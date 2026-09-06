@@ -8,7 +8,7 @@ type GatewayWs = Awaited<ReturnType<StartServerWithClient>>["ws"];
 type GatewayServer = Awaited<ReturnType<StartServerWithClient>>["server"];
 
 /** Starts a gateway, connects a client, runs the callback, and closes resources. */
-export async function withServer<T>(run: (ws: GatewayWs) => Promise<T>): Promise<T> {
+export async function withGatewayClient<T>(run: (ws: GatewayWs) => Promise<T>): Promise<T> {
   const { server, ws, envSnapshot } = await startServerWithClient("secret");
   try {
     return await run(ws);

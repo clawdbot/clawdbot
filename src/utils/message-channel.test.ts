@@ -7,6 +7,7 @@ import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/c
 import {
   isBrowserCopilotClient,
   isBrowserOperatorUiClient,
+  isDeliverableMessageChannel,
   isEphemeralGatewayClient,
   isInternalNonDeliveryChannel,
   isMarkdownCapableMessageChannel,
@@ -60,8 +61,13 @@ describe("message-channel", () => {
   it("normalizes gateway message channels and rejects unknown values", () => {
     expect(resolveGatewayMessageChannel("discord")).toBe("discord");
     expect(resolveGatewayMessageChannel(" imsg ")).toBe("imessage");
+    expect(resolveGatewayMessageChannel("webchat")).toBe("webchat");
     expect(resolveGatewayMessageChannel("web")).toBeUndefined();
     expect(resolveGatewayMessageChannel("nope")).toBeUndefined();
+    expect(isDeliverableMessageChannel("discord")).toBe(true);
+    expect(isDeliverableMessageChannel("imsg")).toBe(false);
+    expect(isDeliverableMessageChannel("webchat")).toBe(false);
+    expect(isDeliverableMessageChannel("nope")).toBe(false);
   });
 
   it("classifies ephemeral Gateway client modes", () => {
@@ -90,6 +96,8 @@ describe("message-channel", () => {
       ]),
     );
     expect(resolveGatewayMessageChannel("workspace-chat")).toBe("demo-alias-channel");
+    expect(isDeliverableMessageChannel("demo-alias-channel")).toBe(true);
+    expect(isDeliverableMessageChannel("workspace-chat")).toBe(false);
   });
 
   it("recognises internal non-delivery channel sources", () => {
@@ -100,37 +108,8 @@ describe("message-channel", () => {
     expect(isInternalNonDeliveryChannel("webchat")).toBe(false);
     expect(isInternalNonDeliveryChannel("")).toBe(false);
     expect(isInternalNonDeliveryChannel("HEARTBEAT")).toBe(false);
-  });
-
-  it("reads native approval behavior from bundled channel manifests", async () => {
-    const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-    const previousTrust = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.resolve("extensions");
-    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
-    vi.resetModules();
-    try {
-      const channelModule = await import("./message-channel.js");
-      const promptModule = await import("../channels/plugins/native-approval-prompt.js");
-      for (const channel of ["webchat", "discord", "imessage", "telegram", "whatsapp"]) {
-        expect(channelModule.isNativeApprovalChannel(channel), channel).toBe(true);
-      }
-      expect(promptModule.isKnownNativeApprovalPromptChannel("whatsapp")).toBe(true);
-      for (const channel of ["feishu", "msteams", "line", "heartbeat", "", "TELEGRAM"]) {
-        expect(channelModule.isNativeApprovalChannel(channel), channel).toBe(false);
-      }
-    } finally {
-      if (previousBundledPluginsDir === undefined) {
-        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-      } else {
-        process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
-      }
-      if (previousTrust === undefined) {
-        delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
-      } else {
-        process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = previousTrust;
-      }
-      vi.resetModules();
-    }
+    expect(isInternalNonDeliveryChannel("cron-event")).toBe(false);
+    expect(isInternalNonDeliveryChannel("exec-event")).toBe(false);
   });
 
   it("reads markdown capability from channel metadata", () => {

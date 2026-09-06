@@ -1,27 +1,15 @@
 // Command source test-helper tests cover fixture helpers for command source checks.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readCommandSource } from "./command-source.test-helpers.js";
 
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-function makeTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-command-source-"));
-  tempDirs.push(dir);
-  return dir;
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("readCommandSource", () => {
   it("follows re-export shims and runtime boundaries", async () => {
-    const rootDir = makeTempDir();
+    const rootDir = tempDirs.make("openclaw-command-source-");
     const cliDir = path.join(rootDir, "src", "cli");
     fs.mkdirSync(cliDir, { recursive: true });
     fs.writeFileSync(path.join(cliDir, "index.ts"), 'export * from "./command.js";\n');
@@ -47,7 +35,7 @@ describe("readCommandSource", () => {
   });
 
   it("dedupes repeated runtime imports", async () => {
-    const rootDir = makeTempDir();
+    const rootDir = tempDirs.make("openclaw-command-source-");
     const cliDir = path.join(rootDir, "src", "cli");
     fs.mkdirSync(cliDir, { recursive: true });
     fs.writeFileSync(

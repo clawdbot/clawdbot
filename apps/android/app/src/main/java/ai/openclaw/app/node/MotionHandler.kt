@@ -13,9 +13,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.time.Instant
@@ -40,6 +40,7 @@ internal data class MotionPedometerRequest(
 )
 
 /** Motion activity sample returned in gateway-compatible boolean flags. */
+@Serializable
 internal data class MotionActivityRecord(
   val startISO: String,
   val endISO: String,
@@ -67,8 +68,6 @@ internal interface MotionDataSource {
   fun isActivityAvailable(context: Context): Boolean
 
   fun isPedometerAvailable(context: Context): Boolean
-
-  fun isAvailable(context: Context): Boolean = isActivityAvailable(context) || isPedometerAvailable(context)
 
   fun hasPermission(context: Context): Boolean
 
@@ -272,12 +271,10 @@ private object SystemMotionDataSource : MotionDataSource {
 }
 
 /** Handles Android motion-related node.invoke commands backed by live sensors. */
-class MotionHandler private constructor(
+class MotionHandler internal constructor(
   private val appContext: Context,
-  private val dataSource: MotionDataSource,
+  private val dataSource: MotionDataSource = SystemMotionDataSource,
 ) {
-  constructor(appContext: Context) : this(appContext = appContext, dataSource = SystemMotionDataSource)
-
   /** Classifies a short accelerometer sample into the gateway activity shape. */
   suspend fun handleMotionActivity(paramsJson: String?): GatewaySession.InvokeResult {
     if (!dataSource.hasPermission(appContext)) {
@@ -294,28 +291,7 @@ class MotionHandler private constructor(
         )
     return try {
       val activity = dataSource.activity(appContext, request)
-      GatewaySession.InvokeResult.ok(
-        buildJsonObject {
-          put(
-            "activities",
-            buildJsonArray {
-              add(
-                buildJsonObject {
-                  put("startISO", JsonPrimitive(activity.startISO))
-                  put("endISO", JsonPrimitive(activity.endISO))
-                  put("confidence", JsonPrimitive(activity.confidence))
-                  put("isWalking", JsonPrimitive(activity.isWalking))
-                  put("isRunning", JsonPrimitive(activity.isRunning))
-                  put("isCycling", JsonPrimitive(activity.isCycling))
-                  put("isAutomotive", JsonPrimitive(activity.isAutomotive))
-                  put("isStationary", JsonPrimitive(activity.isStationary))
-                  put("isUnknown", JsonPrimitive(activity.isUnknown))
-                },
-              )
-            },
-          )
-        }.toString(),
-      )
+      GatewaySession.InvokeResult.ok(Json.encodeToString(mapOf("activities" to listOf(activity))))
     } catch (err: IllegalArgumentException) {
       GatewaySession.InvokeResult.error(code = "MOTION_UNAVAILABLE", message = err.message ?: "MOTION_UNAVAILABLE")
     } catch (err: CancellationException) {
@@ -366,8 +342,6 @@ class MotionHandler private constructor(
     }
   }
 
-  fun isAvailable(): Boolean = dataSource.isAvailable(appContext)
-
   /** Returns true when live accelerometer classification can be sampled. */
   fun isActivityAvailable(): Boolean = dataSource.isActivityAvailable(appContext)
 
@@ -378,18 +352,13 @@ class MotionHandler private constructor(
     if (paramsJson.isNullOrBlank()) {
       return MotionActivityRequest(startISO = null, endISO = null, limit = 200)
     }
-    val params =
-      try {
-        Json.parseToJsonElement(paramsJson).asObjectOrNull()
-      } catch (_: Throwable) {
-        null
-      } ?: return null
+    val params = parseJsonParamsObject(paramsJson) ?: return null
     // Keep the accepted gateway parameter even though Android can only return
     // one live classification sample for now.
     val limit = ((params["limit"] as? JsonPrimitive)?.content?.toIntOrNull() ?: 200).coerceIn(1, 1000)
     return MotionActivityRequest(
-      startISO = (params["startISO"] as? JsonPrimitive)?.content?.trim()?.ifEmpty { null },
-      endISO = (params["endISO"] as? JsonPrimitive)?.content?.trim()?.ifEmpty { null },
+      startISO = parseJsonString(params, "startISO")?.trim()?.ifEmpty { null },
+      endISO = parseJsonString(params, "endISO")?.trim()?.ifEmpty { null },
       limit = limit,
     )
   }
@@ -398,26 +367,10 @@ class MotionHandler private constructor(
     if (paramsJson.isNullOrBlank()) {
       return MotionPedometerRequest(startISO = null, endISO = null)
     }
-    val params =
-      try {
-        Json.parseToJsonElement(paramsJson).asObjectOrNull()
-      } catch (_: Throwable) {
-        null
-      } ?: return null
+    val params = parseJsonParamsObject(paramsJson) ?: return null
     return MotionPedometerRequest(
-      startISO = (params["startISO"] as? JsonPrimitive)?.content?.trim()?.ifEmpty { null },
-      endISO = (params["endISO"] as? JsonPrimitive)?.content?.trim()?.ifEmpty { null },
+      startISO = parseJsonString(params, "startISO")?.trim()?.ifEmpty { null },
+      endISO = parseJsonString(params, "endISO")?.trim()?.ifEmpty { null },
     )
-  }
-
-  companion object {
-    /** Static capability probe used before a MotionHandler instance is needed. */
-    fun isMotionCapabilityAvailable(context: Context): Boolean = SystemMotionDataSource.isAvailable(context)
-
-    /** Creates a handler with an injected sensor source for parser and payload tests. */
-    internal fun forTesting(
-      appContext: Context,
-      dataSource: MotionDataSource,
-    ): MotionHandler = MotionHandler(appContext = appContext, dataSource = dataSource)
   }
 }

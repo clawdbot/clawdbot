@@ -6,42 +6,23 @@ import type {
   SessionUpstreamProbe,
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { CodexAppServerRpcError } from "./app-server/client.js";
-import type {
-  CodexThread,
-  CodexThreadTurnsListParams,
-  CodexThreadTurnsListResponse,
-  CodexTurn,
-  CodexUserInput,
-} from "./app-server/protocol.js";
+import type { CodexTurn, CodexUserInput } from "./app-server/protocol.js";
+import { isCodexThreadReadMissingError } from "./app-server/rpc-error.js";
 import {
   sessionBindingIdentity,
   type CodexAppServerBindingStore,
 } from "./app-server/session-binding.js";
-import type { CodexSessionCatalogControl } from "./session-catalog-types.js";
+import type {
+  CodexSessionCatalogControl,
+  CodexSessionCatalogControlFactory,
+} from "./session-catalog-types.js";
 
 const CODEX_UPSTREAM_TURN_LIMIT = 100;
-// codex-rs app-server thread/read maps a gone rollout to JSON-RPC invalid_request
-// with exactly this message prefix (read_thread_view "thread not loaded"). The code
-// alone is generic (other store validation reuses it), so both must match; a harness
-// message rename degrades to the old silent gap instead of unlinking live threads.
-const CODEX_APP_SERVER_INVALID_REQUEST_CODE = -32600;
-const CODEX_THREAD_NOT_LOADED_MESSAGE_PREFIX = "thread not loaded:";
 
-function isCodexThreadGoneError(error: unknown): boolean {
-  return (
-    error instanceof CodexAppServerRpcError &&
-    error.code === CODEX_APP_SERVER_INVALID_REQUEST_CODE &&
-    error.message.startsWith(CODEX_THREAD_NOT_LOADED_MESSAGE_PREFIX)
-  );
-}
-
-type CodexUpstreamControl = {
-  connectionFingerprint?: string;
-  withPinnedConnection<T>(run: (control: CodexUpstreamControl) => Promise<T>): Promise<T>;
-  listTurnPage(params: CodexThreadTurnsListParams): Promise<CodexThreadTurnsListResponse>;
-  readThread(threadId: string, includeTurns?: boolean): Promise<CodexThread>;
-};
+type CodexUpstreamControl = Pick<
+  CodexSessionCatalogControl,
+  "connectionFingerprint" | "listTurnPage" | "readThread" | "withPinnedConnection"
+>;
 
 type CodexUpstreamMarker = {
   turnId: string | null;
@@ -152,8 +133,7 @@ function normalizeUserMessageTexts(item: CodexTurn["items"][number]): string[] {
 async function checkCodexUpstreamActivity(
   probes: SessionUpstreamProbe[],
   control: CodexUpstreamControl,
-  resolveThreadId: (probe: SessionUpstreamProbe) => Promise<string> = async (probe) =>
-    probe.threadId,
+  resolveThreadId: (probe: SessionUpstreamProbe) => string = (probe) => probe.threadId,
 ): Promise<SessionUpstreamActivity[]> {
   return await control.withPinnedConnection(async (pinned) => {
     const activities: SessionUpstreamActivity[] = [];
@@ -167,7 +147,7 @@ async function checkCodexUpstreamActivity(
         continue;
       }
       try {
-        const threadId = await resolveThreadId(probe);
+        const threadId = resolveThreadId(probe);
         const page = await pinned.listTurnPage({
           threadId,
           limit: CODEX_UPSTREAM_TURN_LIMIT,
@@ -183,7 +163,7 @@ async function checkCodexUpstreamActivity(
           try {
             await pinned.readThread(threadId, false);
           } catch (error) {
-            if (isCodexThreadGoneError(error)) {
+            if (isCodexThreadReadMissingError(error, threadId)) {
               activities.push({ kind: "missing", sessionKey: probe.sessionKey });
             }
           }
@@ -204,27 +184,55 @@ async function checkCodexUpstreamActivity(
 export function createChecker(params: {
   api: OpenClawPluginApi;
   bindingStore: CodexAppServerBindingStore;
-  control: CodexSessionCatalogControl;
+  control: CodexSessionCatalogControlFactory;
   getRuntimeConfig: () => OpenClawConfig | undefined;
 }): NonNullable<SessionCatalogProvider["checkUpstreamActivity"]> {
-  return async (probes) =>
-    await checkCodexUpstreamActivity(probes, params.control, async (probe) => {
-      const config = params.getRuntimeConfig();
-      const entry = params.api.runtime.agent.session.getSessionEntry({
-        agentId: probe.agentId,
-        sessionKey: probe.sessionKey,
-        readConsistency: "latest",
-      });
-      const sessionId = entry?.sessionId?.trim();
-      if (!sessionId) {
-        return probe.threadId;
-      }
-      const binding = await params.bindingStore.read(
-        sessionBindingIdentity({ sessionId, sessionKey: probe.sessionKey, config }),
-      );
-      return binding?.connectionScope === "supervision" &&
-        binding.supervisionSourceThreadId === probe.threadId
-        ? binding.threadId
-        : probe.threadId;
+  const resolveThreadId = (probe: SessionUpstreamProbe) => {
+    const config = params.getRuntimeConfig();
+    const entry = params.api.runtime.agent.session.getSessionEntry({
+      agentId: probe.agentId,
+      sessionKey: probe.sessionKey,
+      readConsistency: "latest",
     });
+    const sessionId = entry?.sessionId?.trim();
+    if (!sessionId) {
+      return probe.threadId;
+    }
+    const binding = params.bindingStore.read(
+      sessionBindingIdentity({ sessionId, sessionKey: probe.sessionKey, config }),
+    );
+    return binding?.connectionScope === "supervision" &&
+      binding.supervisionSourceThreadId === probe.threadId
+      ? binding.threadId
+      : probe.threadId;
+  };
+  return async (probes) => {
+    const groups = new Map<
+      string,
+      { control: CodexSessionCatalogControl; probes: SessionUpstreamProbe[] }
+    >();
+    for (const probe of probes) {
+      const fingerprint = upstreamConnectionFingerprint(probe);
+      if (!fingerprint) {
+        continue;
+      }
+      const control = params.control.forUpstream(probe.agentId, fingerprint);
+      if (!control) {
+        continue;
+      }
+      const key = `${probe.agentId}\0${fingerprint}`;
+      const group = groups.get(key) ?? {
+        control,
+        probes: [],
+      };
+      group.probes.push(probe);
+      groups.set(key, group);
+    }
+    const batches = await Promise.all(
+      [...groups.values()].map((group) =>
+        checkCodexUpstreamActivity(group.probes, group.control, resolveThreadId),
+      ),
+    );
+    return batches.flat();
+  };
 }

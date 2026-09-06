@@ -1,72 +1,48 @@
 // Control UI tests prove route-scoped CSS on fresh direct navigation.
-import { chromium, type Browser } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI route CSS mocked Gateway E2E",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
+});
 
-let browser: Browser;
-let server: ControlUiE2eServer;
-
-describeControlUiE2e("Control UI route CSS mocked Gateway E2E", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
+suite.define(() => {
   it("loads shared Markdown and session-link styles on direct Cron, Skills, and Chat routes", async () => {
-    const context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      methodResponses: {
-        "cron.list": {
-          jobs: [],
-          total: 0,
-          offset: 0,
-          limit: 50,
-          hasMore: false,
-          nextOffset: null,
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      await installMockGateway(page, {
+        methodResponses: {
+          "cron.list": {
+            jobs: [],
+            total: 0,
+            offset: 0,
+            limit: 50,
+            hasMore: false,
+            nextOffset: null,
+          },
+          "cron.runs": {
+            entries: [],
+            total: 0,
+            offset: 0,
+            limit: 50,
+            hasMore: false,
+            nextOffset: null,
+          },
+          "cron.status": { enabled: true, jobs: 0, nextWakeAtMs: null },
+          "skills.status": {
+            workspaceDir: "/tmp/openclaw-e2e/workspace",
+            managedSkillsDir: "/tmp/openclaw-e2e/skills",
+            skills: [],
+          },
         },
-        "cron.runs": {
-          entries: [],
-          total: 0,
-          offset: 0,
-          limit: 50,
-          hasMore: false,
-          nextOffset: null,
-        },
-        "cron.status": { enabled: true, jobs: 0, nextWakeAtMs: null },
-        "skills.status": {
-          workspaceDir: "/tmp/openclaw-e2e/workspace",
-          managedSkillsDir: "/tmp/openclaw-e2e/skills",
-          skills: [],
-        },
-      },
-    });
+      });
 
-    try {
-      const cronResponse = await page.goto(`${server.baseUrl}cron`);
+      const cronResponse = await page.goto(`${suite.server.baseUrl}cron`);
       expect(cronResponse?.status()).toBe(200);
       await page.locator(".cron-page").waitFor();
 
@@ -109,7 +85,7 @@ describeControlUiE2e("Control UI route CSS mocked Gateway E2E", () => {
       expect(cronStyles.sessionFontWeight).toBe("500");
       expect(cronStyles.sessionTextDecoration).toBe("none");
 
-      const skillsResponse = await page.goto(`${server.baseUrl}skills`);
+      const skillsResponse = await page.goto(`${suite.server.baseUrl}skills`);
       expect(skillsResponse?.status()).toBe(200);
       await page.locator(".settings-section__heading", { hasText: "ClawHub" }).waitFor();
 
@@ -144,7 +120,7 @@ describeControlUiE2e("Control UI route CSS mocked Gateway E2E", () => {
       expect(skillsStyles.tableDisplay).toBe("block");
       expect(skillsStyles.taskListStyle).toBe("none");
 
-      const chatResponse = await page.goto(`${server.baseUrl}chat?session=main`);
+      const chatResponse = await page.goto(`${suite.server.baseUrl}chat?session=main`);
       expect(chatResponse?.status()).toBe(200);
       await page.locator("openclaw-chat-page").waitFor();
 
@@ -153,19 +129,41 @@ describeControlUiE2e("Control UI route CSS mocked Gateway E2E", () => {
         probe.className = "chat-text";
         probe.style.width = "900px";
         probe.innerHTML = `
+          <ol class="probe-list"><li>First</li></ol>
+          <blockquote class="probe-quote"><p>Quoted block</p></blockquote>
           <table>
             <thead><tr><th>Dimension</th><th>Sentiment signal</th></tr></thead>
             <tbody><tr><td>Demographics</td><td>Experience-dependent sentiment.</td></tr></tbody>
           </table>
-          <ol><li>One central pattern</li><li>Another central pattern</li></ol>
-          <p><strong>Overall characterization:</strong> Pragmatic adoption under suspicion.</p>
+          <p class="probe-table-copy"><strong>Overall characterization:</strong> Pragmatic adoption under suspicion.</p>
+          <ul class="probe-task-list"><li class="task-list-item"><input class="task-list-item-checkbox" type="checkbox" disabled /> Task</li></ul>
+          <details class="probe-details"><summary>More details</summary><p>Body</p></details>
+          <ul class="probe-unordered"><li>Unordered</li></ul>
+          <ol class="probe-ordered"><li>Ordered</li></ol>
         `;
         document.body.append(probe);
+        const list = probe.querySelector(".probe-list");
+        const quote = probe.querySelector(".probe-quote");
         const dimension = probe.querySelector("th:first-child");
         const demographics = probe.querySelector("td:first-child");
-        const list = probe.querySelector("ol");
-        const summary = probe.querySelector("ol + p");
-        if (!dimension || !demographics || !list || !summary) {
+        const table = probe.querySelector("table");
+        const tableCopy = probe.querySelector(".probe-table-copy");
+        const taskList = probe.querySelector(".probe-task-list");
+        const details = probe.querySelector(".probe-details");
+        const unordered = probe.querySelector(".probe-unordered");
+        const ordered = probe.querySelector(".probe-ordered");
+        if (
+          !dimension ||
+          !demographics ||
+          !list ||
+          !quote ||
+          !table ||
+          !tableCopy ||
+          !taskList ||
+          !details ||
+          !unordered ||
+          !ordered
+        ) {
           throw new Error("Chat Markdown style probe did not render");
         }
         const lineCount = (element: Element) => {
@@ -177,9 +175,18 @@ describeControlUiE2e("Control UI route CSS mocked Gateway E2E", () => {
           demographicsLineCount: lineCount(demographics),
           dimensionLineCount: lineCount(dimension),
           firstColumnWidth: dimension.getBoundingClientRect().width,
-          postListGap: summary.getBoundingClientRect().top - list.getBoundingClientRect().bottom,
-          postListMargin: Number.parseFloat(getComputedStyle(summary).marginTop),
-          summaryFontSize: Number.parseFloat(getComputedStyle(summary).fontSize),
+          listToQuoteGap: quote.getBoundingClientRect().top - list.getBoundingClientRect().bottom,
+          quoteMargin: Number.parseFloat(getComputedStyle(quote).marginTop),
+          tableToCopyGap:
+            tableCopy.getBoundingClientRect().top - table.getBoundingClientRect().bottom,
+          tableCopyMargin: Number.parseFloat(getComputedStyle(tableCopy).marginTop),
+          taskListToDetailsGap:
+            details.getBoundingClientRect().top - taskList.getBoundingClientRect().bottom,
+          detailsMargin: Number.parseFloat(getComputedStyle(details).marginTop),
+          unorderedToOrderedGap:
+            ordered.getBoundingClientRect().top - unordered.getBoundingClientRect().bottom,
+          orderedMargin: Number.parseFloat(getComputedStyle(ordered).marginTop),
+          blockFontSize: Number.parseFloat(getComputedStyle(tableCopy).fontSize),
         };
         probe.remove();
         return result;
@@ -187,13 +194,17 @@ describeControlUiE2e("Control UI route CSS mocked Gateway E2E", () => {
       expect(chatMarkdownStyles.dimensionLineCount).toBe(1);
       expect(chatMarkdownStyles.demographicsLineCount).toBe(1);
       expect(chatMarkdownStyles.firstColumnWidth).toBeGreaterThanOrEqual(128);
-      expect(chatMarkdownStyles.postListGap).toBeGreaterThan(0);
-      expect(chatMarkdownStyles.postListMargin / chatMarkdownStyles.summaryFontSize).toBeCloseTo(
-        0.75,
+      expect(chatMarkdownStyles.listToQuoteGap).toBeGreaterThan(0);
+      expect(chatMarkdownStyles.tableToCopyGap).toBeGreaterThan(0);
+      expect(chatMarkdownStyles.taskListToDetailsGap).toBeGreaterThan(0);
+      expect(chatMarkdownStyles.unorderedToOrderedGap).toBeGreaterThan(0);
+      expect(chatMarkdownStyles.quoteMargin / chatMarkdownStyles.blockFontSize).toBeCloseTo(1, 2);
+      expect(chatMarkdownStyles.tableCopyMargin / chatMarkdownStyles.blockFontSize).toBeCloseTo(
+        1,
         2,
       );
-    } finally {
-      await context.close();
-    }
+      expect(chatMarkdownStyles.detailsMargin / chatMarkdownStyles.blockFontSize).toBeCloseTo(1, 2);
+      expect(chatMarkdownStyles.orderedMargin / chatMarkdownStyles.blockFontSize).toBeCloseTo(1, 2);
+    });
   });
 });

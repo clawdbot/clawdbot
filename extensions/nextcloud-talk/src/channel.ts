@@ -2,14 +2,17 @@
 import { describeWebhookAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createLoggedPairingApprovalNotifier } from "openclaw/plugin-sdk/channel-pairing";
-import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
+import {
+  createAllowlistProviderRouteAllowlistWarningCollector,
+  createConditionalWarningCollector,
+} from "openclaw/plugin-sdk/channel-policy";
 import {
   buildWebhookChannelStatusSummary,
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
-import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
+import { isNextcloudTalkAccountConfigured, type ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { nextcloudTalkApprovalAuth } from "./approval-auth.js";
 import { probeNextcloudTalkBotResponseFeature } from "./bot-preflight.js";
 import { buildChannelConfigSchema, DEFAULT_ACCOUNT_ID, type ChannelPlugin } from "./channel-api.js";
@@ -70,6 +73,12 @@ const collectNextcloudTalkSecurityWarnings =
       groupAllowFromPath: "channels.nextcloud-talk.groupAllowFrom",
     },
   });
+const collectNextcloudTalkOpenGroupFindings = createConditionalWarningCollector.findings({
+  collectWarnings: collectNextcloudTalkSecurityWarnings,
+  checkId: "channels.nextcloud-talk.groups.open",
+  severity: "critical",
+  title: "Nextcloud Talk security warning",
+});
 
 export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
   createChatChannelPlugin({
@@ -89,12 +98,11 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
       configSchema: buildChannelConfigSchema(NextcloudTalkConfigSchema),
       config: {
         ...nextcloudTalkConfigAdapter,
-        isConfigured: (account) =>
-          Boolean(account.tokenStatus !== "missing" && account.baseUrl?.trim()),
+        isConfigured: isNextcloudTalkAccountConfigured,
         describeAccount: (account) =>
           describeWebhookAccountSnapshot({
             account,
-            configured: Boolean(account.tokenStatus !== "missing" && account.baseUrl?.trim()),
+            configured: isNextcloudTalkAccountConfigured(account),
             extra: {
               secretSource: account.secretSource,
               tokenStatus: account.tokenStatus,
@@ -112,6 +120,8 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
       messaging: {
         targetPrefixes: ["nextcloud-talk", "nc-talk", "nc"],
         normalizeTarget: normalizeNextcloudTalkMessagingTarget,
+        inferTargetChatType: ({ to }) =>
+          normalizeNextcloudTalkMessagingTarget(to) ? "group" : undefined,
         resolveOutboundSessionRoute: (params) => resolveNextcloudTalkOutboundSessionRoute(params),
         targetResolver: {
           looksLikeId: looksLikeNextcloudTalkTargetId,
@@ -158,7 +168,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
           accountId: account.accountId,
           name: account.name,
           enabled: account.enabled,
-          configured: Boolean(account.tokenStatus !== "missing" && account.baseUrl?.trim()),
+          configured: isNextcloudTalkAccountConfigured(account),
           extra: {
             secretSource: account.secretSource,
             tokenStatus: account.tokenStatus,
@@ -182,7 +192,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
     },
     security: {
       ...nextcloudTalkSecurityAdapter,
-      collectWarnings: collectNextcloudTalkSecurityWarnings,
+      collectWarnings: collectNextcloudTalkOpenGroupFindings,
     },
     outbound: {
       base: {

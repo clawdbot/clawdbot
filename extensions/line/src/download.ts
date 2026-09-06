@@ -16,7 +16,7 @@ interface DownloadResult {
 const CONTENT_READY_MAX_ATTEMPTS = 6;
 const CONTENT_READY_BASE_DELAY_MS = 500;
 const CONTENT_READY_MAX_DELAY_MS = 4000;
-const CONTENT_READY_TIMEOUT_MS = 15_000;
+const CONTENT_DOWNLOAD_TIMEOUT_MS = 15_000;
 const LINE_CONTENT_BASE_URL = "https://api-data.line.me/v2/bot/message";
 
 class RetryableLineMediaFetchError extends MediaFetchError {
@@ -37,6 +37,8 @@ function lineContentUrl(messageId: string): string {
 async function* lineResponseBodyChunks(
   response: Response,
   messageId: string,
+  signal: AbortSignal,
+  onComplete: () => void,
 ): AsyncIterable<Uint8Array> {
   const body = response.body;
   if (!body) {
@@ -52,6 +54,9 @@ async function* lineResponseBodyChunks(
       try {
         chunk = await reader.read();
       } catch (err) {
+        if (signal.aborted) {
+          throw signal.reason;
+        }
         throw new RetryableLineMediaFetchError(
           `LINE media response stream failed for message ${messageId}`,
           { cause: err },
@@ -59,6 +64,7 @@ async function* lineResponseBodyChunks(
       }
       if (chunk.done) {
         completed = true;
+        onComplete();
         return;
       }
       if (chunk.value.byteLength > 0) {
@@ -67,7 +73,7 @@ async function* lineResponseBodyChunks(
     }
   } finally {
     if (!completed) {
-      await reader.cancel().catch(() => undefined);
+      await reader.cancel(signal.aborted ? signal.reason : undefined).catch(() => undefined);
     }
     try {
       reader.releaseLock();
@@ -78,16 +84,14 @@ async function* lineResponseBodyChunks(
 async function fetchLineContentWhenReady(
   messageId: string,
   channelAccessToken: string,
+  signal: AbortSignal,
 ): Promise<Response> {
-  const controller = new AbortController();
-  const deadline = setTimeout(() => controller.abort(), CONTENT_READY_TIMEOUT_MS);
-  deadline.unref();
   try {
     for (let attempt = 0; attempt < CONTENT_READY_MAX_ATTEMPTS; attempt++) {
       const response = await fetchWithRuntimeDispatcherOrMockedGlobal(lineContentUrl(messageId), {
         headers: { Authorization: `Bearer ${channelAccessToken}` },
         redirect: "error",
-        signal: controller.signal,
+        signal,
       });
       if (response.status === 200) {
         if (!response.body) {
@@ -107,15 +111,12 @@ async function fetchLineContentWhenReady(
         );
       }
       if (attempt < CONTENT_READY_MAX_ATTEMPTS - 1) {
-        await delay(contentBackoffDelayMs(attempt), undefined, { signal: controller.signal });
+        await delay(contentBackoffDelayMs(attempt), undefined, { signal });
       }
     }
   } catch (err) {
-    if (controller.signal.aborted) {
-      throw new RetryableLineMediaFetchError(
-        `LINE media for message ${messageId} did not become ready within ${CONTENT_READY_TIMEOUT_MS / 1000} seconds`,
-        { cause: err },
-      );
+    if (signal.aborted) {
+      throw signal.reason;
     }
     if (err instanceof MediaFetchError) {
       throw err;
@@ -123,8 +124,6 @@ async function fetchLineContentWhenReady(
     throw new RetryableLineMediaFetchError(`LINE media download failed for message ${messageId}`, {
       cause: err,
     });
-  } finally {
-    clearTimeout(deadline);
   }
 
   throw new MediaFetchError(
@@ -160,27 +159,49 @@ export async function downloadLineMedia(
   messageId: string,
   channelAccessToken: string,
   maxBytes = 10 * 1024 * 1024,
-  options?: { originalFilename?: string },
+  options?: { originalFilename?: string; signal?: AbortSignal },
 ): Promise<DownloadResult> {
-  const response = await fetchLineContentWhenReady(messageId, channelAccessToken);
-  let saved: Awaited<ReturnType<typeof saveMediaStream>>;
-  try {
-    saved = await saveMediaStream(
-      lineResponseBodyChunks(response, messageId),
-      response.headers.get("content-type") ?? undefined,
-      "inbound",
-      maxBytes,
-      options?.originalFilename,
+  options?.signal?.throwIfAborted();
+  const deadlineAbort = new AbortController();
+  const signal = options?.signal
+    ? AbortSignal.any([options.signal, deadlineAbort.signal])
+    : deadlineAbort.signal;
+  // Header resolution does not finish the request; only EOF retires this deadline.
+  const deadline = setTimeout(() => {
+    deadlineAbort.abort(
+      new RetryableLineMediaFetchError(
+        `LINE media for message ${messageId} did not download within ${CONTENT_DOWNLOAD_TIMEOUT_MS / 1000} seconds`,
+      ),
     );
-  } catch (err) {
-    await response.body?.cancel().catch(() => undefined);
-    throw err;
-  }
-  logVerbose(`line: persisted media ${messageId} to ${saved.path} (${saved.size} bytes)`);
+  }, CONTENT_DOWNLOAD_TIMEOUT_MS);
+  deadline.unref();
+  try {
+    const response = await fetchLineContentWhenReady(messageId, channelAccessToken, signal);
+    let saved: Awaited<ReturnType<typeof saveMediaStream>>;
+    try {
+      saved = await saveMediaStream(
+        lineResponseBodyChunks(response, messageId, signal, () => clearTimeout(deadline)),
+        response.headers.get("content-type") ?? undefined,
+        "inbound",
+        maxBytes,
+        options?.originalFilename,
+      );
+    } catch (err) {
+      await response.body?.cancel(signal.aborted ? signal.reason : err).catch(() => undefined);
+      if (signal.aborted) {
+        throw signal.reason;
+      }
+      throw err;
+    }
+    options?.signal?.throwIfAborted();
+    logVerbose(`line: persisted media ${messageId} to ${saved.path} (${saved.size} bytes)`);
 
-  return {
-    path: saved.path,
-    contentType: saved.contentType,
-    size: saved.size,
-  };
+    return {
+      path: saved.path,
+      contentType: saved.contentType,
+      size: saved.size,
+    };
+  } finally {
+    clearTimeout(deadline);
+  }
 }

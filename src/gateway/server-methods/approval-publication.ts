@@ -1,3 +1,4 @@
+import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 // Best-effort legacy approval resolution events after durable CAS wins.
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import type {
@@ -30,7 +31,7 @@ export type PluginApprovalIosPushDelivery = {
 async function runSideEffect(params: {
   context: GatewayRequestContext;
   approvalKind: "exec" | "plugin" | "system-agent";
-  effect: "broadcast" | "forwarder" | "ios-push";
+  effect: "broadcast" | "forwarder" | "ios-push" | "web-push";
   run: () => void | Promise<void>;
 }): Promise<void> {
   try {
@@ -44,7 +45,7 @@ async function runSideEffect(params: {
 
 function runSynchronousSideEffect(params: {
   context: GatewayRequestContext;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   run: () => void;
 }): void {
   try {
@@ -73,6 +74,10 @@ export async function publishAppliedApprovalResolution(params: {
     resolvedBy,
     ts,
     request: params.liveRecord.request,
+    ...(params.record.kind === "system-agent" &&
+    (params.record.status === "expired" || params.record.status === "cancelled")
+      ? { terminalStatus: params.record.status }
+      : {}),
   };
   await runSideEffect({
     context: params.context,
@@ -87,14 +92,32 @@ export async function publishAppliedApprovalResolution(params: {
       }),
   });
   const nativeApprovalKind = params.record.kind;
-  if (nativeApprovalKind === "exec" || nativeApprovalKind === "plugin") {
+  if (
+    nativeApprovalKind === "exec" ||
+    nativeApprovalKind === "plugin" ||
+    nativeApprovalKind === "system-agent"
+  ) {
     // Native approval routes are instance-local, so publish the canonical CAS
     // winner directly instead of reconnecting to the Gateway over WebSocket.
-    runSynchronousSideEffect({
-      context: params.context,
-      approvalKind: nativeApprovalKind,
-      run: () => params.context.approvalEvents?.publishResolved(nativeApprovalKind, event),
-    });
+    if (nativeApprovalKind !== "system-agent" || params.record.status !== "allowed") {
+      runSynchronousSideEffect({
+        context: params.context,
+        approvalKind: nativeApprovalKind,
+        run: () => params.context.approvalEvents?.publishResolved(nativeApprovalKind, event),
+      });
+    }
+    const webPushDelivery = params.context.approvalWebPushDelivery;
+    if (webPushDelivery && (nativeApprovalKind === "exec" || nativeApprovalKind === "plugin")) {
+      await runSideEffect({
+        context: params.context,
+        approvalKind: nativeApprovalKind,
+        effect: "web-push",
+        run: () =>
+          params.record.status === "expired"
+            ? webPushDelivery.handleExpired(params.liveRecord)
+            : webPushDelivery.handleResolved(event),
+      });
+    }
   }
   if (params.record.kind === "exec" && params.forwarder) {
     await runSideEffect({

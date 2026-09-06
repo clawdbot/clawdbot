@@ -9,7 +9,7 @@ import { join } from "node:path";
 import type { Duplex } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
-import { withTempDir } from "../../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../../test-helpers/temp-dir.js";
 import { createNodeEvalArgs } from "../../../test-utils/node-process.js";
 import { resolveSystemBin } from "../../resolve-system-bin.js";
 import { resolvePreferredOpenClawTmpDir } from "../../tmp-openclaw-dir.js";
@@ -104,7 +104,7 @@ function createDiscordTlsFixture(dir: string): DiscordTlsFixture {
 async function withDiscordTlsFixture<T>(
   run: (fixture: DiscordTlsFixture) => Promise<T>,
 ): Promise<T> {
-  return await withTempDir(
+  return await withTestDir(
     {
       prefix: "openclaw-discord-tls-",
       parentDir: resolvePreferredOpenClawTmpDir(),

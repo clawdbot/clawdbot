@@ -1,10 +1,12 @@
 // Coverage for classifying SDK tools into the embedded runner runtime surface.
 import { describe, expect, it } from "vitest";
+import { isCodeModeControlTool, markCodeModeControlTool } from "./code-mode-control-tools.js";
 import {
   collectRegisteredToolNames,
   toSessionToolAllowlist,
 } from "./embedded-agent-runner/tool-name-allowlist.js";
 import { splitSdkTools } from "./embedded-agent-runner/tool-split.js";
+import { wrapToolDefinition } from "./sessions/tools/tool-definition-wrapper.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 
 describe("splitSdkTools", () => {
@@ -59,6 +61,21 @@ describe("splitSdkTools", () => {
       hideFromChannelProgress: true,
     });
     expect(customTools[1]).not.toHaveProperty("hideFromChannelProgress");
+  });
+
+  it("preserves Code Mode control identity through both production adapters", () => {
+    const source = markCodeModeControlTool(createStubTool("exec"));
+    const { customTools } = splitSdkTools({
+      tools: [source],
+      sandboxEnabled: false,
+    });
+    const definition = customTools[0];
+    if (!definition) {
+      throw new Error("missing converted Code Mode tool");
+    }
+
+    expect(isCodeModeControlTool(definition)).toBe(true);
+    expect(isCodeModeControlTool(wrapToolDefinition(definition))).toBe(true);
   });
 
   it("keeps OpenClaw-managed custom tools in OpenClaw runtime's session allowlist", () => {

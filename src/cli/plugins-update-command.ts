@@ -12,8 +12,8 @@ import {
   formatInvalidConfigDetails,
 } from "../config/io.invalid-config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
-import { createMergePatch } from "../config/merge-patch.js";
-import { applyMergePatch } from "../config/merge-patch.js";
+import { containsConfigIncludeDirective } from "../config/io.read-helpers.js";
+import { createMergePatch, applyMergePatch } from "../config/merge-patch.js";
 import { ConfigMutationConflictError } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -21,7 +21,6 @@ import { readHookInstalls } from "../hooks/installs.js";
 import { updateNpmInstalledHookPacks } from "../hooks/update.js";
 import { normalizeUpdateChannel, resolveRegistryUpdateChannel } from "../infra/update-channels.js";
 import {
-  containsConfigIncludeDirective,
   resolveCombinedPluginAndHookConfigMutationPreflight,
   resolveInstallConfigMutationPreflights,
   selectInstallMutationWriteOptions,
@@ -31,12 +30,29 @@ import {
   commitPluginInstallRecordsWithConfig,
 } from "../plugins/install-record-commit.js";
 import {
+  requestDeferredPluginInstall,
+  resolvePluginInstallOwnerMigrations,
+  settlePluginInstallTransactions,
+  type PluginInstallTransaction,
+} from "../plugins/install-transaction.js";
+import {
   loadInstalledPluginIndexInstallRecords,
   withoutPluginInstallRecords,
   withPluginInstallRecords,
 } from "../plugins/installed-plugin-index-records.js";
+import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
+import { createInstalledPluginOwnershipResolver } from "../plugins/installed-plugin-package-ownership.js";
 import { configReferencesNpmInstallPath } from "../plugins/installs.js";
-import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import {
+  withPluginLifecycleLease,
+  type PluginLifecycleLeaseContext,
+} from "../plugins/plugin-lifecycle-lease.js";
+import {
+  capturePluginPackageUpdateSnapshot,
+  pluginPackageUpdateMayMutateConfig,
+  reconcilePluginPackageUpdateConfig,
+} from "../plugins/plugin-package-update.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../plugins/registry-refresh.js";
 import {
   isPluginInstallRecordUpdateSource,
@@ -45,7 +61,8 @@ import {
 } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
-import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
+import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
+import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
 import { notifyGatewayPluginMetadataChanged } from "./plugins-update-gateway-signal.js";
 import { logPluginUpdateOutcomes } from "./plugins-update-outcomes.js";
 import {
@@ -114,15 +131,12 @@ function projectUpdaterResultOntoSourceConfig(params: {
 }
 
 function assertWriteOptionRecordFresh(params: {
-  currentHash: string | null;
   current?: Record<string, string>;
   expected?: Record<string, string>;
   message: string;
 }): void {
   if (!isDeepStrictEqual(params.current ?? {}, params.expected ?? {})) {
-    throw new ConfigMutationConflictError(params.message, {
-      currentHash: params.currentHash,
-    });
+    throw new ConfigMutationConflictError(params.message);
   }
 }
 
@@ -143,23 +157,18 @@ async function assertRecordsOnlyUpdateConfigFresh(params: {
     writeOptions.expectedConfigPath !== prepared.snapshot.path
   ) {
     throw new ConfigMutationConflictError("config path changed since last load", {
-      currentHash,
       retryable: false,
     });
   }
   if (params.baseHash !== undefined && params.baseHash !== currentHash) {
-    throw new ConfigMutationConflictError("config changed since last load", {
-      currentHash,
-    });
+    throw new ConfigMutationConflictError("config changed since last load");
   }
   assertWriteOptionRecordFresh({
-    currentHash,
     current: prepared.writeOptions.includeFileTargetsForWrite,
     expected: params.writeOptions?.includeFileTargetsForWrite,
     message: "included config target changed since last load",
   });
   assertWriteOptionRecordFresh({
-    currentHash,
     current: prepared.writeOptions.includeFileHashesForWrite,
     expected: params.writeOptions?.includeFileHashesForWrite,
     message: "included config changed since last load",
@@ -176,7 +185,8 @@ type RunPluginUpdateCommandParams = {
   id?: string;
   opts: {
     all?: boolean;
-    acknowledgeClawHubRisk?: boolean;
+    acceptCapabilities?: boolean;
+    acknowledgeInstallPolicyWarning?: boolean;
     dryRun?: boolean;
     dangerouslyForceUnsafeInstall?: boolean;
   };
@@ -184,24 +194,39 @@ type RunPluginUpdateCommandParams = {
 
 /** Run plugin/hook-pack updates, persist changed install records, and refresh runtime registry. */
 export async function runPluginUpdateCommand(params: RunPluginUpdateCommandParams) {
-  assertConfigWriteAllowedInCurrentMode();
   if (params.opts.dryRun) {
     return await runPluginUpdateCommandUnlocked(params);
   }
+  assertConfigWriteAllowedInCurrentMode();
   return await withPluginLifecycleLease(
     {},
-    async () => await runPluginUpdateCommandUnlocked(params),
+    async (lease) => await runPluginUpdateCommandUnlocked(params, lease),
   );
 }
 
-async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandParams) {
-  assertConfigWriteAllowedInCurrentMode();
+async function runPluginUpdateCommandUnlocked(
+  params: RunPluginUpdateCommandParams,
+  lease?: PluginLifecycleLeaseContext,
+) {
+  const assertOwned = lease?.assertOwned.bind(lease);
+  if (!params.opts.dryRun) {
+    assertConfigWriteAllowedInCurrentMode();
+  }
 
   const sourceSnapshotPromise = readConfigFileSnapshotForWrite()
-    .then((prepared) => ({
-      ...prepared,
-      writeOptions: selectInstallMutationWriteOptions(prepared.writeOptions),
-    }))
+    .then((prepared) => {
+      const writeOptions = selectInstallMutationWriteOptions(prepared.writeOptions);
+      return {
+        ...prepared,
+        writeOptions: {
+          ...writeOptions,
+          assertConfigPathForWrite: () => {
+            assertOwned?.();
+            writeOptions.assertConfigPathForWrite?.();
+          },
+        },
+      };
+    })
     .catch(() => null);
   const mutationSnapshot = params.opts.dryRun ? null : await sourceSnapshotPromise;
   if (!params.opts.dryRun && !mutationSnapshot) {
@@ -223,7 +248,30 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
     sourceCfg,
     pluginInstallRecords,
   );
+  const installedPluginIndex = loadInstalledPluginIndex({
+    config: cfgWithPluginInstallRecords,
+    installRecords: pluginInstallRecords,
+  });
+  const installOwnerByPluginId = new Map<string, string>();
+  const rejectedPluginIds = new Map<string, string>();
+  const ownershipResolver = createInstalledPluginOwnershipResolver(installedPluginIndex);
+  for (const pluginId of new Set([
+    ...installedPluginIndex.plugins.map((plugin) => plugin.pluginId),
+    ...Object.keys(pluginInstallRecords),
+  ])) {
+    const ownership = ownershipResolver.resolveLifecycle(pluginId);
+    if (!ownership.ok) {
+      rejectedPluginIds.set(pluginId, ownership.error);
+      continue;
+    }
+    installOwnerByPluginId.set(pluginId, ownership.value.installOwner);
+    installOwnerByPluginId.set(ownership.value.installOwner, ownership.value.installOwner);
+  }
   const configuredUpdateChannel = normalizeUpdateChannel(cfg.update?.channel) ?? undefined;
+  const officialPluginUpdateChannel = resolveRegistryUpdateChannel({
+    configChannel: configuredUpdateChannel,
+    currentVersion: VERSION,
+  });
   const logger = {
     info: (msg: string) => defaultRuntime.log(msg),
     warn: (msg: string) => defaultRuntime.log(msg.includes("╭─") ? msg : theme.warn(msg)),
@@ -233,9 +281,30 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
   }
   const pluginSelection = resolvePluginUpdateSelection({
     installs: pluginInstallRecords,
+    installOwnerByPluginId,
+    rejectedPluginIds,
     rawId: params.id,
     all: params.opts.all,
   });
+  if (pluginSelection.error) {
+    defaultRuntime.error(pluginSelection.error);
+    return defaultRuntime.exit(1);
+  }
+  const packageUpdateSnapshotResult = capturePluginPackageUpdateSnapshot({
+    index: installedPluginIndex,
+    installOwners: pluginSelection.pluginIds,
+  });
+  if (!packageUpdateSnapshotResult.ok) {
+    defaultRuntime.error(packageUpdateSnapshotResult.error);
+    return defaultRuntime.exit(1);
+  }
+  const packageUpdateSnapshot = packageUpdateSnapshotResult.value;
+  const packagePluginIds = Object.fromEntries(
+    [...packageUpdateSnapshot.values()].map((ownership) => [
+      ownership.installOwner,
+      [...ownership.pluginIds],
+    ]),
+  );
   const selectedHooks = readHookInstalls();
   const hookSelection = resolveHookPackUpdateSelection({
     installs: selectedHooks,
@@ -310,7 +379,14 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
     );
     // Manual update records stay in the index unless scoped-package compatibility
     // migrates authored references or moves an explicit prior managed root.
-    const pluginConfigMayMutate = pluginIdMigrationMayMutate || pluginLoadPathMayMutate;
+    const pluginConfigMayMutate =
+      pluginIdMigrationMayMutate ||
+      pluginLoadPathMayMutate ||
+      pluginPackageUpdateMayMutateConfig({
+        config: mutationSnapshot.snapshot.sourceConfig,
+        index: installedPluginIndex,
+        snapshot: packageUpdateSnapshot,
+      });
     const blockedReasons = new Set<string>();
     if (pluginConfigMayMutate && pluginMutation.mode === "blocked") {
       blockedReasons.add(pluginMutation.reason);
@@ -340,144 +416,225 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
     }
   }
 
-  const pluginResult =
-    pluginSelection.pluginIds.length > 0
-      ? await updateNpmInstalledPlugins({
-          config: cfgWithPluginInstallRecords,
-          pluginIds: pluginSelection.pluginIds,
-          specOverrides: pluginSelection.specOverrides,
-          dryRun: params.opts.dryRun,
-          updateChannel: params.opts.all ? undefined : configuredUpdateChannel,
-          officialPluginUpdateChannel: params.opts.all
-            ? resolveRegistryUpdateChannel({
-                configChannel: normalizeUpdateChannel(cfg.update?.channel),
-                currentVersion: VERSION,
-              })
-            : undefined,
-          syncOfficialPluginInstalls: params.opts.all ? true : undefined,
-          coreVersion: VERSION,
-          dangerouslyForceUnsafeInstall: params.opts.dangerouslyForceUnsafeInstall,
-          ...resolveClawHubRiskAcknowledgementCliOptions({
-            acknowledgeClawHubRisk: params.opts.acknowledgeClawHubRisk,
-            action: "updating",
-            allowPrompt: !params.opts.dryRun,
-          }),
-          logger,
-          onIntegrityDrift: async (drift) => {
-            const specLabel = drift.resolvedSpec ?? drift.spec;
-            defaultRuntime.log(
-              theme.warn(
-                `Integrity drift detected for "${drift.pluginId}" (${specLabel})` +
-                  `\nExpected: ${drift.expectedIntegrity}` +
-                  `\nActual:   ${drift.actualIntegrity}`,
-              ),
-            );
-            if (drift.dryRun) {
-              return true;
-            }
-            return await promptYesNo(`Continue updating "${drift.pluginId}" with this artifact?`);
-          },
-        })
-      : { config: cfgWithPluginInstallRecords, changed: false, outcomes: [] };
-  const hookResult =
-    hookSelection.hookIds.length > 0
-      ? await updateNpmInstalledHookPacks({
-          config: pluginResult.config,
-          hookIds: hookSelection.hookIds,
-          specOverrides: hookSelection.specOverrides,
-          dryRun: params.opts.dryRun,
-          logger,
-          onIntegrityDrift: async (drift) => {
-            const specLabel = drift.resolvedSpec ?? drift.spec;
-            defaultRuntime.log(
-              theme.warn(
-                `Integrity drift detected for hook pack "${drift.hookId}" (${specLabel})` +
-                  `\nExpected: ${drift.expectedIntegrity}` +
-                  `\nActual:   ${drift.actualIntegrity}`,
-              ),
-            );
-            if (drift.dryRun) {
-              return true;
-            }
-            return await promptYesNo(
-              `Continue updating hook pack "${drift.hookId}" with this artifact?`,
-            );
-          },
-        })
-      : { config: pluginResult.config, changed: false, outcomes: [] };
-
-  const outcomeSummary = logPluginUpdateOutcomes({
-    outcomes: [...pluginResult.outcomes, ...hookResult.outcomes],
-    log: (message) => defaultRuntime.log(message),
+  const installPolicyWarningAcknowledgement = resolveInstallPolicyWarningAcknowledgementCliOptions({
+    acknowledgeInstallPolicyWarning: params.opts.acknowledgeInstallPolicyWarning,
+    dangerouslyForceUnsafeInstall: params.opts.dangerouslyForceUnsafeInstall,
+    allowPrompt: !params.opts.dryRun,
   });
+  const deferredInstallTransactions: PluginInstallTransaction[] = [];
+  let pluginResult: Awaited<ReturnType<typeof updateNpmInstalledPlugins>>;
+  try {
+    pluginResult =
+      pluginSelection.pluginIds.length > 0
+        ? await updateNpmInstalledPlugins(
+            requestDeferredPluginInstall(
+              {
+                config: cfgWithPluginInstallRecords,
+                pluginIds: pluginSelection.pluginIds,
+                packagePluginIds,
+                specOverrides: pluginSelection.specOverrides,
+                dryRun: params.opts.dryRun,
+                updateChannel: params.opts.all ? undefined : configuredUpdateChannel,
+                officialPluginUpdateChannel,
+                syncOfficialPluginInstalls: params.opts.all ? true : undefined,
+                coreVersion: VERSION,
+                ...installPolicyWarningAcknowledgement,
+                ...resolvePluginCapabilityConsentCliOptions({
+                  acceptCapabilities: params.opts.acceptCapabilities,
+                  action: "update",
+                  allowPrompt: !params.opts.dryRun,
+                }),
+                logger,
+                onIntegrityDrift: async (drift) => {
+                  const specLabel = drift.resolvedSpec ?? drift.spec;
+                  defaultRuntime.log(
+                    theme.warn(
+                      `Integrity drift detected for "${drift.pluginId}" (${specLabel})` +
+                        `\nExpected: ${drift.expectedIntegrity}` +
+                        `\nActual:   ${drift.actualIntegrity}`,
+                    ),
+                  );
+                  if (drift.dryRun) {
+                    return true;
+                  }
+                  return await promptYesNo(
+                    `Continue updating "${drift.pluginId}" with this artifact?`,
+                  );
+                },
+              },
+              deferredInstallTransactions,
+              assertOwned,
+            ),
+          )
+        : { config: cfgWithPluginInstallRecords, changed: false, outcomes: [] };
+  } catch (error) {
+    await settlePluginInstallTransactions(deferredInstallTransactions, "rollback");
+    throw error;
+  }
+  let packageUpdatePersisted = false;
+  try {
+    if (pluginSelection.pluginIds.length > 0 && pluginResult.changed && !params.opts.dryRun) {
+      const nextInstallRecords = pluginResult.config.plugins?.installs ?? {};
+      // The installer may restore or replace bytes at a previously observed path.
+      const afterIndex = withPluginCache(createPluginCache(), () =>
+        loadInstalledPluginIndex({
+          config: pluginResult.config,
+          installRecords: nextInstallRecords,
+        }),
+      );
+      const reconciled = reconcilePluginPackageUpdateConfig({
+        config: pluginResult.config,
+        beforeIndex: installedPluginIndex,
+        afterIndex,
+        snapshot: packageUpdateSnapshot,
+        installOwnerMigrations: resolvePluginInstallOwnerMigrations(pluginResult),
+      });
+      if (!reconciled.ok) {
+        await settlePluginInstallTransactions(deferredInstallTransactions, "rollback");
+        defaultRuntime.error(reconciled.error);
+        return defaultRuntime.exit(1);
+      }
+      pluginResult = { ...pluginResult, config: reconciled.config };
+    }
+    const hookResult =
+      hookSelection.hookIds.length > 0
+        ? await updateNpmInstalledHookPacks(
+            requestDeferredPluginInstall(
+              {
+                config: pluginResult.config,
+                lease,
+                beforePersistentApply: mutationSnapshot?.writeOptions.assertConfigPathForWrite,
+                hookIds: hookSelection.hookIds,
+                specOverrides: hookSelection.specOverrides,
+                dryRun: params.opts.dryRun,
+                ...installPolicyWarningAcknowledgement,
+                logger,
+                onIntegrityDrift: async (drift) => {
+                  const specLabel = drift.resolvedSpec ?? drift.spec;
+                  defaultRuntime.log(
+                    theme.warn(
+                      `Integrity drift detected for hook pack "${drift.hookId}" (${specLabel})` +
+                        `\nExpected: ${drift.expectedIntegrity}` +
+                        `\nActual:   ${drift.actualIntegrity}`,
+                    ),
+                  );
+                  if (drift.dryRun) {
+                    return true;
+                  }
+                  return await promptYesNo(
+                    `Continue updating hook pack "${drift.hookId}" with this artifact?`,
+                  );
+                },
+              },
+              deferredInstallTransactions,
+              assertOwned,
+            ),
+          )
+        : { config: pluginResult.config, changed: false, outcomes: [] };
 
-  if (!params.opts.dryRun && (pluginResult.changed || hookResult.changed)) {
-    const sourceSnapshot = mutationSnapshot ?? (await sourceSnapshotPromise);
-    const nextPluginInstallRecords = pluginResult.config.plugins?.installs ?? {};
-    const shouldPersistPluginInstallIndex =
-      pluginResult.changed || Object.keys(pluginInstallRecords).length > 0;
-    const sourceShapedUpdateConfig = projectUpdaterResultOntoSourceConfig({
-      runtimeBase: cfgWithPluginInstallRecords,
-      sourceBase: sourceCfgWithPluginInstallRecords,
-      updatedConfig: hookResult.config,
-    });
-    // Plugin install records live in the persisted index. Preserve an authored
-    // empty plugins section so include ownership does not become a false mutation.
-    const nextConfig = withoutPluginInstallRecords(sourceShapedUpdateConfig, {
-      preserveEmptyPlugins: shouldPreserveEmptyPlugins({
-        parsed: sourceSnapshot?.snapshot.parsed,
-        sourceConfig: sourceSnapshot?.snapshot.sourceConfig ?? {},
-      }),
-    });
-    let recordsOnlyPluginUpdate = false;
-    if (shouldPersistPluginInstallIndex) {
-      if (isDeepStrictEqual(nextConfig, sourceSnapshot?.snapshot.sourceConfig ?? sourceCfg)) {
-        await commitPluginInstallRecordsOnly({
-          previousInstallRecords: persistedPluginInstallRecords,
-          nextInstallRecords: nextPluginInstallRecords,
-          verifyConfigFresh: async () => {
-            await assertRecordsOnlyUpdateConfigFresh({
-              baseHash: sourceSnapshot?.snapshot.hash,
-              writeOptions: sourceSnapshot?.writeOptions,
-            });
-          },
+    if (!params.opts.dryRun && (pluginResult.changed || hookResult.changed)) {
+      const sourceSnapshot = mutationSnapshot ?? (await sourceSnapshotPromise);
+      if (pluginResult.changed) {
+        const currentInstallRecords = await loadInstalledPluginIndexInstallRecords();
+        const currentSnapshot = capturePluginPackageUpdateSnapshot({
+          index: installedPluginIndex,
+          installOwners: pluginSelection.pluginIds,
         });
-        recordsOnlyPluginUpdate = pluginResult.changed;
+        if (
+          !isDeepStrictEqual(currentInstallRecords, persistedPluginInstallRecords) ||
+          !currentSnapshot.ok ||
+          !isDeepStrictEqual([...currentSnapshot.value], [...packageUpdateSnapshot])
+        ) {
+          await settlePluginInstallTransactions(deferredInstallTransactions, "rollback");
+          defaultRuntime.error(
+            currentSnapshot.ok
+              ? "Plugin package ownership changed during update; no config or index changes were committed. Refresh the plugin registry and retry."
+              : currentSnapshot.error,
+          );
+          return defaultRuntime.exit(1);
+        }
+      }
+      const nextPluginInstallRecords = pluginResult.config.plugins?.installs ?? {};
+      const shouldPersistPluginInstallIndex =
+        pluginResult.changed || Object.keys(pluginInstallRecords).length > 0;
+      const sourceShapedUpdateConfig = projectUpdaterResultOntoSourceConfig({
+        runtimeBase: cfgWithPluginInstallRecords,
+        sourceBase: sourceCfgWithPluginInstallRecords,
+        updatedConfig: hookResult.config,
+      });
+      // Plugin install records live in the persisted index. Preserve an authored
+      // empty plugins section so include ownership does not become a false mutation.
+      const nextConfig = withoutPluginInstallRecords(sourceShapedUpdateConfig, {
+        preserveEmptyPlugins: shouldPreserveEmptyPlugins({
+          parsed: sourceSnapshot?.snapshot.parsed,
+          sourceConfig: sourceSnapshot?.snapshot.sourceConfig ?? {},
+        }),
+      });
+      let recordsOnlyPluginUpdate = false;
+      if (shouldPersistPluginInstallIndex) {
+        if (isDeepStrictEqual(nextConfig, sourceSnapshot?.snapshot.sourceConfig ?? sourceCfg)) {
+          await commitPluginInstallRecordsOnly({
+            previousInstallRecords: persistedPluginInstallRecords,
+            nextInstallRecords: nextPluginInstallRecords,
+            nextConfig,
+            verifyConfigFresh: async () => {
+              await assertRecordsOnlyUpdateConfigFresh({
+                baseHash: sourceSnapshot?.snapshot.hash,
+                writeOptions: sourceSnapshot?.writeOptions,
+              });
+            },
+          });
+          recordsOnlyPluginUpdate = pluginResult.changed;
+        } else {
+          await commitPluginInstallRecordsWithConfig({
+            previousInstallRecords: persistedPluginInstallRecords,
+            nextInstallRecords: nextPluginInstallRecords,
+            nextConfig,
+            baseHash: sourceSnapshot?.snapshot.hash,
+            writeOptions: {
+              ...sourceSnapshot?.writeOptions,
+              afterWrite: { mode: "restart", reason: "plugin source changed" },
+            },
+          });
+        }
       } else {
-        await commitPluginInstallRecordsWithConfig({
-          previousInstallRecords: persistedPluginInstallRecords,
-          nextInstallRecords: nextPluginInstallRecords,
+        await replaceConfigFile({
           nextConfig,
           baseHash: sourceSnapshot?.snapshot.hash,
-          writeOptions: {
-            ...sourceSnapshot?.writeOptions,
-            afterWrite: { mode: "restart", reason: "plugin source changed" },
-          },
+          writeOptions: sourceSnapshot?.writeOptions,
         });
       }
-    } else {
-      await replaceConfigFile({
-        nextConfig,
-        baseHash: sourceSnapshot?.snapshot.hash,
-        writeOptions: sourceSnapshot?.writeOptions,
-      });
-    }
-    if (pluginResult.changed) {
-      await refreshPluginRegistryAfterConfigMutation({
-        config: nextConfig,
-        reason: "source-changed",
-        installRecords: nextPluginInstallRecords,
-        invalidateRuntimeCache: false,
-        logger,
-      });
-      if (recordsOnlyPluginUpdate) {
-        await notifyGatewayPluginMetadataChanged(cfg);
+      packageUpdatePersisted = true;
+      await settlePluginInstallTransactions(deferredInstallTransactions, "commit").catch(() =>
+        logger.warn("Plugin update committed, but cleanup failed. Restart is required."),
+      );
+      if (pluginResult.changed) {
+        await refreshPluginRegistryAfterConfigMutation({
+          config: nextConfig,
+          reason: "source-changed",
+          installRecords: nextPluginInstallRecords,
+          invalidateRuntimeCache: false,
+          logger,
+        });
+        if (recordsOnlyPluginUpdate) {
+          await notifyGatewayPluginMetadataChanged(cfg);
+        }
       }
+      defaultRuntime.log("Restart the gateway to load plugins and hooks.");
     }
-    defaultRuntime.log("Restart the gateway to load plugins and hooks.");
-  }
 
-  if (outcomeSummary.hasErrors) {
-    defaultRuntime.exit(1);
+    const outcomeSummary = logPluginUpdateOutcomes({
+      outcomes: [...pluginResult.outcomes, ...hookResult.outcomes],
+      log: defaultRuntime.log,
+      error: defaultRuntime.error,
+    });
+    if (outcomeSummary.hasErrors) {
+      defaultRuntime.exit(1);
+    }
+  } catch (error) {
+    if (!packageUpdatePersisted) {
+      await settlePluginInstallTransactions(deferredInstallTransactions, "rollback");
+    }
+    throw error;
   }
 }

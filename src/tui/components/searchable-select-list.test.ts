@@ -204,19 +204,24 @@ describe("SearchableSelectList", () => {
     expectNoMatchesForQuery(list, "32m");
   });
 
-  it("does not corrupt ANSI sequences when highlighting multiple tokens", () => {
-    const items = [{ value: "gpt-model", label: "gpt-model" }];
-    const list = new SearchableSelectList(items, 5, ansiHighlightTheme);
+  it.each(["gpt m", "gpt GPT m", "  GPT  m  "])(
+    "does not corrupt ANSI sequences when highlighting query %j",
+    (query) => {
+      const items = [{ value: "gpt-model", label: "gpt-model" }];
+      const list = new SearchableSelectList(items, 5, ansiHighlightTheme);
 
-    typeInput(list, "gpt m");
+      typeInput(list, query);
 
-    const renderedLine = list.render(80).find((line) => stripAnsi(line).includes("gpt-model"));
-    if (!renderedLine) {
-      throw new Error("expected rendered gpt-model line");
-    }
-    const highlightOpens = renderedLine.split("\u001b[31m").length - 1;
-    expect(highlightOpens).toBe(2);
-  });
+      const rendered = list.render(80);
+      const renderedLine = rendered.find((line) => stripAnsi(line).includes("gpt-model"));
+      if (!renderedLine) {
+        throw new Error("expected rendered gpt-model line");
+      }
+      const highlightOpens = renderedLine.split("\u001b[31m").length - 1;
+      expect(highlightOpens).toBe(2);
+      expect(list.render(80)).toEqual(rendered);
+    },
+  );
 
   it("filters items when typing", () => {
     const list = new SearchableSelectList(testItems, 5, mockTheme);
@@ -330,22 +335,24 @@ describe("SearchableSelectList", () => {
     expect(output).toContain("*gpt*");
   });
 
-  it("discards compiled regexes from previous searches", () => {
-    const queryLength = 300;
+  it("renders the current query during selection callbacks after clearing and replacing it", () => {
     const list = new SearchableSelectList(
-      [{ value: "match", label: "a".repeat(queryLength) }],
+      [{ value: "match", label: "alpha beta", description: "alpha beta description" }],
       5,
-      mockTheme,
+      ansiHighlightTheme,
     );
+    list.handleInput("alpha");
+    list.render(80);
+    const frames: string[] = [];
+    list.onSelectionChange = () => frames.push(list.render(80).join("\n"));
 
-    for (let index = 0; index < queryLength; index += 1) {
-      list.handleInput("a");
-      list.render(queryLength + 10);
-    }
+    list.handleInput("\u0015");
+    list.handleInput("beta");
 
-    const regexCache = (list as unknown as { regexCache: Map<string, RegExp> }).regexCache;
-    expect(regexCache.size).toBe(1);
-    expect(list.render(queryLength + 10).join("\n")).toContain(`*${"a".repeat(queryLength)}*`);
+    expect(frames).toHaveLength(2);
+    expect(frames[0]).not.toContain("\u001b[31m");
+    expect(frames[1]?.split("alpha \u001b[31mbeta\u001b[0m")).toHaveLength(3);
+    expect(list.render(80).join("\n")).toBe(frames[1]);
   });
 
   it("shows no match message when filter yields no results", () => {
@@ -400,7 +407,60 @@ describe("SearchableSelectList", () => {
     expect(selectedValue).toBe("anthropic/claude-3-opus");
   });
 
-  it("calls onCancel when escape is pressed", () => {
+  it("sanitizes rendered fields before applying trusted highlighting", () => {
+    const attacks = [
+      "\u001b[38;5;201m",
+      "\u001b[3J",
+      "\u001b]0;search-title\u0007",
+      "\u001b]52;c;search-clipboard\u0007",
+      "\u009b2K",
+      "\u009d0;search-c1-title\u009c",
+    ];
+    const rawValue = `selector-value-start${attacks[1]}selector-value-end\r\nمرحبا\tשלום`;
+    const description = `selector-description-start${attacks[3]}selector-description-end\n東京`;
+    const list = new SearchableSelectList(
+      [
+        {
+          value: rawValue,
+          label: attacks.join(""),
+          description,
+          searchText: "selector-target",
+        },
+      ],
+      5,
+      ansiHighlightTheme,
+    );
+    let selectedValue: string | undefined;
+    list.onSelect = (item) => {
+      selectedValue = item.value;
+    };
+
+    typeInput(list, "selector");
+    const rendered = list.render(160).join("\n");
+    const plainRendered = stripAnsi(rendered);
+
+    expect(rendered).toContain("\u001b[31mselector\u001b[0m-value-start");
+    expect(plainRendered).toContain("selector-description-startselector-description-end 東京");
+    expect(plainRendered).toContain("مرحبا שלום");
+    expect(plainRendered).toContain("\u2067");
+    expect(plainRendered).toContain("\u2069");
+    for (const attack of attacks) {
+      expect(rendered).not.toContain(attack);
+    }
+    expect(rendered).not.toContain("selector-value-end\r\nمرحبا\tשלום");
+
+    list.handleInput("\r");
+    expect(selectedValue).toBe(rawValue);
+  });
+
+  it.each(
+    ["", "gemini"].flatMap((query) => [
+      { name: "Escape", key: "\x1b", query },
+      { name: "Ctrl+C", key: "\u0003", query },
+      { name: "Kitty Ctrl+C", key: "\x1b[99;5u", query },
+      { name: "modifyOtherKeys Ctrl+C", key: "\x1b[27;5;99~", query },
+    ]),
+  )("cancels query '$query' with $name", ({ query, key }) => {
     const list = new SearchableSelectList(testItems, 5, mockTheme);
     let cancelled = false;
 
@@ -408,9 +468,11 @@ describe("SearchableSelectList", () => {
       cancelled = true;
     };
 
-    // Press escape
-    list.handleInput("\x1b");
+    typeInput(list, query);
+    const selected = list.getSelectedItem();
+    list.handleInput(key);
 
     expect(cancelled).toBe(true);
+    expect(list.getSelectedItem()).toBe(selected);
   });
 });

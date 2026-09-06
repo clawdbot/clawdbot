@@ -203,7 +203,7 @@ async function expectBackgroundSessionTimesOut(params: {
 
   const finished = await waitForFinishedSession(sessionId);
   try {
-    expect(finished?.status).toBe("failed");
+    expect(finished?.terminalStatus).toBe("failed");
   } finally {
     cleanupRunningSession(sessionId);
   }
@@ -232,7 +232,7 @@ test("background exec still times out after tool signal abort", async () => {
     executeParams: {
       command: BACKGROUND_HOLD_CMD,
       background: true,
-      timeout: BACKGROUND_TIMEOUT_SEC,
+      timeoutSeconds: BACKGROUND_TIMEOUT_SEC,
     },
     abortAfterStart: true,
     expectedTimeoutSec: BACKGROUND_TIMEOUT_SEC,
@@ -261,7 +261,7 @@ test("background exec with timeout zero bypasses default timeout", async () => {
   const result = await tool.execute("toolcall", {
     command: BACKGROUND_HOLD_CMD,
     background: true,
-    timeout: 0,
+    timeoutSeconds: 0,
   });
   expect(result.details.status).toBe("running");
   const sessionId = (result.details as { sessionId: string }).sessionId;
@@ -279,7 +279,7 @@ test("yielded background exec still times out", async () => {
     executeParams: {
       command: BACKGROUND_HOLD_CMD,
       yieldMs: 5,
-      timeout: YIELDED_BACKGROUND_TIMEOUT_SEC,
+      timeoutSeconds: YIELDED_BACKGROUND_TIMEOUT_SEC,
     },
     expectedTimeoutSec: YIELDED_BACKGROUND_TIMEOUT_SEC,
   });

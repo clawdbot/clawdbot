@@ -7,7 +7,7 @@ title: "Discord Activities"
 
 Discord Activities let an agent post an interactive, self-contained HTML widget to the current Discord channel. The message includes an **Open widget** button; clicking it launches the widget inside Discord.
 
-The feature is off by default. OpenClaw registers the Activity HTTP routes, the `show_widget` agent tool, and the launch-button handler only when `channels.discord.activities` is present and a client secret resolves. The deprecated `discord_widget` alias remains available for one release.
+The feature is off by default. `show_widget` remains one core-owned tool. When `channels.discord.activities` is present and a client secret resolves, the Discord Activity routes, launch-button handler, and current-channel presenter become available behind that tool. Without the block, requests to the public Activity prefix remain indistinguishable from an unregistered route. No Discord-specific widget tool or alias exists.
 
 ## Prerequisites
 
@@ -86,6 +86,8 @@ Keep normal gateway authentication enabled. Only the Activity prefix is public, 
   </Step>
 </Steps>
 
+Core validates and wraps the widget document before handing it to Discord. The presenter accepts HTML source up to 48 KiB, stores the canonical composed document, and always labels the Activity button **Open widget**. The standard `show_widget` pin, name, tab, size, frame, ordering, and capability fields remain available because dashboard state stays core-owned. Registered non-HTML widget kinds are not offered when Discord is the only available presentation route.
+
 ## Security model
 
 - OAuth identifies the Discord user before widget metadata is returned.
@@ -95,7 +97,7 @@ Keep normal gateway authentication enabled. Only the Activity prefix is public, 
 - Widgets expire after seven days, with at most 64 retained per Discord plugin instance.
 - Widget HTML is authored by your agent and should be treated as trusted content. Do not embed secrets you would not want a buggy widget to expose.
 - The widget can navigate within its own nested frame. The `sandbox="allow-scripts"` iframe blocks top-level navigation, popups, and same-origin access, while its Content Security Policy blocks network connections and external resources. These controls are defense-in-depth, not a security boundary against the agent that authored the widget.
-- When Activities is disabled, `/discord/activity` is not registered at all.
+- When Activities is disabled or its required account credentials are unavailable, the route remains registered internally but public requests under `/discord/activity` are left unhandled and return the normal 404.
 
 The public Activity shell and token-exchange route become reachable through your tunnel when enabled. They do not expose widget HTML without a valid OAuth session and one-time document capability.
 
@@ -106,7 +108,7 @@ The public Activity shell and token-exchange route become reachable through your
 - confirm the tunnel is running and routes to the gateway's actual bind port
 - confirm the Developer Portal target includes `/discord/activity`
 - restart the gateway after changing Discord or OpenClaw configuration
-- check gateway logs for the one-line warning about a missing Activities client secret
+- confirm the Discord bot token and Activities client secret both resolve in the running gateway; incomplete credentials keep `/discord/activity` externally hidden behind the normal 404
 
 ### Discord opens a blank page or reports `blocked:csp`
 
@@ -122,4 +124,4 @@ Launch the button from the channel where the agent posted it. OpenClaw tracks la
 
 ### “You cannot launch Activities in this channel”
 
-Discord does not launch Activities from forum-post threads. OpenClaw can post the widget message and button there, but launch the Activity from a regular text channel instead. This restriction comes from Discord, not OpenClaw.
+Discord does not launch Activities from forum-style channels. OpenClaw rejects the Activity component delivery there instead of posting a button that cannot work. Ask for the widget from a regular text channel instead.

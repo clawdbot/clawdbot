@@ -1,0 +1,26 @@
+{
+  "id": "fish-audio-speech",
+  "capabilityCatalogEntry": "./capability-catalog.ts",
+  "legacyPluginIds": ["fish-audio"],
+  "activation": {
+    "onStartup": false
+  },
+  "name": "Fish Audio",
+  "description": "Fish Audio S2.1 hosted text-to-speech with streaming, voice notes, and telephony output.",
+  "setup": {
+    "providers": [
+      {
+        "id": "fish-audio",
+        "envVars": ["FISH_API_KEY", "FISH_AUDIO_API_KEY"]
+      }
+    ]
+  },
+  "contracts": {
+    "speechProviders": ["fish-audio"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

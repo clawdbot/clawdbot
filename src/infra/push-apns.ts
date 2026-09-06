@@ -2,6 +2,7 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { ChannelApprovalKind } from "./approval-types.js";
 import type { DeviceIdentity } from "./device-identity.js";
 import { toErrorObject } from "./errors.js";
 import { getApnsBearerToken, type ApnsAuthConfig } from "./push-apns-auth.js";
@@ -658,7 +659,7 @@ export async function sendApnsPluginApprovalAlert(
 
 async function sendApnsApprovalResolvedWake(params: {
   transport: ApnsApprovalParams;
-  kind: "exec" | "plugin";
+  kind: ChannelApprovalKind;
 }): Promise<ApnsPushWakeResult> {
   return await sendApnsApprovalPush({
     transport: params.transport,

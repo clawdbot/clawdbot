@@ -5,7 +5,7 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { resolveMemoryPluginConfig, withMemoryCommand } from "./cli-runtime-common.js";
 import { defaultRuntime, shortenHomePath, theme } from "./cli.host.runtime.js";
 import type { MemoryRemBackfillOptions, MemoryRemHarnessOptions } from "./cli.types.js";
-import { removeBackfillDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-narrative.js";
+import { removeBackfillDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-dreams-file.js";
 import { seedHistoricalDailyMemorySignals } from "./dreaming-phases.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 import { previewGroundedRemMarkdown } from "./rem-evidence.js";
@@ -44,8 +44,9 @@ export async function runMemorySessionBackfill(
         process.exitCode = 1;
         return;
       }
+      const pluginConfig = resolveMemoryPluginConfig(cfg);
       const remConfig = resolveMemoryRemDreamingConfig({
-        pluginConfig: resolveMemoryPluginConfig(cfg),
+        pluginConfig,
         cfg,
       });
       let result;
@@ -53,6 +54,7 @@ export async function runMemorySessionBackfill(
         result = await runSessionBackfill({
           agentId,
           workspaceDir,
+          pluginConfig,
           ...(opts.from !== undefined ? { from: opts.from } : {}),
           ...(opts.to !== undefined ? { to: opts.to } : {}),
           ...(opts.limitDays !== undefined ? { limitDays: opts.limitDays } : {}),

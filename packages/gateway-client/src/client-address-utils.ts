@@ -4,7 +4,7 @@ import {
   type ParsedIpAddress,
 } from "@openclaw/net-policy/ip";
 
-export function normalizeLowercaseStringOrEmpty(value: unknown): string {
+export function normalizeGatewayErrorText(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
@@ -12,8 +12,23 @@ export function isSensitiveUrlQueryParamName(key: string): boolean {
   return /(?:token|password|secret|key|auth|credential)/iu.test(key);
 }
 
-export function normalizeFingerprint(fingerprint: string | undefined): string {
-  return (fingerprint ?? "").replaceAll(":", "").trim().toLowerCase();
+const SHA256_HEX_FINGERPRINT = /^[a-fA-F0-9]{64}$/u;
+const SHA256_COLON_FINGERPRINT = /^(?:[a-fA-F0-9]{2}:){31}[a-fA-F0-9]{2}$/u;
+
+export function normalizeTlsFingerprint(fingerprint: string | undefined): string {
+  const value = (fingerprint ?? "").trim().replace(/^sha256:/iu, "");
+  if (SHA256_HEX_FINGERPRINT.test(value)) {
+    return value.toLowerCase();
+  }
+  return SHA256_COLON_FINGERPRINT.test(value) ? value.replaceAll(":", "").toLowerCase() : "";
+}
+
+export function requireTlsFingerprint(fingerprint: string): string {
+  const normalized = normalizeTlsFingerprint(fingerprint);
+  if (!normalized) {
+    throw new Error("Invalid TLS fingerprint; expected a SHA-256 certificate fingerprint.");
+  }
+  return normalized;
 }
 
 export function parseHostForAddressChecks(

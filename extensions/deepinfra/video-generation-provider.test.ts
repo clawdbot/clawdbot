@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
+  requireFirstPostJsonRequest,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -12,6 +13,7 @@ const {
   fetchWithTimeoutMock,
   pollProviderOperationJsonMock,
   resolveProviderHttpRequestConfigMock,
+  sanitizeConfiguredModelProviderRequestMock,
 } = getProviderHttpMocks();
 
 let buildDeepInfraVideoGenerationProvider: typeof import("./video-generation-provider.js").buildDeepInfraVideoGenerationProvider;
@@ -28,14 +30,6 @@ function mockSubmit(job: unknown, release = vi.fn(async () => {})): typeof relea
     release,
   });
   return release;
-}
-
-function requireFirstPostJsonRequest(): unknown {
-  const [call] = postJsonRequestMock.mock.calls;
-  if (!call) {
-    throw new Error("expected DeepInfra video submit request");
-  }
-  return call[0];
 }
 
 describe("deepinfra video generation provider", () => {
@@ -88,7 +82,6 @@ describe("deepinfra video generation provider", () => {
         {
           baseUrl: "https://api.deepinfra.com/v1/openai",
           defaultBaseUrl: "https://api.deepinfra.com/v1/openai",
-          allowPrivateNetwork: false,
           defaultHeaders: {
             Authorization: "Bearer provider-key",
             "Content-Type": "application/json",
@@ -96,12 +89,16 @@ describe("deepinfra video generation provider", () => {
           provider: "deepinfra",
           capability: "video",
           transport: "http",
+          request: undefined,
         },
       ],
     ]);
 
     expect(postJsonRequestMock).toHaveBeenCalledOnce();
-    const postRequest = requireFirstPostJsonRequest();
+    const postRequest = requireFirstPostJsonRequest(
+      postJsonRequestMock,
+      "DeepInfra video submit request",
+    );
     const postRequestHeaders = Reflect.get(postRequest ?? {}, "headers");
     expect(postRequestHeaders).toBeInstanceOf(Headers);
     expect(Object.fromEntries((postRequestHeaders as Headers).entries())).toEqual({
@@ -146,6 +143,68 @@ describe("deepinfra video generation provider", () => {
       status: "succeeded",
     });
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("applies configured request policy to OpenAI-compatible video requests", async () => {
+    const requestPolicy = {
+      allowPrivateNetwork: true,
+      headers: { "X-DeepInfra-Route": "video-policy" },
+    };
+    const dispatcherPolicy = { mode: "env-proxy" as const };
+    resolveProviderHttpRequestConfigMock.mockImplementationOnce((params) => {
+      const headers = new Headers(params.defaultHeaders);
+      for (const [key, value] of Object.entries(params.request?.headers ?? {})) {
+        headers.set(key, value);
+      }
+      return {
+        baseUrl: params.baseUrl ?? params.defaultBaseUrl,
+        allowPrivateNetwork: params.request?.allowPrivateNetwork === true,
+        headers,
+        dispatcherPolicy,
+      };
+    });
+    mockSubmit({
+      id: "videos_policy",
+      status: "succeeded",
+      data: [{ url: "/generated/policy.mp4" }],
+    });
+
+    const provider = buildDeepInfraVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "deepinfra",
+      model: "deepinfra/Pixverse/Pixverse-T2V",
+      prompt: "A request policy video",
+      cfg: {
+        models: {
+          providers: {
+            deepinfra: {
+              baseUrl: "https://api.deepinfra.com/v1/openai",
+              models: [],
+              request: requestPolicy,
+            },
+          },
+        },
+      },
+    });
+
+    expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalledWith(requestPolicy);
+    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "deepinfra",
+        capability: "video",
+        transport: "http",
+        request: requestPolicy,
+      }),
+    );
+    const postRequest = requireFirstPostJsonRequest(
+      postJsonRequestMock,
+      "DeepInfra video submit request",
+    );
+    expect(Reflect.get(postRequest ?? {}, "allowPrivateNetwork")).toBe(true);
+    expect(Reflect.get(postRequest ?? {}, "dispatcherPolicy")).toBe(dispatcherPolicy);
+    const postRequestHeaders = Reflect.get(postRequest ?? {}, "headers");
+    expect(postRequestHeaders).toBeInstanceOf(Headers);
+    expect((postRequestHeaders as Headers).get("x-deepinfra-route")).toBe("video-policy");
   });
 
   it("returns immediately without polling when the submit response already succeeded", async () => {
@@ -196,9 +255,12 @@ describe("deepinfra video generation provider", () => {
       } as unknown as OpenClawConfig,
     });
 
-    expect(Reflect.get(requireFirstPostJsonRequest() ?? {}, "url")).toBe(
-      "https://video.example.com/v1/openai/videos",
-    );
+    expect(
+      Reflect.get(
+        requireFirstPostJsonRequest(postJsonRequestMock, "DeepInfra video submit request") ?? {},
+        "url",
+      ),
+    ).toBe("https://video.example.com/v1/openai/videos");
     expect(result.videos).toEqual([
       {
         url: "https://video.example.com/generated/custom.mp4",
@@ -287,7 +349,10 @@ describe("deepinfra video generation provider", () => {
     });
 
     expect(postJsonRequestMock).toHaveBeenCalledOnce();
-    const postRequest = requireFirstPostJsonRequest();
+    const postRequest = requireFirstPostJsonRequest(
+      postJsonRequestMock,
+      "DeepInfra video submit request",
+    );
     expect(Reflect.get(Reflect.get(postRequest ?? {}, "body") ?? {}, "seed")).toBeUndefined();
   });
 

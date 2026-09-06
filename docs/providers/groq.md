@@ -61,7 +61,7 @@ export GROQ_API_KEY=gsk_...
 
 ```json5
 {
-  env: { GROQ_API_KEY: "gsk_..." },
+  env: { vars: { GROQ_API_KEY: "gsk_..." } },
   agents: {
     defaults: {
       model: { primary: "groq/openai/gpt-oss-120b" },
@@ -99,13 +99,13 @@ See [Thinking modes](/tools/thinking) for the shared `/think` levels and how Ope
 
 Groq's plugin also registers an **audio media-understanding provider** so voice messages can be transcribed through the shared `tools.media.audio` surface.
 
-| Property           | Value                                     |
-| ------------------ | ----------------------------------------- |
-| Shared config path | `tools.media.audio`                       |
-| Default base URL   | `https://api.groq.com/openai/v1`          |
-| Default model      | `whisper-large-v3-turbo`                  |
-| Auto priority      | 20                                        |
-| API endpoint       | OpenAI-compatible `/audio/transcriptions` |
+| Property          | Value                                     |
+| ----------------- | ----------------------------------------- |
+| Shared model path | `tools.media.models`                      |
+| Default base URL  | `https://api.groq.com/openai/v1`          |
+| Default model     | `whisper-large-v3-turbo`                  |
+| Auto priority     | 20                                        |
+| API endpoint      | OpenAI-compatible `/audio/transcriptions` |
 
 To make Groq the default audio backend:
 
@@ -113,9 +113,7 @@ To make Groq the default audio backend:
 {
   tools: {
     media: {
-      audio: {
-        models: [{ provider: "groq" }],
-      },
+      models: [{ provider: "groq", capabilities: ["audio"] }],
     },
   },
 }

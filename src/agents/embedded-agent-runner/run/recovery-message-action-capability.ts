@@ -28,6 +28,9 @@ type RecoveryMessageActionCapabilityParams = Pick<
   | "sessionId"
   | "sessionKey"
   | "senderId"
+  | "senderName"
+  | "senderUsername"
+  | "senderE164"
   | "timeoutMs"
 >;
 
@@ -56,6 +59,9 @@ export function createRecoveryMessageActionTurnCapability(
     sessionId: params.sessionId,
     requesterAccountId: params.agentAccountId,
     requesterSenderId: params.senderId ?? undefined,
+    requesterSenderName: params.senderName ?? undefined,
+    requesterSenderUsername: params.senderUsername ?? undefined,
+    requesterSenderE164: params.senderE164 ?? undefined,
     toolContext: {
       currentChannelId: params.currentChannelId,
       currentChatType: params.chatType,

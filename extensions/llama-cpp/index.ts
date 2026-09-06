@@ -1,76 +1,13 @@
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
-import {
-  LLAMA_CPP_PROVIDER_ID,
-  LLAMA_CPP_PROVIDER_LABEL,
-  buildLlamaCppProviderConfig,
-  resolveLlamaCppSyntheticApiKey,
-} from "./src/defaults.js";
 import { llamaCppEmbeddingProviderAdapter } from "./src/embedding-provider.js";
-import { createLlamaCppStreamFn } from "./src/inference-provider.js";
-import { detectLlamaCppSetup, prepareLlamaCppSetup, runLlamaCppSetup } from "./src/setup.js";
+import { registerLlamaCppProvider } from "./src/managed-provider.js";
 
 export default definePluginEntry({
   id: "llama-cpp",
   name: "llama.cpp Provider",
-  description: "Local GGUF text inference and embeddings through node-llama-cpp",
+  description: "Managed and external llama.cpp servers for GGUF chat and embeddings",
   register(api: OpenClawPluginApi) {
     api.registerEmbeddingProvider(llamaCppEmbeddingProviderAdapter);
-    api.registerProvider({
-      id: LLAMA_CPP_PROVIDER_ID,
-      label: LLAMA_CPP_PROVIDER_LABEL,
-      docsPath: "/plugins/llama-cpp",
-      auth: [
-        {
-          id: "local",
-          label: LLAMA_CPP_PROVIDER_LABEL,
-          hint: "Run one private GGUF model directly inside this Gateway",
-          kind: "custom",
-          appGuidedSetup: {
-            detect: detectLlamaCppSetup,
-            prepare: prepareLlamaCppSetup,
-          },
-          run: runLlamaCppSetup,
-        },
-      ],
-      catalog: {
-        order: "late",
-        run: async (ctx) => ({
-          provider: buildLlamaCppProviderConfig(
-            ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID],
-          ),
-        }),
-      },
-      staticCatalog: {
-        order: "late",
-        run: async () => ({ provider: buildLlamaCppProviderConfig() }),
-      },
-      createStreamFn: ({ config, provider }) =>
-        createLlamaCppStreamFn({
-          providerConfig: config?.models?.providers?.[provider],
-        }),
-      resolveSyntheticAuth: () => ({
-        apiKey: resolveLlamaCppSyntheticApiKey(),
-        source: "local llama.cpp runtime",
-        mode: "api-key" as const,
-      }),
-      ...buildProviderToolCompatFamilyHooks("llamacpp-gbnf"),
-      wizard: {
-        setup: {
-          choiceId: LLAMA_CPP_PROVIDER_ID,
-          choiceLabel: LLAMA_CPP_PROVIDER_LABEL,
-          choiceHint: "Run one private GGUF model directly inside this Gateway",
-          groupId: LLAMA_CPP_PROVIDER_ID,
-          groupLabel: "Local llama.cpp",
-          groupHint: "No API key required",
-          methodId: "local",
-        },
-        modelPicker: {
-          label: "llama.cpp",
-          hint: "Run a GGUF model directly inside OpenClaw",
-          methodId: "local",
-        },
-      },
-    });
+    registerLlamaCppProvider(api);
   },
 });

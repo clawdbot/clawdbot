@@ -13,18 +13,25 @@ import { normalizeProviderId } from "../../../agents/model-selection.js";
 import type { AgentModelConfig } from "../../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolvePluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import { collectConfiguredProviderSelectionIds } from "./configured-provider-selection-ids.js";
+import {
+  createRetiredModelRefRepairResolver,
+  repairRetiredConfigModelRefs,
+} from "./retired-model-ref-repair.js";
 
 type StaleAgentModelRefRepair = {
   config: OpenClawConfig;
   changes: string[];
   warnings: string[];
+  retiredModelRefConfig?: Pick<OpenClawConfig, "agents" | "models">;
 };
 
 type RepairOptions = {
   env?: NodeJS.ProcessEnv;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
   /** Test seam for the provider ids supplied by bundled or installed plugins. */
   pluginProviderIds?: ReadonlySet<string>;
   /** Test seam for provider ids already present in each agent's models.json. */
@@ -53,12 +60,14 @@ function collectPluginProviderIds(
   } else {
     const defaultAgentId = tryResolveDefaultAgentId(cfg);
     const workspaceDir = defaultAgentId ? resolveAgentWorkspaceDir(cfg, defaultAgentId) : undefined;
-    const snapshot = resolvePluginMetadataSnapshot({
-      config: cfg,
-      workspaceDir: workspaceDir ?? undefined,
-      env: options.env ?? process.env,
-      allowWorkspaceScopedCurrent: true,
-    });
+    const snapshot =
+      options.pluginMetadataSnapshot ??
+      resolvePluginMetadataSnapshot({
+        config: cfg,
+        workspaceDir: workspaceDir ?? undefined,
+        env: options.env ?? process.env,
+        allowWorkspaceScopedCurrent: true,
+      });
     if (snapshot.diagnostics.some((diagnostic) => diagnostic.level === "error")) {
       return {
         warnings: [
@@ -201,6 +210,7 @@ function filterFallbacks(params: {
   if (!Array.isArray(params.model.fallbacks)) {
     return;
   }
+  // An empty array disables inherited fallbacks, including after stale refs are removed.
   params.model.fallbacks = params.model.fallbacks.filter((ref) => {
     if (typeof ref !== "string") {
       return true;
@@ -214,9 +224,6 @@ function filterFallbacks(params: {
     );
     return false;
   });
-  if (params.model.fallbacks.length === 0) {
-    delete params.model.fallbacks;
-  }
 }
 
 function firstExplicitModelRef(cfg: OpenClawConfig): string | undefined {
@@ -583,5 +590,23 @@ export function repairStaleAgentModelRefs(
     });
   }
 
-  return { config: changes.length > 0 ? config : cfg, changes, warnings };
+  const retired = repairRetiredConfigModelRefs(
+    config,
+    createRetiredModelRefRepairResolver({
+      cfg: config,
+      env,
+      metadataSnapshot: options.pluginMetadataSnapshot,
+      warnings,
+    }),
+    warnings,
+  );
+  changes.push(...retired.changes);
+  return {
+    config: changes.length > 0 ? retired.config : cfg,
+    changes,
+    warnings,
+    ...(retired.changes.length > 0
+      ? { retiredModelRefConfig: { agents: config.agents, models: config.models } }
+      : {}),
+  };
 }

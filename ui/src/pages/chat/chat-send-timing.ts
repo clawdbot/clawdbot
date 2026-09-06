@@ -1,3 +1,4 @@
+import { asNonNegativeFiniteNumber as readChatSendTimingNumber } from "@openclaw/normalization-core/number-coercion";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { visibleSessionMatches, type SessionScopeHost } from "../../lib/sessions/index.ts";
 import { readChatQueueForScope } from "./chat-queue.ts";
@@ -88,10 +89,6 @@ function readChatSendServerTimingPhase(value: unknown): ChatSendServerTimingPhas
     (CHAT_SEND_SERVER_TIMING_PHASES as ReadonlySet<string>).has(value)
     ? (value as ChatSendServerTimingPhase)
     : null;
-}
-
-function readChatSendTimingNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 export function recordChatSendServerTiming(host: ChatSendTimingHost, payload: unknown) {

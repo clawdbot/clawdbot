@@ -1,4 +1,5 @@
 // Transcript provider contracts for external and manual transcript sources.
+import type { Result } from "@openclaw/normalization-core/result";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 /**
@@ -62,8 +63,28 @@ export type TranscriptStartRequest = {
   abortSignal?: AbortSignal;
   startupWaitMs?: number;
   onUtterance: (utterance: TranscriptUtterance) => void | Promise<void>;
+  /**
+   * `active: false` permanently ends this exact capture subscription, including
+   * replacement or detach; transient transport disconnects must not emit it.
+   * Deliver final utterances first. Callback payload ids/source are descriptive;
+   * consumers retain their admitted session identity and ownership metadata.
+   */
   onStatus?: (status: TranscriptSourceStatus) => void | Promise<void>;
 };
+
+/** Request to watch whether a live source currently has human participants. */
+export type TranscriptOccupancyWatchRequest = {
+  cfg?: OpenClawConfig;
+  source: TranscriptSourceLocator;
+  abortSignal?: AbortSignal;
+  startupWaitMs?: number;
+  /** Emitted on 0 -> >0 humans, and once on subscription if already occupied. */
+  onOccupied: () => void;
+  /** Emitted on >0 -> 0 humans. Bots never count; callbacks preserve observed order. */
+  onEmpty: () => void;
+};
+
+export type TranscriptOccupancyWatchHandle = { stop: () => void };
 
 /**
  * Result from starting a transcript source provider.
@@ -89,7 +110,7 @@ export type TranscriptStopRequest = {
   reason?: string;
 };
 
-/** Result from stopping a transcript source provider. */
+/** Failure does not prove release; only success or a terminal onStatus ends cleanup custody. */
 export type TranscriptsStopResult =
   | {
       ok: true;
@@ -117,13 +138,60 @@ export type TranscriptImportRequest = {
   speakerLabel?: string;
 };
 
+/** Trusted caller facts projected by core; never accepted from tool arguments. */
+export type TranscriptToolCaller =
+  | {
+      kind: "operator";
+      source: "channel-owner" | "local" | "scheduled";
+    }
+  | {
+      kind: "channel";
+      channel: string;
+      accountId?: string;
+      senderId: string;
+      groupId?: string;
+      groupSpace?: string;
+      roleIds: readonly string[];
+    };
+
+export type TranscriptToolAction =
+  | "import"
+  | "start"
+  | "status"
+  | "stop"
+  | "summarize"
+  | "list"
+  | "show";
+
+export type TranscriptSourceAccessControl = {
+  /** Ingress channel whose trusted account owns this provider's account namespace. */
+  channelId: string;
+  /** Resolve and validate the canonical account before persistence. */
+  resolveAccountId: (params: {
+    cfg?: OpenClawConfig;
+    source: TranscriptSourceLocator;
+  }) => Result<string | undefined, string>;
+  /** Apply the provider's native access policy to the resolved source. */
+  authorize: (params: {
+    action: TranscriptToolAction;
+    caller: TranscriptToolCaller;
+    cfg?: OpenClawConfig;
+    source: TranscriptSourceLocator;
+  }) => Promise<Result<void, string>>;
+};
+
 /** Provider contract for transcript capture/import integrations. */
 export type TranscriptSourceProvider = {
   id: string;
   aliases?: readonly string[];
+  /** Closed access contract for providers sharing one inbound channel namespace. */
+  accessControl?: TranscriptSourceAccessControl;
   name: string;
   sourceKinds: readonly TranscriptSourceKind[];
   start?: (request: TranscriptStartRequest) => Promise<TranscriptsStartResult>;
+  watchOccupancy?: (
+    request: TranscriptOccupancyWatchRequest,
+  ) => Promise<Result<TranscriptOccupancyWatchHandle, string>>;
   stop?: (request: TranscriptStopRequest) => Promise<TranscriptsStopResult>;
   status?: (
     source: TranscriptSourceLocator,

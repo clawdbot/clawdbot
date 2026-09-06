@@ -9,8 +9,8 @@ import {
   formatDocs,
   resolveOxfmtInvocation,
   runOxfmt,
-} from "../../scripts/format-docs.mjs";
-import { outputTail } from "../../scripts/lib/output-tail.mjs";
+} from "../../scripts/format-docs.mts";
+import { outputTail } from "../../scripts/lib/output-tail.mts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -129,7 +129,7 @@ describe("format-docs", () => {
     writeDocsFixture(root);
     const oxfmtFileArgs: string[][] = [];
 
-    const spawnSync = (command: string, args: string[]) => {
+    const runCommandSync = (command: string, args: string[]) => {
       if (command === "git") {
         return {
           status: 0,
@@ -150,7 +150,7 @@ describe("format-docs", () => {
         },
         {
           existsSync: fs.existsSync,
-          spawnSync,
+          spawnSync: runCommandSync,
         },
       ),
     ).toEqual({ changed: [], fileCount: 2 });
@@ -164,7 +164,7 @@ describe("format-docs", () => {
         },
         {
           existsSync: fs.existsSync,
-          spawnSync,
+          spawnSync: runCommandSync,
         },
       ),
     ).toEqual({ changed: [], fileCount: 2 });

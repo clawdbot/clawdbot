@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import {
   DEFAULT_SANDBOX_BROWSER_IMAGE,
   DEFAULT_SANDBOX_COMMON_IMAGE,
@@ -14,12 +15,6 @@ import {
   PODMAN_SANDBOX_ENGINE,
   validateSandboxContainerEngineTarget,
 } from "../agents/sandbox/docker.js";
-import {
-  inspectLegacySandboxRegistryFiles,
-  migrateLegacySandboxRegistryFiles,
-  type LegacySandboxRegistryInspection,
-  type LegacySandboxRegistryMigrationResult,
-} from "../agents/sandbox/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
@@ -28,6 +23,12 @@ import { runCommandWithTimeout, runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import {
+  inspectLegacySandboxRegistryFiles,
+  migrateLegacySandboxRegistryFiles,
+  type LegacySandboxRegistryInspection,
+  type LegacySandboxRegistryMigrationResult,
+} from "./doctor-sandbox-legacy-registry.js";
 
 const SANDBOX_REGISTRY_FILES_CHECK_ID = "core/doctor/sandbox/registry-files";
 
@@ -409,12 +410,7 @@ export async function maybeRepairSandboxImages(
 
 function formatLegacyRegistryInspectionLine(file: LegacySandboxRegistryInspection): string {
   const status = file.valid ? `${file.entries} entr${file.entries === 1 ? "y" : "ies"}` : "invalid";
-  const sourcePath = legacySandboxRegistryInspectionSourcePath(file);
-  return `- ${file.kind} ${file.source}: ${shortenHomePath(sourcePath)} (${status})`;
-}
-
-function legacySandboxRegistryInspectionSourcePath(file: LegacySandboxRegistryInspection): string {
-  return file.source === "sharded" ? file.shardedDir : file.registryPath;
+  return `- ${file.kind} ${file.source}: ${shortenHomePath(file.path)} (${status})`;
 }
 
 function formatLegacyRegistryMigrationLine(result: LegacySandboxRegistryMigrationResult): string {
@@ -425,9 +421,8 @@ function formatLegacyRegistryMigrationLine(result: LegacySandboxRegistryMigratio
     return `- Removed empty legacy ${result.kind} registry files.`;
   }
   if (result.status === "quarantined-invalid") {
-    const sourcePath = result.source === "sharded" ? result.shardedDir : result.registryPath;
-    const file = shortenHomePath(sourcePath);
-    const quarantine = result.quarantinePath ? ` to ${shortenHomePath(result.quarantinePath)}` : "";
+    const file = shortenHomePath(result.path);
+    const quarantine = ` to ${shortenHomePath(result.quarantinePath)}`;
     return `- Quarantined invalid legacy ${result.kind} registry ${file}${quarantine}.`;
   }
   return "";
@@ -447,7 +442,7 @@ export function legacySandboxRegistryInspectionToHealthFinding(
     severity: "warning",
     message: `Legacy sandbox registry file detected.
 ${formatLegacyRegistryInspectionLine(file)}`,
-    path: legacySandboxRegistryInspectionSourcePath(file),
+    path: file.path,
     fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to migrate valid entries to SQLite.`,
   };
 }
@@ -463,7 +458,7 @@ export function legacySandboxRegistryInspectionToRepairEffect(
   return {
     kind: "state",
     action,
-    target: legacySandboxRegistryInspectionSourcePath(file),
+    target: file.path,
     dryRunSafe: false,
   };
 }
@@ -499,10 +494,9 @@ export async function maybeRepairSandboxRegistryFiles(prompter: DoctorPrompter):
 /** Warns when agent sandbox overrides are ignored because sandbox scope resolves to shared. */
 export function noteSandboxScopeWarnings(cfg: OpenClawConfig) {
   const globalSandbox = cfg.agents?.defaults?.sandbox;
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
   const warnings: string[] = [];
 
-  for (const agent of agents) {
+  for (const agent of listAgentEntries(cfg)) {
     const agentId = agent.id;
     const agentSandbox = agent.sandbox;
     if (!agentSandbox) {
@@ -534,7 +528,7 @@ export function noteSandboxScopeWarnings(cfg: OpenClawConfig) {
 
     warnings.push(
       [
-        `- agents.list (id "${agentId}") sandbox ${overrides.join("/")} overrides ignored.`,
+        `- agents.entries.${agentId} sandbox ${overrides.join("/")} overrides ignored.`,
         `  scope resolves to "shared".`,
       ].join("\n"),
     );

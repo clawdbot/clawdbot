@@ -8,9 +8,12 @@ import {
   asObjectRecord,
   defineChannelAliasMigration,
   defineKeyMoveMigration,
+  defineStrayPluginEntryConfigMigration,
   hasLegacyAccountStreamingAliases,
   normalizeChannelConfigEntries,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { FeishuConfigSchema } from "./config-schema.js";
+import { DEFAULT_FEISHU_WEBHOOK_PATH, normalizeFeishuWebhookPath } from "./webhook-path.js";
 
 // Feishu's legacy boolean `streaming` gated streaming-card replies with an
 // enabled default, so it migrates through the mode path (true → "partial",
@@ -91,7 +94,37 @@ function sanitizeLegacyCoalesceFields(params: {
   };
 }
 
-function sanitizeFeishuCoalesce(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {
+function hasLegacyWebhookPath(value: unknown): boolean {
+  const path = asObjectRecord(value)?.webhookPath;
+  return typeof path === "string" && normalizeFeishuWebhookPath(path) !== path;
+}
+
+function normalizeLegacyWebhookPath(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): { entry: Record<string, unknown>; changed: boolean } {
+  const path = params.entry.webhookPath;
+  if (typeof path !== "string") {
+    return { entry: params.entry, changed: false };
+  }
+  const normalized = normalizeFeishuWebhookPath(path);
+  const canonical = normalized ?? DEFAULT_FEISHU_WEBHOOK_PATH;
+  if (canonical === path) {
+    return { entry: params.entry, changed: false };
+  }
+  params.changes.push(
+    normalized === null
+      ? `Reset invalid ${params.pathPrefix}.webhookPath to ${DEFAULT_FEISHU_WEBHOOK_PATH}.`
+      : `Normalized ${params.pathPrefix}.webhookPath to its HTTP request path.`,
+  );
+  return { entry: { ...params.entry, webhookPath: canonical }, changed: true };
+}
+
+function normalizeFeishuLegacyConfigEntries(
+  cfg: OpenClawConfig,
+  changes: string[],
+): OpenClawConfig {
   return normalizeChannelConfigEntries({
     cfg,
     channelId: "feishu",
@@ -100,16 +133,38 @@ function sanitizeFeishuCoalesce(cfg: OpenClawConfig, changes: string[]): OpenCla
       const tools = toolsBaseMigration.normalize(params);
       const coalesce = sanitizeLegacyCoalesceFields({ ...params, entry: tools.entry });
       const heartbeat = sanitizeLegacyHeartbeatFields({ ...params, entry: coalesce.entry });
+      const webhook = normalizeLegacyWebhookPath({ ...params, entry: heartbeat.entry });
       return {
-        entry: heartbeat.entry,
-        changed: tools.changed || coalesce.changed || heartbeat.changed,
+        entry: webhook.entry,
+        changed: tools.changed || coalesce.changed || heartbeat.changed || webhook.changed,
       };
     },
   }).config;
 }
 
+// The retired rich plugin-entry schema let config UIs park Feishu settings
+// under plugins.entries.feishu.config, which the runtime never reads.
+const feishuStrayEntryConfigMigration = defineStrayPluginEntryConfigMigration({
+  pluginId: "feishu",
+  channelId: "feishu",
+  validateMergedChannelConfig: (merged) => FeishuConfigSchema.safeParse(merged).success,
+});
+
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   ...streamingAliasMigration.legacyConfigRules,
+  feishuStrayEntryConfigMigration.legacyConfigRule,
+  {
+    path: ["channels", "feishu"],
+    message:
+      'channels.feishu[.accounts.<id>].webhookPath must be a canonical HTTP request path; run "openclaw doctor --fix".',
+    match: (value) => {
+      const entry = asObjectRecord(value);
+      return (
+        hasLegacyWebhookPath(entry) ||
+        hasLegacyAccountStreamingAliases(entry?.accounts, hasLegacyWebhookPath)
+      );
+    },
+  },
   {
     path: ["channels", "feishu"],
     message:
@@ -130,8 +185,10 @@ export function normalizeCompatibilityConfig({
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
   const aliases = streamingAliasMigration.normalizeChannelConfig({ cfg });
+  const entries = normalizeFeishuLegacyConfigEntries(aliases.config, aliases.changes);
+  const stray = feishuStrayEntryConfigMigration.normalizeConfig({ cfg: entries });
   return {
-    config: sanitizeFeishuCoalesce(aliases.config, aliases.changes),
-    changes: aliases.changes,
+    config: stray.config,
+    changes: [...aliases.changes, ...stray.changes],
   };
 }

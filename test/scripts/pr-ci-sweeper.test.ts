@@ -418,31 +418,41 @@ describe("runPrCiSweeper", () => {
     expect(calls.filter((call) => call.method === "pulls.update")).toEqual([]);
   });
 
-  it("logs a ci-attached skip with the attached run ids", async () => {
-    const attached = {
-      ...pr(),
-      number: 21,
-      state: "open",
-      head: { sha: "5".repeat(40) },
-    };
-    const { github } = fakeGithub({
-      prs: [attached],
-      runsBySha: {
-        [attached.head.sha]: [{ id: 30105208438, status: "completed", conclusion: "failure" }],
-      },
-    });
-    const { core: loggedCore, logs } = recordingCore();
-    const results = await runPrCiSweeper({
-      github: github as never,
-      context: context as never,
-      core: loggedCore as never,
-      now: NOW,
-    });
-    expect(results).toEqual([
-      { number: 21, sha: "5".repeat(12), action: "skip", reason: "ci-attached" },
-    ]);
-    expect(logs).toContain("pr-ci-sweeper: skip #21 (ci-attached: 30105208438:completed/failure)");
-  });
+  it.each(["failure", "cancelled", "skipped"])(
+    "logs attached %s CI on a non-auto-merge PR without re-firing or reviving it",
+    async (conclusion) => {
+      const attached = {
+        ...pr(),
+        number: 21,
+        state: "open",
+        head: { sha: "5".repeat(40), ref: "automation/refresh" },
+      };
+      const { github, calls } = fakeGithub({
+        prs: [attached],
+        runsBySha: {
+          [attached.head.sha]: [{ id: 100, status: "completed", conclusion }],
+        },
+        checksByRef: { [attached.head.sha]: [githubActionsCheck(100, { conclusion })] },
+        workflowRunsById: { 100: cancelledRun(100, { event: "pull_request", conclusion }) },
+      });
+      const { core: loggedCore, logs } = recordingCore();
+      const results = await runPrCiSweeper({
+        github: github as never,
+        context: context as never,
+        core: loggedCore as never,
+        now: NOW,
+      });
+      expect(results).toEqual([
+        { number: 21, sha: "5".repeat(12), action: "skip", reason: "ci-attached" },
+      ]);
+      expect(logs).toContain(`pr-ci-sweeper: skip #21 (ci-attached: 100:completed/${conclusion})`);
+      expect(
+        calls.filter((call) =>
+          ["pulls.update", "actions.reRunWorkflow", "issues.createComment"].includes(call.method),
+        ),
+      ).toEqual([]);
+    },
+  );
 
   it("logs draft skips so every scanned PR has a decision", async () => {
     const draft = {
@@ -463,6 +473,47 @@ describe("runPrCiSweeper", () => {
     expect(logs).toContain("pr-ci-sweeper: skip #22 (draft)");
     // Drafts skip before the per-head run lookup so they cost no Actions reads.
     expect(calls.filter((call) => call.method === "actions.listWorkflowRuns")).toEqual([]);
+  });
+
+  it.each([
+    { name: "missing CI", ciRuns: [] },
+    { name: "startup_failure-only CI", ciRuns: [{ conclusion: "startup_failure" }] },
+  ])("does not re-fire $name when the final PR read becomes draft", async ({ ciRuns }) => {
+    const candidate = {
+      ...pr(),
+      number: 23,
+      state: "open",
+      head: { sha: "7".repeat(40) },
+    };
+    const { github, calls } = fakeGithub({
+      prs: [candidate],
+      runsBySha: { [candidate.head.sha]: ciRuns },
+      pullsGetByNumber: {
+        [candidate.number]: [candidate, { ...candidate, draft: true }],
+      },
+    });
+    const { core: loggedCore, logs } = recordingCore();
+
+    const results = await runPrCiSweeper({
+      github: github as never,
+      context: context as never,
+      core: loggedCore as never,
+      now: NOW,
+    });
+
+    expect(calls.filter((call) => call.method === "pulls.update")).toEqual([]);
+    expect(calls.filter((call) => call.method === "actions.reRunWorkflow")).toEqual([]);
+    expect(calls.filter((call) => call.method === "issues.createComment")).toEqual([]);
+    expect(results).toEqual([
+      { number: 23, sha: "7".repeat(12), action: "skip", reason: "changed-during-sweep" },
+    ]);
+    expect(logs).toContain("pr-ci-sweeper: #23 changed during sweep; leaving it alone");
+    expect(logs.at(-1)).toContain("0 re-fires");
+    expect(
+      calls
+        .filter((call) => call.method === "pulls.get" || call.method === "actions.listWorkflowRuns")
+        .map((call) => call.method),
+    ).toEqual(["actions.listWorkflowRuns", "pulls.get", "pulls.get"]);
   });
 
   it("keeps logging decisions after the per-sweep re-fire cap", async () => {
@@ -495,7 +546,7 @@ describe("runPrCiSweeper", () => {
     ).toEqual([]);
   });
 
-  it("does not spend the re-fire budget on PRs that change during revalidation", async () => {
+  it("closes and reopens a dropped-CI PR without spending budget on stale heads", async () => {
     const dropped = Array.from({ length: 11 }, (_, index) => ({
       ...pr(),
       number: 200 + index,
@@ -517,9 +568,11 @@ describe("runPrCiSweeper", () => {
       github: github as never,
       context: context as never,
       core: loggedCore as never,
+      appSlug: "openclaw-barnacle",
       now: NOW,
     });
 
+    expect(results).toHaveLength(dropped.length);
     expect(results.slice(0, 10)).toEqual(
       dropped.slice(0, 10).map((candidate) => ({
         number: candidate.number,
@@ -575,29 +628,6 @@ describe("runPrCiSweeper", () => {
     expect(results).toEqual([
       { number: 30, sha: "7".repeat(12), action: "refire", reason: "ci-run-missing" },
     ]);
-  });
-
-  it("closes and reopens a dropped-CI PR in live mode", async () => {
-    const dropped = {
-      ...pr(),
-      number: 9,
-      state: "open",
-      head: { sha: "c".repeat(40) },
-    };
-    const { github, calls } = fakeGithub({ prs: [dropped], runsBySha: {} });
-    const results = await runPrCiSweeper({
-      github: github as never,
-      context: context as never,
-      core: core as never,
-      appSlug: "openclaw-barnacle",
-      now: NOW,
-    });
-    expect(results).toEqual([
-      { number: 9, sha: "c".repeat(12), action: "refire", reason: "ci-run-missing" },
-    ]);
-    expect(
-      calls.filter((call) => call.method === "pulls.update").map((call) => call.args.state),
-    ).toEqual(["closed", "open"]);
   });
 
   it("revives a cancelled GitHub Actions check exactly once", async () => {

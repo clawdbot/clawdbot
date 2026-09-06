@@ -1,19 +1,24 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Xai plugin entrypoint registers its OpenClaw integration.
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { defaultToolStreamExtraParams } from "openclaw/plugin-sdk/provider-stream-shared";
 import { jsonResult } from "openclaw/plugin-sdk/provider-web-search";
 import {
-  buildXaiImageGenerationProvider,
-  normalizeXaiModelId,
-  resolveXaiTransport,
-} from "./api.js";
-import {
   buildMissingCodeExecutionApiKeyPayload,
   createCodeExecutionToolDefinition,
 } from "./code-execution-tool-shared.js";
+import {
+  createLazyXaiImageGenerationProvider,
+  createLazyXaiMediaUnderstandingProvider,
+  createLazyXaiRealtimeTranscriptionProvider,
+  createLazyXaiRealtimeVoiceProvider,
+  createLazyXaiSpeechProvider,
+  createLazyXaiVideoGenerationProvider,
+} from "./lazy-capability-providers.js";
+import { normalizeNativeXaiModelId } from "./model-compat.js";
 import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
 import {
   buildLiveXaiOAuthProvider,
@@ -27,9 +32,7 @@ import {
   resolveXaiForwardCompatModel,
 } from "./provider-models.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
-import { buildXaiRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
-import { buildXaiRealtimeVoiceProvider } from "./realtime-voice-provider.js";
-import { buildXaiSpeechProvider } from "./speech-provider.js";
+import { resolveXaiTransport } from "./provider-routing.js";
 import {
   readPluginCodeExecutionConfig,
   resolveCodeExecutionEnabled,
@@ -41,8 +44,7 @@ import {
 } from "./src/tool-auth-shared.js";
 import { resolveEffectiveXSearchConfig } from "./src/x-search-config.js";
 import { wrapXaiProviderStream } from "./stream.js";
-import { buildXaiMediaUnderstandingProvider } from "./stt.js";
-import { buildXaiVideoGenerationProvider } from "./video-generation-provider.js";
+import { fetchXaiUsage } from "./usage.js";
 import { createXaiWebSearchProvider } from "./web-search.js";
 import {
   buildMissingXSearchApiKeyPayload,
@@ -52,12 +54,12 @@ import {
   createXaiDeviceCodeAuthMethod,
   createXaiOAuthAuthMethod,
   refreshXaiOAuthCredential,
-} from "./xai-oauth.js";
+} from "./xai-oauth-entry.js";
 
 const PROVIDER_ID = "xai";
 
 const XAI_CREDIT_OR_SPENDING_LIMIT_RE =
-  /\b(?:used all available credits|monthly spending limit|purchase more credits|raise your spending limit)\b/i;
+  /\b(?:used all available credits|run out of credits|monthly spending limit|purchase more credits|raise your spending limit|need a Grok subscription)\b/i;
 const XAI_RATE_LIMIT_RE = /\b(?:rate limit exceeded|too many requests)\b/i;
 
 const loadCodeExecutionModule = createLazyRuntimeModule(() => import("./code-execution.js"));
@@ -157,8 +159,10 @@ function createLazyXSearchTool(ctx: OpenClawPluginToolContext) {
     return null;
   }
 
-  return createXSearchToolDefinition(async (toolCallId: string, args: Record<string, unknown>) => {
+  return createXSearchToolDefinition(async (toolCallId, args, signal) => {
+    signal?.throwIfAborted();
     const { createXSearchTool } = await loadXSearchModule();
+    signal?.throwIfAborted();
     const tool = createXSearchTool({
       config: ctx.config as never,
       runtimeConfig: (ctx.runtimeConfig as never) ?? null,
@@ -167,7 +171,7 @@ function createLazyXSearchTool(ctx: OpenClawPluginToolContext) {
     if (!tool) {
       return jsonResult(buildMissingXSearchApiKeyPayload());
     }
-    return await tool.execute(toolCallId, args);
+    return await tool.execute(toolCallId, args, signal);
   });
 }
 
@@ -200,53 +204,32 @@ export default defineSingleProviderPluginEntry({
       order: "simple",
       run: async (ctx) => {
         const auth = ctx.resolveProviderAuth(PROVIDER_ID);
-        try {
-          const { resolveApiKeyForProvider } =
-            await import("openclaw/plugin-sdk/provider-auth-runtime");
-          const runtimeAuth = await resolveApiKeyForProvider({
-            provider: PROVIDER_ID,
-            cfg: ctx.config,
-            ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
-            ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
-            ...(auth.profileId
-              ? {
-                  profileId: auth.profileId,
-                  lockedProfile: true,
-                }
-              : {}),
-          });
-          if (runtimeAuth?.mode === "oauth" && runtimeAuth.apiKey) {
-            return {
-              provider: await buildLiveXaiOAuthProvider({
-                discoveryApiKey: runtimeAuth.apiKey,
-              }),
-            };
-          }
-        } catch {
-          if (auth.mode === "oauth") {
-            // OAuth discovery is advisory; fall through so configured API-key
-            // auth can still publish the standard xAI catalog.
-          }
-        }
-        if (auth.apiKey) {
-          return {
-            provider: await buildLiveXaiProvider({
-              apiKey: auth.apiKey,
-              discoveryApiKey: auth.discoveryApiKey,
-            }),
-          };
-        }
-
-        const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID);
-        if (!apiKey.apiKey) {
+        const { resolveApiKeyForProvider } =
+          await import("openclaw/plugin-sdk/provider-auth-runtime");
+        const runtimeAuth = await resolveApiKeyForProvider({
+          provider: PROVIDER_ID,
+          cfg: ctx.config,
+          ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
+          ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
+          ...(auth.profileId ? { profileId: auth.profileId, lockedProfile: true } : {}),
+        }).catch(() => undefined);
+        const selectedAuth =
+          runtimeAuth?.mode === "oauth" && runtimeAuth.apiKey
+            ? { ...runtimeAuth, oauth: true }
+            : { ...(auth.apiKey ? auth : ctx.resolveProviderApiKey(PROVIDER_ID)), oauth: false };
+        if (!selectedAuth.apiKey) {
           return null;
         }
-        return {
-          provider: await buildLiveXaiProvider({
-            apiKey: apiKey.apiKey,
-            discoveryApiKey: apiKey.discoveryApiKey,
+        const apiKey = selectedAuth.apiKey;
+        return await runLiveProviderCatalog({
+          providerId: PROVIDER_ID,
+          profileId: selectedAuth.profileId,
+          run: async () => ({
+            provider: selectedAuth.oauth
+              ? await buildLiveXaiOAuthProvider({ discoveryApiKey: apiKey })
+              : await buildLiveXaiProvider(selectedAuth),
           }),
-        };
+        });
       },
       staticRun: async () => ({
         provider: buildXaiProvider(),
@@ -276,21 +259,26 @@ export default defineSingleProviderPluginEntry({
     normalizeResolvedModel: ({ model }) => normalizeXaiResolvedModel(model),
     normalizeTransport: ({ provider, api, baseUrl }) =>
       resolveXaiTransport({ provider, api, baseUrl }),
-    normalizeModelId: ({ modelId }) => normalizeXaiModelId(modelId),
+    normalizeModelId: ({ modelId }) => normalizeNativeXaiModelId(modelId),
     resolveDynamicModel: (ctx) => resolveXaiForwardCompatModel({ providerId: PROVIDER_ID, ctx }),
     refreshOAuth: refreshXaiOAuthCredential,
+    resolveUsageAuth: async (ctx) => {
+      const oauth = await ctx.resolveOAuthToken();
+      return oauth ? oauth : { handled: true };
+    },
+    fetchUsageSnapshot: async (ctx) => await fetchXaiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
     resolveThinkingProfile,
     isModernModelRef: ({ modelId }) => isModernXaiModel(modelId),
     classifyFailoverReason: ({ errorMessage }) => classifyXaiFailoverReason(errorMessage),
   }),
   register(api) {
     api.registerWebSearchProvider(createXaiWebSearchProvider());
-    api.registerMediaUnderstandingProvider(buildXaiMediaUnderstandingProvider());
-    api.registerVideoGenerationProvider(buildXaiVideoGenerationProvider());
-    api.registerImageGenerationProvider(buildXaiImageGenerationProvider());
-    api.registerSpeechProvider(buildXaiSpeechProvider());
-    api.registerRealtimeTranscriptionProvider(buildXaiRealtimeTranscriptionProvider());
-    api.registerRealtimeVoiceProvider(buildXaiRealtimeVoiceProvider());
+    api.registerMediaUnderstandingProvider(createLazyXaiMediaUnderstandingProvider());
+    api.registerVideoGenerationProvider(createLazyXaiVideoGenerationProvider());
+    api.registerImageGenerationProvider(createLazyXaiImageGenerationProvider());
+    api.registerSpeechProvider(createLazyXaiSpeechProvider());
+    api.registerRealtimeTranscriptionProvider(createLazyXaiRealtimeTranscriptionProvider());
+    api.registerRealtimeVoiceProvider(createLazyXaiRealtimeVoiceProvider());
     api.registerTool((ctx) => createLazyCodeExecutionTool(ctx), { name: "code_execution" });
     api.registerTool((ctx) => createLazyXSearchTool(ctx), { name: "x_search" });
   },

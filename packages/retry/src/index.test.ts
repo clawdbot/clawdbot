@@ -51,9 +51,14 @@ describe("RetrySupervisor", () => {
       });
       const retry = supervisor.next();
       const wait = sleepWithAbort(retry?.delayMs ?? 0, retry?.signal);
-      supervisor.cancel(new Error("stop"));
+      const reason = new Error("stop");
+      supervisor.cancel(reason);
 
-      await expect(wait).rejects.toMatchObject({ message: "aborted" });
+      await expect(wait).rejects.toMatchObject({
+        name: "AbortError",
+        message: "aborted",
+        cause: reason,
+      });
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
@@ -69,7 +74,7 @@ describe("RetrySupervisor", () => {
 
       expect(timer?.hasRef()).toBe(false);
       controller.abort();
-      await expect(sleeper).rejects.toMatchObject({ message: "aborted" });
+      await expect(sleeper).rejects.toMatchObject({ name: "AbortError", message: "aborted" });
     } finally {
       controller.abort();
       setTimeoutSpy.mockRestore();
@@ -78,9 +83,15 @@ describe("RetrySupervisor", () => {
 });
 
 describe("retryAsync", () => {
-  it.each([0, 0.5])(
-    "never rounds an honorable Retry-After below its floor with jitter=%s",
-    async (jitter) => {
+  it.each([
+    ["fractional floor without jitter", 1.4, 0, 10, 0, 2],
+    ["fractional floor with jitter", 1.4, 0, 10, 0.5, 2],
+    ["server hint below the cap", 1_000, 1, 60_000, 0.5, 1_000],
+    ["server hint at the cap", 1_000, 1, 1_000, 0.5, 1_000],
+    ["symmetric jitter above the cap", 10_000, 1, 1_000, 0.5, 500],
+  ] as const)(
+    "respects Retry-After: %s",
+    async (_name, retryAfterMs, minDelayMs, maxDelayMs, jitter, expectedDelay) => {
       const sleeps: number[] = [];
       const run = createRetryRunner({ sleep: async (ms) => void sleeps.push(ms) });
       const operation = vi
@@ -91,14 +102,14 @@ describe("retryAsync", () => {
       await expect(
         run(operation, {
           attempts: 2,
-          minDelayMs: 0,
-          maxDelayMs: 10,
+          minDelayMs,
+          maxDelayMs,
           jitter,
           random: () => 0,
-          retryAfterMs: () => 1.4,
+          retryAfterMs: () => retryAfterMs,
         }),
       ).resolves.toBe("ok");
-      expect(sleeps).toEqual([2]);
+      expect(sleeps).toEqual([expectedDelay]);
     },
   );
 

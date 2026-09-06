@@ -1,9 +1,8 @@
-import AVFoundation
 import Contacts
 import EventKit
+import Foundation
 import Photos
 import Testing
-import UserNotifications
 @testable import OpenClaw
 
 struct DevicePermissionsTests {
@@ -31,31 +30,58 @@ struct DevicePermissionsTests {
         #expect(DevicePermissionStatusMap.eventKitRead(.denied) == .denied)
     }
 
-    @Test func `capture microphone notification and location statuses map to shared grants`() {
-        #expect(DevicePermissionStatusMap.capture(.authorized) == .granted)
-        #expect(DevicePermissionStatusMap.capture(.notDetermined) == .notRequested)
-        #expect(DevicePermissionStatusMap.capture(.denied) == .denied)
-
-        #expect(DevicePermissionStatusMap.microphone(.granted) == .granted)
-        #expect(DevicePermissionStatusMap.microphone(.undetermined) == .notRequested)
-        #expect(DevicePermissionStatusMap.microphone(.denied) == .denied)
-
-        #expect(DevicePermissionStatusMap.notifications(.authorized) == .granted)
-        #expect(DevicePermissionStatusMap.notifications(.provisional) == .granted)
-        #expect(DevicePermissionStatusMap.notifications(.notDetermined) == .notRequested)
-        #expect(DevicePermissionStatusMap.notifications(.denied) == .denied)
-
-        #expect(DevicePermissionStatusMap.location(.authorizedWhenInUse) == .granted)
-        #expect(DevicePermissionStatusMap.location(.authorizedAlways) == .granted)
-        #expect(DevicePermissionStatusMap.location(.notDetermined) == .notRequested)
-        #expect(DevicePermissionStatusMap.location(.restricted) == .denied)
+    @Test func `first-run onboarding moves directly from intro to pairing`() {
+        #expect(OnboardingStep.intro.previous == nil)
+        #expect(OnboardingStep.welcome.previous == .intro)
+        #expect(!OnboardingStep.welcome.canGoBack)
+        #expect(OnboardingStep.welcome.manualProgressTitle.isEmpty)
     }
 
-    @Test func `first-run onboarding inserts permissions between intro and pairing`() {
-        #expect(OnboardingStep.permissions.previous == .intro)
-        #expect(OnboardingStep.welcome.previous == .permissions)
-        #expect(!OnboardingStep.permissions.canGoBack)
-        // Permissions is a first-run page, not part of the manual connect progress trail.
-        #expect(OnboardingStep.permissions.manualProgressTitle.isEmpty)
+    @Test func `onboarding has no aggregate system permission prompt`() throws {
+        let onboardingDirectory = Self.sourceRoot()
+            .appending(path: "Onboarding", directoryHint: .isDirectory)
+        let wizard = try String(
+            contentsOf: onboardingDirectory.appending(path: "OnboardingWizardView.swift"),
+            encoding: .utf8)
+
+        #expect(!FileManager.default.fileExists(
+            atPath: onboardingDirectory.appending(path: "OnboardingPermissionsStep.swift").path))
+        #expect(!wizard.contains("OnboardingPermissionsStep"))
+        #expect(!wizard.contains("navigate(to: .permissions)"))
+    }
+
+    @Test func `settings first request says Continue and immediately requests permission`() throws {
+        let settings = try String(
+            contentsOf: Self.sourceRoot()
+                .appending(path: "Settings", directoryHint: .isDirectory)
+                .appending(path: "PrivacyAccessSectionView.swift"),
+            encoding: .utf8)
+        let actionTitles = try #require(Self.extract(
+            settings,
+            from: "    private func standardActionTitle(",
+            to: "    /// `limitedRequests`"))
+        let action = try #require(Self.extract(
+            settings,
+            from: "    private func standardAction(",
+            to: "    private func requestContacts()"))
+
+        #expect(actionTitles.contains("case .notRequested:\n            LocalizedStringResource(\"Continue\")"))
+        #expect(!actionTitles.contains("LocalizedStringResource(\"Allow\")"))
+        #expect(action.contains("await request()"))
+        #expect(action.contains("case .notRequested:\n            return run"))
+    }
+
+    private static func sourceRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appending(path: "Sources", directoryHint: .isDirectory)
+    }
+
+    private static func extract(_ source: String, from start: String, to end: String) -> String? {
+        guard let startRange = source.range(of: start),
+              let endRange = source.range(of: end, range: startRange.upperBound..<source.endIndex)
+        else { return nil }
+        return String(source[startRange.lowerBound..<endRange.lowerBound])
     }
 }

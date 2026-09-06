@@ -3,25 +3,19 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createTcpServer, type Server, type Socket } from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const probePath = path.resolve("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs");
 const dockerSurvivorPath = path.resolve("scripts/e2e/upgrade-survivor-docker.sh");
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const LOAD_SENSITIVE_PROCESS_TIMEOUT_MS = process.env.CI ? 30_000 : 15_000;
 
-function makeTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-probe-"));
-  tempDirs.push(dir);
-  return dir;
-}
-
 function writeProbeImport(source: string): string[] {
-  const fixturePath = path.join(makeTempDir(), "probe-import.mjs");
+  const fixturePath = path.join(tempDirs.make("openclaw-upgrade-probe-"), "probe-import.mjs");
   fs.writeFileSync(fixturePath, source);
   return ["--import", pathToFileURL(fixturePath).href];
 }
@@ -92,12 +86,6 @@ async function listen(server: Server): Promise<string> {
   return `http://127.0.0.1:${address.port}`;
 }
 
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { force: true, recursive: true });
-  }
-});
-
 describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
   it("does not hard-code degraded ready allowlists into Docker survivor probes", () => {
     const script = fs.readFileSync(dockerSurvivorPath, "utf8");
@@ -106,7 +94,7 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
   });
 
   it("rejects loose numeric probe limits instead of parsing prefixes", async () => {
-    const out = path.join(makeTempDir(), "invalid.json");
+    const out = path.join(tempDirs.make("openclaw-upgrade-probe-"), "invalid.json");
     const timeoutResult = await runProbe([
       "--base-url",
       "http://127.0.0.1:9",
@@ -143,7 +131,7 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
       response.end(JSON.stringify({ ready: true }));
     });
     const baseUrl = await listen(server);
-    const out = path.join(makeTempDir(), "ready.json");
+    const out = path.join(tempDirs.make("openclaw-upgrade-probe-"), "ready.json");
     try {
       const result = await runProbe([
         "--base-url",
@@ -176,7 +164,7 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
       response.end(JSON.stringify({ ready: false, failing: ["telegram"] }));
     });
     const baseUrl = await listen(server);
-    const out = path.join(makeTempDir(), "ready-degraded.json");
+    const out = path.join(tempDirs.make("openclaw-upgrade-probe-"), "ready-degraded.json");
     try {
       const result = await runProbe([
         "--base-url",
@@ -203,7 +191,7 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
 
   it("keeps failed probe retries inside the total timeout", async () => {
     const baseUrl = "http://probe.test";
-    const out = path.join(makeTempDir(), "ready-timeout.json");
+    const out = path.join(tempDirs.make("openclaw-upgrade-probe-"), "ready-timeout.json");
     const nodeArgs = writeProbeImport(
       [
         "const realSetTimeout = globalThis.setTimeout;",
@@ -247,7 +235,7 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
 
   it("allows degraded ready responses only when degraded readiness is explicit", async () => {
     const baseUrl = "http://probe.test";
-    const out = path.join(makeTempDir(), "ready-degraded.json");
+    const out = path.join(tempDirs.make("openclaw-upgrade-probe-"), "ready-degraded.json");
     const nodeArgs = writeProbeImport(
       'globalThis.fetch = async () => new Response(JSON.stringify({ ready: false, failing: ["telegram"] }), { status: 503, headers: { "content-type": "application/json" } });',
     );
@@ -286,7 +274,7 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
       response.end(JSON.stringify({ ready: true }));
     });
     const baseUrl = await listen(server);
-    const out = path.join(makeTempDir(), "ready-server-error.json");
+    const out = path.join(tempDirs.make("openclaw-upgrade-probe-"), "ready-server-error.json");
     try {
       const result = await runProbe([
         "--base-url",
@@ -314,7 +302,7 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
 
   it("rejects declared oversized probe bodies before waiting on the stream", async () => {
     const baseUrl = "http://probe.test";
-    const out = path.join(makeTempDir(), "oversized.json");
+    const out = path.join(tempDirs.make("openclaw-upgrade-probe-"), "oversized.json");
     const nodeArgs = writeProbeImport(
       'globalThis.fetch = async () => new Response(new ReadableStream({ start() {} }), { status: 200, headers: { "content-length": "65", "content-type": "application/json" } });',
     );
@@ -352,7 +340,7 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
       socket.on("data", () => {});
     });
     const baseUrl = await listen(server);
-    const out = path.join(makeTempDir(), "stall.json");
+    const out = path.join(tempDirs.make("openclaw-upgrade-probe-"), "stall.json");
     const startedAt = Date.now();
     try {
       const result = await runProbe([
@@ -395,7 +383,7 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
       socket.on("close", () => sockets.delete(socket));
     });
     const baseUrl = await listen(server);
-    const out = path.join(makeTempDir(), "body-stall.json");
+    const out = path.join(tempDirs.make("openclaw-upgrade-probe-"), "body-stall.json");
     const startedAt = Date.now();
     try {
       const result = await runProbe([
@@ -429,7 +417,7 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
 
   it("caps response bodies before parsing probe JSON", async () => {
     const baseUrl = "http://probe.test";
-    const out = path.join(makeTempDir(), "oversized.json");
+    const out = path.join(tempDirs.make("openclaw-upgrade-probe-"), "oversized.json");
     const nodeArgs = writeProbeImport(
       'globalThis.fetch = async () => new Response("x".repeat(256), { status: 200, headers: { "content-type": "application/json" } });',
     );

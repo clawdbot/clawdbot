@@ -11,7 +11,11 @@ export type BundledChannelLegacySessionSurface = {
   }) => string | null | undefined;
 };
 
-/** Detects channel-owned state migrations needed before a bundled channel starts. */
+/**
+ * Detects channel-owned state migrations needed before a bundled channel starts.
+ * @deprecated Export stateMigrations from the plugin doctor contract instead.
+ * Removal plan: remove the setup-entry adapter after the 2027.1 external-plugin migration window.
+ */
 export type BundledChannelLegacyStateMigrationDetector = (params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;

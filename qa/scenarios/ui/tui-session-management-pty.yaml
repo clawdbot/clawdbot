@@ -1,0 +1,35 @@
+title: TUI session management PTY contracts
+scenario:
+  id: tui-session-management-pty
+  surface: tui
+  category: tui.session-management
+  coverage:
+    primary:
+      - tui.session-lifecycle
+      - tui.history
+      - tui.resume
+  risk: medium
+  objective: Prove local session creation and history selection plus remembered Gateway session resume through real PTYs.
+  successCriteria:
+    - A built local TUI creates and adopts a fresh isolated session.
+    - The local session picker renders history from both the previous and current sessions.
+    - A built Gateway TUI relaunch without --session restores the remembered session, its history, and a continuing follow-up turn.
+  codeRefs: [src/tui/tui-pty-local.e2e.test.ts]
+  execution:
+    kind: script
+    parallelSafe: true
+    path: test/e2e/qa-lab/tui/tui-pty-evidence-producer.ts
+    timeoutMs: 600000
+    args: [--artifact-base, "${outputDir}", --scenario-id, "${scenarioId}"]
+    config:
+      requireBuiltCli: true
+      tuiPtyCases:
+        - coverageId: tui.session-lifecycle
+          testFile: src/tui/tui-pty-local.e2e.test.ts
+          testNamePattern: ^TUI PTY real backends > creates and adopts a fresh local session through a real PTY$
+        - coverageId: tui.history
+          testFile: src/tui/tui-pty-local.e2e.test.ts
+          testNamePattern: ^TUI PTY real backends > lists local session history through a real PTY$
+        - coverageId: tui.resume
+          testFile: src/tui/tui-pty-local.e2e.test.ts
+          testNamePattern: ^TUI PTY real backends > with shared Gateway fixture > gates input while a real Gateway restores the remembered session and history$

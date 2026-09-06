@@ -1,0 +1,167 @@
+import {
+  asOptionalObjectRecord,
+  asOptionalRecord as readRecordField,
+} from "@openclaw/normalization-core/record-coerce";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import {
+  emitAgentActivityEvent,
+  type AgentCommandOutputEventData,
+  type AgentItemEventData,
+} from "../infra/agent-activity-events.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
+import { extractLiveExecOutput } from "./embedded-agent-subscribe.handlers.tools.results.js";
+import {
+  buildCommandItemId,
+  buildCommandItemTitle,
+  buildToolItemId,
+  buildToolItemTitle,
+  emitAgentEventCallbackBestEffort,
+  emitTrackedItemEvent,
+  isExecToolName,
+} from "./embedded-agent-subscribe.handlers.tools.start.js";
+import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.types.js";
+import {
+  capLiveExecResult,
+  sanitizeToolResult,
+  truncateLiveExecOutput,
+} from "./embedded-agent-tool-results.js";
+import type { AgentEvent } from "./runtime/index.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
+
+type ChannelToolProgress = {
+  text: string;
+};
+
+const LIVE_EXEC_UPDATE_MIN_INTERVAL_MS = 250;
+
+function readChannelToolProgress(result: unknown): ChannelToolProgress | undefined {
+  const progress = readRecordField(asOptionalObjectRecord(result)?.progress);
+  // Only typed progress crosses into UI; tool output/details may contain private data.
+  if (progress?.visibility !== "channel" || progress.privacy !== "public") {
+    return undefined;
+  }
+  const text = readStringValue(progress.text)?.trim();
+  if (!text) {
+    return undefined;
+  }
+  return { text: truncateLiveExecOutput(text) };
+}
+
+function prepareLiveExecUpdate(
+  ctx: ToolHandlerContext,
+  toolCallId: string,
+  partialResult: unknown,
+): { result: unknown } | undefined {
+  const now = Date.now();
+  const state = ctx.state.execLiveUpdateStateById ?? new Map<string, { lastEmittedAtMs: number }>();
+  ctx.state.execLiveUpdateStateById = state;
+  const previous = state.get(toolCallId);
+  if (previous && now - previous.lastEmittedAtMs < LIVE_EXEC_UPDATE_MIN_INTERVAL_MS) {
+    return undefined;
+  }
+  // Skip payload work inside the throttle; stamp after preparation so slow
+  // redaction cannot make the next detailed frame arrive back-to-back.
+  const result = capLiveExecResult(sanitizeToolResult(partialResult));
+  state.set(toolCallId, { lastEmittedAtMs: Date.now() });
+  return { result };
+}
+
+/** Handles partial tool output and emits throttled live UI updates. */
+export function handleToolExecutionUpdate(
+  ctx: ToolHandlerContext,
+  evt: AgentEvent & {
+    toolName: string;
+    toolCallId: string;
+    partialResult?: unknown;
+    hideFromChannelProgress?: boolean;
+  },
+) {
+  const toolName = normalizeToolPolicyName(evt.toolName);
+  const toolCallId = evt.toolCallId;
+  const hideFromChannelProgress = evt.hideFromChannelProgress === true;
+  const partial = evt.partialResult;
+  const isExecTool = isExecToolName(toolName);
+  const execUpdate = isExecTool ? prepareLiveExecUpdate(ctx, toolCallId, partial) : undefined;
+  const liveResult = isExecTool ? execUpdate?.result : sanitizeToolResult(partial);
+  const toolProgress = isExecTool ? undefined : readChannelToolProgress(liveResult);
+  // Typed progress already has a sanitized path; suppress duplicate raw previews.
+  const emitDetailedLiveUpdate = !toolProgress && (!isExecTool || execUpdate !== undefined);
+  if (emitDetailedLiveUpdate) {
+    emitAgentEvent({
+      runId: ctx.params.runId,
+      stream: "tool",
+      data: {
+        phase: "update",
+        name: toolName,
+        toolCallId,
+        partialResult: liveResult,
+        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+      },
+    });
+  }
+  const itemData: AgentItemEventData = {
+    itemId: buildToolItemId(toolCallId),
+    phase: "update",
+    kind: "tool",
+    title: buildToolItemTitle(toolName, ctx.state.toolMetaById.get(toolCallId)?.meta),
+    status: "running",
+    name: toolName,
+    toolCallId,
+    commandBearing: ctx.state.toolMetaById.get(toolCallId)?.commandBearing,
+    ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+    ...(ctx.state.toolMetaById.get(toolCallId)?.commandBearing && !isExecTool
+      ? { suppressChannelProgress: true }
+      : {}),
+    ...(toolProgress
+      ? { progressText: toolProgress.text }
+      : { meta: ctx.state.toolMetaById.get(toolCallId)?.meta }),
+  };
+  emitTrackedItemEvent(ctx, itemData);
+  if (!toolProgress) {
+    emitAgentEventCallbackBestEffort(ctx, {
+      stream: "tool",
+      data: {
+        phase: "update",
+        name: toolName,
+        toolCallId,
+        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+      },
+    });
+  }
+  if (isExecTool) {
+    const output = extractLiveExecOutput(liveResult);
+    const commandData: AgentItemEventData = {
+      itemId: buildCommandItemId(toolCallId),
+      phase: "update",
+      kind: "command",
+      title: buildCommandItemTitle(toolName, ctx.state.toolMetaById.get(toolCallId)?.meta),
+      status: "running",
+      name: toolName,
+      meta: ctx.state.toolMetaById.get(toolCallId)?.meta,
+      toolCallId,
+      ...(emitDetailedLiveUpdate && output ? { progressText: output } : {}),
+    };
+    emitTrackedItemEvent(ctx, commandData);
+    if (emitDetailedLiveUpdate && output) {
+      const outputData: AgentCommandOutputEventData = {
+        itemId: commandData.itemId,
+        phase: "delta",
+        title: commandData.title,
+        toolCallId,
+        name: toolName,
+        output,
+        status: "running",
+      };
+      emitAgentActivityEvent({
+        runId: ctx.params.runId,
+        ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+        stream: "command_output",
+        data: outputData,
+      });
+      emitAgentEventCallbackBestEffort(ctx, {
+        stream: "command_output",
+        data: outputData,
+      });
+    }
+  }
+}

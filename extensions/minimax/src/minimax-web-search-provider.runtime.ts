@@ -127,6 +127,7 @@ async function runMiniMaxSearch(params: {
   apiKey: string;
   endpoint: string;
   timeoutSeconds: number;
+  signal?: AbortSignal;
 }): Promise<{
   results: Array<Record<string, unknown>>;
   relatedSearches?: string[];
@@ -135,6 +136,7 @@ async function runMiniMaxSearch(params: {
     {
       url: params.endpoint,
       timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
       init: {
         method: "POST",
         headers: {
@@ -202,6 +204,7 @@ function missingMiniMaxKeyPayload() {
 export async function executeMiniMaxWebSearchProviderTool(
   ctx: { config?: Record<string, unknown>; searchConfig?: SearchConfigRecord },
   args: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   const searchConfig = mergeScopedSearchConfig(
     ctx.searchConfig,
@@ -229,14 +232,14 @@ export async function executeMiniMaxWebSearchProviderTool(
   const endpoint = resolveMiniMaxEndpoint(searchConfig, config);
 
   const cacheKey = buildSearchCacheKey(["minimax", endpoint, query, resolvedCount]);
-  const cached = readCachedSearchPayload(cacheKey);
+  const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
+  const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
     return cached;
   }
 
   const start = Date.now();
   const timeoutSeconds = resolveSearchTimeoutSeconds(searchConfig);
-  const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
 
   const { results, relatedSearches } = await runMiniMaxSearch({
     query,
@@ -244,8 +247,10 @@ export async function executeMiniMaxWebSearchProviderTool(
     apiKey,
     endpoint,
     timeoutSeconds,
+    signal,
   });
 
+  signal?.throwIfAborted();
   const payload: Record<string, unknown> = {
     query,
     provider: "minimax",
@@ -267,13 +272,3 @@ export async function executeMiniMaxWebSearchProviderTool(
   writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
   return payload;
 }
-
-export const testing = {
-  MINIMAX_SEARCH_ENDPOINT_GLOBAL,
-  MINIMAX_SEARCH_ENDPOINT_CN,
-  resolveMiniMaxApiKey,
-  resolveMiniMaxEndpoint,
-  resolveMiniMaxRegion,
-  readMiniMaxSearchJsonResponse: readProviderJsonResponse<MiniMaxSearchResponse>,
-} as const;
-export { testing as __testing };

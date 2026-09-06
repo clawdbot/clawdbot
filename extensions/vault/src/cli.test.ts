@@ -40,12 +40,13 @@ async function createSetupPlan(args: string[]): Promise<VaultPlan> {
   }
 }
 
-async function runSetup(planPath: string, args: string[]): Promise<void> {
+async function runSetup(planPath: string, args: string[]): Promise<string> {
   const stdout = captureStdout();
   try {
     await createProgram().parseAsync(["vault", "setup", "--plan-out", planPath, ...args], {
       from: "user",
     });
+    return stdout.output();
   } finally {
     stdout.restore();
   }
@@ -163,6 +164,7 @@ describe("vault CLI setup plan", () => {
   });
 
   it.each([
+    ["empty plans", [], "No SecretRef targets selected"],
     [
       "duplicate providers",
       ["--openai-id", "providers/openai/apiKey", "--provider-key", "OpenAI=providers/openai/other"],
@@ -197,6 +199,21 @@ describe("vault CLI setup plan", () => {
     await expect(createSetupPlan(args)).rejects.toThrow(message);
   });
 
+  it("prints shell-safe commands using the canonical plan path", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-vault-command-"));
+    const planPath = path.join(dir, "plan with spaces.json");
+    const canonicalPlanPath = path.join(await fs.realpath(dir), "plan with spaces.json");
+    try {
+      const output = await runSetup(planPath, setupArgs);
+      expect(output).toContain(
+        `openclaw secrets apply --from '${canonicalPlanPath}' --dry-run --allow-exec`,
+      );
+      expect(output).toContain(`openclaw secrets apply --from '${canonicalPlanPath}' --allow-exec`);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     "providers/openai/apiKey/",
     "/providers/openai/apiKey",
@@ -214,6 +231,21 @@ describe("vault CLI status", () => {
     const result = await runStatus({
       secrets: {
         providers: {
+          "corp-vault": {
+            source: "exec",
+            pluginIntegration: { pluginId: "vault", integrationId: "vault" },
+          },
+        },
+      },
+    });
+    expect(result.providerAlias).toBe("corp-vault");
+  });
+
+  it("prefers the managed integration when the default alias is unrelated", async () => {
+    const result = await runStatus({
+      secrets: {
+        providers: {
+          vault: { source: "exec", command: "/legacy/resolver" },
           "corp-vault": {
             source: "exec",
             pluginIntegration: { pluginId: "vault", integrationId: "vault" },

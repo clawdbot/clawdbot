@@ -5,6 +5,15 @@ import type { JsonSchemaObject } from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it } from "vitest";
 
 type GoogleManifest = {
+  setup?: {
+    providers?: Array<{
+      id?: string;
+      authEvidence?: Array<{
+        fileEnvVar?: string;
+        fallbackPaths?: string[];
+      }>;
+    }>;
+  };
   providerAuthChoices?: Array<{
     provider?: string;
     method?: string;
@@ -21,11 +30,23 @@ type GoogleManifest = {
     >;
   };
   modelCatalog?: {
+    discovery?: Record<string, string>;
     suppressions?: Array<{
       provider?: string;
       model?: string;
       reason?: string;
     }>;
+    providers?: Record<
+      string,
+      {
+        api?: string;
+        baseUrl?: string;
+        models?: Array<{
+          id?: string;
+          name?: string;
+        }>;
+      }
+    >;
   };
   configSchema?: JsonSchemaObject;
   configContracts?: {
@@ -86,6 +107,49 @@ function loadManifest(): GoogleManifest {
 }
 
 describe("google manifest model catalog", () => {
+  it("checks relocated Cloud SDK ADC before platform-specific fallback paths", () => {
+    const vertex = loadManifest().setup?.providers?.find(
+      (provider) => provider.id === "google-vertex",
+    );
+
+    expect(vertex?.authEvidence).toEqual([
+      expect.objectContaining({
+        fileEnvVar: "GOOGLE_APPLICATION_CREDENTIALS",
+        fallbackPaths: [
+          "${CLOUDSDK_CONFIG}/application_default_credentials.json",
+          "${HOME}/.config/gcloud/application_default_credentials.json",
+          "${APPDATA}/gcloud/application_default_credentials.json",
+        ],
+      }),
+    ]);
+  });
+
+  it("owns the canonical Google model catalog and runtime discovery declaration", () => {
+    const catalog = loadManifest().modelCatalog;
+    const provider = catalog?.providers?.google;
+    const modelIds = provider?.models?.map((model) => model.id) ?? [];
+
+    expect(catalog?.discovery?.google).toBe("runtime");
+    expect(provider).toMatchObject({
+      api: "google-generative-ai",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    });
+    expect(modelIds).toHaveLength(10);
+    expect(modelIds).not.toContain(undefined);
+    expect(new Set(modelIds).size).toBe(modelIds.length);
+  });
+
+  it("keeps legacy Google chat providers out of the canonical manifest catalog", () => {
+    const manifest = loadManifest();
+
+    // google-gemini-cli references must stay unknown-model so Doctor keeps
+    // emitting its migration hint, and neither CLI nor Vertex declares runtime
+    // discovery, so manifest rows for them would leak into runtime catalog
+    // planning. Only the canonical google provider owns manifest rows.
+    expect(manifest.modelCatalog?.providers?.["google-gemini-cli"]).toBeUndefined();
+    expect(manifest.modelCatalog?.providers?.["google-vertex"]).toBeUndefined();
+  });
+
   it("offers Google AI Studio API keys without consumer CLI OAuth", () => {
     const choices = loadManifest().providerAuthChoices ?? [];
 

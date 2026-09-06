@@ -206,7 +206,7 @@ export type TuiBackend = {
     opts?: { agentId?: string },
   ) => Promise<TuiSessionMutationResult>;
   getGatewayStatus: () => Promise<unknown>;
-  listModels: () => Promise<TuiModelChoice[]>;
+  listModels: (opts?: { agentId?: string }) => Promise<TuiModelChoice[]>;
   listCommands?: (opts?: CommandsListParams) => Promise<CommandEntry[]>;
   listPluginApprovals?: () => Promise<unknown>;
   resolvePluginApproval?: (id: string, decision: TuiApprovalDecision) => Promise<{ ok?: boolean }>;
@@ -217,4 +217,8 @@ export type TuiBackend = {
   runGoalCommand?: (
     opts: TuiGoalCommandOptions,
   ) => Promise<{ text: string; continuationPrompt?: string }>;
+  runUsageCostCommand?: (opts: {
+    sessionKey: string;
+    agentId?: string;
+  }) => Promise<{ text: string }>;
 };

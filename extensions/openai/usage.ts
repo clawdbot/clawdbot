@@ -3,6 +3,7 @@ import type {
   ProviderResolveUsageAuthContext,
   ProviderResolvedUsageAuth,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { resolveOpenAICodexAuthIdentity } from "openclaw/plugin-sdk/provider-auth";
 import {
   addProviderUsageModel,
   asProviderUsageObject,
@@ -20,7 +21,6 @@ import {
   resolveProviderUsageDisplayName,
   type ProviderUsageSnapshot,
 } from "openclaw/plugin-sdk/provider-usage";
-import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
 
 const OPENAI_COSTS_URL = "https://api.openai.com/v1/organization/costs";
 const OPENAI_COMPLETIONS_USAGE_URL = "https://api.openai.com/v1/organization/usage/completions";
@@ -250,7 +250,8 @@ export async function fetchOpenAIUsage(
     // profile stores no email for these logins.
     const { token: accessToken, email: profileEmail } = ctx;
     const accountEmail =
-      resolveCodexAuthIdentity({ accessToken, email: profileEmail }).email ?? profileEmail;
+      resolveOpenAICodexAuthIdentity({ access: accessToken, email: profileEmail }).email ??
+      profileEmail;
     return accountEmail ? { ...snapshot, accountEmail } : snapshot;
   }
   return await fetchOpenAIAdminUsage({

@@ -5,6 +5,7 @@ import {
   parseSystemdEnvAssignments,
   parseSystemdExecStart,
   renderSystemdEnvAssignment,
+  splitSystemdLogicalLines,
 } from "./systemd-unit.js";
 
 // Values that need quoting, including the backslash and quote shapes the
@@ -18,6 +19,40 @@ const ROUND_TRIP_VALUES = [
   'mix \\ and " here',
   "trailing\\",
 ];
+
+describe("systemd logical lines", () => {
+  it.each([
+    {
+      name: "standalone comment backslashes",
+      input: ["# note \\", "; note \\", "ExecStart=/usr/bin/openclaw gateway run"],
+      expected: ["# note \\", "; note \\", "ExecStart=/usr/bin/openclaw gateway run"],
+    },
+    {
+      name: "comments inside a continued quoted value",
+      input: ['Environment="SETTING=one\\', " # note \\", " ; note", '  two"'],
+      expected: ['Environment="SETTING=one   two"'],
+    },
+    {
+      name: "escaped trailing backslash pairs",
+      input: ["Environment=SETTING=one\\\\", "ExecStart=/usr/bin/openclaw gateway run"],
+      expected: ["Environment=SETTING=one\\\\", "ExecStart=/usr/bin/openclaw gateway run"],
+    },
+    {
+      name: "blank line ending a continuation",
+      input: ["Environment=SETTING=one\\", "", "ExecStart=/usr/bin/openclaw gateway run"],
+      expected: ["Environment=SETTING=one ", "ExecStart=/usr/bin/openclaw gateway run"],
+    },
+    {
+      name: "continued value at EOF",
+      input: ["Environment=SETTING=one\\", " # note"],
+      expected: ["Environment=SETTING=one "],
+    },
+  ])("preserves $name for LF and CRLF", ({ input, expected }) => {
+    for (const separator of ["\n", "\r\n"]) {
+      expect(splitSystemdLogicalLines(input.join(separator))).toEqual(expected);
+    }
+  });
+});
 
 describe("systemd unit value round-trips", () => {
   it.each(ROUND_TRIP_VALUES)("round-trips %p through Environment=", (value) => {
@@ -41,6 +76,27 @@ describe("systemd unit value round-trips", () => {
 });
 
 describe("buildSystemdUnit", () => {
+  it.each(["", "--max-old-space-size=24576"])(
+    "preserves explicit NODE_OPTIONS=%j while omitting other empty values",
+    (nodeOptions) => {
+      const programArguments = ["/usr/bin/node", "--max-old-space-size=16384", "gateway.js"];
+      const unit = buildSystemdUnit({
+        programArguments,
+        environment: { NODE_OPTIONS: nodeOptions, UNUSED: "", MISSING: undefined },
+      });
+      const lines = unit.split("\n");
+      expect(
+        lines
+          .filter((line) => line.startsWith("Environment="))
+          .flatMap((line) => parseSystemdEnvAssignments(line.slice("Environment=".length))),
+      ).toEqual([{ key: "NODE_OPTIONS", value: nodeOptions }]);
+      const execStart = lines.find((line) => line.startsWith("ExecStart="));
+      expect(parseSystemdExecStart(execStart?.slice("ExecStart=".length) ?? "")).toEqual(
+        programArguments,
+      );
+    },
+  );
+
   it("quotes arguments with whitespace", () => {
     const unit = buildSystemdUnit({
       description: "OpenClaw Gateway",
@@ -58,7 +114,7 @@ describe("buildSystemdUnit", () => {
       environment: {},
     });
     expect(unit).toContain("KillMode=control-group");
-    expect(unit).toContain("TimeoutStopSec=30");
+    expect(unit).toContain("TimeoutStopSec=330");
     expect(unit).toContain("TimeoutStartSec=30");
     expect(unit).toContain("SuccessExitStatus=0 143");
     expect(unit).toContain("OOMPolicy=continue");

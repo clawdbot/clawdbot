@@ -1,12 +1,30 @@
-import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
+import type {
+  DoctorHealthCheckContext,
+  DoctorHealthFlowContext,
+} from "./doctor-health-contribution-types.js";
+import { resolveDoctorWorkspaceDir } from "./doctor-health-contribution-utils.js";
 import { renderStructuredHealthFindings } from "./doctor-health-contribution.js";
-import type { HealthCheck, HealthFinding } from "./health-checks.js";
+import { defineSplitHealthCheckInput } from "./health-check-adapter.js";
+import type { DetectableHealthCheckInput } from "./health-check-runner-types.js";
+import type { HealthFinding } from "./health-checks.js";
 
 const loadHealthCheckRegistryModule = async () => await import("./health-check-registry.js");
 
+function withDoctorHealthCheckFacts<T extends object>(
+  ctx: DoctorHealthFlowContext,
+  input: T,
+): T & Pick<DoctorHealthCheckContext, "runWithPluginMetadataSnapshot"> {
+  return {
+    ...input,
+    ...(ctx.runWithPluginMetadataSnapshot
+      ? { runWithPluginMetadataSnapshot: ctx.runWithPluginMetadataSnapshot }
+      : {}),
+  };
+}
+
 export async function runStructuredHealthRepairs(
   ctx: DoctorHealthFlowContext,
-  resolveCoreChecks: () => Promise<readonly HealthCheck[]>,
+  resolveCoreChecks: () => Promise<readonly DetectableHealthCheckInput[]>,
 ): Promise<void> {
   if (!ctx.prompter.shouldRepair) {
     return;
@@ -14,21 +32,21 @@ export async function runStructuredHealthRepairs(
   const { registerBundledHealthChecks } = await import("./bundled-health-checks.js");
   const { listExtensionHealthChecksForDoctor } = await loadHealthCheckRegistryModule();
   const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
-  const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
-    await import("../agents/agent-scope.js");
   const { note } = await import("../../packages/terminal-core/src/note.js");
 
-  const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
+  const workspaceDir = resolveDoctorWorkspaceDir(ctx.cfg, ctx.env);
   registerBundledHealthChecks({ cfg: ctx.cfg, cwd: workspaceDir });
-  const checks = listExtensionHealthChecksForDoctor(await resolveCoreChecks());
+  const checks = listExtensionHealthChecksForDoctor(await resolveCoreChecks()).map(
+    defineSplitHealthCheckInput,
+  );
   const result = await runDoctorHealthRepairs(
-    {
-      mode: "fix",
+    withDoctorHealthCheckFacts(ctx, {
+      mode: "fix" as const,
       runtime: ctx.runtime,
       cfg: ctx.cfg,
       cwd: workspaceDir,
       configPath: ctx.configPath,
-    },
+    }),
     { checks },
   );
   ctx.cfg = result.config;
@@ -49,8 +67,6 @@ export async function runCoreContributionHealth(
   }
   const { CORE_HEALTH_CHECKS } = await import("./doctor-core-checks.js");
   const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
-  const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
-    await import("../agents/agent-scope.js");
   const { note } = await import("../../packages/terminal-core/src/note.js");
 
   const selectedIds = new Set(checkIds);
@@ -58,17 +74,17 @@ export async function runCoreContributionHealth(
   if (checks.length === 0) {
     return;
   }
-  const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
+  const workspaceDir = resolveDoctorWorkspaceDir(ctx.cfg, ctx.env);
   const dryRun = !ctx.prompter.shouldRepair;
   const result = await runDoctorHealthRepairs(
-    {
-      mode: "fix",
+    withDoctorHealthCheckFacts(ctx, {
+      mode: "fix" as const,
       runtime: ctx.runtime,
       cfg: ctx.cfg,
       cwd: workspaceDir,
       configPath: ctx.configPath,
       dryRun,
-    },
+    }),
     { checks, dryRun },
   );
   ctx.cfg = result.config;
@@ -104,22 +120,22 @@ export async function runCoreHealthFindingNote(
   checkId: string,
 ): Promise<void> {
   const { CORE_HEALTH_CHECKS } = await import("./doctor-core-checks.js");
-  const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
-    await import("../agents/agent-scope.js");
   const { note } = await import("../../packages/terminal-core/src/note.js");
 
   const check = CORE_HEALTH_CHECKS.find((candidate) => candidate.id === checkId);
   if (!check) {
     return;
   }
-  const findings = await check.detect({
-    mode: "doctor",
-    runtime: ctx.runtime,
-    cfg: ctx.cfg,
-    cwd: resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg)),
-    configPath: ctx.configPath,
-    allowExecSecretRefs: ctx.options.allowExec === true,
-  });
+  const findings = await check.detect(
+    withDoctorHealthCheckFacts(ctx, {
+      mode: "doctor" as const,
+      runtime: ctx.runtime,
+      cfg: ctx.cfg,
+      cwd: resolveDoctorWorkspaceDir(ctx.cfg, ctx.env),
+      configPath: ctx.configPath,
+      allowExecSecretRefs: ctx.options.allowExec === true,
+    }),
+  );
   if (findings.length === 0) {
     return;
   }

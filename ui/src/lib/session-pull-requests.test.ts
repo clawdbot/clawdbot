@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventListener, GatewayHelloOk } from "../api/gateway.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import {
-  scopedSessionPullRequestKey,
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
 } from "./session-pull-requests.ts";
+import { scopedSessionArtifactKey } from "./sessions/session-key.ts";
 
 function createHello(): GatewayHelloOk {
   return {
@@ -53,6 +53,7 @@ function createGatewayHarness() {
       return snapshot;
     },
     connection: { gatewayUrl: "ws://example.test", token: "", bootstrapToken: "", password: "" },
+    connectionRevision: 0,
     eventLog: [],
     subscribe: subscribeSnapshots,
     subscribeEvents,
@@ -69,11 +70,11 @@ function createGatewayHarness() {
     subscribeEvents,
     unsubscribeSnapshots,
     unsubscribeEvents,
-    emit(payload: unknown) {
+    emit(payload: unknown, event = "controlUi.sessionPullRequests.changed") {
       for (const listener of eventListeners) {
         listener({
           type: "event",
-          event: "controlUi.sessionPullRequests.changed",
+          event,
           payload,
           seq: 1,
         });
@@ -120,15 +121,27 @@ describe("session pull request snapshot store", () => {
     await flushSync();
   });
 
-  it("resubscribes the current union after reconnect", async () => {
+  it("retires snapshots and resubscribes normally across a same-client reconnect", async () => {
     const harness = createGatewayHarness();
     const store = sessionPullRequestsForGateway(harness.gateway);
     const owner = {};
-    store.watch(owner, ["agent:main:demo"]);
+    const key = "agent:main:demo";
+    store.watch(owner, [key]);
     await flushSync();
-    expect(harness.request).toHaveBeenCalledTimes(1);
+    harness.emit({
+      sessions: {
+        [key]: {
+          pullRequests: [{ number: 1, state: "open" }],
+          rateLimited: false,
+          status: "ready",
+        },
+      },
+    });
+    expect(store.get(key)?.pullRequests).toEqual([{ number: 1, state: "open" }]);
 
     harness.setSnapshot({ ...harness.gateway.snapshot, phase: "reconnecting", hello: null });
+    expect(store.get(key)).toBeUndefined();
+
     harness.setSnapshot({
       ...harness.gateway.snapshot,
       phase: "connected",
@@ -137,8 +150,90 @@ describe("session pull request snapshot store", () => {
     await flushSync();
     expect(harness.request).toHaveBeenCalledTimes(2);
     expect(harness.request).toHaveBeenLastCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-      sessionKeys: ["agent:main:demo"],
+      sessionKeys: [key],
     });
+    store.unwatch(owner);
+    await flushSync();
+  });
+
+  it.each(["new", "reset", "branch-switch", "fork", "rewind"])(
+    "retires and force-refreshes only the matching session for %s",
+    async (reason) => {
+      const harness = createGatewayHarness();
+      const store = sessionPullRequestsForGateway(harness.gateway);
+      const owner = {};
+      const listener = vi.fn();
+      const globalAlias = reason === "rewind";
+      harness.setSnapshot({
+        ...harness.gateway.snapshot,
+        hello: {
+          ...createHello(),
+          snapshot: {
+            sessionDefaults: {
+              defaultAgentId: "main",
+              mainKey: "main",
+              mainSessionKey: globalAlias ? "global" : "agent:main:main",
+              scope: globalAlias ? "global" : "per-sender",
+            },
+          },
+        },
+      });
+      const key = globalAlias ? "agent:work:main" : "agent:main:demo";
+      const otherKey = "agent:main:other";
+      store.watch(owner, [key, otherKey]);
+      const unsubscribe = store.subscribe(listener);
+      await flushSync();
+      harness.emit({
+        sessions: {
+          [key]: { pullRequests: [{ number: 1 }], rateLimited: false, status: "ready" },
+          [otherKey]: { pullRequests: [{ number: 2 }], rateLimited: false, status: "ready" },
+        },
+      });
+      harness.request.mockClear();
+      listener.mockClear();
+
+      harness.emit(
+        {
+          sessionKey: globalAlias ? "global" : key,
+          agentId: globalAlias ? "work" : "main",
+          reason,
+        },
+        "sessions.changed",
+      );
+
+      expect(store.get(key)).toBeUndefined();
+      expect(store.get(otherKey)?.pullRequests).toEqual([{ number: 2 }]);
+      expect(listener).toHaveBeenCalled();
+      await flushSync();
+      expect(harness.request).toHaveBeenCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
+        sessionKeys: [key, otherKey].toSorted(),
+        refreshSessionKeys: [key],
+      });
+      unsubscribe();
+      store.unwatch(owner);
+      await flushSync();
+    },
+  );
+
+  it("keeps snapshots for ordinary send events", async () => {
+    const harness = createGatewayHarness();
+    const store = sessionPullRequestsForGateway(harness.gateway);
+    const owner = {};
+    const key = "agent:main:demo";
+    store.watch(owner, [key]);
+    await flushSync();
+    harness.emit({
+      sessions: {
+        [key]: { pullRequests: [{ number: 1 }], rateLimited: false, status: "ready" },
+      },
+    });
+    harness.request.mockClear();
+
+    harness.emit({ sessionKey: key, agentId: "main", reason: "send" }, "sessions.changed");
+    await flushSync();
+
+    expect(store.get(key)?.pullRequests).toEqual([{ number: 1 }]);
+    expect(harness.request).not.toHaveBeenCalled();
     store.unwatch(owner);
     await flushSync();
   });
@@ -381,7 +476,28 @@ describe("session pull request snapshot store", () => {
     await flushSync();
   });
 
-  it("keeps foreground keys inside the bounded server union", async () => {
+  it("does not resubscribe when foreground promotion only reorders watched keys", async () => {
+    const harness = createGatewayHarness();
+    const store = sessionPullRequestsForGateway(harness.gateway);
+    const sidebarOwner = {};
+    const hovercardOwner = {};
+    store.watch(sidebarOwner, ["agent:main:first", "agent:main:second"]);
+    await flushSync();
+    harness.request.mockClear();
+
+    store.watch(hovercardOwner, ["agent:main:second"], { foreground: true });
+    await flushSync();
+    expect(harness.request).not.toHaveBeenCalled();
+
+    store.unwatch(hovercardOwner);
+    await flushSync();
+    expect(harness.request).not.toHaveBeenCalled();
+
+    store.unwatch(sidebarOwner);
+    await flushSync();
+  });
+
+  it("resubscribes when foreground promotion changes the bounded server union", async () => {
     const harness = createGatewayHarness();
     const store = sessionPullRequestsForGateway(harness.gateway);
     const normalOwner = {};
@@ -390,12 +506,17 @@ describe("session pull request snapshot store", () => {
       normalOwner,
       Array.from({ length: 201 }, (_value, index) => `normal-${String(index).padStart(3, "0")}`),
     );
-    store.watch(foregroundOwner, ["zz-foreground"], { foreground: true });
+    await flushSync();
+    harness.request.mockClear();
+
+    store.watch(foregroundOwner, ["normal-200"], { foreground: true });
     await flushSync();
 
-    const params = harness.request.mock.calls[0]?.[1] as { sessionKeys: string[] };
+    expect(harness.request).toHaveBeenCalledOnce();
+    const params = harness.request.mock.lastCall?.[1] as { sessionKeys: string[] };
     expect(params.sessionKeys).toHaveLength(200);
-    expect(params.sessionKeys).toContain("zz-foreground");
+    expect(params.sessionKeys[0]).toBe("normal-200");
+    expect(params.sessionKeys).not.toContain("normal-199");
     store.unwatch(normalOwner);
     store.unwatch(foregroundOwner);
     await flushSync();
@@ -515,7 +636,7 @@ describe("session pull request snapshot store", () => {
   });
 
   it("scopes global aliases without changing canonical keys", () => {
-    expect(scopedSessionPullRequestKey("global", "Work")).toBe("agent:work:global");
-    expect(scopedSessionPullRequestKey("agent:work:main", "main")).toBe("agent:work:main");
+    expect(scopedSessionArtifactKey("global", "Work")).toBe("agent:work:global");
+    expect(scopedSessionArtifactKey("agent:work:main", "main")).toBe("agent:work:main");
   });
 });

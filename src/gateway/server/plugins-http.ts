@@ -34,7 +34,10 @@ export {
   findRegisteredPluginHttpRoute,
   isRegisteredPluginHttpRoutePath,
 } from "./plugins-http/route-match.js";
-export { shouldEnforceGatewayAuthForPluginPath } from "./plugins-http/route-auth.js";
+export {
+  isPluginAuthenticatedRoutePath,
+  shouldEnforceGatewayAuthForPluginPath,
+} from "./plugins-http/route-auth.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 type PluginRouteRuntimeScope = Parameters<typeof withPluginRuntimeGatewayRequestScope>[0];
@@ -53,10 +56,15 @@ function resolvePluginRoutePathContextForRequest(
 function createPluginRouteRuntimeClient(
   scopes: readonly string[],
   clientIp: string | undefined,
+  requestAuth?: AuthorizedGatewayHttpRequest,
 ): GatewayRequestOptions["client"] {
+  const authenticatedUserProfile = requestAuth?.authenticatedUserProfile;
+  const operatorRoleActor = requestAuth?.operatorRoleActor;
   return {
     connId: `plugin-http:${clientIp ?? "unknown"}`,
     ...(clientIp ? { clientIp } : {}),
+    ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
+    ...(operatorRoleActor ? { internal: { operatorRoleActor } } : {}),
     connect: {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
@@ -130,6 +138,7 @@ function createPluginRouteRuntimeScope(params: {
   const runtimeClient = createPluginRouteRuntimeClient(
     runtimeScopes,
     params.gatewayRequestClientIp,
+    params.route.auth === "gateway" ? params.gatewayRequestAuth : undefined,
   );
   return {
     pluginRegistry: params.registry,
@@ -256,7 +265,7 @@ export function createGatewayPluginRequestHandler(params: {
         const runRoute = async () =>
           (await withPluginRuntimeGatewayRequestScope(
             createPluginRouteRuntimeScope({
-              registry: params.registry,
+              registry,
               route,
               req,
               gatewayRequestContext,
@@ -336,7 +345,7 @@ export function createGatewayPluginUpgradeHandler(params: {
           async () =>
             (await withPluginRuntimeGatewayRequestScope(
               createPluginRouteRuntimeScope({
-                registry: params.registry,
+                registry,
                 route,
                 req,
                 gatewayRequestContext,

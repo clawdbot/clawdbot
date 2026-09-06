@@ -1,10 +1,16 @@
+import { asProtocolRecord } from "./protocol-value-normalization.js";
+
+/** Display projection for an assistant failure without visible reply content. */
+export const GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT =
+  "The agent run failed before producing a reply.";
+
 /** Gateway JSON-RPC style error codes shared by clients and server handlers. */
 export const ErrorCodes = {
-  /** Client has not completed account/device linking for this gateway. */
+  /** @deprecated Retained for source compatibility; no current server emitter. */
   NOT_LINKED: "NOT_LINKED",
   /** Device exists but still needs an explicit pairing approval. */
   NOT_PAIRED: "NOT_PAIRED",
-  /** Agent turn exceeded the gateway wait window. */
+  /** @deprecated Retained for source compatibility; no current server emitter. */
   AGENT_TIMEOUT: "AGENT_TIMEOUT",
   /** Request payload failed protocol validation or method preconditions. */
   INVALID_REQUEST: "INVALID_REQUEST",
@@ -21,12 +27,25 @@ export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
 
 /** Stable discriminants for structured method-level failures. */
 export const GatewayErrorDetailCodes = {
+  CRON_JOB_NOT_FOUND: "CRON_JOB_NOT_FOUND",
   MISSING_SCOPE: "MISSING_SCOPE",
   MCP_APP_VIEW_EXPIRED: "MCP_APP_VIEW_EXPIRED",
+  OUTBOUND_DELIVERY_QUEUED: "OUTBOUND_DELIVERY_QUEUED",
+  USER_PREFS_LIMIT_EXCEEDED: "USER_PREFS_LIMIT_EXCEEDED",
   SESSION_COMPANION_BUSY: "SESSION_COMPANION_BUSY",
+  SKILL_PROPOSAL_REVISION_CHANGED: "SKILL_PROPOSAL_REVISION_CHANGED",
+  PROJECT_CLONE_FAILED: "PROJECT_CLONE_FAILED",
   UNKNOWN_AGENT_ID: "UNKNOWN_AGENT_ID",
   WIZARD_NOT_FOUND: "WIZARD_NOT_FOUND",
+  SETUP_ADMISSION_BUSY: "SETUP_ADMISSION_BUSY",
+  GITHUB_PUBLICATION_SELECTION_REJECTED: "GITHUB_PUBLICATION_SELECTION_REJECTED",
 } as const;
+
+/** Missing cron automation identified by its exact store key. */
+export type CronJobNotFoundErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.CRON_JOB_NOT_FOUND;
+  jobId: string;
+};
 
 /** Missing operator-scope details shared by WebSocket and HTTP responses. */
 export type MissingScopeErrorDetails = {
@@ -39,10 +58,32 @@ export type McpAppViewExpiredErrorDetails = {
   code: typeof GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED;
 };
 
+export type OutboundDeliveryQueuedErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED;
+};
+
+/** Per-profile preference quota details returned by users.prefs.set. */
+export type UserPrefsLimitExceededErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.USER_PREFS_LIMIT_EXCEEDED;
+  limit: number;
+  currentCount: number;
+};
+
 /** Unknown agent details carried by agent-scoped method validation failures. */
 export type UnknownAgentIdErrorDetails = {
   code: typeof GatewayErrorDetailCodes.UNKNOWN_AGENT_ID;
   agentId: string;
+};
+
+/** Setup rejected before its task or wizard session was admitted. */
+export type SetupAdmissionBusyErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.SETUP_ADMISSION_BUSY;
+};
+
+/** This invocation rejected its selection before admission; earlier calls may still be pending. */
+export type GitHubPublicationSelectionRejectedErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.GITHUB_PUBLICATION_SELECTION_REJECTED;
+  idempotencyKey: string;
 };
 
 /** Missing or expired process-local setup wizard session. */
@@ -50,12 +91,39 @@ export type WizardNotFoundErrorDetails = {
   code: typeof GatewayErrorDetailCodes.WIZARD_NOT_FOUND;
 };
 
+export type ProjectCloneFailureCause =
+  | "invalid_url"
+  | "auth_required"
+  | "not_found"
+  | "network"
+  | "target_exists"
+  | "clone_failed";
+
+export type ProjectCloneErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.PROJECT_CLONE_FAILED;
+  cause: ProjectCloneFailureCause;
+};
+
+/** Optimistic-concurrency mismatch for an operator-reviewed Skill Workshop draft. */
+export type SkillProposalRevisionChangedErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.SKILL_PROPOSAL_REVISION_CHANGED;
+  expectedRevisionHash: string;
+  currentRevisionHash: string;
+};
+
 /** Structured details emitted by method-level failures. */
 export type GatewayErrorDetails =
+  | CronJobNotFoundErrorDetails
   | MissingScopeErrorDetails
   | McpAppViewExpiredErrorDetails
+  | OutboundDeliveryQueuedErrorDetails
+  | UserPrefsLimitExceededErrorDetails
+  | SkillProposalRevisionChangedErrorDetails
+  | ProjectCloneErrorDetails
   | UnknownAgentIdErrorDetails
-  | WizardNotFoundErrorDetails;
+  | WizardNotFoundErrorDetails
+  | SetupAdmissionBusyErrorDetails
+  | GitHubPublicationSelectionRejectedErrorDetails;
 
 type GatewayErrorLike = {
   code?: unknown;
@@ -65,16 +133,70 @@ type GatewayErrorLike = {
 };
 
 const LEGACY_MISSING_SCOPE_PATTERN = /\bmissing scope:\s*([a-z0-9._-]+)/i;
+const SHA256_PATTERN = /^[a-fA-F0-9]{64}$/;
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
+export function readGitHubPublicationSelectionRejectedError(
+  error: unknown,
+): GitHubPublicationSelectionRejectedErrorDetails | null {
+  const record = asProtocolRecord(error);
+  const details = asProtocolRecord(record?.details);
+  return record?.code === ErrorCodes.UNAVAILABLE &&
+    details?.code === GatewayErrorDetailCodes.GITHUB_PUBLICATION_SELECTION_REJECTED &&
+    Object.keys(details).length === 2 &&
+    typeof details.idempotencyKey === "string" &&
+    details.idempotencyKey.length > 0
+    ? { code: details.code, idempotencyKey: details.idempotencyKey }
     : null;
+}
+
+/** Reads a typed cron lookup miss without parsing operator-facing prose. */
+export function readCronJobNotFoundError(error: unknown): CronJobNotFoundErrorDetails | null {
+  const record = asProtocolRecord(error);
+  const details = asProtocolRecord(record?.details);
+  if (details?.code !== GatewayErrorDetailCodes.CRON_JOB_NOT_FOUND) {
+    return null;
+  }
+  const jobId = typeof details.jobId === "string" ? details.jobId.trim() : "";
+  return jobId ? { code: GatewayErrorDetailCodes.CRON_JOB_NOT_FOUND, jobId } : null;
+}
+
+/** Builds the canonical stale-draft details shared by Skill Workshop RPCs. */
+export function buildSkillProposalRevisionChangedErrorDetails(params: {
+  expectedRevisionHash: string;
+  currentRevisionHash: string;
+}): SkillProposalRevisionChangedErrorDetails {
+  return {
+    code: GatewayErrorDetailCodes.SKILL_PROPOSAL_REVISION_CHANGED,
+    expectedRevisionHash: params.expectedRevisionHash,
+    currentRevisionHash: params.currentRevisionHash,
+  };
+}
+
+/** Reads a stale Skill Workshop decision without parsing operator-facing prose. */
+export function readSkillProposalRevisionChangedError(
+  error: unknown,
+): SkillProposalRevisionChangedErrorDetails | null {
+  const record = asProtocolRecord(error);
+  const details = asProtocolRecord(record?.details);
+  if (details?.code !== GatewayErrorDetailCodes.SKILL_PROPOSAL_REVISION_CHANGED) {
+    return null;
+  }
+  const expectedRevisionHash =
+    typeof details.expectedRevisionHash === "string" ? details.expectedRevisionHash : "";
+  const currentRevisionHash =
+    typeof details.currentRevisionHash === "string" ? details.currentRevisionHash : "";
+  if (!SHA256_PATTERN.test(expectedRevisionHash) || !SHA256_PATTERN.test(currentRevisionHash)) {
+    return null;
+  }
+  return buildSkillProposalRevisionChangedErrorDetails({
+    expectedRevisionHash,
+    currentRevisionHash,
+  });
 }
 
 /** Reads validated missing-scope details from an untrusted protocol payload. */
 export function readMissingScopeErrorDetails(details: unknown): MissingScopeErrorDetails | null {
-  const record = asRecord(details);
+  const record = asProtocolRecord(details);
   if (record?.code !== GatewayErrorDetailCodes.MISSING_SCOPE) {
     return null;
   }
@@ -93,8 +215,8 @@ export function readMissingScopeErrorDetails(details: unknown): MissingScopeErro
 }
 
 export function isMcpAppViewExpiredError(error: unknown): boolean {
-  const record = asRecord(error);
-  return asRecord(record?.details)?.code === GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED;
+  const record = asProtocolRecord(error);
+  return asProtocolRecord(record?.details)?.code === GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED;
 }
 
 /**
@@ -102,7 +224,7 @@ export function isMcpAppViewExpiredError(error: unknown): boolean {
  * The message fallback keeps clients compatible with gateways predating structured details.
  */
 export function readMissingScopeError(error: unknown): MissingScopeErrorDetails | null {
-  const record = asRecord(error);
+  const record = asProtocolRecord(error);
   if (!record) {
     return null;
   }

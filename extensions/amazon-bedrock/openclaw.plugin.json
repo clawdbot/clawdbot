@@ -13,7 +13,7 @@
     }
   },
   "contracts": {
-    "memoryEmbeddingProviders": ["bedrock"]
+    "embeddingProviders": ["bedrock"]
   },
   "configSchema": {
     "type": "object",

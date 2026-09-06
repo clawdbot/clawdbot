@@ -6,52 +6,48 @@ import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import {
   CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
+  closeCodexStartupClientBestEffort,
   interruptCodexTurnAndWaitBestEffort,
 } from "./attempt-client-cleanup.js";
-import {
-  isRetryableErrorNotification,
-  isTerminalTurnStatus,
-  readCodexNotificationItem,
-} from "./attempt-notifications.js";
+import type { CodexAppServerAuthRequirement, CodexAppServerPreparedAuth } from "./auth-bridge.js";
 import type { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
-import { normalizeCodexResponseTokenUsage } from "./event-projector-usage.js";
+import { createCodexElicitationResponse } from "./elicitation-response.js";
+import { CodexEphemeralTurn } from "./ephemeral-turn.js";
+import type { CodexUsageProjection } from "./event-projector-usage.js";
+import { readCodexAppServerConfigOptions } from "./launch-args.js";
 import { readModelListResult } from "./models.js";
-import { readCodexNotificationTurnId } from "./notification-correlation.js";
 import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
 import {
   assertCodexThreadStartResponse,
   assertCodexTurnStartResponse,
   readCodexErrorNotification,
-  readCodexTurnCompletedNotification,
 } from "./protocol-validators.js";
-import {
-  isJsonObject,
-  type CodexServerNotification,
-  type CodexThreadItem,
-  type CodexThreadStartParams,
-  type CodexTurn,
-  type CodexTurnStartParams,
-  type CodexUserInput,
-  type JsonObject,
-  type JsonValue,
+import type {
+  CodexThreadItem,
+  CodexThreadStartParams,
+  CodexTurnStartParams,
+  CodexUserInput,
+  JsonObject,
+  JsonValue,
 } from "./protocol.js";
 import {
   isCodexAppServerStartSelectionChangedError,
-  type CodexAppServerClientFactory,
+  type createIsolatedCodexAppServerClient,
 } from "./shared-client.js";
 import { buildCodexRuntimeThreadConfig } from "./thread-lifecycle.js";
 import {
-  assertCodexRingZeroHasNoManagedHooks,
-  attestCodexRingZeroThreadHasNoMcpServers,
+  assertCodexManagedRequirementsDoNotOverrideToolPolicy,
+  attestCodexRestrictedToolSurfaceMcpServersDisabled,
   buildCodexRingZeroThreadConfigPatch,
   readCodexInheritedMcpServerNames,
 } from "./thread-requests.js";
 
-const CODEX_PRIVATE_STDIO_ARGS = ["app-server", "--listen", "stdio://"];
 const CODEX_APP_SERVER_ARGS_ENV_KEY = "OPENCLAW_CODEX_APP_SERVER_ARGS";
 const CODEX_BOUNDED_THREAD_CONFIG: JsonObject = {
+  "agents.enabled": false,
   "features.multi_agent": false,
+  "features.multi_agent_v2": false,
   "features.apps": false,
   "features.plugins": false,
   "features.image_generation": false,
@@ -69,14 +65,15 @@ const CODEX_SETTLED_FINALIZER_THREAD_CONFIG: JsonObject = {
 
 export type CodexBoundedTurnOptions = {
   pluginConfig?: unknown;
-  clientFactory?: CodexAppServerClientFactory;
+  clientFactory?: typeof createIsolatedCodexAppServerClient;
 };
 
 type CodexBoundedTurnResult = {
   text: string;
   items: CodexThreadItem[];
   model: string;
-  usage?: ReturnType<typeof normalizeCodexResponseTokenUsage>;
+  nativeSelection: { model: string; modelProvider?: string | null };
+  usage?: CodexUsageProjection["usage"];
 };
 
 type CodexBoundedTurnModelSelection = { mode: "required"; id: string } | { mode: "live-default" };
@@ -93,9 +90,13 @@ class CodexBoundedTurnTimeoutError extends Error {
 type CodexBoundedTurnParams = {
   config?: OpenClawConfig;
   model: CodexBoundedTurnModelSelection;
+  modelProvider?: string;
   profile?: string;
+  preparedAuth?: CodexAppServerPreparedAuth;
+  authRequirement?: CodexAppServerAuthRequirement;
   timeoutMs: number;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
   options: CodexBoundedTurnOptions;
@@ -107,11 +108,14 @@ type CodexBoundedTurnParams = {
   threadConfig?: JsonObject;
   historyItems?: JsonValue[];
   requireNoExternalCapabilities?: boolean;
+  /** Finalizer-only: preserve a completed turn whose protocol carries no answer item. */
+  allowEmptyText?: boolean;
 };
 
 export async function runBoundedCodexAppServerTurn(
   params: CodexBoundedTurnParams,
 ): Promise<CodexBoundedTurnResult> {
+  params.assertCurrent?.();
   const appServer = resolveCodexAppServerRuntimeOptions({
     pluginConfig: params.options.pluginConfig,
     managedCommandOrder: params.isolation === "private-stdio" ? "package-first" : undefined,
@@ -155,6 +159,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   if (timeoutMs <= 0) {
     throw timeoutError;
   }
+  params.assertCurrent?.();
   const agentDir = params.agentDir?.trim() || undefined;
   // Hosted search needs a private Codex home and cwd so inherited native tools
   // cannot escape the bounded turn. Media calls retain configured transport
@@ -163,24 +168,25 @@ async function runBoundedCodexAppServerTurnInWorkspace(
     ? buildPrivateCodexAppServerStartOptions(appServer.start, workspace.codexHome)
     : appServer.start;
   const ownsClient = !params.options.clientFactory;
+  const authSelection = params.preparedAuth
+    ? { preparedAuth: params.preparedAuth }
+    : { authProfileId: params.profile };
+  const clientOptions = {
+    startOptions,
+    ...authSelection,
+    authRequirement: params.authRequirement,
+    agentDir,
+    config: params.config,
+    timeoutMs,
+    assertCurrent: params.assertCurrent,
+    ...(params.signal ? { abandonSignal: params.signal } : {}),
+  };
   const client = params.options.clientFactory
-    ? await params.options.clientFactory({
-        startOptions,
-        authProfileId: params.profile,
-        agentDir,
-        config: params.config,
-        timeoutMs,
-        ...(params.signal ? { abandonSignal: params.signal } : {}),
-      })
+    ? await params.options.clientFactory(clientOptions)
     : await import("./shared-client.js").then(({ createIsolatedCodexAppServerClient }) =>
         createIsolatedCodexAppServerClient({
-          startOptions,
-          timeoutMs,
-          authProfileId: params.profile,
-          agentDir,
+          ...clientOptions,
           authProfileStore: params.authProfileStore,
-          config: params.config,
-          ...(params.signal ? { abandonSignal: params.signal } : {}),
         }),
       );
   const abortController = new AbortController();
@@ -215,44 +221,54 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   }
   const timeout = setTimeout(() => abortRun(timeoutError), Math.max(1, remainingRunMs));
   timeout.unref?.();
-
   let retrySelection = false;
+  const requestOptions = {
+    timeoutMs,
+    signal: abortController.signal,
+    assertCurrent: params.assertCurrent,
+  };
   try {
-    const model = await resolveCodexBoundedTurnModel({
+    params.assertCurrent?.();
+    const modelSelection = await resolveCodexBoundedTurnModel({
       client,
       selection: params.model,
       requiredModalities: params.requiredModalities,
-      timeoutMs,
-      signal: abortController.signal,
+      ...requestOptions,
     });
     const inheritedMcpServerNames = params.requireNoExternalCapabilities
       ? await readCodexInheritedMcpServerNames(client, workspace.cwd, abortController.signal)
       : [];
     if (params.requireNoExternalCapabilities) {
-      await assertCodexRingZeroHasNoManagedHooks(client, abortController.signal);
+      await assertCodexManagedRequirementsDoNotOverrideToolPolicy(
+        client,
+        { restrictedToolSurface: true },
+        abortController.signal,
+      );
     }
+    const threadConfig = buildCodexRuntimeThreadConfig(
+      resolveBoundedThreadConfig(params, workspace, inheritedMcpServerNames),
+      { nativeCodeModeEnabled: false },
+    );
+    params.assertCurrent?.();
     const thread = assertCodexThreadStartResponse(
       await client.request<unknown>(
         "thread/start",
         {
-          model,
-          modelProvider: "openai",
+          model: modelSelection.runtimeModelId,
+          ...(params.modelProvider ? { modelProvider: params.modelProvider } : {}),
           cwd: workspace.cwd,
           approvalPolicy: "on-request",
           sandbox: "read-only",
           serviceName: "OpenClaw",
           ...(params.requireNoExternalCapabilities ? { baseInstructions: "" } : {}),
           developerInstructions: params.developerInstructions,
-          config: buildCodexRuntimeThreadConfig(
-            resolveBoundedThreadConfig(params, workspace, inheritedMcpServerNames),
-            { nativeCodeModeEnabled: false },
-          ),
+          config: threadConfig,
           environments: [],
           dynamicTools: [],
           experimentalRawEvents: true,
           ephemeral: true,
         } satisfies CodexThreadStartParams,
-        { timeoutMs, signal: abortController.signal },
+        requestOptions,
       ),
     );
     activeThreadId = thread.thread.id;
@@ -262,9 +278,10 @@ async function runBoundedCodexAppServerTurnInWorkspace(
     if (params.requireNoExternalCapabilities) {
       // Attest the started thread before injecting historical tool evidence.
       // Otherwise inherited MCP state could act on a finalization-only turn.
-      await attestCodexRingZeroThreadHasNoMcpServers(
+      await attestCodexRestrictedToolSurfaceMcpServersDisabled(
         client,
         thread.thread.id,
+        threadConfig,
         abortController.signal,
       );
     }
@@ -272,44 +289,64 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       await client.request(
         "thread/inject_items",
         { threadId: thread.thread.id, items: params.historyItems },
-        { timeoutMs, signal: abortController.signal },
+        requestOptions,
       );
     }
-    const collector = createCodexBoundedTurnCollector(thread.thread.id, params.taskLabel);
-    const cleanup = client.addNotificationHandler(collector.handleNotification);
-    const requestCleanup = client.addRequestHandler(
-      createCodexBoundedApprovalHandler(params.taskLabel),
-    );
+    params.assertCurrent?.();
+    const collector = new CodexEphemeralTurn(client, thread.thread.id, {
+      textMode: "all",
+      onRequest: createCodexBoundedApprovalHandler(params.taskLabel),
+    });
     try {
       const turn = assertCodexTurnStartResponse(
+        // Inherit the admitted model and empty environment; another model/cwd
+        // override would replace the native selection or recreate native tools.
         await client.request<unknown>(
           "turn/start",
           {
             threadId: thread.thread.id,
             input: params.input,
-            cwd: workspace.cwd,
             approvalPolicy: "on-request",
-            model,
             effort: "low",
           } satisfies CodexTurnStartParams,
-          { timeoutMs, signal: abortController.signal },
+          requestOptions,
         ),
       );
       activeTurnId = turn.turn.id;
       if (abortController.signal.aborted) {
         requestInterrupt();
       }
+      const result = await collector.wait(turn.turn, {
+        signal: abortController.signal,
+        abortError: () =>
+          resolveCodexBoundedTurnAbortError(abortController.signal, params.taskLabel, timeoutError),
+      });
+      if (result.error || result.turn?.status === "failed") {
+        throw new Error(
+          (result.error
+            ? readCodexErrorNotification(result.error)?.error.message
+            : result.turn?.error?.message) ?? `codex app-server ${params.taskLabel} turn failed`,
+        );
+      }
+      if (result.turn?.status !== "completed") {
+        throw new Error(
+          `codex app-server ${params.taskLabel} turn ended with status ${result.turn?.status ?? "unknown"}`,
+        );
+      }
+      if (!result.text && !params.allowEmptyText) {
+        throw new Error(`Codex app-server ${params.taskLabel} turn returned no text.`);
+      }
+      params.assertCurrent?.();
       return {
-        ...(await collector.collect(turn.turn, {
-          signal: abortController.signal,
-          timeoutError,
-        })),
-        model,
+        text: result.text,
+        items: result.items,
+        usage: result.usage,
+        model: modelSelection.catalogId,
+        nativeSelection: { model: thread.model, modelProvider: thread.modelProvider },
       };
     } finally {
       await interruptPromise;
-      requestCleanup();
-      cleanup();
+      collector.route.release();
     }
   } catch (error) {
     if (abortController.signal.aborted) {
@@ -329,7 +366,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
     params.signal?.removeEventListener("abort", abortFromCaller);
     await interruptPromise;
     if (ownsClient) {
-      client.close();
+      await closeCodexStartupClientBestEffort(client);
     }
   }
   if (retrySelection) {
@@ -375,6 +412,15 @@ function buildPrivateCodexAppServerStartOptions(
   start: ReturnType<typeof resolveCodexAppServerRuntimeOptions>["start"],
   codexHome: string,
 ): ReturnType<typeof resolveCodexAppServerRuntimeOptions>["start"] {
+  // Provider identity and model catalogs must survive isolation; hooks, MCP,
+  // sandbox policy, and other process overrides must not cross that boundary.
+  const providerArgs = readCodexAppServerConfigOptions(start.args).flatMap(({ name, value }) =>
+    (name === "-c" || name === "--config") &&
+    value &&
+    /^\s*(?:openai_base_url|model_catalog_json)\s*=/u.test(value)
+      ? ["-c", value]
+      : [],
+  );
   const privateEnv = Object.fromEntries(
     Object.entries(start.env ?? {}).filter(
       ([name]) => name.trim().toUpperCase() !== CODEX_APP_SERVER_ARGS_ENV_KEY,
@@ -386,7 +432,10 @@ function buildPrivateCodexAppServerStartOptions(
   });
   return {
     ...start,
-    args: [...CODEX_PRIVATE_STDIO_ARGS],
+    // A fresh private home has no native account; bridge OpenClaw auth even
+    // when the operator's ordinary harness uses their native Codex home.
+    homeScope: "agent",
+    args: ["app-server", ...providerArgs, "--listen", "stdio://"],
     env: {
       ...privateEnv,
       CODEX_HOME: codexHome,
@@ -416,7 +465,9 @@ function createCodexBoundedApprovalHandler(taskLabel: string) {
       };
     }
     if (request.method === "mcpServer/elicitation/request") {
-      return { action: "decline" };
+      return createCodexElicitationResponse("decline", null, {
+        message: `OpenClaw Codex ${taskLabel} does not support interactive input.`,
+      });
     }
     return undefined;
   };
@@ -428,11 +479,16 @@ async function resolveCodexBoundedTurnModel(params: {
   requiredModalities: string[];
   timeoutMs: number;
   signal: AbortSignal;
-}): Promise<string> {
+  assertCurrent?: () => void;
+}): Promise<{ catalogId: string; runtimeModelId: string }> {
   const result = await params.client.request<unknown>(
     "model/list",
-    { limit: null, cursor: null, includeHidden: false },
-    { timeoutMs: Math.min(params.timeoutMs, 5_000), signal: params.signal },
+    { limit: null, cursor: null, includeHidden: params.selection.mode === "required" },
+    {
+      timeoutMs: Math.min(params.timeoutMs, 5_000),
+      signal: params.signal,
+      assertCurrent: params.assertCurrent,
+    },
   );
   const listed = readModelListResult(result).models;
   if (params.selection.mode === "live-default") {
@@ -445,7 +501,7 @@ async function resolveCodexBoundedTurnModel(params: {
         `Codex app-server has no model supporting ${params.requiredModalities.join(" and ")} input.`,
       );
     }
-    return selected.model;
+    return { catalogId: selected.id, runtimeModelId: selected.model };
   }
 
   const model = params.selection.id;
@@ -459,170 +515,7 @@ async function resolveCodexBoundedTurnModel(params: {
   if (params.requiredModalities.includes("text") && !match.inputModalities.includes("text")) {
     throw new Error(`Codex app-server model does not support text: ${model}`);
   }
-  return model;
-}
-
-function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
-  let turnId: string | undefined;
-  let completedTurn: CodexTurn | undefined;
-  let promptError: string | undefined;
-  let responseUsage: ReturnType<typeof normalizeCodexResponseTokenUsage>;
-  const pending: CodexServerNotification[] = [];
-  const completedItems = new Map<string, CodexThreadItem>();
-  const assistantTextByItem = new Map<string, string>();
-  const assistantItemOrder: string[] = [];
-  let resolveCompletion: (() => void) | undefined;
-  const completion = new Promise<void>((resolve) => {
-    resolveCompletion = resolve;
-  });
-
-  const rememberAssistantText = (itemId: string, text: string) => {
-    if (!text) {
-      return;
-    }
-    if (!assistantTextByItem.has(itemId)) {
-      assistantItemOrder.push(itemId);
-    }
-    assistantTextByItem.set(itemId, text);
-  };
-
-  const handleNotification = (notification: CodexServerNotification): void => {
-    const params = isJsonObject(notification.params) ? notification.params : undefined;
-    if (!params || readString(params, "threadId") !== threadId) {
-      return;
-    }
-    if (!turnId) {
-      pending.push(notification);
-      return;
-    }
-    if (readCodexNotificationTurnId(params) !== turnId) {
-      return;
-    }
-    if (notification.method === "item/completed") {
-      const item = readCodexNotificationItem(notification.params);
-      if (item) {
-        completedItems.set(item.id, item);
-        if (item.type === "agentMessage" && typeof item.text === "string") {
-          rememberAssistantText(item.id, item.text);
-        }
-      }
-      return;
-    }
-    if (notification.method === "item/agentMessage/delta") {
-      const itemId = readString(params, "itemId") ?? readString(params, "id") ?? "assistant";
-      const delta = readString(params, "delta") ?? "";
-      rememberAssistantText(itemId, `${assistantTextByItem.get(itemId) ?? ""}${delta}`);
-      return;
-    }
-    if (notification.method === "rawResponse/completed") {
-      const usage = isJsonObject(params.usage) ? params.usage : undefined;
-      // Exact per-response usage replaces any earlier response in this turn.
-      responseUsage = usage ? normalizeCodexResponseTokenUsage(usage) : undefined;
-      return;
-    }
-    if (notification.method === "turn/completed") {
-      completedTurn =
-        readCodexTurnCompletedNotification(notification.params)?.turn ?? completedTurn;
-      resolveCompletion?.();
-      return;
-    }
-    if (notification.method === "error") {
-      if (isRetryableErrorNotification(notification.params)) {
-        return;
-      }
-      promptError =
-        readCodexErrorNotification(notification.params)?.error.message ??
-        `codex app-server ${taskLabel} turn failed`;
-      resolveCompletion?.();
-    }
-  };
-
-  return {
-    handleNotification,
-    async collect(
-      startedTurn: CodexTurn,
-      options: { signal: AbortSignal; timeoutError: CodexBoundedTurnTimeoutError },
-    ): Promise<Omit<CodexBoundedTurnResult, "model">> {
-      turnId = startedTurn.id;
-      if (isTerminalTurnStatus(startedTurn.status)) {
-        completedTurn = startedTurn;
-      }
-      for (const notification of pending.splice(0)) {
-        handleNotification(notification);
-      }
-      if (!completedTurn && !promptError) {
-        await waitForTurnCompletion({
-          completion,
-          signal: options.signal,
-          taskLabel,
-          timeoutError: options.timeoutError,
-        });
-      }
-      if (promptError) {
-        throw new Error(promptError);
-      }
-      if (completedTurn?.status === "failed") {
-        throw new Error(
-          completedTurn.error?.message ?? `codex app-server ${taskLabel} turn failed`,
-        );
-      }
-      if (completedTurn?.status !== "completed") {
-        throw new Error(
-          `codex app-server ${taskLabel} turn ended with status ${completedTurn?.status ?? "unknown"}`,
-        );
-      }
-      const items = collectCompletedItems(completedTurn?.items, completedItems);
-      const itemText = collectAssistantTextFromItems(items);
-      const deltaText = assistantItemOrder
-        .map((itemId) => assistantTextByItem.get(itemId)?.trim())
-        .filter((text): text is string => Boolean(text))
-        .join("\n\n")
-        .trim();
-      const text = (itemText || deltaText).trim();
-      if (!text) {
-        throw new Error(`Codex app-server ${taskLabel} turn returned no text.`);
-      }
-      return { text, items, ...(responseUsage ? { usage: responseUsage } : {}) };
-    },
-  };
-}
-
-function collectCompletedItems(
-  turnItems: CodexThreadItem[] | undefined,
-  notificationItems: Map<string, CodexThreadItem>,
-): CodexThreadItem[] {
-  const items = new Map(notificationItems);
-  for (const item of turnItems ?? []) {
-    items.set(item.id, item);
-  }
-  return [...items.values()];
-}
-
-async function waitForTurnCompletion(params: {
-  completion: Promise<void>;
-  signal: AbortSignal;
-  taskLabel: string;
-  timeoutError: CodexBoundedTurnTimeoutError;
-}): Promise<void> {
-  if (params.signal.aborted) {
-    throw resolveCodexBoundedTurnAbortError(params.signal, params.taskLabel, params.timeoutError);
-  }
-  let cleanupAbort: (() => void) | undefined;
-  try {
-    await Promise.race([
-      params.completion,
-      new Promise<never>((_, reject) => {
-        const abortListener = () =>
-          reject(
-            resolveCodexBoundedTurnAbortError(params.signal, params.taskLabel, params.timeoutError),
-          );
-        params.signal.addEventListener("abort", abortListener, { once: true });
-        cleanupAbort = () => params.signal.removeEventListener("abort", abortListener);
-      }),
-    ]);
-  } finally {
-    cleanupAbort?.();
-  }
+  return { catalogId: match.id, runtimeModelId: match.model };
 }
 
 function resolveCodexBoundedTurnAbortError(
@@ -635,18 +528,4 @@ function resolveCodexBoundedTurnAbortError(
   return signal.reason === timeoutError
     ? timeoutError
     : new Error(`codex app-server ${taskLabel} turn aborted`);
-}
-
-function collectAssistantTextFromItems(items: CodexThreadItem[] | undefined): string {
-  return (items ?? [])
-    .filter((item) => item.type === "agentMessage")
-    .map((item) => item.text.trim())
-    .filter(Boolean)
-    .join("\n\n")
-    .trim();
-}
-
-function readString(record: JsonObject, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" ? value : undefined;
 }

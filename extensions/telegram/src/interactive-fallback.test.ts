@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { handleTelegramQuestionCallback } from "./bot-handlers.callback-questions.runtime.js";
+import { handleTelegramQuestionCallback } from "./bot-handlers.callback-actions.js";
 import { canonicalizeTelegramPresentationPayload } from "./interactive-fallback.js";
 import { parseTelegramQuestionCallbackData } from "./question-callback-data.js";
 
@@ -127,12 +127,13 @@ describe("canonicalizeTelegramPresentationPayload", () => {
       | undefined;
     const rows = telegram?.buttons;
 
-    expect(rows?.map((row) => row.length)).toEqual([3, 1]);
+    expect(rows?.map((row) => row.length)).toEqual([1, 1, 1, 1]);
     expect(rows?.flatMap((row) => row.map((button) => button.callback_data))).toEqual(
       optionValues.map((_, optionIndex) => `tgq1:${questionId}:${optionIndex}`),
     );
-    expect(parseTelegramQuestionCallbackData(rows?.[1]?.[0]?.callback_data)).toEqual({
+    expect(parseTelegramQuestionCallbackData(rows?.[3]?.[0]?.callback_data)).toEqual({
       questionId,
+      intent: "select",
       optionIndex: 3,
     });
   });
@@ -158,16 +159,17 @@ describe("canonicalizeTelegramPresentationPayload", () => {
       | undefined;
     const rows = telegram?.buttons;
 
-    expect(rows?.map((row) => row.length)).toEqual([2, 2]);
+    expect(rows?.map((row) => row.length)).toEqual([1, 1, 1, 1]);
     expect(rows?.flatMap((row) => row.map((button) => button.callback_data))).toEqual([
       `tgq1:${questionId}:0`,
       `tgq1:${questionId}:0`,
       `tgq1:${questionId}:1`,
       `tgq1:${questionId}:2`,
     ]);
-    const callback = parseTelegramQuestionCallbackData(rows?.[1]?.[1]?.callback_data);
+    const callback = parseTelegramQuestionCallbackData(rows?.[3]?.[0]?.callback_data);
     expect(callback).toEqual({
       questionId,
+      intent: "select",
       optionIndex: 2,
     });
     if (!callback) {
@@ -196,7 +198,7 @@ describe("canonicalizeTelegramPresentationPayload", () => {
       questionId: "destination",
       optionValue: "C",
     });
-    expect(feedback).toHaveBeenCalledWith("Answer submitted.", true);
+    expect(feedback).toHaveBeenCalledWith("Answer submitted.", "terminal");
   });
 
   it.each([
@@ -391,5 +393,102 @@ describe("canonicalizeTelegramPresentationPayload", () => {
     });
 
     expect(second.text).toBe(first.text);
+  });
+
+  it("renders table blocks as native table islands for rich accounts", () => {
+    const result = canonicalizeTelegramPresentationPayload(
+      {
+        text: "Summary",
+        presentation: {
+          title: "FY25 outlook",
+          blocks: [
+            {
+              type: "table",
+              caption: "Pipeline",
+              headers: ["Account", "Stage"],
+              rows: [
+                ["Acme", "Won"],
+                ["Cells & <tags>", "Review"],
+              ],
+              rowHeaderColumnIndex: 0,
+            },
+            { type: "buttons", buttons: [{ label: "Refresh", value: "refresh" }] },
+          ],
+        },
+      },
+      { richTables: true },
+    );
+
+    const text = result.text ?? "";
+    expect(text).toContain("**FY25 outlook**");
+    expect(text).toContain("<caption>Pipeline</caption>");
+    expect(text).toContain("<thead><tr><th>Account</th><th>Stage</th></tr></thead>");
+    expect(text).toContain("<tr><th>Acme</th><td>Won</td></tr>");
+    expect(text).toContain("<tr><th>Cells &amp; &lt;tags&gt;</th><td>Review</td></tr>");
+    expect(text).not.toContain("Pipeline (table)");
+    expect(result.channelData?.telegram).toMatchObject({
+      buttons: [[{ text: "Refresh", callback_data: expect.any(String) }]],
+    });
+  });
+
+  it("renders context blocks in italics for rich accounts", () => {
+    const result = canonicalizeTelegramPresentationPayload(
+      {
+        presentation: {
+          blocks: [
+            { type: "context", text: "Uptime: gateway 12s" },
+            { type: "context", text: "already _emphasized_ line" },
+          ],
+        },
+      },
+      { richTables: true },
+    );
+
+    expect(result.text).toContain("_Uptime: gateway 12s_");
+    expect(result.text).toContain("already _emphasized_ line");
+  });
+
+  it("replaces authored fallback text with the rich rendering when text is marked fallback", () => {
+    const result = canonicalizeTelegramPresentationPayload(
+      {
+        text: "Plain fallback body",
+        presentationTextMode: "fallback",
+        presentation: {
+          blocks: [
+            {
+              type: "table",
+              caption: "Pipeline",
+              headers: ["Account"],
+              rows: [["Acme"]],
+            },
+          ],
+        },
+      },
+      { richTables: true },
+    );
+
+    expect(result.text).toContain("<th>Account</th>");
+    expect(result.text).not.toContain("Plain fallback body");
+    expect(result.presentationTextMode).toBeUndefined();
+  });
+
+  it("keeps authored fallback text on plain accounts instead of the generic flatten", () => {
+    const result = canonicalizeTelegramPresentationPayload({
+      text: "Plain fallback body",
+      presentationTextMode: "fallback",
+      presentation: {
+        blocks: [
+          {
+            type: "table",
+            caption: "Pipeline",
+            headers: ["Account"],
+            rows: [["Acme"]],
+          },
+        ],
+      },
+    });
+
+    expect(result.text).toBe("Plain fallback body");
+    expect(result.presentation).toBeUndefined();
   });
 });

@@ -9,7 +9,15 @@ import { base64, fromBase64url, utf8 } from "./encoding.js";
 import { seal, type Envelope } from "./envelope.js";
 import type { GuardAdapter, Verdict } from "./guard.js";
 import { generateIdentity } from "./identity.js";
-import { composeInbound, composeOutbound, PipelineError } from "./pipeline.js";
+import {
+  composeInbound,
+  composeOutbound,
+  PipelineError,
+  type ReviewApproval,
+  type ReviewDecisionState,
+  type ReviewGate,
+  type ReviewRequest,
+} from "./pipeline.js";
 import { MemoryReplayStore } from "./replay.js";
 
 const now = 1_752_300_000;
@@ -55,6 +63,95 @@ function identities() {
   return { alice: generateIdentity(), bob: generateIdentity() };
 }
 
+type Identity = ReturnType<typeof generateIdentity>;
+type OutboundOptions = Parameters<typeof composeOutbound>[0];
+type InboundOptions = Parameters<typeof composeInbound>[0];
+
+function outboundOptions(
+  alice: Identity,
+  bob: Identity,
+  overrides: Partial<OutboundOptions> = {},
+): OutboundOptions {
+  return {
+    id: "01JZ0000000000000000000000",
+    from: "alice#1",
+    to: "bob#1",
+    body: { text: "ordinary text" },
+    senderSigningSecretKey: alice.signing.secretKey,
+    recipientEncryptionPublicKey: bob.encryption.publicKey,
+    guard: mockGuard(allow),
+    audit: audit(),
+    policyVersion: "v1",
+    ...overrides,
+  };
+}
+
+function sealedEnvelope(
+  alice: Identity,
+  bob: Identity,
+  id: string,
+  body: Parameters<typeof seal>[0]["body"],
+): Envelope {
+  return seal({
+    id,
+    from: "alice#1",
+    to: "bob#1",
+    body,
+    senderSigningSecretKey: alice.signing.secretKey,
+    recipientEncryptionPublicKey: bob.encryption.publicKey,
+    ts: now,
+  });
+}
+
+function inboundOptions(
+  envelope: Envelope,
+  alice: Identity,
+  bob: Identity,
+  overrides: Partial<InboundOptions> = {},
+): InboundOptions {
+  return {
+    envelope,
+    self: "bob#1",
+    recipientEncryptionSecretKey: bob.encryption.secretKey,
+    recipientSigningSecretKey: bob.signing.secretKey,
+    senderSigningPublicKey: alice.signing.publicKey,
+    replayStore: new MemoryReplayStore(),
+    now,
+    guard: mockGuard(allow),
+    audit: audit(),
+    policyVersion: "v1",
+    ...overrides,
+  };
+}
+
+function reviewVerdict(): Verdict {
+  return {
+    ...allow,
+    decision: "review",
+    category: "ambiguous",
+    reason: "Review.",
+  };
+}
+
+function gateOf(
+  request: (review: ReviewRequest) => Promise<ReviewApproval | undefined>,
+  lookup: (approvalDigest: string) => Promise<ReviewDecisionState> = async () => "none",
+): ReviewGate {
+  return { lookup, request };
+}
+
+async function capturePipelineError(promise: Promise<unknown>): Promise<PipelineError> {
+  try {
+    await promise;
+  } catch (error) {
+    if (error instanceof PipelineError) {
+      return error;
+    }
+    throw error;
+  }
+  throw new Error("expected pipeline error");
+}
+
 class FailOnceAuditStore implements AuditStore {
   readonly inner = audit();
   #fail = true;
@@ -76,34 +173,18 @@ describe("pipeline", () => {
   it("runs an allowed outbound and inbound exchange end to end", async () => {
     const { alice, bob } = identities();
     const outboundAudit = audit();
-    const outbound = await composeOutbound({
-      id: "01JZ0000000000000000000000",
-      from: "alice#1",
-      to: "bob#1",
-      body: { text: "hello" },
-      senderSigningSecretKey: alice.signing.secretKey,
-      recipientEncryptionPublicKey: bob.encryption.publicKey,
-      ts: now,
-      guard: mockGuard(allow),
-      audit: outboundAudit,
-      policyVersion: "v1",
-    });
+    const outbound = await composeOutbound(
+      outboundOptions(alice, bob, { body: { text: "hello" }, ts: now, audit: outboundAudit }),
+    );
     const inboundAudit = audit();
     const inboundGuard = mockGuard(allow);
     const replayStore = new MemoryReplayStore();
-    const inboundOptions = {
-      envelope: outbound.envelope,
-      self: "bob#1",
-      recipientEncryptionSecretKey: bob.encryption.secretKey,
-      recipientSigningSecretKey: bob.signing.secretKey,
-      senderSigningPublicKey: alice.signing.publicKey,
+    const options = inboundOptions(outbound.envelope, alice, bob, {
       replayStore,
-      now,
       guard: inboundGuard,
       audit: inboundAudit,
-      policyVersion: "v1",
-    };
-    const inbound = await composeInbound(inboundOptions);
+    });
+    const inbound = await composeInbound(options);
     expect(inbound.disposition).toBe("accepted");
     if (inbound.disposition !== "accepted") {
       throw new Error("expected accepted result");
@@ -136,7 +217,7 @@ describe("pipeline", () => {
         ),
       ).size,
     ).toBe(1);
-    const duplicate = await composeInbound({ ...inboundOptions, now: now + 10 * 60 });
+    const duplicate = await composeInbound({ ...options, now: now + 10 * 60 });
     expect(duplicate).toEqual({
       disposition: "duplicate",
       body: inbound.body,
@@ -151,18 +232,7 @@ describe("pipeline", () => {
     const guard = mockGuard(allow);
     const envelope = craftEnvelope({ text: "hello", thread: "free-form thread" }, alice, bob);
     await expect(
-      composeInbound({
-        envelope,
-        self: "bob#1",
-        recipientEncryptionSecretKey: bob.encryption.secretKey,
-        recipientSigningSecretKey: bob.signing.secretKey,
-        senderSigningPublicKey: alice.signing.publicKey,
-        replayStore: new MemoryReplayStore(),
-        now,
-        guard,
-        audit: audit(),
-        policyVersion: "v1",
-      }),
+      composeInbound(inboundOptions(envelope, alice, bob, { guard })),
     ).rejects.toMatchObject({ code: "malformed" });
     expect(guard.calls).toBe(0);
   });
@@ -172,21 +242,16 @@ describe("pipeline", () => {
     const guard = mockGuard(allow);
     let rngCalls = 0;
     await expect(
-      composeOutbound({
-        id: "01JZ0000000000000000000000",
-        from: "alice#1",
-        to: "bob#1",
-        body: { text: ["sk-", "abcdefghijklmnopqrstuvwxyz123456"].join("") },
-        senderSigningSecretKey: alice.signing.secretKey,
-        recipientEncryptionPublicKey: bob.encryption.publicKey,
-        guard,
-        audit: audit(),
-        policyVersion: "v1",
-        rng(length) {
-          rngCalls++;
-          return new Uint8Array(length);
-        },
-      }),
+      composeOutbound(
+        outboundOptions(alice, bob, {
+          body: { text: ["sk-", "abcdefghijklmnopqrstuvwxyz123456"].join("") },
+          guard,
+          rng(length) {
+            rngCalls++;
+            return new Uint8Array(length);
+          },
+        }),
+      ),
     ).rejects.toMatchObject({ stage: "deterministic" });
     expect(guard.calls).toBe(0);
     expect(rngCalls).toBe(0);
@@ -202,21 +267,15 @@ describe("pipeline", () => {
     };
     let rngCalls = 0;
     await expect(
-      composeOutbound({
-        id: "01JZ0000000000000000000000",
-        from: "alice#1",
-        to: "bob#1",
-        body: { text: "ordinary text" },
-        senderSigningSecretKey: alice.signing.secretKey,
-        recipientEncryptionPublicKey: bob.encryption.publicKey,
-        guard: mockGuard(deny),
-        audit: audit(),
-        policyVersion: "v1",
-        rng(length) {
-          rngCalls++;
-          return new Uint8Array(length);
-        },
-      }),
+      composeOutbound(
+        outboundOptions(alice, bob, {
+          guard: mockGuard(deny),
+          rng(length) {
+            rngCalls++;
+            return new Uint8Array(length);
+          },
+        }),
+      ),
     ).rejects.toBeInstanceOf(PipelineError);
     expect(rngCalls).toBe(0);
   });
@@ -232,21 +291,17 @@ describe("pipeline", () => {
     for (const [name, pinnedModel, rawVerdict] of cases) {
       let rngCalls = 0;
       await expect(
-        composeOutbound({
-          id: "01JZ0000000000000000000008",
-          from: "alice#1",
-          to: "bob#1",
-          body: { text: `case ${name}` },
-          senderSigningSecretKey: alice.signing.secretKey,
-          recipientEncryptionPublicKey: bob.encryption.publicKey,
-          guard: structuralGuard(pinnedModel, rawVerdict),
-          audit: audit(),
-          policyVersion: "v1",
-          rng(length) {
-            rngCalls++;
-            return new Uint8Array(length);
-          },
-        }),
+        composeOutbound(
+          outboundOptions(alice, bob, {
+            id: "01JZ0000000000000000000008",
+            body: { text: `case ${name}` },
+            guard: structuralGuard(pinnedModel, rawVerdict),
+            rng(length) {
+              rngCalls++;
+              return new Uint8Array(length);
+            },
+          }),
+        ),
       ).rejects.toMatchObject({
         stage: "guard",
         verdict: { decision: "deny", category: "guard_failure" },
@@ -257,32 +312,21 @@ describe("pipeline", () => {
 
   it("accepts a valid structural adapter and admits the post-review verdict again", async () => {
     const { alice, bob } = identities();
-    const common = {
+    const common = outboundOptions(alice, bob, {
       id: "01JZ0000000000000000000009",
-      from: "alice#1",
-      to: "bob#1",
       body: { text: "structural adapter" },
-      senderSigningSecretKey: alice.signing.secretKey,
-      recipientEncryptionPublicKey: bob.encryption.publicKey,
-      audit: audit(),
-      policyVersion: "v1",
-    };
+    });
     await expect(
       composeOutbound({ ...common, guard: structuralGuard(allow.model, allow) }),
     ).resolves.toMatchObject({ verdict: allow });
-    const review: Verdict = {
-      ...allow,
-      decision: "review",
-      category: "ambiguous",
-      reason: "Review.",
-    };
+    const review = reviewVerdict();
     const invalidAfterApproval = { ...allow, model: "wrong-2026-07-12" };
     await expect(
       composeOutbound({
         ...common,
         audit: audit(),
         guard: structuralGuard(allow.model, review, invalidAfterApproval),
-        reviewGate: async ({ approvalDigest }) => ({ approved: true, approvalDigest }),
+        reviewGate: gateOf(async ({ approvalDigest }) => ({ approved: true, approvalDigest })),
       }),
     ).rejects.toMatchObject({
       stage: "guard",
@@ -290,54 +334,30 @@ describe("pipeline", () => {
     });
   });
 
-  it("rejects an invalid structural inbound verdict instead of accepting it", async () => {
+  it("parks an invalid structural inbound verdict instead of accepting or rejecting it", async () => {
     const { alice, bob } = identities();
-    const envelope = seal({
-      id: "01JZ0000000000000000000010",
-      from: "alice#1",
-      to: "bob#1",
-      body: { text: "inbound structural adapter" },
-      senderSigningSecretKey: alice.signing.secretKey,
-      recipientEncryptionPublicKey: bob.encryption.publicKey,
-      ts: now,
+    const envelope = sealedEnvelope(alice, bob, "01JZ0000000000000000000010", {
+      text: "inbound structural adapter",
     });
+    // guard_failure records classifier unavailability, not a content decision:
+    // the message stays un-acked for retry instead of rejecting the peer.
     await expect(
-      composeInbound({
-        envelope,
-        self: "bob#1",
-        recipientEncryptionSecretKey: bob.encryption.secretKey,
-        recipientSigningSecretKey: bob.signing.secretKey,
-        senderSigningPublicKey: alice.signing.publicKey,
-        replayStore: new MemoryReplayStore(),
-        now,
-        guard: structuralGuard(allow.model, { ...allow, policyVersion: "wrong" }),
-        audit: audit(),
-        policyVersion: "v1",
-      }),
+      composeInbound(
+        inboundOptions(envelope, alice, bob, {
+          guard: structuralGuard(allow.model, { ...allow, policyVersion: "wrong" }),
+        }),
+      ),
     ).rejects.toMatchObject({
       stage: "guard",
       verdict: { decision: "deny", category: "guard_failure" },
-      receipt: { status: "rejected", category: "guard_deny" },
+      receipt: undefined,
     });
   });
 
   it("requires exact full-proposal approval and fresh classification for review", async () => {
     const { alice, bob } = identities();
-    const review: Verdict = {
-      ...allow,
-      decision: "review",
-      category: "ambiguous",
-      reason: "Review.",
-    };
-    const common = {
-      id: "01JZ0000000000000000000000",
-      from: "alice#1",
-      to: "bob#1",
-      body: { text: "ordinary text" },
-      senderSigningSecretKey: alice.signing.secretKey,
-      recipientEncryptionPublicKey: bob.encryption.publicKey,
-      policyVersion: "v1",
-    };
+    const review = reviewVerdict();
+    const common = outboundOptions(alice, bob);
     await expect(
       composeOutbound({ ...common, audit: audit(), guard: mockGuard(review) }),
     ).rejects.toMatchObject({ stage: "review" });
@@ -346,7 +366,7 @@ describe("pipeline", () => {
         ...common,
         audit: audit(),
         guard: mockGuard(review),
-        reviewGate: async ({ approvalDigest }) => ({ approved: false, approvalDigest }),
+        reviewGate: gateOf(async ({ approvalDigest }) => ({ approved: false, approvalDigest })),
       }),
     ).rejects.toMatchObject({ stage: "review", reviewOutcome: "denied", receipt: undefined });
     await expect(
@@ -354,7 +374,7 @@ describe("pipeline", () => {
         ...common,
         audit: audit(),
         guard: mockGuard(review),
-        reviewGate: async () => ({ approved: true, approvalDigest: "wrong" }),
+        reviewGate: gateOf(async () => ({ approved: true, approvalDigest: "wrong" })),
       }),
     ).rejects.toMatchObject({ stage: "review" });
     const guard = mockGuard(review, allow);
@@ -362,7 +382,7 @@ describe("pipeline", () => {
       ...common,
       audit: audit(),
       guard,
-      reviewGate: async ({ approvalDigest }) => ({ approved: true, approvalDigest }),
+      reviewGate: gateOf(async ({ approvalDigest }) => ({ approved: true, approvalDigest })),
     });
     expect(result.verdict.decision).toBe("allow");
     expect(guard.calls).toBe(2);
@@ -370,20 +390,12 @@ describe("pipeline", () => {
 
   it("does not reuse an approval across recipients", async () => {
     const { alice, bob } = identities();
-    const review: Verdict = {
-      ...allow,
-      decision: "review",
-      category: "ambiguous",
-      reason: "Review.",
-    };
-    const common = {
+    const review = reviewVerdict();
+    const common = outboundOptions(alice, bob, {
       id: "01JZ0000000000000000000007",
       from: "sender#1",
       body: { text: "identical body" },
-      senderSigningSecretKey: alice.signing.secretKey,
-      recipientEncryptionPublicKey: bob.encryption.publicKey,
-      policyVersion: "v1",
-    };
+    });
     let vincentDigest = "";
     await expect(
       composeOutbound({
@@ -391,7 +403,7 @@ describe("pipeline", () => {
         to: "vincent#1",
         audit: audit(),
         guard: mockGuard(review),
-        reviewGate: async (request) => {
+        reviewGate: gateOf(async (request) => {
           vincentDigest = request.approvalDigest;
           expect(request).toMatchObject({
             id: common.id,
@@ -401,7 +413,7 @@ describe("pipeline", () => {
           });
           expect(request.bodyHash).toMatch(/^[0-9a-f]{64}$/);
           return undefined;
-        },
+        }),
       }),
     ).rejects.toMatchObject({ stage: "review", reviewOutcome: "pending" });
     await expect(
@@ -410,36 +422,22 @@ describe("pipeline", () => {
         to: "alice#1",
         audit: audit(),
         guard: mockGuard(review),
-        reviewGate: async () => ({ approved: true, approvalDigest: vincentDigest }),
+        reviewGate: gateOf(async () => ({ approved: true, approvalDigest: vincentDigest })),
       }),
     ).rejects.toMatchObject({ stage: "review", message: "approval digest mismatch" });
   });
 
   it("releases a replay claim after transient audit failure and retries successfully", async () => {
     const { alice, bob } = identities();
-    const envelope = seal({
-      id: "01JZ0000000000000000000001",
-      from: "alice#1",
-      to: "bob#1",
-      body: { text: "retry me" },
-      senderSigningSecretKey: alice.signing.secretKey,
-      recipientEncryptionPublicKey: bob.encryption.publicKey,
-      ts: now,
+    const envelope = sealedEnvelope(alice, bob, "01JZ0000000000000000000001", {
+      text: "retry me",
     });
     const replayStore = new MemoryReplayStore();
     const inboundAudit = new FailOnceAuditStore();
-    const options = {
-      envelope,
-      self: "bob#1",
-      recipientEncryptionSecretKey: bob.encryption.secretKey,
-      recipientSigningSecretKey: bob.signing.secretKey,
-      senderSigningPublicKey: alice.signing.publicKey,
+    const options = inboundOptions(envelope, alice, bob, {
       replayStore,
-      now,
-      guard: mockGuard(allow),
       audit: inboundAudit,
-      policyVersion: "v1",
-    };
+    });
     await expect(composeInbound(options)).rejects.toThrow("transient audit failure");
     const retried = await composeInbound(options);
     expect(retried.disposition).toBe("accepted");
@@ -448,45 +446,23 @@ describe("pipeline", () => {
 
   it("returns an identical cached rejection receipt on guard-deny redelivery", async () => {
     const { alice, bob } = identities();
-    const envelope = seal({
-      id: "01JZ0000000000000000000002",
-      from: "alice#1",
-      to: "bob#1",
-      body: { text: "classify me" },
-      senderSigningSecretKey: alice.signing.secretKey,
-      recipientEncryptionPublicKey: bob.encryption.publicKey,
-      ts: now,
+    const envelope = sealedEnvelope(alice, bob, "01JZ0000000000000000000002", {
+      text: "classify me",
     });
     const replayStore = new MemoryReplayStore();
     const inboundAudit = audit();
     const deny: Verdict = { ...allow, decision: "deny", category: "injection", reason: "Denied." };
     const guard = mockGuard(deny);
-    const options = {
-      envelope,
-      self: "bob#1",
-      recipientEncryptionSecretKey: bob.encryption.secretKey,
-      recipientSigningSecretKey: bob.signing.secretKey,
-      senderSigningPublicKey: alice.signing.publicKey,
+    const options = inboundOptions(envelope, alice, bob, {
       replayStore,
-      now,
       guard,
       audit: inboundAudit,
-      policyVersion: "v1",
-    };
-    let rejection: PipelineError | undefined;
-    try {
-      await composeInbound(options);
-    } catch (error) {
-      if (error instanceof PipelineError) {
-        rejection = error;
-      } else {
-        throw error;
-      }
-    }
-    expect(rejection?.receipt).toMatchObject({ status: "rejected", category: "guard_deny" });
+    });
+    const rejection = await capturePipelineError(composeInbound(options));
+    expect(rejection.receipt).toMatchObject({ status: "rejected", category: "guard_deny" });
     const entryCount = (await inboundAudit.entries()).length;
     const duplicate = await composeInbound({ ...options, now: now + 1_000 });
-    expect(duplicate).toEqual({ disposition: "duplicate", receipt: rejection!.receipt });
+    expect(duplicate).toEqual({ disposition: "duplicate", receipt: rejection.receipt });
     expect(duplicate).not.toHaveProperty("body");
     expect((await inboundAudit.entries()).length).toBe(entryCount);
     expect(guard.calls).toBe(1);
@@ -494,50 +470,23 @@ describe("pipeline", () => {
 
   it("completes explicit inbound review denial and caches its receipt", async () => {
     const { alice, bob } = identities();
-    const envelope = seal({
-      id: "01JZ0000000000000000000005",
-      from: "alice#1",
-      to: "bob#1",
-      body: { text: "review me" },
-      senderSigningSecretKey: alice.signing.secretKey,
-      recipientEncryptionPublicKey: bob.encryption.publicKey,
-      ts: now,
+    const envelope = sealedEnvelope(alice, bob, "01JZ0000000000000000000005", {
+      text: "review me",
     });
-    const review: Verdict = {
-      ...allow,
-      decision: "review",
-      category: "ambiguous",
-      reason: "Review.",
-    };
+    const review = reviewVerdict();
     const guard = mockGuard(review);
     const replayStore = new MemoryReplayStore();
     const inboundAudit = audit();
-    const options = {
-      envelope,
-      self: "bob#1",
-      recipientEncryptionSecretKey: bob.encryption.secretKey,
-      recipientSigningSecretKey: bob.signing.secretKey,
-      senderSigningPublicKey: alice.signing.publicKey,
+    const options = inboundOptions(envelope, alice, bob, {
       replayStore,
-      now,
       guard,
       audit: inboundAudit,
-      policyVersion: "v1",
-      reviewGate: async ({ approvalDigest }: { approvalDigest: string }) => ({
+      reviewGate: gateOf(async ({ approvalDigest }) => ({
         approved: false,
         approvalDigest,
-      }),
-    };
-    let rejection: PipelineError | undefined;
-    try {
-      await composeInbound(options);
-    } catch (error) {
-      if (error instanceof PipelineError) {
-        rejection = error;
-      } else {
-        throw error;
-      }
-    }
+      })),
+    });
+    const rejection = await capturePipelineError(composeInbound(options));
     expect(rejection).toMatchObject({
       stage: "review",
       reviewOutcome: "denied",
@@ -546,7 +495,7 @@ describe("pipeline", () => {
     const entryCount = (await inboundAudit.entries()).length;
     await expect(composeInbound(options)).resolves.toEqual({
       disposition: "duplicate",
-      receipt: rejection!.receipt,
+      receipt: rejection.receipt,
     });
     expect((await inboundAudit.entries()).length).toBe(entryCount);
     expect(guard.calls).toBe(1);
@@ -554,37 +503,18 @@ describe("pipeline", () => {
 
   it("releases pending inbound review and accepts a later approved retry", async () => {
     const { alice, bob } = identities();
-    const envelope = seal({
-      id: "01JZ0000000000000000000006",
-      from: "alice#1",
-      to: "bob#1",
-      body: { text: "decide later" },
-      senderSigningSecretKey: alice.signing.secretKey,
-      recipientEncryptionPublicKey: bob.encryption.publicKey,
-      ts: now,
+    const envelope = sealedEnvelope(alice, bob, "01JZ0000000000000000000006", {
+      text: "decide later",
     });
-    const review: Verdict = {
-      ...allow,
-      decision: "review",
-      category: "ambiguous",
-      reason: "Review.",
-    };
+    const review = reviewVerdict();
     const guard = mockGuard(review, review, allow);
     let decided = false;
-    const options = {
-      envelope,
-      self: "bob#1",
-      recipientEncryptionSecretKey: bob.encryption.secretKey,
-      recipientSigningSecretKey: bob.signing.secretKey,
-      senderSigningPublicKey: alice.signing.publicKey,
-      replayStore: new MemoryReplayStore(),
-      now,
+    const options = inboundOptions(envelope, alice, bob, {
       guard,
-      audit: audit(),
-      policyVersion: "v1",
-      reviewGate: async ({ approvalDigest }: { approvalDigest: string }) =>
+      reviewGate: gateOf(async ({ approvalDigest }) =>
         decided ? { approved: true, approvalDigest } : undefined,
-    };
+      ),
+    });
     await expect(composeInbound(options)).rejects.toMatchObject({
       stage: "review",
       reviewOutcome: "pending",
@@ -598,31 +528,136 @@ describe("pipeline", () => {
     expect(guard.calls).toBe(3);
   });
 
+  it("holds a pending review on redelivery without re-classifying", async () => {
+    const { alice, bob } = identities();
+    const envelope = sealedEnvelope(alice, bob, "01JZ0000000000000000000011", {
+      text: "parked while pending",
+    });
+    const guard = mockGuard(allow);
+    const inboundAudit = audit();
+    const options = inboundOptions(envelope, alice, bob, {
+      guard,
+      audit: inboundAudit,
+      reviewGate: gateOf(
+        async () => undefined,
+        async () => "pending",
+      ),
+    });
+    await expect(composeInbound(options)).rejects.toMatchObject({
+      stage: "review",
+      reviewOutcome: "pending",
+      receipt: undefined,
+    });
+    // The recorded review owns redelivery: no fresh guard roll may resolve it,
+    // and re-attempts must not grow the audit chain.
+    expect(guard.calls).toBe(0);
+    expect((await inboundAudit.entries()).length).toBe(0);
+    await expect(
+      composeOutbound(
+        outboundOptions(alice, bob, {
+          guard,
+          reviewGate: gateOf(
+            async () => undefined,
+            async () => "pending",
+          ),
+        }),
+      ),
+    ).rejects.toMatchObject({ stage: "review", reviewOutcome: "pending" });
+    expect(guard.calls).toBe(0);
+  });
+
+  it("completes a decided-approved review on redelivery with one classification", async () => {
+    const { alice, bob } = identities();
+    const envelope = sealedEnvelope(alice, bob, "01JZ0000000000000000000012", {
+      text: "approved while parked",
+    });
+    const guard = mockGuard(allow);
+    const inboundAudit = audit();
+    const result = await composeInbound(
+      inboundOptions(envelope, alice, bob, {
+        guard,
+        audit: inboundAudit,
+        reviewGate: gateOf(
+          async () => undefined,
+          async () => ({ approved: true }),
+        ),
+      }),
+    );
+    expect(result.disposition).toBe("accepted");
+    expect(guard.calls).toBe(1);
+    const entries = await inboundAudit.entries();
+    expect(entries.some((entry) => entry.event.type === "review_approval")).toBe(true);
+  });
+
+  it("completes a decided-denied review on redelivery without classifying", async () => {
+    const { alice, bob } = identities();
+    const envelope = sealedEnvelope(alice, bob, "01JZ0000000000000000000013", {
+      text: "denied while parked",
+    });
+    const guard = mockGuard(allow);
+    const rejection = await capturePipelineError(
+      composeInbound(
+        inboundOptions(envelope, alice, bob, {
+          guard,
+          reviewGate: gateOf(
+            async () => undefined,
+            async () => ({ approved: false }),
+          ),
+        }),
+      ),
+    );
+    expect(rejection).toMatchObject({
+      stage: "review",
+      reviewOutcome: "denied",
+      receipt: { status: "rejected", category: "review_denied" },
+    });
+    expect(guard.calls).toBe(0);
+  });
+
+  it("parks an inbound guard failure instead of rejecting the peer", async () => {
+    const { alice, bob } = identities();
+    const envelope = sealedEnvelope(alice, bob, "01JZ0000000000000000000014", {
+      text: "guard outage",
+    });
+    const failure: Verdict = {
+      ...allow,
+      decision: "deny",
+      category: "guard_failure",
+      reason: "Guard unavailable or invalid.",
+    };
+    const replayStore = new MemoryReplayStore();
+    const inboundAudit = audit();
+    const failing = inboundOptions(envelope, alice, bob, {
+      replayStore,
+      guard: mockGuard(failure),
+      audit: inboundAudit,
+    });
+    const parked = await capturePipelineError(composeInbound(failing));
+    expect(parked).toMatchObject({
+      stage: "guard",
+      verdict: { category: "guard_failure" },
+      receipt: undefined,
+    });
+    expect(
+      (await inboundAudit.entries()).some((entry) => entry.event.type === "inbox_rejected"),
+    ).toBe(false);
+    // The replay claim released, so recovery retries once the guard is back.
+    const retried = await composeInbound({
+      ...failing,
+      guard: mockGuard(allow),
+      now: now + 60,
+    });
+    expect(retried.disposition).toBe("accepted");
+  });
+
   it("completes deterministic inbound denial with a signed rejection", async () => {
     const { alice, bob } = identities();
-    const envelope = seal({
-      id: "01JZ0000000000000000000003",
-      from: "alice#1",
-      to: "bob#1",
-      body: { text: ["sk-", "abcdefghijklmnopqrstuvwxyz123456"].join("") },
-      senderSigningSecretKey: alice.signing.secretKey,
-      recipientEncryptionPublicKey: bob.encryption.publicKey,
-      ts: now,
+    const envelope = sealedEnvelope(alice, bob, "01JZ0000000000000000000003", {
+      text: ["sk-", "abcdefghijklmnopqrstuvwxyz123456"].join(""),
     });
     const guard = mockGuard(allow);
     await expect(
-      composeInbound({
-        envelope,
-        self: "bob#1",
-        recipientEncryptionSecretKey: bob.encryption.secretKey,
-        recipientSigningSecretKey: bob.signing.secretKey,
-        senderSigningPublicKey: alice.signing.publicKey,
-        replayStore: new MemoryReplayStore(),
-        now,
-        guard,
-        audit: audit(),
-        policyVersion: "v1",
-      }),
+      composeInbound(inboundOptions(envelope, alice, bob, { guard })),
     ).rejects.toMatchObject({
       stage: "deterministic",
       receipt: { status: "rejected", category: "deterministic_deny" },

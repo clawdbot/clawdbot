@@ -54,4 +54,4 @@ import from this tree directly.
 
 - If you touch hot channel entrypoints or lazy-loading seams, run `pnpm build`.
 - For bundled plugin channel changes that can affect startup/import cost, run:
-  `OPENCLAW_LOCAL_CHECK=0 node scripts/profile-extension-memory.mjs --extension <id> --skip-combined --concurrency 1`
+  `OPENCLAW_LOCAL_CHECK=0 node --import tsx scripts/profile-extension-memory.mts --extension <id> --skip-combined --concurrency 1`

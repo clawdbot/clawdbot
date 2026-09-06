@@ -1,29 +1,16 @@
 // Discord tests cover client plugin behavior.
 import { ApplicationCommandType, ComponentType, Routes } from "discord-api-types/v10";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client } from "./client.js";
-import { BaseCommand } from "./commands.js";
+import { Command, type CommandOptions, type DiscordCommand } from "./commands.js";
 import { ComponentRegistry } from "./component-registry.js";
 import { Button, StringSelectMenu, parseCustomId } from "./components.js";
 import { DiscordError } from "./rest.js";
 import { attachRestMock, createInternalTestClient } from "./test-builders.test-support.js";
 
 type AnyListener = Parameters<Client["registerListener"]>[0];
-
-function createDeferred<T = void>(): {
-  promise: Promise<T>;
-  resolve: (value: T | PromiseLike<T>) => void;
-  reject: (reason?: unknown) => void;
-} {
-  let resolve: (value: T | PromiseLike<T>) => void = () => {};
-  let reject: (reason?: unknown) => void = () => {};
-  const promise = new Promise<T>((promiseResolve, promiseReject) => {
-    resolve = promiseResolve;
-    reject = promiseReject;
-  });
-  return { promise, resolve, reject };
-}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -33,16 +20,14 @@ afterEach(() => {
 function createTestCommand(params: {
   name: string;
   guildIds?: string[];
-  options?: unknown[];
-}): BaseCommand {
-  return new (class extends BaseCommand {
+  options?: CommandOptions;
+}): DiscordCommand {
+  return new (class extends Command {
     name = params.name;
     override description = `${params.name} command`;
-    type = ApplicationCommandType.ChatInput;
     override guildIds = params.guildIds;
-    serializeOptions() {
-      return params.options;
-    }
+    override options = params.options;
+    run() {}
   })();
 }
 
@@ -581,7 +566,7 @@ describe("Client gateway event queue", () => {
   it("holds a timed-out listener slot until its underlying promise resolves", async () => {
     vi.useFakeTimers();
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const firstSettlement = createDeferred();
+    const firstSettlement = createDeferred<void>();
     const started: string[] = [];
     const first = {
       type: "READY",
@@ -631,7 +616,7 @@ describe("Client gateway event queue", () => {
   it("logs a listener failure that arrives after its dispatch timeout", async () => {
     vi.useFakeTimers();
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const settlement = createDeferred();
+    const settlement = createDeferred<void>();
     const lateError = new Error("late listener failure");
     const listener = {
       type: "READY",
@@ -667,8 +652,8 @@ describe("Client gateway event queue", () => {
 
   it("limits queued listener concurrency", async () => {
     const started: string[] = [];
-    const releaseFirst = createDeferred();
-    const releaseSecond = createDeferred();
+    const releaseFirst = createDeferred<void>();
+    const releaseSecond = createDeferred<void>();
     const first = {
       type: "READY",
       handle: vi.fn(async () => {

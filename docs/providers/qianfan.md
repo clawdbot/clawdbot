@@ -74,7 +74,7 @@ This example explicitly selects the current DeepSeek flagship instead of the onb
 
 ```json5
 {
-  env: { QIANFAN_API_KEY: "bce-v3/ALTAK-..." },
+  env: { vars: { QIANFAN_API_KEY: "bce-v3/ALTAK-..." } },
   agents: {
     defaults: {
       model: { primary: "qianfan/deepseek-v4-pro" },

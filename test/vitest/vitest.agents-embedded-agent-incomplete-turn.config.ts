@@ -1,4 +1,4 @@
-// Vitest embedded agent incomplete-turn config isolates the expensive harness warmup.
+// Keep the focused incomplete-turn owner matrix on its existing CI shard boundary.
 import { agentVitestProjectOwners } from "./vitest.agents-paths.mjs";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 

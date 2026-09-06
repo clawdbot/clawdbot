@@ -13,7 +13,7 @@ import {
 import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
 
 vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: () => ({ plugins: [] }),
+  loadPluginManifestRegistryCore: () => ({ plugins: [] }),
 }));
 
 vi.mock("./model-auth-env-vars.js", () => ({
@@ -26,8 +26,6 @@ vi.mock("./model-auth-env-vars.js", () => ({
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
-  applyProviderConfigDefaultsWithPlugin: (config: OpenClawConfig) => config,
-  applyProviderNativeStreamingUsageCompatWithPlugin: () => undefined,
   normalizeProviderConfigWithPlugin: () => undefined,
   resolveProviderConfigApiKeyWithPlugin: () => undefined,
   resolveProviderSyntheticAuthWithPlugin: () => undefined,
@@ -293,7 +291,7 @@ describe("models-config runtime source snapshot", () => {
     };
     const providers = enforceSourceManagedProviderSecrets({
       providers: runtimeConfig.models!.providers!,
-      sourceProviders: sourceConfig.models!.providers,
+      sourceConfigForSecrets: sourceConfig,
     })!;
     expect(providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
     expect(providers.moonshot?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
@@ -523,7 +521,7 @@ describe("models-config runtime source snapshot", () => {
 
     const providers = enforceSourceManagedProviderSecrets({
       providers: runtimeConfig.models!.providers!,
-      sourceProviders,
+      sourceConfigForSecrets: { models: { providers: sourceProviders } },
     });
 
     expect(providers?.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret

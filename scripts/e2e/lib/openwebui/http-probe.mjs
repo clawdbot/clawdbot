@@ -11,7 +11,7 @@ function parseExpectedStatus(raw) {
   return Number(raw);
 }
 
-function resolveTimerTimeoutMs(valueMs, fallbackMs) {
+function resolveOpenWebUiHttpProbeTimeoutMs(valueMs, fallbackMs) {
   const value = Number.isFinite(valueMs) ? valueMs : fallbackMs;
   return Math.min(Math.max(Math.floor(value), 1), MAX_TIMER_TIMEOUT_MS);
 }
@@ -27,7 +27,7 @@ export async function probeHttpStatus({
     throw new Error("usage: http-probe.mjs <url> [status|lt500]");
   }
   const expectedStatus = expectedRaw === "lt500" ? undefined : parseExpectedStatus(expectedRaw);
-  const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 30_000);
+  const resolvedTimeoutMs = resolveOpenWebUiHttpProbeTimeoutMs(timeoutMs, 30_000);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), resolvedTimeoutMs);
   let res;

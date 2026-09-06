@@ -1,9 +1,17 @@
 // Provides SQLite transaction helpers with nested savepoints.
 import type { DatabaseSync } from "node:sqlite";
+import { setTimeout as sleep } from "node:timers/promises";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsystem.js";
-import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync.js";
-
-const transactionDepthByDatabase = new WeakMap<DatabaseSync, number>();
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+// The cache-state module keeps this lifecycle edge off the kysely value graph
+// so cold control-plane paths using transactions do not load kysely.
+import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
+import {
+  readSqliteBusyTimeout,
+  runWithSqliteBusyTimeout,
+  shouldReportSqliteLockFailure,
+} from "./sqlite-busy-timeout.js";
 
 const SQLITE_LOCK_ERROR_CODES = new Set(["SQLITE_BUSY", "SQLITE_LOCKED"]);
 // Node reports SQLite failures with a generic string code and the extended
@@ -16,8 +24,67 @@ const SQLITE_PRIMARY_RESULT_CODE_MASK = 0xff;
 const DEFAULT_SLOW_BUSY_WAIT_MS = 1_000;
 const DEFAULT_SLOW_TRANSACTION_HOLD_MS = 1_000;
 
-let nextSavepointId = 0;
 const transactionLog = createSubsystemLogger("sqlite/transaction");
+const writeAdmissionServices = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqliteWriteAdmissionServices"),
+  () => new Map<string, Set<() => void>>(),
+);
+
+/** Keep worker-owned lock holders serviceable across connections and module graphs. */
+export async function withSqliteWriteAdmissionService<T>(
+  database: DatabaseSync,
+  service: () => void,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const location = database.location();
+  if (location === null) {
+    throw new Error("SQLite write admission service requires a file-backed database");
+  }
+  const services = writeAdmissionServices.get(location) ?? new Set<() => void>();
+  services.add(service);
+  writeAdmissionServices.set(location, services);
+  try {
+    return await operation();
+  } finally {
+    services.delete(service);
+    if (services.size === 0) {
+      writeAdmissionServices.delete(location);
+    }
+  }
+}
+
+function beginImmediateTransaction(db: DatabaseSync): void {
+  // Native location identifies reopened handles without probing the filesystem.
+  const location = writeAdmissionServices.size > 0 ? db.location() : null;
+  const services = location === null ? undefined : writeAdmissionServices.get(location);
+  if (!services) {
+    db.exec("BEGIN IMMEDIATE");
+    return;
+  }
+  const deadline = performance.now() + readSqliteBusyTimeout(db);
+  while (true) {
+    try {
+      runWithSqliteBusyTimeout(
+        db,
+        Math.min(25, Math.max(0, Math.ceil(deadline - performance.now()))),
+        () => db.exec("BEGIN IMMEDIATE"),
+      );
+      return;
+    } catch (error) {
+      if (!isSqliteLockError(error) || performance.now() >= deadline) {
+        throw error;
+      }
+      // Only admission repeats. Services retain their own authority and settlement
+      // rules; caller mutations and postcommit publication have not started yet.
+      for (const service of services) {
+        service();
+      }
+      if (performance.now() >= deadline) {
+        throw error;
+      }
+    }
+  }
+}
 
 export type SqliteTransactionOptions = {
   busyTimeoutMs?: number;
@@ -29,15 +96,6 @@ export type SqliteTransactionOptions = {
 
 type SqliteTransactionStep = "begin" | "commit";
 type SqliteTransactionMode = "deferred" | "immediate";
-
-function nextSavepointName(): string {
-  nextSavepointId += 1;
-  return `openclaw_tx_${nextSavepointId}`;
-}
-
-function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
-  return Boolean(value && typeof (value as { then?: unknown }).then === "function");
-}
 
 function assertSyncTransactionResult(value: unknown): void {
   if (isPromiseLike(value)) {
@@ -141,7 +199,11 @@ function execTimedTransactionStep(params: {
 }): number {
   const startedAt = Date.now();
   try {
-    params.db.exec(params.sql);
+    if (params.sql === "BEGIN IMMEDIATE") {
+      beginImmediateTransaction(params.db);
+    } else {
+      params.db.exec(params.sql);
+    }
     const elapsedMs = Date.now() - startedAt;
     logSlowTransactionStep({
       elapsedMs,
@@ -151,7 +213,7 @@ function execTimedTransactionStep(params: {
     return elapsedMs;
   } catch (error) {
     const elapsedMs = Date.now() - startedAt;
-    if (isSqliteLockError(error)) {
+    if (isSqliteLockError(error) && shouldReportSqliteLockFailure(params.db)) {
       const sqliteErrcode = sqliteExtendedResultCode(error);
       const sqlitePrimaryCode = sqlitePrimaryResultCode(error);
       transactionLogger(params.options).warn("SQLite transaction lock wait failed", {
@@ -214,88 +276,45 @@ function abortImmediateTransaction(db: DatabaseSync): void {
   }
 }
 
-function getTransactionDepth(db: DatabaseSync): number {
-  return transactionDepthByDatabase.get(db) ?? 0;
-}
-
-function setTransactionDepth(db: DatabaseSync, depth: number): void {
-  if (depth <= 0) {
-    transactionDepthByDatabase.delete(db);
-    return;
-  }
-  transactionDepthByDatabase.set(db, depth);
-}
-
 function runSqliteTransactionSync<T>(
   db: DatabaseSync,
   operation: () => T,
   mode: SqliteTransactionMode,
   options?: SqliteTransactionOptions,
 ): T {
-  const depth = getTransactionDepth(db);
-  if (depth > 0) {
-    const savepointName = nextSavepointName();
-    db.exec(`SAVEPOINT ${savepointName}`);
-    setTransactionDepth(db, depth + 1);
+  if (db.isTransaction) {
+    // SQLite targets the most recent matching savepoint. Reusing its name keeps
+    // nested native/SDK calls correct without module-local depth or counters.
+    db.exec("SAVEPOINT openclaw_tx_nested");
     try {
       const result = operation();
       assertSyncTransactionResult(result);
-      db.exec(`RELEASE SAVEPOINT ${savepointName}`);
+      db.exec("RELEASE SAVEPOINT openclaw_tx_nested");
       return result;
     } catch (error) {
       try {
-        db.exec(`ROLLBACK TO SAVEPOINT ${savepointName}`);
+        db.exec("ROLLBACK TO SAVEPOINT openclaw_tx_nested");
       } finally {
-        db.exec(`RELEASE SAVEPOINT ${savepointName}`);
+        db.exec("RELEASE SAVEPOINT openclaw_tx_nested");
       }
       throw error;
-    } finally {
-      setTransactionDepth(db, depth);
     }
   }
 
   beginTransaction(db, options, mode);
-  setTransactionDepth(db, 1);
-  let transactionStillActive = true;
-  let result: T;
   const transactionStartedAt = Date.now();
   try {
-    result = operation();
+    const result = operation();
     assertSyncTransactionResult(result);
-  } catch (error) {
-    try {
-      abortImmediateTransaction(db);
-      transactionStillActive = false;
-    } catch {
-      // Preserve the original error; rollback failure is secondary.
-    }
-    throw error;
-  } finally {
-    if (!transactionStillActive) {
-      setTransactionDepth(db, 0);
-    }
-  }
-
-  try {
     logSlowTransactionHold({
       elapsedMs: Date.now() - transactionStartedAt,
       options,
     });
     commitImmediateTransaction(db, options);
-    transactionStillActive = false;
     return result;
   } catch (error) {
-    try {
-      abortImmediateTransaction(db);
-      transactionStillActive = false;
-    } catch {
-      // Preserve the original error; rollback failure is secondary.
-    }
+    abortImmediateTransaction(db);
     throw error;
-  } finally {
-    if (!transactionStillActive) {
-      setTransactionDepth(db, 0);
-    }
   }
 }
 
@@ -314,4 +333,52 @@ export function runSqliteImmediateTransactionSync<T>(
   options?: SqliteTransactionOptions,
 ): T {
   return runSqliteTransactionSync(db, operation, "immediate", options);
+}
+
+/** Prepare outside the transaction; yield for admission without replaying admitted writes. */
+export async function runSqliteImmediateTransaction<T>(
+  db: DatabaseSync,
+  prepare: () => Promise<(() => T) | undefined>,
+  options?: SqliteTransactionOptions,
+): Promise<T | undefined> {
+  if (db.isTransaction) {
+    throw new Error("Asynchronous SQLite preparation cannot join an existing transaction");
+  }
+  const deadline = performance.now() + readSqliteBusyTimeout(db);
+  let entered = false;
+  while (true) {
+    const operation = await prepare();
+    if (db.isTransaction) {
+      throw new Error("SQLite preparation left a transaction open");
+    }
+    if (!operation) {
+      return undefined;
+    }
+    try {
+      return runWithSqliteBusyTimeout(
+        db,
+        0,
+        (restore) =>
+          runSqliteImmediateTransactionSync(
+            db,
+            () => {
+              entered = true;
+              restore();
+              return operation();
+            },
+            options,
+          ),
+        { lockFailureReporting: "suppress" },
+      );
+    } catch (error) {
+      if (entered || !isSqliteLockError(error) || performance.now() >= deadline) {
+        throw error;
+      }
+      // The synchronous helper restored connection policy and left no transaction.
+      await sleep(Math.min(25, Math.max(0, deadline - performance.now())));
+      if (performance.now() >= deadline) {
+        throw error;
+      }
+    }
+  }
 }

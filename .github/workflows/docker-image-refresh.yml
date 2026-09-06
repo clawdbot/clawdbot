@@ -1,0 +1,140 @@
+name: Docker Image Refresh
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Release channel to rebuild
+        required: false
+        default: both
+        type: choice
+        options:
+          - stable
+          - extended-stable
+          - both
+      dry_run:
+        description: Resolve and summarize without publishing
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      dry_run: ${{ steps.plan.outputs.dry_run }}
+      image_tag_suffix: ${{ steps.plan.outputs.image_tag_suffix }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - name: Require a main-branch run
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]]; then
+            echo "::error::Docker image refresh must run from main; got ${WORKFLOW_REF}."
+            exit 1
+          fi
+
+      - name: Checkout trusted refresh tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve refresh plan
+        id: plan
+        shell: bash
+        env:
+          CHANNEL: ${{ github.event_name == 'schedule' && 'both' || inputs.channel }}
+          DRY_RUN: ${{ github.event_name == 'schedule' && 'false' || inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          current="$(git tag --list 'v*' | node scripts/lib/docker-release-policy.mjs --current)"
+          stable_tag="$(jq -er '.stable.tag' <<< "${current}")"
+          extended_stable_tag="$(jq -er '.extendedStable.tag' <<< "${current}")"
+          stable_sha="$(git rev-parse "refs/tags/${stable_tag}^{commit}")"
+          extended_stable_sha="$(git rev-parse "refs/tags/${extended_stable_tag}^{commit}")"
+          suffix="-r$(date -u +%Y%m%d)"
+
+          stable_entry="$(
+            jq -cn \
+              --arg channel stable \
+              --arg tag "${stable_tag}" \
+              --arg release_sha "${stable_sha}" \
+              '{channel: $channel, tag: $tag, release_sha: $release_sha}'
+          )"
+          extended_stable_entry="$(
+            jq -cn \
+              --arg channel extended-stable \
+              --arg tag "${extended_stable_tag}" \
+              --arg release_sha "${extended_stable_sha}" \
+              '{channel: $channel, tag: $tag, release_sha: $release_sha}'
+          )"
+          case "${CHANNEL}" in
+            stable)
+              matrix="$(jq -cn --argjson stable "${stable_entry}" '[$stable]')"
+              ;;
+            extended-stable)
+              matrix="$(jq -cn --argjson extended "${extended_stable_entry}" '[$extended]')"
+              ;;
+            both)
+              matrix="$(
+                jq -cn \
+                  --argjson stable "${stable_entry}" \
+                  --argjson extended "${extended_stable_entry}" \
+                  '[$stable, $extended]'
+              )"
+              ;;
+            *)
+              echo "::error::Unsupported Docker refresh channel: ${CHANNEL}"
+              exit 1
+              ;;
+          esac
+
+          {
+            echo "dry_run=${DRY_RUN}"
+            echo "image_tag_suffix=${suffix}"
+            echo "matrix=${matrix}"
+          } >> "${GITHUB_OUTPUT}"
+          {
+            echo "## Docker image refresh plan"
+            echo "- Stable: ${stable_tag} (${stable_sha})"
+            echo "- Extended stable: ${extended_stable_tag} (${extended_stable_sha})"
+            echo "- Image tag suffix: ${suffix}"
+            echo "- Selected channel: ${CHANNEL}"
+            echo "- Dry run: ${DRY_RUN}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  publish:
+    name: Refresh ${{ matrix.channel }} Docker images
+    needs: plan
+    if: needs.plan.outputs.dry_run != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    uses: ./.github/workflows/docker-release.yml
+    with:
+      tag: ${{ matrix.tag }}
+      release_sha: ${{ matrix.release_sha }}
+      image_tag_suffix: ${{ needs.plan.outputs.image_tag_suffix }}
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+    permissions:
+      actions: read
+      attestations: read
+      contents: read
+      packages: write

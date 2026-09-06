@@ -2,18 +2,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  matchRootFileOpenFailure,
-  openRootFile,
-  openRootFileSync,
-} from "../infra/boundary-file-read.js";
-import { resolveRootPath, resolveRootPathSync } from "../infra/boundary-path.js";
+import { matchRootFileOpenFailure, openRootFile } from "../infra/boundary-file-read.js";
+import { resolveRootPath } from "../infra/boundary-path.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { getPackageManifestMetadata, type PackageManifest } from "./manifest.js";
 import {
   isTypeScriptPackageEntry,
   listBuiltRuntimeEntryCandidates,
 } from "./package-entrypoints.js";
+import { checkPluginCacheEntry, pluginCacheExistsSync } from "./plugin-cache-files.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 type ExtensionEntryValidation = { ok: true; exists: boolean } | { ok: false; error: string };
@@ -346,13 +343,10 @@ function resolvePackageEntrySource(params: {
   const rejectHardlinks = params.rejectHardlinks ?? true;
   const candidates = [source];
   const openCandidate = (absolutePath: string): string | null => {
-    const opened = openRootFileSync({
-      absolutePath,
-      rootPath: params.packageDir,
-      ...(params.packageRootRealPath !== undefined
-        ? { rootRealPath: params.packageRootRealPath }
-        : {}),
-      boundaryLabel: "plugin package directory",
+    const opened = checkPluginCacheEntry({
+      rootDir: params.packageDir,
+      relativePath: path.relative(params.packageDir, absolutePath),
+      rootRealPath: params.packageRootRealPath,
       rejectHardlinks,
     });
     if (!opened.ok) {
@@ -378,9 +372,7 @@ function resolvePackageEntrySource(params: {
         },
       });
     }
-    const safeSource = opened.path;
-    fs.closeSync(opened.fd);
-    return safeSource;
+    return opened.exists ? opened.path : null;
   };
   if (!rejectHardlinks) {
     const builtCandidate = source.replace(/\.[^.]+$/u, ".js");
@@ -389,8 +381,8 @@ function resolvePackageEntrySource(params: {
     }
   }
 
-  for (const candidate of new Set(candidates)) {
-    if (!fs.existsSync(candidate)) {
+  for (const candidate of candidates) {
+    if (!pluginCacheExistsSync(candidate)) {
       continue;
     }
     return openCandidate(candidate);
@@ -417,7 +409,7 @@ function resolveSafePackageEntry(params: {
   rejectHardlinks?: boolean;
 }): { relativePath: string; existingSource?: string } | null {
   const absolutePath = path.resolve(params.packageDir, params.entryPath);
-  if (fs.existsSync(absolutePath)) {
+  if (pluginCacheExistsSync(absolutePath)) {
     const existingSource = resolvePackageEntrySource({
       packageDir: params.packageDir,
       ...(params.packageRootRealPath !== undefined
@@ -438,16 +430,13 @@ function resolveSafePackageEntry(params: {
     };
   }
 
-  try {
-    resolveRootPathSync({
-      absolutePath,
-      rootPath: params.packageDir,
-      ...(params.packageRootRealPath !== undefined
-        ? { rootCanonicalPath: params.packageRootRealPath }
-        : {}),
-      boundaryLabel: "plugin package directory",
-    });
-  } catch {
+  const checked = checkPluginCacheEntry({
+    rootDir: params.packageDir,
+    relativePath: params.entryPath,
+    rootRealPath: params.packageRootRealPath,
+    rejectHardlinks: params.rejectHardlinks ?? true,
+  });
+  if (!checked.ok) {
     params.diagnostics.push({
       level: "error",
       ...(params.pluginIdHint ? { pluginId: params.pluginIdHint } : {}),
@@ -469,7 +458,7 @@ function resolveOptionalExistingPackageEntrySource(params: {
   rejectHardlinks?: boolean;
 }): { status: "missing" } | { status: "invalid" } | { status: "resolved"; source: string } {
   const source = path.resolve(params.packageDir, params.entryPath);
-  if (!fs.existsSync(source)) {
+  if (!pluginCacheExistsSync(source)) {
     return { status: "missing" };
   }
   const resolved = resolvePackageEntrySource(params);

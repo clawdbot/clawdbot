@@ -9,7 +9,7 @@ import type { AssembleResult, ContextEngine, ContextEngineInfo } from "./types.j
  *
  * - ingest: no-op (SessionManager handles message persistence)
  * - assemble: pass-through (existing sanitize/validate/limit pipeline in attempt.ts handles this)
- * - compact: delegates to compactEmbeddedAgentSessionDirect
+ * - compact: delegates to the built-in compaction runtime
  */
 export class LegacyContextEngine implements ContextEngine {
   readonly info: ContextEngineInfo = {
@@ -34,15 +34,7 @@ export class LegacyContextEngine implements ContextEngine {
     };
   }
 
-  async afterTurn(_params: Parameters<NonNullable<ContextEngine["afterTurn"]>>[0]): Promise<void> {
-    // No-op: legacy flow persists context directly in SessionManager.
-  }
-
-  compact(params: Parameters<ContextEngine["compact"]>[0]) {
-    return delegateCompactionToRuntime(params);
-  }
-
-  async dispose(): Promise<void> {
-    // Nothing to clean up for legacy engine
-  }
+  // Preserve the canonical delegate identity so the host knows the built-in
+  // runtime, rather than this engine wrapper, owns the compaction watchdog.
+  readonly compact = delegateCompactionToRuntime;
 }

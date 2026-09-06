@@ -20,6 +20,15 @@ separate Fish Audio license. Hosted API use follows Fish Audio's service terms.
 
 ## Hosted S2.1
 
+Install the `fish-audio-speech` plugin:
+
+```bash
+openclaw plugins install @openclaw/fish-audio-speech
+```
+
+The plugin id is `fish-audio-speech`. The provider and TTS configuration id
+remain `fish-audio`.
+
 Set an API key from the [Fish Audio API Keys](https://fish.audio/app/api-keys) page:
 
 ```bash

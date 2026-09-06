@@ -1,0 +1,61 @@
+title: TUI terminal rendering and output safety PTY contracts
+scenario:
+  id: tui-terminal-safety-pty
+  surface: tui
+  category: tui.rendering-and-output-safety
+  coverage:
+    primary:
+      - tui.terminal-rendering-primitives
+      - tui.output-safety
+  risk: medium
+  objective: Prove narrow terminal rendering and hostile display-boundary sanitization through the real runTui PTY loop.
+  successCriteria:
+    - Long Unicode output renders through narrow real PTY frames without replacement characters.
+    - Wrapped URLs retain their complete copy-safe OSC 8 target.
+    - ANSI, OSC, clipboard, and C1 payloads cannot reach raw terminal frames.
+    - Printable text surrounding hostile terminal controls remains visible.
+    - A row-aware synchronized-frame oracle proves selector labels, descriptions, footer fields, connection status, BTW questions, and complete headers collapse CR, LF, and tab payloads to exact single-space one-line copies while preserving printable Unicode and RTL isolation.
+    - The authenticated row oracle uses the final bounded viewport at the fixture's exact PTY dimensions, including autowrap and bottom scrolling, and matches only visible cells authenticated by balanced synchronized frames; later frames preserve untouched authenticated cells, while unsynchronized writes and erases revoke touched cells.
+    - The oracle has negative controls for split rows, literal tabs, stale spaces, post-frame text and erases, right-margin wrapping, scrolling, and incomplete synchronized frames or trailing controls, which invalidate prior frames until controls and OSC 8 state are complete.
+    - Hostile selected session and agent identity fields cannot inject controls through the header while their stored identity remains raw.
+    - Live tool titles sanitize before trusted styling, tool-result Markdown sanitizes source before parsing and isolates rendered RTL content outside OSC 8 and padding, and control-only system or BTW error output renders a neutral visible fallback.
+    - Restored in-flight Markdown and dynamic command descriptions sanitize display copies, while unsafe thinking-level completion values are omitted before editor rendering.
+    - Model and session selections pass exact unmodified backend values to patchSession and loadHistory.
+  codeRefs:
+    - src/tui/components/btw-inline-message.ts
+    - src/tui/components/chat-log.ts
+    - src/tui/components/filterable-select-list.ts
+    - src/tui/components/hyperlink-markdown.ts
+    - src/tui/components/searchable-select-list.ts
+    - src/tui/components/tool-execution.ts
+    - src/tui/tui-autocomplete.ts
+    - src/tui/tui-pty-harness-assertion-test-support.ts
+    - src/tui/tui-pty-harness.e2e.test.ts
+    - src/tui/tui.ts
+    - src/tui/tui-formatters.ts
+    - src/tui/osc8-hyperlinks.ts
+  execution:
+    kind: script
+    parallelSafe: true
+    path: test/e2e/qa-lab/tui/tui-pty-evidence-producer.ts
+    summary: Runs independently matched real-PTY rendering and output-safety assertions and authenticates their fresh Vitest results.
+    timeoutMs: 180000
+    args:
+      - --artifact-base
+      - ${outputDir}
+      - --scenario-id
+      - ${scenarioId}
+    config:
+      tuiPtyCases:
+        - coverageId: tui.terminal-rendering-primitives
+          testFile: src/tui/tui-pty-harness.e2e.test.ts
+          testNamePattern: ^TUI PTY harness > renders long Unicode output and copy-safe URLs in narrow real PTY frames$
+        - coverageId: tui.output-safety
+          testFile: src/tui/tui-pty-harness.e2e.test.ts
+          testNamePattern: ^TUI PTY harness > sanitizes ANSI OSC and C1 payloads across real PTY display boundaries$
+        - coverageId: tui.output-safety
+          testFile: src/tui/tui-pty-harness-assertion-test-support.test.ts
+          testNamePattern: ^hasSynchronizedFrameRow > requires exact single-space text and all markers on one completed row$
+        - coverageId: tui.output-safety
+          testFile: src/tui/tui-pty-harness-assertion-test-support.test.ts
+          testNamePattern: ^hasSynchronizedFrameRow > rejects terminal row reconstruction false positives$

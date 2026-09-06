@@ -1,7 +1,7 @@
 // Live-gated cache regression proof against stored provider baselines.
 import { describe, expect, it } from "vitest";
-import { runLiveCacheRegression } from "./live-cache-regression-runner.js";
 import { LIVE_CACHE_TEST_ENABLED } from "./live-cache-test-support.js";
+import { runLiveCacheRegression } from "./test-helpers/live-cache-regression-runner.js";
 
 const describeCacheLive = LIVE_CACHE_TEST_ENABLED ? describe : describe.skip;
 

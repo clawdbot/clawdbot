@@ -90,17 +90,19 @@ test("encodeKeySequence uses SS3 sequences in application cursor key mode", () =
   expect(end.data).toBe(`${ESC}OF`);
 });
 
-test("encodeKeySequence applies xterm modifiers to arrows in application mode", () => {
-  // Modified arrow keys use xterm modifier scheme even in application mode.
-  // DECCKM only affects unmodified cursor keys.
-  const altUp = encodeKeySequence({ keys: ["M-up"] }, "application");
-  expect(altUp.data).toBe(`${ESC}[1;3A`);
-
-  const ctrlRight = encodeKeySequence({ keys: ["C-right"] }, "application");
-  expect(ctrlRight.data).toBe(`${ESC}[1;5C`);
-
-  const shiftDown = encodeKeySequence({ keys: ["S-down"] }, "application");
-  expect(shiftDown.data).toBe(`${ESC}[1;2B`);
+test.each([
+  ["M-up", `${ESC}[1;3A`],
+  ["C-right", `${ESC}[1;5C`],
+  ["S-down", `${ESC}[1;2B`],
+  ["C-home", `${ESC}[1;5~`],
+  ["M-C-End", `${ESC}[4;7~`],
+  ["S-M-C-PgDn", `${ESC}[6;8~`],
+  ["S-insert", `${ESC}[2;2~`],
+  ["S-M-del", `${ESC}[3;4~`],
+])("encodeKeySequence applies xterm modifiers to %s in every cursor mode", (key, data) => {
+  for (const mode of [undefined, "normal", "application"] as const) {
+    expect(encodeKeySequence({ keys: [key] }, mode)).toEqual({ data, warnings: [] });
+  }
 });
 
 test("encodeKeySequence supports hex + literal with warnings", () => {

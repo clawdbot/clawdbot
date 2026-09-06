@@ -63,9 +63,8 @@ describe("applyQueueRuntimeSettings", () => {
 });
 
 describe("queue summary helpers", () => {
-  it("previewQueueSummaryPrompt does not mutate state", () => {
+  it("renders pending summary state without mutating it", () => {
     const state = {
-      dropPolicy: "summarize" as const,
       droppedCount: 2,
       summaryLines: ["first", "second"],
     };
@@ -78,7 +77,6 @@ describe("queue summary helpers", () => {
     expect(prompt).toContain("[Queue overflow] Dropped 2 messages due to cap.");
     expect(prompt).toContain("first");
     expect(state).toEqual({
-      dropPolicy: "summarize",
       droppedCount: 2,
       summaryLines: ["first", "second"],
     });

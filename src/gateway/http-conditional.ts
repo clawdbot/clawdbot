@@ -1,7 +1,7 @@
 // HTTP conditional requests use weak entity-tag comparison for representation reuse.
 export function matchesHttpIfNoneMatch(
   header: string | string[] | undefined,
-  etag: string,
+  etag: string | undefined,
 ): boolean {
   const value = Array.isArray(header) ? header.join(",") : header;
   if (!value) {

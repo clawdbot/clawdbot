@@ -1,13 +1,13 @@
 /** Public facade for bundle MCP tool materialization and session-scoped runtime management. */
-export type { McpToolCatalogDiagnostic } from "./agent-bundle-mcp-types.js";
 export {
   disposeAllSessionMcpRuntimes,
-  getOrCreateSessionMcpRuntime,
+  reloadSessionMcpRuntimes,
+  acquireSessionMcpRuntime,
   peekSessionMcpRuntime,
-  resolveSessionMcpConfigSummary,
   retireSessionMcpRuntime,
   retireSessionMcpRuntimeForSessionKey,
-} from "./agent-bundle-mcp-runtime.js";
+} from "./agent-bundle-mcp-manager-api.js";
+export { resolveSessionMcpConfigSummary } from "./agent-bundle-mcp-runtime-config.js";
 export {
   buildBundleMcpToolsFromCatalog,
   createBundleMcpToolRuntime,

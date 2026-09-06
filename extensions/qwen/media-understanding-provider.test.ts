@@ -1,3 +1,4 @@
+import { oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 // Qwen tests cover media understanding provider plugin behavior.
 import {
   createRequestCaptureJsonFetch,
@@ -22,39 +23,6 @@ describe("qwen media understanding provider", () => {
     });
   });
 });
-
-function oversizedJsonResponse(params: { chunkCount: number; chunkSize: number }): {
-  response: Response;
-  getReadCount: () => number;
-  wasCanceled: () => boolean;
-} {
-  const chunk = new Uint8Array(params.chunkSize);
-  let readCount = 0;
-  let canceled = false;
-  return {
-    response: new Response(
-      new ReadableStream<Uint8Array>({
-        pull(controller) {
-          if (readCount >= params.chunkCount) {
-            controller.close();
-            return;
-          }
-          readCount += 1;
-          controller.enqueue(chunk);
-        },
-        cancel() {
-          canceled = true;
-        },
-      }),
-      {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      },
-    ),
-    getReadCount: () => readCount,
-    wasCanceled: () => canceled,
-  };
-}
 
 describe("describeQwenVideo", () => {
   it("builds the expected OpenAI-compatible video payload", async () => {

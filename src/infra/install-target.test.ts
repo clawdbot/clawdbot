@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 
 const pathExistsMock = vi.hoisted(() => vi.fn());
 const resolveSafeInstallDirMock = vi.hoisted(() => vi.fn());
@@ -27,7 +27,7 @@ beforeEach(() => {
 
 describe("resolveCanonicalInstallTarget", () => {
   it("creates the base dir and returns early for invalid install ids", async () => {
-    await withTempDir({ prefix: "openclaw-install-target-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-install-target-" }, async (root) => {
       const baseDir = path.join(root, "plugins");
       resolveSafeInstallDirMock.mockReturnValueOnce({
         ok: false,
@@ -50,7 +50,7 @@ describe("resolveCanonicalInstallTarget", () => {
   });
 
   it("returns canonical boundary errors for Error and non-Error throws", async () => {
-    await withTempDir({ prefix: "openclaw-install-target-" }, async (baseDir) => {
+    await withTestDir({ prefix: "openclaw-install-target-" }, async (baseDir) => {
       const targetDir = path.join(baseDir, "demo");
       resolveSafeInstallDirMock.mockReturnValue({
         ok: true,
@@ -80,7 +80,7 @@ describe("resolveCanonicalInstallTarget", () => {
   });
 
   it("returns the resolved target path on success", async () => {
-    await withTempDir({ prefix: "openclaw-install-target-" }, async (baseDir) => {
+    await withTestDir({ prefix: "openclaw-install-target-" }, async (baseDir) => {
       const targetDir = path.join(baseDir, "demo");
       resolveSafeInstallDirMock.mockReturnValueOnce({
         ok: true,

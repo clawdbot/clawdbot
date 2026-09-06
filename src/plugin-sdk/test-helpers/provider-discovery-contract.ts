@@ -1,4 +1,6 @@
 // Provider discovery contract helpers define reusable discovery tests for provider plugins.
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runProviderCatalog } from "../../plugins/provider-discovery.js";
 import {
@@ -136,14 +138,10 @@ function providerModelIds(provider: Record<string, unknown>): Array<unknown> {
 function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContractOptions) {
   beforeAll(async () => {
     vi.resetModules();
-    vi.doMock("openclaw/plugin-sdk/agent-runtime", () => {
+    vi.doMock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../provider-auth.js")>();
       return {
-        ensureAuthProfileStore: ensureAuthProfileStoreMock,
-        listProfilesForProvider: listProfilesForProviderMock,
-      };
-    });
-    vi.doMock("openclaw/plugin-sdk/provider-auth", () => {
-      return {
+        ...actual,
         DEFAULT_COPILOT_API_BASE_URL: "https://api.individual.githubcopilot.com",
         MINIMAX_OAUTH_MARKER: "minimax-oauth",
         applyAuthProfileConfig: (config: OpenClawConfig) => config,
@@ -162,10 +160,7 @@ function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContract
           "Editor-Version": "vscode/1.96.2",
           "User-Agent": "GitHubCopilotChat/0.26.7",
         })),
-        coerceSecretRef: (value: unknown) =>
-          value && typeof value === "object" && !Array.isArray(value)
-            ? (value as Record<string, unknown>)
-            : null,
+        coerceSecretRef: asNullableRecord,
         ensureApiKeyFromOptionEnvOrPrompt: vi.fn(),
         ensureAuthProfileStore: ensureAuthProfileStoreMock,
         listProfilesForProvider: listProfilesForProviderMock,
@@ -176,8 +171,7 @@ function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContract
             ? trimmed
             : "github.com";
         },
-        normalizeOptionalSecretInput: (value: unknown) =>
-          typeof value === "string" && value.trim() ? value.trim() : undefined,
+        normalizeOptionalSecretInput: normalizeOptionalString,
         resolveNonEnvSecretRefApiKeyMarker: (source: unknown) =>
           typeof source === "string" ? source : "",
         upsertAuthProfile: vi.fn(),
@@ -312,7 +306,7 @@ export function describeGithubCopilotProviderDiscoveryContract(params: {
       ).resolves.toBeNull();
     });
 
-    it("keeps profile-only catalog fallback provider-owned", async () => {
+    it("reports an unavailable profile catalog without replacing inventory", async () => {
       setGithubCopilotProfileSnapshot();
 
       await expect(
@@ -320,14 +314,15 @@ export function describeGithubCopilotProviderDiscoveryContract(params: {
           provider: state.githubCopilotProvider!,
         }),
       ).resolves.toEqual({
-        provider: {
-          baseUrl: "https://api.individual.githubcopilot.com",
-          models: [],
-        },
+        providers: {},
+        outcomes: [
+          { provider: "github-copilot", profileId: "github-copilot:github", status: "unavailable" },
+        ],
       });
     });
 
     it("keeps env-token base URL resolution provider-owned", async () => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ data: [] }));
       resolveCopilotRuntimeAuthMock.mockResolvedValueOnce({
         apiKey: "copilot-api-token",
         source: "validated:https://api.github.com/copilot_internal/user",
@@ -347,6 +342,7 @@ export function describeGithubCopilotProviderDiscoveryContract(params: {
           baseUrl: "https://copilot-proxy.example.com",
           models: [],
         },
+        outcomes: [{ provider: "github-copilot", status: "ready" }],
       });
       const copilotCall = requireRecord(
         resolveCopilotRuntimeAuthMock.mock.calls.at(0)?.[0],
@@ -723,6 +719,17 @@ export function describeMinimaxProviderDiscoveryContract(
 
   describe("minimax provider discovery contract", () => {
     installDiscoveryHooks(state, { providerIds: ["minimax"], loadMinimax: load });
+    beforeEach(() => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          Response.json({
+            data: [{ id: "MiniMax-M3" }, { id: "MiniMax-M2.7" }, { id: "MiniMax-M2.7-highspeed" }],
+          }),
+        ),
+      );
+    });
+    afterEach(() => vi.unstubAllGlobals());
 
     it("keeps API catalog provider-owned", async () => {
       const result = await state.runProviderCatalog({
@@ -825,6 +832,17 @@ export function describeModelStudioProviderDiscoveryContract(
 
   describe("modelstudio provider discovery contract", () => {
     installDiscoveryHooks(state, { providerIds: ["modelstudio"], loadModelStudio: load });
+    beforeEach(() => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          Response.json({
+            data: [{ id: "qwen3.5-plus" }, { id: "qwen3-max-2026-01-23" }, { id: "MiniMax-M2.5" }],
+          }),
+        ),
+      );
+    });
+    afterEach(() => vi.unstubAllGlobals());
 
     it("keeps catalog provider-owned", async () => {
       const result = await state.runProviderCatalog({

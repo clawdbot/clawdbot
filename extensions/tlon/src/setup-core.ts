@@ -113,6 +113,8 @@ export function createTlonSetupWizardBase(params: TlonSetupWizardBaseParams): Ch
         inputKey: "code",
         message: t("wizard.tlon.loginCodePrompt"),
         placeholder: "lidlut-tabwed-pillex-ridrup",
+        sensitive: true,
+        keepPrompt: t("wizard.tlon.loginCodeKeep"),
         currentValue: ({ cfg, accountId }) => resolveTlonAccount(cfg, accountId).code ?? undefined,
         validate: ({ value }) =>
           normalizeStringifiedOptionalString(value) ? undefined : "Required",

@@ -16,7 +16,8 @@ export function createTavilyWebSearchProvider(): WebSearchProviderPlugin {
     createTool: (ctx) => ({
       description: TAVILY_GENERIC_SEARCH_DESCRIPTION,
       parameters: TAVILY_GENERIC_SEARCH_SCHEMA,
-      execute: async (args) => {
+      execute: async (args, executionContext) => {
+        executionContext?.signal?.throwIfAborted();
         const { runTavilySearch } = await loadTavilyClientModule();
         return await runTavilySearch({
           cfg: ctx.config,
@@ -25,6 +26,7 @@ export function createTavilyWebSearchProvider(): WebSearchProviderPlugin {
             message: "count must be an integer from 1 to 20",
             max: 20,
           }),
+          ...(executionContext?.signal ? { signal: executionContext.signal } : {}),
         });
       },
     }),

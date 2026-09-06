@@ -2,6 +2,13 @@
   "id": "onepassword",
   "name": "1Password",
   "description": "1Password SecretRef resolver and curated agent broker with approval policy and SQLite audit history.",
+  "cliCommands": [
+    {
+      "name": "onepassword",
+      "description": "Manage the 1Password integration",
+      "hasSubcommands": true
+    }
+  ],
   "activation": {
     "onStartup": false,
     "onCommands": ["onepassword"],

@@ -14,6 +14,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Android Application singleton that owns process-wide secure prefs and lazy NodeRuntime startup.
@@ -24,11 +25,18 @@ class NodeApp : Application() {
   // System share senders can create overlapping Activity tasks; keep one bounded process queue.
   internal val chatShareDraftSeq = AtomicLong()
   internal val chatShareDraftQueue = ChatShareDraftQueue()
+  internal val conversationNotificationLaunchStore = ConversationNotificationLaunchStore()
   internal val permissionRequester by lazy { PermissionRequester(this) }
 
   private val runtimeScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
   private val runtimeLock = Any()
   private var runtimeInstance: NodeRuntime? = null
+  private val nodeServiceControlLock = Any()
+
+  private class NodeServiceIntent
+
+  private val nodeServiceIntent = AtomicReference<NodeServiceIntent?>(NodeServiceIntent())
+  internal val nodeServiceStartAllowed: Boolean get() = nodeServiceIntent.get() != null
 
   internal val wearProxyBridge: WearProxyBridge by lazy {
     WearProxyBridge(
@@ -48,17 +56,42 @@ class NodeApp : Application() {
   /**
    * Returns the single NodeRuntime for this process, creating it on first use.
    */
-  fun ensureRuntime(): NodeRuntime =
-    synchronized(runtimeLock) {
-      runtimeInstance ?: NodeRuntime(this, prefs).also { runtimeInstance = it }
-    }
+  fun ensureRuntime(): NodeRuntime = ensureRuntime(initialForeground = true)
 
   /** Creates a cold-process runtime with foreground-only capabilities disabled before publication. */
-  internal fun ensureBackgroundRuntime(): NodeRuntime =
+  internal fun ensureBackgroundRuntime(): NodeRuntime = ensureRuntime(initialForeground = false)
+
+  private fun ensureRuntime(initialForeground: Boolean): NodeRuntime =
     synchronized(runtimeLock) {
       runtimeInstance
-        ?: NodeRuntime(this, prefs, initialForeground = false).also { runtimeInstance = it }
+        ?: NodeRuntime(this, prefs, initialForeground = initialForeground).also {
+          runtimeInstance = it
+          disconnectIfStopped(it)
+        }
     }
+
+  internal fun updateNodeServiceIntent(
+    allowStart: Boolean,
+    updateService: () -> Unit,
+  ): () -> Boolean {
+    val intent =
+      synchronized(nodeServiceControlLock) {
+        val intent = if (allowStart) nodeServiceIntent.get() ?: NodeServiceIntent() else null
+        nodeServiceIntent.set(intent)
+        if (!allowStart) runtimeScope.launch { peekRuntime()?.let(::disconnectIfStopped) }
+        updateService()
+        intent
+      }
+    return { intent != null && nodeServiceIntent.get() === intent }
+  }
+
+  private fun disconnectIfStopped(runtime: NodeRuntime) {
+    synchronized(nodeServiceControlLock) {
+      // Resume wins over cleanup waiting for construction. Read the singleton before
+      // taking this lock; voice callbacks read only the atomic intent, never this lock.
+      if (!nodeServiceStartAllowed) runtime.disconnect()
+    }
+  }
 
   internal fun ensureScreenshotFixtureRuntime(): NodeRuntime =
     synchronized(runtimeLock) {
@@ -75,11 +108,8 @@ class NodeApp : Application() {
    */
   fun peekRuntime(): NodeRuntime? = synchronized(runtimeLock) { runtimeInstance }
 
-  /** Disconnects the current or concurrently constructing runtime without blocking the caller. */
-  internal fun disconnectRuntimeAsync() {
-    // The process-owned scope outlives a stopping service, so cancellation cannot
-    // strand an Activity-created runtime that the service has not observed yet.
-    runtimeScope.launch { peekRuntime()?.disconnect() }
+  internal fun launchRuntimeTask(block: suspend () -> Unit) {
+    runtimeScope.launch { block() }
   }
 
   /** Clears pairing auth without racing lazy process-runtime construction. */
@@ -115,8 +145,8 @@ class NodeApp : Application() {
 
   override fun onConfigurationChanged(newConfig: Configuration) {
     super.onConfigurationChanged(newConfig)
-    // The process runtime survives Activity recreation, so retained text and
-    // serialized Home Canvas state need an explicit locale refresh signal.
+    // The process runtime survives Activity recreation, so retained text needs an
+    // explicit locale refresh signal.
     NativeStringResources.setConfigurationLocales(newConfig)
     notifyNativeLocaleChanged()
   }

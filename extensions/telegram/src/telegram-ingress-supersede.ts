@@ -27,31 +27,25 @@ function isRecognizedTelegramTextCommand(rawText: string, botUsername?: string):
   );
 }
 
-/**
- * Whether a bot_command entity (or slash token) targets this bot.
- * Same target rule as normalizeCommandBody: untargeted commands match any bot;
- * @OtherBot is ignored when our identity is known.
- */
+/** Whether a bot_command entity is untargeted or addressed to the known bot identity. */
 function isTelegramCommandTargetedAtBot(commandText: string, botUsername?: string): boolean {
   const trimmed = commandText.trim();
   if (!trimmed.startsWith("/")) {
     return false;
   }
-  // normalizeCommandBody only strips @bot when the target equals botUsername.
-  // A non-matching @target leaves the body as `/cmd@other`, which is not ours.
   const normalized = normalizeCommandBody(
     trimmed,
     botUsername ? { botUsername } : undefined,
   ).trim();
-  if (!normalized.startsWith("/")) {
+  if (!normalized.startsWith("/") || normalized === "/") {
     return false;
   }
-  // Untargeted, or successfully stripped for this bot.
-  if (!/^\/[^\s@]+@/u.test(normalized)) {
-    return true;
-  }
-  // Identity unknown: keep untargeted-permissive behavior for pre-getMe drains.
-  return !botUsername?.trim();
+  const preIdentityNormalized = normalizeCommandBody(trimmed, {
+    targetedCommandMode: "pre-identity",
+  }).trim();
+  // Pre-identity mode strips valid @targets. A changed result means the target is
+  // unresolved or foreign; equality means untargeted or a known matching target.
+  return normalized === preIdentityNormalized;
 }
 
 /** True when the update carries a bot_command entity addressed to this bot. */
@@ -89,7 +83,8 @@ function updateHasBotCommandEntityForBot(update: unknown, botUsername?: string):
         if (ent.type !== "bot_command") {
           continue;
         }
-        if (typeof ent.offset !== "number" || typeof ent.length !== "number") {
+        // Telegram command handlers only accept entities at the start of a message.
+        if (ent.offset !== 0 || typeof ent.length !== "number") {
           continue;
         }
         const commandText = body.slice(ent.offset, ent.offset + ent.length);
@@ -157,6 +152,9 @@ export function createShouldSupersedeTelegramSpooledPending(
       return false;
     }
     const commandOptions = auth.botUsername ? { botUsername: auth.botUsername } : undefined;
+    const abortCommandOptions = auth.botUsername
+      ? { botUsername: auth.botUsername }
+      : { targetedCommandMode: "pre-identity" as const };
     if (
       isBtwRequestText(text, commandOptions) ||
       isTelegramReadOnlyControlLaneText({
@@ -168,7 +166,7 @@ export function createShouldSupersedeTelegramSpooledPending(
     }
     // Abort, static text alias, or native bot_command entity (incl. skill commands)
     // addressed to this bot. Never bare `/` prefixes without a bot_command entity.
-    const isAbort = isAbortRequestText(text, commandOptions);
+    const isAbort = isAbortRequestText(text, abortCommandOptions);
     const isCommand =
       isRecognizedTelegramTextCommand(text, auth.botUsername) ||
       updateHasBotCommandEntityForBot(newUpdate, auth.botUsername);

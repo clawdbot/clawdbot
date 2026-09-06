@@ -10,8 +10,6 @@ import {
   normalizeAgentPlanSteps,
   resolveChannelPreviewStreamMode,
   resolveChannelStreamingBlockEnabled,
-  resolveChannelStreamingPreviewToolProgress,
-  resolveChannelStreamingSuppressDefaultToolProgressMessages,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -31,6 +29,7 @@ import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import {
   classifyMSTeamsSendError,
+  formatMSTeamsDeliveryFailureGuidance,
   formatMSTeamsSendErrorHint,
   formatUnknownError,
 } from "./errors.js";
@@ -265,17 +264,22 @@ export function createMSTeamsReplyDispatcher(params: {
     const classification = classifyMSTeamsSendError(failure.error);
     const errorText = formatUnknownError(failure.error);
     const failedAll = failure.failed >= failure.total;
-    const summary = failedAll
-      ? "the previous reply was not delivered"
-      : `${failure.failed} of ${failure.total} message blocks were not delivered`;
+    const ambiguous = classification.kind === "ambiguous";
+    const summary = ambiguous
+      ? failedAll
+        ? "the delivery outcome is unknown for the previous reply"
+        : `the delivery outcome is unknown for ${failure.failed} of ${failure.total} message blocks`
+      : failedAll
+        ? "the previous reply was not delivered"
+        : `${failure.failed} of ${failure.total} message blocks were not delivered`;
     const sentences = [
       `Microsoft Teams delivery failed: ${summary}.`,
-      `The user may not have received ${failedAll ? "that reply" : "the full reply"}.`,
+      ambiguous
+        ? undefined
+        : `The user may not have received ${failedAll ? "that reply" : "the full reply"}.`,
       `Error: ${errorText}.`,
       classification.statusCode != null ? `Status: ${classification.statusCode}.` : undefined,
-      classification.kind === "transient" || classification.kind === "throttled"
-        ? "Retrying later may succeed."
-        : undefined,
+      formatMSTeamsDeliveryFailureGuidance(classification),
     ].filter(Boolean);
     core.system.enqueueSystemEvent(sentences.join(" "), {
       sessionKey: params.sessionKey,
@@ -541,18 +545,8 @@ export function createMSTeamsReplyDispatcher(params: {
   // tools fire (instead of the rotating "Thinking..." label sitting unchanged
   // for the duration of a long tool chain). In other modes these calls are
   // no-ops on the controller side.
-  const previewToolProgressEnabled = resolveChannelStreamingPreviewToolProgress(
-    msteamsCfg,
-    true,
-    teamsStreamMode,
-  );
-  const suppressDefaultToolProgressMessages =
-    resolveChannelStreamingSuppressDefaultToolProgressMessages(msteamsCfg);
   const shouldSuppressDefaultToolProgressMessages =
-    streamController.hasStream() &&
-    teamsStreamMode === "progress" &&
-    suppressDefaultToolProgressMessages &&
-    previewToolProgressEnabled;
+    streamController.hasStream() && teamsStreamMode === "progress";
 
   // Forward the rich pipeline event payload through to the channel-streaming
   // formatters. The formatters accept the canonical union shape; the pipeline
@@ -564,22 +558,14 @@ export function createMSTeamsReplyDispatcher(params: {
     ? {
         onReasoningStream: async (payload: PipelinePayload) => {
           const text = typeof payload?.text === "string" ? payload.text : undefined;
-          if (!text) {
-            return;
-          }
-          if (payload?.isReasoningSnapshot !== true) {
-            await streamController.pushProgressLine(text);
-            return;
-          }
-          await streamController.pushProgressLine(
-            buildChannelProgressDraftLine({
-              event: "item",
-              itemId: "reasoning",
-              itemKind: "analysis",
-              title: "Reasoning",
-              progressText: text,
-            }),
-          );
+          await streamController.pushReasoningProgress(text, {
+            snapshot: payload?.isReasoningSnapshot === true,
+          });
+          return false;
+        },
+        onReasoningEnd: () => {
+          streamController.resetReasoningProgress();
+          return false;
         },
         onToolStart: async (payload: PipelinePayload) => {
           const name = typeof payload?.name === "string" ? payload.name : undefined;
@@ -604,6 +590,7 @@ export function createMSTeamsReplyDispatcher(params: {
             ),
             name ? { toolName: name } : undefined,
           );
+          return false;
         },
         onItemEvent: async (payload: PipelinePayload) => {
           await streamController.pushProgressLine(
@@ -625,36 +612,34 @@ export function createMSTeamsReplyDispatcher(params: {
               ...(typeof payload?.meta === "string" ? { meta: payload.meta } : {}),
             }),
           );
+          return false;
         },
         onPlanUpdate: async (payload: PipelinePayload) => {
           if (payload?.phase !== "update") {
-            return;
+            return false;
           }
           await streamController.pushPlanProgress(normalizeAgentPlanSteps(payload.steps), {
             explanation: typeof payload.explanation === "string" ? payload.explanation : undefined,
           });
+          return false;
         },
         onApprovalEvent: async (payload: PipelinePayload) => {
-          if (payload?.phase !== "requested") {
-            return;
-          }
-          await streamController.pushProgressLine(
-            buildChannelProgressDraftLine({
-              event: "approval",
-              phase: payload.phase as string,
-              ...(typeof payload?.title === "string" ? { title: payload.title } : {}),
-              ...(typeof payload?.command === "string" ? { command: payload.command } : {}),
-              ...(typeof payload?.reason === "string" ? { reason: payload.reason } : {}),
-              ...(typeof payload?.message === "string" ? { message: payload.message } : {}),
-            }),
-          );
+          await streamController.pushApprovalEvent({
+            ...(typeof payload?.phase === "string" ? { phase: payload.phase } : {}),
+            ...(typeof payload?.approvalId === "string" ? { approvalId: payload.approvalId } : {}),
+            ...(typeof payload?.title === "string" ? { title: payload.title } : {}),
+            ...(typeof payload?.command === "string" ? { command: payload.command } : {}),
+            ...(typeof payload?.reason === "string" ? { reason: payload.reason } : {}),
+            ...(typeof payload?.message === "string" ? { message: payload.message } : {}),
+          });
+          return false;
         },
         onCommandOutput: async (payload: PipelinePayload) => {
           if (payload?.phase !== "end") {
-            return;
+            return false;
           }
           await streamController.pushProgressLine(
-            buildChannelProgressDraftLine({
+            buildChannelProgressDraftLineForEntry(msteamsCfg, {
               event: "command-output",
               ...(typeof payload?.itemId === "string" ? { itemId: payload.itemId } : {}),
               ...(typeof payload?.toolCallId === "string"
@@ -667,10 +652,11 @@ export function createMSTeamsReplyDispatcher(params: {
               ...(typeof payload?.exitCode === "number" ? { exitCode: payload.exitCode } : {}),
             }),
           );
+          return false;
         },
         onPatchSummary: async (payload: PipelinePayload) => {
           if (payload?.phase !== "end") {
-            return;
+            return false;
           }
           await streamController.pushProgressLine(
             buildChannelProgressDraftLine({
@@ -697,6 +683,7 @@ export function createMSTeamsReplyDispatcher(params: {
               ...(typeof payload?.summary === "string" ? { summary: payload.summary } : {}),
             }),
           );
+          return false;
         },
       }
     : {};
@@ -710,8 +697,10 @@ export function createMSTeamsReplyDispatcher(params: {
     replyOptions: {
       ...(streamController.hasStream()
         ? {
-            onPartialReply: (payload: { text?: string }) =>
-              streamController.onPartialReply(payload),
+            onPartialReply: (payload: { text?: string }) => {
+              streamController.onPartialReply(payload);
+              return false;
+            },
           }
         : {}),
       ...progressCallbacks,

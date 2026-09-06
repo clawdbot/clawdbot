@@ -2,6 +2,7 @@
  * Extracts native Codex subagent completion notifications from trusted
  * inter-agent commentary messages emitted by the app-server.
  */
+import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexServerNotification, JsonObject, JsonValue } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 
@@ -77,7 +78,40 @@ function extractCodexNativeSubagentCompletionsFromText(
 export const codexNativeSubagentNotifications = {
   fromNotification: extractCodexNativeSubagentCompletions,
   fromText: extractCodexNativeSubagentCompletionsFromText,
+  deliveredAgentPaths: readDeliveredNativeCompletionPaths,
 };
+
+/** Reads native delivery receipts, leaving status and result ownership with the child lifecycle. */
+function readDeliveredNativeCompletionPaths(notification: CodexServerNotification): string[] {
+  if (notification.method !== "rawResponseItem/completed") {
+    return [];
+  }
+  const params = isJsonObject(notification.params) ? notification.params : undefined;
+  const item = isJsonObject(params?.item) ? params.item : undefined;
+  if (!item || readString(item, "type") !== "agent_message") {
+    return extractCodexNativeSubagentCompletions(notification).map(
+      (completion) => completion.agentPath,
+    );
+  }
+  const author = readString(item, "author");
+  const recipient = readString(item, "recipient");
+  const content = item.content;
+  if (!author || !recipient || !Array.isArray(content) || content.length !== 1) {
+    return [];
+  }
+  const part = content[0];
+  if (!isJsonObject(part) || readString(part, "type") !== "input_text") {
+    return [];
+  }
+  const text = readString(part, "text");
+  // Codex's native completion envelope identifies both endpoints outside the
+  // payload. Ordinary messages and quoted completion text are not receipts.
+  return text?.startsWith(
+    `Message Type: FINAL_ANSWER\nTask name: ${recipient}\nSender: ${author}\nPayload:\n`,
+  )
+    ? [author]
+    : [];
+}
 
 function parseCodexNativeSubagentNotificationBody(
   body: string,
@@ -251,11 +285,6 @@ function extractSingleTextPart(item: JsonObject): string | undefined {
     return undefined;
   }
   return readString(entry, "text")?.trim();
-}
-
-function readString(record: JsonObject, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" ? value : undefined;
 }
 
 function normalizeStatusKey(value: string): string {

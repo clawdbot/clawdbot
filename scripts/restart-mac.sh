@@ -5,6 +5,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${ROOT_DIR}/scripts/lib/restart-mac-gateway.sh"
+source "${ROOT_DIR}/scripts/lib/mac-app-bundle.sh"
 APP_BUNDLE="${OPENCLAW_APP_BUNDLE:-}"
 APP_EXECUTABLE_RELATIVE_PATH="Contents/MacOS/OpenClaw"
 DEBUG_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/debug/OpenClaw"
@@ -152,6 +153,12 @@ if [[ "$TARGET_ONLY" -eq 1 && "$ATTACH_ONLY" -ne 1 ]]; then
 fi
 if [[ "$TARGET_ONLY" -eq 1 && -n "$APP_BUNDLE" ]]; then
   fail "--target-only does not accept OPENCLAW_APP_BUNDLE"
+fi
+if [[ -n "${OPENCLAW_PROFILE:-}" ]]; then
+  normalized_profile="$(printf '%s' "${OPENCLAW_PROFILE}" | tr '[:upper:]' '[:lower:]')"
+  if [[ "${normalized_profile}" != "default" ]]; then
+    fail "restart-mac.sh cannot safely target one app profile; launch that profile directly instead"
+  fi
 fi
 canonicalize_app_bundle
 
@@ -369,11 +376,7 @@ if [[ "$TARGET_ONLY" -eq 1 ]]; then
   fi
   log "==> Keeping managed OpenClaw running while the replacement builds"
 else
-  stop_launch_agent
-  log "==> Killing existing OpenClaw instances"
-  if ! kill_all_openclaw; then
-    fail "OpenClaw instances did not exit after cleanup attempts"
-  fi
+  log "==> Keeping existing OpenClaw instances running while the replacement builds"
 fi
 
 # Bundle Gateway-hosted plugin assets.
@@ -399,30 +402,17 @@ elif [ "$SIGN" -eq 1 ]; then
     fail "No signing identity found. Use --no-sign or install a signing key."
   fi
   unset ALLOW_ADHOC_SIGNING
-  unset SIGN_IDENTITY
 fi
 
 # 3) Package and sign outside the live bundle. A failed package/sign operation
 # must leave the currently running and on-disk app untouched.
 run_step "package app" env \
-  SKIP_TSC="${SKIP_TSC:-1}" \
   OPENCLAW_PACKAGE_APP_ROOT="${STAGED_APP_BUNDLE}" \
   "${ROOT_DIR}/scripts/package-mac-app.sh"
 run_step "verify packaged app" /usr/bin/codesign --verify --deep --strict "${STAGED_APP_BUNDLE}"
 
 install_staged_app() {
-  local previous="${ROOT_DIR}/dist/.OpenClaw.app.previous-$$"
-  rm -rf "${previous}"
-  if [[ -d "${TARGET_APP_BUNDLE}" ]]; then
-    mv "${TARGET_APP_BUNDLE}" "${previous}"
-  fi
-  if ! mv "${STAGED_APP_BUNDLE}" "${TARGET_APP_BUNDLE}"; then
-    if [[ -d "${previous}" && ! -d "${TARGET_APP_BUNDLE}" ]]; then
-      mv "${previous}" "${TARGET_APP_BUNDLE}"
-    fi
-    return 1
-  fi
-  rm -rf "${previous}" "${STAGED_APP_DIR}"
+  replace_mac_app_bundle "${STAGED_APP_BUNDLE}" "${TARGET_APP_BUNDLE}"
 }
 
 choose_app_bundle() {
@@ -493,6 +483,12 @@ if [[ "$TARGET_ONLY" -eq 1 ]]; then
   if ! kill_managed_openclaw; then
     fail "Managed OpenClaw instances did not exit after cleanup attempts"
   fi
+else
+  stop_launch_agent
+  log "==> Killing existing OpenClaw instances"
+  if ! kill_all_openclaw; then
+    fail "OpenClaw instances did not exit after cleanup attempts"
+  fi
 fi
 
 run_step "install packaged app" install_staged_app
@@ -505,14 +501,15 @@ fi
 # 4) Launch the installed app in the foreground so the menu bar extra appears.
 # LaunchServices can inherit a huge environment from this shell (secrets, prompt vars, etc.).
 # That can cause launchd spawn failures and is undesirable for a GUI app anyway.
-run_step "launch app" env -i \
-  HOME="${HOME}" \
-  USER="${USER:-$(id -un)}" \
-  LOGNAME="${LOGNAME:-$(id -un)}" \
-  TMPDIR="${TMPDIR:-/tmp}" \
-  PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
-  LANG="${LANG:-en_US.UTF-8}" \
-  /usr/bin/open "${OPEN_ARGS[@]}"
+LAUNCH_ENV=(
+  "HOME=${HOME}"
+  "USER=${USER:-$(id -un)}"
+  "LOGNAME=${LOGNAME:-$(id -un)}"
+  "TMPDIR=${TMPDIR:-/tmp}"
+  "PATH=/usr/bin:/bin:/usr/sbin:/sbin"
+  "LANG=${LANG:-en_US.UTF-8}"
+)
+run_step "launch app" env -i "${LAUNCH_ENV[@]}" /usr/bin/open "${OPEN_ARGS[@]}"
 
 # 5) Verify the app is alive.
 sleep 1.5

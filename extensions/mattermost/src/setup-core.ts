@@ -134,6 +134,7 @@ export const mattermostSetupContract = defineChannelSetupContract({
     useEnv: {
       kind: "boolean",
       cli: { flags: "--use-env", description: "Use Mattermost environment credentials" },
+      envVars: ["MATTERMOST_BOT_TOKEN", "MATTERMOST_URL"],
     },
   },
   legacyAdapter: mattermostSetupAdapter,

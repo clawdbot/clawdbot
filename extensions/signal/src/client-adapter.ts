@@ -75,6 +75,7 @@ export async function streamSignalEvents(params: {
   abortSignal?: AbortSignal;
   timeoutMs?: number;
   onEvent: (event: SignalSseEvent) => unknown;
+  onStreamOpen?: () => void;
   logger?: { log?: (msg: string) => void; error?: (msg: string) => void };
   transportKind?: SignalTransportKind;
 }): Promise<void> {
@@ -85,6 +86,7 @@ export async function streamSignalEvents(params: {
       abortSignal: params.abortSignal,
       timeoutMs: params.timeoutMs,
       onEvent: (event) => params.onEvent({ event: "receive", data: JSON.stringify(event) }),
+      onStreamOpen: params.onStreamOpen,
       logger: params.logger,
     });
   }
@@ -95,5 +97,6 @@ export async function streamSignalEvents(params: {
     abortSignal: params.abortSignal,
     timeoutMs: params.timeoutMs,
     onEvent: (event) => params.onEvent(event),
+    onStreamOpen: params.onStreamOpen,
   });
 }

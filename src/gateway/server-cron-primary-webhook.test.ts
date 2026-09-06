@@ -34,6 +34,7 @@ describe("sendGatewayCronWebhook", () => {
 
   it("propagates cancellation and the remaining run deadline without retrying", async () => {
     const controller = new AbortController();
+    const ssrfPolicy = { allowedHostnames: ["127.0.0.1"] };
     mocks.fetchWithSsrFGuard.mockImplementationOnce(async (value: unknown) => {
       const request = value as { signal?: AbortSignal };
       const signal = request.signal;
@@ -55,6 +56,7 @@ describe("sendGatewayCronWebhook", () => {
       job,
       abortSignal: controller.signal,
       deadlineAtMs,
+      ssrfPolicy,
     });
 
     await vi.waitFor(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledOnce());
@@ -65,6 +67,9 @@ describe("sendGatewayCronWebhook", () => {
     expect(request?.timeoutMs).toEqual(expect.any(Number));
     expect(request?.timeoutMs).toBeGreaterThan(0);
     expect(request?.timeoutMs).toBeLessThanOrEqual(5_000);
+    expect(
+      (mocks.fetchWithSsrFGuard.mock.calls[0]?.[0] as { policy?: unknown } | undefined)?.policy,
+    ).toBe(ssrfPolicy);
 
     controller.abort("Cancelled by operator.");
     await expect(delivery).rejects.toBeDefined();

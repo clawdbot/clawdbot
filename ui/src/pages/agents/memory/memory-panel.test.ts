@@ -4,12 +4,19 @@ import { nothing, render } from "lit";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../../app/context.ts";
+import {
+  showConfirmDialog,
+  type ConfirmDialogOptions,
+} from "../../../components/confirm-dialog.ts";
 import { i18n } from "../../../i18n/index.ts";
 import type { TranslationMap } from "../../../i18n/lib/types.ts";
 import { en } from "../../../i18n/locales/en.ts";
+import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import type { DreamingState } from "./dreaming.ts";
 import type { DreamingViewState } from "./view.ts";
 import "./memory-panel.ts";
+
+vi.mock("../../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
 
 type TestMemoryPanel = HTMLElement & {
   context: ApplicationContext;
@@ -23,12 +30,10 @@ type TestMemoryPanel = HTMLElement & {
   applyGatewaySnapshot: (snapshot: ApplicationGatewaySnapshot) => void;
   loadAll: () => Promise<void>;
   openWikiPage: (lookup: string) => Promise<unknown>;
-  resetEnabledOverride: (configured: {
-    pluginId: string;
-    enabled: boolean;
-    overridden: boolean;
-    engineOff: boolean;
-  }) => Promise<void>;
+  confirmDreamingTask: (
+    task: (state: DreamingState) => Promise<boolean>,
+    confirmation: ConfirmDialogOptions,
+  ) => Promise<void>;
   render: () => unknown;
   requestUpdate: () => void;
   readonly updateComplete: Promise<boolean>;
@@ -76,7 +81,7 @@ function contextWithGateway(
     phase: connected ? "connected" : "stopped",
     offlineStable: false,
     canvasPluginSurfaceUrl: null,
-    hello: null,
+    hello: gatewayHelloForMethods(["config.patch"]),
     assistantAgentId: null,
     sessionKey: "main",
     lastError: null,
@@ -91,6 +96,7 @@ function contextWithGateway(
     },
     runtimeConfig: {
       state: { configForm, configSnapshot: null },
+      ensureLoaded: vi.fn(async () => undefined),
       refresh: vi.fn(async () => undefined),
       removeFormValue: vi.fn(),
       waitForPendingWrites: vi.fn(async () => undefined),
@@ -118,10 +124,62 @@ async function replaceContext(page: TestMemoryPanel, context: ApplicationContext
 
 afterEach(() => {
   document.body.replaceChildren();
+  vi.mocked(showConfirmDialog).mockReset();
   vi.restoreAllMocks();
 });
 
 describe("AgentMemoryPanel gateway lifecycle", () => {
+  it("waits for a committed agent before loading agent-scoped memory", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "doctor.memory.status") {
+        return { dreaming: null };
+      }
+      if (method === "doctor.memory.dreamDiary") {
+        return { found: false, path: "DREAMS.md" };
+      }
+      return {};
+    });
+    const page = document.createElement("openclaw-agent-memory-panel") as TestMemoryPanel;
+    page.context = contextWithGateway({ request } as unknown as GatewayBrowserClient, true);
+
+    document.body.append(page);
+    await page.updateComplete;
+    await page.updateComplete;
+    await Promise.resolve();
+    await expect(page.openWikiPage("unowned.md")).resolves.toBeNull();
+
+    expect(request).not.toHaveBeenCalled();
+
+    page.agentId = "support";
+    await page.updateComplete;
+    await vi.waitFor(() => {
+      expect(request.mock.calls.filter(([method]) => method === "doctor.memory.status")).toEqual([
+        ["doctor.memory.status", { agentId: "support" }],
+      ]);
+      expect(
+        request.mock.calls.filter(([method]) => method === "doctor.memory.dreamDiary"),
+      ).toEqual([["doctor.memory.dreamDiary", { agentId: "support" }]]);
+      expect(request).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("does not run a confirmed dreaming action after the selected agent changes", async () => {
+    const confirmation = deferred<boolean>();
+    vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
+    const page = createPage(contextWithGateway({} as GatewayBrowserClient, true));
+    const task = vi.fn(async () => true);
+    document.body.append(page);
+    await page.updateComplete;
+
+    const pending = page.confirmDreamingTask(task, { message: "Repair?" });
+    page.agentId = "support";
+    await page.updateComplete;
+    confirmation.resolve(true);
+    await pending;
+
+    expect(task).not.toHaveBeenCalled();
+  });
+
   it("loads the selected agent on the first gateway bind", async () => {
     const client = {} as GatewayBrowserClient;
     const context = contextWithGateway(client, true);
@@ -147,6 +205,13 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
 
     expect(page.dreaming).not.toBe(previousState);
     expect(page.dreaming.selectedAgentId).toBe("support");
+    expect(page.dreaming.dreamDiaryContent).toBeNull();
+
+    page.dreaming.dreamDiaryContent = "support-only";
+    page.agentId = "";
+    await page.updateComplete;
+
+    expect(page.dreaming.selectedAgentId).toBeNull();
     expect(page.dreaming.dreamDiaryContent).toBeNull();
   });
 
@@ -247,100 +312,7 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
     });
   });
 
-  it("resets the config-only dreaming override to the enabled runtime default", async () => {
-    const client = {
-      request: vi.fn(async () => ({ dreaming: { enabled: true } })),
-    } as unknown as GatewayBrowserClient;
-    const context = contextWithGateway(client, true, {
-      plugins: {
-        entries: {
-          "memory-core": { config: { dreaming: { enabled: false } } },
-        },
-      },
-    });
-    const page = createPage(context);
-    document.body.append(page);
-    await page.updateComplete;
-
-    await page.resetEnabledOverride({
-      pluginId: "memory-core",
-      enabled: false,
-      overridden: true,
-      engineOff: false,
-    });
-
-    expect(context.runtimeConfig.patch).toHaveBeenCalledWith({
-      raw: {
-        plugins: {
-          entries: {
-            "memory-core": { config: { dreaming: { enabled: null } } },
-          },
-        },
-      },
-      note: "Dreaming settings reset to the plugin default.",
-    });
-    expect(context.runtimeConfig.removeFormValue).not.toHaveBeenCalled();
-    expect(context.runtimeConfig.save).not.toHaveBeenCalled();
-    expect(context.runtimeConfig.refresh).toHaveBeenCalledOnce();
-  });
-
-  it("does not refresh the stale override when the minimal reset patch fails", async () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const context = contextWithGateway(client, true, {
-      plugins: {
-        entries: {
-          "memory-core": { config: { dreaming: { enabled: false } } },
-        },
-      },
-    });
-    vi.mocked(context.runtimeConfig.patch).mockResolvedValue(false);
-    const page = createPage(context);
-    document.body.append(page);
-    await page.updateComplete;
-
-    await page.resetEnabledOverride({
-      pluginId: "memory-core",
-      enabled: false,
-      overridden: true,
-      engineOff: false,
-    });
-
-    expect(context.runtimeConfig.patch).toHaveBeenCalledOnce();
-    expect(context.runtimeConfig.removeFormValue).not.toHaveBeenCalled();
-    expect(context.runtimeConfig.save).not.toHaveBeenCalled();
-    expect(context.runtimeConfig.refresh).not.toHaveBeenCalled();
-  });
-
-  it("drops a successful reset completion after the agent scope changes", async () => {
-    const pending = deferred<boolean>();
-    const context = contextWithGateway({} as GatewayBrowserClient, true, {
-      plugins: {
-        entries: {
-          "memory-core": { config: { dreaming: { enabled: false } } },
-        },
-      },
-    });
-    vi.mocked(context.runtimeConfig.patch).mockReturnValue(pending.promise);
-    const page = createPage(context);
-    document.body.append(page);
-    await page.updateComplete;
-
-    const reset = page.resetEnabledOverride({
-      pluginId: "memory-core",
-      enabled: false,
-      overridden: true,
-      engineOff: false,
-    });
-    page.agentId = "support";
-    await page.updateComplete;
-    pending.resolve(true);
-    await reset;
-
-    expect(context.runtimeConfig.refresh).not.toHaveBeenCalled();
-    expect(page.dreaming.dreamingStatusError).toBeNull();
-  });
-
-  it("renders explicit engine Off as unavailable while preserving latent override reset", () => {
+  it("renders explicit engine Off as unavailable with a latent override", () => {
     const context = contextWithGateway({} as GatewayBrowserClient, true, {
       plugins: {
         slots: { memory: "none" },
@@ -363,7 +335,6 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
     expect(container.querySelector<HTMLButtonElement>(".dreams__phase-toggle")?.disabled).toBe(
       true,
     );
-    expect(container.querySelector('button[aria-label="Reset to default"]')).not.toBeNull();
   });
 
   it("does not present cached runtime status after the memory engine switches Off", () => {
@@ -417,7 +388,7 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
     ).toBe(true);
   });
 
-  it("omits default provenance and reset when engine Off has no latent override", () => {
+  it("omits default provenance when engine Off has no latent override", () => {
     const context = contextWithGateway({} as GatewayBrowserClient, true, {
       plugins: { slots: { memory: "none" } },
     });
@@ -429,7 +400,6 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
     render(page.render(), container);
 
     expect(container.textContent).not.toContain("Using default: Enabled");
-    expect(container.querySelector('button[aria-label="Reset to default"]')).toBeNull();
     const toggle = container.querySelector<HTMLButtonElement>(".dreams__phase-toggle");
     expect(toggle?.disabled).toBe(true);
     toggle?.click();
@@ -593,6 +563,7 @@ describe.runIf(process.env.OPENCLAW_UI_MEMORY_CHROMIUM_E2E === "1")(
       });
       const page = await context.newPage();
       const gateway = await e2e.installMockGateway(page, {
+        webSocketPassthroughPrefixes: [`${e2e.controlUiBundledGatewayUrl(server.baseUrl)}/?token=`],
         featureMethods: [
           "chat.metadata",
           "chat.startup",

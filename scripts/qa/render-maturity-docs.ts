@@ -26,6 +26,7 @@ import {
   type QaMaturityTaxonomyLevel,
   type QaMaturityTaxonomySurface,
 } from "../../extensions/qa-lab/src/scorecard-taxonomy.js";
+import { collectMirroredDocsRoutes } from "../lib/docs-published-routes.mts";
 
 const DEFAULT_TAXONOMY_PATH = "taxonomy.yaml";
 const DEFAULT_SCORES_PATH = "qa/maturity-scores.yaml";
@@ -76,7 +77,6 @@ type DocsRouteIndex = {
 
 type RenderMaturityScorecardInputs = Pick<RenderInputs, "taxonomy" | "scores" | "coverage"> & {
   evidenceSummaries: EvidenceSummary[];
-  acceptedIncompleteEvidence: boolean;
 };
 
 type DerivedCoverageScores = QaMaturityCoverageScores & {
@@ -234,8 +234,12 @@ function collectDocsRouteIndex(docsRoot: string): DocsRouteIndex {
   const docsJsonPath = path.join(docsRoot, "docs.json");
   if (fs.existsSync(docsJsonPath)) {
     const docsJson = JSON.parse(fs.readFileSync(docsJsonPath, "utf8")) as {
+      navigation?: unknown;
       redirects?: Array<{ source?: string; destination?: string }>;
     };
+    for (const route of collectMirroredDocsRoutes(docsJson.navigation)) {
+      routes.add(normalizeRoutePath(route));
+    }
     for (const redirect of docsJson.redirects ?? []) {
       if (!redirect.source || !redirect.destination || redirect.destination.startsWith("http")) {
         continue;
@@ -259,10 +263,12 @@ function docsLink(docPath: string, docsRouteIndex: DocsRouteIndex): string | und
   const publicRoute = docsRouteIndex.routes.has(withoutExtension)
     ? withoutExtension
     : docsRouteIndex.redirects.get(withoutExtension);
-  if (!publicRoute || !docsRouteIndex.routes.has(publicRoute)) {
+  // Redirect fragments override source fragments; route validation only checks the page.
+  const [publicPage = "", publicAnchor = anchor] = (publicRoute ?? "").split("#", 2);
+  if (!publicPage || !docsRouteIndex.routes.has(publicPage)) {
     return undefined;
   }
-  const publicHref = anchor ? `${publicRoute}#${anchor}` : publicRoute;
+  const publicHref = publicAnchor ? `${publicPage}#${publicAnchor}` : publicPage;
   return `[${markdownEscape(title)}](/${markdownEscape(publicHref)})`;
 }
 
@@ -446,13 +452,15 @@ function renderSurfaceRows({
   for (const surface of surfaces) {
     const scoreSurface = scoreSurfaces.get(surface.id);
     rows.push(
-      '  <div className="maturity-surface-row">',
-      `    <a className="maturity-surface-name" href="/maturity/taxonomy#${markdownSlug(surface.name)}"><span className="maturity-surface-title">${markdownEscape(surface.name)}</span><span className="maturity-surface-meta">${maturityLevelPillFromText(levelText(surface, levels))}<span>${surface.categories.length} areas</span></span></a>`,
-      `    <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span>${scoreMeter(coverage.surfaces.get(surface.id))}</div>`,
-      `    <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span>${scoreMeter(scoreSurface?.scores?.quality)}</div>`,
-      `    <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span>${scoreMeter(scoreSurface?.scores?.completeness)}</div>`,
-      `    <div className="maturity-surface-support">${maturityLtsBadge(scoreSurface?.lts)}</div>`,
-      "  </div>",
+      [
+        '  <div className="maturity-surface-row">',
+        `<a className="maturity-surface-name" href="/maturity/taxonomy#${markdownSlug(surface.name)}"><span className="maturity-surface-title">${markdownEscape(surface.name)}</span><span className="maturity-surface-meta">${maturityLevelPillFromText(levelText(surface, levels))}<span>${surface.categories.length} areas</span></span></a>`,
+        `<div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span>${scoreMeter(coverage.surfaces.get(surface.id))}</div>`,
+        `<div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span>${scoreMeter(scoreSurface?.scores?.quality)}</div>`,
+        `<div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span>${scoreMeter(scoreSurface?.scores?.completeness)}</div>`,
+        `<div className="maturity-surface-support">${maturityLtsBadge(scoreSurface?.lts)}</div>`,
+        "</div>",
+      ].join(""),
     );
   }
   rows.push("</div>");
@@ -729,12 +737,6 @@ function rejectBlockingEvidence(evidenceSummaries: EvidenceSummary[]): void {
   );
 }
 
-function hasIncompleteEvidence(evidenceSummaries: EvidenceSummary[]): boolean {
-  return evidenceSummaries.some(
-    (item) => item.statuses.fail > 0 || item.statuses.blocked > 0 || item.statuses.skipped > 0,
-  );
-}
-
 function latestCoverageScorecard(
   evidenceSummaries: EvidenceSummary[],
 ): EvidenceSummary | undefined {
@@ -973,7 +975,6 @@ function renderMaturityScorecard({
   taxonomy,
   scores,
   evidenceSummaries,
-  acceptedIncompleteEvidence,
 }: RenderMaturityScorecardInputs): string {
   const levels = qaMaturityTaxonomyLevelMap(taxonomy);
   const scoreSurfaces = surfaceScoreMap(scores);
@@ -1002,12 +1003,6 @@ function renderMaturityScorecard({
     '  <p className="maturity-jump-links"><a href="#surface-explorer">Browse surfaces</a> / <a href="#qa-evidence-summary">Inspect QA evidence</a> / <a href="/maturity/taxonomy">Read the taxonomy</a></p>',
     "</div>",
     "",
-    ...(acceptedIncompleteEvidence
-      ? [
-          "> **Incomplete QA evidence accepted.** Failed, blocked, and skipped checks provided no Coverage; only passing evidence fulfilled Coverage.",
-          "",
-        ]
-      : []),
     "## What this page is for",
     "",
     "Use this page to answer one question: which OpenClaw surfaces are credible choices for a release, and what evidence supports that judgment? Coverage comes from deterministic QA evidence; quality and completeness are maintained as reviewed maturity scores.",
@@ -1032,8 +1027,6 @@ function renderMaturityScorecard({
 
   lines.push(
     "## Surface explorer",
-    "",
-    '<a id="surface-explorer" />',
     "",
     "Surfaces are ordered by maturity level, completeness, and quality. LTS support is shown alongside each row so release-ready options are easy to compare.",
     "",
@@ -1088,8 +1081,6 @@ function renderTaxonomy({
     "</div>",
     "",
     "## Product areas",
-    "",
-    '<a id="product-areas" />',
     "",
   ];
 
@@ -1248,7 +1239,6 @@ function main(): void {
   if (!args.allowFailures) {
     rejectBlockingEvidence(evidenceSummaries);
   }
-  const acceptedIncompleteEvidence = args.allowFailures && hasIncompleteEvidence(evidenceSummaries);
   const coverage = deriveCoverageScores(taxonomy, evidenceSummaries);
   const { scores, warnings: scoreWarnings } = readValidatedQaMaturityScoreSources({
     coverageScores: coverage,
@@ -1279,7 +1269,6 @@ function main(): void {
         taxonomy,
         scores,
         evidenceSummaries,
-        acceptedIncompleteEvidence,
       }),
     ],
     [

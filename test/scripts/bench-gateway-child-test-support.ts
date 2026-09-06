@@ -1,11 +1,6 @@
 // Gateway benchmark child test support simulates child process behavior for script tests.
 import { EventEmitter } from "node:events";
 import { expect, it, vi } from "vitest";
-import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
-
-function expectedTaskkillPath(): string {
-  return resolveWindowsTaskkillPath();
-}
 
 type StopChildResult = {
   exitedBeforeTeardown: boolean;
@@ -17,8 +12,6 @@ type StopChild<TChild> = (
   child: TChild,
   options?: {
     killGraceMs?: number;
-    platform?: NodeJS.Platform;
-    runTaskkill?: typeof spawnSync;
     teardownGraceMs?: number;
   },
 ) => Promise<StopChildResult>;
@@ -109,116 +102,6 @@ export function registerStopChildBehaviorTests<TChild>(params: {
     expect(child.stdout.destroy).toHaveBeenCalledOnce();
     expect(child.stderr.destroy).toHaveBeenCalledOnce();
     expect(child.unref).toHaveBeenCalledOnce();
-  });
-
-  it("signals Windows child process trees with taskkill", async () => {
-    const child = new EventEmitter() as EventEmitter & {
-      exitCode: number | null;
-      kill: ReturnType<typeof vi.fn>;
-      pid: number;
-      signalCode: NodeJS.Signals | null;
-      stderr: { destroy: ReturnType<typeof vi.fn> };
-      stdin: { destroy: ReturnType<typeof vi.fn> };
-      stdout: { destroy: ReturnType<typeof vi.fn> };
-      unref: ReturnType<typeof vi.fn>;
-    };
-    child.exitCode = null;
-    child.kill = vi.fn(() => true);
-    child.pid = 4450;
-    child.signalCode = null;
-    child.stderr = { destroy: vi.fn() };
-    child.stdin = { destroy: vi.fn() };
-    child.stdout = { destroy: vi.fn() };
-    child.unref = vi.fn();
-    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
-
-    await expect(
-      params.stopChild(child as unknown as TChild, {
-        killGraceMs: 1,
-        platform: "win32",
-        runTaskkill: runTaskkill as unknown as typeof spawnSync,
-        teardownGraceMs: 1,
-      }),
-    ).resolves.toEqual({
-      exitedBeforeTeardown: false,
-      exitCode: null,
-      signal: "SIGKILL",
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, expectedTaskkillPath(), ["/PID", "4450", "/T"], {
-      stdio: "ignore",
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "4450", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(child.kill).not.toHaveBeenCalled();
-    expect(child.stdin.destroy).toHaveBeenCalledOnce();
-    expect(child.stdout.destroy).toHaveBeenCalledOnce();
-    expect(child.stderr.destroy).toHaveBeenCalledOnce();
-    expect(child.unref).toHaveBeenCalledOnce();
-  });
-
-  it("force-kills Windows child process trees when graceful taskkill fails", async () => {
-    const child = new EventEmitter() as EventEmitter & {
-      exitCode: number | null;
-      kill: ReturnType<typeof vi.fn>;
-      pid: number;
-      signalCode: NodeJS.Signals | null;
-      stderr: { destroy: ReturnType<typeof vi.fn> };
-      stdin: { destroy: ReturnType<typeof vi.fn> };
-      stdout: { destroy: ReturnType<typeof vi.fn> };
-      unref: ReturnType<typeof vi.fn>;
-    };
-    child.exitCode = null;
-    child.kill = vi.fn(() => true);
-    child.pid = 4450;
-    child.signalCode = null;
-    child.stderr = { destroy: vi.fn() };
-    child.stdin = { destroy: vi.fn() };
-    child.stdout = { destroy: vi.fn() };
-    child.unref = vi.fn();
-    const runTaskkill = vi
-      .fn()
-      .mockReturnValueOnce({ error: undefined, status: 1 })
-      .mockReturnValueOnce({ error: undefined, status: 0 })
-      .mockReturnValueOnce({ error: undefined, status: 0 });
-
-    await expect(
-      params.stopChild(child as unknown as TChild, {
-        killGraceMs: 1,
-        platform: "win32",
-        runTaskkill,
-        teardownGraceMs: 1,
-      }),
-    ).resolves.toEqual({
-      exitedBeforeTeardown: false,
-      exitCode: null,
-      signal: "SIGKILL",
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, expectedTaskkillPath(), ["/PID", "4450", "/T"], {
-      stdio: "ignore",
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "4450", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      3,
-      expectedTaskkillPath(),
-      ["/PID", "4450", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(child.kill).not.toHaveBeenCalled();
   });
 
   it.skipIf(process.platform === "win32")(
@@ -348,4 +231,3 @@ export function registerStopChildBehaviorTests<TChild>(params: {
     },
   );
 }
-import type { spawnSync } from "node:child_process";

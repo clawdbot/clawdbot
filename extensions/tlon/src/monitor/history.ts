@@ -1,6 +1,8 @@
 // Tlon plugin module implements history behavior.
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
-import { asRecord, extractMessageText, formatErrorMessage } from "./utils.js";
+import { asNullableRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { extractMessageText } from "./utils.js";
 
 /**
  * Format a number as @ud (with dots every 3 digits from the right)
@@ -47,22 +49,7 @@ function createHistoryEntryFromMemo(params: {
   };
 }
 
-const messageCache = new Map<string, TlonHistoryEntry[]>();
 const MAX_CACHED_MESSAGES = 100;
-
-export function cacheMessage(channelNest: string, message: TlonHistoryEntry) {
-  if (!messageCache.has(channelNest)) {
-    messageCache.set(channelNest, []);
-  }
-  const cache = messageCache.get(channelNest);
-  if (!cache) {
-    return;
-  }
-  cache.unshift(message);
-  if (cache.length > MAX_CACHED_MESSAGES) {
-    cache.pop();
-  }
-}
 
 async function fetchChannelHistory(
   api: { scry: (path: string) => Promise<unknown> },
@@ -117,20 +104,38 @@ async function fetchChannelHistory(
   }
 }
 
-export async function getChannelHistory(
-  api: { scry: (path: string) => Promise<unknown> },
-  channelNest: string,
-  count = 50,
-  runtime?: RuntimeEnv,
-): Promise<TlonHistoryEntry[]> {
-  const cache = messageCache.get(channelNest) ?? [];
-  if (cache.length >= count) {
-    runtime?.log?.(`[tlon] Using cached messages (${cache.length} available)`);
-    return cache.slice(0, count);
-  }
+export function createChannelHistoryCache() {
+  // A monitor owns this cache so stopped accounts cannot leak stale history into
+  // a restarted or concurrently running account with the same channel nest.
+  const messageCache = new Map<string, TlonHistoryEntry[]>();
 
-  runtime?.log?.(`[tlon] Cache has ${cache.length} messages, need ${count}, fetching from scry...`);
-  return await fetchChannelHistory(api, channelNest, count, runtime);
+  return {
+    cacheMessage(channelNest: string, message: TlonHistoryEntry) {
+      const cache = messageCache.get(channelNest) ?? [];
+      cache.unshift(message);
+      if (cache.length > MAX_CACHED_MESSAGES) {
+        cache.pop();
+      }
+      messageCache.set(channelNest, cache);
+    },
+    async getChannelHistory(
+      api: { scry: (path: string) => Promise<unknown> },
+      channelNest: string,
+      count = 50,
+      runtime?: RuntimeEnv,
+    ): Promise<TlonHistoryEntry[]> {
+      const cache = messageCache.get(channelNest) ?? [];
+      if (cache.length >= count) {
+        runtime?.log?.(`[tlon] Using cached messages (${cache.length} available)`);
+        return cache.slice(0, count);
+      }
+
+      runtime?.log?.(
+        `[tlon] Cache has ${cache.length} messages, need ${count}, fetching from scry...`,
+      );
+      return await fetchChannelHistory(api, channelNest, count, runtime);
+    },
+  };
 }
 
 /**

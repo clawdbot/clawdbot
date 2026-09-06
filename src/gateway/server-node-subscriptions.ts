@@ -11,8 +11,6 @@ type NodeSendEventFn = (opts: {
   payloadJSON?: SerializedEventPayload | null;
 }) => void | Promise<unknown>;
 
-type NodeListConnectedFn = () => Array<{ nodeId: string; pairingGeneration?: string }>;
-
 type NodeSubscriptionManager = {
   subscribe: (nodeId: string, pairingGeneration: string, sessionKey: string) => void;
   unsubscribe: (nodeId: string, pairingGeneration: string, sessionKey: string) => void;
@@ -34,13 +32,6 @@ type NodeSubscriptionManager = {
     payload: unknown,
     sendEvent?: NodeSendEventFn | null,
   ) => Promise<void>;
-  sendToAllConnected: (
-    event: string,
-    payload: unknown,
-    listConnected?: NodeListConnectedFn | null,
-    sendEvent?: NodeSendEventFn | null,
-  ) => Promise<void>;
-  clear: () => void;
 };
 
 /** Manages node subscriptions to gateway session events. */
@@ -59,10 +50,15 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
     }
   };
 
-  const settleFanout = async (sends: Array<() => void | Promise<unknown>>): Promise<void> => {
-    // Public gateway callers intentionally fire-and-forget fanout. Settle every
-    // sender so one transport failure cannot become an unhandled rejection.
-    await Promise.allSettled(sends.map((send) => Promise.resolve().then(send)));
+  const settleFanout = async <Entry>(
+    entries: Iterable<Entry>,
+    createSend: (entry: Entry) => () => ReturnType<NodeSendEventFn>,
+  ): Promise<void> => {
+    // Build sender closures before yielding without retaining iterator tuples.
+    // Settle failures because public Gateway callers fire-and-forget this fanout.
+    await Promise.allSettled(
+      Array.from(entries, (entry) => Promise.resolve().then(createSend(entry))),
+    );
   };
 
   const subscribe = (nodeId: string, pairingGeneration: string, sessionKey: string) => {
@@ -196,11 +192,10 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
     // Serialize once per event and reuse across all subscribed nodes to keep
     // fanout deterministic and avoid repeated JSON conversion.
     await settleFanout(
-      [...subscribers].map(
-        ([nodeId, pairingGeneration]) =>
-          () =>
-            sendEvent({ nodeId, pairingGeneration, event, payloadJSON }),
-      ),
+      subscribers,
+      ([nodeId, pairingGeneration]) =>
+        () =>
+          sendEvent({ nodeId, pairingGeneration, event, payloadJSON }),
     );
   };
 
@@ -217,50 +212,16 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
       return;
     }
     await settleFanout(
-      [...nodeSubscriptions].map(
-        ([nodeId, subscription]) =>
-          () =>
-            sendEvent({
-              nodeId,
-              pairingGeneration: subscription.pairingGeneration,
-              event,
-              payloadJSON,
-            }),
-      ),
+      nodeSubscriptions,
+      ([nodeId, subscription]) =>
+        () =>
+          sendEvent({
+            nodeId,
+            pairingGeneration: subscription.pairingGeneration,
+            event,
+            payloadJSON,
+          }),
     );
-  };
-
-  const sendToAllConnected = async (
-    event: string,
-    payload: unknown,
-    listConnected?: NodeListConnectedFn | null,
-    sendEvent?: NodeSendEventFn | null,
-  ) => {
-    if (!sendEvent || !listConnected) {
-      return;
-    }
-    const payloadJSON = toPayloadJSON(payload);
-    if (payloadJSON === undefined) {
-      return;
-    }
-    await settleFanout(
-      listConnected().map(
-        (node) => () =>
-          node.pairingGeneration
-            ? sendEvent({
-                nodeId: node.nodeId,
-                pairingGeneration: node.pairingGeneration,
-                event,
-                payloadJSON,
-              })
-            : undefined,
-      ),
-    );
-  };
-
-  const clear = () => {
-    nodeSubscriptions.clear();
-    sessionSubscribers.clear();
   };
 
   return {
@@ -270,7 +231,5 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
     updatePairingGeneration,
     sendToSession,
     sendToAllSubscribed,
-    sendToAllConnected,
-    clear,
   };
 }

@@ -1,4 +1,5 @@
 // Qa Lab resolves Windows system tools without trusting PATH.
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 
 const DEFAULT_WINDOWS_SYSTEM_ROOT = "C:\\Windows";
@@ -57,6 +58,37 @@ export function resolveQaWindowsSystem32ExePath(
     throw new Error(`Invalid Windows System32 executable name: ${executableName}`);
   }
   return path.win32.join(resolveQaWindowsSystemRoot(env), "System32", executableName);
+}
+
+export function runQaWindowsTaskkill(params: {
+  pid: number;
+  signal: NodeJS.Signals;
+  env?: Record<string, string | undefined>;
+  runCommand?: typeof spawnSync;
+}) {
+  const runCommand = params.runCommand ?? spawnSync;
+  const taskkillPath = resolveQaWindowsSystem32ExePath("taskkill.exe", params.env);
+  const args = ["/PID", String(params.pid), "/T"];
+  if (params.signal === "SIGKILL") {
+    args.push("/F");
+  }
+  const result = runCommand(taskkillPath, args, {
+    stdio: "ignore",
+    windowsHide: true,
+    timeout: 5_000,
+  });
+  if (!result.error && result.status === 0) {
+    return true;
+  }
+  if (params.signal !== "SIGKILL") {
+    const forceResult = runCommand(taskkillPath, [...args, "/F"], {
+      stdio: "ignore",
+      windowsHide: true,
+      timeout: 5_000,
+    });
+    return !forceResult.error && forceResult.status === 0;
+  }
+  return false;
 }
 
 export function resolveQaWindowsPowerShellExePath(

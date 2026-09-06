@@ -4,14 +4,57 @@
 
 const BUILT_IN_SESSION_SECTION_IDS = new Set(["ungrouped", "groups", "work"]);
 
-export function readSessionCustomGroupNames(payload: unknown): string[] {
-  const groups = (payload as { groups?: Array<{ name?: unknown }> } | null)?.groups;
+export type SessionGroupSettings = {
+  name: string;
+  position: number;
+  cwd?: string;
+  worktree?: boolean;
+};
+
+export function readSessionCustomGroups(payload: unknown): SessionGroupSettings[] {
+  const groups = (payload as { groups?: unknown } | null)?.groups;
   if (!Array.isArray(groups)) {
     return [];
   }
-  return groups.flatMap((group) =>
-    typeof group?.name === "string" && group.name.trim() ? [group.name.trim()] : [],
-  );
+  return groups.flatMap((entry, index) => {
+    const group = entry as Record<string, unknown> | null;
+    const name = typeof group?.name === "string" ? group.name.trim() : "";
+    if (!name) {
+      return [];
+    }
+    return [
+      {
+        name,
+        position:
+          typeof group?.position === "number" && Number.isSafeInteger(group.position)
+            ? group.position
+            : index,
+      },
+    ];
+  });
+}
+
+export function mergeSessionGroupDefaults(
+  groups: readonly SessionGroupSettings[],
+  payload: unknown,
+): SessionGroupSettings[] {
+  const values = (payload as { defaults?: unknown } | null)?.defaults;
+  const defaults = new Map<string, { cwd?: string; worktree?: boolean }>();
+  if (Array.isArray(values)) {
+    for (const value of values) {
+      const record = value as Record<string, unknown> | null;
+      const name = typeof record?.name === "string" ? record.name.trim() : "";
+      if (!name) {
+        continue;
+      }
+      const cwd = typeof record?.cwd === "string" ? record.cwd.trim() : "";
+      defaults.set(name, {
+        ...(cwd ? { cwd } : {}),
+        ...(typeof record?.worktree === "boolean" ? { worktree: record.worktree } : {}),
+      });
+    }
+  }
+  return groups.map((group) => ({ ...group, ...defaults.get(group.name) }));
 }
 
 export function readSidebarSectionOrder(payload: unknown): string[] {

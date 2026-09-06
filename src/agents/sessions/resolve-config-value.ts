@@ -135,8 +135,3 @@ export function resolveHeadersOrThrow(
   }
   return Object.keys(resolved).length > 0 ? resolved : undefined;
 }
-
-/** Clear the config value command cache. Exported for testing. */
-export function clearConfigValueCache(): void {
-  commandResultCache.clear();
-}

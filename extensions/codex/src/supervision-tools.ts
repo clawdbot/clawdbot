@@ -157,10 +157,6 @@ type CodexSupervisionToolsOptions = {
   useLegacyMcpPolicyEnv?: boolean;
 };
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return isRecord(value) ? value : {};
-}
-
 function asRecordArray(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value) ? value.filter(isRecord) : [];
 }
@@ -1081,7 +1077,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
       description: "List Codex sessions visible to the OpenClaw supervisor.",
       parameters: SessionsListParamsSchema,
       execute: async (_toolCallId, rawParams) => {
-        const params = asRecord(rawParams);
+        const params = isRecord(rawParams) ? rawParams : {};
         const { endpoints } = current();
         const result = await listSessionSnapshot({
           endpoints,
@@ -1107,7 +1103,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
       execute: async (_toolCallId, rawParams) => {
         const { endpoints, pluginConfig } = current();
         requireRawTranscriptAccess(options, pluginConfig);
-        const params = asRecord(rawParams);
+        const params = isRecord(rawParams) ? rawParams : {};
         const threadId = readStringParam(params, "thread_id", { required: true });
         const endpoint = await resolveEndpointForThread({
           endpoints,
@@ -1137,7 +1133,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
       execute: async (_toolCallId, rawParams) => {
         const { endpoints, pluginConfig } = current();
         requireWriteAccess(options, pluginConfig);
-        const params = asRecord(rawParams);
+        const params = isRecord(rawParams) ? rawParams : {};
         const threadId = readStringParam(params, "thread_id", { required: true });
         const text = readStringParam(params, "text", { required: true, allowEmpty: false });
         const mode = readModeParam(params) ?? "auto";
@@ -1186,7 +1182,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
       execute: async (_toolCallId, rawParams) => {
         const { endpoints, pluginConfig } = current();
         requireWriteAccess(options, pluginConfig);
-        const params = asRecord(rawParams);
+        const params = isRecord(rawParams) ? rawParams : {};
         const threadId = readStringParam(params, "thread_id", { required: true });
         const endpoint = await resolveEndpointForThread({
           endpoints,

@@ -1,4 +1,4 @@
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asFiniteNumber, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CodexThread, CodexThreadTurnsListResponse } from "./app-server/protocol.js";
@@ -18,6 +18,7 @@ const DEFAULT_PAGE_LIMIT = 50;
 export const CODEX_APP_SERVER_THREADS_CAPABILITY = "codex-app-server-threads";
 export const CODEX_APP_SERVER_THREADS_LIST_COMMAND = "codex.appServer.threads.list.v1";
 export const CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND = "codex.appServer.thread.turns.list.v1";
+export const CODEX_CATALOG_TRANSCRIPT_READ_COMMAND = "codex.sessionCatalog.transcript.read.v1";
 export const CODEX_LOCAL_SESSION_HOST_ID = "gateway:local";
 export const CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT = 100;
 // Cold Codex state scans can outlive the Mac node's native 60-second deadline.
@@ -37,7 +38,7 @@ const MAX_ACTIVE_FLAGS = 16;
 export const MAX_ACTION_CATALOG_PAGES = 100;
 export const DEFAULT_TRANSCRIPT_PAGE_LIMIT = 20;
 export const MAX_TRANSCRIPT_PAGE_LIMIT = 50;
-const MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024;
+export const MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024;
 export const MAX_TITLE_SEARCH_CATALOG_PAGES = 20;
 
 export class CatalogParamsError extends Error {}
@@ -179,7 +180,7 @@ export function normalizeLimit(value: unknown, key: string): number {
   return value as number;
 }
 
-export function readOptionalString(
+export function readBoundedOptionalString(
   params: Record<string, unknown>,
   key: string,
   maxLength: number,
@@ -211,15 +212,15 @@ export function requireOnlyKeys(
   }
 }
 
-export function readPageParams(value: unknown): CodexSessionCatalogPageParams {
+export function readPageParams(value: unknown): CodexSessionCatalogPageParams & { limit: number } {
   if (!isRecord(value)) {
     throw new CatalogParamsError("Codex session catalog parameters must be an object");
   }
   const params = value;
   requireOnlyKeys(params, new Set(["cursor", "limit", "searchTerm", "cwd"]));
-  const cursor = readOptionalString(params, "cursor", MAX_CURSOR_LENGTH);
-  const searchTerm = readOptionalString(params, "searchTerm", MAX_SEARCH_LENGTH);
-  const cwd = readOptionalString(params, "cwd", MAX_CWD_LENGTH);
+  const cursor = readBoundedOptionalString(params, "cursor", MAX_CURSOR_LENGTH);
+  const searchTerm = readBoundedOptionalString(params, "searchTerm", MAX_SEARCH_LENGTH);
+  const cwd = readBoundedOptionalString(params, "cwd", MAX_CWD_LENGTH);
   return {
     limit: normalizeLimit(params.limit, "limit"),
     ...(cursor ? { cursor } : {}),
@@ -228,13 +229,15 @@ export function readPageParams(value: unknown): CodexSessionCatalogPageParams {
   };
 }
 
-export function readGatewayParams(value: unknown): CodexSessionCatalogParams {
+export function readGatewayParams(
+  value: unknown,
+): CodexSessionCatalogParams & { limitPerHost: number } {
   if (value !== undefined && !isRecord(value)) {
     throw new CatalogParamsError("Codex session catalog parameters must be an object");
   }
   const params = isRecord(value) ? value : {};
   requireOnlyKeys(params, new Set(["search", "limitPerHost", "hostIds", "cursors"]));
-  const search = readOptionalString(params, "search", MAX_SEARCH_LENGTH);
+  const search = readBoundedOptionalString(params, "search", MAX_SEARCH_LENGTH);
   let hostIds: string[] | undefined;
   if (params.hostIds !== undefined) {
     if (!Array.isArray(params.hostIds) || params.hostIds.length > MAX_HOST_COUNT) {
@@ -303,10 +306,6 @@ export function parseJsonParams(paramsJSON?: string | null): unknown {
   } catch (error) {
     throw new Error("Codex session catalog parameters must be valid JSON", { cause: error });
   }
-}
-
-function readFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function parseOptionalCatalogString(
@@ -385,9 +384,9 @@ function parseCatalogSession(
   const sessionKey = options.allowSessionKey
     ? parseOptionalCatalogString(value.sessionKey, "OpenClaw session key", MAX_SESSION_KEY_LENGTH)
     : undefined;
-  const createdAt = readFiniteNumber(value.createdAt);
-  const updatedAt = readFiniteNumber(value.updatedAt);
-  const recencyAt = value.recencyAt === null ? null : readFiniteNumber(value.recencyAt);
+  const createdAt = asFiniteNumber(value.createdAt);
+  const updatedAt = asFiniteNumber(value.updatedAt);
+  const recencyAt = value.recencyAt === null ? null : asFiniteNumber(value.recencyAt);
   return {
     threadId: value.threadId,
     status,
@@ -442,7 +441,9 @@ export function filterCatalogPageByTitle(
   return {
     ...page,
     sessions: page.sessions.filter((session) =>
-      session.name?.toLocaleLowerCase().includes(searchTerm.toLocaleLowerCase()),
+      (session.name ?? session.fallbackName)
+        ?.toLocaleLowerCase()
+        .includes(searchTerm.toLocaleLowerCase()),
     ),
   };
 }

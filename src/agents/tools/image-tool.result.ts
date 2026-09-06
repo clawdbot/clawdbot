@@ -36,7 +36,7 @@ export async function buildNativeImageToolResult(
     content: [
       {
         type: "text",
-        text: `Loaded ${images.length} image${images.length === 1 ? "" : "s"} for direct visual inspection.`,
+        text: `Loaded ${images.length} image${images.length === 1 ? "" : "s"} into private model context for inspection; not displayed, attached, or sent to the user.`,
       },
       ...images.map((image) => ({
         type: "image" as const,

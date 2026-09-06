@@ -1,9 +1,9 @@
 // Generic agent-event bridge machinery shared by the CLI runner's per-stream
 // delivery bridges (assistant, reasoning, commentary, plan).
-import { type AgentEventPayload, onAgentEvent } from "../../infra/agent-events.js";
+import { type AgentEventPayload, onAgentEventForRun } from "../../infra/agent-events.js";
 
 export type AgentEventDeliveryStartOrder = {
-  schedule: (deliver: () => Promise<void>) => Promise<void>;
+  schedule: (deliver: () => Promise<unknown>) => Promise<void>;
 };
 
 export function createAgentEventDeliveryStartOrder(): AgentEventDeliveryStartOrder {
@@ -18,7 +18,7 @@ export function createAgentEventDeliveryStartOrder(): AgentEventDeliveryStartOrd
         releaseStart = resolve;
       });
       await previousStart;
-      let delivery: Promise<void>;
+      let delivery: Promise<unknown>;
       try {
         delivery = deliver();
       } finally {
@@ -33,7 +33,7 @@ export function createAgentEventBridge<T>(params: {
   runId: string;
   suppressed?: boolean;
   read: (evt: AgentEventPayload) => T | undefined;
-  deliver?: (payload: T) => Promise<void>;
+  deliver?: (payload: T) => Promise<unknown>;
   startOrder?: AgentEventDeliveryStartOrder;
 }) {
   const deliver = params.deliver;
@@ -44,8 +44,8 @@ export function createAgentEventBridge<T>(params: {
     };
   }
   let unsubscribed = false;
-  let delivery = Promise.resolve();
-  const rawUnsubscribe = onAgentEvent((evt) => {
+  let delivery: Promise<unknown> = Promise.resolve();
+  const rawUnsubscribe = onAgentEventForRun(params.runId, (evt) => {
     if (evt.runId !== params.runId) {
       return;
     }

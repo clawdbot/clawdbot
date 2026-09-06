@@ -1,6 +1,6 @@
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 /** Name, agent id, and payload text normalization helpers for cron service ops. */
 import { normalizeOptionalAgentId } from "../../routing/session-key.js";
-import { truncateUtf16Safe } from "../../utils.js";
 import type { CronPayload } from "../types.js";
 
 /** Normalizes a required cron job name and throws the public validation error when absent. */
@@ -16,10 +16,7 @@ export function normalizeRequiredName(raw: unknown) {
 }
 
 function truncateText(input: string, maxLen: number) {
-  if (input.length <= maxLen) {
-    return input;
-  }
-  return `${truncateUtf16Safe(input, Math.max(0, maxLen - 1)).trimEnd()}…`;
+  return truncateWithMarker(input, maxLen, { marker: "…", reserve: 1, trimEnd: true });
 }
 
 /** Normalizes optional cron agent ids through the canonical session-key agent id rules. */

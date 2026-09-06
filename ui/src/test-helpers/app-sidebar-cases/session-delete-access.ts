@@ -8,6 +8,11 @@ import {
   type SidebarLifecycleState,
   type TestSessionMenu,
 } from "../app-sidebar.ts";
+import {
+  answerConfirmDialog,
+  installDialogPolyfill,
+  waitForConfirmDialogActions,
+} from "../modal-dialog.ts";
 import { waitForFast } from "../wait-for.ts";
 
 async function openSessionMenu(sidebar: SidebarLifecycleState, key: string) {
@@ -57,20 +62,27 @@ describe("AppSidebar session delete access", () => {
     await sidebar.updateComplete;
     harness.deleteSession.mockResolvedValueOnce({
       deleted: true,
-      worktreePreserved: { id: "wt-1", branch: "feature", path: "/tmp/worktree" },
+      worktreePreserved: {
+        id: "wt-1",
+        branch: "feature",
+        path: "/tmp/worktree",
+        reason: "owner-mismatch",
+      },
     });
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const restoreDialogPolyfill = installDialogPolyfill();
     const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => undefined);
     try {
       const menu = await openSessionMenu(sidebar, archived.key);
       menu.querySelector<HTMLButtonElement>('[data-shortcut="d"]')?.click();
+      answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
       await waitForFast(() => expect(harness.deleteSession).toHaveBeenCalledOnce());
       await waitForFast(() => expect(alertSpy).toHaveBeenCalledOnce());
 
-      expect(confirmSpy).toHaveBeenCalledOnce();
+      expect(alertSpy).toHaveBeenCalledWith("Managed Worktrees:\nfeature — owned elsewhere");
+
       expect(request).not.toHaveBeenCalledWith("worktrees.remove", expect.anything());
     } finally {
-      confirmSpy.mockRestore();
+      restoreDialogPolyfill();
       alertSpy.mockRestore();
     }
   });

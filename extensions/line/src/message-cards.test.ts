@@ -12,17 +12,19 @@ import {
   uriAction,
   type Action,
 } from "./actions.js";
-import { registerLineCardCommand } from "./card-command.js";
+import { handleLineCardCommand } from "./card-command.js";
 import {
   createActionCard,
-  createAppleTvRemoteCard,
-  createDeviceControlCard,
-  createEventCard,
   createImageCard,
   createInfoCard,
   createListCard,
+} from "./flex-templates/basic-cards.js";
+import {
+  createAppleTvRemoteCard,
+  createDeviceControlCard,
   createMediaPlayerCard,
-} from "./flex-templates.js";
+} from "./flex-templates/media-control-cards.js";
+import { createEventCard } from "./flex-templates/schedule-cards.js";
 import {
   buildTemplateMessageFromPayload,
   createConfirmTemplate,
@@ -87,17 +89,27 @@ const lineTemplateMessageScenarios = [
 async function runLineFlexCardCommand(
   args: string,
 ): Promise<{ altText: string; contents: messagingApi.FlexContainer }> {
-  const result = (await registerCommandWithHandler((command: unknown) => {
-    const { handler } = command as {
-      handler: (ctx: { args: string; channel: string }) => Promise<unknown>;
-    };
-    return handler({ channel: "line", args });
-  })) as {
+  const result = (await handleLineCardCommand(args)) as {
     channelData: {
       line: { flexMessage: { altText: string; contents: messagingApi.FlexContainer } };
     };
   };
   return result.channelData.line.flexMessage;
+}
+
+function resolveLineFlexCardActions(message: {
+  contents: messagingApi.FlexContainer;
+}): messagingApi.Action[] {
+  if (message.contents.type !== "bubble") {
+    throw new Error("Expected LINE Flex action card to render a bubble");
+  }
+  const footer = expectDefined(message.contents.footer, "LINE flex-message footer");
+  return footer.contents.map((component) => {
+    if (component.type !== "button") {
+      throw new Error("Expected LINE Flex action card footer to contain buttons");
+    }
+    return component.action;
+  });
 }
 
 type LineProviderRequest = {
@@ -478,16 +490,9 @@ describe("action label/data surrogate-safe truncation", () => {
   });
 
   it("/card action command visibly disables overlong callback data", async () => {
-    const registerCommand = (command: unknown) => {
-      const { handler } = command as {
-        handler: (ctx: { args: string; channel: string }) => Promise<unknown>;
-      };
-      return handler({
-        channel: "line",
-        args: `action "Menu" "Body" --actions "${labelWithEmoji}|k=${"d".repeat(297)}😀"`,
-      });
-    };
-    const result = (await registerCommandWithHandler(registerCommand)) as {
+    const result = (await handleLineCardCommand(
+      `action "Menu" "Body" --actions "${labelWithEmoji}|k=${"d".repeat(297)}😀"`,
+    )) as {
       channelData: {
         line: {
           flexMessage: {
@@ -511,6 +516,70 @@ describe("action label/data surrogate-safe truncation", () => {
       type: "message",
       label: "Unavailable",
       text: "Action unavailable: callback data exceeds LINE's limit.",
+    });
+  });
+
+  it.each([
+    { kind: "message", data: "/status", expected: { type: "message", text: "/status" } },
+    {
+      kind: "postback",
+      data: "action=status",
+      expected: { type: "postback", data: "action=status" },
+    },
+    {
+      kind: "uri",
+      data: "https://example.test/status",
+      expected: { type: "uri", uri: "https://example.test/status" },
+    },
+  ])("/card action preserves 40-character $kind labels", async ({ data, expected }) => {
+    const label = "x".repeat(40);
+    const message = await runLineFlexCardCommand(
+      `action "Menu" "Body" --actions "${label}|${data},${label}y|${data}"`,
+    );
+    expect(resolveLineFlexCardActions(message)).toMatchObject([
+      { ...expected, label },
+      { ...expected, label },
+    ]);
+  });
+
+  it("/card action preserves Unicode labels without splitting the 40-grapheme boundary", async () => {
+    const label = `${"x".repeat(39)}😀`;
+    const message = await runLineFlexCardCommand(
+      `action "Menu" "Body" --actions "${label}|/status"`,
+    );
+    const action = expectDefined(
+      resolveLineFlexCardActions(message)[0],
+      "LINE flex-message footer action",
+    );
+
+    expect(action.label).toBe(label);
+    expect(loneHighSurrogate.test(action.label ?? "")).toBe(false);
+  });
+
+  it("/card buttons retains the template-specific 20-character action label limit", async () => {
+    const label = "x".repeat(40);
+    const result = (await handleLineCardCommand(
+      `buttons "Menu" "Body" --actions "${label}|/status"`,
+    )) as {
+      channelData: {
+        line: { templateMessage: Parameters<typeof buildTemplateMessageFromPayload>[0] };
+      };
+    };
+    const template = expectDefined(
+      buildTemplateMessageFromPayload(result.channelData.line.templateMessage),
+      "LINE buttons template message",
+    ).template as { actions: Array<{ label: string }> };
+
+    expect(template.actions).toMatchObject([{ type: "message", label: "x".repeat(20) }]);
+  });
+
+  it("/card action visibly disables an oversized URI at the Flex action owner", async () => {
+    const uri = `https://example.test/${"u".repeat(1_000)}`;
+    const message = await runLineFlexCardCommand(`action "Menu" "Body" --actions "Open|${uri}"`);
+    expect(resolveLineFlexCardActions(message)[0]).toEqual({
+      type: "message",
+      label: "Unavailable",
+      text: "Link unavailable: URL exceeds LINE's limit.",
     });
   });
 
@@ -607,16 +676,9 @@ describe("action label/data surrogate-safe truncation", () => {
   });
 
   it("/card receipt preserves a provider-valid Unicode alternative-text boundary", async () => {
-    const registerCommand = (command: unknown) => {
-      const { handler } = command as {
-        handler: (ctx: { args: string; channel: string }) => Promise<unknown>;
-      };
-      return handler({
-        channel: "line",
-        args: `receipt "R" "${"a".repeat(395)}:😀x" --total "$30"`,
-      });
-    };
-    const result = (await registerCommandWithHandler(registerCommand)) as {
+    const result = (await handleLineCardCommand(
+      `receipt "R" "${"a".repeat(395)}:😀x" --total "$30"`,
+    )) as {
       channelData: { line: { flexMessage: { altText: string } } };
     };
     const altText = result.channelData.line.flexMessage.altText;
@@ -979,15 +1041,3 @@ describe("action label/data surrogate-safe truncation", () => {
     }
   });
 });
-
-async function registerCommandWithHandler(
-  runHandler: (command: unknown) => Promise<unknown>,
-): Promise<unknown> {
-  let result: unknown;
-  registerLineCardCommand({
-    registerCommand(command: unknown) {
-      result = runHandler(command);
-    },
-  } as never);
-  return result;
-}

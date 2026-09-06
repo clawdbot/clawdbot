@@ -4,7 +4,6 @@
  * safely forwarded.
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizePluginsConfig } from "../../plugins/config-state.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import {
@@ -36,12 +35,14 @@ export function buildAgentRuntimeAuthPlan(params: {
   authProfileProvider?: string;
   authProfileMode?: string;
   sessionAuthProfileId?: string;
-  sessionAuthProfileSource?: "auto" | "user";
+  sessionAuthProfileSource?: "auto" | "user" | "user-link";
   sessionAuthProfileCandidateIds?: string[];
   modelRoute?: AgentRuntimeAuthPlan["modelRoute"];
   deferredRouteSupport?: AgentRuntimeAuthPlan["deferredRouteSupport"];
+  credentialSource?: AgentRuntimeAuthPlan["credentialSource"];
   config?: OpenClawConfig;
   workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
   metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
   providerAuthAliasesEnabled?: boolean;
   harnessId?: string;
@@ -49,14 +50,14 @@ export function buildAgentRuntimeAuthPlan(params: {
   allowHarnessAuthProfileForwarding?: boolean;
 }): AgentRuntimeAuthPlan {
   const providerAuthAliasesEnabled =
-    params.providerAuthAliasesEnabled ??
-    (params.config ? normalizePluginsConfig(params.config.plugins).enabled : true);
+    params.providerAuthAliasesEnabled ?? params.config?.plugins?.enabled !== false;
   const metadataSnapshot =
     params.metadataSnapshot ??
     (providerAuthAliasesEnabled ? undefined : EMPTY_PROVIDER_AUTH_ALIAS_METADATA);
   const aliasLookupParams = {
     config: params.config,
     workspaceDir: params.workspaceDir,
+    env: params.env,
     ...(metadataSnapshot ? { metadataSnapshot } : {}),
   };
   const providerForAuth = resolveProviderIdForAuth(params.provider, aliasLookupParams);
@@ -86,7 +87,11 @@ export function buildAgentRuntimeAuthPlan(params: {
     ...(harnessProviderForAuth ? { harnessAuthProvider: harnessProviderForAuth } : {}),
     ...(canForwardProfile ? { forwardedAuthProfileId } : {}),
     ...(canForwardProfile && params.sessionAuthProfileId && params.sessionAuthProfileSource
-      ? { forwardedAuthProfileSource: params.sessionAuthProfileSource }
+      ? {
+          // Person-linked pins forward at user-pin strength; the wire plan
+          // keeps the closed auto/user contract.
+          forwardedAuthProfileSource: params.sessionAuthProfileSource === "auto" ? "auto" : "user",
+        }
       : {}),
     ...(canForwardProfile && params.sessionAuthProfileCandidateIds?.length
       ? { forwardedAuthProfileCandidateIds: params.sessionAuthProfileCandidateIds }
@@ -96,5 +101,6 @@ export function buildAgentRuntimeAuthPlan(params: {
       : {}),
     ...(params.modelRoute ? { modelRoute: params.modelRoute } : {}),
     ...(params.deferredRouteSupport ? { deferredRouteSupport: params.deferredRouteSupport } : {}),
+    ...(params.credentialSource ? { credentialSource: params.credentialSource } : {}),
   } satisfies AgentRuntimeAuthPlan;
 }

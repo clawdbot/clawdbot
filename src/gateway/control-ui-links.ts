@@ -1,6 +1,6 @@
 // Control UI link builder for local, LAN, tailnet, and custom gateway binds.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAdvertisedLanHost } from "../infra/advertised-lan-host.js";
+import { resolveAdvertisedLanHostCore } from "../infra/advertised-lan-host.js";
 import {
   inspectBestEffortPrimaryTailnetIPv4,
   pickBestEffortPrimaryLanIPv4,
@@ -57,7 +57,7 @@ export async function resolveAdvertisedControlUiLinks(
   params: ControlUiLinkParams,
 ): Promise<ControlUiLinks> {
   const advertisedLanHost =
-    params.bind === "lan" ? await resolveAdvertisedLanHost().catch(() => null) : null;
+    params.bind === "lan" ? await resolveAdvertisedLanHostCore().catch(() => null) : null;
   return resolveControlUiLinks({
     ...params,
     advertisedLanHost,

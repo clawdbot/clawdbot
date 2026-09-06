@@ -4,10 +4,7 @@ import { resolveStateDir } from "../config/paths.js";
 import type { PluginRecord } from "../plugins/registry-types.js";
 import { createPluginRegistry } from "../plugins/registry.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resetPluginBlobStoreForTests, type OpenBlobStoreOptions } from "./plugin-blob-store.js";
@@ -43,7 +40,6 @@ function createPluginRecord(
     webFetchProviderIds: [],
     webSearchProviderIds: [],
     migrationProviderIds: [],
-    memoryEmbeddingProviderIds: [],
     agentHarnessIds: [],
     cliCommands: [],
     services: [],
@@ -69,9 +65,6 @@ function createTestPluginRegistry() {
         },
         openSyncKeyedStore: () => {
           throw new Error("registry plugin runtime proxy should bind openSyncKeyedStore");
-        },
-        withLease: async () => {
-          throw new Error("registry plugin runtime proxy should bind withLease");
         },
       },
     } as unknown as PluginRuntime,
@@ -135,55 +128,6 @@ describe("plugin runtime state proxy", () => {
     });
   });
 
-  it("binds SQLite leases to trusted plugin identity and database scope", async () => {
-    await withOpenClawTestState({ label: "plugin-lease-runtime" }, async (state) => {
-      const registry = createTestPluginRegistry();
-      const bundled = createPluginRecord("memory-core", "bundled");
-      registry.registry.plugins.push(bundled);
-      const bundledApi = registry.createApi(bundled, { config: {} });
-
-      await bundledApi.runtime.state.withLease(
-        {
-          namespace: "qmd",
-          key: "embed",
-          database: { scope: "shared" },
-          leaseMs: 1_000,
-          waitMs: 0,
-        },
-        async ({ signal }) => {
-          expect(signal.aborted).toBe(false);
-          expect(
-            openOpenClawStateDatabase({ env: state.env })
-              .db.prepare("SELECT scope, lease_key FROM state_leases")
-              .get(),
-          ).toEqual({ scope: "plugin:memory-core:qmd", lease_key: "embed" });
-        },
-      );
-
-      const official = createPluginRecord("memory-official", "global", {
-        trustedOfficialInstall: true,
-      });
-      registry.registry.plugins.push(official);
-      const officialApi = registry.createApi(official, { config: {} });
-      await officialApi.runtime.state.withLease(
-        {
-          namespace: "qmd",
-          key: "write",
-          database: { scope: "agent", agentId: "main" },
-          leaseMs: 1_000,
-          waitMs: 0,
-        },
-        async () => {
-          expect(
-            openOpenClawAgentDatabase({ agentId: "main", env: state.env })
-              .db.prepare("SELECT scope, lease_key FROM state_leases")
-              .get(),
-          ).toEqual({ scope: "plugin:memory-official:qmd", lease_key: "write" });
-        },
-      );
-    });
-  });
-
   it("binds blob stores to the trusted plugin id", async () => {
     await withOpenClawTestState({ label: "plugin-blob-runtime" }, async () => {
       const registry = createTestPluginRegistry();
@@ -217,6 +161,33 @@ describe("plugin runtime state proxy", () => {
           maxBytesPerNamespace: 4096,
         });
       await expect(otherStore.lookup("viewer")).resolves.toBeUndefined();
+    });
+  });
+
+  it("keeps blob and keyed namespace option policies independent", async () => {
+    await withOpenClawTestState({ label: "plugin-state-policy-independence" }, async () => {
+      const registry = createTestPluginRegistry();
+      const record = createPluginRecord("diffs", "bundled");
+      registry.registry.plugins.push(record);
+      const state = registry.createApi(record, { config: {} }).runtime.state;
+
+      const blob = state.openBlobStore({
+        namespace: "shared-policy",
+        maxEntries: 2,
+        maxBytesPerEntry: 8,
+        maxBytesPerNamespace: 16,
+        overflowPolicy: "reject-new",
+        defaultTtlMs: 100,
+      });
+      const keyed = state.openKeyedStore({
+        namespace: "shared-policy",
+        maxEntries: 3,
+        overflowPolicy: "evict-oldest",
+        defaultTtlMs: 200,
+      });
+
+      await expect(blob.register("blob", new Uint8Array([1]), {})).resolves.toBeUndefined();
+      await expect(keyed.register("keyed", { ok: true })).resolves.toBeUndefined();
     });
   });
 
@@ -273,18 +244,6 @@ describe("plugin runtime state proxy", () => {
         maxBytesPerNamespace: 4096,
       }),
     ).toThrow("openBlobStore is only available for trusted plugins");
-    expect(() =>
-      api.runtime.state.withLease(
-        {
-          namespace: "runtime",
-          key: "writer",
-          database: { scope: "shared" },
-          leaseMs: 1_000,
-          waitMs: 0,
-        },
-        async () => undefined,
-      ),
-    ).toThrow("withLease is only available for trusted plugins");
   });
 
   it("names the denied capability, plugin, and origin for channel ingress queues", () => {
@@ -315,17 +274,5 @@ describe("plugin runtime state proxy", () => {
         maxBytesPerNamespace: 4096,
       }),
     ).toThrow("openBlobStore is only available for trusted plugins");
-    expect(() =>
-      api.runtime.state.withLease(
-        {
-          namespace: "runtime",
-          key: "writer",
-          database: { scope: "shared" },
-          leaseMs: 1_000,
-          waitMs: 0,
-        },
-        async () => undefined,
-      ),
-    ).toThrow("withLease is only available for trusted plugins");
   });
 });

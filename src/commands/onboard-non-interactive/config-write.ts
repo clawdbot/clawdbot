@@ -3,7 +3,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 /** Commits a non-interactive onboard config update with pending plugin records handled first. */
 export async function commitNonInteractiveOnboardConfig(params: {
   nextConfig: OpenClawConfig;
-  baseConfig: OpenClawConfig;
   baseHash?: string;
   reset?: boolean;
 }): Promise<OpenClawConfig> {
@@ -13,6 +12,5 @@ export async function commitNonInteractiveOnboardConfig(params: {
   return await writeWizardConfigFile(params.nextConfig, {
     allowConfigSizeDrop: params.reset === true,
     ...(params.baseHash !== undefined ? { baseHash: params.baseHash } : {}),
-    migrationBaseConfig: params.baseConfig,
   });
 }

@@ -22,19 +22,23 @@ vi.mock("./navigation-prompter.js", () => ({
   ) => await run(prompter),
 }));
 
-vi.mock("./setup.shared.js", () => ({
-  readSetupConfigFileSnapshot: mocks.readSnapshot,
-  readValidSetupConfigFile: vi.fn(),
-  requireRiskAcknowledgement: async ({ config }: { config: OpenClawConfig }) => config,
-  resolveQuickstartGatewayDefaults: () => ({
-    hasExisting: false,
-    port: 18789,
-    bind: "loopback",
-    authMode: "token",
-    tailscaleMode: "off",
-  }),
-  writeWizardConfigFile: mocks.writeConfig,
-}));
+vi.mock("./setup.shared.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./setup.shared.js")>();
+  return {
+    ...actual,
+    readSetupConfigFileSnapshot: mocks.readSnapshot,
+    readValidSetupConfigFile: vi.fn(),
+    requireRiskAcknowledgement: async ({ config }: { config: OpenClawConfig }) => config,
+    resolveQuickstartGatewayDefaults: () => ({
+      hasExisting: false,
+      port: 18789,
+      bind: "loopback",
+      authMode: "token",
+      tailscaleMode: "off",
+    }),
+    writeWizardConfigFile: mocks.writeConfig,
+  };
+});
 
 vi.mock("./setup.migration-import.js", () => ({
   detectSetupMigrationSources: vi.fn(async () => []),
@@ -70,7 +74,6 @@ vi.mock("./setup.gateway-config.js", () => ({
       authMode: "token",
       gatewayToken: "test-token",
       tailscaleMode: "off",
-      tailscaleResetOnExit: false,
     },
   }),
 }));
@@ -152,6 +155,7 @@ describe("runSetupWizard default-agent ownership", () => {
       valid: true,
       config,
       sourceConfig: config,
+      sourceConfigBeforeMigrations: config,
       issues: [],
     });
     mocks.writeConfig.mockImplementation(async (nextConfig: OpenClawConfig) => nextConfig);

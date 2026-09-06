@@ -9,11 +9,10 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { resolveCdpControlPolicy } from "../cdp-reachability-policy.js";
 import { withCdpSocket } from "../cdp.helpers.js";
-import { getChromeWebSocketUrl } from "../chrome.js";
+import { getChromeWebSocketEndpoint, type ChromeWebSocketEndpoint } from "../chrome.js";
 import { BrowserProfileUnavailableError, toBrowserErrorResponse } from "../errors.js";
 import { getPwAiModule } from "../pw-ai-module.js";
-import type { BrowserRouteContext } from "../server-context.js";
-import type { ProfileContext } from "../server-context.js";
+import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { isProfileRestartRequiredError } from "../server-context.lifecycle.js";
 import { readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
@@ -55,6 +54,7 @@ async function grantPermissions(params: {
   requiredPermissions: string[];
   optionalPermissions: string[];
   timeoutMs: number;
+  wsLookup?: ChromeWebSocketEndpoint["lookup"];
   ssrfPolicy?: SsrFPolicy;
   signal: AbortSignal;
 }) {
@@ -112,7 +112,7 @@ async function grantPermissions(params: {
       });
       unsupportedPermissions = params.optionalPermissions;
     },
-    { commandTimeoutMs: params.timeoutMs, signal: params.signal },
+    { commandTimeoutMs: params.timeoutMs, lookup: params.wsLookup, signal: params.signal },
   );
   params.signal.throwIfAborted();
   return {
@@ -172,19 +172,20 @@ export function registerBrowserPermissionRoutes(
             profileCtx.profile,
             ctx.state().resolved.ssrfPolicy,
           );
-          const wsUrl = await getChromeWebSocketUrl(
+          const endpoint = await getChromeWebSocketEndpoint(
             profileCtx.profile.cdpUrl,
             timeoutMs,
             cdpPolicy,
           );
           signal.throwIfAborted();
-          if (!wsUrl) {
+          if (!endpoint) {
             throw new BrowserProfileUnavailableError("browser CDP WebSocket unavailable");
           }
           return await grantPermissions({
             profileCtx,
             targetId,
-            wsUrl,
+            wsUrl: endpoint.url,
+            wsLookup: endpoint.lookup,
             origin,
             requiredPermissions,
             optionalPermissions,

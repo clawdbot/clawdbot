@@ -40,24 +40,28 @@ type CacheTraceEvent = {
   modelId?: string;
   modelApi?: string | null;
   workspaceDir?: string;
-  prompt?: string;
+  prompt?: unknown;
   system?: unknown;
-  options?: Record<string, unknown>;
-  model?: Record<string, unknown>;
-  messages?: AgentMessage[];
+  options?: unknown;
+  model?: unknown;
+  messages?: unknown;
   messageCount?: number;
   messageRoles?: Array<string | undefined>;
   messageFingerprints?: string[];
   messagesDigest?: string;
   systemDigest?: string;
-  note?: string;
-  error?: string;
+  note?: unknown;
+  error?: unknown;
+};
+
+type CacheTracePayload = Partial<Omit<CacheTraceEvent, "messages">> & {
+  messages?: AgentMessage[];
 };
 
 type CacheTrace = {
   enabled: true;
   filePath: string;
-  recordStage: (stage: CacheTraceStage, payload?: Partial<CacheTraceEvent>) => void;
+  recordStage: (stage: CacheTraceStage, payload?: CacheTracePayload) => void;
   wrapStreamFn: (streamFn: StreamFn) => StreamFn;
 };
 

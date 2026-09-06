@@ -1,3 +1,4 @@
+import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
 // Fetch timeout tests cover abort handling and streamed response timeouts.
 import { Stream } from "openai/streaming";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,8 +11,8 @@ vi.mock("../logging/subsystem.js", () => ({
   })),
 }));
 
-import { buildTimeoutAbortSignal, fetchWithTimeout } from "./fetch-timeout.js";
-import { MAX_SAFE_TIMEOUT_DELAY_MS } from "./timer-delay.js";
+import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../../packages/gateway-client/src/timeouts.js";
+import { bindAbortRelay, buildTimeoutAbortSignal, fetchWithTimeout } from "./fetch-timeout.js";
 
 function captureTimeoutLogUrl(url: string): Promise<Record<string, unknown>> {
   const { cleanup } = buildTimeoutAbortSignal({ timeoutMs: 25, operation: "unit-test", url });
@@ -45,6 +46,32 @@ function requireWarnRecord(callIndex: number): Record<string, unknown> {
   const [, record] = requireWarnCall(callIndex);
   return record;
 }
+
+describe("bindAbortRelay", () => {
+  it("preserves the default AbortError reason when used as an event listener", () => {
+    const parent = new AbortController();
+    const child = new AbortController();
+    const onAbort = bindAbortRelay(child);
+
+    parent.signal.addEventListener("abort", onAbort, { once: true });
+    parent.abort();
+
+    expect(child.signal.aborted).toBe(true);
+    expect(child.signal.reason).toBeInstanceOf(DOMException);
+    expect(child.signal.reason.name).toBe("AbortError");
+  });
+
+  it("removes the event listener with the saved relay reference", () => {
+    const parent = new AbortController();
+    const child = new AbortController();
+    const onAbort = bindAbortRelay(child);
+
+    parent.signal.addEventListener("abort", onAbort);
+    parent.signal.removeEventListener("abort", onAbort);
+    parent.abort();
+    expect(child.signal.aborted).toBe(false);
+  });
+});
 
 describe("buildTimeoutAbortSignal", () => {
   beforeEach(() => {
@@ -445,17 +472,3 @@ describe("buildTimeoutAbortSignal", () => {
     }
   });
 });
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

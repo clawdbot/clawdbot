@@ -4,7 +4,9 @@ import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import { getChannel, getGuild, getGuildMember, getUser } from "./api.js";
+import { getGuild, getGuildMember } from "./api.guild.js";
+import { getChannel } from "./api.messages.js";
+import { getUser } from "./api.users.js";
 import type { RequestClient } from "./rest.js";
 import { Guild, GuildMember, User, channelFactory, type StructureClient } from "./structures.js";
 
@@ -63,6 +65,10 @@ export class DiscordEntityCache {
     });
   }
 
+  async fetchGuildEmojis<T>(guildId: string, fetcher: () => Promise<T>): Promise<T> {
+    return await this.fetchCached(`guild-emojis:${guildId}`, fetcher);
+  }
+
   invalidateForGatewayEvent(type: string, data: unknown): void {
     const raw = data && typeof data === "object" ? (data as Record<string, unknown>) : {};
     const channelUpdate: string = GatewayDispatchEvents.ChannelUpdate;
@@ -70,6 +76,9 @@ export class DiscordEntityCache {
     const threadUpdate: string = GatewayDispatchEvents.ThreadUpdate;
     const threadDelete: string = GatewayDispatchEvents.ThreadDelete;
     const guildUpdate: string = GatewayDispatchEvents.GuildUpdate;
+    const guildEmojisUpdate: string = GatewayDispatchEvents.GuildEmojisUpdate;
+    const guildMemberAdd: string = GatewayDispatchEvents.GuildMemberAdd;
+    const guildMemberRemove: string = GatewayDispatchEvents.GuildMemberRemove;
     const guildMemberUpdate: string = GatewayDispatchEvents.GuildMemberUpdate;
     if (
       type === channelUpdate ||
@@ -82,7 +91,10 @@ export class DiscordEntityCache {
     if (type === guildUpdate) {
       this.deleteId("guild", raw.id);
     }
-    if (type === guildMemberUpdate) {
+    if (type === guildEmojisUpdate) {
+      this.deleteId("guild-emojis", raw.guild_id);
+    }
+    if (type === guildMemberAdd || type === guildMemberRemove || type === guildMemberUpdate) {
       const guildId = raw.guild_id;
       const user = raw.user && typeof raw.user === "object" ? (raw.user as { id?: unknown }) : {};
       if (typeof guildId === "string" && typeof user.id === "string") {

@@ -1,4 +1,6 @@
 // Line plugin module implements status behavior.
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   buildTokenChannelStatusSummary,
@@ -7,7 +9,7 @@ import {
   createDependentCredentialStatusIssueCollector,
 } from "openclaw/plugin-sdk/status-helpers";
 import { hasLineCredentials } from "./account-helpers.js";
-import { DEFAULT_ACCOUNT_ID, type ChannelPlugin, type ResolvedLineAccount } from "./channel-api.js";
+import type { LineProbeResult, ResolvedLineAccount } from "./types.js";
 
 const loadLineProbeRuntime = createLazyRuntimeModule(() => import("./probe.runtime.js"));
 
@@ -18,24 +20,26 @@ const collectLineStatusIssues = createDependentCredentialStatusIssueCollector({
   missingDependentMessage: "LINE channel secret not configured",
 });
 
-export const lineStatusAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>["status"]> =
-  createComputedAccountStatusAdapter<ResolvedLineAccount>({
-    defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
-    collectStatusIssues: collectLineStatusIssues,
-    buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
-    probeAccount: async ({ account, timeoutMs }) =>
-      await (await loadLineProbeRuntime()).probeLineBot(account.channelAccessToken, timeoutMs),
-    resolveAccountSnapshot: ({ account }) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: hasLineCredentials(account),
-      extra: {
-        tokenSource: account.tokenSource,
-        signingSecretSource: account.signingSecretSource,
-        tokenStatus: account.tokenStatus,
-        signingSecretStatus: account.signingSecretStatus,
-        mode: "webhook",
-      },
-    }),
-  });
+export const lineStatusAdapter: NonNullable<
+  ChannelPlugin<ResolvedLineAccount, LineProbeResult>["status"]
+> = createComputedAccountStatusAdapter<ResolvedLineAccount, LineProbeResult>({
+  defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
+  collectStatusIssues: collectLineStatusIssues,
+  buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
+  probeAccount: async ({ account, timeoutMs }) =>
+    await (await loadLineProbeRuntime()).probeLineBot(account.channelAccessToken, timeoutMs),
+  resolveAccountSnapshot: ({ account, probe }) => ({
+    accountId: account.accountId,
+    name: account.name,
+    enabled: account.enabled,
+    configured: hasLineCredentials(account),
+    extra: {
+      tokenSource: account.tokenSource,
+      signingSecretSource: account.signingSecretSource,
+      tokenStatus: account.tokenStatus,
+      signingSecretStatus: account.signingSecretStatus,
+      mode: "webhook",
+      ...(probe?.quota ? { quota: probe.quota } : {}),
+    },
+  }),
+});

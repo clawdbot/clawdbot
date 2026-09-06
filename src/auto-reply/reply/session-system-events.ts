@@ -1,4 +1,3 @@
-// Records system-level session events for restarts, forks, and resets.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -12,6 +11,8 @@ import {
   resolveTimezone,
 } from "../../infra/format-time/format-datetime.ts";
 import { isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
+// Records system-level session events for restarts, forks, and resets.
+import { selectAgentSystemEvents } from "../../infra/system-event-ownership.js";
 import {
   consumeSelectedSystemEventEntries,
   peekSystemEventEntries,
@@ -19,25 +20,6 @@ import {
 } from "../../infra/system-events.js";
 import { acknowledgeSessionStateNotices } from "../../sessions/session-state-events.js";
 import { decodeSessionStateNoticeContextKey } from "../../sessions/session-state-notices.js";
-
-function isCronContextSystemEvent(event: SystemEvent): boolean {
-  return event.contextKey?.startsWith("cron:") ?? false;
-}
-
-function selectGenericSystemEvents(
-  events: readonly SystemEvent[],
-  options?: { suppressHeartbeatOwnedEvents?: boolean },
-): SystemEvent[] {
-  // Exec completions and tagged cron events own dedicated heartbeat prompts
-  // (buildExecEventPrompt / buildCronEventPrompt). During heartbeat runs, leave
-  // cron entries queued for that owner; ordinary turns still drain them as the
-  // fallback when a heartbeat was skipped before it could consume the event.
-  return events.filter(
-    (event) =>
-      !isExecCompletionEvent(event.text) &&
-      !(options?.suppressHeartbeatOwnedEvents === true && isCronContextSystemEvent(event)),
-  );
-}
 
 function compactSystemEvent(line: string): string | null {
   const trimmed = line.trim();
@@ -48,8 +30,7 @@ function compactSystemEvent(line: string): string | null {
   if (lower.includes("reason periodic")) {
     return null;
   }
-  // Filter out the actual heartbeat prompt, but not cron jobs that mention "heartbeat".
-  // The heartbeat prompt starts with "Read HEARTBEAT.md" - cron payloads won't match this.
+  // Keep retired heartbeat prompts out of replayed legacy system events.
   if (lower.startsWith("read heartbeat.md")) {
     return null;
   }
@@ -104,10 +85,11 @@ function formatSystemEventTimestamp(ts: number, cfg: OpenClawConfig) {
 /** Drain queued system events, format as `System:` lines, return the block text (or undefined). */
 export async function drainFormattedSystemEvents(params: {
   cfg: OpenClawConfig;
+  agentId: string;
   sessionKey: string;
   isMainSession: boolean;
   isNewSession: boolean;
-  suppressHeartbeatOwnedEvents?: boolean;
+  events?: readonly SystemEvent[];
 }): Promise<string | undefined> {
   const summaryLines: string[] = [];
   const systemLines: string[] = [];
@@ -115,9 +97,10 @@ export async function drainFormattedSystemEvents(params: {
   // so the heartbeat path can consume and deliver them.
   const queued = consumeSelectedSystemEventEntries(
     params.sessionKey,
-    selectGenericSystemEvents(peekSystemEventEntries(params.sessionKey), {
-      suppressHeartbeatOwnedEvents: params.suppressHeartbeatOwnedEvents,
-    }),
+    selectAgentSystemEvents(
+      params.events ?? peekSystemEventEntries(params.sessionKey),
+      params.agentId,
+    ).filter((event) => !isExecCompletionEvent(event.text)),
   );
   const sessionStateTargets = queued
     .map((event) =>

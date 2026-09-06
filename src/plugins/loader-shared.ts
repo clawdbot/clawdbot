@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -7,12 +5,14 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { activateContextEngineRegistrations } from "../context-engine/registry.js";
+import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_MEMORY_DREAMING_PLUGIN_ID,
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingPluginConfig,
 } from "../memory-host-sdk/dreaming.js";
+import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import {
   resolveEffectiveEnableState,
   type NormalizedPluginsConfig,
@@ -29,16 +29,20 @@ import {
 import { collectPluginManifestCompatCodes } from "./installed-plugin-index-record-builder.js";
 import { createPluginRecord } from "./loader-records.js";
 import type { PluginLoadOptions, PluginRuntimeSubagentMode } from "./loader-types.js";
+import {
+  isPluginManifestInstallOwnerAmbiguous,
+  resolvePluginManifestInstallOwner,
+} from "./manifest-install-owner.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
-import type { PluginDiagnostic } from "./manifest-types.js";
+import type { PluginOrigin } from "./plugin-origin.types.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import {
   captureActivePluginRegistrySnapshot,
   commitStagedPluginRegistry,
-  restoreActivePluginRegistrySnapshot,
+  rollbackStagedPluginRegistry,
   stageActivePluginRegistry,
 } from "./runtime.js";
-import { validateJsonSchemaValue } from "./schema-validator.js";
+import { validatePluginSchemaValue } from "./schema-validator.js";
 import { hasKind } from "./slots.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 import type { PluginLogger } from "./types.js";
@@ -155,17 +159,28 @@ export function matchesScopedPluginOrDreamingSidecar(params: {
 export function createPluginCandidatesFromManifestRegistry(
   manifestRegistry: PluginManifestRegistry,
 ): PluginCandidate[] {
-  return manifestRegistry.plugins.map((record) => ({
-    idHint: record.id,
-    rootDir: record.rootDir,
-    source: record.source,
-    ...(record.setupSource !== undefined ? { setupSource: record.setupSource } : {}),
-    origin: record.origin,
-    ...(record.workspaceDir !== undefined ? { workspaceDir: record.workspaceDir } : {}),
-    ...(record.format !== undefined ? { format: record.format } : {}),
-    ...(record.bundleFormat !== undefined ? { bundleFormat: record.bundleFormat } : {}),
-    ...(record.packageManifest !== undefined ? { packageManifest: record.packageManifest } : {}),
-  }));
+  return manifestRegistry.plugins.map((record) => {
+    const installOwner = resolvePluginManifestInstallOwner(record);
+    return recordPluginCandidateInstallOwner(
+      {
+        idHint: record.id,
+        effectivePluginId: record.id,
+        rootDir: record.rootDir,
+        source: record.source,
+        ...(record.setupSource !== undefined ? { setupSource: record.setupSource } : {}),
+        origin: record.origin,
+        ...(record.sourcePreferred ? { sourcePreferred: true as const } : {}),
+        ...(record.workspaceDir !== undefined ? { workspaceDir: record.workspaceDir } : {}),
+        ...(record.format !== undefined ? { format: record.format } : {}),
+        ...(record.bundleFormat !== undefined ? { bundleFormat: record.bundleFormat } : {}),
+        ...(record.packageManifest !== undefined
+          ? { packageManifest: record.packageManifest }
+          : {}),
+      },
+      installOwner,
+      isPluginManifestInstallOwnerAmbiguous(record),
+    );
+  });
 }
 
 class PluginLoadFailureError extends Error {
@@ -185,15 +200,17 @@ class PluginLoadFailureError extends Error {
 }
 
 export function validatePluginConfig(params: {
+  origin: PluginOrigin;
   schema?: Record<string, unknown>;
   cacheKey?: string;
   value?: unknown;
+  sourceValue?: unknown;
 }): Result<Record<string, unknown> | undefined, string[]> {
   const { schema, value } = params;
   if (!schema) {
     return ok(value as Record<string, unknown> | undefined);
   }
-  if (isEmptyPluginConfigJsonSchema(schema)) {
+  if (params.sourceValue === undefined && isEmptyPluginConfigJsonSchema(schema)) {
     if (
       value === undefined ||
       (value &&
@@ -208,16 +225,36 @@ export function validatePluginConfig(params: {
     }
     return resultError(["<root>: config must be empty"]);
   }
-  const result = validateJsonSchemaValue({
+  const result = validatePluginSchemaValue({
+    origin: params.origin,
     schema,
     cacheKey: params.cacheKey ?? JSON.stringify(schema),
     value: value ?? {},
+    sourceValue: params.sourceValue,
     applyDefaults: true,
   });
   return result.ok
     ? ok(result.value as Record<string, unknown> | undefined)
     : resultError(result.errors.map((error) => error.text));
 }
+
+// The empty-config shortcut answers without compiling the schema, so it is only sound for
+// schemas built purely from keywords it accounts for. An allowlist holds that invariant where
+// a denylist leaked every new keyword: an extra constraint, an unresolvable `$ref`, or an
+// unknown keyword now falls through to validatePluginSchemaValue, which owns the diagnostic.
+const EMPTY_PLUGIN_CONFIG_SHORTCUT_KEYWORDS = new Set([
+  "type",
+  "additionalProperties",
+  "properties",
+  "title",
+  "description",
+  "$schema",
+  "$id",
+  "$comment",
+  "deprecated",
+  "readOnly",
+  "writeOnly",
+]);
 
 function isEmptyPluginConfigJsonSchema(schema: Record<string, unknown>): boolean {
   if (schema.type !== "object" || schema.additionalProperties !== false) {
@@ -232,46 +269,7 @@ function isEmptyPluginConfigJsonSchema(schema: Record<string, unknown>): boolean
   ) {
     return false;
   }
-  const hasConditional = "if" in schema && ("then" in schema || "else" in schema);
-  return !(
-    "required" in schema ||
-    "dependentRequired" in schema ||
-    "dependentSchemas" in schema ||
-    "dependencies" in schema ||
-    "minProperties" in schema ||
-    "allOf" in schema ||
-    "anyOf" in schema ||
-    "oneOf" in schema ||
-    "not" in schema ||
-    "patternProperties" in schema ||
-    hasConditional
-  );
-}
-
-export function pushDiagnostics(diagnostics: PluginDiagnostic[], append: PluginDiagnostic[]): void {
-  diagnostics.push(...append);
-}
-
-export function pushPluginValidationError(params: {
-  registry: PluginRegistry;
-  seenIds: Map<string, PluginRecord["origin"]>;
-  pluginId: string;
-  origin: PluginRecord["origin"];
-  record: PluginRecord;
-  message: string;
-}): void {
-  params.record.status = "error";
-  params.record.error = params.message;
-  params.record.failedAt = new Date();
-  params.record.failurePhase = "validation";
-  params.registry.plugins.push(params.record);
-  params.seenIds.set(params.pluginId, params.origin);
-  params.registry.diagnostics.push({
-    level: "error",
-    pluginId: params.record.id,
-    source: params.record.source,
-    message: params.record.error,
-  });
+  return Object.keys(schema).every((keyword) => EMPTY_PLUGIN_CONFIG_SHORTCUT_KEYWORDS.has(keyword));
 }
 
 /** Builds the common manifest-backed record shape used by runtime and CLI loaders. */
@@ -300,6 +298,7 @@ export function createManifestPluginRecord(params: {
     origin: candidate.origin,
     workspaceDir: candidate.workspaceDir,
     trustedOfficialInstall: manifestRecord.trustedOfficialInstall,
+    trust: manifestRecord.trust,
     enabled: params.enabled,
     compat: collectPluginManifestCompatCodes(manifestRecord),
     activationState: params.activationState,
@@ -309,6 +308,7 @@ export function createManifestPluginRecord(params: {
     configSchema: Boolean(manifestRecord.configSchema),
     contracts: manifestRecord.contracts,
     dashboard: manifestRecord.dashboard,
+    controlUi: manifestRecord.controlUi,
     mcpServers: manifestRecord.mcpServers,
   });
 }
@@ -320,6 +320,8 @@ export function applyPluginManifestRecordDetails(
   record.kind = manifestRecord.kind;
   record.configUiHints = manifestRecord.configUiHints;
   record.configJsonSchema = manifestRecord.configSchema;
+  // Manifest ownership survives rollback of executable registrations.
+  record.commandAliases = manifestRecord.commandAliases;
 }
 
 export function applyManifestSnapshotMetadata(
@@ -360,7 +362,7 @@ export function activatePluginRegistry(
     activateContextEngineRegistrations(registry);
     commitStagedPluginRegistry(activeSnapshot.activeRegistry, registry);
   } catch (error) {
-    restoreActivePluginRegistrySnapshot(activeSnapshot);
+    rollbackStagedPluginRegistry(activeSnapshot);
     if (previousHookRegistry) {
       initializeGlobalHookRunner(previousHookRegistry);
     } else {
@@ -371,9 +373,5 @@ export function activatePluginRegistry(
 }
 
 export function safeRealpathOrResolve(value: string): string {
-  try {
-    return fs.realpathSync(value);
-  } catch {
-    return path.resolve(value);
-  }
+  return resolveRealpathOrAbsolute(value);
 }

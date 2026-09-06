@@ -202,7 +202,7 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
 
   it("caps the effective reserve so small-context models do not compact at token one", () => {
     // Embedded runner default reserveTokens is 16 384. With a 16 384 context window
-    // both the default reserve and floor exceed the safe maximum of 8 384.
+    // both the default reserve and floor exceed one quarter of the model window.
     const settingsManager = SettingsManager.inMemory();
     const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");
 
@@ -211,25 +211,38 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
       contextTokenBudget: 16_384,
     });
 
-    expect(result.compaction).toEqual({ reserveTokens: 8_384, keepRecentTokens: 20_000 });
+    expect(result.compaction).toEqual({ reserveTokens: 4_096, keepRecentTokens: 20_000 });
     expect(result.didOverride).toBe(true);
     expect(applyOverrides).toHaveBeenCalledWith({
-      compaction: { reserveTokens: 8_384 },
+      compaction: { reserveTokens: 4_096 },
     });
     expect(settingsManager.getCompactionSettings()).toEqual({
       enabled: true,
-      reserveTokens: 8_384,
+      reserveTokens: 4_096,
       keepRecentTokens: 20_000,
     });
     expect(shouldCompact(1, 16_384, { enabled: true, ...result.compaction })).toBe(false);
   });
 
+  it.each([
+    [8_000, 2_000],
+    [16_000, 4_000],
+    [24_000, 6_000],
+    [32_000, 8_000],
+    [128_000, 20_000],
+    [200_000, 20_000],
+  ])("keeps model window %i on its effective %i-token reserve", (contextTokenBudget, reserve) => {
+    const settingsManager = SettingsManager.inMemory();
+    const result = applyAgentCompactionSettingsFromConfig({ settingsManager, contextTokenBudget });
+
+    expect(result.compaction.reserveTokens).toBe(reserve);
+    expect(settingsManager.getCompactionReserveTokens()).toBe(reserve);
+  });
+
   it("applies capped floor when current reserve is below it on small-context models", () => {
-    // Simulate an embedded runner default of 4 096 with a 16 384 context window.
-    // minPromptBudget = min(8_000, floor(16_384 * 0.5)) = 8_000.
-    // maxReserve = 16_384 - 8_000 = 8_384.
+    // A smaller project reserve is raised to the context-scaled floor.
     const settingsManager = {
-      getCompactionReserveTokens: () => 4_096,
+      getCompactionReserveTokens: () => 2_048,
       getCompactionKeepRecentTokens: () => 20_000,
       applyOverrides: vi.fn(),
     };
@@ -240,31 +253,21 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     });
 
     expect(result.didOverride).toBe(true);
-    expect(result.compaction.reserveTokens).toBe(8_384);
+    expect(result.compaction.reserveTokens).toBe(4_096);
     expect(settingsManager.applyOverrides).toHaveBeenCalledWith({
-      compaction: { reserveTokens: 8_384 },
+      compaction: { reserveTokens: 4_096 },
     });
   });
 
-  it("does not cap the reserve floor for a mid-size context", () => {
-    const settingsManager = {
-      getCompactionReserveTokens: () => 16_384,
-      getCompactionKeepRecentTokens: () => 20_000,
-      applyOverrides: vi.fn(),
-    };
+  it("keeps a fresh 32K tool turn out of compaction until the conversation grows", () => {
+    const settingsManager = SettingsManager.inMemory();
+    applyAgentCompactionSettingsFromConfig({ settingsManager, contextTokenBudget: 32_768 });
+    const settings = settingsManager.getCompactionSettings();
 
-    // 32 768 context window → minPromptBudget = min(8_000, floor(32_768 * 0.5)) = 8_000.
-    // maxReserve = 32_768 - 8_000 = 24_768, so the 20 000 floor remains intact.
-    const result = applyAgentCompactionSettingsFromConfig({
-      settingsManager,
-      contextTokenBudget: 32_768,
-    });
-
-    expect(result.compaction.reserveTokens).toBe(DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR);
-    expect(result.compaction.keepRecentTokens).toBe(20_000);
-    expect(settingsManager.applyOverrides).toHaveBeenCalledWith({
-      compaction: { reserveTokens: DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR },
-    });
+    // Live local-model proof used 12,824 prompt tokens on its first successful tool turn.
+    expect(shouldCompact(12_824, 32_768, settings)).toBe(false);
+    expect(shouldCompact(24_576, 32_768, settings)).toBe(false);
+    expect(shouldCompact(24_577, 32_768, settings)).toBe(true);
   });
 
   it("does not cap floor when context window is large enough", () => {
@@ -274,8 +277,7 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
       applyOverrides: vi.fn(),
     };
 
-    // 200 000 context window → maxReserve = 200_000 - 8_000 = 192_000.
-    // floor (20 000) is well within that cap.
+    // The large-window default keeps its existing 20,000-token reserve.
     const result = applyAgentCompactionSettingsFromConfig({
       settingsManager,
       contextTokenBudget: 200_000,

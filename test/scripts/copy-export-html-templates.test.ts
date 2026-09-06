@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   copyExportHtmlTemplates,
   generateExportHtmlVendorAssets,
-} from "../../scripts/runtime-postbuild.mjs";
+} from "../../scripts/runtime-postbuild.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

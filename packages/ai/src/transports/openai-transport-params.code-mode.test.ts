@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   assertCodeModeResponsesToolSurface,
   enforceCodeModeResponsesToolSurface,
@@ -98,13 +98,76 @@ describe("OpenAI Code Mode payload tool filtering", () => {
 
   it("keeps the existing Responses and Completions enforcement contract", () => {
     const payload = {
-      tools: [{ name: "exec" }, { name: "web_search" }, { name: "wait" }],
+      tools: [{ name: "exec" }, { name: "web_search" }, { type: "web_search" }, { name: "wait" }],
     };
 
     enforceCodeModeResponsesToolSurface(payload, visibleToolNames);
 
     expect(payload.tools).toEqual([{ name: "exec" }, { name: "wait" }]);
     expect(() => assertCodeModeResponsesToolSurface(payload, visibleToolNames)).not.toThrow();
+  });
+
+  it("keeps only explicitly allowed hosted tools alongside visible client functions", () => {
+    const allowedHostedToolTypes = new Set(["web_search"]);
+    const payload = {
+      tools: [
+        { type: "function", name: "exec" },
+        { type: "function", name: "rogue" },
+        { type: "web_search" },
+        { type: "file_search" },
+        { type: "web_search", name: "exec" },
+        { type: "web_search", function: { name: "wait" } },
+        { type: "web_search", functionDeclarations: [{ name: "exec" }] },
+        { type: "function", name: "wait" },
+      ],
+    };
+
+    filterCodeModePayloadTools(payload, visibleToolNames, allowedHostedToolTypes);
+    enforceCodeModeResponsesToolSurface(payload, visibleToolNames, allowedHostedToolTypes);
+
+    expect(payload.tools).toEqual([
+      { type: "function", name: "exec" },
+      { type: "web_search" },
+      { type: "function", name: "wait" },
+    ]);
+    expect(() =>
+      assertCodeModeResponsesToolSurface(payload, visibleToolNames, allowedHostedToolTypes),
+    ).not.toThrow();
+  });
+
+  it("observes exact final-egress identities without a second payload parser", () => {
+    const observer = vi.fn();
+    const payload = {
+      tools: [
+        { type: "function", name: "exec" },
+        { type: "function", function: { name: "wait" } },
+        {
+          functionDeclarations: [{ name: "computer" }, { name: "rogue" }],
+        },
+        { type: "web_search" },
+        { type: "file_search" },
+      ],
+    };
+
+    enforceCodeModeResponsesToolSurface(
+      payload,
+      visibleToolNames,
+      new Set(["web_search"]),
+      observer,
+    );
+
+    expect(observer).toHaveBeenCalledOnce();
+    expect(observer).toHaveBeenCalledWith({
+      beforeToolIdentities: [
+        "client:exec",
+        "client:wait",
+        "client:computer",
+        "client:rogue",
+        "hosted:web_search",
+        "hosted:file_search",
+      ],
+      afterToolIdentities: ["client:exec", "client:wait", "hosted:web_search"],
+    });
   });
 
   it.each(["functionDeclarations", "function_declarations"] as const)(
@@ -137,6 +200,24 @@ describe("OpenAI Code Mode payload tool filtering", () => {
     expect(() => assertCodeModeResponsesToolSurface({ tools }, visibleToolNames)).toThrow(
       /tool surface violation/,
     );
+  });
+
+  it.each([
+    [
+      { type: "function", name: "exec" },
+      { type: "function", name: "wait" },
+      { type: "web_search" },
+      { type: "web_search" },
+    ],
+    [
+      { type: "function", name: "exec" },
+      { type: "function", name: "wait" },
+      { type: "file_search" },
+    ],
+  ])("rejects duplicate or undeclared hosted tools", (...tools) => {
+    expect(() =>
+      assertCodeModeResponsesToolSurface({ tools }, visibleToolNames, new Set(["web_search"])),
+    ).toThrow(/tool surface violation/);
   });
 
   it("fails closed when the asserted payload tools getter throws", () => {

@@ -13,6 +13,7 @@ describe("QA Docker E2E lane fixture", () => {
     expect(listQaDockerE2eLaneNames()).toEqual(
       expect.arrayContaining([
         "agent-bundle-mcp-tools",
+        "cli-installer-distribution",
         "codex-on-demand",
         "system-agent-first-run",
         "gateway-network",
@@ -21,7 +22,7 @@ describe("QA Docker E2E lane fixture", () => {
         "update-restart-auth",
       ]),
     );
-    expect(listQaDockerE2eLaneNames()).toEqual([...listQaDockerE2eLaneNames()].sort());
+    expect(listQaDockerE2eLaneNames()).toEqual([...listQaDockerE2eLaneNames()].toSorted());
   });
 
   it("parses help, list, and lane arguments", () => {
@@ -48,6 +49,9 @@ describe("QA Docker E2E lane fixture", () => {
     expect(resolveQaDockerE2eLane("codex-on-demand", {}).script).toBe(
       "scripts/e2e/codex-on-demand-docker.sh",
     );
+    expect(resolveQaDockerE2eLane("cli-installer-distribution", {}).script).toBe(
+      "scripts/e2e/cli-installer-distribution-docker.sh",
+    );
 
     const updateMigration = resolveQaDockerE2eLane("update-migration", {
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@custom",
@@ -71,6 +75,22 @@ describe("QA Docker E2E lane fixture", () => {
       }).env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC,
     ).toBe("openclaw@custom");
   });
+
+  it.each(["update-migration", "update-restart-auth"])(
+    "%s defaults to stable while preserving replay overrides",
+    (lane) => {
+      for (const baseline of [undefined, "openclaw@2026.4.23"]) {
+        const resolved = resolveQaDockerE2eLane(lane, {
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: baseline,
+          OPENCLAW_CURRENT_PACKAGE_TGZ: "/tmp/candidate.tgz",
+        });
+        expect(resolved.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC).toBe(
+          baseline ?? "openclaw@latest",
+        );
+        expect(resolved.env.OPENCLAW_CURRENT_PACKAGE_TGZ).toBe("/tmp/candidate.tgz");
+      }
+    },
+  );
 
   it("dispatches through bash without running Docker in fixture tests", () => {
     const spawn = vi.fn(() => ({ signal: null, status: 0 }));

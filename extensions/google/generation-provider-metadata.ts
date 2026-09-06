@@ -2,6 +2,7 @@
 import type { MusicGenerationProvider } from "openclaw/plugin-sdk/music-generation";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import type {
+  VideoGenerationModeCapabilities,
   VideoGenerationProvider,
   VideoGenerationProviderConfiguredContext,
 } from "openclaw/plugin-sdk/video-generation";
@@ -15,13 +16,21 @@ export const GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS = [4, 6, 8] as const;
 export const GOOGLE_VIDEO_MIN_DURATION_SECONDS = GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS[0];
 export const GOOGLE_VIDEO_MAX_DURATION_SECONDS = GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS[2];
 
-function isGoogleProviderConfigured(
-  ctx: { agentDir?: string } | VideoGenerationProviderConfiguredContext,
-): boolean {
-  return isProviderApiKeyConfigured({
-    provider: "google",
-    agentDir: ctx.agentDir,
-  });
+function isGoogleProviderConfigured(ctx: VideoGenerationProviderConfiguredContext): boolean {
+  return isProviderApiKeyConfigured({ provider: "google", ...ctx });
+}
+
+function createGoogleVideoCommonCapabilities() {
+  return {
+    maxDurationSeconds: GOOGLE_VIDEO_MAX_DURATION_SECONDS,
+    supportedDurationSeconds: [...GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS],
+    aspectRatios: ["16:9", "9:16"],
+    resolutions: ["720P", "1080P"],
+    supportsAspectRatio: true,
+    supportsResolution: true,
+    supportsSize: true,
+    supportsAudio: false,
+  } satisfies VideoGenerationModeCapabilities;
 }
 
 export function createGoogleMusicGenerationProviderMetadata(): Omit<
@@ -78,40 +87,19 @@ export function createGoogleVideoGenerationProviderMetadata(): Omit<
     capabilities: {
       generate: {
         maxVideos: 1,
-        maxDurationSeconds: GOOGLE_VIDEO_MAX_DURATION_SECONDS,
-        supportedDurationSeconds: [...GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS],
-        aspectRatios: ["16:9", "9:16"],
-        resolutions: ["720P", "1080P"],
-        supportsAspectRatio: true,
-        supportsResolution: true,
-        supportsSize: true,
-        supportsAudio: false,
+        ...createGoogleVideoCommonCapabilities(),
       },
       imageToVideo: {
         enabled: true,
         maxVideos: 1,
         maxInputImages: 1,
-        maxDurationSeconds: GOOGLE_VIDEO_MAX_DURATION_SECONDS,
-        supportedDurationSeconds: [...GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS],
-        aspectRatios: ["16:9", "9:16"],
-        resolutions: ["720P", "1080P"],
-        supportsAspectRatio: true,
-        supportsResolution: true,
-        supportsSize: true,
-        supportsAudio: false,
+        ...createGoogleVideoCommonCapabilities(),
       },
       videoToVideo: {
         enabled: true,
         maxVideos: 1,
         maxInputVideos: 1,
-        maxDurationSeconds: GOOGLE_VIDEO_MAX_DURATION_SECONDS,
-        supportedDurationSeconds: [...GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS],
-        aspectRatios: ["16:9", "9:16"],
-        resolutions: ["720P", "1080P"],
-        supportsAspectRatio: true,
-        supportsResolution: true,
-        supportsSize: true,
-        supportsAudio: false,
+        ...createGoogleVideoCommonCapabilities(),
       },
     },
   };

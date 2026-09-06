@@ -1,9 +1,23 @@
 // Zalouser tests cover monitor.group gating plugin behavior.
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
-import "./monitor.send.test-mocks.js";
-import "./zalo-js.test-mocks.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  sendDeliveredZalouserMock,
+  sendMessageZalouserMock,
+  sendSeenZalouserMock,
+  sendTypingZalouserMock,
+} from "./monitor.send.test-mocks.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  listZaloFriendsMock,
+  listZaloGroupsMock,
+  startZaloListenerMock,
+} from "./zalo-js.test-mocks.js";
 import { resolveZalouserAccountSync } from "./accounts.js";
 import {
   createRawZalouserMessageFromNormalized,
@@ -11,22 +25,11 @@ import {
   withZalouserIngressTestQueue,
 } from "./ingress.test-support.js";
 import { monitorZalouserProvider } from "./monitor.js";
-import {
-  sendDeliveredZalouserMock,
-  sendMessageZalouserMock,
-  sendSeenZalouserMock,
-  sendTypingZalouserMock,
-} from "./monitor.send.test-mocks.js";
 import { setZalouserRuntime } from "./runtime.js";
 import { createZalouserSendReceipt } from "./send-receipt.js";
 import { sendMessageZalouser } from "./send.js";
 import { createZalouserRuntimeEnv } from "./test-helpers.js";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
-import {
-  listZaloFriendsMock,
-  listZaloGroupsMock,
-  startZaloListenerMock,
-} from "./zalo-js.test-mocks.js";
 
 function createAccount(): ResolvedZalouserAccount {
   return {
@@ -310,7 +313,7 @@ async function processMessageThroughMonitor(params: {
   config: OpenClawConfig;
   runtime: ReturnType<typeof createZalouserRuntimeEnv>;
   historyState?: { historyLimit?: number };
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 }): Promise<void> {
   const messages = params.messages ?? (params.message ? [params.message] : []);
   const account = params.historyState?.historyLimit
@@ -546,8 +549,33 @@ describe("zalouser monitor group mention gating", () => {
     return dispatchReplyCall(dispatchReplyWithBufferedBlockDispatcher);
   }
 
-  it("skips unmentioned group messages when requireMention=true", async () => {
-    await expectSkippedGroupMessage();
+  it("logs missing mentions once with the authored scope after group-name resolution", async () => {
+    const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
+      commandAuthorized: false,
+    });
+    const runtime = { ...createRuntimeEnv(), log: vi.fn() };
+    const account = createAccount();
+    account.config = {
+      ...account.config,
+      dangerouslyAllowNameMatching: true,
+      groups: { "g-diagnostic": { requireMention: true } },
+    };
+    const config = { channels: { zalouser: { accounts: { default: account.config } } } };
+    await processMessageThroughMonitor({
+      messages: ["mention-drop-1", "mention-drop-2"].map((msgId) =>
+        createGroupMessage({ threadId: "g-diagnostic", msgId }),
+      ),
+      account,
+      config,
+      runtime,
+    });
+    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(sendTypingZalouserMock).not.toHaveBeenCalled();
+    const diagnostics = runtime.log.mock.calls.filter(([line]) => line.includes("drop no mention"));
+    expect(diagnostics).toEqual([
+      [expect.stringContaining('accounts["default"].groups["g-diagnostic"].requireMention=false')],
+    ]);
+    expect(diagnostics[0]?.[0]).not.toContain("Alice");
   });
 
   it("blocks mentioned group messages by default when groupPolicy is omitted", async () => {
@@ -970,33 +998,22 @@ describe("zalouser monitor group mention gating", () => {
     expect(callArg?.ctx?.ReplyToIsQuote).toBe(true);
   });
 
-  it("skips pairing store read for open DM control commands", async () => {
-    const { readAllowFromStore } = installRuntime({
-      commandAuthorized: false,
-    });
-    await processMessageThroughMonitor({
-      message: createDmMessage({ content: "/new", commandContent: "/new" }),
-      account: createAccount(),
-      config: createConfig(),
-      runtime: createRuntimeEnv(),
-    });
+  it.each([{ content: "/new", commandContent: "/new" }, { content: "hello there" }])(
+    "skips pairing store read for open DM message: $content",
+    async (message) => {
+      const { readAllowFromStore } = installRuntime({
+        commandAuthorized: false,
+      });
+      await processMessageThroughMonitor({
+        message: createDmMessage(message),
+        account: createAccount(),
+        config: createConfig(),
+        runtime: createRuntimeEnv(),
+      });
 
-    expect(readAllowFromStore).not.toHaveBeenCalled();
-  });
-
-  it("skips pairing store read for open DM non-command messages", async () => {
-    const { readAllowFromStore } = installRuntime({
-      commandAuthorized: false,
-    });
-    await processMessageThroughMonitor({
-      message: createDmMessage({ content: "hello there" }),
-      account: createAccount(),
-      config: createConfig(),
-      runtime: createRuntimeEnv(),
-    });
-
-    expect(readAllowFromStore).not.toHaveBeenCalled();
-  });
+      expect(readAllowFromStore).not.toHaveBeenCalled();
+    },
+  );
 
   it("includes skipped group messages as InboundHistory on the next processed message", async () => {
     const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({

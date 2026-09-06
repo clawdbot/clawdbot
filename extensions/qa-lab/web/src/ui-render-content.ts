@@ -1,3 +1,8 @@
+import type {
+  QaBusAttachment,
+  QaBusMessage,
+  QaBusSnapshotConversation,
+} from "openclaw/plugin-sdk/qa-channel-protocol";
 import {
   conversationSelectionKey,
   findConversationBySelectionKey,
@@ -6,9 +11,9 @@ import {
 } from "./ui-conversation-key.js";
 import { findScenarioOutcome } from "./ui-render-scenario.js";
 import { badgeHtml, esc, formatIso, formatTime } from "./ui-render-utils.js";
-import type { Attachment, Conversation, Message, SeedScenario, UiState } from "./ui-types.js";
+import type { SeedScenario, UiState } from "./ui-types.js";
 
-function attachmentSourceUrl(attachment: Attachment): string | null {
+function attachmentSourceUrl(attachment: QaBusAttachment): string | null {
   if (attachment.url?.trim()) {
     return attachment.url;
   }
@@ -18,7 +23,7 @@ function attachmentSourceUrl(attachment: Attachment): string | null {
   return null;
 }
 
-function renderMessageAttachments(message: Message): string {
+function renderMessageAttachments(message: QaBusMessage): string {
   const attachments = message.attachments ?? [];
   if (attachments.length === 0) {
     return "";
@@ -91,8 +96,8 @@ function filteredMessages(state: UiState) {
 }
 
 function formatConversationLabel(
-  conversation: Conversation,
-  conversations: Conversation[],
+  conversation: QaBusSnapshotConversation,
+  conversations: QaBusSnapshotConversation[],
 ): string {
   const label = conversation.title || conversation.id;
   const sidebarCollisions = conversations.filter(
@@ -239,14 +244,14 @@ export function renderChatView(state: UiState): string {
     </div>`;
 }
 
-function messageAvatar(m: Message): { emoji: string; bg: string; role: string } {
+function messageAvatar(m: QaBusMessage): { emoji: string; bg: string; role: string } {
   if (m.direction === "outbound") {
     return { emoji: "\uD83E\uDD80", bg: "#7c6cff", role: "Claw" }; // 🦀
   }
   return { emoji: "\uD83E\uDD9E", bg: "#d97706", role: "Clawfather" }; // 🦞
 }
 
-function renderMessage(m: Message): string {
+function renderMessage(m: QaBusMessage): string {
   const name = m.senderName || m.senderId;
   const avatar = messageAvatar(m);
   const dirClass = m.direction === "inbound" ? "msg-direction-inbound" : "msg-direction-outbound";
@@ -288,7 +293,7 @@ function recentInspectorMessages(state: UiState, limit = 18) {
   return (state.snapshot?.messages ?? []).slice(-limit).toReversed();
 }
 
-function renderInspectorLiveMessage(message: Message): string {
+function renderInspectorLiveMessage(message: QaBusMessage): string {
   const avatar = messageAvatar(message);
   const conversationLabel = message.conversation.title || message.conversation.id;
   const threadLabel = message.threadTitle || message.threadId;
@@ -483,9 +488,7 @@ export function renderEventsView(state: UiState): string {
                   const detail =
                     "thread" in e
                       ? `${e.thread.conversationId}/${e.thread.id}`
-                      : e.message
-                        ? `${e.message.senderId}: ${e.message.text}`
-                        : "";
+                      : `${e.message.senderId}: ${e.message.text}`;
                   return `
                     <div class="event-row">
                       <span class="event-kind">${esc(e.kind)}</span>

@@ -4,12 +4,8 @@ import {
   type ToolsCatalogResult,
   validateToolsCatalogParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../../agents/agent-scope.js";
-import { resolveSwarmConfig } from "../../agents/swarm-config.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
 import {
   listCoreToolSections,
   PROFILE_OPTIONS,
@@ -19,10 +15,9 @@ import { summarizeToolDescriptionText } from "../../agents/tool-description-summ
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { buildPluginToolMetadataKey, getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import {
-  buildPluginToolMetadataKey,
   ensureStandalonePluginToolRegistryLoaded,
-  getPluginToolMeta,
   resolvePluginTools,
 } from "../../plugins/tools.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
@@ -196,10 +191,10 @@ function buildPluginGroups(params: {
 /** Build the merged core/plugin tool catalog for one agent. */
 function buildToolsCatalogResult(params: {
   cfg: OpenClawConfig;
-  agentId?: string;
+  agentId: string;
   includePlugins?: boolean;
 }): ToolsCatalogResult {
-  const agentId = normalizeOptionalString(params.agentId) || resolveDefaultAgentId(params.cfg);
+  const agentId = params.agentId;
   const includePlugins = params.includePlugins !== false;
   const groups = buildCoreGroups({ cfg: params.cfg, agentId });
   if (includePlugins) {

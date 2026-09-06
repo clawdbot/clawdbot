@@ -12,10 +12,12 @@ import {
 } from "../bash-process-references.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_PROVIDER } from "../defaults.js";
+import { splitTrailingAuthProfile } from "../model-ref-profile.js";
+import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import {
   buildModelAliasIndex,
   inferUniqueProviderFromConfiguredModels,
-  resolveModelRefFromString,
+  listModelAliasCandidates,
 } from "../model-selection-shared.js";
 import { resolveSelectedOpenAIRuntimeProvider } from "../openai-routing.js";
 import { agentRuntimeAuthPlanMatchesTarget } from "../runtime-plan/prepare-auth.js";
@@ -66,13 +68,17 @@ export function resolveEmbeddedCompactionThinkingLevel(params: {
   provider: string;
   modelId: string;
   inheritedLevel?: ThinkLevel;
+  compactionThinkingDefault?: ProviderRuntimeModel["compactionThinkingDefault"];
   catalog?: ThinkingCatalogEntry[];
   agentId?: string;
   sessionKey?: string;
   agentRuntime?: string | null;
 }): ThinkLevel {
+  const configuredLevel = params.config?.agents?.defaults?.compaction?.thinkingLevel;
   const requestedLevel =
-    params.config?.agents?.defaults?.compaction?.thinkingLevel ?? params.inheritedLevel;
+    configuredLevel === "inherit"
+      ? params.inheritedLevel
+      : (configuredLevel ?? params.compactionThinkingDefault ?? "low");
   if (!requestedLevel) {
     return "off";
   }
@@ -106,6 +112,8 @@ export function resolveEmbeddedCompactionTarget(params: {
   modelSelectionLocked?: boolean;
   defaultProvider?: string;
   defaultModel?: string;
+  allowPluginNormalization?: boolean;
+  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"];
 }): {
   provider: string | undefined;
   runtimeProvider?: string;
@@ -121,57 +129,26 @@ export function resolveEmbeddedCompactionTarget(params: {
   const override = params.modelSelectionLocked
     ? undefined
     : params.config?.agents?.defaults?.compaction?.model?.trim();
-  const resolveTargetProviders = (
-    targetProvider: string | undefined,
-    authProfileId: string | undefined,
-  ) => {
-    if (!targetProvider) {
-      return {};
-    }
-    const selectedHarnessRuntime = normalizeOptionalAgentRuntimeId(params.harnessRuntime);
-    // Compaction follows the concrete session or prepared-plan owner. Provider
-    // defaults choose new runs; they cannot move an existing transcript.
-    const useNativeHarnessRuntime =
-      selectedHarnessRuntime !== undefined &&
-      selectedHarnessRuntime !== "openclaw" &&
-      !isDefaultAgentRuntimeId(selectedHarnessRuntime);
-    const harnessRuntime = useNativeHarnessRuntime ? selectedHarnessRuntime : "openclaw";
-    const runtimeProvider = resolveSelectedOpenAIRuntimeProvider({
-      provider: targetProvider,
-      harnessRuntime: harnessRuntime ?? undefined,
-      authProfileId,
-      config: params.config,
-    });
-    const routedRuntimeProvider = runtimeProvider === targetProvider ? undefined : runtimeProvider;
+  const assembleTarget = (targetProvider: string | undefined, targetModel: string | undefined) => {
+    // A provider switch cannot inherit credentials selected for the session's
+    // original provider; all target paths share that boundary.
+    const authProfileId =
+      targetProvider !== provider ? undefined : (params.authProfileId ?? undefined);
     return {
-      runtimeProvider: routedRuntimeProvider,
-      contextProvider: useNativeHarnessRuntime ? routedRuntimeProvider : undefined,
-      ...(useNativeHarnessRuntime ? { nativeHarnessCompaction: true } : {}),
+      provider: targetProvider,
+      ...resolveCompactionTargetRuntime(targetProvider, params.harnessRuntime),
+      model: targetModel,
+      authProfileId,
     };
   };
   if (!override) {
-    const authProfileId = params.authProfileId ?? undefined;
-    return {
-      provider,
-      ...resolveTargetProviders(provider, authProfileId),
-      model,
-      authProfileId,
-    };
+    return assembleTarget(provider, model);
   }
   const slashIdx = override.indexOf("/");
   if (slashIdx > 0) {
     const overrideProvider = override.slice(0, slashIdx).trim();
     const overrideModel = override.slice(slashIdx + 1).trim() || params.defaultModel;
-    // When switching provider via override, drop the primary auth profile to
-    // avoid sending the wrong credentials.
-    const authProfileId =
-      overrideProvider !== provider ? undefined : (params.authProfileId ?? undefined);
-    return {
-      provider: overrideProvider,
-      ...resolveTargetProviders(overrideProvider, authProfileId),
-      model: overrideModel,
-      authProfileId,
-    };
+    return assembleTarget(overrideProvider, overrideModel);
   }
   const config = params.config ?? {};
   const currentProvider = provider?.trim();
@@ -183,55 +160,55 @@ export function resolveEmbeddedCompactionTarget(params: {
       model: override,
     })
   ) {
-    const authProfileId = params.authProfileId ?? undefined;
-    return {
-      provider: currentProvider,
-      ...resolveTargetProviders(currentProvider, authProfileId),
-      model: override,
-      authProfileId,
-    };
+    return assembleTarget(currentProvider, override);
   }
   const inferredLiteralProvider = inferUniqueProviderFromConfiguredModels({
     cfg: config,
     model: override,
+    allowManifestNormalization: false,
   });
   if (inferredLiteralProvider) {
-    const authProfileId =
-      inferredLiteralProvider !== provider ? undefined : (params.authProfileId ?? undefined);
-    return {
-      provider: inferredLiteralProvider,
-      ...resolveTargetProviders(inferredLiteralProvider, authProfileId),
-      model: override,
-      authProfileId,
-    };
+    return assembleTarget(inferredLiteralProvider, override);
   }
   const defaultProvider = provider || DEFAULT_PROVIDER;
-  const aliasResolution = resolveModelRefFromString({
-    cfg: config,
-    raw: override,
-    defaultProvider,
-    aliasIndex: buildModelAliasIndex({
-      cfg: config,
-      defaultProvider,
-    }),
-  });
-  if (aliasResolution?.alias) {
-    const resolvedProvider = aliasResolution.ref.provider;
-    const authProfileId =
-      resolvedProvider !== provider ? undefined : (params.authProfileId ?? undefined);
-    return {
-      provider: resolvedProvider,
-      ...resolveTargetProviders(resolvedProvider, authProfileId),
-      model: aliasResolution.ref.model,
-      authProfileId,
-    };
+  const aliasKey = normalizeCompactionConfigKey(splitTrailingAuthProfile(override).model);
+  // Unrelated aliases must not cold-load provider runtime for a literal override.
+  const alias = listModelAliasCandidates(config).some(
+    ({ alias: candidate }) => normalizeCompactionConfigKey(candidate) === aliasKey,
+  )
+    ? buildModelAliasIndex({
+        cfg: config,
+        defaultProvider,
+        allowPluginNormalization: params.allowPluginNormalization,
+        manifestPlugins: params.manifestPlugins,
+      }).byAlias.get(aliasKey)
+    : undefined;
+  if (alias) {
+    return assembleTarget(alias.ref.provider, alias.ref.model);
   }
-  const authProfileId = params.authProfileId ?? undefined;
+  return assembleTarget(provider, override);
+}
+
+/** Binds harness ownership without repeating model or alias selection. */
+export function resolveCompactionTargetRuntime(
+  provider: string | undefined,
+  harnessRuntime?: string | null,
+) {
+  if (!provider) {
+    return {};
+  }
+  const selectedHarnessRuntime = normalizeOptionalAgentRuntimeId(harnessRuntime);
+  // Provider defaults choose new runs; they cannot move an existing transcript.
+  const useNativeHarnessRuntime =
+    selectedHarnessRuntime !== undefined &&
+    selectedHarnessRuntime !== "openclaw" &&
+    !isDefaultAgentRuntimeId(selectedHarnessRuntime);
+  const runtimeProvider = resolveSelectedOpenAIRuntimeProvider({ provider });
+  const routedRuntimeProvider = runtimeProvider === provider ? undefined : runtimeProvider;
   return {
-    provider,
-    ...resolveTargetProviders(provider, authProfileId),
-    model: override,
-    authProfileId,
+    runtimeProvider: routedRuntimeProvider,
+    contextProvider: useNativeHarnessRuntime ? routedRuntimeProvider : undefined,
+    ...(useNativeHarnessRuntime ? { nativeHarnessCompaction: true } : {}),
   };
 }
 
@@ -307,9 +284,11 @@ export function resolveCompactionContextTokenBudget(params: {
   provider: string;
   modelId: string;
   model?: ProviderRuntimeModel;
+  agentId?: string;
   requestedTokenBudget?: number;
   fallbackTokenBudget?: number;
 }) {
+  // Caller budgets stay bounded by the selected model ceiling.
   const resolvedBudget =
     normalizeContextTokenBudget(
       resolveContextWindowInfo({
@@ -359,11 +338,15 @@ export function buildEmbeddedCompactionRuntimeContext(
     });
   return {
     sessionKey: params.sessionKey ?? undefined,
+    sandboxSessionKey: params.sandboxSessionKey,
+    sandboxAgentId: params.sandboxAgentId,
     messageChannel: params.messageChannel ?? undefined,
     messageProvider: params.messageProvider ?? undefined,
     clientCaps: params.clientCaps,
+    pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
     chatType: params.chatType ?? undefined,
     agentAccountId: params.agentAccountId ?? undefined,
+    conversationRoutePeerId: params.conversationRoutePeerId,
     currentChannelId: params.currentChannelId ?? undefined,
     currentThreadTs: params.currentThreadTs ?? undefined,
     currentMessageId: params.currentMessageId ?? undefined,
@@ -374,9 +357,14 @@ export function buildEmbeddedCompactionRuntimeContext(
     modelSelectionLocked: params.modelSelectionLocked,
     workspaceDir: params.workspaceDir,
     cwd: params.cwd ?? undefined,
+    permissionMode: params.permissionMode,
+    sessionRoot: params.sessionRoot,
+    requireWorkspaceOnly: params.requireWorkspaceOnly,
+    requireWritableSandbox: params.requireWritableSandbox,
     agentDir: params.agentDir,
     config: params.config,
     toolOverrides: params.toolOverrides,
+    toolsAllow: params.toolsAllow,
     skillsSnapshot: params.skillsSnapshot,
     senderIsOwner: params.senderIsOwner,
     senderId: params.senderId ?? undefined,
@@ -386,6 +374,7 @@ export function buildEmbeddedCompactionRuntimeContext(
     modelFallbacksOverride: params.modelFallbacksOverride,
     thinkLevel: params.thinkLevel,
     reasoningLevel: params.reasoningLevel,
+    execOverrides: params.execOverrides,
     bashElevated: params.bashElevated,
     extraSystemPrompt: params.extraSystemPrompt,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,

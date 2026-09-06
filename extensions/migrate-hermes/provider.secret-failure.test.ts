@@ -1,11 +1,15 @@
 // Migrate Hermes tests cover provider.secret failure plugin behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { resolveAuthStorePathForDisplay } from "openclaw/plugin-sdk/agent-runtime";
 import type { MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  resolvePreferredOpenClawTmpDir,
+  tempWorkspace,
+  type TempWorkspace,
+} from "openclaw/plugin-sdk/temp-path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HERMES_REASON_AUTH_PROFILE_WRITE_FAILED } from "./items.js";
 
 const mocks = vi.hoisted(() => ({
@@ -19,19 +23,13 @@ vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
 
 const { buildHermesMigrationProvider } = await import("./provider.js");
 
-const tempRoots = new Set<string>();
+let testWorkspace: TempWorkspace;
 const logger = {
   info() {},
   warn() {},
   error() {},
   debug() {},
 };
-
-async function makeTempRoot() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hermes-secret-failure-"));
-  tempRoots.add(root);
-  return root;
-}
 
 async function writeFile(filePath: string, content: string) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -72,16 +70,20 @@ function authProfileTarget(agentDir: string, profileId: string): string {
 }
 
 describe("Hermes migration provider secret write failures", () => {
+  beforeEach(async () => {
+    testWorkspace = await tempWorkspace({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-hermes-secret-failure-",
+    });
+  });
+
   afterEach(async () => {
-    for (const root of tempRoots) {
-      await fs.rm(root, { force: true, recursive: true });
-    }
-    tempRoots.clear();
+    await testWorkspace.cleanup();
     mocks.updateAuthProfileStoreWithLock.mockClear();
   });
 
   it("reports an error when a secret auth-profile write fails", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const source = path.join(root, "hermes");
     const workspaceDir = path.join(root, "workspace");
     const stateDir = path.join(root, "state");
@@ -122,7 +124,7 @@ describe("Hermes migration provider secret write failures", () => {
   });
 
   it("reports an error when an OAuth auth-profile write fails", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const source = path.join(root, "hermes");
     const workspaceDir = path.join(root, "workspace");
     const stateDir = path.join(root, "state");

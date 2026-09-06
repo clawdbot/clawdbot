@@ -1,4 +1,5 @@
 // Defines Zod schema fragments for per-agent runtime configuration.
+import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -10,7 +11,13 @@ import { splitSandboxBindSpec } from "../agents/sandbox/bind-spec.js";
 import { isSandboxHostPathAbsolute } from "../agents/sandbox/host-paths.js";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import {
+  resolveExactExecModeFromPolicy,
+  type ExecAsk,
+  type ExecSecurity,
+} from "../infra/exec-approvals-core.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { MANAGED_GITHUB_PROFILE_ID_PATTERN } from "./github-identity-profile-id.js";
 import { LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS } from "./web-search-legacy-provider-keys.js";
 import { AgentModelSchema, AgentToolModelSchema } from "./zod-schema.agent-model.js";
 import {
@@ -18,6 +25,7 @@ import {
   HumanDelaySchema,
   IdentitySchema,
   SecretInputSchema,
+  SsrFPolicyConfigSchema,
   ToolsLinksSchema,
   ToolsMediaSchema,
   TypingModeSchema,
@@ -432,13 +440,7 @@ const ToolsWebFetchSchema = z
     headers: z.record(z.string(), z.string().register(sensitive)).optional(),
     readability: z.boolean().optional(),
     useTrustedEnvProxy: z.boolean().optional(),
-    ssrfPolicy: z
-      .object({
-        allowRfc2544BenchmarkRange: z.boolean().optional(),
-        allowIpv6UniqueLocalRange: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
+    ssrfPolicy: SsrFPolicyConfigSchema.optional(),
   })
   .strict()
   .optional();
@@ -522,6 +524,7 @@ const ToolExecBaseShape = {
   safeBins: z.array(z.string()).optional(),
   strictInlineEval: z.boolean().optional(),
   commandHighlighting: z.boolean().optional(),
+  grantExpiryDays: z.number().int().min(1).max(3650).optional(),
   safeBinTrustedDirs: z.array(z.string()).optional(),
   safeBinProfiles: z.record(z.string(), ToolExecSafeBinProfileSchema).optional(),
   reviewer: z
@@ -542,16 +545,27 @@ const ToolExecBaseShape = {
 } as const;
 
 function addExecPolicyModeConflictIssue(
-  value: { mode?: unknown; security?: unknown; ask?: unknown },
+  value: { mode?: unknown; security?: ExecSecurity; ask?: ExecAsk },
   ctx: z.RefinementCtx,
 ): void {
   if (value.mode === undefined || (value.security === undefined && value.ask === undefined)) {
     return;
   }
+  // The issue path identifies root or agent scope; repair that same object without
+  // inferring missing policy values or using the lossy display-mode projection.
+  const exactMode =
+    value.security !== undefined && value.ask !== undefined
+      ? resolveExactExecModeFromPolicy({ security: value.security, ask: value.ask })
+      : null;
+  const repair = exactMode
+    ? `Replace security/ask with mode="${exactMode}" (the equivalent of security="${value.security}" + ask="${value.ask}").`
+    : value.security !== undefined && value.ask !== undefined
+      ? "This security/ask pair has no exact mode equivalent. To keep this policy, retain both legacy fields and remove mode."
+      : "The legacy policy is incomplete. Choose the intended security and ask values before converting; no mode equivalent can be inferred.";
   ctx.addIssue({
     code: z.ZodIssueCode.custom,
     path: ["mode"],
-    message: "tools.exec.mode cannot be combined with tools.exec.security or tools.exec.ask",
+    message: `mode cannot be combined with security or ask in the same exec object. Update the deploy script, template, or patch at this scope. ${repair} Doctor migrates supported legacy policies to mode; run "openclaw doctor --fix" only when the saved file still needs migration.`,
   });
 }
 
@@ -719,6 +733,21 @@ const MessageToolConfigSchema = z
   .strict()
   .optional();
 
+const GitHubToolIdentitySchema = z
+  .object({
+    profileId: z.string().regex(MANAGED_GITHUB_PROFILE_ID_PATTERN),
+    kind: z.literal("oauth").optional(),
+    gitAuthor: z
+      .object({
+        name: z.string().trim().min(1).optional(),
+        email: z.string().trim().min(1).optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .optional();
+
 const AgentToolsSchema = z
   .object({
     ...CommonToolPolicyFields,
@@ -732,6 +761,7 @@ const AgentToolsSchema = z
       .strict()
       .optional(),
     exec: ToolExecSchema,
+    github: GitHubToolIdentitySchema,
     fs: ToolFsSchema,
     loopDetection: ToolLoopDetectionSchema,
     message: MessageToolConfigSchema,
@@ -757,22 +787,13 @@ export const MemorySearchSchema = z
     enabled: z.boolean().optional(),
     rememberAcrossConversations: z.boolean().optional(),
     sources: z.array(z.union([z.literal("memory"), z.literal("sessions")])).optional(),
-    extraPaths: z.array(z.string()).optional(),
-    qmd: z
-      .object({
-        extraCollections: z
-          .array(
-            z
-              .object({
-                path: z.string(),
-                name: z.string().optional(),
-                pattern: z.string().optional(),
-              })
-              .strict(),
-          )
-          .optional(),
-      })
-      .strict()
+    extraPaths: z
+      .array(
+        z.union([
+          z.string(),
+          z.object({ path: z.string(), pattern: z.string().optional() }).strict(),
+        ]),
+      )
       .optional(),
     multimodal: z
       .object({
@@ -881,14 +902,32 @@ const AgentRuntimePolicySchema = z
   .strict()
   .optional();
 
-export const AgentModelRuntimeEntrySchema = z
+const AgentModelRuntimeEntrySchema = z
   .object({
     alias: z.string().optional(),
     params: z.record(z.string(), z.unknown()).optional(),
     agentRuntime: AgentRuntimePolicySchema,
+    codeMode: z.boolean().optional(),
     streaming: z.boolean().optional(),
   })
   .strict();
+
+export const AgentModelMapSchema = z
+  .record(z.string(), AgentModelRuntimeEntrySchema)
+  .superRefine((models, ctx) => {
+    for (const [ref, entry] of Object.entries(models)) {
+      // Runtime policy supports wildcard rows; Code Mode resolves exact models.
+      // Reject an authored override that would otherwise be silently ignored.
+      if (entry.codeMode !== undefined && (ref.includes("*") || !parseProviderModelRef(ref))) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [ref, "codeMode"],
+          message:
+            "Code Mode requires an exact provider/model entry; wildcard and bare model keys are not supported.",
+        });
+      }
+    }
+  });
 
 export const AgentModelPolicySchema = z
   .object({
@@ -899,14 +938,14 @@ export const AgentModelPolicySchema = z
 export const AgentEntrySchema = z
   .object({
     id: z.string(),
-    default: z.boolean().optional(),
     name: z.string().optional(),
     description: z.string().optional(),
     workspace: z.string().optional(),
+    cwd: z.string().optional(),
     agentDir: z.string().optional(),
     model: AgentModelSchema.optional(),
     utilityModel: z.string().optional(),
-    models: z.record(z.string(), AgentModelRuntimeEntrySchema).optional(),
+    models: AgentModelMapSchema.optional(),
     modelPolicy: AgentModelPolicySchema.optional(),
     thinkingDefault: z
       .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra"])
@@ -938,7 +977,6 @@ export const AgentEntrySchema = z
     tts: AgentTtsConfigSchema,
     skillsLimits: AgentSkillsLimitsSchema,
     contextLimits: AgentContextLimitsSchema,
-    contextTokens: z.number().int().positive().optional(),
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,
     groupChat: GroupChatSchema.unwrap().omit({ visibleReplies: true }).optional(),
@@ -964,6 +1002,7 @@ export const ToolsSchema = z
   .object({
     ...CommonToolPolicyFields,
     web: ToolsWebSchema,
+    github: GitHubToolIdentitySchema,
     media: ToolsMediaSchema,
     links: ToolsLinksSchema,
     sessions: z

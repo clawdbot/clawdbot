@@ -7,7 +7,6 @@ import {
   select as clackSelect,
   text as clackText,
 } from "@clack/prompts";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { styleSelectParams } from "../../packages/terminal-core/src/prompt-select-styled-params.js";
 import {
   stylePromptMessage,
@@ -33,7 +32,7 @@ export function parseConfigureWizardSections(raw: unknown): {
   sections: WizardSection[];
   invalid: string[];
 } {
-  const sectionsRaw: string[] = Array.isArray(raw) ? normalizeStringEntries(raw) : [];
+  const sectionsRaw = Array.isArray(raw) ? raw.map((section) => String(section).trim()) : [];
   if (sectionsRaw.length === 0) {
     return { sections: [], invalid: [] };
   }

@@ -1,6 +1,6 @@
 {
   "id": "openrouter",
-  "icon": "https://cdn.simpleicons.org/openrouter",
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
   },

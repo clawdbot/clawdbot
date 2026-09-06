@@ -9,19 +9,16 @@ import { DEFAULT_ACCOUNT_ID, type OpenClawConfig } from "openclaw/plugin-sdk/set
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { whatsappSetupWizard } from "./setup-surface.js";
 import {
-  createWhatsAppAllowlistModeInput,
   createWhatsAppLinkingHarness,
   createWhatsAppOwnerAllowlistHarness,
   createWhatsAppPersonalPhoneHarness,
   createWhatsAppRootAllowFromConfig,
   createWhatsAppWorkAccountConfig,
   expectNoWhatsAppLoginFollowup,
-  expectWhatsAppAllowlistModeSetup,
   expectWhatsAppLoginFollowup,
   expectWhatsAppOpenPolicySetup,
   expectWhatsAppOwnerAllowlistSetup,
   expectWhatsAppPersonalPhoneSetup,
-  expectWhatsAppSeparatePhoneDisabledSetup,
   expectWhatsAppWorkAccountAccessNote,
   expectWhatsAppWorkAccountOpenAccess,
 } from "./setup-test-helpers.js";
@@ -138,20 +135,6 @@ function expectFinalizeResult(result: Awaited<ReturnType<typeof runFinalizeWithH
   return result as { cfg: OpenClawConfig };
 }
 
-async function runSeparatePhoneFlow(params: { selectValues: string[]; textValues?: string[] }) {
-  hoisted.pathExists.mockResolvedValue(true);
-  const harness = createSeparatePhoneHarness({
-    selectValues: params.selectValues,
-    textValues: params.textValues,
-  });
-  const result = expectFinalizeResult(
-    await runFinalizeWithHarness({
-      harness,
-    }),
-  );
-  return { harness, result };
-}
-
 describe("whatsapp setup wizard", () => {
   beforeEach(() => {
     hoisted.detectWhatsAppLinked.mockReset();
@@ -184,14 +167,6 @@ describe("whatsapp setup wizard", () => {
 
     expect(hoisted.loginWeb).not.toHaveBeenCalled();
     expectWhatsAppOwnerAllowlistSetup(result.cfg, harness);
-  });
-
-  it("supports disabled DM policy for separate-phone setup", async () => {
-    const { harness, result } = await runSeparatePhoneFlow({
-      selectValues: ["separate", "disabled"],
-    });
-
-    expectWhatsAppSeparatePhoneDisabledSetup(result.cfg, harness);
   });
 
   it("writes named-account DM policy and allowFrom instead of the channel root", async () => {
@@ -308,12 +283,6 @@ describe("whatsapp setup wizard", () => {
 
     expectWhatsAppWorkAccountOpenAccess(result.cfg);
     expectWhatsAppWorkAccountAccessNote(harness);
-  });
-
-  it("normalizes allowFrom entries when list mode is selected", async () => {
-    const { result } = await runSeparatePhoneFlow(createWhatsAppAllowlistModeInput());
-
-    expectWhatsAppAllowlistModeSetup(result.cfg);
   });
 
   it("enables allowlist self-chat mode for personal-phone setup", async () => {

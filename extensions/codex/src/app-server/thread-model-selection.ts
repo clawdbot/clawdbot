@@ -1,8 +1,3 @@
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  resolveCodexAppServerReasoningEffort,
-  type CodexReasoningEffort,
-} from "./reasoning-effort.js";
 import {
   isCodexAppServerNativeAuthProfile,
   type CodexAppServerAuthProfileLookup,
@@ -132,21 +127,4 @@ export function resolveCodexAppServerModelProvider(params: {
     return undefined;
   }
   return normalizedLower === "openai" ? "openai" : normalized;
-}
-
-// Modern Codex models reject the legacy CLI `minimal` default. Prefer
-// app-server metadata, then use the app-server-owned fallback effort contract
-// for Pro models whose minimum supported effort is `medium`.
-// Other modern models translate `minimal` to `low`. (#71946)
-// Exported for unit-test coverage of the model-aware translation path.
-export function resolveReasoningEffort(
-  thinkLevel: EmbeddedRunAttemptParams["thinkLevel"] | "ultra",
-  modelId: string,
-  supportedReasoningEfforts?: readonly string[],
-): CodexReasoningEffort | null {
-  return resolveCodexAppServerReasoningEffort({
-    thinkLevel,
-    modelId,
-    supportedReasoningEfforts,
-  });
 }

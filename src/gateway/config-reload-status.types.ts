@@ -7,3 +7,5 @@
 // after watcher re-creation fails past the retry budget, so operators/callers
 // can detect silent degradation instead of assuming reloads still fire.
 export type GatewayHotReloadStatus = "active" | "disabled";
+
+export type GatewayHotReloadApplicationStatus = "applied" | "applied-restart-required";

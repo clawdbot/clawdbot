@@ -30,7 +30,7 @@ import {
   UPDATE_EFFECTIVE_CHANNEL_ENV,
 } from "./update-channels.js";
 import {
-  POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
+  buildPostCoreHandoffEnv,
   type PreUpdateConfigRestoreInput,
 } from "./update-post-core-context.js";
 import type { UpdateRunResult } from "./update-runner.js";
@@ -58,17 +58,15 @@ function buildFinalizeEnv(
   sourceConfigPath?: string,
   serviceRepairPolicy?: "external",
 ): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...baseEnv };
+  const env = buildPostCoreHandoffEnv({
+    baseEnv,
+    compatHostVersion,
+    sourceConfigPath,
+  });
   delete env.OPENCLAW_SERVICE_MARKER;
   delete env.OPENCLAW_SERVICE_KIND;
   delete env[GATEWAY_SERVICE_RUNTIME_PID_ENV];
   env[UPDATE_EFFECTIVE_CHANNEL_ENV] = effectiveChannel;
-  if (compatHostVersion) {
-    env.OPENCLAW_COMPATIBILITY_HOST_VERSION = compatHostVersion;
-  }
-  if (sourceConfigPath) {
-    env[POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV] = sourceConfigPath;
-  }
   if (serviceRepairPolicy) {
     env.OPENCLAW_SERVICE_REPAIR_POLICY = serviceRepairPolicy;
   }
@@ -96,7 +94,7 @@ type PostCoreFinalizeSpawner = (params: {
 }) => Promise<FinalizeSpawnResult>;
 
 const defaultFinalizeSpawner: PostCoreFinalizeSpawner = async ({ argv, cwd, timeoutMs, env }) => {
-  const res = await runCommandWithTimeout(argv, { cwd, timeoutMs, env });
+  const res = await runCommandWithTimeout(argv, { baseEnv: {}, cwd, timeoutMs, env });
   return { code: res.code, ...(res.stderr ? { stderr: res.stderr } : {}) };
 };
 

@@ -1,9 +1,12 @@
-// Lmstudio tests cover stream plugin behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
+// Lmstudio tests cover stream plugin behavior.
+import { createRequireRecord, createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 let wrapLmstudioInferencePreload: typeof import("./stream.js").wrapLmstudioInferencePreload;
+let defaultBaseUrl: string;
+let defaultBaseUrlSequence = 0;
 
 const ensureLmstudioModelLoadedMock = vi.hoisted(() => vi.fn());
 const resolveLmstudioProviderHeadersMock = vi.hoisted(() =>
@@ -13,36 +16,34 @@ const resolveLmstudioRuntimeApiKeyMock = vi.hoisted(() =>
   vi.fn(async (_params?: unknown) => undefined),
 );
 
-vi.mock("./models.fetch.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./models.fetch.js")>();
-  return {
-    ...actual,
-    ensureLmstudioModelLoaded: (params: unknown) => ensureLmstudioModelLoadedMock(params),
-  };
-});
+vi.mock("./models.fetch.js", () => ({
+  ensureLmstudioModelLoaded: (params: unknown) => ensureLmstudioModelLoadedMock(params),
+}));
 
-vi.mock("./runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./runtime.js")>();
-  return {
-    ...actual,
-    resolveLmstudioProviderHeaders: (params: unknown) => resolveLmstudioProviderHeadersMock(params),
-    resolveLmstudioRuntimeApiKey: (params: unknown) => resolveLmstudioRuntimeApiKeyMock(params),
-  };
-});
+vi.mock("./runtime.js", () => ({
+  resolveLmstudioProviderHeaders: (params: unknown) => resolveLmstudioProviderHeadersMock(params),
+  resolveLmstudioRuntimeApiKey: (params: unknown) => resolveLmstudioRuntimeApiKeyMock(params),
+}));
 
-afterAll(() => {
-  vi.doUnmock("./models.fetch.js");
-  vi.doUnmock("./runtime.js");
-  vi.resetModules();
+beforeAll(async () => {
+  ({ wrapLmstudioInferencePreload } = await import("./stream.js"));
 });
 
 type StreamEvent = { type: string } & Record<string, unknown>;
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
+const requireRecord = createRequireRecord("record", "expected-label-record");
+
+function lmstudioAssistantMessage(content: AssistantMessage["content"]): AssistantMessage {
+  return {
+    role: "assistant" as const,
+    content,
+    api: "openai-completions" as const,
+    provider: "lmstudio",
+    model: "qwen3-8b-instruct",
+    usage: createZeroUsageFixture(),
+    stopReason: "stop" as const,
+    timestamp: 1,
+  };
 }
 
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
@@ -116,7 +117,7 @@ function buildDoneStreamFn(): StreamFn {
   return vi.fn((_model, _context, _options) => {
     const stream = createAssistantMessageEventStream();
     queueMicrotask(() => {
-      stream.push({ type: "done", reason: "stop", message: {} as never });
+      stream.push({ type: "done", reason: "stop", message: lmstudioAssistantMessage([]) });
       stream.end();
     });
     return stream;
@@ -147,7 +148,7 @@ function createWrappedLmstudioStream(
       models: {
         providers: {
           lmstudio: {
-            baseUrl: params?.baseUrl ?? "http://localhost:1234",
+            baseUrl: params?.baseUrl ?? defaultBaseUrl,
             models: [],
           },
         },
@@ -194,9 +195,10 @@ function runWrappedLmstudioStream(
 }
 
 describe("lmstudio stream wrapper", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ wrapLmstudioInferencePreload } = await import("./stream.js"));
+  beforeEach(() => {
+    // Production preload state is keyed by base URL, model, and context length.
+    // Give each test a real cache namespace while preserving within-test reuse.
+    defaultBaseUrl = `http://lmstudio-test-${defaultBaseUrlSequence++}.localhost:1234`;
   });
 
   afterEach(() => {
@@ -242,7 +244,7 @@ describe("lmstudio stream wrapper", () => {
     expectSingleDoneEvent(events);
     expectEnsureLoadedFields({
       modelKey: variantKey,
-      baseUrl: "http://localhost:1234/v1",
+      baseUrl: `${defaultBaseUrl}/v1`,
     });
     expectBaseStreamModelFields(baseStream, {
       provider: "lmstudio",
@@ -309,7 +311,7 @@ describe("lmstudio stream wrapper", () => {
         models: {
           providers: {
             lmstudio: {
-              baseUrl: "http://localhost:1234",
+              baseUrl: defaultBaseUrl,
               models: [],
             },
           },
@@ -392,7 +394,7 @@ describe("lmstudio stream wrapper", () => {
         models: {
           providers: {
             lmstudio: {
-              baseUrl: "http://localhost:1234",
+              baseUrl: defaultBaseUrl,
               params: { preload: false },
               models: [],
             },
@@ -442,7 +444,7 @@ describe("lmstudio stream wrapper", () => {
         models: {
           providers: {
             lmstudio: {
-              baseUrl: "http://localhost:1234",
+              baseUrl: defaultBaseUrl,
               models: [],
             },
           },
@@ -561,7 +563,7 @@ describe("lmstudio stream wrapper", () => {
         models: {
           providers: {
             lmstudio: {
-              baseUrl: "http://localhost:1234",
+              baseUrl: defaultBaseUrl,
               models: [],
             },
           },
@@ -638,7 +640,7 @@ describe("lmstudio stream wrapper", () => {
         models: {
           providers: {
             lmstudio: {
-              baseUrl: "http://localhost:1234",
+              baseUrl: defaultBaseUrl,
               models: [],
             },
           },
@@ -724,7 +726,7 @@ describe("lmstudio stream wrapper", () => {
         models: {
           providers: {
             lmstudio: {
-              baseUrl: "http://localhost:1234",
+              baseUrl: defaultBaseUrl,
               models: [],
             },
           },
@@ -810,7 +812,7 @@ describe("lmstudio stream wrapper", () => {
         models: {
           providers: {
             lmstudio: {
-              baseUrl: "http://localhost:1234",
+              baseUrl: defaultBaseUrl,
               params: { preload: false },
               models: [],
             },
@@ -853,18 +855,18 @@ describe("lmstudio stream wrapper", () => {
       "[END_TOOL_REQUEST]",
     ].join("\n");
     const baseStream = buildEventStreamFn([
-      { type: "start", partial: { content: [] } },
-      { type: "text_start", contentIndex: 0, partial: { content: [{ type: "text", text: "" }] } },
+      { type: "start", partial: lmstudioAssistantMessage([]) },
+      {
+        type: "text_start",
+        contentIndex: 0,
+        partial: lmstudioAssistantMessage([{ type: "text", text: "" }]),
+      },
       { type: "text_delta", contentIndex: 0, delta: rawToolText },
       { type: "text_end", contentIndex: 0, content: rawToolText },
       {
         type: "done",
         reason: "stop",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: rawToolText }],
-          stopReason: "stop",
-        },
+        message: lmstudioAssistantMessage([{ type: "text", text: rawToolText }]),
       },
     ]);
     const wrapped = createWrappedLmstudioStream(baseStream);
@@ -906,18 +908,18 @@ describe("lmstudio stream wrapper", () => {
     const rawToolText =
       'commentary to=read code {"path":"/path/to/file","line_start":1,"line_end":400}';
     const baseStream = buildEventStreamFn([
-      { type: "start", partial: { content: [] } },
-      { type: "text_start", contentIndex: 0, partial: { content: [{ type: "text", text: "" }] } },
+      { type: "start", partial: lmstudioAssistantMessage([]) },
+      {
+        type: "text_start",
+        contentIndex: 0,
+        partial: lmstudioAssistantMessage([{ type: "text", text: "" }]),
+      },
       { type: "text_delta", contentIndex: 0, delta: rawToolText },
       { type: "text_end", contentIndex: 0, content: rawToolText },
       {
         type: "done",
         reason: "stop",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: rawToolText }],
-          stopReason: "stop",
-        },
+        message: lmstudioAssistantMessage([{ type: "text", text: rawToolText }]),
       },
     ]);
     const wrapped = createWrappedLmstudioStream(baseStream);
@@ -953,18 +955,18 @@ describe("lmstudio stream wrapper", () => {
       "[/mempalace_mempalace_search]",
     ].join("\n");
     const baseStream = buildEventStreamFn([
-      { type: "start", partial: { content: [] } },
-      { type: "text_start", contentIndex: 0, partial: { content: [{ type: "text", text: "" }] } },
+      { type: "start", partial: lmstudioAssistantMessage([]) },
+      {
+        type: "text_start",
+        contentIndex: 0,
+        partial: lmstudioAssistantMessage([{ type: "text", text: "" }]),
+      },
       { type: "text_delta", contentIndex: 0, delta: rawToolText },
       { type: "text_end", contentIndex: 0, content: rawToolText },
       {
         type: "done",
         reason: "stop",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: rawToolText }],
-          stopReason: "stop",
-        },
+        message: lmstudioAssistantMessage([{ type: "text", text: rawToolText }]),
       },
     ]);
     const wrapped = createWrappedLmstudioStream(baseStream);

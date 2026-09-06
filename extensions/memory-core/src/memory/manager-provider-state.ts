@@ -5,6 +5,7 @@ import type {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   resolveEmbeddingProviderFallbackModel,
+  resolveEmbeddingProviderFallbackRemote,
   type EmbeddingProvider,
   type EmbeddingProviderResult,
   type EmbeddingProviderRuntime,
@@ -208,7 +209,7 @@ export function resolveMemoryFallbackProviderRequest(params: {
   return {
     provider: fallback,
     model: resolveEmbeddingProviderFallbackModel(fallback, params.settings.model, params.cfg),
-    remote: params.settings.remote,
+    remote: resolveEmbeddingProviderFallbackRemote(params.settings.remote),
     inputType: params.settings.inputType,
     queryInputType: params.settings.queryInputType,
     documentInputType: params.settings.documentInputType,

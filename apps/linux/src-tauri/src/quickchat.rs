@@ -550,7 +550,7 @@ pub fn toggle_quickchat(app: &AppHandle) {
 
 fn show_quickchat(app: &AppHandle) -> Result<(), String> {
     let window = ensure_quickchat_window(app)?;
-    app.state::<GatewayClient>().resume_reconnect();
+    app.state::<GatewayClient>().resume_paused_reconnect();
     window
         .set_size(LogicalSize::new(QUICKCHAT_WIDTH, QUICKCHAT_HEIGHT))
         .map_err(|error| format!("Could not reset Quick Chat size: {error}"))?;
@@ -580,7 +580,7 @@ fn show_quickchat(app: &AppHandle) -> Result<(), String> {
 
 // Commands take the calling WebView, not WebviewWindow: once widgets are attached the
 // host becomes multi-WebView and Tauri intentionally rejects WebviewWindow command args.
-fn require_quickchat_webview(webview: &Webview) -> Result<(), String> {
+pub(crate) fn require_quickchat_webview(webview: &Webview) -> Result<(), String> {
     if webview.label() == QUICKCHAT_LABEL && webview.window().label() == QUICKCHAT_LABEL {
         Ok(())
     } else {

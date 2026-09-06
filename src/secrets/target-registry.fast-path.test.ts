@@ -1,16 +1,20 @@
-/** Tests that explicit channel secret target lookup avoids broad manifest rediscovery. */
+/** Tests that configured-only secret target lookup avoids broad manifest rediscovery. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { loadPluginManifestRegistryMock } = vi.hoisted(() => ({
   loadPluginManifestRegistryMock: vi.fn(() => {
-    throw new Error("manifest registry should stay off the explicit channel target fast path");
+    throw new Error("manifest registry should stay off configured-only target fast paths");
   }),
 }));
 
-const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
-  loadBundledPluginPublicArtifactModuleSyncMock: vi.fn(
-    ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
-      if (dirName === "googlechat" && artifactBasename === "secret-contract-api.js") {
+const { getSecretTargetRegistryMock } = vi.hoisted(() => ({
+  getSecretTargetRegistryMock: vi.fn(),
+}));
+
+const { loadBundledPublicArtifactMock } = vi.hoisted(() => ({
+  loadBundledPublicArtifactMock: vi.fn(
+    ({ artifactCandidates, dirName }: { artifactCandidates: string[]; dirName: string }) => {
+      if (dirName === "googlechat" && artifactCandidates[0] === "secret-contract-api.js") {
         return {
           secretTargetRegistryEntries: [
             {
@@ -27,7 +31,7 @@ const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
           ],
         };
       }
-      if (dirName === "telegram" && artifactBasename === "secret-contract-api.js") {
+      if (dirName === "telegram" && artifactCandidates[0] === "secret-contract-api.js") {
         return {
           secretTargetRegistryEntries: [
             {
@@ -45,22 +49,51 @@ const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
           ],
         };
       }
-      throw new Error(
-        `Unable to resolve bundled plugin public surface ${dirName}/${artifactBasename}`,
-      );
+      return null;
     },
   ),
 }));
 
 vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: loadPluginManifestRegistryMock,
+  loadPluginManifestRegistryCore: loadPluginManifestRegistryMock,
 }));
 
 vi.mock("../plugins/public-surface-loader.js", () => ({
-  loadBundledPluginPublicArtifactModuleSync: loadBundledPluginPublicArtifactModuleSyncMock,
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync: loadBundledPublicArtifactMock,
 }));
 
+vi.mock("./target-registry-data.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./target-registry-data.js")>();
+  const channelTarget = (id: string) => ({
+    id,
+    targetType: id,
+    configFile: "openclaw.json" as const,
+    pathPattern: id,
+    secretShape: "secret_input" as const,
+    expectedResolvedValue: "string" as const,
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+  });
+  getSecretTargetRegistryMock.mockImplementation(
+    (params?: { config?: { plugins?: { load?: { paths?: string[] } } } }) => {
+      const loadPath = params?.config?.plugins?.load?.paths?.[0];
+      const channelEntries =
+        loadPath === "/plugins/custom-next"
+          ? [channelTarget("channels.customNext.token")]
+          : [
+              channelTarget("channels.qqbot.clientSecret"),
+              channelTarget("channels.custom.primaryToken"),
+              channelTarget("channels.custom.secondaryToken"),
+            ];
+      return [...actual.getCoreSecretTargetRegistry(), ...channelEntries];
+    },
+  );
+  return { ...actual, getSecretTargetRegistry: getSecretTargetRegistryMock };
+});
+
 import {
+  discoverConfigSecretTargets,
   discoverConfigSecretTargetsByIds,
   resolveConfigSecretTargetByPath,
   resolvePlanTargetAgainstRegistry,
@@ -69,7 +102,8 @@ import {
 describe("secret target registry fast path", () => {
   beforeEach(() => {
     loadPluginManifestRegistryMock.mockClear();
-    loadBundledPluginPublicArtifactModuleSyncMock.mockClear();
+    loadBundledPublicArtifactMock.mockClear();
+    getSecretTargetRegistryMock.mockClear();
   });
 
   it("resolves bundled channel targets by explicit channel id without manifest scans", () => {
@@ -80,9 +114,9 @@ describe("secret target registry fast path", () => {
     }
     expect(target.entry.id).toBe("channels.googlechat.serviceAccount");
     expect(target.refPathSegments).toBeUndefined();
-    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
+    expect(loadBundledPublicArtifactMock).toHaveBeenCalledWith({
       dirName: "googlechat",
-      artifactBasename: "secret-contract-api.js",
+      artifactCandidates: ["secret-contract-api.js"],
     });
     expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
   });
@@ -97,7 +131,7 @@ describe("secret target registry fast path", () => {
     );
 
     expect(targets.map((target) => target.entry.id)).toEqual(["gateway.auth.token"]);
-    expect(loadBundledPluginPublicArtifactModuleSyncMock).not.toHaveBeenCalled();
+    expect(loadBundledPublicArtifactMock).not.toHaveBeenCalled();
     expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
   });
 
@@ -109,6 +143,52 @@ describe("secret target registry fast path", () => {
 
     expect(targets.map((target) => target.entry.id)).toContain("channels.telegram.botToken");
     expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
+  });
+
+  it("discovers all core and configured channel targets without loading plugin metadata", () => {
+    const targets = discoverConfigSecretTargets({
+      gateway: { auth: { token: "gateway-token" } },
+      channels: { telegram: { botToken: "telegram-token" } },
+    });
+
+    const targetIds = targets.map((target) => target.entry.id);
+    expect(targetIds).toEqual(
+      expect.arrayContaining(["gateway.auth.token", "channels.telegram.botToken"]),
+    );
+    expect(targetIds.some((targetId) => targetId.startsWith("plugins.entries."))).toBe(false);
+    expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the complete registry for configured external and custom channels", () => {
+    const env = { HOME: "/audit-home" };
+    const config = {
+      plugins: { load: { paths: ["/plugins/custom"] }, entries: {} },
+      channels: {
+        qqbot: { clientSecret: "qqbot-secret" },
+        custom: {
+          primaryToken: "primary-secret",
+          secondaryToken: "secondary-secret",
+        },
+      },
+    };
+    const targets = discoverConfigSecretTargets(config, { env });
+
+    expect(targets.map((target) => target.entry.id)).toEqual(
+      expect.arrayContaining([
+        "channels.qqbot.clientSecret",
+        "channels.custom.primaryToken",
+        "channels.custom.secondaryToken",
+      ]),
+    );
+    expect(getSecretTargetRegistryMock).toHaveBeenLastCalledWith({ config, env });
+
+    const nextConfig = {
+      plugins: { load: { paths: ["/plugins/custom-next"] }, entries: {} },
+      channels: { customNext: { token: "next-secret" } },
+    };
+    const nextTargets = discoverConfigSecretTargets(nextConfig, { env });
+    expect(nextTargets.map((target) => target.entry.id)).toContain("channels.customNext.token");
+    expect(getSecretTargetRegistryMock).toHaveBeenLastCalledWith({ config: nextConfig, env });
   });
 
   it("resolves channel plan targets without loading plugin metadata", () => {

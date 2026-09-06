@@ -136,6 +136,10 @@
     "target": "微信"
   },
   {
+    "source": "WeCom",
+    "target": "企業微信"
+  },
+  {
     "source": "Weixin",
     "target": "微信"
   },

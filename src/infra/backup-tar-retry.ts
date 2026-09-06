@@ -31,7 +31,9 @@ export async function writeTarArchiveWithRetry<T>(params: {
 }): Promise<T> {
   const sleepFn = params.sleepMs ?? sleep;
   let lastErr: unknown;
+  let attempts = 0;
   for (let attempt = 1; attempt <= BACKUP_TAR_MAX_ATTEMPTS; attempt += 1) {
+    attempts = attempt;
     const attemptTempArchivePath = resolveBackupTarAttemptTempPath(params.tempArchivePath, attempt);
     try {
       return await params.runTar(attemptTempArchivePath);
@@ -54,8 +56,9 @@ export async function writeTarArchiveWithRetry<T>(params: {
   }
   const final = lastErr instanceof Error ? lastErr : new Error(String(lastErr));
   const offendingPath = (lastErr as NodeJS.ErrnoException | undefined)?.path;
+  const attemptSuffix = `after ${attempts} attempt${attempts === 1 ? "" : "s"}`;
   const suffix = offendingPath
-    ? ` (last offending path: ${offendingPath}, after ${BACKUP_TAR_MAX_ATTEMPTS} attempts)`
-    : ` (after ${BACKUP_TAR_MAX_ATTEMPTS} attempts)`;
+    ? ` (last offending path: ${offendingPath}, ${attemptSuffix})`
+    : ` (${attemptSuffix})`;
   throw new Error(`Backup archive write failed: ${final.message}${suffix}`, { cause: final });
 }

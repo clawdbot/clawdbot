@@ -1,22 +1,28 @@
 import { isDeepStrictEqual } from "node:util";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
-import { applyAutoLocalModelLean } from "../config/local-model-lean-auto.js";
 import { applyMergePatch } from "../config/merge-patch.js";
+import {
+  attachRuntimeConfigWriteApplication,
+  createRuntimeConfigWriteApplication,
+} from "../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { normalizePluginTargetConfig } from "../plugins/config-state.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
+import { captureGatewayRootWorkAdmissionContinuationScope } from "../process/gateway-work-admission.js";
 import {
-  projectDefaultInferenceRoute,
+  projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
   sameDefaultInferenceRoute,
 } from "./inference-route.js";
-import type { SystemAgentConfiguredRoute } from "./inference-route.js";
-import { createSystemAgentModelSelectionUpdater } from "./setup-apply.js";
+import type {
+  SystemAgentConfiguredRoute,
+  SystemAgentConfiguredRouteDeps,
+} from "./inference-route.js";
 import {
   SetupInferenceActivationIndeterminateError,
   SetupInferenceActivationUnavailableError,
-  log,
+  setupInferenceLog,
   throwIfSetupInferenceCancelled,
   type ActivateSetupInferenceDeps,
   type ActivateSetupInferenceParams,
@@ -30,21 +36,21 @@ import {
   rollbackManualAuthProfiles,
   applyManualAuthConfig,
   type ManualAuthPersistenceReceipt,
-  runSetupInferenceTest,
 } from "./setup-inference-persist.js";
 import {
   projectSetupTargetModelMetadata,
   resolveSetupAgentRuntimeId,
   type SetupInferenceTestPlan,
 } from "./setup-inference-plan-helpers.js";
+import { runSetupInferenceTest } from "./setup-inference-test.js";
+import { createSystemAgentModelSelectionUpdater } from "./setup-model-selection.js";
 import type { SystemAgentOwnerPluginArtifactSnapshot } from "./verified-inference.js";
 
-type ProjectedInferenceRoute = Awaited<ReturnType<typeof projectDefaultInferenceRoute>>;
+type ProjectedInferenceRoute = Awaited<ReturnType<typeof projectInferenceRoute>>;
 
 export type SetupInferenceActivationPersistenceState = {
-  committedConfig: OpenClawConfig | undefined;
-  autoLocalModelLeanApplied: boolean;
   codexInstallOwnership: "unknown" | "owned" | "unowned";
+  gatewayRestartRequired: boolean;
 };
 
 export async function persistActivatedSetupInference(input: {
@@ -63,6 +69,7 @@ export async function persistActivatedSetupInference(input: {
   stagedOwnerPluginArtifacts: SystemAgentOwnerPluginArtifactSnapshot;
   baselineTargetModelMetadata: unknown;
   sourceTargetModelMetadata: unknown;
+  routeDeps: Pick<SystemAgentConfiguredRouteDeps, "pluginMetadataPlugins">;
   readSnapshot: NonNullable<ActivateSetupInferenceDeps["readConfigFileSnapshot"]>;
   hasPreparedAuthProfiles: boolean;
   state: SetupInferenceActivationPersistenceState;
@@ -89,19 +96,25 @@ export async function persistActivatedSetupInference(input: {
     stagedOwnerPluginArtifacts,
     baselineTargetModelMetadata,
     sourceTargetModelMetadata,
+    routeDeps,
     readSnapshot,
     hasPreparedAuthProfiles,
     state,
     revalidateOwner,
   } = input;
-  let committedConfig: OpenClawConfig | undefined;
   let { codexInstallOwnership } = state;
+  const requestedAgentId = params.agentId ? testPlan.routeAgentId : undefined;
+  const projectRoute = (config: OpenClawConfig) =>
+    projectInferenceRoute(config, requestedAgentId, routeDeps);
+  const resolveRoute = (config: OpenClawConfig) =>
+    resolveSystemAgentConfiguredRouteFromConfig(config, requestedAgentId, routeDeps);
 
   const { stripPendingPluginInstallRecords } = await import("../plugins/install-record-commit.js");
   const agentRuntimeId = resolveSetupAgentRuntimeId(params.kind);
   const selectModel = plan.persistModelRef
     ? await createSystemAgentModelSelectionUpdater({
         model: plan.persistModelRef,
+        ...(params.agentId ? { targetAgentId: testPlan.routeAgentId } : {}),
         ...(agentRuntimeId ? { agentRuntimeId } : {}),
         ...(plan.manualAuth && plan.authProfileId ? { authProfileId: plan.authProfileId } : {}),
       })
@@ -132,38 +145,22 @@ export async function persistActivatedSetupInference(input: {
       }
       next = enabledCodex.config;
     }
-    next = applyAutoLocalModelLean({
-      config: next,
-      providerId: testPlan.provider,
-      modelRef: plan.modelRef,
-    }).config;
     next = selectModel ? selectModel(next) : next;
-    if (!pendingCodexInstall) {
-      return next;
-    }
-    return {
-      ...next,
-      plugins: {
-        ...next.plugins,
-        installs: { codex: pendingCodexInstall },
-      },
-    };
+    return pendingCodexInstall
+      ? { ...next, plugins: { ...next.plugins, installs: { codex: pendingCodexInstall } } }
+      : next;
   };
   // Pending install records are probe-only discovery input. The config
   // writer moves them into the installed-plugin index before committing,
   // so post-write reconciliation must compare against the stripped route
   // and verify the exact index record separately below.
   const persistedRoute = pendingCodexInstall
-    ? await projectDefaultInferenceRoute(
-        stripPendingPluginInstallRecords(stageCandidate(cfg, "runtime")),
-      )
+    ? await projectRoute(stripPendingPluginInstallRecords(stageCandidate(cfg, "runtime")))
     : verifiedRoute;
   // Runtime config may materialize provider defaults that are intentionally
   // absent from authored config. Compare source writes against the candidate
   // produced from the original source shape, without ignoring concurrent rows.
-  const expectedSourceCandidateRoute = await projectDefaultInferenceRoute(
-    stageCandidate(sourceCfg, "source"),
-  );
+  const expectedSourceCandidateRoute = await projectRoute(stageCandidate(sourceCfg, "source"));
   // Resolve every fallible config-commit dependency before writing a
   // credential into the real agent store. From this point onward, any
   // failure is inside the rollback boundary below.
@@ -173,13 +170,15 @@ export async function persistActivatedSetupInference(input: {
   let manualAuthReceipt: ManualAuthPersistenceReceipt | undefined;
   if (hasPreparedAuthProfiles && plan.manualAuth) {
     throwIfSetupInferenceCancelled(params);
+    await params.beforePersistentEffect?.();
+    throwIfSetupInferenceCancelled(params);
     const initialCandidate = stageCandidate(cfg, "runtime");
-    const initialRoute = await projectDefaultInferenceRoute(initialCandidate);
-    const resolvedRoute = await resolveSystemAgentConfiguredRouteFromConfig(initialCandidate);
+    const initialRoute = await projectRoute(initialCandidate);
+    const resolvedRoute = await resolveRoute(initialCandidate);
     if (
       !sameDefaultInferenceRoute(initialRoute, verifiedRoute) ||
       !resolvedRoute ||
-      resolvedRoute.modelLabel !== plan.modelRef ||
+      resolvedRoute.modelLabel !== (plan.persistModelRef ?? plan.modelRef) ||
       resolvedRoute.authProfileId !== plan.authProfileId
     ) {
       throw new Error(
@@ -190,6 +189,7 @@ export async function persistActivatedSetupInference(input: {
       profiles: plan.manualAuth.profiles,
       agentDir: resolvedRoute.agentDir,
       deps,
+      secretStorage: { config: initialCandidate, env: process.env },
     });
     if (persistedManualAuth.status === "unknown") {
       const rolledBack = await rollbackManualAuthProfiles(persistedManualAuth.receipt, deps);
@@ -214,22 +214,30 @@ export async function persistActivatedSetupInference(input: {
     }
     manualAuthReceipt = persistedManualAuth.receipt;
   }
+  const application = params.onRuntimeApplication
+    ? createRuntimeConfigWriteApplication(captureGatewayRootWorkAdmissionContinuationScope()?.run)
+    : undefined;
+  if (application) {
+    params.onRuntimeApplication?.(application);
+  }
   let commitMayHaveStarted = false;
   try {
     throwIfSetupInferenceCancelled(params);
     const committed = await transformConfig({
       base: "source",
+      ...(application
+        ? { writeOptions: attachRuntimeConfigWriteApplication({}, application) }
+        : {}),
       // The transform stays side-effect free so a config conflict can retry
       // without replaying credential writes in another agent directory.
-      // Setup changes only hot-reloadable model, agent, and plugin-entry surfaces.
-      // Publish the verified route now so the next turn cannot reuse the old harness.
-      afterWrite: { mode: "auto" },
+      // The install-record owner adds a restart follow-up when this commit adopts
+      // a new plugin source. Preserve that intent for structured setup clients.
       transform: async (current, context) => {
         const latestRuntime = context.snapshot.runtimeConfig ?? context.snapshot.config;
         // Validate that the candidate is still admissible before reporting
         // broader route drift, so policy revocations retain their actionable error.
         const stagedRuntime = stageCandidate(latestRuntime, "runtime");
-        const latestBaseline = await projectDefaultInferenceRoute(latestRuntime);
+        const latestBaseline = await projectRoute(latestRuntime);
         if (!sameDefaultInferenceRoute(latestBaseline, baselineRoute)) {
           throw new Error(
             "The default-agent inference route changed during its live test, so the verified candidate was not saved. Review the current model/auth/runtime settings and retry.",
@@ -237,7 +245,11 @@ export async function persistActivatedSetupInference(input: {
         }
         if (
           !isDeepStrictEqual(
-            projectSetupTargetModelMetadata(latestRuntime, stagedRoute.modelLabel),
+            projectSetupTargetModelMetadata(
+              latestRuntime,
+              stagedRoute.modelLabel,
+              requestedAgentId,
+            ),
             baselineTargetModelMetadata,
           )
         ) {
@@ -245,16 +257,16 @@ export async function persistActivatedSetupInference(input: {
             "The target model metadata changed during its live inference test, so the verified candidate was not saved. Review the current model settings and retry.",
           );
         }
-        const currentRoute = await projectDefaultInferenceRoute(stagedRuntime);
+        const currentRoute = await projectRoute(stagedRuntime);
         if (!sameDefaultInferenceRoute(currentRoute, verifiedRoute)) {
           throw new Error(
             "The default-agent inference route changed during its live test, so the verified candidate was not saved. Review the current model/auth/runtime settings and retry.",
           );
         }
-        const resolvedRoute = await resolveSystemAgentConfiguredRouteFromConfig(stagedRuntime);
+        const resolvedRoute = await resolveRoute(stagedRuntime);
         if (
           !resolvedRoute ||
-          resolvedRoute.modelLabel !== plan.modelRef ||
+          resolvedRoute.modelLabel !== (plan.persistModelRef ?? plan.modelRef) ||
           (plan.authProfileId && resolvedRoute.authProfileId !== plan.authProfileId)
         ) {
           throw new Error(
@@ -263,7 +275,7 @@ export async function persistActivatedSetupInference(input: {
         }
         if (
           !isDeepStrictEqual(
-            projectSetupTargetModelMetadata(current, stagedRoute.modelLabel),
+            projectSetupTargetModelMetadata(current, stagedRoute.modelLabel, requestedAgentId),
             sourceTargetModelMetadata,
           )
         ) {
@@ -271,18 +283,13 @@ export async function persistActivatedSetupInference(input: {
             "The authored target model metadata changed during its live inference test, so the verified candidate was not saved. Review the current model settings and retry.",
           );
         }
-        const autoLocalModelLean = applyAutoLocalModelLean({
-          config: current,
-          providerId: testPlan.provider,
-          modelRef: plan.modelRef,
-        });
         const nextConfig = stageCandidate(current, "source");
-        const nextRouteProjection = await projectDefaultInferenceRoute(nextConfig);
-        const nextResolvedRoute = await resolveSystemAgentConfiguredRouteFromConfig(nextConfig);
+        const nextRouteProjection = await projectRoute(nextConfig);
+        const nextResolvedRoute = await resolveRoute(nextConfig);
         if (
           !sameDefaultInferenceRoute(nextRouteProjection, expectedSourceCandidateRoute) ||
           !nextResolvedRoute ||
-          nextResolvedRoute.modelLabel !== plan.modelRef ||
+          nextResolvedRoute.modelLabel !== (plan.persistModelRef ?? plan.modelRef) ||
           (plan.authProfileId && nextResolvedRoute.authProfileId !== plan.authProfileId)
         ) {
           throw new Error(
@@ -298,13 +305,12 @@ export async function persistActivatedSetupInference(input: {
         // Once this callback returns, the config writer owns the candidate.
         // Any later throw may be post-commit and needs reconciliation.
         throwIfSetupInferenceCancelled(params);
-        params.onCommitStarted?.();
+        params.onCommitStarted?.(current);
         commitMayHaveStarted = true;
-        state.autoLocalModelLeanApplied = autoLocalModelLean.enabled;
         return { nextConfig };
       },
     });
-    committedConfig = committed.nextConfig;
+    state.gatewayRestartRequired = committed.followUp.requiresRestart;
     if (pendingCodexInstall) {
       codexInstallOwnership = "owned";
     }
@@ -325,9 +331,7 @@ export async function persistActivatedSetupInference(input: {
       reconciledSnapshot?.exists && reconciledSnapshot.valid
         ? (reconciledSnapshot.runtimeConfig ?? reconciledSnapshot.config)
         : undefined;
-    const reconciledRoute = reconciledRuntime
-      ? await projectDefaultInferenceRoute(reconciledRuntime)
-      : undefined;
+    const reconciledRoute = reconciledRuntime ? await projectRoute(reconciledRuntime) : undefined;
     const codexInstallPersisted = pendingCodexInstall
       ? await isCodexInstallRecordPersisted(pendingCodexInstall, deps)
       : true;
@@ -358,11 +362,12 @@ export async function persistActivatedSetupInference(input: {
       }
       throw error;
     }
-    committedConfig = reconciledSnapshot?.sourceConfig ?? reconciledRuntime;
-    log.warn("Inference activation committed successfully despite a post-write cleanup error.");
+    state.gatewayRestartRequired = pendingCodexInstall !== undefined;
+    setupInferenceLog.warn(
+      "Inference activation committed successfully despite a post-write cleanup error.",
+    );
   }
 
-  state.committedConfig = committedConfig;
   state.codexInstallOwnership = codexInstallOwnership;
   return undefined;
 }

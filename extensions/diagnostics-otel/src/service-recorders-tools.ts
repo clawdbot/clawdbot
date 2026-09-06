@@ -1,7 +1,10 @@
-import { SpanStatusCode } from "@opentelemetry/api";
+import { ROOT_CONTEXT, SpanStatusCode } from "@opentelemetry/api";
+import {
+  isInternalDiagnosticEventMetadata,
+  normalizeDiagnosticValue,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import { redactSensitiveText } from "../api.js";
 import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
-import { lowCardinalityAttr } from "./service-attributes.js";
 import { positiveFiniteNumber } from "./service-genai-attributes.js";
 import {
   assignOtelToolContentAttributes,
@@ -13,6 +16,9 @@ import type { TelemetryExporterDiagnosticEvent } from "./service-types.js";
 
 export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime) {
   const {
+    gcDurationHistogram,
+    gatewayEventLoopDelayMaxHistogram,
+    gatewayEventLoopObservedCounter,
     queueDepthHistogram,
     skillUsedCounter,
     toolExecutionDurationHistogram,
@@ -30,6 +36,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
     activeTrustedParentContext,
     exportedInternalOrTrustedContext,
     trackTrustedSpan,
+    getTrackedInternalOrTrustedSpan,
     takeTrackedTrustedSpan,
     setSpanAttrs,
     addRunAttrs,
@@ -51,20 +58,24 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
     >,
   ): Record<string, string | number | boolean> => ({
     "openclaw.toolName": evt.toolName,
-    "openclaw.tool.source": lowCardinalityAttr(evt.toolSource, "core"),
+    "openclaw.tool.source": normalizeDiagnosticValue(evt.toolSource, "core"),
     "gen_ai.tool.name": evt.toolName,
-    ...(evt.toolOwner ? { "openclaw.tool.owner": lowCardinalityAttr(evt.toolOwner) } : {}),
+    ...(evt.toolOwner ? { "openclaw.tool.owner": normalizeDiagnosticValue(evt.toolOwner) } : {}),
     ...paramsSummaryAttrs(evt.paramsSummary),
   });
+  const toolTimestampMs = (evt: { sourceTimestampMs?: number; ts: number }) =>
+    evt.sourceTimestampMs ?? evt.ts;
 
   const skillUsedAttrs = (
     evt: Extract<DiagnosticEventPayload, { type: "skill.used" }>,
   ): Record<string, string | number | boolean> => ({
-    "openclaw.skill.name": lowCardinalityAttr(evt.skillName, "skill"),
-    "openclaw.skill.source": lowCardinalityAttr(evt.skillSource),
-    "openclaw.skill.activation": lowCardinalityAttr(evt.activation),
-    ...(evt.agentId ? { "openclaw.agent": lowCardinalityAttr(evt.agentId) } : {}),
-    ...(evt.toolName ? { "openclaw.toolName": lowCardinalityAttr(evt.toolName, "tool") } : {}),
+    "openclaw.skill.name": normalizeDiagnosticValue(evt.skillName, "skill"),
+    "openclaw.skill.source": normalizeDiagnosticValue(evt.skillSource),
+    "openclaw.skill.activation": normalizeDiagnosticValue(evt.activation),
+    ...(evt.agentId ? { "openclaw.agent": normalizeDiagnosticValue(evt.agentId) } : {}),
+    ...(evt.toolName
+      ? { "openclaw.toolName": normalizeDiagnosticValue(evt.toolName, "tool") }
+      : {}),
   });
 
   const recordSkillUsed = (
@@ -94,18 +105,22 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
     metadata: DiagnosticEventMetadata,
   ) => {
     if (!tracesEnabled || !metadata.trusted) {
-      return;
+      return undefined;
+    }
+    const trackedSpan = getTrackedInternalOrTrustedSpan(evt, metadata);
+    if (trackedSpan) {
+      return trackedSpan.spanContext();
     }
     const spanAttrs = toolExecutionBaseAttrs(evt);
     assignOtelToolIdentityAttributes(spanAttrs, evt);
-    trackTrustedSpan(
+    return trackTrustedSpan(
       evt,
       metadata,
       spanWithDuration("openclaw.tool.execution", spanAttrs, undefined, {
         parentContext: activeTrustedParentContext(evt, metadata),
-        startTimeMs: evt.ts,
+        startTimeMs: toolTimestampMs(evt),
       }),
-    );
+    ).spanContext();
   };
 
   const recordToolExecutionCompleted = (
@@ -126,10 +141,10 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
       takeTrackedTrustedSpan(evt, metadata) ??
       spanWithDuration("openclaw.tool.execution", spanAttrs, evt.durationMs, {
         parentContext: activeTrustedParentContext(evt, metadata),
-        endTimeMs: evt.ts,
+        endTimeMs: toolTimestampMs(evt),
       });
     setSpanAttrs(span, spanAttrs);
-    span.end(evt.ts);
+    span.end(toolTimestampMs(evt));
   };
 
   const recordToolExecutionError = (
@@ -139,7 +154,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
   ) => {
     const attrs = {
       ...toolExecutionBaseAttrs(evt),
-      "openclaw.errorCategory": lowCardinalityAttr(evt.errorCategory, "other"),
+      "openclaw.errorCategory": normalizeDiagnosticValue(evt.errorCategory, "other"),
     };
     toolExecutionDurationHistogram.record(evt.durationMs, attrs);
     if (!tracesEnabled) {
@@ -149,21 +164,21 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
     addRunAttrs(spanAttrs, evt);
     assignOtelToolIdentityAttributes(spanAttrs, evt);
     if (evt.errorCode) {
-      spanAttrs["openclaw.errorCode"] = lowCardinalityAttr(evt.errorCode, "other");
+      spanAttrs["openclaw.errorCode"] = normalizeDiagnosticValue(evt.errorCode, "other");
     }
     assignOtelToolContentAttributes(spanAttrs, toolContent, contentCapturePolicy);
     const span =
       takeTrackedTrustedSpan(evt, metadata) ??
       spanWithDuration("openclaw.tool.execution", spanAttrs, evt.durationMs, {
         parentContext: activeTrustedParentContext(evt, metadata),
-        endTimeMs: evt.ts,
+        endTimeMs: toolTimestampMs(evt),
       });
     setSpanAttrs(span, spanAttrs);
     span.setStatus({
       code: SpanStatusCode.ERROR,
       message: redactSensitiveText(evt.errorCategory),
     });
-    span.end(evt.ts);
+    span.end(toolTimestampMs(evt));
   };
 
   const recordToolExecutionBlocked = (
@@ -172,7 +187,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
   ) => {
     toolExecutionBlockedCounter.add(1, {
       ...toolExecutionBaseAttrs(evt),
-      "openclaw.deniedReason": lowCardinalityAttr(evt.deniedReason, "other"),
+      "openclaw.deniedReason": normalizeDiagnosticValue(evt.deniedReason, "other"),
     });
     if (!tracesEnabled) {
       return;
@@ -180,25 +195,27 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
     const spanAttrs: Record<string, string | number | boolean> = {
       ...toolExecutionBaseAttrs(evt),
       "openclaw.outcome": "blocked",
-      "openclaw.deniedReason": lowCardinalityAttr(evt.deniedReason, "other"),
+      "openclaw.deniedReason": normalizeDiagnosticValue(evt.deniedReason, "other"),
     };
     addRunAttrs(spanAttrs, evt);
     assignOtelToolIdentityAttributes(spanAttrs, evt);
-    const span = spanWithDuration("openclaw.tool.execution", spanAttrs, 0, {
-      parentContext: activeTrustedParentContext(evt, metadata),
-      endTimeMs: evt.ts,
-    });
+    const span =
+      takeTrackedTrustedSpan(evt, metadata) ??
+      spanWithDuration("openclaw.tool.execution", spanAttrs, 0, {
+        parentContext: activeTrustedParentContext(evt, metadata),
+        endTimeMs: toolTimestampMs(evt),
+      });
     setSpanAttrs(span, spanAttrs);
-    span.end(evt.ts);
+    span.end(toolTimestampMs(evt));
   };
 
   const recordPayloadLarge = (evt: Extract<DiagnosticEventPayload, { type: "payload.large" }>) => {
     const attrs = {
       "openclaw.payload.action": evt.action,
-      "openclaw.payload.surface": lowCardinalityAttr(evt.surface, "unknown"),
-      "openclaw.channel": lowCardinalityAttr(evt.channel, "none"),
-      "openclaw.plugin": lowCardinalityAttr(evt.pluginId, "none"),
-      "openclaw.reason": lowCardinalityAttr(evt.reason, "none"),
+      "openclaw.payload.surface": normalizeDiagnosticValue(evt.surface, "unknown"),
+      "openclaw.channel": normalizeDiagnosticValue(evt.channel, "none"),
+      "openclaw.plugin": normalizeDiagnosticValue(evt.pluginId, "none"),
+      "openclaw.reason": normalizeDiagnosticValue(evt.reason, "none"),
     };
     payloadLargeCounter.add(1, attrs);
     const bytes = positiveFiniteNumber(evt.bytes);
@@ -232,7 +249,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
       spanAttrs["openclaw.exec.exit_code"] = evt.exitCode;
     }
     if (evt.exitSignal) {
-      spanAttrs["openclaw.exec.exit_signal"] = lowCardinalityAttr(evt.exitSignal, "other");
+      spanAttrs["openclaw.exec.exit_signal"] = normalizeDiagnosticValue(evt.exitSignal, "other");
     }
     if (evt.timedOut !== undefined) {
       spanAttrs["openclaw.exec.timed_out"] = evt.timedOut;
@@ -256,6 +273,28 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
     span.end(evt.ts);
   };
 
+  const recordGcDuration = (
+    evt: Extract<DiagnosticEventPayload, { type: "diagnostic.gc" }>,
+    metadata: DiagnosticEventMetadata,
+  ) => {
+    if (!metadata.trusted && !isInternalDiagnosticEventMetadata(metadata)) {
+      return;
+    }
+    gcDurationHistogram.record(evt.durationMs, undefined, ROOT_CONTEXT);
+  };
+
+  const recordGatewayEventLoopSample = (
+    evt: Extract<DiagnosticEventPayload, { type: "gateway.event_loop.sample" }>,
+    metadata: DiagnosticEventMetadata,
+  ) => {
+    if (!metadata.trusted && !isInternalDiagnosticEventMetadata(metadata)) {
+      return;
+    }
+    // Process-wide windows must not inherit the reader's trace through an external SDK.
+    gatewayEventLoopDelayMaxHistogram.record(evt.delayMaxMs, undefined, ROOT_CONTEXT);
+    gatewayEventLoopObservedCounter.add(evt.intervalMs, undefined, ROOT_CONTEXT);
+  };
+
   const recordHeartbeat = (
     evt: Extract<DiagnosticEventPayload, { type: "diagnostic.heartbeat" }>,
   ) => {
@@ -267,7 +306,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
   ) => {
     const reason = evt.reasons.join(":");
     const attrs = {
-      "openclaw.liveness.reason": lowCardinalityAttr(reason, "unknown"),
+      "openclaw.liveness.reason": normalizeDiagnosticValue(reason, "unknown"),
     };
     livenessWarningCounter.add(1, attrs);
     queueDepthHistogram.record(evt.queued, { "openclaw.channel": "liveness" });
@@ -327,7 +366,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
       return;
     }
     const spanAttrs: Record<string, string | number> = {
-      "openclaw.phase": lowCardinalityAttr(evt.name, "unknown"),
+      "openclaw.phase": normalizeDiagnosticValue(evt.name, "unknown"),
       ...(evt.cpuUserMs !== undefined ? { "openclaw.phase.cpu_user_ms": evt.cpuUserMs } : {}),
       ...(evt.cpuSystemMs !== undefined ? { "openclaw.phase.cpu_system_ms": evt.cpuSystemMs } : {}),
       ...(evt.cpuTotalMs !== undefined ? { "openclaw.phase.cpu_total_ms": evt.cpuTotalMs } : {}),
@@ -353,17 +392,19 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
       return;
     }
     telemetryExporterCounter.add(1, {
-      "openclaw.exporter": lowCardinalityAttr(evt.exporter, "unknown"),
+      "openclaw.exporter": normalizeDiagnosticValue(evt.exporter, "unknown"),
       "openclaw.signal": evt.signal,
       "openclaw.status": evt.status,
       ...(evt.reason ? { "openclaw.reason": evt.reason } : {}),
       ...(evt.errorCategory
-        ? { "openclaw.errorCategory": lowCardinalityAttr(evt.errorCategory, "other") }
+        ? { "openclaw.errorCategory": normalizeDiagnosticValue(evt.errorCategory, "other") }
         : {}),
     });
   };
 
   return {
+    recordGcDuration,
+    recordGatewayEventLoopSample,
     recordSkillUsed,
     recordToolExecutionStarted,
     recordToolExecutionCompleted,

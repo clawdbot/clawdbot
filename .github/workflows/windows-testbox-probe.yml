@@ -9,7 +9,7 @@ on:
         default: "main"
         type: string
       runner_label:
-        description: "Windows runner label"
+        description: "Runner for Windows/WSL probes and headless CI"
         required: false
         default: "blacksmith-16vcpu-windows-2025"
         type: choice
@@ -58,8 +58,9 @@ jobs:
       run:
         shell: pwsh
     steps:
-      - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - &windows_checkout
+        name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.target_ref || github.ref }}
           persist-credentials: false
@@ -204,7 +205,8 @@ jobs:
 
           exit 0
 
-      - name: Try to exclude workspace from Windows Defender (best-effort)
+      - &windows_defender
+        name: Try to exclude workspace from Windows Defender (best-effort)
         if: ${{ inputs.run_windows_ci }}
         shell: pwsh
         run: |
@@ -222,7 +224,8 @@ jobs:
             Write-Warning "Failed to apply Defender exclusions, continuing. $($_.Exception.Message)"
           }
 
-      - name: Setup Node.js
+      - &windows_node
+        name: Setup Node.js
         if: ${{ inputs.run_windows_ci }}
         shell: bash
         env:
@@ -232,13 +235,16 @@ jobs:
           source .github/actions/setup-pnpm-store-cache/ensure-node.sh
           openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
-      - name: Setup pnpm
+      - &windows_pnpm
+        name: Setup pnpm
         if: ${{ inputs.run_windows_ci }}
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
+          cache-mode: restore
           node-version: 22.x
 
-      - name: Runtime versions
+      - &windows_versions
+        name: Runtime versions
         if: ${{ inputs.run_windows_ci }}
         shell: bash
         run: |
@@ -246,7 +252,8 @@ jobs:
           npm -v
           pnpm -v
 
-      - name: Capture node path
+      - &windows_node_path
+        name: Capture node path
         if: ${{ inputs.run_windows_ci }}
         shell: bash
         run: |
@@ -256,7 +263,8 @@ jobs:
           fi
           echo "NODE_BIN=$node_bin" >> "$GITHUB_ENV"
 
-      - name: Install dependencies
+      - &windows_install
+        name: Install dependencies
         if: ${{ inputs.run_windows_ci }}
         shell: bash
         env:
@@ -266,7 +274,7 @@ jobs:
           which node
           node -v
           pnpm -v
-          pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true || pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true
+          pnpm install --frozen-lockfile --prefer-offline --config.ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true || pnpm install --frozen-lockfile --prefer-offline --config.ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true
 
       - name: Run Windows CI tests
         if: ${{ inputs.run_windows_ci }}
@@ -280,6 +288,124 @@ jobs:
           set -euo pipefail
           export PATH="$NODE_BIN:$PATH"
           pnpm test:windows:ci
+
+      - name: Keep runner alive for SSH inspection
+        if: ${{ always() && !cancelled() }}
+        env:
+          KEEPALIVE_MINUTES: ${{ inputs.keepalive_minutes }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $minutes = 20
+          if ($env:KEEPALIVE_MINUTES -match '^\d+$') {
+            $minutes = [int]$env:KEEPALIVE_MINUTES
+          }
+          $minutes = [Math]::Max(0, [Math]::Min($minutes, 60))
+          Write-Host "keepalive_minutes=$minutes"
+          for ($i = 1; $i -le $minutes; $i++) {
+            Write-Host "keepalive minute $i/$minutes"
+            Start-Sleep -Seconds 60
+          }
+
+      - name: Enforce WSL2 requirement
+        if: ${{ always() && !cancelled() && inputs.require_wsl2 }}
+        run: |
+          if ($env:OPENCLAW_WSL2_PROBE_OK -ne "true") {
+            if ($env:OPENCLAW_WSL2_RESTART_REQUIRED -eq "true") {
+              Write-Error "WSL2 probe enabled required Windows features, but the runner needs a reboot before WSL2 can start."
+              exit 1
+            }
+            Write-Error "WSL2 probe failed or WSL2 is unavailable on this Windows runner."
+            exit 1
+          }
+
+  # Native session qualification must not depend on headless CI or WSL results.
+  native-schtasks:
+    name: Native Scheduled Task proof
+    if: ${{ inputs.run_windows_ci }}
+    runs-on: windows-2025
+    timeout-minutes: 75
+    steps:
+      - name: Qualify fresh native runner isolation
+        id: native_isolation
+        shell: pwsh
+        env:
+          NATIVE_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          EXPECTED_HEAD: ${{ inputs.target_ref }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $proofPath = Join-Path $env:RUNNER_TEMP "windows-schtasks-isolation.json"
+          $evidence = [ordered]@{ result = "unqualified"; runnerEnvironment = $env:NATIVE_RUNNER_ENVIRONMENT; image = $env:ImageOS }
+          try {
+            # Standard GitHub-hosted Windows jobs receive a fresh VM per job.
+            # ImageOS also names toolchain variants; it is evidence, not isolation authority.
+            if ($env:NATIVE_RUNNER_ENVIRONMENT -ne "github-hosted" -or $env:RUNNER_OS -ne "Windows") {
+              throw "Expected a newly allocated GitHub-hosted Windows runner."
+            }
+            if ($env:EXPECTED_HEAD -notmatch '^[0-9a-f]{40}$') {
+              throw "Native proof requires an exact 40-character target_ref."
+            }
+            # Actions artifact/cache credentials are infrastructure-only. The
+            # native probe separately bounds its environment before owner imports.
+            $credentialNames = @(
+              "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+              "GITHUB_TOKEN", "GH_TOKEN", "NPM_TOKEN", "NODE_AUTH_TOKEN",
+              "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_WEB_IDENTITY_TOKEN_FILE",
+              "AZURE_CLIENT_SECRET", "AZURE_FEDERATED_TOKEN_FILE", "ARM_CLIENT_SECRET", "GOOGLE_APPLICATION_CREDENTIALS",
+              "SSH_AUTH_SOCK", "NODE_OPTIONS", "NODE_EXTRA_CA_CERTS",
+              "OPENCLAW_HOME", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH",
+              "OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD", "OPENCLAW_SUPERVISOR_MODE"
+            ) | Where-Object { -not [string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable($_)) }
+            $credentialNames = @($credentialNames)
+            $evidence.forwardedCredentialCount = $credentialNames.Count
+            if ($credentialNames.Count -ne 0) { throw "Forwarded credential environment is not permitted." }
+            $tailnetServices = @(Get-Service | Where-Object { $_.Name -match 'tailscale|zerotier' })
+            $tailnetAdapters = @(Get-NetAdapter -IncludeHidden | Where-Object { $_.InterfaceDescription -match 'tailscale|zerotier' })
+            $tailnetRoutes = @(Get-NetRoute | Where-Object { $_.DestinationPrefix -eq '100.64.0.0/10' })
+            $networkDisks = @(Get-CimInstance Win32_LogicalDisk -Filter "DriveType=4")
+            $networkDrives = @(Get-PSDrive -PSProvider FileSystem | Where-Object { $_.DisplayRoot -like '\\*' })
+            $smbMappings = @(Get-SmbMapping)
+            $evidence.tailnetSurfaceCount = $tailnetServices.Count + $tailnetAdapters.Count + $tailnetRoutes.Count
+            $evidence.operatorMountCount = $networkDisks.Count + $networkDrives.Count + $smbMappings.Count
+            if ($evidence.tailnetSurfaceCount -ne 0 -or $evidence.operatorMountCount -ne 0) {
+              throw "Native proof requires no Tailnet attachment or operator network mounts."
+            }
+            # Do not use proxies, follow redirects, or read a successful token
+            # response. Unknown/temporary failures do not establish no identity.
+            $handler = [Net.Http.HttpClientHandler]::new()
+            $handler.UseProxy = $false
+            $handler.AllowAutoRedirect = $false
+            $client = [Net.Http.HttpClient]::new($handler)
+            $client.Timeout = [TimeSpan]::FromSeconds(5)
+            $deadline = [Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(5))
+            $client.DefaultRequestHeaders.Add("Metadata", "true")
+            try {
+              $uri = "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3A%2F%2Fmanagement.azure.com%2F"
+              $response = $client.GetAsync($uri, [Net.Http.HttpCompletionOption]::ResponseHeadersRead, $deadline.Token).GetAwaiter().GetResult()
+              try {
+                $evidence.managedIdentityStatus = [int]$response.StatusCode
+                if ([int]$response.StatusCode -ne 400) { throw "Managed identity absence is unproven." }
+                $body = $response.Content.ReadAsStringAsync($deadline.Token).GetAwaiter().GetResult() | ConvertFrom-Json
+                # Accept only this known negative; changed error wording blocks
+                # qualification instead of treating every 400 as no identity.
+                if ($body.access_token -or $body.error -ne "invalid_request" -or $body.error_description -cne "Identity not found") {
+                  throw "Managed identity absence is unproven."
+                }
+                $evidence.managedIdentity = "explicit-identity-not-found"
+              } finally {
+                $body = $null
+                $response.Dispose()
+              }
+            } catch {
+              # Never include endpoint bodies or exception data in logs/artifacts.
+              throw "IMDS did not establish identity absence; native product execution is blocked."
+            } finally {
+              $deadline.Dispose()
+              $client.Dispose()
+            }
+            $evidence.result = "qualified"
+          } finally {
+            $evidence | ConvertTo-Json | Set-Content -LiteralPath $proofPath
+          }
 
       - name: Preflight native Scheduled Task session
         if: ${{ inputs.run_windows_ci }}
@@ -299,6 +425,14 @@ jobs:
             throw "Native Scheduled Task proof requires an interactive Windows runner session."
           }
           exit 0
+
+      - *windows_checkout
+      - *windows_defender
+      - *windows_node
+      - *windows_pnpm
+      - *windows_versions
+      - *windows_node_path
+      - *windows_install
 
       - name: Run native Scheduled Task lifecycle proof
         id: native_schtasks
@@ -326,9 +460,10 @@ jobs:
           mkdir -p .artifacts/windows-schtasks
           pnpm test:windows:schtasks:integration
 
+      # Qualification/setup failures cannot have created this run's native task.
       - name: Clean native Scheduled Task residue
         id: native_cleanup
-        if: ${{ always() && inputs.run_windows_ci }}
+        if: ${{ always() && inputs.run_windows_ci && steps.native_isolation.outcome == 'success' && contains(fromJSON('["success","failure","cancelled"]'), steps.native_schtasks.outcome) }}
         shell: pwsh
         env:
           TEST_ID: ${{ github.run_id }}-${{ github.run_attempt }}
@@ -356,7 +491,7 @@ jobs:
                 throw "Could not inspect Scheduled Task probe process $probePid."
               }
               if ($process) {
-                $probePath = Join-Path $env:TEST_ROOT "probe.cjs"
+                $probePath = Join-Path $env:TEST_ROOT "probe.mts"
                 $eventsPath = Join-Path $env:TEST_ROOT "runs.txt"
                 if (
                   $process.CommandLine -like "*$probePath*" -and
@@ -425,6 +560,8 @@ jobs:
           name: windows-schtasks-proof-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             .artifacts/windows-schtasks/proof.json
+            ${{ runner.temp }}\windows-schtasks-isolation.json
+            ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}\runs.txt.hosted-stop
             ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}\failure-diagnostics.json
             ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}\cleanup-summary.txt
           if-no-files-found: warn
@@ -440,32 +577,3 @@ jobs:
           $profile = "schtasks-int-$env:TEST_ID"
           Remove-Item -LiteralPath (Join-Path $env:USERPROFILE ".openclaw-$profile") -Recurse -Force -ErrorAction SilentlyContinue
           Remove-Item -LiteralPath $env:TEST_ROOT -Recurse -Force -ErrorAction SilentlyContinue
-
-      - name: Keep runner alive for SSH inspection
-        if: ${{ always() && !cancelled() }}
-        env:
-          KEEPALIVE_MINUTES: ${{ inputs.keepalive_minutes }}
-        run: |
-          $ErrorActionPreference = "Stop"
-          $minutes = 20
-          if ($env:KEEPALIVE_MINUTES -match '^\d+$') {
-            $minutes = [int]$env:KEEPALIVE_MINUTES
-          }
-          $minutes = [Math]::Max(0, [Math]::Min($minutes, 60))
-          Write-Host "keepalive_minutes=$minutes"
-          for ($i = 1; $i -le $minutes; $i++) {
-            Write-Host "keepalive minute $i/$minutes"
-            Start-Sleep -Seconds 60
-          }
-
-      - name: Enforce WSL2 requirement
-        if: ${{ always() && !cancelled() && inputs.require_wsl2 }}
-        run: |
-          if ($env:OPENCLAW_WSL2_PROBE_OK -ne "true") {
-            if ($env:OPENCLAW_WSL2_RESTART_REQUIRED -eq "true") {
-              Write-Error "WSL2 probe enabled required Windows features, but the runner needs a reboot before WSL2 can start."
-              exit 1
-            }
-            Write-Error "WSL2 probe failed or WSL2 is unavailable on this Windows runner."
-            exit 1
-          }

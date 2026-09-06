@@ -16,7 +16,7 @@ describe("runGatewayHealthJsonRoute", () => {
   it("writes successful JSON without loading error-only dependencies", async () => {
     const runtime = createRuntime();
     const callGateway = vi.fn(async () => ({ ok: true, durationMs: 6 }));
-    const readBestEffortConfig = vi.fn(async () => ({}));
+    const readNonObservingHealthConfig = vi.fn(async () => ({}));
     const emitReachableGatewayAuthDiagnostic = vi.fn(async () => false);
     const formatGatewayAuthErrorJson = vi.fn();
     const formatGatewayClientRequestErrorJson = vi.fn();
@@ -29,7 +29,7 @@ describe("runGatewayHealthJsonRoute", () => {
       runtime as never,
       {
         callGateway,
-        readBestEffortConfig,
+        readNonObservingHealthConfig,
         emitReachableGatewayAuthDiagnostic: emitReachableGatewayAuthDiagnostic as never,
         formatGatewayAuthErrorJson: formatGatewayAuthErrorJson as never,
         formatGatewayClientRequestErrorJson: formatGatewayClientRequestErrorJson as never,
@@ -41,10 +41,10 @@ describe("runGatewayHealthJsonRoute", () => {
       "health",
       { json: true, timeout: "10000" },
       undefined,
-      { defaultTimeoutMs: 10_000 },
+      { defaultTimeoutMs: 10_000, sharedStateMode: "read-only" },
     );
     expect(runtime.writeJson).toHaveBeenCalledWith({ ok: true, durationMs: 6 }, 2);
-    expect(readBestEffortConfig).not.toHaveBeenCalled();
+    expect(readNonObservingHealthConfig).not.toHaveBeenCalled();
     expect(emitReachableGatewayAuthDiagnostic).not.toHaveBeenCalled();
     expect(formatGatewayAuthErrorJson).not.toHaveBeenCalled();
     expect(formatGatewayClientRequestErrorJson).not.toHaveBeenCalled();
@@ -54,7 +54,7 @@ describe("runGatewayHealthJsonRoute", () => {
   it("projects a local port into the routed config", async () => {
     const runtime = createRuntime();
     const callGateway = vi.fn(async () => ({ ok: true }));
-    const readBestEffortConfig = vi.fn(async () => ({
+    const readNonObservingHealthConfig = vi.fn(async () => ({
       gateway: { auth: { mode: "token" as const } },
     }));
 
@@ -64,7 +64,7 @@ describe("runGatewayHealthJsonRoute", () => {
         localPortOverride: 19083,
       },
       runtime as never,
-      { callGateway, readBestEffortConfig },
+      { callGateway, readNonObservingHealthConfig },
     );
 
     expect(callGateway).toHaveBeenCalledWith(
@@ -76,33 +76,35 @@ describe("runGatewayHealthJsonRoute", () => {
         },
       }),
       undefined,
-      { defaultTimeoutMs: 10_000 },
+      { defaultTimeoutMs: 10_000, sharedStateMode: "read-only" },
     );
   });
 
-  it("preserves the existing error contract when local config resolution fails", async () => {
+  it("leaves local config resolution failures to the root CLI renderer", async () => {
     const runtime = createRuntime();
     const error = new Error("config unavailable");
     const callGateway = vi.fn();
 
-    await runGatewayHealthJsonRoute(
-      {
-        rpc: { json: true, timeout: "10000" },
-        localPortOverride: 19083,
-      },
-      runtime as never,
-      {
-        callGateway,
-        readBestEffortConfig: vi.fn(async () => {
-          throw error;
-        }),
-      },
-    );
+    await expect(
+      runGatewayHealthJsonRoute(
+        {
+          rpc: { json: true, timeout: "10000" },
+          localPortOverride: 19083,
+        },
+        runtime as never,
+        {
+          callGateway,
+          readNonObservingHealthConfig: vi.fn(async () => {
+            throw error;
+          }),
+        },
+      ),
+    ).rejects.toBe(error);
 
     expect(callGateway).not.toHaveBeenCalled();
     expect(runtime.writeJson).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith(String(error));
-    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("preserves structured transport errors", async () => {
@@ -115,13 +117,45 @@ describe("runGatewayHealthJsonRoute", () => {
 
     await runGatewayHealthJsonRoute({ rpc: { json: true, timeout: "10000" } }, runtime as never, {
       callGateway,
-      readBestEffortConfig: async () => ({}),
+      readNonObservingHealthConfig: async () => ({}),
       emitReachableGatewayAuthDiagnostic: vi.fn(async () => false) as never,
       formatGatewayAuthErrorJson: vi.fn(() => null) as never,
       formatGatewayClientRequestErrorJson: vi.fn(() => null) as never,
       formatGatewayTransportErrorJson: vi.fn(() => payload) as never,
     });
 
+    expect(runtime.writeJson).toHaveBeenCalledWith(payload, 2);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("preserves structured Gateway health request errors", async () => {
+    const runtime = createRuntime();
+    const error = new Error("health snapshot unavailable");
+    const callGateway = vi.fn(async () => {
+      throw error;
+    });
+    const payload = {
+      ok: false,
+      error: {
+        type: "gateway_request_error",
+        code: "UNAVAILABLE",
+        message: "health snapshot unavailable",
+      },
+    };
+    const formatGatewayClientRequestErrorJson = vi.fn(() => payload);
+    const formatGatewayTransportErrorJson = vi.fn();
+
+    await runGatewayHealthJsonRoute({ rpc: { json: true, timeout: "10000" } }, runtime as never, {
+      callGateway,
+      readNonObservingHealthConfig: async () => ({}),
+      emitReachableGatewayAuthDiagnostic: vi.fn(async () => false) as never,
+      formatGatewayAuthErrorJson: vi.fn(() => null) as never,
+      formatGatewayClientRequestErrorJson: formatGatewayClientRequestErrorJson as never,
+      formatGatewayTransportErrorJson: formatGatewayTransportErrorJson as never,
+    });
+
+    expect(formatGatewayClientRequestErrorJson).toHaveBeenCalledWith(error);
+    expect(formatGatewayTransportErrorJson).not.toHaveBeenCalled();
     expect(runtime.writeJson).toHaveBeenCalledWith(payload, 2);
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
@@ -145,7 +179,7 @@ describe("runGatewayHealthJsonRoute", () => {
 
     await runGatewayHealthJsonRoute({ rpc: { json: true, timeout: "10000" } }, runtime as never, {
       callGateway,
-      readBestEffortConfig: async () => ({}),
+      readNonObservingHealthConfig: async () => ({}),
       emitReachableGatewayAuthDiagnostic: vi.fn(async () => false) as never,
       formatGatewayAuthErrorJson: formatGatewayAuthErrorJson as never,
       formatGatewayClientRequestErrorJson: formatGatewayClientRequestErrorJson as never,

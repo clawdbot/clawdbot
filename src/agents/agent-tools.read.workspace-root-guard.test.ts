@@ -106,31 +106,41 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
     });
   });
 
-  it("does not remap remote-host file:// paths", async () => {
+  it.each([
+    {
+      title: "does not remap remote-host file:// paths",
+      toolCallId: "tc-remote-file-url",
+      requestedPath: "file://attacker/share/readme.md",
+      expectedPath: "file://attacker/share/readme.md",
+    },
+    {
+      title: "does not remap malformed file:// container workspace paths",
+      toolCallId: "tc-malformed-file-url",
+      requestedPath: "file:///workspace/%E0%A4%A",
+      expectedPath: "file:///workspace/%E0%A4%A",
+    },
+    {
+      title: "normalizes @-prefixed absolute paths before guard checks",
+      toolCallId: "tc-at-absolute",
+      requestedPath: "@/etc/passwd",
+      expectedPath: "/etc/passwd",
+    },
+    {
+      title: "does not remap absolute paths outside the configured container workdir",
+      toolCallId: "tc3",
+      requestedPath: "/workspace-two/secret.txt",
+      expectedPath: "/workspace-two/secret.txt",
+    },
+  ])("$title", async ({ toolCallId, requestedPath, expectedPath }) => {
     const { tool } = createToolHarness();
     const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
       containerWorkdir: "/workspace",
     });
 
-    await wrapped.execute("tc-remote-file-url", { path: "file://attacker/share/readme.md" });
+    await wrapped.execute(toolCallId, { path: requestedPath });
 
     expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
-      filePath: "file://attacker/share/readme.md",
-      cwd: root,
-      root,
-    });
-  });
-
-  it("does not remap malformed file:// container workspace paths", async () => {
-    const { tool } = createToolHarness();
-    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
-      containerWorkdir: "/workspace",
-    });
-
-    await wrapped.execute("tc-malformed-file-url", { path: "file:///workspace/%E0%A4%A" });
-
-    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
-      filePath: "file:///workspace/%E0%A4%A",
+      filePath: expectedPath,
       cwd: root,
       root,
     });
@@ -163,36 +173,6 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
 
     expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
       filePath: path.resolve(root, "docs", "readme.md"),
-      cwd: root,
-      root,
-    });
-  });
-
-  it("normalizes @-prefixed absolute paths before guard checks", async () => {
-    const { tool } = createToolHarness();
-    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
-      containerWorkdir: "/workspace",
-    });
-
-    await wrapped.execute("tc-at-absolute", { path: "@/etc/passwd" });
-
-    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
-      filePath: "/etc/passwd",
-      cwd: root,
-      root,
-    });
-  });
-
-  it("does not remap absolute paths outside the configured container workdir", async () => {
-    const { tool } = createToolHarness();
-    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
-      containerWorkdir: "/workspace",
-    });
-
-    await wrapped.execute("tc3", { path: "/workspace-two/secret.txt" });
-
-    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
-      filePath: "/workspace-two/secret.txt",
       cwd: root,
       root,
     });

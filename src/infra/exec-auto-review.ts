@@ -51,6 +51,14 @@ export type ExecAutoReviewInput = {
   };
 };
 
+/** Capability request supplied to the same configured model-backed reviewer. */
+export type BoardWidgetAutoReviewInput = {
+  kind: "board-widget";
+  name: string;
+  declared: { netOrigins?: string[]; tools?: string[] };
+  agent?: { id?: string | null; sessionKey?: string | null };
+};
+
 /** Reviewer function used by gateway/node exec paths before human approval fallback. */
 export type ExecAutoReviewer = (
   input: ExecAutoReviewInput,
@@ -78,10 +86,10 @@ export function buildExecAutoReviewFailureDecision(
   };
 }
 
-/** Custom reviewer failures must defer to a human, never authorize or crash execution. */
-export async function resolveExecAutoReviewDecision(
-  reviewer: ExecAutoReviewer,
-  input: ExecAutoReviewInput,
+/** Reviewer failures become ask decisions; each approval owner applies its own policy. */
+export async function resolveExecAutoReviewDecision<TInput>(
+  reviewer: (input: TInput) => Promise<ExecAutoReviewDecision> | ExecAutoReviewDecision,
+  input: TInput,
 ): Promise<ExecAutoReviewDecision> {
   try {
     return await reviewer(input);

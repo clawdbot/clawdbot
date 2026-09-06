@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { FailoverError } from "../../agents/failover-error.js";
+import { createCliTimeoutError } from "../../agents/cli-runner/no-output-timeout-policy.js";
+import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveFallbackCandidateRun } from "./agent-runner-auth-profile.js";
@@ -9,6 +10,8 @@ import {
   GENERIC_RUN_FAILURE_TEXT,
   getExecuteAgentTurnForTest,
   createFollowupRun,
+  fallbackAttemptOptions,
+  initialFallbackAttemptOptions,
   createMockReplyOperation,
   expectRecordFields,
   expectMockCallArgFields,
@@ -18,9 +21,9 @@ import type {
   FallbackRunnerParams,
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
-import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "./agent-runner-failure-copy.js";
+import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: primary probe routing", () => {
   it("rechecks queued auto fallback primary probes before running", async () => {
@@ -109,6 +112,48 @@ describe("executeAgentTurn: primary probe routing", () => {
     });
   });
 
+  it.each([
+    { name: "legacy user", marker: undefined, expectedSource: "user" as const },
+    { name: "marker-backed auto", marker: 0, expectedSource: "auto" as const },
+  ])(
+    "canonicalizes a source-less $name auth profile during queued probe recheck",
+    ({ marker, expectedSource }) => {
+      const probe = {
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        fallbackProvider: "google",
+        fallbackModel: "gemini-3-pro",
+      };
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: 1,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4",
+        modelOverrideSource: "user",
+        authProfileOverride: "openai:work",
+        ...(marker === undefined ? {} : { authProfileOverrideCompactionCount: marker }),
+      };
+      const run = createFollowupRun().run;
+      run.provider = probe.provider;
+      run.model = probe.model;
+      run.autoFallbackPrimaryProbe = probe;
+
+      expect(
+        resolveRunAfterAutoFallbackPrimaryProbeRecheck({
+          run,
+          entry: sessionEntry,
+          sessionKey: "main",
+        }),
+      ).toMatchObject({
+        provider: "openai",
+        model: "gpt-5.4",
+        authProfileId: "openai:work",
+        authProfileIdSource: expectedSource,
+        autoFallbackPrimaryProbe: undefined,
+      });
+    },
+  );
+
   it("propagates rechecked user selections to post-run state", async () => {
     const sessionKey = "rechecked-user-selection";
     const sessionEntry: SessionEntry = {
@@ -140,7 +185,11 @@ describe("executeAgentTurn: primary probe routing", () => {
       fallbackModel: "gemini-3-pro",
     };
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run(params.provider, params.model),
+      result: await params.run(
+        params.provider,
+        params.model,
+        initialFallbackAttemptOptions(params),
+      ),
       provider: params.provider,
       model: params.model,
       attempts: [],
@@ -298,7 +347,7 @@ describe("executeAgentTurn: primary probe routing", () => {
     });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       outcome: "exhausted",
-      result: await params.run(probe.provider, probe.model),
+      result: await params.run(probe.provider, probe.model, initialFallbackAttemptOptions(params)),
       provider: probe.provider,
       model: probe.model,
       attempts: [
@@ -344,7 +393,7 @@ describe("executeAgentTurn: primary probe routing", () => {
           (event) =>
             event.stream === "lifecycle" &&
             event.data.phase === "error" &&
-            event.data.fallbackExhaustedFailure === true &&
+            event.data.executionSettled === true &&
             event.data.livenessState === "blocked" &&
             event.data.providerStarted === true &&
             event.data.replayInvalid === true &&
@@ -378,7 +427,7 @@ describe("executeAgentTurn: primary probe routing", () => {
     });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       outcome: "completed",
-      result: await params.run("anthropic", "claude"),
+      result: await params.run("anthropic", "claude", initialFallbackAttemptOptions(params)),
       provider: "anthropic",
       model: "claude",
       attempts: [],
@@ -408,6 +457,7 @@ describe("executeAgentTurn: primary probe routing", () => {
           data: expect.objectContaining({
             phase: "error",
             error: "Command may have changed state",
+            executionSettled: true,
             replayInvalid: true,
           }),
         }),
@@ -455,7 +505,7 @@ describe("executeAgentTurn: primary probe routing", () => {
     });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       outcome: testCase.outcome,
-      result: await params.run("anthropic", "claude"),
+      result: await params.run("anthropic", "claude", initialFallbackAttemptOptions(params)),
       provider: "anthropic",
       model: "claude",
       attempts: testCase.attempts,
@@ -481,11 +531,14 @@ describe("executeAgentTurn: primary probe routing", () => {
     expect(failMock).toHaveBeenCalledWith("run_failed", expect.any(Error));
   });
 
-  it("reports exhausted CLI results without a success lifecycle terminal", async () => {
+  it.each([
+    { label: "last candidate", attemptedModel: "gpt-5.4" },
+    { label: "preserved earlier candidate", attemptedModel: "gpt-5.5" },
+  ])("reports exhausted CLI $label without a success terminal", async ({ attemptedModel }) => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       outcome: "exhausted",
-      result: await params.run("codex-cli", "gpt-5.4"),
+      result: await params.run("codex-cli", attemptedModel, initialFallbackAttemptOptions(params)),
       provider: "codex-cli",
       model: "gpt-5.4",
       attempts: [{ provider: "codex-cli", model: "gpt-5.4", error: "incomplete" }],
@@ -503,6 +556,7 @@ describe("executeAgentTurn: primary probe routing", () => {
     followupRun.run.provider = "codex-cli";
     followupRun.run.model = "gpt-5.4";
     const { replyOperation, failMock, retainFailureUntilCompleteMock } = createMockReplyOperation();
+    replyOperation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
     const emitAgentEvent = vi.mocked((await import("../../infra/agent-events.js")).emitAgentEvent);
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
@@ -514,6 +568,7 @@ describe("executeAgentTurn: primary probe routing", () => {
       }),
     );
 
+    expect(state.runCliAgentMock).toHaveBeenCalledOnce();
     expect(result).toMatchObject({
       kind: "success",
       fallbackExhausted: true,
@@ -530,7 +585,7 @@ describe("executeAgentTurn: primary probe routing", () => {
         expect.objectContaining({
           data: expect.objectContaining({
             phase: "error",
-            fallbackExhaustedFailure: true,
+            executionSettled: true,
           }),
         }),
       ]),
@@ -542,13 +597,22 @@ describe("executeAgentTurn: primary probe routing", () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       try {
-        return await params.run("codex-cli", "gpt-5.4");
+        return await params.run("codex-cli", "gpt-5.4", initialFallbackAttemptOptions(params));
       } catch (cause) {
         throw new Error("All model fallback candidates failed", { cause });
       }
     });
     state.runCliAgentMock.mockRejectedValueOnce(
-      new FailoverError("CLI produced no output", { reason: "timeout" }),
+      createCliTimeoutError(
+        { provider: "codex-cli", model: "gpt-5.4" },
+        {
+          mode: "no-output",
+          timeoutSeconds: 1,
+          observedActivity: false,
+          activeToolCount: 0,
+          backgroundTaskCount: 0,
+        },
+      ),
     );
     const followupRun = createFollowupRun();
     followupRun.run.provider = "codex-cli";
@@ -575,7 +639,7 @@ describe("executeAgentTurn: primary probe routing", () => {
     ).toMatchObject({
       stopReason: "timeout",
       timeoutPhase: "provider",
-      fallbackExhaustedFailure: true,
+      executionSettled: true,
     });
   });
 
@@ -595,9 +659,9 @@ describe("executeAgentTurn: primary probe routing", () => {
     followupRun.run.authProfileIdSource = "auto";
     followupRun.run.autoFallbackPrimaryProbe = probe;
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      await params.run("openai", "gpt-5.5");
+      await params.run("openai", "gpt-5.5", initialFallbackAttemptOptions(params));
       return {
-        result: await params.run("openai", "gpt-5.4"),
+        result: await params.run("openai", "gpt-5.4", fallbackAttemptOptions(params, "unknown")),
         provider: "openai",
         model: "gpt-5.4",
         attempts: [{ provider: "openai", model: "gpt-5.5", error: "rate limit" }],
@@ -648,7 +712,11 @@ describe("executeAgentTurn: primary probe routing", () => {
     followupRun.run.model = "claude-sonnet-4-6";
     followupRun.run.autoFallbackPrimaryProbe = probe;
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const result = await params.run(params.provider, params.model);
+      const result = await params.run(
+        params.provider,
+        params.model,
+        initialFallbackAttemptOptions(params),
+      );
       activeSessionStore[sessionKey] = {
         sessionId: "session",
         updatedAt: 2,
@@ -719,7 +787,7 @@ describe("executeAgentTurn: primary probe routing", () => {
       const provider = params.provider ?? "anthropic";
       const model = params.model ?? "claude-sonnet-4-6";
       return {
-        result: await params.run(provider, model),
+        result: await params.run(provider, model, initialFallbackAttemptOptions(params)),
         provider,
         model,
         attempts: [],

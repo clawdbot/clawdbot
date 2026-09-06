@@ -99,7 +99,7 @@ describe.skipIf(!LIVE)("image tool Ollama live", () => {
 
       const result = await tool.execute("live-ollama-image", {
         prompt: "Describe this image in one short sentence.",
-        image: imagePath,
+        path: imagePath,
       });
 
       const content = (result as { content?: Array<{ type?: string; text?: string }> }).content;

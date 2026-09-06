@@ -1,6 +1,7 @@
 // Openai provider module implements model/runtime integration.
 import {
   fetchRemoteEmbeddingVectors,
+  resolveEmbeddingEndpointUrl,
   resolveRemoteEmbeddingClient,
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
@@ -49,7 +50,7 @@ export async function createOpenAiEmbeddingProvider(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<{ provider: MemoryEmbeddingProvider; client: OpenAiEmbeddingClient }> {
   const client = await resolveOpenAiEmbeddingClient(options);
-  const url = `${client.baseUrl.replace(/\/$/, "")}/embeddings`;
+  const url = resolveEmbeddingEndpointUrl(client.baseUrl, "embeddings");
 
   const resolveInputType = (kind: "query" | "document"): string | undefined => {
     const explicit = kind === "query" ? client.queryInputType : client.documentInputType;
@@ -57,7 +58,7 @@ export async function createOpenAiEmbeddingProvider(
     return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
   };
 
-  const embed = async (
+  const embedMany = async (
     input: string[],
     kind: "query" | "document",
     signal?: AbortSignal,
@@ -91,12 +92,27 @@ export async function createOpenAiEmbeddingProvider(
       ...(typeof OPENAI_MAX_INPUT_TOKENS[normalizeOpenAiModel(client.model)] === "number"
         ? { maxInputTokens: OPENAI_MAX_INPUT_TOKENS[normalizeOpenAiModel(client.model)] }
         : {}),
-      embedQuery: async (text, optionsValue) => {
-        const [vec] = await embed([text], "query", optionsValue?.signal);
+      embed: async (input, optionsValue) => {
+        const text = typeof input === "string" ? input : input.text;
+        const [vec] = await embedMany(
+          [text],
+          optionsValue?.inputType === "query" ? "query" : "document",
+          optionsValue?.signal,
+        );
         return vec ?? [];
       },
-      embedBatch: async (texts, optionsLocal) =>
-        await embed(texts, "document", optionsLocal?.signal),
+      embedBatch: async (inputs, optionsLocal) => {
+        const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
+        if (optionsLocal?.inputType === "query") {
+          return await Promise.all(
+            texts.map(async (text) => {
+              const [vec] = await embedMany([text], "query", optionsLocal.signal);
+              return vec ?? [];
+            }),
+          );
+        }
+        return await embedMany(texts, "document", optionsLocal?.signal);
+      },
     },
     client,
   };
@@ -123,6 +139,6 @@ async function resolveOpenAiEmbeddingClient(
     inputType: options.inputType,
     queryInputType: options.queryInputType,
     documentInputType: options.documentInputType,
-    outputDimensionality: options.outputDimensionality,
+    outputDimensionality: options.dimensions,
   };
 }

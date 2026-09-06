@@ -3,7 +3,6 @@
  *
  * Local callers keep the historic throwing API while agent-core returns explicit Result objects.
  */
-import type { StreamFn as CoreStreamFn } from "../../../../packages/llm-core/src/index.js";
 import type { Model } from "../../../llm/types.js";
 import {
   calculateContextTokens,
@@ -18,16 +17,19 @@ import {
   prepareCompaction as prepareCompactionCore,
   serializeConversation,
   shouldCompact,
-  openClawAgentCoreRuntime,
   type CompactionDetails,
   type CompactionPreparation,
   type CompactionResult,
   type CompactionSettings,
+  type CompactionSummaryPrompt,
   type ContextUsageEstimate,
   type Result,
+  type AgentMessage,
+  type StreamFn,
+  type ThinkingLevel,
 } from "../../runtime/index.js";
-import type { AgentMessage, StreamFn, ThinkingLevel } from "../../runtime/index.js";
 import type { SessionEntry } from "../session-manager.js";
+import { createCompactionRuntime, type SessionModelUsageSink } from "./runtime.js";
 
 export {
   calculateContextTokens,
@@ -74,6 +76,8 @@ export async function generateSummary(
   previousSummary?: string,
   thinkingLevel?: ThinkingLevel,
   streamFn?: StreamFn,
+  usageSink?: SessionModelUsageSink,
+  summaryPrompt?: CompactionSummaryPrompt,
 ): Promise<string> {
   return unwrapCompactionResult(
     await generateSummaryCore(
@@ -86,8 +90,9 @@ export async function generateSummary(
       customInstructions,
       previousSummary,
       thinkingLevel,
-      streamFn as unknown as CoreStreamFn | undefined,
-      openClawAgentCoreRuntime,
+      streamFn,
+      createCompactionRuntime(usageSink),
+      summaryPrompt,
     ),
   );
 }
@@ -102,6 +107,7 @@ export async function compact(
   signal?: AbortSignal,
   thinkingLevel?: ThinkingLevel,
   streamFn?: StreamFn,
+  usageSink?: SessionModelUsageSink,
 ): Promise<CompactionResult> {
   return unwrapCompactionResult(
     await compactCore(
@@ -112,8 +118,8 @@ export async function compact(
       customInstructions,
       signal,
       thinkingLevel,
-      streamFn as unknown as CoreStreamFn | undefined,
-      openClawAgentCoreRuntime,
+      streamFn,
+      createCompactionRuntime(usageSink),
     ),
   );
 }

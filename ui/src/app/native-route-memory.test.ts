@@ -18,15 +18,13 @@ describe("native route memory", () => {
     });
   });
 
-  it("drops corrupt and invalid entries", () => {
-    storage.setItem("openclaw.native.lastRoute", "{");
-    expect(considerRouteRestore("chat", "/chat", "", storage, true)).toBeNull();
-    expect(storage.getItem("openclaw.native.lastRoute")).toBeNull();
-
-    storage.setItem(
-      "openclaw.native.lastRoute",
-      JSON.stringify({ routeId: "retired", pathname: "/retired", search: "" }),
-    );
+  it.each([
+    "{",
+    ...["retired", "constructor", "toString", "__proto__"].map((routeId) =>
+      JSON.stringify({ routeId, pathname: `/${routeId}`, search: "" }),
+    ),
+  ])("drops corrupt or invalid entry %s", (raw) => {
+    storage.setItem("openclaw.native.lastRoute", raw);
     expect(considerRouteRestore("chat", "/chat", "", storage, true)).toBeNull();
     expect(storage.getItem("openclaw.native.lastRoute")).toBeNull();
   });

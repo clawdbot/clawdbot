@@ -1,14 +1,17 @@
 /**
  * Normalizes and delivers agent command results to outbound channels.
  */
-import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope-config.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
-import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
+import {
+  normalizeReplyPayloadOutcome,
+  type NormalizeReplyOutcome,
+  type NormalizeReplySkipReason,
+} from "../../auto-reply/reply/normalize-reply.js";
 import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.runtime.js";
 import { formatBtwTextForExternalDelivery } from "../../auto-reply/reply/reply-payloads-base.js";
 import {
@@ -17,14 +20,17 @@ import {
   resolveMessagingToolPayloadDedupe,
 } from "../../auto-reply/reply/reply-payloads-dedupe.runtime.js";
 import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-prefix-template.js";
+import { createChannelReplyTransform } from "../../channels/message/reply-transform.js";
 import {
-  sendDurableMessageBatch,
+  sendDurableMessageBatchCore,
   serializeDurableMessagePayloadOutcomes,
   type SerializedDurableMessagePayloadOutcome,
 } from "../../channels/message/runtime.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
+import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -34,7 +40,7 @@ import {
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
-import { buildOutboundResultEnvelope } from "../../infra/outbound/envelope.js";
+import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
 import {
   createOutboundPayloadPlan,
   formatOutboundPayloadLog,
@@ -47,6 +53,7 @@ import type { OutboundSessionContext } from "../../infra/outbound/session-contex
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { hasAnyNonEmptyString as hasNonEmptyStringArray } from "../delivery-evidence-values.js";
 import type { MessagingToolSend } from "../embedded-agent-messaging.types.js";
 import type { EmbeddedAgentRunMeta } from "../embedded-agent-runner/types.js";
 import { isNestedAgentLane } from "../lanes.js";
@@ -54,7 +61,7 @@ import { isAgentRunRestartAbortReason } from "../run-termination.js";
 import type { AgentCommandOpts } from "./types.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
-type DurableSendResult = Awaited<ReturnType<typeof sendDurableMessageBatch>>;
+type DurableSendResult = Awaited<ReturnType<typeof sendDurableMessageBatchCore>>;
 
 function createRestartOnlyAbortSignal(source: AbortSignal | undefined): {
   signal?: AbortSignal;
@@ -104,6 +111,9 @@ type AgentCommandDeliveryResult = {
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: MessagingToolSend[];
+  didSendDeterministicApprovalPrompt?: true;
+  acceptedSessionSpawns?: NonNullable<RunResult["acceptedSessionSpawns"]>;
+  successfulCronAdds?: number;
   deliverySucceeded?: boolean;
   deliveryStatus?: AgentCommandDeliveryStatus;
 };
@@ -130,7 +140,9 @@ type DeliverAgentCommandResultParams = {
   outboundSession: OutboundSessionContext | undefined;
   sessionEntry: SessionEntry | undefined;
   result: RunResult;
-  payloads: RunResult["payloads"];
+  payloads: ReplyPayload[] | undefined;
+  /** Channel plugin already selected and bootstrapped by the caller. */
+  preparedPlugin?: ChannelPlugin;
   assertDeliveryCurrent?: () => void;
   onDeliveryResult?: (result: AgentCommandDeliveryResult) => void;
 } & FreshSessionDeliveryRefreshParams;
@@ -185,10 +197,6 @@ function logNestedOutput(
   }
 }
 
-function hasNonEmptyStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.some(hasNonEmptyString);
-}
-
 function hasNonEmptyArray<T>(value: T[] | undefined): value is T[] {
   return Array.isArray(value) && value.length > 0;
 }
@@ -200,6 +208,11 @@ function buildDeliveryResult(params: {
   deliverySucceeded?: boolean;
   deliveryStatus?: AgentCommandDeliveryStatus;
 }): AgentCommandDeliveryResult {
+  const successfulCronAdds = params.result.successfulCronAdds;
+  const hasSuccessfulCronAdds =
+    typeof successfulCronAdds === "number" &&
+    Number.isFinite(successfulCronAdds) &&
+    successfulCronAdds > 0;
   return {
     payloads: params.payloads,
     meta: params.meta,
@@ -213,6 +226,13 @@ function buildDeliveryResult(params: {
     ...(hasNonEmptyArray(params.result.messagingToolSentTargets)
       ? { messagingToolSentTargets: params.result.messagingToolSentTargets }
       : {}),
+    ...(params.result.didSendDeterministicApprovalPrompt === true
+      ? { didSendDeterministicApprovalPrompt: true }
+      : {}),
+    ...(hasNonEmptyArray(params.result.acceptedSessionSpawns)
+      ? { acceptedSessionSpawns: params.result.acceptedSessionSpawns }
+      : {}),
+    ...(hasSuccessfulCronAdds ? { successfulCronAdds } : {}),
     ...(params.deliverySucceeded !== undefined
       ? { deliverySucceeded: params.deliverySucceeded }
       : {}),
@@ -283,13 +303,13 @@ function preDeliveryFailureStatus(reason: string): AgentCommandDeliveryStatus {
   };
 }
 
-function noVisiblePayloadStatus(): AgentCommandDeliveryStatus {
+function noVisiblePayloadStatus(reason?: NormalizeReplySkipReason): AgentCommandDeliveryStatus {
   return {
     requested: true,
     attempted: false,
     status: "suppressed",
     succeeded: true,
-    reason: "no_visible_payload",
+    reason: reason === "channel_transform" ? reason : "no_visible_payload",
     resultCount: 0,
   };
 }
@@ -459,26 +479,27 @@ function normalizeAgentCommandReplyPayloads(params: {
   cfg: OpenClawConfig;
   opts: AgentCommandOpts;
   outboundSession: OutboundSessionContext | undefined;
-  payloads: RunResult["payloads"];
+  payloads: ReplyPayload[] | undefined;
   result: RunResult;
   deliveryChannel?: string;
+  plugin?: ChannelPlugin;
   accountId?: string;
   applyChannelTransforms?: boolean;
   includeRunModelContext?: boolean;
-}): ReplyPayload[] {
+}): NormalizeReplyOutcome<ReplyPayload[]> {
   const payloads = params.payloads ?? [];
   if (payloads.length === 0) {
-    return [];
+    return { kind: "suppress", reason: "empty" };
   }
   const channel =
     params.deliveryChannel && !isInternalMessageChannel(params.deliveryChannel)
       ? (normalizeChannelId(params.deliveryChannel) ?? params.deliveryChannel)
       : undefined;
   if (!channel) {
-    return payloads as ReplyPayload[];
+    return { kind: "deliver", payload: payloads };
   }
   const applyChannelTransforms = params.applyChannelTransforms ?? true;
-  const deliveryPlugin = applyChannelTransforms ? getChannelPlugin(channel) : undefined;
+  const deliveryPlugin = applyChannelTransforms ? params.plugin : undefined;
 
   const sessionKey = params.outboundSession?.key ?? params.opts.sessionKey;
   const agentId =
@@ -513,28 +534,31 @@ function normalizeAgentCommandReplyPayloads(params: {
     UNRESOLVED_RESPONSE_PREFIX_VAR_PATTERN.test(resolvedResponsePrefix)
       ? undefined
       : replyPrefix.responsePrefix;
-  const transformReplyPayload = deliveryPlugin?.messaging?.transformReplyPayload
-    ? (payload: ReplyPayload) =>
-        deliveryPlugin.messaging?.transformReplyPayload?.({
-          payload,
-          cfg: params.cfg,
-          accountId: params.accountId,
-        }) ?? payload
-    : undefined;
+  const deliveryMessaging = deliveryPlugin?.messaging;
+  const transformReplyPayload = createChannelReplyTransform({
+    messaging: deliveryMessaging,
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
 
   const normalizedPayloads: ReplyPayload[] = [];
+  let suppressionReason: NormalizeReplySkipReason | undefined;
   for (const payload of payloads) {
-    const normalized = normalizeReplyPayload(payload as ReplyPayload, {
+    const outcome = normalizeReplyPayloadOutcome(payload, {
       responsePrefix,
       applyChannelTransforms,
       responsePrefixContext,
       transformReplyPayload,
     });
-    if (normalized) {
-      normalizedPayloads.push(normalized);
+    if (outcome.kind === "deliver") {
+      normalizedPayloads.push(outcome.payload);
+    } else if (suppressionReason === undefined || outcome.reason === "channel_transform") {
+      suppressionReason = outcome.reason;
     }
   }
-  return normalizedPayloads;
+  return normalizedPayloads.length > 0
+    ? { kind: "deliver", payload: normalizedPayloads }
+    : { kind: "suppress", reason: suppressionReason ?? "empty" };
 }
 
 /** Delivers an agent command result or records why delivery was skipped. */
@@ -569,6 +593,7 @@ export async function deliverAgentCommandResult(
       explicitThreadId: opts.threadId,
       accountId: opts.replyAccountId ?? opts.accountId,
       wantsDelivery: deliver,
+      preparedPlugin: params.preparedPlugin,
       turnSourceChannel,
       turnSourceTo,
       turnSourceAccountId,
@@ -576,11 +601,13 @@ export async function deliverAgentCommandResult(
     });
     params.assertDeliveryCurrent?.();
     let deliveryChannel = deliveryPlan.resolvedChannel;
+    let preparedPlugin = deliveryPlan.plugin;
     if (deliver && isInternalMessageChannel(deliveryChannel) && !explicitChannelHint) {
       try {
         const selection = await resolveMessageChannelSelection({ cfg });
         params.assertDeliveryCurrent?.();
         deliveryChannel = selection.channel;
+        preparedPlugin = selection.plugin;
       } catch {
         // Keep the internal channel marker; error handling below reports the failure.
       }
@@ -591,27 +618,34 @@ export async function deliverAgentCommandResult(
         : {
             ...deliveryPlan,
             resolvedChannel: deliveryChannel,
+            plugin: preparedPlugin,
           };
-    // Channel docking: delivery channels are resolved via plugin registry.
+    // Bundled/setup channels may be dockable before they appear in the registered
+    // deliverable-id list. Resolve only when upstream planning prepared no plugin.
     const deliveryPlugin =
       deliver && !isInternalMessageChannel(deliveryChannel)
-        ? getChannelPlugin(normalizeChannelId(deliveryChannel) ?? deliveryChannel)
+        ? (effectiveDeliveryPlan.plugin ??
+          getChannelPlugin(normalizeChannelId(deliveryChannel) ?? deliveryChannel))
         : undefined;
+    const pluginDeliveryPlan =
+      deliveryPlugin && deliveryPlugin !== effectiveDeliveryPlan.plugin
+        ? { ...effectiveDeliveryPlan, plugin: deliveryPlugin }
+        : effectiveDeliveryPlan;
     const isDeliveryChannelKnown =
       isInternalMessageChannel(deliveryChannel) || Boolean(deliveryPlugin);
     const targetMode =
       opts.deliveryTargetMode ??
-      effectiveDeliveryPlan.deliveryTargetMode ??
+      pluginDeliveryPlan.deliveryTargetMode ??
       (opts.to ? "explicit" : "implicit");
     const defaultAccountId =
-      !effectiveDeliveryPlan.resolvedAccountId && deliveryPlugin?.config?.listAccountIds
+      !pluginDeliveryPlan.resolvedAccountId && deliveryPlugin?.config?.listAccountIds
         ? resolveChannelDefaultAccountId({ plugin: deliveryPlugin, cfg })
         : undefined;
-    const resolvedAccountId = effectiveDeliveryPlan.resolvedAccountId ?? defaultAccountId;
+    const resolvedAccountId = pluginDeliveryPlan.resolvedAccountId ?? defaultAccountId;
     const resolvedDeliveryPlan =
-      resolvedAccountId === effectiveDeliveryPlan.resolvedAccountId
-        ? effectiveDeliveryPlan
-        : { ...effectiveDeliveryPlan, resolvedAccountId };
+      resolvedAccountId === pluginDeliveryPlan.resolvedAccountId
+        ? pluginDeliveryPlan
+        : { ...pluginDeliveryPlan, resolvedAccountId };
     const resolved =
       deliver && isDeliveryChannelKnown && deliveryChannel
         ? resolveAgentOutboundTarget({
@@ -718,6 +752,7 @@ export async function deliverAgentCommandResult(
     deliveryTarget,
     resolvedReplyToId,
     resolvedThreadTarget,
+    deliveryPlugin,
   } = deliveryRouting;
 
   let deliveryLoggedError = false;
@@ -750,23 +785,26 @@ export async function deliverAgentCommandResult(
       );
       handlePreDeliveryError(err, "channel_resolved_to_internal");
     } else if (!isDeliveryChannelKnown) {
-      const err = new Error(`Unknown channel: ${deliveryChannel}`);
+      const err = new Error(formatUnknownChannelMessage({ channel: deliveryChannel }));
       handlePreDeliveryError(err, "unknown_channel");
     } else if (resolvedTarget && !resolvedTarget.ok) {
       handlePreDeliveryError(resolvedTarget.error, "invalid_delivery_target");
     }
   }
 
-  const normalizedReplyPayloads = normalizeAgentCommandReplyPayloads({
+  const replyNormalization = normalizeAgentCommandReplyPayloads({
     cfg,
     opts,
     outboundSession,
     payloads,
     result,
     deliveryChannel,
+    plugin: deliveryPlugin,
     accountId: resolvedAccountId,
     applyChannelTransforms: deliver,
   });
+  const normalizedReplyPayloads =
+    replyNormalization.kind === "deliver" ? replyNormalization.payload : [];
   const canonicalReplyPayloads = projectOutboundPayloadPlanForDelivery(
     createOutboundPayloadPlan(normalizedReplyPayloads),
   );
@@ -775,18 +813,23 @@ export async function deliverAgentCommandResult(
     !deliveryStatus &&
     Boolean(deliveryTarget) &&
     !isInternalMessageChannel(deliveryChannel);
-  const normalizeSentTexts = (sentTexts: readonly string[]) =>
-    normalizeAgentCommandReplyPayloads({
+  const normalizeSentTexts = (sentTexts: readonly string[]) => {
+    const outcome = normalizeAgentCommandReplyPayloads({
       cfg,
       opts,
       outboundSession,
       payloads: sentTexts.map((text) => ({ text })),
       result,
       deliveryChannel,
+      plugin: deliveryPlugin,
       accountId: resolvedAccountId,
       applyChannelTransforms: deliver,
       includeRunModelContext: false,
-    }).flatMap((payload) => (payload.text?.trim() ? [payload.text] : []));
+    });
+    return (outcome.kind === "deliver" ? outcome.payload : []).flatMap((payload) =>
+      payload.text?.trim() ? [payload.text] : [],
+    );
+  };
   const filterDeliveredPayloads = (
     replyPayloads: ReplyPayload[],
     normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>,
@@ -846,11 +889,10 @@ export async function deliverAgentCommandResult(
     if (!opts.json) {
       return;
     }
+    const meta = result.meta;
     writeRuntimeJson(runtime, {
-      ...buildOutboundResultEnvelope({
-        payloads: normalizedPayloads,
-        meta: result.meta,
-      }),
+      payloads: [...normalizedPayloads],
+      ...(meta ? { meta } : {}),
       ...(status ? { deliveryStatus: status } : {}),
     });
   };
@@ -869,7 +911,12 @@ export async function deliverAgentCommandResult(
 
   const deliveryPayloads = projectOutboundPayloadPlanForOutbound(outboundPayloadPlan);
   if (deliveryPayloads.length === 0) {
-    deliveryStatus = deliver ? (deliveryStatus ?? noVisiblePayloadStatus()) : undefined;
+    deliveryStatus = deliver
+      ? (deliveryStatus ??
+        noVisiblePayloadStatus(
+          replyNormalization.kind === "suppress" ? replyNormalization.reason : undefined,
+        ))
+      : undefined;
     const deliverySucceeded = deliveryStatus?.succeeded === true ? true : undefined;
     emitJsonEnvelope(deliveryStatus);
     return captureDeliveryResult(
@@ -913,13 +960,14 @@ export async function deliverAgentCommandResult(
       const restartAbort = createRestartOnlyAbortSignal(opts.abortSignal);
       let send: DurableSendResult;
       try {
-        send = await sendDurableMessageBatch({
+        send = await sendDurableMessageBatchCore({
           cfg,
           channel: deliveryChannel,
           to: deliveryTarget,
           accountId: resolvedAccountId,
           payloads: deliveryPayloads,
           session: outboundSession,
+          identity: resolveAgentOutboundIdentity(cfg, deliveryAgentId),
           replyPayloadSendingHook: {
             kind: "final",
             channel: deliveryChannel,

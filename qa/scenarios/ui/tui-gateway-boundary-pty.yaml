@@ -1,0 +1,41 @@
+title: TUI Gateway boundary PTY contracts
+scenario:
+  id: tui-gateway-boundary-pty
+  surface: tui
+  category: tui.runtime-modes
+  coverage:
+    primary:
+      - tui.gateway-connection
+      - tui.gateway-authentication
+      - tui.history-load-on-attach
+      - tui.reconnect-visibility
+      - tui.gateway-command-rpcs
+  risk: medium
+  objective: Prove TUI Gateway connection, authentication, attach history, reconnect visibility, and command RPC behavior through a real WebSocket and PTY.
+  successCriteria:
+    - A built TUI proves Gateway connection, isolated authentication without token leakage, authoritative attach history, disconnected-draft recovery, and visible authoritative status, model, session creation, and reset RPC outcomes.
+  codeRefs: [src/tui/tui-pty-local.e2e.test.ts]
+  execution:
+    kind: script
+    parallelSafe: true
+    path: test/e2e/qa-lab/tui/tui-pty-evidence-producer.ts
+    timeoutMs: 600000
+    args: [--artifact-base, "${outputDir}", --scenario-id, "${scenarioId}"]
+    config:
+      requireBuiltCli: true
+      tuiPtyCases:
+        - coverageId: tui.gateway-connection
+          testFile: src/tui/tui-pty-local.e2e.test.ts
+          testNamePattern: ^TUI PTY real backends > with shared Gateway fixture > launches openclaw tui against a real Gateway through a real PTY$
+        - coverageId: tui.gateway-authentication
+          testFile: src/tui/tui-pty-local.e2e.test.ts
+          testNamePattern: ^TUI PTY real backends > with shared Gateway fixture > authenticates valid tokens and rejects invalid tokens through a real Gateway PTY$
+        - coverageId: tui.history-load-on-attach
+          testFile: src/tui/tui-pty-local.e2e.test.ts
+          testNamePattern: ^TUI PTY real backends > with shared Gateway fixture > loads completed Gateway history on a fresh TUI attach before user input$
+        - coverageId: tui.reconnect-visibility
+          testFile: src/tui/tui-pty-local.e2e.test.ts
+          testNamePattern: ^TUI PTY real backends > with shared Gateway fixture > preserves a disconnected draft across a real Gateway restart$
+        - coverageId: tui.gateway-command-rpcs
+          testFile: src/tui/tui-pty-local.e2e.test.ts
+          testNamePattern: ^TUI PTY real backends > with shared Gateway fixture > executes Gateway status model new and reset RPCs through a real TUI PTY$

@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { findGitRoot, resolveGitHeadPath } from "./git-root.js";
 
 async function expectGitRootResolution(params: {
@@ -11,7 +11,7 @@ async function expectGitRootResolution(params: {
     temp: string,
   ) => Promise<{ startPath: string; expectedRoot: string | null; expectedHead: string | null }>;
 }): Promise<void> {
-  await withTempDir({ prefix: `openclaw-${params.label}-` }, async (temp) => {
+  await withTestDir({ prefix: `openclaw-${params.label}-` }, async (temp) => {
     const { startPath, expectedRoot, expectedHead } = await params.setup(temp);
     expect(findGitRoot(startPath)).toBe(expectedRoot);
     expect(resolveGitHeadPath(startPath)).toBe(expectedHead);
@@ -102,7 +102,7 @@ describe("git-root", () => {
   });
 
   it("respects maxDepth traversal limit", async () => {
-    await withTempDir({ prefix: "openclaw-git-root-depth-" }, async (temp) => {
+    await withTestDir({ prefix: "openclaw-git-root-depth-" }, async (temp) => {
       const repoRoot = path.join(temp, "repo");
       const nested = path.join(repoRoot, "a", "b", "c");
       await fs.mkdir(path.join(repoRoot, ".git"), { recursive: true });

@@ -1,17 +1,16 @@
 // Memory Core tests cover manager session sync state plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
-  resolveMemorySessionStartupDirtyFiles,
+  resolveMemorySessionStartupState,
   resolveMemorySessionSyncPlan,
 } from "./manager-session-sync-state.js";
 
 describe("memory session sync state", () => {
-  it("tracks active paths and bulk hashes for full scans", () => {
+  it("tracks active paths and bulk hashes without rebuilding unchanged full scans", () => {
     const plan = resolveMemorySessionSyncPlan({
       needsFullReindex: false,
       files: ["/tmp/a.jsonl", "/tmp/b.jsonl"],
       targetSessionFiles: null,
-      sessionsDirtyFiles: new Set(),
       existingRows: [
         { path: "sessions/a.jsonl", hash: "hash-a" },
         { path: "sessions/b.jsonl", hash: "hash-b" },
@@ -19,7 +18,7 @@ describe("memory session sync state", () => {
       sessionPathForFile: (file) => `sessions/${file.split("/").at(-1)}`,
     });
 
-    expect(plan.indexAll).toBe(true);
+    expect(plan.indexAll).toBe(false);
     expect(plan.activePaths).toEqual(new Set(["sessions/a.jsonl", "sessions/b.jsonl"]));
     expect(plan.existingRows).toEqual([
       { path: "sessions/a.jsonl", hash: "hash-a" },
@@ -38,7 +37,6 @@ describe("memory session sync state", () => {
       needsFullReindex: false,
       files: ["/tmp/targeted-first.jsonl"],
       targetSessionFiles: new Set(["/tmp/targeted-first.jsonl"]),
-      sessionsDirtyFiles: new Set(["/tmp/targeted-first.jsonl"]),
       existingRows: [
         { path: "sessions/targeted-first.jsonl", hash: "hash-first" },
         { path: "sessions/targeted-second.jsonl", hash: "hash-second" },
@@ -52,20 +50,6 @@ describe("memory session sync state", () => {
     expect(plan.existingHashes).toBeNull();
   });
 
-  it("keeps dirty-only incremental mode when no targeted sync is requested", () => {
-    const plan = resolveMemorySessionSyncPlan({
-      needsFullReindex: false,
-      files: ["/tmp/incremental.jsonl"],
-      targetSessionFiles: null,
-      sessionsDirtyFiles: new Set(["/tmp/incremental.jsonl"]),
-      existingRows: [],
-      sessionPathForFile: (file) => `sessions/${file.split("/").at(-1)}`,
-    });
-
-    expect(plan.indexAll).toBe(false);
-    expect(plan.activePaths).toEqual(new Set(["sessions/incremental.jsonl"]));
-  });
-
   it("marks identity-targeted syncs as session work", async () => {
     const { shouldSyncSessionsForReindex } = await import("./manager-session-reindex.js");
 
@@ -73,14 +57,13 @@ describe("memory session sync state", () => {
       shouldSyncSessionsForReindex({
         hasSessionSource: true,
         sessionsDirty: false,
-        dirtySessionFileCount: 0,
         sync: { sessions: [{ agentId: "main", sessionId: "targeted" }] },
       }),
     ).toBe(true);
   });
 
   it("marks missing and changed startup session files dirty", () => {
-    const dirtyFiles = resolveMemorySessionStartupDirtyFiles({
+    const { dirtyFiles } = resolveMemorySessionStartupState({
       files: [
         {
           absPath: "/tmp/sessions/unchanged.jsonl",
@@ -143,5 +126,16 @@ describe("memory session sync state", () => {
       "/tmp/sessions/resized.jsonl",
       "/tmp/sessions/missing.jsonl",
     ]);
+  });
+
+  it("detects indexed session paths that are absent from the live corpus", () => {
+    expect(
+      resolveMemorySessionStartupState({
+        files: [],
+        existingRows: [
+          { path: "sessions/deleted.jsonl", hash: "hash-deleted", mtime: 100, size: 10 },
+        ],
+      }),
+    ).toEqual({ dirtyFiles: [], hasStaleIndexedPaths: true });
   });
 });

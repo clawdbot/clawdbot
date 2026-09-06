@@ -14,7 +14,7 @@ export function appendMessageToolVisibleReplyHint(
   const targetGuidance = requireExplicitTarget
     ? "send needs target."
     : "target defaults current source; set only elsewhere.";
-  return `${description} This turn visible reply: action="send" + message; ${targetGuidance} Final answer private.`;
+  return `${description} This turn visible reply: action="send" + message; ${targetGuidance} Set final=false for progress. Set final=true, or omit it, for the completed reply. Final answer private.`;
 }
 
 export function appendMessageToolReadHint(

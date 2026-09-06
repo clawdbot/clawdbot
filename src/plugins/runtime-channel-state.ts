@@ -38,8 +38,3 @@ export function getActivePluginChannelRegistrySnapshotFromState(): ActivePluginC
 export function getActivePluginChannelRegistryFromState(): ActivePluginChannelRegistry | null {
   return getActivePluginChannelRegistrySnapshotFromState().registry;
 }
-
-/** Returns the active plugin channel registry version from global runtime state. */
-export function getActivePluginChannelRegistryVersionFromState(): number {
-  return getActivePluginChannelRegistrySnapshotFromState().version;
-}

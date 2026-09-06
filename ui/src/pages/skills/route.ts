@@ -1,9 +1,8 @@
-import { formatErrorMessage } from "@openclaw/normalization-core";
 import { definePage } from "@openclaw/uirouter";
-import { html } from "lit";
+import { html, nothing } from "lit";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { redactToolDetail } from "../../lib/browser-redact.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { loadSkillStatusReport } from "../../lib/skills/index.ts";
 import type { SkillsRouteData } from "./skills-page.ts";
 
@@ -26,23 +25,32 @@ async function loadSkillsRouteData(context: ApplicationContext): Promise<SkillsR
 
   let error: string | null = null;
   let agentsList: SkillsRouteData["agentsList"] = null;
+  let selectedAgentId: string | null = null;
   let report: SkillsRouteData["report"] = null;
   try {
-    agentsList = await agents.ensureList();
+    const loadedAgentsList = await agents.ensureList();
+    agentsList = loadedAgentsList;
+    selectedAgentId = loadedAgentsList?.agents.some(
+      (agent) => agent.id === loadedAgentsList.defaultId,
+    )
+      ? loadedAgentsList.defaultId
+      : null;
   } catch (err) {
-    error = formatErrorMessage(err, { redact: redactToolDetail });
+    error = formatUiError(err);
   }
-  try {
-    report = (await loadSkillStatusReport(client, null)) ?? null;
-  } catch (err) {
-    error ??= formatErrorMessage(err, { redact: redactToolDetail });
+  if (selectedAgentId) {
+    try {
+      report = (await loadSkillStatusReport(client, selectedAgentId)) ?? null;
+    } catch (err) {
+      error ??= formatUiError(err);
+    }
   }
   return {
     gateway,
     gatewaySnapshot,
     agents,
     agentsList,
-    selectedAgentId: null,
+    selectedAgentId,
     report,
     error,
   };
@@ -55,6 +63,6 @@ export const page = definePage({
     import("./skills-page.ts").then(() => ({
       header: true,
       render: (data: SkillsRouteData | undefined) =>
-        html`<openclaw-skills-page .routeData=${data}></openclaw-skills-page>`,
+        data ? html`<openclaw-skills-page .routeData=${data}></openclaw-skills-page>` : nothing,
     })),
 });

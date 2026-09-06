@@ -1,5 +1,5 @@
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
-import { registerSubagentRun } from "./subagent-registry.js";
+import { registerSubagentRun } from "./subagents/registry/subagent-registry.js";
 
 type SpawnPipelinePhase = "initialize" | "dispatch" | "register";
 
@@ -38,8 +38,10 @@ export function summarizeSpawnError(error: unknown): string {
   return error instanceof Error ? error.message : typeof error === "string" ? error : "error";
 }
 
-export async function runSpawnPipeline<TState>(params: {
+type SpawnPipelineParams<TState> = {
   adapter: SpawnBackendAdapter<TState>;
+  assertActive?: () => void;
+  admissionReservation?: { release: () => void };
   buildRegistration: (state: TState, runId: string) => RegisterSubagentRunInput;
   hookRunner?: SubagentLifecycleHookRunner | null;
   progressOrigin?: SpawnProgressOrigin;
@@ -47,53 +49,57 @@ export async function runSpawnPipeline<TState>(params: {
       purpose: native passes the controller-side requester key, ACP its
       historical completion-owner key; do not collapse them. */
   progressSessionKey: string;
-}): Promise<SpawnPipelineResult<TState>> {
-  let state: TState;
-  try {
-    state = await params.adapter.initialize();
-  } catch (error) {
-    await params.adapter.cleanupOnFailure({ phase: "initialize", error });
-    return { ok: false, phase: "initialize", error };
-  }
+};
 
-  let runId: string;
+export async function runSpawnPipeline<TState>(
+  params: SpawnPipelineParams<TState>,
+): Promise<SpawnPipelineResult<TState>> {
+  let phase: SpawnPipelinePhase = "initialize";
+  let state: TState | undefined;
+  let runId: string | undefined;
   try {
-    ({ runId } = await params.adapter.dispatchTurn(state));
-  } catch (error) {
-    await params.adapter.cleanupOnFailure({ phase: "dispatch", state, error });
-    return { ok: false, phase: "dispatch", state, error };
-  }
-
-  let registration: RegisterSubagentRunInput;
-  try {
-    // Keep construction and registration in one synchronous section so callers
-    // can revalidate shared admission state without an interleaving await.
-    registration = params.buildRegistration(state, runId);
-    registerSubagentRun(registration);
-  } catch (error) {
-    await params.adapter.cleanupOnFailure({ phase: "register", state, error });
-    return { ok: false, phase: "register", state, runId, error };
-  }
-
-  if (params.hookRunner?.hasHooks("subagent_progress")) {
+    let registration: RegisterSubagentRunInput;
     try {
-      await params.hookRunner.runSubagentProgress(
-        {
-          phase: "started",
-          runId,
-          childSessionKey: registration.childSessionKey,
-          requester: params.progressOrigin,
-        },
-        {
-          runId,
-          childSessionKey: registration.childSessionKey,
-          requesterSessionKey: params.progressSessionKey,
-        },
-      );
-    } catch {
-      // Presentation hooks are best-effort after the run is durably registered.
+      params.assertActive?.();
+      state = await params.adapter.initialize();
+      // Retain initialization's rollback handle before checking a parent that
+      // may have closed while the backend was preparing its child.
+      phase = "dispatch";
+      params.assertActive?.();
+      ({ runId } = await params.adapter.dispatchTurn(state));
+      phase = "register";
+      params.assertActive?.();
+      // Construction and registration transfer ownership without an interleaving await.
+      registration = params.buildRegistration(state, runId);
+      registerSubagentRun(registration);
+      // Registry insertion takes ownership synchronously; keeping the slot would double-count it.
+      params.admissionReservation?.release();
+    } catch (error) {
+      await params.adapter.cleanupOnFailure({ phase, state, error });
+      return { ok: false, phase, state, runId, error };
     }
-  }
 
-  return { ok: true, state, runId };
+    if (params.hookRunner?.hasHooks("subagent_progress")) {
+      try {
+        await params.hookRunner.runSubagentProgress(
+          {
+            phase: "started",
+            runId,
+            childSessionKey: registration.childSessionKey,
+            requester: params.progressOrigin,
+          },
+          {
+            runId,
+            childSessionKey: registration.childSessionKey,
+            requesterSessionKey: params.progressSessionKey,
+          },
+        );
+      } catch {
+        // Presentation hooks are best-effort after the run is durably registered.
+      }
+    }
+    return { ok: true, state, runId };
+  } finally {
+    params.admissionReservation?.release();
+  }
 }

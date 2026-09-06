@@ -3,15 +3,16 @@ import { randomInt } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { resolveAgentConfig, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import {
-  readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
   readGeminiCliCredentialsCached,
 } from "../agents/cli-credentials.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { tryLoadActivatedBundledPluginPublicSurfaceModule } from "../plugin-sdk/facade-runtime.js";
 import { probeLocalCommand, type LocalCommandProbe } from "../system-agent/probes.js";
 import {
   CLAUDE_CLI_DEFAULT_MODEL_REF,
@@ -40,7 +41,7 @@ export {
 
 type DetectInferenceBackendsDeps = {
   probeLocalCommand?: typeof probeLocalCommand;
-  readClaudeCliCredentials?: () => { type: string } | null;
+  detectClaudeLoginState?: typeof detectClaudeLoginState;
   readCodexCliCredentials?: () => { type: string } | null;
   readGeminiCliCredentials?: () => { type: string } | null;
   detectCodexLoginState?: typeof detectCodexLoginState;
@@ -49,6 +50,7 @@ type DetectInferenceBackendsDeps = {
 
 type DetectInferenceBackendsOptions = {
   config?: OpenClawConfig;
+  agentId?: string;
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   deps?: DetectInferenceBackendsDeps;
@@ -77,11 +79,31 @@ function detectCliCredentialState(params: {
   return params.platform === "darwin" ? undefined : false;
 }
 
-function describeCliDetail(credentials: boolean | undefined, loginHint: string): string {
-  if (credentials === true) {
-    return "logged in";
+type CliAuthKind = "api-key" | "chatgpt-subscription" | "claude-subscription" | "token";
+type CliLoginState = {
+  credentials: boolean | undefined;
+  authKind?: CliAuthKind;
+  email?: string;
+};
+
+const CLI_AUTH_KIND_LABEL: Record<CliAuthKind, string> = {
+  "api-key": "API key (usage-billed)",
+  "chatgpt-subscription": "ChatGPT account",
+  "claude-subscription": "Claude account",
+  token: "OAuth token",
+};
+
+function describeCliDetail(state: CliLoginState, loginHint: string): string {
+  if (state.authKind) {
+    const account =
+      state.authKind === "chatgpt-subscription" || state.authKind === "claude-subscription";
+    const identity = account ? ` · ${state.email || "email unavailable"}` : "";
+    return `logged in · ${CLI_AUTH_KIND_LABEL[state.authKind]}${identity}`;
   }
-  if (credentials === false) {
+  if (state.credentials === true) {
+    return "logged in · authentication method unavailable";
+  }
+  if (state.credentials === false) {
     return `installed, not logged in — ${loginHint}, then check again`;
   }
   return "installed";
@@ -93,17 +115,116 @@ function describeGeminiCliDetail(credentials: boolean | undefined): string {
     : "installed; login status unavailable";
 }
 
+async function classifyCodexLoginStatus(
+  probe: typeof probeLocalCommand,
+  command: string,
+): Promise<CliLoginState> {
+  const status = await probe(command, ["login", "status"], { timeoutMs: 3_000 });
+  if (status.error) {
+    // Codex login status covers its own auth store, not custom model-provider
+    // credentials. Keep failures indeterminate so the live probe decides usability.
+    return { credentials: undefined };
+  }
+  if (status.version === "Logged in using ChatGPT") {
+    return { credentials: true, authKind: "chatgpt-subscription" };
+  }
+  if (/^Logged in using an API key - .+$/u.test(status.version ?? "")) {
+    return { credentials: true, authKind: "api-key" };
+  }
+  return { credentials: true };
+}
+
+async function detectClaudeLoginState(
+  _probe: typeof probeLocalCommand,
+  command: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<CliLoginState> {
+  type ClaudeAuthFacade = {
+    probeClaudeCliAuthStatus: (params: {
+      command: string;
+      env: NodeJS.ProcessEnv;
+    }) => Promise<
+      | { status: "available"; authMethod?: string; email?: string }
+      | { status: "missing" | "unreadable" }
+    >;
+  };
+  try {
+    const facade = await tryLoadActivatedBundledPluginPublicSurfaceModule<ClaudeAuthFacade>({
+      dirName: "anthropic",
+      artifactBasename: "cli-auth-api.js",
+      env,
+    });
+    const status = await facade?.probeClaudeCliAuthStatus({ command, env });
+    if (status?.status !== "available") {
+      return { credentials: status?.status === "missing" ? false : undefined };
+    }
+    switch (status.authMethod) {
+      case "claude.ai":
+        return { credentials: true, authKind: "claude-subscription", email: status.email };
+      case "api_key":
+      case "api_key_helper":
+        return { credentials: true, authKind: "api-key" };
+      case "oauth_token":
+        return { credentials: true, authKind: "token" };
+      default:
+        return { credentials: true };
+    }
+  } catch {
+    return { credentials: undefined };
+  }
+}
+
+async function readCodexNativeLoginState(
+  command: string,
+  env: NodeJS.ProcessEnv,
+): Promise<CliLoginState | undefined> {
+  type CodexAuthFacade = {
+    readCodexCliAccount: (params: {
+      command: string;
+      env: NodeJS.ProcessEnv;
+    }) => Promise<
+      | { type: "apiKey" }
+      | { type: "chatgpt"; email?: string }
+      | { type: "none"; requiresOpenaiAuth: boolean }
+      | { type: "unknown" }
+      | null
+    >;
+  };
+  try {
+    const facade = await tryLoadActivatedBundledPluginPublicSurfaceModule<CodexAuthFacade>({
+      dirName: "openai",
+      artifactBasename: "cli-auth-api.js",
+      env,
+    });
+    const account = await facade?.readCodexCliAccount({ command, env });
+    switch (account?.type) {
+      case "apiKey":
+        return { credentials: true, authKind: "api-key" };
+      case "chatgpt":
+        return { credentials: true, authKind: "chatgpt-subscription", email: account.email };
+      case "none":
+        return { credentials: account.requiresOpenaiAuth ? false : undefined };
+      case "unknown":
+        return { credentials: undefined };
+      case undefined:
+        return undefined;
+    }
+  } catch {
+    // Older CLIs can still report their login method when account/read is unavailable.
+    // A separate saved token never proves which account the native runtime selected.
+  }
+  return undefined;
+}
+
+// Deliberately boolean-shaped: this signature is reachable from the exported
+// detectInferenceBackends options type and therefore part of the plugin-sdk
+// agent-harness API contract. Widening it would bump the contract hash — the
+// rich classification stays module-local in classifyCodexLoginStatus.
 async function detectCodexLoginState(
   probe: typeof probeLocalCommand,
   command: string,
 ): Promise<boolean | undefined> {
-  const status = await probe(command, ["login", "status"], { timeoutMs: 3_000 });
-  if (!status.error) {
-    return true;
-  }
-  // Codex login status covers its own auth store, not custom model-provider
-  // credentials. Keep failures indeterminate so the live probe decides usability.
-  return undefined;
+  return (await classifyCodexLoginStatus(probe, command)).credentials;
 }
 
 function randomizeClaudeCodexTie(
@@ -127,6 +248,7 @@ function randomizeClaudeCodexTie(
 
 // ChatGPT.app is the current desktop owner; keep Codex stable/beta as fallbacks.
 const CODEX_MACOS_APP_NAMES = ["ChatGPT.app", "Codex.app", "Codex Beta.app"] as const;
+const CODEX_MACOS_APP_PROBE_TIMEOUT_MS = 3_000;
 
 async function probeCodexCommand(params: {
   probe: typeof probeLocalCommand;
@@ -145,7 +267,12 @@ async function probeCodexCommand(params: {
     ]),
   );
   for (const executable of appExecutables) {
-    const appProbe = await params.probe(executable);
+    // ChatGPT.app's signed Codex binary can spend most of the generic 1.5s
+    // probe budget in macOS cold-start validation. Keep the broader probe
+    // contract tight while giving known desktop-app binaries enough headroom.
+    const appProbe = await params.probe(executable, ["--version"], {
+      timeoutMs: CODEX_MACOS_APP_PROBE_TIMEOUT_MS,
+    });
     if (appProbe.found) {
       return appProbe;
     }
@@ -163,11 +290,6 @@ async function detectNativeCodexAppServer(
   });
 }
 
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.onboardInferenceTestApi")] = {
-    detectNativeCodexAppServer,
-  };
-}
 /**
  * Detect usable inference backends in ladder order. Returns candidates only
  * for backends that exist on this machine; the first entry is the bootstrap
@@ -180,9 +302,6 @@ export async function detectInferenceBackends(
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
   const probe = options.deps?.probeLocalCommand ?? probeLocalCommand;
-  const readClaude =
-    options.deps?.readClaudeCliCredentials ??
-    (() => readClaudeCliCredentialsCached({ allowKeychainPrompt: false, ttlMs: 60_000 }));
   const readCodex =
     options.deps?.readCodexCliCredentials ??
     (() => readCodexCliCredentialsCached({ allowKeychainPrompt: false, ttlMs: 60_000 }));
@@ -191,10 +310,13 @@ export async function detectInferenceBackends(
     (() => readGeminiCliCredentialsCached({ ttlMs: 60_000 }));
 
   const candidates: InferenceBackendCandidate[] = [];
-  const defaultAgentId = options.config ? resolveDefaultAgentId(options.config) : undefined;
-  const defaultAgentModel = options.config
-    ? resolveAgentConfig(options.config, resolveDefaultAgentId(options.config))?.model
+  const defaultAgentId = options.config
+    ? options.agentId?.trim() || tryResolveLegacyCompatibilityAgentId(options.config)
     : undefined;
+  const defaultAgentModel =
+    options.config && defaultAgentId
+      ? resolveAgentConfig(options.config, defaultAgentId)?.model
+      : undefined;
   const existingModel =
     resolveAgentModelPrimaryValue(defaultAgentModel) ??
     resolveAgentModelPrimaryValue(options.config?.agents?.defaults?.model);
@@ -214,7 +336,9 @@ export async function detectInferenceBackends(
       credentials: true,
     });
   }
-  const envCandidates = detectAmbientInferenceBackends(env);
+  const envCandidates = detectAmbientInferenceBackends(env).filter(
+    (candidate) => candidate.kind === "openai-api-key" || candidate.kind === "anthropic-api-key",
+  );
 
   const [claudeProbe, codexProbe, geminiProbe] = await Promise.all([
     probe("claude"),
@@ -224,44 +348,54 @@ export async function detectInferenceBackends(
   const cliCandidates: InferenceBackendCandidate[] = [];
   const subscriptionPromotionEligibleCliKinds = new Set<InferenceBackendKind>();
   if (claudeProbe.found && !claudeProbe.timedOut) {
-    const claudeCredential = readClaude();
-    const credentials = detectCliCredentialState({
-      probe: claudeProbe,
-      hasStoredCredentials: claudeCredential !== null,
-      platform,
-    });
-    if (credentials === true && claudeCredential?.type === "oauth") {
+    const loginState = options.deps?.detectClaudeLoginState
+      ? await options.deps.detectClaudeLoginState(probe, claudeProbe.command)
+      : await detectClaudeLoginState(probe, claudeProbe.command, env);
+    const credentials = loginState.credentials;
+    if (credentials === true && loginState.authKind === "claude-subscription") {
       subscriptionPromotionEligibleCliKinds.add("claude-cli");
     }
+    const detail = describeCliDetail(loginState, "run `claude auth login`");
     cliCandidates.push({
       kind: "claude-cli",
       modelRef: CLAUDE_CLI_DEFAULT_MODEL_REF,
       label: "Claude Code",
-      detail: describeCliDetail(credentials, "run `claude auth login`"),
+      detail,
       ...(credentials === undefined ? {} : { credentials }),
     });
   }
   if (codexProbe.found && !codexProbe.timedOut) {
     const codexCredential = readCodex();
-    const credentials = options.deps?.detectCodexLoginState
-      ? await options.deps.detectCodexLoginState(probe, codexProbe.command)
-      : options.deps?.readCodexCliCredentials
-        ? detectCliCredentialState({
-            probe: codexProbe,
-            hasStoredCredentials: codexCredential !== null,
-            platform,
-          })
-        : await detectCodexLoginState(probe, codexProbe.command);
+    const loginState: CliLoginState = options.deps?.detectCodexLoginState
+      ? { credentials: await options.deps.detectCodexLoginState(probe, codexProbe.command) }
+      : ((await readCodexNativeLoginState(codexProbe.command, env)) ??
+        (options.deps?.readCodexCliCredentials
+          ? {
+              credentials: detectCliCredentialState({
+                probe: codexProbe,
+                hasStoredCredentials: codexCredential !== null,
+                platform,
+              }),
+              ...(codexCredential?.type === "oauth"
+                ? { authKind: "chatgpt-subscription" as const }
+                : {}),
+            }
+          : await classifyCodexLoginStatus(probe, codexProbe.command)));
+    const credentials = loginState.credentials;
     // Promote only prompt-free ChatGPT OAuth tokens. Status-only logins may be metered;
     // keychain-only ChatGPT users conservatively stay usable in the fallback tier.
-    if (credentials === true && codexCredential?.type === "oauth") {
+    if (
+      credentials === true &&
+      loginState.authKind === "chatgpt-subscription" &&
+      codexCredential?.type === "oauth"
+    ) {
       subscriptionPromotionEligibleCliKinds.add("codex-cli");
     }
     cliCandidates.push({
       kind: "codex-cli",
       modelRef: CODEX_APP_SERVER_DEFAULT_MODEL_REF,
       label: "Codex",
-      detail: describeCliDetail(credentials, "run `codex login`"),
+      detail: describeCliDetail(loginState, "run `codex login`"),
       ...(credentials === undefined ? {} : { credentials }),
     });
   }

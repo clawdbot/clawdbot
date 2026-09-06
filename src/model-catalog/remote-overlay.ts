@@ -4,11 +4,12 @@ import {
   type RemoteModelCatalogPricing,
 } from "@openclaw/model-catalog-core";
 import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-catalog-types";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { compareOpenClawVersions } from "../config/version.js";
 import { VERSION } from "../version.js";
 import { bundledCatalogGeneratedAt } from "./bundled-catalog-stamp.js";
-import { isRemoteModelCatalogRefreshEnabled, resolveRemoteCatalogUrl } from "./remote-refresh.js";
+import { isRemoteModelCatalogRefreshEnabled, resolveRemoteCatalogUrl } from "./remote-config.js";
 import { readRemoteModelCatalog } from "./remote-store.js";
 
 type RemoteModelCatalogOverlay = Readonly<Record<string, ModelCatalogProvider>>;
@@ -65,20 +66,18 @@ function getActiveRemoteModelCatalog(config: OpenClawConfig): ActiveRemoteModelC
   }
 }
 
-export function getRemoteModelCatalogOverlay(
+export function getRemoteModelCatalogProviderOverlay(
   config: OpenClawConfig,
-): RemoteModelCatalogOverlay | undefined {
-  return getActiveRemoteModelCatalog(config)?.providers;
+  provider: string,
+): ModelCatalogProvider | undefined {
+  const providerId = normalizeProviderId(provider);
+  return providerId ? getActiveRemoteModelCatalog(config)?.providers[providerId] : undefined;
 }
 
 export function getRemoteModelCatalogPricing(
   config: OpenClawConfig,
 ): Readonly<Record<string, RemoteModelCatalogPricing>> | undefined {
   return getActiveRemoteModelCatalog(config)?.pricing;
-}
-
-function resetRemoteModelCatalogOverlayForTest(): void {
-  cachedOverlay = undefined;
 }
 
 function setRemoteModelCatalogOverlaySourcesForTest(sources?: {
@@ -94,7 +93,6 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[
     Symbol.for("openclaw.remoteModelCatalogOverlayTestApi")
   ] = {
-    resetRemoteModelCatalogOverlayForTest,
     setRemoteModelCatalogOverlaySourcesForTest,
   };
 }

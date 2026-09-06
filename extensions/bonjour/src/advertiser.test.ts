@@ -25,7 +25,7 @@ const {
 } = mocks;
 const dnsLabelEncoder = new TextEncoder();
 
-const asString = (value: unknown, fallback: string) =>
+const stringOrFallback = (value: unknown, fallback: string) =>
   typeof value === "string" && value.trim() ? value : fallback;
 
 function expectDnsLabelByteLength(value: string, expected: number) {
@@ -81,8 +81,9 @@ function mockCiaoService(params?: {
       advertise,
       destroy,
       on,
-      getFQDN: () => `${asString(options.type, "service")}.${asString(options.domain, "local")}.`,
-      getHostname: () => asString(options.hostname, "unknown"),
+      getFQDN: () =>
+        `${stringOrFallback(options.type, "service")}.${stringOrFallback(options.domain, "local")}.`,
+      getHostname: () => stringOrFallback(options.hostname, "unknown"),
       getPort: () => Number(options.port ?? -1),
     };
     Object.defineProperty(service, "serviceState", {
@@ -173,7 +174,7 @@ describe("gateway bonjour advertiser", () => {
     expect(createService).toHaveBeenCalledTimes(1);
     const [gatewayCall] = createService.mock.calls as Array<[Record<string, unknown>]>;
     expect(gatewayCall?.[0]?.type).toBe("openclaw-gw");
-    const gatewayType = asString(gatewayCall?.[0]?.type, "");
+    const gatewayType = stringOrFallback(gatewayCall?.[0]?.type, "");
     expect(gatewayType.length).toBeLessThanOrEqual(15);
     expect(gatewayCall?.[0]?.port).toBe(18789);
     expect(gatewayCall?.[0]?.domain).toBe("local");

@@ -1,6 +1,7 @@
 // Plugin node capability tests cover scoped host URLs, request rewriting, and
 // authorization state attached to gateway node clients.
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
+import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import {
   buildPluginNodeCapabilityScopedHostUrl,
   hasAuthorizedClientPluginNodeCapabilityUrl,
@@ -8,6 +9,7 @@ import {
   indexPluginNodeCapabilitySurfaces,
   normalizePluginNodeCapabilityScopedUrl,
   pluginNodeCapabilityScopedHostUrlsConflict,
+  reconcileClientPluginNodeCapabilities,
   refreshClientPluginNodeCapability,
   setClientPluginNodeCapability,
 } from "./plugin-node-capability.js";
@@ -22,6 +24,8 @@ function makeClient(
     socket: {} as GatewayWsClient["socket"],
     connect: {
       role: "node",
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
       client: {
         mode: "node",
       },
@@ -197,6 +201,108 @@ describe("plugin node capability helpers", () => {
     });
   });
 
+  test.each([
+    { change: "enabled", before: [], after: [{ surface: "files" }] },
+    { change: "disabled", before: [{ surface: "files" }], after: [] },
+    {
+      change: "owner changed",
+      before: [{ surface: "files", scopeKey: "previous:files" }],
+      after: [{ surface: "files", scopeKey: "current:files" }],
+    },
+  ])("reconnects nodes when a capability is $change", ({ before, after }) => {
+    const close = vi.fn();
+    const client = makeClient({
+      connect: { ...makeClient().connect, caps: ["files"] },
+      pluginNodeCapabilitySurfaces: indexPluginNodeCapabilitySurfaces(before),
+    });
+
+    expect(
+      reconcileClientPluginNodeCapabilities(
+        client,
+        indexPluginNodeCapabilitySurfaces(after),
+        close,
+      ),
+    ).toBe(false);
+    expect(client).toMatchObject({
+      invalidated: true,
+      invalidatedReason: "plugin-node-capabilities-changed",
+    });
+    expect(close).toHaveBeenCalledOnce();
+    expect(client.pluginSurfaceUrls).toBeUndefined();
+  });
+
+  test.each([
+    { node: "browser-only", caps: ["browser"], maxProtocol: PROTOCOL_VERSION },
+    { node: "without approved capabilities", caps: [], maxProtocol: PROTOCOL_VERSION },
+  ])("preserves $node nodes across unrelated hosted-surface changes", ({ caps, maxProtocol }) => {
+    const close = vi.fn();
+    const client = makeClient({
+      connect: { ...makeClient().connect, minProtocol: maxProtocol, maxProtocol, caps },
+    });
+    for (const next of [
+      [{ surface: "files", scopeKey: "previous:files", ttlMs: 100 }],
+      [{ surface: "files", scopeKey: "current:files", ttlMs: 200 }],
+      [],
+    ]) {
+      const surfaces = indexPluginNodeCapabilitySurfaces(next);
+      expect(reconcileClientPluginNodeCapabilities(client, surfaces, close)).toBe(true);
+      expect(client.invalidated).toBeUndefined();
+      expect(close).not.toHaveBeenCalled();
+      expect(
+        refreshClientPluginNodeCapability({ client, surface: { surface: "files" } }),
+      ).toBeUndefined();
+      client.pluginNodeCapabilitySurfaces = surfaces;
+    }
+  });
+
+  test("reconnects legacy nodes to recompute session protocol ceilings", () => {
+    const close = vi.fn();
+    const client = makeClient({
+      connect: {
+        ...makeClient().connect,
+        minProtocol: PROTOCOL_VERSION - 1,
+        maxProtocol: PROTOCOL_VERSION - 1,
+        caps: [],
+      },
+    });
+    expect(
+      reconcileClientPluginNodeCapabilities(client, { files: { surface: "files" } }, close),
+    ).toBe(false);
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  test("revokes changed node capabilities while preserving current nodes and operators", () => {
+    const surface = { surface: "files", scopeKey: "publisher:files", ttlMs: 200 };
+    const surfaces = indexPluginNodeCapabilitySurfaces([surface]);
+    const close = vi.fn();
+    const changed = makeClient({
+      connect: { ...makeClient().connect, caps: [] },
+      pluginSurfaceUrls: { files: "https://gateway.example/__openclaw__/cap/current-token" },
+      pluginNodeCapabilitySurfaces: { files: { ...surface, ttlMs: 100 } },
+      pluginNodeCapabilities: {
+        "files\0publisher:files": { capability: "current-token", expiresAtMs: 2_000 },
+      },
+    });
+    changed.socket.close = close;
+    const current = makeClient({ pluginNodeCapabilitySurfaces: surfaces });
+    const operator = makeClient({ connect: { ...current.connect, role: "operator" } });
+
+    expect(reconcileClientPluginNodeCapabilities(changed, surfaces)).toBe(false);
+    expect(reconcileClientPluginNodeCapabilities(current, surfaces)).toBe(true);
+    expect(reconcileClientPluginNodeCapabilities(operator, surfaces)).toBe(true);
+    expect(close).toHaveBeenCalledExactlyOnceWith(1012, "node capabilities changed");
+    expect(current.invalidated).toBeUndefined();
+    expect(operator.invalidated).toBeUndefined();
+    expect(
+      hasAuthorizedPluginNodeCapability({
+        clients: [changed],
+        surface,
+        capability: "current-token",
+        nowMs: 1_000,
+      }),
+    ).toBe(false);
+  });
+
   test("refreshes client plugin surface url and stored capability", () => {
     const client = makeClient({
       pluginSurfaceUrls: {
@@ -279,6 +385,25 @@ describe("plugin node capability helpers", () => {
         nowMs: 1_000,
       }),
     ).toBe(false);
+  });
+
+  test("rejects invalidated clients without sliding capability expiry", () => {
+    const client = makeClient({
+      invalidated: true,
+      pluginNodeCapabilities: {
+        canvas: { capability: "canvas-token", expiresAtMs: 1_500 },
+      },
+    });
+
+    expect(
+      hasAuthorizedPluginNodeCapability({
+        clients: new Set([client]),
+        surface: { surface: "canvas", ttlMs: 100 },
+        capability: "canvas-token",
+        nowMs: 1_000,
+      }),
+    ).toBe(false);
+    expect(client.pluginNodeCapabilities?.canvas?.expiresAtMs).toBe(1_500);
   });
 
   test("rejects plugin surface capabilities when the clock is invalid", () => {

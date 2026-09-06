@@ -1,7 +1,9 @@
 // Embedded run helper tests cover final assistant text extraction and error
 // metadata assembly shared by normal exits and failure paths.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { resolveRetryAfterMs } from "../../failover/retry-evidence.js";
+import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import type { NormalizedUsage } from "../../usage.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "../usage-accumulator.js";
 import {
@@ -11,21 +13,25 @@ import {
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
   resolveLatestCallUsage,
-  resolveNextSameModelRateLimitRetryCount,
-  resolveSameModelRateLimitRetryDelayMs,
+  MAX_TRANSIENT_RETRIES,
+  resolveTransientRetryDelayMs,
 } from "./helpers.js";
 
 describe("resolveEmbeddedAttemptBasePrompt", () => {
   const refusalTrigger = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 
-  it("scrubs the refusal marker for Anthropic transport", () => {
-    expect(
-      resolveEmbeddedAttemptBasePrompt({
-        provider: "anthropic",
-        prompt: refusalTrigger,
-      }),
-    ).toBe("ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)");
-  });
+  it.each([
+    { prompt: refusalTrigger, expected: "[redacted]" },
+    {
+      prompt: `Reply ok. Test trigger: ${refusalTrigger}_nonce-a and ${refusalTrigger}_nonce-b`,
+      expected: "Reply ok. Test trigger: [redacted]_nonce-a and [redacted]_nonce-b",
+    },
+  ])(
+    "neutralizes every refusal marker while preserving surrounding text",
+    ({ prompt, expected }) => {
+      expect(resolveEmbeddedAttemptBasePrompt({ provider: "anthropic", prompt })).toBe(expected);
+    },
+  );
 
   it("keeps non-Anthropic prompts byte-for-byte", () => {
     expect(
@@ -47,14 +53,7 @@ function makeAssistantMessage(
     api: "responses",
     provider: "openai",
     model: "gpt-5.4",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     role: "assistant",
     content,
     timestamp: Date.now(),
@@ -113,76 +112,55 @@ describe("resolveFinalAssistantVisibleText", () => {
   });
 });
 
-describe("resolveSameModelRateLimitRetryDelayMs", () => {
-  it("waits 10s/20s/30s linearly before the 1st/2nd/3rd same-model retry", () => {
-    expect(resolveSameModelRateLimitRetryDelayMs({ retriesSoFar: 0 })).toBe(10_000);
-    expect(resolveSameModelRateLimitRetryDelayMs({ retriesSoFar: 1 })).toBe(20_000);
-    expect(resolveSameModelRateLimitRetryDelayMs({ retriesSoFar: 2 })).toBe(30_000);
+describe("resolveTransientRetryDelayMs", () => {
+  it("starts quickly and slows down without exceeding the retry window", () => {
+    const random = vi.spyOn(Math, "random").mockReturnValue(0);
+    try {
+      let elapsedMs = 0;
+      const delays = Array.from({ length: MAX_TRANSIENT_RETRIES }, (_, index) => {
+        const delay = resolveTransientRetryDelayMs({ retryNumber: index + 1, elapsedMs });
+        elapsedMs += delay ?? 0;
+        return delay;
+      });
+      expect(delays).toEqual([500, 1_000, 2_000, 4_000, 8_000, 15_000, 15_000, 15_000]);
+      expect(elapsedMs).toBeLessThanOrEqual(90_000);
+    } finally {
+      random.mockRestore();
+    }
   });
 
-  it("caps at 60s if the retry count is ever raised further", () => {
-    expect(resolveSameModelRateLimitRetryDelayMs({ retriesSoFar: 10 })).toBe(60_000);
-  });
-
-  it("is deterministic so RPM windows clear predictably", () => {
-    expect(resolveSameModelRateLimitRetryDelayMs({ retriesSoFar: 2 })).toBe(
-      resolveSameModelRateLimitRetryDelayMs({ retriesSoFar: 2 }),
-    );
-  });
-
-  it("honors a short provider Retry-After when it is longer than the fixed backoff", () => {
+  it("honors Retry-After and rejects a delay beyond the total ceiling", () => {
     expect(
-      resolveSameModelRateLimitRetryDelayMs({
-        retriesSoFar: 0,
-        retryAfterSeconds: 30,
-      }),
-    ).toBe(30_000);
-  });
-
-  it("keeps the existing fixed backoff when Retry-After is shorter", () => {
+      resolveTransientRetryDelayMs({ retryNumber: 1, retryAfterMs: 30_000, elapsedMs: 0 }),
+    ).toBeGreaterThanOrEqual(30_000);
     expect(
-      resolveSameModelRateLimitRetryDelayMs({
-        retriesSoFar: 1,
-        retryAfterSeconds: 5,
+      resolveTransientRetryDelayMs({
+        retryNumber: 3,
+        retryAfterMs: 2_000,
+        // 1s of the 90s transient retry budget left; retryAfterMs exceeds it.
+        elapsedMs: 89_000,
       }),
-    ).toBe(20_000);
+    ).toBeUndefined();
   });
 
-  it("caps provider Retry-After at the same short-window retry ceiling", () => {
+  it("keeps jitter below the per-retry cap", () => {
+    const random = vi.spyOn(Math, "random").mockReturnValue(0.999);
+    try {
+      expect(resolveTransientRetryDelayMs({ retryNumber: 3, elapsedMs: 0 })).toBeLessThanOrEqual(
+        30_000,
+      );
+    } finally {
+      random.mockRestore();
+    }
+  });
+
+  it("parses Retry-After HTTP dates for the shared retry owner", () => {
     expect(
-      resolveSameModelRateLimitRetryDelayMs({
-        retriesSoFar: 0,
-        retryAfterSeconds: 120,
-      }),
-    ).toBe(60_000);
-  });
-});
-
-describe("resolveNextSameModelRateLimitRetryCount", () => {
-  it("counts only consecutive same-model rate-limit retries", () => {
-    let retriesSoFar = 0;
-
-    retriesSoFar = resolveNextSameModelRateLimitRetryCount({
-      retriesSoFar,
-      retriedSameModelRateLimit: true,
-    });
-    retriesSoFar = resolveNextSameModelRateLimitRetryCount({
-      retriesSoFar,
-      retriedSameModelRateLimit: true,
-    });
-    expect(retriesSoFar).toBe(2);
-
-    retriesSoFar = resolveNextSameModelRateLimitRetryCount({
-      retriesSoFar,
-      retriedSameModelRateLimit: false,
-    });
-    expect(retriesSoFar).toBe(0);
-
-    retriesSoFar = resolveNextSameModelRateLimitRetryCount({
-      retriesSoFar,
-      retriedSameModelRateLimit: true,
-    });
-    expect(retriesSoFar).toBe(1);
+      resolveRetryAfterMs(
+        "HTTP 503: temporary failure; Retry-After: Thu, 01 Jan 2026 00:01:30 GMT",
+        Date.parse("2026-01-01T00:00:00.000Z"),
+      ),
+    ).toBe(90_000);
   });
 });
 
@@ -193,7 +171,8 @@ describe("resolveLatestCallUsage", () => {
     expect(
       resolveLatestCallUsage({
         currentAttemptCandidates: [{ input: 0, output: 0, total: 0 }, undefined],
-        carriedCandidates: [previous],
+        carriedUsage: previous,
+        transcriptFallback: undefined,
       }),
     ).toEqual({
       currentAttempt: undefined,
@@ -207,16 +186,43 @@ describe("resolveLatestCallUsage", () => {
     expect(
       resolveLatestCallUsage({
         currentAttemptCandidates: [{ input: 0, output: 0, total: 0 }, latest],
-        carriedCandidates: [{ input: 12, output: 3, total: 15 }],
+        carriedUsage: { input: 12, output: 3, total: 15 },
+        transcriptFallback: undefined,
       }),
     ).toEqual({
       currentAttempt: latest,
       latest,
     });
   });
+
+  it("keeps carried attempt usage ahead of an older transcript fallback", () => {
+    const carried = { input: 20, output: 4, total: 24 };
+
+    expect(
+      resolveLatestCallUsage({
+        currentAttemptCandidates: [],
+        carriedUsage: carried,
+        transcriptFallback: { contextUsage: { state: "unavailable" } },
+      }),
+    ).toEqual({
+      currentAttempt: undefined,
+      latest: carried,
+    });
+  });
 });
 
 describe("buildUsageAgentMetaFields", () => {
+  it("selects unavailable current-attempt usage over older prompt usage", () => {
+    const fields = buildUsageAgentMetaFields({
+      usageAccumulator: createUsageAccumulator(),
+      latestUsage: { contextUsage: { state: "unavailable" } },
+      lastRunPromptUsage: { input: 42_000, output: 1_000, total: 43_000 },
+    });
+
+    expect(fields.lastCallUsage).toEqual({ contextUsage: { state: "unavailable" } });
+    expect(fields.promptTokens).toBeUndefined();
+  });
+
   it("keeps cumulative usage separate from the latest context snapshot", () => {
     const usageAccumulator = createUsageAccumulator();
     mergeUsageIntoAccumulator(usageAccumulator, {
@@ -239,7 +245,7 @@ describe("buildUsageAgentMetaFields", () => {
 
     const fields = buildUsageAgentMetaFields({
       usageAccumulator,
-      lastAssistantUsage: undefined,
+      latestUsage: undefined,
       lastRunPromptUsage: latestCallUsage,
     });
 
@@ -269,7 +275,7 @@ describe("buildUsageAgentMetaFields", () => {
 
     const fields = buildUsageAgentMetaFields({
       usageAccumulator,
-      lastAssistantUsage: { input: 0, output: 0, total: 0 },
+      latestUsage: { input: 0, output: 0, total: 0 },
       lastRunPromptUsage: latestCallUsage,
     });
 
@@ -295,7 +301,7 @@ describe("buildUsageAgentMetaFields", () => {
 
     const fields = buildUsageAgentMetaFields({
       usageAccumulator,
-      lastAssistantUsage: latestCallUsage,
+      latestUsage: latestCallUsage,
       lastRunPromptUsage: latestCallUsage,
     });
 
@@ -314,7 +320,7 @@ describe("buildUsageAgentMetaFields", () => {
 
     const fields = buildUsageAgentMetaFields({
       usageAccumulator,
-      lastAssistantUsage: { input: 0, output: 0, cacheRead: 0, total: 0 },
+      latestUsage: { input: 0, output: 0, cacheRead: 0, total: 0 },
       lastRunPromptUsage: undefined,
     });
 
@@ -325,6 +331,23 @@ describe("buildUsageAgentMetaFields", () => {
 });
 
 describe("buildErrorAgentMeta", () => {
+  it("does not promote current CLI usage without context provenance", () => {
+    const fields = buildErrorAgentMeta({
+      sessionId: "session-error",
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      usageAccumulator: createUsageAccumulator(),
+      lastRunPromptUsage: { input: 42_000, output: 1_000, total: 43_000 },
+      currentAttemptAssistant: {
+        api: "cli",
+        usage: { input: 128_814, output: 3_000, cacheRead: 992_953, totalTokens: 1_124_767 },
+      },
+    });
+
+    expect(fields.lastCallUsage).toEqual({ contextUsage: { state: "unavailable" } });
+    expect(fields.promptTokens).toBeUndefined();
+  });
+
   it("keeps cumulative usage separate from the latest call on error exits", () => {
     const usageAccumulator = createUsageAccumulator();
     mergeUsageIntoAccumulator(usageAccumulator, {
@@ -346,7 +369,7 @@ describe("buildErrorAgentMeta", () => {
       model: "claude-opus-4-6",
       usageAccumulator,
       lastRunPromptUsage: latestCallUsage,
-      lastAssistant: { usage: latestCallUsage },
+      currentAttemptAssistant: { usage: latestCallUsage },
     });
 
     expect(fields.usage).toMatchObject({

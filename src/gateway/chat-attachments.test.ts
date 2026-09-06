@@ -39,14 +39,22 @@ import {
 } from "./chat-attachment-policy.js";
 import {
   type ChatAttachment,
+  discardPreparedInboundMedia,
+  type OffloadedRef,
   parseMessageWithAttachments,
   persistInboundImagesForTranscript,
   stripImageMediaMarkers,
   UnsupportedAttachmentError,
 } from "./chat-attachments.js";
+import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
 
 const PNG_1x1 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+// ISO-BMFF's generic brand identifies the container, not its audio/video tracks.
+const GENERIC_MP4 = Buffer.from(
+  "0000001c6674797069736f6d0000020069736f6d69736f326d70343100000008",
+  "hex",
+).toString("base64");
 
 type ParsedAttachments = Awaited<ReturnType<typeof parseMessageWithAttachments>>;
 
@@ -154,8 +162,34 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("discardPreparedInboundMedia", () => {
+  it("deletes only the managed inbound id and reports cleanup failures", async () => {
+    const error = new Error("unlink denied");
+    deleteMediaBufferMock.mockRejectedValueOnce(error);
+    const warn = vi.fn();
+    const prepared: OffloadedRef = {
+      mediaRef: "media://inbound/managed-id",
+      id: "managed-id",
+      path: "/external/user-owned.png",
+      kind: "image",
+      mimeType: "image/png",
+      label: "user-owned.png",
+      sizeBytes: 42,
+      sourceIndex: 0,
+    };
+
+    await expect(discardPreparedInboundMedia([prepared], { warn })).resolves.toBeUndefined();
+
+    expect(deleteMediaBufferMock).toHaveBeenCalledOnce();
+    expect(deleteMediaBufferMock).toHaveBeenCalledWith("managed-id", "inbound");
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("failed to discard prepared inbound media managed-id: unlink denied"),
+    );
+  });
+});
+
 describe("persistInboundImagesForTranscript", () => {
-  it("preserves mixed image order and appends non-image offloads", async () => {
+  it("preserves original mixed-media order in claim-only transcript facts", async () => {
     saveMediaBufferMock.mockResolvedValueOnce({
       id: "inline",
       path: "/media/inbound/inline.jpg",
@@ -163,39 +197,103 @@ describe("persistInboundImagesForTranscript", () => {
       contentType: "image/jpeg",
     });
 
-    const saved = await persistInboundImagesForTranscript({
-      images: [{ type: "image", data: "aGVsbG8=", mimeType: "image/jpeg" }],
-      imageOrder: ["offloaded", "inline"],
+    const result = await persistInboundImagesForTranscript({
+      images: [
+        {
+          type: "image",
+          data: "aGVsbG8=",
+          mimeType: "image/jpeg",
+          sourceIndex: 1,
+        },
+      ],
       offloadedRefs: [
         {
-          mediaRef: "media://inbound/offloaded",
-          id: "offloaded",
-          path: "/media/inbound/offloaded.png",
-          kind: "image",
-          mimeType: "image/png",
-          label: "offloaded.png",
-          sizeBytes: 2_100_000,
-        },
-        {
-          mediaRef: "media://inbound/report",
-          id: "report",
-          path: "/media/inbound/report.pdf",
-          kind: "document",
-          mimeType: "application/pdf",
-          label: "report.pdf",
+          mediaRef: "https://signed.example/private-video",
+          id: "video",
+          path: "/media/inbound/video.mp4",
+          kind: "video",
+          mimeType: "video/mp4",
+          label: "video.mp4",
           sizeBytes: 100,
+          durationMs: 2_000,
+          sourceIndex: 0,
         },
       ],
       log: { warn: vi.fn() },
       logContext: "test",
     });
 
-    expect(saved.map((entry) => entry.path)).toEqual([
-      "/media/inbound/offloaded.png",
-      "/media/inbound/inline.jpg",
-      "/media/inbound/report.pdf",
+    expect(result.entries.map((entry) => entry.sourceIndex)).toEqual([0, 1]);
+    expect(result.entries.map((entry) => entry.fact)).toEqual([
+      {
+        url: "media://inbound/video",
+        contentType: "video/mp4",
+        kind: "video",
+        fileName: "video.mp4",
+        sizeBytes: 100,
+        durationMs: 2_000,
+        hydrationSuppressed: true,
+      },
+      {
+        url: "media://inbound/inline",
+        contentType: "image/jpeg",
+        kind: "image",
+        sizeBytes: 5,
+      },
     ]);
+    expect(result.omission).toBe("none");
+    const durable = JSON.stringify(result.entries.map((entry) => entry.fact));
+    expect(durable).not.toContain("/media/");
+    expect(durable).not.toContain("signed.example");
+    expect(durable).not.toContain("sourceIndex");
   });
+
+  it("reports an inline image whose durable managed save fails", async () => {
+    saveMediaBufferMock.mockRejectedValueOnce(new Error("disk unavailable"));
+    const warn = vi.fn();
+
+    const result = await persistInboundImagesForTranscript({
+      images: [
+        {
+          type: "image",
+          data: "aGVsbG8=",
+          mimeType: "image/jpeg",
+          sourceIndex: 0,
+        },
+      ],
+      offloadedRefs: [],
+      log: { warn },
+      logContext: "test",
+    });
+
+    expect(result).toEqual({ entries: [], omission: "inline-image-save-failed" });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("disk unavailable"));
+  });
+
+  it.each(["nested/id", String.raw`nested\id`, "bad\0id", ".", "..", "claim?sig", "claim#part"])(
+    "rejects an unsafe saved media id %j before projecting a durable claim",
+    async (id) => {
+      await expect(
+        persistInboundImagesForTranscript({
+          images: [],
+          offloadedRefs: [
+            {
+              mediaRef: "https://signed.example/private",
+              id,
+              path: "/media/inbound/private",
+              kind: "video",
+              mimeType: "video/mp4",
+              label: "private.mp4",
+              sizeBytes: 10,
+              sourceIndex: 0,
+            },
+          ],
+          log: { warn: vi.fn() },
+          logContext: "test",
+        }),
+      ).rejects.toThrow();
+    },
+  );
 });
 
 describe("parseMessageWithAttachments", () => {
@@ -288,8 +386,10 @@ describe("parseMessageWithAttachments", () => {
   it("keeps image inline and offloads non-image side by side", async () => {
     const { parsed } = await parseWithWarnings("x", [pngAttachment(), pdfAttachment()]);
     expectSingleInlinePng(parsed);
+    expect(parsed.images[0]?.sourceIndex).toBe(0);
     expect(parsed.offloadedRefs).toHaveLength(1);
     expect(parsed.offloadedRefs[0]?.mimeType).toBe("application/pdf");
+    expect(parsed.offloadedRefs[0]?.sourceIndex).toBe(1);
     expect(parsed.imageOrder).toEqual(["inline"]);
   });
 
@@ -370,20 +470,23 @@ describe("parseMessageWithAttachments", () => {
     );
   });
 
-  it("accepts zip attachments via workspace offload", async () => {
-    const zip = Buffer.from("PK\u0003\u0004zip-archive-bytes").toString("base64");
-    const { parsed } = await parseWithWarnings("x", [
-      {
-        type: "file",
-        mimeType: "application/zip",
-        fileName: "bundle.zip",
-        content: zip,
-      },
-    ]);
-    expect(parsed.offloadedRefs).toHaveLength(1);
-    expect(parsed.offloadedRefs[0]?.label).toBe("bundle.zip");
-    expect(parsed.offloadedRefs[0]?.mimeType).toBe("application/zip");
-  });
+  it.each(["application/zip", "application/pdf"])(
+    "keeps ZIP bytes as an archive with %s metadata",
+    async (mimeType) => {
+      const zip = Buffer.from("PK\u0003\u0004zip-archive-bytes").toString("base64");
+      const { parsed } = await parseWithWarnings("x", [
+        {
+          type: "file",
+          mimeType,
+          fileName: "bundle.zip",
+          content: zip,
+        },
+      ]);
+      expect(parsed.offloadedRefs).toHaveLength(1);
+      expect(parsed.offloadedRefs[0]?.label).toBe("bundle.zip");
+      expect(parsed.offloadedRefs[0]?.mimeType).toBe("application/zip");
+    },
+  );
 
   it("does not let image filenames override generic non-image byte sniffing", async () => {
     const zip = Buffer.from("PK\u0003\u0004zip-archive-bytes").toString("base64");
@@ -421,6 +524,39 @@ describe("parseMessageWithAttachments validation errors", () => {
     expect(saveMediaBufferMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { name: "an empty string", attachment: { content: "" } },
+    { name: "an empty typed array", attachment: { content: new Uint8Array(0) } },
+    { name: "an empty array buffer", attachment: { content: new ArrayBuffer(0) } },
+    {
+      name: "an empty nested base64 source",
+      attachment: { source: { type: "base64", media_type: "application/pdf", data: "" } },
+    },
+    { name: "whitespace-only content", attachment: { content: "   " } },
+  ])("rejects normalized RPC attachments with $name", async ({ attachment }) => {
+    const normalized = normalizeRpcAttachmentsToChatAttachments([
+      {
+        type: "file",
+        mimeType: "application/pdf",
+        fileName: "empty.pdf",
+        ...attachment,
+      },
+    ]);
+
+    await expectUnsupportedAttachmentReason(normalized, {}, "empty-payload");
+  });
+
+  it("continues to omit RPC attachments without recognized content", () => {
+    expect(
+      normalizeRpcAttachmentsToChatAttachments([
+        { content: undefined },
+        { content: null },
+        { mimeType: "image/png" },
+        { source: { type: "base64", media_type: "application/pdf", data: null } },
+      ]),
+    ).toEqual([]);
+  });
+
   it("throws UnsupportedAttachmentError on non-image when acceptNonImage is false", async () => {
     await expectUnsupportedAttachmentReason(
       [pdfAttachment({ fileName: "a.pdf" })],
@@ -428,6 +564,50 @@ describe("parseMessageWithAttachments validation errors", () => {
       "unsupported-non-image",
     );
   });
+
+  it("rejects declared text with an image filename on image-only entrypoints", async () => {
+    await expectUnsupportedAttachmentReason(
+      [
+        {
+          type: "file",
+          mimeType: "text/plain",
+          fileName: "note.png",
+          content: Buffer.from("ordinary text attachment").toString("base64"),
+        },
+      ],
+      { acceptNonImage: false },
+      "unsupported-non-image",
+    );
+  });
+
+  it.each([
+    { mimeType: "text/plain; charset=utf-8", fileName: "note.png", expected: "text/plain" },
+    { mimeType: "audio/webm", fileName: "voice.webm", expected: "audio/webm" },
+    { mimeType: "audio/mp4", fileName: "voice.mp4", expected: "audio/mp4" },
+    {
+      mimeType: "application/octet-stream",
+      fileName: "bundle.zip",
+      expected: "application/octet-stream",
+    },
+    { mimeType: "application/octet-stream", fileName: "note.txt", expected: "text/plain" },
+    { mimeType: undefined, fileName: "bundle.zip", expected: "application/zip" },
+  ])(
+    "preserves metadata precedence for inconclusive bytes: $mimeType/$fileName",
+    async ({ mimeType, fileName, expected }) => {
+      const { parsed } = await parseWithWarnings("read this", [
+        {
+          type: "file",
+          mimeType,
+          fileName,
+          content: Buffer.from("ordinary text attachment").toString("base64"),
+        },
+      ]);
+      expect(parsed.images).toEqual([]);
+      expect(parsed.offloadedRefs).toEqual([
+        expect.objectContaining({ mimeType: expected, label: fileName }),
+      ]);
+    },
+  );
 
   it("rejects generic-container payloads mislabeled as images when acceptNonImage is false", async () => {
     const docx = Buffer.from("PK\u0003\u0004fake-docx-content").toString("base64");
@@ -529,34 +709,69 @@ describe("parseMessageWithAttachments validation errors", () => {
     {
       kind: "audio",
       mimeType: "audio/mpeg",
+      expectedMimeType: "audio/mpeg",
       fileName: "voice.mp3",
       content: Buffer.from([0xff, 0xfb, 0x90, 0x00]).toString("base64"),
     },
     {
       kind: "video",
       mimeType: "video/mp4",
+      expectedMimeType: "video/mp4",
       fileName: "clip.mp4",
-      content: Buffer.from([
-        0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32,
-      ]).toString("base64"),
+      content: GENERIC_MP4,
     },
-  ])("surfaces structured inbound $kind facts", async ({ kind, mimeType, fileName, content }) => {
-    const parsed = await parseMessageWithAttachments(
-      "play this",
-      [{ type: kind, mimeType, fileName, content, durationMs: 1_500 }],
-      { log: { warn: () => {} } },
-    );
+    ...["audio/mp4", "audio/x-m4a", "audio/m4a", undefined].map((mimeType) => ({
+      kind: "audio",
+      mimeType,
+      expectedMimeType: mimeType ?? "audio/x-m4a",
+      fileName: "voice.m4a",
+      content: GENERIC_MP4,
+    })),
+    {
+      kind: "audio",
+      mimeType: undefined,
+      expectedMimeType: "audio/x-m4a",
+      fileName: "voice.m4a",
+      content: Buffer.from(
+        "0000001c667479704d344120000002004d34412069736f6d69736f3200000008",
+        "hex",
+      ).toString("base64"),
+    },
+    {
+      kind: "audio",
+      mimeType: "audio/webm",
+      expectedMimeType: "audio/webm",
+      fileName: "voice.webm",
+      content: Buffer.from("1a45dfa3874282847765626d", "hex").toString("base64"),
+    },
+    {
+      kind: "video",
+      mimeType: "audio/aac",
+      expectedMimeType: "video/mp4",
+      fileName: "clip.mp4",
+      content: GENERIC_MP4,
+    },
+  ])(
+    "surfaces structured inbound $kind facts %#",
+    async ({ kind, mimeType, expectedMimeType, fileName, content }) => {
+      const parsed = await parseMessageWithAttachments(
+        "play this",
+        [{ type: kind, mimeType, fileName, content, durationMs: 1_500 }],
+        { log: { warn: () => {} } },
+      );
 
-    expect(parsed.offloadedRefs).toEqual([
-      expect.objectContaining({
-        kind,
-        mimeType,
-        label: fileName,
-        durationMs: 1_500,
-        mediaRef: expect.stringMatching(/^media:\/\/inbound\//u),
-      }),
-    ]);
-  });
+      expect(parsed.offloadedRefs).toEqual([
+        expect.objectContaining({
+          kind,
+          mimeType: expectedMimeType,
+          label: fileName,
+          durationMs: 1_500,
+          mediaRef: expect.stringMatching(/^media:\/\/inbound\//u),
+        }),
+      ]);
+      expect(parsed.media[0]).toMatchObject({ kind, contentType: expectedMimeType });
+    },
+  );
 
   it("keeps image sniff fallback for generic image attachments", async () => {
     const { parsed, logs } = await parseWithWarnings("see this", [
@@ -599,15 +814,12 @@ describe("parseMessageWithAttachments validation errors", () => {
 
   it("caps text-only image offloads", async () => {
     const logs: string[] = [];
-    const attachments = Array.from(
-      { length: 11 },
-      (_, index): ChatAttachment => ({
-        type: "image",
-        mimeType: "image/png",
-        fileName: `dot-${index}.png`,
-        content: PNG_1x1,
-      }),
-    );
+    const attachments = Array.from({ length: 11 }, (_, index): ChatAttachment => ({
+      type: "image",
+      mimeType: "image/png",
+      fileName: `dot-${index}.png`,
+      content: PNG_1x1,
+    }));
     const parsed = await parseTextOnlyAttachments("see these", attachments, logs);
 
     try {

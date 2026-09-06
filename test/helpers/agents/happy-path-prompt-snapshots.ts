@@ -29,16 +29,17 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../../../src/plugins/runtime.js";
+import { withStateDirEnv } from "../../../src/test-helpers/state-dir-env.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../../../src/test-utils/channel-plugins.js";
 import {
   CODEX_MODEL_PROMPT_FIXTURE_DIR,
+  CODEX_PROMPT_SNAPSHOT_BASE_SCENARIO,
+  CODEX_PROMPT_SNAPSHOT_FILES,
   CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
 } from "./prompt-snapshot-paths.js";
 
 // Builds Codex happy-path prompt snapshot fixtures for agent prompt regression tests.
-
-export { CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR };
 
 const WORKSPACE_DIR = "/tmp/openclaw-happy-path/workspace";
 const AGENT_DIR = "/tmp/openclaw-happy-path/agent";
@@ -110,7 +111,6 @@ type CodexPromptSnapshotApi = {
     promptText?: string;
     developerInstructionAdditions?: string;
     turnScopedDeveloperInstructions?: string;
-    heartbeatCollaborationInstructions?: string;
   }) => {
     developerInstructions: string;
     threadStartParams: Record<string, unknown>;
@@ -255,13 +255,8 @@ const CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_CONTEXT_FILES = [
   },
 ] as const;
 
-const CODEX_HEARTBEAT_CONTEXT_FILE = {
-  path: path.join(WORKSPACE_DIR, "HEARTBEAT.md"),
-  content: "<HEARTBEAT.md contents will be here>",
-} as const;
-
 const CODEX_WORKSPACE_BOOTSTRAP_PROMPT_CONTEXT = [
-  "OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance. Those files are not repeated here.",
+  "OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. Those files are not repeated here.",
   "",
   "# Project Context",
   "",
@@ -292,14 +287,6 @@ const CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_INSTRUCTIONS = [
   .join("\n")
   .trim();
 
-const CODEX_HEARTBEAT_COLLABORATION_INSTRUCTIONS = [
-  "## OpenClaw Heartbeat Workspace",
-  "",
-  "HEARTBEAT.md exists in the active agent workspace. Read it before proceeding with this heartbeat, then decide what action is appropriate.",
-  "",
-  `- ${CODEX_HEARTBEAT_CONTEXT_FILE.path}`,
-].join("\n");
-
 const CODEX_PROMPT_SNAPSHOT_THREAD_CONFIG = {
   "features.code_mode_only": false,
 };
@@ -312,6 +299,7 @@ const baseConfig: OpenClawConfig = {
   },
   agents: {
     defaults: {
+      userTimezone: "UTC",
       heartbeat: {
         every: "30m",
       },
@@ -424,6 +412,7 @@ function createAttempt(params: {
     sessionKey: params.sessionKey,
     sessionId: `session-${params.scenario.id}`,
     runId: `run-${params.scenario.id}`,
+    startedAtMs: Date.parse("2026-01-01T00:00:00.000Z"),
     provider: "codex",
     modelId: MODEL_ID,
     model: happyPathModel,
@@ -875,18 +864,21 @@ function renderScenarioSnapshot(
   });
   const appServer = codexApi.resolveCodexPromptSnapshotAppServerOptions();
   const codexTurnPromptText = prependCodexOpenClawRuntimeContext(scenario.prompt);
-  const codexSnapshot = codexApi.buildCodexHarnessPromptSnapshot({
-    attempt,
-    cwd: WORKSPACE_DIR,
-    threadId: `thread-${scenario.id}`,
-    dynamicTools: scenario.dynamicTools,
-    appServer,
-    config: CODEX_PROMPT_SNAPSHOT_THREAD_CONFIG,
-    promptText: codexTurnPromptText,
-    turnScopedDeveloperInstructions: CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_INSTRUCTIONS,
-    heartbeatCollaborationInstructions:
-      scenario.trigger === "heartbeat" ? CODEX_HEARTBEAT_COLLABORATION_INSTRUCTIONS : undefined,
-  });
+  if (attempt.startedAtMs === undefined) {
+    throw new Error("Codex prompt snapshot attempt requires a fixed start time");
+  }
+  const codexSnapshot = withFixedDateNow(attempt.startedAtMs, () =>
+    codexApi.buildCodexHarnessPromptSnapshot({
+      attempt,
+      cwd: WORKSPACE_DIR,
+      threadId: `thread-${scenario.id}`,
+      dynamicTools: scenario.dynamicTools,
+      appServer,
+      config: CODEX_PROMPT_SNAPSHOT_THREAD_CONFIG,
+      promptText: codexTurnPromptText,
+      turnScopedDeveloperInstructions: CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_INSTRUCTIONS,
+    }),
+  );
   const dynamicToolFunctions = flattenCodexDynamicToolSpecs(scenario.dynamicTools);
   const criticalToolSpecs = dynamicToolFunctions.filter((tool) =>
     ["message", "heartbeat_respond"].includes(tool.name),
@@ -901,7 +893,7 @@ function renderScenarioSnapshot(
     "",
     ...scenario.notes.map((note) => `- ${note}`),
     "- This captures the OpenClaw-owned Codex app-server inputs and reconstructs the stable Codex model/permission layers from committed Codex prompt fixtures.",
-    "- This also simulates Codex workspace bootstrap routing: `AGENTS.md` through native project-doc discovery, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, `MEMORY.md` in turn input, and `HEARTBEAT.md` as a heartbeat-only file pointer.",
+    "- This also simulates Codex workspace bootstrap routing: `AGENTS.md` through native project-doc discovery, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, and `MEMORY.md` in turn input.",
     "",
     "## Scenario Metadata",
     "",
@@ -923,7 +915,6 @@ function renderScenarioSnapshot(
         ),
         simulatedWorkspaceTurnScopedDeveloperInstructionFiles:
           CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_CONTEXT_FILES.map((file) => file.path),
-        simulatedHeartbeatWorkspaceFile: CODEX_HEARTBEAT_CONTEXT_FILE.path,
       }),
     ),
     "",
@@ -955,6 +946,18 @@ function renderScenarioSnapshot(
   ].join("\n");
 }
 
+function withFixedDateNow<T>(nowMs: number, build: () => T): T {
+  // Snapshot generation is synchronous here. Restore the process clock so this fixture cannot
+  // leak its pinned calendar date into later scenarios or checks.
+  const readNow = Date.now;
+  Date.now = () => nowMs;
+  try {
+    return build();
+  } finally {
+    Date.now = readNow;
+  }
+}
+
 function renderReadme(scenarios: PromptScenario[]): string {
   return [
     "# Codex Happy Path Prompt Snapshots",
@@ -967,11 +970,13 @@ function renderReadme(scenarios: PromptScenario[]): string {
     "- Codex harness default coverage for tool-only visible source replies.",
     "- Telegram direct chat, Discord group chat, and a heartbeat turn with `heartbeat_respond` available through searchable dynamic tools.",
     "",
-    "The Markdown files show selected app-server thread/turn params plus a reconstructed model-bound prompt layer stack: Codex `gpt-5.5` model instructions from a pinned Codex model catalog fixture, Codex permission developer instructions for the happy-path yolo profile, OpenClaw developer instructions, turn input with simulated OpenClaw workspace bootstrap runtime context, heartbeat collaboration-mode guidance when applicable, and references to the complete dynamic tool catalog.",
+    "The materialized Markdown snapshots show selected app-server thread/turn params plus a reconstructed model-bound prompt layer stack: Codex `gpt-5.5` model instructions from a pinned Codex model catalog fixture, Codex permission developer instructions for the happy-path yolo profile, OpenClaw developer instructions, turn input with simulated OpenClaw workspace bootstrap runtime context, and references to the complete dynamic tool catalog.",
     "",
-    "The workspace bootstrap simulation includes dummy workspace contents so prompt reviewers can see how OpenClaw routes stable profile files into Codex developer instructions, keeps `MEMORY.md` in turn input, and points heartbeat turns at `HEARTBEAT.md` without inlining it. `AGENTS.md` is intentionally not repeated here because Codex loads it natively.",
+    "The workspace bootstrap simulation includes dummy workspace contents so prompt reviewers can see how OpenClaw routes stable profile files into Codex developer instructions and keeps `MEMORY.md` in turn input. `AGENTS.md` is intentionally not repeated here because Codex loads it natively.",
     "",
     "The tool catalog is pinned to the canonical happy-path OpenClaw tools so optional locally installed plugin tools do not create fixture churn.",
+    "",
+    "The Telegram Markdown file is the complete canonical prompt snapshot. Discord and heartbeat are readable, SHA-bound zero-context `.md.diff` files with complete lossless differences from that base. Materialize one with `node --import tsx scripts/generate-prompt-snapshots.ts --materialize-prompt discord-group`; replace the scenario with `heartbeat-turn` or `telegram-direct` as needed.",
     "",
     "The Telegram JSON is the complete shared tool catalog. Discord and heartbeat JSON fixtures contain readable, complete replacements for their changed top-level tools or namespaces; their `base` field points to the Telegram catalog.",
     "",
@@ -1000,7 +1005,9 @@ function renderReadme(scenarios: PromptScenario[]): string {
     "",
     "Snapshots:",
     "",
-    ...scenarios.map((scenario) => `- ${scenario.id}.md`),
+    ...Object.entries(CODEX_PROMPT_SNAPSHOT_FILES).map(([scenario, fileName]) =>
+      scenario === CODEX_PROMPT_SNAPSHOT_BASE_SCENARIO ? `- ${fileName}` : `- ${fileName}.diff`,
+    ),
     ...scenarios.map((scenario) => `- ${scenario.toolSnapshotFile}`),
     "",
     "Codex model prompt fixtures:",
@@ -1019,24 +1026,28 @@ function renderReadme(scenarios: PromptScenario[]): string {
 
 /** Build all Codex happy-path prompt snapshot files without writing them. */
 export async function createHappyPathPromptSnapshotFiles(): Promise<PromptSnapshotFile[]> {
-  const codexApi = await loadCodexPromptSnapshotApi();
-  const scenarios = await createScenarios(codexApi);
-  const files = [
-    {
-      path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, "README.md"),
-      content: renderReadme(scenarios),
-    },
-    ...scenarios.map((scenario) => ({
-      path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, `${scenario.id}.md`),
-      content: renderScenarioSnapshot(codexApi, scenario),
-    })),
-    ...scenarios.map((scenario) => ({
-      path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, scenario.toolSnapshotFile),
-      content: stableJson(scenario.dynamicTools),
-    })),
-  ];
-  return files.map((file) => ({
-    path: file.path,
-    content: file.content.endsWith("\n") ? file.content : `${file.content}\n`,
-  }));
+  // Plugin-policy hashing reads machine state from the process state dir.
+  // Pin a fresh one so snapshot generation never reads the host's live database.
+  return withStateDirEnv("openclaw-prompt-snapshot-", async () => {
+    const codexApi = await loadCodexPromptSnapshotApi();
+    const scenarios = await createScenarios(codexApi);
+    const files = [
+      {
+        path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, "README.md"),
+        content: renderReadme(scenarios),
+      },
+      ...scenarios.map((scenario) => ({
+        path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, `${scenario.id}.md`),
+        content: renderScenarioSnapshot(codexApi, scenario),
+      })),
+      ...scenarios.map((scenario) => ({
+        path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, scenario.toolSnapshotFile),
+        content: stableJson(scenario.dynamicTools),
+      })),
+    ];
+    return files.map((file) => ({
+      path: file.path,
+      content: file.content.endsWith("\n") ? file.content : `${file.content}\n`,
+    }));
+  });
 }

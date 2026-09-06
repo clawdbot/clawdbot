@@ -1,9 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // Channel streaming config normalization and progress-draft formatting helpers.
+import { asNullableRecord as asObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   formatToolDetail,
+  isCommandBearingToolCall,
   isShellToolDisplayName,
   resolveToolDisplay,
 } from "../agents/tool-display.js";
@@ -12,39 +15,39 @@ import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
   ChannelStreamingCommandTextMode,
-  ChannelStreamingConfig,
   ChannelStreamingProgressConfig,
   StreamingMode,
   TextChunkMode,
 } from "../config/types.base.js";
-import {
-  DEFAULT_PROGRESS_DRAFT_LABELS as SHARED_PROGRESS_DRAFT_LABELS,
-  selectProgressLabel,
-} from "../shared/progress-labels.js";
+import { isAgentPlanProgressToolName } from "../session-cards/progress-card-channel-summary.js";
+import { DEFAULT_PROGRESS_DRAFT_LABELS, selectProgressLabel } from "../shared/progress-labels.js";
+import { compactProgressText } from "../shared/text-truncate.js";
 import { asBoolean } from "../utils/boolean.js";
+import {
+  formatChannelProgressDraftDiffStat,
+  type ChannelProgressDraftDiffStat,
+} from "./progress-draft-diffstat.js";
+import {
+  getChannelStreamingConfigObject,
+  type StreamingCompatEntry,
+} from "./streaming-config-readers.js";
 
-export type StreamingCompatEntry = { streaming?: unknown };
+export {
+  getChannelStreamingConfigObject,
+  resolveChannelStreamingNativeTransport,
+} from "./streaming-config-readers.js";
+export type { StreamingCompatEntry } from "./streaming-config-readers.js";
 
 export type {
   ChannelDeliveryStreamingConfig,
   ChannelPreviewStreamingConfig,
   ChannelStreamingBlockConfig,
-  ChannelStreamingCommandTextMode,
-  ChannelStreamingConfig,
   ChannelStreamingProgressConfig,
-  ChannelStreamingPreviewConfig,
   StreamingMode,
   TextChunkMode,
 } from "../config/types.base.js";
-export type { SlackChannelStreamingConfig } from "../config/types.slack.js";
 
 // Runtime reads are nested-only; doctor migrates legacy streaming spellings.
-
-function asObjectRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 function asInteger(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) ? value : undefined;
@@ -79,12 +82,10 @@ function asCommandTextMode(value: unknown): ChannelStreamingCommandTextMode | un
   return value === "raw" || value === "status" ? value : undefined;
 }
 
-export const DEFAULT_PROGRESS_DRAFT_LABELS = SHARED_PROGRESS_DRAFT_LABELS;
-
 // Short enough that a multi-tool turn is never silent, long enough that a
 // quick answer posts no draft at all: the gate only creates the draft when the
 // timer fires, and finalize cancels it.
-export const DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS = 1_500;
+const DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS = 1_500;
 const DEFAULT_PROGRESS_DRAFT_MAX_LINE_CHARS = 120;
 // Narration is a short paragraph, not a compact tool line; it gets its own
 // budget so the utility-model text is not mid-word truncated at line width.
@@ -100,6 +101,7 @@ const NON_WORK_PROGRESS_TOOL_NAMES = new Set([
   "reaction",
   "react",
   "typing",
+  "progress_card",
   "update_plan",
 ]);
 
@@ -109,7 +111,8 @@ export function isChannelProgressDraftWorkToolName(name: string | null | undefin
 }
 
 function stripTrailingEllipsis(text: string): string {
-  return text.replace(/(?:\s*(?:\.{3}|\u2026))+$/u, "").trimEnd();
+  // Start at a whitespace-run boundary instead of retrying every blank line.
+  return text.replace(/(?<!\s)(?:\s*(?:\.{3}|\u2026))+$/u, "").trimEnd();
 }
 
 export function isPotentialTruncatedFinal(finalText: string): boolean {
@@ -174,8 +177,6 @@ export type ChannelProgressLineOptions = {
   commandText?: ChannelStreamingCommandTextMode;
 };
 
-export type ChannelProgressDraftRenderMode = "text" | "rich";
-
 export type AgentPlanStepStatus = "pending" | "in_progress" | "completed";
 
 export type AgentPlanStep = {
@@ -183,7 +184,7 @@ export type AgentPlanStep = {
   status: AgentPlanStepStatus;
 };
 
-export type AgentPlanStepInput = AgentPlanStep | string;
+type AgentPlanStepInput = AgentPlanStep | string;
 
 function isAgentPlanStepStatus(value: unknown): value is AgentPlanStepStatus {
   return value === "pending" || value === "in_progress" || value === "completed";
@@ -237,6 +238,7 @@ export type ChannelProgressDraftLineInput =
       summary?: string;
       progressText?: string;
       meta?: string;
+      commandBearing?: boolean;
     }
   | {
       event: "plan";
@@ -247,6 +249,7 @@ export type ChannelProgressDraftLineInput =
     }
   | {
       event: "approval";
+      approvalId?: string;
       phase?: string;
       title?: string;
       command?: string;
@@ -276,7 +279,7 @@ export type ChannelProgressDraftLineInput =
       summary?: string;
     };
 
-export type ChannelProgressDraftLineKind = ChannelProgressDraftLineInput["event"];
+type ChannelProgressDraftLineKind = ChannelProgressDraftLineInput["event"];
 
 export type ChannelProgressDraftLine = {
   /** Stable line id used to update an existing progress line in place. */
@@ -298,6 +301,21 @@ export type ChannelProgressDraftLine = {
   /** Whether final formatting should add a bullet/line prefix. */
   prefix?: boolean;
 };
+
+/** Lines that need the operator's attention even when routine tool rows are hidden. */
+export function isChannelProgressAttentionLine(line: string | ChannelProgressDraftLine): boolean {
+  if (typeof line === "string") {
+    return false;
+  }
+  const status = line.status?.toLowerCase();
+  return (
+    line.kind === "approval" ||
+    status === "failed" ||
+    status === "error" ||
+    status === "blocked" ||
+    (status?.startsWith("exit ") === true && status !== "exit 0")
+  );
+}
 
 const progressDraftLineCorrelationKeys = new WeakMap<ChannelProgressDraftLine, string>();
 
@@ -379,14 +397,13 @@ function itemKindToToolName(kind: string | undefined): string | undefined {
 }
 
 /** Tools whose detail is raw command text; commandText policy applies to these. */
-export function isCommandToolName(name: string | undefined): boolean {
-  const normalized = normalizeOptionalLowercaseString(name);
-  return normalized === "exec" || normalized === "shell" || normalized === "bash";
+function isCommandToolName(name: string | undefined): boolean {
+  return isCommandBearingToolCall(name);
 }
 
 function isCommandProgressItem(input: Extract<ChannelProgressDraftLineInput, { event: "item" }>) {
   const itemKind = normalizeOptionalLowercaseString(input.itemKind);
-  return itemKind === "command" || isCommandToolName(input.name);
+  return input.commandBearing === true || itemKind === "command" || isCommandToolName(input.name);
 }
 
 function resolveProgressDraftLineId(
@@ -443,7 +460,7 @@ function buildCommandOutputProgressLine(
 ): ChannelProgressDraftLine | undefined {
   const name = input.name ?? "exec";
   const correlationKey = resolveCommandProgressCorrelationKey(input);
-  const detail = options?.commandText === "status" ? [] : compactStrings([input.title]);
+  const detail = options?.commandText === "raw" ? compactStrings([input.title]) : [];
   const line = buildNamedProgressLine(input.event, name, detail, options, {
     correlationKey,
     id: resolveProgressDraftLineId(input, { useToolCallIdFallback: true }),
@@ -485,7 +502,7 @@ export function formatChannelProgressDraftLine(
   return buildChannelProgressDraftLine(input, options)?.text;
 }
 
-export function resolveChannelProgressDraftLineOptions(
+function resolveChannelProgressDraftLineOptions(
   /** Channel streaming config source for command-text defaults. */
   entry: StreamingCompatEntry | null | undefined,
   /** Caller-supplied line formatting overrides. */
@@ -530,33 +547,44 @@ export function buildChannelProgressDraftLine(
 ): ChannelProgressDraftLine | undefined {
   switch (input.event) {
     case "tool": {
+      // Plan/card tools publish one authoritative plan event after a successful
+      // write. Generic argument rows would duplicate it and expose card markup.
+      if (isAgentPlanProgressToolName(input.name)) {
+        return undefined;
+      }
       const itemId = input.itemId ?? (input.toolCallId ? `tool:${input.toolCallId}` : undefined);
+      const commandBearing = isCommandBearingToolCall(input.name, input.args);
       return buildNamedProgressLine(
         input.event,
         input.name,
         [
-          options?.commandText === "status" && isCommandToolName(input.name)
+          options?.commandText !== "raw" && commandBearing
             ? undefined
             : inferToolMeta(input.name, input.args, options?.detailMode),
           input.phase && !input.name ? input.phase : undefined,
         ],
         options,
         {
-          correlationKey: isCommandToolName(input.name)
-            ? resolveCommandProgressCorrelationKey(input)
-            : undefined,
+          correlationKey: commandBearing ? resolveCommandProgressCorrelationKey(input) : undefined,
           id: itemId,
         },
       );
     }
     case "item": {
       const name = input.name ?? itemKindToToolName(input.itemKind);
+      if (isAgentPlanProgressToolName(name)) {
+        const status = normalizeOptionalLowercaseString(input.status);
+        return status === "failed" || status === "error" || status === "blocked"
+          ? buildNamedProgressLine(input.event, name, [], options, {
+              id: resolveProgressDraftLineId(input),
+              status,
+            })
+          : undefined;
+      }
       const meta =
-        input.meta ??
-        input.summary ??
-        (options?.commandText === "status" && isCommandProgressItem(input)
+        options?.commandText !== "raw" && isCommandProgressItem(input)
           ? undefined
-          : input.progressText);
+          : (input.meta ?? input.summary ?? input.progressText);
       if (isEmptyReasoningProgressItem(input, meta)) {
         return undefined;
       }
@@ -593,7 +621,7 @@ export function buildChannelProgressDraftLine(
       }
       return buildNamedProgressLine(
         input.event,
-        "update_plan",
+        "progress_card",
         [
           input.explanation,
           normalizeAgentPlanSteps(input.steps)?.[0]?.step,
@@ -611,7 +639,7 @@ export function buildChannelProgressDraftLine(
         "approval",
         [input.command, input.message, input.reason, input.title ?? "approval requested"],
         options,
-        { status: "requested" },
+        { status: "requested", id: input.approvalId ? `approval:${input.approvalId}` : undefined },
       );
     }
     case "command-output": {
@@ -761,13 +789,6 @@ export function createChannelProgressDraftGate(params: {
   };
 }
 
-export function getChannelStreamingConfigObject(
-  entry: StreamingCompatEntry | null | undefined,
-): ChannelStreamingConfig | undefined {
-  const streaming = asObjectRecord(entry?.streaming);
-  return streaming ? (streaming as ChannelStreamingConfig) : undefined;
-}
-
 export function resolveChannelStreamingChunkMode(
   entry: StreamingCompatEntry | null | undefined,
 ): TextChunkMode | undefined {
@@ -777,8 +798,38 @@ export function resolveChannelStreamingChunkMode(
 
 export function resolveChannelStreamingBlockEnabled(
   entry: StreamingCompatEntry | null | undefined,
+): boolean | undefined;
+export function resolveChannelStreamingBlockEnabled(
+  entry: StreamingCompatEntry | null | undefined,
+  previewPolicy: {
+    previewAvailable: boolean;
+    blockStreamingDefault?: "off" | "on";
+  },
+): boolean;
+export function resolveChannelStreamingBlockEnabled(
+  entry: StreamingCompatEntry | null | undefined,
+  previewPolicy?: {
+    previewAvailable: boolean;
+    blockStreamingDefault?: "off" | "on";
+  },
 ): boolean | undefined {
-  return asBoolean(getChannelStreamingConfigObject(entry)?.block?.enabled);
+  const explicitBlockStreaming = asBoolean(getChannelStreamingConfigObject(entry)?.block?.enabled);
+  if (typeof explicitBlockStreaming === "boolean" || !previewPolicy) {
+    return explicitBlockStreaming;
+  }
+  // Explicit channel choices beat the inherited agent default. Keep availability
+  // in the decision so a turn that cannot render a preview may still use blocks.
+  const explicitPreviewMode = parsePreviewStreamingMode(
+    getChannelStreamingConfigObject(entry)?.mode,
+  );
+  if (
+    previewPolicy.previewAvailable &&
+    explicitPreviewMode !== null &&
+    explicitPreviewMode !== "off"
+  ) {
+    return false;
+  }
+  return previewPolicy.blockStreamingDefault === "on";
 }
 
 export function resolveChannelStreamingBlockCoalesce(
@@ -795,15 +846,19 @@ export function resolveChannelStreamingPreviewChunk(
   return (chunk as BlockStreamingChunkConfig | null) ?? undefined;
 }
 
+/**
+ * The shipped SDK default keeps tool rows visible. Bundled callers pass their
+ * mode-specific default so progress drafts can stay quiet.
+ */
 export function resolveChannelStreamingPreviewToolProgress(
   entry: StreamingCompatEntry | null | undefined,
   defaultValue = true,
   /**
    * The channel's resolved stream mode. Only the caller knows it: channels pick
-   * their own default when `streaming.mode` is unset (Discord and Telegram use
-   * "progress", Slack and others "partial"), and this helper has no channel
-   * identity to guess with. Omitting it reads the configured mode and treats
-   * unset as "partial".
+   * their own default when `streaming.mode` is unset (Telegram uses "progress",
+   * Discord uses "off", and Slack uses "progress"), and this helper has no
+   * channel identity to guess with. Omitting it reads the configured mode and
+   * treats unset as "partial".
    */
   mode?: StreamingMode,
 ): boolean {
@@ -827,7 +882,7 @@ export function resolveChannelStreamingProgressCommentary(
    * resolveChannelStreamingPreviewToolProgress takes one: only the caller knows
    * which default applies when `streaming.mode` is unset. Guessing "partial"
    * here made `progress.commentary: true` a silent no-op on the progress-draft
-   * channels, whose own default is "progress".
+   * channels, such as Telegram, whose own default is "progress".
    */
   mode?: StreamingMode,
 ): boolean {
@@ -841,7 +896,7 @@ export function resolveChannelStreamingProgressCommentary(
 }
 
 // Pure toggle: progress-mode gating stays with the caller because channels
-// resolve their own default stream mode (Discord defaults to "progress").
+// resolve their own default stream mode.
 export function resolveChannelStreamingProgressNarration(
   entry: StreamingCompatEntry | null | undefined,
   defaultValue = true,
@@ -852,7 +907,7 @@ export function resolveChannelStreamingProgressNarration(
 
 export function resolveChannelStreamingPreviewCommandText(
   entry: StreamingCompatEntry | null | undefined,
-  defaultValue: ChannelStreamingCommandTextMode = "raw",
+  defaultValue: ChannelStreamingCommandTextMode = "status",
 ): ChannelStreamingCommandTextMode {
   const config = getChannelStreamingConfigObject(entry);
   return (
@@ -866,6 +921,7 @@ export function resolveChannelStreamingSuppressDefaultToolProgressMessages(
   entry: StreamingCompatEntry | null | undefined,
   options?: {
     draftStreamActive?: boolean;
+    mode?: StreamingMode;
     previewToolProgressEnabled?: boolean;
     previewStreamingEnabled?: boolean;
   },
@@ -873,7 +929,7 @@ export function resolveChannelStreamingSuppressDefaultToolProgressMessages(
   if (options?.draftStreamActive === false || options?.previewStreamingEnabled === false) {
     return false;
   }
-  const mode = resolveChannelPreviewStreamMode(entry, "off");
+  const mode = options?.mode ?? resolveChannelPreviewStreamMode(entry, "off");
   if (mode === "off") {
     return false;
   }
@@ -884,12 +940,6 @@ export function resolveChannelStreamingSuppressDefaultToolProgressMessages(
     return true;
   }
   return options?.previewToolProgressEnabled ?? resolveChannelStreamingPreviewToolProgress(entry);
-}
-
-export function resolveChannelStreamingNativeTransport(
-  entry: StreamingCompatEntry | null | undefined,
-): boolean | undefined {
-  return asBoolean(getChannelStreamingConfigObject(entry)?.nativeTransport);
 }
 
 export function resolveChannelPreviewStreamMode(
@@ -917,9 +967,13 @@ export function resolveChannelProgressDraftLabel(params: {
   entry?: StreamingCompatEntry | null;
   seed?: string;
   random?: () => number;
+  narration?: string;
 }): string | undefined {
   const progress = resolveChannelProgressDraftConfig(params.entry);
-  if (progress.label === false) {
+  if (
+    progress.label === false ||
+    (params.narration && progress.label === undefined && progress.labels === undefined)
+  ) {
     return undefined;
   }
   const normalizedLabel =
@@ -947,20 +1001,8 @@ export function resolveChannelProgressDraftMaxLineChars(
   return configured && configured > 0 ? configured : defaultValue;
 }
 
-export function resolveChannelProgressDraftRender(
-  entry: StreamingCompatEntry | null | undefined,
-  defaultValue: ChannelProgressDraftRenderMode = "text",
-): ChannelProgressDraftRenderMode {
-  const configured = resolveChannelProgressDraftConfig(entry).render;
-  return configured === "rich" || configured === "text" ? configured : defaultValue;
-}
-
-function sliceCodePoints(value: string, start: number, end?: number): string {
-  return Array.from(value).slice(start, end).join("");
-}
-
 function compactProgressLineDetail(detail: string, maxChars: number): string {
-  const chars = Array.from(detail);
+  const chars = Array.from(sliceUtf16Safe(detail, 0, (maxChars + 1) * 2));
   if (chars.length <= maxChars) {
     return detail;
   }
@@ -972,11 +1014,14 @@ function compactProgressLineDetail(detail: string, maxChars: number): string {
   const rawStart = chars.slice(0, keepStart).join("").trimEnd();
   const start =
     rawStart.length > 8 && /\s+\S+$/.test(rawStart) ? rawStart.replace(/\s+\S+$/, "") : rawStart;
-  return `${start}…${chars.slice(-keepEnd).join("").trimStart()}`;
+  const tail = Array.from(sliceUtf16Safe(detail, -keepEnd * 2))
+    .slice(-keepEnd)
+    .join("");
+  return `${start}…${tail.trimStart()}`;
 }
 
 function removeUnbalancedInlineBackticks(value: string): string {
-  const backtickCount = Array.from(value).filter((char) => char === "`").length;
+  const backtickCount = value.match(/`/g)?.length ?? 0;
   if (backtickCount % 2 === 0) {
     return value;
   }
@@ -989,7 +1034,7 @@ function repairCompactedProgressMarkdown(value: string): string {
   if (!trimmedStart.startsWith("_") || trimmedStart.endsWith("_")) {
     return withoutDanglingBackticks;
   }
-  const underscoreCount = Array.from(trimmedStart).filter((char) => char === "_").length;
+  const underscoreCount = trimmedStart.match(/_/g)?.length ?? 0;
   if (underscoreCount % 2 === 0) {
     return withoutDanglingBackticks;
   }
@@ -1000,29 +1045,13 @@ function repairCompactedProgressMarkdown(value: string): string {
   return `${leadingWhitespace}${trimmedStart.slice(1)}`;
 }
 
-function compactChannelProgressDraftNarration(text: string): string {
-  const normalized = text.replace(/\s+/g, " ").trim();
-  if (Array.from(normalized).length <= PROGRESS_DRAFT_NARRATION_MAX_CHARS) {
-    return normalized;
-  }
-  return compactPlainProgressLine(normalized, PROGRESS_DRAFT_NARRATION_MAX_CHARS);
-}
-
-function compactPlainProgressLine(line: string, maxChars: number): string {
-  const head = sliceCodePoints(line, 0, maxChars - 1).trimEnd();
-  const boundary = head.search(/\s+\S*$/u);
-  if (boundary > Math.floor(maxChars * 0.6)) {
-    return `${head.slice(0, boundary).trimEnd()}…`;
-  }
-  return `${head}…`;
-}
-
-function compactChannelProgressDraftLine(line: string, maxChars: number): string {
+export function compactChannelProgressDraftLine(line: string, maxChars: number): string {
   const normalized = line.replace(/\s+/g, " ").trim();
   if (!normalized) {
     return "";
   }
-  const chars = Array.from(normalized);
+  // Two UTF-16 units per code point retain the full budget plus an overflow sentinel.
+  const chars = Array.from(sliceUtf16Safe(normalized, 0, (Math.max(0, maxChars) + 1) * 2));
   if (chars.length <= maxChars) {
     return normalized;
   }
@@ -1031,7 +1060,7 @@ function compactChannelProgressDraftLine(line: string, maxChars: number): string
   }
 
   const compactWithPrefix = (prefix: string, detail: string): string | undefined => {
-    const prefixChars = Array.from(prefix).length;
+    const prefixChars = Array.from(sliceUtf16Safe(prefix, 0, (maxChars + 1) * 2)).length;
     const detailLimit = maxChars - prefixChars;
     if (detailLimit < 8) {
       return undefined;
@@ -1061,40 +1090,26 @@ function compactChannelProgressDraftLine(line: string, maxChars: number): string
     }
   }
 
-  return repairCompactedProgressMarkdown(compactPlainProgressLine(normalized, maxChars));
+  return repairCompactedProgressMarkdown(compactProgressText(normalized, maxChars, chars));
 }
 
-export function formatPlanChecklistLines(
+export function selectPlanChecklistSteps(
   steps: readonly AgentPlanStep[],
-  options: { maxLines: number; maxLineChars: number },
-): string[] {
+  options: { maxLines: number },
+): { steps: AgentPlanStep[]; summary?: string } {
   const normalizedSteps = steps
     .map((entry, index) => ({ ...entry, step: entry.step.replace(/\s+/g, " ").trim(), index }))
     .filter((entry) => entry.step);
   if (normalizedSteps.length === 0 || options.maxLines <= 0) {
-    return [];
+    return { steps: [] };
   }
-  const maxLines = Math.max(1, options.maxLines);
-  const marker = (status: AgentPlanStepStatus) =>
-    status === "completed" ? "✅" : status === "in_progress" ? "▸" : "▢";
-  const formatStep = (entry: (typeof normalizedSteps)[number]) =>
-    compactChannelProgressDraftLine(`${marker(entry.status)} ${entry.step}`, options.maxLineChars);
-  if (normalizedSteps.length <= maxLines) {
-    return normalizedSteps.map(formatStep);
+  if (normalizedSteps.length <= options.maxLines) {
+    return { steps: normalizedSteps };
   }
-
-  const availableSteps = maxLines - 1;
-  if (availableSteps === 0) {
-    const completedCount = normalizedSteps.filter((entry) => entry.status === "completed").length;
-    return [
-      compactChannelProgressDraftLine(
-        `✅ ${completedCount}/${normalizedSteps.length} done`,
-        options.maxLineChars,
-      ),
-    ];
-  }
+  const availableSteps = Math.max(0, options.maxLines - 1);
   const pendingSteps = normalizedSteps.filter((entry) => entry.status !== "completed");
-  const activeStep = pendingSteps.find((entry) => entry.status === "in_progress");
+  const activeStep =
+    availableSteps > 0 ? pendingSteps.find((entry) => entry.status === "in_progress") : undefined;
   const pendingSlots = Math.max(0, availableSteps - (activeStep ? 1 : 0));
   // slice(-0) would return the whole array and blow past the line cap.
   const pendingTail =
@@ -1111,13 +1126,35 @@ export function formatPlanChecklistLines(
     (a, b) => a.index - b.index,
   );
   const completedCount = normalizedSteps.length - pendingSteps.length;
+  return { steps: visibleSteps, summary: `${completedCount}/${normalizedSteps.length} done` };
+}
+
+export function formatPlanChecklistLines(
+  steps: readonly AgentPlanStep[],
+  options: {
+    maxLines: number;
+    maxLineChars: number;
+    /** @deprecated v2026.9.1 SDK option; retain until a breaking SDK release. */
+    plain?: boolean;
+  },
+): string[] {
+  const selected = selectPlanChecklistSteps(steps, options);
+  const marker = (status: AgentPlanStepStatus) =>
+    options.plain
+      ? status === "completed"
+        ? "Completed:"
+        : status === "in_progress"
+          ? "In progress:"
+          : "Pending:"
+      : status === "completed"
+        ? "✅"
+        : status === "in_progress"
+          ? "▸"
+          : "▢";
   return [
-    compactChannelProgressDraftLine(
-      `✅ ${completedCount}/${normalizedSteps.length} done`,
-      options.maxLineChars,
-    ),
-    ...visibleSteps.map(formatStep),
-  ];
+    ...(selected.summary ? [`${options.plain ? "" : "✅ "}${selected.summary}`] : []),
+    ...selected.steps.map((entry) => `${marker(entry.status)} ${entry.step}`),
+  ].map((line) => compactChannelProgressDraftLine(line, options.maxLineChars));
 }
 
 function getProgressDraftLineText(line: string | ChannelProgressDraftLine): string {
@@ -1200,7 +1237,7 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
       }
       const next = [...lines];
       next[existingIndex] = replacement;
-      return next.slice(-maxLines);
+      return limitProgressDraftLines(next, maxLines);
     }
   } else {
     const previous = lines.at(-1);
@@ -1208,7 +1245,22 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
       return lines;
     }
   }
-  return [...lines, line].slice(-maxLines);
+  return limitProgressDraftLines([...lines, line], maxLines);
+}
+
+function limitProgressDraftLines<TLine extends string | ChannelProgressDraftLine>(
+  lines: TLine[],
+  maxLines: number,
+): TLine[] {
+  let attentionSlots = maxLines;
+  let ordinarySlots = Math.max(0, maxLines - lines.filter(isChannelProgressAttentionLine).length);
+  // Keep attention through tool/commentary bursts without changing arrival order.
+  return lines
+    .toReversed()
+    .filter((line) =>
+      isChannelProgressAttentionLine(line) ? attentionSlots-- > 0 : ordinarySlots-- > 0,
+    )
+    .toReversed();
 }
 
 function mergeProgressDraftLineUpdate<TLine extends string | ChannelProgressDraftLine>(
@@ -1256,6 +1308,8 @@ function resolveProgressDraftLineMergeKeys(line: string | ChannelProgressDraftLi
 }
 
 export function formatChannelProgressDraftText(params: {
+  /** @deprecated v2026.9.1 SDK presentation; retain until a breaking SDK release. */
+  presentation?: "summary";
   /** Channel streaming config source for progress label and bounds. */
   entry?: StreamingCompatEntry | null;
   /** Ordered progress lines to render. */
@@ -1272,31 +1326,53 @@ export function formatChannelProgressDraftText(params: {
   narration?: string;
   /** Latest full plan snapshot, rendered independently from rolling tool lines. */
   plan?: readonly AgentPlanStep[];
+  diffStat?: ChannelProgressDraftDiffStat;
 }): string {
-  const narration = params.narration ? compactChannelProgressDraftNarration(params.narration) : "";
-  const progress = resolveChannelProgressDraftConfig(params.entry);
+  const narration = compactProgressText(
+    params.narration?.replace(/\s+/g, " ").trim() ?? "",
+    PROGRESS_DRAFT_NARRATION_MAX_CHARS,
+  );
   const maxLines = resolveChannelProgressDraftMaxLines(params.entry);
   const maxLineChars = resolveChannelProgressDraftMaxLineChars(params.entry);
   const formatLine = params.formatLine ?? ((line: string) => line);
-  const planLines = formatPlanChecklistLines(params.plan ?? [], { maxLines, maxLineChars }).map(
-    formatLine,
-  );
-  const hasConfiguredLabel = progress.label !== undefined || progress.labels !== undefined;
-  const resolvedLabel =
-    narration && !hasConfiguredLabel
-      ? undefined
-      : resolveChannelProgressDraftLabel({
-          entry: params.entry,
-          seed: params.seed,
-          random: params.random,
-        });
+  const attention = params.lines.filter(isChannelProgressAttentionLine);
+  const planLines = formatPlanChecklistLines(params.plan ?? [], {
+    maxLines: maxLines - attention.length,
+    maxLineChars,
+    plain: params.presentation === "summary",
+  }).map(formatLine);
+  const resolvedLabel = resolveChannelProgressDraftLabel({
+    entry: params.entry,
+    seed: params.seed,
+    random: params.random,
+    narration,
+  });
   // The status headline sits above the rolling lines instead of replacing them:
   // a headline-only draft reads as "the agent is quiet" even while tools run.
   const statusHeadline = narration ? formatLine(narration) : "";
   const bullet = params.bullet ?? "•";
   const toolLineBudget = planLines.length > 0 ? Math.max(0, maxLines - planLines.length) : maxLines;
-  const renderedToolLines = params.lines
+  // Attention owns capacity before plans and routine progress consume the window.
+  const visibleLines = [
+    ...params.lines.filter((line) => !isChannelProgressAttentionLine(line)),
+    ...attention,
+  ];
+  const renderedToolLines = visibleLines
     .map((line) => {
+      if (params.presentation === "summary") {
+        if (typeof line === "string") {
+          return undefined;
+        }
+        const text =
+          line.kind === "approval"
+            ? `Approval required: ${line.detail || line.label}`
+            : isChannelProgressAttentionLine(line)
+              ? [line.label, line.detail, line.status].filter(Boolean).join(" — ")
+              : line.id === "reasoning" || line.id?.startsWith("commentary:")
+                ? line.text
+                : undefined;
+        return text ? formatLine(compactChannelProgressDraftLine(text, maxLineChars)) : undefined;
+      }
       const text = compactChannelProgressDraftLine(
         typeof line === "string" ? line : getProgressDraftLineText(line),
         maxLineChars,
@@ -1311,13 +1387,21 @@ export function formatChannelProgressDraftText(params: {
     .filter((line): line is string => Boolean(line));
   // Budget 0 is handled before the slice: slice(-0) returns every line.
   const rollingLines = toolLineBudget === 0 ? [] : renderedToolLines.slice(-toolLineBudget);
+  const diffStat =
+    rollingLines.length + planLines.length < maxLines
+      ? formatChannelProgressDraftDiffStat(params.diffStat)
+      : undefined;
   // The label is a block, not a line: it yields its slot once real work lines
   // fill the window, which is why a busy draft shows work instead of a title.
   const labelBlock =
-    resolvedLabel && (planLines.length > 0 || rollingLines.length < maxLines)
+    resolvedLabel && (planLines.length > 0 || rollingLines.length + (diffStat ? 1 : 0) < maxLines)
       ? compactChannelProgressDraftLine(resolvedLabel, maxLineChars)
       : undefined;
-  const rollingBlock = [...rollingLines, ...planLines].join("\n");
+  const rollingBlock = [
+    ...rollingLines,
+    ...planLines,
+    ...(diffStat ? [formatLine(compactChannelProgressDraftLine(diffStat, maxLineChars))] : []),
+  ].join("\n");
   return [labelBlock, statusHeadline, rollingBlock].filter(Boolean).join("\n\n");
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

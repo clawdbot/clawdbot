@@ -1,18 +1,18 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveStorePath } from "../../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
+  hasSessionTranscriptMessage,
   loadSessionEntry,
-  loadTranscriptEvents,
-  resolveSessionTranscriptRuntimeReadTarget,
+  resolveSessionTranscriptRuntimeTarget,
   updateSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
 import { resolveQuotaSuspensionEntryMaintenance } from "../../../config/sessions/store-maintenance.js";
 import type { SessionEntry as ConfigSessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
+import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
-import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
 import { log } from "../logger.js";
 import { canContinueFromMessage, trimToContinuableTail } from "./compaction-timeout.js";
 import { MID_TURN_PRECHECK_ERROR_MESSAGE } from "./midturn-precheck.js";
@@ -24,22 +24,11 @@ export function flushSessionManagerTranscript(sessionManager: AttemptSessionMana
   sessionManager.flushPendingPersistence();
 }
 
-export function repairAttemptToolUseResultPairing(
-  messages: AgentMessage[],
-  isOpenAIResponsesApi: boolean,
-): AgentMessage[] {
-  return sanitizeToolUseResultPairing(messages, {
-    erroredAssistantResultPolicy: "drop",
-    ...(isOpenAIResponsesApi ? { missingToolResultText: "aborted" } : {}),
-  });
-}
-
 function isMidTurnPrecheckAssistantError(message: AgentMessage | undefined): boolean {
   if (!message || message.role !== "assistant") {
     return false;
   }
-  const record = message as unknown as { stopReason?: unknown; errorMessage?: unknown };
-  return record.stopReason === "error" && record.errorMessage === MID_TURN_PRECHECK_ERROR_MESSAGE;
+  return message.stopReason === "error" && message.errorMessage === MID_TURN_PRECHECK_ERROR_MESSAGE;
 }
 
 export function removeTrailingMidTurnPrecheckAssistantError(params: {
@@ -48,10 +37,6 @@ export function removeTrailingMidTurnPrecheckAssistantError(params: {
 }): void {
   const messages = params.activeSession.agent.state.messages;
   const removedActiveError = isMidTurnPrecheckAssistantError(messages.at(-1));
-  if (removedActiveError) {
-    params.activeSession.agent.state.messages = messages.slice(0, -1);
-  }
-
   const removedPersistedError =
     params.sessionManager.removeTrailingEntries(
       (entry) => entry.type === "message" && isMidTurnPrecheckAssistantError(entry.message),
@@ -63,6 +48,9 @@ export function removeTrailingMidTurnPrecheckAssistantError(params: {
           (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message)),
       },
     ) > 0;
+  if (removedActiveError) {
+    params.activeSession.agent.state.messages = messages.slice(0, -1);
+  }
   if (removedActiveError && !removedPersistedError) {
     log.warn(
       "[context-overflow-midturn-precheck] removed synthetic assistant error from active session but could not locate matching persisted SessionManager entry",
@@ -91,7 +79,7 @@ export function normalizeCompactionRecoveryTranscriptTail(params: {
   );
   params.activeSession.agent.state.messages =
     removedEntries > 0
-      ? params.sessionManager.buildSessionContext().messages
+      ? sanitizeCompactionReplayMessages(params.sessionManager.buildSessionContext().messages)
       : continuableMessages.length === messages.length
         ? messages
         : continuableMessages;
@@ -100,10 +88,12 @@ export function normalizeCompactionRecoveryTranscriptTail(params: {
 
 // Applies quota-resume TTL maintenance to only the active attempt session.
 export async function loadAttemptSessionEntryAfterQuotaMaintenance(params: {
+  agentId: string;
   storePath: string;
   sessionKey: string;
 }): Promise<ConfigSessionEntry | undefined> {
   const entry = loadSessionEntry({
+    agentId: params.agentId,
     storePath: params.storePath,
     sessionKey: params.sessionKey,
   });
@@ -117,6 +107,7 @@ export async function loadAttemptSessionEntryAfterQuotaMaintenance(params: {
   }
   const updated = await updateSessionEntry(
     {
+      agentId: params.agentId,
       storePath: params.storePath,
       sessionKey: params.sessionKey,
     },
@@ -143,12 +134,12 @@ export async function resolveAttemptTrajectorySessionFile(params: {
 }): Promise<string> {
   const storePath =
     params.sessionTarget?.storePath ??
-    resolveStorePath(params.config?.session?.store, { agentId: params.agentId });
+    resolveSessionStorePathCore(params.config?.session?.store, { agentId: params.agentId });
   if (!storePath || !params.sessionKey) {
     return params.sessionFile;
   }
   return (
-    await resolveSessionTranscriptRuntimeReadTarget({
+    await resolveSessionTranscriptRuntimeTarget({
       agentId: params.agentId,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
@@ -161,27 +152,27 @@ type ExistingAttemptTranscriptState = {
   hasBootstrapTranscriptState: boolean;
 };
 
-function isTranscriptMessageEvent(event: unknown): boolean {
-  return (
-    typeof event === "object" &&
-    event !== null &&
-    "type" in event &&
-    (event as { type?: unknown }).type === "message"
-  );
-}
-
 export async function resolveExistingAttemptTranscriptState(params: {
   agentId: string;
   config?: OpenClawConfig;
   sessionFile: string;
+  sessionManager?: EmbeddedRunAttemptParams["sessionManager"];
   sessionId: string;
   sessionKey?: string;
   sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
 }): Promise<ExistingAttemptTranscriptState> {
+  // The supplied manager owns this transcript; a borrowed durable identity is not its history.
+  if (params.sessionManager) {
+    return {
+      hasBootstrapTranscriptState: params.sessionManager
+        .getEntries()
+        .some((entry) => entry.type === "message"),
+    };
+  }
   const agentId = normalizeOptionalString(params.sessionTarget?.agentId) ?? params.agentId;
   const storePath =
     normalizeOptionalString(params.sessionTarget?.storePath) ??
-    resolveStorePath(params.config?.session?.store, { agentId });
+    resolveSessionStorePathCore(params.config?.session?.store, { agentId });
   const sessionId = normalizeOptionalString(params.sessionTarget?.sessionId) ?? params.sessionId;
   const sessionKey =
     normalizeOptionalString(params.sessionTarget?.sessionKey) ??
@@ -189,13 +180,12 @@ export async function resolveExistingAttemptTranscriptState(params: {
   let hasBootstrapTranscriptState = false;
   if (storePath && sessionKey) {
     try {
-      const sqliteEvents = await loadTranscriptEvents({
+      hasBootstrapTranscriptState = await hasSessionTranscriptMessage({
         agentId,
         sessionId,
         sessionKey,
         storePath,
       });
-      hasBootstrapTranscriptState = sqliteEvents.some(isTranscriptMessageEvent);
     } catch {
       hasBootstrapTranscriptState = false;
     }

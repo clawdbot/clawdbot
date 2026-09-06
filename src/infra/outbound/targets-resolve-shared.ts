@@ -6,7 +6,6 @@ import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.pub
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
-import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { validateTargetProviderPrefix } from "./channel-target-prefix.js";
 import { missingTargetError, reservedTargetLiteralError } from "./target-errors.js";
 import { resolveReservedTargetLiteral } from "./target-normalization.js";
@@ -20,7 +19,7 @@ export type OutboundTargetResolution = { ok: true; to: string } | { ok: false; e
  * Inputs shared by direct and heartbeat outbound target resolution.
  */
 type ResolveOutboundTargetParams = {
-  channel: GatewayMessageChannel;
+  channel: string;
   to?: string;
   allowFrom?: string[];
   cfg?: OpenClawConfig;

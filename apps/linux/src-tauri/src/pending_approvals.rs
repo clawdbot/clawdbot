@@ -1,7 +1,6 @@
 use crate::cli::OpenClawCli;
 use serde::Deserialize;
 use std::collections::HashSet;
-use std::process::Output;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum ApprovalKind {
@@ -72,15 +71,12 @@ struct DevicePairingList {
 }
 
 pub fn fetch(cli: &OpenClawCli) -> Result<Vec<PendingApproval>, String> {
-    let (nodes, node_output) = cli
+    let nodes = cli
         .json::<Vec<NodePendingRequest>, _, _>(["nodes", "pending", "--json"])
         .map_err(|error| error.to_string())?;
-    require_success("nodes pending", &node_output)?;
-
-    let (devices, device_output) = cli
+    let devices = cli
         .json::<DevicePairingList, _, _>(["devices", "list", "--json"])
         .map_err(|error| error.to_string())?;
-    require_success("devices list", &device_output)?;
 
     let mut pending = Vec::with_capacity(nodes.len() + devices.pending.len());
     pending.extend(nodes.into_iter().map(|request| PendingApproval {
@@ -98,14 +94,6 @@ pub fn fetch(cli: &OpenClawCli) -> Result<Vec<PendingApproval>, String> {
         ]),
     }));
     Ok(pending)
-}
-
-fn require_success(command: &str, output: &Output) -> Result<(), String> {
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(format!("openclaw {command} exited with {}", output.status))
-    }
 }
 
 fn preferred_label<'a>(candidates: impl IntoIterator<Item = Option<&'a str>>) -> String {

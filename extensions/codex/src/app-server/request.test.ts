@@ -1,4 +1,11 @@
 // Codex tests cover request plugin behavior.
+import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearSessionStoreCacheForTest,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sharedClientMocks = vi.hoisted(() => ({
@@ -22,6 +29,7 @@ vi.mock("./shared-client.js", () => ({
 
 const { readCodexAppServerUsage, requestCodexAppServerJson, withCodexAppServerJsonClient } =
   await import("./request.js");
+const { listAllCodexAppServerModels } = await import("./models.js");
 
 const expectDeadlineOptions = () =>
   expect.objectContaining({ timeoutMs: expect.any(Number), signal: expect.anything() });
@@ -427,6 +435,108 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(secondRequest).not.toHaveBeenCalled();
+  });
+
+  it("does not resume or publish a control attachment after its passive preflight times out", async () => {
+    const { codexControlRequest } = await import("../command-rpc.js");
+    await withTempDir("openclaw-codex-preflight-", async (root) => {
+      const authority = {
+        config: {},
+        agentId: "main",
+        sessionKey: "agent:main:preflight",
+        sessionId: "preflight-session",
+        storePath: path.join(root, "sessions.json"),
+      };
+      await upsertSessionEntry({
+        ...authority,
+        entry: { sessionId: authority.sessionId, updatedAt: Date.now() },
+      });
+      vi.useFakeTimers();
+      let releasePreflight!: () => void;
+      const preflight = new Promise<void>((resolve) => {
+        releasePreflight = resolve;
+      });
+      const request = vi.fn(async (_method: string) => ({ thread: { id: "thread-1" } }));
+      sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+      const onResponse = vi.fn();
+
+      try {
+        const result = codexControlRequest(
+          {},
+          "thread/resume",
+          { threadId: "thread-1" },
+          {
+            ...authority,
+            authProfileId: null,
+            timeoutMs: 50,
+            beforeRequest: async (send) => {
+              await send({
+                method: "thread/read",
+                requestParams: { threadId: "thread-1", includeTurns: false },
+              });
+              await preflight;
+            },
+            onResponse,
+          },
+        );
+        const settled = result.then(
+          (value) => ({ status: "fulfilled", value }),
+          (error: unknown) => ({ status: "rejected", error }),
+        );
+        await vi.advanceTimersByTimeAsync(50);
+        expect(await settled).toMatchObject({
+          status: "rejected",
+          error: expect.objectContaining({ message: expect.stringContaining("timed out") }),
+        });
+        releasePreflight();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/read"]);
+        expect(onResponse).not.toHaveBeenCalled();
+        expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledOnce();
+        expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).not.toHaveBeenCalled();
+      } finally {
+        releasePreflight();
+        await vi.advanceTimersByTimeAsync(0);
+        vi.useRealTimers();
+        clearSessionStoreCacheForTest();
+      }
+    });
+  });
+
+  it("revokes scoped requests and mutation authority when their client lease ends", async () => {
+    const request = vi.fn(async () => ({ ok: true }));
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+    const retained = await withCodexAppServerJsonClient({}, async (send, _client, scope) => {
+      await send({ method: "thread/read", requestParams: { threadId: "thread-1" } });
+      return { send, assertCurrent: scope.assertCurrent };
+    });
+
+    expect(retained.assertCurrent).toThrow();
+    await expect(
+      retained.send({ method: "thread/resume", requestParams: { threadId: "thread-1" } }),
+    ).rejects.toThrow();
+    await expect(listAllCodexAppServerModels({ request: retained.send })).rejects.toThrow(
+      "codex app-server request timed out",
+    );
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("does not request another model page after the shared deadline", async () => {
+    vi.useFakeTimers();
+    const page = createDeferred<{ data: never[]; nextCursor: string }>();
+    const request = vi.fn(() => page.promise);
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+    const result = withCodexAppServerJsonClient({ timeoutMs: 50 }, async (scopedRequest) =>
+      listAllCodexAppServerModels({ request: scopedRequest }),
+    );
+    const rejection = expect(result).rejects.toThrow("codex app-server request timed out");
+    await vi.advanceTimersByTimeAsync(50);
+    await rejection;
+    page.resolve({ data: [], nextCursor: "next-page" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(request).toHaveBeenCalledOnce();
+    expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledOnce();
   });
 
   it("blocks thread starts with sandbox environments when exec host=node is active", async () => {

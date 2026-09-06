@@ -1,5 +1,6 @@
 // Openai provider module implements model/runtime integration.
 import path from "node:path";
+import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   ImageGenerationOutputFormat,
@@ -11,7 +12,6 @@ import {
   resolveInlineImageJsonResponseMaxBytes,
   toImageDataUrl,
 } from "openclaw/plugin-sdk/image-generation";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import {
   resolveClosestSize,
   resolveGeneratedMediaMaxBytes,
@@ -35,6 +35,7 @@ import {
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import { filterStringRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   canonicalizeCodexResponsesBaseUrl,
@@ -81,7 +82,10 @@ const OPENAI_IMAGE_MODELS = [
   "gpt-image-1",
   "gpt-image-1-mini",
 ] as const;
-const log = createSubsystemLogger("image-generation/openai");
+const OPENAI_FLEXIBLE_IMAGE_MODELS = [
+  DEFAULT_OPENAI_IMAGE_MODEL,
+  "gpt-image-2-2026-04-21",
+] as const;
 
 const AZURE_HOSTNAME_SUFFIXES = [
   ".openai.azure.com",
@@ -260,6 +264,32 @@ function resolveNativeOpenAIImageSizesForModel(model: string): readonly string[]
   }
 }
 
+function isValidFlexibleOpenAIImageSize(model: string, size: string | undefined): size is string {
+  if (
+    !OPENAI_FLEXIBLE_IMAGE_MODELS.includes(model as (typeof OPENAI_FLEXIBLE_IMAGE_MODELS)[number])
+  ) {
+    return false;
+  }
+  const dimensions = /^(\d+)x(\d+)$/.exec(size ?? "");
+  if (!dimensions) {
+    return false;
+  }
+  const width = Number(dimensions[1]);
+  const height = Number(dimensions[2]);
+  const pixels = width * height;
+  return (
+    width > 0 &&
+    height > 0 &&
+    width % 16 === 0 &&
+    height % 16 === 0 &&
+    Math.max(width, height) <= 3840 &&
+    pixels >= 655_360 &&
+    pixels <= 8_294_400 &&
+    width <= height * 3 &&
+    height <= width * 3
+  );
+}
+
 function resolveConfiguredOpenAIImageBaseUrl(cfg: OpenClawConfig | undefined, model: string) {
   const modelId = model.trim().replace(/^openai\//u, "");
   const modelBaseUrl = cfg?.models?.providers?.openai?.models
@@ -371,22 +401,6 @@ function hasCodexResponseTransportProfileConfigured(req: {
   );
 }
 
-function resolveOpenAIImageAuthProvider(req: {
-  cfg?: OpenClawConfig;
-  authStore?: AuthProfileStore;
-  agentDir?: string;
-}): string {
-  const providerConfig = req.cfg?.models?.providers?.openai;
-  if (providerConfig?.apiKey !== undefined || providerConfig?.auth === "api-key") {
-    return "openai";
-  }
-  const store = resolveRequestAuthStore(req);
-  if (!store) {
-    return "openai";
-  }
-  return "openai";
-}
-
 function hasExplicitOpenAIImageApiKeyConfig(cfg: OpenClawConfig | undefined): boolean {
   const providerConfig = cfg?.models?.providers?.openai;
   return providerConfig?.apiKey !== undefined || providerConfig?.auth === "api-key";
@@ -417,16 +431,7 @@ function hasChatGPTImageRouteConfig(cfg: OpenClawConfig | undefined): boolean {
 function resolveConfiguredOpenAIImageHeaders(
   cfg: OpenClawConfig | undefined,
 ): Record<string, string> | undefined {
-  const headers = cfg?.models?.providers?.openai?.headers;
-  if (!headers) {
-    return undefined;
-  }
-  const stringHeaders = Object.fromEntries(
-    Object.entries(headers).filter(
-      (entry): entry is [string, string] => typeof entry[1] === "string",
-    ),
-  );
-  return Object.keys(stringHeaders).length > 0 ? stringHeaders : undefined;
+  return filterStringRecord(cfg?.models?.providers?.openai?.headers);
 }
 
 function forceOpenAIImageApiKeyAuth(cfg: OpenClawConfig | undefined): OpenClawConfig | undefined {
@@ -450,19 +455,6 @@ function forceOpenAIImageApiKeyAuth(cfg: OpenClawConfig | undefined): OpenClawCo
       },
     },
   };
-}
-
-async function resolveOpenAIImageAuth(req: {
-  cfg?: OpenClawConfig;
-  agentDir?: string;
-  authStore?: AuthProfileStore;
-}) {
-  return await resolveOptionalApiKeyForProvider({
-    provider: resolveOpenAIImageAuthProvider(req),
-    cfg: req.cfg,
-    agentDir: req.agentDir,
-    store: req.authStore,
-  });
 }
 
 function isCodexSubscriptionAuthMode(mode: unknown): boolean {
@@ -708,6 +700,8 @@ function createOpenAIImageGenerationProviderBase(params: {
       },
       geometry: {
         sizes: [...OPENAI_SUPPORTED_SIZES],
+        // Empty model-specific lists stop core from snapping valid flexible dimensions.
+        sizesByModel: Object.fromEntries(OPENAI_FLEXIBLE_IMAGE_MODELS.map((model) => [model, []])),
       },
       output: {
         formats: [...OPENAI_OUTPUT_FORMATS],
@@ -734,11 +728,13 @@ async function resolveOptionalApiKeyForProvider(
   }
 }
 
-function logCodexImageAuthSelected(params: {
+async function logCodexImageAuthSelected(params: {
   req: Parameters<ImageGenerationProvider["generateImage"]>[0];
   authMode?: unknown;
   timeoutMs: number;
 }) {
+  const { createSubsystemLogger } = await import("openclaw/plugin-sdk/logging-core");
+  const log = createSubsystemLogger("image-generation/openai");
   const model = resolveOpenAIImageRequestModel(params.req, {
     allowTransparentDefaultReroute: true,
   });
@@ -928,7 +924,12 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
             : null;
       }
       if (useCodexResponseTransportRoute) {
-        const codexAuth = await resolveOpenAIImageAuth(req);
+        const codexAuth = await resolveOptionalApiKeyForProvider({
+          provider: "openai",
+          cfg: req.cfg,
+          agentDir: req.agentDir,
+          store: req.authStore,
+        });
         if (!codexAuth?.apiKey) {
           throw new Error("OpenAI Codex OAuth missing");
         }
@@ -936,7 +937,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
           preResolvedImageAuth = codexAuth;
         } else {
           const timeoutMs = resolveOpenAIImageTimeoutMs(req.timeoutMs);
-          logCodexImageAuthSelected({ req, authMode: codexAuth.mode, timeoutMs });
+          await logCodexImageAuthSelected({ req, authMode: codexAuth.mode, timeoutMs });
           return generateOpenAICodexImage({ req, apiKey: codexAuth.apiKey });
         }
       }
@@ -960,7 +961,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
       ) {
         if (publicOpenAIBaseUrl) {
           const timeoutMs = resolveOpenAIImageTimeoutMs(req.timeoutMs);
-          logCodexImageAuthSelected({ req, authMode: imageAuth.mode, timeoutMs });
+          await logCodexImageAuthSelected({ req, authMode: imageAuth.mode, timeoutMs });
           return generateOpenAICodexImage({ req, apiKey: imageAuth.apiKey });
         }
         imageAuth = undefined;
@@ -995,11 +996,13 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
       });
       const count = resolveOpenAIImageCount(req.count);
       const timeoutMs = resolveOpenAIImageTimeoutMs(req.timeoutMs, { isAzure });
-      const sizeResolution = resolveOpenAIImageRequestSize({
-        model,
-        requestedSize: req.size,
-        applyNativeLimits: publicOpenAIBaseUrl || isAzure,
-      });
+      const sizeResolution = isValidFlexibleOpenAIImageSize(model, req.size)
+        ? { size: req.size }
+        : resolveOpenAIImageRequestSize({
+            model,
+            requestedSize: req.size,
+            applyNativeLimits: publicOpenAIBaseUrl || isAzure,
+          });
       const size = sizeResolution.size;
       const url = isAzure
         ? buildAzureImageUrl(rawBaseUrl, model, isEdit ? "edits" : "generations")
@@ -1018,7 +1021,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
               const mimeType = image.mimeType?.trim() || DEFAULT_OUTPUT_MIME;
               form.append(
                 "image[]",
-                new Blob([new Uint8Array(image.buffer)], { type: mimeType }),
+                new Blob([bufferToBlobPart(image.buffer)], { type: mimeType }),
                 inferImageUploadFileName({
                   fileName: image.fileName,
                   mimeType,

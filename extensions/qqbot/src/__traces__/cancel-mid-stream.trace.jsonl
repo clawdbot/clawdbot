@@ -1,9 +1,0 @@
-{"seq":1,"at":0,"dir":"in","kind":"reply-start"}
-{"seq":2,"at":0,"dir":"out","kind":"POST /v2/users/user-openid-trace/messages","data":{"payload":{"input_notify":{"input_second":10,"input_type":1},"msg_id":"qq-msg-cancel-mid-stream","msg_seq":1,"msg_type":6},"result":{"id":"wire-msg-1","timestamp":"2026-01-01T00:00:00.000Z"}}}
-{"seq":3,"at":0,"dir":"in","kind":"partial","data":{"text":"Working on the fix"}}
-{"seq":4,"at":0,"dir":"out","kind":"POST /v2/users/user-openid-trace/stream_messages","data":{"payload":{"content_raw":"Working on the fix","content_type":"markdown","event_id":"qq-msg-cancel-mid-stream","index":0,"input_mode":"replace","input_state":1,"msg_id":"qq-msg-cancel-mid-stream","msg_seq":2},"result":{"id":"stream-msg-1"}}}
-{"seq":5,"at":300,"dir":"in","kind":"partial","data":{"text":"Working on the fix: patching now."}}
-{"seq":6,"at":500,"dir":"out","kind":"POST /v2/users/user-openid-trace/stream_messages","data":{"payload":{"content_raw":"Working on the fix: patching now.","content_type":"markdown","event_id":"qq-msg-cancel-mid-stream","index":1,"input_mode":"replace","input_state":1,"msg_id":"qq-msg-cancel-mid-stream","msg_seq":2,"stream_msg_id":"stream-msg-1"},"result":{"id":"stream-msg-1"}}}
-{"seq":7,"at":600,"dir":"in","kind":"cancel"}
-{"seq":8,"at":600,"dir":"in","kind":"idle"}
-{"seq":9,"at":600,"dir":"out","kind":"POST /v2/users/user-openid-trace/stream_messages","data":{"payload":{"content_raw":"Working on the fix: patching now.","content_type":"markdown","event_id":"qq-msg-cancel-mid-stream","index":2,"input_mode":"replace","input_state":10,"msg_id":"qq-msg-cancel-mid-stream","msg_seq":2,"stream_msg_id":"stream-msg-1"},"result":{"id":"stream-msg-1"}}}

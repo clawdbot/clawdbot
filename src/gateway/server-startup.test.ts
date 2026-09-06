@@ -13,6 +13,7 @@ const refreshPreparedModelRuntimeSnapshotsMock = vi.fn(
       defaultWorkspaceDir?: string;
       catalogMode?: "live" | "static";
       allowGatewaySubagentBinding?: boolean;
+      isPublicationCurrent?: () => boolean;
     },
   ) => {},
 );
@@ -32,11 +33,13 @@ vi.mock("../agents/prepared-model-runtime.js", () => ({
       defaultWorkspaceDir?: string;
       catalogMode?: "live" | "static";
       allowGatewaySubagentBinding?: boolean;
+      isPublicationCurrent?: () => boolean;
     },
   ) => refreshPreparedModelRuntimeSnapshotsMock(cfg, options),
 }));
 
 let prewarmConfiguredPrimaryModel: typeof import("./server-startup-post-attach.js").testing.prewarmConfiguredPrimaryModel;
+let hydrateConfiguredExternalCliAuth: typeof import("./server-startup-post-attach.js").testing.hydrateConfiguredExternalCliAuth;
 let publishStartupModelRuntime: typeof import("./server-startup-post-attach.js").testing.publishStartupModelRuntime;
 let shouldSkipStartupModelPrewarm: typeof import("./server-startup-post-attach.js").testing.shouldSkipStartupModelPrewarm;
 
@@ -45,6 +48,7 @@ describe("gateway startup primary model warmup", () => {
     ({
       testing: {
         prewarmConfiguredPrimaryModel,
+        hydrateConfiguredExternalCliAuth,
         publishStartupModelRuntime,
         shouldSkipStartupModelPrewarm,
       },
@@ -77,6 +81,29 @@ describe("gateway startup primary model warmup", () => {
       gatewayLifecycle: true,
       catalogMode: "static",
     });
+  });
+
+  it("hydrates configured external CLI auth before prepared owner publication", async () => {
+    const cfg = {} as OpenClawConfig;
+    const hydrate = vi.fn();
+
+    await hydrateConfiguredExternalCliAuth({
+      getConfig: () => cfg,
+      log: { warn: vi.fn() },
+      deps: {
+        listAgentIds: () => ["main", "secondary"],
+        resolveAgentDir: (_config, agentId) => `/tmp/${agentId}`,
+        collectConfiguredRefs: (_config, agentId) => [
+          { value: agentId === "main" ? "openai/gpt-5.4" : "anthropic/sonnet-4.6" },
+        ],
+        hydrate,
+      },
+    });
+
+    expect(hydrate).toHaveBeenCalledTimes(2);
+    expect(hydrate).toHaveBeenCalledWith(cfg, "/tmp/main", ["openai"]);
+    expect(hydrate).toHaveBeenCalledWith(cfg, "/tmp/secondary", ["anthropic"]);
+    expect(refreshPreparedModelRuntimeSnapshotsMock).not.toHaveBeenCalled();
   });
 
   it("prewarms the default catalog when no explicit primary model is configured", async () => {

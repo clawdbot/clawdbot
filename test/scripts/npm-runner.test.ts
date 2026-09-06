@@ -1,7 +1,7 @@
 // Npm Runner tests cover npm runner script behavior.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveNpmRunner } from "../../scripts/npm-runner.mjs";
+import { resolveNpmRunner } from "../../scripts/npm-runner.mts";
 
 describe("resolveNpmRunner", () => {
   it("anchors npm staging to the active node toolchain when npm-cli.js exists", () => {

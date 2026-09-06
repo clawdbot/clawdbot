@@ -184,22 +184,37 @@ describe("native Gateway protocol levels", () => {
   it("uses the min constant for native connect compatibility ranges", async () => {
     const swiftChannelPath = "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayChannel.swift";
     const swiftChannel = await readRepoFile(swiftChannelPath);
+    const swiftRangePath =
+      "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayConnectFailureBackoff.swift";
+    const swiftRange = await readRepoFile(swiftRangePath);
     assertPattern(
-      swiftChannel,
-      swiftChannelPath,
+      swiftRange,
+      swiftRangePath,
       /if role == "node", clientMode == "node" \{\s+return GATEWAY_MIN_NODE_PROTOCOL_VERSION\s+\}\s+return GATEWAY_MIN_PROTOCOL_VERSION/,
       "node connections must use the node compatibility floor without changing operator clients.",
     );
     assertPattern(
       swiftChannel,
       swiftChannelPath,
-      /"minProtocol": ProtoAnyCodable\(minProtocol\)/,
+      /var supportedProtocols: ClosedRange<Int> \{\s+Self\.minimumProtocolVersion\(\s+role: self\.connectOptions\?\.role \?\? "operator",\s+clientMode: self\.connectOptions\?\.clientMode \?\? "ui"\)\.\.\.GATEWAY_PROTOCOL_VERSION\s+\}/,
+      "the shared range must use the configured role and mode through GATEWAY_PROTOCOL_VERSION.",
+    );
+    assertPattern(
+      swiftChannel,
+      swiftChannelPath,
+      /let protocols = self\.supportedProtocols/,
+      "connect params must use the shared supported protocol range.",
+    );
+    assertPattern(
+      swiftChannel,
+      swiftChannelPath,
+      /"minProtocol": ProtoAnyCodable\(protocols\.lowerBound\)/,
       "connect params must advertise the role-specific minimum as minProtocol.",
     );
     assertPattern(
       swiftChannel,
       swiftChannelPath,
-      /"maxProtocol": ProtoAnyCodable\(GATEWAY_PROTOCOL_VERSION\)/,
+      /"maxProtocol": ProtoAnyCodable\(protocols\.upperBound\)/,
       "connect params must advertise GATEWAY_PROTOCOL_VERSION as maxProtocol.",
     );
 
@@ -331,6 +346,37 @@ describe("native Gateway protocol levels", () => {
       swiftGeneratedPath,
       /case terminal\(TerminalSessionApprovalEvent\)/,
       "SessionApprovalEvent must decode terminal transitions.",
+    );
+  });
+
+  it("emits the scope upgrade result as a discriminated Swift union", async () => {
+    const swiftGeneratedPath =
+      "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift";
+    const swiftGenerated = await readRepoFile(swiftGeneratedPath);
+
+    assertPattern(
+      swiftGenerated,
+      swiftGeneratedPath,
+      /public enum ScopeUpgradeResult: Codable, Sendable \{/,
+      "missing the generated ScopeUpgradeResult union.",
+    );
+    assertPattern(
+      swiftGenerated,
+      swiftGeneratedPath,
+      /case approved\(ScopeUpgradeApproved\)/,
+      "ScopeUpgradeResult must decode approved outcomes.",
+    );
+    assertPattern(
+      swiftGenerated,
+      swiftGeneratedPath,
+      /case rejected\(ScopeUpgradeRejected\)/,
+      "ScopeUpgradeResult must decode rejected outcomes.",
+    );
+    assertPattern(
+      swiftGenerated,
+      swiftGeneratedPath,
+      /case expired\(ScopeUpgradeExpired\)/,
+      "ScopeUpgradeResult must decode expired outcomes.",
     );
   });
 });

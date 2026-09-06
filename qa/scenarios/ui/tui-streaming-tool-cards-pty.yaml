@@ -1,0 +1,34 @@
+title: TUI streaming rendering and tool card PTY contracts
+scenario:
+  id: tui-streaming-tool-cards-pty
+  surface: tui
+  category: tui.rendering-and-output-safety
+  coverage:
+    primary:
+      - tui.streaming-message-rendering
+      - tui.tool-cards
+  risk: medium
+  objective: Prove streaming progression and tool card lifecycle rendering through synchronized frames in the real runTui PTY loop.
+  successCriteria:
+    - A release-gated stream authenticates its exact 64-token prefix before continuing.
+    - The latest final frame contains all 128 tokens exactly once and in order.
+    - A release-gated verbose-full tool card authenticates running partial output before completion.
+    - The latest tool frame contains the final result and no running or stale partial marker.
+  codeRefs:
+    - src/tui/tui-pty-rendering-test-support.ts
+    - src/tui/tui-pty-harness-fixture-test-support.ts
+    - src/tui/tui-pty-harness.e2e.test.ts
+  execution:
+    kind: script
+    parallelSafe: true
+    path: test/e2e/qa-lab/tui/tui-pty-evidence-producer.ts
+    timeoutMs: 180000
+    args: [--artifact-base, "${outputDir}", --scenario-id, "${scenarioId}"]
+    config:
+      tuiPtyCases:
+        - coverageId: tui.streaming-message-rendering
+          testFile: src/tui/tui-pty-harness.e2e.test.ts
+          testNamePattern: ^TUI PTY harness > authenticates a streamed prefix before the complete ordered final frame$
+        - coverageId: tui.tool-cards
+          testFile: src/tui/tui-pty-harness.e2e.test.ts
+          testNamePattern: ^TUI PTY harness > authenticates running partial and completed tool cards in real terminal frames$

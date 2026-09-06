@@ -1,13 +1,13 @@
 import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import type { TeamsMeetingsConfig, TeamsMeetingsMode } from "./config.js";
-import { assertBlackHole2chAvailable } from "./transports/chrome.js";
+import { assertTeamsMeetingsAudioAvailable } from "./transports/chrome.js";
 import { TEAMS_MEETINGS_BROWSER_NODE_ADAPTER } from "./transports/teams-meetings-platform-constants.js";
 
 export const getTeamsMeetingsSetupStatus = MeetingPlatformAdapter.createRuntimeSetup<
   TeamsMeetingsConfig,
   TeamsMeetingsMode
 >({
-  assertAudioDeviceAvailable: assertBlackHole2chAvailable,
+  assertAudioDeviceAvailable: assertTeamsMeetingsAudioAvailable,
   captionsMessage: (mode) =>
     mode === "transcribe"
       ? "Teams caption scraping is disabled pending live selector validation; transcript snapshots are empty"

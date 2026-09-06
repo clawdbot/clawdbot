@@ -15,7 +15,6 @@ import {
   runPluginRegistryHealth,
   runReleaseConfiguredPluginInstallsHealth,
   runSandboxHealth,
-  runSessionLocksHealth,
   runSessionSnapshotsHealth,
   runSessionTranscriptHeadersHealth,
   runSessionTranscriptLabelsHealth,
@@ -60,12 +59,8 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:write-config-migrations",
       label: "Write config migrations",
+      required: true,
       run: runInitialConfigWriteHealth,
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:active-tool-schema-warnings",
-      label: "Active tool schema warnings",
-      run: runActiveToolSchemaWarningsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:gateway-config",
@@ -97,6 +92,18 @@ export function resolveInitialDoctorHealthContributions(params: {
       label: "Gateway auth",
       healthCheckIds: ["core/doctor/gateway-auth"],
       run: params.runGatewayAuthHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:node-hosting-preconditions",
+      label: "Node hosting preconditions",
+      healthChecks: {
+        description: "Gateway config can authenticate and onboard node and worker hosts.",
+        async detect(ctx) {
+          const { collectNodeHostingPreconditionFindings } =
+            await import("../commands/doctor-node-hosting-preconditions.js");
+          return collectNodeHostingPreconditionFindings(ctx.cfg);
+        },
+      },
     }),
     createDoctorHealthContribution({
       id: "doctor:command-owner",
@@ -163,19 +170,22 @@ export function resolveInitialDoctorHealthContributions(params: {
       run: runLegacyPluginManifestHealth,
     }),
     createDoctorHealthContribution({
+      // Stable v2026.8.1 exposed this --only selector. Retain its public identity,
+      // not the unsupported shared-root scan or its destructive repair advice.
       id: "doctor:legacy-plugin-dependencies",
       label: "Legacy plugin dependencies",
       healthChecks: {
-        description: "Legacy plugin dependency state roots are represented as findings.",
+        description: "Deprecated shared plugin dependency cleanup check.",
         defaultEnabled: false,
         async detect() {
-          const {
-            detectLegacyPluginDependencyStateIssues,
-            legacyPluginDependencyStateIssueToHealthFinding,
-          } = await import("../commands/doctor/shared/plugin-dependency-cleanup.js");
-          return (await detectLegacyPluginDependencyStateIssues({ env: process.env })).map(
-            legacyPluginDependencyStateIssueToHealthFinding,
-          );
+          return [
+            {
+              checkId: "core/doctor/legacy-plugin-dependencies",
+              severity: "info",
+              message:
+                "Deprecated check: Doctor preserves shared plugin runtime caches and no longer scans them for removal.",
+            },
+          ];
         },
       },
       run: async () => {},
@@ -253,6 +263,13 @@ export function resolveInitialDoctorHealthContributions(params: {
       },
       run: runPluginRegistryHealth,
     }),
+    // Runtime tool discovery must follow plugin metadata repair; running it earlier
+    // scans each workspace again after the authoritative generation changes.
+    createDoctorHealthContribution({
+      id: "doctor:active-tool-schema-warnings",
+      label: "Active tool schema warnings",
+      run: runActiveToolSchemaWarningsHealth,
+    }),
     createDoctorHealthContribution({
       id: "doctor:ui-protocol-freshness",
       label: "UI protocol freshness",
@@ -319,12 +336,6 @@ export function resolveInitialDoctorHealthContributions(params: {
       label: "Telegram General-topic conversations",
       healthCheckIds: ["core/doctor/telegram-general-topic-conversations"],
       run: runTelegramGeneralTopicConversationHealth,
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:session-locks",
-      label: "Session locks",
-      healthCheckIds: ["core/doctor/session-locks"],
-      run: runSessionLocksHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:session-transcript-headers",

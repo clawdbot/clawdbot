@@ -1,8 +1,20 @@
 {
   "id": "copilot",
+  "doctorContract": {
+    "configRepair": true
+  },
+  "sessionRouteStateOwners": [
+    {
+      "id": "copilot",
+      "label": "GitHub Copilot agent runtime",
+      "providerIds": ["github-copilot"],
+      "runtimeIds": ["copilot"],
+      "cliSessionKeys": ["copilot"],
+      "authProfilePrefixes": ["github-copilot:"]
+    }
+  ],
   "name": "GitHub Copilot agent runtime",
   "description": "Registers the GitHub Copilot agent runtime.",
-  "icon": "https://cdn.simpleicons.org/githubcopilot",
   "version": "2026.6.2",
   "activation": {
     "onStartup": false,

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { parseGitUrl } from "./utils/git.js";
 
@@ -16,18 +17,6 @@ function escapeProjectKeyForAnnotation(value: string): string {
     .replaceAll(">", "%3e")
     .replaceAll("\r", "%0d")
     .replaceAll("\n", "%0a");
-}
-
-function setBounded<K, V>(map: Map<K, V>, key: K, value: V, limit: number): void {
-  map.delete(key);
-  map.set(key, value);
-  while (map.size > limit) {
-    const oldest = map.keys().next().value as K | undefined;
-    if (oldest === undefined) {
-      break;
-    }
-    map.delete(oldest);
-  }
 }
 
 async function resolveUncachedProjectKey(repoRoot: string): Promise<string> {
@@ -64,6 +53,7 @@ export function resolveProjectKey(repoRoot: string): Promise<string> {
     return cached;
   }
   const pending = resolveUncachedProjectKey(canonicalRoot);
-  setBounded(projectKeyByRepoRoot, canonicalRoot, pending, MAX_PROJECT_KEY_CACHE_ENTRIES);
+  projectKeyByRepoRoot.set(canonicalRoot, pending);
+  pruneMapToMaxSize(projectKeyByRepoRoot, MAX_PROJECT_KEY_CACHE_ENTRIES);
   return pending;
 }

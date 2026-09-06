@@ -2,12 +2,12 @@
 // Waits for mocked agent command dispatches in async gateway tests.
 import { vi } from "vitest";
 import { sleep } from "../utils/sleep.js";
-import { agentCommand } from "./test-helpers.runtime-state.js";
+import { agentCommandMock } from "./test-helpers.runtime-state.js";
 
 type AgentCommandCall = Record<string, unknown>;
 
 function agentCommandCalls(): Array<[AgentCommandCall]> {
-  return vi.mocked(agentCommand).mock.calls as unknown as Array<[AgentCommandCall]>;
+  return vi.mocked(agentCommandMock).mock.calls as unknown as Array<[AgentCommandCall]>;
 }
 
 /** Waits until the mocked `agentCommand` receives a call for a specific run id. */

@@ -11,6 +11,8 @@ import {
   installProviderHttpMockCleanup,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 const {
@@ -121,6 +123,24 @@ describe("openai video generation provider", () => {
     });
   });
 
+  it("advertises OpenAI video for an actual config-only API key", () => {
+    expect(
+      buildOpenAIVideoGenerationProvider().isConfigured?.({
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                apiKey: "openai-video-config-key",
+                baseUrl: "https://api.openai.com/v1",
+                models: [],
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("does not advertise video generation for OAuth-only OpenAI profiles", () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-openai-video-auth-"));
     const previousOpenAIKey = process.env.OPENAI_API_KEY;
@@ -151,6 +171,10 @@ describe("openai video generation provider", () => {
       } else {
         process.env.OPENAI_API_KEY = previousOpenAIKey;
       }
+      // Saving the profile store opens the per-agent database under the temporary agent
+      // dir, and clearing the snapshots does not release it, so Windows fails the removal
+      // with EBUSY unless the cached handles are closed first.
+      closeOpenClawAgentDatabasesForTest();
       fs.rmSync(agentDir, { recursive: true, force: true });
     }
   });
@@ -262,6 +286,7 @@ describe("openai video generation provider", () => {
 
   it("downloads an immediately completed OpenAI submission without polling it again", async () => {
     const release = vi.fn(async () => {});
+    const cancel = vi.fn();
     postMultipartRequestMock.mockResolvedValueOnce({
       response: streamedJsonResponse({
         id: "vid_completed",
@@ -272,10 +297,18 @@ describe("openai video generation provider", () => {
       }),
       release,
     });
-    fetchWithTimeoutMock.mockResolvedValueOnce({
-      headers: new Headers({ "content-type": "video/mp4" }),
-      arrayBuffer: async () => Buffer.from("completed-video"),
-    });
+    fetchWithTimeoutMock.mockResolvedValueOnce(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("completed-video"));
+            controller.close();
+          },
+          cancel,
+        }),
+        { headers: { "content-type": "video/mp4" } },
+      ),
+    );
 
     const result = await buildOpenAIVideoGenerationProvider().generateVideo({
       provider: "openai",
@@ -290,8 +323,255 @@ describe("openai video generation provider", () => {
       model: "sora-2",
       metadata: { seconds: "4", size: "720x1280", status: "completed", videoId: "vid_completed" },
     });
+    expect(cancel).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    {
+      label: "JSON error",
+      contentType: "application/json",
+      body: JSON.stringify({ error: "not a rendered video" }),
+    },
+    {
+      label: "problem JSON error",
+      contentType: "application/problem+json",
+      body: JSON.stringify({ detail: "render failed" }),
+    },
+    { label: "plain-text error", contentType: "text/plain", body: "render failed" },
+    { label: "HTML error", contentType: "text/html", body: "<html>render failed</html>" },
+    { label: "empty video", contentType: "video/mp4", body: "" },
+  ])(
+    "rejects a successful $label download and releases both requests",
+    async ({ contentType, body }) => {
+      const submissionRelease = vi.fn(async () => {});
+      const downloadRelease = vi.fn(async () => {});
+      postMultipartRequestMock.mockResolvedValueOnce({
+        response: streamedJsonResponse({
+          id: "vid_malformed",
+          model: "sora-2",
+          status: "completed",
+        }),
+        release: submissionRelease,
+      });
+      fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+        response: new Response(body, { headers: { "content-type": contentType } }),
+        finalUrl: "http://127.0.0.1:44080/v1/videos/vid_malformed/content?variant=video",
+        release: downloadRelease,
+      });
+
+      await expect(
+        buildOpenAIVideoGenerationProvider().generateVideo({
+          provider: "openai",
+          model: "sora-2",
+          prompt: "Reject an invalid generated video",
+          cfg: {
+            models: {
+              providers: {
+                openai: {
+                  baseUrl: "http://127.0.0.1:44080/v1",
+                  request: { allowPrivateNetwork: true },
+                  models: [],
+                },
+              },
+            },
+          },
+        }),
+      ).rejects.toThrow("OpenAI generated video download: malformed video response");
+
+      expect(pollProviderOperationJsonMock).not.toHaveBeenCalled();
+      expect(submissionRelease).toHaveBeenCalledOnce();
+      expect(downloadRelease).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
+    { mode: "public", allowPrivateNetwork: false },
+    { mode: "guarded private", allowPrivateNetwork: true },
+  ])(
+    "cancels unread malformed $mode video responses and closes their upstream socket",
+    async ({ allowPrivateNetwork }) => {
+      let notifySocketClosed: ((closed: boolean) => void) | undefined;
+      const socketClosed = new Promise<boolean>((resolve) => {
+        notifySocketClosed = resolve;
+      });
+      await withServer(
+        (request, response) => {
+          request.socket.once("close", () => notifySocketClosed?.(true));
+          response.writeHead(200, { "content-type": "application/json" });
+          response.write('{"error":"still streaming');
+        },
+        async (baseUrl) => {
+          postMultipartRequestMock.mockResolvedValueOnce({
+            response: streamedJsonResponse({ id: "vid_unread", status: "completed" }),
+            release: vi.fn(async () => {}),
+          });
+          const upstreamUrl = `${baseUrl}/videos/vid_unread/content`;
+          const downloadRelease = vi.fn(async () => {});
+          if (allowPrivateNetwork) {
+            fetchWithTimeoutGuardedMock.mockImplementationOnce(async () => ({
+              response: await fetch(upstreamUrl),
+              finalUrl: upstreamUrl,
+              release: downloadRelease,
+            }));
+          } else {
+            fetchWithTimeoutMock.mockImplementationOnce(async () => await fetch(upstreamUrl));
+          }
+
+          await expect(
+            buildOpenAIVideoGenerationProvider().generateVideo({
+              provider: "openai",
+              model: "sora-2",
+              prompt: "Reject an unending public video error response",
+              cfg: allowPrivateNetwork
+                ? {
+                    models: {
+                      providers: {
+                        openai: {
+                          baseUrl: `${baseUrl}/v1`,
+                          request: { allowPrivateNetwork: true },
+                          models: [],
+                        },
+                      },
+                    },
+                  }
+                : {},
+            }),
+          ).rejects.toThrow("OpenAI generated video download: malformed video response");
+
+          await expect(
+            Promise.race([
+              socketClosed,
+              new Promise<boolean>((resolve) => {
+                setTimeout(() => resolve(false), 250);
+              }),
+            ]),
+          ).resolves.toBe(true);
+          if (allowPrivateNetwork) {
+            expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledOnce();
+            expect(downloadRelease).toHaveBeenCalledOnce();
+          } else {
+            expect(fetchWithTimeoutGuardedMock).not.toHaveBeenCalled();
+          }
+        },
+      );
+    },
+  );
+
+  it.each([
+    { mode: "public", allowPrivateNetwork: false },
+    { mode: "guarded private", allowPrivateNetwork: true },
+  ])(
+    "rejects cloned endless $mode video errors without waiting for capture cancellation",
+    async ({ allowPrivateNetwork }) => {
+      const response = new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('{"error":"still streaming'));
+          },
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+      const captureClone = response.clone();
+      const submissionRelease = vi.fn(async () => {});
+      const downloadRelease = vi.fn(async () => {});
+      postMultipartRequestMock.mockResolvedValueOnce({
+        response: streamedJsonResponse({ id: "vid_cloned", status: "completed" }),
+        release: submissionRelease,
+      });
+      if (allowPrivateNetwork) {
+        fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+          response,
+          finalUrl: "http://127.0.0.1:44080/v1/videos/vid_cloned/content",
+          release: downloadRelease,
+        });
+      } else {
+        fetchWithTimeoutMock.mockResolvedValueOnce(response);
+      }
+
+      const generation = buildOpenAIVideoGenerationProvider().generateVideo({
+        provider: "openai",
+        model: "sora-2",
+        prompt: "Reject a cloned, unending video error",
+        cfg: allowPrivateNetwork
+          ? {
+              models: {
+                providers: {
+                  openai: {
+                    baseUrl: "http://127.0.0.1:44080/v1",
+                    request: { allowPrivateNetwork: true },
+                    models: [],
+                  },
+                },
+              },
+            }
+          : {},
+      });
+      const captureCancellationPending = Symbol("capture cancellation pending");
+
+      try {
+        const result = await Promise.race([
+          generation.then(
+            () => undefined,
+            (error: unknown) => error,
+          ),
+          new Promise<symbol>((resolve) => {
+            setImmediate(() => resolve(captureCancellationPending));
+          }),
+        ]);
+
+        expect(result).not.toBe(captureCancellationPending);
+        expect(result).toMatchObject({
+          message: "OpenAI generated video download: malformed video response",
+        });
+        expect(submissionRelease).toHaveBeenCalledOnce();
+        if (allowPrivateNetwork) {
+          expect(downloadRelease).toHaveBeenCalledOnce();
+        }
+      } finally {
+        void captureClone.body?.cancel().catch(() => undefined);
+        await generation.catch(() => undefined);
+      }
+    },
+  );
+
+  it.each(["application/json", "text/plain"])(
+    "keeps the malformed public video error when %s body cancellation fails",
+    async (contentType) => {
+      const cancel = vi.fn(async () => {
+        throw new Error("upstream cancellation failed");
+      });
+      const submissionRelease = vi.fn(async () => {});
+      postMultipartRequestMock.mockResolvedValueOnce({
+        response: streamedJsonResponse({ id: "vid_cancel_failed", status: "completed" }),
+        release: submissionRelease,
+      });
+      fetchWithTimeoutMock.mockResolvedValueOnce(
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode("still streaming"));
+            },
+            cancel,
+          }),
+          { headers: { "content-type": contentType } },
+        ),
+      );
+
+      await expect(
+        buildOpenAIVideoGenerationProvider().generateVideo({
+          provider: "openai",
+          model: "sora-2",
+          prompt: "Preserve the malformed public video response error",
+          cfg: {},
+        }),
+      ).rejects.toThrow("OpenAI generated video download: malformed video response");
+
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(submissionRelease).toHaveBeenCalledOnce();
+      expect(fetchWithTimeoutGuardedMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects generated video downloads that exceed the configured media cap", async () => {
     postMultipartRequestMock.mockResolvedValueOnce({
@@ -346,13 +626,15 @@ describe("openai video generation provider", () => {
       });
 
     const provider = buildOpenAIVideoGenerationProvider();
+    const input = Buffer.from("!png-bytes?").subarray(1, -1);
     await provider.generateVideo({
       provider: "openai",
       model: "sora-2",
       prompt: "Animate this frame",
       cfg: {},
-      inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+      inputImages: [{ buffer: input, mimeType: "image/png" }],
     });
+    input.fill(0);
 
     const createRequest = postMultipartRequest();
     expect(createRequest.url).toBe("https://api.openai.com/v1/videos");
@@ -635,13 +917,15 @@ describe("openai video generation provider", () => {
       });
 
     const provider = buildOpenAIVideoGenerationProvider();
+    const input = Buffer.from("!mp4-bytes?").subarray(1, -1);
     await provider.generateVideo({
       provider: "openai",
       model: "sora-2",
       prompt: "Remix this clip",
       cfg: {},
-      inputVideos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+      inputVideos: [{ buffer: input, mimeType: "video/mp4" }],
     });
+    input.fill(0);
 
     expect(postJsonRequestMock).not.toHaveBeenCalled();
     const createRequest = postMultipartRequest();
@@ -651,6 +935,9 @@ describe("openai video generation provider", () => {
     expect(form.get("prompt")).toBe("Remix this clip");
     expect(form.get("model")).toBeNull();
     expect(form.get("video")).toBeInstanceOf(File);
+    expect(Buffer.from(await (form.get("video") as File).arrayBuffer())).toEqual(
+      Buffer.from("mp4-bytes"),
+    );
     expect(form.get("input_reference")).toBeNull();
     expect(createRequest.timeoutMs).toBe(120000);
     expect(createRequest.fetchFn).toBe(fetch);

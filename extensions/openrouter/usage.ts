@@ -1,13 +1,23 @@
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import {
+  readProviderJsonResponse,
+  resolveProviderHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
+} from "openclaw/plugin-sdk/provider-http";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   buildUsageHttpErrorSnapshot,
   parseProviderUsageNonNegativeNumber,
   type ProviderUsageSnapshot,
 } from "openclaw/plugin-sdk/provider-usage";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  OPENROUTER_BASE_URL,
+  resolveOpenRouterApiBaseUrl,
+  resolveOpenRouterSsrfPolicy,
+} from "./provider-catalog.js";
 
 const OPENROUTER_USAGE_RESPONSE_MAX_BYTES = 1024 * 1024;
-const OPENROUTER_API_ROOT = "https://openrouter.ai/api/v1";
 
 type OpenRouterCreditsData = {
   total_credits?: unknown;
@@ -88,43 +98,81 @@ async function readJson(response: Response, timeoutMs: number): Promise<unknown>
 
 async function fetchEndpoint(params: {
   path: "credits" | "key";
-  token: string;
+  baseUrl: string;
+  headers: Headers;
+  ssrfPolicy: ReturnType<typeof resolveOpenRouterSsrfPolicy>;
+  dispatcherPolicy: ReturnType<typeof resolveProviderHttpRequestConfig>["dispatcherPolicy"];
   timeoutMs: number;
   fetchFn: typeof fetch;
 }): Promise<EndpointResult> {
-  let response: Response;
+  let guardedResponse: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
   try {
-    response = await params.fetchFn(`${OPENROUTER_API_ROOT}/${params.path}`, {
-      headers: {
-        Accept: "application/json",
-        Authorization: `Bearer ${params.token}`,
+    guardedResponse = await fetchWithSsrFGuard({
+      url: `${params.baseUrl}/${params.path}`,
+      // Ambient proxy fetch wrappers replace dispatchers, so configured provider transport wins.
+      ...(params.dispatcherPolicy
+        ? { dispatcherPolicy: params.dispatcherPolicy }
+        : { fetchImpl: params.fetchFn }),
+      init: {
+        headers: params.headers,
+        redirect: "error",
       },
-      signal: AbortSignal.timeout(params.timeoutMs),
+      timeoutMs: params.timeoutMs,
+      // The shared guard controls redirects manually; zero hops preserves fail-closed usage auth.
+      maxRedirects: 0,
+      policy: params.ssrfPolicy,
+      auditContext: "openrouter-usage",
     });
   } catch {
     return { ok: false, reason: "transport" };
   }
-  if (!response.ok) {
-    await response.body?.cancel().catch(() => undefined);
-    return { ok: false, status: response.status };
-  }
   try {
-    const root = asOptionalRecord(await readJson(response, params.timeoutMs));
-    const data = asOptionalRecord(root?.data);
-    return data ? { ok: true, data } : { ok: false, reason: "malformed" };
-  } catch {
-    return { ok: false, reason: "malformed" };
+    const { response } = guardedResponse;
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      return { ok: false, status: response.status };
+    }
+    try {
+      const root = asOptionalRecord(await readJson(response, params.timeoutMs));
+      const data = asOptionalRecord(root?.data);
+      return data ? { ok: true, data } : { ok: false, reason: "malformed" };
+    } catch {
+      return { ok: false, reason: "malformed" };
+    }
+  } finally {
+    await guardedResponse.release();
   }
 }
 
 export async function fetchOpenRouterUsage(params: {
   token: string;
+  baseUrl?: string;
+  request?: ModelProviderConfig["request"];
   timeoutMs: number;
   fetchFn: typeof fetch;
 }): Promise<ProviderUsageSnapshot> {
+  const requestConfig = resolveProviderHttpRequestConfig({
+    provider: "openrouter",
+    capability: "other",
+    baseUrl: resolveOpenRouterApiBaseUrl(params.baseUrl),
+    defaultBaseUrl: OPENROUTER_BASE_URL,
+    defaultHeaders: {
+      Accept: "application/json",
+      Authorization: `Bearer ${params.token}`,
+    },
+    request: sanitizeConfiguredModelProviderRequest(params.request),
+  });
+  const request = {
+    baseUrl: requestConfig.baseUrl,
+    headers: requestConfig.headers,
+    ssrfPolicy: resolveOpenRouterSsrfPolicy(requestConfig, params.request),
+    dispatcherPolicy: requestConfig.dispatcherPolicy,
+    timeoutMs: params.timeoutMs,
+    fetchFn: params.fetchFn,
+  };
   const [creditsResult, keyResult] = await Promise.all([
-    fetchEndpoint({ ...params, path: "credits" }),
-    fetchEndpoint({ ...params, path: "key" }),
+    fetchEndpoint({ ...request, path: "credits" }),
+    fetchEndpoint({ ...request, path: "key" }),
   ]);
   if (!creditsResult.ok && !keyResult.ok) {
     const status =

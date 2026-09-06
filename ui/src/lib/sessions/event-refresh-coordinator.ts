@@ -2,92 +2,70 @@ const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 200;
 const SESSION_EVENT_REFRESH_MAX_WAIT_MS = 1_000;
 
 type SessionEventRefreshCoordinatorOptions = {
-  canRefresh: () => boolean;
+  active: boolean;
   refresh: () => Promise<void>;
 };
 
 /** Canonical bounded event refresh policy shared by session-list owners. */
-export function createSessionEventRefreshCoordinator(
-  options: SessionEventRefreshCoordinatorOptions,
-) {
-  let timer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  let deadline: number | null = null;
-  let inFlight: Promise<void> | null = null;
-  let trailing = false;
-  let generation = 0;
-  let disposed = false;
+export function createSessionEventRefreshCoordinator({
+  active: initialActive,
+  refresh,
+}: SessionEventRefreshCoordinatorOptions) {
+  let active = initialActive;
+  let timer: ReturnType<typeof setTimeout> | 0 = 0;
+  let deadline = 0;
+  // Hidden/page-exit lifecycle holds one authoritative refresh bit. Resume
+  // redeems it once without starting network work during teardown.
+  let queued = false;
 
   const clearTimer = () => {
-    if (timer !== null) {
-      globalThis.clearTimeout(timer);
-      timer = null;
-    }
-    deadline = null;
+    clearTimeout(timer);
+    timer = 0;
+    deadline = 0;
   };
 
   const start = () => {
-    if (disposed || !options.canRefresh()) {
+    timer = 0;
+    deadline = 0;
+    if (!active) {
+      queued = true;
       return;
     }
-    if (inFlight) {
-      trailing = true;
-      return;
-    }
-    const operationGeneration = generation;
-    const operation = options.refresh().catch(() => undefined);
-    const pending = operation.finally(() => {
-      if (generation !== operationGeneration || inFlight !== pending) {
-        return;
-      }
-      inFlight = null;
-      if (trailing) {
-        trailing = false;
-        start();
-      }
-    });
-    inFlight = pending;
+    queued = false;
+    void refresh().catch(() => {});
+  };
+
+  const absorb = () => {
+    clearTimer();
+    queued = false;
   };
 
   return {
     schedule() {
-      if (disposed || !options.canRefresh()) {
+      if (!active) {
+        clearTimer();
+        queued = true;
         return;
       }
       const now = Date.now();
-      deadline ??= now + SESSION_EVENT_REFRESH_MAX_WAIT_MS;
-      if (timer !== null) {
-        globalThis.clearTimeout(timer);
-      }
-      const delay = Math.min(SESSION_EVENT_REFRESH_DEBOUNCE_MS, Math.max(0, deadline - now));
-      timer = globalThis.setTimeout(() => {
-        timer = null;
-        deadline = null;
-        start();
-      }, delay);
+      deadline ||= now + SESSION_EVENT_REFRESH_MAX_WAIT_MS;
+      clearTimeout(timer);
+      const delay = Math.min(SESSION_EVENT_REFRESH_DEBOUNCE_MS, deadline - now);
+      timer = setTimeout(start, delay);
     },
-    flush() {
-      if (timer === null) {
+    setActive(next: boolean, markDirty = false) {
+      active = next;
+      if (next) {
+        if (queued) {
+          start();
+        }
         return;
       }
+      queued ||= markDirty || timer !== 0;
       clearTimer();
-      start();
     },
-    absorb() {
-      clearTimer();
-      trailing = false;
-    },
-    reset() {
-      clearTimer();
-      trailing = false;
-      inFlight = null;
-      generation += 1;
-    },
-    dispose() {
-      clearTimer();
-      trailing = false;
-      inFlight = null;
-      generation += 1;
-      disposed = true;
-    },
+    absorb,
+    reset: absorb,
+    dispose: absorb,
   };
 }

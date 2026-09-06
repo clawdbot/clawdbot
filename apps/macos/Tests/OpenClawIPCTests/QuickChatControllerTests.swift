@@ -94,21 +94,78 @@ struct QuickChatControllerTests {
     }
 
     @Test func `controller lifecycle cleans monitor tokens without UI`() {
-        let snapshots = QuickChatController.exerciseForTesting()
+        var globalMonitorInstallCount = 0
+        var localMonitorInstallCount = 0
+        var clearedMonitorCount = 0
+        var hotkeyRegisterCount = 0
+        var hotkeyRemoveCount = 0
+        let controller = QuickChatController(
+            enableUI: false,
+            model: Self.makeModel(),
+            monitoringEnabled: true,
+            globalMonitorInstaller: { _, _ in
+                globalMonitorInstallCount += 1
+                return NSObject()
+            },
+            localMonitorInstaller: { _, _ in
+                localMonitorInstallCount += 1
+                return NSObject()
+            },
+            monitorClearer: { monitor in
+                if monitor != nil {
+                    clearedMonitorCount += 1
+                }
+                monitor = nil
+            },
+            hotkeyRegistrar: { _ in hotkeyRegisterCount += 1 },
+            hotkeyRemover: { hotkeyRemoveCount += 1 },
+            allowsHotkeyRegistrationInTests: true)
 
-        #expect(snapshots.count == 4)
-        #expect(!snapshots[0].isVisible)
-        #expect(snapshots[0].hotkeyRegistered)
-        #expect(snapshots[0].isEnabled)
-        #expect(snapshots[1].isVisible)
-        #expect(snapshots[1].hasGlobalMonitor)
-        #expect(snapshots[1].hasLocalMonitor)
-        #expect(!snapshots[2].isVisible)
-        #expect(!snapshots[2].hasGlobalMonitor)
-        #expect(!snapshots[2].hasLocalMonitor)
-        #expect(!snapshots[2].hotkeyRegistered)
-        #expect(!snapshots[2].isEnabled)
-        #expect(!snapshots[3].hotkeyRegistered)
+        controller.start()
+        controller.setEnabled(true)
+        #expect(!controller.isVisible)
+        #expect(controller.isEnabled)
+        #expect(hotkeyRegisterCount == 1)
+
+        controller.present()
+        #expect(controller.isVisible)
+        #expect(globalMonitorInstallCount == 1)
+        #expect(localMonitorInstallCount == 1)
+
+        controller.setEnabled(false)
+        #expect(!controller.isVisible)
+        #expect(!controller.isEnabled)
+        #expect(hotkeyRemoveCount == 1)
+        #expect(clearedMonitorCount == 2)
+
+        controller.stop()
+        #expect(hotkeyRemoveCount == 1)
+        #expect(clearedMonitorCount == 2)
+    }
+
+    @Test func `deferred focus loss cannot dismiss a newer presentation`() async throws {
+        let model = Self.makeModel()
+        let controller = QuickChatController(enableUI: false, model: model, monitoringEnabled: false)
+        defer { controller.stop() }
+        controller.present()
+        let firstPresentation = try #require(model.activePresentationID)
+
+        controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification))
+        controller.dismiss()
+        controller.present()
+        let nextPresentation = try #require(model.activePresentationID)
+        #expect(nextPresentation != firstPresentation)
+
+        await Self.drainMainQueue()
+
+        #expect(controller.isVisible)
+        #expect(model.activePresentationID == nextPresentation)
+
+        controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification))
+        await Self.drainMainQueue()
+
+        #expect(!controller.isVisible)
+        #expect(model.activePresentationID == nil)
     }
 
     @Test func `resign key keeps bar visible while granting permissions`() async {
@@ -153,6 +210,7 @@ struct QuickChatControllerTests {
             await Task.yield()
         }
         controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification))
+        await Self.drainMainQueue()
         #expect(!controller.isVisible)
         controller.stop()
     }
@@ -198,6 +256,7 @@ struct QuickChatControllerTests {
             await Task.yield()
         }
         controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification))
+        await Self.drainMainQueue()
         #expect(!controller.isVisible)
         controller.stop()
     }
@@ -208,6 +267,12 @@ struct QuickChatControllerTests {
         }
         await TestIsolation.withUserDefaultsValues([quickChatEnabledKey: false]) {
             #expect(!AppState(preview: true).quickChatEnabled)
+        }
+    }
+
+    private static func drainMainQueue() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
         }
     }
 

@@ -333,14 +333,32 @@ describe("resolveDiscordAutoThreadContext", () => {
           peer: { kind: "channel", id: "parent" },
         }),
       },
+      {
+        name: "created thread folded into a custom main session",
+        createdThreadId: "thread",
+        expectedNull: false,
+        groupScope: "main",
+        parentSessionKey: "agent:agent:work",
+        parentInheritanceEnabled: true,
+        expectedModelParentSessionKey: undefined,
+        expectedParentSessionKey: undefined,
+      },
     ] as const;
 
     for (const testCase of cases) {
       const context = resolveDiscordAutoThreadContext({
         agentId: "agent",
         channel: "discord",
-        messageChannelId: "parent",
+        parentSessionKey:
+          "parentSessionKey" in testCase
+            ? testCase.parentSessionKey
+            : buildAgentSessionKey({
+                agentId: "agent",
+                channel: "discord",
+                peer: { kind: "channel", id: "parent" },
+              }),
         createdThreadId: testCase.createdThreadId,
+        groupScope: "groupScope" in testCase ? testCase.groupScope : undefined,
         parentInheritanceEnabled: testCase.parentInheritanceEnabled,
       });
 
@@ -354,13 +372,18 @@ describe("resolveDiscordAutoThreadContext", () => {
         To: "channel:thread",
         From: "discord:channel:thread",
         OriginatingTo: "channel:thread",
-        SessionKey: buildAgentSessionKey({
-          agentId: "agent",
-          channel: "discord",
-          peer: { kind: "channel", id: "thread" },
-        }),
-        ModelParentSessionKey: testCase.expectedModelParentSessionKey,
-        ...(testCase.parentInheritanceEnabled
+        SessionKey:
+          "groupScope" in testCase && testCase.groupScope === "main"
+            ? testCase.parentSessionKey
+            : buildAgentSessionKey({
+                agentId: "agent",
+                channel: "discord",
+                peer: { kind: "channel", id: "thread" },
+              }),
+        ...(testCase.expectedModelParentSessionKey
+          ? { ModelParentSessionKey: testCase.expectedModelParentSessionKey }
+          : {}),
+        ...(testCase.expectedParentSessionKey
           ? { ParentSessionKey: testCase.expectedParentSessionKey }
           : {}),
       });
@@ -530,6 +553,11 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
       replyToMode: "all" as const,
       agentId: "agent",
       channel: "discord" as const,
+      parentSessionKey: buildAgentSessionKey({
+        agentId: "agent",
+        channel: "discord",
+        peer: { kind: "channel", id: "parent" },
+      }),
       threadParentInheritanceEnabled: overrides?.threadParentInheritanceEnabled,
     };
   }

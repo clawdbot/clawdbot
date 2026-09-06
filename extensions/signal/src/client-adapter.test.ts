@@ -115,6 +115,7 @@ describe("streamSignalEvents", () => {
       params.onEvent({ event: "receive", data: "native" });
     });
     const onEvent = vi.fn();
+    const onStreamOpen = vi.fn();
 
     await streamSignalEvents({
       baseUrl: "http://native:8080",
@@ -122,6 +123,7 @@ describe("streamSignalEvents", () => {
       transportKind: "managed-native",
       timeoutMs: 0,
       onEvent,
+      onStreamOpen,
     });
 
     expect(nativeStream).toHaveBeenCalledWith(
@@ -129,6 +131,7 @@ describe("streamSignalEvents", () => {
         baseUrl: "http://native:8080",
         account: "+15555550123",
         timeoutMs: 0,
+        onStreamOpen,
       }),
     );
     expect(onEvent).toHaveBeenCalledWith({ event: "receive", data: "native" });
@@ -140,18 +143,21 @@ describe("streamSignalEvents", () => {
       params.onEvent({ envelope: { sourceNumber: "+15555550124" } });
     });
     const onEvent = vi.fn();
+    const onStreamOpen = vi.fn();
 
     await streamSignalEvents({
       baseUrl: "http://container:8080",
       account: "+15555550123",
       transportKind: "container",
       onEvent,
+      onStreamOpen,
     });
 
     expect(containerStream).toHaveBeenCalledWith(
       expect.objectContaining({
         baseUrl: "http://container:8080",
         account: "+15555550123",
+        onStreamOpen,
       }),
     );
     expect(onEvent).toHaveBeenCalledWith({

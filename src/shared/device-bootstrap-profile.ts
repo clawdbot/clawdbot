@@ -2,7 +2,12 @@
 import { normalizeDeviceAuthRole, normalizeDeviceAuthScopes } from "./device-auth.js";
 
 /** Closed purpose codes carried by specialized bootstrap tokens. */
-export type DeviceBootstrapPurpose = "control-ui" | "mobile-full" | "voice-node";
+export type DeviceBootstrapPurpose =
+  | "control-ui"
+  | "control-ui-owner"
+  | "mobile-full"
+  | "voice-node"
+  | "cloud-worker";
 
 /** Normalized roles/scopes carried by a bootstrap token during device handoff. */
 export type DeviceBootstrapProfile = {
@@ -18,6 +23,8 @@ export type DeviceBootstrapProfileInput = {
   purpose?: DeviceBootstrapPurpose;
 };
 
+export type PairingSetupAccess = "full" | "limited" | "node";
+
 /** Operator scopes allowed to cross the short-lived bootstrap handoff boundary. */
 export const BOOTSTRAP_HANDOFF_OPERATOR_SCOPES = [
   "operator.approvals",
@@ -28,6 +35,21 @@ export const BOOTSTRAP_HANDOFF_OPERATOR_SCOPES = [
 ] as const;
 
 const BOOTSTRAP_HANDOFF_OPERATOR_SCOPE_SET = new Set<string>(BOOTSTRAP_HANDOFF_OPERATOR_SCOPES);
+
+/** Full browser-owner scopes allowed only by the host-issued Control UI profile. */
+export const CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES = [
+  "operator.admin",
+  "operator.approvals",
+  "operator.pairing",
+  "operator.questions",
+  "operator.read",
+  "operator.talk.secrets",
+  "operator.write",
+] as const;
+
+const CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPE_SET = new Set<string>(
+  CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES,
+);
 
 /** Full native-mobile operator scopes allowed only by the closed mobile setup profile. */
 const MOBILE_FULL_ACCESS_OPERATOR_SCOPES = [
@@ -47,6 +69,13 @@ export const PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
   scopes: [...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES],
 };
 
+/** Full browser-owner profile issued only by dashboard and graphical onboarding. */
+export const CONTROL_UI_OWNER_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
+  roles: ["operator"],
+  scopes: [...CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES],
+  purpose: "control-ui-owner",
+};
+
 /** Full native-mobile setup profile for explicitly authorized setup surfaces. */
 export const FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
   roles: ["node", "operator"],
@@ -58,6 +87,13 @@ export const FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile
 export const NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
   roles: ["node"],
   scopes: [],
+};
+
+/** Environment-owned node profile removed when its cloud lease is released. */
+export const CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
+  roles: ["node"],
+  scopes: [],
+  purpose: "cloud-worker",
 };
 
 /** Room/embedded voice profile: node capabilities plus least-privilege Talk RPCs. */
@@ -109,7 +145,25 @@ function isPairingSetupBootstrapProfile(input: DeviceBootstrapProfileInput | und
 export function isNodePairingSetupBootstrapProfile(
   input: DeviceBootstrapProfileInput | undefined,
 ): boolean {
-  return matchesBootstrapProfile(input, NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE);
+  return (
+    matchesBootstrapProfile(input, NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE) ||
+    matchesBootstrapProfile(input, CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE)
+  );
+}
+
+export function resolvePairingSetupAccess(
+  input: DeviceBootstrapProfileInput | undefined,
+): PairingSetupAccess {
+  if (deviceBootstrapProfilesEqual(input, FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE)) {
+    return "full";
+  }
+  if (
+    deviceBootstrapProfilesEqual(input, NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE) ||
+    deviceBootstrapProfilesEqual(input, CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE)
+  ) {
+    return "node";
+  }
+  return "limited";
 }
 
 /** Return whether an input exactly matches the embedded voice-node setup profile. */
@@ -129,11 +183,13 @@ export function resolveBootstrapProfileScopesForRole(
   const normalizedScopes = normalizeDeviceAuthScopes(Array.from(scopes));
   if (normalizedRole === "operator") {
     const allowedScopes =
-      purpose === "mobile-full"
-        ? MOBILE_FULL_ACCESS_OPERATOR_SCOPE_SET
-        : purpose === "voice-node"
-          ? VOICE_NODE_OPERATOR_SCOPE_SET
-          : BOOTSTRAP_HANDOFF_OPERATOR_SCOPE_SET;
+      purpose === "control-ui-owner"
+        ? CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPE_SET
+        : purpose === "mobile-full"
+          ? MOBILE_FULL_ACCESS_OPERATOR_SCOPE_SET
+          : purpose === "voice-node"
+            ? VOICE_NODE_OPERATOR_SCOPE_SET
+            : BOOTSTRAP_HANDOFF_OPERATOR_SCOPE_SET;
     return normalizedScopes.filter((scope) => allowedScopes.has(scope));
   }
   return [];
@@ -201,8 +257,10 @@ export function normalizeDeviceBootstrapProfile(
 ): DeviceBootstrapProfile {
   const purpose =
     input?.purpose === "control-ui" ||
+    input?.purpose === "control-ui-owner" ||
     input?.purpose === "mobile-full" ||
-    input?.purpose === "voice-node"
+    input?.purpose === "voice-node" ||
+    input?.purpose === "cloud-worker"
       ? input.purpose
       : undefined;
   return {

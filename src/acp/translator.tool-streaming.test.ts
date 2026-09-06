@@ -121,7 +121,5 @@ describe("acp tool streaming bridge behavior", () => {
         locations: [{ path: "src/app.ts", line: 12 }],
       },
     });
-
-    sessionStore.clearAllSessionsForTest();
   });
 });

@@ -5,9 +5,10 @@ scenario:
   surface: models
   category: agent-runtime.local-and-self-hosted-providers
   coverage:
+    primary:
+      - gateway.remote-host-commands
     secondary:
       - gateway.node-capabilities
-      - gateway.remote-host-commands
       - agent-runtime.tool-capability-flags
       - agent-runtime.local-smoke-checks
       - agent-runtime.local-failure-handling

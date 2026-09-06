@@ -1,8 +1,10 @@
 // Line plugin module implements monitor behavior.
-import type { webhook } from "@line/bot-sdk";
+import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { channelReadyPatch, channelStoppedPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 import {
   danger,
@@ -11,11 +13,10 @@ import {
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
 import {
-  isRequestBodyLimitError,
+  canonicalizeWebhookRouteKey,
   normalizePluginHttpPath,
   normalizeWebhookPath,
   registerWebhookTargetWithPluginRoute,
-  requestBodyErrorToText,
   resolveSingleWebhookTarget,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import {
@@ -28,19 +29,22 @@ import { createLineBot } from "./bot.js";
 import { processLineMessage } from "./markdown-to-line.js";
 import { resolveLineDurableReplyOptions } from "./monitor-durable.js";
 import { buildLineMediaMessage } from "./outbound-media.js";
+import { prepareLineReplyPayload } from "./rich-messages.js";
 import { getLineRuntime } from "./runtime.js";
 import {
   createFlexMessage,
   createLocationMessage,
-  createQuickReplyItems,
-  getUserDisplayName,
   pushMessagesLine,
   replyMessageLine,
   showLoadingAnimation,
 } from "./send.js";
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
 import type { LineChannelData, ResolvedLineAccount } from "./types.js";
-import { createLineNodeWebhookHandler, readLineWebhookRequestBody } from "./webhook-node.js";
+import {
+  createLineNodeWebhookHandler,
+  readLineWebhookRequestBody,
+  rejectLineWebhookRequest,
+} from "./webhook-node.js";
 import { LineWebhookTerminalDeliveryError } from "./webhook-spool.js";
 import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
 
@@ -50,14 +54,16 @@ interface MonitorLineProviderOptions {
   accountId?: string;
   config: OpenClawConfig;
   runtime: RuntimeEnv;
+  buildContext?: typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
   abortSignal?: AbortSignal;
   webhookUrl?: string;
   webhookPath?: string;
+  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 }
 
 interface LineProviderMonitor {
   account: ResolvedLineAccount;
-  handleWebhook: (body: webhook.CallbackRequest) => Promise<void>;
+  handleWebhook: ReturnType<typeof createLineBot>["handleWebhook"];
   stop: () => Promise<void>;
 }
 
@@ -72,6 +78,18 @@ type LineWebhookTarget = {
   path: string;
   runtime: RuntimeEnv;
 };
+
+async function registerLineWebhookTarget(
+  params: Parameters<typeof registerWebhookTargetWithPluginRoute<LineWebhookTarget>>[0],
+  bot: ReturnType<typeof createLineBot>,
+) {
+  try {
+    return registerWebhookTargetWithPluginRoute(params);
+  } catch (error) {
+    await Promise.allSettled([bot.stop()]);
+    throw error;
+  }
+}
 
 const lineWebhookTargets = new Map<string, LineWebhookTarget[]>();
 
@@ -118,8 +136,10 @@ export async function monitorLineProvider(
     accountId,
     config,
     runtime,
+    buildContext,
     abortSignal,
     webhookPath,
+    statusSink,
   } = opts;
   const resolvedAccountId = accountId ?? resolveDefaultLineAccountId(config);
   const token = channelAccessToken.trim();
@@ -137,6 +157,7 @@ export async function monitorLineProvider(
     channelSecret: secret,
     accountId,
     runtime,
+    buildContext,
     config,
     onMessage: async (ctx, deliveryControl) => {
       if (!ctx) {
@@ -144,26 +165,39 @@ export async function monitorLineProvider(
       }
 
       const { ctxPayload, replyToken, route } = ctx;
+      // Admission already resolved the config live for this event; the turn and
+      // its delivery run on that same one so the two can never disagree.
+      const turnConfig = deliveryControl.cfg;
 
       const shouldShowLoading = Boolean(ctx.userId && !ctx.isGroup);
 
-      const displayNamePromise = ctx.userId
-        ? getUserDisplayName(ctx.userId, { cfg: config, accountId: ctx.accountId })
-        : Promise.resolve(ctxPayload.From);
-
       const stopLoading = shouldShowLoading
         ? startLineLoadingKeepalive({
-            cfg: config,
+            cfg: turnConfig,
             userId: ctx.userId!,
             accountId: ctx.accountId,
           })
         : null;
 
-      const displayName = await displayNamePromise;
-      logVerbose(`line: received message from ${displayName} (${ctxPayload.From})`);
+      // The inbound context already resolved the sender's name for the agent;
+      // reading it back costs nothing instead of asking LINE a second time.
+      logVerbose(
+        `line: received message from ${ctxPayload.SenderName ?? ctx.userId ?? ctxPayload.From} (${ctxPayload.From})`,
+      );
       let replyTokenUsed = false;
       let turnAdopted = false;
       const ingressLifecycle = deliveryControl.turnAdoptionLifecycle;
+      const turnAbortSignal = ingressLifecycle?.abortSignal;
+      // A group's configured skill scope only applies if the turn answering it carries it.
+      // An empty filter is a real scope ("no skills"), so presence decides, not length.
+      const skillFilter = ctx.skillFilter;
+      const replyOptions =
+        turnAbortSignal || skillFilter
+          ? {
+              ...(turnAbortSignal ? { abortSignal: turnAbortSignal } : {}),
+              ...(skillFilter ? { skillFilter } : {}),
+            }
+          : undefined;
 
       try {
         const textLimit = 5000;
@@ -186,17 +220,23 @@ export async function monitorLineProvider(
               rawText: ctxPayload.RawBody ?? ctxPayload.BodyForAgent ?? "",
             }),
             resolveTurn: () => ({
-              cfg: config,
+              cfg: turnConfig,
               channel: "line",
               accountId: route.accountId,
               route: { agentId: route.agentId, sessionKey: route.sessionKey },
               ctxPayload,
               record: ctx.turn.record,
               replyPipeline: {},
-              ...(ingressLifecycle?.abortSignal
-                ? { replyOptions: { abortSignal: ingressLifecycle.abortSignal } }
-                : {}),
+              // Block replies are paced by the agent's own humanDelay; nothing else
+              // reads it, so a turn that never forwards it silently paces at zero.
+              dispatcherOptions: {
+                humanDelay: resolveHumanDelayConfig(turnConfig, route.agentId),
+              },
+              ...(replyOptions ? { replyOptions } : {}),
               delivery: {
+                // Core renders presentations inside the outbound send pipeline only,
+                // so this path resolves them before either branch reads channelData.
+                preparePayload: prepareLineReplyPayload,
                 durable: (payload, info) =>
                   resolveLineDurableReplyOptions({
                     payload,
@@ -210,7 +250,7 @@ export async function monitorLineProvider(
 
                   if (ctx.userId && !ctx.isGroup) {
                     void showLoadingAnimation(ctx.userId, {
-                      cfg: config,
+                      cfg: turnConfig,
                       accountId: ctx.accountId,
                     }).catch(() => {});
                   }
@@ -222,14 +262,13 @@ export async function monitorLineProvider(
                     replyToken,
                     replyTokenUsed,
                     accountId: ctx.accountId,
-                    cfg: config,
+                    cfg: turnConfig,
                     textLimit,
                     deps: {
                       buildTemplateMessageFromPayload,
                       processLineMessage,
                       chunkMarkdownText,
                       replyMessageLine,
-                      createQuickReplyItems,
                       pushMessagesLine,
                       createFlexMessage,
                       buildMediaMessage: buildLineMediaMessage,
@@ -282,13 +321,16 @@ export async function monitorLineProvider(
   const normalizedPath = normalizeWebhookPath(
     normalizePluginHttpPath(webhookPath, "/line/webhook") ?? "/line/webhook",
   );
+  const webhookRouteKey = canonicalizeWebhookRouteKey(normalizedPath);
   const createScopedLineWebhookHandler = (target: LineWebhookTarget) =>
     createLineNodeWebhookHandler({
       channelSecret: target.channelSecret,
       bot: target.bot,
       runtime: target.runtime,
     });
-  const { unregister: unregisterHttp } = registerWebhookTargetWithPluginRoute({
+  const registrationParams: Parameters<
+    typeof registerWebhookTargetWithPluginRoute<LineWebhookTarget>
+  >[0] = {
     targetsByPath: lineWebhookTargets,
     target: {
       accountId: resolvedAccountId,
@@ -300,10 +342,12 @@ export async function monitorLineProvider(
     route: {
       auth: "plugin",
       pluginId: "line",
+      source: "line-webhook",
       accountId: resolvedAccountId,
       log: (msg) => logVerbose(msg),
+      throwOnFailure: true,
       handler: async (req, res) => {
-        const targets = lineWebhookTargets.get(normalizedPath) ?? [];
+        const targets = lineWebhookTargets.get(webhookRouteKey) ?? [];
         const firstTarget = targets[0];
         if (req.method !== "POST") {
           if (!firstTarget) {
@@ -319,7 +363,7 @@ export async function monitorLineProvider(
           req,
           res,
           inFlightLimiter: lineWebhookInFlightLimiter,
-          inFlightKey: `line:${normalizedPath}`,
+          inFlightKey: `line:${webhookRouteKey}`,
         });
         if (!requestLifecycle.ok) {
           return;
@@ -375,24 +419,16 @@ export async function monitorLineProvider(
 
           if (body.events && body.events.length > 0) {
             logVerbose(`line: received ${body.events.length} webhook events`);
-            await match.target.bot.handleWebhook(body);
-            // Only a committed event is adopted; signed LINE verification pings must stay unmarked.
-            res.setHeader("x-openclaw-delivery-accepted", "durable");
+            // Only the admission owner can distinguish queued events from ignored standby deliveries.
+            if ((await match.target.bot.handleWebhook(body)) === "durable") {
+              res.setHeader("x-openclaw-delivery-accepted", "durable");
+            }
           }
           res.statusCode = 200;
           res.setHeader("Content-Type", "application/json");
           res.end(JSON.stringify({ status: "ok" }));
         } catch (err) {
-          if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
-            res.statusCode = 413;
-            res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ error: "Payload too large" }));
-            return;
-          }
-          if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
-            res.statusCode = 408;
-            res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ error: requestBodyErrorToText("REQUEST_BODY_TIMEOUT") }));
+          if (await rejectLineWebhookRequest(req, res, err)) {
             return;
           }
           runtime.error?.(danger(`line webhook error: ${formatErrorMessage(err)}`));
@@ -406,9 +442,11 @@ export async function monitorLineProvider(
         }
       },
     },
-  });
+  };
+  const { unregister: unregisterHttp } = await registerLineWebhookTarget(registrationParams, bot);
 
   logVerbose(`line: registered webhook handler at ${normalizedPath}`);
+  statusSink?.(channelReadyPatch());
 
   let stopped = false;
   let stopPromise: Promise<void> | undefined;
@@ -422,7 +460,9 @@ export async function monitorLineProvider(
     stopped = true;
     logVerbose(`line: stopping provider for account ${resolvedAccountId}`);
     unregisterHttp();
-    stopPromise = bot.stop();
+    stopPromise = bot.stop().finally(() => {
+      statusSink?.(channelStoppedPatch());
+    });
     return stopPromise;
   };
   const stopOnAbort = () => void stopHandler();

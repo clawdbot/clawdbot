@@ -12,7 +12,7 @@ import {
   listTaskRecords,
   listTaskRecordsUnsorted,
   listTasksForAgentId,
-  listTasksForSessionKey,
+  listTasksForRelatedSessionKey,
 } from "./task-registry.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
@@ -40,8 +40,11 @@ export function getTaskSessionLookupByIdForStatus(
     : undefined;
 }
 
-export function listTasksForSessionKeyForStatus(sessionKey: string): TaskRecord[] {
-  return listTasksForSessionKey(sessionKey);
+export function listTasksForSessionKeyForStatus(
+  sessionKey: string,
+  sessionAgentId?: string,
+): TaskRecord[] {
+  return listTasksForRelatedSessionKey(sessionKey, sessionAgentId);
 }
 
 export function listTasksForOwnerOrRequesterSessionKeyForStatus(sessionKey: string): TaskRecord[] {

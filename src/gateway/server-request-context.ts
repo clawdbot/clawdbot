@@ -6,12 +6,25 @@ import {
   hasGatewayClientCap,
   type GatewayClientId,
 } from "../../packages/gateway-protocol/src/client-info.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { GatewayServerLiveState } from "./server-live-state.js";
+import { getRuntimeConfig } from "../config/io.js";
+import { resolveUserProfileId } from "../state/user-profiles.js";
+import { NODE_DESKTOP_SERVICE_CONTEXT } from "./desktop/node-source-context.js";
+import { ScopeUpgradeCoordinator } from "./device-scope-upgrade.js";
+import { WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
+import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
-import { disconnectAllSharedGatewayAuthClients } from "./server-shared-auth-generation.js";
-import type { SessionCompanionService } from "./session-companion.js";
-import type { SessionObserverService } from "./session-observer-contract.js";
+import {
+  disconnectAllSharedGatewayAuthClients,
+  enforceSharedGatewaySessionGenerationForConfigWrite,
+} from "./server-shared-auth-generation.js";
+import { recordClientPresenceActivity, refreshClientPresence } from "./server/client-presence.js";
+import {
+  getHealthCache,
+  getHealthVersion,
+  incrementPresenceVersion,
+} from "./server/health-state.js";
+import { broadcastPresenceSnapshot } from "./server/presence-events.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
 
 type GatewayRequestContextClient = GatewayClient & {
   socket: { close: (code: number, reason: string) => void };
@@ -20,89 +33,130 @@ type GatewayRequestContextClient = GatewayClient & {
   invalidatedReason?: string;
 };
 
+type GatewayCoreRuntime = Awaited<ReturnType<typeof startGatewayCoreRuntime>>;
+
+type GatewayRequestContextRuntime = Pick<
+  GatewayRequestContext,
+  | "deps"
+  | "mentionInbox"
+  | "execApprovalManager"
+  | "questionManager"
+  | "forwardPluginApprovalRequest"
+  | "approvalWebPushDelivery"
+  | "pluginApprovalIosPushDelivery"
+  | "pluginApprovalManager"
+  | "placementStandingGrants"
+  | "systemAgentApprovalManager"
+  | "loadGatewayModelCatalog"
+  | "loadGatewayModelCatalogSnapshot"
+  | "readPreparedGatewayModelCatalog"
+  | "getRuntimeSnapshot"
+  | "broadcast"
+  | "broadcastToConnIds"
+  | "nodeSendToSession"
+  | "nodeSendToAllSubscribed"
+  | "nodeSubscribe"
+  | "nodeUnsubscribe"
+  | "nodeUnsubscribeAll"
+  | "nodeRegistry"
+  | "workerEnvironmentService"
+  | "hostDesktopService"
+  | "githubPublicationService"
+  | "validateAgentRuntimeApprovalAuthority"
+  | "terminalSessions"
+  | "agentRunSeq"
+  | "chatAbortControllers"
+  | "chatQueuedTurns"
+  | "chatRunState"
+  | "addChatRun"
+  | "removeChatRun"
+  | "subscribeSessionMessageEvents"
+  | "unsubscribeSessionMessageEvents"
+  | "dedupe"
+  | "wizardSessions"
+  | "systemAgentSessions"
+  | "findRunningWizard"
+  | "purgeWizardSession"
+  | "startChannel"
+  | "stopChannel"
+  | "markChannelLoggedOut"
+  | "wizardRunner"
+  | "channelWizardRunner"
+  | "broadcastVoiceWakeChanged"
+  | "broadcastVoiceWakeRoutingChanged"
+  | "unavailableGatewayMethods"
+> &
+  Pick<
+    GatewayCoreRuntime,
+    | "refreshGatewayHealthSnapshotWithRuntime"
+    | "hasTalkNodeConnected"
+    | "sharedGatewaySessionGenerationState"
+    | "resolveSharedGatewaySessionGenerationForRuntimeSnapshot"
+    | "workerPlacementControlAvailable"
+    | "getAttachedGatewayMethodRegistry"
+  > & {
+    sessionObserver: NonNullable<GatewayRequestContext["sessionObserver"]>;
+    sessionCompanion: NonNullable<GatewayRequestContext["sessionCompanion"]>;
+    isConnectionActive: NonNullable<GatewayRequestContext["isConnectionActive"]>;
+    clients: Set<GatewayWsClient>;
+    gatewayTls: Pick<GatewayCoreRuntime["gatewayTls"], "enabled" | "fingerprintSha256">;
+    nodeDesktopService?: GatewayCoreRuntime["nodeDesktopService"];
+    cancelRunBoundApprovals?: GatewayCoreRuntime["cancelRunBoundApprovals"];
+    connectionWork: Pick<GatewayCoreRuntime["connectionWork"], "track">;
+    runtimeState: Pick<
+      GatewayCoreRuntime["runtimeState"],
+      "cronState" | "controlUiSessionPullRequests" | "sessionViewerPresence"
+    > & {
+      configReloader: Pick<
+        GatewayCoreRuntime["runtimeState"]["configReloader"],
+        "isConfigReloadSettled"
+      >;
+    };
+    lifecycle: Pick<GatewayCoreRuntime["lifecycle"], "closePreludeStarted">;
+    transportBridge: Pick<
+      GatewayCoreRuntime["transportBridge"],
+      "getPortalService" | "getMcpAppSandboxPort" | "ensureSandboxHostPort"
+    >;
+    terminalLaunchPolicy: Pick<GatewayCoreRuntime["terminalLaunchPolicy"], "resolve" | "isEnabled">;
+    approvalSessionEvents: { replay: GatewayRequestContext["listSessionPendingApprovals"] };
+    watchNodeHttpRuntime: Pick<
+      GatewayCoreRuntime["watchNodeHttpRuntime"],
+      "invalidateSessionsForDevice" | "disconnectSessionsForDevice"
+    >;
+    sessionEventSubscribers: Pick<
+      GatewayCoreRuntime["sessionEventSubscribers"],
+      "subscribe" | "unsubscribe" | "getAll"
+    >;
+    sessionMessageSubscribers: Pick<
+      GatewayCoreRuntime["sessionMessageSubscribers"],
+      "unsubscribeAll"
+    >;
+    toolEventRecipients: Pick<GatewayCoreRuntime["toolEventRecipients"], "add">;
+    readinessEventLoopHealth: Pick<GatewayCoreRuntime["readinessEventLoopHealth"], "snapshot">;
+    kernel: Pick<
+      GatewayCoreRuntime["kernel"],
+      "notifyPluginMetadataChanged" | "getConfigReloaderHotReloadStatus"
+    >;
+    workerEnvironmentStartup:
+      | Pick<NonNullable<GatewayCoreRuntime["workerEnvironmentStartup"]>, "placementStore">
+      | undefined;
+    workerPlacementRuntime:
+      | {
+          diskSpace: GatewayRequestContext["workerPlacementDiskSpaceReader"];
+          runnerAvailability: GatewayRequestContext["workerPlacementRunnerAvailabilityReader"];
+        }
+      | undefined;
+  };
+
 type GatewayRequestContextParams = {
-  deps: GatewayRequestContext["deps"];
-  runtimeState: Pick<
-    GatewayServerLiveState,
-    "cronState" | "configReloader" | "controlUiSessionPullRequests" | "sessionViewerPresence"
-  >;
-  getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
-  sessionCompanion: SessionCompanionService;
-  sessionObserver: SessionObserverService;
-  getMcpAppSandboxPort?: GatewayRequestContext["getMcpAppSandboxPort"];
-  ensureSandboxHostPort?: GatewayRequestContext["ensureSandboxHostPort"];
-  resolveTerminalLaunchPolicy: GatewayRequestContext["resolveTerminalLaunchPolicy"];
-  isTerminalEnabled: GatewayRequestContext["isTerminalEnabled"];
-  execApprovalManager: GatewayRequestContext["execApprovalManager"];
-  cancelRunBoundApprovals?: (runId: string, context: GatewayRequestContext) => number;
-  forwardPluginApprovalRequest?: GatewayRequestContext["forwardPluginApprovalRequest"];
-  pluginApprovalIosPushDelivery?: GatewayRequestContext["pluginApprovalIosPushDelivery"];
-  pluginApprovalManager: GatewayRequestContext["pluginApprovalManager"];
-  systemAgentApprovalManager?: GatewayRequestContext["systemAgentApprovalManager"];
-  listSessionPendingApprovals: GatewayRequestContext["listSessionPendingApprovals"];
-  loadGatewayModelCatalog: GatewayRequestContext["loadGatewayModelCatalog"];
-  loadGatewayModelCatalogSnapshot: GatewayRequestContext["loadGatewayModelCatalogSnapshot"];
-  getHealthCache: GatewayRequestContext["getHealthCache"];
-  refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
+  runtime: GatewayRequestContextRuntime;
+  configRevisionProjector: GatewayRequestContext["configRevisionProjector"];
+  chatMetadataLifecycle: {
+    read: GatewayRequestContext["readChatMetadata"];
+    readStartup: GatewayRequestContext["readChatStartupProjection"];
+  };
+  log: GatewayRequestContext["logGateway"];
   logHealth: GatewayRequestContext["logHealth"];
-  logGateway: GatewayRequestContext["logGateway"];
-  incrementPresenceVersion: GatewayRequestContext["incrementPresenceVersion"];
-  getHealthVersion: GatewayRequestContext["getHealthVersion"];
-  broadcast: GatewayRequestContext["broadcast"];
-  broadcastToConnIds: GatewayRequestContext["broadcastToConnIds"];
-  nodeSendToSession: GatewayRequestContext["nodeSendToSession"];
-  nodeSendToAllSubscribed: GatewayRequestContext["nodeSendToAllSubscribed"];
-  nodeSubscribe: GatewayRequestContext["nodeSubscribe"];
-  nodeUnsubscribe: GatewayRequestContext["nodeUnsubscribe"];
-  nodeUnsubscribeAll: GatewayRequestContext["nodeUnsubscribeAll"];
-  hasConnectedTalkNode: GatewayRequestContext["hasConnectedTalkNode"];
-  clients: Set<GatewayRequestContextClient>;
-  invalidateDeviceTransports?: (
-    deviceId: string,
-    opts?: { role?: string; reason?: string },
-  ) => void;
-  disconnectDeviceTransports?: (deviceId: string, opts?: { role?: string }) => void;
-  enforceSharedGatewayAuthGenerationForConfigWrite: (nextConfig: OpenClawConfig) => void;
-  claimControlUiDeviceAuthMigration?: (deviceId: string) => boolean;
-  releaseControlUiDeviceAuthMigrationClaim?: (deviceId: string) => void;
-  completeControlUiDeviceAuthMigration?: (device: {
-    deviceId: string;
-    publicKey: string;
-    scopes: string[];
-  }) => void;
-  nodeRegistry: GatewayRequestContext["nodeRegistry"];
-  workerEnvironmentService?: GatewayRequestContext["workerEnvironmentService"];
-  workerSessionPlacementService?: GatewayRequestContext["workerSessionPlacementService"];
-  workerPlacementDispatchService?: GatewayRequestContext["workerPlacementDispatchService"];
-  terminalSessions?: GatewayRequestContext["terminalSessions"];
-  agentRunSeq: GatewayRequestContext["agentRunSeq"];
-  chatAbortControllers: GatewayRequestContext["chatAbortControllers"];
-  chatQueuedTurns: GatewayRequestContext["chatQueuedTurns"];
-  chatRunState: GatewayRequestContext["chatRunState"];
-  addChatRun: GatewayRequestContext["addChatRun"];
-  removeChatRun: GatewayRequestContext["removeChatRun"];
-  subscribeSessionEvents: GatewayRequestContext["subscribeSessionEvents"];
-  unsubscribeSessionEvents: GatewayRequestContext["unsubscribeSessionEvents"];
-  subscribeSessionMessageEvents: GatewayRequestContext["subscribeSessionMessageEvents"];
-  unsubscribeSessionMessageEvents: GatewayRequestContext["unsubscribeSessionMessageEvents"];
-  unsubscribeAllSessionEvents: GatewayRequestContext["unsubscribeAllSessionEvents"];
-  getSessionEventSubscriberConnIds: GatewayRequestContext["getSessionEventSubscriberConnIds"];
-  registerToolEventRecipient: GatewayRequestContext["registerToolEventRecipient"];
-  dedupe: GatewayRequestContext["dedupe"];
-  wizardSessions: GatewayRequestContext["wizardSessions"];
-  systemAgentSessions: GatewayRequestContext["systemAgentSessions"];
-  findRunningWizard: GatewayRequestContext["findRunningWizard"];
-  purgeWizardSession: GatewayRequestContext["purgeWizardSession"];
-  getRuntimeSnapshot: GatewayRequestContext["getRuntimeSnapshot"];
-  getEventLoopHealth?: GatewayRequestContext["getEventLoopHealth"];
-  startChannel: GatewayRequestContext["startChannel"];
-  stopChannel: GatewayRequestContext["stopChannel"];
-  markChannelLoggedOut: GatewayRequestContext["markChannelLoggedOut"];
-  wizardRunner: GatewayRequestContext["wizardRunner"];
-  channelWizardRunner: GatewayRequestContext["channelWizardRunner"];
-  broadcastVoiceWakeChanged: GatewayRequestContext["broadcastVoiceWakeChanged"];
-  broadcastVoiceWakeRoutingChanged: GatewayRequestContext["broadcastVoiceWakeRoutingChanged"];
-  unavailableGatewayMethods: ReadonlySet<string>;
 };
 
 const ALL_APPROVAL_CLIENT_IDS: ReadonlySet<GatewayClientId> = new Set([
@@ -145,63 +199,114 @@ function canDeliverApprovals(
   );
 }
 
-export type GatewayRequestContextWithClientLookup = GatewayRequestContext & {
-  getClientConnIds?: (filter?: (client: GatewayClient) => boolean) => ReadonlySet<string>;
-};
-
 export function createGatewayRequestContext(
   params: GatewayRequestContextParams,
-): GatewayRequestContextWithClientLookup {
-  const context: GatewayRequestContextWithClientLookup = {
-    deps: params.deps,
+): GatewayRequestContext {
+  const { runtime } = params;
+  const {
+    connectionWork,
+    runtimeState,
+    lifecycle,
+    cancelRunBoundApprovals,
+    clients,
+    broadcast,
+    nodeRegistry,
+    sharedGatewaySessionGenerationState,
+    resolveSharedGatewaySessionGenerationForRuntimeSnapshot,
+    sessionEventSubscribers,
+    sessionMessageSubscribers,
+    sessionObserver,
+  } = runtime;
+  const { getPortalService } = runtime.transportBridge;
+  const workerSessionPlacementService = runtime.workerEnvironmentStartup?.placementStore;
+  const workerPlacementDiskSpaceReader = runtime.workerPlacementRuntime?.diskSpace;
+  const workerPlacementRunnerAvailabilityReader =
+    runtime.workerPlacementRuntime?.runnerAvailability;
+  const {
+    invalidateSessionsForDevice: invalidateDeviceTransports,
+    disconnectSessionsForDevice: disconnectDeviceTransports,
+  } = runtime.watchNodeHttpRuntime;
+  const scopeUpgradeCoordinator = new ScopeUpgradeCoordinator();
+  const context: GatewayRequestContext = {
+    trackExecution: (run) => connectionWork.track(run),
+    deps: runtime.deps,
+    configRevisionProjector: params.configRevisionProjector,
     // Keep cron reads live so config hot reload can swap cron/store state without rebuilding
     // every handler closure that already holds this request context.
     get cron() {
-      return params.runtimeState.cronState.cron;
+      return runtimeState.cronState.cron;
     },
     get cronStorePath() {
-      return params.runtimeState.cronState.storePath;
+      return runtimeState.cronState.storePath;
     },
-    getRuntimeConfig: params.getRuntimeConfig,
-    controlUiSessionPullRequests: params.runtimeState.controlUiSessionPullRequests,
-    sessionViewerPresence: params.runtimeState.sessionViewerPresence,
-    sessionCompanion: params.sessionCompanion,
-    sessionObserver: params.sessionObserver,
-    notifyPluginMetadataChanged: () =>
-      params.runtimeState.configReloader.notifyPluginMetadataChanged(),
-    getMcpAppSandboxPort: params.getMcpAppSandboxPort,
-    ensureSandboxHostPort: params.ensureSandboxHostPort,
-    resolveTerminalLaunchPolicy: params.resolveTerminalLaunchPolicy,
-    isTerminalEnabled: params.isTerminalEnabled,
-    execApprovalManager: params.execApprovalManager,
-    cancelRunBoundApprovals: params.cancelRunBoundApprovals
-      ? (runId) => params.cancelRunBoundApprovals!(runId, context)
+    getRuntimeConfig,
+    isConfigReloadSettled: () =>
+      !lifecycle.closePreludeStarted && runtimeState.configReloader.isConfigReloadSettled(),
+    getGatewayMethodRegistry: runtime.getAttachedGatewayMethodRegistry,
+    gatewayTlsFingerprint: runtime.gatewayTls.enabled
+      ? runtime.gatewayTls.fingerprintSha256
       : undefined,
-    forwardPluginApprovalRequest: params.forwardPluginApprovalRequest,
-    pluginApprovalIosPushDelivery: params.pluginApprovalIosPushDelivery,
-    pluginApprovalManager: params.pluginApprovalManager,
-    systemAgentApprovalManager: params.systemAgentApprovalManager,
-    listSessionPendingApprovals: params.listSessionPendingApprovals,
-    loadGatewayModelCatalog: params.loadGatewayModelCatalog,
-    loadGatewayModelCatalogSnapshot: params.loadGatewayModelCatalogSnapshot,
-    getHealthCache: params.getHealthCache,
-    refreshHealthSnapshot: params.refreshHealthSnapshot,
+    controlUiSessionPullRequests: runtimeState.controlUiSessionPullRequests,
+    sessionViewerPresence: runtimeState.sessionViewerPresence,
+    sessionCompanion: runtime.sessionCompanion,
+    sessionObserver,
+    mentionInbox: runtime.mentionInbox,
+    notifyPluginMetadataChanged: runtime.kernel.notifyPluginMetadataChanged,
+    getMcpAppSandboxPort: runtime.transportBridge.getMcpAppSandboxPort,
+    ensureSandboxHostPort: runtime.transportBridge.ensureSandboxHostPort,
+    get portalService() {
+      return getPortalService?.();
+    },
+    resolveTerminalLaunchPolicy: runtime.terminalLaunchPolicy.resolve,
+    isTerminalEnabled: runtime.terminalLaunchPolicy.isEnabled,
+    execApprovalManager: runtime.execApprovalManager,
+    questionManager: runtime.questionManager,
+    scopeUpgradeCoordinator,
+    cancelRunBoundApprovals: cancelRunBoundApprovals
+      ? (runId) => cancelRunBoundApprovals(runId, context)
+      : undefined,
+    forwardPluginApprovalRequest: runtime.forwardPluginApprovalRequest,
+    approvalWebPushDelivery: runtime.approvalWebPushDelivery,
+    pluginApprovalIosPushDelivery: runtime.pluginApprovalIosPushDelivery,
+    pluginApprovalManager: runtime.pluginApprovalManager,
+    placementStandingGrants: runtime.placementStandingGrants,
+    systemAgentApprovalManager: runtime.systemAgentApprovalManager,
+    listSessionPendingApprovals: runtime.approvalSessionEvents.replay,
+    loadGatewayModelCatalog: runtime.loadGatewayModelCatalog,
+    loadGatewayModelCatalogSnapshot: runtime.loadGatewayModelCatalogSnapshot,
+    ...(runtime.readPreparedGatewayModelCatalog
+      ? { readPreparedGatewayModelCatalog: runtime.readPreparedGatewayModelCatalog }
+      : {}),
+    readChatMetadata: params.chatMetadataLifecycle.read,
+    ...(params.chatMetadataLifecycle.readStartup
+      ? { readChatStartupProjection: params.chatMetadataLifecycle.readStartup }
+      : {}),
+    getHealthCache,
+    refreshHealthSnapshot: runtime.refreshGatewayHealthSnapshotWithRuntime,
     logHealth: params.logHealth,
-    logGateway: params.logGateway,
-    incrementPresenceVersion: params.incrementPresenceVersion,
-    getHealthVersion: params.getHealthVersion,
-    broadcast: params.broadcast,
-    broadcastToConnIds: params.broadcastToConnIds,
-    nodeSendToSession: params.nodeSendToSession,
-    nodeSendToAllSubscribed: params.nodeSendToAllSubscribed,
-    nodeSubscribe: params.nodeSubscribe,
-    nodeUnsubscribe: params.nodeUnsubscribe,
-    nodeUnsubscribeAll: params.nodeUnsubscribeAll,
-    hasConnectedTalkNode: params.hasConnectedTalkNode,
-    isConnectionActive: (connId) =>
-      [...params.clients].some((client) => client.connId === connId && !client.invalidated),
+    logGateway: params.log,
+    incrementPresenceVersion,
+    getHealthVersion,
+    broadcast,
+    broadcastToConnIds: runtime.broadcastToConnIds,
+    nodeSendToSession: runtime.nodeSendToSession,
+    nodeSendToAllSubscribed: runtime.nodeSendToAllSubscribed,
+    nodeSubscribe: runtime.nodeSubscribe,
+    nodeUnsubscribe: runtime.nodeUnsubscribe,
+    nodeUnsubscribeAll: runtime.nodeUnsubscribeAll,
+    hasConnectedTalkNode: runtime.hasTalkNodeConnected,
+    isConnectionActive: runtime.isConnectionActive,
+    recordClientActivity: (client) => {
+      if (recordClientPresenceActivity(clients, client)) {
+        broadcastPresenceSnapshot({
+          broadcast,
+          incrementPresenceVersion,
+          getHealthVersion,
+        });
+      }
+    },
     hasExecApprovalClients: (excludeConnId?: string) => {
-      for (const gatewayClient of params.clients) {
+      for (const gatewayClient of clients) {
         if (excludeConnId && gatewayClient.connId === excludeConnId) {
           continue;
         }
@@ -213,7 +318,7 @@ export function createGatewayRequestContext(
     },
     getApprovalClientConnIds: (opts = {}) => {
       const connIds = new Set<string>();
-      for (const gatewayClient of params.clients) {
+      for (const gatewayClient of clients) {
         if (!gatewayClient.connId) {
           continue;
         }
@@ -232,7 +337,7 @@ export function createGatewayRequestContext(
     },
     getClientConnIds: (filter) => {
       const connIds = new Set<string>();
-      for (const gatewayClient of params.clients) {
+      for (const gatewayClient of clients) {
         if (!gatewayClient.connId || gatewayClient.invalidated) {
           continue;
         }
@@ -244,16 +349,53 @@ export function createGatewayRequestContext(
       return connIds;
     },
     hasConnectedClientsForDevice: (deviceId: string) => {
-      for (const gatewayClient of params.clients) {
+      for (const gatewayClient of clients) {
         if (gatewayClient.connect.device?.id === deviceId && !gatewayClient.invalidated) {
           return true;
         }
       }
       return false;
     },
+    refreshConnectedUserProfile: (profile) => {
+      let presenceChanged = false;
+      for (const gatewayClient of clients) {
+        if (
+          gatewayClient.invalidated ||
+          gatewayClient.socket.readyState !== WEBSOCKET_OPEN_READY_STATE
+        ) {
+          continue;
+        }
+        const authenticatedUserProfile = gatewayClient.authenticatedUserProfile;
+        if (!authenticatedUserProfile) {
+          continue;
+        }
+        const canonicalProfileId =
+          authenticatedUserProfile.profileId === profile.id
+            ? profile.id
+            : resolveUserProfileId(authenticatedUserProfile.profileId);
+        if (canonicalProfileId !== profile.id) {
+          continue;
+        }
+        Object.assign(authenticatedUserProfile, {
+          profileId: canonicalProfileId,
+          displayName: profile.displayName,
+          avatarRevision: profile.avatarRevision,
+          hasAvatar: profile.hasAvatar,
+          updatedAt: profile.updatedAt,
+        });
+        presenceChanged = refreshClientPresence(clients, gatewayClient) || presenceChanged;
+      }
+      if (presenceChanged) {
+        broadcastPresenceSnapshot({
+          broadcast,
+          incrementPresenceVersion,
+          getHealthVersion,
+        });
+      }
+    },
     invalidateClientsForDevice: (deviceId: string, opts?: { role?: string; reason?: string }) => {
       const reason = opts?.reason ?? "device-invalidated";
-      for (const gatewayClient of params.clients) {
+      for (const gatewayClient of clients) {
         if (gatewayClient.connect.device?.id !== deviceId) {
           continue;
         }
@@ -263,15 +405,15 @@ export function createGatewayRequestContext(
         // Retire node-owned projections and pending invokes synchronously; socket
         // close remains separate so already-buffered requests fail authorization.
         if (gatewayClient.connId) {
-          params.nodeRegistry.invalidateConnectionForPairingChange(gatewayClient.connId, reason);
+          nodeRegistry.invalidateConnectionForPairingChange(gatewayClient.connId, reason);
         }
         gatewayClient.invalidated = true;
         gatewayClient.invalidatedReason = reason;
       }
-      params.invalidateDeviceTransports?.(deviceId, opts);
+      invalidateDeviceTransports?.(deviceId, opts);
     },
     disconnectClientsForDevice: (deviceId: string, opts?: { role?: string }) => {
-      for (const gatewayClient of params.clients) {
+      for (const gatewayClient of clients) {
         if (gatewayClient.connect.device?.id !== deviceId) {
           continue;
         }
@@ -289,61 +431,89 @@ export function createGatewayRequestContext(
           /* ignore */
         }
       }
-      params.disconnectDeviceTransports?.(deviceId, opts);
+      disconnectDeviceTransports?.(deviceId, opts);
+    },
+    disconnectClientsForUserProfile: (profileId: string) => {
+      for (const gatewayClient of clients) {
+        if (gatewayClient.authenticatedUserProfile?.profileId !== profileId) {
+          continue;
+        }
+        // Invalidate before closing so buffered requests cannot retain revoked role scopes.
+        gatewayClient.invalidated = true;
+        gatewayClient.invalidatedReason = "operator-role-changed";
+        try {
+          gatewayClient.socket.close(4001, "operator role changed");
+        } catch {
+          /* ignore */
+        }
+      }
     },
     disconnectClientsUsingSharedGatewayAuth: () => {
-      disconnectAllSharedGatewayAuthClients(params.clients);
+      disconnectAllSharedGatewayAuthClients(clients);
     },
-    enforceSharedGatewayAuthGenerationForConfigWrite:
-      params.enforceSharedGatewayAuthGenerationForConfigWrite,
-    claimControlUiDeviceAuthMigration: params.claimControlUiDeviceAuthMigration,
-    releaseControlUiDeviceAuthMigrationClaim: params.releaseControlUiDeviceAuthMigrationClaim,
-    completeControlUiDeviceAuthMigration: params.completeControlUiDeviceAuthMigration,
-    nodeRegistry: params.nodeRegistry,
-    ...(params.workerEnvironmentService
-      ? { workerEnvironmentService: params.workerEnvironmentService }
+    enforceSharedGatewayAuthGenerationForConfigWrite: (nextConfig) => {
+      enforceSharedGatewaySessionGenerationForConfigWrite({
+        state: sharedGatewaySessionGenerationState,
+        nextConfig,
+        resolveRuntimeSnapshotGeneration: resolveSharedGatewaySessionGenerationForRuntimeSnapshot,
+        clients,
+      });
+    },
+    nodeRegistry,
+    ...(runtime.nodeDesktopService
+      ? { [NODE_DESKTOP_SERVICE_CONTEXT]: runtime.nodeDesktopService }
       : {}),
-    ...(params.workerSessionPlacementService
-      ? { workerSessionPlacementService: params.workerSessionPlacementService }
+    ...(runtime.workerEnvironmentService
+      ? { workerEnvironmentService: runtime.workerEnvironmentService }
       : {}),
-    ...(params.workerPlacementDispatchService
-      ? { workerPlacementDispatchService: params.workerPlacementDispatchService }
+    ...(runtime.hostDesktopService ? { hostDesktopService: runtime.hostDesktopService } : {}),
+    ...(workerSessionPlacementService ? { workerSessionPlacementService } : {}),
+    ...(workerPlacementDiskSpaceReader ? { workerPlacementDiskSpaceReader } : {}),
+    ...(workerPlacementRunnerAvailabilityReader ? { workerPlacementRunnerAvailabilityReader } : {}),
+    validateAgentRuntimeApprovalAuthority: runtime.validateAgentRuntimeApprovalAuthority,
+    ...(runtime.workerPlacementControlAvailable
+      ? { workerPlacementDispatchService: runtime.workerPlacementControlAvailable }
       : {}),
-    terminalSessions: params.terminalSessions,
-    agentRunSeq: params.agentRunSeq,
-    chatAbortControllers: params.chatAbortControllers,
-    chatQueuedTurns: params.chatQueuedTurns,
-    chatRunState: params.chatRunState,
-    addChatRun: params.addChatRun,
-    removeChatRun: params.removeChatRun,
-    subscribeSessionEvents: params.subscribeSessionEvents,
-    unsubscribeSessionEvents: params.unsubscribeSessionEvents,
-    subscribeSessionMessageEvents: params.subscribeSessionMessageEvents,
-    unsubscribeSessionMessageEvents: params.unsubscribeSessionMessageEvents,
+    ...(runtime.githubPublicationService
+      ? { githubPublicationService: runtime.githubPublicationService }
+      : {}),
+    terminalSessions: runtime.terminalSessions,
+    agentRunSeq: runtime.agentRunSeq,
+    chatAbortControllers: runtime.chatAbortControllers,
+    chatQueuedTurns: runtime.chatQueuedTurns,
+    chatRunState: runtime.chatRunState,
+    addChatRun: runtime.addChatRun,
+    removeChatRun: runtime.removeChatRun,
+    subscribeSessionEvents: sessionEventSubscribers.subscribe,
+    unsubscribeSessionEvents: sessionEventSubscribers.unsubscribe,
+    subscribeSessionMessageEvents: runtime.subscribeSessionMessageEvents,
+    unsubscribeSessionMessageEvents: runtime.unsubscribeSessionMessageEvents,
     unsubscribeAllSessionEvents: (connId) => {
-      params.unsubscribeAllSessionEvents(connId);
+      sessionEventSubscribers.unsubscribe(connId);
+      sessionMessageSubscribers.unsubscribeAll(connId);
+      sessionObserver.removeConnection(connId);
       // PR replace-sets share this websocket cleanup boundary with session events.
-      params.runtimeState.controlUiSessionPullRequests?.unsubscribe(connId);
-      params.runtimeState.sessionViewerPresence?.unsubscribe(connId);
+      runtimeState.controlUiSessionPullRequests?.unsubscribe(connId);
+      runtimeState.sessionViewerPresence?.unsubscribe(connId);
     },
-    getSessionEventSubscriberConnIds: params.getSessionEventSubscriberConnIds,
-    registerToolEventRecipient: params.registerToolEventRecipient,
-    dedupe: params.dedupe,
-    wizardSessions: params.wizardSessions,
-    systemAgentSessions: params.systemAgentSessions,
-    findRunningWizard: params.findRunningWizard,
-    purgeWizardSession: params.purgeWizardSession,
-    getRuntimeSnapshot: params.getRuntimeSnapshot,
-    getEventLoopHealth: params.getEventLoopHealth,
-    getConfigReloaderHotReloadStatus: () => params.runtimeState.configReloader.hotReloadStatus?.(),
-    startChannel: params.startChannel,
-    stopChannel: params.stopChannel,
-    markChannelLoggedOut: params.markChannelLoggedOut,
-    wizardRunner: params.wizardRunner,
-    channelWizardRunner: params.channelWizardRunner,
-    broadcastVoiceWakeChanged: params.broadcastVoiceWakeChanged,
-    broadcastVoiceWakeRoutingChanged: params.broadcastVoiceWakeRoutingChanged,
-    unavailableGatewayMethods: params.unavailableGatewayMethods,
+    getSessionEventSubscriberConnIds: sessionEventSubscribers.getAll,
+    registerToolEventRecipient: runtime.toolEventRecipients.add,
+    dedupe: runtime.dedupe,
+    wizardSessions: runtime.wizardSessions,
+    systemAgentSessions: runtime.systemAgentSessions,
+    findRunningWizard: runtime.findRunningWizard,
+    purgeWizardSession: runtime.purgeWizardSession,
+    getRuntimeSnapshot: runtime.getRuntimeSnapshot,
+    getEventLoopHealth: runtime.readinessEventLoopHealth.snapshot,
+    getConfigReloaderHotReloadStatus: runtime.kernel.getConfigReloaderHotReloadStatus,
+    startChannel: runtime.startChannel,
+    stopChannel: runtime.stopChannel,
+    markChannelLoggedOut: runtime.markChannelLoggedOut,
+    wizardRunner: runtime.wizardRunner,
+    channelWizardRunner: runtime.channelWizardRunner,
+    broadcastVoiceWakeChanged: runtime.broadcastVoiceWakeChanged,
+    broadcastVoiceWakeRoutingChanged: runtime.broadcastVoiceWakeRoutingChanged,
+    unavailableGatewayMethods: runtime.unavailableGatewayMethods,
   };
   return context;
 }

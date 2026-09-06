@@ -8,12 +8,18 @@ import type { ImageContent } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { buildInboundMediaNoteProjection } from "../auto-reply/media-note.js";
+import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
+  formatCliImageTurnContext,
+  hashCliImageTurnEntryId,
+  readCliImageTurnContext,
+} from "./cli-image-turn-correlation.js";
+import {
   buildCliArgs,
-  buildClaudeOwnerKey,
   prepareCliPromptImagePayload,
   resolveCliRunQueueKey,
   writeCliSystemPromptFile,
@@ -108,6 +114,55 @@ describe("prepareCliPromptImagePayload prompt references", () => {
     }
   });
 
+  it("hydrates structured media from the active agent workspace without widening sibling access", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-agent-image-"));
+    const workspaceDir = path.join(stateDir, "workspace-arthur");
+    const siblingWorkspaceDir = path.join(stateDir, "workspace-merlin");
+    const imagePath = path.join(workspaceDir, "media", "inbound", "photo.png");
+    const siblingImagePath = path.join(siblingWorkspaceDir, "media", "inbound", "photo.png");
+    const image = createSolidPngBuffer(1, 1, { r: 255, g: 0, b: 0 });
+    await fs.mkdir(path.dirname(imagePath), { recursive: true });
+    await fs.mkdir(path.dirname(siblingImagePath), { recursive: true });
+    await fs.writeFile(imagePath, image);
+    await fs.writeFile(siblingImagePath, image);
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    const config = {
+      agents: {
+        entries: {
+          arthur: { default: true, workspace: workspaceDir },
+          merlin: { workspace: siblingWorkspaceDir },
+        },
+      },
+    };
+
+    try {
+      const localRoots = getAgentScopedMediaLocalRoots(config, "arthur");
+      const prepared = await prepareCliPromptImagePayload({
+        backend: { command: "claude", input: "stdin" },
+        prompt: "describe the attachment",
+        workspaceDir,
+        localRoots,
+        media: [{ path: imagePath, contentType: "image/png" }],
+      });
+
+      expect(prepared.imagePaths).toHaveLength(1);
+      await expect(fs.readFile(prepared.imagePaths?.[0] ?? "")).resolves.toEqual(image);
+      await expect(
+        prepareCliPromptImagePayload({
+          backend: { command: "claude", input: "stdin" },
+          prompt: "describe the attachment",
+          workspaceDir,
+          localRoots,
+          media: [{ path: siblingImagePath, contentType: "image/png" }],
+        }),
+      ).rejects.toThrow("failed to hydrate 1 structured image attachment");
+    } finally {
+      envSnapshot.restore();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("dedupes repeated refs and skips failed loads before sanitizing", async () => {
     const workspaceDir = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-ref-dedupe-"),
@@ -140,6 +195,57 @@ describe("prepareCliPromptImagePayload prompt references", () => {
           media: [{ path: path.join(workspaceDir, "missing.png"), contentType: "image/png" }],
         }),
       ).rejects.toThrow("failed to hydrate 1 structured image attachment");
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not hydrate media suppressed during current-turn admission", async () => {
+    await expect(
+      prepareCliPromptImagePayload({
+        backend: { command: "claude" },
+        prompt: "describe the attachment",
+        imagePrompt: "describe the attachment",
+        workspaceDir: "/workspace",
+        images: [],
+        imageOrder: [],
+        mediaImageLayout: { slots: [], suppressedFactIndexes: [0] },
+        media: [
+          {
+            path: "/openclaw-test-missing/current.png",
+            contentType: "image/png",
+            hydrationSuppressed: true,
+          },
+        ],
+      }),
+    ).resolves.toEqual({ prompt: "describe the attachment" });
+  });
+
+  it("delivers readable structured images when an unresolved attachment is hydration-suppressed", async () => {
+    const workspaceDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-mixed-media-"),
+    );
+    const imagePath = path.join(workspaceDir, "present.png");
+    const image = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 });
+    await fs.writeFile(imagePath, image);
+    try {
+      const result = await prepareCliPromptImagePayload({
+        backend: { command: "codex" },
+        prompt: "describe the attachments",
+        workspaceDir,
+        images: [{ type: "image", data: image.toString("base64"), mimeType: "image/png" }],
+        imageOrder: ["inline"],
+        media: [
+          { path: imagePath, contentType: "image/png" },
+          {
+            path: path.join(workspaceDir, "missing.png"),
+            contentType: "image/png",
+            hydrationSuppressed: true,
+          },
+        ],
+      });
+
+      expect(result.imagePaths).toHaveLength(1);
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
@@ -319,6 +425,41 @@ describe("writeCliImages", () => {
       });
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
+  });
+
+  it("carries exact image-turn correlation beside Claude prompt paths", async () => {
+    const turnKey = hashCliImageTurnEntryId("transcript-entry-1");
+    const prepared = await prepareCliPromptImagePayload({
+      backend: { command: "claude", imageArg: "@" },
+      prompt: "describe this",
+      workspaceDir: "/workspace",
+      images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
+      imageTurnKey: turnKey,
+    });
+
+    try {
+      expect(readCliImageTurnContext(prepared.prompt)).toBe(turnKey);
+      expect(stripInboundMetadata(prepared.prompt)).not.toContain(turnKey);
+      expect(stripInboundMetadata(prepared.prompt)).toContain(
+        `@${expectDefined(prepared.imagePaths?.[0], "correlated image path")}`,
+      );
+    } finally {
+      await fs.rm(expectDefined(prepared.imagePaths?.[0], "correlated image path"), {
+        force: true,
+      });
+    }
+  });
+
+  it("rejects conflicting or malformed image-turn correlation", () => {
+    const first = hashCliImageTurnEntryId("transcript-entry-1");
+    const second = hashCliImageTurnEntryId("transcript-entry-2");
+
+    expect(
+      readCliImageTurnContext(
+        `${formatCliImageTurnContext(first)}\n\n${formatCliImageTurnContext(second)}`,
+      ),
+    ).toBeUndefined();
+    expect(readCliImageTurnContext(formatCliImageTurnContext("not-a-key"))).toBeUndefined();
   });
 
   it("uses the shared media extension map for image formats beyond the tiny builtin list", async () => {
@@ -597,6 +738,10 @@ describe("writeCliImages", () => {
           },
         ],
         imageOrder: ["offloaded", "inline"],
+        mediaImageLayout: {
+          slots: [{ kind: "offloaded", factIndex: 0 }, { kind: "inline" }],
+          suppressedFactIndexes: [],
+        },
         media: [{ url: `media://inbound/${mediaId}`, contentType: "image/png" }],
       });
 
@@ -726,6 +871,19 @@ describe("resolveCliRunQueueKey", () => {
     ).toBe("claude-cli:owner:abcd1234");
   });
 
+  it("keeps third-party live sessions serialized on their exact owner even when serialize=false", () => {
+    expect(
+      resolveCliRunQueueKey({
+        backendId: "acme-cli",
+        liveSession: "claude-stdio",
+        serialize: false,
+        runId: "run-third-party-live",
+        workspaceDir: "/tmp/project-a",
+        ownerKey: "third-party-owner",
+      }),
+    ).toBe("acme-cli:owner:third-party-owner");
+  });
+
   it("keeps resumed Claude live sessions on the owner lane", () => {
     expect(
       resolveCliRunQueueKey({
@@ -738,34 +896,5 @@ describe("resolveCliRunQueueKey", () => {
         ownerKey: "abcd1234",
       }),
     ).toBe("claude-cli:owner:abcd1234");
-  });
-});
-
-describe("buildClaudeOwnerKey", () => {
-  it("is deterministic and distinguishes session keys", () => {
-    const base = {
-      agentAccountId: "acct-1",
-      agentId: "agent-main",
-      authProfileId: "profile-a",
-      sessionId: "sess-1",
-      sessionKey: "key-a",
-    };
-    const a1 = buildClaudeOwnerKey(base);
-    const a2 = buildClaudeOwnerKey(base);
-    expect(a1).toBe(a2);
-    const b = buildClaudeOwnerKey({ ...base, sessionKey: "key-b" });
-    expect(a1).not.toBe(b);
-  });
-
-  it("matches the legacy buildClaudeLiveKey hash for a frozen fixture (DO NOT EDIT — splits queue from live-session map)", () => {
-    expect(
-      buildClaudeOwnerKey({
-        agentAccountId: "acct-1",
-        agentId: "agent-main",
-        authProfileId: "profile-a",
-        sessionId: "sess-1",
-        sessionKey: "key-a",
-      }),
-    ).toBe("718b9a6cf473526c3c357883dfc8f1da1cf90b709d9ed38d675b52314abe6800");
   });
 });

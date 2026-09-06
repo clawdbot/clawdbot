@@ -13,7 +13,6 @@ export {
   expectCodexMissingAuthHint,
   importProviderRuntimeCatalogModule,
   loadBundledPluginPublicSurface,
-  loadBundledPluginPublicSurfaceSync,
   type ProviderPlugin,
 } from "./test-helpers/provider-catalog.js";
 export { describeProviderContracts } from "./test-helpers/provider-contract.js";

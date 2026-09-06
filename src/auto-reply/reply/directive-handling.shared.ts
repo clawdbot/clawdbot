@@ -1,5 +1,7 @@
 // Shared directive parsing helpers used by model and auth directive handlers.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { AgentModelPrimaryWriteTarget } from "../../agents/agent-scope.js";
+import type { StickyModelSelectionDispatchOutcome } from "../../agents/sticky-model-selection.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import {
   adoptPersistedSessionSnapshot,
@@ -7,7 +9,7 @@ import {
   sessionModelOverrideChangesApplied,
   sessionSnapshotChangesApplied,
 } from "../../config/sessions/session-snapshot-merge.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { SYSTEM_MARK, prefixSystemMessage } from "../../infra/system-message.js";
 import { applyTraceOverride, applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
@@ -61,6 +63,30 @@ export const formatInternalVerbosePersistenceDeniedText = () =>
 export const formatInternalVerboseCurrentReplyOnlyText = () =>
   "Verbose logging set for the current reply only.";
 
+export function formatModelSelectionScopeAck(params: {
+  isDefault: boolean;
+  label: string;
+  configuredDefaultUpdate?: StickyModelSelectionDispatchOutcome;
+  stickyModelSelectionTarget?: AgentModelPrimaryWriteTarget;
+}): string {
+  if (params.isDefault && !params.stickyModelSelectionTarget) {
+    return `Session model reset to configured default (${params.label}).`;
+  }
+  const targetLabel =
+    params.stickyModelSelectionTarget === "agent"
+      ? "Agent default"
+      : params.stickyModelSelectionTarget === "defaults"
+        ? "Global default"
+        : "Configured default";
+  if (params.configuredDefaultUpdate === "requested") {
+    return `Model set to ${params.label} for this session. ${targetLabel} update requested.`;
+  }
+  if (params.configuredDefaultUpdate === "skipped-immutable") {
+    return `Model set to ${params.label} for this session. ${targetLabel} unchanged because configuration is immutable.`;
+  }
+  return `Model set to ${params.label} for this session only; configured default unchanged.`;
+}
+
 export function canPersistSessionDirectiveDefaults(params: {
   messageProvider?: string;
   surface?: string;
@@ -92,12 +118,9 @@ const SESSION_LEVEL_DIRECTIVE_FIELDS = [
   ["hasElevatedDirective", "elevatedLevel"],
 ] as const satisfies ReadonlyArray<readonly [keyof InlineDirectives, keyof SessionEntry]>;
 
-const SESSION_EXEC_DIRECTIVE_FIELDS = [
-  "execHost",
-  "execSecurity",
-  "execAsk",
-  "execNode",
-] as const satisfies ReadonlyArray<keyof InlineDirectives & keyof SessionEntry>;
+const SESSION_EXEC_DIRECTIVE_FIELDS = ["execHost", "execNode"] as const satisfies ReadonlyArray<
+  keyof InlineDirectives & keyof SessionEntry
+>;
 
 const SESSION_QUEUE_DIRECTIVE_FIELDS = [
   ["queueMode", "queueMode"],
@@ -110,20 +133,25 @@ const SESSION_QUEUE_DIRECTIVE_FIELDS = [
 export function resolveDirectiveTouchedSessionFields(params: {
   directives: InlineDirectives;
   allowPrivilegedPersistence: boolean;
+  directiveOnly: boolean;
 }): Array<keyof SessionEntry> {
   const { directives } = params;
   const fields = new Set<keyof SessionEntry>();
+  if (directives.hasModelDirective) {
+    for (const field of SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS) {
+      fields.add(field);
+    }
+  }
+  // Mixed-message hints are turn-local; only model selection has a persistent contract.
+  if (!params.directiveOnly) {
+    return [...fields];
+  }
   for (const [directiveField, sessionField] of SESSION_LEVEL_DIRECTIVE_FIELDS) {
     if (
       directives[directiveField] &&
       (sessionField !== "verboseLevel" || params.allowPrivilegedPersistence)
     ) {
       fields.add(sessionField);
-    }
-  }
-  if (directives.hasModelDirective) {
-    for (const field of SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS) {
-      fields.add(field);
     }
   }
   if (directives.hasExecDirective && params.allowPrivilegedPersistence) {
@@ -153,16 +181,15 @@ export function rejectSessionDirectiveTransaction(
   if (persistenceState) {
     persistenceState.outcome = { kind: "rejected", errorText };
   }
-  return { text: errorText };
+  return { text: errorText, isError: true };
 }
 
-/** Keeps the first informational/denied acknowledgement while committing valid siblings once. */
+/** Keeps the first informational/denied acknowledgement while validating the remaining hints. */
 export async function acknowledgeIgnoredSessionDirective(params: {
   reply: ReplyPayload;
   directives: InlineDirectives;
   ignoredDirective: IgnoredSessionDirectiveFlag;
   persistenceState: HandleDirectiveOnlyParams["persistenceState"];
-  allowPrivilegedPersistence: boolean;
   applyRemainingDirectives: (directives: InlineDirectives) => Promise<ReplyPayload | undefined>;
 }): Promise<ReplyPayload> {
   if (!params.persistenceState) {
@@ -185,15 +212,10 @@ export async function acknowledgeIgnoredSessionDirective(params: {
           ...(ignoredDirective === "hasFastDirective" ? { clearFastMode: false } : {}),
           ...(ignoredDirective === "hasModelDirective" ? { rawModelProfile: undefined } : {}),
         };
-  const touchedFields = resolveDirectiveTouchedSessionFields({
-    directives: remainingDirectives,
-    allowPrivilegedPersistence: params.allowPrivilegedPersistence,
-  });
-  if (touchedFields.length > 0) {
-    const siblingReply = await params.applyRemainingDirectives(remainingDirectives);
-    if (params.persistenceState.outcome.kind === "rejected") {
-      return siblingReply ?? params.reply;
-    }
+  // Turn-local hints still need validation even when they cannot write session fields.
+  const siblingReply = await params.applyRemainingDirectives(remainingDirectives);
+  if (params.persistenceState.outcome.kind === "rejected") {
+    return siblingReply ?? params.reply;
   }
   return params.reply;
 }
@@ -203,9 +225,7 @@ export function applySessionDirectiveFields(params: {
   directives: InlineDirectives;
   sessionEntry: SessionEntry;
   allowPrivilegedPersistence: boolean;
-  allowTracePersistence: boolean;
   allowElevatedPersistence: boolean;
-  persistDirectiveOnlyFields: boolean;
 }): boolean {
   const { directives, sessionEntry } = params;
   let updated = false;
@@ -230,11 +250,7 @@ export function applySessionDirectiveFields(params: {
       delete sessionEntry.fastMode;
       updated = true;
     }
-  } else if (
-    params.persistDirectiveOnlyFields &&
-    directives.hasFastDirective &&
-    directives.fastMode !== undefined
-  ) {
+  } else if (directives.hasFastDirective && directives.fastMode !== undefined) {
     updateField("fastMode", directives.fastMode);
   }
   if (
@@ -245,7 +261,7 @@ export function applySessionDirectiveFields(params: {
     applyVerboseOverride(sessionEntry, directives.verboseLevel);
     updated = true;
   }
-  if (directives.hasTraceDirective && directives.traceLevel && params.allowTracePersistence) {
+  if (directives.hasTraceDirective && directives.traceLevel) {
     applyTraceOverride(sessionEntry, directives.traceLevel);
     updated = true;
   }
@@ -278,7 +294,7 @@ export function applySessionDirectiveFields(params: {
       delete sessionEntry[field];
     }
     updated = true;
-  } else if (directives.hasQueueDirective && params.persistDirectiveOnlyFields) {
+  } else if (directives.hasQueueDirective) {
     for (const [directiveField, sessionField] of SESSION_QUEUE_DIRECTIVE_FIELDS) {
       const value = directives[directiveField];
       if (typeof value === "number" || value) {
@@ -299,7 +315,11 @@ export async function persistSessionDirectiveSnapshot(params: {
   touchedFields: Array<keyof SessionEntry>;
   hasModelSelection: boolean;
   reassertLiveModelSwitchPending: boolean;
-}): Promise<{ status: "applied" | "conflict" | "model-selection-locked" }> {
+  validateCommit?: () => string | undefined;
+}): Promise<
+  | { status: "applied" | "conflict" | "model-selection-locked" }
+  | { status: "commit-rejected"; error: string }
+> {
   const { sessionEntry, sessionKey, sessionStore } = params;
   const persistence = await persistReplySessionEntry({
     storePath: params.storePath,
@@ -309,11 +329,15 @@ export async function persistSessionDirectiveSnapshot(params: {
     reassertLiveModelSwitchPending: params.reassertLiveModelSwitchPending,
     requireModelSelectionUnlocked: params.hasModelSelection,
     touchedFields: params.touchedFields,
+    validateCommit: params.validateCommit,
   });
   if (persistence.status !== "current") {
     if (persistence.entry) {
       sessionStore[sessionKey] = persistence.entry;
       adoptPersistedSessionSnapshot(sessionEntry, persistence.entry);
+    }
+    if (persistence.status === "commit-rejected") {
+      return persistence;
     }
     return {
       status: persistence.status === "model-selection-locked" ? persistence.status : "conflict",

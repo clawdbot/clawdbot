@@ -22,26 +22,45 @@
  * tested is purely the validator's accept/reject behavior — the surrounding
  * HTTP plumbing is a separate concern covered by `monitor.lifecycle.test.ts`.
  *
- * `JwksClient.prototype.getSigningKey` is patched to return a single
- * in-memory test public key so we don't hit `login.botframework.com` /
- * `login.microsoftonline.com` during the test. `jose` (devDep) mints RS256
- * tokens against the matching private key.
+ * The validators fetch signing keys over HTTP from a JWKS endpoint, so the
+ * test serves a real JWKS document from an in-process `node:http` server on
+ * 127.0.0.1 and points the validators at it via the SDK's own endpoint
+ * overrides (`withOverrides(..., { openIdMetadataUrl })` for the service
+ * validator, `loginEndpoint` for the Entra validator). This exercises the
+ * SDK's real JWKS fetch + signature verification path instead of stubbing it,
+ * and keeps the test fully deterministic with no external network access.
+ * `jose` (devDep) mints RS256 tokens against the matching private key.
  */
 
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import { PUBLIC, withOverrides } from "@microsoft/teams.api/dist/auth/cloud-environment.js";
 // Internal subpath imports. See file header for the rationale.
-import { createEntraTokenValidator } from "@microsoft/teams.apps/dist/middleware/auth/jwt-validator.js";
+import {
+  createEntraTokenValidator,
+  JwtValidator,
+} from "@microsoft/teams.apps/dist/middleware/auth/jwt-validator.js";
 import { ServiceTokenValidator } from "@microsoft/teams.apps/dist/middleware/auth/service-token-validator.js";
 import type { ILogger } from "@microsoft/teams.common";
-import { exportSPKI, generateKeyPair, SignJWT } from "jose";
-import { JwksClient, type SigningKey } from "jwks-rsa";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { exportJWK, generateKeyPair, SignJWT } from "jose";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const APP_ID = "test-app-id";
 const TENANT_ID = "test-tenant-id";
 const TEST_KID = "test-key-id";
 
 let privateKey: CryptoKey;
-let publicPem: string;
+let jwksServer: Server;
+// The SDK builds the Entra JWKS URI as `${loginEndpoint}/${tenantId}/discovery/v2.0/keys`,
+// so the override must carry no path of its own.
+let loginEndpoint: string;
+// The service validator derives its keys URI by replacing the
+// `/openidconfiguration` suffix with `/keys`.
+let openIdMetadataUrl: string;
+// Direct JWKS URI for the JwtValidator v2-acceptance test, which decouples
+// the signing-key source (`jwksUriOptions: { type: 'uri' }`) from the issuer
+// allowlist (`loginEndpoint`).
+let jwksUri: string;
 
 async function mintToken(claims: Record<string, unknown>): Promise<string> {
   return await new SignJWT(claims)
@@ -56,20 +75,31 @@ beforeAll(async () => {
     modulusLength: 2048,
   });
   privateKey = priv;
-  publicPem = await exportSPKI(publicKey);
+  const jwk = { ...(await exportJWK(publicKey)), kid: TEST_KID, alg: "RS256", use: "sig" };
+  const jwksDocument = JSON.stringify({ keys: [jwk] });
 
-  // Patch `JwksClient.prototype.getSigningKeys` so every JWKS lookup the SDK
-  // performs returns our in-memory test key instead of fetching from
-  // `login.botframework.com` / `login.microsoftonline.com` while preserving
-  // the package's callback/promise getSigningKey wrapper behavior.
-  vi.spyOn(JwksClient.prototype, "getSigningKeys").mockResolvedValue([
-    {
-      kid: TEST_KID,
-      alg: "RS256",
-      getPublicKey: () => publicPem,
-      rsaPublicKey: publicPem,
-    } as SigningKey,
-  ]);
+  jwksServer = createServer((req, res) => {
+    if (req.url?.endsWith("/keys") || req.url === "/jwks") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(jwksDocument);
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise<void>((resolve) => {
+    jwksServer.listen(0, "127.0.0.1", resolve);
+  });
+  const { port } = jwksServer.address() as AddressInfo;
+  loginEndpoint = `http://127.0.0.1:${port}`;
+  openIdMetadataUrl = `${loginEndpoint}/v1/.well-known/openidconfiguration`;
+  jwksUri = `${loginEndpoint}/jwks`;
+});
+
+afterAll(async () => {
+  await new Promise<void>((resolve, reject) => {
+    jwksServer.close((err) => (err ? reject(err) : resolve()));
+  });
 });
 
 // Logger that surfaces SDK validation failures so we can see *why* a token
@@ -86,8 +116,19 @@ const debugLogger: ILogger = {
 };
 
 describe("ServiceTokenValidator (inbound Bot Framework)", () => {
+  // A cloud environment whose OpenID metadata URL points at the in-process
+  // JWKS server; every other endpoint stays on the public-cloud defaults so
+  // issuer/service-url semantics are unchanged.
+  const testCloud = () => withOverrides(PUBLIC, { openIdMetadataUrl });
+
   it("accepts a token whose audience matches the bot app id", async () => {
-    const validator = new ServiceTokenValidator(APP_ID, undefined, undefined, debugLogger);
+    const validator = new ServiceTokenValidator(
+      APP_ID,
+      undefined,
+      undefined,
+      debugLogger,
+      testCloud(),
+    );
     const token = await mintToken({
       aud: APP_ID,
       iss: "https://api.botframework.com",
@@ -99,7 +140,13 @@ describe("ServiceTokenValidator (inbound Bot Framework)", () => {
   });
 
   it("rejects a token with aud=api.botframework.com even when the appid claim matches the bot", async () => {
-    const validator = new ServiceTokenValidator(APP_ID);
+    const validator = new ServiceTokenValidator(
+      APP_ID,
+      undefined,
+      undefined,
+      undefined,
+      testCloud(),
+    );
     // This is the confused-deputy shape: the token was issued *for* the
     // Connector resource (`aud=https://api.botframework.com`) and happens to
     // carry the bot's app id in `appid`. The SDK must reject it on the
@@ -119,6 +166,7 @@ describe("createEntraTokenValidator (Entra access tokens — SDK 2.0.10 v1 issue
   it("accepts the v1 sts.windows.net issuer for an allowed tenant", async () => {
     const validator = createEntraTokenValidator(TENANT_ID, APP_ID, {
       allowedTenantIds: [TENANT_ID],
+      loginEndpoint,
     });
     const token = await mintToken({
       aud: APP_ID,
@@ -132,9 +180,23 @@ describe("createEntraTokenValidator (Entra access tokens — SDK 2.0.10 v1 issue
   });
 
   it("accepts the v2 login.microsoftonline.com issuer for an allowed tenant", async () => {
-    const validator = createEntraTokenValidator(TENANT_ID, APP_ID, {
-      allowedTenantIds: [TENANT_ID],
-    });
+    // `createEntraTokenValidator` hardcodes `jwksUriOptions: { type: 'tenantId' }`,
+    // which ties both the JWKS fetch and the issuer allowlist to `loginEndpoint`.
+    // Pointing that at the local JWKS server drops the public login host from the
+    // allowlist, so it can't prove v2-issuer acceptance. The underlying
+    // `JwtValidator` decouples the two: `jwksUriOptions: { type: 'uri' }` sources
+    // keys from the local server while `loginEndpoint` independently drives issuer
+    // validation, so the real public v2 issuer is accepted here.
+    const validator = new JwtValidator(
+      {
+        clientId: APP_ID,
+        tenantId: TENANT_ID,
+        loginEndpoint: "https://login.microsoftonline.com",
+        validateIssuer: { allowedTenantIds: [TENANT_ID] },
+        jwksUriOptions: { type: "uri", uri: jwksUri },
+      },
+      debugLogger,
+    );
     const token = await mintToken({
       aud: APP_ID,
       iss: `https://login.microsoftonline.com/${TENANT_ID}/v2.0`,
@@ -143,11 +205,13 @@ describe("createEntraTokenValidator (Entra access tokens — SDK 2.0.10 v1 issue
     const payload = await validator.validateAccessToken(token);
 
     expect(payload).not.toBeNull();
+    expect(payload?.iss).toBe(`https://login.microsoftonline.com/${TENANT_ID}/v2.0`);
   });
 
   it("rejects an issuer for a tenant that is not allowed", async () => {
     const validator = createEntraTokenValidator(TENANT_ID, APP_ID, {
       allowedTenantIds: [TENANT_ID],
+      loginEndpoint,
     });
     const token = await mintToken({
       aud: APP_ID,

@@ -1,19 +1,18 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { hasExplicitChannelConfig } from "./channel-presence-policy.js";
-import { resolveEffectivePluginActivationState } from "./config-state.js";
+import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
+import { isBundledProviderCompatPlugin } from "./bundled-provider-compat.js";
+import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import {
   blocksPluginStartup,
   hasConfiguredActivationPath,
-  listManifestChannelIds,
   normalizePluginsConfigForInstalledIndex,
 } from "./gateway-startup-plugin-config.js";
 import type {
   ConfiguredGenerationProviderIds,
   ConfiguredVoiceProviderIds,
-  ManifestRegistryLookup,
   NormalizedPluginsConfig,
 } from "./gateway-startup-plugin-contracts.js";
 import {
@@ -23,7 +22,7 @@ import {
 } from "./gateway-startup-plugin-providers.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import { manifestOwnsWorkerProvider } from "./worker-provider-registry.js";
+import { manifestOwnsWorkerProvider } from "./worker-provider-manifest.js";
 
 type PluginStartupActivationParams = {
   plugin: InstalledPluginIndexRecord;
@@ -31,6 +30,7 @@ type PluginStartupActivationParams = {
   pluginsConfig: NormalizedPluginsConfig;
   activationSource: { plugins: NormalizedPluginsConfig; rootConfig?: OpenClawConfig };
   platform?: NodeJS.Platform;
+  env?: NodeJS.ProcessEnv;
 };
 
 type GatewayStartupActivationParams = PluginStartupActivationParams & {
@@ -52,11 +52,11 @@ type StartupActivationPolicy =
   | "speech"
   | "root"
   | "harness"
-  | "hook";
+  | "hook"
+  | "tool";
 type StartupContractKey =
   | keyof ConfiguredGenerationProviderIds
   | keyof ConfiguredVoiceProviderIds
-  | "memoryEmbeddingProviders"
   | "embeddingProviders";
 
 export function addRequiredAgentHarnessPluginIds(
@@ -95,16 +95,37 @@ export function addRequiredAgentHarnessPluginIds(
 function resolveStartupActivationState(
   params: PluginStartupActivationParams,
   autoEnabledReason?: string,
+  applyBundledProviderCompat = false,
 ) {
+  const config = applyBundledProviderCompat
+    ? (withBundledPluginEnablementCompat({
+        config: params.config,
+        pluginIds: [params.plugin.pluginId],
+        env: params.env,
+        activation: "defaults",
+      }) ?? params.config)
+    : params.config;
   return resolveEffectivePluginActivationState({
     id: params.plugin.pluginId,
     origin: params.plugin.origin,
-    config: params.pluginsConfig,
-    rootConfig: params.config,
+    channelIds: params.plugin.contributions?.channels,
+    config: applyBundledProviderCompat
+      ? normalizePluginsConfig(config.plugins)
+      : params.pluginsConfig,
+    rootConfig: config,
     enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin, params.platform),
     activationSource: params.activationSource,
     ...(autoEnabledReason ? { autoEnabledReason } : {}),
   });
+}
+
+function isProviderCompatStartupPolicy(policy: StartupActivationPolicy): boolean {
+  return (
+    policy === "provider" ||
+    policy === "worker" ||
+    policy === "speech" ||
+    policy === "implicit-external"
+  );
 }
 
 function hasExplicitHookPolicyConfig(
@@ -158,6 +179,12 @@ function passesPluginStartupPolicy(
   const activationState = resolveStartupActivationState(
     params,
     policy === "worker" ? "cloud worker provider required" : undefined,
+    isProviderCompatStartupPolicy(policy) &&
+      isBundledProviderCompatPlugin({
+        origin: plugin.origin,
+        providers: plugin.contributions?.providers,
+        contracts: plugin.contributions?.contracts,
+      }),
   );
   if (!activationState.enabled) {
     return false;
@@ -247,11 +274,6 @@ const GATEWAY_STARTUP_ACTIVATION_POLICIES: readonly {
     matches: ({ manifest, configuredMemoryEmbeddingProviderIds }) =>
       manifestOwnsConfiguredContract(
         manifest,
-        "memoryEmbeddingProviders",
-        configuredMemoryEmbeddingProviderIds,
-      ) ||
-      manifestOwnsConfiguredContract(
-        manifest,
         "embeddingProviders",
         configuredMemoryEmbeddingProviderIds,
       ),
@@ -261,6 +283,12 @@ const GATEWAY_STARTUP_ACTIVATION_POLICIES: readonly {
     matches: ({ activationSource, manifest, plugin }) =>
       manifest?.activation?.onCapabilities?.includes("hook") === true ||
       hasExplicitHookPolicyConfig(activationSource.plugins.entries[plugin.pluginId]),
+  },
+  {
+    policy: "tool",
+    // Tool factories execute synchronously while an agent surface is built. Load enabled owners
+    // at the Gateway lifecycle boundary so a first concurrent turn cannot block control traffic.
+    matches: ({ manifest }) => (manifest?.contracts?.tools?.length ?? 0) > 0,
   },
   {
     policy: "provider",
@@ -273,37 +301,4 @@ export function canStartGatewayStartupPlugin(params: GatewayStartupActivationPar
   return GATEWAY_STARTUP_ACTIVATION_POLICIES.some(
     ({ matches, policy }) => matches(params) && passesPluginStartupPolicy(params, policy),
   );
-}
-
-export function canStartConfiguredChannelPlugin(
-  params: PluginStartupActivationParams & { manifestLookup: ManifestRegistryLookup },
-): boolean {
-  const { activationSource, config, manifestLookup, plugin, pluginsConfig } = params;
-  if (
-    !pluginsConfig.enabled ||
-    pluginsConfig.deny.includes(plugin.pluginId) ||
-    pluginsConfig.entries[plugin.pluginId]?.enabled === false
-  ) {
-    return false;
-  }
-  const explicitBundledChannelConfig =
-    plugin.origin === "bundled" &&
-    listManifestChannelIds(manifestLookup, plugin.pluginId).some((channelId) =>
-      hasExplicitChannelConfig({
-        config: activationSource.rootConfig ?? config,
-        channelId,
-      }),
-    );
-  if (
-    pluginsConfig.allow.length > 0 &&
-    !pluginsConfig.allow.includes(plugin.pluginId) &&
-    !explicitBundledChannelConfig
-  ) {
-    return false;
-  }
-  if (plugin.origin === "bundled") {
-    return true;
-  }
-  const activationState = resolveStartupActivationState(params);
-  return activationState.enabled && activationState.explicitlyEnabled;
 }

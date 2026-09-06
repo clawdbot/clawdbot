@@ -1,26 +1,24 @@
 ---
 name: clawsweeper
-description: "Use for all ClawSweeper work: OpenClaw issue/PR sweep reports, commit-review reports, repair jobs, cloud fix PRs, @clawsweeper maintainer mention commands, trusted ClawSweeper-reviewed autofix/automerge, GitHub Actions monitoring, permissions, gates, and manual backfills."
+description: "Use for all ClawSweeper work: OpenClaw issue/PR sweep reports, repair jobs, cloud fix PRs, @clawsweeper maintainer mention commands, trusted ClawSweeper-reviewed autofix/automerge, GitHub Actions monitoring, permissions, gates, and manual backfills."
 ---
 
 # ClawSweeper
 
 ClawSweeper lives at `~/Projects/clawsweeper`. It is the one OpenClaw
-maintenance bot for sweeping, commit review, repair jobs, and guarded fix PRs.
+maintenance bot for sweeping, repair jobs, and guarded fix PRs.
 Use this skill whenever asked about reports, findings, dispatch health,
 repair/cloud PR creation, comment commands, automerge, permissions, or gates.
 
 ## Start
 
-```bash
-cd ~/Projects/clawsweeper
-git status --short --branch
-git pull --ff-only
-pnpm run build:all
-```
+Inspect `git status --short --branch` in the ClawSweeper checkout. Status and
+report requests stay read-only: use current reports and live read APIs when
+freshness matters, without pulling or building just to inspect them.
 
-Do not overwrite unrelated edits. If the tree is dirty, inspect first and keep
-read-only report work read-only unless the requester asked to commit.
+For authorized implementation or execution, update a clean task-owned checkout
+and build only when the selected command needs it. Preserve unrelated edits
+and other operators' active workflows.
 
 ## One Bot, One App
 
@@ -36,8 +34,7 @@ Required app setup:
 - Target app permissions: read target scan context; write issues and pull
   requests; contents write for report commits, repair branches, and workflow
   inputs; Actions write on `openclaw/clawsweeper` for comment-router
-  re-review dispatch, workflow dispatch, run cancellation, and self-heal;
-  optional Checks write for commit Check Runs.
+  re-review dispatch, workflow dispatch, run cancellation, and self-heal.
 
 Token boundary:
 
@@ -47,40 +44,12 @@ Token boundary:
   closes, and merges through short-lived GitHub App tokens.
 - Merge and write gates default closed.
 
-## Commit Reports
+## Hosted Commit Reviews
 
-Canonical commit reports:
-
-```text
-records/<repo-slug>/commits/<40-char-sha>.md
-```
-
-Use the lister:
-
-```bash
-pnpm commit-reports -- --since 6h
-pnpm commit-reports -- --since "24 hours ago" --findings
-pnpm commit-reports -- --since 7d --non-clean
-pnpm commit-reports -- --repo openclaw/openclaw --author steipete --since 7d
-pnpm commit-reports -- --since 24h --json
-```
-
-Results: `nothing_found`, `findings`, `inconclusive`, `failed`,
-`skipped_non_code`. One report per SHA; reruns overwrite the SHA-named report.
-
-Manual rerun/backfill:
-
-```bash
-gh workflow run commit-review.yml --repo openclaw/clawsweeper \
-  -f target_repo=openclaw/openclaw \
-  -f commit_sha=<end-sha> \
-  -f before_sha=<start-or-parent-sha> \
-  -f create_checks=false \
-  -f enabled=true
-```
-
-Use `create_checks=true` only when the requester explicitly wants target commit Check
-Runs. Add `-f additional_prompt="..."` for focused one-off review instructions.
+Hosted per-commit reports and commit Check Runs are retired. For the retained
+offline review of a committed branch, use `pnpm local-review -- --base main`.
+`$autoreview --mode commit --commit <sha>` remains a separate general-purpose
+review path.
 
 ## Sweep Reports
 
@@ -101,14 +70,15 @@ short `Review findings:` list when findings exist; full review comments,
 evidence links, likely owners, and runtime details stay inside the collapsed
 `Review details` block.
 
-Useful commands:
+For a simple status request, read existing reports and bounded live workflow
+state. `pnpm run status` summarizes current state. A requested full audit can use
+`pnpm run audit`; it is a broader scan, not a prerequisite for reading one item.
 
-```bash
-pnpm run status
-pnpm run audit
-pnpm run reconcile
-pnpm run apply-decisions -- --dry-run
-```
+Reconciliation is a separate authorized mutation: bare `pnpm run reconcile`
+moves/deletes report and work-plan files. Inspect its dry-run only when that
+maintenance task is requested; do not run reconciliation during status/report
+reads. Likewise, `apply-decisions` belongs to an explicitly authorized apply
+workflow, beginning with its dry-run.
 
 ## Create One Repair Job
 
@@ -166,7 +136,8 @@ trailers, and closes superseded source PRs only after replacement exists.
 
 ## Gates
 
-Open execution windows intentionally and close them after the run:
+Change execution gates only under explicit authority for that window. Record
+the original state and any agreed restoration before changing it:
 
 ```bash
 gh variable set CLAWSWEEPER_ALLOW_EXECUTE --repo openclaw/clawsweeper --body 1
@@ -175,8 +146,10 @@ gh variable set CLAWSWEEPER_ALLOW_MERGE --repo openclaw/clawsweeper --body 1
 gh variable set CLAWSWEEPER_ALLOW_AUTOMERGE --repo openclaw/clawsweeper --body 1
 ```
 
-Reset gates only when explicitly requested; the active maintainer window may intentionally
-leave them at `1`.
+Restore a gate only when the authorized window includes that restoration and
+its ownership/state still match. Otherwise leave it unchanged; another active
+maintainer window may intentionally keep it at `1`. Never reset all gates as
+generic cleanup.
 
 Important gates:
 
@@ -257,7 +230,7 @@ loop. The router:
   checks are green, GitHub says mergeable, no human-review label is present,
   the PR is not draft, and both merge gates are open.
 
-Missing changelog is not a review finding or merge blocker. If repairing a user-facing change, add/update changelog automatically when practical; never ask or block solely on it.
+Missing changelog is never a review finding or merge blocker. `CHANGELOG.md` is release-only; record user-facing release-note context in the PR body or squash message, never edit the changelog for normal repairs.
 
 If ClawSweeper passes while merge gates are closed, it labels
 `clawsweeper:merge-ready` and comments instead of merging. `@clawsweeper stop`
@@ -303,11 +276,13 @@ prose.
 Receiver workflows:
 
 ```bash
-gh run list --repo openclaw/clawsweeper --workflow "ClawSweeper Commit Review" \
+gh run list --repo openclaw/clawsweeper --workflow sweep.yml \
   --limit 12 --json databaseId,displayTitle,event,status,conclusion,createdAt,updatedAt,url
-gh run list --repo openclaw/clawsweeper --workflow "repair cluster worker" \
+gh run list --repo openclaw/clawsweeper --workflow repair-cluster-worker.yml \
   --limit 12 --json databaseId,displayTitle,event,status,conclusion,createdAt,updatedAt,url
-gh run list --repo openclaw/clawsweeper --workflow "repair comment router" \
+gh run list --repo openclaw/clawsweeper --workflow repair-comment-router.yml \
+  --limit 12 --json databaseId,displayTitle,event,status,conclusion,createdAt,updatedAt,url
+gh run list --repo openclaw/clawsweeper --workflow github-activity.yml \
   --limit 12 --json databaseId,displayTitle,event,status,conclusion,createdAt,updatedAt,url
 ```
 
@@ -315,21 +290,14 @@ Target dispatcher:
 
 ```bash
 gh run list --repo openclaw/openclaw --workflow "ClawSweeper Dispatch" \
-  --event push --limit 8 --json databaseId,displayTitle,event,status,conclusion,headSha,url
-```
-
-Target commit check:
-
-```bash
-gh api "repos/openclaw/openclaw/commits/<sha>/check-runs?per_page=100" \
-  --jq '.check_runs[] | select(.name=="ClawSweeper Commit Review") | [.status,.conclusion,.details_url] | @tsv'
+  --limit 8 --json databaseId,displayTitle,event,status,conclusion,headSha,url
 ```
 
 ## Reading Output
 
 For findings or failures, summarize:
 
-- target repo, item/PR/commit, run, report path
+- target repo, item/PR, run, report path
 - result, confidence, severity, and exact blocker
 - affected files or cluster refs
 - validation commands and whether they passed

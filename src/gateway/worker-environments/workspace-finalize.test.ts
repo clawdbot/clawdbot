@@ -1,29 +1,50 @@
 import { describe, expect, it, vi } from "vitest";
-import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
+import {
+  runInstrumentedWorkspaceReconcile,
+  verifyReconciledWorkspaceFinal,
+} from "./workspace-finalize.js";
+
+const workspaceDebug = vi.hoisted(() => vi.fn());
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "gateway/worker-workspace"
+        ? { ...logger, debug: workspaceDebug }
+        : logger;
+    },
+  };
+});
 
 describe("final worker workspace fences", () => {
   it("rechecks remote and local stability after the final quiescence renewal", async () => {
     const log: string[] = [];
-    await verifyReconciledWorkspaceFinal(
-      {
-        manifestRef: "sha256:" + "a".repeat(64),
-        changed: true,
-        verifyStable: async () => {
-          log.push("remote");
-        },
-        verifyLocalStable: async () => {
-          log.push("local");
-        },
+    workspaceDebug.mockClear();
+    const reconciliation = await runInstrumentedWorkspaceReconcile(async () => ({
+      manifestRef: "sha256:" + "a".repeat(64),
+      changed: true,
+      verifyStable: async () => {
+        log.push("remote");
       },
-      {
-        assertActive: async () => {
-          log.push("quiescence");
-        },
-        resume: async () => {},
+      verifyLocalStable: async () => {
+        log.push("local");
       },
-    );
+    }));
+    expect(workspaceDebug).not.toHaveBeenCalled();
+    await verifyReconciledWorkspaceFinal(reconciliation, {
+      assertActive: async () => {
+        log.push("quiescence");
+      },
+      resume: async () => {},
+    });
 
     expect(log).toEqual(["remote", "local", "quiescence", "remote", "local"]);
+    expect(workspaceDebug).toHaveBeenCalledExactlyOnceWith(
+      "worker workspace reconcile completed",
+      expect.objectContaining({ outcome: "succeeded" }),
+    );
   });
 
   it("rejects a remote write observed after the final quiescence renewal", async () => {

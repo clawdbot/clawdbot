@@ -1,8 +1,8 @@
 // Doctor install policy tests cover install policy checks and filesystem diagnostics.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { noteInstallPolicyHealth } from "./doctor-install-policy.js";
 
@@ -20,13 +20,7 @@ async function collectInstallPolicyHealthLines(
   return typeof body === "string" ? body.split("\n") : [];
 }
 
-const tempDirs: string[] = [];
-
-async function makeTempDir(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-install-policy-"));
-  tempDirs.push(dir);
-  return dir;
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function writePolicyScript(dir: string, response: string): Promise<string> {
   const scriptPath = path.join(dir, "policy.cjs");
@@ -50,17 +44,13 @@ function configWithPolicy(scriptPath: string): OpenClawConfig {
   };
 }
 
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
-
 describe("collectInstallPolicyHealthLines", () => {
   it("returns no lines when install policy is disabled", async () => {
     await expect(collectInstallPolicyHealthLines({})).resolves.toEqual([]);
   });
 
   it("reports static availability without running the command by default", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-doctor-install-policy-");
     const scriptPath = await writePolicyScript(
       dir,
       JSON.stringify({ protocolVersion: 1, decision: "block", reason: "probe blocked" }),
@@ -74,7 +64,7 @@ describe("collectInstallPolicyHealthLines", () => {
   });
 
   it("runs the synthetic probe in deep mode", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-doctor-install-policy-");
     const scriptPath = await writePolicyScript(
       dir,
       JSON.stringify({ protocolVersion: 1, decision: "allow" }),
@@ -87,6 +77,44 @@ describe("collectInstallPolicyHealthLines", () => {
     expect(lines.join("\n")).toContain("Deep probe allowed the synthetic install request");
   });
 
+  it("reports warnings as requiring acknowledgement", async () => {
+    const dir = tempDirs.make("openclaw-doctor-install-policy-");
+    const scriptPath = await writePolicyScript(
+      dir,
+      JSON.stringify({ protocolVersion: 1, decision: "warn", reason: "review probe" }),
+    );
+
+    const lines = await collectInstallPolicyHealthLines(configWithPolicy(scriptPath), {
+      deep: true,
+    });
+
+    expect(lines.join("\n")).toContain("Deep probe returned a warning: review probe");
+    expect(lines.join("\n")).toContain("require explicit acknowledgement");
+  });
+
+  it.each(["warn", "block"] as const)(
+    "keeps policy-controlled %s reasons on one terminal line",
+    async (decision) => {
+      const dir = tempDirs.make("openclaw-doctor-install-policy-");
+      const scriptPath = await writePolicyScript(
+        dir,
+        JSON.stringify({
+          protocolVersion: 1,
+          decision,
+          reason: "review probe\n- ERROR: forged\u001b[31m",
+        }),
+      );
+
+      const lines = await collectInstallPolicyHealthLines(configWithPolicy(scriptPath), {
+        deep: true,
+      });
+
+      expect(lines).not.toContain("- ERROR: forged");
+      expect(lines.join("\n")).toContain(String.raw`review probe\n- ERROR: forged`);
+      expect(lines.join("\n")).not.toContain("\u001b");
+    },
+  );
+
   it("reports unavailable enabled policy as fail-closed", async () => {
     const lines = await collectInstallPolicyHealthLines({
       security: {
@@ -98,5 +126,16 @@ describe("collectInstallPolicyHealthLines", () => {
 
     expect(lines.join("\n")).toContain("security.installPolicy.exec is not configured");
     expect(lines.join("\n")).toContain("will fail closed");
+  });
+
+  it("keeps static validation errors on one terminal line", async () => {
+    const dir = tempDirs.make("openclaw-doctor-install-policy-");
+    const command = path.join(dir, "missing\n- ERROR: forged\u001b[31m");
+
+    const lines = await collectInstallPolicyHealthLines(configWithPolicy(command));
+
+    expect(lines).not.toContain("- ERROR: forged");
+    expect(lines.join("\n")).toContain(String.raw`missing\n- ERROR: forged`);
+    expect(lines.join("\n")).not.toContain("\u001b");
   });
 });

@@ -8,6 +8,7 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
+import { isRecord as isConfigRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   parse as parseToml,
   stringify as stringifyToml,
@@ -23,7 +24,7 @@ import {
   extractTrustedCodexProjectPaths,
   renderIsolatedCodexConfig,
 } from "./codex-trust-config.js";
-import { quoteCommandPart, splitCommandParts } from "./command-line.js";
+import { splitCommandParts, type AcpxAgentCommand } from "./command-line.js";
 import { resolveAcpxPluginRoot } from "./config.js";
 import type { ResolvedAcpxPluginConfig } from "./config.js";
 import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
@@ -250,9 +251,9 @@ const stderrLogFileNamePrefix = ${params.stderrLogFileNamePrefix ? JSON.stringif
 const stderrLogMaxChars = 256 * 1024;
 
 const openClawWrapperArgs = new Set([
-  ${quoteCommandPart(OPENCLAW_ACPX_LEASE_ID_ARG)},
-  ${quoteCommandPart(OPENCLAW_GATEWAY_INSTANCE_ID_ARG)},
-  ${(params.openClawWrapperArgs ?? []).map(quoteCommandPart).join(",\n  ")}
+  ${JSON.stringify(OPENCLAW_ACPX_LEASE_ID_ARG)},
+  ${JSON.stringify(OPENCLAW_GATEWAY_INSTANCE_ID_ARG)},
+  ${(params.openClawWrapperArgs ?? []).map((arg) => JSON.stringify(arg)).join(",\n  ")}
 ]);
 
 function readOpenClawWrapperArg(args, name) {
@@ -289,7 +290,7 @@ function resolveStderrLogPath(args) {
     return undefined;
   }
   const leaseId =
-    readOpenClawWrapperArg(args, ${quoteCommandPart(OPENCLAW_ACPX_LEASE_ID_ARG)}) ||
+    readOpenClawWrapperArg(args, ${JSON.stringify(OPENCLAW_ACPX_LEASE_ID_ARG)}) ||
     "pid-" + process.pid;
   const fileName = stderrLogFileNamePrefix + "." + safeDiagnosticFilePart(leaseId) + ".log";
   return fileURLToPath(new URL("./" + fileName, import.meta.url));
@@ -448,7 +449,7 @@ function resolveNpmCliPath() {
 }
 
 const npmCliPath = resolveNpmCliPath();
-const installedBinPath = ${params.installedBinPath ? quoteCommandPart(params.installedBinPath) : "undefined"};
+const installedBinPath = ${params.installedBinPath ? JSON.stringify(params.installedBinPath) : "undefined"};
 let defaultCommand;
 let defaultArgs;
 if (installedBinPath) {
@@ -632,7 +633,7 @@ function mergeCodexConfig(base, override) {
 
 const openClawCodexConfigs = readOpenClawWrapperArgs(
   rawConfiguredArgs,
-  ${quoteCommandPart(OPENCLAW_CODEX_CONFIG_ARG)},
+  ${JSON.stringify(OPENCLAW_CODEX_CONFIG_ARG)},
 );
 if (openClawCodexConfigs.length > 0) {
   let existingCodexConfig = {};
@@ -744,8 +745,8 @@ async function writeClaudeAcpWrapper(baseDir: string, installedBinPath?: string)
   return wrapperPath;
 }
 
-function buildWrapperCommand(wrapperPath: string, args: string[] = []): string {
-  return [process.execPath, wrapperPath, ...args].map(quoteCommandPart).join(" ");
+function buildWrapperCommand(wrapperPath: string, args: string[] = []): string[] {
+  return [process.execPath, wrapperPath, ...args];
 }
 
 function isAcpPackageSpec(value: string, packageName: string): boolean {
@@ -764,15 +765,11 @@ function isPackageRunnerCommand(value: string): boolean {
 }
 
 function extractConfiguredAdapterArgs(params: {
-  configuredCommand?: string;
+  configuredCommand?: AcpxAgentCommand;
   packageName: string;
   binName: string;
 }): string[] | undefined {
-  const trimmedConfiguredCommand = params.configuredCommand?.trim();
-  if (!trimmedConfiguredCommand) {
-    return [];
-  }
-  const parts = splitCommandParts(trimmedConfiguredCommand);
+  const parts = splitCommandParts(params.configuredCommand ?? []);
   if (!parts.length) {
     return [];
   }
@@ -800,10 +797,6 @@ function extractConfiguredAdapterArgs(params: {
   }
 
   return undefined;
-}
-
-function isConfigRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function mergeConfigRecords(
@@ -882,7 +875,9 @@ type CodexAdapterLaunch = {
   migratedConfig?: Record<string, unknown>;
 };
 
-function resolveCodexAdapterLaunch(configuredCommand?: string): CodexAdapterLaunch | undefined {
+function resolveCodexAdapterLaunch(
+  configuredCommand?: AcpxAgentCommand,
+): CodexAdapterLaunch | undefined {
   const legacyAdapterArgs = extractConfiguredAdapterArgs({
     configuredCommand,
     packageName: LEGACY_CODEX_ACP_PACKAGE,
@@ -913,14 +908,17 @@ function resolveCodexAdapterLaunch(configuredCommand?: string): CodexAdapterLaun
   return { args: maintainedAdapterArgs };
 }
 
-function buildCodexAcpWrapperCommand(wrapperPath: string, configuredCommand?: string): string {
+function buildCodexAcpWrapperCommand(
+  wrapperPath: string,
+  configuredCommand?: AcpxAgentCommand,
+): string[] {
   const launch = resolveCodexAdapterLaunch(configuredCommand);
   if (launch) {
     return buildWrapperCommand(wrapperPath, launch.args);
   }
   return buildWrapperCommand(wrapperPath, [
     RUN_CONFIGURED_COMMAND_SENTINEL,
-    ...splitCommandParts(configuredCommand?.trim() ?? ""),
+    ...splitCommandParts(configuredCommand ?? []),
   ]);
 }
 
@@ -938,7 +936,10 @@ async function persistMigratedCodexMcpConfig(params: {
   await fs.writeFile(configPath, stringifyToml(merged as TomlTableWithoutBigInt), "utf8");
 }
 
-function buildClaudeAcpWrapperCommand(wrapperPath: string, configuredCommand?: string): string {
+function buildClaudeAcpWrapperCommand(
+  wrapperPath: string,
+  configuredCommand?: AcpxAgentCommand,
+): AcpxAgentCommand {
   const configuredAdapterArgs = extractConfiguredAdapterArgs({
     configuredCommand,
     packageName: CLAUDE_ACP_PACKAGE,
@@ -947,7 +948,7 @@ function buildClaudeAcpWrapperCommand(wrapperPath: string, configuredCommand?: s
   if (configuredAdapterArgs) {
     return buildWrapperCommand(wrapperPath, configuredAdapterArgs);
   }
-  return configuredCommand?.trim() || buildWrapperCommand(wrapperPath);
+  return configuredCommand ?? buildWrapperCommand(wrapperPath);
 }
 
 /** Prepare ACPX agent commands and isolated auth homes for Codex/Claude adapters. */

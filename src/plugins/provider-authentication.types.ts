@@ -10,9 +10,23 @@ import type { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
 
 export type ProviderAuthKind = "oauth" | "api_key" | "token" | "device_code" | "custom";
 
+type ProviderAuthSecretStorage = {
+  /** Final persistence target. The inline credential remains available for staged validation. */
+  kind: "store";
+  /** Environment-style prefix used for the host-owned secret-store entry. */
+  namePrefix: string;
+};
+
+export type ProviderAuthProfile = {
+  profileId: string;
+  credential: AuthProfileCredential;
+  /** Request host-owned SecretRef materialization at the final persistence boundary. */
+  secretStorage?: ProviderAuthSecretStorage;
+};
+
 /** Standard result payload returned by provider auth methods. */
 export type ProviderAuthResult = {
-  profiles: Array<{ profileId: string; credential: AuthProfileCredential }>;
+  profiles: ProviderAuthProfile[];
   /**
    * Optional config patch to merge after credentials are written.
    *
@@ -41,6 +55,8 @@ export type ProviderAuthContext = {
   runtime: RuntimeEnv;
   /** Cancels browser callbacks, device polling, and other app-owned auth work. */
   signal?: AbortSignal;
+  /** Personal-account methods must recheck live caller authority immediately before external effects. */
+  assertCurrent?: () => void;
   /**
    * Optional onboarding CLI options that triggered this auth flow.
    *
@@ -54,7 +70,7 @@ export type ProviderAuthContext = {
    * Onboarding secret persistence preference.
    *
    * Interactive wizard flows set this when the caller explicitly requested
-   * plaintext or env/file/exec ref storage. Ad-hoc `models auth login` flows
+   * plaintext or env/file/exec/store ref storage. Ad-hoc `models auth login` flows
    * usually leave it undefined.
    */
   secretInputMode?: SecretInputMode;
@@ -134,6 +150,11 @@ export type ProviderAppGuidedSetupCandidate = {
 };
 
 export type ProviderAppGuidedSetup = {
+  /**
+   * Report whether the provider's local service is reachable, even when no
+   * model is suitable for automatic activation. This probe must be read-only.
+   */
+  detectAvailability?: (ctx: ProviderAppGuidedSetupContext) => Promise<boolean>;
   /** Detection is read-only: no model pull, download, login, or config write. */
   detect: (ctx: ProviderAppGuidedSetupContext) => Promise<ProviderAppGuidedSetupCandidate | null>;
   /** Recheck one detected model and return the config required for a live probe. */
@@ -157,6 +178,11 @@ export type ProviderAuthMethod = {
    * method-specific auth choices while keeping the provider id stable.
    */
   wizard?: ProviderPluginWizardSetup;
+  /** Proven provider identity for reconnecting an owned personal account; absent means a new slot. */
+  matchesPersonalAccount?: (
+    credential: AuthProfileCredential,
+    existing: AuthProfileCredential,
+  ) => boolean;
   run: (ctx: ProviderAuthContext) => Promise<ProviderAuthResult>;
   runNonInteractive?: (
     ctx: ProviderAuthMethodNonInteractiveContext,

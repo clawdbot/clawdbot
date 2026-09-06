@@ -1,20 +1,33 @@
 // Telegram tests cover network errors plugin behavior.
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { describe, expect, it } from "vitest";
 import {
   isRecoverableTelegramNetworkError,
   isRetryableTelegramApiError,
+  isTelegramAuthenticationError,
   isTelegramRateLimitError,
   isSafeToRetrySendError,
   isTelegramClientRejection,
   isTelegramPollingNetworkError,
   isTelegramServerError,
+  rethrowTelegramSendError,
   tagTelegramNetworkError,
+  TelegramRequestNotStartedError,
 } from "./network-errors.js";
 
 const errorWithCode = (message: string, code: string) =>
   Object.assign(new Error(message), { code });
 const errorWithTelegramCode = (message: string, error_code: number) =>
   Object.assign(new Error(message), { error_code });
+
+function captureTelegramSendError(error: unknown): unknown {
+  try {
+    rethrowTelegramSendError(error);
+  } catch (caught) {
+    return caught;
+  }
+  throw new Error("Expected Telegram send error to be rethrown");
+}
 
 const plainErrorPredicateCases = [
   {
@@ -57,6 +70,20 @@ describe("Telegram error_code predicate contracts", () => {
       expect(predicate(outer)).toBe(true);
     },
   );
+});
+
+describe("isTelegramAuthenticationError", () => {
+  it.each([
+    ["Unauthorized", 401, true],
+    ["Forbidden", 403, false],
+    ["Not Found", 404, true],
+  ])("returns %s for error_code %s", (message, errorCode, expected) => {
+    expect(isTelegramAuthenticationError(errorWithTelegramCode(message, errorCode))).toBe(expected);
+  });
+
+  it("does not infer authentication failure from an unstructured message", () => {
+    expect(isTelegramAuthenticationError(new Error("Unauthorized"))).toBe(false);
+  });
 });
 
 describe("isRecoverableTelegramNetworkError", () => {
@@ -154,6 +181,17 @@ describe("isRecoverableTelegramNetworkError", () => {
         { context: "send" },
       ),
     ).toBe(true);
+  });
+
+  it("keeps request-not-started markers recoverable across Telegram contexts", () => {
+    const marker = new TelegramRequestNotStartedError();
+    const wrapped = Object.assign(new Error("Network request for 'getUpdates' failed!"), {
+      name: "HttpError",
+      error: marker,
+    });
+
+    expect(isRecoverableTelegramNetworkError(marker, { context: "send" })).toBe(true);
+    expect(isRecoverableTelegramNetworkError(wrapped, { context: "polling" })).toBe(true);
   });
 
   it("returns false for unrelated errors", () => {
@@ -264,6 +302,17 @@ describe("isSafeToRetrySendError", () => {
     expect(isSafeToRetrySendError(wrapped)).toBe(false);
   });
 
+  it("accepts only direct and exact grammY-wrapped request-not-started markers", () => {
+    const marker = new TelegramRequestNotStartedError();
+
+    expect(isSafeToRetrySendError(marker)).toBe(true);
+    expect(
+      isSafeToRetrySendError(
+        new MockHttpError("Network request for 'sendMessage' failed!", marker),
+      ),
+    ).toBe(true);
+  });
+
   it.each([
     ["status", Object.assign(new Error("Misdirected Request"), { status: 421 })],
     ["statusCode", Object.assign(new Error("Misdirected Request"), { statusCode: "421" })],
@@ -282,8 +331,8 @@ describe("isSafeToRetrySendError", () => {
         Object.assign(new Error("Misdirected Request"), { status: 421 }),
       ),
     ],
-  ])("treats Telegram 421 Misdirected Request as safe to retry via %s", (_name, err) => {
-    expect(isSafeToRetrySendError(err)).toBe(true);
+  ])("does not infer safe retry from broad Telegram 421 shape %s", (_name, err) => {
+    expect(isSafeToRetrySendError(err)).toBe(false);
   });
 
   it("does not parse malformed status strings as Telegram 421", () => {
@@ -292,6 +341,79 @@ describe("isSafeToRetrySendError", () => {
         Object.assign(new Error("Misdirected Request"), { statusCode: "421abc" }),
       ),
     ).toBe(false);
+  });
+});
+
+describe("rethrowTelegramSendError", () => {
+  const migratedChatId = -1_001_234_567_890;
+  const migrationError = Object.assign(
+    new Error("400: Bad Request: group chat was upgraded to a supergroup chat"),
+    {
+      name: "GrammyError",
+      error_code: 400,
+      description: "Bad Request: group chat was upgraded to a supergroup chat",
+      parameters: { migrate_to_chat_id: migratedChatId },
+    },
+  );
+
+  it.each([
+    ["direct grammY rejection", migrationError],
+    [
+      "nested provider rejection",
+      Object.assign(new Error("Telegram send failed"), { cause: migrationError }),
+    ],
+  ])("marks a migrated supergroup as a permanent non-dispatch for %s", (_name, error) => {
+    const caught = captureTelegramSendError(error);
+
+    expect(caught).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(caught).toMatchObject({
+      retryable: false,
+      cause: error,
+    });
+    expect(caught).toMatchObject({ message: expect.stringContaining(String(migratedChatId)) });
+  });
+
+  it.each([
+    ["rate limit", errorWithTelegramCode("Too Many Requests", 429)],
+    ["server failure", errorWithTelegramCode("Bad Gateway", 502)],
+    ["unrelated client rejection", errorWithTelegramCode("Bad Request: message is empty", 400)],
+    ["ambiguous network failure", errorWithCode("read ECONNRESET", "ECONNRESET")],
+    ...(["status", "statusCode"] as const).map((statusField): [string, Error] => [
+      `non-Telegram ${statusField} lookalike`,
+      Object.assign(new Error("migration-shaped HTTP error"), {
+        [statusField]: 400,
+        description: "Bad Request: group chat was upgraded to a supergroup chat",
+        parameters: { migrate_to_chat_id: migratedChatId },
+      }),
+    ]),
+    [
+      "migration parameter without matching description",
+      Object.assign(new Error("different bad request"), {
+        error_code: 400,
+        description: "Bad Request: chat not found",
+        parameters: { migrate_to_chat_id: migratedChatId },
+      }),
+    ],
+    ["plain migration text", new Error("400: group chat was upgraded to a supergroup chat")],
+  ])("does not terminalize a %s", (_name, error) => {
+    expect(captureTelegramSendError(error)).toBe(error);
+  });
+
+  it.each([
+    ["without response parameters", undefined],
+    ["with an unsafe replacement id", Number.MAX_SAFE_INTEGER + 1],
+  ])("terminalizes a migration response %s without surfacing a target", (_name, target) => {
+    const error = Object.assign(new Error("migration"), {
+      error_code: 400,
+      description: "Bad Request: group chat was upgraded to a supergroup chat",
+      ...(target === undefined ? {} : { parameters: { migrate_to_chat_id: target } }),
+    });
+
+    const caught = captureTelegramSendError(error);
+
+    expect(caught).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(caught).toMatchObject({ retryable: false, cause: error });
+    expect(caught).not.toMatchObject({ message: expect.stringContaining(String(target)) });
   });
 });
 

@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "../../packages/normalization-core/src/s
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { isRecord } from "../utils.js";
+import { PLUGIN_MANIFEST_CONTRACT_KEYS } from "./manifest-contract-keys.js";
 import type {
   PluginManifestCapabilityProviderAuthSignal,
   PluginManifestCapabilityProviderConfigSignal,
@@ -19,7 +20,14 @@ import type {
   PluginManifestSecretInputContracts,
   PluginManifestSecretInputPath,
   PluginManifestToolMetadata,
+  PluginManifestToolProfile,
 } from "./manifest-types.js";
+
+function isPluginToolProfile(profile: string): profile is PluginManifestToolProfile {
+  return (
+    profile === "minimal" || profile === "coding" || profile === "messaging" || profile === "full"
+  );
+}
 
 export function normalizeStringListRecord(value: unknown): Record<string, string[]> | undefined {
   if (!isRecord(value)) {
@@ -40,7 +48,7 @@ export function normalizeStringListRecord(value: unknown): Record<string, string
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
-export function normalizeStringRecord(value: unknown): Record<string, string> | undefined {
+export function normalizeManifestStringRecord(value: unknown): Record<string, string> | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
@@ -315,10 +323,13 @@ export function normalizePluginToolMetadata(
 ): Record<string, PluginManifestToolMetadata> | undefined {
   return normalizeNamedMetadataRecord(value, (rawMetadata) => {
     const providerMetadata = normalizeCapabilityProviderMetadataEntry(rawMetadata);
+    const profiles = normalizeTrimmedStringList(rawMetadata.profiles).filter(isPluginToolProfile);
     const metadata = {
       ...providerMetadata,
       ...(rawMetadata.optional === true ? { optional: true } : {}),
+      ...(profiles.length > 0 ? { profiles } : {}),
       ...(rawMetadata.replaySafe === true ? { replaySafe: true } : {}),
+      ...(rawMetadata.sideEffecting === true ? { sideEffecting: true } : {}),
     } satisfies PluginManifestToolMetadata;
     return Object.keys(metadata).length > 0 ? metadata : undefined;
   });
@@ -340,38 +351,12 @@ export function normalizeManifestCatalog(value: unknown): PluginManifestCatalog 
   };
 }
 
-const MANIFEST_CONTRACT_KEYS = [
-  "embeddedExtensionFactories",
-  "agentToolResultMiddleware",
-  "trustedToolPolicies",
-  "externalAuthProviders",
-  "embeddingProviders",
-  "memoryEmbeddingProviders",
-  "speechProviders",
-  "realtimeTranscriptionProviders",
-  "realtimeVoiceProviders",
-  "mediaUnderstandingProviders",
-  "transcriptSourceProviders",
-  "documentExtractors",
-  "imageGenerationProviders",
-  "videoGenerationProviders",
-  "musicGenerationProviders",
-  "webContentExtractors",
-  "webFetchProviders",
-  "webSearchProviders",
-  "workerProviders",
-  "usageProviders",
-  "migrationProviders",
-  "gatewayMethodDispatch",
-  "tools",
-] as const satisfies readonly (keyof PluginManifestContracts)[];
-
 export function normalizeManifestContracts(value: unknown): PluginManifestContracts | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
   const contracts: PluginManifestContracts = {};
-  for (const key of MANIFEST_CONTRACT_KEYS) {
+  for (const key of PLUGIN_MANIFEST_CONTRACT_KEYS) {
     const entries = normalizeTrimmedStringList(value[key]);
     if (entries.length > 0) {
       contracts[key] = entries;
@@ -425,7 +410,8 @@ function normalizeManifestSecretInputPaths(
       continue;
     }
     const expected = entry.expected === "string" ? entry.expected : undefined;
-    const ownerKind = entry.ownerKind === "route" ? entry.ownerKind : undefined;
+    const ownerKind =
+      entry.ownerKind === "capability" || entry.ownerKind === "route" ? entry.ownerKind : undefined;
     normalized.push({
       path: pathLocal,
       ...(expected ? { expected } : {}),

@@ -1,7 +1,24 @@
 // Discord tests cover draft stream plugin behavior.
 import { MessageFlags, Routes } from "discord-api-types/v10";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { createDiscordDraftStream } from "./draft-stream.js";
+
+function createCurrentPreviewHarness(remove = vi.fn(async () => undefined)) {
+  const rest = {
+    post: vi.fn().mockResolvedValueOnce({ id: "m1" }).mockResolvedValueOnce({ id: "m2" }),
+    patch: vi.fn(async () => undefined),
+    delete: remove,
+  };
+  const warn = vi.fn();
+  const stream = createDiscordDraftStream({
+    rest: rest as never,
+    channelId: "c1",
+    throttleMs: 250,
+    warn,
+  });
+  return { rest, stream, warn };
+}
 
 describe("createDiscordDraftStream", () => {
   it("moves the visible draft to a newly adopted thread", async () => {
@@ -50,7 +67,7 @@ describe("createDiscordDraftStream", () => {
     stream.update("working");
     await stream.flush();
     await stream.retarget("thread-1");
-    await stream.cleanupRetargeted();
+    await stream.cleanupPendingMessages();
 
     expect(rest.delete).toHaveBeenNthCalledWith(1, "/channels/parent/messages/parent-draft");
     expect(rest.delete).toHaveBeenNthCalledWith(2, "/channels/parent/messages/parent-draft");
@@ -77,11 +94,11 @@ describe("createDiscordDraftStream", () => {
     await expect(stream.retarget("thread-1")).rejects.toThrow("retarget replacement failed");
     expect(rest.delete).not.toHaveBeenCalled();
 
-    await stream.cleanupRetargeted();
+    await stream.cleanupPendingMessages();
     expect(rest.delete).toHaveBeenCalledWith("/channels/parent/messages/parent-draft");
   });
 
-  it("holds the first preview until minInitialChars is reached", async () => {
+  it("holds answer deltas below minInitialChars but sends a complete progress update", async () => {
     const rest = {
       post: vi.fn(async () => ({ id: "m1" })),
       patch: vi.fn(async () => undefined),
@@ -99,6 +116,14 @@ describe("createDiscordDraftStream", () => {
 
     expect(rest.post).not.toHaveBeenCalled();
     expect(stream.messageId()).toBeUndefined();
+
+    stream.update("hey", { complete: true });
+    await stream.flush();
+    expect(rest.post).toHaveBeenCalledTimes(1);
+    await stream.deleteCurrentMessage();
+    stream.update("hey");
+    await stream.flush();
+    expect(rest.post).toHaveBeenCalledTimes(1);
   });
 
   it("sends a reply preview, then edits the same message on later flushes", async () => {
@@ -136,16 +161,7 @@ describe("createDiscordDraftStream", () => {
   });
 
   it("deletes the current preview without stopping later draft updates", async () => {
-    const rest = {
-      post: vi.fn().mockResolvedValueOnce({ id: "m1" }).mockResolvedValueOnce({ id: "m2" }),
-      patch: vi.fn(async () => undefined),
-      delete: vi.fn(async () => undefined),
-    };
-    const stream = createDiscordDraftStream({
-      rest: rest as never,
-      channelId: "c1",
-      throttleMs: 250,
-    });
+    const { rest, stream } = createCurrentPreviewHarness();
 
     stream.update("temporary commentary");
     await stream.flush();
@@ -163,6 +179,52 @@ describe("createDiscordDraftStream", () => {
     expect(rest.patch).not.toHaveBeenCalled();
     expect(stream.messageId()).toBe("m2");
   });
+
+  it("retries failed current-preview cleanup without reusing the stale message", async () => {
+    const remove = vi.fn().mockRejectedValueOnce(new Error("transient"));
+    const { rest, stream, warn } = createCurrentPreviewHarness(remove);
+
+    stream.update("temporary commentary");
+    await stream.flush();
+    await stream.deleteCurrentMessage();
+    stream.update("tool progress");
+    await stream.flush();
+    await stream.cleanupPendingMessages();
+
+    expect(rest.delete).toHaveBeenNthCalledWith(1, Routes.channelMessage("c1", "m1"));
+    expect(rest.delete).toHaveBeenNthCalledWith(2, Routes.channelMessage("c1", "m1"));
+    expect(rest.patch).not.toHaveBeenCalled();
+    expect(stream.messageId()).toBe("m2");
+    expect(warn).toHaveBeenCalledWith("discord stream preview cleanup failed: transient");
+  });
+
+  it.each(["clear", "deleteCurrentMessage"] as const)(
+    "%s claims a preview once and preserves its replacement during deletion",
+    async (method) => {
+      const deleteStarted = createDeferred<void>();
+      const finishDelete = createDeferred<void>();
+      const remove = vi.fn(async () => {
+        deleteStarted.resolve();
+        await finishDelete.promise;
+        return undefined;
+      });
+      const { rest, stream } = createCurrentPreviewHarness(remove);
+
+      stream.update("original preview");
+      await stream.flush();
+      const deleting = stream[method]();
+      await deleteStarted.promise;
+      await stream[method]();
+      stream.forceNewMessage();
+      stream.update("replacement preview");
+      await stream.flush();
+      finishDelete.resolve();
+      await deleting;
+
+      expect(rest.delete).toHaveBeenCalledExactlyOnceWith(Routes.channelMessage("c1", "m1"));
+      expect(stream.messageId()).toBe("m2");
+    },
+  );
 
   it("suppresses mentions in preview creates and edits", async () => {
     const rest = {

@@ -88,5 +88,9 @@ export function startBotIdentityRecovery(params: {
     );
   }
 
-  void retryBotIdentityProbe(account, accountId, runtime, abortSignal);
+  void retryBotIdentityProbe(account, accountId, runtime, abortSignal).catch((err: unknown) => {
+    (runtime?.error ?? console.error)(
+      `feishu[${accountId}]: bot identity background retry failed unexpectedly: ${String(err)}`,
+    );
+  });
 }

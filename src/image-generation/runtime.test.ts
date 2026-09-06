@@ -821,6 +821,94 @@ describe("image-generation runtime", () => {
     expect(result.metadata.aspectRatioDerivedFromSize).toBe("16:9");
   });
 
+  it.each([
+    {
+      name: "landscape aspect-ratio hint",
+      aspectRatio: "16:9",
+      expectedSize: "2048x1152",
+      modelSizes: [],
+    },
+    {
+      name: "portrait aspect-ratio hint",
+      aspectRatio: "9:16",
+      expectedSize: "1152x2048",
+      modelSizes: [],
+    },
+    {
+      name: "portrait reference-image edit",
+      aspectRatio: "9:16",
+      expectedSize: "1152x2048",
+      modelSizes: [],
+      edit: true,
+    },
+    {
+      name: "explicit arbitrary dimensions",
+      size: "1536x864",
+      expectedSize: "1536x864",
+      modelSizes: [],
+    },
+    {
+      name: "restricted model-specific dimensions",
+      aspectRatio: "16:9",
+      expectedSize: "1536x1024",
+      modelSizes: ["1536x1024"],
+    },
+  ])(
+    "preserves flexible-model geometry for $name",
+    async ({
+      aspectRatio,
+      edit,
+      expectedSize,
+      modelSizes,
+      size,
+    }: {
+      aspectRatio?: string;
+      edit?: boolean;
+      expectedSize: string;
+      modelSizes: string[];
+      size?: string;
+    }) => {
+      let seenRequest: { aspectRatio?: string; size?: string } | undefined;
+      providers = [
+        {
+          id: "canvas",
+          capabilities: {
+            generate: { supportsSize: true, supportsAspectRatio: false },
+            edit: { enabled: true, supportsSize: true, supportsAspectRatio: false },
+            geometry: {
+              sizes: ["1024x1024", "2048x1152", "1152x2048", "1536x1024"],
+              sizesByModel: { "flexible-image": modelSizes },
+            },
+          },
+          async generateImage(request) {
+            seenRequest = { aspectRatio: request.aspectRatio, size: request.size };
+            return {
+              images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+            };
+          },
+        },
+      ];
+
+      const result = await runGenerateImage({
+        cfg: {
+          agents: { defaults: { imageGenerationModel: { primary: "canvas/flexible-image" } } },
+        } as OpenClawConfig,
+        prompt: "preserve the requested image geometry",
+        aspectRatio,
+        size,
+        ...(edit
+          ? { inputImages: [{ buffer: Buffer.from("reference"), mimeType: "image/png" }] }
+          : {}),
+      });
+
+      expect(seenRequest).toEqual({ aspectRatio: undefined, size: expectedSize });
+      expect(result.ignoredOverrides).toStrictEqual([]);
+      expect(result.normalization?.size).toEqual(
+        aspectRatio ? { applied: expectedSize, derivedFrom: "aspectRatio" } : undefined,
+      );
+    },
+  );
+
   it("uses model-specific geometry lists before provider normalization", async () => {
     let seenRequest:
       | {

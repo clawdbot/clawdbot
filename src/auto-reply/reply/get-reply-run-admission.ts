@@ -1,13 +1,15 @@
 import crypto from "node:crypto";
+import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { clearAutoFallbackPrimaryProbeSelection } from "../../agents/agent-scope.js";
-import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
+import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
+import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
 import { hasResolvedThinkingCatalogEntry } from "../../agents/thinking-runtime.js";
+import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
-  resolveSessionFilePath,
+  resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -15,6 +17,11 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
+import {
+  getSessionWorkAdmissionOwnerRelease,
+  interruptSessionWorkAdmissions,
+} from "../../sessions/session-lifecycle-admission.js";
+import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import {
   formatThinkingLevels,
@@ -22,6 +29,7 @@ import {
   normalizeThinkLevel,
   resolveSupportedThinkingLevel,
 } from "../thinking.js";
+import { removeDirectiveSpan } from "./directive-parsing.js";
 import type { PreparedReplyRunContext } from "./get-reply-run-context.js";
 import {
   loadAgentRunnerRuntime,
@@ -29,15 +37,19 @@ import {
   loadSessionUpdatesRuntime,
   routeThreadIdsMatch,
 } from "./get-reply-run-helpers.js";
-import { resolvePreparedReplyQueueState } from "./get-reply-run-queue.js";
+import {
+  REPLY_RUN_STILL_SHUTTING_DOWN_TEXT,
+  resolvePreparedReplyQueueState,
+} from "./get-reply-run-queue.js";
 import { buildReplyPromptEnvelope } from "./prompt-prelude.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
+import { getExistingFollowupQueue } from "./queue/state.js";
 import {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-  abortReplyRunBySessionId,
+  interruptReplyRunTarget,
   isReplyRunActiveForSessionId,
-  isReplyRunStreamingForSessionId,
+  replyRunRegistry,
   resolveActiveReplyRunThreadId,
   resolveActiveReplyRunSessionId,
   waitForReplyRunEndBySessionId,
@@ -48,6 +60,7 @@ import {
   resolveRoutedDeliveryThreadId,
 } from "./routed-delivery-thread.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
+import { getReplySystemEventContext } from "./system-event-session-key.js";
 
 export async function prepareReplyRunAdmission(context: PreparedReplyRunContext) {
   const {
@@ -64,10 +77,8 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     startupAction,
     startupContextPrelude,
     softResetTail,
-    workspaceDir,
     isMainSession,
     inboundUserContextPromptJoiner,
-    heartbeatRunScope,
     effectiveQueueMode,
     effectiveResetTriggered,
     explicitThinkingLevelOverride,
@@ -95,16 +106,20 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   } = params;
   let { sessionEntry, prefixedBodyBase } = context;
   let { resolvedThinkLevel } = params;
+  let thinkLevelOverride =
+    explicitThinkingLevelOverride ??
+    directives.thinkLevel ??
+    (directives.clearThinkLevel ? ("default" as const) : undefined);
 
   // Extract first-token think hint from the user body BEFORE prepending system events.
-  // If done after, the System: prefix becomes parts[0] and silently shadows any
+  // If done after, the System: prefix becomes the first token and silently shadows any
   // low|medium|high shorthand the user typed.
   if (!resolvedThinkLevel && prefixedBodyBase) {
-    const parts = prefixedBodyBase.split(/\s+/);
-    const maybeLevel = normalizeThinkLevel(parts[0]);
+    const firstToken = prefixedBodyBase.split(/\s+/, 1)[0] ?? "";
+    const maybeLevel = normalizeThinkLevel(firstToken);
     const thinkingCatalog = maybeLevel
       ? await traceRunPhase("reply.resolve_thinking_catalog_for_hint", () =>
-          modelState.resolveThinkingCatalog(),
+          modelState.resolveThinkingCatalog({ provider, model }),
         )
       : undefined;
     if (
@@ -118,7 +133,8 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       })
     ) {
       resolvedThinkLevel = maybeLevel;
-      prefixedBodyBase = parts.slice(1).join(" ").trim();
+      thinkLevelOverride = maybeLevel;
+      prefixedBodyBase = removeDirectiveSpan(prefixedBodyBase, 0, firstToken.length);
     }
   }
   const prefixedBodyCore = prefixedBodyBase;
@@ -130,19 +146,35 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       ? `[Thread starter - for context]\n${threadStarterBody}`
       : undefined;
   const drainedSystemEventBlocks: string[] = [];
-  const rebuildPromptBodies = async () => {
-    if (!useFastReplyRuntime && heartbeatRunScope !== "commitment-only") {
+  const drainSystemEventBlocks = async () => {
+    if (useFastReplyRuntime) {
+      return;
+    }
+    const eventContext = getReplySystemEventContext(opts);
+    const routeSystemEventSessionKey = normalizeOptionalString(eventContext?.sessionKey);
+    const systemEventSessionKeys = context.isHeartbeat
+      ? [routeSystemEventSessionKey ?? sessionKey]
+      : routeSystemEventSessionKey && routeSystemEventSessionKey !== sessionKey
+        ? [routeSystemEventSessionKey, sessionKey]
+        : [sessionKey];
+    for (const systemEventSessionKey of systemEventSessionKeys) {
+      const isCurrentSession = systemEventSessionKey === sessionKey;
       const eventsBlock = await drainFormattedSystemEvents({
         cfg,
-        sessionKey,
-        isMainSession,
-        isNewSession,
-        suppressHeartbeatOwnedEvents: context.isHeartbeat,
+        agentId,
+        sessionKey: systemEventSessionKey,
+        isMainSession: isCurrentSession && isMainSession,
+        isNewSession: isCurrentSession && isNewSession,
+        // A heartbeat may consume only its prepared generic selection, never
+        // dedicated reminders or arrivals that were not part of this turn.
+        events: context.isHeartbeat ? (eventContext?.events ?? []) : undefined,
       });
       if (eventsBlock) {
         drainedSystemEventBlocks.push(eventsBlock);
       }
     }
+  };
+  const rebuildPromptBodies = () => {
     const { activeGoalContext, inboundUserContext } = context.getInboundContext();
     return buildReplyPromptEnvelope({
       ctx,
@@ -173,6 +205,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     : await traceRunPhase("reply.ensure_skill_snapshot", async () => {
         const { ensureSkillSnapshot } = await loadSessionUpdatesRuntime();
         return await ensureSkillSnapshot({
+          agentId,
           sessionEntry,
           sessionEntryHandle,
           sessionStore,
@@ -180,7 +213,11 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
           storePath,
           sessionId,
           isFirstTurnInSession,
-          workspaceDir,
+          workspaceDir: context.skillsWorkspaceDir,
+          executionSkillsDir: path.join(
+            sessionEntry?.worktree?.canonicalWorkspaceDir ?? context.workspaceDir,
+            "skills",
+          ),
           cfg,
           execOverrides: params.execOverrides,
           skillFilter: opts?.skillFilter,
@@ -203,7 +240,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   const isRoomEvent = inboundEventKind === "room_event";
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await traceRunPhase("reply.resolve_default_thinking", () =>
-      modelState.resolveDefaultThinkingLevel(),
+      modelState.resolveDefaultThinkingLevel({ provider, model, agentRuntime: thinkingRuntime }),
     );
   }
   const allowedThinkingCatalog = modelState.allowedModelCatalog ?? [];
@@ -225,7 +262,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     // catalog load was a 14s+ reply-blocking cost for known Codex models that
     // already publish authoritative thinking metadata.
     thinkingCatalog = await traceRunPhase("reply.resolve_thinking_catalog", () =>
-      modelState.resolveThinkingCatalog(),
+      modelState.resolveThinkingCatalog({ provider, model }),
     );
     thinkingLevelSupported = isThinkingLevelSupported({
       provider,
@@ -278,21 +315,20 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     resolveCommandTurnTargetSessionKey(ctx) !== undefined
       ? sessionKey
       : undefined;
-  if (
-    commandTurnContinuationTargetKey === undefined &&
-    providedReplyOperation !== undefined &&
-    providedReplyOperation.result === null &&
-    providedReplyOperation.phase === "queued" &&
-    sessionId !== undefined &&
-    sessionId !== providedReplyOperation.sessionId
-  ) {
-    // Dispatch reserves a queued operation before session init. If stale init
-    // rotates the session, move the reservation so later steer/abort paths
-    // target the session that will actually run. Command-turn continuations
-    // rebind after slot adoption below: rebinding first would collide with a
-    // still-active target operation that owns the same session ID.
-    providedReplyOperation.updateSessionId(sessionId);
-  }
+  const rebindProvidedReplyOperation = (nextSessionId: string) => {
+    if (
+      commandTurnContinuationTargetKey === undefined &&
+      providedReplyOperation !== undefined &&
+      providedReplyOperation.result === null &&
+      providedReplyOperation.phase === "queued" &&
+      nextSessionId !== providedReplyOperation.sessionId
+    ) {
+      // Dispatch can reserve a queued operation before session init discovers the
+      // authoritative row. Keep steer/abort and durable admission on that session.
+      // Command continuations rebind only after adopting the target slot below.
+      providedReplyOperation.updateSessionId(nextSessionId);
+    }
+  };
   const isOwnPreDispatchOperationSession = (candidateSessionId: string | undefined): boolean =>
     providedReplyOperation !== undefined &&
     providedReplyOperation.result === null &&
@@ -316,10 +352,11 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
           sessionEntry)
         : sessionEntry;
     const latestSessionId = latestSessionEntry?.sessionId ?? sessionIdFinal;
+    rebindProvidedReplyOperation(latestSessionId);
     opts?.onSessionPrepared?.({ sessionKey, sessionId: latestSessionId, storePath });
     const sessionFile = storePath
       ? formatSqliteSessionFileMarker({ agentId, sessionId: latestSessionId, storePath })
-      : resolveSessionFilePath(latestSessionId, latestSessionEntry, sessionFilePathOptions);
+      : resolveSessionFilePathCore(latestSessionId, latestSessionEntry, sessionFilePathOptions);
     return { sessionEntry: latestSessionEntry, sessionId: latestSessionId, sessionFile };
   };
   let preparedSessionState = resolvePreparedSessionState();
@@ -349,6 +386,23 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   )
     ? undefined
     : rawActiveSessionIdForInterrupt;
+  const shouldPreemptHeartbeat =
+    !isRoomEvent && !context.isHeartbeat && rawActiveSessionIdForInterrupt !== undefined;
+  const heartbeatPreemption =
+    shouldPreemptHeartbeat && embeddedAgentRuntime
+      ? await embeddedAgentRuntime.preemptAndDrainEmbeddedHeartbeatRun(
+          rawActiveSessionIdForInterrupt,
+          REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+        )
+      : "not-heartbeat";
+  if (heartbeatPreemption === "timed-out") {
+    typing.cleanup();
+    return {
+      kind: "reply",
+      reply: { text: REPLY_RUN_STILL_SHUTTING_DOWN_TEXT },
+    } as const;
+  }
+  const visibleTurnPreemptsHeartbeat = heartbeatPreemption === "drained";
   if (
     activeRunQueueMode === "interrupt" &&
     !isRoomEvent &&
@@ -356,10 +410,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     (laneSize > 0 || activeSessionIdForInterrupt)
   ) {
     const cleared = clearCommandLane(sessionLaneKey);
-    const aborted = embeddedAgentRuntime?.abortEmbeddedAgentRun(
-      activeSessionIdForInterrupt ?? preparedSessionState.sessionId,
-    );
-    logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
+    logVerbose(`Cleared ${cleared} queued command(s) before interrupting ${sessionLaneKey}`);
   }
   const agentHarnessPolicy = useFastReplyRuntime
     ? undefined
@@ -370,19 +421,13 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         agentId,
         sessionKey: context.runtimePolicySessionKey,
       });
-  const resolveAcceptedAuthProfileProviders = () =>
-    agentHarnessPolicy
-      ? listOpenAIAuthProfileProvidersForAgentRuntime({
-          provider,
-          harnessRuntime: agentHarnessPolicy.runtime,
-          config: cfg,
-        })
-      : [provider];
   const resolveRuntimeAuthProfile = async () => {
     if (useFastReplyRuntime) {
       return {
         authProfileId: preparedSessionState.sessionEntry?.authProfileOverride,
-        authProfileIdSource: preparedSessionState.sessionEntry?.authProfileOverrideSource,
+        authProfileIdSource: resolveCollapsedSessionAuthPinSource(
+          preparedSessionState.sessionEntry,
+        ),
       };
     }
     const shouldUseEphemeralSession = params.autoFallbackPrimaryProbe !== undefined;
@@ -398,23 +443,24 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       shouldUseEphemeralSession && authSessionEntry
         ? { [authSessionKey]: authSessionEntry }
         : sessionStore;
-    const resolvedAuthProfileId = await resolveSessionAuthProfileOverride({
+    const selection = await resolveSessionAuthSelection({
       cfg,
       provider,
-      acceptedProviderIds: resolveAcceptedAuthProfileProviders(),
+      modelId: model,
+      ...(agentHarnessPolicy ? { harnessRuntime: agentHarnessPolicy.runtime } : {}),
       agentDir,
       sessionEntry: authSessionEntry,
       sessionStore: authSessionStore,
       sessionKey: authSessionKey,
       storePath: shouldUseEphemeralSession ? undefined : storePath,
       isNewSession,
+      // Only an authenticated Gateway profile establishes a person-linked pin;
+      // channel senders read as observations and resolve to undefined here.
+      requesterProfileId: readSessionInputProfileId(ctx),
     });
     return {
-      authProfileId: resolvedAuthProfileId,
-      authProfileIdSource:
-        resolvedAuthProfileId && authSessionEntry?.authProfileOverride === resolvedAuthProfileId
-          ? authSessionEntry.authProfileOverrideSource
-          : undefined,
+      authProfileId: selection?.profileId,
+      authProfileIdSource: selection?.source,
     };
   };
   let { authProfileId, authProfileIdSource } = await traceRunPhase(
@@ -440,16 +486,28 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     resolveActiveEmbeddedSessionId() ??
     resolveActiveReplyOperationSessionId() ??
     preparedSessionState.sessionId;
+  let recoveryOwnerActive = false;
   const resolveQueueBusyState = () => {
     const embeddedActiveSessionId = resolveActiveEmbeddedSessionId();
     const replyOperationActiveSessionId = resolveActiveReplyOperationSessionId();
+    const recoveryOwnerRelease = storePath
+      ? getSessionWorkAdmissionOwnerRelease({
+          scope: storePath,
+          identities: [sessionKey, preparedSessionState.sessionId],
+          owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
+        })
+      : undefined;
+    recoveryOwnerActive = recoveryOwnerRelease !== undefined;
     const activeSessionId =
       embeddedActiveSessionId ?? replyOperationActiveSessionId ?? preparedSessionState.sessionId;
-    if (!activeSessionId || (!embeddedAgentRuntime && !replyOperationActiveSessionId)) {
-      return { activeSessionId: undefined, isActive: false, isStreaming: false };
+    if (
+      !activeSessionId ||
+      (!embeddedAgentRuntime && !replyOperationActiveSessionId && !recoveryOwnerActive)
+    ) {
+      return { activeSessionId: undefined, isActive: false };
     }
-    if (isOwnPreDispatchOperationSession(activeSessionId)) {
-      return { activeSessionId, isActive: false, isStreaming: false };
+    if (!recoveryOwnerRelease && isOwnPreDispatchOperationSession(activeSessionId)) {
+      return { activeSessionId, isActive: false };
     }
     const replyOperationActive =
       replyOperationActiveSessionId != null &&
@@ -459,12 +517,8 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       isActive:
         (embeddedActiveSessionId != null &&
           (embeddedAgentRuntime?.isEmbeddedAgentRunActive(embeddedActiveSessionId) ?? false)) ||
-        replyOperationActive,
-      isStreaming:
-        (embeddedActiveSessionId != null &&
-          (embeddedAgentRuntime?.isEmbeddedAgentRunStreaming(embeddedActiveSessionId) ?? false)) ||
-        (replyOperationActiveSessionId != null &&
-          isReplyRunStreamingForSessionId(replyOperationActiveSessionId)),
+        replyOperationActive ||
+        recoveryOwnerActive,
     };
   };
   if (commandTurnContinuationTargetKey && providedReplyOperation) {
@@ -496,21 +550,39 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       providedReplyOperation.updateSessionId(sessionId);
     }
   }
-  const { activeSessionId, isActive, isStreaming } = resolveQueueBusyState();
+  const { activeSessionId, isActive } = resolveQueueBusyState();
+  const activeRunInterruptTarget =
+    activeRunQueueMode === "interrupt" && sessionKey
+      ? replyRunRegistry.resolveCurrentInterruptTarget(sessionKey)
+      : undefined;
+  const pendingQueue = getExistingFollowupQueue(queueKey);
+  const queueAdmissionState = !pendingQueue
+    ? "empty"
+    : pendingQueue.items.some((item) => !item.steerPending) ||
+        pendingQueue.inFlight.size > 0 ||
+        pendingQueue.droppedCount > 0
+      ? "ready"
+      : "steering";
   const activeRunAcceptsCurrentThread = resolveActiveRunAcceptsCurrentThread({ isActive });
   const shouldSteer =
     !isRoomEvent &&
+    queueAdmissionState !== "ready" &&
     activeRunAcceptsCurrentThread &&
     !context.isHeartbeat &&
     !effectiveResetTriggered &&
+    !visibleTurnPreemptsHeartbeat &&
+    !recoveryOwnerActive &&
     resolvedQueue.mode === "steer";
   const shouldFollowup =
     !effectiveResetTriggered &&
-    ((isRoomEvent && isActive) ||
-      resolvedQueue.mode === "steer" ||
-      resolvedQueue.mode === "followup" ||
-      resolvedQueue.mode === "collect");
+    (recoveryOwnerActive ||
+      (!visibleTurnPreemptsHeartbeat &&
+        ((isRoomEvent && isActive) ||
+          resolvedQueue.mode === "steer" ||
+          resolvedQueue.mode === "followup" ||
+          resolvedQueue.mode === "collect")));
   const activeRunQueueAction = resolveActiveRunQueueAction({
+    queueAdmissionState,
     isActive,
     isHeartbeat: context.isHeartbeat,
     shouldFollowup,
@@ -524,11 +596,22 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       queueMode: activeRunQueueMode,
       sessionKey,
       sessionId: sessionIdFinal,
-      abortActiveRun: (activeRunSessionId) => {
-        const embeddedAborted =
-          embeddedAgentRuntime?.abortEmbeddedAgentRun(activeRunSessionId) ?? false;
-        const replyOperationAborted = abortReplyRunBySessionId(activeRunSessionId);
-        return embeddedAborted || replyOperationAborted;
+      interruptActiveRun: async () => {
+        if (activeRunInterruptTarget) {
+          return (
+            await interruptReplyRunTarget(
+              activeRunInterruptTarget,
+              REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+            )
+          ).settled;
+        }
+        return storePath
+          ? await interruptSessionWorkAdmissions({
+              scope: storePath,
+              identities: [sessionKey, activeSessionId, preparedSessionState.sessionId],
+              timeoutMs: REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+            })
+          : false;
       },
       waitForActiveRunEnd: (activeRunSessionId) =>
         isReplyRunActiveForSessionId(activeRunSessionId)
@@ -558,11 +641,23 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       return { kind: "reply", reply: queueState.reply } as const;
     }
   }
+  if (activeRunQueueAction !== "drop") {
+    await traceRunPhase("reply.drain_system_events", () => drainSystemEventBlocks());
+    ({
+      prefixedCommandBody,
+      queuedBody,
+      transcriptBody,
+      transcriptCommandBody,
+      media: promptMedia,
+      currentInboundContext,
+    } = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies()));
+  }
 
   return {
     kind: "ready",
     context,
     resolvedThinkLevel,
+    thinkLevelOverride,
     thinkingCatalog,
     sessionEntry,
     skillsSnapshot,
@@ -584,8 +679,8 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     queueKey,
     shouldSteer,
     shouldFollowup,
+    queueAdmissionState,
     isActive,
-    isStreaming,
     authProfileId,
     authProfileIdSource,
   } as const;

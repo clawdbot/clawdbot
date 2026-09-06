@@ -2,7 +2,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listConversations } from "../config/sessions/conversation-registry.js";
-import { patchSessionEntry, upsertSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  patchSessionEntryCore,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import {
   getSessionKysely,
   resolveSqliteReadScope,
@@ -49,13 +52,13 @@ describe("doctor Telegram General-topic conversation repair", () => {
       normalizeSessionDeliveryState({
         context: { channel: "telegram", accountId: "default", to, threadId: "1" },
       });
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: "topic-1-session",
       updatedAt: 100,
       chatType: "group",
       delivery: delivery("telegram:-1001234567890:topic:1"),
     });
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: "topic-1-session",
       updatedAt: 200,
       chatType: "group",
@@ -152,7 +155,7 @@ describe("doctor Telegram General-topic conversation repair", () => {
   it("canonicalizes a legacy-only current entry before later session writes", async () => {
     const sessionKey = "agent:main:telegram:group:-1002223334444:topic:1";
     const scope = { agentId: "main", env, sessionKey, storePath };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: "legacy-only-session",
       updatedAt: 100,
       chatType: "group",
@@ -185,7 +188,7 @@ describe("doctor Telegram General-topic conversation repair", () => {
       }),
     ]);
 
-    await patchSessionEntry(scope, () => ({ displayName: "harmless later write" }));
+    await patchSessionEntryCore(scope, () => ({ displayName: "harmless later write" }));
     expect(listConversations(scope, { channel: "telegram" })).toEqual([
       expect.objectContaining({
         target: "telegram:-1002223334444",

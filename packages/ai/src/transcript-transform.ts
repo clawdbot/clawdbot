@@ -1,6 +1,5 @@
-// Package-owned transcript transform used by providers and the inert transport host.
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveModelBoundThinkingReplayMode } from "./providers/anthropic-model-contract.js";
+import { isImageWithMediaPayload } from "./providers/tool-result-text.js";
 import type {
   Api,
   AssistantMessage,
@@ -9,265 +8,213 @@ import type {
   Model,
   TextContent,
   ToolCall,
-  ToolResultMessage,
 } from "./types.js";
 
 const NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)";
 const NON_VISION_TOOL_IMAGE_PLACEHOLDER = "(tool image omitted: model does not support images)";
 
-function isImageWithMediaPayload<T>(block: T): block is T & { type: "image"; data: string } {
-  return (
-    isRecord(block) &&
-    block.type === "image" &&
-    typeof block.data === "string" &&
-    block.data.trim().length > 0
-  );
-}
-
 function replaceImagesWithPlaceholder(
   content: (TextContent | ImageContent)[],
   placeholder: string,
-): TextContent[] {
-  const result: TextContent[] = [];
-  let previousWasPlaceholder = false;
+): (TextContent | ImageContent)[] {
+  const result: (TextContent | ImageContent)[] = [];
 
   for (const block of content) {
-    if (block.type === "image") {
-      if (!isImageWithMediaPayload(block)) {
-        continue;
-      }
-      if (!previousWasPlaceholder) {
-        result.push({ type: "text", text: placeholder });
-      }
-      previousWasPlaceholder = true;
+    if (block.type !== "image") {
+      result.push(block);
       continue;
     }
-
-    result.push(block);
-    previousWasPlaceholder = block.text === placeholder;
+    const previous = result.at(-1);
+    const repeated = previous?.type === "text" && previous.text === placeholder;
+    if (isImageWithMediaPayload(block) && !repeated) {
+      result.push({ type: "text", text: placeholder });
+    }
   }
 
   return result;
 }
 
-function downgradeUnsupportedImages<TApi extends Api>(
-  messages: Message[],
+function transformAssistant<TApi extends Api>(
+  message: AssistantMessage,
   model: Model<TApi>,
-): Message[] {
-  if (model.input.includes("image")) {
-    return messages;
-  }
-
-  return messages.map((msg) => {
-    if (msg.role === "user" && Array.isArray(msg.content)) {
-      return {
-        ...msg,
-        content: replaceImagesWithPlaceholder(msg.content, NON_VISION_USER_IMAGE_PLACEHOLDER),
-      };
-    }
-
-    if (msg.role === "toolResult") {
-      return {
-        ...msg,
-        content: replaceImagesWithPlaceholder(msg.content, NON_VISION_TOOL_IMAGE_PLACEHOLDER),
-      };
-    }
-
-    return msg;
+  toolCallIdMap: Map<string, string>,
+  normalizeToolCallId?: (id: string, model: Model<TApi>, source: AssistantMessage) => string,
+): AssistantMessage {
+  const replayMode = resolveModelBoundThinkingReplayMode({
+    source: {
+      provider: message.provider,
+      api: message.api,
+      modelId: message.model,
+      responseModelId: message.responseModel,
+    },
+    target: {
+      provider: model.provider,
+      api: model.api,
+      modelId: model.id,
+      modelParams: model.params,
+    },
   });
+  const sameModel =
+    replayMode === "preserve" ||
+    (message.provider === model.provider &&
+      message.api === model.api &&
+      message.model === model.id);
+  const blocks =
+    typeof message.content === "string"
+      ? [{ type: "text" as const, text: message.content }]
+      : message.content;
+  const content = blocks.flatMap((block) => {
+    if (block.type === "thinking") {
+      if (replayMode === "drop") {
+        return [];
+      }
+      if (block.redacted) {
+        return sameModel ? block : [];
+      }
+      if (sameModel && block.thinkingSignature) {
+        return block;
+      }
+      if (!block.thinking?.trim()) {
+        return [];
+      }
+      return sameModel ? block : { type: "text" as const, text: block.thinking };
+    }
+    if (block.type === "text") {
+      return sameModel ? block : { type: "text" as const, text: block.text };
+    }
+    // Pairing uses these IDs as shared keys, before model-specific normalization runs.
+    const trimmedId = block.id.trim();
+    if (sameModel) {
+      return trimmedId === block.id ? block : Object.assign({}, block, { id: trimmedId });
+    }
+    const { thoughtSignature: _, async: _async, ...unsigned } = block;
+    const id = normalizeToolCallId?.(trimmedId, model, message) ?? trimmedId;
+    if (id !== trimmedId) {
+      toolCallIdMap.set(trimmedId, id);
+    }
+    return id === block.id ? unsigned : Object.assign({}, unsigned, { id });
+  });
+  return { ...message, content };
 }
 
-/**
- * Normalize tool call ID for cross-provider compatibility.
- * OpenAI Responses API generates IDs that are 450+ chars with special characters like `|`.
- * Anthropic APIs require IDs matching ^[a-zA-Z0-9_-]+$ (max 64 chars).
- */
 export function transformMessages<TApi extends Api>(
   messages: Message[],
   model: Model<TApi>,
   normalizeToolCallId?: (id: string, model: Model<TApi>, source: AssistantMessage) => string,
 ): Message[] {
-  // Build a map of original tool call IDs to normalized IDs
   const toolCallIdMap = new Map<string, string>();
-  const normalizedMessages = messages.map((msg) =>
-    msg.content == null ? { ...msg, content: [] } : msg,
-  );
-  const imageAwareMessages = downgradeUnsupportedImages(normalizedMessages, model);
-
-  // First pass: transform messages (unsupported image downgrade, thinking blocks, tool call ID normalization)
-  const transformed = imageAwareMessages.map((msg) => {
-    // User messages pass through unchanged
-    if (msg.role === "user") {
-      return msg;
-    }
-
-    // Handle toolResult messages - normalize toolCallId if we have a mapping
-    if (msg.role === "toolResult") {
-      const normalizedId = toolCallIdMap.get(msg.toolCallId);
-      if (normalizedId && normalizedId !== msg.toolCallId) {
-        return Object.assign({}, msg, { toolCallId: normalizedId });
-      }
-      return msg;
-    }
-
-    // Assistant messages need transformation check
-    if (msg.role === "assistant") {
-      const assistantMsg = msg;
-      const modelBoundThinkingReplayMode = resolveModelBoundThinkingReplayMode({
-        source: {
-          provider: assistantMsg.provider,
-          api: assistantMsg.api,
-          modelId: assistantMsg.model,
-          responseModelId: assistantMsg.responseModel,
-        },
-        target: {
-          provider: model.provider,
-          api: model.api,
-          modelId: model.id,
-          modelParams: model.params,
-        },
-      });
-      const isSameModel =
-        modelBoundThinkingReplayMode === "preserve" ||
-        (assistantMsg.provider === model.provider &&
-          assistantMsg.api === model.api &&
-          assistantMsg.model === model.id);
-
-      // Public plugin-sdk/llm exports transformMessages; keep accepting legacy
-      // assistant strings from external provider adapters even though session
-      // JSONL replay normalizes them at ingest.
-      const contentBlocks =
-        typeof assistantMsg.content === "string"
-          ? [{ type: "text" as const, text: assistantMsg.content }]
-          : assistantMsg.content;
-
-      const transformedContent = contentBlocks.flatMap((block) => {
-        if (block.type === "thinking") {
-          if (modelBoundThinkingReplayMode === "drop") {
-            return [];
-          }
-          // Redacted thinking is opaque encrypted content, only valid for the same model.
-          // Drop it for cross-model to avoid API errors.
-          if (block.redacted) {
-            return isSameModel ? block : [];
-          }
-          // For same model: keep thinking blocks with signatures (needed for replay)
-          // even if the thinking text is empty (OpenAI encrypted reasoning)
-          if (isSameModel && block.thinkingSignature) {
-            return block;
-          }
-          // Skip empty thinking blocks, convert others to plain text
-          if (!block.thinking || block.thinking.trim() === "") {
-            return [];
-          }
-          if (isSameModel) {
-            return block;
-          }
-          return {
-            type: "text" as const,
-            text: block.thinking,
-          };
-        }
-
-        if (block.type === "text") {
-          if (isSameModel) {
-            return block;
-          }
-          return {
-            type: "text" as const,
-            text: block.text,
-          };
-        }
-
+  // Other model contracts require ordinary adjacent call/results. Preserve real
+  // delayed outcomes before stripping the source model's async capability.
+  const asyncOwners = new Map<string, AssistantMessage>();
+  const relocated = new Map<AssistantMessage, Message[]>();
+  const movedResults = new Set<Message>();
+  for (const message of messages) {
+    if (message.role === "assistant") {
+      const sameModel =
+        message.provider === model.provider &&
+        message.api === model.api &&
+        message.model === model.id;
+      for (const block of message.content ?? []) {
         if (block.type === "toolCall") {
-          const toolCall = block;
-          let normalizedToolCall: ToolCall = toolCall;
-
-          if (!isSameModel && toolCall.thoughtSignature) {
-            normalizedToolCall = Object.assign({}, toolCall);
-            delete (normalizedToolCall as { thoughtSignature?: string }).thoughtSignature;
+          const id = block.id.trim();
+          if (block.async && !sameModel) {
+            asyncOwners.set(id, message);
+          } else {
+            asyncOwners.delete(id);
           }
-
-          if (!isSameModel && normalizeToolCallId) {
-            const normalizedId = normalizeToolCallId(toolCall.id, model, assistantMsg);
-            if (normalizedId !== toolCall.id) {
-              toolCallIdMap.set(toolCall.id, normalizedId);
-              normalizedToolCall = Object.assign({}, normalizedToolCall, { id: normalizedId });
-            }
-          }
-
-          return normalizedToolCall;
-        }
-
-        return block;
-      });
-
-      return Object.assign({}, assistantMsg, { content: transformedContent });
-    }
-    return msg;
-  });
-
-  // Second pass: insert synthetic empty tool results for orphaned tool calls
-  // This preserves thinking signatures and satisfies API requirements
-  const result: Message[] = [];
-  let pendingToolCalls: ToolCall[] = [];
-  let existingToolResultIds = new Set<string>();
-  const insertSyntheticToolResults = () => {
-    if (pendingToolCalls.length > 0) {
-      for (const tc of pendingToolCalls) {
-        if (!existingToolResultIds.has(tc.id)) {
-          result.push({
-            role: "toolResult",
-            toolCallId: tc.id,
-            toolName: tc.name,
-            content: [{ type: "text", text: "No result provided" }],
-            isError: true,
-            timestamp: Date.now(),
-          } as ToolResultMessage);
         }
       }
-      pendingToolCalls = [];
-      existingToolResultIds = new Set();
-    }
-  };
-
-  for (const msg of transformed) {
-    if (msg.role === "assistant") {
-      // If we have pending orphaned tool calls from a previous assistant, insert synthetic results now
-      insertSyntheticToolResults();
-
-      // Skip errored/aborted assistant messages entirely.
-      // These are incomplete turns that shouldn't be replayed:
-      // - May have partial content (reasoning without message, incomplete tool calls)
-      // - Replaying them can cause API errors (e.g., OpenAI "reasoning without following item")
-      // - The model should retry from the last valid state
-      const assistantMsg = msg as AssistantMessage;
-      if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
-        continue;
+    } else if (message.role === "toolResult") {
+      const id = message.toolCallId.trim();
+      const owner = asyncOwners.get(id);
+      if (owner) {
+        const results = relocated.get(owner) ?? [];
+        results.push(message);
+        relocated.set(owner, results);
+        movedResults.add(message);
+        asyncOwners.delete(id);
       }
-
-      // Track tool calls from this assistant message
-      const toolCalls = assistantMsg.content.filter((b) => b.type === "toolCall");
-      if (toolCalls.length > 0) {
-        pendingToolCalls = toolCalls;
-        existingToolResultIds = new Set();
-      }
-
-      result.push(msg);
-    } else if (msg.role === "toolResult") {
-      existingToolResultIds.add(msg.toolCallId);
-      result.push(msg);
-    } else if (msg.role === "user") {
-      // User message interrupts tool flow - insert synthetic results for orphaned calls
-      insertSyntheticToolResults();
-      result.push(msg);
-    } else {
-      result.push(msg);
     }
   }
+  const source =
+    movedResults.size > 0
+      ? messages.flatMap((message) =>
+          movedResults.has(message)
+            ? []
+            : [message, ...(message.role === "assistant" ? (relocated.get(message) ?? []) : [])],
+        )
+      : messages;
+  const supportsImages = model.input.includes("image");
+  const result: Message[] = [];
+  const pendingAsyncCalls = new Map<string, ToolCall>();
+  let pendingToolCalls: ToolCall[] = [];
+  let existingToolResultIds = new Set<string>();
+  const flushToolCalls = () => {
+    for (const call of pendingToolCalls) {
+      if (!existingToolResultIds.has(call.id)) {
+        result.push({
+          role: "toolResult",
+          toolCallId: call.id,
+          toolName: call.name,
+          content: [{ type: "text", text: "No result provided" }],
+          isError: true,
+          timestamp: Date.now(),
+        });
+      }
+    }
+    pendingToolCalls = [];
+    existingToolResultIds = new Set();
+  };
 
-  // If the conversation ends with unresolved tool calls, synthesize results now.
-  insertSyntheticToolResults();
-
+  for (let message of source) {
+    if (message.content == null) {
+      message = { ...message, content: [] };
+    }
+    if (message.role === "assistant") {
+      message = transformAssistant(message, model, toolCallIdMap, normalizeToolCallId);
+      flushToolCalls();
+      if (message.stopReason === "error" || message.stopReason === "aborted") {
+        continue;
+      }
+      pendingToolCalls = message.content.filter((block): block is ToolCall => {
+        if (block.type !== "toolCall") {
+          return false;
+        }
+        if (block.async) {
+          pendingAsyncCalls.set(block.id, block);
+          return false;
+        }
+        return true;
+      });
+    } else {
+      if (!supportsImages && typeof message.content !== "string") {
+        message = {
+          ...message,
+          content: replaceImagesWithPlaceholder(
+            message.content,
+            message.role === "user"
+              ? NON_VISION_USER_IMAGE_PLACEHOLDER
+              : NON_VISION_TOOL_IMAGE_PLACEHOLDER,
+          ),
+        };
+      }
+      if (message.role === "toolResult") {
+        const trimmedId = message.toolCallId.trim();
+        const toolCallId = toolCallIdMap.get(trimmedId) ?? trimmedId;
+        if (toolCallId !== message.toolCallId) {
+          message = { ...message, toolCallId };
+        }
+        existingToolResultIds.add(toolCallId);
+        pendingAsyncCalls.delete(toolCallId);
+      } else {
+        flushToolCalls();
+      }
+    }
+    result.push(message);
+  }
+  // Async calls may own results after later assistant fragments. Only a closed
+  // history without their result needs the ordinary missing-result repair.
+  pendingToolCalls.push(...pendingAsyncCalls.values());
+  flushToolCalls();
   return result;
 }
