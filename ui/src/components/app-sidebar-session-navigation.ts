@@ -38,7 +38,7 @@ import {
   buildSidebarSessionNavigationState,
   collectCategorizedChildRootRows,
   collectPromotedMainChildRows,
-  collectSidebarSessionCandidateRows,
+  collectSidebarSessionRowsByKey,
   compareSidebarSessionRowsByMode,
   collectKnownSidebarSessionCatalogIds,
   collectKnownSidebarSessionGroups,
@@ -659,10 +659,11 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     ) {
       scopedRootRows.push(lineageRoot);
     }
-    const sessionCandidateRows = collectSidebarSessionCandidateRows({
+    const sessionRowsByKey = collectSidebarSessionRowsByKey({
       rows,
       childRowsByParent: childSessionRowsByParent,
     });
+    const sessionCandidateRows = [...sessionRowsByKey.values()];
     const categorizedChildRows = collectCategorizedChildRootRows({
       rows: sessionCandidateRows,
       scopedRoots: scopedRootRows,
@@ -692,8 +693,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     // renders as its live row inside the Coding catalog, never as a thread.
     const projected = projectSessionTree({
       roots: orderedRootRows.filter((row) => !adopted.has(row.key)),
-      agentRows: rows,
-      childRowsByParent: childSessionRowsByParent,
+      rowsByKey: sessionRowsByKey,
       loadingChildKeys: this.sessionData.loadingChildSessionKeys,
       knownSessionAttention: this.attention.knownSessionAttention(),
       toSidebarSession: navigationState.toSidebarSession,

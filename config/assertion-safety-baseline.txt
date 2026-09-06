@@ -2293,7 +2293,7 @@ src/cli/cron-cli/register.cron-simple.ts	2
 src/cli/cron-cli/shared.ts	8
 src/cli/daemon-cli/launchd-recovery.ts	1
 src/cli/daemon-cli/lifecycle.ts	1
-src/cli/daemon-cli/restart-health-probe.ts	9
+src/cli/daemon-cli/restart-health-probe.ts	7
 src/cli/daemon-cli/restart-health.ts	1
 src/cli/daemon-cli/start-repair.ts	1
 src/cli/deps.ts	2
@@ -2327,7 +2327,6 @@ src/cli/pairing-cli.ts	1
 src/cli/parse-duration.ts	2
 src/cli/plugin-install-plan.ts	1
 src/cli/plugins-authoring-command.ts	8
-src/cli/plugins-cli.runtime.ts	2
 src/cli/plugins-command-helpers.ts	1
 src/cli/plugins-install-config.ts	2
 src/cli/plugins-uninstall-command.ts	4
@@ -3288,7 +3287,7 @@ src/plugin-sdk/migration.ts	8
 src/plugin-sdk/plugin-test-api.ts	1
 src/plugin-sdk/provider-auth-copilot-cache.ts	1
 src/plugin-sdk/provider-auth-login-flow-runtime.ts	6
-src/plugin-sdk/provider-auth-result.ts	4
+src/plugin-sdk/provider-auth-result.ts	3
 src/plugin-sdk/provider-auth-runtime.ts	1
 src/plugin-sdk/provider-auth.ts	1
 src/plugin-sdk/provider-catalog-shared.ts	1

@@ -8,6 +8,7 @@ import { readPackageVersion } from "./package-json.js";
 
 const MAX_TREE_BYTES = 1024 * 1024 * 1024;
 const MAX_TREE_ENTRIES = 50_000;
+const MAX_MANIFEST_BYTES = 1024 * 1024;
 const MAX_LAUNCHER_BYTES = 1024 * 1024;
 const MAX_SCAN_MS = 30_000;
 
@@ -197,8 +198,9 @@ export function createPackageIntegrityReader(timeoutMs = MAX_SCAN_MS) {
     }
 
     await visit(root, "");
-    // The manifest can grow after hashing. Keep its metadata reread bounded too.
-    const version = await read(() => readPackageVersion(root, { maxBytes: MAX_TREE_BYTES }));
+    // JSON parsing buffers the manifest, unlike the streamed tree hash. Bound
+    // that allocation separately, including growth after hashing.
+    const version = await read(() => readPackageVersion(root, { maxBytes: MAX_MANIFEST_BYTES }));
     if (!version) {
       throw new Error("Package rollback version is unavailable");
     }

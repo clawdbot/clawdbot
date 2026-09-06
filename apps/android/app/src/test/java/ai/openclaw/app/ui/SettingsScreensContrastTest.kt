@@ -209,7 +209,6 @@ class SettingsScreensContrastTest {
       observe("cron-help", "Open an automation to inspect its configuration and run history.", substring = true)
     }
     composeRule.runOnIdle { route.value = SettingsRoute.Approvals }
-    // Rows can render before the independently propagated refreshing flag settles.
     composeRule.waitUntil(10_000) {
       composeRule.onAllNodesWithText("echo ok").fetchSemanticsNodes().isNotEmpty() &&
         !model.execApprovalInbox.value.refreshing && model.execApprovalInbox.value.approvals
@@ -231,8 +230,9 @@ class SettingsScreensContrastTest {
     gateway.terminal = true
     composeRule.onNodeWithText("Refresh").performScrollTo().performClick()
     composeRule.waitUntil(10_000) {
+      val inbox = model.execApprovalInbox.value
       composeRule.onAllNodesWithText("Approval approval-1").fetchSemanticsNodes().isNotEmpty() &&
-        model.execApprovals.value.isEmpty() && model.execApprovalsNotice.value?.approvalId == "approval-1"
+        inbox.approvals.isEmpty() && inbox.notice?.approvalId == "approval-1"
     }
     assertTrue(
       model.execApprovalInbox.value.approvals
