@@ -44,6 +44,44 @@ Generated locale trees and live translation memory now live in the publish repo:
 - `ar-navigation.json`, `de-navigation.json`, `es-navigation.json`, `fr-navigation.json`, `id-navigation.json`, `it-navigation.json`, `ja-navigation.json`, `ko-navigation.json`, `pl-navigation.json`, `pt-BR-navigation.json`, and `tr-navigation.json` — starter locale labels kept alongside the source repo. Publish sync clones the full English navigation tree, prefixes locale routes, and overlays translated labels by matching shared page anchors.
 - `<lang>.tm.jsonl` — translation memory keyed by workflow, prompt version, language, and text hash.
 
+### Locale code mapping
+
+Three different code families are in play and they do not always match. Mintlify
+`navigation.languages` uses the language code, the generated locale tree and the
+glossary/TM files use the directory code, and the navigation overlay file is named
+after the language code. `GENERATED_LOCALES` in `scripts/docs-sync-publish.mjs` is
+the source of truth for this mapping.
+
+| Mintlify language | Locale directory | Navigation file | Glossary file | TM file | Nav mode |
+| --- | --- | --- | --- | --- | --- |
+| `zh-Hans` | `docs/zh-CN/` | `zh-Hans-navigation.json` | `glossary.zh-CN.json` | `zh-CN.tm.jsonl` | overlay |
+| `zh-Hant` | `docs/zh-TW/` | `zh-Hant-navigation.json` (not present) | `glossary.zh-TW.json` | `zh-TW.tm.jsonl` | clone-en |
+| `ja` | `docs/ja-JP/` | `ja-navigation.json` | `glossary.ja-JP.json` | `ja-JP.tm.jsonl` | clone-en |
+| `es` | `docs/es/` | `es-navigation.json` | `glossary.es.json` | `es.tm.jsonl` | clone-en |
+| `pt-BR` | `docs/pt-BR/` | `pt-BR-navigation.json` | `glossary.pt-BR.json` | `pt-BR.tm.jsonl` | clone-en |
+| `ko` | `docs/ko/` | `ko-navigation.json` | `glossary.ko.json` | `ko.tm.jsonl` | clone-en |
+| `de` | `docs/de/` | `de-navigation.json` | `glossary.de.json` | `de.tm.jsonl` | clone-en |
+| `fr` | `docs/fr/` | `fr-navigation.json` | `glossary.fr.json` | `fr.tm.jsonl` | clone-en |
+| `hi` | `docs/hi/` | `hi-navigation.json` (not present) | `glossary.hi.json` | `hi.tm.jsonl` | clone-en |
+| `ar` | `docs/ar/` | `ar-navigation.json` | `glossary.ar.json` | `ar.tm.jsonl` | clone-en |
+| `it` | `docs/it/` | `it-navigation.json` | `glossary.it.json` | `it.tm.jsonl` | clone-en |
+| `vi` | `docs/vi/` | `vi-navigation.json` (not present) | `glossary.vi.json` | `vi.tm.jsonl` | clone-en |
+| `nl` | `docs/nl/` | `nl-navigation.json` (not present) | `glossary.nl.json` | `nl.tm.jsonl` | clone-en |
+| `fa` | `docs/fa/` | `fa-navigation.json` (not present) | `glossary.fa.json` | `fa.tm.jsonl` | clone-en |
+| `tr` | `docs/tr/` | `tr-navigation.json` | `glossary.tr.json` | `tr.tm.jsonl` | clone-en |
+| `uk` | `docs/uk/` | `uk-navigation.json` (not present) | `glossary.uk.json` | `uk.tm.jsonl` | clone-en |
+| `id` | `docs/id/` | `id-navigation.json` | `glossary.id.json` | `id.tm.jsonl` | clone-en |
+| `pl` | `docs/pl/` | `pl-navigation.json` | `glossary.pl.json` | `pl.tm.jsonl` | clone-en |
+| `th` | `docs/th/` | `th-navigation.json` (not present) | `glossary.th.json` | `th.tm.jsonl` | clone-en |
+| `ru` | `docs/ru/` | `ru-navigation.json` (not present) | `glossary.ru.json` | `ru.tm.jsonl` | clone-en |
+
+Only three locales differ between the two code families: `zh-Hans`/`zh-CN`,
+`zh-Hant`/`zh-TW`, and `ja`/`ja-JP`. Every other locale uses the same code in both
+places. `scripts/docs-i18n` builds the glossary path from the
+directory code (`-lang`), so a glossary must be named `glossary.<dir>.json`, not
+`glossary.<language>.json`. Locales without a navigation file fall back to the
+cloned English tree with route prefixes only.
+
 In this repo, generated locale TM files such as `docs/.i18n/zh-CN.tm.jsonl`, `docs/.i18n/zh-TW.tm.jsonl`, `docs/.i18n/ja-JP.tm.jsonl`, `docs/.i18n/es.tm.jsonl`, `docs/.i18n/pt-BR.tm.jsonl`, `docs/.i18n/ko.tm.jsonl`, `docs/.i18n/de.tm.jsonl`, `docs/.i18n/fr.tm.jsonl`, `docs/.i18n/ar.tm.jsonl`, `docs/.i18n/it.tm.jsonl`, `docs/.i18n/vi.tm.jsonl`, `docs/.i18n/nl.tm.jsonl`, `docs/.i18n/fa.tm.jsonl`, `docs/.i18n/tr.tm.jsonl`, `docs/.i18n/uk.tm.jsonl`, `docs/.i18n/id.tm.jsonl`, `docs/.i18n/pl.tm.jsonl`, and `docs/.i18n/th.tm.jsonl` are intentionally no longer committed.
 
 ## Glossary format
