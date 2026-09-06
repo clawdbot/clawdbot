@@ -306,7 +306,16 @@ describe("prepared bundled provider static catalogs", () => {
         loadBundledProviderStaticCatalogContextModels({
           cfg,
           metadataSnapshot: createMetadataSnapshot(["google"], false),
-          registeredProviders: source === "registered" ? [provider] : [],
+          registeredProviders:
+            source === "registered"
+              ? [
+                  {
+                    pluginId: "google",
+                    provider: { ...provider, pluginId: "not-the-owner" },
+                    source: "fixture",
+                  },
+                ]
+              : [],
           preparedStaticProviderCatalog: {
             providers: source === "prepared" ? [provider] : [],
             entries: [],

@@ -28,6 +28,7 @@ import {
   resolveBundledProviderCompatPluginIds,
   resolveOwningPluginIdsForProviderRef,
 } from "../../plugins/providers.js";
+import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildInlineProviderModels, type InlineModelEntry } from "./model.inline-provider.js";
@@ -441,7 +442,7 @@ async function loadBundledProviderStaticCatalogModels(params: {
 /** Reads static rows from discovery entries and captured owners without activating runtimes. */
 export async function loadBundledProviderStaticCatalogContextModels(
   params: BundledProviderStaticCatalogResolverParams & {
-    registeredProviders?: PreparedProviderStaticCatalog["providers"];
+    registeredProviders?: Readonly<PluginRegistry["providers"]>;
   } = {},
 ): Promise<ProviderRuntimeModel[]> {
   const env = params.env ?? process.env;
@@ -455,7 +456,9 @@ export async function loadBundledProviderStaticCatalogContextModels(
     providers: dedupeByKey(
       [
         ...(params.preparedStaticProviderCatalog?.providers ?? []),
-        ...(params.registeredProviders ?? []),
+        ...(params.registeredProviders ?? []).map(({ pluginId, provider }) =>
+          Object.assign({}, provider, { pluginId }),
+        ),
       ],
       (provider) => `${provider.pluginId}\0${provider.id}`,
     ),
