@@ -46,6 +46,26 @@ describe("sendCronAnnouncePayloadStrict", () => {
     mocks.deliverOutboundPayloads.mockResolvedValue([{ ok: true }]);
   });
 
+  it("forwards the formatting hint to delivery", async () => {
+    await sendCronAnnouncePayloadStrict({
+      deps: {} as never,
+      cfg: {} as never,
+      agentId: "main",
+      jobId: "job-1",
+      target: { channel: "slack", to: "C123" },
+      payload: { text: "*job* done" },
+      formatting: { preRendered: "slack-mrkdwn" },
+      abortSignal: new AbortController().signal,
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ text: "*job* done" }],
+        formatting: { preRendered: "slack-mrkdwn" },
+      }),
+    );
+  });
+
   it("delivers the payload through the resolved target with strict send settings", async () => {
     await sendCronAnnouncePayloadStrict({
       deps: {} as never,

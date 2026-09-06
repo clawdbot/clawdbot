@@ -4,6 +4,7 @@ import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "./delivery-plan.js";
+import { cronAnnounceFormatting } from "./delivery.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
 
 function createPrefixOnlyChannelPlugin(
@@ -764,5 +765,13 @@ describe("resolveFailureDestination", () => {
       to: "slack:U123",
       accountId: undefined,
     });
+  });
+});
+
+describe("cronAnnounceFormatting", () => {
+  it("marks command output as pre-rendered Slack mrkdwn and leaves agent turns to markdown", () => {
+    expect(cronAnnounceFormatting("command")).toEqual({ preRendered: "slack-mrkdwn" });
+    expect(cronAnnounceFormatting("agentTurn")).toBeUndefined();
+    expect(cronAnnounceFormatting("systemEvent")).toBeUndefined();
   });
 });
