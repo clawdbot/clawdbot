@@ -846,7 +846,6 @@ enum class GatewayMethod(
   BoardAction("board.action"),
   SessionsObserverVisibility("sessions.observer.visibility"),
   SessionVisibilitySet("session.visibility.set"),
-  SessionPublicShareSet("session.publicShare.set"),
   SessionMembersList("session.members.list"),
   SessionMembersAdd("session.members.add"),
   SessionMembersRemove("session.members.remove"),
@@ -926,6 +925,7 @@ enum class GatewayMethod(
   TranscriptsStatus("transcripts.status"),
   UpdateReport("update.report"),
   SkillsWorkshopRead("skills.workshop.read"),
+  SessionPublicShareSet("session.publicShare.set"),
 }
 
 enum class GatewayEvent(
