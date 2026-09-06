@@ -41,6 +41,43 @@ See [Plugins](/tools/plugin) for the full plugin system guide, and [Capability m
 
 **Do not use it for:** registering native runtime hooks, declaring the full plugin runtime entrypoint, or npm install metadata. Those belong in your plugin code and `package.json`.
 
+## Native conversation discovery
+
+Plugins exposing conversations created outside OpenClaw declare
+`setup.nativeSessionCatalog` with a `label`, optional `description`, and optional
+`nodeCommands` containing their catalog read/list/resume command names. The
+contract uses the plugin's existing `config.sessionCatalog.enabled` preference.
+Core checks this preference before registered catalog reads, lists, activity
+checks, and the declared node commands execute. Schema-generated defaults for
+`enabled` remain available in plugin-local configuration, but the root runtime
+config retains only an authored value so a default cannot impersonate consent.
+
+Declare commands that expose the native catalog, not independently authorized
+execution transports. Disabling discovery must preserve turns in an already-bound
+conversation; those turns retain their existing execution and node permissions.
+
+New declarations default to off when no preference is authored, including plugins
+installed after configuration creation. Their schemas should also default `enabled`
+to `false`. New configuration files persist `false` for the host-generated catalog
+inventory, including installable official plugins. Explicit values are always kept.
+These opt-out-only entries do not request installation or widen a plugin allowlist;
+an explicit plugin selection or other authored configuration still does.
+
+The host-generated `legacyDefaultEnabled: true` declaration preserves the shipped
+Claude/Codex implicit-on behavior only for existing readable configurations. It is
+an upgrade exception, not a permission an installed third-party manifest can grant.
+Future catalogs do not inherit that exception merely by joining the generated
+inventory. Existing undeclared catalogs retain their previous behavior.
+
+Onboarding offers an unchecked enablement choice when all declared catalogs are
+off; selecting an agent does not imply consent. Explicit selection persists the
+choice for installed declarations too. Detection itself writes no preferences.
+
+Run `pnpm native-catalogs:gen` after changing these declarations and
+`pnpm native-catalogs:check` to verify the official catalog metadata and packaged
+macOS resource. The required `pnpm check` preflight runs this verification. Fresh native configuration creation fails if its privacy-default
+resource is missing.
+
 ## Minimal example
 
 ```json

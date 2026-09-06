@@ -2296,7 +2296,6 @@ src/cli/daemon-cli/lifecycle.ts	1
 src/cli/daemon-cli/restart-health-probe.ts	9
 src/cli/daemon-cli/restart-health.ts	1
 src/cli/daemon-cli/start-repair.ts	1
-src/cli/daemon-cli/status.gather.ts	10
 src/cli/deps.ts	2
 src/cli/devices-cli.runtime.ts	10
 src/cli/directory-cli.ts	7
@@ -3367,9 +3366,8 @@ src/plugins/host-hook-runtime.ts	1
 src/plugins/host-hook-scheduled-turns.ts	7
 src/plugins/host-hook-state.ts	8
 src/plugins/host-hooks.ts	1
-src/plugins/install-managed-npm-state.ts	5
+src/plugins/install-managed-npm-state.ts	2
 src/plugins/install-npm-metadata.ts	1
-src/plugins/install-npm-pack.ts	2
 src/plugins/install-persistence.ts	1
 src/plugins/install-record-commit.ts	3
 src/plugins/install-security-scan.runtime.ts	1

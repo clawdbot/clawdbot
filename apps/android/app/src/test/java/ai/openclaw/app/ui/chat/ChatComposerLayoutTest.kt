@@ -47,6 +47,7 @@ import androidx.compose.ui.test.FontScale
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
@@ -65,11 +66,13 @@ import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
@@ -580,6 +583,88 @@ class ChatComposerLayoutTest {
   }
 
   @Test
+  fun modelSheetKeepsChatVisibleAndDetailsOptional() {
+    showChat(viewportHeight = { 640.dp })
+    composeRule.onNodeWithContentDescription(nativeString("Model")).performClick()
+    val window = composeRule.onNode(isDialog()).getUnclippedBoundsInRoot()
+    val sheet = composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.PaneTitle)).getUnclippedBoundsInRoot()
+    assertTrue("Model sheet must leave chat visible: sheet=$sheet window=$window", sheet.bottom - sheet.top <= (window.bottom - window.top) * 0.6f)
+    composeRule.onNodeWithText(nativeString("Latest model call")).assertDoesNotExist()
+    composeRule.onNodeWithText(nativeString("Default model")).assertIsDisplayed().assertHasClickAction()
+  }
+
+  @Test
+  @Config(qualifiers = "w320dp-h533dp-240dpi")
+  fun modelSheetScrollsWithinSmallWindowWithLargeText() {
+    verifyConstrainedModelSheet(320.dp, 500.dp, 1.5f)
+  }
+
+  @Test
+  @Config(qualifiers = "w640dp-h320dp-240dpi")
+  fun modelSheetScrollsWithinLandscapeWindow() {
+    verifyConstrainedModelSheet(640.dp, 300.dp, 1f)
+  }
+
+  private fun verifyConstrainedModelSheet(
+    width: Dp,
+    height: Dp,
+    fontScale: Float,
+  ) {
+    showChat(viewportWidth = width, viewportHeight = { height }, fontScale = { fontScale })
+    updatePermissions(null, pending = false)
+    val editor = composeRule.onNode(hasSetTextAction())
+    val draftBounds = editor.getUnclippedBoundsInRoot()
+    composeRule.onNodeWithContentDescription(nativeString("Model")).performClick()
+    val window = composeRule.onNode(isDialog()).getUnclippedBoundsInRoot()
+    val sheet = composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.PaneTitle)).getUnclippedBoundsInRoot()
+    assertTrue("Small window must actually constrain the dialog: $window", window.bottom - window.top < 600.dp)
+    assertTrue("Sheet stays compact: $sheet in $window", sheet.bottom - sheet.top <= (window.bottom - window.top) * 0.6f)
+    assertTrue("Sheet stays bottom anchored: $sheet in $window", kotlin.math.abs((sheet.bottom - window.bottom).value) < 1f)
+    composeRule.onNodeWithText(nativeString("Latest model call")).assertDoesNotExist()
+    val details = composeRule.onNode(hasText(nativeString("Details")) and hasClickAction())
+    details.performScrollTo().performClick()
+    listOf("2.1k", "160", "76.5k", "\$0.0015").forEach { value ->
+      composeRule.onNodeWithText(value).performScrollTo().assertIsDisplayed()
+    }
+    details.performScrollTo().performClick()
+    val sheetList = composeRule.onNode(hasAnyAncestor(isDialog()) and SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex))
+    sheetList.performScrollToNode(hasText(nativeString("Permissions")) and hasClickAction())
+    composeRule.onNode(hasText(nativeString("Permissions")) and hasClickAction()).assertIsEnabled().performClick()
+    val permissionSheet = composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.PaneTitle)).getUnclippedBoundsInRoot()
+    assertTrue("Permission page stays compact", permissionSheet.bottom - permissionSheet.top <= (window.bottom - window.top) * 0.6f)
+    sheetList.performScrollToNode(hasText(nativeString("Full access")) and hasClickAction())
+    composeRule.onNode(hasText(nativeString("Full access")) and hasClickAction()).assertIsDisplayed()
+    sheetList.performScrollToNode(hasText(nativeString("Back")) and hasClickAction())
+    composeRule.onNodeWithText(nativeString("Back")).performClick()
+    sheetList.performScrollToNode(hasText(nativeString("Default model")))
+    composeRule
+      .onNodeWithText(nativeString("Default model"))
+      .assertIsDisplayed()
+      .assertHasClickAction()
+      .performClick()
+    composeRule.onNode(isDialog()).assertDoesNotExist()
+    assertEquals("Sheet interactions preserve draft bounds", draftBounds, editor.getUnclippedBoundsInRoot())
+  }
+
+  @Test
+  fun modelSheetPressureHasAccessibleThresholdAndRecoveryLabels() {
+    showChat(viewportHeight = { 640.dp }, fontScale = { 1.5f })
+    composeRule.onNodeWithContentDescription(nativeString("Model")).performClick()
+    for ((percent, label) in listOf(74 to null, 75 to "Warning", 89 to "Warning", 90 to "Critical", 40 to null)) {
+      composeRule.runOnIdle {
+        controller.handleGatewayEvent(
+          "sessions.changed",
+          """{"session":{"key":"${controller.sessionKey.value}","totalTokens":${percent * 1000},"totalTokensFresh":true,"contextTokens":100000}}""",
+        )
+      }
+      for (candidate in listOf("Warning", "Critical")) {
+        val node = composeRule.onNodeWithText(nativeString(candidate))
+        if (candidate == label) node.assertIsDisplayed() else node.assertDoesNotExist()
+      }
+    }
+  }
+
+  @Test
   fun compactPickersExposeFullSettingsWithoutExpandingTheComposer() {
     showChat(viewportWidth = 320.dp, fontScale = { 1.5f }, talkActive = true)
     composeRule.runOnIdle {
@@ -621,7 +706,28 @@ class ChatComposerLayoutTest {
     composeRule.onNode(isDialog()).assertDoesNotExist()
 
     model.performClick()
-    composeRule.onNodeWithText(nativeString("Context: \$detail", "24k / 200k · 12%")).assertIsDisplayed()
+    composeRule.onNodeWithText(nativeString("Context window")).assertIsDisplayed()
+    composeRule.onNodeWithText("24k / 200k · 12%").assertIsDisplayed()
+    composeRule
+      .onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.ProgressBarRangeInfo))
+      .assert(
+        SemanticsMatcher("has 12 percent context progress") { node ->
+          node.config.getOrNull(SemanticsProperties.ProgressBarRangeInfo)?.current == 0.12f
+        },
+      )
+    composeRule.onNodeWithText(nativeString("Latest run")).assertIsDisplayed()
+    composeRule.onAllNodesWithText(nativeString("Non-cached input")).assertCountEquals(1)
+    composeRule.onNodeWithText(nativeString("Latest model call")).assertDoesNotExist()
+    val details = composeRule.onNode(hasText(nativeString("Details")) and hasClickAction())
+    details.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
+    details.performClick()
+    details.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Expanded")))
+    listOf(nativeString("Non-cached input excludes cache reads."), nativeString("Latest model call"), "2.1k", "160", "76.5k", nativeString("Cache read cost"), "\$0.0015").forEach { label ->
+      composeRule.onNodeWithText(label).performScrollTo().assertIsDisplayed()
+    }
+    details.performScrollTo().performClick()
+    details.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
+    composeRule.onNodeWithText(nativeString("Latest model call")).assertDoesNotExist()
     composeRule.onNodeWithText(nativeString("Default model")).assertIsDisplayed().assertHasClickAction()
     composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.Dismiss)).performSemanticsAction(SemanticsActions.Dismiss) { dismiss -> assertTrue(dismiss()) }
     composeRule.onNode(isDialog()).assertDoesNotExist()

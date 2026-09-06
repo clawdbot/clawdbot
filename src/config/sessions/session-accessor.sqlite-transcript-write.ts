@@ -65,7 +65,10 @@ import type {
   SessionTranscriptRuntimeTarget,
   SessionTranscriptWriteTransactionContext,
 } from "./session-accessor.types.js";
-import { projectCompactionAccountingPatch } from "./session-entry-projection.js";
+import {
+  COMPACTION_RUN_USAGE_CLEAR_PATCH,
+  projectCompactionAccountingPatch,
+} from "./session-entry-projection.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import {
@@ -346,8 +349,7 @@ export async function trimTranscriptForManualCompact(
       replaceSqliteTranscriptEventsInTransaction(writeDatabase, resolved, retainedEvents);
       const nextEntry = cloneSessionEntry(freshEntry);
       delete nextEntry.contextBudgetStatus;
-      delete nextEntry.inputTokens;
-      delete nextEntry.outputTokens;
+      Object.assign(nextEntry, COMPACTION_RUN_USAGE_CLEAR_PATCH);
       delete nextEntry.totalTokens;
       delete nextEntry.totalTokensFresh;
       delete nextEntry.totalTokensVersion;

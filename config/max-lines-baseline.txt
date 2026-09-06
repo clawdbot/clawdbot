@@ -460,7 +460,6 @@ src/cli/command-secret-targets.ts
 src/cli/config-cli.test.ts
 src/cli/cron-cli.test.ts
 src/cli/daemon-cli/status.gather.test.ts
-src/cli/daemon-cli/status.gather.ts
 src/cli/daemon-cli/status.print.test.ts
 src/cli/devices-cli.runtime.ts
 src/cli/devices-cli.test.ts

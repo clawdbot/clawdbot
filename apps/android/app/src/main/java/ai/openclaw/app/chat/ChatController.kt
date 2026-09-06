@@ -4796,7 +4796,13 @@ class ChatController internal constructor(
                 adoptInFlightRun(history, runIdsOwnedAfterRequest)
               }
               publishRunPresentation()
-              enqueueTranscriptCacheWrite(requestCacheScope, requestAgentId, sessionKey, history.messages)
+              enqueueTranscriptCacheWrite(
+                requestCacheScope,
+                requestAgentId,
+                sessionKey,
+                history.messages,
+                appliedHistoryEntry.takeIf { appliedPurpose == HistoryRefreshPurpose.RestoreSession && history.sessionInfo != null },
+              )
               HistoryRefreshResult.Applied(historyBranchState, appliedPurpose)
             }
           }
@@ -4954,6 +4960,7 @@ class ChatController internal constructor(
     agentId: String,
     sessionKey: String,
     messages: List<ChatMessage>,
+    sessionInfo: ChatSessionEntry?,
   ) {
     val cache = transcriptCache ?: return
     val capturedScope = requestCacheScope ?: return
@@ -4962,7 +4969,7 @@ class ChatController internal constructor(
     scope.launch(start = CoroutineStart.UNDISPATCHED) {
       cacheMutationMutex.withLock {
         if (capturedScope != currentCacheScope()) return@withLock
-        runCatching { cache.saveTranscript(capturedScope.gatewayId, agentId, sessionKey, messages) }
+        runCatching { cache.saveTranscript(capturedScope.gatewayId, agentId, sessionKey, messages, sessionInfo) }
       }
     }
   }
@@ -6627,6 +6634,13 @@ class ChatController internal constructor(
       return
     }
     val phase = payload["phase"].asStringOrNull()
+    val reason = payload["reason"].asStringOrNull()
+    if (reason == "compact") {
+      // Compaction events omit cleared fields. Read the full owner snapshot rather
+      // than treating those omissions as a patch or inferring usage from the transcript.
+      if (eventKey == _sessionKey.value) refreshHistoryForRecovery() else refreshSessionsForCurrentWindow()
+      return
+    }
     // Durable transcript invalidations need no session snapshot or chat terminal event.
     if (eventKey == _sessionKey.value && (payload["message"] is JsonObject || phase == "message")) {
       refreshCurrentHistoryBestEffort(purpose = HistoryRefreshPurpose.Transcript)
@@ -7611,7 +7625,18 @@ class ChatController internal constructor(
       provenance = parseChatMessageProvenance(obj["provenance"]),
       transcriptMarker = parseChatTranscriptMarker(obj["__openclaw"]),
       senderLabel = obj["senderLabel"].asJsonStringOrNull()?.trim()?.takeIf { role == "user" && it.isNotEmpty() },
+      provider = obj["provider"].asJsonStringOrNull()?.trim()?.takeIf(String::isNotEmpty),
+      model = obj["model"].asJsonStringOrNull()?.trim()?.takeIf(String::isNotEmpty),
+      deliveryMirror = parseChatDeliveryMirror(obj["openclawDeliveryMirror"]),
+      usage = parseChatMessageUsage(obj),
+      cost = parseChatMessageCost(obj),
     )
+  }
+
+  private fun parseChatDeliveryMirror(element: JsonElement?): ChatDeliveryMirror? {
+    val obj = element.asObjectOrNull() ?: return null
+    val kind = obj["kind"].asJsonStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    return ChatDeliveryMirror(kind = kind)
   }
 
   private fun parseChatMessageProvenance(element: JsonElement?): ChatMessageProvenance? {
@@ -8007,8 +8032,10 @@ class ChatController internal constructor(
     preserveSessionSettings: Boolean = false,
   ): ChatSessionEntry? {
     val thinkingLevel = history.thinkingLevel?.trim()?.takeIf(String::isNotEmpty)
+    // Full sessionInfo is authoritative even when usage is absent after compaction.
+    // Thinking-only refreshes and partial events must retain their existing usage.
     val info =
-      history.sessionInfo.takeIf { includeSessionInfo }
+      history.sessionInfo.takeIf { includeSessionInfo }?.copy(hasSessionUsageMetadata = true)
         ?: thinkingLevel?.let { ChatSessionEntry(key = history.sessionKey, updatedAtMs = null, thinkingLevel = it) }
         ?: return null
     return upsertSessionEntry(
@@ -8417,6 +8444,43 @@ internal fun parseChatMessageContents(obj: JsonObject): List<ChatMessageContent>
     transcriptAudio.filterNot { audio ->
       content.any { it.mimeType == audio.mimeType && it.fileName == audio.fileName }
     }
+}
+
+internal fun parseChatMessageUsage(obj: JsonObject): ChatMessageUsage? {
+  val usage = obj["usage"].asObjectOrNull() ?: return null
+
+  fun read(vararg keys: String): Long? = keys.firstNotNullOfOrNull { key -> usage[key].asLongOrNull()?.takeIf { it >= 0L } }
+
+  val parsed =
+    ChatMessageUsage(
+      // Only canonical input is non-cached; provider prompt aliases can include cache
+      // whose split is absent from the display projection. Keep that input unknown.
+      input = read("input"),
+      output = read("output", "outputTokens", "output_tokens", "completionTokens", "completion_tokens"),
+      cacheRead = read("cacheRead", "cache_read_input_tokens"),
+    )
+  return parsed.takeIf { listOf(it.input, it.output, it.cacheRead).any { value -> value != null } }
+}
+
+internal fun parseChatMessageCost(obj: JsonObject): ChatMessageCost? {
+  val direct = obj["cost"].asObjectOrNull()
+  val nested = obj["usage"].asObjectOrNull()?.get("cost").asObjectOrNull()
+
+  fun parse(cost: JsonObject?): ChatMessageCost? {
+    fun read(key: String): Double? = cost?.get(key).asJsonNumberOrNull()?.takeIf { it.isFinite() && it >= 0.0 }
+
+    val parsed =
+      ChatMessageCost(
+        input = read("input"),
+        output = read("output"),
+        cacheRead = read("cacheRead"),
+        cacheWrite = read("cacheWrite"),
+        total = read("total"),
+      )
+    return parsed.takeIf { listOf(it.input, it.output, it.cacheRead, it.cacheWrite, it.total).any { value -> value != null } }
+  }
+
+  return parse(direct) ?: parse(nested)
 }
 
 private fun parseTranscriptAudioContents(obj: JsonObject): List<ChatMessageContent> {

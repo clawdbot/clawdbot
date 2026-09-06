@@ -2112,6 +2112,8 @@
     "native:i18n:baseline": "node --import ./scripts/tsx.mjs scripts/native-app-i18n.ts baseline --write",
     "native:i18n:check": "node --import ./scripts/tsx.mjs scripts/native-app-i18n.ts check",
     "native:i18n:sync": "node --import ./scripts/tsx.mjs scripts/native-app-i18n.ts sync --write",
+    "native-catalogs:gen": "node scripts/generate-native-session-catalogs.mjs",
+    "native-catalogs:check": "node scripts/generate-native-session-catalogs.mjs --check",
     "native:i18n:verify": "node --import ./scripts/tsx.mjs scripts/native-app-i18n.ts verify",
     "android:i18n:check": "node --import ./scripts/tsx.mjs scripts/android-app-i18n.ts check",
     "apple:i18n:check": "node --import ./scripts/tsx.mjs scripts/apple-app-i18n.ts check",

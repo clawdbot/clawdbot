@@ -75,6 +75,15 @@ export function projectPublicSessionEntryPatch(
   return stripPrivateSessionEntryFields(patch);
 }
 
+// A completed context rewrite invalidates the previous run snapshot, not the transcript ledger.
+export const COMPACTION_RUN_USAGE_CLEAR_PATCH = {
+  inputTokens: undefined,
+  outputTokens: undefined,
+  cacheRead: undefined,
+  cacheWrite: undefined,
+  estimatedCostUsd: undefined,
+} satisfies Partial<InternalSessionEntry>;
+
 export function projectCompactionAccountingPatch(
   current: InternalSessionEntry,
   params: {
@@ -98,6 +107,7 @@ export function projectCompactionAccountingPatch(
     compactionCount: (current.compactionCount ?? 0) + incrementBy,
     transcriptByteCompactionLatch: params.transcriptByteCompactionLatch,
     updatedAt: params.now ?? Date.now(),
+    ...(incrementBy > 0 || tokensAfter !== undefined ? COMPACTION_RUN_USAGE_CLEAR_PATCH : {}),
     ...(incrementBy > 0 ? { contextBudgetStatus: undefined } : {}),
   };
   if (params.compactionKind === "context-engine") {
@@ -108,10 +118,6 @@ export function projectCompactionAccountingPatch(
       totalTokens: tokensAfter,
       totalTokensFresh: true,
       totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
-      inputTokens: undefined,
-      outputTokens: undefined,
-      cacheRead: undefined,
-      cacheWrite: undefined,
     });
   } else if (incrementBy > 0) {
     patch.totalTokensFresh = false;
