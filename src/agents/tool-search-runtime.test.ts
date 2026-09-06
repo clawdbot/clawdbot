@@ -873,24 +873,36 @@ describe("Tool Search catalog indexing", () => {
     ]);
   });
 
-  it("rebuilds the search index when a parameter description changes in place", async () => {
-    const parameters = {
-      type: "object",
-      description: "Search an orchard",
-      properties: {},
-    };
-    const { runtime } = createRuntime([fakeTool("indexed_resource", parameters as never)]);
+  it.each(["root", "property", "items"])(
+    "rebuilds the search index when a %s description changes in place",
+    async (location) => {
+      const described = {
+        type: "object",
+        description: "Search an orchard",
+        properties: {},
+      };
+      const parameters =
+        location === "root"
+          ? described
+          : location === "property"
+            ? { type: "object", properties: { resource: described } }
+            : {
+                type: "object",
+                properties: { resources: { type: "array", items: described } },
+              };
+      const { runtime } = createRuntime([fakeTool("indexed_resource", parameters as never)]);
 
-    await expect(runtime.search("orchard")).resolves.toEqual([
-      expect.objectContaining({ name: "indexed_resource" }),
-    ]);
-    parameters.description = "Search a meteor";
+      await expect(runtime.search("orchard")).resolves.toEqual([
+        expect.objectContaining({ name: "indexed_resource" }),
+      ]);
+      described.description = "Search a meteor";
 
-    await expect(runtime.search("meteor")).resolves.toEqual([
-      expect.objectContaining({ name: "indexed_resource" }),
-    ]);
-    await expect(runtime.search("orchard")).resolves.toEqual([]);
-  });
+      await expect(runtime.search("meteor")).resolves.toEqual([
+        expect.objectContaining({ name: "indexed_resource" }),
+      ]);
+      await expect(runtime.search("orchard")).resolves.toEqual([]);
+    },
+  );
 });
 
 describe("Tool Search network error boundaries", () => {
