@@ -71,8 +71,42 @@ describe("browser manage output", () => {
     const output = lastRuntimeLog();
     expect(output).toContain("transport: chrome-mcp");
     expect(output).toContain("headless: false (default)");
+    expect(output).toContain("attachOnly: true");
     expect(output).not.toContain("cdpPort:");
     expect(output).not.toContain("cdpUrl:");
+  });
+
+  it("shows attachOnly: false in status output for managed browser profiles", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
+      req.path === "/"
+        ? {
+            enabled: true,
+            profile: "openclaw",
+            driver: "openclaw",
+            transport: "cdp",
+            running: true,
+            cdpReady: true,
+            cdpHttp: true,
+            pid: 4321,
+            cdpPort: 18800,
+            cdpUrl: "http://127.0.0.1:18800",
+            chosenBrowser: "chromium",
+            userDataDir: null,
+            color: "#00AA00",
+            headless: false,
+            headlessSource: "default",
+            noSandbox: false,
+            executablePath: null,
+            attachOnly: false,
+          }
+        : {},
+    );
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "status"], { from: "user" });
+
+    const output = lastRuntimeLog();
+    expect(output).toContain("attachOnly: false");
   });
 
   it("shows configured userDataDir for existing-session status", async () => {
