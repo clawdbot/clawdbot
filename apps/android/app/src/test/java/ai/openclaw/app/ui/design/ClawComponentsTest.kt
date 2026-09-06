@@ -3,11 +3,16 @@ package ai.openclaw.app.ui.design
 import ai.openclaw.app.AppearanceThemeFamily
 import ai.openclaw.app.GatewaySummaryState
 import ai.openclaw.app.appearanceAccentPalette
+import ai.openclaw.app.i18n.NativeStringResources
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeText
+import ai.openclaw.app.parseClawHubSearchResults
 import ai.openclaw.app.ui.SettingsRefreshControls
 import ai.openclaw.app.ui.SettingsSummaryContent
 import ai.openclaw.app.ui.chat.ChatMarkdown
+import android.graphics.Bitmap
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,8 +36,10 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toPixelMap
@@ -56,6 +63,10 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
+import androidx.core.os.LocaleListCompat
+import kotlinx.serialization.json.Json
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -63,8 +74,11 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import java.io.File
+import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36], qualifiers = "w360dp-h800dp-mdpi")
@@ -74,6 +88,148 @@ class ClawComponentsTest {
   val composeRule = createComposeRule()
 
   @Test
+  fun detailRowKeepsInstallOnlyTrustWarningVisible() {
+    val results =
+      parseClawHubSearchResults(
+        """{"results":[{"slug":"weather","installRef":"skills-sh:openclaw/skills/weather","installOnly":true,"trustState":"not-scanned-by-clawhub","displayName":"Weather"},{"slug":"pdf","installRef":"skills-sh:openai/skills/pdf","installOnly":true,"trustState":"not-scanned-by-clawhub","displayName":"Pdf"}]}""",
+        Json,
+      )
+    assertEquals("Both install-only result fixtures must render", 2, results.size)
+    val current = mutableStateOf(Triple("", "", ""))
+    val width = mutableStateOf(320.dp)
+    val fontScale = mutableStateOf(1f)
+    val evidence = File("build/outputs/detail-row-required-subtitle", UUID.randomUUID().toString())
+    check(!evidence.exists() && evidence.mkdirs())
+    val observations = JSONArray()
+    val failures = mutableListOf<String>()
+
+    // These English/French fixture words may break at source spacing or punctuation, not inside letters.
+    fun intraWordBreaks(
+      text: String,
+      layout: TextLayoutResult,
+      start: Int,
+      end: Int,
+    ): List<Int> =
+      (0 until layout.lineCount - 1)
+        .map { layout.getLineEnd(it, visibleEnd = true) }
+        .filter { it > start && it < end && text[it - 1].isLetterOrDigit() && text[it].isLetterOrDigit() }
+    NativeStringResources.install(RuntimeEnvironment.getApplication())
+    try {
+      composeRule.setContent {
+        DeviceConfigurationOverride(DeviceConfigurationOverride.FontScale(fontScale.value)) {
+          ClawDesignTheme(dark = false) {
+            LazyColumn(Modifier.width(width.value)) {
+              item {
+                ClawListPanel(items = listOf(current.value), modifier = Modifier.testTag("detail-result-panel")) { row ->
+                  ClawListItem(
+                    title = row.first,
+                    subtitle = row.second,
+                    leading = { ClawTextBadge(row.first.take(1).uppercase()) },
+                    trailing = { ClawSecondaryButton(text = row.third, onClick = {}) },
+                  )
+                }
+              }
+            }
+          }
+        }
+      }
+      for (language in listOf("en", "fr")) {
+        NativeStringResources.setApplicationLocales(LocaleListCompat.forLanguageTags(language))
+        val warning = nativeString("Not scanned by ClawHub")
+        for (result in results) {
+          val subtitle =
+            listOfNotNull(
+              result.summary,
+              result.reference,
+              result.version?.let { nativeString("Version \$it", it) },
+              warning.takeIf { result.isUnscannedSource },
+            ).joinToString(" · ")
+          for ((rowWidth, scale) in listOf(320.dp to 1f, 280.dp to 1f, 280.dp to 2f)) {
+            val name = "${result.slug}-$language-${rowWidth.value.toInt()}-${scale.toInt()}"
+            composeRule.runOnIdle {
+              current.value = Triple(result.displayName, subtitle, nativeString("Install"))
+              width.value = rowWidth
+              fontScale.value = scale
+            }
+            val panel = composeRule.onNodeWithTag("detail-result-panel").performScrollTo()
+            val layouts = mutableListOf<TextLayoutResult>()
+            composeRule
+              .onNodeWithText(subtitle, useUnmergedTree = true)
+              .assertIsDisplayed()
+              .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action -> assertTrue(action(layouts)) }
+            val layout = layouts.single()
+            val titleLayouts = mutableListOf<TextLayoutResult>()
+            val titleNode = composeRule.onNodeWithText(result.displayName, useUnmergedTree = true)
+            titleNode.assertIsDisplayed().performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action -> assertTrue(action(titleLayouts)) }
+            val titleLayout = titleLayouts.single()
+            val titleBounds = titleNode.fetchSemanticsNode().boundsInRoot
+            val subtitleBounds = composeRule.onNodeWithText(subtitle, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+            val controlBounds =
+              composeRule
+                .onNodeWithText(current.value.third)
+                .assertIsDisplayed()
+                .assertHasClickAction()
+                .fetchSemanticsNode()
+                .boundsInRoot
+            val titleComplete =
+              titleLayout.getLineEnd(titleLayout.lineCount - 1, visibleEnd = true) == result.displayName.length &&
+                (0 until titleLayout.lineCount).none(titleLayout::isLineEllipsized)
+            val titleBreaks = intraWordBreaks(result.displayName, titleLayout, 0, result.displayName.length)
+            val visibleEnd = layout.getLineEnd(layout.lineCount - 1, visibleEnd = true)
+            val ellipsized = (0 until layout.lineCount).any(layout::isLineEllipsized)
+            val warningStart = subtitle.indexOf(warning)
+            val complete = warningStart >= 0 && visibleEnd >= warningStart + warning.length && !ellipsized
+            val warningBreaks = intraWordBreaks(subtitle, layout, warningStart, warningStart + warning.length)
+            File(evidence, "$name.png").outputStream().use { stream ->
+              check(panel.captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, stream))
+            }
+            observations.put(
+              JSONObject()
+                .put("case", name)
+                .put("title", result.displayName)
+                .put("titleComplete", titleComplete)
+                .put("titleLineEnds", JSONArray((0 until titleLayout.lineCount).map { titleLayout.getLineEnd(it, visibleEnd = true) }))
+                .put("titleIntraWordBreaks", JSONArray(titleBreaks))
+                .put("warningIntraWordBreaks", JSONArray(warningBreaks))
+                .put("subtitleLineEnds", JSONArray((0 until layout.lineCount).map { layout.getLineEnd(it, visibleEnd = true) }))
+                .put("titleTop", titleBounds.top)
+                .put("subtitleBottom", subtitleBounds.bottom)
+                .put("controlTop", controlBounds.top)
+                .put("controlBottom", controlBounds.bottom)
+                .put("reference", result.reference)
+                .put("subtitle", subtitle)
+                .put("warning", warning)
+                .put("warningStart", warningStart)
+                .put("warningEnd", warningStart + warning.length)
+                .put("lineCount", layout.lineCount)
+                .put("visibleEnd", visibleEnd)
+                .put("ellipsized", ellipsized)
+                .put("didExceedMaxLines", layout.multiParagraph.didExceedMaxLines)
+                .put("layoutWidthPx", layout.size.width)
+                .put("layoutHeightPx", layout.size.height)
+                .put("warningComplete", complete),
+            )
+            File(evidence, "observations.json").writeText(observations.toString(2))
+            if (!complete) failures += "$name: warning [$warningStart, ${warningStart + warning.length}), visibleEnd=$visibleEnd, ellipsized=$ellipsized"
+            if (!titleComplete || titleBreaks.isNotEmpty() || warningBreaks.isNotEmpty()) {
+              failures += "$name: titleComplete=$titleComplete, title word breaks=$titleBreaks, warning word breaks=$warningBreaks"
+            }
+            if (language == "fr" && rowWidth == 280.dp && scale == 2f && controlBounds.top < subtitleBounds.bottom) {
+              failures += "$name: Installer must move below the text"
+            }
+            if (rowWidth == 320.dp && scale == 1f && !(controlBounds.top < subtitleBounds.bottom && controlBounds.bottom > titleBounds.top)) {
+              failures += "$name: fitting normal controls must stay beside the text"
+            }
+          }
+        }
+      }
+      assertTrue("Required install-only warning must stay visible:\n${failures.joinToString("\n")}", failures.isEmpty())
+    } finally {
+      NativeStringResources.setApplicationLocales(LocaleListCompat.getEmptyLocaleList())
+    }
+  }
+
+  @Test
   fun listItemKeepsCompleteLabelsAtNarrowWidthsAndLargeText() {
     val cases =
       listOf(
@@ -81,6 +237,7 @@ class ClawComponentsTest {
         ListRowCase("Fournisseurs et modèles", "Vérifier l’état de préparation", slots = ListRowSlots.Settings),
         ListRowCase("Microphone USB du bureau", "Microphone externe", "Session suivante", ListRowSlots.Microphone),
         ListRowCase("Passerelle principale du bureau", "gateway.example.test:18789", slots = ListRowSlots.Gateway),
+        ListRowCase("Analyse des documents", "Configuration de la compétence", slots = ListRowSlots.Skill),
       )
     val current = mutableStateOf(cases.first())
     val width = mutableStateOf(320.dp)
@@ -98,6 +255,12 @@ class ClawComponentsTest {
             item {
               ClawListItem(
                 title = row.title,
+                modifier =
+                  if (row.slots == ListRowSlots.Skill) {
+                    Modifier.clickable(onClickLabel = "Open skill detail") { rowClicks++ }
+                  } else {
+                    Modifier
+                  },
                 subtitle = row.subtitle,
                 metadata = row.metadata,
                 leading =
@@ -107,6 +270,8 @@ class ClawComponentsTest {
                     {
                       if (row.slots == ListRowSlots.Settings) {
                         Icon(Icons.Default.Cloud, null, Modifier.size(20.dp))
+                      } else if (row.slots == ListRowSlots.Skill) {
+                        ClawTextBadge("A")
                       } else {
                         ClawIconBadge(if (row.slots == ListRowSlots.Microphone) Icons.Default.Mic else Icons.Default.Cloud)
                       }
@@ -139,11 +304,21 @@ class ClawComponentsTest {
                           }
                         }
 
+                        ListRowSlots.Skill -> {
+                          Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            ClawStatusPill(text = "Setup", status = ClawStatus.Warning)
+                            Switch(connected.value, {
+                              connected.value = it
+                              connectionClicks++
+                            }, Modifier.testTag("skill-enabled"))
+                          }
+                        }
+
                         ListRowSlots.None -> {}
                       }
                     }
                   },
-                onClick = { rowClicks++ },
+                onClick = if (row.slots == ListRowSlots.Skill) null else ({ rowClicks++ }),
               )
             }
           }
@@ -158,7 +333,7 @@ class ClawComponentsTest {
             width.value = rowWidth
             fontScale.value = scale
           }
-          val labels = listOfNotNull(row.title, row.subtitle, row.metadata, "Oublier".takeIf { row.slots == ListRowSlots.Gateway })
+          val labels = listOfNotNull(row.title, row.subtitle, row.metadata, "Oublier".takeIf { row.slots == ListRowSlots.Gateway }, "Setup".takeIf { row.slots == ListRowSlots.Skill })
           for (label in labels) {
             val layouts = mutableListOf<TextLayoutResult>()
             composeRule
@@ -173,6 +348,16 @@ class ClawComponentsTest {
             assertTrue("${row.slots}/$rowWidth/$scale: $label must fit horizontally", (0 until layout.lineCount).all { layout.getLineLeft(it) >= -1f && layout.getLineRight(it) <= layout.size.width + 1f })
             assertTrue("$label must not be ellipsized", (0 until layout.lineCount).none(layout::isLineEllipsized))
             assertEquals(label.length, layout.getLineEnd(layout.lineCount - 1, visibleEnd = true))
+          }
+          if (row.slots == ListRowSlots.Skill) {
+            assertEquals(
+              "Open skill detail",
+              composeRule
+                .onNodeWithText(row.title)
+                .fetchSemanticsNode()
+                .config[SemanticsActions.OnClick]
+                .label,
+            )
           }
           val beforeRowClicks = rowClicks
           val beforeForgetClicks = forgetClicks
@@ -196,16 +381,18 @@ class ClawComponentsTest {
             assertEquals(beforeForgetClicks, forgetClicks)
             assertEquals(beforeConnectionClicks, connectionClicks)
           }
-          if (row.slots == ListRowSlots.Gateway) {
-            composeRule.onNodeWithText("Oublier").performScrollTo().performClick()
+          if (row.slots == ListRowSlots.Gateway || row.slots == ListRowSlots.Skill) {
+            if (row.slots == ListRowSlots.Gateway) {
+              composeRule.onNodeWithText("Oublier").performScrollTo().performClick()
+            }
             composeRule
-              .onNodeWithTag("gateway-connection")
+              .onNodeWithTag(if (row.slots == ListRowSlots.Gateway) "gateway-connection" else "skill-enabled")
               .performScrollTo()
               .assertIsDisplayed()
               .performClick()
             composeRule.runOnIdle {
               assertEquals("Trailing controls must not activate the row", beforeRowClicks + 1, rowClicks)
-              assertEquals(beforeForgetClicks + 1, forgetClicks)
+              assertEquals(beforeForgetClicks + if (row.slots == ListRowSlots.Gateway) 1 else 0, forgetClicks)
               assertEquals(beforeConnectionClicks + 1, connectionClicks)
             }
           }
@@ -214,7 +401,7 @@ class ClawComponentsTest {
     }
   }
 
-  private enum class ListRowSlots { None, Settings, Microphone, Gateway }
+  private enum class ListRowSlots { None, Settings, Microphone, Gateway, Skill }
 
   private data class ListRowCase(
     val title: String,

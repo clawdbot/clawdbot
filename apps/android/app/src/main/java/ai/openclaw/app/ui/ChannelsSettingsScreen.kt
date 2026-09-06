@@ -4,7 +4,7 @@ import ai.openclaw.app.GatewayChannelSummary
 import ai.openclaw.app.GatewayChannelsSummary
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.i18n.nativeString
-import ai.openclaw.app.ui.design.ClawDetailRow
+import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawListPanel
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawStatus
@@ -78,7 +78,7 @@ internal fun ChannelsSettingsScreen(
 
 @Composable
 private fun ChannelRow(channel: GatewayChannelSummary) {
-  ClawDetailRow(
+  ClawListItem(
     title = channel.label,
     subtitle = channelSubtitle(channel),
     leading = { ClawTextBadge(text = channelBadge(channel.label)) },
