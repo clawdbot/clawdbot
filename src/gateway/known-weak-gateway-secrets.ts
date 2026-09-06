@@ -1,6 +1,6 @@
 // Gateway known-weak credential guard.
 // Rejects published placeholder auth values before the gateway starts.
-import type { ResolvedGatewayAuth } from "./auth.js";
+import type { ResolvedGatewayAuth } from "./auth-resolve.js";
 
 const KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS = [
   "change-me-to-a-long-random-token",
@@ -41,7 +41,8 @@ export function assertGatewayAuthNotKnownWeak(auth: ResolvedGatewayAuth, rawToke
     ) {
       throw new Error(
         "Invalid config: gateway auth token is blank, a published example placeholder, or the literal string undefined/null. " +
-          "Run `openclaw doctor --fix --generate-gateway-token` for an inline token, or rotate its external secret source before starting the Gateway.",
+          "Generate a real secret (for example, `openssl rand -hex 32`) and update gateway.auth.token or its external source. " +
+          "For blank or undefined/null inline tokens, `openclaw doctor --fix --generate-gateway-token` can generate one.",
       );
     }
     return;
