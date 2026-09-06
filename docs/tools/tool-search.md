@@ -263,6 +263,10 @@ independent queries:
 ```
 
 Single-query calls continue to return the compact candidate array directly.
+A call that sets both shapes is not rejected: a non-empty `query` runs as the
+first batch entry (with the top-level `limit` scoped to it), while a `null` or
+empty `query` beside `queries` is ignored. Strict-schema models often send
+every property, so only a request with no usable query at all fails.
 Batch calls return `{ results: [{ query, candidates }] }` in request order. Each
 query uses the same effective catalog, ranking, filtering, and per-query limit
 as an ordinary search; a candidate may appear in more than one result group.

@@ -274,16 +274,21 @@ describe("Tool Search", () => {
     {
       label: "missing request",
       input: {},
-      error: "provide exactly one of query or queries",
+      error: "provide query or queries",
     },
     {
-      label: "mixed single and batch request",
-      input: { query: "calendar", queries: [{ query: "Slack" }] },
-      error: "provide exactly one of query or queries",
+      label: "null request",
+      input: { query: null, queries: null },
+      error: "provide query or queries",
     },
     {
       label: "empty batch",
       input: { queries: [] },
+      error: "queries must be a non-empty array",
+    },
+    {
+      label: "empty batch beside an empty query",
+      input: { query: "", queries: [] },
       error: "queries must be a non-empty array",
     },
     {
@@ -391,6 +396,83 @@ describe("Tool Search", () => {
     );
 
     await expect(searchTool.execute("call-unicode-query", { query })).resolves.toBeDefined();
+  });
+
+  it("serves a single query beside a batch instead of rejecting the call", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const config = {
+      tools: {
+        toolSearch: { enabled: true, mode: "tools", searchDefaultLimit: 2, maxSearchLimit: 10 },
+      },
+    } as never;
+    applyToolSearchCatalog({
+      tools: [
+        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
+        fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
+        fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
+        pluginTool("fake_calendar", "calendar events surface"),
+        pluginTool("fake_slack", "Slack messages surface"),
+      ],
+      config,
+      catalogRef,
+    });
+    const searchTool = expectDefined(
+      createToolSearchTools({ config, catalogRef }).find(
+        (tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME,
+      ),
+      "mixed shape search tool",
+    );
+
+    const groups = (details: Record<string, unknown>) =>
+      details.results as Array<{ query: string; candidates: Array<{ name: string }> }>;
+
+    // Strict-schema models send every property: the single query joins the batch first.
+    const mixed = groups(
+      resultDetails(
+        await searchTool.execute("call-mixed", {
+          query: "calendar",
+          limit: 1,
+          queries: [{ query: "Slack" }],
+        }),
+      ),
+    );
+    expect(mixed.map((group) => group.query)).toEqual(["calendar", "Slack"]);
+    expect(mixed[0]?.candidates.map((candidate) => candidate.name)).toEqual(["fake_calendar"]);
+    expect(mixed[1]?.candidates.map((candidate) => candidate.name)).toEqual(["fake_slack"]);
+    expect(catalogRef.current?.searchCount).toBe(2);
+
+    // A duplicated single query keeps the batch entry and its limit.
+    const duplicated = groups(
+      resultDetails(
+        await searchTool.execute("call-mixed-duplicate", {
+          query: "Slack",
+          limit: 1,
+          queries: [{ query: "Slack", limit: 2 }],
+        }),
+      ),
+    );
+    expect(duplicated.map((group) => group.query)).toEqual(["Slack"]);
+    expect(catalogRef.current?.searchCount).toBe(3);
+
+    // Absent-like single values beside a batch are ignored.
+    for (const [callId, query] of [
+      ["call-mixed-empty", ""],
+      ["call-mixed-null", null],
+    ] as const) {
+      const batchOnly = groups(
+        resultDetails(await searchTool.execute(callId, { query, queries: [{ query: "Slack" }] })),
+      );
+      expect(batchOnly.map((group) => group.query)).toEqual(["Slack"]);
+    }
+    expect(catalogRef.current?.searchCount).toBe(5);
+
+    // An empty batch beside a real query keeps the compact single-result shape.
+    const singleShape = await searchTool.execute("call-mixed-empty-batch", {
+      query: "calendar",
+      queries: [],
+    });
+    expect(Array.isArray(singleShape.details)).toBe(true);
+    expect(catalogRef.current?.searchCount).toBe(6);
   });
 
   it("accepts the documented batch boundaries without deduplicating queries", async () => {
