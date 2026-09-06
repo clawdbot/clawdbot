@@ -95,7 +95,7 @@ func cronSummaryProofTexts(in row: NSView, title: String, fixtureEvents: [[Strin
         let children = element.accessibilityChildren?()
         let label = element.accessibilityLabel?()
         let role = element.accessibilityRole?()
-        let value = element.accessibilityValue?()
+        let value: Any? = element.accessibilityValue?()
         if role == .staticText, let text = value as? String { texts.append(text) }
         elements.append([
             "path": path, "depth": depth, "isView": view != nil,
