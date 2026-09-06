@@ -1472,7 +1472,13 @@ describe("buildAgentSystemPrompt", () => {
     });
     expect(withTool).toContain("- skill_workshop: Author reusable skills");
     expect(withTool).toContain("## Skill Workshop");
-    expect(withTool).toContain("Durable reusable skill/playbook/workflow work");
+    expect(withTool).toContain(
+      "Durable reusable skill/playbook/workflow work on this agent's Workshop-managed skills",
+    );
+    expect(withTool).toContain("never write Workshop proposal/skill files directly");
+    expect(withTool).toContain(
+      "Skills owned elsewhere (repository/project/workspace source, bundled, plugin, managed) are not Workshop targets",
+    );
     expect(withTool).toContain("Used skill proved wrong or incomplete");
     expect(withTool).toContain(
       "Where supported, autonomous mode may disable repair, stage a proposal, or apply it",
