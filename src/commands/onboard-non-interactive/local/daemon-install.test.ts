@@ -10,6 +10,7 @@ const gatewayInstallErrorHint = vi.hoisted(() => vi.fn(() => "hint"));
 const resolveGatewayInstallToken = vi.hoisted(() => vi.fn());
 const serviceInstall = vi.hoisted(() => vi.fn(async () => {}));
 const serviceReadCommand = vi.hoisted(() => vi.fn());
+const readGatewayServiceCommandForMutation = vi.hoisted(() => vi.fn());
 const ensureSystemdUserLingerNonInteractive = vi.hoisted(() => vi.fn(async () => {}));
 const isSystemdUserServiceAvailable = vi.hoisted(() => vi.fn(async () => true));
 
@@ -23,6 +24,7 @@ vi.mock("../../gateway-install-token.js", () => ({
 }));
 
 vi.mock("../../../daemon/service.js", () => ({
+  readGatewayServiceCommandForMutation,
   resolveGatewayService: vi.fn(() => ({
     install: serviceInstall,
     readCommand: serviceReadCommand,
@@ -46,6 +48,11 @@ describe("installGatewayDaemonNonInteractive", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     serviceReadCommand.mockResolvedValue(null);
+    readGatewayServiceCommandForMutation.mockReset();
+    readGatewayServiceCommandForMutation.mockImplementation(async () => {
+      const command = await serviceReadCommand();
+      return command === null ? { kind: "missing", command: null } : { kind: "current", command };
+    });
     isSystemdUserServiceAvailable.mockResolvedValue(true);
     resolveGatewayInstallToken.mockResolvedValue({
       token: undefined,
@@ -59,61 +66,84 @@ describe("installGatewayDaemonNonInteractive", () => {
     });
   });
 
-  it("preserves stored heap controls without passing plaintext tokens for SecretRef-managed install", async () => {
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-    const managedDefinition = {
-      programArguments: [
-        "/usr/bin/node",
-        "--max-old-space-size=24576",
-        "--require=/tmp/service-preload.js",
-        "/usr/local/bin/openclaw",
-        "gateway",
-      ],
-      environment: { NODE_OPTIONS: "--max-heap-size=32768", UNRELATED: "not-persisted" },
-    };
-    const existingCommand = {
-      programArguments: ["/operator/drop-in-wrapper", "gateway"],
-      environment: { NODE_OPTIONS: "--max-old-space-size=1024" },
-      managedDefinition,
-      managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
-    };
-    serviceReadCommand.mockResolvedValue(existingCommand);
+  it.each(["current systemd", "relocated LaunchAgent"] as const)(
+    "preserves %s heap controls without passing plaintext tokens for SecretRef-managed install",
+    async (definitionKind) => {
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const managedDefinition = {
+        programArguments: [
+          "/usr/bin/node",
+          "--max-old-space-size=24576",
+          "--require=/tmp/service-preload.js",
+          "/usr/local/bin/openclaw",
+          "gateway",
+        ],
+        environment: { NODE_OPTIONS: "--max-heap-size=32768", UNRELATED: "not-persisted" },
+      };
+      const currentSystemdCommand = {
+        programArguments: ["/operator/drop-in-wrapper", "gateway"],
+        environment: { NODE_OPTIONS: "--max-old-space-size=1024" },
+        managedDefinition,
+        managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
+      };
+      const relocatedLaunchAgentCommand = {
+        programArguments: [
+          "/usr/bin/node",
+          "--max-old-space-size=24576",
+          "/usr/local/bin/openclaw",
+          "gateway",
+        ],
+        environment: { NODE_OPTIONS: "" },
+      };
+      const existingCommand =
+        definitionKind === "current systemd" ? currentSystemdCommand : relocatedLaunchAgentCommand;
+      if (definitionKind === "current systemd") {
+        serviceReadCommand.mockResolvedValue(existingCommand);
+      } else {
+        readGatewayServiceCommandForMutation.mockResolvedValue({
+          kind: "relocated",
+          plistPath: "/external/Library/LaunchAgents/ai.openclaw.gateway.plist",
+          command: existingCommand,
+        });
+      }
 
-    await installGatewayDaemonNonInteractive({
-      nextConfig: {
-        gateway: {
-          auth: {
-            mode: "token",
-            token: {
-              source: "env",
-              provider: "default",
-              id: "OPENCLAW_GATEWAY_TOKEN",
+      await installGatewayDaemonNonInteractive({
+        nextConfig: {
+          gateway: {
+            auth: {
+              mode: "token",
+              token: {
+                source: "env",
+                provider: "default",
+                id: "OPENCLAW_GATEWAY_TOKEN",
+              },
             },
           },
-        },
-      } as OpenClawConfig,
-      opts: { installDaemon: true },
-      runtime,
-      port: 18789,
-    });
+        } as OpenClawConfig,
+        opts: { installDaemon: true },
+        runtime,
+        port: 18789,
+      });
 
-    expect(resolveGatewayInstallToken).toHaveBeenCalledTimes(1);
-    expect(buildGatewayInstallPlan).toHaveBeenCalledTimes(1);
-    expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        existingCommand,
-      }),
-    );
-    expect(buildGatewayInstallPlan.mock.calls[0]?.[0]).not.toHaveProperty("existingEnvironment");
-    expect(
-      "token" in
-        expectDefined(
-          buildGatewayInstallPlan.mock.calls[0],
-          "buildGatewayInstallPlan.mock.calls[0] test invariant",
-        )[0],
-    ).toBe(false);
-    expect(serviceInstall).toHaveBeenCalledTimes(1);
-  });
+      expect(resolveGatewayInstallToken).toHaveBeenCalledTimes(1);
+      expect(buildGatewayInstallPlan).toHaveBeenCalledTimes(1);
+      expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
+        expect.objectContaining({
+          existingCommand,
+        }),
+      );
+      expect(readGatewayServiceCommandForMutation).toHaveBeenCalledOnce();
+      expect(buildGatewayInstallPlan.mock.calls[0]?.[0]).not.toHaveProperty("existingEnvironment");
+      expect(
+        "token" in
+          expectDefined(
+            buildGatewayInstallPlan.mock.calls[0],
+            "buildGatewayInstallPlan.mock.calls[0] test invariant",
+          )[0],
+      ).toBe(false);
+      expect(serviceInstall).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("forwards Bun as the explicit daemon runtime", async () => {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
@@ -155,6 +185,29 @@ describe("installGatewayDaemonNonInteractive", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(buildGatewayInstallPlan).not.toHaveBeenCalled();
     expect(serviceInstall).not.toHaveBeenCalled();
+  });
+
+  it("routes an unreadable migrated service definition through the install failure result", async () => {
+    readGatewayServiceCommandForMutation.mockRejectedValueOnce(
+      new Error("existing service definition is unreadable"),
+    );
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    const result = await installGatewayDaemonNonInteractive({
+      nextConfig: {} as OpenClawConfig,
+      opts: { installDaemon: true },
+      runtime,
+      port: 18789,
+    });
+
+    expect(result).toEqual({ installed: false });
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Gateway service install failed: existing service definition is unreadable",
+    );
+    expect(runtime.log).toHaveBeenCalledWith("hint");
+    expect(buildGatewayInstallPlan).not.toHaveBeenCalled();
+    expect(serviceInstall).not.toHaveBeenCalled();
+    expect(ensureSystemdUserLingerNonInteractive).not.toHaveBeenCalled();
   });
 
   it("returns a skipped result when Linux user systemd is unavailable", async () => {

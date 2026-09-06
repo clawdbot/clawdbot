@@ -5,7 +5,10 @@
  * delegates the platform-specific service install.
  */
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { resolveGatewayService } from "../../../daemon/service.js";
+import {
+  readGatewayServiceCommandForMutation,
+  resolveGatewayService,
+} from "../../../daemon/service.js";
 import { isSystemdUserServiceAvailable } from "../../../daemon/systemd.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { RuntimeEnv } from "../../../runtime.js";
@@ -74,7 +77,17 @@ export async function installGatewayDaemonNonInteractive(params: {
     runtime.exit(1);
     return { installed: false };
   }
-  const existingCommand = await service.readCommand(process.env).catch(() => null);
+  let existingCommand: Awaited<ReturnType<typeof readGatewayServiceCommandForMutation>>["command"];
+  try {
+    ({ command: existingCommand } = await readGatewayServiceCommandForMutation(
+      service,
+      process.env,
+    ));
+  } catch (err) {
+    runtime.error(`Gateway service install failed: ${formatErrorMessage(err)}`);
+    runtime.log(gatewayInstallErrorHint());
+    return { installed: false };
+  }
   const { programArguments, workingDirectory, environment, environmentValueSources } =
     await buildGatewayInstallPlan({
       env: process.env,

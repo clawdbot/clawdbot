@@ -736,6 +736,7 @@ describe("successful update finalization ordering", () => {
       { source: "writable refresh", sealed: false, args: ["--port=19301"], expected: 19303 },
     ])("verifies the CLI service port for $source", async ({ sealed, args, expected }) => {
       const serviceEnv = { HOME: identity.home };
+      const sourcePath = "/Volumes/MainDataDrive/Library/LaunchAgents/ai.openclaw.gateway.plist";
       mocks.readServiceState.mockResolvedValue({
         installed: true,
         loadState: { status: "loaded" },
@@ -748,6 +749,7 @@ describe("successful update finalization ordering", () => {
             ...args,
           ],
           environment: serviceEnv,
+          sourcePath,
         },
       });
       mocks.readConfig.mockResolvedValue({
@@ -779,6 +781,7 @@ describe("successful update finalization ordering", () => {
           serviceEnv,
           expected,
           expect.any(Array),
+          sourcePath,
         );
         expect(mocks.createServiceConfigIO).not.toHaveBeenCalled();
       }

@@ -33,6 +33,7 @@ vi.mock("node:fs/promises", async () => {
 
 const mocks = vi.hoisted(() => ({
   readCommand: vi.fn(),
+  readGatewayServiceCommandForMutation: vi.fn(),
   readRuntime: vi.fn(),
   stage: vi.fn(),
   install: vi.fn(),
@@ -115,6 +116,7 @@ vi.mock("../daemon/service-audit.js", () => ({
 }));
 
 vi.mock("../daemon/service.js", () => ({
+  readGatewayServiceCommandForMutation: mocks.readGatewayServiceCommandForMutation,
   resolveGatewayService: () => ({
     readCommand: mocks.readCommand,
     readRuntime: mocks.readRuntime,
@@ -430,6 +432,10 @@ function setupGatewayTokenRepairScenario() {
 describe("maybeRepairGatewayServiceConfig", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.readGatewayServiceCommandForMutation.mockImplementation(async (_service, env, opts) => {
+      const command = await mocks.readCommand(env, opts);
+      return command ? { kind: "current", command } : { kind: "missing", command: null };
+    });
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     fsMocks.realpath.mockImplementation(async (value: string) => value);
     mocks.resolveGatewayPort.mockReturnValue(18789);
@@ -814,6 +820,60 @@ describe("maybeRepairGatewayServiceConfig", () => {
         }),
       );
     }
+    expect(mocks.install).toHaveBeenCalledTimes(1);
+  });
+
+  it("repairs audited drift from a relocated definition without losing managed ownership", async () => {
+    const relocatedCommand = {
+      programArguments: [
+        "/usr/bin/node",
+        "--max-old-space-size=24576",
+        ...gatewayProgramArguments.slice(1),
+      ],
+      environment: {
+        NODE_EXTRA_CA_CERTS: "/external/state/ca.pem",
+        OPENCLAW_WRAPPER: "/external/state/wrapper.zsh",
+        NODE_OPTIONS: "",
+      },
+      environmentValueSources: {
+        NODE_EXTRA_CA_CERTS: "file" as const,
+        OPENCLAW_WRAPPER: "file" as const,
+        NODE_OPTIONS: "file" as const,
+      },
+      sourcePath: "/external/Library/LaunchAgents/ai.openclaw.gateway.plist",
+    };
+    mocks.readCommand.mockResolvedValue(null);
+    mocks.readGatewayServiceCommandForMutation.mockResolvedValue({
+      kind: "relocated",
+      plistPath: "/external/Library/LaunchAgents/ai.openclaw.gateway.plist",
+      command: relocatedCommand,
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: gatewayProgramArguments,
+      workingDirectory: "/tmp",
+      environment: {},
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: false,
+      issues: [
+        {
+          code: "gateway-path-nonminimal",
+          message: "Gateway PATH should be regenerated",
+          level: "recommended",
+        },
+      ],
+    });
+    mocks.install.mockResolvedValue(undefined);
+
+    await runRepair({ gateway: {} });
+
+    expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        existingCommand: relocatedCommand,
+        existingEnvironment: relocatedCommand.environment,
+        existingEnvironmentValueSources: relocatedCommand.environmentValueSources,
+      }),
+    );
     expect(mocks.install).toHaveBeenCalledTimes(1);
   });
 
@@ -2288,6 +2348,10 @@ describe("maybeScanExtraGatewayServices", () => {
 
       expectBoundedLaunchctlCleanup();
       expect(rename).toHaveBeenCalledTimes(1);
+      expect(rename).toHaveBeenCalledWith(
+        LEGACY_MAC_PLIST,
+        expect.stringMatching(/^\/Users\/test\/\.Trash\/com\.openclaw\.gateway-\d+\.plist$/),
+      );
       expectNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
       expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway cleanup skipped");
       expect(runtime.log).not.toHaveBeenCalledWith(
@@ -2295,6 +2359,33 @@ describe("maybeScanExtraGatewayServices", () => {
       );
     },
   );
+
+  it("moves a system-global legacy macOS plist to the user's Trash", async () => {
+    const plistPath = "/Library/LaunchAgents/com.openclaw.gateway.plist";
+    mockProcessPlatform("darwin");
+    mocks.findExtraGatewayServices.mockResolvedValue([
+      {
+        platform: "darwin",
+        label: LEGACY_MAC_LABEL,
+        detail: `plist: ${plistPath}`,
+        scope: "user",
+        legacy: true,
+      },
+    ]);
+    mockConfirmedUnloaded();
+    vi.spyOn(os, "homedir").mockReturnValue("/Users/test");
+    const rename = vi.spyOn(fs, "rename").mockResolvedValue(undefined);
+    vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
+    vi.spyOn(fs, "access").mockResolvedValue(undefined);
+
+    await maybeScanExtraGatewayServices({ deep: false }, makeDoctorIo(), makeDoctorPrompts());
+
+    expect(rename).toHaveBeenCalledWith(
+      plistPath,
+      expect.stringMatching(/^\/Users\/test\/\.Trash\/com\.openclaw\.gateway-\d+\.plist$/),
+    );
+    expect(rename).not.toHaveBeenCalledWith(plistPath, expect.stringMatching(/^\/\.Trash\//));
+  });
 
   it.each([
     ["timeouts", launchctlResult({ code: 124, termination: "timeout" })],

@@ -21,7 +21,11 @@ import {
   assertServiceDefinitionWritable,
   resolveManagedGatewayServiceCommand,
 } from "../../daemon/service-types.js";
-import { resolveGatewayService, type GatewayServiceCommandConfig } from "../../daemon/service.js";
+import {
+  readGatewayServiceCommandForMutation,
+  resolveGatewayService,
+  type GatewayServiceCommandConfig,
+} from "../../daemon/service.js";
 import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd-exec.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import {
@@ -174,13 +178,16 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     }
     loaded = false;
   }
-  let existingServiceCommand: GatewayServiceCommandConfig | null;
+  let installCommand: Awaited<ReturnType<typeof readGatewayServiceCommandForMutation>>;
   try {
-    existingServiceCommand = await service.readCommand(process.env, { requireEffective: true });
+    installCommand = await readGatewayServiceCommandForMutation(service, process.env, {
+      requireEffective: true,
+    });
   } catch {
     fail("SERVICE_DEFINITION_UNKNOWN: Service definition cannot be safely inspected.");
     return;
   }
+  const existingServiceCommand = installCommand.command;
   const existingManagedCommand = resolveManagedGatewayServiceCommand(existingServiceCommand);
   const existingServiceEnv = existingManagedCommand?.environment;
   const installEnv = mergeInstallInvocationEnv({
@@ -205,7 +212,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       return false;
     }
   };
-  if ((opts.force || !loaded) && !(await assertWritable())) {
+  if ((opts.force || !loaded || installCommand.kind === "relocated") && !(await assertWritable())) {
     return;
   }
 
@@ -269,7 +276,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     return;
   }
   let autoRefreshMessage: string | undefined;
-  if (loaded && !opts.force) {
+  if (loaded && !opts.force && installCommand.kind !== "relocated") {
     autoRefreshMessage = await getGatewayServiceAutoRefreshMessage({
       currentCommand: existingServiceCommand,
       env: process.env,
@@ -308,7 +315,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     warn("No gateway.mode found. Set gateway.mode=local for managed gateway install.");
   }
 
-  if (loaded && !opts.force && !autoRefreshMessage) {
+  if (loaded && !opts.force && !autoRefreshMessage && installCommand.kind !== "relocated") {
     emit({
       ok: true,
       result: "already-installed",

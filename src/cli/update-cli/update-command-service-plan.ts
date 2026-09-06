@@ -8,7 +8,10 @@ import { resolveGatewayPort } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
-import { resolveGatewayService } from "../../daemon/service.js";
+import {
+  readGatewayServiceCommandForMutation,
+  resolveGatewayService,
+} from "../../daemon/service.js";
 import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervision.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
@@ -159,8 +162,10 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
   }
   // Root and runtime planning share one effective command; mutation and restart
   // revalidate independently so this snapshot cannot grant later service authority.
-  const command = await resolveGatewayService()
-    .readCommand(process.env, { requireEffective: true })
+  const command = await readGatewayServiceCommandForMutation(resolveGatewayService(), process.env, {
+    requireEffective: true,
+  })
+    .then((definition) => definition.command)
     .catch(() => null);
   const layout = await summarizeGatewayServiceLayout(command);
   const serviceRoot = layout?.packageRoot;
@@ -201,8 +206,12 @@ export async function gatewayServiceCommandUsesRoot(params: {
   const command =
     params.command === undefined
       ? isGatewayServiceManagementAllowedForUpdate(params.env ?? process.env)
-        ? await resolveGatewayService()
-            .readCommand(params.env ?? process.env, { requireEffective: true })
+        ? await readGatewayServiceCommandForMutation(
+            resolveGatewayService(),
+            params.env ?? process.env,
+            { requireEffective: true },
+          )
+            .then((definition) => definition.command)
             .catch(() => null)
         : null
       : params.command;

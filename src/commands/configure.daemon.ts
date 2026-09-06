@@ -2,7 +2,11 @@
 import { note } from "../../packages/terminal-core/src/note.js";
 import { withProgress } from "../cli/progress.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { describeGatewayServiceRestart, resolveGatewayService } from "../daemon/service.js";
+import {
+  describeGatewayServiceRestart,
+  readGatewayServiceCommandForMutation,
+  resolveGatewayService,
+} from "../daemon/service.js";
 import { isNonFatalSystemdInstallProbeError } from "../daemon/systemd.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -113,7 +117,19 @@ export async function maybeInstallDaemon(params: {
           progress.setLabel("Gateway service install blocked.");
           return;
         }
-        const existingCommand = await service.readCommand(process.env).catch(() => null);
+        let existingCommand: Awaited<
+          ReturnType<typeof readGatewayServiceCommandForMutation>
+        >["command"];
+        try {
+          ({ command: existingCommand } = await readGatewayServiceCommandForMutation(
+            service,
+            process.env,
+          ));
+        } catch (err) {
+          installError = formatErrorMessage(err);
+          progress.setLabel("Gateway service install failed.");
+          return;
+        }
         const { programArguments, workingDirectory, environment, environmentValueSources } =
           await buildGatewayInstallPlan({
             env: process.env,

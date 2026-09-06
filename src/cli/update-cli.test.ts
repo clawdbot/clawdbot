@@ -417,6 +417,14 @@ vi.mock("../config/backup-rotation.js", () => ({
 }));
 
 vi.mock("../daemon/service.js", () => ({
+  readGatewayServiceCommandForMutation: async (
+    service: { readCommand: (...args: unknown[]) => Promise<unknown> },
+    env: NodeJS.ProcessEnv,
+    opts?: unknown,
+  ) => {
+    const command = await service.readCommand(env, opts);
+    return command ? { kind: "current", command } : { kind: "missing", command: null };
+  },
   readGatewayServiceState: async (
     _service: unknown,
     args?: {
@@ -7508,12 +7516,12 @@ describe("update-cli", () => {
 
     expect(serviceStop).toHaveBeenCalledTimes(1);
     expect(runGatewayUpdate).toHaveBeenCalledTimes(1);
-    expect(prepareRestartScript).toHaveBeenCalledWith(expect.anything(), expect.any(Number), [
-      "node",
-      serviceEntrypoint,
-      "gateway",
-      "run",
-    ]);
+    expect(prepareRestartScript).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(Number),
+      ["node", serviceEntrypoint, "gateway", "run"],
+      undefined,
+    );
     const serviceStopCall = serviceStop.mock.calls[0]?.[0] as
       | { env?: NodeJS.ProcessEnv }
       | undefined;

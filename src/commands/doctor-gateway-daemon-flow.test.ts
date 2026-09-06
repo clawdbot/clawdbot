@@ -21,6 +21,7 @@ const service = vi.hoisted(() => ({
   install: vi.fn(),
   readCommand: vi.fn(),
 }));
+const readGatewayServiceCommandForMutation = vi.hoisted(() => vi.fn());
 const note = vi.hoisted(() => vi.fn());
 const sleep = vi.hoisted(() => vi.fn(async () => {}));
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
@@ -90,6 +91,7 @@ vi.mock("../daemon/service.js", async () => {
     await vi.importActual<typeof import("../daemon/service.js")>("../daemon/service.js");
   return {
     ...actual,
+    readGatewayServiceCommandForMutation,
     resolveGatewayService: () => service,
   };
 });
@@ -188,6 +190,11 @@ describe("maybeRepairGatewayDaemon", () => {
     service.isLoaded.mockResolvedValue(true);
     service.readRuntime.mockResolvedValue({ status: "running" });
     service.readCommand.mockResolvedValue(null);
+    readGatewayServiceCommandForMutation.mockReset();
+    readGatewayServiceCommandForMutation.mockImplementation(async () => {
+      const command = await service.readCommand();
+      return command === null ? { kind: "missing", command: null } : { kind: "current", command };
+    });
     service.restart.mockResolvedValue({ outcome: "completed" });
     isDefaultInstallIdentity.mockReturnValue(true);
     isContainerEnvironment.mockReturnValue(false);

@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const unrefMock = vi.hoisted(() => vi.fn());
+const fsState = vi.hoisted(() => ({ externalHome: undefined as string | undefined }));
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -15,6 +16,31 @@ vi.mock("node:child_process", async () => {
     ...actual,
     spawn: (...args: unknown[]) => spawnMock(...args),
   };
+});
+
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  const statSync = ((target: string) => {
+    if (fsState.externalHome) {
+      if (target === "/") {
+        return { dev: 1 };
+      }
+      if (target === fsState.externalHome) {
+        return { dev: 2 };
+      }
+      if (target === "/Users/test") {
+        return { dev: 1 };
+      }
+    }
+    return actual.statSync(target);
+  }) as typeof actual.statSync;
+  return { ...actual, statSync, default: { ...actual, statSync } };
+});
+
+vi.mock("node:os", async () => {
+  const actual = await vi.importActual<typeof import("node:os")>("node:os");
+  const userInfo = () => ({ ...actual.userInfo(), username: "test" });
+  return { ...actual, userInfo, default: { ...actual, userInfo } };
 });
 
 import {
@@ -161,6 +187,7 @@ ${launchctlStub}
 afterEach(() => {
   spawnMock.mockReset();
   unrefMock.mockReset();
+  fsState.externalHome = undefined;
   spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock, once: vi.fn() });
 });
 
@@ -402,6 +429,24 @@ esac`,
       });
     }).toThrow("Invalid launchd label: ../evil/label");
     expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("passes the boot-volume plist to detached restart recovery", () => {
+    fsState.externalHome = "/Volumes/MainDataDrive";
+    spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock, once: vi.fn() });
+
+    scheduleDetachedLaunchdRestartHandoff({
+      env: {
+        HOME: fsState.externalHome,
+        USER: "test",
+        OPENCLAW_PROFILE: "default",
+      },
+      mode: "reload",
+    });
+
+    const [, args] = requireSpawnCall();
+    expect(args[5]).toBe("/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist");
+    expect(args[5]).not.toContain("/Volumes/");
   });
 
   it("reports an asynchronous helper spawn failure", async () => {

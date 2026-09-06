@@ -42,7 +42,11 @@ import {
   resolveManagedGatewayServiceCommand,
   type GatewayServiceInstallArgs,
 } from "../daemon/service-types.js";
-import { resolveGatewayService, type GatewayServiceCommandConfig } from "../daemon/service.js";
+import {
+  readGatewayServiceCommandForMutation,
+  resolveGatewayService,
+  type GatewayServiceCommandConfig,
+} from "../daemon/service.js";
 import {
   findSystemdGatewayInstallation,
   isSystemUnitActiveAndEnabled,
@@ -376,7 +380,14 @@ async function cleanupLegacyLaunchdService(params: {
     return { status: "failed", reason: "launchctl could not confirm unload" };
   }
 
-  const trashDir = path.join(os.homedir(), ".Trash");
+  const launchAgentsDir = path.dirname(params.plistPath);
+  const libraryDir = path.dirname(launchAgentsDir);
+  const adjacentHomeDir = path.dirname(libraryDir);
+  const trashHomeDir =
+    libraryDir === path.join(path.parse(libraryDir).root, "Library")
+      ? os.homedir()
+      : adjacentHomeDir;
+  const trashDir = path.join(trashHomeDir, ".Trash");
   try {
     await fs.mkdir(trashDir, { recursive: true });
   } catch {
@@ -522,12 +533,10 @@ export async function maybeRepairGatewayServiceConfig(
   }
 
   const service = resolveGatewayService();
-  let command: Awaited<ReturnType<typeof service.readCommand>> | null;
-  try {
-    command = await service.readCommand(process.env);
-  } catch {
-    command = null;
-  }
+  const definition = await readGatewayServiceCommandForMutation(service, process.env).catch(
+    () => null,
+  );
+  const command = definition?.command ?? null;
   if (!command) {
     const audit = await auditGatewayServiceConfig({
       env: process.env,

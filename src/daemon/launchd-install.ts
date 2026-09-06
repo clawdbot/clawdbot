@@ -21,6 +21,7 @@ import {
   LAUNCH_AGENT_PLIST_MODE,
   publishLaunchAgentPlist,
   readExistingLaunchAgentPlist,
+  readLaunchAgentProgramArgumentsAtPath,
   resolveLaunchAgentEnvFilePath,
   resolveLaunchAgentEnvWrapperPath,
   resolveLaunchAgentPlistPath,
@@ -31,9 +32,11 @@ import { assertNoSystemLaunchDaemonOwnership } from "./launchd-system.js";
 import { formatLine, normalizeWindowsPathSeparators, writeFormattedLines } from "./output.js";
 import { resolveDaemonHomeDir } from "./paths.js";
 import type {
+  GatewayServiceCommandConfig,
   GatewayServiceEnv,
   GatewayServiceInstallArgs,
   GatewayServiceManageArgs,
+  GatewayServiceReadOptions,
 } from "./service-types.js";
 
 export async function uninstallLaunchAgent({
@@ -43,39 +46,51 @@ export async function uninstallLaunchAgent({
   await assertExternalLaunchAgentMutation(env, "uninstall");
   const domain = resolveLaunchAgentGuiDomain();
   const label = resolveLaunchAgentLabel(env);
-  const plistPath = resolveLaunchAgentPlistPath(env);
-  const probe = await probeLaunchAgentState(`${domain}/${label}`);
+  let preflight: LaunchAgentRemovalPreflight;
+  try {
+    preflight = await preflightLaunchAgentPlistRemoval(env, label);
+  } catch (error) {
+    throw createLaunchAgentRemovalError(error);
+  }
+  const serviceTarget = `${domain}/${label}`;
+  const probe = await probeLaunchAgentState(serviceTarget);
   if (probe.state !== "not-loaded") {
-    const bootout = await execLaunchctl(["bootout", domain, plistPath]);
+    const bootout = await execLaunchctl(["bootout", serviceTarget]);
     if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
       throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
     }
   }
 
-  try {
-    await fs.lstat(plistPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw createLaunchAgentRemovalError(error);
-    }
-    stdout.write(`LaunchAgent not found at ${plistPath}\n`);
+  if (preflight.existingPlistPaths.length === 0) {
+    stdout.write(`LaunchAgent not found at ${preflight.canonicalPlistPath}\n`);
     return;
   }
 
-  const home = normalizeWindowsPathSeparators(resolveDaemonHomeDir(env));
-  const trashDir = path.posix.join(home, ".Trash");
-  const dest = path.join(trashDir, `${label}.plist`);
+  for (const plistPath of preflight.existingPlistPaths) {
+    await moveLaunchAgentPlistToTrash({ plistPath, label, stdout });
+  }
+}
+
+async function moveLaunchAgentPlistToTrash(params: {
+  plistPath: string;
+  label: string;
+  stdout: GatewayServiceManageArgs["stdout"];
+}): Promise<void> {
+  const launchAgentsDir = path.posix.dirname(normalizeWindowsPathSeparators(params.plistPath));
+  const libraryDir = path.posix.dirname(launchAgentsDir);
+  const trashDir = path.posix.join(path.posix.dirname(libraryDir), ".Trash");
+  const dest = path.join(trashDir, `${params.label}.plist`);
   try {
     await fs.mkdir(trashDir, { recursive: true });
-    await fs.rename(plistPath, dest);
-    stdout.write(`${formatLine("Moved LaunchAgent to Trash", dest)}\n`);
+    await fs.rename(params.plistPath, dest);
+    params.stdout.write(`${formatLine("Moved LaunchAgent to Trash", dest)}\n`);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       try {
-        await fs.lstat(plistPath);
+        await fs.lstat(params.plistPath);
       } catch (accessError) {
         if ((accessError as NodeJS.ErrnoException).code === "ENOENT") {
-          stdout.write(`LaunchAgent not found at ${plistPath}\n`);
+          params.stdout.write(`LaunchAgent not found at ${params.plistPath}\n`);
           return;
         }
         throw createLaunchAgentRemovalError(accessError);
@@ -148,6 +163,100 @@ type LaunchAgentInstallSnapshot = {
   }>;
   loaded: boolean;
 };
+
+type RelocatedLaunchAgentPlist = {
+  plistPath: string;
+  contents: Buffer;
+  command: GatewayServiceCommandConfig;
+};
+
+type LaunchAgentRemovalPreflight = {
+  canonicalPlistPath: string;
+  existingPlistPaths: string[];
+};
+
+function resolvePreCanonicalLaunchAgentPlistPath(env: GatewayServiceEnv, label: string): string {
+  const home = normalizeWindowsPathSeparators(resolveDaemonHomeDir(env));
+  return path.posix.join(home, "Library", "LaunchAgents", `${label}.plist`);
+}
+
+async function preflightLaunchAgentPlistRemoval(
+  env: GatewayServiceEnv,
+  label: string,
+): Promise<LaunchAgentRemovalPreflight> {
+  const canonicalPlistPath = resolveLaunchAgentPlistPath(env);
+  const preCanonicalPlistPath = resolvePreCanonicalLaunchAgentPlistPath(env, label);
+  const distinctPreCanonicalPath =
+    preCanonicalPlistPath === canonicalPlistPath ? undefined : preCanonicalPlistPath;
+  const existing = new Set<string>();
+  for (const plistPath of [canonicalPlistPath, distinctPreCanonicalPath]) {
+    if (!plistPath) {
+      continue;
+    }
+    try {
+      await fs.lstat(plistPath);
+      existing.add(plistPath);
+    } catch (error) {
+      // SAFETY: Node filesystem rejections expose errno-compatible codes when present.
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+  return {
+    canonicalPlistPath,
+    // Retire the pre-canonical definition first so a partial failure never
+    // leaves it as the only rediscoverable LaunchAgent definition.
+    existingPlistPaths: [distinctPreCanonicalPath, canonicalPlistPath].filter(
+      (plistPath): plistPath is string => Boolean(plistPath && existing.has(plistPath)),
+    ),
+  };
+}
+
+async function readRelocatedLaunchAgentPlistForInstall(params: {
+  env: GatewayServiceEnv;
+  label: string;
+  targetPlistPath: string;
+  options?: GatewayServiceReadOptions;
+}): Promise<RelocatedLaunchAgentPlist | null> {
+  const plistPath = resolvePreCanonicalLaunchAgentPlistPath(params.env, params.label);
+  if (plistPath === params.targetPlistPath) {
+    return null;
+  }
+  const contents = await readExistingLaunchAgentPlist(plistPath);
+  if (contents === null) {
+    return null;
+  }
+  const command = await readLaunchAgentProgramArgumentsAtPath(
+    params.env,
+    params.label,
+    plistPath,
+    params.options,
+  );
+  if (command === null) {
+    throw new Error("The pre-migration LaunchAgent definition cannot be safely inspected.");
+  }
+  return { plistPath, contents, command };
+}
+
+/** Install-only definition for a pre-boot-volume LaunchAgent that needs relocation. */
+export async function readRelocatedLaunchAgentForInstall(
+  env: GatewayServiceEnv,
+  options?: GatewayServiceReadOptions,
+): Promise<{ plistPath: string; command: GatewayServiceCommandConfig } | null> {
+  const label = resolveLaunchAgentLabel(env);
+  const targetPlistPath = resolveLaunchAgentPlistPath(env);
+  if ((await readExistingLaunchAgentPlist(targetPlistPath)) !== null) {
+    return null;
+  }
+  const relocated = await readRelocatedLaunchAgentPlistForInstall({
+    env,
+    label,
+    targetPlistPath,
+    options,
+  });
+  return relocated === null ? null : { plistPath: relocated.plistPath, command: relocated.command };
+}
 
 async function snapshotLaunchAgentLoadedState(
   plistContents: Buffer | null,
@@ -362,20 +471,69 @@ export async function installLaunchAgent(
   const previousContents = await readExistingLaunchAgentPlist(targetPlistPath);
   const label = resolveLaunchAgentLabel(args.env);
   const domain = resolveLaunchAgentGuiDomain();
+  const relocated = await readRelocatedLaunchAgentPlistForInstall({
+    env: args.env,
+    label,
+    targetPlistPath,
+  });
+  const sameLabelLoaded = await snapshotLaunchAgentLoadedState(
+    previousContents ?? relocated?.contents ?? null,
+    `${domain}/${label}`,
+  );
+  if (sameLabelLoaded && previousContents !== null && relocated !== null) {
+    throw new Error(
+      `LaunchAgent ${label} has multiple prior definitions; refusing an install that cannot identify the loaded definition for rollback.`,
+    );
+  }
   // Plist, generated environment files, and launchd registration form one cutover.
   // Capture every prior owner before publication so any later failure can restore it.
-  const legacy = await Promise.all(
-    resolveLegacyGatewayLaunchAgentLabels(args.env.OPENCLAW_PROFILE).map(async (legacyLabel) => {
-      const plistPath = resolveLaunchAgentPlistPathForLabel(args.env, legacyLabel);
-      const contents = await readExistingLaunchAgentPlist(plistPath);
-      return {
-        label: legacyLabel,
-        plistPath,
-        contents,
-        loaded: await snapshotLaunchAgentLoadedState(contents, `${domain}/${legacyLabel}`),
-      };
-    }),
-  );
+  const legacy = [
+    ...(relocated
+      ? [
+          {
+            label,
+            plistPath: relocated.plistPath,
+            contents: relocated.contents,
+            loaded: sameLabelLoaded,
+          },
+        ]
+      : []),
+    ...(
+      await Promise.all(
+        resolveLegacyGatewayLaunchAgentLabels(args.env.OPENCLAW_PROFILE).map(
+          async (legacyLabel) => {
+            const paths = new Set([
+              resolveLaunchAgentPlistPathForLabel(args.env, legacyLabel),
+              resolvePreCanonicalLaunchAgentPlistPath(args.env, legacyLabel),
+            ]);
+            const definitions = await Promise.all(
+              [...paths].map(async (plistPath) => ({
+                label: legacyLabel,
+                plistPath,
+                contents: await readExistingLaunchAgentPlist(plistPath),
+              })),
+            );
+            const existing = definitions.filter((definition) => definition.contents !== null);
+            const loaded = await snapshotLaunchAgentLoadedState(
+              existing[0]?.contents ?? null,
+              `${domain}/${legacyLabel}`,
+            );
+            if (loaded && existing.length > 1) {
+              throw new Error(
+                `LaunchAgent ${legacyLabel} has multiple prior definitions; refusing an install that cannot identify the loaded definition for rollback.`,
+              );
+            }
+            return definitions.map((definition) => ({
+              label: definition.label,
+              plistPath: definition.plistPath,
+              contents: definition.contents,
+              loaded: loaded && definition.contents !== null,
+            }));
+          },
+        ),
+      )
+    ).flat(),
+  ];
   const snapshot: LaunchAgentInstallSnapshot = {
     plistContents: previousContents,
     envFileContents: await readExistingLaunchAgentPlist(
@@ -385,7 +543,7 @@ export async function installLaunchAgent(
       resolveLaunchAgentEnvWrapperPath(args.env, label),
     ),
     legacy,
-    loaded: await snapshotLaunchAgentLoadedState(previousContents, `${domain}/${label}`),
+    loaded: relocated ? false : sameLabelLoaded,
   };
   let plistPath: string;
   let stdoutPath: string;

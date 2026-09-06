@@ -16,6 +16,7 @@ const buildGatewayInstallPlan = vi.hoisted(() => vi.fn());
 const note = vi.hoisted(() => vi.fn());
 const serviceIsLoaded = vi.hoisted(() => vi.fn(async () => false));
 const serviceReadCommand = vi.hoisted(() => vi.fn());
+const readGatewayServiceCommandForMutation = vi.hoisted(() => vi.fn());
 const serviceInstall = vi.hoisted(() => vi.fn(async () => {}));
 const serviceUninstall = vi.hoisted(() => vi.fn(async () => {}));
 const serviceRestart = vi.hoisted(() =>
@@ -58,6 +59,7 @@ vi.mock("../daemon/service.js", async () => {
     await vi.importActual<typeof import("../daemon/service.js")>("../daemon/service.js");
   return {
     ...actual,
+    readGatewayServiceCommandForMutation,
     resolveGatewayService: vi.fn(() => ({
       isLoaded: serviceIsLoaded,
       readCommand: serviceReadCommand,
@@ -78,6 +80,11 @@ describe("maybeInstallDaemon", () => {
     progressSetLabel.mockReset();
     serviceIsLoaded.mockResolvedValue(false);
     serviceReadCommand.mockResolvedValue(null);
+    readGatewayServiceCommandForMutation.mockReset();
+    readGatewayServiceCommandForMutation.mockImplementation(async () => {
+      const command = await serviceReadCommand();
+      return command === null ? { kind: "missing", command: null } : { kind: "current", command };
+    });
     serviceInstall.mockResolvedValue(undefined);
     serviceUninstall.mockReset();
     select.mockReset();
@@ -183,43 +190,97 @@ describe("maybeInstallDaemon", () => {
     expect(serviceInstall).not.toHaveBeenCalled();
   });
 
-  it("hands the existing service to the replacement installer", async () => {
-    serviceIsLoaded.mockResolvedValue(true);
-    select.mockResolvedValueOnce("reinstall");
-    const managedDefinition = {
-      programArguments: [
-        "/usr/bin/node",
-        "--max-old-space-size=24576",
-        "--require=/tmp/service-preload.js",
-        "/usr/local/bin/openclaw",
-        "gateway",
-      ],
-      environment: { NODE_OPTIONS: "--max-heap-size=32768", UNRELATED: "not-persisted" },
-    };
-    const existingCommand = {
-      programArguments: ["/operator/drop-in-wrapper", "gateway"],
-      environment: { NODE_OPTIONS: "--max-old-space-size=1024" },
-      managedDefinition,
-      managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
-    };
-    serviceReadCommand.mockResolvedValue(existingCommand);
+  it.each([false, true])(
+    "routes an unreadable migrated service definition through install failure handling (reinstall=%s)",
+    async (loaded) => {
+      serviceIsLoaded.mockResolvedValue(loaded);
+      if (loaded) {
+        select.mockResolvedValueOnce("reinstall");
+      }
+      readGatewayServiceCommandForMutation.mockRejectedValueOnce(
+        new Error("existing service definition is unreadable"),
+      );
 
-    const outcome = await maybeInstallDaemon({
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      port: 18789,
-    });
+      const outcome = await maybeInstallDaemon({
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        port: 18789,
+      });
 
-    expect(outcome).toBe("succeeded");
-    expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        existingCommand,
-      }),
-    );
-    expect(buildGatewayInstallPlan.mock.calls[0]?.[0]).not.toHaveProperty("existingEnvironment");
-    expect(serviceInstall).toHaveBeenCalledOnce();
-    expect(serviceUninstall).not.toHaveBeenCalled();
-    expect(serviceRestart).not.toHaveBeenCalled();
-  });
+      expect(outcome).toBe("failed");
+      expect(progressSetLabel).toHaveBeenLastCalledWith("Gateway service install failed.");
+      expect(note).toHaveBeenCalledWith(
+        "Gateway service install failed: existing service definition is unreadable",
+        "Gateway",
+      );
+      expect(note).toHaveBeenCalledWith("hint", "Gateway");
+      expect(buildGatewayInstallPlan).not.toHaveBeenCalled();
+      expect(serviceInstall).not.toHaveBeenCalled();
+      expect(serviceUninstall).not.toHaveBeenCalled();
+      expect(serviceRestart).not.toHaveBeenCalled();
+      expect(ensureSystemdUserLingerInteractive).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["current systemd", "relocated LaunchAgent"] as const)(
+    "hands a %s service command to the replacement installer",
+    async (definitionKind) => {
+      serviceIsLoaded.mockResolvedValue(true);
+      select.mockResolvedValueOnce("reinstall");
+      const managedDefinition = {
+        programArguments: [
+          "/usr/bin/node",
+          "--max-old-space-size=24576",
+          "--require=/tmp/service-preload.js",
+          "/usr/local/bin/openclaw",
+          "gateway",
+        ],
+        environment: { NODE_OPTIONS: "--max-heap-size=32768", UNRELATED: "not-persisted" },
+      };
+      const currentSystemdCommand = {
+        programArguments: ["/operator/drop-in-wrapper", "gateway"],
+        environment: { NODE_OPTIONS: "--max-old-space-size=1024" },
+        managedDefinition,
+        managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
+      };
+      const relocatedLaunchAgentCommand = {
+        programArguments: [
+          "/usr/bin/node",
+          "--max-old-space-size=24576",
+          "/usr/local/bin/openclaw",
+          "gateway",
+        ],
+        environment: { NODE_OPTIONS: "" },
+      };
+      const existingCommand =
+        definitionKind === "current systemd" ? currentSystemdCommand : relocatedLaunchAgentCommand;
+      if (definitionKind === "current systemd") {
+        serviceReadCommand.mockResolvedValue(existingCommand);
+      } else {
+        readGatewayServiceCommandForMutation.mockResolvedValue({
+          kind: "relocated",
+          plistPath: "/external/Library/LaunchAgents/ai.openclaw.gateway.plist",
+          command: existingCommand,
+        });
+      }
+
+      const outcome = await maybeInstallDaemon({
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        port: 18789,
+      });
+
+      expect(outcome).toBe("succeeded");
+      expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
+        expect.objectContaining({
+          existingCommand,
+        }),
+      );
+      expect(readGatewayServiceCommandForMutation).toHaveBeenCalledOnce();
+      expect(buildGatewayInstallPlan.mock.calls[0]?.[0]).not.toHaveProperty("existingEnvironment");
+      expect(serviceInstall).toHaveBeenCalledOnce();
+      expect(serviceUninstall).not.toHaveBeenCalled();
+      expect(serviceRestart).not.toHaveBeenCalled();
+    },
+  );
 
   it("continues daemon install flow when service status probe throws", async () => {
     serviceIsLoaded.mockRejectedValueOnce(

@@ -1,12 +1,12 @@
 // Coordinates gateway restart requests across supported supervisors.
 import { spawnSync } from "node:child_process";
 import os from "node:os";
-import path from "node:path";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
 } from "../daemon/constants.js";
+import { resolveLaunchAgentPlistPathForLabel } from "../daemon/launchd-service-files.js";
 import { abortPendingChannelReloads } from "../gateway/server-reload-generation.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -917,7 +917,7 @@ export function triggerOpenClawRestart(): RestartAttempt {
   // Fall back to bootstrap, which loads RunAtLoad agents without a follow-up kickstart.
   // Use env HOME to match how launchd.ts resolves the plist install path.
   const home = process.env.HOME?.trim() || os.homedir();
-  const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
+  const plistPath = resolveLaunchAgentPlistPathForLabel({ ...process.env, HOME: home }, label);
   const bootstrapArgs = ["bootstrap", domain, plistPath];
   tried.push(`launchctl ${bootstrapArgs.join(" ")}`);
   const boot = spawnSync("launchctl", bootstrapArgs, {

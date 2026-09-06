@@ -19,6 +19,7 @@ import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import type { GatewayServiceLoadState } from "../daemon/service-types.js";
 import {
   describeGatewayServiceRestart,
+  readGatewayServiceCommandForMutation,
   readGatewayServiceState,
   resolveGatewayService,
 } from "../daemon/service.js";
@@ -391,12 +392,25 @@ export async function maybeRepairGatewayDaemon(params: {
         return;
       }
       const port = resolveGatewayPort(params.cfg, process.env);
+      let existingCommand: Awaited<
+        ReturnType<typeof readGatewayServiceCommandForMutation>
+      >["command"];
+      try {
+        ({ command: existingCommand } = await readGatewayServiceCommandForMutation(
+          service,
+          process.env,
+        ));
+      } catch (err) {
+        note(`Gateway service install failed: ${String(err)}`, "Gateway");
+        note(gatewayInstallErrorHint(), "Gateway");
+        return;
+      }
       const { programArguments, workingDirectory, environment, environmentValueSources } =
         await buildGatewayInstallPlan({
           env: process.env,
           port,
           runtime: daemonRuntime,
-          existingCommand: serviceState.command,
+          existingCommand,
           warn: (message, title) => note(message, title),
           config: params.cfg,
         });
