@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ToolsGitHubStatusResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -125,7 +126,7 @@ it("shows an identified status failure once while opening personal setup", async
 });
 
 it("shows loading rather than disconnected until personal connection status arrives", async () => {
-  const status = Promise.withResolvers<{ personal: typeof disconnected; system: typeof system }>();
+  const status = createDeferredCore<{ personal: typeof disconnected; system: typeof system }>();
   const request = vi.fn(() => status.promise);
   const { element } = mount(["operator.read"], "profile-a", request);
   await waitForFast(() => expect(element.textContent).toContain("Checking connection…"));
@@ -160,7 +161,7 @@ it("retries failed status without reconnecting the GitHub account", async () => 
 });
 
 it("distinguishes a failed System lookup from unverified credentials", async () => {
-  const status = Promise.withResolvers<ToolsGitHubStatusResult>();
+  const status = createDeferredCore<ToolsGitHubStatusResult>();
   const request = vi.fn(() => status.promise);
   const { element } = mount(["operator.admin"], null, request);
   const row = () => element.querySelector('[data-github-connection="system"]');
