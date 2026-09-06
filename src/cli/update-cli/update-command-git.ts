@@ -10,8 +10,10 @@ import {
   resolveGlobalInstallTarget,
   resolveNpmLifecyclePolicyGate,
 } from "../../infra/update-global.js";
+import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "../../state/openclaw-database-preflight.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
@@ -23,7 +25,6 @@ import {
   hasSchemaRefusal,
 } from "./schema-preflight.js";
 import {
-  createGlobalCommandRunner,
   DEFAULT_PACKAGE_NAME,
   ensureGitCheckout,
   readPackageName,
@@ -31,6 +32,7 @@ import {
   resolveGlobalManager,
   runUpdateStep,
   UpdatePreMutationError,
+  type UpdateCommandOptions,
 } from "./shared.js";
 import {
   resolvePreparedGatewayUpdatePolicy,
@@ -124,6 +126,7 @@ type BeforeGitMutation = (target: {
 } | void>;
 
 export function createBeforeGitMutation(params: {
+  updateRun?: UpdateCommandOptions["run"];
   roots: readonly string[];
   shouldRestart: boolean;
   stopManagedService: (roots: readonly string[]) => Promise<void>;
@@ -137,7 +140,7 @@ export function createBeforeGitMutation(params: {
         `Update refused: could not inspect the target's schema support (${target.metadataUnreadable}). Retry, or see ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
       );
     }
-    const preStopSchemas = checkTargetDatabaseSchemas(target?.schemaVersions);
+    const preStopSchemas = await checkTargetDatabaseSchemas(target?.schemaVersions);
     if (hasSchemaRefusal(preStopSchemas)) {
       throw new UpdatePreMutationError(
         "database-schema-preflight",
@@ -146,7 +149,7 @@ export function createBeforeGitMutation(params: {
     }
     await params.stopManagedService(params.roots);
     const preManagedServiceStop = params.getPreManagedServiceStop();
-    const postStopSchemas = checkTargetDatabaseSchemas(
+    const postStopSchemas = await checkTargetDatabaseSchemas(
       target?.schemaVersions,
       preManagedServiceStop?.serviceEnv ?? process.env,
     );
@@ -159,6 +162,11 @@ export function createBeforeGitMutation(params: {
     // Git's deferred prepare phase owns the task suspension. Once mutation
     // starts, only a verified recovery may re-enable persistent autostart.
     preManagedServiceStop?.windowsTaskAutoStartRecovery?.beginMutation();
+    if (params.updateRun) {
+      recordUpdateRunPhase(params.updateRun.runId, "activating", undefined, {
+        env: params.updateRun.env,
+      });
+    }
     // A candidate checkout cannot own the service until its global exposure
     // succeeds. Finalization refreshes and activates the verified installation.
     return params.switchToGit
@@ -184,7 +192,6 @@ export async function updateGitInstall(params: {
   let updateRoot = params.switchToGit ? resolveGitInstallDir() : params.root;
   const effectiveTimeout = params.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
   const installEnv = await createGlobalInstallEnv();
-  const runCommand = createGlobalCommandRunner();
   const installTarget = params.switchToGit
     ? await resolveGlobalInstallTarget({
         manager: await resolveGlobalManager({
@@ -192,7 +199,7 @@ export async function updateGitInstall(params: {
           installKind: params.installKind,
           timeoutMs: effectiveTimeout,
         }),
-        runCommand,
+        runCommand: runCommandWithTimeout,
         timeoutMs: effectiveTimeout,
         pkgRoot: params.root,
       })
@@ -269,7 +276,7 @@ export async function updateGitInstall(params: {
       installSpec: updateRoot,
       packageName,
       packageRoot: installTarget.packageRoot,
-      runCommand,
+      runCommand: runCommandWithTimeout,
       runStep: (stepParams) => runUpdateStep({ ...stepParams, progress: params.progress }),
       timeoutMs: effectiveTimeout,
       env: installEnv,

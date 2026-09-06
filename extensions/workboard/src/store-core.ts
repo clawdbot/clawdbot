@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type {
   WorkboardBoardMetadata,
-  WorkboardChange,
   WorkboardCard,
   WorkboardEvent,
   WorkboardLink,
@@ -35,7 +34,6 @@ import {
   updateEvent,
   appendEvent,
 } from "./store-card-helpers.js";
-import { WorkboardChangeTracker } from "./store-change-tracker.js";
 import {
   invertWorkboardCardMutation,
   invertWorkboardWorkspaceMutation,
@@ -76,6 +74,7 @@ import {
   syncExecutionSessionKey,
   trimMetadataToBudget,
 } from "./store-normalizers.js";
+import { WorkboardStoreRuntime } from "./store-runtime.js";
 
 type WorkboardUpdateCardOptions = {
   allowAutomationLaunch?: boolean;
@@ -95,10 +94,8 @@ type WorkboardMutationJournalEntry = {
 
 const WORKBOARD_CAS_ATTEMPTS = 3;
 
-export class WorkboardCoreStore {
-  private mutationQueue: Promise<unknown> = Promise.resolve();
+export class WorkboardCoreStore extends WorkboardStoreRuntime {
   private lastNotificationSequence = 0;
-  private readonly changes: WorkboardChangeTracker;
   private readonly cardStore?: WorkboardCardStore;
   private compensationJournal?: WorkboardMutationJournalEntry[];
   protected readonly store: WorkboardKeyedStore;
@@ -113,45 +110,28 @@ export class WorkboardCoreStore {
       subscriptions?: WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>;
       attachments?: WorkboardKeyedStore<PersistedWorkboardAttachment>;
       dataVersion?: () => number;
+      close?: () => void;
     } = {},
   ) {
-    this.changes = new WorkboardChangeTracker(stores.dataVersion);
+    super(stores.dataVersion, stores.close);
     if (isWorkboardCardStore(store)) {
-      this.cardStore = this.changes.trackCardStore(store);
+      this.cardStore = this.trackCardStore(store);
       this.store = this.cardStore;
     } else {
-      this.store = this.changes.track(store);
+      this.store = this.track(store);
     }
-    this.boardStore = this.changes.track(
+    this.boardStore = this.track(
       stores.boards ?? (store as unknown as WorkboardKeyedStore<PersistedWorkboardBoard>),
     );
-    this.subscriptionStore =
+    this.subscriptionStore = this.track(
       stores.subscriptions ??
-      (store as unknown as WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>);
-    this.attachmentStore =
-      stores.attachments ?? (store as unknown as WorkboardKeyedStore<PersistedWorkboardAttachment>);
-  }
-
-  subscribeChanges(listener: (change: WorkboardChange) => void): () => void {
-    return this.changes.subscribe(listener);
-  }
-
-  announceChangeEpoch(): void {
-    this.changes.announceEpoch();
-  }
-
-  reconcileExternalChanges(): boolean {
-    return this.changes.reconcileExternalChanges();
-  }
-
-  protected async enqueueMutation<T>(run: () => Promise<T>): Promise<T> {
-    const runAndNotify = async () => await this.changes.runMutation(run);
-    const result = this.mutationQueue.then(runAndNotify, runAndNotify);
-    this.mutationQueue = result.then(
-      () => undefined,
-      () => undefined,
+        (store as unknown as WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>),
+      { notifyChanges: false },
     );
-    return await result;
+    this.attachmentStore = this.track(
+      stores.attachments ?? (store as unknown as WorkboardKeyedStore<PersistedWorkboardAttachment>),
+      { notifyChanges: false },
+    );
   }
 
   protected async withCardCompensation<T>(run: () => Promise<T>): Promise<T> {

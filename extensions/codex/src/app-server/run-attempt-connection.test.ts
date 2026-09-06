@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 import * as appServerPolicy from "./app-server-policy.js";
 import { applyCodexAppServerAuthProfile } from "./auth-bridge.js";
@@ -13,11 +14,13 @@ import { prepareCodexAttemptConnection } from "./run-attempt-connection.js";
 import {
   createCodexRuntimePlanFixture,
   createParams,
+  runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
   tempDir,
 } from "./run-attempt-test-harness.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import {
+  createCodexTestBindingStore,
   readCodexAppServerBinding,
   registerCodexTestSessionIdentity,
   testCodexAppServerBindingStore,
@@ -32,6 +35,42 @@ import { withCodexThreadLifecycleBinding } from "./thread-lifecycle-adoption.js"
 setupRunAttemptTestHooks();
 
 describe("prepareCodexAttemptConnection", () => {
+  it("retains the recovered generation fence after connection preparation", async () => {
+    const workspaceDir = path.join(tempDir, "recovered-workspace");
+    const params = createParams(path.join(tempDir, "recovered.jsonl"), workspaceDir);
+    const current = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionKey: params.sessionKey!,
+      sessionId: params.sessionId,
+    };
+    const previous = { ...current, sessionId: "before-compaction" };
+    const scope = {
+      agentId: current.agentId,
+      sessionKey: current.sessionKey,
+      storePath: path.join(tempDir, "admitted", "sessions.json"),
+    };
+    params.sessionTarget = { ...scope, sessionId: current.sessionId };
+    await upsertSessionEntry({ ...scope, entry: { sessionId: previous.sessionId, updatedAt: 1 } });
+    await patchSessionEntry({ ...scope, update: () => ({ sessionId: current.sessionId }) });
+    const bindingStore = createCodexTestBindingStore();
+    const binding = { threadId: "recovered-native-thread", cwd: workspaceDir };
+    await bindingStore.mutate(previous, { kind: "set", binding });
+    const originalHostCapabilities = params.hostCapabilities;
+
+    const connection = await prepareCodexAttemptConnection({ params, options: { bindingStore } });
+    expect(bindingStore.read(current)).toEqual(binding);
+    expect(connection.params.hostCapabilities).toBe(originalHostCapabilities);
+    expect(() => connection.assertCurrent()).not.toThrow();
+    await patchSessionEntry({ ...scope, update: () => ({ sessionId: "next-compaction" }) });
+
+    expect(() => originalHostCapabilities.assertActive()).not.toThrow();
+    expect(() => connection.assertCurrent()).toThrow(
+      "Codex session generation is no longer current",
+    );
+    expect(bindingStore.read(current)).toEqual(binding);
+  });
+
   it.each(["missing", "ordinary", "auth-changed", "model-changed", "provider-changed"] as const)(
     "rejects %s expected native ownership before reclaim or connection preparation",
     async (state) => {
@@ -167,7 +206,9 @@ describe("prepareCodexAttemptConnection", () => {
     "loopback-server",
     "ordinary-loopback-server",
     "forwarded-server",
+    "forwarded-stdio-server",
     "unix-server",
+    "ordinary-unix-server",
     "remote-server",
     "sandbox",
     "remote",
@@ -175,6 +216,7 @@ describe("prepareCodexAttemptConnection", () => {
   ])("handles an installation target for %s execution before native startup", async (placement) => {
     const sessionFile = path.join(tempDir, "installation-target.jsonl");
     const params = createParams(sessionFile, path.join(tempDir, "workspace-installation-target"));
+    const createToolSurface = vi.fn(params.hostCapabilities.createToolSurface);
     const localProcessEnv = Object.freeze({
       OPENCLAW_STATE_DIR: "/fixture/diagnosed",
       OPENCLAW_CONFIG_PATH: "/fixture/custom.json",
@@ -182,11 +224,12 @@ describe("prepareCodexAttemptConnection", () => {
     });
     params.hostCapabilities = Object.freeze({
       ...params.hostCapabilities,
+      createToolSurface,
       preparedEnvironment: () => ({
         credentialScrubEnv: {},
         localIdentityEnv: {},
         managedLocalIdentity: false,
-        localProcessEnv: placement === "ordinary-loopback-server" ? undefined : localProcessEnv,
+        localProcessEnv: placement.startsWith("ordinary-") ? undefined : localProcessEnv,
       }),
     });
     if (["sandbox", "remote", "remote-only"].includes(placement)) {
@@ -197,15 +240,15 @@ describe("prepareCodexAttemptConnection", () => {
       } as NonNullable<typeof params.sandbox>;
     }
     registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
-    const pending = prepareCodexAttemptConnection({
-      params,
-      options: {
-        bindingStore: testCodexAppServerBindingStore,
-        ...(placement.endsWith("-server")
-          ? {
-              pluginConfig: {
-                appServer:
-                  placement === "unix-server"
+    const options = {
+      bindingStore: testCodexAppServerBindingStore,
+      ...(placement.endsWith("-server")
+        ? {
+            pluginConfig: {
+              appServer:
+                placement === "forwarded-stdio-server"
+                  ? { transport: "stdio", remoteWorkspaceRoot: "/remote/workspace" }
+                  : placement.endsWith("unix-server")
                     ? { transport: "unix", homeScope: "user", url: "unix:///fixture/native.sock" }
                     : {
                         transport: "websocket",
@@ -218,22 +261,34 @@ describe("prepareCodexAttemptConnection", () => {
                           ? { remoteWorkspaceRoot: "/remote/workspace" }
                           : {}),
                       },
-              },
-            }
-          : {}),
-      },
-    });
-    if (!["local", "ordinary-loopback-server", "unix-server"].includes(placement)) {
+            },
+          }
+        : {}),
+    };
+    const pending = prepareCodexAttemptConnection({ params, options });
+    if (placement !== "local" && !placement.startsWith("ordinary-")) {
       await expect(pending).rejects.toThrow("saved prompt");
+      const clientFactory = vi.fn(async () => {
+        throw new Error("unexpected app-server admission");
+      });
+      await expect(runCodexAppServerAttempt(params, { ...options, clientFactory })).rejects.toThrow(
+        /owned local Codex stdio.*saved prompt/,
+      );
+      expect(clientFactory).not.toHaveBeenCalled();
+      expect(createToolSurface).not.toHaveBeenCalled();
       return;
     }
     const connection = await pending;
-    if (placement === "ordinary-loopback-server") {
+    if (placement.startsWith("ordinary-")) {
+      expect(connection.appServer.start.transport).toBe(
+        placement === "ordinary-unix-server" ? "unix" : "websocket",
+      );
       expect(connection.shellEnvironment).toBeUndefined();
       expect(connection.appServer.start.env ?? {}).not.toHaveProperty("OPENCLAW_STATE_DIR");
       expect(connection.disableLoginShell).toBe(false);
       return;
     }
+    expect(connection.appServer.start.transport).toBe("stdio");
     expect(connection.shellEnvironment).toEqual(localProcessEnv);
     expect(connection.appServer.start.env).toMatchObject(localProcessEnv);
     expect(connection.disableLoginShell).toBe(true);
@@ -602,10 +657,11 @@ describe("prepareCodexAttemptConnection", () => {
             options: { bindingStore: testCodexAppServerBindingStore },
           }),
         ).rejects.toBe(rotationError);
-        expect(mutate).toHaveBeenCalledWith(expect.anything(), {
-          kind: "clear",
-          threadId: "thread-existing",
-        });
+        expect(mutate).toHaveBeenCalledWith(
+          expect.anything(),
+          { kind: "clear", threadId: "thread-existing" },
+          expect.any(Function),
+        );
         const remainingListeners = getEventListeners(controller.signal, "abort").length;
         controller.abort("cancelled after rejection");
         expect({

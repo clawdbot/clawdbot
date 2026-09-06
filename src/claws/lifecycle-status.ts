@@ -16,7 +16,6 @@ import {
   ClawRemoveError,
   inspectClawBootstrap,
   inspectClawWorkspaceFile,
-  readAllClawWorkspaceFiles,
   synthesizeOrphanInstall,
   type ClawManagedFileStatus,
   type ClawBootstrapStatus,
@@ -39,7 +38,7 @@ import {
   type PersistedClawPackageRef,
 } from "./provenance.js";
 import { CLAW_OUTPUT_STABILITY, type ClawPackagePreflight } from "./types.js";
-import { readClawWorkspaceFiles } from "./workspace.js";
+import { readAllClawWorkspaceFiles, readClawWorkspaceFiles } from "./workspace.js";
 
 const CLAW_STATUS_SCHEMA_VERSION = "openclaw.clawStatus.v1" as const;
 

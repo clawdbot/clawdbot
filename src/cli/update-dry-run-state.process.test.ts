@@ -44,10 +44,6 @@ async function sha256File(filePath: string): Promise<string> {
   return createHash("sha256").update(contents).digest("hex");
 }
 
-function snapshotDatabaseArtifacts(snapshot: string[]): string[] {
-  return snapshot.filter((entry) => /^f .*\.sqlite(?:-(?:wal|shm))? /.test(entry));
-}
-
 function runUpdateProcess(root: string, args: string[], env: NodeJS.ProcessEnv = {}) {
   const configPath = path.join(root, "config", "openclaw.json");
   const stateDir = path.join(root, "state");
@@ -84,6 +80,31 @@ function runUpdateProcess(root: string, args: string[], env: NodeJS.ProcessEnv =
     },
     maxBuffer: 4 * 1024 * 1024,
     timeout: 60_000,
+  });
+}
+
+async function expectPreviewLedger(root: string, runId: string, before: string[]): Promise<void> {
+  const after = await snapshotTree(root);
+  const ledgerArtifacts = after.filter((entry) =>
+    /^(?:d state\/state$|f state\/state\/openclaw\.sqlite(?:-(?:wal|shm))? )/.test(entry),
+  );
+  expect(ledgerArtifacts).toContain("d state/state");
+  expect(ledgerArtifacts).toContainEqual(
+    expect.stringMatching(/^f state\/state\/openclaw\.sqlite [a-f0-9]{64}$/),
+  );
+  expect(after.filter((entry) => !ledgerArtifacts.includes(entry))).toEqual(before);
+
+  const status = runUpdateProcess(root, ["update", "status", "--json"]);
+  expect(status.error).toBeUndefined();
+  expect(status.status, status.stderr).toBe(0);
+  const report = JSON.parse(status.stdout);
+  expect(report.activeRun).toBeUndefined();
+  expect(report.lastRun).toMatchObject({
+    runId,
+    trigger: "cli",
+    phase: "finished",
+    status: "skipped",
+    reason: "dry-run",
   });
 }
 
@@ -128,12 +149,14 @@ describe("update process state", () => {
 
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({
+    const preview = JSON.parse(result.stdout);
+    expect(preview).toMatchObject({
+      runId: expect.any(String),
       dryRun: true,
       actions: expect.arrayContaining([expect.any(String)]),
     });
     expect(await fs.readFile(configPath)).toEqual(configBefore);
-    expect(await snapshotTree(root)).toEqual(treeBefore);
+    await expectPreviewLedger(root, preview.runId, treeBefore);
   });
 
   it("keeps migration-pending config and SQLite markers immutable for the shorthand", async () => {
@@ -156,20 +179,19 @@ describe("update process state", () => {
       wal: await sha256File(walPath),
     };
     const treeBefore = await snapshotTree(root);
-    const databaseArtifactsBefore = snapshotDatabaseArtifacts(treeBefore);
 
     const result = runUpdateProcess(root, ["--update", "--dry-run", "--no-restart", "--json"]);
 
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ dryRun: true });
+    const preview = JSON.parse(result.stdout);
+    expect(preview).toMatchObject({ runId: expect.any(String), dryRun: true });
     expect(await fs.readFile(configPath)).toEqual(configBefore);
-    expect(await snapshotTree(root)).toEqual(treeBefore);
+    await expectPreviewLedger(root, preview.runId, treeBefore);
     expect({
       migration: await sha256File(migrationMarkerPath),
       wal: await sha256File(walPath),
     }).toEqual(markerHashesBefore);
-    expect(snapshotDatabaseArtifacts(await snapshotTree(root))).toEqual(databaseArtifactsBefore);
   });
 
   it.each(["update", "repair"])(

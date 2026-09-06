@@ -412,6 +412,7 @@ function buildOpenClawCodingToolsOptions(
     },
     messageProvider: a.messageProvider ?? a.messageChannel,
     messageChannel: a.messageChannel,
+    pinnedWidgetAuthoring: a.pinnedWidgetAuthoring,
     // Bridged tools are dispatched here, not through the embedded tool lifecycle,
     // so no tool-start handler reserves a blocking question's prompt for them.
     ...(a.onToolResult
@@ -558,6 +559,7 @@ function convertOpenClawToolToSdkTool(
     input.attemptParams.observeToolTerminal?.({
       toolCallId: invocation.toolCallId,
       toolName: sourceTool.name,
+      result: error,
       arguments: executedArgs,
       executionStarted,
       outcome: "failure",
@@ -653,6 +655,7 @@ function convertOpenClawToolToSdkTool(
     input.attemptParams.observeToolTerminal?.({
       toolCallId: invocation.toolCallId,
       toolName: sourceTool.name,
+      result,
       arguments: preparedArgs,
       executionStarted: true,
       outcome: resultIsError ? "failure" : "success",
@@ -718,6 +721,7 @@ async function executeCatalogTool(
     input.attemptParams?.observeToolTerminal?.({
       toolCallId: params.toolCallId,
       toolName: params.toolName,
+      result,
       arguments: preparedArgs,
       executionStarted,
       outcome: isError ? "failure" : "success",
@@ -746,6 +750,7 @@ async function executeCatalogTool(
       input.attemptParams?.observeToolTerminal?.({
         toolCallId: params.toolCallId,
         toolName: params.toolName,
+        result: error,
         arguments: preparedArgs,
         executionStarted,
         outcome: "failure",

@@ -39,13 +39,17 @@ import {
 } from "../sessions/session-key-utils.js";
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
+import { mergeAssistantText, resolveAssistantTextInput } from "./agent-event-assistant-text.js";
 import {
+  capLiveAssistantText,
   projectLiveAssistantBufferedText,
-  resolveAssistantLiveChatInput,
-  resolveMergedAssistantText,
   shouldSuppressAssistantEventForLiveChat,
 } from "./live-chat-projector.js";
-import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
+import type {
+  GatewayBroadcastFn,
+  GatewayBroadcastOpts,
+  GatewayBroadcastToConnIdsFn,
+} from "./server-broadcast-types.js";
 import { isChatAbortMarkerCurrent } from "./server-chat-state.js";
 import type {
   BufferedAgentEvent,
@@ -380,6 +384,31 @@ type AgentEventHandler = ((event: AgentEventPayload) => void) & {
 type ChatRunRecord = ReturnType<ChatRunState["getOrCreate"]>;
 type AgentTextThrottleStream = keyof NonNullable<ChatRunRecord["agentText"]>;
 type LiveTextStream = "chat" | "agent";
+type LivePayloadOptions = {
+  agentId?: string;
+  controlUiVisible?: boolean;
+  dropIfSlow?: boolean;
+  liveText?: GatewayBroadcastOpts["liveText"];
+};
+
+function mergeAgentTextPayload(previous: unknown, next: unknown): AgentEventPayload {
+  // SAFETY: this callback only merges the same typed agent producer and stream/item key.
+  const payload = next as AgentEventPayload;
+  // SAFETY: the coalescing key prevents mixing agent payloads with other event shapes.
+  const delta = (previous as AgentEventPayload).data.delta;
+  const nextDelta = payload.data.delta;
+  return payload.stream !== "item" && typeof delta === "string" && typeof nextDelta === "string"
+    ? { ...payload, data: { ...payload.data, delta: `${delta}${nextDelta}` } }
+    : payload;
+}
+
+function mergeChatTextPayload(previous: unknown, next: unknown): ChatEvent {
+  type Delta = Extract<ChatEvent, { state: "delta" }>;
+  // SAFETY: only append deltas use this callback; replacements and terminal events flush it.
+  const payload = next as Delta;
+  // SAFETY: both values share the same chat-delta delivery key and buffering generation.
+  return { ...payload, deltaText: `${(previous as Delta).deltaText}${payload.deltaText}` };
+}
 
 function cancelPendingLiveTextFlush(run: ChatRunRecord, stream: LiveTextStream): void {
   const pending = run.pendingTextFlushes?.[stream];
@@ -484,6 +513,19 @@ export function createAgentEventHandler({
   };
 
   const pendingTerminalLifecycleErrors = new Map<string, PendingTerminalLifecycleError>();
+
+  const liveTextDelivery = (
+    runId: string,
+    coalesce?: NonNullable<GatewayBroadcastOpts["liveText"]>["coalesce"],
+    isCurrent?: () => boolean,
+  ): GatewayBroadcastOpts["liveText"] => {
+    const run = coalesce ? chatRunState.getOrCreate(runId) : chatRunState.runs.get(runId);
+    const group =
+      run && (coalesce ? (run.liveTextGroup ??= new AbortController()) : run.liveTextGroup);
+    return group
+      ? { group: group.signal, coalesce, isCurrent: coalesce ? isCurrent : undefined }
+      : undefined;
+  };
 
   const cancelPendingChatDeltaFlush = (clientRunId: string) => {
     const record = chatRunState.runs.get(clientRunId);
@@ -931,10 +973,20 @@ export function createAgentEventHandler({
     emitFirstAssistantChatSendTiming(
       opts?.firstAssistantTimingEntry ?? chatRunState.registry.peek(sourceRunId),
     );
-    sendChatPayload(sessionKey, payload, {
+    sendLivePayload("chat", sessionKey, payload, {
       agentId,
       controlUiVisible: opts?.controlUiVisible ?? true,
       dropIfSlow: true,
+      liveText: liveTextDelivery(
+        clientRunId,
+        broadcastDelta.replace
+          ? undefined
+          : {
+              key: JSON.stringify(["chat", sessionKey, agentId, opts?.controlUiVisible ?? true]),
+              merge: mergeChatTextPayload,
+            },
+        run.bufferIsCurrent,
+      ),
     });
   };
 
@@ -971,7 +1023,7 @@ export function createAgentEventHandler({
     clientRunId: string,
     sourceRunId: string,
     seq: number,
-    input: NonNullable<ReturnType<typeof resolveAssistantLiveChatInput>>,
+    input: NonNullable<ReturnType<typeof resolveAssistantTextInput>>,
     opts?: { controlUiVisible?: boolean; isCurrent?: () => boolean },
   ) => {
     const run = chatRunState.getOrCreate(clientRunId);
@@ -983,17 +1035,13 @@ export function createAgentEventHandler({
       delete run.bufferProjection;
     }
     const previousRawText = run.rawBuffer ?? "";
-    if (!input.itemId) {
-      delete run.assistantScope;
-    } else if (run.assistantScope?.itemId !== input.itemId) {
-      run.assistantScope = { itemId: input.itemId, prefix: previousRawText };
-    }
-    const mergedRawText = resolveMergedAssistantText({
-      previousText: previousRawText,
-      nextText: input.text,
-      nextDelta: input.delta,
-      scope: run.assistantScope,
-    });
+    const snapshot = mergeAssistantText(
+      { text: previousRawText, scope: run.assistantScope },
+      input,
+      "live",
+    );
+    run.assistantScope = snapshot.scope;
+    const mergedRawText = capLiveAssistantText(snapshot);
     if (!mergedRawText && !previousRawText) {
       return;
     }
@@ -1079,41 +1127,40 @@ export function createAgentEventHandler({
     broadcastChatDelta(sessionKey, agentId, clientRunId, sourceRunId, seq, text, opts);
   };
 
-  const sendSessionMessagePayload = (
-    event: "chat" | "agent",
-    deliverySessionKeys: string[],
-    payload: unknown,
-    dropIfSlow: boolean | undefined,
+  const sendLivePayload = (
+    event: "agent" | "chat",
+    sessionKey: string | undefined,
+    payload: ChatEvent | AgentEventPayload,
+    opts?: LivePayloadOptions,
   ) => {
+    const visible = opts?.controlUiVisible ?? true;
+    const deliverySessionKeys = sessionKey
+      ? resolveSessionDeliveryKeys(sessionKey, opts?.agentId)
+      : undefined;
+    const broadcastOpts = {
+      dropIfSlow: event === "agent" && visible ? undefined : opts?.dropIfSlow,
+      sessionKeys: deliverySessionKeys,
+      liveText: opts?.liveText ?? liveTextDelivery(payload.runId),
+    };
+    if (visible) {
+      broadcast(event, payload, broadcastOpts);
+      if (sessionKey) {
+        sendNodeSessionPayloadForAgent(sessionKey, event, payload, opts?.agentId);
+      }
+      return;
+    }
     const recipients = new Set<string>();
-    for (const key of deliverySessionKeys) {
-      for (const connId of sessionMessageSubscribers.get(key)) {
+    for (const deliveryKey of deliverySessionKeys ?? []) {
+      for (const connId of sessionMessageSubscribers.get(deliveryKey)) {
         recipients.add(connId);
       }
     }
     if (recipients.size > 0) {
       broadcastToConnIds(event, payload, recipients, {
-        dropIfSlow,
-        sessionKeys: deliverySessionKeys,
+        ...broadcastOpts,
+        sessionSubscriptionVerified: true,
       });
     }
-  };
-
-  const sendChatPayload = (
-    sessionKey: string,
-    payload: unknown,
-    opts?: { agentId?: string; controlUiVisible?: boolean; dropIfSlow?: boolean },
-  ) => {
-    const deliverySessionKeys = resolveSessionDeliveryKeys(sessionKey, opts?.agentId);
-    if (opts?.controlUiVisible ?? true) {
-      broadcast("chat", payload, {
-        dropIfSlow: opts?.dropIfSlow,
-        sessionKeys: deliverySessionKeys,
-      });
-      sendNodeSessionPayloadForAgent(sessionKey, "chat", payload, opts?.agentId);
-      return;
-    }
-    sendSessionMessagePayload("chat", deliverySessionKeys, payload, opts?.dropIfSlow);
   };
 
   const emitChatTerminal = (
@@ -1145,7 +1192,6 @@ export function createAgentEventHandler({
       text,
       shouldSuppressSilent,
     });
-    chatRunState.clearRun(clientRunId);
     const spawnedBy = resolveSpawnedBy(sessionKey);
     if (jobState !== "error") {
       const payload = {
@@ -1169,7 +1215,8 @@ export function createAgentEventHandler({
               }
             : undefined,
       };
-      sendChatPayload(sessionKey, payload, opts);
+      sendLivePayload("chat", sessionKey, payload, opts);
+      chatRunState.clearRun(clientRunId);
       return;
     }
     const errorDetail = projectChatErrorDetail(opts?.errorObservation);
@@ -1185,28 +1232,34 @@ export function createAgentEventHandler({
       ...(errorDetail ? { errorDetail } : {}),
       ...(stopReason && { stopReason }),
     };
-    sendChatPayload(sessionKey, payload, opts);
+    sendLivePayload("chat", sessionKey, payload, opts);
+    chatRunState.clearRun(clientRunId);
   };
 
   const sendAgentPayload = (
     sessionKey: string | undefined,
     payload: AgentEventPayload & { spawnedBy?: string },
-    opts?: { agentId?: string; controlUiVisible?: boolean; dropIfSlow?: boolean },
+    opts?: LivePayloadOptions & { coalesce?: boolean; isCurrent?: () => boolean },
   ) => {
-    if (opts?.controlUiVisible ?? true) {
-      broadcast("agent", payload, {
-        sessionKeys: sessionKey ? resolveSessionDeliveryKeys(sessionKey, opts?.agentId) : undefined,
-      });
-      if (sessionKey) {
-        sendNodeSessionPayloadForAgent(sessionKey, "agent", payload, opts?.agentId);
-      }
-      return;
-    }
-    if (!sessionKey) {
-      return;
-    }
-    const deliverySessionKeys = resolveSessionDeliveryKeys(sessionKey, opts?.agentId);
-    sendSessionMessagePayload("agent", deliverySessionKeys, payload, opts?.dropIfSlow);
+    const stream = opts?.coalesce ? resolveAgentTextThrottleStream(payload) : null;
+    const liveText = liveTextDelivery(
+      payload.runId,
+      stream
+        ? {
+            key: JSON.stringify([
+              "agent",
+              stream,
+              payload.data.itemId,
+              sessionKey,
+              opts?.agentId,
+              opts?.controlUiVisible ?? true,
+            ]),
+            merge: mergeAgentTextPayload,
+          }
+        : undefined,
+      opts?.isCurrent,
+    );
+    sendLivePayload("agent", sessionKey, payload, { ...opts, liveText });
   };
 
   const flushBufferedAgentDeltaIfNeeded = (clientRunId: string) => {
@@ -1232,6 +1285,8 @@ export function createAgentEventHandler({
         agentId: buffered.agentId,
         controlUiVisible: buffered.controlUiVisible,
         dropIfSlow: buffered.controlUiVisible === false,
+        coalesce: true,
+        isCurrent: buffered.isCurrent,
       });
     }
   };
@@ -1287,14 +1342,9 @@ export function createAgentEventHandler({
           previous.isCurrent?.() !== false))
     ) {
       // Deltas accumulate, while item progress replaces its cumulative snapshot.
-      const delta = previous?.payload.data.delta;
-      const nextDelta = payload.data.delta;
       state.bufferedEvent = {
         ...next,
-        payload:
-          payload.stream !== "item" && typeof delta === "string" && typeof nextDelta === "string"
-            ? { ...payload, data: { ...payload.data, delta: `${delta}${nextDelta}` } }
-            : payload,
+        payload: previous ? mergeAgentTextPayload(previous.payload, payload) : payload,
       };
       scheduleLiveTextFlush(run, "agent", LIVE_TEXT_PACING_MS - (now - last), () =>
         flushBufferedAgentDeltaIfNeeded(clientRunId),
@@ -1460,6 +1510,7 @@ export function createAgentEventHandler({
           sessionKeys: sessionKey
             ? resolveSessionDeliveryKeys(sessionKey, sessionAgentId)
             : undefined,
+          liveText: liveTextDelivery(clientRunId),
         },
       );
     }
@@ -1498,7 +1549,7 @@ export function createAgentEventHandler({
           state: "status" as const,
           phase,
         } satisfies ChatEvent;
-        sendChatPayload(sessionKey, payload, {
+        sendLivePayload("chat", sessionKey, payload, {
           agentId: sessionAgentId,
           controlUiVisible: true,
           dropIfSlow: true,
@@ -1562,6 +1613,7 @@ export function createAgentEventHandler({
             sessionKeys: sessionKey
               ? resolveSessionDeliveryKeys(sessionKey, sessionAgentId)
               : undefined,
+            liveText: liveTextDelivery(clientRunId),
           },
         );
       }
@@ -1595,7 +1647,7 @@ export function createAgentEventHandler({
               ...buildSessionEventSnapshot(sessionKey, undefined, sessionAgentId),
             },
             sessionSubscribers,
-            { dropIfSlow: true },
+            { dropIfSlow: true, liveText: liveTextDelivery(clientRunId) },
           );
         }
       }
@@ -1668,7 +1720,7 @@ export function createAgentEventHandler({
         );
       }
       const assistantLiveChatInput =
-        evt.stream === "assistant" ? resolveAssistantLiveChatInput(evt.data) : undefined;
+        evt.stream === "assistant" ? resolveAssistantTextInput(evt.data) : undefined;
       const suppressAssistant = shouldSuppressAssistantEventForLiveChat(evt.data);
       if (
         !isAborted &&

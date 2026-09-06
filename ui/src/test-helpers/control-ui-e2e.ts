@@ -210,6 +210,36 @@ export async function waitForControlUiRoute(page: Page, target: ControlUiRouteTa
 }
 
 /**
+ * Click a control inside a board widget document once pointer events reach it.
+ *
+ * Board widget frames stay `inert` and transparent until the sandbox reports
+ * the document rendered, and Linux Chromium keeps routing pointer events to the
+ * outer iframe element instead of into the revealed cross-origin document until
+ * that reveal reaches its compositor. Playwright's actionability checks read the
+ * DOM, and its hit-target interceptor reports a click that reached no frame as
+ * delivered, so a click issued in that window is a silent no-op. Hover until the
+ * widget document itself observes the pointer, then click; a control that never
+ * observes it fails loudly instead.
+ */
+export async function clickBoardWidgetControl(page: Page, control: Locator): Promise<void> {
+  const deadline = Date.now() + controlUiE2eWaitTimeoutMs;
+  for (;;) {
+    // Leave and re-enter: a stationary pointer keeps the browser's stale
+    // routing decision, while a fresh move re-runs hit testing.
+    await page.mouse.move(0, 0);
+    await control.hover();
+    if (await control.evaluate((element) => element.matches(":hover"))) {
+      break;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error("Board widget control never received pointer events.");
+    }
+    await page.waitForTimeout(100);
+  }
+  await control.click();
+}
+
+/**
  * Wait for the settled in-app confirmation modal. Control UI routes destructive
  * confirms through `showConfirmDialog`, so no native browser dialog ever fires;
  * waiting for full opacity keeps the click from landing mid-animation.
@@ -310,6 +340,8 @@ export const defaultControlUiFeatureMethods = [
   "tools.github.authorize.cancel",
   "update.hold",
   "update.run",
+  "update.runs.get",
+  "update.runs.list",
   "update.status",
   "worktrees.branches",
 ] as const;
@@ -441,8 +473,6 @@ export type ControlUiMockGatewayScenario = {
   cliAgentsEnabled?: boolean;
   workspace?: string;
   workspaceGit?: boolean;
-  /** Local media preview roots served in the bootstrap config; tilde sources expand against these. */
-  localMediaPreviewRoots?: string[];
 };
 
 type NormalizedControlUiMockGatewayScenario = Required<
@@ -1059,7 +1089,6 @@ function normalizeScenario(
     cliAgentsEnabled: scenario.cliAgentsEnabled ?? false,
     workspace: scenario.workspace ?? "",
     workspaceGit: scenario.workspaceGit ?? false,
-    localMediaPreviewRoots: scenario.localMediaPreviewRoots ?? [],
   };
 }
 
@@ -1087,7 +1116,6 @@ export function createControlUiMockBootstrapConfig(scenario: ControlUiMockGatewa
     basePath: normalizedScenario.basePath,
     devGitBranch: normalizedScenario.devGitBranch || undefined,
     embedSandbox: "scripts",
-    localMediaPreviewRoots: normalizedScenario.localMediaPreviewRoots,
     serverVersion: normalizedScenario.serverVersion,
     serverBuildId: normalizedScenario.serverBuildId,
     terminalEnabled: normalizedScenario.terminalEnabled,
@@ -2073,10 +2101,20 @@ function installControlUiMockGateway(
         return { artifacts: [] };
       case "artifacts.download":
         return null;
+      case "sessions.resolve":
+        return sessions.resolve(isRecord(params) ? params : {});
       case "chat.history":
       case "chat.startup": {
-        const key =
-          isRecord(params) && typeof params.sessionKey === "string"
+        const resolution =
+          method === "chat.startup" && isRecord(params) && typeof params.shortId === "string"
+            ? sessions.resolve(params)
+            : undefined;
+        if (resolution && !resolution.ok) {
+          return { resolution, messages: [] };
+        }
+        const key = resolution?.ok
+          ? resolution.key
+          : isRecord(params) && typeof params.sessionKey === "string"
             ? params.sessionKey
             : scenario.sessionKey;
         const row = sessions.read(key);
@@ -2087,6 +2125,7 @@ function installControlUiMockGateway(
             : null;
         return {
           messages: scenario.historyMessages,
+          ...(resolution ? { resolution } : {}),
           sessionId: row.sessionId,
           ...(info || override ? { sessionInfo: { ...info, ...override } } : {}),
           thinkingLevel: null,
@@ -3257,7 +3296,7 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
       githubJob: process.env.GITHUB_JOB ?? null,
       runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? null,
       runId: process.env.GITHUB_RUN_ID ?? null,
-      shardIndex: process.env.SHARD_INDEX ?? null,
+      shardIndex: process.env.VITEST_SHARD_INDEX ?? null,
       vitestShardCount: process.env.VITEST_SHARD_COUNT ?? null,
     },
     pageEvents: [...pageEvents],

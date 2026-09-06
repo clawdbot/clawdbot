@@ -1,5 +1,6 @@
 // Codex supervision tests cover passive listing and safe local session takeover.
 /* oxlint-disable typescript/unbound-method -- assertions inspect vi.fn-backed object methods, not unbound class methods. */
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import {
   nodeHostMocks,
@@ -31,6 +32,39 @@ import {
 } from "./session-catalog.test-helpers.js";
 
 describe("Codex supervision catalog", () => {
+  it("does not start paired hosts when retired during node inventory", async () => {
+    const inventory = createDeferred<Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>>();
+    const inventoryStarted = createDeferred<void>();
+    const listNodes = vi.fn(() => {
+      inventoryStarted.resolve();
+      return inventory.promise;
+    });
+    const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async () => ({
+      payloadJSON: JSON.stringify({ sessions: [] }),
+    }));
+    const controller = new AbortController();
+    const reason = new Error("catalog retired during inventory");
+    const listed = listCodexSessionCatalog({
+      bindingStore: createCodexTestBindingStore(),
+      config,
+      runtime: createRuntime({ invoke }).runtime,
+      control: createControl(),
+      query: { hostIds: ["node:late"] },
+      listNodes,
+      signal: controller.signal,
+    }).catch((error: unknown) => error);
+    await inventoryStarted.promise;
+    controller.abort(reason);
+    inventory.resolve({
+      nodes: [
+        { nodeId: "late", connected: true, commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND] },
+      ],
+    });
+    const result = await listed;
+    expect(invoke).not.toHaveBeenCalled();
+    expect(result).toBe(reason);
+  });
+
   it("filters managed threads and backfills paired-node catalog pages", async () => {
     const listPage = vi.fn(async ({ cursor }: { cursor?: string; limit: number }) =>
       cursor
@@ -411,56 +445,108 @@ describe("Codex supervision catalog", () => {
     }
   });
 
-  it("publishes a paired-node page that finishes after the fail-soft response", async () => {
-    vi.useFakeTimers();
-    try {
-      let resolveInvoke!: (value: unknown) => void;
-      const invokeResult = new Promise<unknown>((resolve) => {
-        resolveInvoke = resolve;
-      });
-      const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async () => await invokeResult);
-      const onHost = vi.fn();
-      const pending = listPairedNode({
-        agentId: "main",
-        runtime: { nodes: { invoke } } as unknown as PluginRuntime,
-        node: {
+  it.each(["completes", "is cancelled"] as const)(
+    "owns paired-node publication after the fail-soft response when discovery %s",
+    async (outcome) => {
+      vi.useFakeTimers();
+      try {
+        const invokeResult = createDeferred<unknown>();
+        const controller = new AbortController();
+        const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async ({ signal }) => {
+          const abort = () => invokeResult.reject(signal?.reason);
+          signal?.addEventListener("abort", abort, { once: true });
+          try {
+            return await invokeResult.promise;
+          } finally {
+            signal?.removeEventListener("abort", abort);
+          }
+        });
+        const { runtime } = createRuntime({
+          invoke,
+          nodes: [
+            {
+              nodeId: "slow-node",
+              displayName: "Slow node",
+              connected: true,
+              commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
+            },
+          ],
+        });
+        const { api, getProvider } = createGatewayApi(runtime);
+        registerCodexSessionCatalog({
+          api,
+          bindingStore: createCodexTestBindingStore(),
+          control: createControl(),
+          getRuntimeConfig: () => config,
+        });
+        const completions: Promise<void>[] = [];
+        const completed = vi.fn();
+        const onHost = vi.fn();
+        const pending = getProvider()!.list({
+          hostIds: ["node:slow-node"],
+          limitPerHost: 40,
+          signal: controller.signal,
+          waitUntil: (completion) => {
+            completions.push(
+              completion.then(() => {
+                expect(onHost).toHaveBeenCalledOnce();
+                completed();
+              }),
+            );
+          },
+          onHost,
+        });
+
+        await vi.advanceTimersByTimeAsync(8_000);
+        await expect(pending).resolves.toMatchObject([
+          { hostId: "node:slow-node", error: { code: "NODE_INVOKE_FAILED" } },
+        ]);
+        expect(completions).toHaveLength(1);
+        expect(completed).not.toHaveBeenCalled();
+        expect(onHost).not.toHaveBeenCalled();
+        expect(invoke).toHaveBeenCalledWith({
           nodeId: "slow-node",
-          displayName: "Slow node",
-          connected: true,
-          commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
-        },
-        query: { limitPerHost: 40 },
-        adoptedSessions: new Map(),
-        terminalCapabilities: { canStartTerminal: true, canOpenTerminalCodex: true },
-        onHost,
-      });
+          command: CODEX_APP_SERVER_THREADS_LIST_COMMAND,
+          params: { agentId: "main", cursor: undefined, limit: 40, searchTerm: undefined },
+          timeoutMs: 65_000,
+          scopes: ["operator.write"],
+          signal: controller.signal,
+        });
 
-      await vi.advanceTimersByTimeAsync(8_000);
-      await expect(pending).resolves.toMatchObject({
-        canStartTerminal: true,
-        error: { code: "NODE_INVOKE_FAILED" },
-      });
-      expect(onHost).not.toHaveBeenCalled();
+        if (outcome === "is cancelled") {
+          controller.abort(new Error("catalog owner retired"));
+        } else {
+          invokeResult.resolve({
+            payloadJSON: JSON.stringify({
+              sessions: [{ threadId: "late-thread", status: "idle", archived: false }],
+            }),
+          });
+        }
+        await Promise.all(completions);
 
-      resolveInvoke({
-        payloadJSON: JSON.stringify({
-          sessions: [{ threadId: "late-thread", status: "idle", archived: false }],
-        }),
-      });
-      await vi.advanceTimersByTimeAsync(0);
-
-      expect(onHost).toHaveBeenCalledWith(
-        expect.objectContaining({
-          hostId: "node:slow-node",
-          canStartTerminal: true,
-          canOpenTerminalCodex: true,
-          sessions: [expect.objectContaining({ threadId: "late-thread" })],
-        }),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        expect(onHost).toHaveBeenCalledWith(
+          expect.objectContaining({
+            hostId: "node:slow-node",
+            ...(outcome === "is cancelled"
+              ? { sessions: [], error: { code: "NODE_INVOKE_FAILED", message: expect.any(String) } }
+              : {
+                  sessions: [
+                    expect.objectContaining({
+                      threadId: "late-thread",
+                      canContinue: false,
+                      canArchive: false,
+                      canOpenTerminal: false,
+                    }),
+                  ],
+                }),
+          }),
+        );
+        expect(completed).toHaveBeenCalledOnce();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it.each([
     { mode: "app-owned", execHost: "app", boundedReader: false },

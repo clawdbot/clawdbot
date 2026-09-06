@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { heartbeatRunnerTelegramPlugin } from "../../test/helpers/infra/heartbeat-runner-channel-plugins.js";
 import { createHeartbeatToolResponsePayload } from "../auto-reply/heartbeat-tool-response.js";
-import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import { setReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -263,6 +263,10 @@ describe("runHeartbeatOnce structured heartbeat delivery", () => {
         lastHeartbeatSentAt: previousSentAt,
       });
       replySpy.mockImplementation(async () => {
+        const entry = readSessionStoreForTest<SessionEntry>(storePath)[sessionKey];
+        if (!entry) {
+          throw new Error("Expected heartbeat execution session");
+        }
         await patchSessionEntryCore(
           { storePath, sessionKey },
           () => ({
@@ -270,20 +274,32 @@ describe("runHeartbeatOnce structured heartbeat delivery", () => {
               kind: "transport-only",
               createdAt: 0,
               intentId: "structured-heartbeat-intent",
+              deliveries: [{ id: "structured-delivery", state: "prepared" }],
             },
           }),
           { preserveActivity: true },
         );
-        return {
-          presentation: {
-            blocks: [
-              {
-                type: "buttons",
-                buttons: [{ label: "Approve deployment", value: "approve" }],
-              },
-            ],
+        return setReplyPayloadMetadata(
+          {
+            presentation: {
+              blocks: [
+                {
+                  type: "buttons",
+                  buttons: [{ label: "Approve deployment", value: "approve" }],
+                },
+              ],
+            },
+          } satisfies ReplyPayload,
+          {
+            pendingFinalDeliveryCompletion: {
+              deliveryId: "structured-delivery",
+              intentId: "structured-heartbeat-intent",
+              sessionId: entry.sessionId,
+              sessionKey,
+              storePath,
+            },
           },
-        };
+        );
       });
       const sendTelegram = vi.fn().mockResolvedValue({ messageId: "presentation-1" });
 

@@ -104,6 +104,7 @@ describe("BoardWidgetSandboxHost", () => {
     const fetchMock = vi.fn(async () => new Response("<!doctype html><p>weather</p>"));
     vi.stubGlobal("fetch", fetchMock);
     const onLoaded = vi.fn();
+    const onRendered = vi.fn();
     const host = new BoardWidgetSandboxHost({
       frame,
       widget: widget(),
@@ -118,6 +119,7 @@ describe("BoardWidgetSandboxHost", () => {
       onUnauthorized: vi.fn(),
       onReadyTimeout: vi.fn(),
       onLoaded,
+      onRendered,
       onError: vi.fn(),
     });
 
@@ -135,10 +137,79 @@ describe("BoardWidgetSandboxHost", () => {
     expect(postMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "ui/notifications/sandbox-resource-ready",
-        params: { html: "<!doctype html><p>weather</p>" },
+        params: { html: "<!doctype html><p>weather</p>", renderId: expect.any(String) },
       }),
       "https://sandbox.example",
     );
+    expect(onRendered).not.toHaveBeenCalled();
+    const { renderId } = postMessage.mock.calls[0]![0].params as { renderId: string };
+    const rendered = (
+      id: string,
+      source = frame.contentWindow,
+      origin = "https://sandbox.example",
+    ) =>
+      host.handleMessage(
+        new MessageEvent("message", {
+          source,
+          origin,
+          data: { method: "ui/notifications/sandbox-resource-loaded", params: { renderId: id } },
+        }),
+      );
+    rendered("stale-document");
+    rendered(renderId, window);
+    rendered(renderId, frame.contentWindow, "https://other.example");
+    expect(onRendered).not.toHaveBeenCalled();
+    rendered(renderId);
+    rendered(renderId);
+    expect(onRendered).toHaveBeenCalledOnce();
+    host.reset();
+    rendered(renderId);
+    expect(onRendered).toHaveBeenCalledOnce();
+    host.dispose();
+  });
+
+  it("delivers passive preview HTML without accepting its capability bridge", async () => {
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("<!doctype html><p>weather</p>")),
+    );
+    const client = { request: vi.fn(async () => ({ ok: true })) };
+    const onLoaded = vi.fn();
+    const host = new BoardWidgetSandboxHost({
+      frame,
+      widget: widget(),
+      sandboxOrigin: "https://sandbox.example",
+      sandboxUrl: SANDBOX_URL,
+      sourceOrigin: "https://gateway.example",
+      client,
+      bridgeEnabled: false,
+      resolveFrameUrl: () => "/__openclaw__/board/weather?bt=ticket",
+      confirmPrompt: () => true,
+      onFrameUrl: vi.fn(),
+      onLoadFailed: vi.fn(),
+      onUnauthorized: vi.fn(),
+      onReadyTimeout: vi.fn(),
+      onLoaded,
+      onError: vi.fn(),
+    });
+
+    notifyProxyReady(host, frame);
+    await vi.waitFor(() => expect(onLoaded).toHaveBeenCalledOnce());
+    const channel = new MessageChannel();
+    const close = vi.spyOn(channel.port1, "close");
+    host.handleMessage(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        origin: "https://sandbox.example",
+        data: { type: "openclaw:widget-bridge-port-offer" },
+        ports: [channel.port1],
+      }),
+    );
+
+    expect(close).toHaveBeenCalledOnce();
+    expect(client.request).not.toHaveBeenCalled();
   });
 
   it("routes transient document fetch failures through the refresh budget", async () => {

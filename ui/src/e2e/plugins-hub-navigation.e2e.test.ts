@@ -1,7 +1,9 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -187,11 +189,12 @@ async function captureScreenshot(page: Page, name: string) {
   if (!captureUiProof) {
     return;
   }
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(proofDir, name),
-  });
+  await writeFile(
+    path.join(proofDir, name),
+    await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+      page.locator(".plugins-hub-tabs"),
+    ]),
+  );
 }
 
 async function selectHubTab(

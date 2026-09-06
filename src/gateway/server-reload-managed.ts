@@ -55,14 +55,14 @@ function canAdvancePreparedModelRuntimeConfigInPlace(plan: GatewayReloadPlan): b
 export function startManagedGatewayConfigReloader(
   params: ManagedGatewayConfigReloaderParams,
 ): ManagedGatewayConfigReloaderHandle {
-  let stopped = false;
+  const lifecycle = new AbortController();
   if (params.minimalTestGateway) {
     return {
       stop: async () => {
-        stopped = true;
+        lifecycle.abort(new GatewayConfigReloadSupersededError());
       },
       notifyPluginMetadataChanged: () => {},
-      isConfigReloadSettled: () => !stopped,
+      isConfigReloadSettled: () => !lifecycle.signal.aborted,
     };
   }
 
@@ -127,7 +127,7 @@ export function startManagedGatewayConfigReloader(
   const createGmailRestartAbortController = (): GatewayGmailRestartAbortController => {
     abortActiveGmailRestart();
     const abortController = new AbortController();
-    if (stopped) {
+    if (lifecycle.signal.aborted) {
       abortController.abort();
       return abortController;
     }
@@ -149,35 +149,15 @@ export function startManagedGatewayConfigReloader(
     restoreConservativeRestartDebt,
     stopRestartRetries,
   } = createGatewayReloadHandlers({
-    deps: params.deps,
-    broadcast: params.broadcast,
-    ...(params.resolveGatewayContext
-      ? { resolveGatewayContext: params.resolveGatewayContext }
-      : {}),
-    getState: params.getState,
-    setState: params.setState,
-    getPluginMetadataSnapshot: params.getPluginMetadataSnapshot,
-    startChannel: params.startChannel,
-    stopChannel: params.stopChannel,
+    ...params,
+    releaseChannelRouteHandoffs: params.channelManager.releaseChannelRouteHandoffs,
     pruneInactiveChannelAccountState: params.channelManager.pruneInactiveChannelAccountState,
-    getChannelAutostartSuppression: params.getChannelAutostartSuppression,
-    stopPostReadySidecars: params.stopPostReadySidecars,
-    reloadPlugins: params.reloadPlugins,
-    logHooks: params.logHooks,
-    logChannels: params.logChannels,
-    logCron: params.logCron,
-    logReload: params.logReload,
-    cronReconciliation: params.cronReconciliation,
     createGmailRestartAbortController,
     clearGmailRestartAbortController: (abortController) => {
       if (activeGmailRestartAbortController === abortController) {
         activeGmailRestartAbortController = null;
       }
     },
-    ...(params.onCronRestart ? { onCronRestart: params.onCronRestart } : {}),
-    ...(params.requestRecoveryRestart
-      ? { requestRecoveryRestart: params.requestRecoveryRestart }
-      : {}),
     assertRestartReady: () =>
       import("../state/openclaw-database-preflight.js").then(({ assertOpenClawDatabasesReady }) =>
         assertOpenClawDatabasesReady({ env: process.env, operation: "gateway-restart" }),
@@ -192,7 +172,7 @@ export function startManagedGatewayConfigReloader(
     restartOptions?: GatewayRestartRequestOptions,
     beforeRestartRequest?: () => Promise<void>,
   ) => {
-    const isCurrent = () => !stopped && transactionOwnership.isCurrent();
+    const isCurrent = () => !lifecycle.signal.aborted && transactionOwnership.isCurrent();
     const assertCurrent = () => {
       if (!isCurrent()) {
         throw new GatewayConfigReloadSupersededError();
@@ -377,7 +357,20 @@ export function startManagedGatewayConfigReloader(
       ? { prepareConfigCandidate: params.prepareConfigCandidate }
       : {}),
     initialInternalWriteHash: params.initialInternalWriteHash,
-    runTransaction: (run) => runWithGatewayIndependentRootWorkAdmission(run, "reload:config"),
+    runTransaction: (run) =>
+      runWithGatewayIndependentRootWorkAdmission(run, "reload:config", lifecycle.signal).catch(
+        (error: unknown) => {
+          // Only the admission wait wraps this stop reason; retain admitted work failures.
+          if (
+            lifecycle.signal.reason instanceof GatewayConfigReloadSupersededError &&
+            error instanceof Error &&
+            error.cause === lifecycle.signal.reason
+          ) {
+            throw lifecycle.signal.reason;
+          }
+          throw error;
+        },
+      ),
     readSnapshot: params.readSnapshot,
     promoteSnapshot: async (snapshot, _reason) => await params.promoteSnapshot(snapshot),
     subscribeToWrites: params.subscribeToWrites,
@@ -525,7 +518,7 @@ export function startManagedGatewayConfigReloader(
   });
   return {
     stop: async () => {
-      stopped = true;
+      lifecycle.abort(new GatewayConfigReloadSupersededError());
       stopRestartRetries();
       // Release managed waiters before the base reloader joins every active transaction.
       abortPendingChannelReloads();
@@ -536,6 +529,6 @@ export function startManagedGatewayConfigReloader(
     notifyPluginMetadataChanged: configReloader.notifyPluginMetadataChanged,
     // Equal config revisions can still owe a plugin/runtime restart.
     isConfigReloadSettled: () =>
-      !stopped && !hasConfigCandidatePending() && !hasOutstandingGatewayRestart(),
+      !lifecycle.signal.aborted && !hasConfigCandidatePending() && !hasOutstandingGatewayRestart(),
   };
 }

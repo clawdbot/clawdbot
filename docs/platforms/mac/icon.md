@@ -9,6 +9,37 @@ title: "Menu bar icon"
 
 Scope: macOS app (`apps/macos`). Rendering: `CritterIconRenderer.makeIcon(...)`. Animation/state wiring: `CritterStatusLabel` + `CritterStatusLabel+Behavior.swift`.
 
+## Dock icon
+
+Inside the Mac app's Dashboard, choose a Dock icon in **Settings → This Mac → Dock icon**:
+
+- **Original** (default): the original Molty silhouette on a paper tile.
+- **Heritage**: the legacy README lobster with its raised claw.
+- **Clawmark**: a bold, sculpted lobster pincer.
+- **Origami**: a folded, faceted Molty.
+- **Pincer**: a single claw silhouette with a rounded, flowing wrist.
+- **Open C**: a circular claw with two opposing pincer tips.
+
+Each design has light and dark artwork.
+On macOS 26 and later, Original uses native icon styling, including the setting in
+**System Settings → Appearance → Icon & widget style**. For automatic switching,
+choose **Dark → Auto** there; the default icon style can otherwise stay light
+even when app windows are dark. On older macOS versions, Original follows light/dark
+appearance while the app runs.
+
+The other designs follow macOS light/dark appearance while OpenClaw is running.
+
+The selection is saved separately for each OpenClaw profile and applies immediately.
+Custom designs change the running app's Dock icon; Finder and the Dock tile after
+quitting use the bundled Original icon. The menu bar critter and its animations are independent.
+
+Original's source is `apps/macos/Icon.icon`; other vector designs are in
+`apps/macos/AppIconDesigns`. After editing them, regenerate the pairs with
+`bash scripts/generate-mac-app-icons.sh` and verify them with
+`bash scripts/generate-mac-app-icons.sh --check`. The generator owns custom dark
+backgrounds and monochrome foreground colors, and Apple's asset compiler supplies the macOS mask and padding.
+Packaging also compiles the primary Icon Composer document for native styling.
+
 ## States
 
 | State                 | Trigger                                   | Visual                                                                                              |

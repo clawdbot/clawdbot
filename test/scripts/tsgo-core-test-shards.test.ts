@@ -14,6 +14,7 @@ import {
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { isProcessAlive, waitForPidFile } from "../helpers/process-wait.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
+import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 
 describe("tsgo core test shards", () => {
   it("stripes partition the full shard list exactly once", () => {
@@ -236,6 +237,7 @@ it.runIf(process.platform !== "win32")(
     lifetime.run(async () => {
       const sourceRoot = process.cwd();
       const root = fs.realpathSync(lifetime.createTempDir("openclaw-changed-types-"));
+      const native = materializeNativeCompiler(root);
       const write = (name: string, content: string) => {
         const file = path.join(root, name);
         fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -286,13 +288,14 @@ it.runIf(process.platform !== "win32")(
           }),
         );
       }
+      fs.unlinkSync(path.join(root, "node_modules/.bin/tsgo"));
       const compiler = write(
         "node_modules/.bin/tsgo",
         `#!/usr/bin/env node
 const fs=require('node:fs'),path=require('node:path'),{spawnSync}=require('node:child_process');
 const args=process.argv.slice(2);
 fs.appendFileSync(path.join(process.cwd(),'compiler-events.jsonl'),JSON.stringify(args)+'\\n');
-const result=spawnSync(process.execPath,[${JSON.stringify(path.join(sourceRoot, "node_modules/@typescript/native-preview/bin/tsgo"))},...args],{stdio:'inherit'});
+const result=spawnSync(${JSON.stringify(native)},args,{stdio:'inherit'});
 process.exit(result.status??1);
 `,
       );

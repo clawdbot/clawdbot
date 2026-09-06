@@ -75,7 +75,7 @@ describe("worker placement startup cleanup ownership", () => {
       workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
       resolveWorkspacePath,
       reportWorkspaceResultConflict: async () => {},
-      resolveWorkspaceResultConflict: async () => undefined,
+      resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
     });
     const starting = recovery.reconcile("startup");
     let sweeping: Promise<void> | undefined;

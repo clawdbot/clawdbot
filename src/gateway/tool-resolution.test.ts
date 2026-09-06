@@ -283,7 +283,6 @@ describe("resolveGatewayScopedTools", () => {
       expect(onYield).toHaveBeenCalledWith("waiting on subagents", "I’m waiting on the subagents.");
       expect(toolResult.details).toEqual({
         status: "yielded",
-        message: "waiting on subagents",
         acknowledgment: "I’m waiting on the subagents.",
       });
     } finally {

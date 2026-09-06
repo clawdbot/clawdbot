@@ -43,6 +43,9 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "openai": "openai"
+    },
     "providers": {
       "openai": {
         "baseUrl": "https://api.openai.com/v1",
@@ -207,6 +210,20 @@
       "openai": "runtime"
     },
     "suppressions": [
+      {
+        "provider": "openai",
+        "model": "gpt-5.4",
+        "reason": "GPT-5.4 has retired from the ChatGPT-account Codex route.",
+        "retirement": { "replacedBy": "gpt-5.6-terra" },
+        "when": { "baseUrlHosts": ["chatgpt.com"] }
+      },
+      {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "reason": "GPT-5.4 Mini has retired from the ChatGPT-account Codex route.",
+        "retirement": { "replacedBy": "gpt-5.6-luna" },
+        "when": { "baseUrlHosts": ["chatgpt.com"] }
+      },
       {
         "provider": "openai",
         "model": "gpt-5.3-codex-spark",

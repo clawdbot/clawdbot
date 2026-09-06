@@ -19,6 +19,7 @@ import { type AnyAgentTool, readToolStringParam, ToolInputError } from "./common
 import {
   awaitGatewayQuestionAnswer,
   createGatewayQuestionCanceller,
+  createQuestionPromptLifetime,
   type GatewayQuestionCall,
 } from "./gateway-question-lifecycle.js";
 import { callGatewayTool } from "./gateway.js";
@@ -271,6 +272,7 @@ export function createSecretsTool(params: {
         throw new ToolInputError(`Unknown secrets action: ${action}`);
       }
       const request = normalizeSecretsRequestParams(input);
+      using prompt = createQuestionPromptLifetime(signal);
       const delivery = beginAskUserPromptDelivery({
         toolCallId,
         sessionKey: params.sessionKey,
@@ -287,6 +289,7 @@ export function createSecretsTool(params: {
                   questions: request.questions,
                   config: params.config,
                   send: publishOwnPrompt,
+                  signal: prompt.signal,
                 }),
             }
           : {}),
@@ -296,8 +299,10 @@ export function createSecretsTool(params: {
       const cancelPendingQuestion = createGatewayQuestionCanceller({
         gatewayCall,
         questionId: delivery.questionId,
+        beforeCancel: prompt.close,
       });
       const cancelOnAbort = () => {
+        prompt.close();
         delivery.release();
         void cancelPendingQuestion("run-abort");
       };
@@ -338,7 +343,7 @@ export function createSecretsTool(params: {
           questionId: delivery.questionId,
           timeoutMs,
           ...(signal ? { signal } : {}),
-        });
+        }).finally(prompt.close);
         delivery.markReady();
         let questionResult: QuestionWaitAnswerResult | undefined;
         if (delivery.hasSubscriber) {

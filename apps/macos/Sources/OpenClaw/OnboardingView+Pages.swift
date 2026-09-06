@@ -1,5 +1,6 @@
 import AppKit
 import OpenClawDiscovery
+import OpenClawKit
 import SwiftUI
 
 extension OnboardingView {
@@ -115,6 +116,16 @@ extension OnboardingView {
                             self.advancedConnectionSection()
                         }
                     }
+
+                    self.connectionChoiceButton(
+                        title: "Connect to an existing Gateway",
+                        badge: nil,
+                        subtitle: "Enter its address and sign in with your browser.",
+                        systemImage: "globe",
+                        selected: false)
+                    {
+                        self.showBrowserGateway = true
+                    }
                 }
             }
 
@@ -128,11 +139,11 @@ extension OnboardingView {
                 .buttonStyle(.link)
                 .font(.callout)
                 .foregroundStyle(self.selectedConnectionMode == .unconfigured ? Color.accentColor : .secondary)
-                .help("Skip Gateway setup for now; pick Local or Remote later in Settings → General.")
+                .help("Skip Gateway setup for now; pick Local or Remote later in the Connection window.")
                 Spacer(minLength: 0)
             }
             if self.selectedConnectionMode == .unconfigured {
-                Text("OK — OpenClaw won’t start anything yet. Pick Local or Remote later in Settings → General.")
+                Text("OK — OpenClaw won’t start anything yet. Pick Local or Remote later in the Connection window.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity)
@@ -140,6 +151,11 @@ extension OnboardingView {
             }
         }
         .disabled(self.installingCLI)
+        .sheet(isPresented: self.$showBrowserGateway) {
+            GatewayProfileEditor { _ in
+                self.finish(openPrimaryDashboard: false)
+            }
+        }
         .onChange(of: self.state.connectionMode) { _, newValue in
             // The root view's mode observer calls handleConnectionModeChange(), which
             // retires route-owned AI/OpenClaw state. This nested observer owns probe copy only.
@@ -975,7 +991,7 @@ extension OnboardingView {
             self.onboardingCard {
                 self.featureRow(
                     title: "Configure later",
-                    subtitle: "Pick Local or Remote in Settings → General whenever you’re ready.",
+                    subtitle: "Pick Local or Remote in the Connection window whenever you’re ready.",
                     systemImage: "gearshape")
                 Divider()
                     .padding(.vertical, 6)
@@ -985,15 +1001,16 @@ extension OnboardingView {
                     systemImage: "bubble.left.and.bubble.right")
                 self.featureActionRow(
                     title: "Connect Discord, Slack, Telegram, WhatsApp, …",
-                    subtitle: "Open Settings → Channels to link channels and monitor status.",
+                    subtitle: "Open Dashboard → Settings → Channels to link channels and monitor status.",
                     systemImage: "link",
-                    buttonTitle: "Open Settings → Channels")
+                    buttonTitle: "Open Dashboard → Settings → Channels")
                 {
-                    self.openSettings(tab: .channels)
+                    Task { await DashboardManager.shared.show(atPath: DashboardRouteMap.channelsSettingsPath) }
                 }
                 self.featureRow(
                     title: "Try Voice Wake",
-                    subtitle: "Enable Voice Wake in Settings for hands-free commands with a live transcript overlay.",
+                    subtitle: "Enable Voice Wake in Dashboard → Settings → Talk for hands-free commands " +
+                        "with a live transcript overlay.",
                     systemImage: "waveform.circle")
                 self.featureRow(
                     title: "Use the panel + Canvas",
@@ -1002,11 +1019,11 @@ extension OnboardingView {
                     systemImage: "rectangle.inset.filled.and.person.filled")
                 self.featureActionRow(
                     title: "Give your agent more powers",
-                    subtitle: "Enable optional skills (Peekaboo, oracle, camsnap, …) from Settings → Skills.",
+                    subtitle: "Enable optional skills (Peekaboo, oracle, camsnap, …) from Dashboard → Skills.",
                     systemImage: "sparkles",
-                    buttonTitle: "Open Settings → Skills")
+                    buttonTitle: "Open Dashboard → Skills")
                 {
-                    self.openSettings(tab: .skills)
+                    Task { await DashboardManager.shared.show(atPath: DashboardRouteMap.skillsPagePath) }
                 }
                 if AppProfile.current.isActive {
                     LabeledContent("Launch at login", value: "Unavailable under profile")

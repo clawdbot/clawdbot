@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { markPluginRegistryActive } from "../../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -79,6 +80,7 @@ function withProfile<T>(profile: string | undefined, run: () => Promise<T>): Pro
 describe("session catalog Gateway HOME isolation", () => {
   beforeEach(() => {
     hoisted.activeRegistry = createEmptyPluginRegistry() as TestPluginRegistry;
+    markPluginRegistryActive(hoisted.activeRegistry as PluginRegistry);
     hoisted.listSessionEntriesReadOnly.mockReset().mockReturnValue([]);
   });
 

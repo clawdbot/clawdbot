@@ -388,6 +388,7 @@ describe("AcpSessionManager", () => {
       },
       { interval: 1 },
     );
+    expect(manager.getObservabilitySnapshot().turns.queueDepth).toBe(1);
     const second = manager.runTurn({
       provenance: "system",
       cfg: baseCfg,
@@ -398,9 +399,11 @@ describe("AcpSessionManager", () => {
     });
     await flushMicrotasks();
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
+    expect(manager.getObservabilitySnapshot().turns.queueDepth).toBe(2);
     releaseFirstTurn.resolve();
     await Promise.all([first, second]);
 
+    expect(manager.getObservabilitySnapshot().turns.queueDepth).toBe(0);
     expect(maxInFlight).toBe(1);
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
   });
@@ -675,6 +678,7 @@ describe("AcpSessionManager", () => {
       }),
     ]);
 
+    expect(manager.getObservabilitySnapshot().turns.queueDepth).toBe(2);
     releaseFirstTurn?.();
     await first;
     await vi.waitFor(

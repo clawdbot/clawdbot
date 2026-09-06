@@ -31,6 +31,7 @@ export type ProgressCard = Static<typeof ProgressCardSchema>;
 
 export const ProgressCardGetParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
 });
 export type ProgressCardGetParams = Static<typeof ProgressCardGetParamsSchema>;
 
@@ -41,6 +42,7 @@ export type ProgressCardGetResult = Static<typeof ProgressCardGetResultSchema>;
 
 export const ProgressCardPutParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   markdown: Type.Optional(Type.String()),
   plan: Type.Optional(Type.Array(ProgressCardStepSchema, { maxItems: PROGRESS_CARD_MAX_STEPS })),
   expectedRevision: Type.Optional(Type.Integer({ minimum: 1 })),

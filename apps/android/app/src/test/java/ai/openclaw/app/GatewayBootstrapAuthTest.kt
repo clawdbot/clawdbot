@@ -24,6 +24,8 @@ import ai.openclaw.app.ui.canFinishOnboarding
 import ai.openclaw.app.voice.MicCaptureManager
 import ai.openclaw.app.voice.TalkModeManager
 import android.Manifest
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -53,9 +55,11 @@ import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.QueueDispatcher
+import okhttp3.mockwebserver.RecordedRequest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -71,6 +75,8 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowNetwork
+import org.robolectric.shadows.ShadowNetworkCapabilities
 import java.io.IOException
 import java.lang.reflect.Field
 import java.net.InetAddress
@@ -79,8 +85,10 @@ import java.net.ProxySelector
 import java.net.SocketAddress
 import java.net.URI
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 @RunWith(RobolectricTestRunner::class)
@@ -172,6 +180,78 @@ class GatewayBootstrapAuthTest {
       },
     )
   }
+
+  @Test
+  fun networkAttachmentWakesEveryDesiredSecondaryGateway() =
+    runBlocking {
+      data class Peer(
+        val server: MockWebServer,
+        val stalled: CompletableDeferred<Unit>,
+        val resumed: CompletableDeferred<Unit>,
+        val release: CountDownLatch,
+      )
+      val (app, prefs, runtime) = gatewayFixture()
+      val peers =
+        List(2) {
+          val stalled = CompletableDeferred<Unit>()
+          val resumed = CompletableDeferred<Unit>()
+          val release = CountDownLatch(1)
+          val attempts = AtomicInteger()
+          val server =
+            MockWebServer().apply {
+              dispatcher =
+                object : Dispatcher() {
+                  override fun dispatch(request: RecordedRequest): MockResponse {
+                    when (attempts.incrementAndGet()) {
+                      3 -> {
+                        stalled.complete(Unit)
+                        release.await(10, TimeUnit.SECONDS)
+                      }
+
+                      4 -> {
+                        resumed.complete(Unit)
+                      }
+                    }
+                    return MockResponse().setResponseCode(503)
+                  }
+                }
+              start()
+            }
+          Peer(server, stalled, resumed, release)
+        }
+      try {
+        for (peer in peers) {
+          val endpoint = GatewayEndpoint.manual("127.0.0.1", peer.server.port)
+          prefs.gatewayRegistry.upsert(
+            GatewayRegistryEntry(
+              stableId = endpoint.stableId,
+              kind = GatewayRegistryEntryKind.MANUAL,
+              name = endpoint.name,
+              host = endpoint.host,
+              port = endpoint.port,
+              tls = false,
+            ),
+          )
+          prefs.saveGatewayCredentials(endpoint.stableId, token = "shared-token")
+          runtime.setGatewayConnectionEnabled(endpoint.stableId, true)
+        }
+        // The real fleet collector creates both sessions. Hold their third HTTP upgrade
+        // responses so only a recovery wake can admit another attempt before release.
+        withTimeout(10_000) { peers.forEach { it.stalled.await() } }
+        val network = ShadowNetwork.newInstance(321)
+        val capabilities = ShadowNetworkCapabilities.newInstance()
+        shadowOf(capabilities).addCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        shadowOf(app.getSystemService(ConnectivityManager::class.java)).networkCallbacks.toList().forEach { callback ->
+          callback.onAvailable(network)
+          callback.onCapabilitiesChanged(network, capabilities)
+        }
+        withTimeout(2_000) { peers.forEach { it.resumed.await() } }
+      } finally {
+        peers.forEach { it.release.countDown() }
+        runtime.disconnect()
+        peers.forEach { it.server.shutdown() }
+      }
+    }
 
   @Test
   fun nodeFirstBootstrapBecomesReadyWhenOperatorConnects() {

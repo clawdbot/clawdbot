@@ -168,9 +168,13 @@ export function attachInternalToolResultAcknowledgement<T extends object>(
 
 export function attachInternalToolResultProvenance<T extends object>(
   value: T,
-  provenance: object,
+  provenance: object | undefined,
 ): T {
-  toolResultProvenanceByValue.set(value, provenance);
+  if (provenance) {
+    toolResultProvenanceByValue.set(value, provenance);
+  } else {
+    toolResultProvenanceByValue.delete(value);
+  }
   return value;
 }
 

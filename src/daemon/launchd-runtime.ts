@@ -16,10 +16,13 @@ import {
   type LaunchctlResult,
 } from "./launchd-exec.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
-import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "./launchd-plist.js";
+import {
+  LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
+  readLaunchAgentProgramArgumentsFromFile,
+} from "./launchd-plist.js";
 import {
   resolveLaunchAgentPlistPath,
-  readLaunchAgentProgramArguments,
+  resolveLaunchAgentEnvironmentReadOptions,
 } from "./launchd-service-files.js";
 import {
   formatSystemLaunchDaemonOwnershipSummary,
@@ -27,7 +30,36 @@ import {
 } from "./launchd-system.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
-import type { GatewayServiceEnv, GatewayServiceEnvArgs } from "./service-types.js";
+import type {
+  GatewayServiceCommandConfig,
+  GatewayServiceEnv,
+  GatewayServiceEnvArgs,
+  GatewayServiceReadOptions,
+} from "./service-types.js";
+
+export async function readLaunchAgentProgramArguments(
+  env: GatewayServiceEnv,
+  options?: GatewayServiceReadOptions,
+): Promise<GatewayServiceCommandConfig | null> {
+  const label = resolveLaunchAgentLabel(env);
+  const command = await readLaunchAgentProgramArgumentsFromFile(resolveLaunchAgentPlistPath(env), {
+    ...resolveLaunchAgentEnvironmentReadOptions(env, label),
+    ...options,
+  });
+  if (!command && options?.requireEffective) {
+    // A removed plist can leave its job registered; only launchd can prove absence.
+    const timeoutMs =
+      options.timeoutMs && options.timeoutMs > 0 ? Math.min(options.timeoutMs, 5_000) : 5_000;
+    const probe = await probeLaunchAgentState(
+      `${resolveLaunchAgentGuiDomain()}/${label}`,
+      timeoutMs,
+    ).catch(() => null);
+    if (probe?.state !== "not-loaded") {
+      throw new Error("Effective LaunchAgent service command could not be inspected.");
+    }
+  }
+  return command;
+}
 
 // launchd reserves the label until the outgoing job actually exits, and it
 // SIGKILLs that job once ExitTimeOut elapses. Bound the bootstrap retry by that

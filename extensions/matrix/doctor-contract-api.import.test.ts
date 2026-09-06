@@ -12,6 +12,9 @@ vi.mock("fake-indexeddb", () => {
 vi.mock("openclaw/plugin-sdk/doctor-repair-runtime", () => {
   throw new Error("Schema repair runtime loaded without an account database");
 });
+vi.mock("./src/matrix/client/storage.js", () => {
+  throw new Error("Client storage loaded by an absent-state Doctor migration");
+});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -30,6 +33,7 @@ it("completes absent legacy-state checks without loading client runtimes", async
   };
   for (const id of [
     "matrix-account-sqlite-schema",
+    "matrix-storage-meta-json-to-plugin-state",
     "matrix-sync-cache-json-to-plugin-state",
     "matrix-legacy-crypto-migration-json-to-plugin-state",
   ]) {

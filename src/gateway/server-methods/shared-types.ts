@@ -396,6 +396,8 @@ export type GatewayContextResolver = () => GatewayRequestContext | undefined;
 export type GatewayRequestContext = GatewayKernelContext &
   GatewayTransportContext &
   GatewayResidentBridgeContext & {
+    /** Retains original execution while callers may receive an early response. */
+    trackExecution: typeof import("../../shared/async-work-scope.js").trackAsyncWork;
     /** Local commands can dispatch methods without owning a Gateway server. */
     localEmbedded?: true;
     /** Live instance routing only; never authorization or wire state. */

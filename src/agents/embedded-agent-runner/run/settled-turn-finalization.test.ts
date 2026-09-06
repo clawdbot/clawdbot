@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { shouldDeliverDespiteSourceReplySuppression } from "../../../auto-reply/reply/dispatch-from-config.payloads.js";
 import { resolveStrandedReplyRecovery } from "../../../auto-reply/reply/stranded-reply-recovery.js";
+import { createMockFollowupRun } from "../../../auto-reply/reply/test-helpers.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../../config/sessions/transcript-write-context.js";
 import {
@@ -15,6 +16,7 @@ import {
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS } from "./lane-runtime.js";
+import { buildEmbeddedRunPayloads } from "./payloads.js";
 import { prepareTerminalWithSettledTurnFinalization } from "./settled-turn-finalization.js";
 import { createSettledFinalizationTestInput } from "./settled-turn-finalization.test-support.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
@@ -268,6 +270,16 @@ describe("resolveSettledTurnFinalizationRequest", () => {
     expect(request({ settledTurnFinalizationAvailable: false })).toBeNull();
     expect(
       request({ payloadsWithToolMedia: [{ text: "⚠️ 🛠️ Exec failed", isError: true }] }),
+    ).toBeNull();
+    expect(
+      request({
+        payloadsWithToolMedia: buildEmbeddedRunPayloads({
+          assistantTexts: [],
+          lastAssistant: assistant,
+          lastToolError: attempt.lastToolError,
+          sessionKey: "session:settled-policy",
+        }),
+      }),
     ).toContain(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
   });
 });
@@ -650,7 +662,7 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       expect(result.prepared.finalAssistantRawText).toBe("");
       expect(
         resolveStrandedReplyRecovery({
-          base: {} as never,
+          base: createMockFollowupRun(),
           finalText: result.prepared.finalAssistantVisibleText ?? "",
           sourceReplyDeliveryMode: "message_tool_only",
           sendPolicyDenied: false,

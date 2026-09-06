@@ -326,6 +326,7 @@ it("recovers the Gateway account after silent presence without replaying pre-act
   const abort = new AbortController();
   const states: string[] = [];
   const firstReady = createDeferred<void>();
+  const secondReady = createDeferred<void>();
   const ctx = createStartAccountContext({
     account,
     cfg,
@@ -336,6 +337,9 @@ it("recovers the Gateway account after silent presence without replaying pre-act
       }
       if (next.lifecycle === "ready") {
         firstReady.resolve();
+        if (states.filter((state) => state === "ready").length === 2) {
+          secondReady.resolve();
+        }
       }
       if (next.lifecycle === "recovering") {
         fixture.setPresenceMode("accept");
@@ -344,18 +348,18 @@ it("recovers the Gateway account after silent presence without replaying pre-act
     },
   });
   const lifecycle = startBuzzGatewayAccount(ctx);
+  const stoppedBeforeReady = lifecycle.then(() => {
+    throw new Error("Buzz account stopped before becoming ready");
+  });
   try {
-    await Promise.race([
-      firstReady.promise,
-      lifecycle.then(() => {
-        throw new Error("Buzz account stopped before becoming ready");
-      }),
-    ]);
+    await Promise.race([firstReady.promise, stoppedBeforeReady]);
     expect(states).toContain("ready");
     fixture.sendMessage("before stall");
     await vi.waitFor(() => expect(handled).toContain("before stall"));
     await vi.waitFor(() => expect(fixture.authenticatedSessions()).toBe(2), { timeout: 8000 });
     await vi.waitFor(() => expect(handled).toContain("during reconnect"));
+    // Replay can dispatch before subscription history and Gateway startup finish.
+    await Promise.race([secondReady.promise, stoppedBeforeReady]);
     expect(states.filter((state) => state === "ready")).toHaveLength(2);
     expect(states).toContain("recovering");
     expect(handled).toEqual(["before stall", "during reconnect"]);

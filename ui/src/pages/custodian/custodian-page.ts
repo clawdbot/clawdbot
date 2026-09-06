@@ -1,6 +1,6 @@
 import { consume } from "@lit/context";
 import type { SystemChangeEntry, SystemChangesListResult } from "@openclaw/gateway-protocol";
-import { html, nothing, type PropertyValues } from "lit";
+import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
@@ -36,38 +36,36 @@ export class CustodianPage extends OpenClawLightDomElement {
   private historyLoaded = false;
   private historyClient: GatewayBrowserClient | null = null;
   private historyRequestEpoch = 0;
-  private subscribedStore: CustodianSessionStore | null = null;
-  private storeCleanup: (() => void) | null = null;
   private channelsSource: ApplicationContext["channels"] | null = null;
-  private readonly subscriptions = new SubscriptionsController(this).effect(
-    () => this.context?.channels,
-    (channels) => {
-      this.channelsSource = channels;
-      const stop = channels.subscribe(() => {
-        this.ensureOnboardingChannelStatus();
-        this.requestUpdate();
-      });
-      this.ensureOnboardingChannelStatus();
-      return () => {
-        stop();
-        if (this.channelsSource === channels) {
-          this.channelsSource = null;
-        }
-      };
-    },
-  );
 
-  override connectedCallback(): void {
-    super.connectedCallback();
-    this.subscribeToStore();
-  }
-
-  override disconnectedCallback(): void {
-    this.storeCleanup?.();
-    this.storeCleanup = null;
-    this.subscribedStore = null;
-    this.subscriptions.clear();
-    super.disconnectedCallback();
+  constructor() {
+    super();
+    void new SubscriptionsController(this)
+      .watch(
+        () => this.store,
+        (store, notify) => {
+          const cleanup = store.subscribe(notify);
+          void store.refreshTranscriptIfIdle();
+          return cleanup;
+        },
+      )
+      .effect(
+        () => this.context?.channels,
+        (channels) => {
+          this.channelsSource = channels;
+          const stop = channels.subscribe(() => {
+            this.ensureOnboardingChannelStatus();
+            this.requestUpdate();
+          });
+          this.ensureOnboardingChannelStatus();
+          return () => {
+            stop();
+            if (this.channelsSource === channels) {
+              this.channelsSource = null;
+            }
+          };
+        },
+      );
   }
 
   protected override async getUpdateComplete(): Promise<boolean> {
@@ -79,10 +77,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     return complete;
   }
 
-  override willUpdate(changedProperties: PropertyValues): void {
-    if (changedProperties.has("store")) {
-      this.subscribeToStore();
-    }
+  override willUpdate(): void {
     this.synchronizeHistoryClient();
     this.ensureOnboardingChannelStatus();
   }
@@ -102,16 +97,6 @@ export class CustodianPage extends OpenClawLightDomElement {
       return;
     }
     void channels.refresh(false);
-  }
-
-  private subscribeToStore(): void {
-    if (!this.isConnected || this.subscribedStore === this.store) {
-      return;
-    }
-    this.storeCleanup?.();
-    this.subscribedStore = this.store;
-    this.storeCleanup = this.store.subscribe(() => this.requestUpdate());
-    void this.store.refreshTranscriptIfIdle();
   }
 
   private synchronizeHistoryClient(): void {

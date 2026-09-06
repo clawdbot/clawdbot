@@ -1,5 +1,6 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
+import type { GatewaySuspendHandoffOwner } from "../infra/gateway-suspend-coordinator.js";
 import type { GatewayRestartEmitter } from "../infra/restart.js";
 import type { GatewayTailscaleIngressEndpoint } from "./ingress-attribution.js";
 import type { ChannelAutostartSuppression } from "./server-channels.js";
@@ -13,15 +14,21 @@ export type GatewayCloseOptions = {
 
 /** A capability for one host iteration; native completion belongs to the host. */
 export type GatewayHostLifecycle = {
+  /** Present only when this host owns process exit; the identity never crosses RPC. */
+  externalRestart?: GatewaySuspendHandoffOwner;
   request(
     action: "start" | "stop" | "restart",
     assertCaller: () => void,
   ): Promise<Result<{ outcome: "already-running" | "scheduled" }, string>>;
 };
 
+/** Runs resource-owning startup work under the current host's stop-and-cleanup join. */
+export type GatewayStartupOperation = <T>(run: (signal: AbortSignal) => Promise<T>) => Promise<T>;
+
 export type GatewayServer = {
   /** Process-local endpoint used by OpenClaw-managed Tailscale proxying. */
   getTailscaleIngressEndpoint: () => GatewayTailscaleIngressEndpoint | undefined;
+  /** Fences WebSocket ingress and joins received work and connection cleanup before disposal. */
   close: (opts?: GatewayCloseOptions) => Promise<void>;
   /**
    * Resolves when this generation finishes mandatory sidecar startup and rejects on failure.
@@ -33,6 +40,8 @@ export type GatewayServer = {
 export type GatewayServerOptions = {
   /** Internal, closure-bound host authority. Direct servers have no native lifecycle owner. */
   hostLifecycle?: GatewayHostLifecycle;
+  /** Internal startup ownership; direct callers own their awaited startup work. */
+  startupOperation?: GatewayStartupOperation;
   /** Exact lifecycle generation projected to connected clients. */
   bootId?: string;
   /**

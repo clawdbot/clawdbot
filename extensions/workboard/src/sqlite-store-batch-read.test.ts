@@ -2,8 +2,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import type { WorkboardCard } from "@openclaw/workboard-contract";
 import { describe, expect, it, vi } from "vitest";
+import type {
+  PersistedWorkboardAttachment,
+  PersistedWorkboardBoard,
+  PersistedWorkboardNotificationSubscription,
+} from "./persistence-types.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
 
 const sqliteStatements = vi.hoisted(() => ({ count: 0 }));
@@ -16,8 +22,18 @@ vi.mock("openclaw/plugin-sdk/sqlite-runtime", async (importOriginal) => {
       const db = actual.openNodeSqliteDatabase(...args);
       const prepare = db.prepare.bind(db);
       vi.spyOn(db, "prepare").mockImplementation((sql) => {
-        sqliteStatements.count++;
-        return prepare(sql);
+        const statement = prepare(sql);
+        for (const method of ["all", "get", "iterate", "run"] as const) {
+          Object.defineProperty(statement, method, {
+            value: new Proxy(statement[method], {
+              apply(target, receiver, methodArgs) {
+                sqliteStatements.count++;
+                return Reflect.apply(target, receiver, methodArgs);
+              },
+            }),
+          });
+        }
+        return statement;
       });
       return db;
     },
@@ -35,6 +51,18 @@ function fixtureCard(index: number): WorkboardCard {
     position: index,
     createdAt: 1000 + index,
     updatedAt: 2000 + index,
+    ...(index % 2
+      ? {
+          execution: {
+            id: `${id}-execution`,
+            kind: "agent-session" as const,
+            mode: "autonomous" as const,
+            status: "done" as const,
+            startedAt: 0,
+            updatedAt: 1,
+          },
+        }
+      : {}),
     events: [{ id: `${id}-event`, kind: "created", at: 1000 + index }],
     metadata: {
       attempts: [{ id: `${id}-attempt`, status: "succeeded", startedAt: 1000 + index }],
@@ -127,6 +155,263 @@ describe("workboard sqlite batch card read", () => {
 
         expect(many).toBe(few);
       } finally {
+        stores.close();
+      }
+    });
+  });
+
+  it.each(["lookup", "entries"] as const)(
+    "preserves native, child, and execution error order through %s and remains reusable",
+    async (mode) => {
+      await withStores(async (dbPath) => {
+        const stores = createWorkboardSqliteStores({ dbPath });
+        const raw = new DatabaseSync(dbPath);
+        const card = fixtureCard(1);
+        card.events = [...(card.events ?? []), { id: "late-event", kind: "created", at: 1002 }];
+        const read = () =>
+          mode === "lookup" ? stores.cards.lookup(card.id) : stores.cards.entries();
+        try {
+          await stores.cards.register(card.id, { version: 1, card });
+          raw.prepare("UPDATE workboard_card_events SET kind = '' WHERE ordinal = 0").run();
+          raw
+            .prepare("UPDATE workboard_card_events SET ordinal = ? WHERE id = ?")
+            .run(9007199254740993n, "late-event");
+          await expect(read()).rejects.toMatchObject({ code: "ERR_OUT_OF_RANGE" });
+
+          raw
+            .prepare("UPDATE workboard_card_events SET ordinal = 1 WHERE id = ?")
+            .run("late-event");
+          await expect(read()).rejects.toThrow("workboard sqlite row missing kind");
+          raw
+            .prepare("UPDATE workboard_cards SET execution_mode = NULL, automation_json = '{'")
+            .run();
+          await expect(read()).rejects.toThrow(SyntaxError);
+          raw.prepare("UPDATE workboard_cards SET automation_json = NULL").run();
+          await expect(read()).rejects.toThrow("workboard sqlite row missing kind");
+          raw.prepare("UPDATE workboard_card_events SET kind = 'created'").run();
+          await expect(read()).rejects.toThrow("workboard sqlite row missing execution_mode");
+          raw.prepare("UPDATE workboard_cards SET execution_mode = 'autonomous'").run();
+
+          const expected = { version: 1, card };
+          await expect(read()).resolves.toEqual(
+            mode === "lookup" ? expected : [{ key: card.id, value: expected }],
+          );
+        } finally {
+          raw.close();
+          stores.close();
+        }
+      });
+    },
+  );
+
+  it.each([
+    { fault: "later JSON", expected: "owner_busy", revisionMatches: true, targetOnly: false },
+    { fault: "later integer", expected: "native-error", revisionMatches: true, targetOnly: false },
+    { fault: "later integer", expected: "conflict", revisionMatches: false, targetOnly: false },
+    { fault: "target integer", expected: "native-error", revisionMatches: true, targetOnly: true },
+  ] as const)(
+    "keeps claim precedence for $fault: $expected",
+    async ({ fault, expected, revisionMatches, targetOnly }) => {
+      await withStores(async (dbPath) => {
+        const stores = createWorkboardSqliteStores({ dbPath });
+        const raw = new DatabaseSync(dbPath);
+        const target = fixtureCard(2);
+        try {
+          if (!targetOnly) {
+            const busy = { ...fixtureCard(0), status: "running" as const, agentId: "slot-owner" };
+            await stores.cards.register(busy.id, { version: 1, card: busy });
+            await stores.cards.register("card-1", { version: 1, card: fixtureCard(1) });
+          }
+          await stores.cards.register(target.id, { version: 1, card: target });
+          if (fault === "later JSON") {
+            raw
+              .prepare("UPDATE workboard_cards SET automation_json = '{' WHERE id = 'card-1'")
+              .run();
+          } else {
+            raw
+              .prepare("UPDATE workboard_card_events SET ordinal = ? WHERE card_id = ?")
+              .run(9007199254740993n, targetOnly ? target.id : "card-1");
+          }
+          const before = sqliteStatements.count;
+          const claim = stores.cards.claimIfOwnerAvailable(
+            target.id,
+            { version: 1, card: { ...target, updatedAt: target.updatedAt + 1 } },
+            revisionMatches ? target.updatedAt : target.updatedAt - 1,
+            "slot-owner",
+            3000,
+          );
+          if (expected === "native-error") {
+            await expect(claim).rejects.toMatchObject({ code: "ERR_OUT_OF_RANGE" });
+          } else {
+            await expect(claim).resolves.toBe(expected);
+          }
+          if (expected === "conflict") {
+            expect(sqliteStatements.count - before).toBe(1);
+          }
+          expect(
+            raw.prepare("SELECT updated_at FROM workboard_cards WHERE id = ?").get(target.id),
+          ).toEqual({ updated_at: target.updatedAt });
+        } finally {
+          raw.close();
+          stores.close();
+        }
+      });
+    },
+  );
+
+  it("reads each keyed collection once while preserving rows, binary order, and attachment joins", async () => {
+    await withStores(async (dbPath) => {
+      let stores = createWorkboardSqliteStores({ dbPath });
+      // SQLite's binary order differs from locale sorting and from UTF-16 for the last two ids.
+      const ids = ["Z", "a", "Å", "ä", "é", "中", "\uE000", "😀"];
+      const boards: PersistedWorkboardBoard[] = ids.map((id, index) => ({
+        version: 1,
+        board: {
+          id,
+          createdAt: index,
+          updatedAt: 30,
+          ...(index % 2
+            ? {
+                name: `Board ${id}`,
+                automationJobId: `job-${id}`,
+                defaultWorkspace: { kind: "scratch" as const },
+                orchestration: { autoDecompose: false },
+                archivedAt: 0,
+              }
+            : {}),
+        },
+      }));
+      const subscriptions: PersistedWorkboardNotificationSubscription[] = ids.map((id, index) => ({
+        version: 1,
+        subscription: {
+          id,
+          boardId: id,
+          createdAt: index % 2,
+          updatedAt: 30,
+          ...(index % 2
+            ? {
+                cardId: "card-0",
+                sessionKey: `session-${id}`,
+                runId: `run-${id}`,
+                target: `target-${id}`,
+                eventKinds: [],
+                lastEventAt: 0,
+                lastEventId: `event-${id}`,
+                lastEventSequence: 0,
+                deliveredEventIds: [],
+              }
+            : {}),
+        },
+      }));
+      const attachments: PersistedWorkboardAttachment[] = ids.map((id, index) => ({
+        version: 1,
+        attachment: {
+          id,
+          cardId: "card-0",
+          fileName: `${id}.bin`,
+          byteSize: 3,
+          createdAt: index % 2,
+          ...(index % 2 ? { mimeType: "application/octet-stream", note: `Note ${id}` } : {}),
+        },
+        contentBase64: Buffer.from([0, index, 255]).toString("base64"),
+      }));
+      try {
+        for (const board of boards.toReversed()) {
+          await stores.boards.register(board.board.id, board);
+        }
+        for (const subscription of subscriptions.toReversed()) {
+          await stores.subscriptions.register(subscription.subscription.id, subscription);
+        }
+        const card = fixtureCard(0);
+        card.metadata = {
+          attachments: [
+            ...attachments.toReversed().map((entry) => entry.attachment),
+            { ...attachments[0]!.attachment, id: "metadata-without-blob" },
+          ],
+        };
+        await stores.cards.register(card.id, { version: 1, card });
+        for (const attachment of attachments.toReversed()) {
+          await stores.attachments.register(attachment.attachment.id, attachment);
+        }
+        await stores.attachments.register("blob-without-metadata", {
+          ...attachments[0]!,
+          attachment: { ...attachments[0]!.attachment, id: "blob-without-metadata" },
+        });
+        stores.close();
+        stores = createWorkboardSqliteStores({ dbPath });
+
+        const beforeBoards = sqliteStatements.count;
+        const boardEntries = await stores.boards.entries();
+        const boardReads = sqliteStatements.count - beforeBoards;
+        const beforeSubscriptions = sqliteStatements.count;
+        const subscriptionEntries = await stores.subscriptions.entries();
+        const subscriptionReads = sqliteStatements.count - beforeSubscriptions;
+        const beforeAttachments = sqliteStatements.count;
+        const attachmentEntries = await stores.attachments.entries();
+        const attachmentReads = sqliteStatements.count - beforeAttachments;
+
+        expect(boardEntries).toEqual(boards.map((value) => ({ key: value.board.id, value })));
+        const timeOrder = [0, 2, 4, 6, 1, 3, 5, 7];
+        expect(subscriptionEntries).toEqual(
+          timeOrder.map((index) => ({ key: ids[index], value: subscriptions[index] })),
+        );
+        expect(attachmentEntries).toEqual(
+          timeOrder.map((index) => ({ key: ids[index], value: attachments[index] })),
+        );
+        for (const [collection, entries] of [
+          [stores.boards, boardEntries],
+          [stores.subscriptions, subscriptionEntries],
+          [stores.attachments, attachmentEntries],
+        ] as const) {
+          for (const { key, value } of entries) {
+            await expect(collection.lookup(key)).resolves.toEqual(value);
+          }
+          await expect(collection.lookup("missing")).resolves.toBeUndefined();
+        }
+        expect({ boardReads, subscriptionReads, attachmentReads }).toEqual({
+          boardReads: 1,
+          subscriptionReads: 1,
+          attachmentReads: 1,
+        });
+      } finally {
+        stores.close();
+      }
+    });
+  });
+
+  it.each([
+    { kind: "boards", table: "workboard_boards", column: "default_workspace_json" },
+    {
+      kind: "subscriptions",
+      table: "workboard_notification_subscriptions",
+      column: "event_kinds_json",
+    },
+  ] as const)("preserves empty and malformed JSON handling for $kind", async (testCase) => {
+    await withStores(async (dbPath) => {
+      const stores = createWorkboardSqliteStores({ dbPath });
+      const raw = new DatabaseSync(dbPath);
+      try {
+        const board: PersistedWorkboardBoard = {
+          version: 1,
+          board: { id: "row", createdAt: 1, updatedAt: 2 },
+        };
+        const subscription: PersistedWorkboardNotificationSubscription = {
+          version: 1,
+          subscription: { id: "row", boardId: "default", createdAt: 1, updatedAt: 2 },
+        };
+        await stores.boards.register("row", board);
+        await stores.subscriptions.register("row", subscription);
+        const collection = stores[testCase.kind];
+        const expected = testCase.kind === "boards" ? board : subscription;
+        raw.prepare(`UPDATE ${testCase.table} SET ${testCase.column} = ?`).run("");
+        await expect(collection.lookup("row")).resolves.toEqual(expected);
+        await expect(collection.entries()).resolves.toEqual([{ key: "row", value: expected }]);
+
+        raw.prepare(`UPDATE ${testCase.table} SET ${testCase.column} = ?`).run("{");
+        await expect(collection.lookup("row")).rejects.toThrow(SyntaxError);
+        await expect(collection.entries()).rejects.toThrow(SyntaxError);
+      } finally {
+        raw.close();
         stores.close();
       }
     });

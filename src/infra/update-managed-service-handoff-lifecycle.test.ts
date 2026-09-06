@@ -27,7 +27,9 @@ import {
   MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX,
 } from "./update-managed-service-handoff-cleanup.js";
 import {
+  awaitEmulatedRecoveryHandoffExit,
   createManagedServiceCommandFixture,
+  LAUNCHD_GATEWAY_IDENTITY_ENV,
   registerManagedRecoveryCommandTests,
   registerManagedLaunchdTeardownTests,
   waitForHandoffResponse,
@@ -48,6 +50,7 @@ import {
 } from "./update-managed-service-handoff-result.test-support.js";
 import { registerManagedUpdateHandoffTriageTests } from "./update-managed-service-handoff-triage.test-support.js";
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
+import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
 
 const { forceKillChildProcessTreeMock, spawnMock } = vi.hoisted(() => ({
   forceKillChildProcessTreeMock: vi.fn(),
@@ -219,10 +222,23 @@ async function runManagedServiceManagerBoundary(
   );
   const env = {
     ...process.env,
+    ...(kind === "launchd" ? LAUNCHD_GATEWAY_IDENTITY_ENV : {}),
     OPENCLAW_STATE_DIR: root,
     OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
     PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
   };
+  const run = options?.ledger ? createUpdateRun({ trigger: "api" }, { env }) : undefined;
+  if (run) {
+    await fs.appendFile(
+      recoveryModulePath,
+      `
+      const { register } = await import(${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm/api")).href)});
+      register();
+      const ledger = await import(${JSON.stringify(new URL("./update-run-ledger.ts", import.meta.url).href)});
+      export const { finishUpdateRun, recordUpdateRunPhase, recordUpdateRunVerification } = ledger;
+    `,
+    );
+  }
   if (options?.requester) {
     await fs.writeFile(
       env.OPENCLAW_CONFIG_PATH,
@@ -249,6 +265,7 @@ async function runManagedServiceManagerBoundary(
   let helper: import("node:child_process").ChildProcess | undefined;
   try {
     await startManagedServiceUpdateHandoff({
+      runId: run?.runId,
       root,
       restartDrainTimeoutMs: 300_000,
       parentPid,
@@ -260,7 +277,8 @@ async function runManagedServiceManagerBoundary(
       env,
       meta: { handoffId: `${kind}-boundary` },
     });
-    const [, generatedArgs] = spawnMock.mock.calls.at(-1) as [string, string[]];
+    const spawnCall = spawnMock.mock.calls.at(-1) as [string, string[], { env: NodeJS.ProcessEnv }];
+    const [, generatedArgs, { env: childEnv }] = spawnCall;
     const scriptPath = generatedArgs[0];
     const generatedParamsPath = generatedArgs[1];
     if (!scriptPath || !generatedParamsPath) {
@@ -338,7 +356,7 @@ async function runManagedServiceManagerBoundary(
         outputPath: String(generated.triageContextPath),
       });
     }
-    let helperEnv: NodeJS.ProcessEnv = env;
+    let helperEnv = childEnv;
     if (options?.launchdTeardown?.clockEachCommandMs || options?.recoveryClockAdvanceMs) {
       const preloadPath = path.join(root, "launchd-clock-preload.cjs");
       await fs.writeFile(
@@ -350,7 +368,7 @@ async function runManagedServiceManagerBoundary(
           recoveryCommandArgv: commandFixture.recoveryCommandArgv,
         }),
       );
-      helperEnv = { ...env, NODE_OPTIONS: `--require ${preloadPath}` };
+      helperEnv = { ...childEnv, NODE_OPTIONS: `--require ${preloadPath}` };
     }
     const runningHelper = spawn(process.execPath, [scriptPath, paramsPath], {
       env: helperEnv,
@@ -501,6 +519,7 @@ async function runManagedServiceManagerBoundary(
         }
       : null;
     return {
+      ...(run ? { run: getUpdateRun(run.runId, { env }) } : {}),
       commands: (await fs.readFile(commandsPath, "utf8").catch(() => ""))
         .trim()
         .split("\n")
@@ -526,6 +545,9 @@ async function runManagedServiceManagerBoundary(
     parent.stdin?.end();
     if (helper && helper.exitCode === null && helper.signalCode === null) {
       helper.kill("SIGKILL");
+    }
+    if (options?.recoveryChecksServiceIdentity) {
+      await awaitEmulatedRecoveryHandoffExit(statePath);
     }
   }
 }
@@ -867,28 +889,6 @@ describe("managed service update handoff", () => {
   registerManagedRecoveryCommandTests(runManagedServiceManagerBoundary, itUnix, expect);
 
   registerManagedUpdateHandoffTriageTests(runManagedServiceManagerBoundary, itUnix, expect);
-
-  itUnix("rejects an overdue commit before its delayed deadline callback executes", async () => {
-    const { commands, parentSignal, sentinel, state } = await runManagedServiceManagerBoundary(
-      "systemd",
-      { overdueCommit: true },
-    );
-
-    expect(parentSignal).toBeNull();
-    expect(
-      commands.filter((command) => command.includes("stop openclaw-gateway.service")),
-    ).toHaveLength(0);
-    expect(
-      commands.filter((command) => command.includes("start openclaw-gateway.service")),
-    ).toHaveLength(0);
-    expect(state).toEqual({});
-    expect(sentinel).toMatchObject({
-      payload: {
-        status: "skipped",
-        stats: { reason: "managed-service-handoff-cancelled", steps: [] },
-      },
-    });
-  });
 
   itUnix.each([
     ["cannot restart", "start-failed", { startFailed: true }],

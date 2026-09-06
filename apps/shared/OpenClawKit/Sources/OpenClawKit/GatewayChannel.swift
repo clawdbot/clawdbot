@@ -354,12 +354,9 @@ public actor GatewayChannelActor {
         do {
             connectHello = try await AsyncTimeout.withTimeout(
                 seconds: self.connectTimeoutSeconds,
-                onTimeout: {
-                    NSError(
-                        domain: "Gateway",
-                        code: 1,
-                        userInfo: [NSLocalizedDescriptionKey: "connect timed out"])
-                },
+                // A handshake deadline is a transport failure, just like a URLSession
+                // timeout. Keep it typed so endpoint failover can distinguish auth rejection.
+                onTimeout: { URLError(.timedOut) },
                 operation: {
                     try await self.sendConnect(
                         task: connectTask,
@@ -1156,9 +1153,9 @@ extension GatewayChannelActor {
     {
         try await AsyncTimeout.withTimeout(
             seconds: self.connectChallengeTimeoutSeconds,
-            onTimeout: { ConnectChallengeError.timeout },
+            onTimeout: { URLError(.timedOut) },
             operation: { [weak self] in
-                guard let self else { throw ConnectChallengeError.timeout }
+                guard let self else { throw CancellationError() }
                 while true {
                     let msg = try await task.receive()
                     try await self.ensureCurrentConnectAttempt(attemptID, task: task)

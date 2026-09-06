@@ -208,7 +208,6 @@ export class GatewayChatClient implements TuiBackend {
       clientName: GATEWAY_CLIENT_NAMES.TUI,
       clientDisplayName: "openclaw-tui",
       clientVersion: VERSION,
-      platform: process.platform,
       mode: GATEWAY_CLIENT_MODES.UI,
       scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals"],
       caps: [

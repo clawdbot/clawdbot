@@ -43,6 +43,7 @@ import {
   replaceWithEffectiveCronCreatorToolAllowlist,
   type CronCreatorToolAllowlistEntry,
 } from "../agents/tools/cron-tool.js";
+import { createChannelQuestionPromptDelivery } from "../agents/tools/question-prompt-send.js";
 import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
@@ -89,6 +90,8 @@ export function resolveGatewayScopedTools(params: {
   replyToMode?: "off" | "first" | "all" | "batched";
   currentInboundAudio?: boolean;
   clientCaps?: string[];
+  /** Trusted run-local context carried only by a Gateway-launched CLI grant. */
+  pinnedWidgetAuthoring?: boolean;
   accountId?: string;
   inboundEventKind?: InboundEventKind;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -309,6 +312,13 @@ export function resolveGatewayScopedTools(params: {
     requesterAgentIdOverride: sessionAgentId,
     agentChannel: params.messageProvider ?? undefined,
     agentAccountId: params.accountId,
+    questionPrompt: createChannelQuestionPromptDelivery({
+      cfg: params.cfg,
+      channel: params.messageProvider,
+      to: params.currentChannelId ?? params.agentTo,
+      accountId: params.accountId,
+      threadId: params.currentThreadTs ?? params.agentThreadId,
+    }),
     gatewayCallerAccountId: gatewayCaller.accountId,
     gatewayCallerChannel: gatewayCaller.channel,
     gatewayCallerLocal: gatewayCaller.local,
@@ -341,6 +351,7 @@ export function resolveGatewayScopedTools(params: {
     modelId: params.modelId,
     modelHasVision: params.modelHasVision,
     clientCaps: params.clientCaps,
+    pinnedWidgetAuthoring: surface === "loopback" ? params.pinnedWidgetAuthoring : undefined,
     workspaceDir,
     sandboxed: sandboxRuntime.sandboxed,
     pluginToolAllowlist: collectExplicitAllowlist([

@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { NodeRegistry } from "./node-registry.js";
 import { dispatchGatewayRequestInProcessRaw } from "./server-in-process-dispatch.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
@@ -80,7 +81,7 @@ describe("in-process paired-node invocation cancellation", () => {
           {},
           {
             client: null,
-            context: {} as GatewayRequestContext,
+            context: { trackExecution: trackAsyncWork } as GatewayRequestContext,
             expectFinal: true,
             onAccepted,
           },
@@ -119,7 +120,7 @@ describe("in-process paired-node invocation cancellation", () => {
       { nodeId: "paired-node", command: "ollama.chat" },
       {
         client: null,
-        context: {} as GatewayRequestContext,
+        context: { trackExecution: trackAsyncWork } as GatewayRequestContext,
         signal: controller.signal,
       },
     );
@@ -149,7 +150,7 @@ describe("in-process paired-node invocation cancellation", () => {
         { nodeId: "paired-node", command: "ollama.chat" },
         {
           client: null,
-          context: {} as GatewayRequestContext,
+          context: { trackExecution: trackAsyncWork } as GatewayRequestContext,
           signal: controller.signal,
         },
       ),
@@ -164,7 +165,11 @@ describe("in-process paired-node invocation cancellation", () => {
       dispatchGatewayRequestInProcessRaw(
         "node.invoke",
         { nodeId: "paired-node", command: "ollama.chat" },
-        { client: null, context: {} as GatewayRequestContext, signal },
+        {
+          client: null,
+          context: { trackExecution: trackAsyncWork } as GatewayRequestContext,
+          signal,
+        },
       ),
     ).rejects.toMatchObject({
       name: "AbortError",
@@ -183,7 +188,7 @@ describe("in-process paired-node invocation cancellation", () => {
       dispatchGatewayRequestInProcessRaw(
         "node.invoke",
         { nodeId: "paired-node", command: "ollama.chat" },
-        { client: null, context: {} as GatewayRequestContext },
+        { client: null, context: { trackExecution: trackAsyncWork } as GatewayRequestContext },
       ),
     ).resolves.toMatchObject({ ok: true, payload: { ok: true } });
     expect(handleGatewayRequest.mock.calls[0]?.[0]).not.toHaveProperty("signal");

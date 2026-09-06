@@ -13,6 +13,7 @@ import {
   sidebarSessionOrder,
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
+import { dockChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const rosterMatch = { includeGlobal: true };
@@ -254,6 +255,13 @@ suite.define(() => {
       const splitEntry = page.getByRole("button", { name: "Open split view" });
       await expect.poll(() => splitEntry.isVisible()).toBe(true);
       await expect.poll(() => page.locator(".chat-pane__header").count()).toBe(1);
+      const taskHeader = page.locator(".chat-pane__header");
+      const regularHeaderPadding = await taskHeader.evaluate(
+        (header) => getComputedStyle(header).paddingLeft,
+      );
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.fill("Keep this draft while docking beside native controls");
+      const originalComposer = await composer.elementHandle();
       await page.evaluate(() => {
         document.documentElement.classList.add("openclaw-native-macos");
         document.querySelector(".shell")?.classList.add("shell--nav-collapsed");
@@ -265,6 +273,31 @@ suite.define(() => {
             .evaluate((header) => getComputedStyle(header).paddingLeft),
         )
         .toBe("90px");
+      await openChatSidePanelType(page, "Files");
+      await dockChatSidePanel(page, "left");
+      const sideHeader = page.locator('[data-region-header="side"]');
+      const filesTab = sideHeader.getByRole("tab", { name: "Files", exact: true });
+      await filesTab.waitFor();
+      await expect
+        .poll(() => taskHeader.evaluate((header) => getComputedStyle(header).paddingLeft))
+        .toBe(regularHeaderPadding);
+      await expect
+        .poll(() => filesTab.evaluate((tab) => tab.getBoundingClientRect().left))
+        .toBeGreaterThanOrEqual(90);
+      const taskHeaderBox = await taskHeader.boundingBox();
+      const sideHeaderBox = await sideHeader.boundingBox();
+      expect(taskHeaderBox?.y).toBeCloseTo(sideHeaderBox!.y, 0);
+      expect(taskHeaderBox!.x).toBeGreaterThan(sideHeaderBox!.x);
+      expect(
+        await composer.evaluate((element, original) => element === original, originalComposer),
+      ).toBe(true);
+      expect(await composer.inputValue()).toBe(
+        "Keep this draft while docking beside native controls",
+      );
+      await originalComposer?.dispose();
+      await sideHeader.getByRole("button", { name: "Close Files", exact: true }).click();
+      await filesTab.waitFor({ state: "detached" });
+      await composer.fill("");
       await page.evaluate(() => {
         document.documentElement.classList.remove("openclaw-native-macos");
         document.querySelector(".shell")?.classList.remove("shell--nav-collapsed");
@@ -369,17 +402,27 @@ suite.define(() => {
       await expect.poll(() => actionRows.first().isVisible()).toBe(false);
       await expect.poll(() => actionRows.last().isVisible()).toBe(true);
       const targetHeader = headers.first();
-      await expect
-        .poll(() =>
-          targetHeader.evaluate((header) => {
-            const owner = header.closest("openclaw-chat-pane");
-            return (
-              header.parentElement?.classList.contains("chat-pane-layout") === true &&
-              owner?.classList.contains("chat-split-view__pane") === true
-            );
-          }),
-        )
-        .toBe(true);
+      const headerGeometry = await headers.evaluateAll((nodes) =>
+        nodes.map((header) => {
+          const owner = header.closest("openclaw-chat-pane");
+          const main = owner?.querySelector('[data-region="main"]:not([hidden])');
+          if (!main) {
+            throw new Error("Each task toolbar must have visible main content");
+          }
+          const toolbar = header.getBoundingClientRect();
+          const content = main.getBoundingClientRect();
+          return {
+            height: toolbar.height,
+            left: Math.abs(toolbar.left - content.left),
+            right: Math.abs(toolbar.right - content.right),
+            gap: Math.abs(toolbar.bottom - content.top),
+          };
+        }),
+      );
+      for (const geometry of headerGeometry) {
+        expect(geometry.height).toBeGreaterThan(0);
+        expect(Math.max(geometry.left, geometry.right, geometry.gap)).toBeLessThanOrEqual(1);
+      }
 
       const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
       await dataTransfer.evaluate(

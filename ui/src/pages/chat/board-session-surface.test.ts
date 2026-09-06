@@ -1,14 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { boardProviderForSession } from "../../lib/board/provider.ts";
-import { installBrowserHistoryIsolation } from "../../test-helpers/browser-history.ts";
+import { afterEach, describe, expect, it } from "vitest";
+import { createMockBoardProvider } from "../../test-helpers/board-provider.ts";
 import { renderBoardSessionSurface } from "./board-session-surface.ts";
 
 const containers: HTMLElement[] = [];
-
-installBrowserHistoryIsolation();
 
 function createContainer() {
   const container = document.createElement("div");
@@ -23,14 +20,10 @@ afterEach(() => {
   }
 });
 
-beforeEach(() => {
-  window.history.replaceState({}, "", "/?mockBoard=1");
-});
-
 describe("board session shell", () => {
   it("preserves the board element while the dashboard panel activates and parks", () => {
     const container = createContainer();
-    const provider = boardProviderForSession({ sessionKey: "agent:main:main" });
+    const provider = createMockBoardProvider("agent:main:main");
     const props = {
       active: true,
       session: { sessionKey: "agent:main:main" },

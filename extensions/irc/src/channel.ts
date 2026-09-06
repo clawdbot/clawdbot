@@ -183,7 +183,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
       media: true,
       blockStreaming: true,
     },
-    reload: { configPrefixes: ["channels.irc"] },
+    reload: { configPrefixes: ["channels.irc"], accountScopedRestart: true },
     configSchema: IrcChannelConfigSchema,
     config: {
       ...ircConfigAdapter,

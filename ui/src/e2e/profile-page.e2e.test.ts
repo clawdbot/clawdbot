@@ -1,6 +1,7 @@
 // Control UI tests cover the settings profile page against a mocked Gateway.
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, type Page } from "playwright/test";
+import { expect, type Locator, type Page } from "playwright/test";
 import { beforeEach, it } from "vitest";
 import {
   GIT_COAUTHOR_PREFERENCE_KEY,
@@ -11,7 +12,14 @@ import {
   computeInlineScriptHashes,
 } from "../../../src/gateway/control-ui-csp.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  takeControlUiElementScreenshot,
+  takeControlUiViewportScreenshot,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  installMockGateway,
+  type ControlUiMockGatewayScenario,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -35,10 +43,20 @@ async function screenshot(page: Page, name: string) {
   if (!captureUiProof) {
     return;
   }
-  await page.locator("#settings-profile-identity").screenshot({
-    animations: "disabled",
-    path: path.join(proofDir, name),
-  });
+  const identity = page.locator("#settings-profile-identity");
+  if (page.video()) {
+    await writeFile(
+      path.join(proofDir, name),
+      await takeControlUiElementScreenshot(page, identity, [
+        identity.locator(".settings-section__heading"),
+      ]),
+    );
+  } else {
+    await identity.screenshot({
+      animations: "disabled",
+      path: path.join(proofDir, name),
+    });
+  }
 }
 
 const testProfile = {
@@ -61,7 +79,7 @@ const linkedGitHubProfile = {
     avatarUrl: githubAvatarUrl,
   },
 };
-const testPresenceUsers = [
+const testPresenceUsers: NonNullable<ControlUiMockGatewayScenario["presenceUsers"]> = [
   {
     self: true,
     id: testProfile.id,
@@ -72,12 +90,20 @@ const testPresenceUsers = [
 ];
 
 suite.define(() => {
-  async function openProfilePage(page: Page, methodResponses: Record<string, unknown> = {}) {
+  async function openProfilePage(
+    page: Page,
+    methodResponses: Record<string, unknown> = {},
+    presenceUsers = testPresenceUsers,
+  ) {
     const gateway = await installMockGateway(page, {
       basePath,
-      presenceUsers: testPresenceUsers,
+      presenceUsers,
       methodResponses: {
         "users.self": { profile: testProfile },
+        "agents.list": {
+          defaultId: "clipper",
+          agents: [{ id: "clipper", name: "Clipper" }],
+        },
         ...methodResponses,
       },
     });
@@ -92,10 +118,12 @@ suite.define(() => {
 
       await page.locator(".profile-hero__name").waitFor({ timeout: 10_000 });
       await expect(page.locator(".profile-hero__name").textContent()).resolves.toContain(
-        "OpenClaw",
+        "Test Person",
       );
-      await expect(page.locator(".profile-hero__handle").textContent()).resolves.toContain("@main");
-      await page.locator(".profile-hero__avatar-mascot svg").waitFor({ timeout: 5_000 });
+      await expect(page.locator(".profile-hero__handle").textContent()).resolves.toContain(
+        "test@example.com",
+      );
+      await expect(page.locator(".profile-hero").textContent()).resolves.not.toContain("Clipper");
       await page.locator("#settings-profile-identity").waitFor({ timeout: 5_000 });
       await expect(
         page.getByRole("button", { name: /Usage statistics/u }).textContent(),
@@ -105,6 +133,31 @@ suite.define(() => {
       expect(await page.locator(".profile-stats, .profile-heatmap, .profile-tools").count()).toBe(
         0,
       );
+    });
+  });
+
+  it("wraps an unnamed user's long email in both hero fields on narrow screens", async () => {
+    const longEmail = "primaryuserprimaryuserprimaryuserprimaryuserprimaryuser@example.test";
+    await suite.withPage({ viewport: { width: 360, height: 800 } }, async ({ page }) => {
+      await openProfilePage(
+        page,
+        { "users.self": { profile: { ...testProfile, displayName: null, emails: [longEmail] } } },
+        testPresenceUsers.map((user) => ({ ...user, name: undefined, email: longEmail })),
+      );
+
+      const title = page.locator(".profile-hero__name");
+      const handle = page.locator(".profile-hero__handle");
+      await expect(title).toHaveText(longEmail);
+      await expect(handle).toContainText(longEmail);
+      for (const field of [title, handle]) {
+        await expect(field).toBeInViewport({ ratio: 1 });
+        expect(await field.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+          true,
+        );
+      }
+      expect(
+        await page.locator("body").evaluate((element) => element.scrollWidth),
+      ).toBeLessThanOrEqual(360);
     });
   });
 
@@ -240,23 +293,27 @@ suite.define(() => {
             status: 200,
           });
         });
-        const gateway = await openProfilePage(page, {
-          "agent.identity.get": {
-            agentId: "main",
-            name: "Main agent",
-            avatar: `${basePath}/avatar/main`,
-            avatarStatus: "local",
+        const gateway = await openProfilePage(
+          page,
+          {
+            "agent.identity.get": {
+              agentId: "main",
+              name: "Main agent",
+              avatar: `${basePath}/avatar/main`,
+              avatarStatus: "local",
+            },
+            "agents.list": {
+              defaultId: "main",
+              agents: [
+                {
+                  id: "main",
+                  identity: { name: "Main agent", avatarUrl: `${basePath}/avatar/main` },
+                },
+              ],
+            },
           },
-          "agents.list": {
-            defaultId: "main",
-            agents: [
-              {
-                id: "main",
-                identity: { name: "Main agent", avatarUrl: `${basePath}/avatar/main` },
-              },
-            ],
-          },
-        });
+          [],
+        );
 
         await gateway.waitForRequest("agent.identity.get");
         const image = page.locator(".profile-hero__avatar-image");
@@ -276,10 +333,10 @@ suite.define(() => {
           ]),
         );
         if (captureUiProof) {
-          await page.locator(".profile-hero").screenshot({
-            animations: "disabled",
-            path: path.join(proofDir, "06-authenticated-assistant-avatar.png"),
-          });
+          await writeFile(
+            path.join(proofDir, "06-authenticated-assistant-avatar.png"),
+            await takeControlUiElementScreenshot(page, page.locator(".profile-hero"), [image]),
+          );
         }
       },
     );
@@ -591,6 +648,18 @@ suite.define(() => {
         const section = page.locator("section.settings-section", {
           has: page.locator(".profile-auth-link-input"),
         });
+        const captureAccounts = async (name: string, content: Locator) => {
+          if (!captureUiProof) {
+            return;
+          }
+          // Saved accounts and sign-in steps can exceed the viewport. Keep the
+          // active control visible without resizing the page behind its recording.
+          await content.scrollIntoViewIfNeeded();
+          await writeFile(
+            path.join(proofDir, name),
+            await takeControlUiViewportScreenshot(page, section, [content]),
+          );
+        };
         const selectedAccount = section
           .locator(".settings-row")
           .filter({ has: page.locator(".profile-auth-link-unlink") });
@@ -606,10 +675,15 @@ suite.define(() => {
           await picker.click();
           if (captureUiProof) {
             await expect(picker.locator('wa-option[value="xai"]')).toBeVisible();
-            await section.screenshot({
-              animations: "disabled",
-              path: path.join(proofDir, `connected-accounts-providers-${signInAttempt}.png`),
-            });
+            // Web Awesome exposes the options before the owning popup finishes fading in.
+            await writeFile(
+              path.join(proofDir, `connected-accounts-providers-${signInAttempt}.png`),
+              await takeControlUiViewportScreenshot(
+                page,
+                picker.locator('wa-popup [part="popup"]'),
+                [picker.locator('wa-option[value="xai"]')],
+              ),
+            );
           }
           await picker.locator(`wa-option[value="${providerId}"]`).click();
           if (providerId === "openai") {
@@ -634,12 +708,7 @@ suite.define(() => {
           selectedAccount.locator(".model-accounts__provider").textContent(),
         ).resolves.toContain("OpenAI");
         await expect(section.locator(".profile-auth-link-unlink").isEnabled()).resolves.toBe(true);
-        if (captureUiProof) {
-          await section.screenshot({
-            animations: "disabled",
-            path: path.join(proofDir, "model-accounts-linked.png"),
-          });
-        }
+        await captureAccounts("model-accounts-linked.png", selectedAccount);
 
         await startSignIn();
         const openSignIn = section.locator(".wizard-step__external-link");
@@ -652,12 +721,10 @@ suite.define(() => {
         await expect(section.locator(".wizard-step__message")).toHaveText(
           "Finish signing in, or paste the redirect URL here.",
         );
-        if (captureUiProof) {
-          await section.screenshot({
-            animations: "disabled",
-            path: path.join(proofDir, "model-accounts-flow.png"),
-          });
-        }
+        await captureAccounts(
+          "model-accounts-flow.png",
+          section.locator("#profile-account-auth-answer"),
+        );
 
         await gateway.deferNext("users.authConnect.cancel");
         await section.locator(".profile-auth-connect-cancel").click();
@@ -669,12 +736,7 @@ suite.define(() => {
         await expect(section.locator(".model-accounts-flow")).toHaveCount(0);
         await expect(section.locator('[role="status"]')).toContainText("Sign-in cancelled.");
         await expect(selectedAccount.locator(".model-accounts__id")).toHaveText(personal.label);
-        if (captureUiProof) {
-          await section.screenshot({
-            animations: "disabled",
-            path: path.join(proofDir, "model-accounts-cancelled.png"),
-          });
-        }
+        await captureAccounts("model-accounts-cancelled.png", section.locator('[role="status"]'));
 
         await gateway.setMethodResponse("users.authConnect.status", {
           status: "pending",
@@ -685,12 +747,10 @@ suite.define(() => {
         await page.locator(".profile-refresh").click();
         await expect.poll(async () => (await gateway.getRequests("users.self")).length).toBe(2);
         await expect(section.locator(".profile-auth-connect-cancel")).toBeEnabled();
-        if (captureUiProof) {
-          await section.screenshot({
-            animations: "disabled",
-            path: path.join(proofDir, "model-accounts-saving.png"),
-          });
-        }
+        await captureAccounts(
+          "model-accounts-saving.png",
+          section.locator(".wizard-step__progress"),
+        );
         savedAccounts.push(connected);
         await gateway.setMethodResponse("users.listModelAccounts", inventory(connected));
         await gateway.setMethodResponse("users.authConnect.status", {
@@ -706,12 +766,7 @@ suite.define(() => {
         await expect(section.locator(".profile-auth-add-account")).toBeEnabled();
         const polls = await gateway.getRequests("users.authConnect.status");
         expect(polls.at(-1)?.params).toEqual({ profileId: testProfile.id, connectId: "connect-2" });
-        if (captureUiProof) {
-          await section.screenshot({
-            animations: "disabled",
-            path: path.join(proofDir, "model-accounts-connected.png"),
-          });
-        }
+        await captureAccounts("model-accounts-connected.png", selectedAccount);
         await gateway.setMethodResponse("users.selectModelAccount", {
           links: inventory(work).links,
         });
@@ -726,12 +781,7 @@ suite.define(() => {
         await expect(section.locator(".model-accounts-notice")).toContainText(
           "Existing chats are unchanged.",
         );
-        if (captureUiProof) {
-          await section.screenshot({
-            animations: "disabled",
-            path: path.join(proofDir, "model-accounts-default-selected.png"),
-          });
-        }
+        await captureAccounts("model-accounts-default-selected.png", selectedAccount);
         await gateway.setMethodResponse("users.unlinkAuthProfile", { links: [] });
         await gateway.setMethodResponse("users.listModelAccounts", inventory(null));
         await section.getByRole("button", { name: "Use gateway default", exact: true }).click();
@@ -740,12 +790,10 @@ suite.define(() => {
         await expect(section.locator(".model-accounts-notice")).toContainText(
           "Saved credentials and existing chats are unchanged.",
         );
-        if (captureUiProof) {
-          await section.screenshot({
-            animations: "disabled",
-            path: path.join(proofDir, "model-accounts-default-cleared.png"),
-          });
-        }
+        await captureAccounts(
+          "model-accounts-default-cleared.png",
+          section.locator(".model-accounts-notice"),
+        );
 
         const grok: UserModelAccount = {
           authProfileId: "xai:personal",
@@ -768,12 +816,7 @@ suite.define(() => {
         await expect(keyInput).toHaveAttribute("type", "password");
         await keyInput.fill("synthetic-grok-key");
         await gateway.deferNext("users.authConnect.answer");
-        if (captureUiProof) {
-          await section.screenshot({
-            animations: "disabled",
-            path: path.join(proofDir, "connected-accounts-grok-input.png"),
-          });
-        }
+        await captureAccounts("connected-accounts-grok-input.png", keyInput);
         await section.locator('.wizard-step__form button[type="submit"]').click();
         const answer = await gateway.waitForRequest("users.authConnect.answer");
         expect(answer.params).toEqual({
@@ -794,12 +837,7 @@ suite.define(() => {
         await expect(selectedAccount.locator(".model-accounts__id")).toHaveText(grok.label);
         await expect(section.locator('input[type="password"]')).toHaveCount(0);
         await expect(section.locator(".model-accounts-notice")).toHaveText("Account added.");
-        if (captureUiProof) {
-          await section.screenshot({
-            animations: "disabled",
-            path: path.join(proofDir, "connected-accounts-grok-added.png"),
-          });
-        }
+        await captureAccounts("connected-accounts-grok-added.png", selectedAccount);
       },
     );
   });

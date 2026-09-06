@@ -71,6 +71,12 @@ model response before opening the agent. An already configured Gateway opens
 its normal dashboard after verification; newly configured access continues into
 guided onboarding.
 
+If the Gateway confirms that a live model test failed before saving the model
+and credentials, close the error and retry or choose another connection.
+An uncertain error keeps replacement setup blocked because settings may already
+have been saved. Confirmed cancellation and requests rejected before setup
+started can be retried immediately.
+
 Model Setup can resume an activation across a Gateway restart or app reopen
 while its temporary recovery record is valid. Recovery stays bound to the same
 Gateway, agent, and authentication. When the known activation target still
@@ -162,7 +168,7 @@ export XDG_CACHE_HOME="$cache"
 apps/linux/scripts/stage-appimage-gstreamer.sh "$plugins"
 apps/linux/scripts/tauri-appimage-tools.sh prepare
 apps/linux/scripts/tauri-appimage-tools.sh verify pre-build
-export LDAI_RUNTIME_FILE="$cache/tauri/.appimage-runtime-x86_64"
+export LDAI_RUNTIME_FILE="$(apps/linux/scripts/tauri-appimage-tools.sh runtime-path)"
 (
   cd apps/linux/src-tauri
   GSTREAMER_PLUGINS_DIR="$plugins" \
