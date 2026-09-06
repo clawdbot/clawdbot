@@ -889,13 +889,19 @@ describe("github-copilot plugin", () => {
         models: [expect.objectContaining({ id: "reenabled-model" })],
       },
     });
-    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
-      "https://copilot-reenabled.test/models",
-      expect.objectContaining({ method: "GET" }),
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const request = new Request(
+      ...expectDefined(fetchMock.mock.calls[0], "Copilot catalog request"),
     );
-    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
-      "Bearer gh_test_token",
-    );
+    expect({
+      url: request.url,
+      method: request.method,
+      authorization: request.headers.get("authorization"),
+    }).toEqual({
+      url: "https://copilot-reenabled.test/models",
+      method: "GET",
+      authorization: "Bearer gh_test_token",
+    });
   });
 
   it("publishes only picker-visible, policy-enabled tool models in the live catalog", async () => {
@@ -1022,13 +1028,19 @@ describe("github-copilot plugin", () => {
         source: "live",
       },
     ]);
-    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
-      "https://copilot-unified.test/models",
-      expect.objectContaining({ method: "GET" }),
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const request = new Request(
+      ...expectDefined(fetchMock.mock.calls[0], "Copilot catalog request"),
     );
-    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
-      "Bearer gh_test_token",
-    );
+    expect({
+      url: request.url,
+      method: request.method,
+      authorization: request.headers.get("authorization"),
+    }).toEqual({
+      url: "https://copilot-unified.test/models",
+      method: "GET",
+      authorization: "Bearer gh_test_token",
+    });
   });
 
   it("offers to reuse an existing token profile during interactive onboarding", async () => {
