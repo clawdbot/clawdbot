@@ -1,5 +1,9 @@
 // Tests applying parsed directives to get-reply execution options.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+} from "../../infra/diagnostic-events.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
 import { applyMixedDirectives } from "./directive-handling.mixed-inline.test-helpers.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
@@ -397,5 +401,76 @@ describe("applyInlineDirectiveOverrides", () => {
     expect(typing.cleanup).toHaveBeenCalledOnce();
     expect(mocks.applyModelSelection).not.toHaveBeenCalled();
     expect(mocks.handleDirective).not.toHaveBeenCalled();
+  });
+});
+
+describe("directive.rejected diagnostic trace", () => {
+  beforeEach(() => {
+    resetDiagnosticEventsForTest();
+  });
+
+  it("emits a pre_run directive.rejected trace when a model directive is rejected pre-run", async () => {
+    const events: Array<Record<string, unknown>> = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => {
+      events.push(event as unknown as Record<string, unknown>);
+    });
+
+    try {
+      const ctx = buildTestCtx({
+        Body: "/model openai/gpt-5.5 -a -g",
+        CommandBody: "/model openai/gpt-5.5 -a -g",
+        CommandAuthorized: true,
+        SessionKey: "agent:main:main",
+        Provider: "webchat",
+        Surface: "webchat",
+        OriginatingChannel: "webchat",
+        MessageSidFull: "msg-123",
+      });
+      const result = await resolveReplyDirectives({
+        ctx,
+        cfg: { agents: { ownership: "explicit", entries: { main: {} } } },
+        agentId: "main",
+        agentDir: "/tmp/main-agent",
+        workspaceDir: "/tmp/workspace",
+        agentCfg: {},
+        sessionCtx: ctx,
+        sessionEntry: { sessionId: "session-1", updatedAt: 1 },
+        sessionStore: {},
+        sessionKey: "agent:main:main",
+        sessionScope: undefined,
+        groupResolution: undefined,
+        isGroup: false,
+        triggerBodyNormalized: "/model openai/gpt-5.5 -a -g",
+        resetTriggered: false,
+        commandAuthorized: true,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        aliasIndex: { byAlias: new Map(), byKey: new Map() },
+        provider: "openai",
+        model: "gpt-5.5",
+        hasResolvedHeartbeatModelOverride: false,
+        typing: createTypingController({}),
+      });
+
+      expect(result).toMatchObject({
+        kind: "reply",
+        reply: { text: "Use only one model scope option.", isError: true },
+      });
+
+      const rejected = events.find((e) => e.type === "directive.rejected");
+      expect(rejected).toBeDefined();
+      expect(rejected).toMatchObject({
+        type: "directive.rejected",
+        stage: "pre_run",
+        sessionKey: "agent:main:main",
+        channel: "webchat",
+        messageId: "msg-123",
+        directiveType: "model",
+        errorText: "Use only one model scope option.",
+      });
+      expect(rejected?.rawToken).toEqual(expect.any(String));
+    } finally {
+      unsubscribe();
+    }
   });
 });
