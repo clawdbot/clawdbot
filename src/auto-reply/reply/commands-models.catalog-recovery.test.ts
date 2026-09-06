@@ -149,6 +149,36 @@ describe("/models browse catalog recovery", () => {
     },
   );
 
+  it("keeps unprepared setup hints on provider auth", async () => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          pluginId: "anthropic",
+          config: { command: "claude" },
+        },
+      ],
+    });
+    const checker = providerAuth.createProviderAuthChecker({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
+            },
+          },
+        },
+      },
+      env: { ANTHROPIC_API_KEY: "synthetic-provider-key" },
+      discoverExternalCliAuth: false,
+      allowPluginSyntheticAuth: false,
+      allowPreparedRuntimeAuth: false,
+    });
+
+    await expect(checker("anthropic", { modelId: "claude-sonnet-4-6" })).resolves.toBe(true);
+  });
+
   it.each(["pinnedProfileId", "requiredProfileId"] as const)(
     "does not replace an expired %s with a prepared native login",
     async (selection) => {
