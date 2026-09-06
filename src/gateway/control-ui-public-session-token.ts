@@ -48,6 +48,32 @@ function hasExactKeys(value: object, keys: readonly string[]): boolean {
   return Object.keys(value).toSorted().join("\0") === keys.join("\0");
 }
 
+function hasInvalidSessionKeyCharacter(value: string): boolean {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    if (codePoint <= 0x1f || codePoint === 0x7f) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasInvalidSessionIdCharacter(value: string): boolean {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    if (
+      character === "/" ||
+      character === "\\" ||
+      character.trim() === "" ||
+      codePoint <= 0x1f ||
+      (codePoint >= 0x7f && codePoint <= 0x9f)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function isValidLocator(value: unknown): value is PublicSessionShareLocator {
   if (!isRecord(value)) {
     return false;
@@ -58,13 +84,11 @@ function isValidLocator(value: unknown): value is PublicSessionShareLocator {
     typeof value.sessionKey === "string" &&
     value.sessionKey.length > 0 &&
     value.sessionKey.length <= 4_096 &&
-    // oxlint-disable-next-line eslint/no-control-regex -- Exact stored keys may contain spaces but not control bytes.
-    !/[\u0000-\u001f\u007f]/u.test(value.sessionKey) &&
+    !hasInvalidSessionKeyCharacter(value.sessionKey) &&
     typeof value.sessionId === "string" &&
     value.sessionId.length > 0 &&
     value.sessionId.length <= 512 &&
-    // oxlint-disable-next-line eslint/no-control-regex -- Stored ids are opaque but cannot become path/control syntax.
-    !/[/\\\s\u0000-\u001f\u007f-\u009f]/u.test(value.sessionId) &&
+    !hasInvalidSessionIdCharacter(value.sessionId) &&
     typeof value.shareId === "string" &&
     /^[a-f0-9]{48}$/u.test(value.shareId)
   );
