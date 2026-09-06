@@ -44,8 +44,12 @@ export function createRecoveryDestinationVerifier(stateDir: string) {
           throw new Error("destination database ownership cannot be verified");
         }
       }
-      // Even a read-only SQLite connection can create WAL/SHM files. Establish the baseline
-      // after owner inspection closes it; later checks only stat, never reopen or hash the DB.
+      // Even a read-only SQLite connection can create or update WAL/SHM files. Establish the
+      // baseline after owner inspection closes it; later checks only stat, never reopen or hash
+      // the DB.  Sidecar files (WAL/SHM/journal) can have ctime/mtime/size churn from read-only
+      // queries (e.g. `openclaw sessions --all-agents --json`), so only their identity (dev/ino)
+      // is fenced.  The main database file (index 0) is fully fenced so substantive writes are
+      // still detected after a WAL checkpoint. (#140467)
       const files = paths.map((file) =>
         fs.lstatSync(file, { bigint: true, throwIfNoEntry: false }),
       );
@@ -55,9 +59,10 @@ export function createRecoveryDestinationVerifier(stateDir: string) {
         (expected &&
           (expected.agentId !== target.agentId ||
             files.some((file, index) =>
-              (["dev", "ino", "ctimeNs", "mtimeNs", "size"] as const).some(
-                (key) => file?.[key] !== expected.files[index]?.[key],
-              ),
+              (index === 0
+                ? (["dev", "ino", "ctimeNs", "mtimeNs", "size"] as const)
+                : (["dev", "ino"] as const)
+              ).some((key) => file?.[key] !== expected.files[index]?.[key]),
             )))
       ) {
         throw new Error("Recovery destination database changed; preview cleanup again.");
