@@ -62,6 +62,10 @@ export async function processResponsesStream<TApi extends Api>(
   type StreamingToolCallState = ResponsesToolCallState & {
     block: StreamingToolCallBlock;
     contentIndex: number;
+    // Set once an argument delta or done event lands on this call. The opening
+    // item snapshot seeds partialJson too, so this is what separates a streamed
+    // encoding from a snapshot the terminal item may legitimately replace.
+    argumentsStreamed: boolean;
     // Preview refresh schedule for streamed arguments; done/terminal parses stay authoritative.
     previewSchedule: ToolArgumentPreviewSchedule;
   };
@@ -284,7 +288,10 @@ export async function processResponsesStream<TApi extends Api>(
       }
       const validated = resolveCompletedResponsesToolCall(item, {
         name: state?.block.name,
-        arguments: state?.argumentStreamReliable ? state.block.partialJson : undefined,
+        arguments:
+          state?.argumentStreamReliable && state.argumentsStreamed
+            ? state.block.partialJson
+            : undefined,
       });
       if (state) {
         recovered.push(state);
@@ -368,6 +375,7 @@ export async function processResponsesStream<TApi extends Api>(
             block: toolCallBlock,
             contentIndex,
             argumentStreamReliable: true,
+            argumentsStreamed: false,
             previewSchedule: createToolArgumentPreviewSchedule(),
             ...readResponsesToolCallItemIdentity(item),
           };
@@ -471,6 +479,7 @@ export async function processResponsesStream<TApi extends Api>(
       } else if (event.type === "response.function_call_arguments.delta") {
         const toolCall = streamingToolCalls.resolve(event);
         if (toolCall) {
+          toolCall.argumentsStreamed = true;
           toolCall.block.partialJson += event.delta;
           // Preview refresh is geometric; the done event and terminal finalize
           // re-parse the full buffer authoritatively either way.
@@ -499,6 +508,7 @@ export async function processResponsesStream<TApi extends Api>(
             toolCall.block.partialJson = doneArguments;
             toolCall.block.arguments = parseStreamingJson(toolCall.block.partialJson);
             toolCall.argumentStreamReliable = true;
+            toolCall.argumentsStreamed = true;
           }
 
           if (doneArguments?.startsWith(previousPartialJson)) {
@@ -658,9 +668,10 @@ export async function processResponsesStream<TApi extends Api>(
           }
           const validated = resolveCompletedResponsesToolCall(item, {
             name: streamingToolCall?.block.name,
-            arguments: streamingToolCall?.argumentStreamReliable
-              ? streamingToolCall.block.partialJson
-              : undefined,
+            arguments:
+              streamingToolCall?.argumentStreamReliable && streamingToolCall.argumentsStreamed
+                ? streamingToolCall.block.partialJson
+                : undefined,
           });
 
           finalizeToolCall(item, readResponsesOutputIndex(event), streamingToolCall, validated);

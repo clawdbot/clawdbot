@@ -234,6 +234,31 @@ describe("Responses terminal tool completion", () => {
     ).toEqual([{ slot: 0 }, { slot: 1 }]);
   });
 
+  it("completes a snapshot-only call whose opening snapshot is an empty object", async () => {
+    // No argument events: the terminal item, not the seeded opening snapshot,
+    // is the only argument encoding this call ever streamed.
+    const result = await runFixture([
+      added(0, { arguments: "{}" }),
+      { type: "response.output_item.done", output_index: 0, item: tool(0) },
+      completed("resp_opening_snapshot_done", [tool(0)]),
+    ]);
+    expect(result.error).toBeNull();
+    expect(
+      result.content.map((block) => (block.type === "toolCall" ? block.arguments : null)),
+    ).toEqual([{ slot: 0 }]);
+  });
+
+  it("recovers a snapshot-only call from the terminal response after an empty-object opening", async () => {
+    const result = await runFixture([
+      added(0, { arguments: "{}" }),
+      completed("resp_opening_snapshot_terminal", [tool(0)]),
+    ]);
+    expect(result.error).toBeNull();
+    expect(
+      result.content.map((block) => (block.type === "toolCall" ? block.arguments : null)),
+    ).toEqual([{ slot: 0 }]);
+  });
+
   it("never completes active tools from an incomplete response", async () => {
     const result = await runFixture([
       added(0),
