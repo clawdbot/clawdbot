@@ -1642,7 +1642,9 @@ describe("installPluginFromNpmSpec", () => {
     }
     let managedInstallAttempts = 0;
     runCommandWithTimeoutMock.mockImplementation(async (argv, options) => {
-      if (isManagedNpmInstallCommand(argv) && options?.cwd === npmProjectRoot) {
+      // The staged managed-npm flow installs inside a stage directory before
+      // publication, so intercept by command identity rather than final root.
+      if (isManagedNpmInstallCommand(argv)) {
         managedInstallAttempts += 1;
         controller.abort(abortReason);
         return {
