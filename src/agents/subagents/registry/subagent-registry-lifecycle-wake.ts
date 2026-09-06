@@ -136,15 +136,42 @@ const completeRequesterSettleWakeBatch = (
         delivery.lastDropReason = undefined;
       } else {
         const error = outcome.error ?? outcome.reason ?? "requester settle wake failed";
-        if (
-          !blockSubagentCompletionDelivery({
-            subagent: entry,
-            taskId: params.resolveSubagentTask(entry).task?.taskId ?? "",
-            reason: error,
-            disposition: outcome.disposition,
-          })
-        ) {
-          throw new Error(`subagent completion owner changed before settlement: ${runId}`);
+        const resolvedTask = params.resolveSubagentTask(entry).task;
+        const isSuccessful =
+          resolvedTask?.status === "succeeded" && entry.execution.outcome?.status === "ok";
+        if (isSuccessful) {
+          if (
+            !blockSubagentCompletionDelivery({
+              subagent: entry,
+              taskId: resolvedTask?.taskId ?? "",
+              reason: error,
+              disposition: outcome.disposition,
+            })
+          ) {
+            throw new Error(`subagent completion owner changed before settlement: ${runId}`);
+          }
+        } else {
+          // Terminal non-success or orphaned: blockSubagentCompletionDelivery
+          // returns false for these (guard failures or status mismatch), and
+          // throwing restores the wake state, causing the sweeper to retry the
+          // same batch forever (#137332). Mark delivery failed without throwing
+          // so the batch settles atomically for all siblings.
+          const delivery = ensureDeliveryState(entry);
+          delivery.status = "failed";
+          delivery.disposition = outcome.disposition ?? delivery.disposition;
+          delivery.lastError = error;
+          delivery.deliveredAt = undefined;
+          delivery.announcedAt = undefined;
+          delivery.nextAttemptAt = undefined;
+          delivery.queueId = undefined;
+          entry.suppressCompletionDelivery = true;
+          entry.cleanupHandled = false;
+          entry.wakeOnDescendantSettle = undefined;
+          safeSetSubagentTaskDeliveryStatus(params, {
+            entry,
+            deliveryStatus: "failed",
+            deliveryError: error,
+          });
         }
       }
       settledDeliveries.push(entry);

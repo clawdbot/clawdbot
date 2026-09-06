@@ -5315,12 +5315,9 @@ describe("requester settle wake trigger", () => {
       disposition: "intentional_non_delivery",
       lastError: "requester settle wake attempts exhausted",
     });
-    expect(completionDeliveryMocks.blockSubagentCompletionDelivery).toHaveBeenCalledWith({
-      subagent: entry,
-      taskId: "",
-      reason: "requester settle wake attempts exhausted",
-      disposition: undefined,
-    });
+    // Fix #137332: orphaned/non-success children skip blockSubagentCompletionDelivery
+    // and mark delivery failed directly to avoid retry storms.
+    expect(completionDeliveryMocks.blockSubagentCompletionDelivery).not.toHaveBeenCalled();
     expect(entry.suppressCompletionDelivery).toBe(true);
 
     entry.cleanupCompletedAt = undefined;
