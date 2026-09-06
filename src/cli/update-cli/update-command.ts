@@ -112,11 +112,13 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
   };
   recoveryState.triageTarget.root = prepared.discoveredRoot;
   let disposePresentation: (() => void) | undefined;
+  let executionStarted = false;
   try {
     const presentation = createUpdateProgress(!opts.json, run);
     disposePresentation = presentation.dispose;
     await withUpdateFailureTriage({ ...opts, invocationCwd }, recoveryState.triageTarget, () =>
       withUpdateInProgressEnv(invocationCwd, async () => {
+        executionStarted = true;
         let failure: { error: unknown } | undefined;
         try {
           await updateCommandInternal(opts, recoveryState, invocationCwd, prepared, presentation);
@@ -152,7 +154,9 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
       }),
     );
   } catch (error) {
-    if (!recoveryState.ledgerHandoffOwned) {
+    // Execution owns its unwind, including helper-pending rollback and migrated state.
+    // This boundary only terminalizes failures before that owner starts.
+    if (!executionStarted) {
       failUpdateCommandRun(error, run);
     }
     throw error;

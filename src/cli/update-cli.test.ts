@@ -4969,6 +4969,42 @@ describe("update-cli", () => {
     },
   );
 
+  it("leaves restored-generation completion with the helper across updateCommand unwind", async () => {
+    const postUpdate = await import("./update-cli/update-command-post-update.js");
+    const { UpdateCommandFailure } = await import("./update-cli/update-command-result.js");
+    const { finishUpdateRun } = await import("../infra/update-run-ledger.js");
+    const result = makeOkUpdateResult({
+      status: "error",
+      root: process.cwd(),
+      reason: "restart-unhealthy",
+      before: { version: "2026.9.1" },
+      after: { version: "2026.9.1" },
+      recovery: {
+        serviceRestartSafe: true,
+        packageRollbackVerified: true,
+        version: "2026.9.1",
+      },
+    });
+    vi.spyOn(postUpdate, "finishUpdate").mockRejectedValueOnce(new UpdateCommandFailure(result));
+    mockOwnedGitService();
+    mockGitUpdateAfterMutation(makeOkUpdateResult({ root: process.cwd() }));
+
+    await withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: "1" }, async () => {
+      await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
+
+      expect(postUpdate.finishUpdate).toHaveBeenCalledOnce();
+      const run = expectDefined(listUpdateRuns({ limit: 1 })[0], "helper-owned update run");
+      expect(run).toMatchObject({ status: "running", after: { version: "2026.9.1" } });
+      // Native recovery finishes after the CLI exits; the ledger must still accept its outcome.
+      finishUpdateRun(run.runId, { status: "rolled-back", reason: result.reason });
+      expect(getUpdateRun(run.runId)).toMatchObject({
+        status: "rolled-back",
+        phase: "finished",
+        reason: "restart-unhealthy",
+      });
+    });
+  });
+
   it("does not reopen the ledger after migrated finalization fails", async () => {
     const migrated = await import("./update-cli/update-command-migrated.js");
     const ledgerReads = vi.spyOn(await import("../infra/update-run-ledger.js"), "getUpdateRun");
