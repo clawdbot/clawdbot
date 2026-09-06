@@ -1894,5 +1894,185 @@
   {
     "source": "Node and tsx startup errors",
     "target": "Node 和 tsx 启动错误"
+  },
+  {
+    "source": "Installation and Onboarding",
+    "target": "安装与新手引导"
+  },
+  {
+    "source": "v2026.8.1: Installation and Onboarding",
+    "target": "v2026.8.1：安装与新手引导"
+  },
+  {
+    "source": "The New Web UI",
+    "target": "全新 Web UI"
+  },
+  {
+    "source": "v2026.8.1: The New Web UI",
+    "target": "v2026.8.1：全新 Web UI"
+  },
+  {
+    "source": "Updates and Maintenance",
+    "target": "更新与维护"
+  },
+  {
+    "source": "v2026.8.1: Updates and Maintenance",
+    "target": "v2026.8.1：更新与维护"
+  },
+  {
+    "source": "Messaging",
+    "target": "消息"
+  },
+  {
+    "source": "v2026.8.1: Messaging",
+    "target": "v2026.8.1：消息"
+  },
+  {
+    "source": "Memory",
+    "target": "记忆"
+  },
+  {
+    "source": "v2026.8.1: Memory",
+    "target": "v2026.8.1：记忆"
+  },
+  {
+    "source": "v2026.8.1: Skills",
+    "target": "v2026.8.1：Skills"
+  },
+  {
+    "source": "Native Apps",
+    "target": "原生应用"
+  },
+  {
+    "source": "v2026.8.1: Native Apps",
+    "target": "v2026.8.1：原生应用"
+  },
+  {
+    "source": "Models and Providers",
+    "target": "Models 与提供商"
+  },
+  {
+    "source": "v2026.8.1: Models and Providers",
+    "target": "v2026.8.1：Models 与提供商"
+  },
+  {
+    "source": "Automations and Scheduling",
+    "target": "自动化与定时任务"
+  },
+  {
+    "source": "v2026.8.1: Automations and Scheduling",
+    "target": "v2026.8.1：自动化与定时任务"
+  },
+  {
+    "source": "Browser and Computer Use",
+    "target": "浏览器与计算机使用"
+  },
+  {
+    "source": "v2026.8.1: Browser and Computer Use",
+    "target": "v2026.8.1：浏览器与计算机使用"
+  },
+  {
+    "source": "Plugins and Integrations",
+    "target": "插件与集成"
+  },
+  {
+    "source": "v2026.8.1: Plugins and Integrations",
+    "target": "v2026.8.1：插件与集成"
+  },
+  {
+    "source": "Security and Privacy",
+    "target": "安全与隐私"
+  },
+  {
+    "source": "v2026.8.1: Security and Privacy",
+    "target": "v2026.8.1：安全与隐私"
+  },
+  {
+    "source": "Quality-of-Life Improvements",
+    "target": "体验改进"
+  },
+  {
+    "source": "v2026.8.1: Quality-of-Life Improvements",
+    "target": "v2026.8.1：体验改进"
+  },
+  {
+    "source": "Other Bug Fixes",
+    "target": "其他缺陷修复"
+  },
+  {
+    "source": "v2026.8.1: Other Bug Fixes",
+    "target": "v2026.8.1：其他缺陷修复"
+  },
+  {
+    "source": "Maintainer and Internal Changes",
+    "target": "维护者与内部变更"
+  },
+  {
+    "source": "v2026.8.1: Maintainer and Internal Changes",
+    "target": "v2026.8.1：维护者与内部变更"
+  },
+  {
+    "source": "v2026.8.1: Maintenance changes (part 1 of 8)",
+    "target": "v2026.8.1：维护变更（第 1 部分，共 8 部分）"
+  },
+  {
+    "source": "Part 1 of 8",
+    "target": "第 1 部分，共 8 部分"
+  },
+  {
+    "source": "v2026.8.1: Maintenance changes (part 2 of 8)",
+    "target": "v2026.8.1：维护变更（第 2 部分，共 8 部分）"
+  },
+  {
+    "source": "Part 2 of 8",
+    "target": "第 2 部分，共 8 部分"
+  },
+  {
+    "source": "v2026.8.1: Maintenance changes (part 3 of 8)",
+    "target": "v2026.8.1：维护变更（第 3 部分，共 8 部分）"
+  },
+  {
+    "source": "Part 3 of 8",
+    "target": "第 3 部分，共 8 部分"
+  },
+  {
+    "source": "v2026.8.1: Maintenance changes (part 4 of 8)",
+    "target": "v2026.8.1：维护变更（第 4 部分，共 8 部分）"
+  },
+  {
+    "source": "Part 4 of 8",
+    "target": "第 4 部分，共 8 部分"
+  },
+  {
+    "source": "v2026.8.1: Maintenance changes (part 5 of 8)",
+    "target": "v2026.8.1：维护变更（第 5 部分，共 8 部分）"
+  },
+  {
+    "source": "Part 5 of 8",
+    "target": "第 5 部分，共 8 部分"
+  },
+  {
+    "source": "v2026.8.1: Maintenance changes (part 6 of 8)",
+    "target": "v2026.8.1：维护变更（第 6 部分，共 8 部分）"
+  },
+  {
+    "source": "Part 6 of 8",
+    "target": "第 6 部分，共 8 部分"
+  },
+  {
+    "source": "v2026.8.1: Maintenance changes (part 7 of 8)",
+    "target": "v2026.8.1：维护变更（第 7 部分，共 8 部分）"
+  },
+  {
+    "source": "Part 7 of 8",
+    "target": "第 7 部分，共 8 部分"
+  },
+  {
+    "source": "v2026.8.1: Maintenance changes (part 8 of 8)",
+    "target": "v2026.8.1：维护变更（第 8 部分，共 8 部分）"
+  },
+  {
+    "source": "Part 8 of 8",
+    "target": "第 8 部分，共 8 部分"
   }
 ]

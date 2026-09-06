@@ -66,20 +66,18 @@ export async function rollbackFailedUpdate(params: {
   const port = before?.stopped
     ? await resolveUpdatedGatewayRestartPort({ config: params.config, serviceEnv: env })
     : undefined;
-  const failed = (reason: string) => {
-    return {
-      result: {
-        ...result,
-        status: "error" as const,
-        reason:
-          result.recovery?.serviceRestartSafe === true && result.recovery.packageRollbackVerified
-            ? (params.result.reason ?? reason)
-            : reason,
-      },
-      rolledBack: false,
-      stoppedForRollback,
-    };
-  };
+  const failed = (reason: string) => ({
+    result: {
+      ...result,
+      status: "error" as const,
+      reason:
+        result.recovery?.serviceRestartSafe === true && result.recovery.packageRollbackVerified
+          ? (params.result.reason ?? reason)
+          : reason,
+    },
+    rolledBack: false,
+    stoppedForRollback,
+  });
   const stateUnchanged = async () => {
     const baseline = params.schemaVersions;
     const current = await readUpdateStateSchemaVersions({

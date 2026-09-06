@@ -1,17 +1,13 @@
 // Owns managed plugin install, policy and uninstall mutations under the lifecycle lease.
-import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { collectChangedPaths } from "../config/config-change-paths.js";
 import {
   assertConfigWriteAllowedInCurrentMode,
   readConfigFileSnapshot,
-  readConfigFileSnapshotForWrite,
   replaceConfigFile,
 } from "../config/config.js";
 import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   resolvePluginCapabilityConsent,
@@ -23,27 +19,14 @@ import { normalizePluginId } from "./config-state.js";
 import { resolvePluginControlPlaneWorkspace } from "./control-plane-workspace.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { enableExplicitlySelectedPluginInConfig } from "./enable.js";
-import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
-import {
-  resolveInstallConfigMutationPreflights,
-  selectInstallMutationWriteOptions,
-  type ConfigSnapshotForInstallPersist,
-} from "./install-persistence.js";
-import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
 import type { InstallPolicyWarningDetails } from "./install-security-scan.types.js";
-import {
-  loadInstalledPluginIndexInstallRecords,
-  removePluginInstallRecordFromRecords,
-  withPluginInstallRecords,
-  withoutPluginInstallRecords,
-} from "./installed-plugin-index-records.js";
-import { createInstalledPluginIndexScopeLookup } from "./installed-plugin-index-scope-lookup.js";
 import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import {
   type ManagedPluginCatalogEntry,
   loadOfficialCatalog,
   resolveOfficialEntryById,
 } from "./management-catalog.js";
+import { readPluginMutationSnapshot } from "./management-config.js";
 import {
   type ManagedPluginSourceInstallRequest,
   installManagedPluginSource,
@@ -66,17 +49,6 @@ import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
 import { applySlotSelectionForPlugin } from "./slot-selection.js";
 import { setPluginEnabledInConfig } from "./toggle-config.js";
-import { collectClawPluginUninstallWarnings } from "./uninstall-claw-references.js";
-import {
-  prepareConfigForDisabledPluginSet,
-  recordPluginPackageUninstallPlan,
-} from "./uninstall-package-plan.js";
-import {
-  applyPluginUninstallDirectoryRemoval,
-  formatUninstallActionLabels,
-  planPluginUninstall,
-  pluginUninstallTargetExists,
-} from "./uninstall.js";
 
 type ManagedPluginInstallRequest =
   | {
@@ -92,42 +64,6 @@ type ManagedPluginInstallRequest =
       acknowledgeInstallPolicyWarning?: true;
       acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
     };
-
-function assertValidConfigSnapshot(
-  prepared: Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>,
-): ConfigSnapshotForInstallPersist {
-  const { snapshot, writeOptions } = prepared;
-  if (!snapshot.valid) {
-    throw new ManagedPluginLifecycleError(
-      "Config invalid; run `openclaw doctor --fix` before managing plugins.",
-    );
-  }
-  const mutationWriteOptions = selectInstallMutationWriteOptions(writeOptions);
-  const { pluginMutation } = resolveInstallConfigMutationPreflights({
-    parsed: asRecord(snapshot.parsed),
-    snapshotPath: snapshot.path,
-    writeOptions: mutationWriteOptions,
-  });
-  if (pluginMutation.mode === "blocked") {
-    throw new ManagedPluginLifecycleError(pluginMutation.reason);
-  }
-  return {
-    config: snapshot.sourceConfig,
-    baseHash: snapshot.hash,
-    writeOptions: mutationWriteOptions,
-  };
-}
-
-async function readPluginMutationSnapshot(
-  env: NodeJS.ProcessEnv,
-): Promise<ConfigSnapshotForInstallPersist> {
-  try {
-    assertConfigWriteAllowedInCurrentMode({ env });
-  } catch (error) {
-    throw new ManagedPluginLifecycleError(formatErrorMessage(error), { cause: error });
-  }
-  return assertValidConfigSnapshot(await readConfigFileSnapshotForWrite());
-}
 
 function createSilentRuntime(): RuntimeEnv {
   return {
@@ -515,165 +451,4 @@ export async function setManagedPluginEnabled(params: ManagedPluginEnableRequest
   });
 }
 
-/** Remove an installed plugin: config references, install record, and managed files. */
-export async function uninstallManagedPlugin(params: {
-  pluginId: string;
-  env?: NodeJS.ProcessEnv;
-}): Promise<{ pluginId: string; removed: string[]; warnings?: string[] }> {
-  const env = params.env ?? process.env;
-  return await withPluginLifecycleLease({ env }, async () => {
-    const snapshot = await readPluginMutationSnapshot(env);
-    const installRecords = await loadInstalledPluginIndexInstallRecords({ env });
-    // Mirror the CLI uninstall flow: plan against config carrying install records
-    // so managed npm/git directories resolve, then persist the stripped config.
-    const configWithRecords = withPluginInstallRecords(snapshot.config, installRecords);
-    const metadata = loadFreshManagedPluginMetadata(configWithRecords, env);
-    const pluginId = metadata.normalizePluginId(params.pluginId.trim());
-    const record = metadata.index.plugins.find((plugin) => plugin.pluginId === pluginId);
-    if (record?.origin === "bundled") {
-      throw new ManagedPluginLifecycleError(
-        `bundled plugin cannot be uninstalled: ${pluginId}; disable it instead`,
-      );
-    }
-    if (!record && !Object.hasOwn(installRecords, pluginId)) {
-      throw new ManagedPluginLifecycleError(`Plugin not found: ${pluginId}`);
-    }
-    const ownership = createInstalledPluginOwnershipResolver(metadata.index, env).resolveLifecycle(
-      pluginId,
-    );
-    if (!ownership.ok) {
-      throw new ManagedPluginLifecycleError(ownership.error);
-    }
-    const { installOwner, pluginIds: ownedPluginIds } = ownership.value;
-    const policyPluginIds = ownedPluginIds.length > 0 ? ownedPluginIds : [installOwner];
-    const ownedManifests = ownedPluginIds.flatMap((entryId) => {
-      const manifest = metadata.byPluginId.get(entryId);
-      return manifest ? [manifest] : [];
-    });
-    const channelIds =
-      ownedManifests.length > 0
-        ? uniqueStrings(ownedManifests.flatMap((manifest) => manifest.channels))
-        : ownership.value.kind === "orphan" &&
-            createInstalledPluginIndexScopeLookup(metadata.index).hasChannelContributionOwners([
-              installOwner,
-            ])
-          ? []
-          : undefined;
-    const extensionsDir = resolveDefaultPluginExtensionsDir(env);
-    const initialPlan = planPluginUninstall(
-      recordPluginPackageUninstallPlan(
-        {
-          config: configWithRecords,
-          pluginId: installOwner,
-          ...(channelIds !== undefined ? { channelIds } : {}),
-          deleteFiles: true,
-          extensionsDir,
-        },
-        {
-          runtimePluginIds: policyPluginIds,
-          runtimeLoadPaths: ownedPluginIds.flatMap(
-            (entryId) => metadata.byPluginId.get(entryId)?.source ?? [],
-          ),
-        },
-      ),
-    );
-    if (!initialPlan.ok) {
-      throw new ManagedPluginLifecycleError(initialPlan.error);
-    }
-    let plan = initialPlan;
-    let finalSnapshot = snapshot;
-    let directoryResult: Awaited<ReturnType<typeof applyPluginUninstallDirectoryRemoval>> = {
-      directoryRemoved: false,
-      warnings: [],
-    };
-    if (plan.directoryRemoval) {
-      const disabledConfig = prepareConfigForDisabledPluginSet(
-        snapshot.config,
-        policyPluginIds,
-        plan.config,
-      );
-      await replaceConfigFile({
-        nextConfig: disabledConfig,
-        baseHash: snapshot.baseHash,
-        writeOptions: {
-          ...snapshot.writeOptions,
-          afterWrite: { mode: "auto" },
-        },
-      });
-      directoryResult = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
-      if (pluginUninstallTargetExists(plan.directoryRemoval.target)) {
-        throw new ManagedPluginLifecycleError(
-          `Failed to remove plugin directory ${plan.directoryRemoval.target}; the plugin remains disabled and tracked so uninstall can be retried.`,
-          { kind: "unavailable" },
-        );
-      }
-      finalSnapshot = await readPluginMutationSnapshot(env);
-      const refreshedConfigWithRecords = withPluginInstallRecords(
-        finalSnapshot.config,
-        installRecords,
-      );
-      const refreshedPlan = planPluginUninstall(
-        recordPluginPackageUninstallPlan(
-          {
-            config: refreshedConfigWithRecords,
-            pluginId: installOwner,
-            ...(channelIds !== undefined ? { channelIds } : {}),
-            deleteFiles: true,
-            extensionsDir,
-          },
-          {
-            runtimePluginIds: policyPluginIds,
-            runtimeLoadPaths: ownedPluginIds.flatMap(
-              (entryId) => metadata.byPluginId.get(entryId)?.source ?? [],
-            ),
-          },
-        ),
-      );
-      if (!refreshedPlan.ok) {
-        throw new ManagedPluginLifecycleError(refreshedPlan.error);
-      }
-      plan = refreshedPlan;
-    }
-    const nextConfig = withoutPluginInstallRecords(plan.config);
-    const nextInstallRecords = removePluginInstallRecordFromRecords(installRecords, installOwner);
-    await commitPluginInstallRecordsWithConfig({
-      previousInstallRecords: installRecords,
-      nextInstallRecords,
-      nextConfig,
-      baseHash: finalSnapshot.baseHash,
-      writeOptions: finalSnapshot.writeOptions,
-    });
-    const warnings = [
-      ...collectClawPluginUninstallWarnings({
-        pluginId: installOwner,
-        installRecord: installRecords[installOwner],
-        env,
-      }),
-      ...(pluginId !== installOwner || ownedPluginIds.length > 1
-        ? [
-            `Uninstalled package "${installOwner}" and all owned plugin entries: ${ownedPluginIds.join(", ")}.`,
-          ]
-        : []),
-      ...directoryResult.warnings,
-    ];
-    await refreshPluginRegistryAfterConfigMutation({
-      config: nextConfig,
-      env,
-      reason: "source-changed",
-      installRecords: nextInstallRecords,
-      invalidateRuntimeCache: false,
-      logger: { warn: (message) => warnings.push(message) },
-    });
-    refreshManagedPluginMetadata({ config: nextConfig, env });
-    const removed = formatUninstallActionLabels({
-      ...plan.actions,
-      loadPath: initialPlan.actions.loadPath || plan.actions.loadPath,
-      directory: directoryResult.directoryRemoved,
-    });
-    return {
-      pluginId: installOwner,
-      removed,
-      ...(warnings.length > 0 ? { warnings: [...new Set(warnings)] } : {}),
-    };
-  });
-}
+export { uninstallManagedPlugin } from "./management-uninstall.js";
