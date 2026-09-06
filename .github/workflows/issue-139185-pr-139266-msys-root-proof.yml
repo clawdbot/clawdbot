@@ -1,0 +1,99 @@
+name: Issue 139185 PR 139266 MSYS drive-root proof
+
+on:
+  push:
+    branches: [maint/proof-139266-msys-root-final]
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - name: Install dependencies with native Git
+        shell: pwsh
+        run: |
+          npm install --global pnpm@12.3.4
+          pnpm install --frozen-lockfile
+      - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884
+        id: msys
+        with:
+          msystem: MSYS
+          update: true
+          install: git
+      - name: Run real MSYS2 baseline and exact-head candidate
+        shell: pwsh
+        env:
+          MSYS_ROOT: ${{ steps.msys.outputs.msys2-location }}
+        run: |
+          $nativeGit = (Get-Command git.exe).Source
+          $candidate = '6023523b62ae86232d9cf570d2b3736aec984c41'
+          $baseline = 'd56cfcbe8a33ab9a1e1799eaa7fd75598053261f'
+          $parent = (& $nativeGit rev-parse HEAD^).Trim()
+          if ($parent -ne $candidate) { throw "Proof branch is not based on the exact PR head" }
+
+          $primaryBacking = Join-Path $env:RUNNER_TEMP "openclaw-msys-primary-root"
+          $linkedBacking = Join-Path $env:RUNNER_TEMP "openclaw-msys-linked-root"
+          $backupBacking = Join-Path ([System.IO.Path]::GetTempPath()) "openclaw-msys-backup-root"
+          New-Item -ItemType Directory -Path $primaryBacking, $linkedBacking, $backupBacking | Out-Null
+          $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+          & icacls.exe $backupBacking /inheritance:r | Out-Null
+          & icacls.exe $backupBacking /grant:r "${currentUser}:(OI)(CI)F" | Out-Null
+          subst R: $primaryBacking
+          subst S: $linkedBacking
+          subst T: $backupBacking
+          try {
+            $env:OPENCLAW_MSYS_PROOF_ROOT = 'R:\'
+            $env:OPENCLAW_MSYS_PROOF_LINKED = 'S:\linked checkout'
+            $env:OPENCLAW_MSYS_PROOF_BACKUP = 'T:\'
+            $env:OPENCLAW_MSYS_PROOF_STATE = 'S:\state'
+            $env:PATH = "$env:MSYS_ROOT\usr\bin;$env:PATH"
+            where.exe git
+            & "$env:MSYS_ROOT\usr\bin\git.exe" --version
+
+            $files = @(
+              'src/agents/worktrees/git.ts',
+              'src/agents/worktrees/service.ts',
+              'src/infra/git-exec.ts',
+              'src/snapshot/git-backup.ts'
+            )
+            & $nativeGit restore --source=$baseline -- $files
+            if ($LASTEXITCODE -ne 0) { throw 'Baseline restore failed' }
+            node scripts/run-vitest.mjs src/infra/git-exec.msys-proof.test.ts 2>&1 |
+              Tee-Object baseline-proof.log
+            $baselineExit = $LASTEXITCODE
+            if ($baselineExit -eq 0) { throw 'Baseline unexpectedly passed' }
+            if (!(Select-String -Path baseline-proof.log -SimpleMatch 'MSYS_DRIVE_ROOT_RAW=/r' -Quiet)) {
+              throw 'Baseline did not demonstrate the exact raw MSYS drive-root precondition'
+            }
+            if (!(Select-String -Path baseline-proof.log -Pattern 'realpath' -Quiet)) {
+              throw 'Baseline did not fail at the intended native filesystem boundary'
+            }
+
+            Get-ChildItem 'R:\', 'S:\', 'T:\' -Force |
+              Remove-Item -Recurse -Force
+
+            & $nativeGit restore --source=$candidate -- $files
+            if ($LASTEXITCODE -ne 0) { throw 'Candidate restore failed' }
+            node scripts/run-vitest.mjs src/infra/git-exec.msys-proof.test.ts 2>&1 |
+              Tee-Object candidate-proof.log
+            if ($LASTEXITCODE -ne 0) { throw 'Exact-head candidate proof failed' }
+
+            $nativeTop = (& $nativeGit -C 'R:\' rev-parse --show-toplevel).Trim()
+            if ($nativeTop -notmatch '^[A-Za-z]:[/\\]') {
+              throw 'Native Git-for-Windows did not retain a native drive path'
+            }
+            'NATIVE_GIT_DRIVE_PATH_CONTROL=passed'
+          } finally {
+            subst R: /d
+            subst S: /d
+            subst T: /d
+          }
