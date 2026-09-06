@@ -511,10 +511,16 @@ describe("sessionsCommand", () => {
         lastInteractionAt: Date.now() - 5 * 60_000,
         label: "research helper",
         color: "blue",
+        category: "work",
         status: "done",
         model: "test:opus",
       },
       "agent:main:uncolored": { sessionId: "uncolored-session", updatedAt: Date.now() },
+      "agent:main:uncategorized": {
+        sessionId: "uncategorized-session",
+        updatedAt: Date.now(),
+        category: "archive",
+      },
       "agent:main:cleared": {
         sessionId: "cleared-session",
         updatedAt: Date.now(),
@@ -524,6 +530,11 @@ describe("sessionsCommand", () => {
     await patchSessionEntryCore(
       { agentId: "main", sessionKey: "agent:main:cleared", storePath: store },
       () => ({ color: undefined }),
+      { skipMaintenance: true },
+    );
+    await patchSessionEntryCore(
+      { agentId: "main", sessionKey: "agent:main:uncategorized", storePath: store },
+      () => ({ category: undefined }),
       { skipMaintenance: true },
     );
 
@@ -542,6 +553,7 @@ describe("sessionsCommand", () => {
         lastInteractionAt?: number;
         label?: string;
         color?: string;
+        category?: string;
         status?: string;
       }>;
     }>(sessionsCommand, store);
@@ -560,13 +572,15 @@ describe("sessionsCommand", () => {
       lastInteractionAt: Date.now() - 5 * 60_000,
       label: "research helper",
       color: "blue",
+      category: "work",
       status: "done",
     });
     expect(child).not.toHaveProperty("sessionFile");
-    for (const key of ["agent:main:uncolored", "agent:main:cleared"]) {
+    for (const key of ["agent:main:uncolored", "agent:main:cleared", "agent:main:uncategorized"]) {
       const row = payload.sessions?.find((session) => session.key === key);
       expect(row).toBeDefined();
       expect(row).not.toHaveProperty("color");
+      expect(row).not.toHaveProperty("category");
     }
   });
 
