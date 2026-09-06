@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -36,18 +35,7 @@ export async function buildPluginControlUi(params: {
   if (relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) {
     throw new Error("Control UI source must stay inside the plugin package.");
   }
-  const require = createRequire(path.join(rootDir, "package.json"));
-  let builder: typeof import("esbuild");
-  try {
-    // SAFETY: Node resolves the plugin's installed esbuild package with this public API.
-    builder = require("esbuild") as typeof import("esbuild");
-  } catch (cause) {
-    throw new Error(
-      "Install esbuild in this plugin's devDependencies, then run plugins build again.",
-      { cause },
-    );
-  }
-  const outputFiles = await buildPluginBundle(builder, {
+  const files = await buildPluginBundle({
     absWorkingDir: rootDir,
     entryPoints: { index: entry },
     outdir: path.join(rootDir, "dist/control-ui/build"),
@@ -61,7 +49,6 @@ export async function buildPluginControlUi(params: {
     },
     alias: buildPluginLoaderAliasMap(entry, process.argv[1], import.meta.url),
   });
-  const files = outputFiles.toSorted((left, right) => left.path.localeCompare(right.path));
   if (
     files.some((file) => file.contents.length > CONTROL_UI_PLUGIN_MAX_ASSET_BYTES) ||
     files.reduce((total, file) => total + file.contents.length, 0) >

@@ -1,4 +1,5 @@
-import { isBuiltin } from "node:module";
+import { createRequire, isBuiltin } from "node:module";
+import { join } from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { BuildOptions, BuildResult, PluginBuild } from "esbuild";
 
@@ -21,16 +22,24 @@ type PluginBundleOptions = Omit<
   | "inject"
   | "plugins"
   | "minifySyntax"
-> & { platform: "node" | "browser" };
+> & { platform: "node" | "browser"; absWorkingDir: string };
 
 function isPluginBundleHostImport(specifier: string): boolean {
   return isBuiltin(specifier) || specifier === "openclaw" || specifier.startsWith("openclaw/");
 }
 
-export async function buildPluginBundle(
-  builder: Pick<typeof import("esbuild"), "build">,
-  options: PluginBundleOptions,
-) {
+export async function buildPluginBundle(options: PluginBundleOptions) {
+  const require = createRequire(join(options.absWorkingDir, "package.json"));
+  let builder: typeof import("esbuild");
+  try {
+    // SAFETY: Resolve the compiler installed by the author in the plugin package.
+    builder = require("esbuild") as typeof import("esbuild");
+  } catch (cause) {
+    throw new Error(
+      "Install esbuild in this plugin's devDependencies, then run plugins build again.",
+      { cause },
+    );
+  }
   const backend = options.platform === "node";
   const recovery = backend
     ? "Use literal import or require paths and embed runtime resources, or use the regular package-install flow."
@@ -123,13 +132,13 @@ export async function buildPluginBundle(
   }
   if (
     imports.some((item) => item.external && (!backend || !isPluginBundleHostImport(item.path))) ||
-    (backend && result.outputFiles.length !== 1)
+    (backend && result.outputFiles.some((file) => !file.path.endsWith(".js")))
   ) {
     throw new Error(
       backend
-        ? "Plugin artifact must bundle all dependencies into its backend entrypoint."
+        ? "Plugin artifact must bundle all dependencies into its JavaScript runtime files."
         : "Control UI builds must bundle their browser dependencies.",
     );
   }
-  return result.outputFiles;
+  return result.outputFiles.toSorted((left, right) => left.path.localeCompare(right.path));
 }
