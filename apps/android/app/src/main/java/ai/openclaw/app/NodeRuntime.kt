@@ -3574,7 +3574,23 @@ class NodeRuntime private constructor(
         // Focus can promote a secondary operator to the primary session for the same gateway.
         // Its accepted credentials must finish before either primary role reads them.
         disconnectSecondaryGatewayConnection(endpoint.stableId)?.disconnectAndJoin()
-        if (!clientDatabases.readerPositionStore().activateGateway(endpoint.stableId, intent)) return@withLock false
+        val readers =
+          try {
+            clientDatabases.readerPositionStore()
+          } catch (error: CancellationException) {
+            throw error
+          } catch (_: Exception) {
+            synchronized(gatewayLifecycleIntentLock) {
+              if (intent()) {
+                updateStatus {
+                  operatorStatusText = "Failed: couldn't open local chat data. Restart OpenClaw. If this continues, contact support before clearing app data."
+                  nodeStatusText = operatorStatusText
+                }
+              }
+            }
+            return@withLock false
+          }
+        if (!readers.activateGateway(endpoint.stableId, intent)) return@withLock false
         synchronized(gatewayLifecycleIntentLock) {
           if (!intent()) return@withLock false
           if (prefs.gatewayRegistry.entries.value
