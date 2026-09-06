@@ -294,7 +294,9 @@ private final class UsageGatewayFixture {
                     payload = #"{"ok":true}"#
                 }
                 let response = #"{"type":"res","id":"\#(id)","ok":true,"payload":\#(payload)}"#
-                socket.emitReceiveSuccess(.data(Data(response.utf8)))
+                let responseData = Data(response.utf8)
+                if cronJobCount > 0, method == "cron.list" { recordCronProof(cronSummaryWireFacts(responseData)) }
+                socket.emitReceiveSuccess(.data(responseData))
                 if isCronProofRequest { recordCronProof(responseFacts) }
             })
         })

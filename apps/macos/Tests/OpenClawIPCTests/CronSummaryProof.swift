@@ -1,7 +1,57 @@
 import AppKit
 import ApplicationServices
 import Foundation
+import OpenClawProtocol
 import Testing
+@testable import OpenClaw
+
+private struct CronSummaryWirePage: Decodable {
+    let jobs: [OpenClaw.CronJob]
+}
+
+/// Temporary fixture diagnostics: inspect the same bytes the socket will receive, without changing them.
+nonisolated func cronSummaryWireFacts(_ response: Data) -> [String: String] {
+    var facts = ["stage": "wire-validation", "phase": "response-frame"]
+    do {
+        let frame = try JSONDecoder().decode(ResponseFrame.self, from: response)
+        guard let payload = frame.payload else {
+            facts["kind"] = "missing-payload"
+            return facts
+        }
+        let raw = try JSONSerialization.jsonObject(with: response) as? [String: Any]
+        let rawPayload = raw?["payload"] as? [String: Any]
+        facts["wireJobs"] = (rawPayload?["jobs"] as? [Any]).map { String($0.count) } ?? "unknown"
+        facts["phase"] = "payload-encoding"
+        let data = try JSONEncoder().encode(payload)
+        // Keep the lossy count even when strict decoding identifies the first rejected row.
+        facts["phase"] = "lossy-jobs"
+        facts["lossyJobs"] = try String(OpenClaw.GatewayConnection.decodeCronListResponse(data).count)
+        facts["phase"] = "strict-jobs"
+        facts["strictJobs"] = try String(JSONDecoder().decode(CronSummaryWirePage.self, from: data).jobs.count)
+        facts["kind"] = "success"
+    } catch {
+        let kind: String
+        let path: [any CodingKey]
+        switch error {
+        case let DecodingError.keyNotFound(key, context):
+            (kind, path) = ("key-not-found", context.codingPath + [key])
+        case let DecodingError.typeMismatch(_, context):
+            (kind, path) = ("type-mismatch", context.codingPath)
+        case let DecodingError.valueNotFound(_, context):
+            (kind, path) = ("value-not-found", context.codingPath)
+        case let DecodingError.dataCorrupted(context):
+            (kind, path) = ("data-corrupted", context.codingPath)
+        case let EncodingError.invalidValue(_, context):
+            (kind, path) = ("invalid-encoding-value", context.codingPath)
+        default:
+            (kind, path) = ("other", [])
+        }
+        facts["kind"] = kind
+        facts["codingPath"] = path.prefix(8).map(\.stringValue).joined(separator: ".")
+            + (path.count > 8 ? ".<truncated>" : "")
+    }
+    return facts
+}
 
 /// Temporary before/after proof; remove after both CI images have been exported.
 @MainActor
