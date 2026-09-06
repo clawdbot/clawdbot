@@ -276,105 +276,146 @@ describe("Control UI service-worker production update E2E", () => {
     }
   });
 
-  it("reloads the same tab after missing the replacement worker's activation", async () => {
-    const context = await browser.newContext({ serviceWorkers: "allow" });
-    const page = await context.newPage();
-    page.setDefaultTimeout(15_000);
-    const pageErrors: string[] = [];
-    page.on("pageerror", (error) => {
-      pageErrors.push(error.message);
-    });
-    await page.addInitScript(() => {
-      // Model a suspended page missing both one-shot notifications. Keep the
-      // real worker, registration, cache, browser messaging, and reload intact.
-      for (const type of ["message", "controllerchange"]) {
-        navigator.serviceWorker.addEventListener(type, (event) => {
-          if (sessionStorage.getItem("test-missed-activation") === "1") {
-            event.stopImmediatePropagation();
-          }
+  it.each(["chat", "config"] as const)(
+    "recovers a missed worker activation without losing a %s draft",
+    async (mode) => {
+      const context = await browser.newContext({ serviceWorkers: "allow" });
+      const page = await context.newPage();
+      page.setDefaultTimeout(15_000);
+      const pageErrors: string[] = [];
+      page.on("pageerror", (error) => pageErrors.push(error.message));
+      await page.addInitScript(() => {
+        // Model missing one-shot notifications, not fake worker activation or reload.
+        for (const type of ["message", "controllerchange"]) {
+          navigator.serviceWorker.addEventListener(type, (event) => {
+            if (sessionStorage.getItem("test-missed-activation") === "1") {
+              event.stopImmediatePropagation();
+            }
+          });
+        }
+      });
+      const gateway = await installMockGateway(page, {
+        assistantAgentId: "research",
+        defaultAgentId: "research",
+        serverBuildId: buildA,
+        terminalEnabled: true,
+        methodResponses: {
+          "config.get": {
+            config: { count: 1 },
+            raw: '{ "count": 1 }',
+            hash: "config-a",
+            valid: true,
+            issues: [],
+          },
+          "config.schema": {
+            schema: { type: "object", properties: { count: { type: "number" } } },
+            uiHints: {},
+            version: "test",
+            generatedAt: "2026-09-06T00:00:00.000Z",
+          },
+        },
+      });
+      await page.unroute("**" + CONTROL_UI_BOOTSTRAP_CONFIG_PATH);
+      const resume = () =>
+        page.evaluate(() => {
+          sessionStorage.removeItem("test-missed-activation");
+          Object.defineProperty(document, "visibilityState", {
+            configurable: true,
+            get: () => "hidden",
+          });
+          document.dispatchEvent(new Event("visibilitychange"));
+          Object.defineProperty(document, "visibilityState", {
+            configurable: true,
+            get: () => "visible",
+          });
+          document.dispatchEvent(new Event("visibilitychange"));
         });
+      const nextDir = outDir + "-foreground";
+      const previousDir = outDir + "-sleeping";
+      let swapped = false;
+      try {
+        await page.goto(
+          server.baseUrl + (mode === "chat" ? "chat" : "settings/advanced") + "?resume=1#latest",
+        );
+        await ensureControlledPage(page, pageErrors, buildA);
+        if (mode === "chat") {
+          await gateway.waitForRequest("chat.startup");
+        } else {
+          await page.getByRole("button", { name: "Raw", exact: true }).click();
+        }
+        const originalUrl = page.url();
+        const editor = page.locator(
+          mode === "chat"
+            ? ".agent-chat__composer-combobox textarea"
+            : ".config-raw-field textarea",
+        );
+        const draft =
+          mode === "chat" ? "keep my draft through the missed update" : '{ "count": 2 }';
+        await editor.fill(draft);
+        await buildProductionControlUiE2e(nextDir, buildB);
+        await page.evaluate(() => sessionStorage.setItem("test-missed-activation", "1"));
+        await rename(outDir, previousDir);
+        await rename(nextDir, outDir);
+        swapped = true;
+        await page.evaluate(async () => {
+          await (await navigator.serviceWorker.getRegistration())?.update();
+        });
+        await expect
+          .poll(() => page.evaluate(() => caches.keys()))
+          .toContain("openclaw-control-" + buildB);
+        await page.waitForFunction(async () => {
+          const registration = await navigator.serviceWorker.getRegistration();
+          return registration?.active?.state === "activated" && !registration.installing;
+        });
+        expect((await gateway.getRequests("connect")).at(-1)?.params).toMatchObject({
+          client: { buildId: buildA },
+        });
+        await gateway.setServerBuildId(buildB);
+        if (mode === "config") {
+          await resume();
+          // The native message round trip must not navigate a dirty settings page.
+          await page.waitForTimeout(300);
+          expect(await editor.inputValue()).toBe(draft);
+          expect((await gateway.getRequests("connect")).at(-1)?.params).toMatchObject({
+            client: { buildId: buildA },
+          });
+          await page.getByRole("button", { name: "Discard", exact: true }).click();
+        }
+        const reloaded = page.waitForEvent("domcontentloaded");
+        await resume();
+        await reloaded;
+        await expect
+          .poll(async () => (await gateway.getRequests("connect")).at(-1)?.params)
+          .toMatchObject({ client: { buildId: buildB } });
+        expect(page.url()).toBe(originalUrl);
+        if (mode === "chat") {
+          await expect.poll(() => editor.inputValue()).toBe(draft);
+        } else {
+          await page.getByRole("button", { name: "Raw", exact: true }).click();
+          await expect
+            .poll(async () => JSON.parse(await editor.inputValue()))
+            .toEqual({ count: 1 });
+        }
+      } catch (error) {
+        if (error instanceof Error) {
+          await captureControlUiE2eFailureDiagnostics(page, {
+            error,
+            label: "worker-missed-activation",
+            pageErrors,
+          });
+        }
+        throw error;
+      } finally {
+        await context.close();
+        if (swapped) {
+          await rename(outDir, nextDir);
+          await rename(previousDir, outDir);
+        }
+        await rm(nextDir, { recursive: true, force: true });
       }
-    });
-    const gateway = await installMockGateway(page, {
-      assistantAgentId: "research",
-      defaultAgentId: "research",
-      serverBuildId: buildA,
-      terminalEnabled: true,
-    });
-    await page.unroute("**" + CONTROL_UI_BOOTSTRAP_CONFIG_PATH);
-    const nextDir = outDir + "-foreground";
-    const previousDir = outDir + "-sleeping";
-    let swapped = false;
-    try {
-      await page.goto(server.baseUrl + "chat?resume=1#latest");
-
-      await ensureControlledPage(page, pageErrors, buildA);
-
-      await gateway.waitForRequest("chat.startup");
-
-      const originalUrl = page.url();
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.fill("keep my draft through the missed update");
-      await buildProductionControlUiE2e(nextDir, buildB);
-      await page.evaluate(() => sessionStorage.setItem("test-missed-activation", "1"));
-      await rename(outDir, previousDir);
-      await rename(nextDir, outDir);
-      swapped = true;
-      await page.evaluate(async () => {
-        const registration = await navigator.serviceWorker.getRegistration();
-        await registration?.update();
-      });
-      await expect
-        .poll(() => page.evaluate(() => caches.keys()))
-        .toContain("openclaw-control-" + buildB);
-      await page.waitForFunction(async () => {
-        const registration = await navigator.serviceWorker.getRegistration();
-        return registration?.active?.state === "activated" && !registration.installing;
-      });
-      expect((await gateway.getRequests("connect")).at(-1)?.params).toMatchObject({
-        client: { buildId: buildA },
-      });
-      await gateway.setServerBuildId(buildB);
-      const reloaded = page.waitForEvent("domcontentloaded");
-      await page.evaluate(() => {
-        sessionStorage.removeItem("test-missed-activation");
-        Object.defineProperty(document, "visibilityState", {
-          configurable: true,
-          get: () => "hidden",
-        });
-        document.dispatchEvent(new Event("visibilitychange"));
-        Object.defineProperty(document, "visibilityState", {
-          configurable: true,
-          get: () => "visible",
-        });
-        document.dispatchEvent(new Event("visibilitychange"));
-      });
-      await reloaded;
-      await expect
-        .poll(async () => (await gateway.getRequests("connect")).at(-1)?.params)
-        .toMatchObject({ client: { buildId: buildB } });
-      expect(page.url()).toBe(originalUrl);
-      await expect
-        .poll(() => composer.inputValue())
-        .toBe("keep my draft through the missed update");
-    } catch (error) {
-      if (error instanceof Error) {
-        await captureControlUiE2eFailureDiagnostics(page, {
-          error,
-          label: "worker-missed-activation",
-          pageErrors,
-        });
-      }
-      throw error;
-    } finally {
-      await context.close();
-      if (swapped) {
-        await rename(outDir, nextDir);
-        await rename(previousDir, outDir);
-      }
-      await rm(nextDir, { recursive: true, force: true });
-    }
-  }, 120_000);
+    },
+    120_000,
+  );
 
   it("refreshes a same-version build on reconnect before restoring an owned terminal", async () => {
     const context = await browser.newContext({

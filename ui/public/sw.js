@@ -13,13 +13,18 @@ const CACHE_VERSION =
 const CACHE_NAME = `${CACHE_PREFIX}${CACHE_VERSION}`;
 const CONTROL_CACHE_LIMIT = 3;
 
-function isControlUiClient(url) {
+// Older pages reload directly and cannot acquire new config-draft guards. Keep
+// their root/chat announcement contract; current pages also reconcile on resume.
+function isControlUiChatClient(url) {
   const clientUrl = new URL(url);
   const scopeUrl = new URL(self.registration.scope);
   const scopePath = scopeUrl.pathname.endsWith("/") ? scopeUrl.pathname : `${scopeUrl.pathname}/`;
+  const chatPath = `${scopePath}chat`;
   return (
     clientUrl.origin === scopeUrl.origin &&
-    (clientUrl.pathname === scopeUrl.pathname || clientUrl.pathname.startsWith(scopePath))
+    (clientUrl.pathname === scopeUrl.pathname ||
+      clientUrl.pathname === chatPath ||
+      clientUrl.pathname.startsWith(`${chatPath}/`))
   );
 }
 
@@ -64,7 +69,7 @@ self.addEventListener("activate", (event) => {
         includeUncontrolled: true,
       });
       for (const client of windowClients) {
-        if (isControlUiClient(client.url)) {
+        if (isControlUiChatClient(client.url)) {
           client.postMessage({ type: "sw-updated", version: CACHE_VERSION }, []);
         }
       }

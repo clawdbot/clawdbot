@@ -1862,6 +1862,7 @@ export const en: TranslationMap & {
     retry: "Retry",
     applyChanges: "Apply changes",
     rawDiscard: "Discard",
+    reloadBlocked: "Finish saving or discard pending config changes before reloading.",
     rawDraftBlocksApply:
       "Unsaved raw config edits — save or discard them in the Raw editor before restarting.",
     rawDraftPendingFormTitle:

@@ -9,14 +9,15 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const serviceWorkerPath = path.join(here, "../../public/sw.js");
 
 describe("Control UI service worker cache versioning", () => {
-  it("announces to in-scope pages without waiting for suspended documents", async () => {
+  it("announces only to legacy root/chat clients without reloading older settings tabs", async () => {
     const client = (url: string) => ({ url, postMessage: vi.fn(), navigate: vi.fn() });
     const included = [
       client("https://control.example/openclaw/"),
       client("https://control.example/openclaw/chat/main/session?mode=compact#latest"),
-      client("https://control.example/openclaw/settings/appearance"),
     ];
     const excluded = [
+      client("https://control.example/openclaw/settings/appearance"),
+      client("https://control.example/openclaw/config?raw=1#editor"),
       client("https://control.example/openclaw-other/chat"),
       client("https://other.example/openclaw/chat/main/session"),
     ];
