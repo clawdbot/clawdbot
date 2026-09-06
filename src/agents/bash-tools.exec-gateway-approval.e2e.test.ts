@@ -87,6 +87,7 @@ describe("gateway-hosted exec approvals", () => {
       await fs.mkdir(stateDir, { recursive: true });
       const config = {
         agents: {
+          ownership: "explicit",
           defaults: { workspace: workspaceDir },
           list: [{ id: "main", tools: { exec: { cleanupMs: 180_000 } } }, { id: "helper" }],
         },

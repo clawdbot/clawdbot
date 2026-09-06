@@ -80,7 +80,10 @@ describe("Agent-specific exec tool defaults", () => {
   it("keeps each actual exec result for its own agent retention after another process tool loads", async () => {
     const config: OpenClawConfig = {
       tools: { exec: { host: "gateway", mode: "full", cleanupMs: 60_000 } },
-      agents: { list: [{ id: "main", tools: { exec: { cleanupMs: 180_000 } } }, { id: "helper" }] },
+      agents: {
+        ownership: "explicit",
+        list: [{ id: "main", tools: { exec: { cleanupMs: 180_000 } } }, { id: "helper" }],
+      },
     };
     const toolsFor = (agentId: string) =>
       createOpenClawCodingTools({
@@ -112,6 +115,9 @@ describe("Agent-specific exec tool defaults", () => {
       throw new Error("Expected process tools for both agents");
     }
     await shortProcess.execute("load-short-process", { action: "list" });
+    console.log(
+      "[retention-proof] Both commands completed; observing their retention for 95 seconds.",
+    );
     const observedAt = Date.now();
     // The old 60s global TTL sweeps every 30s, so allow its next full sweep.
     await new Promise((resolve) => {
