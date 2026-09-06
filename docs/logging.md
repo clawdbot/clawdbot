@@ -131,8 +131,12 @@ To filter channel activity (WhatsApp/Telegram/etc), use:
 openclaw channels logs --channel whatsapp
 ```
 
-`--channel` defaults to `all`; `--lines <n>` (default 200) and `--json` are also
-available.
+`--channel` defaults to `all`; `--lines <n>` (default 200), `--follow`,
+`--interval <ms>` (default 1000), and `--json` are also available. `--follow` prints
+the initial tail, then polls the configured file for newly appended matching records.
+It preserves the channel filter across truncation and rolling-file rotation, and Ctrl-C
+stops the poll cleanly. Follow-mode `--json` emits compact line-delimited `meta`, `log`,
+and `notice` records; one-shot JSON keeps the existing object shape.
 
 ## Log formats
 

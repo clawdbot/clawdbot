@@ -58,11 +58,18 @@ did not name.
 - `channels status`: `--channel <name>`, `--probe`, `--timeout <ms>` (default `10000`), `--json`
 - `channels capabilities`: `--channel <name>`, `--agent <id>`, `--account <id>` (requires `--channel`), `--target <dest>` (requires `--channel`), `--timeout <ms>` (default `10000`, capped at `30000`), `--json`
 - `channels resolve <entries...>`: `--channel <name>`, `--account <id>`, `--agent <id>`, `--kind <auto|user|group|channel>` (default `auto`), `--json`
-- `channels logs`: `--channel <name|all>` (default `all`), `--lines <n>` (default `200`), `--json`
+- `channels logs`: `--channel <name|all>` (default `all`), `--lines <n>` (default `200`), `--follow`, `--interval <ms>` (default `1000`), `--json`
 
 `channels logs --channel <name>` matches subsystem or module names rooted at `<name>`
 or `gateway/channels/<name>`, including slash-separated descendants. Similar names
 such as `discord-archive` do not match `discord`.
+
+Pass `--follow` to print the initial tail and poll for newly appended matching records.
+The cursor follows the configured log file and re-anchors after truncation or rolling-file
+rotation, so records already printed are not replayed. `--interval <ms>` controls the
+positive polling interval. Press Ctrl-C to stop cleanly. Follow-mode `--json` emits one
+compact JSON record per line (`meta`, `log`, or `notice`); without `--follow`, JSON output
+retains the one-shot object shape.
 
 `channels status --probe` is the live path: on a reachable gateway it runs per-account
 `probeAccount` and optional `auditAccount` checks, so output can include transport

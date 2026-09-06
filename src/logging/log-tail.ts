@@ -15,6 +15,7 @@ const DEFAULT_LIMIT = 500;
 const DEFAULT_MAX_BYTES = 250_000;
 const MAX_LIMIT = 5000;
 const MAX_BYTES = 1_000_000;
+type LogTailLimit = number | "all";
 
 function missingPathToNull(error: unknown): null {
   if (!isMissingPathError(error)) {
@@ -73,7 +74,7 @@ async function resolveLogFile(file: string, options?: { rolling?: boolean }): Pr
 async function readLogSlice(params: {
   file: string;
   cursor?: number;
-  limit: number;
+  limit: LogTailLimit;
   maxBytes: number;
   filter?: (line: string) => boolean;
 }): Promise<Omit<LogTailPayload, "file">> {
@@ -90,7 +91,7 @@ async function readLogSlice(params: {
 
   const size = stat.size;
   const maxBytes = clamp(params.maxBytes, 1, MAX_BYTES);
-  const limit = clamp(params.limit, 1, MAX_LIMIT);
+  const limit = params.limit === "all" ? undefined : clamp(params.limit, 1, MAX_LIMIT);
   let cursor =
     typeof params.cursor === "number" && Number.isFinite(params.cursor)
       ? Math.max(0, Math.floor(params.cursor))
@@ -157,7 +158,7 @@ async function readLogSlice(params: {
       // Sparse consumers inspect the full byte-bounded window before the shared line cap.
       lines = lines.filter(params.filter);
     }
-    if (lines.length > limit) {
+    if (limit !== undefined && lines.length > limit) {
       truncated = true;
       lines = lines.slice(lines.length - limit);
     }
@@ -181,7 +182,7 @@ async function readLogSlice(params: {
 
 /** Reads and redacts the configured log tail with bounded bytes and line count. */
 export async function readConfiguredLogTail(
-  params?: { cursor?: number; limit?: number; maxBytes?: number },
+  params?: { cursor?: number; limit?: LogTailLimit; maxBytes?: number },
   filter?: (line: string) => boolean,
 ): Promise<LogTailPayload> {
   const target = getResolvedLoggerFileTarget();
@@ -204,7 +205,7 @@ export async function readConfiguredLogTail(
 /** Reads the canonical configured tail and parses its already-redacted lines. */
 export async function readConfiguredParsedLogTail(params?: {
   cursor?: number;
-  limit?: number;
+  limit?: LogTailLimit;
   maxBytes?: number;
   filter?: (line: Pick<ParsedLogLine, "subsystem" | "module" | "plugin">) => boolean;
 }): Promise<ParsedLogTailPayload> {

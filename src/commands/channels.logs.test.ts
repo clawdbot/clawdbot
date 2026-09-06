@@ -339,4 +339,87 @@ describe("channelsLogsCommand", () => {
       "--lines must be a positive integer.",
     );
   });
+
+  it("follows appended matching records without replaying the initial tail", async () => {
+    vi.useFakeTimers();
+    try {
+      await fs.writeFile(
+        logPath,
+        [
+          logLine({ module: "gateway/channels/slack/send", message: "existing" }),
+          logLine({ module: "gateway/health", message: "unrelated" }),
+        ].join(""),
+      );
+
+      const follow = channelsLogsCommand(
+        { channel: "slack", lines: 1, follow: true, interval: 10, json: true },
+        runtime,
+      );
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(2));
+
+      await fs.appendFile(
+        logPath,
+        [
+          logLine({ module: "gateway/health", message: "ignored" }),
+          logLine({ module: "gateway/channels/slack/receive", message: "appended" }),
+          logLine({ module: "gateway/channels/slack/receive", message: "appended-second" }),
+        ].join(""),
+      );
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(4));
+
+      process.emit("SIGINT");
+      await follow;
+
+      const records = runtime.log.mock.calls.map(([value]) => JSON.parse(String(value)));
+      expect(
+        records.filter((record) => record.type === "log").map((record) => record.message),
+      ).toEqual(["existing", "appended", "appended-second"]);
+      expect(records.some((record) => record.message === "ignored")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-anchors after a same-path replacement without replaying the old cursor", async () => {
+    vi.useFakeTimers();
+    try {
+      await fs.writeFile(
+        logPath,
+        logLine({ module: "gateway/channels/slack/send", message: "before" }),
+      );
+      const follow = channelsLogsCommand(
+        { channel: "slack", follow: true, interval: 10, json: true },
+        runtime,
+      );
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(2));
+
+      await fs.writeFile(
+        logPath,
+        [
+          logLine({ module: "gateway/channels/slack/send", message: "new-first" }),
+          logLine({ module: "gateway/channels/slack/send", message: "new-second" }),
+        ].join(""),
+      );
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(5));
+
+      process.emit("SIGINT");
+      await follow;
+
+      const records = runtime.log.mock.calls.map(([value]) => JSON.parse(String(value)));
+      expect(
+        records.filter((record) => record.type === "log").map((record) => record.message),
+      ).toEqual(["before", "new-first", "new-second"]);
+      expect(records.filter((record) => record.type === "notice")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects invalid follow intervals", async () => {
+    await expect(
+      channelsLogsCommand({ follow: true, interval: "0", json: true }, runtime),
+    ).rejects.toThrow("--interval must be a positive integer.");
+  });
 });

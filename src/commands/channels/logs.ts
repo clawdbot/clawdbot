@@ -1,4 +1,6 @@
 // Implements channel-scoped tailing of the OpenClaw log file.
+import fs from "node:fs/promises";
+import { setTimeout as delay } from "node:timers/promises";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -6,6 +8,7 @@ import {
   CHAT_CHANNEL_ORDER,
   normalizeChatChannelId as normalizeBundledChannelId,
 } from "../../channels/registry.js";
+import { readFileWindowFully } from "../../infra/file-read.js";
 import { readConfiguredParsedLogTail } from "../../logging/log-tail.js";
 import type { ParsedLogLine } from "../../logging/parse-log-line.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
@@ -15,13 +18,23 @@ export type ChannelsLogsOptions = {
   channel?: string;
   lines?: string | number;
   json?: boolean;
+  follow?: boolean;
+  interval?: string | number;
 };
 
 const DEFAULT_LIMIT = 200;
+const DEFAULT_INTERVAL = 1000;
 const MAX_BYTES = 1_000_000;
 
 type ChannelLogFilter = { channel: string; pluginIds: ReadonlySet<string> };
 type ManifestChannel = { id: string; pluginId: string };
+type FileCheckpoint = {
+  file: string;
+  identity: string;
+  cursor: number;
+  prefix: string;
+  boundary: string;
+};
 
 function listManifestChannels(): ManifestChannel[] {
   return loadPluginManifestRegistryForPluginRegistry({
@@ -90,6 +103,184 @@ function parseLinesOption(value: unknown): number {
   return parsed;
 }
 
+function parseIntervalOption(value: unknown): number {
+  if (value === undefined || value === null || value === "") {
+    return DEFAULT_INTERVAL;
+  }
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined) {
+    throw new Error("--interval must be a positive integer.");
+  }
+  return parsed;
+}
+
+function writeChannelLogLine(runtime: RuntimeEnv, line: ParsedLogLine, json: boolean): void {
+  if (json) {
+    writeRuntimeJson(runtime, { type: "log", ...line }, 0);
+    return;
+  }
+  const ts = line.time ? `${line.time} ` : "";
+  const level = line.level ? `${normalizeLowercaseStringOrEmpty(line.level)} ` : "";
+  runtime.log(`${ts}${level}${line.message}`.trim());
+}
+
+function installFollowSignalHandlers(controller: AbortController): () => void {
+  const stop = () => controller.abort();
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+  return () => {
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
+  };
+}
+
+async function readFileCheckpoint(
+  file: string,
+  cursor: number,
+): Promise<FileCheckpoint | undefined> {
+  const stat = await fs.stat(file).catch(() => undefined);
+  if (!stat) {
+    return undefined;
+  }
+  const handle = await fs.open(file, "r");
+  try {
+    const readWindow = async (start: number, length: number) => {
+      const buffer = Buffer.alloc(Math.max(0, Math.min(length, stat.size - start)));
+      const bytesRead = await readFileWindowFully(handle, buffer, start);
+      return buffer.toString("base64", 0, bytesRead);
+    };
+    const boundedCursor = Math.min(Math.max(0, cursor), stat.size);
+    const boundaryStart = Math.max(0, boundedCursor - 64);
+    return {
+      file,
+      identity: `${stat.dev}:${stat.ino}`,
+      cursor: boundedCursor,
+      prefix: await readWindow(0, 64),
+      boundary: await readWindow(boundaryStart, boundedCursor - boundaryStart),
+    };
+  } finally {
+    await handle.close();
+  }
+}
+
+function isSameFileCheckpoint(
+  previous: FileCheckpoint,
+  current: FileCheckpoint | undefined,
+): boolean {
+  return (
+    current?.file === previous.file &&
+    current.identity === previous.identity &&
+    current.prefix === previous.prefix &&
+    current.boundary === previous.boundary
+  );
+}
+
+async function followChannelLogs(
+  filter: ChannelLogFilter,
+  channel: string,
+  limit: number,
+  interval: number,
+  json: boolean,
+  runtime: RuntimeEnv,
+): Promise<void> {
+  const controller = new AbortController();
+  const removeSignalHandlers = installFollowSignalHandlers(controller);
+  let cursor: number | undefined;
+  let previousFile: string | undefined;
+  let previousCheckpoint: FileCheckpoint | undefined;
+  let firstRead = true;
+
+  try {
+    while (!controller.signal.aborted) {
+      const readLimit = firstRead ? limit : "all";
+      let tail = await readConfiguredParsedLogTail({
+        cursor,
+        limit: readLimit,
+        maxBytes: MAX_BYTES,
+        filter: (line) => matchesChannel(line, filter),
+      });
+      let reanchored = false;
+
+      // A rolling file can change between polls. Re-anchor to the new file so a
+      // coincidentally valid byte offset cannot skip its initial records.
+      if (previousFile !== undefined && tail.file !== previousFile) {
+        tail = await readConfiguredParsedLogTail({
+          limit: readLimit,
+          maxBytes: MAX_BYTES,
+          filter: (line) => matchesChannel(line, filter),
+        });
+        reanchored = true;
+      } else if (
+        previousCheckpoint !== undefined &&
+        !isSameFileCheckpoint(
+          previousCheckpoint,
+          await readFileCheckpoint(tail.file, previousCheckpoint.cursor),
+        )
+      ) {
+        tail = await readConfiguredParsedLogTail({
+          limit: readLimit,
+          maxBytes: MAX_BYTES,
+          filter: (line) => matchesChannel(line, filter),
+        });
+        reanchored = true;
+      }
+
+      const fileChanged = previousFile !== undefined && tail.file !== previousFile;
+      if (json) {
+        if (firstRead || fileChanged) {
+          writeRuntimeJson(runtime, { type: "meta", file: tail.file, channel }, 0);
+        }
+        if (tail.truncated) {
+          writeRuntimeJson(
+            runtime,
+            { type: "notice", message: "Log tail truncated; earlier entries were omitted." },
+            0,
+          );
+        }
+        if (tail.reset || reanchored) {
+          writeRuntimeJson(
+            runtime,
+            { type: "notice", message: "Log file reset; re-reading the current tail." },
+            0,
+          );
+        }
+      } else {
+        if (firstRead || fileChanged) {
+          runtime.log(theme.info(`Log file: ${tail.file}`));
+          if (channel !== "all") {
+            runtime.log(theme.info(`Channel: ${channel}`));
+          }
+        }
+        if (tail.truncated) {
+          runtime.log(theme.warn("Log tail truncated; earlier entries were omitted."));
+        }
+        if (tail.reset || reanchored) {
+          runtime.log(theme.warn("Log file reset; re-reading the current tail."));
+        }
+      }
+
+      for (const line of tail.lines) {
+        writeChannelLogLine(runtime, line, json);
+      }
+      cursor = tail.cursor;
+      previousFile = tail.file;
+      previousCheckpoint = await readFileCheckpoint(tail.file, tail.cursor);
+      firstRead = false;
+
+      try {
+        await delay(interval, undefined, { signal: controller.signal });
+      } catch (error) {
+        if (controller.signal.aborted) {
+          return;
+        }
+        throw error;
+      }
+    }
+  } finally {
+    removeSignalHandlers();
+  }
+}
+
 /** Print or serialize recent log lines matching one channel subsystem/module. */
 export async function channelsLogsCommand(
   opts: ChannelsLogsOptions,
@@ -98,6 +289,18 @@ export async function channelsLogsCommand(
   const filter = parseChannelFilter(opts.channel);
   const { channel } = filter;
   const limit = parseLinesOption(opts.lines);
+
+  if (opts.follow) {
+    await followChannelLogs(
+      filter,
+      channel,
+      limit,
+      parseIntervalOption(opts.interval),
+      Boolean(opts.json),
+      runtime,
+    );
+    return;
+  }
 
   const tail = await readConfiguredParsedLogTail({
     limit,
@@ -123,8 +326,6 @@ export async function channelsLogsCommand(
     return;
   }
   for (const line of lines) {
-    const ts = line.time ? `${line.time} ` : "";
-    const level = line.level ? `${normalizeLowercaseStringOrEmpty(line.level)} ` : "";
-    runtime.log(`${ts}${level}${line.message}`.trim());
+    writeChannelLogLine(runtime, line, false);
   }
 }
