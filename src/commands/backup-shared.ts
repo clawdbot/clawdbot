@@ -598,7 +598,9 @@ export async function resolveBackupPlanFromDisk(
     ? []
     : await resolveBackupAgentRoots(discoverySnapshot.config);
   const discoveredWorkspaceDirs = cleanupPlan.workspaceDirs;
-  const configuredWorkspaceBase = discoverySnapshot.config.agents?.defaults?.workspace?.trim();
+  const configuredWorkspace = discoverySnapshot.config.agents?.defaults?.workspace;
+  const configuredWorkspaceBase =
+    typeof configuredWorkspace === "string" ? configuredWorkspace.trim() : undefined;
   if (!includeWorkspace && configuredWorkspaceBase) {
     // Agent discovery can return base/<id>, leaving shared scratch files in
     // the base. Exclude that base too without widening full backups or cleanup.

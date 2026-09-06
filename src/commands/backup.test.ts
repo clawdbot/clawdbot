@@ -91,11 +91,14 @@ describe("backup commands", () => {
     await tempHome.restore();
   });
 
-  async function withInvalidWorkspaceBackupConfig<T>(fn: (runtime: RuntimeEnv) => Promise<T>) {
+  async function withInvalidWorkspaceBackupConfig<T>(
+    configRaw: string,
+    fn: (runtime: RuntimeEnv) => Promise<T>,
+  ) {
     const stateDir = path.join(tempHome.home, ".openclaw");
     const configPath = path.join(tempHome.home, "custom-config.json");
     await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
-    await fs.writeFile(configPath, '{"agents": { defaults: { workspace: ', "utf8");
+    await fs.writeFile(configPath, configRaw, "utf8");
 
     const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH"]);
     setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
@@ -578,8 +581,23 @@ describe("backup commands", () => {
     expect(await fs.readFile(existingArchive, "utf8")).toBe("already here");
   });
 
-  it("handles invalid config according to backup scope", async () => {
-    await withInvalidWorkspaceBackupConfig(async (runtime) => {
+  it.each([
+    { label: "malformed JSON", configRaw: '{"agents": { defaults: { workspace: ' },
+    {
+      label: "a non-string workspace base",
+      configRaw: JSON.stringify({
+        agents: {
+          ownership: "explicit",
+          defaults: { workspace: 123 },
+          entries: {
+            main: { workspace: "/fixture/main" },
+            helper: { workspace: "/fixture/helper" },
+          },
+        },
+      }),
+    },
+  ])("handles invalid config with $label according to backup scope", async ({ configRaw }) => {
+    await withInvalidWorkspaceBackupConfig(configRaw, async (runtime) => {
       await expect(backupCreateCommand(runtime, { dryRun: true })).rejects.toThrow(
         /--no-include-workspace/i,
       );
