@@ -1373,6 +1373,10 @@ fn main() {
             if window.label() == quickchat::QUICKCHAT_LABEL {
                 match event {
                     tauri::WindowEvent::Focused(false) => {
+                        // GTK queues focus events; a stale blur must not hide a refocused window.
+                        if cfg!(target_os = "linux") && window.is_focused().unwrap_or(false) {
+                            return;
+                        }
                         quickchat::request_hide(window.app_handle());
                         return;
                     }
