@@ -38,5 +38,13 @@
   {
     "source": "iMessage",
     "target": "iMessage"
+  },
+  {
+    "source": "Toggle dashboard panel",
+    "target": "Alternar painel do dashboard"
+  },
+  {
+    "source": "parent session",
+    "target": "sessão pai"
   }
 ]
