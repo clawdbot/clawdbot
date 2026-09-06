@@ -134,7 +134,10 @@ async function readLogSlice(params: LogSliceParams): Promise<Omit<LogTailReadPay
       const result = await readLogSliceAttempt(retryParams, handle, stat);
       lastResult = result;
       const finalStat = (await handle.stat({ bigint: true })) as LogFileStat;
-      if (isSameLogFileStat(stat, finalStat)) {
+      if (
+        isSameLogFileStat(stat, finalStat) ||
+        (await isStableLogSlice(handle, stat, finalStat, result, retryParams.forceReset === true))
+      ) {
         return result;
       }
       if (result.reset && result.skippedBytes === undefined) {
@@ -159,6 +162,50 @@ function isSameLogFileStat(left: LogFileStat, right: LogFileStat): boolean {
     left.mtimeNs === right.mtimeNs &&
     left.ctimeNs === right.ctimeNs
   );
+}
+
+// An append can race the read without changing consumed bytes; validate that bounded snapshot
+// instead of requiring an idle file, while preserving shrink re-anchors for callers.
+async function isStableLogSlice(
+  handle: Awaited<ReturnType<typeof fs.open>>,
+  initialStat: LogFileStat,
+  finalStat: LogFileStat,
+  result: Omit<LogTailReadPayload, "file">,
+  forcedReset: boolean,
+): Promise<boolean> {
+  if (
+    initialStat.dev !== finalStat.dev ||
+    initialStat.ino !== finalStat.ino ||
+    finalStat.size < initialStat.size ||
+    (!forcedReset && result.reset && result.skippedBytes === undefined) ||
+    result.generation === undefined
+  ) {
+    return false;
+  }
+
+  const generation = result.generation;
+  const readWindow = async (start: number, length: number) => {
+    const buffer = Buffer.alloc(Math.max(0, length));
+    const bytesRead = await readFileWindowFully(handle, buffer, start);
+    return buffer.subarray(0, bytesRead);
+  };
+  const prefix = await readWindow(0, generation.prefixLength);
+  if (!prefix.equals(Buffer.from(generation.prefix, "base64"))) {
+    return false;
+  }
+
+  const content = await readWindow(generation.contentWindowStart, generation.contentWindowLength);
+  if (
+    content.length !== generation.contentWindowLength ||
+    createHash("sha256").update(content).digest("hex") !== generation.contentHash
+  ) {
+    return false;
+  }
+
+  const cursor = generation.contentWindowStart + generation.contentWindowLength;
+  const boundaryStart = Math.max(0, cursor - 64);
+  const boundary = await readWindow(boundaryStart, cursor - boundaryStart);
+  return boundary.equals(Buffer.from(generation.boundary, "base64"));
 }
 
 async function readLogSliceAttempt(
