@@ -30,7 +30,9 @@ describe("anonymous public session HTTP boundary", () => {
           }
         });
       });
-      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
       const address = server.address();
       if (!address || typeof address === "string") {
         throw new Error("Missing server address");
@@ -97,9 +99,9 @@ describe("anonymous public session HTTP boundary", () => {
         expect(await unavailable.text()).not.toContain("private store location");
       } finally {
         server.closeAllConnections();
-        await new Promise<void>((resolve, reject) =>
-          server.close((error) => (error ? reject(error) : resolve())),
-        );
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
       }
     },
   );

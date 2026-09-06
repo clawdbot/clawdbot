@@ -39,10 +39,12 @@ export function parseControlUiPublicSessionShareUrl(
       !/^[a-z0-9][a-z0-9_-]{0,63}$/u.test(agentId) ||
       !sessionId ||
       sessionId.length > 512 ||
-      /[\/\\\s\u0000-\u001f\u007f-\u009f]/u.test(sessionId) ||
+      // oxlint-disable-next-line eslint/no-control-regex -- Public locators must reject control bytes in stored identifiers.
+      /[/\\\s\u0000-\u001f\u007f-\u009f]/u.test(sessionId) ||
       !/^[0-9a-f]{48}$/u.test(shareId) ||
       !sessionKey ||
       sessionKey.length > 4096 ||
+      // oxlint-disable-next-line eslint/no-control-regex -- Reject ASCII control bytes without normalizing the exact stored key.
       /[\u0000-\u001f\u007f]/u.test(sessionKey)
     ) {
       return null;
