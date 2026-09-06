@@ -58,6 +58,7 @@ export type ManifestModelCatalogSuppressionEntry = {
   model: string;
   mergeKey: string;
   reason?: string;
+  retirement?: NonNullable<ModelCatalog["suppressions"]>[number]["retirement"];
   when?: NonNullable<ModelCatalog["suppressions"]>[number]["when"];
 };
 
@@ -353,6 +354,7 @@ export function planManifestModelCatalogSuppressions(params: {
         model,
         mergeKey: buildModelCatalogMergeKey(provider, model),
         ...(suppression.reason ? { reason: suppression.reason } : {}),
+        ...(suppression.retirement ? { retirement: suppression.retirement } : {}),
         ...(suppression.when ? { when: suppression.when } : {}),
       });
     }
