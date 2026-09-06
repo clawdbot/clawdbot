@@ -183,6 +183,51 @@ describe("summarizeMatrixRawEvent", () => {
     expect(summary.body).toBe("original text");
   });
 
+  it("marks isSelf true when the event sender matches the provided selfUserId", () => {
+    const summary = summarizeMatrixRawEvent(
+      {
+        event_id: "$text",
+        sender: "@bot:example.org",
+        type: "m.room.message",
+        origin_server_ts: 123,
+        content: { msgtype: "m.text", body: "hello" },
+      },
+      { selfUserId: "@bot:example.org" },
+    );
+
+    expect(summary.isSelf).toBe(true);
+    expect(summary.sender).toBe("@bot:example.org");
+  });
+
+  it("marks isSelf false when the event sender differs from the provided selfUserId", () => {
+    const summary = summarizeMatrixRawEvent(
+      {
+        event_id: "$text",
+        sender: "@glenn:example.org",
+        type: "m.room.message",
+        origin_server_ts: 123,
+        content: { msgtype: "m.text", body: "hello" },
+      },
+      { selfUserId: "@bot:example.org" },
+    );
+
+    expect(summary.isSelf).toBe(false);
+    expect(summary.sender).toBe("@glenn:example.org");
+  });
+
+  it("omits isSelf when no selfUserId is provided (backward compatible)", () => {
+    const summary = summarizeMatrixRawEvent({
+      event_id: "$text",
+      sender: "@gum:matrix.example.org",
+      type: "m.room.message",
+      origin_server_ts: 123,
+      content: { msgtype: "m.text", body: "hello" },
+    });
+
+    expect(summary.isSelf).toBeUndefined();
+    expect(summary.sender).toBe("@gum:matrix.example.org");
+  });
+
   it("does not apply a redacted bundled replacement", () => {
     const summary = summarizeMatrixRawEvent({
       event_id: "$original",

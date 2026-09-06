@@ -3,7 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { MatrixClient } from "../sdk.js";
 import { listMatrixPins, pinMatrixMessage, unpinMatrixMessage } from "./pins.js";
 
-function createPinsClient(seedPinned: string[], knownBodies: Record<string, string> = {}) {
+function createPinsClient(
+  seedPinned: string[],
+  knownBodies: Record<string, string> = {},
+  opts: { getUserId?: () => Promise<string>; senders?: Record<string, string> } = {},
+) {
   let pinned = [...seedPinned];
   const getRoomStateEvent = vi.fn(async () => ({ pinned: [...pinned] }));
   const sendStateEvent = vi.fn(
@@ -18,7 +22,7 @@ function createPinsClient(seedPinned: string[], knownBodies: Record<string, stri
     }
     return {
       event_id: eventId,
-      sender: "@alice:example.org",
+      sender: opts.senders?.[eventId] ?? "@alice:example.org",
       type: "m.room.message",
       origin_server_ts: 123,
       content: { msgtype: "m.text", body },
@@ -30,6 +34,7 @@ function createPinsClient(seedPinned: string[], knownBodies: Record<string, stri
       getRoomStateEvent,
       sendStateEvent,
       getEvent,
+      ...(opts.getUserId ? { getUserId: opts.getUserId } : {}),
       stop: vi.fn(),
     } as unknown as MatrixClient,
     getPinned: () => pinned,
@@ -119,5 +124,31 @@ describe("matrix pins actions", () => {
     expect(result.pinned).toEqual(["$poll", "$message"]);
     expect(result.events.map((event) => event.eventId)).toEqual(["$message"]);
     expect(getRelations).toHaveBeenCalledTimes(2);
+  });
+
+  it("marks a self-pinned event isSelf: true and a non-self pinned event isSelf: false", async () => {
+    const { client } = createPinsClient(
+      ["$mine", "$theirs"],
+      { $mine: "my message", $theirs: "their message" },
+      {
+        getUserId: async () => "@turing:example.org",
+        senders: { $mine: "@turing:example.org", $theirs: "@alice:example.org" },
+      },
+    );
+
+    const result = await listMatrixPins("!room:example.org", { client });
+
+    expect(result.events).toEqual([
+      expect.objectContaining({ eventId: "$mine", sender: "@turing:example.org", isSelf: true }),
+      expect.objectContaining({ eventId: "$theirs", sender: "@alice:example.org", isSelf: false }),
+    ]);
+  });
+
+  it("omits isSelf on pinned events when the client can't resolve its own MXID", async () => {
+    const { client } = createPinsClient(["$a"], { $a: "hello" });
+
+    const result = await listMatrixPins("!room:example.org", { client });
+
+    expect(result.events[0]?.isSelf).toBeUndefined();
   });
 });

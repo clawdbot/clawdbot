@@ -99,10 +99,16 @@ export async function fetchMatrixPollSnapshot(
   };
 }
 
+// Poll summaries are built here rather than by summarizeMatrixRawEvent, so the
+// reading account's own MXID has to be threaded in separately for `isSelf` to
+// cover polls as well as ordinary messages. Like the ordinary path, `isSelf` is
+// omitted (not `false`) when no `selfUserId` is available, and it describes the
+// `sender` this summary actually reports, which is the poll's creator.
 export async function fetchMatrixPollMessageSummary(
   client: MatrixClient,
   roomId: string,
   event: MatrixRawEvent,
+  opts: { selfUserId?: string } = {},
 ): Promise<MatrixMessageSummary | null> {
   const snapshot = await fetchMatrixPollSnapshot(client, roomId, event);
   if (!snapshot) {
@@ -112,6 +118,7 @@ export async function fetchMatrixPollMessageSummary(
   return {
     eventId: snapshot.pollEventId,
     sender: snapshot.rootEvent.sender,
+    ...(opts.selfUserId ? { isSelf: opts.selfUserId === snapshot.rootEvent.sender } : {}),
     body: snapshot.text,
     msgtype: "m.text",
     timestamp: snapshot.triggerEvent.origin_server_ts || snapshot.rootEvent.origin_server_ts,
