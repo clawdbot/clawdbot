@@ -11,6 +11,7 @@ import {
   readCodexEffectiveConfig,
 } from "./config-layer-policy.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
+import { joinPresentSections } from "./developer-instruction-sections.js";
 import {
   isMessageOnlyCodexSourceReply,
   isSystemAgentOnlyCodexDynamicToolAllowlist,
@@ -30,7 +31,6 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
-import { joinPresentSections } from "./run-attempt-state.js";
 import { fingerprintJsonObject } from "./thread-fingerprints.js";
 import {
   CODEX_NATIVE_PERSONALITY_NONE,
