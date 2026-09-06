@@ -1,14 +1,22 @@
 // Run on each revision with: node --expose-gc --import tsx scripts/bench-session-context-navigation.ts
 // All state is synthetic and temporary; no Gateway or operator database is opened.
+// Optional worker load: OPENCLAW_BENCH_WORKER_CASE=long-reset OPENCLAW_BENCH_ADMISSIONS=4
+// Run each worker case in its own process, on both revisions with identical settings.
 import { createHash } from "node:crypto";
 import path from "node:path";
 import type { DatabaseSync, SQLInputValue, StatementSync } from "node:sqlite";
+import { setTimeout as delay } from "node:timers/promises";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   upsertSessionEntryCore,
   type TranscriptEvent,
 } from "../src/config/sessions/session-accessor.js";
 import { readSessionTranscriptModelContext } from "../src/config/sessions/session-accessor.sqlite-model-context.js";
-import { replaceTranscriptEvents } from "../src/config/sessions/session-accessor.sqlite-transcript-write.js";
+import {
+  appendTranscriptMessage,
+  replaceTranscriptEvents,
+} from "../src/config/sessions/session-accessor.sqlite-transcript-write.js";
+import { readSessionTranscriptModelContextAsync } from "../src/config/sessions/session-model-context-worker-runtime.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../src/infra/kysely-sync.js";
 import { openOpenClawAgentDatabase } from "../src/state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
@@ -211,11 +219,120 @@ function observeReads(db: DatabaseSync) {
   };
 }
 
+// Select one case per process so the production worker inherits that fixture's
+// isolated environment for its entire lifetime. No worker-pool policy is changed.
+async function measureWorkerContention(
+  scope: Parameters<typeof readSessionTranscriptModelContextAsync>[0],
+  expectedHash: string,
+  rounds: number,
+) {
+  const concurrency = integerEnv("OPENCLAW_BENCH_ADMISSIONS", 4, 1, 8);
+  const writerScope = {
+    ...scope,
+    sessionId: "contention-writer",
+    sessionKey: "agent:main:contention-writer",
+  };
+  await upsertSessionEntryCore(writerScope, { sessionId: writerScope.sessionId, updatedAt: 1 });
+  // Exclude worker startup and validate that it actually reads the same fixture.
+  if (
+    hashContext((await readSessionTranscriptModelContextAsync(scope, undefined)).events) !==
+    expectedHash
+  ) {
+    throw new Error("Worker warmup differs from the synchronous reference");
+  }
+  const batches = [];
+  let appended = 0;
+  const append = async () => {
+    const start = performance.now();
+    const result = await appendTranscriptMessage(writerScope, {
+      eventId: `writer-${appended}`,
+      now: appended + 1,
+      message: { role: "user", content: [{ type: "text", text: "synthetic append" }] },
+    });
+    if (!result.appended) {
+      throw new Error("Synthetic writer unexpectedly deduplicated an append");
+    }
+    appended += 1;
+    return performance.now() - start;
+  };
+  // Do not charge first-use writer/header initialization to the first batch.
+  await append();
+  for (let round = 0; round < rounds; round += 1) {
+    const completion = { readsSettled: false };
+    const appendMs: number[] = [];
+    const before = process.memoryUsage();
+    const start = performance.now();
+    const reads = Promise.allSettled(
+      Array.from({ length: concurrency }, async () => {
+        const admittedAt = performance.now();
+        const result = await readSessionTranscriptModelContextAsync(scope, undefined);
+        return {
+          result,
+          latencyMs: performance.now() - admittedAt,
+          completedAtMs: performance.now() - start,
+        };
+      }),
+    ).finally(() => {
+      completion.readsSettled = true;
+    });
+    // Same agent DB, different session: real writer/read connection contention
+    // without changing the expected context while a read is queued.
+    const writes = (async () => {
+      while (!completion.readsSettled) {
+        appendMs.push(await append());
+        await delay(20);
+      }
+    })();
+    const settled = await Promise.allSettled([reads, writes]);
+    for (const result of settled) {
+      if (result.status === "rejected") {
+        throw result.reason;
+      }
+    }
+    // Drain every queued admission before fixture cleanup, including failures.
+    const completed = (await reads).map((read) => {
+      if (read.status === "rejected") {
+        throw read.reason;
+      }
+      return read.value;
+    });
+    const after = process.memoryUsage();
+    const wallMs = performance.now() - start;
+    // Last read completion excludes the writer's final pacing delay and hashing.
+    const readWindowMs = Math.max(...completed.map((read) => read.completedAtMs));
+    const hashes = completed.map((read) => hashContext(read.result.events));
+    if (hashes.some((hash) => hash !== expectedHash)) {
+      throw new Error("Concurrent worker read differs from the synchronous reference");
+    }
+    batches.push({
+      readWindowMs,
+      wallMs,
+      readsPerSecond: (1000 * completed.length) / readWindowMs,
+      readLatencyMs: completed.map((read) => read.latencyMs),
+      appendMs,
+      hashes,
+      before,
+      after,
+    });
+  }
+  const writer = readSessionTranscriptModelContext(writerScope);
+  if (
+    writer.events.filter((event) => isRecord(event) && event.type === "message").length !== appended
+  ) {
+    throw new Error("Committed synthetic writer messages were lost");
+  }
+  return { concurrency, writerCadenceMs: 20, warmupAppends: 1, appended, batches };
+}
+
 async function main() {
   const samples = integerEnv("OPENCLAW_BENCH_SAMPLES", 5, 1, 50);
   const warmups = integerEnv("OPENCLAW_BENCH_WARMUPS", 1, 1, 10);
   const longEvents = integerEnv("OPENCLAW_BENCH_EVENTS", 4000, 24, 10000);
   const bodyBytes = integerEnv("OPENCLAW_BENCH_EVENT_BYTES", 8192, 128, 65536);
+  const workerCase = process.env.OPENCLAW_BENCH_WORKER_CASE;
+  if (workerCase && !/^(short|long)-(active|reset|compaction)$/u.test(workerCase)) {
+    throw new Error("OPENCLAW_BENCH_WORKER_CASE must select short/long-active/reset/compaction");
+  }
   if (longEvents % 4 !== 0 || longEvents * bodyBytes > 256 * 1024 * 1024) {
     throw new Error(
       "OPENCLAW_BENCH_EVENTS must be divisible by four; each fixture must fit 256 MiB of message bodies",
@@ -228,6 +345,7 @@ async function main() {
     messages: number;
     transcriptBytes: number;
     samples: Sample[];
+    workerContention?: Awaited<ReturnType<typeof measureWorkerContention>>;
     median: {
       navigationSqlMs: number;
       transactionHoldMs: number;
@@ -241,6 +359,9 @@ async function main() {
     ["long", longEvents],
   ] as const) {
     for (const shape of ["active", "reset", "compaction"] as const) {
+      if (workerCase && workerCase !== `${size}-${shape}`) {
+        continue;
+      }
       await withOpenClawTestState({ label: "context-navigation-benchmark" }, async (state) => {
         const sessionId = `${size}-${shape}`;
         const scope = {
@@ -296,12 +417,16 @@ async function main() {
         if (new Set(results.map((result) => result.contextHash)).size !== 1) {
           throw new Error(`Non-deterministic context output for ${sessionId}`);
         }
+        const workerContention = workerCase
+          ? await measureWorkerContention(scope, results[0]!.contextHash, samples)
+          : undefined;
         cases.push({
           size,
           shape,
           messages: count,
           transcriptBytes,
           samples: results,
+          ...(workerContention ? { workerContention } : {}),
           median: {
             navigationSqlMs: median(results.map((result) => result.navigationSqlMs)),
             transactionHoldMs: median(results.map((result) => result.transactionHoldMs)),
@@ -325,7 +450,9 @@ async function main() {
         bodyBytes,
         gcAvailable: Boolean(gc),
         notes: [
-          "Warm synchronous native context reads; no worker scheduling or concurrent workload measured.",
+          "Native samples are warm synchronous reads. Optional workerContention measures queued production-worker admissions with same-DB, different-session appends.",
+          "Worker batches include queueing and result transfer; hashing is outside read latency. Worker startup is excluded. Append rate is paced, not saturated throughput.",
+          "Neither mode measures end-to-end Gateway or model-turn latency, or establishes uniform gains across workloads.",
           "Navigation SQL time includes iterator construction and next() calls, excluding SQL preparation, JavaScript parsing and tree traversal.",
           "Iterator timing adds measurement overhead. Compare identical scripts and host conditions across revisions.",
           "Hashes cover canonicalized returned events, not randomized rewrite-generation metadata.",
