@@ -341,6 +341,10 @@ export const QA_WHATSAPP_REPLY_TO_BOT_TRIGGER_MARKER_RE =
 export const QA_WHATSAPP_BATCHED_FINAL_MARKER_RE = /\bWHATSAPP_QA_BATCHED_FINAL_([A-Z0-9]+)\b/u;
 export const QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE = /subagent direct fallback qa check/i;
 export const QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE = /subagent direct fallback worker/i;
+export const QA_SUBAGENT_DIRECT_MEDIA_FALLBACK_PROMPT_RE =
+  /subagent direct fallback media qa check:[\s\S]*?media path:\s*(\S+)/i;
+export const QA_SUBAGENT_DIRECT_MEDIA_FALLBACK_WORKER_RE =
+  /subagent direct fallback media worker:[\s\S]*?media path:\s*(\S+)/i;
 // A subagent that yields on its own behalf, then finishes on a later follow-up
 // dispatched to the same paused child session. The worker regex must not match
 // the follow-up text, so the two turns carry deliberately disjoint wording: the
@@ -378,6 +382,7 @@ export function isStrandedFinalRetryFailureRequest(allInputText: string): boolea
   );
 }
 export const QA_SUBAGENT_DIRECT_FALLBACK_MARKER = "QA-SUBAGENT-DIRECT-FALLBACK-OK";
+export const QA_SUBAGENT_DIRECT_MEDIA_FALLBACK_MARKER = "QA-SUBAGENT-DIRECT-MEDIA-FALLBACK-OK";
 export const QA_SUBAGENT_SELF_YIELD_MARKER = "QA-SUBAGENT-SELF-YIELD-FOLLOW-UP-OK";
 export const QA_SUBAGENT_TERMINAL_MARKERS = {
   visible: "QA-SUBAGENT-TERMINAL-VISIBLE-OK",

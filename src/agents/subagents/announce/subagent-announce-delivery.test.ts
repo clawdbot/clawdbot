@@ -1883,6 +1883,72 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
 
   it.each([
     {
+      name: "caption plus structured and directive media",
+      payload: {
+        text: "Image ready\nMEDIA:/tmp/directive.png",
+        mediaUrls: ["/tmp/structured.png", "/tmp/directive.png"],
+      },
+      expectedContent: "Image ready",
+      expectedMediaUrls: ["/tmp/structured.png", "/tmp/directive.png"],
+    },
+    {
+      name: "directive-only media",
+      payload: { text: "MEDIA:/tmp/directive-only.png" },
+      expectedContent: "",
+      expectedMediaUrls: ["/tmp/directive-only.png"],
+    },
+    {
+      name: "structured media without a caption",
+      payload: { mediaUrls: ["/tmp/structured-only.png"] },
+      expectedContent: "",
+      expectedMediaUrls: ["/tmp/structured-only.png"],
+    },
+  ])("directly delivers $name from the announce payload", async (testCase) => {
+    const callGateway = createGatewayMock({ result: { payloads: [testCase.payload] } });
+    const sendMessage = createSendMessageMock();
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      internalEvents: taskCompletionEvents({ childSessionId: "child-session-id" }),
+    });
+
+    expectDeliveryPath(result, "direct");
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: testCase.expectedContent,
+        mediaUrls: testCase.expectedMediaUrls,
+        idempotencyKey: "announce-dm-fallback-empty:text-direct",
+      }),
+    );
+  });
+
+  it("directly delivers structured media owned by the child event", async () => {
+    const callGateway = createGatewayMock({ result: { payloads: [] } });
+    const sendMessage = createSendMessageMock();
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      internalEvents: taskCompletionEvents({
+        childSessionId: "child-session-id",
+        result: "",
+        mediaUrls: ["/tmp/child-event.png"],
+      }),
+    });
+
+    expectDeliveryPath(result, "direct");
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "",
+        mediaUrls: ["/tmp/child-event.png"],
+        idempotencyKey: "announce-dm-fallback-empty:text-direct",
+      }),
+    );
+  });
+
+  it.each([
+    {
       name: "intentional suppression",
       suppressionReason: "cancelled_by_message_sending_hook",
       disposition: "intentional_non_delivery",
@@ -2111,6 +2177,45 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expect(content).not.toContain(childResult);
     },
   );
+
+  it("does not expose synthesis media for a failed trusted child", async () => {
+    const childSessionKey = "agent:worker:subagent:failed-media-child";
+    const privateMedia = "/tmp/private-failed-child.png";
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [
+          {
+            text: `Private failure details\nMEDIA:${privateMedia}`,
+            mediaUrls: [privateMedia],
+          },
+        ],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      sourceSessionKey: childSessionKey,
+      sourceTool: "subagent_announce",
+      internalEvents: taskCompletionEvents({
+        childSessionKey,
+        childSessionId: "failed-media-child-session-id",
+        status: "error",
+        statusLabel: "failed: private provider rejection",
+        result: `Private child output\nMEDIA:${privateMedia}`,
+      }),
+    });
+
+    expectRecordFields(result, { delivered: true, path: "direct" });
+    expect(sendMessage).toHaveBeenCalledOnce();
+    const directPayload = mockCallArg(sendMessage, 0, 0);
+    expect(directPayload.content).toBe(
+      "A delegated task failed before it could report a result. Please retry the task.",
+    );
+    expect(directPayload).not.toHaveProperty("mediaUrls");
+    expect(directPayload.content).not.toContain(privateMedia);
+  });
 
   it.each(["cancelled", "source owner changed"] as const)(
     "stops a failed-child notice when %s at platform dispatch",
