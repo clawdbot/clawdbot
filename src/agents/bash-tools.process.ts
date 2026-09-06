@@ -1,9 +1,4 @@
 import { getAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
-/**
- * Process-control tool factory.
- * Lists, polls, logs, writes to, sends keys to, pastes into, kills, clears,
- * and removes background exec sessions.
- */
 import { createAbortError as createNamedAbortError } from "../infra/abort-signal.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
@@ -123,15 +118,6 @@ function isWritableStdin(stdin: ManagedRunStdin | undefined): stdin is ManagedRu
   return true;
 }
 
-function runningSessionInputDetails(runtime: RunningSessionRuntime) {
-  return {
-    stdinWritable: runtime.stdinWritable,
-    waitingForInput: runtime.waitingForInput,
-    idleMs: runtime.idleMs,
-    lastOutputAt: runtime.lastOutputAt,
-  };
-}
-
 function resolvePollWaitMs(value: unknown) {
   if (typeof value === "number" && Number.isFinite(value)) {
     return Math.max(0, Math.min(MAX_POLL_WAIT_MS, Math.floor(value)));
@@ -236,28 +222,23 @@ async function sleepPollInterval(ms: number, signal?: AbortSignal): Promise<void
   }
   await new Promise<void>((resolve, reject) => {
     const cleanup = () => {
-      if (timer) {
-        clearTimeout(timer);
-      }
-      if (onAbort) {
-        signal?.removeEventListener("abort", onAbort);
-      }
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
     };
     const onResolve = () => {
       cleanup();
       resolve();
     };
-    const onAbort: (() => void) | undefined = () => {
+    const onAbort = () => {
       cleanup();
       reject(createAbortError(signal?.reason));
     };
-    const timer: ReturnType<typeof setTimeout> | undefined = setTimeout(onResolve, ms);
-    timer.unref?.();
+    const timer = setTimeout(onResolve, ms);
+    timer.unref();
     signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 
-/** Build the process-control tool with optional cleanup, scope, and input-idle defaults. */
 export function createProcessTool(
   defaults?: ProcessToolDefaults,
 ): AgentToolWithMeta<typeof processSchema, unknown> {
@@ -351,10 +332,7 @@ export function createProcessTool(
                     status: s.terminalStatus ?? "running",
                     endedAt: s.endedAt,
                   }
-                : Object.assign(
-                    { pid: s.pid ?? undefined },
-                    runningSessionInputDetails(describeRunningSession(s)),
-                  ),
+                : Object.assign({ pid: s.pid ?? undefined }, describeRunningSession(s)),
             ),
           );
         const lines = sessions.map((s) => {
@@ -484,7 +462,7 @@ export function createProcessTool(
               sessionId: params.sessionId,
               aggregated: scopedSession.aggregated,
               name: deriveSessionName(scopedSession.command),
-              ...runningSessionInputDetails(runtime),
+              ...runtime,
               ...(typeof retryInMs === "number" ? { retryInMs } : {}),
             }),
             () => delivery.acknowledge(),
@@ -519,7 +497,7 @@ export function createProcessTool(
                   status: record.exited ? "completed" : "running",
                   sessionId: params.sessionId,
                   name: deriveSessionName(record.command),
-                  ...runningSessionInputDetails(runtime),
+                  ...runtime,
                 }
               : finishedSessionDetails(params.sessionId, record)),
             // Code Mode reads details, so preserve the requested page and its recovery hints.
@@ -612,7 +590,7 @@ export function createProcessTool(
           // action as a tool error and invite the model to retry it.
           return textResult(`Termination requested for session ${params.sessionId}.`, {
             status: "completed",
-            name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
+            name: deriveSessionName(scopedSession.command),
           });
         }
 
@@ -638,7 +616,6 @@ export function createProcessTool(
                 `Unable to remove session ${params.sessionId}: no active supervisor cancellation handle. Use process poll to check whether it is already exiting.`,
               );
             }
-            // Keep remove semantics deterministic: drop from process registry now.
             scopedSession.backgrounded = false;
             deleteSession(params.sessionId);
             resetPollRetrySuggestion(params.sessionId);
@@ -646,7 +623,7 @@ export function createProcessTool(
             // match the finished-session remove branch's success shape.
             return textResult(`Removed session ${params.sessionId} (termination requested).`, {
               status: "completed",
-              name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
+              name: deriveSessionName(scopedSession.command),
             });
           }
           if (scopedFinished) {
@@ -663,5 +640,4 @@ export function createProcessTool(
   };
 }
 
-/** Shared process-control tool instance used by the default Bash tool barrel. */
 export const processTool = createProcessTool();
