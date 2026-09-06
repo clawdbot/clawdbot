@@ -5,8 +5,8 @@ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
   getAdvertisedScopedMcpCatalog,
-  getOrCreateRequesterScopedMcpRuntime,
-  getOrCreateSessionMcpRuntime,
+  acquireRequesterScopedMcpRuntime,
+  acquireSessionMcpRuntime,
   rememberAdvertisedScopedMcpCatalog,
   retireSessionMcpRuntime,
 } from "./agent-bundle-mcp-manager-api.js";
@@ -251,7 +251,7 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
     retireSessionRuntimeAfterDispose?: boolean;
   },
 ): Promise<StaticHarnessMcpTools> {
-  const runtime = await getOrCreateSessionMcpRuntime({
+  const acquisition = await acquireSessionMcpRuntime({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
@@ -271,7 +271,7 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
   let liveRuntime: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>>;
   try {
     liveRuntime = await materializeBundleMcpToolsForRun({
-      runtime,
+      ...acquisition,
       agentId: params.agentId,
       reservedToolNames: params.reservedToolNames,
       ...(retireSnapshotRuntime ? { disposeRuntime: retireSnapshotRuntime } : {}),
@@ -351,7 +351,7 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
 export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
   params: MaterializeRequesterScopedMcpToolsForHarnessRunParams,
 ): Promise<RequesterScopedHarnessMcpTools | undefined> {
-  const scopedRuntimeHandle = await getOrCreateRequesterScopedMcpRuntime({
+  const scopedRuntimeHandle = await acquireRequesterScopedMcpRuntime({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
@@ -371,6 +371,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
     if (scopedRuntime) {
       liveRuntime = await materializeBundleMcpToolsForRun({
         runtime: scopedRuntime,
+        releaseLease: scopedRuntimeHandle?.releaseLease,
         agentId: params.agentId,
         reservedToolNames: params.reservedToolNames,
       });

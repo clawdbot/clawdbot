@@ -45,6 +45,7 @@ type AgentResetPhaseResult = {
 };
 
 export async function runAgentResetPhase(params: {
+  assertAdmissionCurrent?: () => void;
   request: AgentRunRequest;
   cfg: OpenClawConfig;
   requestedSessionKey?: string;
@@ -110,6 +111,7 @@ export async function runAgentResetPhase(params: {
         ? { operatorRoleActor: params.client.internal.operatorRoleActor }
         : {}),
       assertCurrent: () => {
+        params.assertAdmissionCurrent?.();
         assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
         assertPreparedSkillLibrarySelection(creation.skillLibrarySelections);
       },

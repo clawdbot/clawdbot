@@ -4,7 +4,7 @@
   "description": "OpenClaw Telegram channel plugin.",
   "doctorContract": {
     "configRepair": true,
-    "stateMigrations": true
+    "stateMigrations": [{ "id": "telegram-legacy-state" }]
   },
   "activation": {
     "onStartup": false

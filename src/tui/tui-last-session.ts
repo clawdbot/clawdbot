@@ -4,10 +4,10 @@ import { normalizeLowercaseStringOrEmpty as normalizeMarker } from "@openclaw/no
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import {
-  readConfigMachineStateWithMetadata,
   writeConfigMachineState,
   updateConfigMachineState,
-} from "../state/config-machine-state.js";
+} from "../state/config-machine-state-write.js";
+import { readConfigMachineStateWithMetadata } from "../state/config-machine-state.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";

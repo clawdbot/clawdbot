@@ -39,7 +39,6 @@ import {
   resolveUbuntuVmName,
   resolveWindowsProviderAuth,
   run,
-  runStreaming,
   shellQuote,
   SKIP_SNAPSHOT_RESTORE_ENV,
   validateSnapshotRestoreMode,
@@ -288,13 +287,6 @@ function runNode(source: string, options: NonNullable<Parameters<typeof run>[2]>
   return run(process.execPath, ["-e", source], { quiet: true, ...options });
 }
 
-function runStreamingNode(
-  source: string,
-  options: NonNullable<Parameters<typeof runStreaming>[2]> = {},
-) {
-  return runStreaming(process.execPath, ["-e", source], { quiet: true, ...options });
-}
-
 type FakeCommandResult = { status: number; stderr: string; stdout: string };
 type FakePosixBackgroundOptions = {
   done?: FakeCommandResult;
@@ -386,21 +378,17 @@ function drainableProcessTreeScript(delayMs: number): string {
 const SIGNAL_GRANDCHILD_SCRIPT = `const { writeFileSync } = require('node:fs'); writeFileSync(process.env.OPENCLAW_TEST_GRANDCHILD_PID, String(process.pid)); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);`;
 const SIGNAL_PARENT_SCRIPT = `const { spawn } = require('node:child_process'); const { writeFileSync } = require('node:fs'); spawn(process.execPath, ['-e', ${JSON.stringify(SIGNAL_GRANDCHILD_SCRIPT)}], { env: process.env, stdio: 'ignore' }); writeFileSync(process.env.OPENCLAW_TEST_READY_FILE, 'ready'); process.on('SIGTERM', () => process.exit(0)); setInterval(() => {}, 1000);`;
 
-function createSignaledHostCommandFixture(streaming: boolean) {
+function createSignaledHostCommandFixture() {
   const tempDir = makeTempDir(tempDirs, "openclaw-parallels-host-command-signal-");
   const runnerPath = join(tempDir, "runner.mjs");
   const readyPath = join(tempDir, "ready");
   const grandchildPidPath = join(tempDir, "grandchild.pid");
-  const commandName = streaming ? "runStreaming" : "run";
   const hostCommandUrl = pathToFileURL(join(process.cwd(), TS_PATHS.hostCommand)).href;
-  const specificOption = streaming
-    ? `logPath: ${JSON.stringify(join(tempDir, "stream.log"))},`
-    : "check: false,";
   writeFileSync(
     runnerPath,
-    `import { ${commandName} } from ${JSON.stringify(hostCommandUrl)};
-${streaming ? "await " : ""}${commandName}(process.execPath, ['-e', ${JSON.stringify(SIGNAL_PARENT_SCRIPT)}], {
-  ${specificOption}
+    `import { run } from ${JSON.stringify(hostCommandUrl)};
+run(process.execPath, ['-e', ${JSON.stringify(SIGNAL_PARENT_SCRIPT)}], {
+  check: false,
   env: { ...process.env, OPENCLAW_TEST_GRANDCHILD_PID: ${JSON.stringify(grandchildPidPath)}, OPENCLAW_TEST_READY_FILE: ${JSON.stringify(readyPath)} },
   quiet: true,
   timeoutMs: 30_000,
@@ -411,7 +399,7 @@ ${streaming ? "await " : ""}${commandName}(process.execPath, ['-e', ${JSON.strin
     readyPath,
     runner: spawn(process.execPath, ["--import", "tsx", runnerPath], {
       cwd: process.cwd(),
-      detached: !streaming,
+      detached: true,
       stdio: "ignore",
     }),
   };
@@ -2180,7 +2168,7 @@ if (commandArgs[0] === "list") {
   it.runIf(process.platform !== "win32")(
     "reaps externally signaled timed host command descendants",
     async () => {
-      const fixture = createSignaledHostCommandFixture(false);
+      const fixture = createSignaledHostCommandFixture();
       let runnerPid = 0;
       let grandchildPid = 0;
 
@@ -2214,118 +2202,6 @@ if (commandArgs[0] === "list") {
         timeoutMs: 50,
       }),
     ).toThrow(/ENOENT/u);
-  });
-
-  it("rejects streaming host commands when log writes fail", async () => {
-    const tempDir = makeTempDir(tempDirs, "openclaw-parallels-host-command-log-");
-    await expect(
-      runStreamingNode("process.stdout.write('ok')", { logPath: tempDir }),
-    ).rejects.toThrow(/failed to write Parallels host command log/u);
-  });
-
-  it("clears streaming host command timers when spawn fails", async () => {
-    vi.useFakeTimers();
-    try {
-      await expect(
-        runStreaming("openclaw-definitely-missing-host-command", [], {
-          quiet: true,
-          timeoutMs: 60 * 60 * 1000,
-        }),
-      ).rejects.toMatchObject({ code: "ENOENT" });
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("clamps oversized streaming host command timeouts before arming timers", async () => {
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    try {
-      await expect(
-        runStreamingNode("setTimeout(() => process.exit(0), 25);", {
-          timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
-        }),
-      ).resolves.toBe(0);
-      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-    } finally {
-      setTimeoutSpy.mockRestore();
-    }
-  });
-
-  it.runIf(process.platform !== "win32")(
-    "lets timed streaming host command descendants drain before force kill",
-    async () => {
-      const tempDir = makeTempDir(tempDirs, "openclaw-parallels-streaming-host-command-drain-");
-      const readyFile = join(tempDir, "ready");
-      const drainFile = join(tempDir, "drained");
-      const logPath = join(tempDir, "stream.log");
-
-      const statusPromise = runStreamingNode(drainableProcessTreeScript(50), {
-        env: {
-          ...process.env,
-          DRAIN_FILE: drainFile,
-          READY_FILE: readyFile,
-        },
-        logPath,
-        timeoutMs: 500,
-      });
-
-      await waitFor(() => existsSync(readyFile), 2_000);
-      await expect(statusPromise).resolves.toBe(124);
-      expect(readFileSync(drainFile, "utf8")).toBe("drained");
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "reaps externally signaled streaming host command descendants before re-raising",
-    async () => {
-      const fixture = createSignaledHostCommandFixture(true);
-      let runnerPid = 0;
-      let grandchildPid = 0;
-
-      try {
-        runnerPid = fixture.runner.pid ?? 0;
-        expect(runnerPid).toBeGreaterThan(0);
-        await waitFor(
-          () => existsSync(fixture.readyPath) && existsSync(fixture.grandchildPidPath),
-          2_000,
-        );
-        grandchildPid = Number.parseInt(readFileSync(fixture.grandchildPidPath, "utf8"), 10);
-
-        fixture.runner.kill("SIGTERM");
-
-        await expect(waitForProcessClose(fixture.runner, 3_000)).resolves.toEqual({
-          code: null,
-          signal: "SIGTERM",
-        });
-        await waitFor(() => !isProcessAlive(grandchildPid), 3_000);
-      } finally {
-        forceKillSignaledFixture(runnerPid, grandchildPid, false);
-      }
-    },
-  );
-
-  it("streams host command logs instead of retaining them in memory", async () => {
-    const runStreamingBlock = hostCommand.slice(
-      hostCommand.indexOf("export async function runStreaming"),
-    );
-    expect(runStreamingBlock).toContain("createWriteStream");
-    expect(runStreamingBlock).toContain("child.kill(signal)");
-    expect(runStreamingBlock).toContain("writeLogChunk(chunk)");
-    expect(runStreamingBlock).not.toContain('let log = ""');
-    expect(runStreamingBlock).not.toContain("log += text");
-    expect(runStreamingBlock).not.toContain("writeFile(options.logPath, log");
-
-    const tempDir = makeTempDir(tempDirs, "openclaw-parallels-host-command-log-");
-    const logPath = join(tempDir, "stream.log");
-    const status = await runStreamingNode(
-      "process.stdout.write('x'.repeat(128 * 1024)); process.stderr.write('stream-done');",
-      { logPath },
-    );
-
-    expect(status).toBe(0);
-    expect(statSync(logPath).size).toBeGreaterThan(128 * 1024);
-    expect(readFileSync(logPath, "utf8")).toContain("stream-done");
   });
 
   it.runIf(process.platform !== "win32")(

@@ -10,7 +10,7 @@ const realRmSync = fs.rmSync.bind(fs);
 const realWriteFileSync = fs.writeFileSync.bind(fs);
 const realRealpathSyncNative = fs.realpathSync.native.bind(fs.realpathSync);
 
-vi.mock("../utils.js", () => ({
+vi.mock("openclaw/plugin-sdk/text-utility-runtime", () => ({
   get CONFIG_DIR() {
     return browserUtilsMock.configDir;
   },
@@ -24,7 +24,7 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
-  vi.doUnmock("../utils.js");
+  vi.doUnmock("openclaw/plugin-sdk/text-utility-runtime");
   vi.resetModules();
 });
 

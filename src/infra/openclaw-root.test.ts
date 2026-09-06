@@ -49,7 +49,7 @@ const mockFsModule = () => {
       isFixturePath(p) ? state.entries.has(abs(p)) : actualFs.existsSync(p),
     readFileSync: (p: string, encoding?: BufferEncoding) => {
       if (!isFixturePath(p)) {
-        return actualFs.readFileSync(p, encoding);
+        return actualFs.readFileSync(p, { encoding });
       }
       const entry = state.entries.get(abs(p));
       if (!entry || entry.kind !== "file") {
@@ -89,7 +89,7 @@ const mockFsPromisesModule = () => {
     ...actualFsPromises,
     readFile: async (p: string, encoding?: BufferEncoding) => {
       if (!isFixturePath(p)) {
-        return await actualFsPromises.readFile(p, encoding);
+        return await actualFsPromises.readFile(p, { encoding });
       }
       const entry = state.entries.get(abs(p));
       if (!entry || entry.kind !== "file") {

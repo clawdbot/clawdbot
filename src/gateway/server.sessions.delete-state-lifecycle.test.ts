@@ -1,4 +1,8 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
+import type { SessionsCompanionStateResult } from "../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
 import {
   loadSessionEntry,
@@ -9,12 +13,22 @@ import * as sessionArchiveStore from "../config/sessions/session-accessor.sqlite
 import * as sessionArchive from "../config/sessions/session-accessor.sqlite-archive.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import {
+  emitSessionIdentityMutation,
+  onSessionIdentityMutation,
+  type SessionIdentityMutation,
+} from "../sessions/session-lifecycle-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { loadGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.js";
+import type { SessionCompanionAskDeps } from "./session-companion-ask.js";
+import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
+import { createSessionCompanion, type SessionCompanionService } from "./session-companion.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
+  getGatewayConfigModule,
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
   writeSingleLineSession,
@@ -33,12 +47,77 @@ function afterSessionStateMaterialization(after: () => void) {
   );
 }
 
-const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+const {
+  createSessionStoreDir,
+  createConfiguredGlobalAgentSessionStore,
+  resetConfiguredGlobalAgentSessionStore,
+} = setupGatewaySessionsHandlerTestHarness();
+const companions = new Set<SessionCompanionService>();
 
 afterEach(() => {
+  for (const companion of companions) {
+    companion.dispose();
+  }
+  companions.clear();
   vi.restoreAllMocks();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
+});
+
+test("repository ownership survives reset and archive, then permanent deletion releases it", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionKey = "agent:main:dashboard:repository-lifecycle";
+  const repositories = getSessionRepositoryWorkspaceStore();
+  const repository = repositories.create({
+    agentId: "main",
+    sessionKey,
+    url: "https://github.com/openclaw/fixture.git",
+    runSetupScript: false,
+    assertCurrent: () => {},
+  });
+  await writeSessionStore({
+    entries: {
+      [sessionKey]: sessionStoreEntry("repository-lifecycle-session", {
+        repositoryWorkspaceId: repository.workspaceId,
+      }),
+    },
+  });
+  const artifactRoot = repositories.artifactPath(repository.workspaceId);
+  await fs.mkdir(artifactRoot, { recursive: true });
+  await fs.writeFile(path.join(artifactRoot, "retained-checkpoint"), "accepted checkpoint");
+
+  for (const [method, params] of [
+    ["sessions.reset", { key: sessionKey }],
+    ["sessions.patch", { key: sessionKey, archived: true }],
+    ["sessions.patch", { key: sessionKey, archived: false }],
+  ] as const) {
+    const result = await directSessionReq(
+      method,
+      method === "sessions.patch"
+        ? { ...params, expectedSessionId: loadSessionEntry({ sessionKey, storePath })!.sessionId }
+        : params,
+    );
+    expect(result.ok, JSON.stringify(result.error)).toBe(true);
+    const entry = loadSessionEntry({ sessionKey, storePath });
+    expect(entry?.repositoryWorkspaceId).toBe(repository.workspaceId);
+    expect(entry?.worktree).toBeUndefined();
+    expect(entry?.spawnedCwd).toBeUndefined();
+    expect(repositories.get(repository.workspaceId)).toEqual(repository);
+  }
+  const denied = await directSessionReq("sessions.delete", {
+    key: sessionKey,
+    expectedSessionId: "replaced-session",
+  });
+  expect(denied.ok).toBe(false);
+  expect(repositories.get(repository.workspaceId)).toEqual(repository);
+  expect(await fs.readFile(path.join(artifactRoot, "retained-checkpoint"), "utf8")).toBe(
+    "accepted checkpoint",
+  );
+  const deleted = await directSessionReq("sessions.delete", { key: sessionKey });
+  expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
+  expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
+  expect(repositories.get(repository.workspaceId)).toBeUndefined();
+  await expect(fs.stat(artifactRoot)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 test("sessions.delete broadcasts the removed generation after a replacement appears", async () => {
@@ -254,4 +333,182 @@ test("sessions.delete accepts placement retirement by the absent-session reconci
   expect(retired).toBe(true);
   expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
   expect(placementStore.get(sessionId)).toBeUndefined();
+});
+
+async function createCompanion(runModel?: SessionCompanionAskDeps["run"]) {
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  const run = vi.fn(runModel ?? (async () => "Synthetic answer from the selected session."));
+  const service = createSessionCompanion({
+    getConfig: getRuntimeConfig,
+    contextReader: defaultSessionCompanionContextReader,
+    sessionObserver: { getCompanionSnapshot: () => ({ agentId: "main", notes: [] }) },
+    resolveUtilityModelRef: () => "openai/gpt-5.6-luna",
+    run,
+  });
+  companions.add(service);
+  return { service, run };
+}
+
+async function ask(
+  service: SessionCompanionService,
+  sessionKey: string,
+  question: string,
+  agentId = "main",
+) {
+  return service.ask({ agentId, sessionKey, question, connId: `conn-${agentId}` });
+}
+
+async function readState(service: SessionCompanionService, sessionKey: string, agentId = "main") {
+  const response = await directSessionReq<SessionsCompanionStateResult>(
+    "sessions.companion.state",
+    { sessionKey, agentId },
+    { context: { sessionCompanion: service } },
+  );
+  expect(response.ok, response.error?.message).toBe(true);
+  return response.payload;
+}
+
+async function recreate(sessionKey: string) {
+  const response = await directSessionReq<{ entry: { sessionId: string } }>("sessions.patch", {
+    key: sessionKey,
+    label: "Recreated session",
+  });
+  expect(response.ok, response.error?.message).toBe(true);
+  return response.payload?.entry.sessionId;
+}
+
+test("sessions.delete retires Side chat before same-key recreation", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionKey = "agent:main:companion-delete";
+  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry("generation-a") } });
+  const { service, run } = await createCompanion();
+  await ask(service, sessionKey, "Question about generation A?");
+  expect((await readState(service, sessionKey))?.exchanges).toHaveLength(1);
+
+  const deleted = await directSessionReq("sessions.delete", { key: sessionKey });
+  expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
+  expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
+  expect.soft(await readState(service, sessionKey)).toEqual({ exchanges: [] });
+
+  const nextSessionId = await recreate(sessionKey);
+  expect(nextSessionId).toBeTruthy();
+  expect(nextSessionId).not.toBe("generation-a");
+  expect.soft(await readState(service, sessionKey)).toEqual({ exchanges: [] });
+  expect(run).toHaveBeenCalledTimes(1);
+});
+
+test("sessions.delete preserves Side chat when the deletion expectation is stale", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionKey = "agent:main:companion-rejected-delete";
+  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry("current-generation") } });
+  const { service } = await createCompanion();
+  await ask(service, sessionKey, "Keep this exchange?");
+  const before = await readState(service, sessionKey);
+
+  const deleted = await directSessionReq("sessions.delete", {
+    key: sessionKey,
+    expectedSessionId: "stale-generation",
+  });
+  expect(deleted).toMatchObject({ ok: false, error: { details: { reason: "session-changed" } } });
+  expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe("current-generation");
+  expect(await readState(service, sessionKey)).toEqual(before);
+});
+
+test("sessions.reset clears its Side chat and preserves another session", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionKey = "agent:main:companion-reset";
+  const otherKey = "agent:main:companion-unrelated";
+  await writeSessionStore({
+    entries: {
+      [sessionKey]: sessionStoreEntry("reset-generation"),
+      [otherKey]: sessionStoreEntry("unrelated-generation"),
+    },
+  });
+  const { service } = await createCompanion();
+  await ask(service, sessionKey, "Before reset?");
+  await ask(service, otherKey, "Keep the unrelated conversation?");
+  const otherBefore = await readState(service, otherKey);
+
+  const reset = await directSessionReq("sessions.reset", { key: sessionKey });
+  expect(reset.ok, reset.error?.message).toBe(true);
+  expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe("reset-generation");
+  expect(await readState(service, sessionKey)).toEqual({ exchanges: [] });
+  expect(await readState(service, otherKey)).toEqual(otherBefore);
+});
+
+test("sessions.delete isolates Side chat for the same global key and session ID in another agent", async () => {
+  const stores = await createConfiguredGlobalAgentSessionStore();
+  await writeSessionStore({
+    agentId: "work",
+    entries: { global: sessionStoreEntry("sess-main-global") },
+    storePath: stores.workStorePath,
+  });
+  const { service } = await createCompanion();
+  try {
+    await ask(service, "global", "Main agent question?", "main");
+    await ask(service, "global", "Work agent question?", "work");
+    const mainBefore = await readState(service, "global", "main");
+
+    const deleted = await directSessionReq("sessions.delete", { key: "global", agentId: "work" });
+    expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
+    expect(await readState(service, "global", "main")).toEqual(mainBefore);
+    expect(await readState(service, "global", "work")).toEqual({ exchanges: [] });
+  } finally {
+    service.dispose();
+    companions.delete(service);
+    await resetConfiguredGlobalAgentSessionStore(stores);
+  }
+});
+
+test("a delayed deletion event cannot erase Side chat for a newer generation", async () => {
+  await createSessionStoreDir();
+  const sessionKey = "agent:main:companion-late-delete";
+  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry("old-generation") } });
+  const { service } = await createCompanion();
+  await ask(service, sessionKey, "Old generation question?");
+  let deletion: Extract<SessionIdentityMutation, { kind: "delete" }> | undefined;
+  const stop = onSessionIdentityMutation((event) => {
+    if (event.kind === "delete" && event.previous.sessionId === "old-generation") {
+      deletion = event;
+    }
+  });
+  try {
+    const deleted = await directSessionReq("sessions.delete", { key: sessionKey });
+    expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
+  } finally {
+    stop();
+  }
+  expect(deletion).toBeDefined();
+  await recreate(sessionKey);
+  await ask(service, sessionKey, "New generation question?");
+  const newState = await readState(service, sessionKey);
+  expect(newState?.exchanges.map((exchange) => exchange.question)).toEqual([
+    "New generation question?",
+  ]);
+
+  emitSessionIdentityMutation(deletion!);
+  expect(await readState(service, sessionKey)).toEqual(newState);
+});
+
+test("sessions.delete cancels a prepared Side chat ask before its late answer", async () => {
+  await createSessionStoreDir();
+  const sessionKey = "agent:main:companion-active-delete";
+  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry("active-generation") } });
+  const pending = createDeferred<string>();
+  const { service, run } = await createCompanion(() => pending.promise);
+  const active = ask(service, sessionKey, "Can this survive deletion?");
+  const failure = active.catch((error: unknown) => error);
+  try {
+    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+    const deleted = await directSessionReq("sessions.delete", { key: sessionKey });
+    expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
+    expect(run.mock.calls[0]?.[0].signal.aborted).toBe(true);
+    pending.resolve("Late answer from the deleted session.");
+    await expect(failure).resolves.toMatchObject({ reason: "context-unavailable" });
+    await active.catch(() => undefined);
+    expect(await readState(service, sessionKey)).toEqual({ exchanges: [] });
+  } finally {
+    pending.resolve("Late answer from the deleted session.");
+    await active.catch(() => undefined);
+  }
 });

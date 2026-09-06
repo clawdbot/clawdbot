@@ -189,7 +189,7 @@ describe("Discord native slash commands with commands.allowFrom", () => {
       userId: "999999999999999999",
       mutateConfig: (cfg) => {
         cfg.commands = {
-          ownerAllowFrom: ["user:123456789012345678"],
+          ownerAllowFrom: ["discord:123456789012345678"],
           allowFrom: {
             discord: ["user:999999999999999999"],
           },
@@ -388,7 +388,7 @@ describe("Discord native slash commands with commands.allowFrom", () => {
       userId: "999999999999999999",
       mutateConfig: (cfg) => {
         cfg.commands = {
-          ownerAllowFrom: ["user:123456789012345678"],
+          ownerAllowFrom: ["discord:123456789012345678"],
         };
       },
     });

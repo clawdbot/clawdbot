@@ -8,6 +8,7 @@ import {
   makeResponsesModel,
 } from "./openai-transport-stream.test-harness.js";
 import { testing } from "./openai-transport-stream.test-support.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 describe("openai transport stream", () => {
   it("carries the system prompt via top-level instructions for xAI responses providers", () => {
@@ -575,14 +576,7 @@ describe("openai transport stream", () => {
             api: "openai-chatgpt-responses",
             provider: "openai",
             model: "gpt-5.4",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsageFixture(),
             stopReason: "toolUse",
             timestamp: 1,
             content: [

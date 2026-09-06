@@ -27,6 +27,7 @@ import {
 } from "./components/chat-message.ts";
 import * as chatThread from "./components/chat-thread-interactions.ts";
 import { handleChatDraftChange } from "./input-history.ts";
+import { scheduleChatScroll } from "./scroll.ts";
 import { buildInitialChatSubmission } from "./user-message-content.ts";
 
 const SKIP_REWIND_CONFIRM_PREFERENCE = "openclaw:skip-rewind-confirm";
@@ -746,6 +747,37 @@ describe("chat pane presentation teardown", () => {
 });
 
 describe("chat pane connection lifecycle", () => {
+  it("notifies the owning shell after a pane leaves its DOM subtree", async () => {
+    const { pane } = createTestChatPane({
+      client: { request: vi.fn() } as unknown as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    const lifecycle = pane as TestChatPane & {
+      render: () => unknown;
+      readonly conversationPresented: boolean;
+    };
+    lifecycle.render = () => null;
+    const shell = document.createElement("openclaw-app-shell");
+    const presentations: Array<{ paneCount: number; conversationPresented: boolean }> = [];
+    shell.addEventListener("openclaw-chat-pane-lifecycle-changed", () => {
+      presentations.push({
+        paneCount: shell.querySelectorAll("openclaw-chat-pane").length,
+        conversationPresented: lifecycle.conversationPresented,
+      });
+    });
+    shell.append(pane);
+    ChatPaneBase.prototype.connectedCallback.call(lifecycle);
+    await lifecycle.updateComplete;
+    pane.remove();
+    ChatPaneBase.prototype.disconnectedCallback.call(lifecycle);
+
+    expect(presentations).toEqual([
+      { paneCount: 1, conversationPresented: false },
+      { paneCount: 1, conversationPresented: true },
+      { paneCount: 0, conversationPresented: false },
+    ]);
+  });
+
   it("renders once while initially hidden, then reconciles hidden invalidations", async () => {
     let visibilityState: DocumentVisibilityState = "hidden";
     vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibilityState);
@@ -887,8 +919,8 @@ describe("chat pane connection lifecycle", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
     const cancelCommit = vi.fn();
-    const initialScrollGeneration = state.chatScrollGeneration;
-    state.chatScrollCommitCleanup = cancelCommit;
+    state.renderLifecycle.afterCommit = () => cancelCommit;
+    scheduleChatScroll(state);
 
     pane.applyGatewaySnapshot({
       ...pane.context.gateway.snapshot,
@@ -898,8 +930,6 @@ describe("chat pane connection lifecycle", () => {
     });
 
     expect(cancelCommit).toHaveBeenCalledOnce();
-    expect(state.chatScrollCommitCleanup).toBeNull();
-    expect(state.chatScrollGeneration).toBe(initialScrollGeneration + 1);
   });
 
   it("retires pending model selection state when the Gateway owner changes", () => {
@@ -1007,7 +1037,7 @@ describe("chat pane connection lifecycle", () => {
 
     expect(request).toHaveBeenCalledWith(
       "chat.startup",
-      expect.objectContaining({ limit: 800, sessionKey: state.sessionKey }),
+      expect.objectContaining({ limit: 80, maxBytes: 256 * 1024, sessionKey: state.sessionKey }),
     );
     expect(deferHydration).toHaveBeenCalledWith(state.sessionKey, expect.any(Promise));
   });

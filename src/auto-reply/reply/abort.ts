@@ -190,6 +190,7 @@ export async function stopSubagentsForRequester(params: {
 export async function tryFastAbortFromMessage(params: {
   ctx: FinalizedRuntimeMsgContext;
   cfg: OpenClawConfig;
+  isCommandTargetCurrent?: () => boolean;
 }): Promise<{
   handled: boolean;
   aborted: boolean;
@@ -282,6 +283,9 @@ export async function tryFastAbortFromMessage(params: {
         requesterSessionKey,
         requesterAgentId: agentId,
         beforeKill: () => {
+          if (params.isCommandTargetCurrent?.() === false) {
+            throw new Error("The selected session changed before it could be stopped.");
+          }
           try {
             const sourceAbortKey =
               commandSessionKey &&
@@ -366,6 +370,7 @@ export async function tryFastAbortFromMessage(params: {
         let persistedAbortTarget: SessionAbortTargetResult | null = null;
         try {
           persistedAbortTarget = await markSessionAbortTarget({
+            isCurrent: params.isCommandTargetCurrent,
             scope: {
               agentId,
               sessionKey: targetKey,
@@ -388,7 +393,12 @@ export async function tryFastAbortFromMessage(params: {
         const hasAbortTargetEntry = Boolean(
           persistedAbortTarget?.entry ?? resolvedAbortTarget?.entry,
         );
-        if (persistedAbortTarget?.persisted !== true && abortMemoryKey && !hasAbortTargetEntry) {
+        if (
+          persistedAbortTarget?.persisted !== true &&
+          abortMemoryKey &&
+          !hasAbortTargetEntry &&
+          params.isCommandTargetCurrent?.() !== false
+        ) {
           setAbortMemory(abortMemoryKey, true);
         }
       }

@@ -18,6 +18,11 @@ export const SessionPermissionModeSchema = Type.Union([
   Type.Literal("full"),
 ]);
 
+export const SessionRepositorySourceSchema = closedObject({
+  url: Type.String({ minLength: 1, maxLength: 2048 }),
+  ref: Type.Optional(Type.String({ minLength: 1, maxLength: 1024 })),
+});
+
 export const SessionRunStatusSchema = Type.Union([
   Type.Literal("queued"),
   Type.Literal("running"),
@@ -59,6 +64,35 @@ export const SessionOwnerSchema = closedObject({
   actor: SessionCreatedActorSchema,
   assignedBy: Type.Optional(SessionCreatedActorSchema),
   assignedAt: Type.Optional(Type.Number({ minimum: 0 })),
+});
+
+const SessionSwarmSummarySchema = closedObject({
+  groups: Type.Array(
+    closedObject({
+      groupId: NonEmptyString,
+      createdAt: Type.Number({ minimum: 0 }),
+      children: Type.Optional(
+        Type.Array(
+          closedObject({
+            sessionKey: NonEmptyString,
+            status: Type.Union([
+              Type.Literal("queued"),
+              Type.Literal("running"),
+              Type.Literal("done"),
+              Type.Literal("failed"),
+            ]),
+          }),
+          { maxItems: 64 },
+        ),
+      ),
+      queued: Type.Integer({ minimum: 0 }),
+      running: Type.Integer({ minimum: 0 }),
+      done: Type.Integer({ minimum: 0 }),
+      failed: Type.Integer({ minimum: 0 }),
+    }),
+    { maxItems: 5 },
+  ),
+  otherActiveGroups: Type.Integer({ minimum: 0 }),
 });
 
 /** Stable Gateway session row fields; mutation envelopes may add null tombstones. */
@@ -122,11 +156,20 @@ export const SessionRowSchema = Type.Object(
       Type.Union([Type.Literal("children"), Type.Literal("none")]),
     ),
     swarmGroupId: Type.Optional(Type.String()),
+    /** Requester-owned execution counts; never child content or parent synthesis status. */
+    swarm: Type.Optional(SessionSwarmSummarySchema),
     worktree: Type.Optional(
       Type.Object({
         id: Type.String(),
         branch: Type.String(),
         repoRoot: Type.String(),
+      }),
+    ),
+    repositoryWorkspaceId: Type.Optional(NonEmptyString),
+    repository: Type.Optional(
+      closedObject({
+        ...SessionRepositorySourceSchema.properties,
+        branch: NonEmptyString,
       }),
     ),
     execNode: Type.Optional(Type.String()),
@@ -176,6 +219,9 @@ export const SessionRowSchema = Type.Object(
     estimatedCostUsd: Type.Optional(Type.Number()),
     model: Type.Optional(Type.String()),
     modelProvider: Type.Optional(Type.String()),
+    /** Runtime model serving this session while it differs from the selected model. */
+    activeModel: Type.Optional(Type.String()),
+    activeModelProvider: Type.Optional(Type.String()),
     /** Persisted override provenance; null means inherited, omission means not projected. */
     modelOverrideSource: Type.Optional(
       Type.Union([Type.Literal("user"), Type.Literal("auto"), Type.Null()]),

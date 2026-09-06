@@ -68,15 +68,13 @@ export function isCurrentSessionSubmittedProgress(
   );
 }
 
-// Single source for "the agent is visibly working": drives both the thread's
-// working spark and the composer's sr-only announcement. A fresh terminal
-// toast masks stale abortable rows so neither surface flashes back to working.
+// Single source for "the selected session is visibly working": drives both
+// the thread's working spark and the composer's sr-only announcement.
 export function isChatRunWorking(
-  props: Pick<ChatComposerProps, "canAbort" | "onAbort" | "runStatus" | "queue" | "sessionKey">,
+  props: Pick<ChatComposerProps, "runActive" | "runStatus" | "queue" | "sessionKey">,
 ): boolean {
-  const canAbort = Boolean(props.canAbort && props.onAbort);
   return (
-    (canAbort && !hasTerminalRunStatus(props.runStatus)) ||
+    (props.runActive === true && !hasTerminalRunStatus(props.runStatus)) ||
     props.queue.some((item) =>
       isCurrentSessionSubmittedProgress(item, props.sessionKey, props.runStatus),
     )

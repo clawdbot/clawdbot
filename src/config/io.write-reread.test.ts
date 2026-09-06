@@ -5,10 +5,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { writeConfigFile } from "./io.runtime.js";
+import { readConfigFileSnapshotForWrite, writeConfigFile } from "./io.runtime.js";
 import {
   clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
   setRuntimeConfigSnapshotRefreshHandler,
+  type RuntimeConfigSnapshotRefreshHandler,
 } from "./runtime-snapshot.js";
 import { withTempHome } from "./test-helpers.js";
 
@@ -20,15 +22,15 @@ describe("writeConfigFile canonical reread", () => {
     vi.restoreAllMocks();
   });
 
-  it("records when the post-write reread is invalid instead of silently keeping runtime state", async () => {
+  it("preserves committed source provenance when the post-write reread is invalid", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        `${JSON.stringify({ gateway: { mode: "local", port: 18789 } }, null, 2)}\n`,
-        "utf-8",
-      );
+      const initialConfig = {
+        gateway: { mode: "local", port: 18789 },
+        agents: { entries: { main: {} }, defaults: { compaction: {} } },
+      };
+      await fs.writeFile(configPath, `${JSON.stringify(initialConfig, null, 2)}\n`, "utf-8");
 
       // Simulate a concurrent edit racing the commit: after the write renames the
       // new config into place, every subsequent sync read sees corrupt content,
@@ -42,24 +44,44 @@ describe("writeConfigFile canonical reread", () => {
         }
       });
       const realReadFileSync = fsNode.readFileSync.bind(fsNode);
-      vi.spyOn(fsNode, "readFileSync").mockImplementation(((target, options) => {
-        if (corrupted && target === configPath) {
-          return "{ definitely not json";
-        }
-        return realReadFileSync(target as Parameters<typeof realReadFileSync>[0], options);
-      }) as typeof fsNode.readFileSync);
+      vi.spyOn(fsNode, "readFileSync").mockImplementation(
+        (target, options?: BufferEncoding | fsNode.ReadFileSyncOptions | null) => {
+          if (corrupted && target === configPath) {
+            return "{ definitely not json";
+          }
+          return realReadFileSync(
+            target,
+            typeof options === "string" ? { encoding: options } : (options ?? {}),
+          );
+        },
+      );
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      // Keep runtime-snapshot finalization from re-parsing the corrupt file;
-      // this test targets only the canonical reread's recorded degradation.
-      setRuntimeConfigSnapshotRefreshHandler({ refresh: async () => true });
+      const preflight = vi.fn<NonNullable<RuntimeConfigSnapshotRefreshHandler["preflight"]>>(
+        ({ sourceConfig }) => ({ sourceConfig }),
+      );
+      const refresh = vi.fn<RuntimeConfigSnapshotRefreshHandler["refresh"]>(async () => true);
+      setRuntimeConfigSnapshotRefreshHandler({ preflight, refresh });
 
       await withEnvAsync(
         { OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_TEST_FAST: "1" },
         async () => {
-          await writeConfigFile({ gateway: { mode: "local", port: 19001 } });
+          const { snapshot } = await readConfigFileSnapshotForWrite();
+          expect(snapshot.config.agents?.defaults?.compaction?.mode).toBe("safeguard");
+          setRuntimeConfigSnapshot(snapshot.config, snapshot.sourceConfig);
+          await writeConfigFile({
+            ...snapshot.config,
+            gateway: { mode: "local", port: 19001 },
+          });
         },
       );
 
+      const persisted: unknown = JSON.parse(await fs.readFile(configPath, "utf-8"));
+      expect(persisted).toHaveProperty("agents.defaults.compaction", {});
+      expect(preflight).toHaveBeenCalledExactlyOnceWith({ sourceConfig: persisted });
+      expect(refresh).toHaveBeenCalledExactlyOnceWith({
+        sourceConfig: persisted,
+        preflightResult: { sourceConfig: persisted },
+      });
       expect(
         warn.mock.calls.some(([line]) =>
           String(line).includes("canonical reread after write was invalid"),

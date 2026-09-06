@@ -3,6 +3,7 @@ import type { MutableAssistantOutput } from "@openclaw/ai/transports";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { expect } from "vitest";
 import { testing } from "./openai-transport-stream.test-support.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 export const buildOpenAIResponsesParams: typeof testing.buildOpenAIResponsesParams =
   testing.buildOpenAIResponsesParams;
@@ -69,14 +70,7 @@ export function createAssistantOutput(model: Model<"openai-completions">): Mutab
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "stop",
     timestamp: Date.now(),
   };
@@ -91,14 +85,7 @@ export function createResponsesAssistantOutput(
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "stop",
     timestamp: Date.now(),
   };

@@ -53,7 +53,7 @@ function requireAttemptCall(index: number): {
 
 function expectRetryContinuesFromTranscript(): void {
   const retry = requireAttemptCall(1);
-  expect(retry.prompt).toContain("Continue from the current transcript");
+  expect(retry.prompt).toContain("Continue the current task from the existing transcript");
   expect(retry.suppressNextUserMessagePersistence).toBe(true);
   expect(retry.prompt).not.toBe(session.runParams.prompt);
 }

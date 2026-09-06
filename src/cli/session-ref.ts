@@ -198,21 +198,6 @@ function isSessionUrlInputCandidate(raw: string): boolean {
   return /^(?:https?|wss?):\/\//iu.test(raw.trim());
 }
 
-function findBareSessionUrlIndex(argv: readonly string[]): number {
-  for (let index = 2; index < argv.length; index += 1) {
-    const rootConsumed = consumeRootOptionToken(argv, index);
-    if (rootConsumed > 0) {
-      index += rootConsumed - 1;
-      continue;
-    }
-    const arg = argv[index];
-    if (arg && isSessionUrlInputCandidate(arg)) {
-      return index;
-    }
-  }
-  return -1;
-}
-
 function bareSessionOptionError(flag: string): Error {
   return new Error(
     `Unsupported bare session URL option: ${sanitizeTerminalText(flag)}. Use \`openclaw tui <url> --help\` for the full option list.`,
@@ -221,17 +206,15 @@ function bareSessionOptionError(flag: string): Error {
 
 /** Parse the complete bare-root URL invocation before generic command discovery can see secrets. */
 export function parseBareSessionInvocation(argv: readonly string[]): BareSessionInvocation | null {
-  const targetIndex = findBareSessionUrlIndex(argv);
-  if (targetIndex === -1) {
+  if (!argv.slice(2).some(isSessionUrlInputCandidate)) {
     return null;
   }
   const options: BareSessionTuiOptions = {};
+  let target: string | undefined;
+  let consumedUrlFlag: string | undefined;
   for (let index = 2; index < argv.length; index += 1) {
     const arg = argv[index];
     if (!arg) {
-      continue;
-    }
-    if (index === targetIndex) {
       continue;
     }
     if (arg === FLAG_TERMINATOR) {
@@ -246,35 +229,42 @@ export function parseBareSessionInvocation(argv: readonly string[]): BareSession
       options.deliver = true;
       continue;
     }
+    if (!arg.startsWith("-")) {
+      if (!target) {
+        // Message text can itself be a URL; select the target only after consuming option values.
+        // Other first positionals belong to Commander or plugin routing.
+        if (!isSessionUrlInputCandidate(arg)) {
+          break;
+        }
+        target = arg;
+        continue;
+      }
+      throw new Error(
+        "Unexpected extra argument for bare session URL. Use `openclaw tui <url> --help` for the full option list.",
+      );
+    }
     const equalsIndex = arg.indexOf("=");
     const flag = equalsIndex === -1 ? arg : arg.slice(0, equalsIndex);
     const optionKey =
       BARE_SESSION_TUI_VALUE_OPTIONS[flag as keyof typeof BARE_SESSION_TUI_VALUE_OPTIONS];
     if (!optionKey) {
-      if (!arg.startsWith("-")) {
-        // A positional before the URL is an explicit core/plugin command owner.
-        // Leave its URL argument untouched for Commander and plugin routing.
-        if (index < targetIndex) {
-          return null;
-        }
-        throw new Error(
-          "Unexpected extra argument for bare session URL. Use `openclaw tui <url> --help` for the full option list.",
-        );
-      }
       throw bareSessionOptionError(flag);
     }
     const value = equalsIndex === -1 ? argv[index + 1] : arg.slice(equalsIndex + 1);
-    if (
-      !value ||
-      value === FLAG_TERMINATOR ||
-      (equalsIndex === -1 && (index + 1 === targetIndex || value.startsWith("-")))
-    ) {
+    if (!value || value === FLAG_TERMINATOR || (equalsIndex === -1 && value.startsWith("-"))) {
       throw new Error(`${flag} requires a value.`);
     }
     options[optionKey] = value;
     if (equalsIndex === -1) {
+      if (!target && isSessionUrlInputCandidate(value)) {
+        consumedUrlFlag ??= flag;
+      }
       index += 1;
     }
   }
-  return { target: argv[targetIndex] ?? "", options };
+  if (!target && consumedUrlFlag) {
+    // Keep an ambiguous missing value out of generic command discovery and its error output.
+    throw new Error(`${consumedUrlFlag} requires a value.`);
+  }
+  return target ? { target, options } : null;
 }

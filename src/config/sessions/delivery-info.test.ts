@@ -219,6 +219,23 @@ describe("extractDeliveryInfo", () => {
     });
   });
 
+  it("keeps qualified global main delivery in its owner's store", () => {
+    storeState.stores["/tmp/sessions.json"] = {
+      global: buildEntry({ channel: "telegram", to: "telegram:ops", accountId: "ops" }),
+    };
+    const deliveryContext = { channel: "telegram", to: "telegram:worker", accountId: "worker" };
+    storeState.stores["/tmp/worker-sessions.json"] = { global: buildEntry(deliveryContext) };
+
+    expect(
+      extractDeliveryInfo("agent:worker:main", {
+        cfg: {
+          session: { scope: "global" },
+          agents: { ownership: "explicit", entries: { ops: {}, worker: {} } },
+        },
+      }),
+    ).toEqual({ deliveryContext, threadId: undefined });
+  });
+
   it("continues across per-agent stores until it finds a routable deliveryContext", () => {
     const sessionKey = "agent:shadow:telegram:dm:user-789";
     storeState.stores["/tmp/sessions.json"] = {

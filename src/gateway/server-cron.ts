@@ -1,5 +1,6 @@
 // Gateway cron runtime service runs scheduled agent turns, heartbeat wakeups,
 // plugin hooks, notifications, and cron lifecycle cleanup.
+import fs from "node:fs/promises";
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
 import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
@@ -46,7 +47,6 @@ import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/deliver
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
 import { toPublicCronJob } from "../cron/public-job.js";
 import { createCronExecutionId } from "../cron/run-id.js";
-import { resolveCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
 import { cronScriptFailureMetadata } from "../cron/script-failure.js";
 import { CronService, type CronEvent } from "../cron/service.js";
 import {
@@ -58,6 +58,7 @@ import {
   resolveCronDeliverySessionKey,
   resolveCronSessionTargetSessionKey,
 } from "../cron/session-target.js";
+import { skillCollectionReviewMonitorAgentId } from "../cron/skill-collection-review-monitor.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { cronStreamScheduleKey } from "../cron/stream-schedule.js";
 import { createCronScriptRuntime } from "../cron/trigger-script.js";
@@ -104,7 +105,10 @@ import {
 } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
-import { runSkillCollectionReviewForAgent } from "../skills/workshop/collection-review.js";
+import { truncateUtf16WithEllipsis } from "../shared/text-truncate.js";
+import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
+import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
+import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import {
   createCronExitWatchers,
   type CronExitResult,
@@ -137,23 +141,20 @@ import {
 import { buildGatewaySessionEventFields } from "./session-event-payload.js";
 import { loadGatewaySessionRow } from "./session-utils.js";
 
-export type GatewayHeartbeatReconciliationResult = "converged" | "retry-scheduled" | "superseded";
+export type GatewaySystemJobReconciliationResult = "converged" | "retry-scheduled" | "superseded";
 
-class GatewayHeartbeatReconciliationSupersededError extends Error {}
+class GatewaySystemJobReconciliationSupersededError extends Error {}
 
 export type GatewayCronState = {
   cron: GatewayCronServiceContract;
   storePath: string;
   cronEnabled: boolean;
   prepareExitWatcherHandoff?: () => Promise<GatewayCronExitWatcherHandoff | undefined>;
-  // Required, not optional: reload rules call these hooks directly on whatever
-  // cronState is live (including the lazy proxy). An optional member here let
-  // the proxy silently omit reconcileHeartbeatJobs, turning every
-  // restart-heartbeat reload into a permanent no-op until gateway restart.
+  // The lazy proxy must preserve system-job reconciliation on the serving config.
   reconcileExitWatchers: () => Promise<void>;
   reconcileStreamWatchers: () => Promise<void>;
   stopStreamWatchers: () => Promise<void>;
-  reconcileHeartbeatJobs: (cfg?: OpenClawConfig) => Promise<GatewayHeartbeatReconciliationResult>;
+  reconcileSystemJobs: () => Promise<GatewaySystemJobReconciliationResult>;
 };
 
 export type GatewayCronExitWatcherHandoff = {
@@ -172,17 +173,6 @@ function formatOnExitRunSummary(exit: CronExitResult): string {
   return output ? `${lines.join("\n")}\n\nOutput:\n${output}` : lines.join("\n");
 }
 
-function addOnExitRunSummary(payload: CronPayload, exit: CronExitResult): CronPayload {
-  const summary = formatOnExitRunSummary(exit);
-  if (payload.kind === "systemEvent") {
-    return { ...payload, text: `${payload.text}\n\n${summary}` };
-  }
-  if (payload.kind === "agentTurn") {
-    return { ...payload, message: `${payload.message}\n\n${summary}` };
-  }
-  return payload;
-}
-
 /**
  * On-exit jobs use the normal force-run path so every payload kind records
  * run state, history, notifications, and delivery outcomes consistently.
@@ -191,11 +181,25 @@ export async function fireOnExitJob(
   job: CronJob,
   exit: CronExitResult,
   deps: {
-    run: (jobId: string, payload?: CronPayload) => Promise<unknown>;
+    run: (jobId: string, payload?: CronPayload) => ReturnType<CronService["run"]>;
   },
 ): Promise<void> {
-  const payload = addOnExitRunSummary(job.payload, exit);
-  await deps.run(job.id, payload === job.payload ? undefined : payload);
+  const summary = formatOnExitRunSummary(exit);
+  const payload = job.payload;
+  const runPayload =
+    payload.kind === "systemEvent"
+      ? { ...payload, text: `${payload.text}\n\n${summary}` }
+      : payload.kind === "agentTurn"
+        ? { ...payload, message: `${payload.message}\n\n${summary}` }
+        : undefined;
+  const result = await deps.run(job.id, runPayload);
+  if (!result.ok || !("ran" in result && result.ran)) {
+    // Retiring a one-shot must not hide refused admission behind a fulfilled callback.
+    // Keep bounded terminal evidence in the watcher's existing failure log.
+    const reason = "reason" in result ? result.reason : "run did not start";
+    const evidence = truncateUtf16WithEllipsis(summary, 2_000);
+    throw new Error(`cron on-exit run was not admitted: ${reason}\n\n${evidence}`);
+  }
 }
 
 /** Fire one source batch through the normal trigger and payload pipeline. */
@@ -600,6 +604,7 @@ export function buildGatewayCronService(params: {
     ? createCronScriptRuntime({
         config: params.cfg,
         loadPluginRegistry: loadPreparedInboundPluginRegistry,
+        resolveGatewayContext: scheduledGatewayContextResolver,
       })
     : undefined;
 
@@ -790,26 +795,7 @@ export function buildGatewayCronService(params: {
     cronEnabled,
     cronConfig: params.cfg.cron,
     listConfiguredChannels: () => listConfiguredMessageChannels(getRuntimeConfig()),
-    ...(scriptRuntime
-      ? {
-          evaluateCronTrigger: ({ job, script, state, streamBatch, abortSignal }) =>
-            scriptRuntime.evaluateTrigger({
-              jobId: job.id,
-              agentId: job.agentId,
-              script,
-              state,
-              streamBatch,
-              toolsAllow: job.payload.toolsAllow,
-              scheduledToolPolicy: resolveCronScheduledToolPolicy({
-                toolsAllow: job.payload.toolsAllow,
-                scheduledToolPolicy: job.scheduledToolPolicy,
-                owner: job.owner,
-              }),
-              execTarget: job.toolsAllowExecTarget,
-              abortSignal,
-            }),
-        }
-      : {}),
+    ...(scriptRuntime ? { evaluateCronTrigger: scriptRuntime.evaluateTrigger } : {}),
     ...(defaultAgentId ? { defaultAgentId } : {}),
     ...(legacyDefaultAgentId ? { legacyDefaultAgentId } : {}),
     resolveDefaultAgentId: () => tryResolveAmbientOwnerAgentId(getRuntimeConfig()),
@@ -907,12 +893,6 @@ export function buildGatewayCronService(params: {
         deps: { ...heartbeatDeps, runtime: defaultRuntime },
       });
     },
-    runSkillCollectionReview: ({ agentId, abortSignal }) =>
-      runSkillCollectionReviewForAgent({
-        config: getRuntimeConfig(),
-        agentId,
-        ...(abortSignal ? { abortSignal } : {}),
-      }),
     runIsolatedAgentJob: async ({
       job,
       message,
@@ -924,20 +904,40 @@ export function buildGatewayCronService(params: {
     }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       const sessionKey = resolveCronSessionTargetSessionKey(job.sessionTarget) ?? `cron:${job.id}`;
-      return await runCronIsolatedAgentTurn({
-        cfg: runtimeConfig,
-        deps: params.deps,
-        job,
-        message,
-        abortSignal,
-        onExecutionStarted,
-        onExecutionPhase,
-        onLaneWait,
-        executionIdentity,
-        agentId,
-        sessionKey,
-        lane: "cron",
-      });
+      const reviewAgentId = skillCollectionReviewMonitorAgentId(job);
+      if (reviewAgentId && resolveSkillWorkshopConfig(runtimeConfig).autonomous.mode !== "auto") {
+        return { status: "skipped", summary: "Skill collection review disabled." };
+      }
+      const executionRoot = reviewAgentId
+        ? resolveWorkshopSkillsDir(runtimeConfig, agentId)
+        : undefined;
+      if (executionRoot) {
+        await fs.mkdir(executionRoot, { recursive: true });
+      }
+      try {
+        return await runCronIsolatedAgentTurn({
+          cfg: runtimeConfig,
+          deps: params.deps,
+          job,
+          message,
+          abortSignal,
+          onExecutionStarted,
+          onExecutionPhase,
+          onLaneWait,
+          executionIdentity,
+          agentId,
+          sessionKey,
+          lane: "cron",
+          executionRoot,
+          skillsSnapshot: executionRoot ? { prompt: "", skills: [] } : undefined,
+        });
+      } finally {
+        // Normal file tools can finish edits before cancellation. Refresh future
+        // sessions without rewriting files or invalidating the running session.
+        if (executionRoot) {
+          bumpSkillsSnapshotVersion({ reason: "workshop" });
+        }
+      }
     },
     runCommandJob: async ({ job, abortSignal }) => {
       const result = await runCronCommandJob({
@@ -985,7 +985,7 @@ export function buildGatewayCronService(params: {
         ssrfPolicy: webhookSsrfPolicy,
       });
     },
-    runScriptJob: async ({ job, streamBatch, abortSignal }) => {
+    runScriptJob: async ({ job, streamBatch, abortSignal, executionIdentity }) => {
       if (!scriptRuntime || job.payload.kind !== "script") {
         return {
           status: "error",
@@ -994,21 +994,10 @@ export function buildGatewayCronService(params: {
         };
       }
       const execution = await scriptRuntime.executePayload({
-        jobId: job.id,
-        agentId: job.agentId,
-        script: job.payload.script,
-        state: job.state.triggerState,
+        job,
         streamBatch,
-        toolsAllow: job.payload.toolsAllow,
-        scheduledToolPolicy: resolveCronScheduledToolPolicy({
-          toolsAllow: job.payload.toolsAllow,
-          scheduledToolPolicy: job.scheduledToolPolicy,
-          owner: job.owner,
-        }),
-        execTarget: job.toolsAllowExecTarget,
-        timeoutSeconds: job.payload.timeoutSeconds,
-        toolBudget: job.payload.toolBudget,
         abortSignal,
+        executionIdentity,
       });
       if (execution.kind === "error") {
         return {
@@ -1526,7 +1515,7 @@ export function buildGatewayCronService(params: {
       } else {
         stopExitWatchers();
       }
-      stopHeartbeatReconcileRetry();
+      stopSystemJobReconcileRetry();
       void stopStreamWatchers().catch((err: unknown) => {
         cronLogger.warn(
           { err: formatErrorMessage(err) },
@@ -1568,72 +1557,61 @@ export function buildGatewayCronService(params: {
   cron.stopAndDrain = async () => {
     await stopAndDrainCron();
   };
-  // Reconciliations serialize on one tail and only the latest requested epoch
-  // executes, so an older reload's convergence can never clobber a newer one.
-  // A failed pass schedules one bounded retry; a newer request supersedes it.
-  let heartbeatReconcileEpoch = 0;
-  let heartbeatReconcileTail: Promise<GatewayHeartbeatReconciliationResult> =
-    Promise.resolve("converged");
-  let heartbeatRetryTimer: NodeJS.Timeout | undefined;
-  const stopHeartbeatReconcileRetry = () => {
+  // Serialize accepted-config convergence; newer requests and stop supersede this tail.
+  let systemJobReconcileEpoch = 0;
+  let systemJobReconcileTail = Promise.resolve<GatewaySystemJobReconciliationResult>("converged");
+  let systemJobRetryTimer: NodeJS.Timeout | undefined;
+  const stopSystemJobReconcileRetry = () => {
     // Also invalidate any in-flight pass so a post-stop retry cannot fire.
-    heartbeatReconcileEpoch += 1;
-    if (heartbeatRetryTimer) {
-      clearTimeout(heartbeatRetryTimer);
-      heartbeatRetryTimer = undefined;
-    }
+    systemJobReconcileEpoch += 1;
+    clearTimeout(systemJobRetryTimer);
+    systemJobRetryTimer = undefined;
   };
-  const reconcileHeartbeatJobs = (
-    cfgOverride?: OpenClawConfig,
-  ): Promise<GatewayHeartbeatReconciliationResult> => {
-    const epoch = ++heartbeatReconcileEpoch;
-    if (heartbeatRetryTimer) {
-      clearTimeout(heartbeatRetryTimer);
-      heartbeatRetryTimer = undefined;
-    }
-    const pass = async (): Promise<GatewayHeartbeatReconciliationResult> => {
+  const reconcileSystemJobs = (): Promise<GatewaySystemJobReconciliationResult> => {
+    stopSystemJobReconcileRetry();
+    const epoch = systemJobReconcileEpoch;
+    const pass = async (): Promise<GatewaySystemJobReconciliationResult> => {
+      const cfg = getRuntimeConfig();
       const assertCurrent = () => {
-        if (epoch !== heartbeatReconcileEpoch) {
-          throw new GatewayHeartbeatReconciliationSupersededError();
+        if (epoch !== systemJobReconcileEpoch || cfg !== getRuntimeConfig()) {
+          throw new GatewaySystemJobReconciliationSupersededError();
         }
       };
-      if (epoch !== heartbeatReconcileEpoch) {
-        return "superseded";
+      try {
+        assertCurrent();
+        let converged = true;
+        for (const reconcile of [
+          reconcileHeartbeatMonitorJobs,
+          reconcileSkillCollectionReviewJobs,
+        ]) {
+          const { ok } = await reconcile({
+            cron,
+            cfg,
+            logger: cronLogger,
+            commitGuard: assertCurrent,
+          });
+          assertCurrent();
+          converged &&= ok;
+        }
+        if (!converged) {
+          systemJobRetryTimer = setTimeout(() => {
+            systemJobRetryTimer = undefined;
+            void reconcileSystemJobs();
+          }, 30_000);
+          systemJobRetryTimer.unref?.();
+        }
+        return converged ? "converged" : "retry-scheduled";
+      } catch (error) {
+        if (!(error instanceof GatewaySystemJobReconciliationSupersededError)) {
+          throw error;
+        }
+        // A no-op accepted replacement may not request another pass. Finish
+        // against its config; an explicit newer request or stop owns its own tail.
+        return epoch === systemJobReconcileEpoch ? await pass() : "superseded";
       }
-      const { ok: heartbeatOk } = await reconcileHeartbeatMonitorJobs({
-        cron,
-        cfg: cfgOverride ?? getRuntimeConfig(),
-        logger: cronLogger,
-        commitGuard: assertCurrent,
-      });
-      if (epoch !== heartbeatReconcileEpoch) {
-        return "superseded";
-      }
-      const { ok: skillReviewOk } = await reconcileSkillCollectionReviewJobs({
-        cron,
-        cfg: cfgOverride ?? getRuntimeConfig(),
-        logger: cronLogger,
-        commitGuard: assertCurrent,
-      });
-      if (epoch !== heartbeatReconcileEpoch) {
-        return "superseded";
-      }
-      if (!heartbeatOk || !skillReviewOk) {
-        heartbeatRetryTimer = setTimeout(() => {
-          heartbeatRetryTimer = undefined;
-          void reconcileHeartbeatJobs(cfgOverride);
-        }, 30_000);
-        heartbeatRetryTimer.unref?.();
-      }
-      return heartbeatOk && skillReviewOk ? "converged" : "retry-scheduled";
     };
-    heartbeatReconcileTail = heartbeatReconcileTail.then(pass, pass).catch((error: unknown) => {
-      if (error instanceof GatewayHeartbeatReconciliationSupersededError) {
-        return "superseded";
-      }
-      throw error;
-    });
-    return heartbeatReconcileTail;
+    systemJobReconcileTail = systemJobReconcileTail.then(pass, pass);
+    return systemJobReconcileTail;
   };
   const startCron = cron.start.bind(cron);
   cron.start = async () => {
@@ -1662,7 +1640,7 @@ export function buildGatewayCronService(params: {
     if (lifecycleChanged()) {
       return;
     }
-    await reconcileHeartbeatJobs();
+    await reconcileSystemJobs();
     if (lifecycleChanged()) {
       return;
     }
@@ -1696,7 +1674,7 @@ export function buildGatewayCronService(params: {
     reconcileExitWatchers,
     reconcileStreamWatchers,
     stopStreamWatchers,
-    reconcileHeartbeatJobs,
+    reconcileSystemJobs,
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

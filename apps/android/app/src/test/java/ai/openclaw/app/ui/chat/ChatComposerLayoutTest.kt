@@ -9,11 +9,14 @@ import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.NodeRuntimeMode
 import ai.openclaw.app.R
 import ai.openclaw.app.SecurePrefs
+import ai.openclaw.app.chat.ChatCacheScope
 import ai.openclaw.app.chat.ChatController
+import ai.openclaw.app.chat.ChatThinkingLevelOption
 import ai.openclaw.app.chat.questionsForSession
 import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
+import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.i18n.NativeStringResources
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawDesignTheme
@@ -25,6 +28,7 @@ import android.provider.Settings
 import android.speech.SpeechRecognizer
 import android.view.KeyEvent
 import android.view.inspector.WindowInspector
+import androidx.activity.findViewTreeOnBackPressedDispatcherOwner
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
@@ -41,7 +45,9 @@ import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.DeviceConfigurationOverride
 import androidx.compose.ui.test.FontScale
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
@@ -60,15 +66,19 @@ import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpRect
@@ -90,6 +100,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -102,6 +113,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowSpeechRecognizer
 import java.util.UUID
+import java.util.concurrent.ConcurrentLinkedQueue
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w360dp-h800dp-420dpi")
@@ -159,12 +171,20 @@ class ChatComposerLayoutTest {
   }
 
   @Test
-  fun overflowingLoadedHistoryKeepsJumpOutsideMessagesAndReachesLatest() {
+  fun overflowingLoadedHistoryStartsAtLatestAndManualReadingOffersJump() {
     withReaderHistory(assistantCount = 24) {
       val transcript = readerTranscript()
       val before = transcript.getUnclippedBoundsInRoot()
+      val initialRange = transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
+      assertEquals("The overflowing transcript must start at the latest reply", 0f, initialRange.value(), 0f)
+      assertTrue("The sibling remains overflowing at the latest edge", initialRange.maxValue() > 0f)
+      assertReaderMessageVisible("OpenClaw", "Reader answer 24")
+      composeRule.onNodeWithContentDescription(nativeString("Jump to latest")).assertDoesNotExist()
+
+      transcript.performTouchInput { swipeDown() }
+      composeRule.waitForIdle()
       assertTrue(
-        "The overflowing transcript must start above the latest reply",
+        "Manual reading must move above the latest reply",
         transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value() > 0f,
       )
       assertReaderHeaderControl("Jump to latest")
@@ -194,10 +214,6 @@ class ChatComposerLayoutTest {
         "Fixture precondition: the transcript viewport must be fully visible: $viewport within $root",
         viewport.left >= root.left && viewport.right <= root.right && viewport.top >= root.top && viewport.bottom <= root.bottom,
       )
-      assertReaderHeaderControl("Jump to latest")
-      readerHeaderControl("Jump to latest").performClick()
-      composeRule.waitForIdle()
-
       val replyNode = composeRule.onNode(hasContentDescription(nativeString("OpenClaw")) and hasText(tail))
       val atLatest = replyNode.getUnclippedBoundsInRoot()
       assertTrue(
@@ -248,6 +264,8 @@ class ChatComposerLayoutTest {
     withReaderHistory(assistantCount = assistantCount, viewportHeight = { viewportHeight.value }) {
       val transcript = readerTranscript()
       val before = transcript.getUnclippedBoundsInRoot()
+      transcript.performTouchInput { swipeDown() }
+      composeRule.waitForIdle()
       assertTrue(
         "The smaller viewport must hide newer replies",
         transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value() > 0f,
@@ -281,6 +299,12 @@ class ChatComposerLayoutTest {
     ) {
       val transcript = readerTranscript()
       val before = transcript.getUnclippedBoundsInRoot()
+      transcript.performTouchInput { swipeDown() }
+      composeRule.waitForIdle()
+      assertTrue(
+        "Manual reading must move above the latest reply",
+        transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value() > 0f,
+      )
       val controls = listOf("Show Sidebar", "Jump to latest", "Chat actions").map(::assertReaderHeaderControl)
       val sidebar = controls.first()
       controls.drop(1).forEach { bounds ->
@@ -367,31 +391,47 @@ class ChatComposerLayoutTest {
   }
 
   @Test
-  fun slashSuggestionsKeepEditorAndStopVisibleAndLastSuggestionReachable() {
+  fun slashSuggestionsKeepEditorAndSendVisibleAndLastSuggestionReachable() {
     showChat()
     val editor = composeRule.onNode(hasSetTextAction())
     editor.performTextReplacement("/")
     editor.assertTextEquals("/")
 
-    assertComposerControlsVisible()
+    assertComposerControlsVisible(primaryAction = "Send")
     val sidebar = composeRule.onNodeWithContentDescription(nativeString("Show Sidebar")).assertIsDisplayed()
     val lastSuggestion = composeRule.onNodeWithText("/loop").performScrollTo().assertIsDisplayed()
     sidebar.assertIsDisplayed()
-    assertComposerControlsVisible()
+    assertComposerControlsVisible(primaryAction = "Send")
     lastSuggestion.performClick()
     editor.assertTextEquals("/loop ")
-    assertComposerControlsVisible()
+    assertComposerControlsVisible(primaryAction = "Send")
   }
 
   @Test
-  fun normalTextAndShortSuggestionListsKeepComposerVisible() {
+  fun activeRunKeepsNewTextSendableAndRestoresStopForAnEmptyDraft() {
     showChat()
+    assertTrue("The fixture must have an active run", controller.pendingRunCount.value > 0)
     val editor = composeRule.onNode(hasSetTextAction())
     listOf("hello", "/help", "/unknown").forEach { input ->
       editor.performTextReplacement(input)
       editor.assertTextEquals(input)
-      assertComposerControlsVisible()
+      assertComposerControlsVisible(primaryAction = "Send")
+      composeRule.onNodeWithContentDescription(nativeString("Send")).assertIsEnabled()
+      assertTrue("Typing must not end the active run", controller.pendingRunCount.value > 0)
     }
+    editor.performTextReplacement("")
+    assertComposerControlsVisible(primaryAction = "Stop")
+    composeRule.onNodeWithContentDescription(nativeString("Send")).assertDoesNotExist()
+  }
+
+  @Test
+  fun physicalEnterPreservesTheDraftDuringTalkWithAnActiveRun() {
+    assertPhysicalEnterDuringActiveRun(talkActive = true, expectedSends = 0)
+  }
+
+  @Test
+  fun physicalEnterSendsTheDraftDuringANonTalkActiveRun() {
+    assertPhysicalEnterDuringActiveRun(talkActive = false, expectedSends = 1)
   }
 
   @Test
@@ -539,7 +579,89 @@ class ChatComposerLayoutTest {
       assertTrue("The editor must grow from ${index + 1} to ${index + 2} visible lines", next > current)
     }
     assertEquals("The seventh line must scroll inside the six-line editor", heights[5], heights[6])
-    assertComposerControlsVisible()
+    assertComposerControlsVisible(primaryAction = "Send")
+  }
+
+  @Test
+  fun modelSheetKeepsChatVisibleAndDetailsOptional() {
+    showChat(viewportHeight = { 640.dp })
+    composeRule.onNodeWithContentDescription(nativeString("Model")).performClick()
+    val window = composeRule.onNode(isDialog()).getUnclippedBoundsInRoot()
+    val sheet = composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.PaneTitle)).getUnclippedBoundsInRoot()
+    assertTrue("Model sheet must leave chat visible: sheet=$sheet window=$window", sheet.bottom - sheet.top <= (window.bottom - window.top) * 0.6f)
+    composeRule.onNodeWithText(nativeString("Latest model call")).assertDoesNotExist()
+    composeRule.onNodeWithText(nativeString("Default model")).assertIsDisplayed().assertHasClickAction()
+  }
+
+  @Test
+  @Config(qualifiers = "w320dp-h533dp-240dpi")
+  fun modelSheetScrollsWithinSmallWindowWithLargeText() {
+    verifyConstrainedModelSheet(320.dp, 500.dp, 1.5f)
+  }
+
+  @Test
+  @Config(qualifiers = "w640dp-h320dp-240dpi")
+  fun modelSheetScrollsWithinLandscapeWindow() {
+    verifyConstrainedModelSheet(640.dp, 300.dp, 1f)
+  }
+
+  private fun verifyConstrainedModelSheet(
+    width: Dp,
+    height: Dp,
+    fontScale: Float,
+  ) {
+    showChat(viewportWidth = width, viewportHeight = { height }, fontScale = { fontScale })
+    updatePermissions(null, pending = false)
+    val editor = composeRule.onNode(hasSetTextAction())
+    val draftBounds = editor.getUnclippedBoundsInRoot()
+    composeRule.onNodeWithContentDescription(nativeString("Model")).performClick()
+    val window = composeRule.onNode(isDialog()).getUnclippedBoundsInRoot()
+    val sheet = composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.PaneTitle)).getUnclippedBoundsInRoot()
+    assertTrue("Small window must actually constrain the dialog: $window", window.bottom - window.top < 600.dp)
+    assertTrue("Sheet stays compact: $sheet in $window", sheet.bottom - sheet.top <= (window.bottom - window.top) * 0.6f)
+    assertTrue("Sheet stays bottom anchored: $sheet in $window", kotlin.math.abs((sheet.bottom - window.bottom).value) < 1f)
+    composeRule.onNodeWithText(nativeString("Latest model call")).assertDoesNotExist()
+    val details = composeRule.onNode(hasText(nativeString("Details")) and hasClickAction())
+    details.performScrollTo().performClick()
+    listOf("2.1k", "160", "76.5k", "\$0.0015").forEach { value ->
+      composeRule.onNodeWithText(value).performScrollTo().assertIsDisplayed()
+    }
+    details.performScrollTo().performClick()
+    val sheetList = composeRule.onNode(hasAnyAncestor(isDialog()) and SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex))
+    sheetList.performScrollToNode(hasText(nativeString("Permissions")) and hasClickAction())
+    composeRule.onNode(hasText(nativeString("Permissions")) and hasClickAction()).assertIsEnabled().performClick()
+    val permissionSheet = composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.PaneTitle)).getUnclippedBoundsInRoot()
+    assertTrue("Permission page stays compact", permissionSheet.bottom - permissionSheet.top <= (window.bottom - window.top) * 0.6f)
+    sheetList.performScrollToNode(hasText(nativeString("Full access")) and hasClickAction())
+    composeRule.onNode(hasText(nativeString("Full access")) and hasClickAction()).assertIsDisplayed()
+    sheetList.performScrollToNode(hasText(nativeString("Back")) and hasClickAction())
+    composeRule.onNodeWithText(nativeString("Back")).performClick()
+    sheetList.performScrollToNode(hasText(nativeString("Default model")))
+    composeRule
+      .onNodeWithText(nativeString("Default model"))
+      .assertIsDisplayed()
+      .assertHasClickAction()
+      .performClick()
+    composeRule.onNode(isDialog()).assertDoesNotExist()
+    assertEquals("Sheet interactions preserve draft bounds", draftBounds, editor.getUnclippedBoundsInRoot())
+  }
+
+  @Test
+  fun modelSheetPressureHasAccessibleThresholdAndRecoveryLabels() {
+    showChat(viewportHeight = { 640.dp }, fontScale = { 1.5f })
+    composeRule.onNodeWithContentDescription(nativeString("Model")).performClick()
+    for ((percent, label) in listOf(74 to null, 75 to "Warning", 89 to "Warning", 90 to "Critical", 40 to null)) {
+      composeRule.runOnIdle {
+        controller.handleGatewayEvent(
+          "sessions.changed",
+          """{"session":{"key":"${controller.sessionKey.value}","totalTokens":${percent * 1000},"totalTokensFresh":true,"contextTokens":100000}}""",
+        )
+      }
+      for (candidate in listOf("Warning", "Critical")) {
+        val node = composeRule.onNodeWithText(nativeString(candidate))
+        if (candidate == label) node.assertIsDisplayed() else node.assertDoesNotExist()
+      }
+    }
   }
 
   @Test
@@ -565,21 +687,48 @@ class ChatComposerLayoutTest {
     assertComposerControlsVisible(talkActive = true, thinkingLabel = "Ultra")
     model.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Context: \$detail", "24k / 200k · 12%")))
 
-    val priorWindows = composeRule.runOnIdle { WindowInspector.getGlobalWindowViews().toSet() }
     thinking.performClick()
-    composeRule.onNodeWithText("Ultra").assertIsDisplayed().assert(hasClickAction().not())
-    composeRule.onNodeWithText(nativeString("High")).assertIsDisplayed().assertHasClickAction()
-    assertEquals("Opening effort must not move or shrink the draft", editorBounds, editor.getUnclippedBoundsInRoot())
-    composeRule.runOnIdle {
-      val popup = WindowInspector.getGlobalWindowViews().single { it !in priorWindows }
-      assertTrue(popup.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ESCAPE)))
-      assertTrue(popup.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ESCAPE)))
-    }
+    composeRule.onNode(isDialog()).assertIsDisplayed()
     composeRule.onNode(isPopup()).assertDoesNotExist()
+    composeRule.onNodeWithText(nativeString("Effort")).assertIsDisplayed()
+    composeRule.onNodeWithText("Ultra").assertIsDisplayed().assert(hasClickAction().not())
+    composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.ProgressBarRangeInfo)).assertDoesNotExist()
+    listOf(nativeString("Off"), nativeString("High")).forEach { label ->
+      composeRule
+        .onNode(hasText(label) and hasClickAction())
+        .assertIsDisplayed()
+        .assertIsEnabled()
+        .assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, false))
+    }
+    composeRule.onNodeWithText(nativeString("Faster responses, higher usage of limits.")).assertIsDisplayed()
+    assertEquals("Opening effort must not move or shrink the draft", editorBounds, editor.getUnclippedBoundsInRoot())
+    composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.Dismiss)).performSemanticsAction(SemanticsActions.Dismiss) { dismiss -> assertTrue(dismiss()) }
+    composeRule.onNode(isDialog()).assertDoesNotExist()
 
     model.performClick()
-    composeRule.onNodeWithText(nativeString("Context: \$detail", "24k / 200k · 12%")).assertIsDisplayed()
-    composeRule.onNode(hasText(nativeString("Default")) and hasClickAction() and hasText(nativeString("Permissions")).not()).assertIsDisplayed().assertHasClickAction()
+    composeRule.onNodeWithText(nativeString("Context window")).assertIsDisplayed()
+    composeRule.onNodeWithText("24k / 200k · 12%").assertIsDisplayed()
+    composeRule
+      .onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.ProgressBarRangeInfo))
+      .assert(
+        SemanticsMatcher("has 12 percent context progress") { node ->
+          node.config.getOrNull(SemanticsProperties.ProgressBarRangeInfo)?.current == 0.12f
+        },
+      )
+    composeRule.onNodeWithText(nativeString("Latest run")).assertIsDisplayed()
+    composeRule.onAllNodesWithText(nativeString("Non-cached input")).assertCountEquals(1)
+    composeRule.onNodeWithText(nativeString("Latest model call")).assertDoesNotExist()
+    val details = composeRule.onNode(hasText(nativeString("Details")) and hasClickAction())
+    details.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
+    details.performClick()
+    details.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Expanded")))
+    listOf(nativeString("Non-cached input excludes cache reads."), nativeString("Latest model call"), "2.1k", "160", "76.5k", nativeString("Cache read cost"), "\$0.0015").forEach { label ->
+      composeRule.onNodeWithText(label).performScrollTo().assertIsDisplayed()
+    }
+    details.performScrollTo().performClick()
+    details.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
+    composeRule.onNodeWithText(nativeString("Latest model call")).assertDoesNotExist()
+    composeRule.onNodeWithText(nativeString("Default model")).assertIsDisplayed().assertHasClickAction()
     composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.Dismiss)).performSemanticsAction(SemanticsActions.Dismiss) { dismiss -> assertTrue(dismiss()) }
     composeRule.onNode(isDialog()).assertDoesNotExist()
     assertEquals("Dismissing model selection must preserve the draft", editorBounds, editor.getUnclippedBoundsInRoot())
@@ -607,11 +756,237 @@ class ChatComposerLayoutTest {
   }
 
   @Test
+  fun effortSliderPreviewsAndCommitsEveryAdvertisedLevel() {
+    val options =
+      listOf(
+        ChatThinkingLevelOption(id = "off", label = "Off"),
+        ChatThinkingLevelOption(id = "low", label = "Low"),
+        ChatThinkingLevelOption(id = "medium", label = "Medium"),
+        ChatThinkingLevelOption(id = "high", label = "High"),
+        ChatThinkingLevelOption(id = "xhigh", label = "Extra high"),
+      )
+    var committedId: String? = null
+    val selectedId = mutableStateOf("off")
+    composeRule.setContent {
+      ClawDesignTheme {
+        ChatEffortSliderControl(
+          options = options,
+          selectedId = selectedId.value,
+          enabled = true,
+          onSelect = { id ->
+            committedId = id
+            selectedId.value = id
+          },
+        )
+      }
+    }
+    val slider = composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.ProgressBarRangeInfo))
+    slider.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, options.first().label))
+    composeRule.onNodeWithText(options.first().label).assertIsDisplayed().assert(hasClickAction().not())
+
+    options.drop(1).forEachIndexed { offset, option ->
+      val index = offset + 1
+      slider.performSemanticsAction(SemanticsActions.SetProgress) { setProgress -> assertTrue(setProgress(index.toFloat())) }
+      slider.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, option.label))
+      composeRule.onNodeWithText(option.label).assertIsDisplayed().assert(hasClickAction().not())
+      composeRule.runOnIdle { assertEquals(option.id, committedId) }
+    }
+  }
+
+  @Test
+  fun effortSliderRestoresTheAuthoritativeLevelWhenACommitIsRejected() {
+    val options =
+      listOf(
+        ChatThinkingLevelOption(id = "off", label = "Off"),
+        ChatThinkingLevelOption(id = "low", label = "Low"),
+        ChatThinkingLevelOption(id = "high", label = "High"),
+      )
+    var attemptedId: String? = null
+    composeRule.setContent {
+      ClawDesignTheme {
+        ChatEffortSliderControl(
+          options = options,
+          selectedId = "off",
+          enabled = true,
+          onSelect = { id -> attemptedId = id },
+        )
+      }
+    }
+    val slider = composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.ProgressBarRangeInfo))
+
+    slider.performSemanticsAction(SemanticsActions.SetProgress) { setProgress -> assertTrue(setProgress(2f)) }
+
+    composeRule.runOnIdle { assertEquals("high", attemptedId) }
+    slider.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Off"))
+    composeRule.onNodeWithText("Off").assertIsDisplayed()
+  }
+
+  @Test
+  fun binaryEffortOptionsAreIndividuallyAccessible() {
+    val selectedId = mutableStateOf("off")
+    val options = listOf(ChatThinkingLevelOption("off", "Off"), ChatThinkingLevelOption("high", "High"))
+    composeRule.setContent {
+      ClawDesignTheme {
+        ChatEffortSliderControl(options, selectedId.value, true) { selectedId.value = it }
+      }
+    }
+
+    composeRule.onNode(hasText("High") and hasClickAction()).assertIsEnabled().performClick()
+    composeRule.runOnIdle { assertEquals("high", selectedId.value) }
+    composeRule.onNode(hasText("High") and hasClickAction()).assertIsSelected()
+    composeRule.onNode(hasText("Off") and hasClickAction()).performClick()
+    composeRule.runOnIdle { assertEquals("off", selectedId.value) }
+    composeRule.onNode(hasText("Off") and hasClickAction()).assertIsSelected()
+  }
+
+  @Test
+  fun unknownEffortCanSelectTheFirstAdvertisedOption() {
+    val selectedId = mutableStateOf("future-effort")
+    val options =
+      listOf(
+        ChatThinkingLevelOption("off", "Off"),
+        ChatThinkingLevelOption("low", "Low"),
+        ChatThinkingLevelOption("high", "High"),
+      )
+    composeRule.setContent {
+      ClawDesignTheme {
+        ChatEffortSliderControl(options, selectedId.value, true) { selectedId.value = it }
+      }
+    }
+
+    composeRule.onNode(hasText("Off") and hasClickAction()).assertIsEnabled().performClick()
+    composeRule.runOnIdle { assertEquals("off", selectedId.value) }
+  }
+
+  @Test
+  fun singleEffortOptionDoesNotClaimAnUnknownSelection() {
+    composeRule.setContent {
+      ClawDesignTheme {
+        ChatEffortSliderControl(
+          options = listOf(ChatThinkingLevelOption(id = "high", label = "High")),
+          selectedId = "future-effort",
+          enabled = true,
+          onSelect = {},
+        )
+      }
+    }
+
+    composeRule
+      .onNode(hasText("High") and hasClickAction())
+      .assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, false))
+    composeRule.onNodeWithContentDescription(nativeString("Selected")).assertDoesNotExist()
+  }
+
+  @Test
+  fun fastModeBadgeBelongsToTheGaugeGeometry() {
+    showChat(viewportWidth = 360.dp, viewportHeight = { 640.dp })
+    composeRule.runOnIdle {
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """
+        {"reason":"patch","session":{
+          "key":"${AndroidScreenshotFixture.mainSessionKey}",
+          "thinkingLevel":"high",
+          "thinkingLevels":[{"id":"off","label":"off"},{"id":"high","label":"high"}],
+          "fastMode":true,"effectiveFastMode":true
+        }}
+        """.trimIndent(),
+      )
+    }
+
+    composeRule.onNodeWithContentDescription(nativeString("Thinking")).assertIsDisplayed()
+    val gauge = composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).getUnclippedBoundsInRoot()
+    val badge = composeRule.onNodeWithTag("chat-fast-mode-badge", useUnmergedTree = true).getUnclippedBoundsInRoot()
+    val badgeCenterX = (badge.left.value + badge.right.value) / 2f
+    val badgeCenterY = (badge.top.value + badge.bottom.value) / 2f
+    val gaugeCenterX = (gauge.left.value + gauge.right.value) / 2f
+    val gaugeCenterY = (gauge.top.value + gauge.bottom.value) / 2f
+
+    assertTrue("The Fast mode badge center must stay inside the gauge: $badge in $gauge", badgeCenterX in gauge.left.value..gauge.right.value)
+    assertTrue("The Fast mode badge center must stay inside the gauge: $badge in $gauge", badgeCenterY in gauge.top.value..gauge.bottom.value)
+    assertFalse(
+      "The Fast mode badge must not cover the needle hub: $badge over $gauge",
+      gaugeCenterX in badge.left.value..badge.right.value && gaugeCenterY in badge.top.value..badge.bottom.value,
+    )
+  }
+
+  @Test
+  fun effortSheetScrollsFastModeIntoViewOnAConstrainedViewport() {
+    showChat(viewportWidth = 320.dp, viewportHeight = { 320.dp }, fontScale = { 2f })
+    composeRule.runOnIdle {
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """
+        {"reason":"patch","session":{
+          "key":"${AndroidScreenshotFixture.mainSessionKey}",
+          "thinkingLevel":"high",
+          "thinkingLevels":[{"id":"off","label":"off"},{"id":"low","label":"low"},{"id":"high","label":"high"}]
+        }}
+        """.trimIndent(),
+      )
+    }
+
+    composeRule.onNodeWithContentDescription(nativeString("Thinking")).performClick()
+    composeRule
+      .onNodeWithText(nativeString("Faster responses, higher usage of limits."))
+      .performScrollTo()
+      .assertIsDisplayed()
+    composeRule.onNodeWithContentDescription(nativeString("Fast mode")).assertIsDisplayed()
+  }
+
+  @Test
+  fun modelSheetSeparatesPermissionActionStatusAndDefaultModel() {
+    val fontScale = mutableStateOf(1f)
+    showChat(viewportWidth = 360.dp, viewportHeight = { 640.dp }, fontScale = { fontScale.value })
+
+    fun sheetBackOwner() =
+      checkNotNull(
+        WindowInspector
+          .getGlobalWindowViews()
+          .asReversed()
+          .firstNotNullOfOrNull { it.findViewTreeOnBackPressedDispatcherOwner() },
+      )
+
+    updatePermissions(null, pending = false)
+    composeRule.onNodeWithContentDescription(nativeString("Model")).performClick()
+
+    composeRule
+      .onNodeWithText(nativeString("Policy default"), useUnmergedTree = true)
+      .assertTextEquals(nativeString("Policy default"))
+      .assert(hasClickAction().not())
+      .assert(hasAnyAncestor(hasClickAction()).not())
+    composeRule.onNodeWithText(nativeString("Default model")).assertIsDisplayed().assertHasClickAction()
+
+    composeRule.onNode(hasText(nativeString("Permissions")) and hasClickAction()).performClick()
+    composeRule.onNode(isPopup()).assertDoesNotExist()
+    composeRule.onNodeWithText(nativeString("Back")).assert(hasAnyAncestor(isDialog()))
+    val initialOwner = composeRule.runOnIdle { sheetBackOwner() }
+    composeRule.runOnIdle { fontScale.value = 1.2f }
+    composeRule.waitForIdle()
+    composeRule.runOnIdle {
+      val recreatedOwner = sheetBackOwner()
+      assertTrue("The dialog must actually be recreated", initialOwner !== recreatedOwner)
+      recreatedOwner.onBackPressedDispatcher.onBackPressed()
+    }
+    composeRule.onNodeWithText(nativeString("Back")).assertDoesNotExist()
+    composeRule.onNodeWithText(nativeString("Default model")).assertIsDisplayed()
+    composeRule.runOnIdle { sheetBackOwner().onBackPressedDispatcher.onBackPressed() }
+    composeRule.onNode(isDialog()).assertDoesNotExist()
+
+    composeRule.onNodeWithContentDescription(nativeString("Model")).performClick()
+    composeRule.onNode(hasText(nativeString("Permissions")) and hasClickAction()).performClick()
+    composeRule.onNode(hasText(nativeString("Policy default")) and hasClickAction()).performClick()
+
+    composeRule.onNodeWithText(nativeString("Default model")).assertIsDisplayed().performClick()
+    composeRule.onNode(isDialog()).assertDoesNotExist()
+  }
+
+  @Test
   fun lockedModelPickerExplainsNativeOwnershipAndKeepsOtherControlsAvailable() {
     showChat(viewportWidth = 320.dp, viewportHeight = { 640.dp })
     val sessionKey = controller.sessionKey.value
     val model = composeRule.onNodeWithContentDescription(nativeString("Model"))
-    val defaultModel = hasText(nativeString("Default")) and hasClickAction() and hasText(nativeString("Permissions")).not()
+    val defaultModel = hasText(nativeString("Default model")) and hasClickAction()
 
     for ((runtimeId, label) in listOf("codex" to nativeString("Native Codex model"), "other" to nativeString("Locked session model"))) {
       composeRule.runOnIdle {
@@ -814,6 +1189,87 @@ class ChatComposerLayoutTest {
   }
 
   @Test
+  fun progressCardRendersProgressMarkupAsANativeBar() {
+    showChat()
+    showProgressCard(
+      steps = emptyList(),
+      markdown =
+        """
+        [Test is running][status]
+
+        <progress aria-label="Test progress" value="2" max="5"></progress>
+        40%
+
+        [status]: https://example.com/status
+        """.trimIndent(),
+    )
+
+    composeRule.onNodeWithContentDescription(nativeString("Expand progress card")).performClick()
+
+    val progress =
+      composeRule
+        .onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.ProgressBarRangeInfo))
+        .assertIsDisplayed()
+        .fetchSemanticsNode()
+        .config[SemanticsProperties.ProgressBarRangeInfo]
+    assertEquals(0.4f, progress.current, 0.001f)
+    val statusText =
+      composeRule
+        .onNodeWithText("Test is running")
+        .assertIsDisplayed()
+        .fetchSemanticsNode()
+        .config[SemanticsProperties.Text]
+        .single()
+    val statusLink = statusText.getLinkAnnotations(0, statusText.length).single().item as LinkAnnotation.Url
+    assertEquals("https://example.com/status", statusLink.url)
+    composeRule.onNodeWithText("40%").assertIsDisplayed()
+    composeRule
+      .onNodeWithText("<progress aria-label=\"Test progress\" value=\"2\" max=\"5\"></progress>")
+      .assertDoesNotExist()
+  }
+
+  @Test
+  fun progressCardKeepsWarningAfterDisclosure() {
+    showChat()
+    showProgressCard(
+      steps = emptyList(),
+      markdown =
+        """
+        <progress value='2' max='5'></progress>
+
+        <details>
+        <summary>Logs</summary>
+        body
+        </details>Do not ship: tests are failing on Linux
+        """.trimIndent(),
+    )
+    composeRule.onNodeWithContentDescription(nativeString("Expand progress card")).performClick()
+
+    composeRule.onNodeWithText("Do not ship: tests are failing on Linux").assertIsDisplayed()
+    composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.ProgressBarRangeInfo)).assertIsDisplayed()
+  }
+
+  @Test
+  fun progressCardRendersAdjacentBarsWithoutLeakingMarkup() {
+    showChat()
+    showProgressCard(
+      steps = emptyList(),
+      markdown =
+        """
+        <progress aria-label='First' value='2' max='5'></progress>
+        <progress aria-label='Second' value='3' max='5'></progress>
+        Both checks are running
+        """.trimIndent(),
+    )
+    composeRule.onNodeWithContentDescription(nativeString("Expand progress card")).performClick()
+
+    composeRule.onNodeWithContentDescription("First").assertIsDisplayed()
+    composeRule.onNodeWithContentDescription("Second").assertIsDisplayed()
+    composeRule.onNodeWithText("Both checks are running").assertIsDisplayed()
+    composeRule.onNodeWithText("<progress", substring = true).assertDoesNotExist()
+  }
+
+  @Test
   fun progressCardStaysUndecoratedWhileRecordingVoiceNote() {
     val permission = Manifest.permission.RECORD_AUDIO
     val permissionWasGranted = app.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
@@ -866,10 +1322,10 @@ class ChatComposerLayoutTest {
     composeRule.onNodeWithContentDescription(nativeString("Model")).performClick()
     val permissions = composeRule.onNode(hasText(nativeString("Permissions")) and hasClickAction())
     permissions.assertIsEnabled().performClick()
-    composeRule.onNodeWithText(nativeString("PERMISSIONS")).assertIsDisplayed()
+    composeRule.onNodeWithText(nativeString("Back")).assert(hasAnyAncestor(isDialog()))
 
     updatePermissions("read-only", pending = true)
-    composeRule.onNodeWithText(nativeString("PERMISSIONS")).assertDoesNotExist()
+    composeRule.onNodeWithText(nativeString("Back")).assertDoesNotExist()
     permissions.assertIsNotEnabled()
     composeRule.onNodeWithText(nativeString("Applying permissions…"), useUnmergedTree = true).assertIsDisplayed()
 
@@ -919,11 +1375,11 @@ class ChatComposerLayoutTest {
     composeRule.onNodeWithContentDescription(nativeString("Model")).assertIsEnabled().performClick()
     composeRule.onNode(hasText(nativeString("Permissions")) and hasClickAction()).assertIsNotEnabled()
     composeRule.onNodeWithText(nativeString("Update the Gateway to change session permissions.")).assertIsDisplayed()
-    composeRule.onNode(hasText(nativeString("Default")) and hasClickAction()).assertIsEnabled()
+    composeRule.onNode(hasText(nativeString("Default model")) and hasClickAction()).assertIsEnabled()
   }
 
   private fun updatePermissions(
-    mode: String,
+    mode: String?,
     pending: Boolean,
   ) {
     composeRule.runOnIdle {
@@ -934,12 +1390,15 @@ class ChatComposerLayoutTest {
           ?.sessionId ?: "permission-layout-session"
       controller.handleGatewayEvent(
         "sessions.changed",
-        """{"reason":"patch","session":{"key":"$sessionKey","sessionId":"$sessionId","agentId":"main","permissionMode":"$mode","permissionModePending":$pending}}""",
+        """{"reason":"patch","session":{"key":"$sessionKey","sessionId":"$sessionId","agentId":"main","permissionMode":${mode?.let { "\"$it\"" } ?: "null"},"permissionModePending":$pending}}""",
       )
     }
   }
 
-  private fun showProgressCard(steps: List<String>) {
+  private fun showProgressCard(
+    steps: List<String>,
+    markdown: String? = null,
+  ) {
     val response =
       buildJsonObject {
         put(
@@ -948,6 +1407,7 @@ class ChatComposerLayoutTest {
             put("sessionKey", JsonPrimitive(controller.sessionKey.value))
             put("revision", JsonPrimitive(1))
             put("updatedAt", JsonPrimitive(System.currentTimeMillis()))
+            markdown?.let { put("markdown", JsonPrimitive(it)) }
             put(
               "steps",
               buildJsonArray {
@@ -964,15 +1424,28 @@ class ChatComposerLayoutTest {
           },
         )
       }.toString()
-    val requestField = ChatController::class.java.getDeclaredField("requestGatewayForGateway").apply { isAccessible = true }
+    val leaseField = ChatController::class.java.getDeclaredField("captureRequestLease").apply { isAccessible = true }
 
     @Suppress("UNCHECKED_CAST")
-    val request = requestField.get(controller) as suspend (String, String, String?) -> String
-    val progressRequest: suspend (String, String, String?) -> String = { gatewayId, method, params ->
-      if (method == "progressCard.get") response else request(gatewayId, method, params)
+    val captureLease = leaseField.get(controller) as (ChatCacheScope?) -> GatewaySession.RequestLease?
+    val progressLease: (ChatCacheScope?) -> GatewaySession.RequestLease? = { gatewayScope ->
+      captureLease(gatewayScope)?.let { lease ->
+        GatewaySession.RequestLease(
+          endpointStableId = lease.endpointStableId,
+          isCurrentImpl = lease::isCurrent,
+          commitIfCurrentImpl = lease::commitIfCurrent,
+        ) { method, params, timeoutMs, withEnqueue ->
+          if (method == "progressCard.get") {
+            withEnqueue {}
+            response
+          } else {
+            lease.request(method, params, timeoutMs, withEnqueue)
+          }
+        }
+      }
     }
     composeRule.runOnIdle {
-      requestField.set(controller, progressRequest)
+      leaseField.set(controller, progressLease)
       controller.handleGatewayEvent(
         "progressCard.changed",
         """{"sessionKey":"${controller.sessionKey.value}","revision":1}""",
@@ -985,6 +1458,62 @@ class ChatComposerLayoutTest {
     }
   }
 
+  private fun assertPhysicalEnterDuringActiveRun(
+    talkActive: Boolean,
+    expectedSends: Int,
+  ) {
+    prefs.gatewayRegistry.upsert(
+      GatewayRegistryEntry(
+        stableId = AndroidScreenshotFixture.gatewayId,
+        kind = GatewayRegistryEntryKind.MANUAL,
+        name = "Test gateway",
+      ),
+    )
+    prefs.gatewayRegistry.setActive(AndroidScreenshotFixture.gatewayId)
+    val viewModel = showChat(talkActive = talkActive)
+    val owner = viewModel.captureChatShareOwner()
+    assertTrue("The fixture must have an active run", controller.pendingRunCount.value > 0)
+    assertTrue("The composer must have a routable controller owner", controller.isCurrentComposerOwner(owner))
+    val sent = ConcurrentLinkedQueue<JsonObject>()
+    val requestField = ChatController::class.java.getDeclaredField("requestGatewayForGateway").apply { isAccessible = true }
+
+    @Suppress("UNCHECKED_CAST")
+    val originalRequest = requestField.get(controller) as suspend (String, String, String?) -> String
+    val request: suspend (String, String, String?) -> String = { gatewayId, method, params ->
+      if (method == "chat.send") {
+        val payload = Json.parseToJsonElement(requireNotNull(params)).jsonObject
+        sent.add(payload)
+        buildJsonObject {
+          put("runId", payload.getValue("idempotencyKey"))
+          put("status", JsonPrimitive("started"))
+        }.toString()
+      } else {
+        originalRequest(gatewayId, method, params)
+      }
+    }
+    try {
+      requestField.set(controller, request)
+      val draft = "Physical follow-up"
+      val editor = composeRule.onNode(hasSetTextAction())
+      editor.performClick()
+      editor.performTextReplacement(draft)
+      assertComposerControlsVisible(talkActive = talkActive, primaryAction = if (talkActive) "Stop" else "Send")
+      if (!talkActive) composeRule.onNodeWithContentDescription(nativeString("Send")).assertIsEnabled()
+      composeRule.runOnIdle {
+        val root = WindowInspector.getGlobalWindowViews().single { it.hasFocus() }
+        assertTrue("The focused editor must consume Enter down", root.dispatchKeyEventPreIme(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER)))
+        assertTrue("The focused editor must consume Enter up", root.dispatchKeyEventPreIme(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER)))
+      }
+      composeRule.waitUntil(timeoutMillis = 5_000) {
+        composeRule.runOnIdle { owner !in viewModel.chatComposerState.sendStates.value }
+      }
+      assertEquals(List(expectedSends) { JsonPrimitive(draft) }, sent.map { it["message"] })
+      editor.assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString(if (expectedSends == 0) draft else "")))
+    } finally {
+      requestField.set(controller, originalRequest)
+    }
+  }
+
   private fun assertDraftKeepsDisabledSendWhileAdmissionIsPending(
     text: String = "",
     attachment: PendingAttachment? = null,
@@ -992,11 +1521,7 @@ class ChatComposerLayoutTest {
     val viewModel = showChat()
     val owner = viewModel.captureChatShareOwner()
     composeRule.runOnIdle {
-      val runId = requireNotNull(controller.selectedActiveRunPresentation.value.runId)
-      controller.handleGatewayEvent(
-        "agent",
-        """{"sessionKey":"${controller.sessionKey.value}","runId":"$runId","seq":1,"stream":"lifecycle","data":{"phase":"end"}}""",
-      )
+      assertTrue("The prior run must remain active", controller.pendingRunCount.value > 0)
       viewModel.chatComposerState.addAttachments(owner, listOfNotNull(attachment))
     }
     val editor = composeRule.onNode(hasSetTextAction())

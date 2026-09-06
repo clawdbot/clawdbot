@@ -7,6 +7,7 @@ import {
 } from "../../packages/media-understanding-common/src/openai-compatible-video.js";
 import {
   assertOkOrThrowHttpError,
+  buildOpenAiCompatibleAuthHeaders,
   postJsonRequest,
   readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
@@ -38,7 +39,7 @@ export async function describeOpenAiCompatibleVideo(
       request: params.request,
       defaultHeaders: {
         "content-type": "application/json",
-        authorization: `Bearer ${params.apiKey}`,
+        ...buildOpenAiCompatibleAuthHeaders(params),
       },
       provider: params.provider,
       api: "openai-completions",
@@ -63,10 +64,11 @@ export async function describeOpenAiCompatibleVideo(
   });
 
   try {
-    await assertOkOrThrowHttpError(response, `${errorPrefix} failed`);
+    await assertOkOrThrowHttpError(response, `${errorPrefix} failed`, { requestHeaders: headers });
     const payload = await readProviderJsonResponse<OpenAiCompatibleVideoPayload>(
       response,
       `${errorPrefix} failed`,
+      { requestHeaders: headers },
     );
     const text = coerceOpenAiCompatibleVideoText(payload);
     if (!text) {

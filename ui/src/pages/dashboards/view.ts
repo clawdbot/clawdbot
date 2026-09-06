@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { icons } from "../../components/icons.ts";
 import { renderPanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
@@ -10,6 +11,7 @@ import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import "../../styles/dashboards.css";
+import "./dashboard-preview.ts";
 
 export type DashboardsRouteData = {
   result: SessionsListResult | null;
@@ -46,27 +48,18 @@ function dashboardAuthor(row: DashboardRow, fallbackAgentId: string) {
   return { id, label: actor?.label?.trim() || id };
 }
 
-function dashboardPreviewVariant(key: string): number {
-  let hash = 0;
-  for (const character of key) {
-    hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
-  }
-  return hash % 3;
-}
-
-function renderDashboardPreview(row: DashboardRow) {
-  return html`<div
-    class="dashboard-preview dashboard-preview--${dashboardPreviewVariant(row.key)}"
-    aria-hidden="true"
-  >
-    <div class="dashboard-preview__topbar"><span></span><span></span><span></span><i></i></div>
-    <div class="dashboard-preview__canvas">
-      <div class="dashboard-preview__metric"><span></span><strong></strong><i></i></div>
-      <div class="dashboard-preview__chart">
-        <span></span><span></span><span></span><span></span><span></span><span></span>
-      </div>
-      <div class="dashboard-preview__feed"><span></span><span></span><span></span></div>
-    </div>
+function renderDashboardPreview(
+  row: DashboardRow,
+  gatewaySnapshot: ApplicationGatewaySnapshot | undefined,
+  error: string | null,
+) {
+  return html`<div class="dashboard-preview" aria-hidden="true" inert>
+    <openclaw-dashboard-preview
+      .gatewaySnapshot=${gatewaySnapshot}
+      .sessionKey=${row.key}
+      .agentId=${row.agentId}
+      .error=${error}
+    ></openclaw-dashboard-preview>
   </div>`;
 }
 
@@ -94,7 +87,12 @@ function visibleDashboardRows(data: DashboardsRouteData, filters: DashboardGalle
     );
 }
 
-function renderDashboardCard(data: DashboardsRouteData, row: DashboardRow) {
+function renderDashboardCard(
+  data: DashboardsRouteData,
+  row: DashboardRow,
+  gatewaySnapshot: ApplicationGatewaySnapshot | undefined,
+  previewError: string | null,
+) {
   const target = sessionNavigationTarget({
     face: "chat",
     sessionKey: row.key,
@@ -109,7 +107,7 @@ function renderDashboardCard(data: DashboardsRouteData, row: DashboardRow) {
   const initial = author.label.trim().charAt(0).toLocaleUpperCase() || "?";
   return html`<article class="dashboard-card" data-dashboard-session=${row.key}>
     <a class="dashboard-card__main" href=${target.href} aria-label=${title}>
-      ${renderDashboardPreview(row)}
+      ${renderDashboardPreview(row, gatewaySnapshot, previewError)}
       <div class="dashboard-card__body">
         <div class="dashboard-card__heading">
           <h2>${title}</h2>
@@ -142,6 +140,8 @@ function renderDashboardList(
   data: DashboardsRouteData,
   filters: DashboardGalleryFilters,
   handlers: DashboardGalleryHandlers,
+  gatewaySnapshot: ApplicationGatewaySnapshot | undefined,
+  previewError: string | null,
 ) {
   const rows = data.result?.sessions ?? [];
   if (data.error && !data.result) {
@@ -224,7 +224,7 @@ function renderDashboardList(
             ${repeat(
               visibleRows,
               (row) => row.key,
-              (row) => renderDashboardCard(data, row),
+              (row) => renderDashboardCard(data, row, gatewaySnapshot, previewError),
             )}
           </div>`
     }
@@ -236,6 +236,8 @@ export function renderDashboards(
   onRetry: () => void,
   filters: DashboardGalleryFilters = DEFAULT_FILTERS,
   handlers: DashboardGalleryHandlers = NOOP_HANDLERS,
+  gatewaySnapshot?: ApplicationGatewaySnapshot,
+  previewError: string | null = null,
 ) {
   const body = data
     ? html`
@@ -250,7 +252,7 @@ export function renderDashboards(
             : undefined,
           onRetry,
         })}
-        ${renderDashboardList(data, filters, handlers)}
+        ${renderDashboardList(data, filters, handlers, gatewaySnapshot, previewError)}
       `
     : html`<section class="card" aria-busy="true">${t("common.loading")}</section>`;
   return html`

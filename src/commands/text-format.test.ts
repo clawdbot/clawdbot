@@ -3,25 +3,33 @@ import { describe, expect, it } from "vitest";
 import { formatTextCell, shortenText } from "./text-format.js";
 
 describe("shortenText", () => {
-  it("returns original text when it fits", () => {
-    expect(shortenText("openclaw", 16)).toBe("openclaw");
-  });
-
-  it("truncates and appends ellipsis when over limit", () => {
-    expect(shortenText("openclaw-status-output", 10)).toBe("openclaw-…");
-  });
-
-  it("returns an empty string for non-positive limits", () => {
-    expect(shortenText("openclaw", 0)).toBe("");
-    expect(shortenText("openclaw", -1)).toBe("");
-  });
-
-  it("counts multi-byte characters correctly", () => {
-    expect(shortenText("hello🙂world", 7)).toBe("hello🙂…");
+  it.each([
+    ["", 1, ""],
+    ["openclaw", 16, "openclaw"],
+    ["openclaw-status-output", 10, "openclaw-…"],
+    ["openclaw", 0, ""],
+    ["openclaw", -1, ""],
+    ["hello🙂world", 7, "hello🙂…"],
+    ["🙂🙂🙂", 3, "🙂🙂🙂"],
+    ["🙂🙂🙂🙂", 3, "🙂🙂…"],
+    ["a🙂🙂🙂🙂", 3, "a🙂…"],
+    ["🙂x", 1, "…"],
+    ["e\u0301x", 2, "e…"],
+  ])("shortens %j to %i code points", (input, maxLen, expected) => {
+    expect(shortenText(input, maxLen)).toBe(expected);
   });
 });
 
 describe("formatTextCell raw output bound", () => {
+  it.each([
+    ["abc", 5, "abc  "],
+    ["表", 4, "表  "],
+    ["e\u0301", 3, "e\u0301  "],
+    ["\u001b[31mred\u001b[0m", 4, "\u001b[31mred\u001b[0m "],
+  ])("pads fitting %j to %s visible columns", (input, width, expected) => {
+    expect(formatTextCell(input, width)).toBe(expected);
+  });
+
   it.each([
     ["zero-width overflow", "\u200b".repeat(32), "\u200b".repeat(14) + "… "],
     ["exact zero-width raw boundary", "\u200b".repeat(14), "\u200b".repeat(14) + "  "],

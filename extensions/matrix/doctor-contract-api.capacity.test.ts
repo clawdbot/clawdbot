@@ -62,7 +62,7 @@ function writeLegacyDedupeSource(stateDir: string, now: number, withMetadata = f
     "accounts",
     "home",
     "matrix.example.org__bot",
-    "token-a",
+    "0123456789abcdef",
   );
   fs.mkdirSync(root, { recursive: true });
   const jsonPath = path.join(root, "inbound-dedupe.json");

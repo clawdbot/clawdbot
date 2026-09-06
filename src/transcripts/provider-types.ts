@@ -110,7 +110,7 @@ export type TranscriptStopRequest = {
   reason?: string;
 };
 
-/** Result from stopping a transcript source provider. */
+/** Failure does not prove release; only success or a terminal onStatus ends cleanup custody. */
 export type TranscriptsStopResult =
   | {
       ok: true;

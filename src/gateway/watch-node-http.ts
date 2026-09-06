@@ -12,6 +12,7 @@ import {
   PROTOCOL_VERSION,
   validateConnectParams,
   type ConnectParams,
+  type HelloOk,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -36,14 +37,17 @@ import {
   recordPairedNodeDisconnection,
   type RequestNodePairingResult,
 } from "../infra/device-pairing-node.js";
-import { ensureDeviceToken, verifyDeviceToken } from "../infra/device-pairing-tokens.js";
+import { verifyDeviceToken } from "../infra/device-pairing-tokens.js";
 import {
   getPairedDevice,
   requestDevicePairing,
   resolveNodePairingState,
 } from "../infra/device-pairing.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { isNodePairingSetupBootstrapProfile } from "../shared/device-bootstrap-profile.js";
+import {
+  isNodePairingSetupBootstrapProfile,
+  isVoiceNodePairingSetupBootstrapProfile,
+} from "../shared/device-bootstrap-profile.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING,
   AUTH_RATE_LIMIT_SCOPE_WATCH_CHALLENGE,
@@ -124,7 +128,7 @@ type WatchNodeSession = {
   connId: string;
   invalidatedReason?: string;
   lastSeenAtMs: number;
-  expiresTimer: ReturnType<typeof setTimeout>;
+  expiresTimer?: ReturnType<typeof setTimeout>;
   queue: QueuedNodeEvent[];
   queuedBytes: number;
   waiter?: {
@@ -141,6 +145,7 @@ type WatchNodeHttpRuntimeOptions = {
   nodeReapprovalCoordinator?: NodeReapprovalCoordinator;
   onNodeConnected?: (session: NodeSession) => void;
   onNodeDisconnected?: (nodeId: string, reason: string) => void;
+  onDeviceTokensReplaced?: (deviceId: string, roles: readonly string[]) => void;
   onError?: (message: string, error: unknown) => void;
   pairingBaseDir?: string;
   now?: () => number;
@@ -651,6 +656,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
     }
 
     let issuedDeviceToken = deviceToken;
+    const bootstrapDeviceTokens: NonNullable<HelloOk["auth"]["deviceTokens"]> = [];
     let setupBootstrapAccepted = false;
     if (bootstrapToken) {
       const existing = await getPairedDevice(derivedDeviceId, options.pairingBaseDir);
@@ -664,60 +670,64 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         publicKey,
         baseDir: options.pairingBaseDir,
       });
-      if (!profile || !isNodePairingSetupBootstrapProfile(profile)) {
+      const voiceProfile = isVoiceNodePairingSetupBootstrapProfile(profile ?? undefined);
+      if (!profile || (!isNodePairingSetupBootstrapProfile(profile) && !voiceProfile)) {
         sendUnauthorized(res);
         return;
       }
-      if (existing) {
-        issuedDeviceToken =
-          (
-            await ensureDeviceToken({
-              deviceId: derivedDeviceId,
-              role: "node",
-              scopes: [],
-              baseDir: options.pairingBaseDir,
-            })
-          )?.token ?? null;
+      // Setup approval owns the entire handoff. Reusing an existing role token
+      // could skip a node-to-voice upgrade or hand out an older, broader grant.
+      const pairing = await requestDevicePairing(
+        {
+          deviceId: derivedDeviceId,
+          publicKey,
+          displayName: connect.client.displayName,
+          platform: connect.client.platform,
+          deviceFamily: connect.client.deviceFamily,
+          clientId: connect.client.id,
+          clientMode: connect.client.mode,
+          role: "node",
+          roles: profile.roles,
+          scopes: profile.scopes,
+          remoteIp: clientIp,
+          silent: true,
+        },
+        options.pairingBaseDir,
+      );
+      const approved = await approveBootstrapDevicePairing(
+        pairing.request.requestId,
+        profile,
+        { onTokensReplaced: options.onDeviceTokensReplaced },
+        options.pairingBaseDir,
+      );
+      if (approved?.status !== "approved") {
+        sendUnauthorized(res);
+        return;
       }
-      if (!issuedDeviceToken) {
-        const pairing = await requestDevicePairing(
-          {
-            deviceId: derivedDeviceId,
-            publicKey,
-            displayName: connect.client.displayName,
-            platform: connect.client.platform,
-            deviceFamily: connect.client.deviceFamily,
-            clientId: connect.client.id,
-            clientMode: connect.client.mode,
-            role: "node",
-            roles: ["node"],
-            scopes: [],
-            remoteIp: clientIp,
-            silent: true,
-          },
-          options.pairingBaseDir,
-        );
-        const approved = await approveBootstrapDevicePairing(
-          pairing.request.requestId,
-          profile,
-          options.pairingBaseDir,
-        );
-        if (approved?.status !== "approved") {
+      issuedDeviceToken = approved.device.tokens?.node?.token ?? null;
+      if (voiceProfile) {
+        const operatorToken = approved.device.tokens?.operator;
+        if (!operatorToken) {
           sendUnauthorized(res);
           return;
         }
-        issuedDeviceToken = approved.device.tokens?.node?.token ?? null;
-        options.broadcast(
-          "device.pair.resolved",
-          {
-            requestId: pairing.request.requestId,
-            deviceId: derivedDeviceId,
-            decision: "approved",
-            ts: current,
-          },
-          { dropIfSlow: true },
-        );
+        bootstrapDeviceTokens.push({
+          deviceToken: operatorToken.token,
+          role: operatorToken.role,
+          scopes: operatorToken.scopes,
+          issuedAtMs: operatorToken.rotatedAtMs ?? operatorToken.createdAtMs,
+        });
       }
+      options.broadcast(
+        "device.pair.resolved",
+        {
+          requestId: pairing.request.requestId,
+          deviceId: derivedDeviceId,
+          decision: "approved",
+          ts: current,
+        },
+        { dropIfSlow: true },
+      );
       setupBootstrapAccepted = Boolean(issuedDeviceToken);
     } else if (deviceToken) {
       const paired = await getPairedDevice(derivedDeviceId, options.pairingBaseDir);
@@ -828,7 +838,9 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
           scopes: [],
           baseDir: options.pairingBaseDir,
         });
-        if (!redemption.recorded || !redemption.fullyRedeemed) {
+        // Like hello-ok, this response hands off the entire bounded profile;
+        // consumeSetupHandoff retires its bearer even when only node connected.
+        if (!redemption.recorded) {
           sendUnauthorized(res);
           return;
         }
@@ -882,7 +894,11 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
             const currentNodePairing = resolveNodePairingState(device);
             return (
               currentNodePairing?.identity.key === nodePairingState.identity.key &&
-              currentNodePairing.generation?.key === nodePairingGeneration.key
+              currentNodePairing.generation?.key === nodePairingGeneration.key &&
+              bootstrapDeviceTokens.every((grant) => {
+                const currentToken = device?.tokens?.[grant.role];
+                return currentToken?.token === grant.deviceToken && !currentToken.revokedAtMs;
+              })
             );
           },
           baseDir: options.pairingBaseDir,
@@ -926,7 +942,6 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
           nodeId: derivedDeviceId,
           connId,
           lastSeenAtMs: now(),
-          expiresTimer: setTimeout(() => undefined, SESSION_IDLE_MS),
           queue: [],
           queuedBytes: 0,
         };
@@ -961,6 +976,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
           ok: true,
           sessionToken: session.token,
           deviceToken: issuedDeviceToken,
+          ...(bootstrapDeviceTokens.length > 0 ? { deviceTokens: bootstrapDeviceTokens } : {}),
           nodeId: session.nodeId,
           protocol: PROTOCOL_VERSION,
           pollTimeoutMs: POLL_TIMEOUT_MS,

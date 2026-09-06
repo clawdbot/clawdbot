@@ -42,7 +42,7 @@ it.runIf(process.platform !== "win32")("runs only on POSIX", () => {});
 it.runIf(process.platform !== "win32").each(["SIGTERM"] as const)("handles %s", () => {});
 const runIfPowerShell = powershell ? it : it.skip;
 it.concurrent.only("focused concurrent test", () => {});
-test.sequential.skip("skipped sequential test", () => {});
+test.skip("skipped sequential test", { concurrent: false }, () => {});
 const fixture = 'describe.skip("not code", () => {})';
 `,
   );

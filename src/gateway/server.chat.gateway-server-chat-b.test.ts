@@ -2253,7 +2253,7 @@ describe("gateway server chat", () => {
               preparedAuthStore: requirePreparedAuthStore(agentId),
               ...(profileId ? { preferredProfileId: profileId } : {}),
               ...(profileId && (profileSource === "user" || legacyUserProfile)
-                ? { lockedProfileId: profileId }
+                ? { pinnedProfileId: profileId }
                 : {}),
             });
             const projection = Promise.all([
@@ -7034,13 +7034,17 @@ describe("gateway server chat", () => {
       expect(assistantMessage.role).toBe("assistant");
       expect(messages[1]).toMatchObject({
         role: "assistant",
-        content: [{ type: "text", text: "I will clean that up now." }],
-        openclawStreamFallback: {
-          replacementText: "I will clean that up now.",
-          source: "segment",
-          itemId: "msg-progress",
-        },
+        timestamp: 2,
       });
+      expect(messages[1]).toHaveProperty("content", [
+        { type: "text", text: "I will clean that up now." },
+      ]);
+      expect(messages[1]).toHaveProperty("openclawStreamFallback", {
+        replacementText: "I will clean that up now.",
+        source: "segment",
+        itemId: "msg-progress",
+      });
+      expect(messages.slice(1, 3).map(readOpenClawSeq)).toEqual([2, 2]);
       expect(assistantMessage.content).toEqual([
         { type: "thinking", thinking: "private reasoning" },
         {

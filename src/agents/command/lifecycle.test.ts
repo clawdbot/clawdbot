@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { attachErrorDiagnostic } from "../../infra/error-diagnostics.js";
 import { buildAgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
+import { createCliTimeoutError } from "../cli-runner/no-output-timeout-policy.js";
 import { FailoverError } from "../failover-error.js";
 import { renderFailoverCodeUserCopy } from "../failover/user-copy.js";
 import { createAgentCommandLifecycle } from "./lifecycle.js";
@@ -272,7 +273,16 @@ describe("createAgentCommandLifecycle", () => {
       });
       const error = attachErrorDiagnostic(
         kind === "timeout"
-          ? new FailoverError("watchdog stopped the child", { reason: "timeout" })
+          ? createCliTimeoutError(
+              {},
+              {
+                mode: "overall",
+                timeoutSeconds: 30,
+                observedActivity: false,
+                activeToolCount: 0,
+                backgroundTaskCount: 0,
+              },
+            )
           : new Error("child exited with code 1"),
         "stderr: an earlier request timed out and was aborted",
       );

@@ -16,9 +16,9 @@ import {
   getRegistryWorktreeProvisionedState,
   insertRegistryWorktreeProvisionedChunk,
   insertRegistryWorktree,
+  listLegacyRegistryWorktreesForMigration,
   listRegistryWorktrees,
   listRegistryWorktreesForMigration,
-  hasLegacyRegistryWorktrees,
   updateRegistryWorktree,
 } from "./registry.js";
 import type { ManagedWorktreeRecord } from "./types.js";
@@ -39,7 +39,7 @@ describe("managed worktree registry", () => {
   });
 
   it("inspects absent legacy worktrees without creating the state database", async () => {
-    expect(hasLegacyRegistryWorktrees(env)).toBe(false);
+    expect(listLegacyRegistryWorktreesForMigration(env)).toEqual([]);
     expect(listRegistryWorktreesForMigration(env)).toEqual([]);
     await expect(fs.stat(env.OPENCLAW_STATE_DIR!)).rejects.toMatchObject({ code: "ENOENT" });
   });
@@ -68,9 +68,11 @@ describe("managed worktree registry", () => {
       lastActiveAt: 20,
     });
 
-    expect(hasLegacyRegistryWorktrees(env)).toBe(true);
     expect(listRegistryWorktrees(env).map((entry) => entry.id)).toEqual(["second", "first"]);
     expect(listRegistryWorktreesForMigration(env)).toEqual(listRegistryWorktrees(env));
+    expect(listLegacyRegistryWorktreesForMigration(env).map((entry) => entry.id)).toEqual([
+      "second",
+    ]);
     expect(findLiveRegistryWorktreeByPath(env, record.path)).toMatchObject({
       id: "first",
       ownerKind: "workboard",

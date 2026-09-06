@@ -3,11 +3,14 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createRealtimeTranscriptionWebSocketSession } from "openclaw/plugin-sdk/realtime-transcription-session";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type WebSocket from "ws";
 import type { RawData } from "ws";
 import { WebSocketServer } from "ws";
-import { buildDeepgramRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
+import { buildDeepgramRealtimeTranscriptionProvider } from "./realtime-transcription-provider-factory.js";
+
+const transcriptionHost = { createRealtimeTranscriptionWebSocketSession };
 
 let cleanup: (() => Promise<void>) | undefined;
 
@@ -84,7 +87,7 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
   });
 
   it("normalizes nested provider config", () => {
-    const provider = buildDeepgramRealtimeTranscriptionProvider();
+    const provider = buildDeepgramRealtimeTranscriptionProvider(transcriptionHost);
     const resolved = provider.resolveConfig?.({
       cfg: {} as OpenClawConfig,
       rawConfig: {
@@ -116,14 +119,14 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
 
   it("requires an API key when creating sessions", () => {
     vi.stubEnv("DEEPGRAM_API_KEY", "");
-    const provider = buildDeepgramRealtimeTranscriptionProvider();
+    const provider = buildDeepgramRealtimeTranscriptionProvider(transcriptionHost);
     expect(() => provider.createSession({ providerConfig: {} })).toThrow(
       "Deepgram API key missing",
     );
   });
 
   it.each(["not a url", "ftp://files.example.com"])("rejects invalid endpoint %s", (baseUrl) => {
-    const provider = buildDeepgramRealtimeTranscriptionProvider();
+    const provider = buildDeepgramRealtimeTranscriptionProvider(transcriptionHost);
     expect(() => provider.createSession({ providerConfig: { apiKey: "dg-key", baseUrl } })).toThrow(
       /^Invalid Deepgram baseUrl:/,
     );
@@ -131,7 +134,7 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
 
   it("validates the environment override", () => {
     vi.stubEnv("DEEPGRAM_BASE_URL", "not a url");
-    const provider = buildDeepgramRealtimeTranscriptionProvider();
+    const provider = buildDeepgramRealtimeTranscriptionProvider(transcriptionHost);
     expect(() => provider.createSession({ providerConfig: { apiKey: "dg-key" } })).toThrow(
       "Invalid Deepgram baseUrl: value is not a valid URL",
     );
@@ -140,7 +143,7 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
   it("does not echo the configured URL in validation errors", () => {
     const rawMarker = "configured-value-marker";
     const nonHttp = `ftp://files.example.com/${rawMarker}`;
-    const provider = buildDeepgramRealtimeTranscriptionProvider();
+    const provider = buildDeepgramRealtimeTranscriptionProvider(transcriptionHost);
     try {
       provider.createSession({ providerConfig: { apiKey: "dg-key", baseUrl: nonHttp } });
       throw new Error("expected rejection");
@@ -159,7 +162,7 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
     const server = await createDeepgramRealtimeServer({
       onRequest: (url, headers) => requests.push({ url, headers }),
     });
-    const provider = buildDeepgramRealtimeTranscriptionProvider();
+    const provider = buildDeepgramRealtimeTranscriptionProvider(transcriptionHost);
     const session = provider.createSession({
       providerConfig: {
         apiKey: "dummy",
@@ -189,7 +192,7 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
     const onPartial = vi.fn();
     const transcriptReceived = createDeferred<string>();
     const onTranscript = vi.fn(transcriptReceived.resolve);
-    const session = buildDeepgramRealtimeTranscriptionProvider().createSession({
+    const session = buildDeepgramRealtimeTranscriptionProvider(transcriptionHost).createSession({
       providerConfig: { apiKey: "dummy", baseUrl: server.baseUrl, endpointingMs: 1000 },
       onPartial,
       onTranscript,
@@ -217,7 +220,7 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
     });
     const transcriptReceived = createDeferred<string>();
     const onTranscript = vi.fn(transcriptReceived.resolve);
-    const session = buildDeepgramRealtimeTranscriptionProvider().createSession({
+    const session = buildDeepgramRealtimeTranscriptionProvider(transcriptionHost).createSession({
       providerConfig: { apiKey: "dummy", baseUrl: server.baseUrl, endpointingMs: 1000 },
       onTranscript,
     });
@@ -254,7 +257,7 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
       }
     });
     const onTranscript = vi.fn();
-    const session = buildDeepgramRealtimeTranscriptionProvider().createSession({
+    const session = buildDeepgramRealtimeTranscriptionProvider(transcriptionHost).createSession({
       providerConfig: { apiKey: "dummy", baseUrl: server.baseUrl, endpointingMs: 1000 },
       onPartial,
       onError,
@@ -294,7 +297,7 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
         framesDelivered.resolve();
       }
     });
-    const session = buildDeepgramRealtimeTranscriptionProvider().createSession({
+    const session = buildDeepgramRealtimeTranscriptionProvider(transcriptionHost).createSession({
       providerConfig: { apiKey: "dummy", baseUrl: server.baseUrl, endpointingMs: 1000 },
       onTranscript,
       onError,
@@ -333,7 +336,7 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
     });
     const transcriptReceived = createDeferred<string>();
     const onTranscript = vi.fn(transcriptReceived.resolve);
-    const session = buildDeepgramRealtimeTranscriptionProvider().createSession({
+    const session = buildDeepgramRealtimeTranscriptionProvider(transcriptionHost).createSession({
       providerConfig: { apiKey: "dummy", baseUrl: server.baseUrl, endpointingMs: 10_000 },
       onTranscript,
     });
@@ -370,7 +373,7 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
       }
     });
     const onTranscript = vi.fn();
-    const session = buildDeepgramRealtimeTranscriptionProvider().createSession({
+    const session = buildDeepgramRealtimeTranscriptionProvider(transcriptionHost).createSession({
       providerConfig: { apiKey: "dummy", baseUrl: server.baseUrl, endpointingMs: 10_000 },
       onPartial,
       onTranscript,
@@ -411,7 +414,7 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
     });
     const transcriptReceived = createDeferred<string>();
     const onTranscript = vi.fn(transcriptReceived.resolve);
-    const session = buildDeepgramRealtimeTranscriptionProvider().createSession({
+    const session = buildDeepgramRealtimeTranscriptionProvider(transcriptionHost).createSession({
       providerConfig: { apiKey: "dummy", baseUrl: server.baseUrl, endpointingMs: 25 },
       onTranscript,
     });
@@ -439,7 +442,7 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
     });
     const onPartial = vi.fn();
     const onTranscript = vi.fn();
-    const session = buildDeepgramRealtimeTranscriptionProvider().createSession({
+    const session = buildDeepgramRealtimeTranscriptionProvider(transcriptionHost).createSession({
       providerConfig: { apiKey: "dummy", baseUrl: server.baseUrl, endpointingMs: 25 },
       onPartial,
       onTranscript,
@@ -471,7 +474,7 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
       },
     });
     const onTranscript = vi.fn();
-    const session = buildDeepgramRealtimeTranscriptionProvider().createSession({
+    const session = buildDeepgramRealtimeTranscriptionProvider(transcriptionHost).createSession({
       providerConfig: { apiKey: "dummy", baseUrl: server.baseUrl, endpointingMs: 10_000 },
       onTranscript,
     });
@@ -504,7 +507,7 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
       },
     });
     const onTranscript = vi.fn();
-    const session = buildDeepgramRealtimeTranscriptionProvider().createSession({
+    const session = buildDeepgramRealtimeTranscriptionProvider(transcriptionHost).createSession({
       providerConfig: { apiKey: "dummy", baseUrl: server.baseUrl, endpointingMs: 10_000 },
       onTranscript,
     });
@@ -530,7 +533,7 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
     });
     const errorReceived = createDeferred<Error>();
     const onError = vi.fn(errorReceived.resolve);
-    const session = buildDeepgramRealtimeTranscriptionProvider().createSession({
+    const session = buildDeepgramRealtimeTranscriptionProvider(transcriptionHost).createSession({
       providerConfig: { apiKey: "dummy", baseUrl: server.baseUrl, endpointingMs: 1000 },
       onError,
     });
