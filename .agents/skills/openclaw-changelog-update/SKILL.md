@@ -106,10 +106,15 @@ every human `Thanks @...` attribution.
      target prose, or target record. The manifest and generated provenance retain
      each tag plus the exact excluded PR inventory and count for deterministic
      candidate validation
-   - source PR discovery combines merged GitHub commit associations with merged
-     PR references explicitly present in active commit subjects/bodies so
-     cherry-picks and squash commits remain accounted for. Resolve every
-     association page and exclude PRs merged after the target release commit
+   - source PR discovery bounds GitHub commit associations to the selected target
+     history, or the frozen main history for canonical carriers. A contextual
+     source reference becomes a contribution only when its merged commit is
+     reachable in the target history and its merge time is within the target.
+     Keep all references resolvable, but do not promote unrelated PRs merely
+     because they merge while release preparation continues. Explicit seeds
+     retain their historical membership and remain seed-only unless independently
+     proven in-range. Resolve every association page; existing canonical,
+     cherry-pick, and provenance contracts remain authoritative.
    - explicit multi-commit reverts require a revert subject and one standalone
      `Reverts <full SHA> and <full SHA>.` declaration (comma-separated lists
      with final `and` also work). The exact ending ` to restore the previous
