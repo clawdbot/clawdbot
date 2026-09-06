@@ -27,6 +27,7 @@ import {
 } from "./sessions-send-helpers.js";
 
 const log = createSubsystemLogger("agents/sessions-send");
+const A2A_STEP_SYSTEM_PROMPT = "Agent-to-agent reply step / announce step.";
 
 function sameOwnedSession(params: {
   leftKey: string | undefined;
@@ -215,7 +216,8 @@ export async function runSessionsSendA2AFlow(params: {
           agentId: currentAgentId,
           sessionKey: currentSessionKey,
           message: incomingMessage,
-          extraSystemPrompt: replyPrompt,
+          extraSystemPrompt: A2A_STEP_SYSTEM_PROMPT,
+          runtimeContext: replyPrompt,
           timeoutMs: params.announceTimeoutMs,
           lane: resolveNestedAgentLaneForSession(currentSessionKey),
           sourceAgentId: nextAgentId,
@@ -254,7 +256,8 @@ export async function runSessionsSendA2AFlow(params: {
       agentId: params.targetAgentId,
       sessionKey: params.targetSessionKey,
       message: "Agent-to-agent announce step.",
-      extraSystemPrompt: announcePrompt,
+      extraSystemPrompt: A2A_STEP_SYSTEM_PROMPT,
+      runtimeContext: announcePrompt,
       timeoutMs: params.announceTimeoutMs,
       lane: resolveNestedAgentLaneForSession(params.targetSessionKey),
       transcriptMessage: "",
