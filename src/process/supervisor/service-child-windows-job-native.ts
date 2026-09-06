@@ -9,6 +9,17 @@ const FILE_SHARE_READ = 0x0000_0001;
 const FILE_SHARE_WRITE = 0x0000_0002;
 const OPEN_EXISTING = 3;
 const FILE_ATTRIBUTE_NORMAL = 0x0000_0080;
+const CREATE_NEW_PROCESS_GROUP = 0x0000_0200;
+const CREATE_UNICODE_ENVIRONMENT = 0x0000_0400;
+const EXTENDED_STARTUPINFO_PRESENT = 0x0008_0000;
+const CREATE_NO_WINDOW = 0x0800_0000;
+// Owned here (a module with no import-time side effects) so tests can assert the exact
+// CreateProcessW creation flags without loading the anchor's process-lifecycle entrypoint.
+export const WINDOWS_JOB_ANCHOR_CREATE_PROCESS_FLAGS =
+  CREATE_NEW_PROCESS_GROUP |
+  CREATE_UNICODE_ENVIRONMENT |
+  EXTENDED_STARTUPINFO_PRESENT |
+  CREATE_NO_WINDOW;
 
 export function createWindowsJobBindings(koffi: typeof import("koffi").default) {
   if (process.arch !== "x64" && process.arch !== "arm64") {

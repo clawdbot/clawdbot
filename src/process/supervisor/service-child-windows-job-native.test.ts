@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { WINDOWS_JOB_ANCHOR_CREATE_PROCESS_FLAGS } from "./service-child-windows-job-anchor.js";
+import { WINDOWS_JOB_ANCHOR_CREATE_PROCESS_FLAGS } from "./service-child-windows-job-native.js";
 
 describe("Windows Job anchor CreateProcessW flags", () => {
   it("includes CREATE_NO_WINDOW so the anchored child console stays hidden", () => {

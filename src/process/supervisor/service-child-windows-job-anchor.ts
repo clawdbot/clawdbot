@@ -8,7 +8,10 @@ import type {
   ServiceChildAnchorPayload,
   ServiceChildStart,
 } from "./service-child-protocol.js";
-import { createWindowsJobBindings } from "./service-child-windows-job-native.js";
+import {
+  createWindowsJobBindings,
+  WINDOWS_JOB_ANCHOR_CREATE_PROCESS_FLAGS,
+} from "./service-child-windows-job-native.js";
 import {
   buildWindowsJobEnvironmentBlock,
   isWindowsJobServiceStart,
@@ -29,16 +32,6 @@ type OutputStream = {
 const JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION = 1;
 const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9;
 const STARTF_USESTDHANDLES = 0x0000_0100;
-const CREATE_NEW_PROCESS_GROUP = 0x0000_0200;
-const CREATE_UNICODE_ENVIRONMENT = 0x0000_0400;
-const EXTENDED_STARTUPINFO_PRESENT = 0x0008_0000;
-const CREATE_NO_WINDOW = 0x0800_0000;
-// Exported so a test can assert on the exact CreateProcessW flags without invoking native koffi bindings.
-export const WINDOWS_JOB_ANCHOR_CREATE_PROCESS_FLAGS =
-  CREATE_NEW_PROCESS_GROUP |
-  CREATE_UNICODE_ENVIRONMENT |
-  EXTENDED_STARTUPINFO_PRESENT |
-  CREATE_NO_WINDOW;
 const WAIT_OBJECT_0 = 0;
 const WAIT_TIMEOUT = 258;
 const WAIT_FAILED = 0xffff_ffff;
