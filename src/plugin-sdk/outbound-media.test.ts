@@ -117,7 +117,7 @@ describe("loadOutboundMediaFromUrl", () => {
 });
 
 describe("createHostedOutboundMediaStore", () => {
-  function createStoreFixture(namespace = "hosted-media") {
+  function createStoreFixture(namespace = "hosted-media", bulkReads = true) {
     const metadataStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaMetaRecord>(
       "fixture-plugin",
       {
@@ -137,7 +137,7 @@ describe("createHostedOutboundMediaStore", () => {
       chunkStore,
       store: createHostedOutboundMediaStore({
         metadataStore,
-        chunkStore,
+        chunkStore: bulkReads ? chunkStore : { ...chunkStore, lookupMany: undefined },
         ttlMs: 120_000,
         resolveExpiresAtMs: () => Date.now() + 120_000,
         createId: () => "abc123abc123abc123abc123",
@@ -153,35 +153,38 @@ describe("createHostedOutboundMediaStore", () => {
     return createStoreFixture(namespace).store;
   }
 
-  it("stores hosted media chunks and reads them back", async () => {
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: Buffer.from("image-bytes"),
-      kind: "image",
-      contentType: "image/png",
-      fileName: "floor-plan.png",
-    });
-    const store = createStore();
+  it.each([true, false])(
+    "stores hosted media chunks and reads them back (bulk: %s)",
+    async (bulkReads) => {
+      loadWebMediaMock.mockResolvedValueOnce({
+        buffer: Buffer.from("image-bytes"),
+        kind: "image",
+        contentType: "image/png",
+        fileName: "floor-plan.png",
+      });
+      const { store } = createStoreFixture("hosted-media", bulkReads);
 
-    const url = await store.prepareUrl({
-      mediaUrl: "https://example.com/photo.png",
-      routePath: "/hook/media/",
-      publicBaseUrl: "https://gateway.example.com",
-      maxBytes: 1024,
-    });
-    const entry = await store.read("abc123abc123abc123abc123");
+      const url = await store.prepareUrl({
+        mediaUrl: "https://example.com/photo.png",
+        routePath: "/hook/media/",
+        publicBaseUrl: "https://gateway.example.com",
+        maxBytes: 1024,
+      });
+      const entry = await store.read("abc123abc123abc123abc123");
 
-    expect(url).toBe(
-      "https://gateway.example.com/hook/media/abc123abc123abc123abc123?token=token123",
-    );
-    expect(entry?.metadata).toMatchObject({
-      routePath: "/hook/media/",
-      token: "token123",
-      contentType: "image/png",
-      fileName: "floor-plan.png",
-      byteLength: Buffer.byteLength("image-bytes"),
-    });
-    expect(entry?.buffer.toString("utf8")).toBe("image-bytes");
-  });
+      expect(url).toBe(
+        "https://gateway.example.com/hook/media/abc123abc123abc123abc123?token=token123",
+      );
+      expect(entry?.metadata).toMatchObject({
+        routePath: "/hook/media/",
+        token: "token123",
+        contentType: "image/png",
+        fileName: "floor-plan.png",
+        byteLength: Buffer.byteLength("image-bytes"),
+      });
+      expect(entry?.buffer.toString("utf8")).toBe("image-bytes");
+    },
+  );
 
   it("validates the loaded bytes before persisting a capability", async () => {
     const media = {
@@ -334,6 +337,7 @@ describe("createHostedOutboundMediaStore", () => {
       maxBytes: 1024,
     });
     const chunkLookup = vi.spyOn(chunkStore, "lookup");
+    const chunkBulkLookup = vi.spyOn(chunkStore, "lookupMany");
 
     await expect(store.readMetadata("abc123abc123abc123abc123")).resolves.toMatchObject({
       routePath: "/hook/media/",
@@ -342,6 +346,7 @@ describe("createHostedOutboundMediaStore", () => {
       byteLength: Buffer.byteLength("image-bytes"),
     });
     expect(chunkLookup).not.toHaveBeenCalled();
+    expect(chunkBulkLookup).not.toHaveBeenCalled();
   });
 
   it("forwards local media access into hosted media preparation", async () => {

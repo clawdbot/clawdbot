@@ -24,6 +24,7 @@ import {
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
   resetPluginStateStoreForTests,
+  pluginStateEntriesInKeyRange,
 } from "./plugin-state-store.js";
 
 let testState: OpenClawTestState | undefined;
@@ -35,6 +36,90 @@ afterEach(() => resetPluginStateStoreForTests());
 afterAll(async () => testState?.cleanup());
 
 describe("plugin state open errors", () => {
+  it("reports the opened database path for corrupt values with an explicit env", async () => {
+    await withOpenClawTestState(
+      { label: "plugin-state-corrupt-explicit-env", applyEnv: false },
+      async (state) => {
+        const options = { namespace: "corrupt-env", maxEntries: 10, env: state.env };
+        const sync = createPluginStateSyncKeyedStore<{ owner: string }>("discord", options);
+        const store = createPluginStateKeyedStore<{ owner: string }>("discord", options);
+        sync.register("key", { owner: "custom" });
+        const database = openOpenClawStateDatabase({ env: state.env });
+        expect(database.path).not.toBe(resolveOpenClawStateSqlitePath());
+        database.db
+          .prepare("UPDATE plugin_state_entries SET value_json = ? WHERE namespace = ?")
+          .run("invalid JSON", options.namespace);
+        const expected = {
+          code: "PLUGIN_STATE_CORRUPT",
+          path: database.path,
+          message: "Plugin state entry contains corrupt JSON.",
+        };
+        for (const connection of ["warm", "readonly"]) {
+          if (connection === "readonly") {
+            closePluginStateDatabase();
+          }
+          for (const read of [
+            () => sync.lookup("key"),
+            () => store.lookup("key"),
+            () => sync.entries(),
+            () => store.entries(),
+            () =>
+              pluginStateEntriesInKeyRange({
+                pluginId: "discord",
+                namespace: options.namespace,
+                keyStartInclusive: "key",
+                keyEndExclusive: "kez",
+                limit: 1,
+                env: state.env,
+              }),
+          ]) {
+            await expect((async () => await read())()).rejects.toMatchObject(expected);
+          }
+          expect(sync.lookupMany(["key"])).toEqual([
+            { ok: false, error: expect.objectContaining({ ...expected, operation: "lookup" }) },
+          ]);
+          await expect(store.lookupMany(["key"])).resolves.toEqual([
+            { ok: false, error: expect.objectContaining({ ...expected, operation: "lookup" }) },
+          ]);
+        }
+        let callbackCalled = false;
+        for (const stateStore of [sync, store]) {
+          const readers = [
+            { operation: "consume", read: () => stateStore.consume("key") },
+            {
+              operation: "lookup",
+              read: () =>
+                stateStore.update("key", () => {
+                  callbackCalled = true;
+                  return { owner: "changed" };
+                }),
+            },
+            {
+              operation: "delete",
+              read: () =>
+                stateStore.deleteIf("key", () => {
+                  callbackCalled = true;
+                  return true;
+                }),
+            },
+          ];
+          for (const { read, operation } of readers) {
+            await expect((async () => await read())()).rejects.toMatchObject({
+              ...expected,
+              operation,
+            });
+          }
+        }
+        expect(callbackCalled).toBe(false);
+        expect(
+          openOpenClawStateDatabase({ env: state.env })
+            .db.prepare("SELECT value_json FROM plugin_state_entries WHERE namespace = ?")
+            .get(options.namespace),
+        ).toEqual({ value_json: "invalid JSON" });
+      },
+    );
+  });
+
   it("keeps warm ownership denials distinct from acquisition failures for the same path", async () => {
     // A different open database must not make this fixture's closed path look warm.
     openOpenClawStateDatabase();
@@ -114,7 +199,11 @@ describe("plugin state open errors", () => {
       }),
     ).toBe(true);
     try {
-      for (const operation of [() => store.lookup("k"), () => store.register("k", { ok: true })]) {
+      for (const operation of [
+        () => store.lookup("k"),
+        () => store.lookupMany(["k"]),
+        () => store.register("k", { ok: true }),
+      ]) {
         await expect(operation()).rejects.toMatchObject({
           code: "PLUGIN_STATE_OPEN_FAILED",
           path: databasePath,
@@ -141,7 +230,11 @@ describe("plugin state open errors", () => {
     closePluginStateDatabase();
 
     try {
-      for (const operation of [() => store.lookup("k"), () => store.register("k", { ok: true })]) {
+      for (const operation of [
+        () => store.lookup("k"),
+        () => store.lookupMany(["k"]),
+        () => store.register("k", { ok: true }),
+      ]) {
         await expect(operation()).rejects.toMatchObject({
           code: "PLUGIN_STATE_OPEN_FAILED",
           path: databasePath,

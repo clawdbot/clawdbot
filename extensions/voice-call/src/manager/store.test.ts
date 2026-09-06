@@ -5,6 +5,7 @@ import { Command } from "commander";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateSyncKeyedStoreForTests,
+  openOpenClawStateDatabase,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,6 +19,8 @@ import { setVoiceCallStateRuntime } from "../runtime-state.js";
 import { CallRecordSchema } from "../types.js";
 import { MAX_CALL_REPLAY_KEYS } from "./replay-keys.js";
 import {
+  CALL_RECORD_EVENT_CHUNKS_NAMESPACE,
+  CALL_RECORD_CHUNK_MAX_ENTRIES,
   findCallInStore,
   getCallHistoryFromStore,
   loadActiveCallsFromStore,
@@ -32,15 +35,21 @@ vi.mock("../../api.js", async (importOriginal) => ({
 
 const MANAGER_REPLAY_KEY_LIMIT = 10_000;
 
-function installStateRuntime(): void {
+function installStateRuntime(bulkReads = true): void {
   setVoiceCallStateRuntime({
     state: {
       resolveStateDir: () => "",
       openKeyedStore: (() => {
         throw new Error("openKeyedStore is not used by voice-call store tests");
       }) as never,
-      openSyncKeyedStore: (options: OpenKeyedStoreOptions) =>
-        createPluginStateSyncKeyedStoreForTests("voice-call", options),
+      openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
+        const store = createPluginStateSyncKeyedStoreForTests<T>("voice-call", options);
+        if (bulkReads) {
+          return store;
+        }
+        const { lookupMany: _lookupMany, ...legacy } = store;
+        return legacy;
+      },
       openChannelIngressQueue: (() => {
         throw new Error("openChannelIngressQueue is not used by voice-call store tests");
       }) as never,
@@ -160,6 +169,61 @@ describe("voice-call call record store", () => {
     expect(restored.activeCalls.has("call-jsonl")).toBe(false);
     expect(fs.existsSync(path.join(storePath, "calls.jsonl"))).toBe(true);
   });
+
+  it.each([true, false])(
+    "restores complete chunked call transcripts (bulk: %s)",
+    async (bulkReads) => {
+      installStateRuntime(bulkReads);
+      const storePath = createTestStorePath();
+      const call = CallRecordSchema.parse(
+        makePersistedCall({
+          callId: "call-chunked",
+          transcript: [
+            { timestamp: Date.now(), speaker: "user", text: "🦞".repeat(180_000), isFinal: true },
+          ],
+        }),
+      );
+      persistCallRecord(storePath, call);
+      resetPluginStateStoreForTests();
+      expect(loadActiveCallsFromStore(storePath).activeCalls.get(call.callId)?.transcript).toEqual(
+        call.transcript,
+      );
+      await expect(getCallHistoryFromStore(storePath)).resolves.toEqual([call]);
+      const env = { ...process.env, OPENCLAW_STATE_DIR: storePath };
+      const chunks = createPluginStateSyncKeyedStoreForTests<{ index: number; dataBase64: string }>(
+        "voice-call",
+        {
+          namespace: CALL_RECORD_EVENT_CHUNKS_NAMESPACE,
+          maxEntries: CALL_RECORD_CHUNK_MAX_ENTRIES,
+          env,
+        },
+      );
+      const rows = chunks.entries();
+      const first = rows.find((row) => row.value.index === 0);
+      const later = rows.find((row) => row.value.index === 1);
+      if (!first || !later) {
+        throw new Error("expected call transcript chunks");
+      }
+      const good = CallRecordSchema.parse(
+        makePersistedCall({ callId: "good-call", transcript: [] }),
+      );
+      persistCallRecord(storePath, good);
+      const { db } = openOpenClawStateDatabase({ env });
+      db.prepare("UPDATE plugin_state_entries SET value_json = ? WHERE entry_key = ?").run(
+        "invalid JSON",
+        later.key,
+      );
+      chunks.register(first.key, { ...first.value, index: -1 });
+      await expect(getCallHistoryFromStore(storePath)).resolves.toEqual([good]);
+      expect(findCallInStore(storePath, good.callId)).toEqual(good);
+      chunks.delete(first.key);
+      await expect(getCallHistoryFromStore(storePath)).resolves.toEqual([good]);
+      chunks.register(first.key, first.value);
+      expect(() => findCallInStore(storePath, good.callId)).toThrowError(
+        expect.objectContaining({ code: "PLUGIN_STATE_CORRUPT" }),
+      );
+    },
+  );
 
   it("persists oversized records in SQLite without creating a JSONL fallback", async () => {
     const storePath = createTestStorePath();

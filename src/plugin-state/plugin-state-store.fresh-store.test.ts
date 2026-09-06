@@ -50,6 +50,7 @@ describe("plugin state fresh-store reads", () => {
         });
 
         await expect(store.lookup("k")).resolves.toBeUndefined();
+        await expect(store.lookupMany(["k"])).resolves.toEqual([{ ok: true, value: undefined }]);
         await expect(store.entries()).resolves.toEqual([]);
         expect(
           pluginStateEntriesInKeyRange({

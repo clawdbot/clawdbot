@@ -101,6 +101,14 @@ describe("plugin runtime state proxy", () => {
         maxEntries: 10,
       });
       await expect(telegramStore.lookup("k")).resolves.toBeUndefined();
+      await expect(telegramStore.lookupMany?.(["k"])).resolves.toEqual([
+        { ok: true, value: undefined },
+      ]);
+      await expect(store.lookupMany?.(["k", "missing", "k"])).resolves.toEqual([
+        { ok: true, value: { plugin: "discord" } },
+        { ok: true, value: undefined },
+        { ok: true, value: { plugin: "discord" } },
+      ]);
       await expect(store.lookup("k")).resolves.toEqual({ plugin: "discord" });
 
       const syncStore = api.runtime.state.openSyncKeyedStore<{ plugin: string }>({
@@ -109,6 +117,10 @@ describe("plugin runtime state proxy", () => {
       });
       expect(syncStore.registerIfAbsent("k", { plugin: "discord" })).toBe(true);
       expect(syncStore.lookup("k")).toEqual({ plugin: "discord" });
+      expect(syncStore.lookupMany?.(["k", "missing"])).toEqual([
+        { ok: true, value: { plugin: "discord" } },
+        { ok: true, value: undefined },
+      ]);
     });
   });
 

@@ -278,14 +278,29 @@ function pruneCallRecordEvents(stores: CallRecordStateStores): void {
 }
 
 /** Read and reassemble one chunked call record event. */
-function readCallRecordEvent(stores: CallRecordStateStores, eventKey: string): CallRecord | null {
-  const meta = stores.events.lookup(eventKey);
-  if (!meta) {
+function readCallRecordEvent(
+  stores: CallRecordStateStores,
+  eventKey: string,
+  meta: CallRecordEventMeta,
+): CallRecord | null {
+  if (
+    !Number.isSafeInteger(meta.chunkCount) ||
+    meta.chunkCount < 1 ||
+    meta.chunkCount > MAX_CHUNKS_PER_CALL_RECORD_EVENT
+  ) {
     return null;
   }
+  // Preserve compatibility with published hosts exposing point reads only.
+  const records = stores.chunks.lookupMany?.(
+    Array.from({ length: meta.chunkCount }, (_, index) => buildChunkKey(eventKey, index)),
+  );
   const chunks: Buffer[] = [];
   for (let index = 0; index < meta.chunkCount; index += 1) {
-    const chunk = stores.chunks.lookup(buildChunkKey(eventKey, index));
+    const result = records?.[index];
+    if (result && !result.ok) {
+      throw result.error;
+    }
+    const chunk = records ? result?.value : stores.chunks.lookup(buildChunkKey(eventKey, index));
     if (!chunk || chunk.index !== index) {
       return null;
     }
@@ -301,7 +316,7 @@ function readCallRecordEvents(stores: CallRecordStateStores): CallRecord[] {
     .entries()
     .toSorted((a, b) => a.createdAt - b.createdAt || a.key.localeCompare(b.key))
     .map((entry) => {
-      const call = readCallRecordEvent(stores, entry.key);
+      const call = readCallRecordEvent(stores, entry.key, entry.value);
       return call
         ? {
             call,

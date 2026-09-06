@@ -975,6 +975,11 @@ describe("plugin state keyed store", () => {
 
         expect(existsSync(databasePath)).toBe(false);
         await expect(store.lookup("k")).resolves.toBeUndefined();
+        await expect(store.lookupMany(["k", "missing"])).resolves.toEqual([
+          { ok: true, value: undefined },
+          { ok: true, value: undefined },
+        ]);
+        await expect(store.lookupMany([])).resolves.toEqual([]);
         await expect(store.entries()).resolves.toEqual([]);
         expect(countPluginStateLiveEntries("discord", state.env)).toBe(0);
         expect(existsSync(databasePath)).toBe(false);
