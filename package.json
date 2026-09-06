@@ -2029,6 +2029,7 @@
     "test:startup:bench:update": "node --import ./scripts/tsx.mjs scripts/test-update-cli-startup-bench.mts",
     "test:startup:gateway": "node --import ./scripts/tsx.mjs scripts/bench-gateway-startup.ts",
     "test:restart:gateway": "node --import ./scripts/tsx.mjs scripts/bench-gateway-restart.ts",
+    "test:sessions:context-navigation": "node --expose-gc --import ./scripts/tsx.mjs scripts/bench-session-context-navigation.ts",
     "test:sessions:hydration-memory": "node --import ./scripts/tsx.mjs scripts/bench-session-manager-hydration-memory.ts",
     "test:startup:memory": "node --import ./scripts/tsx.mjs scripts/ensure-cli-startup-build.mts && node scripts/check-cli-startup-memory.mjs",
     "test:ui": "pnpm lint:ui:no-raw-window-open && node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts && pnpm --dir ui test",

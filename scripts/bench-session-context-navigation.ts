@@ -2,7 +2,7 @@
 // All state is synthetic and temporary; no Gateway or operator database is opened.
 import { createHash } from "node:crypto";
 import path from "node:path";
-import type { DatabaseSync, StatementSync } from "node:sqlite";
+import type { DatabaseSync, SQLInputValue, StatementSync } from "node:sqlite";
 import {
   upsertSessionEntryCore,
   type TranscriptEvent,
@@ -129,7 +129,10 @@ function makeTranscript(sessionId: string, count: number, bodyBytes: number, sha
 /** Instrument only the isolated process-owned handle borrowed by the native reader. */
 function observeReads(db: DatabaseSync) {
   clearNodeSqliteKyselyCacheForDatabase(db);
+  // Keep the exact methods for restoration; invocation below supplies their receiver.
+  // oxlint-disable-next-line typescript/unbound-method
   const originalExec = db.exec;
+  // oxlint-disable-next-line typescript/unbound-method
   const originalPrepare = db.prepare;
   const restoreStatements: Array<() => void> = [];
   let current: ReadMetrics | undefined;
@@ -151,13 +154,18 @@ function observeReads(db: DatabaseSync) {
     if (!sql.includes('as "navigation_json"')) {
       return statement;
     }
+    // Save the method for restoration; Reflect.apply below supplies its receiver.
+    // oxlint-disable-next-line typescript/unbound-method
     const originalIterate = statement.iterate;
     statement.iterate = function* (
       this: StatementSync,
-      ...parameters: Parameters<StatementSync["iterate"]>
+      ...parameters: SQLInputValue[] | [Record<string, SQLInputValue>, ...SQLInputValue[]]
     ) {
       const start = performance.now();
-      const iterator = originalIterate.apply(this, parameters);
+      // Reflect.apply forwards either native overload without narrowing to the last one.
+      const iterator = Reflect.apply(originalIterate, this, parameters) as ReturnType<
+        StatementSync["iterate"]
+      >;
       if (current) {
         current.navigationSqlMs += performance.now() - start;
       }
@@ -218,7 +226,20 @@ async function main() {
     );
   }
   const gc = (globalThis as typeof globalThis & { gc?: () => void }).gc;
-  const cases = [];
+  const cases: Array<{
+    size: "short" | "long";
+    shape: Shape;
+    messages: number;
+    transcriptBytes: number;
+    samples: Sample[];
+    median: {
+      navigationSqlMs: number;
+      transactionHoldMs: number;
+      totalReadMs: number;
+      heapUsedDeltaBytes: number;
+      rssDeltaBytes: number;
+    };
+  }> = [];
   for (const [size, count] of [
     ["short", 24],
     ["long", longEvents],

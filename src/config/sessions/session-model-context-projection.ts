@@ -83,7 +83,7 @@ export function projectModelContextNavigationSql(event: Expression<string>): Raw
     "label",
     "name",
   ]);
-  const message = /* kysely-allow-raw: JSON message metadata is selected without content or native replay payloads. */ sql<unknown>`jsonb_extract(${navigationEvent}, '$.message')`;
+  const message = /* kysely-allow-raw: JSON message metadata is selected without content or native replay payloads. */ sql`jsonb_extract(${navigationEvent}, '$.message')`;
   const messageFacts = pickJsonObject(message, [
     "role",
     "provider",
