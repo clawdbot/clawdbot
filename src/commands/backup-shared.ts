@@ -597,15 +597,15 @@ export async function resolveBackupPlanFromDisk(
   const agentRoots = unresolvedOwnership
     ? []
     : await resolveBackupAgentRoots(discoverySnapshot.config);
-  // Agents resolve to subdirectories of a shared base, so the base itself is never an
-  // effective agent workspace and would otherwise be traversed. When workspace content is
-  // excluded these paths are only ever the exclusion set, so adding the base skips its
-  // scratch contents without changing what an include-workspace archive collects.
-  const sharedWorkspaceBase = discoverySnapshot.config?.agents?.defaults?.workspace?.trim();
-  const discoveredWorkspaceDirs =
-    includeWorkspace || !sharedWorkspaceBase
-      ? cleanupPlan.workspaceDirs
-      : [...cleanupPlan.workspaceDirs, resolveUserPath(sharedWorkspaceBase)];
+  const discoveredWorkspaceDirs = cleanupPlan.workspaceDirs;
+  // Effective agent workspaces can omit their shared base. Exclude it only here
+  // so full backups and destructive cleanup retain their existing selection.
+  if (!includeWorkspace && discoverySnapshot.valid) {
+    const sharedWorkspaceBase = discoverySnapshot.config.agents?.defaults?.workspace?.trim();
+    if (sharedWorkspaceBase) {
+      discoveredWorkspaceDirs.push(resolveUserPath(sharedWorkspaceBase));
+    }
+  }
   const pluginInventory = unresolvedOwnership
     ? undefined
     : resolveActivatedPluginBackupInventory({
