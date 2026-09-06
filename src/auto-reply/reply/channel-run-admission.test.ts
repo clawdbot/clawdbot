@@ -67,6 +67,8 @@ describe("channel run admission", () => {
         onAdmitted: (context) => admittedContexts.push(context),
       });
 
+      expect(() => prepared.assertSourceCurrent()).not.toThrow();
+      expect(identityWork).toHaveLength(0);
       const first = await prepared.admit("embedded");
       const fallback = await prepared.admit("embedded");
 
@@ -85,6 +87,7 @@ describe("channel run admission", () => {
       });
 
       prepared.close();
+      expect(() => prepared.assertSourceCurrent()).not.toThrow();
       await expect(prepared.admit("embedded")).rejects.toThrow(
         "prepared execution context is already closed",
       );

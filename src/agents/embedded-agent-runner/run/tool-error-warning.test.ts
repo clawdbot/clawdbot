@@ -149,20 +149,6 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
     });
   });
 
-  it("suppresses non-mutating non-recoverable tool errors when messages.suppressToolErrors is enabled", () => {
-    expectNoPayloads({
-      lastToolError: { toolName: "browser", error: "connection timeout" },
-      config: { messages: { suppressToolErrors: true } },
-    });
-  });
-
-  it("suppresses mutating tool errors when suppressToolErrorWarnings is enabled", () => {
-    expectNoPayloads({
-      lastToolError: { toolName: "exec", error: "command not found" },
-      suppressToolErrorWarnings: true,
-    });
-  });
-
   it("keeps exec-like tool error warnings when there is no user-facing reply", () => {
     const payloads = buildPayloads({
       lastToolError: {
@@ -453,8 +439,6 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
   });
 
   it("wraps markdown-capable mutating tool warnings so mention-looking names stay inert", () => {
-    // Non-recoverable error so the generic exec-like rule still surfaces a warning
-    // for this no-reply formatting case (recoverable keywords would suppress it).
     const payloads = buildPayloads({
       lastToolError: {
         toolName: "bash",

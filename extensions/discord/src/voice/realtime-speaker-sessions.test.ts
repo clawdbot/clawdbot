@@ -16,19 +16,38 @@ defineDiscordVoiceTests(
     lastAgentCommandArgs,
     lastRealtimeBridge,
     sentUserMessages,
+    createClient,
+    startTranscripts,
+    receiveRecordedSpeech,
   }) => {
+    it("preserves immediate acknowledgments for installed providers with unscoped marks", async () => {
+      const { entry, manager } = await createJoinedAgentProxyFixture();
+      try {
+        beginSpeakerTurn(entry).close();
+        const source = lastRealtimeBridge();
+        source.bridgeParams.audioSink.sendMark?.("legacy-mark");
+        expect(source.session.acknowledgeMark).toHaveBeenCalledExactlyOnceWith("legacy-mark");
+      } finally {
+        await manager.destroy();
+      }
+    });
+
     it.each(["guest-first", "owner-first"] as const)(
       "keeps speaker authority and transcript labels with their input connections: %s",
       async (order) => {
+        const client = createClient();
+        client.fetchMember.mockImplementation(async (_guildId, userId) => ({
+          nickname: userId === "guest" ? "Ada" : "Grace",
+          roles: [],
+          user: { id: userId },
+        }));
         const { entry, manager } = await createJoinedAgentProxyFixture({
+          client,
           config: { voice: { realtime: { requireWakeName: false } } },
         });
         const onUtterance = vi.fn();
         try {
-          await manager.join(
-            { guildId: "g1", channelId: "1001" },
-            { transcripts: { sessionId: "shared-room", onUtterance } },
-          );
+          await startTranscripts(manager, onUtterance, "shared-room");
           beginSpeakerTurn(entry, {
             userId: "guest",
             speakerLabel: "Ada",
@@ -72,6 +91,8 @@ defineDiscordVoiceTests(
               agentId: "agent-1",
               sessionKey: "discord:g1:c1",
             });
+            expect(onUtterance).toHaveBeenCalledTimes(index);
+            await receiveRecordedSpeech(manager, turn.text, entry, turn.id);
             expect(onUtterance).toHaveBeenCalledWith(
               expect.objectContaining({
                 sessionId: "shared-room",
@@ -216,12 +237,7 @@ defineDiscordVoiceTests(
       const newTranscript = vi.fn();
       let pending: Promise<void> | void = undefined;
       try {
-        await manager.join(
-          { guildId: "g1", channelId: "1001" },
-          {
-            transcripts: { sessionId: "old-subscription", onUtterance: oldTranscript },
-          },
-        );
+        await startTranscripts(manager, oldTranscript, "old-subscription");
         const originalCapture = beginSpeakerTurn(entry);
         const original = lastRealtimeBridge();
         pending = original.bridgeParams.onToolCall?.(
@@ -234,12 +250,7 @@ defineDiscordVoiceTests(
           original.session,
         );
         await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledOnce());
-        await manager.join(
-          { guildId: "g1", channelId: "1001" },
-          {
-            transcripts: { sessionId: "new-subscription", onUtterance: newTranscript },
-          },
-        );
+        await startTranscripts(manager, newTranscript, "new-subscription");
         beginSpeakerTurn(entry).close();
         const replacement = lastRealtimeBridge();
         const sentBeforeLateAudio = original.session.sendAudio.mock.calls.length;
@@ -253,6 +264,8 @@ defineDiscordVoiceTests(
         });
         expect(replacement.session.submitToolResult).not.toHaveBeenCalled();
         await emitFinalRealtimeUserTranscript(replacement.bridgeParams, "Fresh question.");
+        expect(newTranscript).not.toHaveBeenCalled();
+        await receiveRecordedSpeech(manager, "Fresh question.", entry);
         expect(newTranscript).toHaveBeenCalledWith(
           expect.objectContaining({ sessionId: "new-subscription", text: "Fresh question." }),
         );

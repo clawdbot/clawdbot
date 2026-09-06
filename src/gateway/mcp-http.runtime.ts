@@ -1,13 +1,18 @@
-import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 // MCP loopback runtime scope cache.
 // Resolves Gateway-visible tools for MCP clients with short-lived schema caching.
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import {
+  isCoreCodingSurfaceToolName,
+  listCoreToolFactoryDescriptors,
+} from "../agents/core-tool-factory-descriptors.js";
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { loadNodeExecAvailability } from "../agents/node-exec-availability.js";
 import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DirectoryCache } from "../infra/outbound/directory-cache.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
-import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
+import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
 import {
   buildMcpToolSchema,
@@ -22,7 +27,11 @@ import { resolveGatewayScopedTools } from "./tool-resolution.js";
 // list/call traffic from the same MCP client.
 const TOOL_CACHE_TTL_MS = 30_000;
 const TOOL_CACHE_MAX_ENTRIES = 256;
-const NATIVE_TOOL_EXCLUDE = new Set(["read", "write", "edit", "apply_patch", "exec", "process"]);
+const NATIVE_TOOL_EXCLUDE = new Set(
+  listCoreToolFactoryDescriptors()
+    .map(({ name }) => name)
+    .filter(isCoreCodingSurfaceToolName),
+);
 
 type CachedScopedTools = {
   agentId: string | undefined;
@@ -34,13 +43,13 @@ type CachedScopedTools = {
   toolSchema: McpToolSchemaEntry[];
 };
 
-type McpLoopbackScopeParams = Omit<McpLoopbackRequestContext, "senderIsOwner" | "skillWorkshop"> & {
-  skillWorkshop?: SkillWorkshopRunOptions;
+type McpLoopbackScopeParams = {
+  context: Omit<McpLoopbackRequestContext, "senderIsOwner"> & { senderIsOwner?: boolean };
   cfg: OpenClawConfig;
   authProfileStore?: AuthProfileStore;
   authProfileStoreAgentDir?: string;
+  skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
   grantToken?: string;
-  senderIsOwner: boolean | undefined;
   yieldContextCacheKey?: string;
   onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
   nodeExecAvailability?: Awaited<ReturnType<typeof loadNodeExecAvailability>>;
@@ -79,8 +88,8 @@ async function resolveNodeExecScope(
   mode: LoopbackToolsAllowMode,
 ): Promise<McpLoopbackScopeParams> {
   if (
-    params.nodeExecAllowed !== true ||
-    resolveMediatedNativeTools(params.toolsAllow, mode).size > 0
+    params.context.nodeExecAllowed !== true ||
+    resolveMediatedNativeTools(params.context.toolsAllow, mode).size > 0
   ) {
     return params;
   }
@@ -96,42 +105,44 @@ function resolveMcpLoopbackTools(
   tools: McpLoopbackTool[];
 } {
   params.signal?.throwIfAborted();
+  const { toolsAllow, ...context } = params.context;
   const excludeToolNames = new Set(NATIVE_TOOL_EXCLUDE);
   // Restricted CLI grants use OpenClaw's implementations for coding tools;
   // native CLI tools bypass path, approval, sandbox, and exec policy.
-  const mediatedNativeTools = resolveMediatedNativeTools(params.toolsAllow, mode);
+  const mediatedNativeTools = resolveMediatedNativeTools(toolsAllow, mode);
   for (const toolName of mediatedNativeTools) {
     excludeToolNames.delete(toolName);
   }
-  const includeNodeExecTool = params.nodeExecAllowed === true && mediatedNativeTools.size === 0;
+  const includeNodeExecTool = context.nodeExecAllowed === true && mediatedNativeTools.size === 0;
   if (includeNodeExecTool) {
     excludeToolNames.delete("exec");
   }
-  const {
-    toolsAllow: _toolsAllow,
-    authProfileStoreAgentDir,
-    grantToken: _grantToken,
-    nodeExecAvailability,
-    signal: _signal,
-    ...scopeParams
-  } = params;
+  const skillWorkshop =
+    context.skillWorkshop || params.skillLibraryAuthoring
+      ? { ...context.skillWorkshop, libraryAuthoring: params.skillLibraryAuthoring }
+      : undefined;
   const scoped = resolveGatewayScopedTools({
-    ...scopeParams,
-    agentDir: authProfileStoreAgentDir,
+    ...context,
+    cfg: params.cfg,
+    authProfileStore: params.authProfileStore,
+    onYield: params.onYield,
+    skillWorkshop,
+    nativeCronCreatorToolAllowlist: context.nativeCronCreatorToolAllowlist ?? undefined,
+    agentDir: params.authProfileStoreAgentDir,
     conversationReadOrigin: "delegated",
     surface: "loopback",
     excludeToolNames,
     mediatedToolNames: mediatedNativeTools,
     includeNodeExecTool,
-    nodeExecAvailable: nodeExecAvailability?.isAvailable,
+    nodeExecAvailable: params.nodeExecAvailability?.isAvailable,
   });
   return {
     agentId: scoped.agentId,
     workspaceDir: scoped.workspaceDir,
     tools:
       mode === "exact"
-        ? applyGrantToolsAllow(scoped.tools, params.toolsAllow)
-        : applyPolicyToolsAllow(scoped.tools, params.toolsAllow),
+        ? applyGrantToolsAllow(scoped.tools, toolsAllow)
+        : applyPolicyToolsAllow(scoped.tools, toolsAllow),
   };
 }
 
@@ -202,80 +213,28 @@ export class McpLoopbackToolCache {
     // Availability belongs to the current connection, not the schema TTL.
     const params = await resolveNodeExecScope(input, "exact");
     input.signal?.throwIfAborted();
-    // Callers differing only in capabilities must not share cached tool lists.
-    const clientCapsCacheKey = [...new Set(params.clientCaps ?? [])].toSorted().join(",");
-    const cacheKey = [
-      params.grantToken ?? "",
-      params.sessionKey,
-      params.runtimePolicySessionKey ?? "",
-      params.runtimePolicyAgentId ?? "",
-      params.agentId ?? "",
-      params.sessionId ?? "",
-      params.runId ?? "",
-      params.workspaceDir ?? "",
-      params.cwd ?? "",
-      params.modelProvider ?? "",
-      params.modelId ?? "",
-      params.modelHasVision === true ? "vision" : "text-only",
-      params.yieldContextCacheKey ?? "",
-      params.messageProvider ?? "",
-      clientCapsCacheKey,
-      params.currentChannelId ?? "",
-      params.currentThreadTs ?? "",
-      params.currentMessageId ?? "",
-      params.replyToMode ?? "",
-      params.currentInboundAudio === true ? "audio" : "no-audio",
-      params.accountId ?? "",
-      params.inboundEventKind ?? "",
-      params.sourceReplyDeliveryMode ?? "",
-      params.sourceReplyOnly === true ? "source-reply-only" : "",
-      params.taskSuggestionDeliveryMode ?? "",
-      params.requireExplicitMessageTarget === true ? "explicit-message-target" : "",
-      // Unset (full scope) must never share a cache row with an empty
-      // allowlist (deny-all), so the marker distinguishes presence.
-      params.toolsAllow ? `allow:${[...new Set(params.toolsAllow)].toSorted().join(",")}` : "",
-      JSON.stringify(params.skillWorkshop?.proposalRevision ?? null),
-      // A delegation-restricted attempt must never read or seed the cached
-      // full-capability list for the same session/run context.
-      params.delegationCapability === "report_only" ? "delegation:report_only" : "",
-      JSON.stringify(params.scheduledToolPolicy ?? null),
-      params.nodeExecAllowed === true ? "node-exec" : "",
-      params.nodeExecAvailability?.cacheKey ?? "",
-      params.execSession?.execHost ?? "",
-      params.execSession?.execNode ?? "",
-      params.execSession?.permissionMode ?? "",
-      params.execOverrides?.mode ?? "",
-      params.execOverrides?.host ?? "",
-      params.execOverrides?.security ?? "",
-      params.execOverrides?.ask ?? "",
-      params.execOverrides?.node ?? "",
-      params.bashElevated ? "elevated-present" : "elevated-absent",
-      params.bashElevated?.enabled === true ? "elevated-enabled" : "elevated-disabled",
-      params.bashElevated?.allowed === true ? "elevated-allowed" : "elevated-blocked",
-      params.bashElevated?.defaultLevel ?? "",
-      params.bashElevated?.fullAccessAvailable === true
-        ? "full-access-available"
-        : params.bashElevated?.fullAccessAvailable === false
-          ? "full-access-unavailable"
-          : "",
-      params.bashElevated?.fullAccessBlockedReason ?? "",
-      params.trigger ?? "",
-      params.approvalReviewerDeviceId ?? "",
-      params.channelContext?.sender?.id ?? "",
-      params.channelContext?.chat?.id ?? "",
-      params.senderName ?? "",
-      params.senderUsername ?? "",
-      params.senderE164 ?? "",
-      params.groupId ?? "",
-      params.groupChannel ?? "",
-      params.groupSpace ?? "",
-      params.spawnedBy ?? "",
-      params.senderIsOwner === true
-        ? "owner"
-        : params.senderIsOwner === false
-          ? "non-owner"
-          : "unknown-owner",
-    ].join("\u0000");
+    const { context } = params;
+    // Only the serializable grant context enters this key. Prepared credentials,
+    // authoring capabilities, and callbacks stay bound to their grant lifetime.
+    const cacheKey = `${params.grantToken ?? ""}\u0000${stableStringify({
+      context: {
+        ...context,
+        clientCaps: [...new Set(context.clientCaps ?? [])].toSorted(),
+        // Missing allows all; an empty list denies all.
+        toolsAllow: context.toolsAllow ? [...new Set(context.toolsAllow)].toSorted() : undefined,
+        modelHasVision: context.modelHasVision,
+        pinnedWidgetAuthoring: context.pinnedWidgetAuthoring === true,
+        currentInboundAudio: context.currentInboundAudio === true,
+        sourceReplyOnly: context.sourceReplyOnly === true,
+        requireExplicitMessageTarget: context.requireExplicitMessageTarget === true,
+        nodeExecAllowed: context.nodeExecAllowed === true,
+        delegationCapability:
+          context.delegationCapability === "report_only" ? "report_only" : undefined,
+      },
+      authProfileStoreAgentDir: params.authProfileStoreAgentDir,
+      yieldContextCacheKey: params.yieldContextCacheKey,
+      nodeExecAvailability: params.nodeExecAvailability?.cacheKey,
+    })}`;
     const cached = this.#entries.get(cacheKey, params.cfg);
     if (cached) {
       return cached;

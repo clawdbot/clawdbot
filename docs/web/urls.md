@@ -13,6 +13,20 @@ becomes `/openclaw/chat/main` when the base path is `/openclaw`.
 
 ## Session and dashboard URLs
 
+**Copy → Session link** uses the connected Gateway's public Control UI address
+when `gateway.publicOrigin` is configured, including its
+`gateway.controlUi.basePath`. This keeps links shareable when the desktop app
+connects through a local SSH tunnel. Without a public origin, copied links use
+the connected Gateway's HTTP(S) address; a tunnel-only address remains local.
+Normal navigation and **Open in** continue using the current UI. Copied links
+contain no connection credentials, and recipients still need Gateway access.
+
+The Dashboards gallery adds `?dashboard=expanded` to the owning task's chat
+link, for example `/chat/main/deploy-monitor-6db92d48?dashboard=expanded`.
+This makes Dashboard the main view and focuses it. **Restore split** brings
+the side panel alongside the dashboard. Ordinary task navigation restores the browser's
+saved task arrangement instead of forcing a dashboard-only view.
+
 Chat and dashboard views are parallel route namespaces:
 
 ```text
@@ -56,7 +70,11 @@ When an otherwise literal one-segment rest could be mistaken for a short id,
 the builder inserts `~key` before it, for example
 `agent:main:release-deadbeef` becomes
 `/chat/main/~key/release-deadbeef`. The marker forces literal interpretation
-and appears only when the unescaped form would be ambiguous.
+when a reference could otherwise be ambiguous. Builders also use it for the
+ordinary key `agent:research:global`, producing `/chat/research/~key/global`
+to distinguish it from the raw `global` home-session key, which uses
+`/chat/research`. Existing `/chat/research/global` literal links still resolve
+to `agent:research:global`.
 
 The reserved single-segment literal rest names are `main`, `global`, `boot`,
 and `sessions`. Exactly one segment after the agent id is literal when it is
@@ -133,6 +151,104 @@ identify the native source. Opening the same source under different agents
 keeps their panes and drafts separate, including in split view. Continuing a
 thread navigates to the adopted OpenClaw session link. The same catalog query
 also works under `/dashboard/<agentId>`.
+
+## Social previews
+
+Use **Copy → Preview link** in a session's menu to share a link with an OpenClaw
+social card. It opens a small public landing page; **Open dashboard** or
+**Open session** then takes the recipient to the normal authenticated view.
+**Copy → Session link** still copies the direct link.
+
+For example, `/share/dashboard/main/deploy-monitor-6db92d48` previews
+`/dashboard/main/deploy-monitor-6db92d48`. A configured Control UI base path
+prefixes both paths. The preview serves Open Graph metadata and a 1200 × 630 PNG
+at `/share/card.png`, without requiring JavaScript or a Gateway connection.
+
+The card shows generic OpenClaw branding, not the session's title, messages,
+dashboard widgets, or screenshots. Preview requests never look up session state,
+so the page does not reveal whether the target exists. The link itself still
+contains the session route and, for catalog sessions, the catalog routing fields.
+Treat those URLs as information you are choosing to share.
+
+### Behind a login proxy
+
+Link crawlers cannot sign in to your proxy. Allow anonymous `GET` and `HEAD`
+requests **only** to the Control UI's `/share/*` namespace (for example,
+`/openclaw/share/*` for a `/openclaw` base path). Keep the dashboard, WebSocket,
+bootstrap, API, and other routes protected. Do not grant crawlers authenticated
+access based on their User-Agent.
+
+For Cloudflare Access, use a separate application matching that public path with
+a Bypass policy; keep the existing authenticated application for the rest of the
+host. See [Cloudflare's application path rules](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/app-paths/).
+This is an operator deployment step; OpenClaw does not change proxy policies.
+
+Set the existing `gateway.publicOrigin` to your external HTTP(S) origin when TLS
+terminates at the proxy, so the image and canonical URLs use the public HTTPS
+address. Without it, previews use the request's Host and direct connection
+protocol; forwarded headers are not trusted for public preview URLs.
+
+Verify both the preview URL and its `/share/card.png` return `200` without
+cookies, then check that opening the dashboard still requires login. If a chat
+app shows the login page or no image, check for proxy redirects on both preview
+requests. Ordinary dashboard URLs remain protected and do not gain crawler
+access from this feature.
+
+## Public session transcripts
+
+Session owners and Gateway admins can open the session's sharing menu and select
+**Public access → Enable public access**. Confirming publishes the session's
+existing and future conversation text to anyone with its public URL. Recipients
+do not need an account or Gateway credentials. **Copy public link** copies that
+URL; **Disable public access** revokes it.
+
+Public access is separate from teammate visibility and editing permissions.
+Publishing does not let anonymous visitors send messages, invoke tools, open
+private dashboards, or connect to the Gateway. Incognito sessions cannot be
+published. Review the conversation before enabling public access: text can
+contain sensitive information, and disabling access cannot recall saved copies.
+
+The public page shows user messages and assistant final answers, with Markdown
+formatting. Tool output, reasoning, files, images, executable widgets, internal
+metadata, and hidden messages are omitted. Recognized credential patterns are
+redacted, but this is not a guarantee that all sensitive text is detected.
+The latest view refreshes every 15 seconds. **Older messages** opens earlier
+pages without automatic refresh; **Back to latest** returns to the live view.
+Each page is bounded, and oversized content is explicitly marked as omitted.
+The initial page and its social metadata work without JavaScript.
+
+Public URLs have this form, prefixed by the configured Control UI base path:
+
+```text
+/share/session?token=<opaque-publication-token>
+```
+
+The token is an encrypted bearer capability. It does not expose the agent,
+session key, session ID, or internal publication ID in the URL. Anyone who has
+the complete URL can read the published text, so handle it like any other
+public link. Copying the link again can produce a different token for the same
+publication; every copy remains valid until public access is disabled.
+
+The publication is bound to one exact session instance. Resetting, replacing,
+forking, or deleting the session does not transfer public access to another
+instance. Disabling and enabling again creates a new URL; the old link remains
+invalid. The publication record lives with existing session metadata and does
+not require a database schema migration. Normal session retention still applies.
+
+Tokens are bound to the Gateway installation identity, not its login token or
+password. Rotating Gateway authentication does not break public links. A full
+OpenClaw backup preserves both the installation identity and agent session
+databases, so links survive a full restore. Restoring only an agent database to
+another installation, or replacing the installation identity during repair,
+invalidates its existing links; disable and enable public access again to issue
+new links.
+
+Behind a login proxy, apply the same narrow `/share/*` routing described in
+[Behind a login proxy](/web/urls#behind-a-login-proxy). Keep all other routes protected.
+The proxy must overwrite `X-Forwarded-Proto` with the external request scheme;
+public session reads require its exact value to be `https`. The viewer and social
+card must both be reachable without cookies. OpenClaw
+does not change the proxy's access policies automatically.
 
 ## Person activity URLs
 

@@ -3,7 +3,7 @@ import Testing
 
 @MainActor
 struct DashboardGatewayMenuTests {
-    @Test func `menu model is gated and preserves catalog facts`() {
+    @Test func `menu model includes single gateways and preserves catalog facts`() {
         let primary = Self.entry(id: "primary", name: "Mac Studio", isPrimary: true, health: .ok)
         let profile = Self.entry(
             id: "profile:travel",
@@ -11,7 +11,25 @@ struct DashboardGatewayMenuTests {
             canPromote: true,
             health: .unknown)
         let cases: [([DashboardGatewayEntry], [DashboardGatewayMenuItem])] = [
-            ([primary], []),
+            ([], []),
+            ([primary], [
+                DashboardGatewayMenuItem(
+                    target: .primary,
+                    name: "Mac Studio",
+                    health: .ok,
+                    isPrimary: true,
+                    canPromote: false,
+                    shortcutNumber: 1),
+            ]),
+            ([profile], [
+                DashboardGatewayMenuItem(
+                    target: .profile("travel"),
+                    name: "Travel",
+                    health: .unknown,
+                    isPrimary: false,
+                    canPromote: true,
+                    shortcutNumber: 1),
+            ]),
             ([primary, profile], [
                 DashboardGatewayMenuItem(
                     target: .primary,

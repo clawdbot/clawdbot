@@ -164,7 +164,6 @@ describe("plugin release cohort package reconciliation", () => {
       const result = await withPluginCache(createPluginCache(), () =>
         convergePluginReleaseCohort({
           config,
-          installRecords: records,
           channel: "stable",
           timeoutMs: 60_000,
           env,
@@ -238,7 +237,6 @@ describe("plugin release cohort package reconciliation", () => {
 
     const result = await convergePluginReleaseCohort({
       config,
-      installRecords: legacyRecords,
       channel: "stable",
       timeoutMs: 60_000,
     });

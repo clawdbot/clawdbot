@@ -2,10 +2,13 @@
 summary: "Generic JSON-only LLM tool for structured tasks callable from workflows."
 read_when:
   - You are installing, configuring, or auditing the llm-task plugin
-title: "LLM Task plugin"
+title: "LLM Task plugin reference"
 ---
 
-# LLM Task plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 Generic JSON-only LLM tool for structured tasks callable from workflows.
 
@@ -16,4 +19,4 @@ Generic JSON-only LLM tool for structured tasks callable from workflows.
 
 ## Surface
 
-contracts: `tools`
+- Contracts: `tools`

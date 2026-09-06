@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
-import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,

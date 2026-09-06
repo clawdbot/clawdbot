@@ -761,6 +761,59 @@ export interface GithubPublicationRequests {
   worktree_id: string;
 }
 
+export interface GithubPublicationSessionLifecycles {
+  lifecycle_revision: string | null;
+  publication_kind: string;
+  request_id: string;
+}
+
+export interface GithubRepositoryPublicationRequests {
+  agent_id: string;
+  base_branch: string | null;
+  body: string | null;
+  branch: string;
+  checkpoint_digest: string | null;
+  checkpoint_ref: string | null;
+  claim_id: string | null;
+  connection_generation: string | null;
+  created_at_ms: number;
+  effect_state: string | null;
+  environment_id: string | null;
+  error_code: string | null;
+  execution_id: string | null;
+  gateway_instance_id: string | null;
+  head_commit: string | null;
+  idempotency_key: string;
+  identity_account_id: number;
+  identity_login: string;
+  identity_profile_id: string | null;
+  identity_source: string;
+  last_effect: string | null;
+  next_action: string | null;
+  owner_epoch: number | null;
+  owner_profile_id: string | null;
+  placement_generation: number | null;
+  previous_head_commit: string | null;
+  pull_request_url: string | null;
+  push_repository: string | null;
+  pushed_head_commit: string | null;
+  reported_at_ms: number | null;
+  repository: string | null;
+  request_digest: string;
+  request_id: string;
+  run_id: string | null;
+  session_id: string;
+  session_key: string;
+  session_lifecycle_revision: string | null;
+  source_head_commit: string | null;
+  source_index_tree: string | null;
+  status: string;
+  title: string | null;
+  updated_at_ms: number;
+  workspace_id: string;
+  workspace_tree: string | null;
+}
+
 export interface MacosPortGuardianRecords {
   command: string;
   mode: string;
@@ -1108,6 +1161,23 @@ export interface SessionGroups {
   worktree: number | null;
 }
 
+export interface SessionRepositoryWorkspaces {
+  agent_id: string;
+  base_commit: string | null;
+  base_manifest_hash: string | null;
+  branch: string;
+  checkpoint_ref: string | null;
+  created_at_ms: number;
+  manifest_hash: string | null;
+  requested_ref: string | null;
+  revision: number;
+  run_setup_script: Generated<number>;
+  session_key: string;
+  updated_at_ms: number;
+  url: string;
+  workspace_id: string;
+}
+
 export interface SessionStateEvents {
   actor_id: string | null;
   actor_type: string;
@@ -1236,8 +1306,8 @@ export interface SkillWorkshopCollectionReviews {
   create_time: number;
   dropped_json: string;
   kept_names_json: string;
+  owner_agent_id: string;
   review_id: string;
-  workspace_dir: string;
   written_names_json: string;
 }
 
@@ -1266,7 +1336,6 @@ export interface SkillWorkshopProposalRollbacks {
 
 export interface SkillWorkshopProposals {
   applied_at: string | null;
-  claim_released_time: number | null;
   created_at: string;
   draft_hash: string;
   kind: string;
@@ -1283,7 +1352,6 @@ export interface SkillWorkshopProposals {
   status: string;
   status_reason: string | null;
   updated_at: string;
-  workspace_dir: string;
 }
 
 export interface StateLeases {
@@ -1343,6 +1411,26 @@ export interface TaskRuns {
   terminal_outcome: string | null;
   terminal_summary: string | null;
   tool_use_count: number | null;
+}
+
+export interface UpdateRuns {
+  after_json: string;
+  before_json: string;
+  confirmed_at_ms: number | null;
+  created_at_ms: number;
+  downtime_ms: number | null;
+  finished_at_ms: number | null;
+  origin_json: string;
+  phase: string;
+  reason: string | null;
+  repair_json: string;
+  run_id: string;
+  status: string;
+  steps_json: string;
+  target_json: string;
+  trigger: string;
+  updated_at_ms: number;
+  verification_json: string;
 }
 
 export interface UserPreferences {
@@ -1530,6 +1618,7 @@ export interface WorkerWorkspacePendingResults {
   owner_epoch: number;
   placement_generation: number;
   recovery_requested_at_ms: number | null;
+  repository_workspace_id: string | null;
   run_id: string;
   session_id: string;
   staged_result_ref: string | null;
@@ -1652,6 +1741,8 @@ export interface DB {
   gateway_restart_sentinel: GatewayRestartSentinel;
   github_personal_publication_requests: GithubPersonalPublicationRequests;
   github_publication_requests: GithubPublicationRequests;
+  github_publication_session_lifecycles: GithubPublicationSessionLifecycles;
+  github_repository_publication_requests: GithubRepositoryPublicationRequests;
   macos_port_guardian_records: MacosPortGuardianRecords;
   managed_outgoing_image_records: ManagedOutgoingImageRecords;
   mcp_oauth_pending_authorizations: McpOauthPendingAuthorizations;
@@ -1680,6 +1771,7 @@ export interface DB {
   schema_meta: SchemaMeta;
   secret_store_entries: SecretStoreEntries;
   session_groups: SessionGroups;
+  session_repository_workspaces: SessionRepositoryWorkspaces;
   session_state_events: SessionStateEvents;
   session_state_heads: SessionStateHeads;
   session_upstream_links: SessionUpstreamLinks;
@@ -1699,6 +1791,7 @@ export interface DB {
   subagent_runs: SubagentRuns;
   task_delivery_state: TaskDeliveryState;
   task_runs: TaskRuns;
+  update_runs: UpdateRuns;
   user_preferences: UserPreferences;
   web_push_approval_deliveries: WebPushApprovalDeliveries;
   web_push_subscriptions: WebPushSubscriptions;

@@ -5,6 +5,7 @@ import {
   CronJobNotFoundErrorDetailsSchema,
   GatewayErrorDetailCodes,
   GatewayErrorDetailsSchema,
+  GitHubPublicationSelectionRejectedErrorDetailsSchema,
   isMcpAppViewExpiredError,
   McpAppViewExpiredErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
@@ -16,11 +17,42 @@ import {
   readMissingScopeError,
   readMissingScopeErrorDetails,
   readCronJobNotFoundError,
+  readGitHubPublicationSelectionRejectedError,
   UnknownAgentIdErrorDetailsSchema,
 } from "./error-codes.js";
 import { ErrorShapeSchema } from "./frames.js";
 
 describe("gateway error details", () => {
+  it("reads only closed, keyed publication selection rejections", () => {
+    const details = {
+      code: GatewayErrorDetailCodes.GITHUB_PUBLICATION_SELECTION_REJECTED,
+      idempotencyKey: "publication-invocation",
+    };
+    const response = { code: ErrorCodes.UNAVAILABLE, message: "Review the publisher.", details };
+    expect(Value.Check(GitHubPublicationSelectionRejectedErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(ErrorShapeSchema, response)).toBe(true);
+    expect(readGitHubPublicationSelectionRejectedError(response)).toEqual(details);
+    for (const malformed of [
+      null,
+      [],
+      { ...details, idempotencyKey: "" },
+      { ...details, idempotencyKey: 1 },
+      { ...details, accepted: true },
+    ]) {
+      expect(Value.Check(GitHubPublicationSelectionRejectedErrorDetailsSchema, malformed)).toBe(
+        false,
+      );
+      expect(
+        readGitHubPublicationSelectionRejectedError({ ...response, details: malformed }),
+      ).toBeNull();
+    }
+    expect(
+      readGitHubPublicationSelectionRejectedError({ ...response, code: ErrorCodes.FORBIDDEN }),
+    ).toBeNull();
+    expect(readGitHubPublicationSelectionRejectedError(new Error(response.message))).toBeNull();
+  });
+
   it("validates and reads cron job lookup misses", () => {
     const details = {
       code: GatewayErrorDetailCodes.CRON_JOB_NOT_FOUND,

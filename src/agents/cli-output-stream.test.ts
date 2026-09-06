@@ -110,6 +110,75 @@ function claudeSyntheticNoResponse(text = "No response requested.") {
 }
 
 describe("createCliJsonlStreamingParser", () => {
+  it("observes exact parent native tools across chunked fresh and warm initialization", () => {
+    const snapshots: unknown[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+      onNativeTools: (tools: unknown) => snapshots.push(tools),
+    });
+    const initial = JSON.stringify({
+      type: "system",
+      subtype: "init",
+      session_id: "reused-session",
+      tools: ["Read", "Bash", "mcp__openclaw__automations"],
+    });
+    parser.push(initial.slice(0, -2));
+    expect(snapshots).toEqual([]);
+    parser.push(
+      initial.slice(-2) +
+        "\n" +
+        joinJsonlFrames(
+          { type: "result", result: "first turn complete" },
+          { type: "system", subtype: "init", session_id: "reused-session", tools: ["Read"] },
+          { type: "result", result: "warm turn complete" },
+          { type: "system", subtype: "init", session_id: "replacement-session", tools: [] },
+        ),
+    );
+    parser.finish();
+
+    expect(snapshots).toEqual([["Read", "Bash", "mcp__openclaw__automations"], ["Read"], []]);
+  });
+
+  it("ignores subagent and non-initialization native tool lists", () => {
+    const snapshots: unknown[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+      onNativeTools: (tools: unknown) => snapshots.push(tools),
+    });
+    parser.push(
+      joinJsonlFrames(
+        { type: "system", subtype: "init", parent_tool_use_id: null, tools: ["Read"] },
+        { type: "system", subtype: "init", parent_tool_use_id: "child-call", tools: ["Bash"] },
+        { type: "system", subtype: "status", tools: [] },
+        { type: "assistant", tools: ["Write"] },
+        "",
+      ),
+    );
+    parser.finish();
+
+    expect(snapshots).toEqual([["Read"]]);
+  });
+
+  it("forwards malformed and missing parent native tool lists for owner validation", () => {
+    const snapshots: unknown[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+      onNativeTools: (tools: unknown) => snapshots.push(tools),
+    });
+    for (const tools of [["Read"], "Bash", null, ["Read", 7], undefined]) {
+      parser.push(JSON.stringify({ type: "system", subtype: "init", tools }) + "\n");
+    }
+    parser.finish();
+
+    expect(snapshots).toEqual([["Read"], "Bash", null, ["Read", 7], undefined]);
+  });
+
   it.each(OPENAI_COMPATIBLE_CLI_USAGE_CASES)(
     "normalizes $name while incrementally streaming CLI JSONL",
     ({ raw, normalized }) => {

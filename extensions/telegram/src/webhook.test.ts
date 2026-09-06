@@ -11,6 +11,19 @@ import {
   createChannelIngressQueueForTests as createChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { DEFAULT_INGRESS_ADOPTION_STALL_MS } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  onDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
+import {
+  logWebhookReceived,
+  startDiagnosticHeartbeat,
+  stopDiagnosticHeartbeat,
+} from "openclaw/plugin-sdk/logging-core";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 // Telegram tests cover webhook plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { WEBHOOK_RATE_LIMIT_DEFAULTS } from "openclaw/plugin-sdk/webhook-ingress";
@@ -615,6 +628,72 @@ async function runNearLimitPayloadTestAndExpectUpdate(
 }
 
 describe("startTelegramWebhook", () => {
+  it.each([
+    { binding: "standalone", enabled: false },
+    { binding: "standalone", enabled: true },
+    { binding: "unrelated", enabled: false },
+    { binding: "late", enabled: false },
+    { binding: "runtime", enabled: false },
+    { binding: "source", enabled: false },
+  ] as const)(
+    "respects $binding diagnostics (enabled=$enabled) and preserves the host heartbeat",
+    async ({ binding, enabled }) => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const events: string[] = [];
+      const unsubscribe = onDiagnosticEvent((event) => events.push(event.type));
+      startDiagnosticHeartbeat({}, { sampleLiveness: () => null });
+      const config = { diagnostics: { enabled } };
+      const followsRuntime = binding === "runtime" || binding === "source";
+      if (followsRuntime) {
+        setRuntimeConfigSnapshot(binding === "runtime" ? config : { ...config }, config);
+      } else if (binding === "unrelated") {
+        setRuntimeConfigSnapshot(
+          { diagnostics: { enabled: true } },
+          { logging: { level: "debug" } },
+        );
+      }
+      try {
+        await withStartedWebhook(
+          {
+            secret: TELEGRAM_SECRET,
+            path: TELEGRAM_WEBHOOK_PATH,
+            config: binding === "source" ? structuredClone(config) : config,
+          },
+          async ({ port, server }) => {
+            if (binding === "late") {
+              setRuntimeConfigSnapshot({ diagnostics: { enabled: true } });
+            }
+            let expectedEvents = 0;
+            for (const currentEnabled of followsRuntime ? [false, true, false] : [enabled]) {
+              if (followsRuntime) {
+                setRuntimeConfigSnapshot({ diagnostics: { enabled: currentEnabled } });
+              }
+              const response = await postWebhookJson({
+                url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
+                payload: "{}",
+              });
+              expect(response.status).toBe(401);
+              await waitForDiagnosticEventsDrained();
+              expectedEvents += currentEnabled ? 1 : 0;
+              expect(events.filter((event) => event === "webhook.received")).toHaveLength(
+                expectedEvents,
+              );
+            }
+            expect(server.listening).toBe(true);
+            expect(initSpy).toHaveBeenCalledOnce();
+          },
+        );
+        logWebhookReceived({ channel: "host" });
+        await vi.advanceTimersByTimeAsync(30_000);
+        await waitForDiagnosticEventsDrained();
+        expect(events.filter((event) => event === "diagnostic.heartbeat")).toHaveLength(1);
+      } finally {
+        clearRuntimeConfigSnapshot();
+        stopDiagnosticHeartbeat();
+        unsubscribe();
+      }
+    },
+  );
   it("starts server, registers webhook, and serves health", async () => {
     initSpy.mockClear();
     createTelegramBotSpy.mockClear();

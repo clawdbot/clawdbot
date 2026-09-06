@@ -1,6 +1,15 @@
 import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
+import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import { createSessionCapability } from "./index.ts";
+import type { SessionGateway } from "./session-capability.ts";
+
+export function createTestSessionCapability(gateway: SessionGateway, selectedId = "main") {
+  return createSessionCapability(gateway, {
+    state: { selectedId },
+    subscribe: () => () => undefined,
+  });
+}
 
 export function sessionsResult(
   sessions: SessionsListResult["sessions"],
@@ -13,6 +22,23 @@ export function sessionsResult(
     defaults: { modelProvider: null, model: null, contextTokens: null },
     sessions,
   };
+}
+
+export function runningSessionsResult(): SessionsListResult {
+  return sessionsResult(
+    [
+      {
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: 1,
+        hasActiveRun: true,
+        activeRunIds: ["run-1"],
+        status: "running",
+        startedAt: 1,
+      },
+    ],
+    1,
+  );
 }
 
 export function createGatewayHarness(
@@ -91,5 +117,69 @@ export function createSessionCapabilityHarness(
       selfUser: options?.ownerId ? { id: options.ownerId } : null,
     },
   );
-  return { sessions: createSessionCapability(gateway), emitEvent };
+  return { sessions: createTestSessionCapability(gateway), emitEvent };
+}
+
+export function createSubscriptionHydrationHarness(
+  request: (method: string, params?: Record<string, unknown>) => Promise<unknown>,
+  savedAgentId: string | null = null,
+) {
+  const client = { request } as GatewayBrowserClient;
+  let snapshot = {
+    client: null as GatewayBrowserClient | null,
+    phase: "reconnecting" as "connected" | "reconnecting",
+    sessionKey: "agent:main:main",
+    assistantAgentId: null as string | null,
+    hello: null as GatewayHelloOk | null,
+  };
+  const gatewayListeners = new Set<(next: typeof snapshot) => void>();
+  const publish = () => gatewayListeners.forEach((listener) => listener(snapshot));
+  const gateway = {
+    connection: { gatewayUrl: "ws://gateway.example.test" },
+    get snapshot() {
+      return snapshot;
+    },
+    subscribe(listener: (next: typeof snapshot) => void) {
+      gatewayListeners.add(listener);
+      return () => gatewayListeners.delete(listener);
+    },
+    subscribeEvents: () => () => undefined,
+    setSessionKey(sessionKey: string) {
+      snapshot = { ...snapshot, sessionKey };
+      publish();
+    },
+  };
+  const selection = createAgentSelectionCapability(
+    gateway,
+    {
+      state: {
+        agentsList: {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "per-sender",
+          agents: [
+            { id: "main", kind: "agent" },
+            { id: "writer", kind: "agent" },
+          ],
+        },
+      },
+      subscribe: () => () => undefined,
+    },
+    { load: () => savedAgentId, save: () => undefined },
+  );
+  const sessions = createSessionCapability(gateway, selection);
+  return {
+    client,
+    gateway,
+    selection,
+    sessions,
+    connect: () => {
+      snapshot = { ...snapshot, client, phase: "connected", assistantAgentId: "main" };
+      publish();
+    },
+    disconnect: () => {
+      snapshot = { ...snapshot, phase: "reconnecting" };
+      publish();
+    },
+  };
 }

@@ -1,6 +1,7 @@
 import { normalizeURL } from "nostr-tools/utils";
 import {
   buildChannelInboundEventContext,
+  logInboundDrop,
   resolveChannelInboundRouteEnvelope,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
@@ -8,6 +9,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { BuzzBus } from "./buzz-bus.js";
+import type { BuzzConfigInput } from "./config-schema.js";
 import {
   BUZZ_DIFF_MESSAGE_KIND,
   formatBuzzMessageForAgent,
@@ -93,6 +95,19 @@ export async function handleBuzzInbound(params: {
   const historyLimit = account.config.historyLimit ?? 0;
   if (access.ingress.admission !== "dispatch") {
     if (access.ingress.reasonCode === "activation_skipped") {
+      // SAFETY: Buzz's manifest schema validates this plugin-owned channel section before startup.
+      const buzzConfig = cfg.channels?.buzz as BuzzConfigInput | undefined;
+      const groupsPath = buzzConfig?.accounts?.[account.accountId]
+        ? `channels.buzz.accounts[${JSON.stringify(account.accountId)}].groups`
+        : "channels.buzz.groups";
+      logInboundDrop({
+        log: log.info,
+        channel: "buzz",
+        reason: "no mention",
+        target: channelId,
+        onceKey: JSON.stringify([account.accountId, channelId]),
+        hint: `Mention patterns can be derived from the agent identity name. Set ${groupsPath}[${JSON.stringify(channelId)}].requireMention=false to process messages without a mention.`,
+      });
       await recordBuzzPendingHistory({
         historyMap: params.historyMap,
         key: historyKey,

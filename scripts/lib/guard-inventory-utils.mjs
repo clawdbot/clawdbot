@@ -103,18 +103,14 @@ export function writeLine(stream, text) {
 }
 
 function hasSupplementalModuleReference(ts, source, acceptSpecifier) {
-  const checkUrl = source.includes("new") && source.includes("import") && source.includes("meta");
-  const interpolationStart = source.indexOf("${");
-  const checkRequire =
-    interpolationStart >= 0 &&
-    (source.includes("require") || source.indexOf("\\u", interpolationStart + 2) >= 0);
-  const interpolatedSlash =
-    interpolationStart < 0 ? -1 : source.indexOf("/", interpolationStart + 2);
-  const checkTemplateImport =
-    interpolatedSlash >= 0 && source.indexOf("import", interpolatedSlash + 1) >= 0;
-  const checkNamespaceExport =
-    source.includes("export") && source.includes("*") && source.includes("as");
-  if (!checkUrl && !checkRequire && !checkTemplateImport && !checkNamespaceExport) {
+  // Escaped names and regexp ambiguity must reach the scanner before rejecting the file.
+  if (
+    !source.includes("new") &&
+    !source.includes("${") &&
+    !source.includes("export") &&
+    !source.includes("/") &&
+    !source.includes("\\u")
+  ) {
     return false;
   }
 
@@ -136,7 +132,6 @@ function hasSupplementalModuleReference(ts, source, acceptSpecifier) {
 
   for (let token = scanner.scan(); token !== kinds.EndOfFileToken; token = scanner.scan()) {
     if (
-      checkUrl &&
       token === kinds.NewKeyword &&
       scanner.lookAhead(
         () =>
@@ -149,7 +144,6 @@ function hasSupplementalModuleReference(ts, source, acceptSpecifier) {
       return true;
     }
     if (
-      checkRequire &&
       (token === kinds.RequireKeyword ||
         (token === kinds.Identifier && scanner.getTokenValue() === "require")) &&
       scanner.lookAhead(() => scanner.scan() === kinds.OpenParenToken && scanAcceptedSpecifier())
@@ -157,7 +151,6 @@ function hasSupplementalModuleReference(ts, source, acceptSpecifier) {
       return true;
     }
     if (
-      checkNamespaceExport &&
       token === kinds.ExportKeyword &&
       scanner.lookAhead(() => {
         let next = scanner.scan();
@@ -170,11 +163,9 @@ function hasSupplementalModuleReference(ts, source, acceptSpecifier) {
       return true;
     }
 
-    // A context-free slash may start a regexp whose `}` would corrupt interpolation tracking.
-    if (
-      templateBraceDepths.length > 0 &&
-      (token === kinds.SlashToken || token === kinds.SlashEqualsToken)
-    ) {
+    // Only the parser distinguishes division from regexps, whose quotes or braces
+    // can hide later module references from a context-free scanner.
+    if (token === kinds.SlashToken || token === kinds.SlashEqualsToken) {
       return true;
     }
 

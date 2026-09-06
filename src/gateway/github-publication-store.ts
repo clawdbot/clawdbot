@@ -6,6 +6,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { insertGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
 import { ensureGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as StateDatabase } from "../state/openclaw-state-db.generated.js";
@@ -126,7 +127,14 @@ export function claimGitHubPublicationExecution(
 }
 
 export function matchesGitHubPublicationIdentityRow(
-  row: GitHubPublicationExecutionRow,
+  row: Pick<
+    GitHubPublicationExecutionRow,
+    | "agent_id"
+    | "identity_source"
+    | "identity_profile_id"
+    | "identity_account_id"
+    | "identity_login"
+  >,
   identity: Pick<PreparedGitHubPublicationIdentity, "source" | "profileId" | "account">,
 ): boolean {
   return (
@@ -151,6 +159,7 @@ export function insertGitHubPublicationRequest(
     requestId: string;
     requestDigest: string;
     sessionId: string;
+    lifecycleRevision: string | null;
     now: number;
     worktree: { id: string; repoFingerprint: string; branch: string };
     identity: Pick<PreparedGitHubPublicationIdentity, "source" | "profileId" | "account">;
@@ -160,7 +169,7 @@ export function insertGitHubPublicationRequest(
 ): GitHubPublicationRow {
   const { request, identity, worktree, claim, snapshot } = input;
   const query = githubPublicationDatabase(db);
-  executeSqliteQuerySync(
+  const inserted = executeSqliteQuerySync(
     db,
     query
       .insertInto("github_publication_requests")
@@ -202,6 +211,13 @@ export function insertGitHubPublicationRequest(
       })
       .onConflict((conflict) => conflict.columns(["session_id", "idempotency_key"]).doNothing()),
   );
+  if (inserted.numAffectedRows === 1n) {
+    insertGitHubPublicationSessionLifecycle(db, {
+      publicationKind: "shared",
+      requestId: input.requestId,
+      lifecycleRevision: input.lifecycleRevision,
+    });
+  }
   const stored = readGitHubPublicationRequest(db, {
     sessionId: input.sessionId,
     idempotencyKey: request.idempotencyKey,
@@ -392,7 +408,22 @@ export function digestGitHubPublicationRequest(params: {
 }
 
 export function projectGitHubPublicationResult(
-  row: GitHubPublicationExecutionRow,
+  row: Pick<
+    GitHubPublicationExecutionRow,
+    | "request_id"
+    | "identity_source"
+    | "identity_account_id"
+    | "identity_login"
+    | "status"
+    | "head_commit"
+    | "pull_request_url"
+    | "repository"
+    | "branch"
+    | "error_code"
+    | "next_action"
+    | "last_effect"
+    | "effect_state"
+  >,
 ): SessionGitHubPublicationResult {
   const effect: Pick<SessionGitHubPublicationResult, "effect"> =
     (row.last_effect === "push" || row.last_effect === "pull_request") &&

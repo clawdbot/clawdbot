@@ -1,5 +1,7 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import { isMainSessionRestartRecoveryInputProvenance } from "../../sessions/input-provenance.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "../code-mode-control-tools.js";
 import {
   getTranscriptMessageRole as getMessageRole,
@@ -224,7 +226,10 @@ export function hasReplaySafeCodeModeCheckpointInCurrentTurn(
 ): boolean {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (getMessageRole(message) === "user") {
+    if (
+      getMessageRole(message) === "user" &&
+      !isMainSessionRestartRecoveryInputProvenance(asOptionalRecord(message)?.provenance)
+    ) {
       return false;
     }
     if (readCodeModeCheckpoint(message)?.replaySafe === true) {
@@ -371,6 +376,7 @@ export function resolveMainSessionResumePolicy(
   beforeAgentReplyState?: SessionEntry["restartRecoveryBeforeAgentReplyState"],
   deliveryReceiptState?: SessionEntry["restartRecoveryDeliveryReceiptState"],
   deliveryToolCallId?: string,
+  fullAccess = false,
 ): MainSessionResumePolicy {
   const mirroredToolCallId = readDeliveredTerminalSourceReplyToolCallId(
     messages,
@@ -402,6 +408,12 @@ export function resolveMainSessionResumePolicy(
   }
   if (beforeAgentReplyState === "handled-unrecoverable") {
     return { action: "resume", forceRestartSafeTools: true };
+  }
+  // A fresh continuation must be able to inspect an interrupted side effect.
+  // Full access keeps ordinary tools; explicit replay-safe reconstruction and
+  // delivery reconciliation above retain their narrower execution contract.
+  if (fullAccess && !hasReplaySafeCodeModeCheckpointInCurrentTurn(messages)) {
+    return { action: "resume", forceRestartSafeTools: false };
   }
   // Progress can commit after the recovery mark while the old run is winding
   // down. It is not a terminal turn boundary; preserve it in the transcript

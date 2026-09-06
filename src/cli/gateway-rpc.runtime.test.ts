@@ -116,16 +116,21 @@ describe("callGatewayFromCliRuntime", () => {
     );
   });
 
-  it("rejects combining --url and --port before opening a Gateway connection", async () => {
-    await expect(
-      callGatewayFromCliRuntime("cron.status", {
-        url: "ws://127.0.0.1:19083",
-        port: "19083",
-      }),
-    ).rejects.toThrow("Use either --url or --port, not both.");
+  it.each([
+    { opts: { port: "" }, error: "--port must be an integer between 1 and 65535." },
+    { opts: { port: " \t " }, error: "--port must be an integer between 1 and 65535." },
+    {
+      opts: { url: "ws://127.0.0.1:19083", port: "19083" },
+      error: "Use either --url or --port, not both.",
+    },
+  ])(
+    "rejects invalid target $opts before opening a Gateway connection",
+    async ({ opts, error }) => {
+      await expect(callGatewayFromCliRuntime("cron.status", opts)).rejects.toThrow(error);
 
-    expect(callGatewayMock).not.toHaveBeenCalled();
-  });
+      expect(callGatewayMock).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     { name: "token", auth: { token: "test-gateway-token" } },

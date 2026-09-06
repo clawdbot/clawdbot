@@ -16,11 +16,10 @@ import {
 } from "node:fs";
 import type { Dirent } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve, win32 } from "node:path";
-import { pathToFileURL } from "node:url";
+import { basename, dirname, join, posix, resolve, win32 } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { extract } from "tar";
-import { tsImport } from "tsx/esm/api";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
 import { escapeRegExp } from "../src/shared/regexp.js";
@@ -30,27 +29,13 @@ import {
   type BundledExtension,
   type ExtensionPackageJson as PackageJson,
 } from "./lib/bundled-extension-manifest.ts";
-import {
-  collectRootPackageExcludedExtensionDirs,
-  listBundledPluginPackArtifacts,
-} from "./lib/bundled-plugin-build-entries.mjs";
+import { GATEWAY_RUN_CHUNK_METADATA_VERSION } from "./lib/gateway-run-chunk-metadata.mts";
+import { importToolingTypeScript } from "./lib/import-tooling-typescript.mts";
 import { collectPackUnpackedSizeErrors as collectNpmPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mts";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
-import {
-  isLegacyPluginDependencyInstallStagePath,
-  LOCAL_BUILD_METADATA_DIST_PATHS,
-  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
-} from "./lib/package-dist-inventory.ts";
+import { isLegacyPluginDependencyInstallStagePath } from "./lib/package-dist-inventory.ts";
 import { collectBundledPluginPackageDependencySpecs } from "./lib/plugin-package-dependencies.mts";
-import {
-  listPluginSdkDistArtifacts,
-  listUnpackagedPrivatePluginSdkDistArtifacts,
-} from "./lib/plugin-sdk-entries.mts";
-import { listStaticExtensionAssetOutputs } from "./lib/static-extension-assets.mts";
-import {
-  runInstalledWorkspaceBootstrapSmoke,
-  WORKSPACE_TEMPLATE_PACK_PATHS,
-} from "./lib/workspace-bootstrap-smoke.mts";
+import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mts";
 import { resolveNpmRunner } from "./npm-runner.mts";
 import {
   collectInstalledPackageErrors,
@@ -77,89 +62,6 @@ type ReleaseCheckCommandInvocation = {
   windowsVerbatimArguments?: boolean;
 };
 
-const rootPackageExcludedExtensionDirs = collectRootPackageExcludedExtensionDirs();
-const rootPackageExcludedExtensionPrefixes = [...rootPackageExcludedExtensionDirs].map(
-  (extensionId) => `dist/extensions/${extensionId}/`,
-);
-// Trusted tooling can validate an older release checkout. Its SDK inventory
-// belongs to that target, including release-only compatibility entrypoints.
-const targetPluginSdkEntries = JSON.parse(
-  readFileSync(resolve("scripts/lib/plugin-sdk-entrypoints.json"), "utf8"),
-) as string[];
-const targetPrivatePluginSdkEntries = JSON.parse(
-  readFileSync(resolve("scripts/lib/plugin-sdk-private-local-only-subpaths.json"), "utf8"),
-) as string[];
-const requiredPathGroups = [
-  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
-  ["dist/index.js", "dist/index.mjs"],
-  ["dist/entry.js", "dist/entry.mjs"],
-  ...listPluginSdkDistArtifacts(targetPluginSdkEntries, targetPrivatePluginSdkEntries),
-  ...listBundledPluginPackArtifacts(),
-  ...listStaticExtensionAssetOutputs().filter((relativePath: string) => {
-    const match = /^dist\/extensions\/([^/]+)\//u.exec(relativePath);
-    return (
-      !match ||
-      !rootPackageExcludedExtensionDirs.has(
-        expectDefined(match[1], "release-check extension artifact id"),
-      )
-    );
-  }),
-  ...WORKSPACE_TEMPLATE_PACK_PATHS,
-  "scripts/prepare-git-hooks.mjs",
-  "scripts/preinstall-package-manager-warning.mjs",
-  "scripts/lib/official-external-channel-catalog.json",
-  "scripts/lib/official-external-plugin-catalog.json",
-  "scripts/lib/official-external-provider-catalog.json",
-  "scripts/lib/recommended-tool-installs.json",
-  "scripts/lib/guard-inventory-utils.mjs",
-  "scripts/lib/package-dist-imports.mjs",
-  "scripts/postinstall-bundled-plugins.mjs",
-  "dist/agents/compaction-planning.worker.js",
-  "dist/agents/model-provider-auth.worker.js",
-  "dist/agents/prepared-model-catalog.worker.js",
-  "dist/extensions/memory-core/memory-search-knn.child.js",
-  "dist/config/sessions/session-accessor.sqlite-archive.worker.js",
-  "dist/config/sessions/session-transcript-reconcile.worker.js",
-  "dist/state/openclaw-database-verify.worker.js",
-  "dist/system-agent/setup-inference-detection.worker.js",
-  "dist/task-registry-control.runtime.js",
-  "dist/telegram-ingress-worker.runtime.js",
-  "dist/build-info.json",
-  "dist/channel-catalog.json",
-  "dist/control-ui/index.html",
-];
-const forbiddenPrefixes = [
-  ...rootPackageExcludedExtensionPrefixes,
-  ...LOCAL_BUILD_METADATA_DIST_PATHS,
-  "dist-runtime/",
-  "dist/OpenClaw.app/",
-  "dist/extensions/qa-channel/",
-  "dist/extensions/qa-lab/",
-  "dist/plugin-sdk/extensions/qa-channel/",
-  "dist/plugin-sdk/extensions/qa-lab/",
-  "dist/plugin-sdk/qa-channel.",
-  "dist/plugin-sdk/qa-channel-protocol.",
-  "dist/plugin-sdk/qa-lab.",
-  "dist/plugin-sdk/qa-runtime.",
-  "dist/plugin-sdk/src/",
-  "dist/plugin-sdk/src/plugin-sdk/qa-channel.d.ts",
-  "dist/plugin-sdk/src/plugin-sdk/qa-channel-protocol.d.ts",
-  "dist/plugin-sdk/src/plugin-sdk/qa-lab.d.ts",
-  "dist/plugin-sdk/src/plugin-sdk/qa-runtime.d.ts",
-  "dist/plugin-sdk/index.",
-  "dist/plugin-sdk/compat.",
-  "dist/plugin-sdk/root-alias.",
-  "dist/extensionAPI.",
-  ...listUnpackagedPrivatePluginSdkDistArtifacts(
-    targetPluginSdkEntries,
-    targetPrivatePluginSdkEntries,
-  ),
-  "dist/qa-runtime-",
-  "dist/plugin-sdk/.tsbuildinfo",
-  "docs/.generated/",
-  "docs/channels/qa-channel.md",
-  "qa/",
-];
 const forbiddenPrivateQaContentMarkers = [
   "//#region extensions/qa-lab/",
   "qa-channel/runtime-api.js",
@@ -181,6 +83,9 @@ const laneFloorAdoptionReleaseKey = 20260227;
 const SAFE_UNIX_SMOKE_PATH = "/usr/bin:/bin";
 const DEFAULT_RELEASE_CHECK_COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_RELEASE_CHECK_COMMAND_MAX_BUFFER_BYTES = 100 * 1024 * 1024;
+const PACKAGE_TARBALL_VERIFIER_PATH = fileURLToPath(
+  new URL("./check-openclaw-package-tarball.mjs", import.meta.url),
+);
 export const MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES = 2 * 1024 * 1024;
 const CRITICAL_PLUGIN_SDK_SIZE_CHECK_SPECIFIERS = [
   "openclaw/plugin-sdk/core",
@@ -1096,48 +1001,13 @@ function runPackedBundledChannelEntrySmoke(tarballPath: string, packedRoot: stri
   }
 }
 
-export function collectMissingPackPaths(paths: Iterable<string>): string[] {
-  const available = new Set(paths);
-  return requiredPathGroups
-    .flatMap((group) => {
-      if (Array.isArray(group)) {
-        return group.some((path) => available.has(path)) ? [] : [group.join(" or ")];
-      }
-      return available.has(group) ? [] : [group];
-    })
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-export function resolveMissingPackBuildHint(missing: readonly string[]): string | null {
-  const needsControlUiBuild = missing.includes("dist/control-ui/index.html");
-  const needsRuntimeBuild = missing.some(
-    (path) =>
-      path !== "dist/control-ui/index.html" &&
-      (path === "dist/build-info.json" || path.startsWith("dist/")),
-  );
-
-  if (!needsControlUiBuild && !needsRuntimeBuild) {
-    return null;
-  }
-
-  if (needsControlUiBuild && needsRuntimeBuild) {
-    return "release-check: build and Control UI artifacts are missing. Run `pnpm build && pnpm ui:build` before `pnpm release:check`.";
-  }
-  if (needsControlUiBuild) {
-    return "release-check: Control UI artifacts are missing. Run `pnpm ui:build` before `pnpm release:check`.";
-  }
-  return "release-check: build artifacts are missing. Run `pnpm build` before `pnpm release:check`.";
-}
-
 export function collectForbiddenPackPaths(paths: Iterable<string>): string[] {
   return [...paths]
     .filter(
       (path) =>
         isLegacyPluginDependencyInstallStagePath(path) ||
-        forbiddenPrefixes.some((prefix) => path.startsWith(prefix)) ||
         /(^|\/)\.openclaw-runtime-deps-[^/]+(\/|$)/u.test(path) ||
-        path.endsWith("/.openclaw-runtime-deps-stamp.json") ||
-        path.includes("node_modules/"),
+        path.endsWith("/.openclaw-runtime-deps-stamp.json"),
     )
     .toSorted((left, right) => left.localeCompare(right));
 }
@@ -1390,7 +1260,7 @@ async function main() {
     if (packedPackage.name !== "openclaw" || packedPackage.version !== rootPackage.version) {
       throw new Error("release-check: prepared tarball does not match the target package version.");
     }
-    await verifyPackedContents(results, packedRoot);
+    await verifyPackedContents(results, packedRoot, tarballPath);
     runPackedBundledChannelEntrySmoke(tarballPath, packedRoot);
     console.log("release-check: final npm tarball contents and installed runtime look OK.");
   } finally {
@@ -1398,24 +1268,65 @@ async function main() {
   }
 }
 
-async function verifyPackedContents(results: NpmPackResult[], packedRoot: string): Promise<void> {
+async function verifyPackedContents(
+  results: NpmPackResult[],
+  packedRoot: string,
+  tarballPath: string,
+): Promise<void> {
   // WORKER_BUNDLE_*_PATH exports declare the target's sealed deploy artifacts.
   // Trusted tooling may be newer than the frozen target in the working directory.
-  const workerBundle = await tsImport(
-    pathToFileURL(resolve("src/shared/worker-bundle-hash.ts")).href,
-    import.meta.url,
-  );
-  const workerDeployEntrypoints = Object.entries(workerBundle)
-    .filter(([name]) => /^WORKER_BUNDLE_.*_PATH$/u.test(name))
-    .map(([name, value]) => {
-      if (typeof value !== "string") {
-        throw new Error(`release-check: target worker artifact ${name} must be a path string.`);
-      }
-      return `dist/worker/${value}`;
-    });
+  // The producer owns this contract; shared worker helpers can predate deploy output.
+  const workerProducerPath = resolve("src/worker/worker-deploy-entry.ts");
+  const workerBundlePath = resolve("src/shared/worker-bundle-hash.ts");
+  const workerDeployEntrypoints = existsSync(workerProducerPath)
+    ? Object.entries(
+        await importToolingTypeScript(pathToFileURL(workerBundlePath).href, import.meta.url),
+      )
+        .filter(([name]) => /^WORKER_BUNDLE_.*_PATH$/u.test(name))
+        .map(([name, value]) => {
+          if (typeof value !== "string" || !value.trim()) {
+            throw new Error(
+              `release-check: target worker artifact ${name} must be a non-empty path string.`,
+            );
+          }
+          const normalizedPath = posix.normalize(value);
+          const workerPath = posix.join("dist/worker", normalizedPath);
+          if (
+            value !== value.trim() ||
+            value !== normalizedPath ||
+            value.includes("\\") ||
+            normalizedPath.split("/").includes("..") ||
+            win32.isAbsolute(value) ||
+            !workerPath.startsWith("dist/worker/")
+          ) {
+            throw new Error(
+              `release-check: target worker artifact ${name} must be a normalized relative path within dist/worker.`,
+            );
+          }
+          return workerPath;
+        })
+    : [];
+  if (existsSync(workerProducerPath) && workerDeployEntrypoints.length === 0) {
+    throw new Error(
+      "release-check: target worker producer is missing WORKER_BUNDLE_*_PATH declarations.",
+    );
+  }
+  // New tooling may qualify a frozen target without the build-owned locator generator.
+  // Never infer legacy mode from missing output: current targets must rebuild missing metadata.
+  const locatorModulePath = resolve("scripts/lib/gateway-run-chunk-metadata.mts");
+  const locatorModule = existsSync(locatorModulePath)
+    ? await importToolingTypeScript(pathToFileURL(locatorModulePath).href, import.meta.url)
+    : undefined;
+  if (
+    locatorModule &&
+    locatorModule.GATEWAY_RUN_CHUNK_METADATA_VERSION !== GATEWAY_RUN_CHUNK_METADATA_VERSION
+  ) {
+    throw new Error("release-check: unsupported target gateway run chunk metadata version.");
+  }
   checkCliBootstrapExternalImports({
     rootDir: packedRoot,
     workerDeployEntrypoints,
+    legacyGatewayChunkDiscovery: locatorModule === undefined,
     logger: {
       error: (message: string) => console.error(`release-check: ${message}`),
     },
@@ -1428,30 +1339,23 @@ async function verifyPackedContents(results: NpmPackResult[], packedRoot: string
       `release-check: critical plugin-sdk entrypoint validation failed:\n- ${criticalPluginSdkEntrypointErrors.join("\n- ")}`,
     );
   }
+  // The tarball verifier owns lifecycle and target-declared dist layout. It
+  // accepts valid historical entries without duplicating current package policy.
+  runReleaseCheckCommand(
+    {
+      command: process.execPath,
+      args: [PACKAGE_TARBALL_VERIFIER_PATH, tarballPath],
+    },
+    { stdio: "inherit" },
+  );
   const files = results.flatMap((entry) => entry.files ?? []);
   const paths = new Set(files.map((file) => file.path));
 
-  const missing = collectMissingPackPaths(paths);
   const forbidden = collectForbiddenPackPaths(paths);
   const forbiddenContent = collectForbiddenPackContentPaths(paths, packedRoot);
   const sizeErrors = collectNpmPackUnpackedSizeErrors(results);
 
-  if (
-    missing.length > 0 ||
-    forbidden.length > 0 ||
-    forbiddenContent.length > 0 ||
-    sizeErrors.length > 0
-  ) {
-    if (missing.length > 0) {
-      console.error("release-check: missing files in npm pack:");
-      for (const path of missing) {
-        console.error(`  - ${path}`);
-      }
-      const buildHint = resolveMissingPackBuildHint(missing);
-      if (buildHint) {
-        console.error(buildHint);
-      }
-    }
+  if (forbidden.length > 0 || forbiddenContent.length > 0 || sizeErrors.length > 0) {
     if (forbidden.length > 0) {
       console.error("release-check: forbidden files in npm pack:");
       for (const path of forbidden) {

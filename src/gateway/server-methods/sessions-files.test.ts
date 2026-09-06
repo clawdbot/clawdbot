@@ -264,6 +264,33 @@ describe("sessions.files RPC handlers", () => {
     );
   });
 
+  it.runIf(process.platform === "linux")(
+    "returns missing xdg-open launcher failure as a headless environment error",
+    async () => {
+      const warn = vi.fn();
+      hoisted.execOpenPath.mockRejectedValueOnce(
+        Object.assign(
+          new Error("Command failed with ENOENT: xdg-open /tmp\nspawn xdg-open ENOENT"),
+          { code: "ENOENT" },
+        ),
+      );
+
+      const payload = expectOkPayload(
+        await invokeSessionFilesHandler(
+          "sessions.files.reveal",
+          { key: "agent:main:main" },
+          { logGateway: { warn } },
+        ),
+      );
+
+      expect(payload).toMatchObject({ ok: false, path: workspaceRoot });
+      expect(payload.error).toContain("headless environment");
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("sessions.files.reveal failed path="),
+      );
+    },
+  );
+
   it("prefers the spawned workspace root over a nested spawned cwd", async () => {
     const nestedCwd = path.join(workspaceRoot, "packages/app");
     fs.mkdirSync(nestedCwd, { recursive: true });
@@ -421,6 +448,36 @@ describe("sessions.files RPC handlers", () => {
         path: "src/readme.md",
       }),
     ]);
+  });
+
+  it("round-trips listed folders beginning with two dots", async () => {
+    writeWorkspaceFile(workspaceRoot, "..notes/readme.md", "# Notes\n");
+    const root = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", {
+        sessionKey: "agent:main:main",
+      }),
+    );
+    const selected = root.browser.entries.find(
+      (entry: Record<string, unknown>) => entry.name === "..notes",
+    );
+    const folder = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", {
+        sessionKey: "agent:main:main",
+        path: selected.path,
+      }),
+    );
+    expect(folder.browser).toMatchObject({
+      path: "..notes",
+      parentPath: "",
+      entries: [{ path: "..notes/readme.md", kind: "file" }],
+    });
+    const preview = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.get", {
+        sessionKey: "agent:main:main",
+        path: folder.browser.entries[0].path,
+      }),
+    );
+    expect(preview.file.content).toBe("# Notes\n");
   });
 
   it("browses, searches, and previews files not referenced by the session", async () => {

@@ -232,7 +232,7 @@ type CommandsStatusRuntimeModule = {
 };
 
 const commandsStatusRuntimeLoader = createLazyImportLoader<CommandsStatusRuntimeModule>(
-  () => import("./session-status.runtime.js") as Promise<CommandsStatusRuntimeModule>,
+  () => import("../../status/status-text.js") as Promise<CommandsStatusRuntimeModule>,
 );
 
 function loadCommandsStatusRuntime(): Promise<CommandsStatusRuntimeModule> {

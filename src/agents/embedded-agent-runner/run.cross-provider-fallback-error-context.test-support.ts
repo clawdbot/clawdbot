@@ -235,7 +235,7 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
     const promise = runCompactionRemovedFallbackAttempt(state);
 
     await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
-    await expect(promise).rejects.toThrow("⚠️ anthropic/test-model request failed.");
+    await expect(promise).rejects.toThrow("⚠️ Agent run failed (model: anthropic/test-model).");
     expect(mockedIsFailoverAssistantError).toHaveBeenCalledTimes(2);
     expect(getLastFormattedAssistant()).toMatchObject({
       provider: "anthropic",
