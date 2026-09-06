@@ -652,6 +652,36 @@ describe("channelsLogsCommand", () => {
     }
   });
 
+  it("does not replay after a metadata-only log update", async () => {
+    vi.useFakeTimers();
+    try {
+      await fs.writeFile(
+        logPath,
+        logLine({ module: "gateway/channels/slack/send", message: "before" }),
+      );
+      const follow = channelsLogsCommand(
+        { channel: "slack", follow: true, interval: 10, json: true },
+        runtime,
+      );
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(2));
+
+      const timestamp = new Date("2026-01-01T00:00:00.000Z");
+      await fs.utimes(logPath, timestamp, timestamp);
+      await vi.advanceTimersByTimeAsync(10);
+
+      const records = runtime.log.mock.calls.map(([value]) => JSON.parse(String(value)));
+      expect(
+        records.filter((record) => record.type === "log").map((record) => record.message),
+      ).toEqual(["before"]);
+      expect(records.filter((record) => record.type === "notice")).toHaveLength(0);
+
+      process.emit("SIGINT");
+      await follow;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not replay a complete record while a trailing record is incomplete", async () => {
     vi.useFakeTimers();
     try {

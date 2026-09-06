@@ -56,8 +56,6 @@ type FileCheckpoint = {
   validationContentWindowStart: number;
   validationContentWindowLength: number;
   validationBoundary: string;
-  mtimeNs: string;
-  ctimeNs: string;
 };
 
 function checkpointPrefixLength(size: number): number {
@@ -266,8 +264,6 @@ async function readFileCheckpoint(
               validationBoundaryStart,
               boundedValidationCursor - validationBoundaryStart,
             ),
-      mtimeNs: stat.mtimeNs.toString(),
-      ctimeNs: stat.ctimeNs.toString(),
     };
   } finally {
     await handle.close();
@@ -295,9 +291,7 @@ function isSameFileGeneration(
     currentPrefix?.subarray(0, previous.prefixLength).equals(previousPrefix) === true &&
     current.validationContentHash === previous.contentHash &&
     current.validationContentWindowStart === previous.contentWindowStart &&
-    current.validationContentWindowLength === previous.contentWindowLength &&
-    (current.size > previous.size ||
-      (current.mtimeNs === previous.mtimeNs && current.ctimeNs === previous.ctimeNs))
+    current.validationContentWindowLength === previous.contentWindowLength
   );
 }
 
@@ -320,9 +314,7 @@ function isSameTailGeneration(
     current.boundary === generation.boundary &&
     current.contentHash === generation.contentHash &&
     current.contentWindowStart === generation.contentWindowStart &&
-    current.contentWindowLength === generation.contentWindowLength &&
-    (current.size > generation.size ||
-      (current.mtimeNs === generation.mtimeNs && current.ctimeNs === generation.ctimeNs))
+    current.contentWindowLength === generation.contentWindowLength
   );
 }
 
