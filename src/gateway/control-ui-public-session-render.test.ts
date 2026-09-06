@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { applyLoggingConfig, resetLogger } from "../logging/logger.js";
 import { renderPublicSessionDocument } from "./control-ui-public-session-render.js";
 
 function render(
@@ -9,6 +10,7 @@ function render(
     messages,
     title: "A shared conversation",
     truncated: false,
+    latestUrl: "/share/session?token=v1.opaque",
     canonicalUrl: "https://example.test/share/session/demo",
     cardUrl: "https://example.test/share/card.png",
     ...overrides,
@@ -85,23 +87,52 @@ describe("public session document", () => {
     );
   });
 
-  it("strips generated envelopes and redacts known credentials in text and titles", () => {
+  it("strips generated envelopes and applies built-in and operator redaction", () => {
     const token = `sk-${"a".repeat(48)}`;
-    const html = render(
-      [
-        {
-          role: "user",
-          content: `<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nprivate runtime context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\nVisible user request ${token}`,
-        },
-        { role: "assistant", content: `Visible response ${token}` },
-      ],
-      { title: `Shared ${token}` },
-    );
-    expect(html).toContain("Visible user request");
+    const operatorSecret = "internal-ticket-8315";
+    applyLoggingConfig({ redactPatterns: [String.raw`/internal-ticket-\d+/g`] });
+    try {
+      const html = render(
+        [
+          {
+            role: "user",
+            content: `<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nprivate runtime context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\nVisible user request ${token}`,
+          },
+          { role: "assistant", content: `Visible response ${token} ${operatorSecret}` },
+        ],
+        { title: `Shared ${token} ${operatorSecret}` },
+      );
+      expect(html).toContain("Visible user request");
+      expect(html).toContain("Visible response");
+      expect(html).not.toContain("private runtime context");
+      expect(html).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
+      expect(html).not.toContain(token);
+      expect(html).not.toContain(operatorSecret);
+    } finally {
+      resetLogger();
+    }
+  });
+
+  it("omits local and remote media directives while preserving fenced examples", () => {
+    const relativePath = "./Private/customer-board.pdf";
+    const signedUrl = "https://media.example.test/private.png?sig=private-signed-value";
+    const html = render([
+      {
+        role: "assistant",
+        content: [
+          "Visible response",
+          `MEDIA:${relativePath}`,
+          `MEDIA:${signedUrl}`,
+          "```text",
+          "MEDIA:./example.png",
+          "```",
+        ].join("\n"),
+      },
+    ]);
     expect(html).toContain("Visible response");
-    expect(html).not.toContain("private runtime context");
-    expect(html).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
-    expect(html).not.toContain(token);
+    expect(html).toContain("MEDIA:./example.png");
+    expect(html).not.toContain(relativePath);
+    expect(html).not.toContain(signedUrl);
   });
 
   it("renders inert Markdown without executable markup, automatic image loads, or unsafe links", () => {
@@ -152,15 +183,23 @@ describe("public session document", () => {
   it("keeps older pages still and offers chronological navigation back to the live view", () => {
     const html = render([{ role: "user", content: "An earlier question" }], {
       isLatest: false,
-      olderUrl: "https://example.test/share/session/demo?before=100&share=published",
+      olderUrl: "/share/session?token=v1.opaque&offset=100",
     });
     expect(html).not.toContain('http-equiv="refresh"');
     expect(html).toContain("Earlier conversation");
     expect(html).toContain("Back to latest");
-    expect(html).toContain(
-      'href="https://example.test/share/session/demo?before=100&amp;share=published" rel="prev"',
-    );
+    expect(html).toContain('href="/share/session?token=v1.opaque&amp;offset=100" rel="prev"');
+    expect(html).toContain('href="/share/session?token=v1.opaque">Back to latest</a>');
     expect(html).not.toContain("within its size limit");
+  });
+
+  it("keeps bearer navigation relative when no trusted absolute origin is available", () => {
+    const html = render([{ role: "user", content: "Public question" }], {
+      canonicalUrl: undefined,
+    });
+    expect(html).not.toContain('rel="canonical"');
+    expect(html).not.toContain('property="og:url"');
+    expect(html).toContain('href="/share/session?token=v1.opaque">Refresh now</a>');
   });
 
   it("renders an accessible empty live view with disclosure and crawler metadata", () => {

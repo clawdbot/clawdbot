@@ -4801,6 +4801,7 @@ export const en: TranslationMap & {
       noPeople: "No paired people found.",
       readOnlyNotice: "Only the session owner and members can act in this session.",
       publicAccess: "Public access",
+      publicIndicator: "Public",
       worldReadable: "Public — anyone can read without signing in.",
       notPublic: "Only signed-in people with access can view this session.",
       enablePublicAccess: "Enable public access…",

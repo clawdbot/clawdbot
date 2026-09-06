@@ -17,6 +17,49 @@ function mount(template: ReturnType<typeof renderChatSessionSharing>) {
 }
 
 describe("chat session sharing menu", () => {
+  it.each(["draft", "read-only"] as const)(
+    "keeps a world-readable %s session visibly public after its menu closes",
+    (visibility) => {
+      const session = {
+        key: "agent:main:current",
+        sessionId: "session-current",
+        kind: "direct" as const,
+        updatedAt: 1,
+        visibility,
+        sharingRole: "owner" as const,
+      };
+      const allowedVisibilities: Array<"draft" | "read-only"> = ["draft", "read-only"];
+      const result = {
+        sessionKey: session.key,
+        members: [],
+        identities: [],
+        role: "owner" as const,
+        allowedVisibilities,
+        publicShare: { token: `v1.${"a".repeat(96)}`, createdAt: 1 },
+      };
+      const renderIndicator = (published: boolean) =>
+        renderChatSessionSharing({
+          session,
+          state: {
+            loading: false,
+            result: published ? result : { ...result, publicShare: undefined },
+          },
+          onOpen: vi.fn(),
+          onVisibilityChange: vi.fn(),
+          onMemberChange: vi.fn(),
+          onPublicShareChange: vi.fn(),
+        });
+      const root = mount(renderIndicator(true));
+
+      const indicator = root.querySelector(".chat-pane__public-share-indicator");
+      expect(indicator?.textContent?.trim()).toBe("Public");
+      expect(indicator?.getAttribute("aria-label")).toContain("anyone can read");
+
+      render(renderIndicator(false), root);
+      expect(root.querySelector(".chat-pane__public-share-indicator")).toBeNull();
+    },
+  );
+
   it.each([false, true])(
     "keeps public access separate from team visibility (published=%s)",
     (published) => {
@@ -43,7 +86,7 @@ describe("chat session sharing menu", () => {
               allowedVisibilities: ["draft", "shared"],
               ...(published
                 ? {
-                    publicShare: { id: "a".repeat(48), sessionId: "session-current", createdAt: 1 },
+                    publicShare: { token: `v1.${"a".repeat(96)}`, createdAt: 1 },
                   }
                 : {}),
             },

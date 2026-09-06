@@ -73,7 +73,7 @@ approval.get approval.resolve sessions.search sessions.dispatch sessions.reclaim
 migrations.memory.plan migrations.memory.apply ui.command approval.history
 plugin.surface.refresh conversations.list session.discussion.info session.discussion.open
 board.prompt.authorize board.data.read board.action sessions.observer.visibility
-session.visibility.set session.publicShare.set session.members.list session.members.add session.members.remove
+session.visibility.set session.members.list session.members.add session.members.remove
 session.suggestions.add session.suggestions.list session.suggestions.resolve session.typing
 sessions.companion.ask sessions.companion.state sessions.companion.reset memory.search
 skills.proposals.events.list skills.proposals.evaluate hooks.status tasks.retry tasks.dismiss

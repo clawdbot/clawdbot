@@ -7401,23 +7401,19 @@ public struct SessionVisibilitySetResult: Codable, Sendable {
 }
 
 public struct SessionPublicShare: Codable, Sendable {
-    public let id: String
-    public let sessionid: String
+    public let token: String
     public let createdat: Int
 
     public init(
-        id: String,
-        sessionid: String,
+        token: String,
         createdat: Int)
     {
-        self.id = id
-        self.sessionid = sessionid
+        self.token = token
         self.createdat = createdat
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id
-        case sessionid = "sessionId"
+        case token
         case createdat = "createdAt"
     }
 }

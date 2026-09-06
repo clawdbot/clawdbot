@@ -42,8 +42,7 @@ export const SessionVisibilitySetResultSchema = closedObject({
 });
 
 export const SessionPublicShareSchema = closedObject({
-  id: Type.String({ pattern: "^[a-f0-9]{48}$" }),
-  sessionId: NonEmptyString,
+  token: Type.String({ pattern: "^v1\\.[A-Za-z0-9_-]+$", maxLength: 7000 }),
   createdAt: Type.Integer({ minimum: 0 }),
 });
 

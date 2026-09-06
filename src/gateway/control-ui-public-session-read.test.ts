@@ -8,7 +8,10 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { readPublicSessionShare } from "./control-ui-public-session-read.js";
+import {
+  isPublicSessionShareActive,
+  readPublicSessionShare,
+} from "./control-ui-public-session-read.js";
 import * as transcriptReaders from "./session-transcript-readers.js";
 
 afterEach(() => {
@@ -81,6 +84,7 @@ describe("anonymous published session reader", () => {
   it("rejects private, unknown-agent, mismatched-instance and mismatched-grant requests", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await seed(["Published"]);
+      expect(isPublicSessionShareActive(cfg, locator)).toBe(true);
       for (const target of [
         { ...locator, agentId: "other" },
         { ...locator, sessionKey: "agent:other:public-history" },
@@ -93,6 +97,7 @@ describe("anonymous published session reader", () => {
       }
       expect(await readPublicSessionShare({ agents: { entries: {} } }, locator)).toBeNull();
       await patchSessionEntryCore(locator, () => ({ publicShare: undefined }));
+      expect(isPublicSessionShareActive(cfg, locator)).toBe(false);
       expect(await readPublicSessionShare(cfg, locator)).toBeNull();
     });
   });

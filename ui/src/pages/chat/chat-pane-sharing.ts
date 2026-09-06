@@ -18,8 +18,30 @@ import { CHAT_COMPOSER_TEXTAREA_SELECTOR } from "./chat-pane-shared.ts";
 import { ChatPaneSharingActions } from "./chat-pane-sharing-actions.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { clearTypingActorForSessionMessage } from "./chat-typing-presence.ts";
+import { canManageChatSessionSharing } from "./components/chat-session-sharing.ts";
 
 export abstract class ChatPaneSharing extends ChatPaneSharingActions {
+  protected syncSelectedSessionSharing(session: GatewaySessionRow | undefined): void {
+    const sessionId = session?.sessionId?.trim();
+    if (!session || !sessionId || !this.presented || !canManageChatSessionSharing(session)) {
+      return;
+    }
+    const cacheKey = this.sessionSharingCacheKey(session.key);
+    if (
+      this.sessionSharingHydrationTargets.get(cacheKey) === sessionId &&
+      this.sessionSharingStates.has(cacheKey)
+    ) {
+      return;
+    }
+    this.sessionSharingHydrationTargets.set(cacheKey, sessionId);
+    const states = new Map(this.sessionSharingStates);
+    states.delete(cacheKey);
+    this.sessionSharingStates = states;
+    // Selecting a new generation under the same key must supersede an older
+    // in-flight read. loadSessionSharing owns the connection and instance guards.
+    void this.loadSessionSharing(session, true);
+  }
+
   protected suggestionMatchesCurrentSession(
     suggestion: Pick<TaskSuggestion | SessionSuggestion, "agentId" | "sessionKey">,
   ): boolean {

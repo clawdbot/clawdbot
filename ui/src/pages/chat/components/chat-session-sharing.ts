@@ -91,11 +91,7 @@ export function selectChatSessionSharingItem(
     ) {
       return;
     }
-    if (
-      value === "public:copy" &&
-      props.state.result.publicShare &&
-      props.state.result.publicShare?.sessionId === props.session.sessionId
-    ) {
+    if (value === "public:copy" && props.state.result.publicShare) {
       props.onCopyPublicLink?.();
     } else if (!props.publicShareDisabledReason) {
       if (value === "public:enable") {
@@ -131,6 +127,22 @@ export function canManageChatSessionSharing(
   return session.sharingRole === "admin" || session.sharingRole === "owner";
 }
 
+export function renderChatSessionPublicIndicator(props: ChatSessionSharingProps) {
+  if (!props.state?.result?.publicShare) {
+    return nothing;
+  }
+  const description = t("chat.sessionSharing.worldReadable");
+  return html`<span
+    class="chat-pane__public-share-indicator"
+    role="status"
+    aria-label=${description}
+    title=${description}
+  >
+    <span aria-hidden="true">${icons.globe}</span>
+    <span>${t("chat.sessionSharing.publicIndicator")}</span>
+  </span>`;
+}
+
 export function renderChatSessionSharing(props: ChatSessionSharingProps, inline = false) {
   const session = props.session;
   if (!session) {
@@ -139,8 +151,7 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps, inline 
   const visibility = session.visibility ?? "shared";
   const canManage = canManageChatSessionSharing(session);
   const result = props.state?.result;
-  const publicShare =
-    result?.publicShare?.sessionId === session.sessionId ? result?.publicShare : undefined;
+  const publicShare = result?.publicShare;
   const owner = result?.owner ?? session.owner?.actor;
   const ownerActivity = personActivityLink(
     owner?.identity?.type === "profile" ? owner.identity.id : undefined,
@@ -350,6 +361,7 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps, inline 
     return content;
   }
   return html`
+    ${renderChatSessionPublicIndicator(props)}
     <wa-dropdown
       class="chat-pane__sharing-menu ${shouldCapMembers ? "chat-pane__sharing-menu--capped" : ""}"
       placement="bottom-end"

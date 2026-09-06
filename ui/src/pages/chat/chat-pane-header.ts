@@ -58,6 +58,7 @@ import {
 import { renderChatPanePlacement } from "./components/chat-pane-placement.ts";
 import {
   canManageChatSessionSharing,
+  renderChatSessionPublicIndicator,
   renderChatSessionSharing,
 } from "./components/chat-session-sharing.ts";
 import type { SessionWorkspaceProps } from "./components/chat-session-workspace.ts";
@@ -209,6 +210,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     sidebarLayout?: SidebarLayout,
     panelDefinitions = sidebarPanelDefinitions(),
   ) {
+    this.syncSelectedSessionSharing(row);
     const workspace = resolveSessionWorkspace({
       session: row,
       agentWorkspace: row?.worktree ? undefined : agentWorkspace,
@@ -583,6 +585,8 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         (!this.narrow || !canManageChatSessionSharing(sharing.session))
           ? renderChatSessionSharing(sharing)
           : nothing,
+      publicAccessIndicator:
+        this.narrow && sharing ? renderChatSessionPublicIndicator(sharing) : nothing,
       placementControl: renderChatPanePlacement({
         session: row,
         placementStartupStatus,

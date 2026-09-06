@@ -220,8 +220,14 @@ The initial page and its social metadata work without JavaScript.
 Public URLs have this form, prefixed by the configured Control UI base path:
 
 ```text
-/share/session/<agentId>/<sessionId>?key=<encodedSessionKey>&share=<publicationId>
+/share/session?token=<opaque-publication-token>
 ```
+
+The token is an encrypted bearer capability. It does not expose the agent,
+session key, session ID, or internal publication ID in the URL. Anyone who has
+the complete URL can read the published text, so handle it like any other
+public link. Copying the link again can produce a different token for the same
+publication; every copy remains valid until public access is disabled.
 
 The publication is bound to one exact session instance. Resetting, replacing,
 forking, or deleting the session does not transfer public access to another
@@ -229,9 +235,19 @@ instance. Disabling and enabling again creates a new URL; the old link remains
 invalid. The publication record lives with existing session metadata and does
 not require a database schema migration. Normal session retention still applies.
 
+Tokens are bound to the Gateway installation identity, not its login token or
+password. Rotating Gateway authentication does not break public links. A full
+OpenClaw backup preserves both the installation identity and agent session
+databases, so links survive a full restore. Restoring only an agent database to
+another installation, or replacing the installation identity during repair,
+invalidates its existing links; disable and enable public access again to issue
+new links.
+
 Behind a login proxy, apply the same narrow `/share/*` routing described in
 [Behind a login proxy](/web/urls#behind-a-login-proxy). Keep all other routes protected.
-The viewer and social card must both be reachable without cookies. OpenClaw
+The proxy must overwrite `X-Forwarded-Proto` with the external request scheme;
+public session reads require its exact value to be `https`. The viewer and social
+card must both be reachable without cookies. OpenClaw
 does not change the proxy's access policies automatically.
 
 ## Person activity URLs

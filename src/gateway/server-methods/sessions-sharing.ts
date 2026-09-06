@@ -27,9 +27,14 @@ import {
   patchSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { resolveSessionPublicShare } from "../../config/sessions/session-public-share.js";
+import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { listProfiles } from "../../state/user-profiles.js";
+import {
+  loadPublicSessionShareTokenCodec,
+  type PublicSessionShareTokenCodec,
+} from "../control-ui-public-session-token.js";
 import { getGatewayLocalUserIngress } from "../local-user-ingress.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
@@ -117,6 +122,24 @@ function projectLegacySessionMember(member: SessionMemberEvidence): SessionMembe
   };
 }
 
+function projectPublicSessionShare(params: {
+  agentId: string;
+  sessionKey: string;
+  grant: NonNullable<ReturnType<typeof resolveSessionPublicShare>>;
+  codec?: PublicSessionShareTokenCodec;
+}): SessionPublicShare {
+  const codec = params.codec ?? loadPublicSessionShareTokenCodec();
+  return {
+    token: codec.mint({
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sessionId: params.grant.sessionId,
+      shareId: params.grant.id,
+    }),
+    createdAt: params.grant.createdAt,
+  };
+}
+
 function requireManageableTarget(params: {
   cfg: ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
   client: GatewayClient | null;
@@ -174,7 +197,14 @@ function requireCurrentManagedTarget(params: {
     sessionKey: params.authorized.canonicalKey,
     agentId: params.authorized.agentId,
   });
-  if (!current || current.entry.sessionId !== params.authorized.entry.sessionId) {
+  if (
+    !current ||
+    current.agentId !== params.authorized.agentId ||
+    current.canonicalKey !== params.authorized.canonicalKey ||
+    current.storeKey !== params.authorized.storeKey ||
+    current.storePath !== params.authorized.storePath ||
+    current.entry.sessionId !== params.authorized.entry.sessionId
+  ) {
     throw new Error("session changed before sharing mutation");
   }
   const role = resolveSessionSharingRole({
@@ -313,18 +343,26 @@ function createSessionMembersListHandler(
         left.id.localeCompare(right.id),
     );
     const owner = target.entry.createdActor?.id ? target.entry.createdActor : undefined;
-    const publicShare = resolveSessionPublicShare(
+    const publicShareGrant = resolveSessionPublicShare(
       loadExactSessionEntryReadOnly({
         agentId: target.agentId,
         sessionKey: target.storeKey,
         storePath: target.storePath,
       })?.entry,
     );
+    const publicShare =
+      publicShareGrant?.sessionId === target.entry.sessionId
+        ? projectPublicSessionShare({
+            agentId: target.agentId,
+            sessionKey: target.canonicalKey,
+            grant: publicShareGrant,
+          })
+        : undefined;
     respond(
       true,
       {
         sessionKey: target.canonicalKey,
-        ...(publicShare?.sessionId === target.entry.sessionId ? { publicShare } : {}),
+        ...(publicShare ? { publicShare } : {}),
         ...(owner ? { owner: { ...owner } } : {}),
         members: projectedMembers,
         identities,
@@ -378,6 +416,8 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    let tokenCodec: PublicSessionShareTokenCodec | undefined;
+    let publicShareGrant: NonNullable<ReturnType<typeof resolveSessionPublicShare>> | undefined;
     let publicShare: SessionPublicShare | undefined;
     await runExclusiveSharingMutation(managed.target, async () => {
       const current = requireCurrentManagedTarget({
@@ -385,6 +425,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
         client,
         authorized: managed.target,
       });
+      tokenCodec = params.enabled ? loadPublicSessionShareTokenCodec() : undefined;
       let changed = false;
       let inspected = false;
       await patchSessionEntryCore(
@@ -413,15 +454,29 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
             throw new Error("session ownership changed before sharing mutation");
           }
           const previous = resolveSessionPublicShare(entry);
-          publicShare = params.enabled
+          publicShareGrant = params.enabled
             ? (previous ?? {
                 id: randomBytes(24).toString("hex"),
                 sessionId: entry.sessionId,
                 createdAt: Date.now(),
               })
             : undefined;
-          changed = publicShare?.id !== previous?.id;
-          return changed ? { publicShare } : null;
+          if (publicShareGrant) {
+            // Capability URLs may surface in free-form diagnostics where no
+            // structured field or query-name policy is available.
+            registerSecretValueForRedaction(publicShareGrant.id);
+          }
+          publicShare =
+            publicShareGrant && tokenCodec
+              ? projectPublicSessionShare({
+                  agentId: current.agentId,
+                  sessionKey: current.canonicalKey,
+                  grant: publicShareGrant,
+                  codec: tokenCodec,
+                })
+              : undefined;
+          changed = publicShareGrant?.id !== previous?.id;
+          return changed ? { publicShare: publicShareGrant } : null;
         },
         {
           // Entry patches await preparation before committing. Recheck current

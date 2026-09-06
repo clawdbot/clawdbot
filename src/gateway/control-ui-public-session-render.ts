@@ -6,7 +6,8 @@ import {
   stripInternalMetadataForDisplay,
   stripUserEnvelopeForDisplay,
 } from "../auto-reply/reply/display-text-sanitize.js";
-import { redactSensitiveText } from "../logging/redact.js";
+import { redactToolPayloadText } from "../logging/redact.js";
+import { splitMediaFromOutput } from "../media/parse.js";
 import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../sessions/input-provenance.js";
 import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import { escapeHtml } from "../shared/html-escape.js";
@@ -95,8 +96,12 @@ function publicMessageText(
   if (entry.role === "assistant") {
     text = stripSuppressedControlReplyToken(text);
   }
-  // Explicit options retain built-in redaction even when operator logging is off.
-  text = redactSensitiveText(text, { mode: "tools" }).trim();
+  // The canonical parser removes attachment directives while preserving fenced examples.
+  text = splitMediaFromOutput(text, {
+    extractAudioDirectives: false,
+    extractMarkdownImages: false,
+  }).text;
+  text = redactToolPayloadText(text).trim();
   return text ? { role: entry.role, text } : undefined;
 }
 
@@ -104,16 +109,16 @@ export function renderPublicSessionDocument(params: {
   messages: unknown[];
   title: string;
   truncated: boolean;
-  canonicalUrl: string;
+  latestUrl: string;
+  canonicalUrl?: string;
   cardUrl: string;
   olderUrl?: string;
   isLatest?: boolean;
 }): string {
   const isLatest = params.isLatest !== false;
   const title = escapeHtml(
-    redactSensitiveText(stripInternalMetadataForDisplay(params.title), { mode: "tools" })
-      .slice(0, 200)
-      .trim() || "Shared conversation",
+    redactToolPayloadText(stripInternalMetadataForDisplay(params.title)).slice(0, 200).trim() ||
+      "Shared conversation",
   );
   let truncated = params.truncated || params.messages.length > MAX_MESSAGES;
   let remaining = MAX_DOCUMENT_CHARS;
@@ -137,6 +142,10 @@ export function renderPublicSessionDocument(params: {
     );
   }
   const description = "A public, read-only OpenClaw conversation. No login required.";
+  const canonicalMetadata = params.canonicalUrl
+    ? `<link rel="canonical" href="${escapeHtml(params.canonicalUrl)}">
+<meta property="og:url" content="${escapeHtml(params.canonicalUrl)}">`
+    : "";
   const navigation = params.olderUrl
     ? `<nav class="pagination" aria-label="Conversation pages"><a href="${escapeHtml(params.olderUrl)}" rel="prev">← Older messages</a></nav>`
     : "";
@@ -145,10 +154,10 @@ export function renderPublicSessionDocument(params: {
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer"><meta name="robots" content="noindex, nofollow">
 ${isLatest ? '<meta http-equiv="refresh" content="15">' : ""}
-<title>${title} · OpenClaw</title><link rel="canonical" href="${escapeHtml(params.canonicalUrl)}">
+<title>${title} · OpenClaw</title>${canonicalMetadata}
 <meta property="og:type" content="website"><meta property="og:site_name" content="OpenClaw">
 <meta property="og:title" content="${title}"><meta property="og:description" content="${description}">
-<meta property="og:url" content="${escapeHtml(params.canonicalUrl)}"><meta property="og:image" content="${escapeHtml(params.cardUrl)}">
+<meta property="og:image" content="${escapeHtml(params.cardUrl)}">
 <meta name="twitter:card" content="summary_large_image">
 <style>
 :root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0b1016;color:#edf1f5;font-synthesis:none}
@@ -160,11 +169,11 @@ h1{font-size:clamp(28px,5vw,42px);line-height:1.15;letter-spacing:-.045em;margin
 </style></head><body><main>
 <header><div class="masthead"><div class="brand"><span aria-hidden="true">✳</span>OpenClaw</div><span class="badge">Public · Read-only</span></div>
 <h1>${title}</h1><p class="intro"><strong>Shared with everyone, no login required.</strong> This ${isLatest ? "live view" : "page"} includes conversation text. Tool output, files, images, reasoning, and interactive content are omitted.</p></header>
-${!isLatest ? `<p class="page-label">Earlier conversation · <a href="${escapeHtml(params.canonicalUrl)}">Back to latest</a></p>` : ""}
+${!isLatest ? `<p class="page-label">Earlier conversation · <a href="${escapeHtml(params.latestUrl)}">Back to latest</a></p>` : ""}
 ${truncated ? '<aside class="notice">Some messages or long text are omitted to keep this public page within its size limit.</aside>' : ""}
 ${navigation}
 <section class="transcript" aria-label="Conversation">${rows.length ? rows.toReversed().join("\n") : `<p class="empty">${isLatest ? "No public conversation text yet. New messages will appear here as the conversation continues." : "No public conversation text on this page. Use the page links to continue reading."}</p>`}</section>
 ${navigation}
-<footer><span>${isLatest ? "Live view · Refreshes every 15 seconds" : "Earlier conversation · Updates when you reload"}<br>Public access can be revoked by the session owner.</span><a href="${escapeHtml(params.canonicalUrl)}">${isLatest ? "Refresh now" : "Back to latest"}</a></footer>
+<footer><span>${isLatest ? "Live view · Refreshes every 15 seconds" : "Earlier conversation · Updates when you reload"}<br>Public access can be revoked by the session owner.</span><a href="${escapeHtml(params.latestUrl)}">${isLatest ? "Refresh now" : "Back to latest"}</a></footer>
 </main></body></html>`;
 }

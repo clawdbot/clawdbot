@@ -1,4 +1,3 @@
-import type { ControlUiPublicSessionShare } from "@openclaw/session-url-contract/public-share";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { resolveSessionPublicShare } from "../config/sessions/session-public-share.js";
@@ -7,6 +6,7 @@ import { resolveSessionStorePathForScope } from "../config/sessions/session-stor
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import type { PublicSessionShareLocator } from "./control-ui-public-session-token.js";
 import { readSessionMessagesPageWithStatsAsync } from "./session-transcript-readers.js";
 
 type PublicSessionShareReadResult = {
@@ -17,12 +17,17 @@ type PublicSessionShareReadResult = {
   olderOffset?: number;
 };
 
-/** Only the exact published generation is readable; this grants no Gateway session authority. */
-export async function readPublicSessionShare(
+type PublicSessionShareScope = {
+  agentId: string;
+  sessionKey: string;
+  storePath: string;
+  projection: "list";
+};
+
+function resolvePublicSessionShareScope(
   cfg: OpenClawConfig,
-  locator: ControlUiPublicSessionShare,
-  options: { offset?: number } = {},
-): Promise<PublicSessionShareReadResult | null> {
+  locator: PublicSessionShareLocator,
+): PublicSessionShareScope | null {
   const parsed = parseAgentSessionKey(locator.sessionKey);
   const fixedOwner = resolvePersistedSessionStoreOwnerForKey(cfg, locator.sessionKey);
   if (
@@ -37,20 +42,42 @@ export async function readPublicSessionShare(
   ) {
     return null;
   }
-  const scope = {
+  return {
     agentId: locator.agentId,
     sessionKey: locator.sessionKey,
     storePath: resolveSessionStorePathForScope(locator, cfg),
-    projection: "list" as const,
+    projection: "list",
   };
-  const readAuthorizedEntry = (): InternalSessionEntry | undefined => {
-    const entry = loadExactSessionEntryReadOnly(scope)?.entry;
-    const share = resolveSessionPublicShare(entry);
-    return share?.id === locator.shareId && share.sessionId === locator.sessionId
-      ? entry
-      : undefined;
-  };
-  const entry = readAuthorizedEntry();
+}
+
+function readAuthorizedEntry(
+  scope: PublicSessionShareScope,
+  locator: PublicSessionShareLocator,
+): InternalSessionEntry | undefined {
+  const entry = loadExactSessionEntryReadOnly(scope)?.entry;
+  const share = resolveSessionPublicShare(entry);
+  return share?.id === locator.shareId && share.sessionId === locator.sessionId ? entry : undefined;
+}
+
+export function isPublicSessionShareActive(
+  cfg: OpenClawConfig,
+  locator: PublicSessionShareLocator,
+): boolean {
+  const scope = resolvePublicSessionShareScope(cfg, locator);
+  return Boolean(scope && readAuthorizedEntry(scope, locator));
+}
+
+/** Only the exact published generation is readable; this grants no Gateway session authority. */
+export async function readPublicSessionShare(
+  cfg: OpenClawConfig,
+  locator: PublicSessionShareLocator,
+  options: { offset?: number } = {},
+): Promise<PublicSessionShareReadResult | null> {
+  const scope = resolvePublicSessionShareScope(cfg, locator);
+  if (!scope) {
+    return null;
+  }
+  const entry = readAuthorizedEntry(scope, locator);
   if (!entry) {
     return null;
   }
@@ -65,7 +92,7 @@ export async function readPublicSessionShare(
   );
   // Revocation, replacement, or reset during history work closes this publication.
   // Never return a previously authorized payload after an awaited read without rechecking.
-  const current = readAuthorizedEntry();
+  const current = readAuthorizedEntry(scope, locator);
   if (!current) {
     return null;
   }

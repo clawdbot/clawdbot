@@ -1,56 +1,42 @@
 import { normalizeControlUiBasePath } from "./grammar.js";
 
+export const CONTROL_UI_PUBLIC_SESSION_SHARE_TOKEN_MAX_LENGTH = 7_000;
+
 export type ControlUiPublicSessionShare = {
-  agentId: string;
-  sessionKey: string;
-  sessionId: string;
-  shareId: string;
+  token: string;
 };
+
+function isSyntacticallyValidPublicSessionToken(token: string): boolean {
+  const encoded = token.startsWith("v1.") ? token.slice(3) : "";
+  return (
+    token.length <= CONTROL_UI_PUBLIC_SESSION_SHARE_TOKEN_MAX_LENGTH &&
+    encoded.length > 0 &&
+    encoded.length % 4 !== 1 &&
+    /^[A-Za-z0-9_-]+$/u.test(encoded)
+  );
+}
 
 export function buildControlUiPublicSessionSharePath(
   params: ControlUiPublicSessionShare & { basePath?: string },
 ): string {
-  const query = new URLSearchParams({ key: params.sessionKey, share: params.shareId });
-  return `${normalizeControlUiBasePath(params.basePath)}/share/session/${encodeURIComponent(params.agentId)}/${encodeURIComponent(params.sessionId)}?${query}`;
+  if (!isSyntacticallyValidPublicSessionToken(params.token)) {
+    throw new Error("invalid public session token");
+  }
+  return `${normalizeControlUiBasePath(params.basePath)}/share/session?${new URLSearchParams({ token: params.token })}`;
 }
 
 export function parseControlUiPublicSessionShareUrl(
   url: URL,
   basePath?: string,
 ): ControlUiPublicSessionShare | null {
-  const prefix = `${normalizeControlUiBasePath(basePath)}/share/session/`;
-  if (url.href.length > 8192 || !url.pathname.startsWith(prefix)) {
-    return null;
-  }
-  const segments = url.pathname.slice(prefix.length).split("/");
   if (
-    segments.length !== 2 ||
-    url.searchParams.getAll("key").length !== 1 ||
-    url.searchParams.getAll("share").length !== 1
+    url.href.length > 8192 ||
+    url.pathname !== `${normalizeControlUiBasePath(basePath)}/share/session` ||
+    url.searchParams.getAll("token").length !== 1 ||
+    [...url.searchParams.keys()].some((key) => key !== "token" && key !== "offset")
   ) {
     return null;
   }
-  try {
-    const agentId = decodeURIComponent(segments[0] ?? "");
-    const sessionId = decodeURIComponent(segments[1] ?? "");
-    const sessionKey = url.searchParams.get("key") ?? "";
-    const shareId = url.searchParams.get("share") ?? "";
-    if (
-      !/^[a-z0-9][a-z0-9_-]{0,63}$/u.test(agentId) ||
-      !sessionId ||
-      sessionId.length > 512 ||
-      // oxlint-disable-next-line eslint/no-control-regex -- Public locators must reject control bytes in stored identifiers.
-      /[/\\\s\u0000-\u001f\u007f-\u009f]/u.test(sessionId) ||
-      !/^[0-9a-f]{48}$/u.test(shareId) ||
-      !sessionKey ||
-      sessionKey.length > 4096 ||
-      // oxlint-disable-next-line eslint/no-control-regex -- Reject ASCII control bytes without normalizing the exact stored key.
-      /[\u0000-\u001f\u007f]/u.test(sessionKey)
-    ) {
-      return null;
-    }
-    return { agentId, sessionId, sessionKey, shareId };
-  } catch {
-    return null;
-  }
+  const token = url.searchParams.get("token") ?? "";
+  return isSyntacticallyValidPublicSessionToken(token) ? { token } : null;
 }

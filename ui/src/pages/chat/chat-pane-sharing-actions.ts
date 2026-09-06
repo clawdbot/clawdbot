@@ -217,6 +217,7 @@ export abstract class ChatPaneSharingActions extends ChatPaneBase {
         },
       );
       if (!isCurrent()) {
+        this.sessionSharingHydrationTargets.delete(cacheKey);
         return;
       }
       this.setSessionSharingState(cacheKey, {
@@ -250,13 +251,13 @@ export abstract class ChatPaneSharingActions extends ChatPaneBase {
     }
     const share = this.sessionSharingStates.get(this.sessionSharingCacheKey(row.key))?.result
       ?.publicShare;
-    const agentId = this.sessionSharingAgentId(row.key);
-    if (!share || share.sessionId !== currentRow.sessionId || !agentId) {
+    const expectedSessionId = currentRow.sessionId;
+    if (!share || !expectedSessionId) {
       return;
     }
     const isCurrent = () =>
       this.ownsHeaderOutcomeScope(scope) &&
-      this.currentSessionSharingRow(scope, currentRow)?.sessionId === share.sessionId;
+      this.currentSessionSharingRow(scope, currentRow)?.sessionId === expectedSessionId;
     try {
       const gateway = scope.context.gateway;
       const controlUiUrl = gateway.snapshot.hello?.controlUiUrl;
@@ -265,10 +266,7 @@ export abstract class ChatPaneSharingActions extends ChatPaneBase {
       url.protocol = url.protocol.replace(/^ws/u, "http");
       const path = buildControlUiPublicSessionSharePath({
         basePath: controlUiUrl ? url.pathname : scope.context.basePath,
-        agentId,
-        sessionKey: currentRow.key,
-        sessionId: share.sessionId,
-        shareId: share.id,
+        token: share.token,
       });
       const copied = await copyToClipboard(new URL(path, url.origin).href, isCurrent);
       if (isCurrent()) {

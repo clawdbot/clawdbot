@@ -1029,21 +1029,6 @@ export async function handleControlUiHttpRequest(
   applyControlUiSecurityHeaders(res);
 
   if (isControlUiSharePath(pathname, basePath) && pathname !== `${basePath}/share/card.png`) {
-    if (
-      pathname === `${basePath}/share/session` ||
-      pathname.startsWith(`${basePath}/share/session/`)
-    ) {
-      const { serveControlUiPublicSession } = await import("./control-ui-public-session.js");
-      await serveControlUiPublicSession(
-        req,
-        res,
-        url,
-        basePath,
-        opts?.config,
-        resolveGatewayPublicOrigin(opts?.config),
-      );
-      return true;
-    }
     serveControlUiShareDocument(req, res, url, basePath, resolveGatewayPublicOrigin(opts?.config));
     return true;
   }
