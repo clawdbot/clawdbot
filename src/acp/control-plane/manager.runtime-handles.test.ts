@@ -783,22 +783,25 @@ describe("AcpSessionManager runtime handles", () => {
     });
   });
 
-  it("passes persisted model runtime options into ensureSession after restart", async () => {
+  it.each([
+    { agent: "codex", model: "openai/gpt-5.4" },
+    { agent: "claude", model: "anthropic/claude-sonnet-4-6" },
+  ])("preserves the selected $agent model contract after restart", async ({ agent, model }) => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
       id: "acpx",
       runtime: runtimeState.runtime,
     });
-    const sessionKey = "agent:codex:acp:binding:demo-binding:default:model-restart";
+    const sessionKey = `agent:${agent}:acp:binding:demo-binding:default:model-restart`;
     hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
       const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
       return {
         sessionKey: key,
         storeSessionKey: key,
         acp: {
-          ...readySessionMeta(),
+          ...readySessionMeta({ agent }),
           runtimeOptions: {
-            model: "openai/gpt-5.4",
+            model,
           },
         },
       };
@@ -816,7 +819,8 @@ describe("AcpSessionManager runtime handles", () => {
 
     expectRecordFields(mockCallArg(runtimeState.ensureSession), {
       sessionKey,
-      model: "openai/gpt-5.4",
+      model,
+      modelExplicit: true,
     });
   });
 

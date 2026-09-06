@@ -58,8 +58,8 @@ describe("embedded acpx plugin config", () => {
     });
 
     expect(resolved.agents).toEqual({
-      claude: "claude --acp",
-      codex: "codex custom-acp",
+      claude: ["claude", "--acp"],
+      codex: ["codex", "custom-acp"],
     });
   });
 
@@ -81,12 +81,12 @@ describe("embedded acpx plugin config", () => {
     });
 
     expect(resolved.agents).toEqual({
-      claude: "node /path/to/adapter.mjs --verbose",
-      codex: "codex-acp --model gpt-5",
+      claude: ["node", "/path/to/adapter.mjs", "--verbose"],
+      codex: ["codex-acp", "--model", "gpt-5"],
     });
   });
 
-  it("quotes agent args that need to survive command-line parsing as one token", () => {
+  it("preserves structured agent args without shell quoting", () => {
     const resolved = resolveAcpxPluginConfig({
       rawConfig: {
         agents: {
@@ -100,7 +100,7 @@ describe("embedded acpx plugin config", () => {
     });
 
     expect(resolved.agents).toEqual({
-      custom: "node '/tmp/My Adapter.mjs' '--flag=value with spaces' 'owner'\"'\"'s-choice'",
+      custom: ["node", "/tmp/My Adapter.mjs", "--flag=value with spaces", "owner's-choice"],
     });
   });
 
@@ -115,8 +115,17 @@ describe("embedded acpx plugin config", () => {
     });
 
     expect(resolved.agents).toEqual({
-      simple: "simple-acp",
+      simple: ["simple-acp"],
     });
+  });
+
+  it("rejects incomplete command quoting before creating launch argv", () => {
+    expect(() =>
+      resolveAcpxPluginConfig({
+        rawConfig: { agents: { custom: { command: "node 'unfinished argument" } } },
+        workspaceDir: "/tmp/openclaw-acpx",
+      }),
+    ).toThrow("unterminated quote");
   });
 
   it("carries an explicit probeAgent through to the resolved plugin config, trimmed", () => {

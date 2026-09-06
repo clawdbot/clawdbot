@@ -5,14 +5,10 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { isPidAlive, runExec } from "openclaw/plugin-sdk/process-runtime";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { CODEX_ACP_PACKAGE, LEGACY_CODEX_ACP_PACKAGE } from "./codex-adapter.js";
-import { splitCommandParts } from "./command-line.js";
 import { resolveAcpxPluginRoot } from "./config.js";
-import {
-  OPENCLAW_ACPX_LEASE_ID_ARG,
-  OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
-  readAcpxProcessLeaseIdentity,
-} from "./process-lease.js";
+import { readAcpxProcessLeaseIdentity } from "./process-lease.js";
 
 const requireFromHere = createRequire(import.meta.url);
 const GENERATED_WRAPPER_BASENAMES = new Set([
@@ -145,7 +141,10 @@ function commandWrapperBelongsToRoot(command: string, wrapperRoot: string | unde
 
 function commandContainsExactWrapperPath(command: string, wrapperPath: string): boolean {
   const expectedPath = normalizePathLike(wrapperPath);
-  return splitCommandParts(command).some((part) => normalizePathLike(part) === expectedPath);
+  // Process display paths can contain spaces and literal quote characters.
+  return new RegExp(`(?:^|[\\s"'])${escapeRegExp(expectedPath)}(?=$|[\\s"'])`).test(
+    normalizePathLike(command),
+  );
 }
 
 function wrapperPathBelongsToRoot(wrapperPath: string, wrapperRoot: string): boolean {
@@ -180,18 +179,6 @@ function commandsReferToSameRootCommand(liveCommand: string, storedCommand: stri
   return normalizePathLike(liveCommand).trim() === normalizePathLike(storedCommand).trim();
 }
 
-function commandOptionEquals(
-  parts: string[],
-  option: string,
-  expected: string | undefined,
-): boolean {
-  if (!expected) {
-    return true;
-  }
-  const index = parts.indexOf(option);
-  return index >= 0 && parts[index + 1] === expected;
-}
-
 function liveCommandMatchesLeaseIdentity(params: {
   command: string | undefined;
   expectedLeaseId?: string;
@@ -200,10 +187,11 @@ function liveCommandMatchesLeaseIdentity(params: {
   if (!params.expectedLeaseId && !params.expectedGatewayInstanceId) {
     return true;
   }
-  const parts = splitCommandParts(params.command ?? "");
+  const identity = readAcpxProcessLeaseIdentity(params.command);
   return (
-    commandOptionEquals(parts, OPENCLAW_ACPX_LEASE_ID_ARG, params.expectedLeaseId) &&
-    commandOptionEquals(parts, OPENCLAW_GATEWAY_INSTANCE_ID_ARG, params.expectedGatewayInstanceId)
+    (!params.expectedLeaseId || identity?.leaseId === params.expectedLeaseId) &&
+    (!params.expectedGatewayInstanceId ||
+      identity?.gatewayInstanceId === params.expectedGatewayInstanceId)
   );
 }
 

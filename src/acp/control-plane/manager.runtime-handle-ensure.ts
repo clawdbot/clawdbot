@@ -122,7 +122,7 @@ export async function ensureManagerRuntimeHandle(params: {
           agent,
           mode,
           ...(resumeSessionId ? { resumeSessionId } : {}),
-          ...(model ? { model } : {}),
+          ...(model ? { model, modelExplicit: true } : {}),
           ...(thinking ? { thinking } : {}),
           cwd,
         }),
