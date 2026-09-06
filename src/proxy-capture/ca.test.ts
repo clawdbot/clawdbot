@@ -27,7 +27,6 @@ vi.mock("node:crypto", async (importOriginal) => {
       value: class {
         readonly ca: boolean;
         readonly marker: string;
-
         constructor(value: Buffer) {
           this.marker = parseMarker(value, "ca-cert-marker:");
           this.ca = this.marker !== "not-ca";
@@ -35,6 +34,14 @@ vi.mock("node:crypto", async (importOriginal) => {
 
         checkPrivateKey(key: { marker?: string }): boolean {
           return key.marker === this.marker;
+        }
+
+        checkHost(hostname: string): string | undefined {
+          return this.marker === "not-ca" ? hostname : undefined;
+        }
+
+        checkIP(hostname: string): string | undefined {
+          return this.marker === "not-ca" ? hostname : undefined;
         }
       },
     },
@@ -47,11 +54,11 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
   runExec: runExecMock,
 }));
 
-import { ensureDebugProxyCa } from "./ca.js";
+import { ensureDebugProxyCa, generateLocalProxyLeaf } from "./ca.js";
 
 const tempDirs = createTrackedTempDirs();
 
-function outputPath(args: string[], flag: "-config" | "-keyout" | "-out"): string {
+function outputPath(args: string[], flag: "-config" | "-extfile" | "-keyout" | "-out"): string {
   const index = args.indexOf(flag);
   const value = args[index + 1];
   if (!value) {
@@ -124,6 +131,8 @@ describe("ensureDebugProxyCa", () => {
     expect(generatedConfig).toContain("CN = OpenClaw Debug Proxy");
     expect(generatedConfig).toContain("basicConstraints = critical, CA:TRUE");
     expect(generatedConfig).toContain("keyUsage = critical, keyCertSign, cRLSign");
+    expect(generatedConfig).toContain("subjectKeyIdentifier = hash");
+    expect(generatedConfig).toContain("authorityKeyIdentifier = keyid:always,issuer");
   });
 
   it("rejects matching certificate material that is not a CA", async () => {
@@ -192,5 +201,37 @@ describe("ensureDebugProxyCa", () => {
     expect(fs.readFileSync(certPath, "utf8")).toBe("ca-cert-marker:retry-after-publication");
     expect(fs.readFileSync(keyPath, "utf8")).toBe("ca-material-marker:retry-after-publication");
     expect(runExecMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("generateLocalProxyLeaf", () => {
+  it("generates a constrained server leaf with key identifiers", async () => {
+    const { certDir, certPath, keyPath } = await makeCertPaths();
+    fs.writeFileSync(certPath, "ca-cert-marker:root");
+    fs.writeFileSync(keyPath, "ca-material-marker:root");
+    let generatedExtensions = "";
+    runExecMock
+      .mockImplementationOnce(async (_command: string, args: string[]) => {
+        fs.writeFileSync(outputPath(args, "-out"), "ca-material-marker:not-ca");
+      })
+      .mockImplementationOnce(async () => {})
+      .mockImplementationOnce(async (_command: string, args: string[]) => {
+        generatedExtensions = fs.readFileSync(outputPath(args, "-extfile"), "utf8");
+        fs.writeFileSync(outputPath(args, "-out"), "ca-cert-marker:not-ca");
+      });
+
+    await expect(
+      generateLocalProxyLeaf({ certDir, ca: { certPath, keyPath }, hostname: "api.example.com" }),
+    ).resolves.toEqual({
+      cert: Buffer.from("ca-cert-marker:not-ca"),
+      key: Buffer.from("ca-material-marker:not-ca"),
+    });
+
+    expect(generatedExtensions).toContain("subjectAltName=DNS:api.example.com");
+    expect(generatedExtensions).toContain("basicConstraints=critical,CA:FALSE");
+    expect(generatedExtensions).toContain("keyUsage=critical,digitalSignature,keyEncipherment");
+    expect(generatedExtensions).toContain("extendedKeyUsage=serverAuth");
+    expect(generatedExtensions).toContain("subjectKeyIdentifier=hash");
+    expect(generatedExtensions).toContain("authorityKeyIdentifier=keyid,issuer");
   });
 });
