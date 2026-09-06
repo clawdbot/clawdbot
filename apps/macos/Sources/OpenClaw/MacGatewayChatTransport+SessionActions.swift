@@ -1,6 +1,5 @@
 import Foundation
 import OpenClawChatUI
-import OpenClawProtocol
 
 extension MacGatewayChatTransport {
     func acquireNewSessionRouteLease() async -> OpenClawChatNewSessionRouteLease? {
