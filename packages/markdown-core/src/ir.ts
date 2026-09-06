@@ -191,8 +191,8 @@ type MarkdownTableSource = {
 type MarkdownTableWithSource = MarkdownTableMeta & { source?: MarkdownTableSource };
 
 /** Private source coordinates do not change the serialized native-table payload. */
-export function getMarkdownTableSource(table: MarkdownTableMeta) {
-  return (table as MarkdownTableWithSource).source;
+export function getMarkdownTableSource(table: MarkdownTableWithSource) {
+  return table.source;
 }
 
 type OpenStyle = {
@@ -383,6 +383,7 @@ function createMarkdownIt(options: MarkdownParseOptions): MarkdownItParser {
   if (options.tableMode && options.tableMode !== "off") {
     md.enable("table");
     md.block.ruler.before("table", "markdown_core_table_source", (state, line, _end, silent) => {
+      // SAFETY: markdownToIRWithMeta creates and passes this parser's RenderEnv.
       const env = state.env as RenderEnv;
       if (!silent && env.tableSourceColumns) {
         const start = (state.bMarks[line] ?? 0) + (state.tShift[line] ?? 0);
@@ -933,7 +934,7 @@ function collectTableBlock(state: RenderState) {
   }
   const headerCells = state.table.headers.map(trimCell);
   const rowCells = state.table.rows.map((row) => row.map(trimCell));
-  const table = {
+  const table: MarkdownTableWithSource = {
     headers: headerCells.map((cell) => cell.text),
     rows: rowCells.map((row) => row.map((cell) => cell.text)),
     headerCells,
@@ -946,7 +947,7 @@ function collectTableBlock(state: RenderState) {
     const [first, after] = state.table.sourceLines;
     const { lines, starts } = (state.sourceIndex ??= indexSourceLines(state.source));
     const column = state.env.tableSourceColumns?.get(first) ?? 0;
-    defineMetadata(table as MarkdownTableWithSource, "source", {
+    defineMetadata(table, "source", {
       start: (starts[first] ?? 0) + column,
       end: (starts[after - 1] ?? 0) + (lines[after - 1]?.length ?? 0),
       // Continue list markers as indentation while retaining enclosing quote markers.
