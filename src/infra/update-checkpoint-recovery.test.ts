@@ -16,6 +16,7 @@ import {
   sealUpdateCheckpointRestoreSharedDatabase,
   verifyUpdateCheckpointRestore,
 } from "./update-checkpoint-restore.js";
+import { buildCheckpointReaderRuntime } from "./update-checkpoint-runtime.test-support.js";
 import { captureUpdateCheckpoint, type UpdateCheckpointAccess } from "./update-checkpoint.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "./update-run-ledger.js";
 import {
@@ -53,12 +54,10 @@ async function fixture(
   const options = { env: { HOME: root, OPENCLAW_STATE_DIR: stateDir } };
   const run = createUpdateRun({ trigger: "cli" }, options);
   const file = path.join(stateDir, "state", "openclaw.sqlite");
-  const runtime = {
-    root: path.join(root, "package"),
-    nodePath: process.execPath,
-    version: "1.0.0",
-    buildId: null,
-  };
+  const { runtime: fixtureRuntime } = await buildCheckpointReaderRuntime(
+    path.join(root, "package"),
+  );
+  const runtime = { ...fixtureRuntime, buildId: null };
   let record = beginUpdateRecovery(
     { runId: run.runId, from: runtime, to: runtime },
     fence,
@@ -228,6 +227,61 @@ async function fixture(
 }
 
 describe("checkpoint publication with the actual recovery owner", () => {
+  it("does not seal successfully without the actual retained reader even when the in-transaction callback approves", async () => {
+    const f = await fixture();
+    await fs.rename(
+      path.join(f.access.binding.fromRuntime.root, "dist", "index.js"),
+      path.join(f.access.binding.fromRuntime.root, "dist", "unavailable.js"),
+    );
+    await expect(
+      sealUpdateCheckpointRestoreSharedDatabase({
+        ...f.request,
+        recoveryRecord: f.record,
+        fence,
+      }),
+    ).rejects.toThrow("Previous runtime database validation unavailable");
+    // Both local commits may have completed; that fact alone must not enable replay.
+    const current = loadUpdateRecovery(f.record.runId, f.options)!;
+    expect(current.restore?.phase).toBe("intent");
+    expect(
+      await restoreUpdateCheckpointResource({
+        ...f.request,
+        recoveryRecord: current,
+      }),
+    ).toMatchObject({
+      status: "unavailable",
+      reason: "previous-runtime-unavailable",
+      observed: "before",
+    });
+    expect(
+      await inspectUpdateCheckpointRestoreResource({
+        ...f.request,
+        recoveryRecord: current,
+      }),
+    ).toMatchObject({ observed: "before" });
+  });
+
+  it("revalidates the real runtime on replay instead of trusting an earlier successful seal", async () => {
+    const f = await fixture();
+    const sealed = await sealUpdateCheckpointRestoreSharedDatabase({
+      ...f.request,
+      recoveryRecord: f.record,
+      fence,
+    });
+    await fs.rename(
+      path.join(f.access.binding.fromRuntime.root, "dist", "index.js"),
+      path.join(f.access.binding.fromRuntime.root, "dist", "unavailable.js"),
+    );
+    const before = await Promise.all([f.file, f.stage].map(inspectCheckpointFile));
+    expect(
+      await restoreUpdateCheckpointResource({
+        ...f.request,
+        recoveryRecord: sealed,
+      }),
+    ).toMatchObject({ status: "unavailable", reason: "previous-runtime-unavailable" });
+    expect(await Promise.all([f.file, f.stage].map(inspectCheckpointFile))).toEqual(before);
+  });
+
   it.each(["rejection", "asynchronous result"])(
     "does not seal or publish after executor validation %s",
     async (failure) => {

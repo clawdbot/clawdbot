@@ -5,7 +5,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { z } from "zod";
 import { requireDirectorySync, syncDirectorySync } from "./directory-durability.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "./node-sqlite.js";
 import {
   checkpointContentMatches,
   inspectCheckpointFile,
@@ -18,6 +18,7 @@ import {
   type RestoreResource,
   type UpdateCheckpointRestorePlanRef,
 } from "./update-checkpoint-plan.js";
+import { validateUpdateCheckpointPreviousRuntimeDatabase } from "./update-checkpoint-runtime.js";
 import { assertUpdateCheckpointSqliteSchema } from "./update-checkpoint-sqlite.js";
 import {
   reopenUpdateCheckpoint,
@@ -58,7 +59,7 @@ export type UpdateCheckpointRestoreObservation = {
 export type UpdateCheckpointRestoreResult = UpdateCheckpointRestoreObservation &
   (
     | { status: "applied" | "already-applied" | "conflict" }
-    | { status: "unavailable"; reason: "quiescence-unavailable" }
+    | { status: "unavailable"; reason: "quiescence-unavailable" | "previous-runtime-unavailable" }
   );
 
 function matchesOwnedFile(
@@ -234,11 +235,11 @@ export async function restoreUpdateCheckpointResource(
 ): Promise<UpdateCheckpointRestoreResult> {
   // Reconciliation is read-only and does not require mutation authority. Keep
   // its evidence separate from the executor's current exclusion check below.
-  const { resource, observation, current, staged, displaced } = await inspectResource(params);
+  let { resource, observation, current, staged, displaced } = await inspectResource(params);
   if (observation.observed === "conflict") {
     return { ...observation, status: "conflict" };
   }
-  try {
+  const assertCurrent = (): undefined => {
     const completion: unknown = params.assertQuiescent();
     if (completion !== undefined) {
       // A Promise is not established exclusion. Handle an eventual rejection,
@@ -248,6 +249,10 @@ export async function restoreUpdateCheckpointResource(
       }
       throw new Error("Checkpoint exclusion must complete synchronously");
     }
+    return undefined;
+  };
+  try {
+    assertCurrent();
   } catch {
     // No effects have begun. Do not include arbitrary executor error contents
     // or turn failures after displacement/publication into this safe outcome.
@@ -263,6 +268,46 @@ export async function restoreUpdateCheckpointResource(
     }
   }
   const replacement = path.join(resource.stageDirectory, "replacement");
+  if (resource.recovery) {
+    // A previous process may have committed intent and then failed runtime
+    // validation. Never treat that durable intent alone as publication proof.
+    const file = observation.observed === "after" ? resource.sourcePath : replacement;
+    const database = openNodeSqliteDatabase(resolveImmutableSqliteFileUri(file), {
+      readOnly: true,
+    });
+    let validation;
+    try {
+      validation = await validateUpdateCheckpointPreviousRuntimeDatabase({
+        database,
+        runtime: params.binding.fromRuntime,
+        assertCurrent,
+      });
+    } finally {
+      database.close();
+    }
+    if (validation.status !== "verified") {
+      return { ...observation, status: "unavailable", reason: "previous-runtime-unavailable" };
+    }
+    // The external reader awaited work. Reconcile the exact owner records and
+    // original logical bindings again, then check live authority immediately
+    // before the existing physical guards and non-awaiting rename sequence.
+    ({ resource, observation, current, staged, displaced } = await inspectResource(params));
+    if (observation.observed === "conflict") {
+      return { ...observation, status: "conflict" };
+    }
+    try {
+      assertCurrent();
+    } catch {
+      return { ...observation, status: "unavailable", reason: "quiescence-unavailable" };
+    }
+    for (const member of [
+      resource.sourcePath,
+      replacement,
+      path.join(resource.stageDirectory, "displaced"),
+    ]) {
+      assertSqliteFamilyClosed(member);
+    }
+  }
   const unchanged = (file: string, state: RestoreResource["before"]) =>
     state === null
       ? !fsSync.existsSync(file)
@@ -346,10 +391,22 @@ export async function sealUpdateCheckpointRestoreSharedDatabase(
     planRef: UpdateCheckpointRestorePlanRef;
     recoveryRecord: UpdateRecoveryRecord;
     fence: UpdateRecoveryFence;
-    /** Synchronous matching-runtime reader supplied by the executor, not a schema-only fallback. */
+    /** In-transaction checks only; the real retained reader runs after both commits below. */
     validateStagedDatabase: (db: DatabaseSync) => undefined;
   },
 ): Promise<UpdateRecoveryRecord> {
+  const assertCurrent = (): undefined => {
+    for (const check of [() => params.assertQuiescent(), () => params.fence.assertCurrent()]) {
+      const result: unknown = check();
+      if (result !== undefined) {
+        if (isPromiseLike(result)) {
+          void Promise.resolve(result).catch(() => undefined);
+        }
+        throw new TypeError("Checkpoint sealing requires synchronous current exclusion");
+      }
+    }
+    return undefined;
+  };
   const reopened = await reopenUpdateCheckpointRestorePlan(params.planRef, params);
   const resource = reopened.plan.resources[0];
   if (!resource?.recovery || !resource.before || !resource.after) {
@@ -371,8 +428,7 @@ export async function sealUpdateCheckpointRestoreSharedDatabase(
   if (!captured?.artifact) {
     throw new Error("Missing shared checkpoint artifact");
   }
-  params.assertQuiescent();
-  params.fence.assertCurrent();
+  assertCurrent();
   if (
     !sourceState ||
     !stageState ||
@@ -392,8 +448,7 @@ export async function sealUpdateCheckpointRestoreSharedDatabase(
   if (!stagedRecord) {
     throw new Error("Missing staged recovery record");
   }
-  params.assertQuiescent();
-  params.fence.assertCurrent();
+  assertCurrent();
   const sourceDb = openNodeSqliteDatabase(resource.sourcePath);
   const stagedDb = openNodeSqliteDatabase(replacement);
   let sealed: UpdateRecoveryRecord;
@@ -414,12 +469,7 @@ export async function sealUpdateCheckpointRestoreSharedDatabase(
         stagedDb,
         expected: params.recoveryRecord,
         nextProgress: { ...params.planRef, resourceCursor: 0, phase: "intent" },
-        fence: {
-          assertCurrent() {
-            params.assertQuiescent();
-            params.fence.assertCurrent();
-          },
-        },
+        fence: { assertCurrent },
         validateStagedDatabase(db) {
           assertUpdateCheckpointSqliteSchema(checkpointDb, db);
           const validation: unknown = params.validateStagedDatabase(db);
@@ -437,14 +487,27 @@ export async function sealUpdateCheckpointRestoreSharedDatabase(
     } finally {
       checkpointDb.close();
     }
+    // The retained release runs in another process. It must see the FINAL
+    // committed carry-forward image, including sealed-plan intent, not the old
+    // image visible while validateStagedDatabase executes inside a transaction.
+    const validation = await validateUpdateCheckpointPreviousRuntimeDatabase({
+      database: stagedDb,
+      runtime: params.binding.fromRuntime,
+      assertCurrent,
+    });
+    if (validation.status !== "verified") {
+      throw new Error("Previous runtime database validation unavailable: " + validation.reason);
+    }
+    assertCurrent();
+    validateUpdateRecoveryDatabaseBinding(sourceDb, sealed, resource.recovery.sourceBinding);
+    validateUpdateRecoveryDatabaseBinding(stagedDb, sealed, resource.recovery.stagedBinding);
   } finally {
     sourceDb.close();
     stagedDb.close();
   }
   await syncCheckpointTree(resource.sourcePath);
   await syncCheckpointTree(replacement);
-  params.assertQuiescent();
-  params.fence.assertCurrent();
+  assertCurrent();
   if ((await observeResource(resource, params.planRef, sealed)).observed !== "before") {
     throw new Error("Recovery sealing did not preserve restore bindings");
   }
