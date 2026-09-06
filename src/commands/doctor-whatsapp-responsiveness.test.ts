@@ -109,8 +109,8 @@ describe("doctor WhatsApp responsiveness", () => {
       tuis: localTuis,
     },
     { name: "no local TUI", cfg, status: { eventLoop: cpuPressure }, tuis: () => [] },
-  ])("stays quiet with $name", ({ cfg, status, tuis }) => {
-    const params = { cfg, status, listLocalTuiProcesses: tuis };
+  ])("stays quiet with $name", ({ cfg: caseConfig, status, tuis }) => {
+    const params = { cfg: caseConfig, status, listLocalTuiProcesses: tuis };
     expect(collectWhatsappResponsivenessHealthFindings(params)).toEqual([]);
     noteWhatsappResponsivenessHealth(params);
     expect(noteMock).not.toHaveBeenCalled();

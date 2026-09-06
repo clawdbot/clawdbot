@@ -2450,7 +2450,6 @@ src/commands/doctor-state-integrity.ts	1
 src/commands/doctor-state-sqlite-compact.ts	1
 src/commands/doctor-telegram-general-topic-conversations.ts	2
 src/commands/doctor-tools-md-migration.ts	5
-src/commands/doctor-whatsapp-responsiveness.ts	1
 src/commands/doctor-workspace.ts	4
 src/commands/doctor/channel-capabilities.ts	1
 src/commands/doctor/cron/dreaming-payload-migration.ts	3
