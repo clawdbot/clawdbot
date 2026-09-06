@@ -78,6 +78,7 @@ const SessionListRowOutputSchema = Type.Object(
     archived: Type.Boolean(),
     pinned: Type.Boolean(),
     label: Type.Optional(Type.String()),
+    color: Type.Optional(Type.String()),
     group: Type.Optional(
       Type.String({
         description: 'Custom sidebar group membership; unrelated to kind "group" (group chats).',
@@ -353,6 +354,7 @@ export function createSessionsListTool(opts?: {
           typeof entry.agentId === "string" && entry.agentId ? entry.agentId : resolvedAgentId;
         const stateVersion = stateVersions[stateVersionAgentId]?.[key];
         const rowLabel = readStringValue(entry.label);
+        const color = readStringValue(entry.color);
         // Gateway rows carry groups under the legacy wire field `category`.
         const group = readStringValue(entry.category);
         const displayName = readStringValue(entry.displayName);
@@ -406,6 +408,7 @@ export function createSessionsListTool(opts?: {
           archived: entry.archived === true,
           pinned: entry.pinned === true,
           ...(rowLabel ? { label: rowLabel } : {}),
+          ...(color ? { color } : {}),
           ...(group ? { group } : {}),
           ...(displayName ? { displayName } : {}),
           ...(derivedTitle ? { derivedTitle } : {}),

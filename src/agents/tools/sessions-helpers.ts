@@ -72,6 +72,7 @@ export type GatewaySessionListRow = {
   };
   spawnedBy?: string;
   label?: string;
+  color?: SessionRow["color"];
   category?: string;
   displayName?: string;
   derivedTitle?: string;
@@ -122,6 +123,7 @@ export type SessionListRow = {
   kind: SessionKind;
   channel: string;
   label?: string;
+  color?: string;
   group?: string;
   displayName?: string;
   derivedTitle?: string;

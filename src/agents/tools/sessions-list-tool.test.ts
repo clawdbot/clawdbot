@@ -356,6 +356,34 @@ describe("sessions-list-tool", () => {
     ).toEqual([{ key: "agent:main:dashboard:visible", group: "Projects" }]);
   });
 
+  it("returns canonical session colors so agents can read back their patches", async () => {
+    const key = "agent:main:main";
+    const entry: SessionEntry = {
+      sessionId: "session-main",
+      updatedAt: 1,
+      color: "blue",
+    };
+    const projected = buildGatewaySessionRow({
+      cfg: VALID_CONFIG,
+      storePath: "/tmp/sessions.json",
+      store: { [key]: entry },
+      key,
+      entry,
+      skipTranscriptUsageFallback: true,
+      lightweightListRow: true,
+    });
+    mocks.gatewayCall.mockResolvedValue({ path: "/tmp/sessions.json", sessions: [projected] });
+
+    const result = await createSessionsListTool({ config: VALID_CONFIG }).execute(
+      "color-readback",
+      {},
+    );
+
+    expect(projected.color).toBe("blue");
+    expect(getSessionsListDetails(result).sessions?.[0]).toMatchObject({ key, color: "blue" });
+    expect(Value.Check(createSessionsListTool().outputSchema!, result.details)).toBe(true);
+  });
+
   it("declares a complete focused row contract", async () => {
     mocks.gatewayCall.mockResolvedValue({
       path: "/tmp/sessions.json",
@@ -405,7 +433,7 @@ describe("sessions-list-tool", () => {
       linkedDetails.sessionLinkRule,
     );
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      '{ count: number; sessions: Array<{ agentId: string; archived: boolean; channel: string; key: string; kind: "main" | "group" | "cron" | "hook" | "node" | "other"; pinned: boolean; abortedLastRun?: boolean; childSessions?: Array<string>; contextTokens?: number; derivedTitle?: string; displayName?: string; group?: string; label?: string; lastMessagePreview?: string; messages?: Array<unknown>; model?: string; parentSessionKey?: string; sessionId?: string; stateVersion?: number; status?: "queued" | "running" | "done" | "failed" | "killed" | "timeout"; totalTokens?: number; updatedAt?: number }>; sessionLinkRule?: string; visibility?: { mode: "self" | "tree" | "agent"; restricted: true; warning: string } }',
+      '{ count: number; sessions: Array<{ agentId: string; archived: boolean; channel: string; key: string; kind: "main" | "group" | "cron" | "hook" | "node" | "other"; pinned: boolean; abortedLastRun?: boolean; childSessions?: Array<string>; color?: string; contextTokens?: number; derivedTitle?: string; displayName?: string; group?: string; label?: string; lastMessagePreview?: string; messages?: Array<unknown>; model?: string; parentSessionKey?: string; sessionId?: string; stateVersion?: number; status?: "queued" | "running" | "done" | "failed" | "killed" | "timeout"; totalTokens?: number; updatedAt?: number }>; sessionLinkRule?: string; visibility?: { mode: "self" | "tree" | "agent"; restricted: true; warning: string } }',
     );
     expect(result.details).toEqual({
       count: 1,
