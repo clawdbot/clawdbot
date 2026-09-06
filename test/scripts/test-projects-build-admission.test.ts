@@ -215,7 +215,12 @@ syncBuiltinESMExports();\n`,
     [
       "Codex delivery QA runtime",
       "scripts/run-vitest.mts",
-      ["run", "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts"],
+      [
+        "run",
+        "--config",
+        "test/vitest/vitest.tooling.config.ts",
+        "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts",
+      ],
       "private-qa",
     ],
     [
