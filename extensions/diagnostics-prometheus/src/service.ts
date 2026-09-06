@@ -1011,6 +1011,7 @@ function recordDiagnosticEvent(
         numericValue(evt.queueLength),
       );
       break;
+    case "directive.rejected":
     case "diagnostic.heartbeat":
       break;
     case "telemetry.exporter":
