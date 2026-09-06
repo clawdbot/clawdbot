@@ -311,6 +311,7 @@ module.exports = {
         );
         const result = await runPreparedModelCatalogWorkerRequest(serialized, {
           kind: "catalog",
+          syntheticAuth: [],
         });
         expect(result.status).toBe("ok");
         const runtimeFacts = getConfigResolutionFacts(serialized.input.config);

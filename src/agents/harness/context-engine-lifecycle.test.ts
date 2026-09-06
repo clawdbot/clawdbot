@@ -213,6 +213,30 @@ describe("harness context engine lifecycle", () => {
     expect(assembleParams?.messages).toEqual([visibleUser, visibleAssistant]);
   });
 
+  it("keeps persisted runtime-context carriers in place for append-only replay policies", async () => {
+    // Prefix-bound thinking (Anthropic family) is signed over every earlier message,
+    // including the carrier that followed its user turn; assembly must not drop it.
+    const visibleUser = textMessage("user", "visible ask", 1);
+    const persistedCarrier = runtimeContextMessage("persisted runtime context", 2);
+    const visibleAssistant = textMessage("assistant", "visible answer", 3);
+    const assemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
+      messages: params.messages,
+      estimatedTokens: 0,
+    }));
+
+    await assembleHarnessContextEngine({
+      contextEngine: createContextEngine({ assemble }),
+      sessionId: sessionParams.sessionId,
+      sessionKey: sessionParams.sessionKey,
+      appendOnlyRuntimeContext: true,
+      messages: [visibleUser, persistedCarrier, visibleAssistant],
+      modelId: "claude-test",
+    });
+
+    const assembleParams = assemble.mock.calls.at(0)?.[0];
+    expect(assembleParams?.messages).toEqual([visibleUser, persistedCarrier, visibleAssistant]);
+  });
+
   it("isolates the authoritative history array while preserving in-place assembly", async () => {
     const first = textMessage("user", "first", 1);
     const second = textMessage("assistant", "second", 2);

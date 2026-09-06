@@ -36,25 +36,18 @@ describe("readResponseBodySnippet", () => {
     expect(result).toBe("abcde");
   });
 
-  it("truncates by maxBytes in the body-less path", async () => {
-    const text = "a".repeat(200);
+  it.each([
+    { textLength: 200, maxBytes: 50 },
+    { textLength: 500, maxBytes: 30 },
+  ])("caps body-less text at $maxBytes bytes", async ({ textLength, maxBytes }) => {
+    const text = "a".repeat(textLength);
     const result = await readResponseBodySnippet(bodyLessResponse(text), {
-      maxBytes: 50,
+      maxBytes,
       maxChars: 500,
     });
     const byteLen = new TextEncoder().encode(result).length;
-    expect(byteLen).toBeLessThanOrEqual(50);
+    expect(byteLen).toBeLessThanOrEqual(maxBytes);
     expect(result.length).toBeLessThan(text.length);
-  });
-
-  it("enforces maxBytes before maxChars in the body-less path", async () => {
-    const text = "a".repeat(500);
-    const result = await readResponseBodySnippet(bodyLessResponse(text), {
-      maxBytes: 30,
-      maxChars: 500,
-    });
-    const byteLen = new TextEncoder().encode(result).length;
-    expect(byteLen).toBeLessThanOrEqual(30);
   });
 
   it("does not split multi-byte UTF-8 characters at the byte boundary", async () => {

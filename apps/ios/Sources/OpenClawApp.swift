@@ -6,12 +6,9 @@ import SwiftUI
 import UIKit
 @preconcurrency import UserNotifications
 
-private struct PendingWatchPromptAction {
-    var promptId: String?
-    var actionId: String
-    var actionLabel: String?
-    var sessionKey: String?
-    var gatewayStableID: String?
+enum WatchPromptAction: Sendable {
+    case delivery(OpenClawWatchChatDeliveryCommand)
+    case upgradeRequired
 }
 
 private typealias PendingExecApprovalPrompt = ApprovalNotificationPrompt
@@ -75,7 +72,6 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
 
     private var backgroundWakeAttempt: BackgroundWakeRefreshAttempt?
     private var pendingAPNsDeviceToken: Data?
-    private var pendingWatchPromptActions: [PendingWatchPromptAction] = []
     private var pendingExecApprovalPrompts: [PendingExecApprovalPrompt] = []
     private var pendingExecApprovalRequestedPushes: [ExecApprovalNotificationPrompt] = []
     private var pendingExecApprovalResolvedPushes: [ExecApprovalNotificationPrompt] = []
@@ -88,20 +84,6 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
                 self.pendingAPNsDeviceToken = nil
                 Task { @MainActor in
                     model.updateAPNsDeviceToken(token)
-                }
-            }
-            if !self.pendingWatchPromptActions.isEmpty {
-                let pending = self.pendingWatchPromptActions
-                self.pendingWatchPromptActions.removeAll()
-                Task { @MainActor in
-                    for action in pending {
-                        await model.handleMirroredWatchPromptAction(
-                            promptId: action.promptId,
-                            actionId: action.actionId,
-                            actionLabel: action.actionLabel,
-                            sessionKey: action.sessionKey,
-                            gatewayStableID: action.gatewayStableID)
-                    }
                 }
             }
             if !self.pendingExecApprovalPrompts.isEmpty {
@@ -195,7 +177,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         guard let route = DeepLinkParser.parse(url) else { return }
 
         switch route {
-        case .agent, .dashboard:
+        case .agent, .dashboard, .gatewayAdd:
             await model.handleDeepLink(url: url)
         case let .gateway(link):
             model.stageGatewaySetupLink(link)
@@ -281,9 +263,11 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     }
 
     private func registerBackgroundWakeRefreshTask() {
+        // The launch handler inherits this delegate's main-actor isolation, so it must run on
+        // the main queue; a nil queue would invoke it on the scheduler's background queue.
         BGTaskScheduler.shared.register(
             forTaskWithIdentifier: Self.wakeRefreshTaskIdentifier,
-            using: nil)
+            using: .main)
         { [weak self] task in
             guard let refreshTask = task as? BGAppRefreshTask else {
                 task.setTaskCompleted(success: false)
@@ -339,65 +323,48 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         (userInfo[WatchPromptNotificationBridge.typeKey] as? String) == WatchPromptNotificationBridge.typeValue
     }
 
-    private static func parseWatchPromptAction(
-        from response: UNNotificationResponse) -> PendingWatchPromptAction?
+    static func parseWatchPromptAction(
+        actionIdentifier: String,
+        userInfo: [AnyHashable: Any]) -> WatchPromptAction?
     {
-        let userInfo = response.notification.request.content.userInfo
-        guard Self.isWatchPromptNotification(userInfo) else { return nil }
-
-        let promptId = userInfo[WatchPromptNotificationBridge.promptIDKey] as? String
-        let sessionKey = userInfo[WatchPromptNotificationBridge.sessionKeyKey] as? String
-        let gatewayStableID = userInfo[WatchPromptNotificationBridge.gatewayStableIDKey] as? String
-
-        switch response.actionIdentifier {
+        guard self.isWatchPromptNotification(userInfo) else { return nil }
+        let actionIDKey: String
+        let actionLabelKey: String
+        switch actionIdentifier {
         case WatchPromptNotificationBridge.actionPrimaryIdentifier:
-            let actionId = (userInfo[WatchPromptNotificationBridge.actionPrimaryIDKey] as? String)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !actionId.isEmpty else { return nil }
-            let actionLabel = userInfo[WatchPromptNotificationBridge.actionPrimaryLabelKey] as? String
-            return PendingWatchPromptAction(
-                promptId: promptId,
-                actionId: actionId,
-                actionLabel: actionLabel,
-                sessionKey: sessionKey,
-                gatewayStableID: gatewayStableID)
+            actionIDKey = WatchPromptNotificationBridge.actionPrimaryIDKey
+            actionLabelKey = WatchPromptNotificationBridge.actionPrimaryLabelKey
         case WatchPromptNotificationBridge.actionSecondaryIdentifier:
-            let actionId = (userInfo[WatchPromptNotificationBridge.actionSecondaryIDKey] as? String)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !actionId.isEmpty else { return nil }
-            let actionLabel = userInfo[WatchPromptNotificationBridge.actionSecondaryLabelKey] as? String
-            return PendingWatchPromptAction(
-                promptId: promptId,
-                actionId: actionId,
-                actionLabel: actionLabel,
-                sessionKey: sessionKey,
-                gatewayStableID: gatewayStableID)
+            actionIDKey = WatchPromptNotificationBridge.actionSecondaryIDKey
+            actionLabelKey = WatchPromptNotificationBridge.actionSecondaryLabelKey
         default:
-            break
+            guard actionIdentifier.hasPrefix(WatchPromptNotificationBridge.actionIdentifierPrefix),
+                  let index = Int(actionIdentifier
+                      .dropFirst(WatchPromptNotificationBridge.actionIdentifierPrefix.count)),
+                  index >= 0
+            else { return nil }
+            actionIDKey = WatchPromptNotificationBridge.actionIDKey(index: index)
+            actionLabelKey = WatchPromptNotificationBridge.actionLabelKey(index: index)
         }
-
-        guard response.actionIdentifier.hasPrefix(WatchPromptNotificationBridge.actionIdentifierPrefix) else {
-            return nil
-        }
-        let indexString = String(
-            response.actionIdentifier.dropFirst(WatchPromptNotificationBridge.actionIdentifierPrefix.count))
-        guard let actionIndex = Int(indexString), actionIndex >= 0 else {
-            return nil
-        }
-        let actionIdKey = WatchPromptNotificationBridge.actionIDKey(index: actionIndex)
-        let actionLabelKey = WatchPromptNotificationBridge.actionLabelKey(index: actionIndex)
-        let actionId = (userInfo[actionIdKey] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !actionId.isEmpty else {
-            return nil
-        }
-        let actionLabel = userInfo[actionLabelKey] as? String
-        return PendingWatchPromptAction(
-            promptId: promptId,
-            actionId: actionId,
-            actionLabel: actionLabel,
-            sessionKey: sessionKey,
-            gatewayStableID: gatewayStableID)
+        guard let actionID = WatchMessagingPayloadCodec.nonEmpty(userInfo[actionIDKey] as? String) else { return nil }
+        guard let payload = userInfo[WatchPromptNotificationBridge.chatDeliveryContextKey] as? [String: Any],
+              let context = try? OpenClawWatchChatDeliveryCodec.decodeContext(payload),
+              let promptID = userInfo[WatchPromptNotificationBridge.promptIDKey] as? String,
+              !promptID.isEmpty,
+              let gatewayID = userInfo[WatchPromptNotificationBridge.gatewayStableIDKey] as? String,
+              gatewayID.utf8.elementsEqual(context.gatewayStableID.utf8),
+              let sessionKey = userInfo[WatchPromptNotificationBridge.sessionKeyKey] as? String,
+              sessionKey.utf8.elementsEqual(context.sessionKey.utf8)
+        else { return .upgradeRequired }
+        return .delivery(OpenClawWatchChatDeliveryCommand(
+            context: context,
+            commandId: UUID().uuidString,
+            submittedAtMs: WatchMessagingPayloadCodec.nowMs(),
+            body: .quickReply(
+                promptId: promptID,
+                actionId: actionID,
+                actionLabel: userInfo[actionLabelKey] as? String,
+                note: "source=ios.notification")))
     }
 
     private static func parseApprovalPrompt(
@@ -408,18 +375,29 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
             userInfo: response.notification.request.content.userInfo)
     }
 
-    private func routeWatchPromptAction(_ action: PendingWatchPromptAction) async {
-        guard let appModel = resolvedAppModel() else {
-            self.pendingWatchPromptActions.append(action)
+    func routeWatchPromptAction(
+        _ action: WatchPromptAction,
+        notificationCenter: NotificationCentering = LiveNotificationCenter()) async
+    {
+        let appModel = self.resolvedAppModel()
+        if case .upgradeRequired = action {
+            appModel?.rejectLegacyWatchChat()
+            await WatchPromptNotificationBridge.publishAdmissionFailure(
+                upgradeRequired: true, notificationCenter: notificationCenter)
             return
         }
-        await appModel.handleMirroredWatchPromptAction(
-            promptId: action.promptId,
-            actionId: action.actionId,
-            actionLabel: action.actionLabel,
-            sessionKey: action.sessionKey,
-            gatewayStableID: action.gatewayStableID)
-        _ = await appModel.handleBackgroundRefreshWake(trigger: "watch_prompt_action")
+        do {
+            guard let appModel, case let .delivery(command) = action else {
+                throw WatchMessagingError.admissionUnavailable
+            }
+            // The OS callback completes only after the canonical model has committed custody.
+            try await appModel.admitWatchChatDelivery(command, destination: .phone)
+            Task { _ = await appModel.handleBackgroundRefreshWake(trigger: "watch_prompt_action") }
+        } catch {
+            appModel?.recordWatchChatAdmissionFailure()
+            await WatchPromptNotificationBridge.publishAdmissionFailure(
+                upgradeRequired: false, notificationCenter: notificationCenter)
+        }
     }
 
     private func routeApprovalPrompt(_ prompt: PendingExecApprovalPrompt) {
@@ -453,7 +431,10 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void)
     {
-        if let action = Self.parseWatchPromptAction(from: response) {
+        if let action = Self.parseWatchPromptAction(
+            actionIdentifier: response.actionIdentifier,
+            userInfo: response.notification.request.content.userInfo)
+        {
             Task { @MainActor [weak self] in
                 guard let self else {
                     completionHandler()
@@ -485,6 +466,7 @@ enum WatchPromptNotificationBridge {
     static let promptIDKey = "openclaw.watch.promptId"
     static let sessionKeyKey = "openclaw.watch.sessionKey"
     static let gatewayStableIDKey = "openclaw.watch.gatewayStableID"
+    static let chatDeliveryContextKey = "openclaw.watch.chatDeliveryContext"
     static let actionPrimaryIDKey = "openclaw.watch.action.primary.id"
     static let actionPrimaryLabelKey = "openclaw.watch.action.primary.label"
     static let actionSecondaryIDKey = "openclaw.watch.action.secondary.id"
@@ -501,6 +483,7 @@ enum WatchPromptNotificationBridge {
         invokeID: String,
         params: OpenClawWatchNotifyParams,
         gatewayStableID: String?,
+        chatDeliveryContext: OpenClawWatchChatDeliveryContext? = nil,
         sendResult: WatchNotificationSendResult,
         notificationCenter: NotificationCentering) async
     {
@@ -547,6 +530,14 @@ enum WatchPromptNotificationBridge {
         {
             userInfo[self.gatewayStableIDKey] = gatewayStableID
         }
+        if let context = chatDeliveryContext,
+           let encoded = try? OpenClawWatchChatDeliveryCodec.encode(context)
+        {
+            userInfo[self.chatDeliveryContextKey] = encoded
+            userInfo[self.gatewayStableIDKey] = context.gatewayStableID
+            userInfo[self.sessionKeyKey] = context.sessionKey
+            userInfo[self.promptIDKey] = params.promptId ?? invokeID
+        }
         for (index, action) in displayedActions.enumerated() {
             userInfo[self.actionIDKey(index: index)] = action.id
             userInfo[self.actionLabelKey(index: index)] = action.label
@@ -583,6 +574,29 @@ enum WatchPromptNotificationBridge {
             content: content,
             trigger: nil)
         try? await notificationCenter.add(request)
+    }
+
+    @MainActor
+    static func publishAdmissionFailure(upgradeRequired: Bool, notificationCenter: NotificationCentering) async {
+        GatewayDiagnostics.log(upgradeRequired
+            ? "watch notification reply rejected: upgrade_required"
+            : "watch notification reply rejected: admission_unavailable")
+        guard await self.isNotificationAuthorizationAllowed(notificationCenter: notificationCenter) else {
+            GatewayDiagnostics.log("watch reply failure notice not presented: notifications disabled")
+            return
+        }
+        let content = UNMutableNotificationContent()
+        content.title = String(localized: "Watch reply was not saved")
+        content.body = upgradeRequired
+            ? String(localized: "Update OpenClaw on iPhone and Apple Watch, then request a new prompt.")
+            : String(localized: "Open OpenClaw on iPhone and try the action again.")
+        content.userInfo = [self.typeKey: self.typeValue]
+        do {
+            try await notificationCenter.add(UNNotificationRequest(
+                identifier: "watch.reply.admission-failed", content: content, trigger: nil))
+        } catch {
+            GatewayDiagnostics.log("watch reply failure notice could not be presented")
+        }
     }
 
     static func actionIDKey(index: Int) -> String {
@@ -646,36 +660,6 @@ enum WatchPromptNotificationBridge {
                 continuation.resume()
             }
         }
-    }
-}
-
-extension NodeAppModel {
-    func handleMirroredWatchPromptAction(
-        promptId: String?,
-        actionId: String,
-        actionLabel: String?,
-        sessionKey: String?,
-        gatewayStableID: String?) async
-    {
-        let normalizedActionID = actionId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalizedActionID.isEmpty else { return }
-
-        let normalizedPromptID = promptId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalizedSessionKey = sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalizedGatewayStableID = gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalizedActionLabel = actionLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        let event = WatchQuickReplyEvent(
-            replyId: UUID().uuidString,
-            promptId: (normalizedPromptID?.isEmpty == false) ? normalizedPromptID! : "unknown",
-            actionId: normalizedActionID,
-            actionLabel: (normalizedActionLabel?.isEmpty == false) ? normalizedActionLabel : nil,
-            sessionKey: (normalizedSessionKey?.isEmpty == false) ? normalizedSessionKey : nil,
-            gatewayStableID: (normalizedGatewayStableID?.isEmpty == false) ? normalizedGatewayStableID : nil,
-            note: "source=ios.notification",
-            sentAtMs: Int64(Date().timeIntervalSince1970 * 1000),
-            transport: "ios.notification")
-        await _bridgeConsumeMirroredWatchReply(event)
     }
 }
 

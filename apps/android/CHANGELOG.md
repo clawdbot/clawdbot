@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 2026.8.2 - 2026-08-31
+
+View your connected machine's desktop from your phone, and follow live subagent progress in chat.
+
+Organize conversations with session groups, nested threads, and colors. Switch agents more easily and receive reply notifications.
+
+Keeps queued messages and offline history intact across reconnects, recovers truncated replies, and preserves shared attachments.
+
+Improves Talk playback, photo orientation, notification consent, and connections through Gateway proxy paths.
+
 ## 2026.7.4 - 2026-07-30
 
 Adds inline audio/video playback and uploads, session dashboards, run telemetry, chat rewind/fork, a Settings repair assistant, and Wear instant Talk.

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CHAT_ROUTE_READY_EVENT } from "../../app/route-transition.ts";
 import { peekChatMetadata } from "../../lib/chat/chat-metadata-store.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import { patchNewSessionPreference } from "./preferences.ts";
@@ -54,6 +55,89 @@ describe("DraftSubmissionFlow submit gates", () => {
         message ? { gate: "model-unavailable", reason: message } : undefined,
       );
       expect(flow.canSubmit()).toBe(message === undefined);
+    },
+  );
+
+  it.each(["creating", "dispatching"] as const)(
+    "retries a retained personal-account $0 without consulting the neutral draft model",
+    async (phase) => {
+      const { context, flow, place } = createDraftFixture({
+        methods: ["sessions.create", "sessions.dispatch"],
+        scopes: ["operator.admin", "operator.read", "operator.write"],
+        request: async () => ({
+          models: [
+            {
+              id: "gpt-5.6-luna",
+              provider: "openai",
+              available: false,
+              unavailableReason: "missing-auth",
+            },
+          ],
+        }),
+      });
+      place.modelControl.load(context, "main", true, { agent: place.selectedAgent() });
+      await vi.waitFor(() =>
+        expect(place.modelControl.modelUnavailableReason(place.selectedAgent())).toBe(
+          "missing-auth",
+        ),
+      );
+      const createParams = flow.pendingPlacement.stageCreate({
+        agentId: "main",
+        target: { kind: "profile", profileId: "cloud" },
+        message: "Resume the original personal-account task",
+        gatewayUrl: "ws://gateway.example",
+        recoveryScope: "principal-a",
+        createParams: {
+          agentId: "main",
+          message: "",
+          model: "openai/gpt-5.6-luna@personal:person-a:openai:one",
+          worktree: true,
+        },
+      });
+      expect(createParams).not.toBeNull();
+      flow.releasePendingPlacementOwner();
+      flow.restorePendingPlacementRecovery("ws://gateway.example", "principal-a");
+      const key = flow.pendingPlacement.sessionKey;
+      if (phase === "dispatching") {
+        expect(flow.pendingPlacement.promoteToDispatching(key)).toBe(true);
+      }
+      expect(flow.submitBlock()).toBeUndefined();
+      flow.pendingPlacement.recoveryScope = "principal-b";
+      expect(flow.submitBlock()?.gate).toBe("placement-recovery");
+      flow.pendingPlacement.recoveryScope = "principal-a";
+      const hello = context.gateway.snapshot.hello!;
+      hello.auth!.scopes = ["operator.read"];
+      expect(flow.submitBlock()?.gate).toBe("access");
+      hello.auth!.scopes = ["operator.admin", "operator.read", "operator.write"];
+
+      context.placementStartup.start = vi.fn();
+      vi.mocked(context.sessions.createResult).mockResolvedValue({
+        key,
+        initialRun: { status: "idle" },
+      });
+      vi.mocked(context.navigateAndWait).mockImplementation(async () => {
+        queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
+      });
+      await flow.submit();
+
+      if (phase === "creating") {
+        expect(context.sessions.createResult).toHaveBeenCalledExactlyOnceWith(createParams, {
+          reconciliation: "background",
+        });
+      } else {
+        expect(context.sessions.createResult).not.toHaveBeenCalled();
+      }
+      expect(context.placementStartup.start).toHaveBeenCalledExactlyOnceWith({
+        recovery: expect.objectContaining({
+          sessionKey: key,
+          message: "Resume the original personal-account task",
+          phase: "dispatching",
+        }),
+        persistRecovery: true,
+        recovering: phase === "dispatching",
+        createdAt: expect.any(Number),
+      });
+      expect(flow.error).toBeNull();
     },
   );
 

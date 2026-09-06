@@ -19,6 +19,7 @@ export type SessionCleanupSummary = {
   dmScopeRetired: number;
   modelRunPruned: number;
   archived?: number;
+  capArchived?: number;
   pruned: number;
   capped: number;
   unreferencedArtifacts: SessionUnreferencedArtifactSweepResult;
@@ -133,6 +134,7 @@ function isSessionCleanupSummary(value: unknown): value is SessionCleanupSummary
     typeof value.dmScopeRetired === "number" &&
     typeof value.modelRunPruned === "number" &&
     (value.archived === undefined || typeof value.archived === "number") &&
+    (value.capArchived === undefined || typeof value.capArchived === "number") &&
     typeof value.pruned === "number" &&
     typeof value.capped === "number" &&
     typeof value.unreferencedArtifacts.removedFiles === "number" &&

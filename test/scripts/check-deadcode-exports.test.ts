@@ -124,6 +124,7 @@ describe("check-deadcode-exports", () => {
         "apps/android/scripts/build-release-artifacts.ts!",
         "security/opengrep/check-rule-metadata.mjs!",
         "skills/meme-maker/scripts/meme.mjs!",
+        "scripts/check-openclaw-package-tarball.mts!",
         "scripts/check-live-cache.ts!",
         "scripts/lib/vitest-resource-reporter.mts!",
         "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",

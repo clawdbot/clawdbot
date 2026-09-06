@@ -24,6 +24,7 @@ type RestartSentinelStep = {
 };
 
 type RestartSentinelStats = {
+  runId?: string;
   recovery?: UpdateRecovery;
   mode?: string;
   root?: string;
@@ -180,6 +181,7 @@ function parseRestartSentinelStats(value: unknown): RestartSentinelStats | null 
   const mode = parseOptionalNullableString(value, "mode");
   const root = parseOptionalNullableString(value, "root");
   const handoffId = parseOptionalNullableString(value, "handoffId");
+  const runId = parseOptionalNullableString(value, "runId");
   const reason = parseOptionalNullableString(value, "reason");
   const before = value.before;
   const after = value.after;
@@ -188,13 +190,14 @@ function parseRestartSentinelStats(value: unknown): RestartSentinelStats | null 
   const recovery =
     value.recovery === undefined ? undefined : updateRecoverySchema.safeParse(value.recovery);
   if (
-    (recovery !== undefined && !recovery.success) ||
     mode === false ||
     mode === null ||
     root === false ||
     root === null ||
     handoffId === false ||
     handoffId === null ||
+    runId === false ||
+    runId === null ||
     reason === false ||
     (value.requiresRestart !== undefined && typeof value.requiresRestart !== "boolean") ||
     (before !== undefined && before !== null && !isPlainRecord(before)) ||
@@ -206,6 +209,7 @@ function parseRestartSentinelStats(value: unknown): RestartSentinelStats | null 
     return null;
   }
   const result: RestartSentinelStats = {};
+  // Recovery is diagnostic here; unsupported metadata must not suppress the restart notice.
   if (recovery?.success) {
     result.recovery = recovery.data;
   }
@@ -220,6 +224,9 @@ function parseRestartSentinelStats(value: unknown): RestartSentinelStats | null 
   }
   if (handoffId !== undefined) {
     result.handoffId = handoffId;
+  }
+  if (runId !== undefined) {
+    result.runId = runId;
   }
   if (before !== undefined) {
     result.before = before as Record<string, unknown> | null;

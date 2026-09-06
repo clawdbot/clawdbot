@@ -114,7 +114,7 @@ const JOURNAL_MAX_LIMIT = 5000;
 const JOURNAL_MAX_BYTES = 1_000_000;
 
 function parsePositiveInt(value: string | undefined, fallback: number, flag: string): number {
-  if (!value) {
+  if (value === undefined) {
     return fallback;
   }
   const parsed = parseStrictPositiveInteger(value);
@@ -392,11 +392,7 @@ function isTransientFollowError(error: unknown): boolean {
   return isPlainGatewayRequestCloseError(message) || isPlainGatewayRequestTimeoutError(message);
 }
 
-export function formatLogTimestamp(
-  value?: string,
-  mode: "pretty" | "plain" = "plain",
-  localTime = true,
-) {
+function formatLogTimestamp(value?: string, mode: "pretty" | "plain" = "plain", localTime = true) {
   if (!value) {
     return "";
   }

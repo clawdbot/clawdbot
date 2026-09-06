@@ -72,6 +72,7 @@ import {
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   describeToolResultMediaPlaceholder,
+  failTransportStream,
   finalizeTerminalToolCallArguments,
   notifyProviderHttpMetadata,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
@@ -177,9 +178,7 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
     // Claude classifiers may refuse after partial output. Hold every event until
     // messageStop proves the response is safe to expose.
     const refusalBuffer = usesClaudeStreamingRefusalBedrockContract(model)
-      ? createDeferredEventBuffer<AssistantMessageEvent>(stream, () =>
-          notifyLlmRequestActivity(options.signal),
-        )
+      ? createDeferredEventBuffer<AssistantMessageEvent>(stream)
       : undefined;
     const eventSink = refusalBuffer ?? stream;
 
@@ -308,6 +307,7 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
 
       let sawMessageStop = false;
       for await (const item of { [Symbol.asyncIterator]: () => responseIterator }) {
+        notifyLlmRequestActivity(options.signal);
         if (item.messageStart) {
           if (item.messageStart.role !== ConversationRole.ASSISTANT) {
             throw new Error(
@@ -393,20 +393,26 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
     } catch (error) {
-      output.content = output.content.filter((block) => block.type !== "toolCall");
-      for (const block of output.content) {
-        delete (block as Block).index;
-        // partialJson is only a streaming scratch buffer; never persist it.
-        delete (block as Block).partialJson;
-      }
-      if (refusalBuffer) {
-        refusalBuffer.discard();
-        output.content = [];
-      }
-      output.stopReason = options.signal?.aborted ? "aborted" : "error";
-      output.errorMessage = formatBedrockError(error);
-      stream.push({ type: "error", reason: output.stopReason, error: output });
-      stream.end();
+      failTransportStream({
+        stream,
+        output,
+        signal: options.signal,
+        error,
+        cleanup: () => {
+          output.content = output.content.filter((block) => block.type !== "toolCall");
+          for (const block of output.content) {
+            delete (block as Block).index;
+            // partialJson is only a streaming scratch buffer; never persist it.
+            delete (block as Block).partialJson;
+          }
+          if (refusalBuffer) {
+            refusalBuffer.discard();
+            output.content = [];
+          }
+          // Keep the name-prefixed message that downstream matchers rely on.
+          output.errorMessage = formatBedrockError(error);
+        },
+      });
     } finally {
       // The SDK client owns pooled HTTP resources; release them only after its async stream settles.
       client?.destroy();
@@ -436,6 +442,7 @@ const BEDROCK_ERROR_PREFIXES: Record<string, string> = {
  * extend BedrockRuntimeServiceException. We map the `.name` to a stable
  * human-readable prefix so downstream consumers (retry logic, context-overflow
  * detection) can distinguish error categories via simple string matching.
+ * The shared transport owner projects errorType, errorCode, and diagnostics.
  */
 function formatBedrockError(error: unknown): string {
   const message = error instanceof Error ? error.message : JSON.stringify(error);

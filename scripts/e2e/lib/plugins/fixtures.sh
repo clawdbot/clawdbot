@@ -264,6 +264,8 @@ start_npm_fixture_registry() {
   for _ in $(seq 1 100); do
     if [[ -s "$server_port_file" ]]; then
       export NPM_CONFIG_REGISTRY="http://127.0.0.1:$(cat "$server_port_file")"
+      # Override both spellings so an inherited prerelease registry cannot win in npm.
+      export npm_config_registry="$NPM_CONFIG_REGISTRY"
       return 0
     fi
     if ! kill -0 "$server_pid" 2>/dev/null; then

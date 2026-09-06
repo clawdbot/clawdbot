@@ -13,7 +13,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   commitArgs,
   createContentGuardFixture,
+  installFormattingRecorder,
   installPreCommitFixture,
+  readFormatterLog,
   literals,
   rulePath,
   ruleSetting,
@@ -25,20 +27,6 @@ import {
 import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "./helpers/temp-dir.js";
 
 const tempDirs: string[] = [];
-
-function installFormattingRecorder(dir: string, body = ""): string {
-  const logPath = path.join(dir, "hook-tool.log");
-  writeExecutable(
-    path.join(dir, "node_modules/.bin"),
-    "oxfmt",
-    `#!/usr/bin/env bash
-set -euo pipefail
-printf 'oxfmt %s\n' "$*" >> hook-tool.log
-${body}
-`,
-  );
-  return logPath;
-}
 
 function installRunNodeToolFixture(dir: string): void {
   mkdirSync(path.join(dir, "scripts", "pre-commit"), { recursive: true });
@@ -56,13 +44,6 @@ function splitNonEmptyLines(output: string): string[] {
     }
   }
   return lines;
-}
-
-function readFormatterLog(logPath: string): string[] {
-  if (!existsSync(logPath)) {
-    return [];
-  }
-  return splitNonEmptyLines(readFileSync(logPath, "utf8"));
 }
 
 afterEach(() => {
@@ -90,98 +71,6 @@ describe("git-hooks/pre-commit (integration)", () => {
 
     const staged = splitNonEmptyLines(run(dir, "git", ["diff", "--cached", "--name-only"]));
     expect(staged).toEqual(["--all"]);
-  });
-
-  it("skips formatting staged files while a merge commit is in progress", () => {
-    const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-merge-");
-    run(dir, "git", ["init", "-q", "--initial-branch=main"]);
-    installPreCommitFixture(dir);
-    const logPath = installFormattingRecorder(dir);
-
-    writeFileSync(path.join(dir, "changed.ts"), "export const value = 1;\n", "utf8");
-    run(dir, "git", ["add", "--", "changed.ts"]);
-    run(dir, "git", [
-      "-c",
-      "user.name=Test User",
-      "-c",
-      "user.email=test@example.invalid",
-      "commit",
-      "-q",
-      "-m",
-      "initial",
-    ]);
-    run(dir, "git", ["checkout", "-q", "-b", "side"]);
-    writeFileSync(path.join(dir, "changed.ts"), "export const value = 2;\n", "utf8");
-    run(dir, "git", ["add", "--", "changed.ts"]);
-    run(dir, "git", [
-      "-c",
-      "user.name=Test User",
-      "-c",
-      "user.email=test@example.invalid",
-      "commit",
-      "-q",
-      "-m",
-      "side change",
-    ]);
-    run(dir, "git", ["checkout", "-q", "main"]);
-    run(dir, "git", [
-      "-c",
-      "user.name=Test User",
-      "-c",
-      "user.email=test@example.invalid",
-      "merge",
-      "--no-commit",
-      "--no-ff",
-      "side",
-    ]);
-
-    expect(existsSync(path.join(dir, ".git", "MERGE_HEAD"))).toBe(true);
-    expect(run(dir, "git", ["diff", "--cached", "--name-only"])).toBe("changed.ts");
-
-    run(dir, "bash", ["git-hooks/pre-commit"]);
-
-    expect(readFormatterLog(logPath)).toEqual([]);
-
-    writeFileSync(path.join(dir, "changed.ts"), literals[0]);
-    run(dir, "git", ["add", "--", "changed.ts"]);
-    expect(runFailure(dir, "bash", ["git-hooks/pre-commit"]).stderr).toContain(
-      "Blocked staged content",
-    );
-    expect(readFormatterLog(logPath)).toEqual([]);
-  });
-
-  it.each([
-    ["cherry-pick", "CHERRY_PICK_HEAD", "file"],
-    ["revert", "REVERT_HEAD", "file"],
-    ["rebase head", "REBASE_HEAD", "file"],
-    ["merge rebase state", "rebase-merge", "dir"],
-    ["apply rebase state", "rebase-apply", "dir"],
-  ])("skips formatting staged files while %s metadata is present", (_label, gitPath, kind) => {
-    const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-sequencer-");
-    run(dir, "git", ["init", "-q", "--initial-branch=main"]);
-    installPreCommitFixture(dir);
-    const logPath = installFormattingRecorder(dir);
-
-    writeFileSync(path.join(dir, "changed.ts"), "export const value = 1;\n", "utf8");
-    run(dir, "git", ["add", "--", "changed.ts"]);
-
-    const metadataPath = path.join(dir, ".git", gitPath);
-    if (kind === "dir") {
-      mkdirSync(metadataPath, { recursive: true });
-    } else {
-      writeFileSync(metadataPath, "sequencer state\n", "utf8");
-    }
-
-    run(dir, "bash", ["git-hooks/pre-commit"]);
-
-    expect(readFormatterLog(logPath)).toEqual([]);
-
-    writeFileSync(path.join(dir, "changed.ts"), literals[1]);
-    run(dir, "git", ["add", "--", "changed.ts"]);
-    expect(runFailure(dir, "bash", ["git-hooks/pre-commit"]).stderr).toContain(
-      "Blocked staged content",
-    );
-    expect(readFormatterLog(logPath)).toEqual([]);
   });
 
   it.each(["configured", "unconfigured", "external"])(
@@ -226,6 +115,78 @@ describe("git-hooks/pre-commit (integration)", () => {
       }
     },
   );
+
+  it("formats only staged bytes of a partially staged file and preserves the working tree", () => {
+    const dir = createContentGuardFixture(tempDirs);
+    writeExecutable(
+      path.join(dir, "node_modules/.bin"),
+      "oxfmt",
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf 'oxfmt %s\n' "$*" >> hook-tool.log
+case "$*" in *--stdin-filepath=*) sed 's/FORMAT_ME/FORMATTED/' ;; esac
+`,
+    );
+    const staged = "export const value = FORMAT_ME;\n";
+    const working = `${staged}export const unstagedOnly = 1;\n`;
+    stage(dir, "partial.ts", staged);
+    writeFileSync(path.join(dir, "partial.ts"), working);
+
+    run(dir, "git", commitArgs);
+
+    expect(run(dir, "git", ["show", "HEAD:partial.ts"])).toBe("export const value = FORMATTED;");
+    expect(readFileSync(path.join(dir, "partial.ts"), "utf8")).toBe(working);
+    expect(readFormatterLog(path.join(dir, "hook-tool.log"))).toEqual([
+      "oxfmt --stdin-filepath=partial.ts",
+    ]);
+  });
+
+  it("preserves formatted staged content when the working-tree copy is deleted", () => {
+    const dir = createContentGuardFixture(tempDirs);
+    stage(dir, "gone.ts", "export const keep = 1;\n");
+    unlinkSync(path.join(dir, "gone.ts"));
+
+    run(dir, "git", commitArgs);
+
+    expect(run(dir, "git", ["show", "HEAD:gone.ts"])).toBe("export const keep = 1;");
+    expect(existsSync(path.join(dir, "gone.ts"))).toBe(false);
+  });
+
+  it("leaves staged symlinks untouched even when retargeted in the working tree", () => {
+    const dir = createContentGuardFixture(tempDirs);
+    writeFileSync(path.join(dir, "target-a.ts"), "const unformatted =  1\n", "utf8");
+    writeFileSync(path.join(dir, "target-b.ts"), "const other = 2;\n", "utf8");
+    symlinkSync("target-a.ts", path.join(dir, "alias.ts"));
+    run(dir, "git", ["add", "--", "alias.ts"]);
+    unlinkSync(path.join(dir, "alias.ts"));
+    symlinkSync("target-b.ts", path.join(dir, "alias.ts"));
+
+    run(dir, "git", commitArgs);
+
+    expect(run(dir, "git", ["show", "HEAD:alias.ts"])).toBe("target-a.ts");
+    expect(readFileSync(path.join(dir, "alias.ts"), "utf8")).toBe("const other = 2;\n");
+  });
+
+  it("fails instead of staging empty formatter output for a partially staged file", () => {
+    const dir = createContentGuardFixture(tempDirs);
+    // Drain stdin so SIGPIPE cannot preempt the hook's empty-output check.
+    writeExecutable(
+      path.join(dir, "node_modules/.bin"),
+      "oxfmt",
+      "#!/bin/sh\ncat >/dev/null\nexit 0\n",
+    );
+    stage(dir, "partial.ts", "export const value = 1;\n");
+    writeFileSync(
+      path.join(dir, "partial.ts"),
+      "export const value = 1;\nexport const extra = 2;\n",
+    );
+
+    const result = runFailure(dir, "git", commitArgs);
+
+    expect(result.stderr).toContain("Formatter returned no output");
+    expect(run(dir, "git", ["show", ":partial.ts"])).toBe("export const value = 1;");
+    expect(runFailure(dir, "git", ["rev-parse", "--verify", "HEAD"]).status).not.toBe(0);
+  });
 
   it("does not run the changed-scope check for non-doc staged changes", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-no-check-changed-");
@@ -335,14 +296,14 @@ describe("staged content guard", () => {
   );
 
   it.each(["payload.txt", "payload.ts"])(
-    "blocks working-tree bytes restaged by the real formatter path: %s",
+    "keeps unstaged working-tree bytes out of the commit: %s",
     (name) => {
       const dir = fixture();
       stage(dir, name, "clean staged version\n");
       writeFileSync(path.join(dir, name), literals[0]);
-      blocked(dir, [name], true);
-      expect(run(dir, "git", ["show", `:${name}`])).toBe(literals[0]);
-      expect(runFailure(dir, "git", ["rev-parse", "--verify", "HEAD"]).status).not.toBe(0);
+      run(dir, "git", commitArgs);
+      expect(run(dir, "git", ["show", `HEAD:${name}`])).toBe("clean staged version");
+      expect(readFileSync(path.join(dir, name), "utf8")).toBe(literals[0]);
     },
   );
 

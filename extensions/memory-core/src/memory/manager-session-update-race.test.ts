@@ -516,12 +516,14 @@ describe("memory session update sync", () => {
     );
     expect(privateHashes.size).toBe(2);
 
-    const writeFile = fs.writeFile.bind(fs);
-    const fault = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
-      await writeFile(...args);
-      if (args[0] === memoryPath) {
+    const open = fs.open.bind(fs);
+    const memoryTempPrefix = `${memoryPath}.forget.`;
+    const fault = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const target = args[0];
+      if (typeof target === "string" && target.startsWith(memoryTempPrefix)) {
         throw new Error("interrupted after memory rewrite");
       }
+      return await open(...args);
     });
     try {
       await expect(
@@ -530,7 +532,9 @@ describe("memory session update sync", () => {
     } finally {
       fault.mockRestore();
     }
-    expect(await fs.readFile(memoryPath, "utf8")).not.toContain("Private violet");
+    // The interrupted rewrite is atomic: MEMORY.md keeps its original content
+    // until the retry completes the purge.
+    expect(await fs.readFile(memoryPath, "utf8")).toContain("Private violet alpha");
     expect(await fs.readFile(userPath, "utf8")).toContain("Private violet beta");
 
     // A rebuild can drop a cleaned file's old chunk while retaining its cached
@@ -543,6 +547,7 @@ describe("memory session update sync", () => {
     ).not.toEqual([]);
     await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: [sessionId] });
 
+    expect(await fs.readFile(memoryPath, "utf8")).not.toContain("Private violet");
     expect(await fs.readFile(userPath, "utf8")).not.toContain("Private violet");
     expect(
       database

@@ -2,7 +2,6 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { countCodePoints } from "@openclaw/normalization-core/code-points";
 import {
   compactReleaseNotes,
   OPENCLAW_RELEASE_TAG_PATTERN,
@@ -119,7 +118,7 @@ export function parseContributionRecordProvenance(section: string) {
 
 function githubReleaseBodySize(body: string) {
   return {
-    characters: countCodePoints(body),
+    characters: Array.from(body).length,
     bytes: Buffer.byteLength(body, "utf8"),
   };
 }

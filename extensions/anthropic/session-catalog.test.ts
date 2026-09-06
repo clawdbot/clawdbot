@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   OpenClawPluginApi,
   OpenClawPluginNodeHostCommand,
@@ -22,6 +23,7 @@ import {
   CLAUDE_SESSIONS_LIST_COMMAND,
   CLAUDE_SESSION_READ_COMMAND,
   CLAUDE_TERMINAL_RESUME_COMMAND,
+  CLAUDE_TERMINAL_START_COMMAND,
   listLocalClaudeSessionPage,
   readLocalClaudeTranscriptPage,
 } from "./session-catalog.js";
@@ -589,6 +591,37 @@ afterEach(async () => {
 });
 
 describe("Claude session catalog", () => {
+  it("does not start paired hosts when retired during node inventory", async () => {
+    const inventory = createDeferred<Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>>();
+    const inventoryStarted = createDeferred<void>();
+    const listNodes = vi.fn(() => {
+      inventoryStarted.resolve();
+      return inventory.promise;
+    });
+    const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async () => ({
+      payloadJSON: JSON.stringify({ sessions: [] }),
+    }));
+    const provider = captureCatalogProvider({
+      nodes: { list: listNodes, invoke },
+    } as unknown as PluginRuntime);
+    const controller = new AbortController();
+    const reason = new Error("catalog retired during inventory");
+    const listed = provider
+      .list({
+        hostIds: ["node:late"],
+        signal: controller.signal,
+      })
+      .catch((error: unknown) => error);
+    await inventoryStarted.promise;
+    controller.abort(reason);
+    inventory.resolve({
+      nodes: [{ nodeId: "late", connected: true, commands: [CLAUDE_SESSIONS_LIST_COMMAND] }],
+    });
+    const result = await listed;
+    expect(invoke).not.toHaveBeenCalled();
+    expect(result).toBe(reason);
+  });
+
   it.each([
     {
       label: "catalog marker",
@@ -1098,7 +1131,7 @@ describe("Claude session catalog", () => {
     const authorizedCommands = new Set(
       createClaudeSessionNodeInvokePolicies().flatMap((policy) => policy.commands),
     );
-    expect(authorizedCommands).toEqual(new Set(commands));
+    expect(authorizedCommands).toEqual(new Set([...commands, CLAUDE_TERMINAL_START_COMMAND]));
     const nodes = [
       {
         nodeId: "node-a",
@@ -1650,6 +1683,16 @@ describe("Claude session catalog", () => {
         "sidechain-session": [message("sidechain-session", "user", "sidechain", 1)],
         "unindexed-session": [message("unindexed-session", "user", "unindexed", 1)],
         "cli-session": [
+          {
+            ...message(
+              "cli-session",
+              "user",
+              "<local-command-caveat>CLI metadata</local-command-caveat>",
+              1,
+            ),
+            entrypoint: "cli",
+            isMeta: true,
+          },
           {
             ...message("cli-session", "user", "Interactive CLI prompt", 1),
             entrypoint: "cli",
@@ -2924,6 +2967,7 @@ describe("Claude session catalog", () => {
       CLAUDE_SESSIONS_LIST_COMMAND,
       CLAUDE_SESSION_READ_COMMAND,
       CLAUDE_TERMINAL_RESUME_COMMAND,
+      CLAUDE_TERMINAL_START_COMMAND,
     ]);
     expect(commands.every((command) => command.dangerous === false)).toBe(true);
     await expect(commands[0]?.handle(JSON.stringify({ cursor: " wrapped " }))).rejects.toThrow(
@@ -2935,6 +2979,7 @@ describe("Claude session catalog", () => {
       CLAUDE_SESSION_READ_COMMAND,
       CLAUDE_CLI_NODE_RUN_COMMAND,
       CLAUDE_TERMINAL_RESUME_COMMAND,
+      CLAUDE_TERMINAL_START_COMMAND,
     ]);
     if (!policy) {
       throw new Error("expected Claude node invoke policy");
@@ -2943,6 +2988,28 @@ describe("Claude session catalog", () => {
     expect(policy.handle({ command: CLAUDE_TERMINAL_RESUME_COMMAND, invokeNode } as never)).toEqual(
       { ok: true },
     );
+    for (const [terminal, admin, allowed] of [
+      [undefined, true, true],
+      [true, true, true],
+      [false, true, false],
+      [undefined, false, false],
+    ] as const) {
+      expect(
+        await policy.handle({
+          command: CLAUDE_TERMINAL_START_COMMAND,
+          nodeId: "node",
+          params: {},
+          invokeNode,
+          config: {
+            gateway: {
+              cliAgents: { enabled: true },
+              ...(terminal === undefined ? {} : { terminal: { enabled: terminal } }),
+            },
+          },
+          client: { scopes: admin ? ["operator.admin"] : [] },
+        }),
+      ).toMatchObject({ ok: allowed });
+    }
     expect(invokeNode).not.toHaveBeenCalled();
     await expect(
       policy.handle({ command: CLAUDE_SESSIONS_LIST_COMMAND, invokeNode } as never),
@@ -3005,7 +3072,8 @@ describe("Claude session catalog", () => {
     }
     process.env.PATH = binDir;
     nodeHostMocks.userShellPaths.set("claude", binDir);
-    const provider = captureCatalogProvider(createPluginRuntimeMock());
+    const runtime = createPluginRuntimeMock();
+    const provider = captureCatalogProvider(runtime);
 
     await expect(
       provider.startTerminalSession?.({
@@ -3036,8 +3104,98 @@ describe("Claude session catalog", () => {
         cwd: "/work/new-session",
         nodeId: "paired-node",
       }),
-    ).rejects.toThrow(
-      "Paired-node Claude terminal start is unavailable; omit hostId to start on the gateway host",
+    ).resolves.toEqual({
+      kind: "node",
+      nodeId: "paired-node",
+      command: CLAUDE_TERMINAL_START_COMMAND,
+      paramsJSON: JSON.stringify({ cwd: "/work/new-session" }),
+      cwd: "/work/new-session",
+      title: "claude",
+    });
+    const fresh = createClaudeSessionNodeHostCommands().find(
+      (command) => command.command === CLAUDE_TERMINAL_START_COMMAND,
+    )!;
+    expect(fresh.isAvailable?.({ config: {}, env: { HOME: home, PATH: binDir } })).toBe(true);
+    const io = { signal: new AbortController().signal, emitChunk: vi.fn(), onInput: vi.fn() };
+    await fresh.handle(
+      JSON.stringify({ cwd: binDir, initialMessage: "--help", cols: 100, rows: 30 }),
+      io,
+    );
+    expect(nodeHostMocks.runNodePtyCommand).toHaveBeenCalledWith(
+      {
+        file: executable,
+        args: ["--", "--help"],
+        cwd: binDir,
+        requiredCwd: true,
+        pathEnv: binDir,
+        cols: 100,
+        rows: 30,
+      },
+      io,
+    );
+    await expect(
+      fresh.handle(
+        JSON.stringify({ cwd: binDir, cols: 80, rows: 24, agentId: "remote-agent" }),
+        io,
+      ),
+    ).rejects.toThrow("unknown terminal start parameter");
+    const onHost = vi.fn();
+    let rejectNodes!: (error: Error) => void;
+    const pending = provider.list({
+      onHost,
+      listNodes: () =>
+        new Promise((_, reject) => {
+          rejectNodes = reject;
+        }),
+    });
+    await vi.waitFor(() =>
+      expect(onHost).toHaveBeenCalledWith(
+        expect.objectContaining({ hostId: "gateway:local", canStartTerminal: true, sessions: [] }),
+      ),
+    );
+    rejectNodes(new Error("node registry down"));
+    expect(await pending).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ hostId: "gateway:local", canStartTerminal: true }),
+        expect.objectContaining({ hostId: "node:registry", canStartTerminal: false }),
+      ]),
+    );
+    await expect(
+      provider.list({
+        onHost,
+        listNodes: async () => ({
+          nodes: [
+            {
+              nodeId: "ready",
+              connected: true,
+              invocableCommands: [CLAUDE_TERMINAL_START_COMMAND],
+            },
+            {
+              nodeId: "resume-only",
+              connected: true,
+              invocableCommands: [CLAUDE_TERMINAL_RESUME_COMMAND],
+            },
+            {
+              nodeId: "offline",
+              connected: false,
+              invocableCommands: [CLAUDE_TERMINAL_START_COMMAND],
+            },
+            {
+              nodeId: "denied",
+              connected: true,
+              commands: [CLAUDE_TERMINAL_START_COMMAND],
+              invocableCommands: [],
+            },
+          ],
+        }),
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({ hostId: "gateway:local", canStartTerminal: true, sessions: [] }),
+      expect.objectContaining({ hostId: "node:ready", canStartTerminal: true, sessions: [] }),
+    ]);
+    expect(runtime.nodes.invoke).not.toHaveBeenCalled();
+    expect(onHost).toHaveBeenCalledWith(
+      expect.objectContaining({ hostId: "node:ready", canStartTerminal: true, sessions: [] }),
     );
   });
 
@@ -3355,7 +3513,11 @@ describe("Claude session catalog", () => {
         cwd: process.cwd(),
         nodeId: "remote-node",
       }),
-    ).rejects.toThrow("Paired-node Claude terminal start is unavailable");
+    ).resolves.toMatchObject({
+      kind: "node",
+      nodeId: "remote-node",
+      command: CLAUDE_TERMINAL_START_COMMAND,
+    });
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ nodeId: "remote-node" }));
   });
@@ -3404,20 +3566,34 @@ describe("Claude session catalog", () => {
       name: "returns cold paired-node discovery before the fail-soft response",
       delayMs: 10_000,
       timedOut: false,
+      cancelled: false,
     },
     {
       name: "publishes a paired-node page that finishes after the fail-soft response",
       delayMs: 20_000,
       timedOut: true,
+      cancelled: false,
     },
-  ])("$name", async ({ delayMs, timedOut }) => {
+    {
+      name: "settles paired-node publication when its owner cancels after the fail-soft response",
+      delayMs: 20_000,
+      timedOut: true,
+      cancelled: true,
+    },
+  ])("$name", async ({ delayMs, timedOut, cancelled }) => {
     vi.useFakeTimers();
     try {
-      let resolveInvoke!: (value: unknown) => void;
-      const invokeResult = new Promise<unknown>((resolve) => {
-        resolveInvoke = resolve;
+      const invokeResult = createDeferred<unknown>();
+      const controller = new AbortController();
+      const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async ({ signal }) => {
+        const abort = () => invokeResult.reject(signal?.reason);
+        signal?.addEventListener("abort", abort, { once: true });
+        try {
+          return await invokeResult.promise;
+        } finally {
+          signal?.removeEventListener("abort", abort);
+        }
       });
-      const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async () => await invokeResult);
       const provider = captureCatalogProvider({
         nodes: {
           list: vi.fn().mockResolvedValue({
@@ -3433,8 +3609,23 @@ describe("Claude session catalog", () => {
           invoke,
         },
       } as unknown as PluginRuntime);
+      const completions: Promise<void>[] = [];
+      const completed = vi.fn();
       const onHost = vi.fn();
-      const pending = provider.list({ hostIds: ["node:slow-node"], onHost });
+      const pending = provider.list({
+        hostIds: ["node:slow-node"],
+        limitPerHost: 40,
+        signal: controller.signal,
+        waitUntil: (completion) => {
+          completions.push(
+            completion.then(() => {
+              expect(onHost).toHaveBeenCalledOnce();
+              completed();
+            }),
+          );
+        },
+        onHost,
+      });
 
       await vi.advanceTimersByTimeAsync(delayMs);
       if (timedOut) {
@@ -3444,22 +3635,36 @@ describe("Claude session catalog", () => {
           }),
         ]);
       }
+      expect(completions).toHaveLength(1);
+      expect(completed).not.toHaveBeenCalled();
       expect(onHost).not.toHaveBeenCalled();
-
-      resolveInvoke({
-        payloadJSON: JSON.stringify({
-          sessions: [
-            {
-              threadId: "late-thread",
-              status: "stored",
-              source: "claude-cli",
-              modelProvider: "anthropic",
-              archived: false,
-            },
-          ],
-        }),
+      expect(invoke).toHaveBeenCalledWith({
+        nodeId: "slow-node",
+        command: CLAUDE_SESSIONS_LIST_COMMAND,
+        params: { limit: 40 },
+        timeoutMs: 30_000,
+        scopes: ["operator.write"],
+        signal: controller.signal,
       });
-      await vi.advanceTimersByTimeAsync(0);
+
+      if (cancelled) {
+        controller.abort(new Error("catalog owner retired"));
+      } else {
+        invokeResult.resolve({
+          payloadJSON: JSON.stringify({
+            sessions: [
+              {
+                threadId: "late-thread",
+                status: "stored",
+                source: "claude-cli",
+                modelProvider: "anthropic",
+                archived: false,
+              },
+            ],
+          }),
+        });
+      }
+      await Promise.all(completions);
 
       if (!timedOut) {
         await expect(pending).resolves.toEqual([
@@ -3472,9 +3677,21 @@ describe("Claude session catalog", () => {
       expect(onHost).toHaveBeenCalledWith(
         expect.objectContaining({
           hostId: "node:slow-node",
-          sessions: [expect.objectContaining({ threadId: "late-thread" })],
+          ...(cancelled
+            ? { sessions: [], error: { code: "NODE_INVOKE_FAILED", message: expect.any(String) } }
+            : {
+                sessions: [
+                  expect.objectContaining({
+                    threadId: "late-thread",
+                    canContinue: false,
+                    canArchive: false,
+                    canOpenTerminal: false,
+                  }),
+                ],
+              }),
         }),
       );
+      expect(completed).toHaveBeenCalledOnce();
     } finally {
       vi.useRealTimers();
     }
@@ -3509,14 +3726,31 @@ describe("Claude session catalog", () => {
       nodes: { list: runtimeListNodes },
     } as unknown as PluginRuntime);
 
-    const listing = provider.list({ listNodes: requestListNodes });
+    const completions: Promise<void>[] = [];
+    const onHost = vi.fn();
+    const listing = provider.list({
+      listNodes: requestListNodes,
+      onHost,
+      waitUntil: (completion) => {
+        completions.push(completion);
+      },
+    });
     await opened;
+    expect(completions).toHaveLength(1);
+    expect(onHost).not.toHaveBeenCalled();
     expect(requestListNodes).toHaveBeenCalledOnce();
     expect(runtimeListNodes).not.toHaveBeenCalled();
     releaseOpen();
     await expect(listing).resolves.toMatchObject([
       { hostId: "gateway:local", sessions: [expect.objectContaining({ threadId: sessionId })] },
     ]);
+    await Promise.all(completions);
+    expect(onHost).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hostId: "gateway:local",
+        sessions: [expect.objectContaining({ threadId: sessionId, canArchive: false })],
+      }),
+    );
   });
 
   it("falls back to the plugin node runtime without a request snapshot", async () => {

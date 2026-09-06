@@ -8,7 +8,6 @@ import {
   asOptionalRecord,
   readNonBlankString as readNonEmptyString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { countCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 import { renderSlackMessagePresentationTableFallbackText } from "./presentation-fallback.js";
 import { renderSlackRichText } from "./rich-text.js";
@@ -49,6 +48,10 @@ type ParsedSlackDataTable = {
   cellCharacterCount: number;
 };
 
+function countCharacters(value: string): number {
+  return Array.from(value).length;
+}
+
 function readSlackBasicTableCell(value: unknown): string {
   const cell = asOptionalRecord(value);
   if (!cell) {
@@ -88,7 +91,7 @@ function parseSlackBasicTableRows(value: unknown): string[][] | undefined {
       return undefined;
     }
     const row = rawRow.map(readSlackBasicTableCell);
-    characterCount += row.reduce((total, cell) => total + countCodePoints(cell), 0);
+    characterCount += row.reduce((total, cell) => total + countCharacters(cell), 0);
     if (characterCount > SLACK_DATA_TABLE_AGGREGATE_CELL_CHARACTERS_MAX) {
       return undefined;
     }
@@ -147,7 +150,7 @@ function parseSlackDataTable(
     return undefined;
   }
   const cellCharacterCount = [...headers, ...rows.flat()].reduce(
-    (total, cell) => total + countCodePoints(cell),
+    (total, cell) => total + countCharacters(cell),
     0,
   );
   if (
@@ -231,7 +234,7 @@ function resolvePortableTableCellCharacterCount(
       values.push(cell);
     }
   }
-  return values.reduce((total, value) => total + countCodePoints(value), 0);
+  return values.reduce((total, value) => total + countCharacters(value), 0);
 }
 
 /** True when a portable table fits Slack's per-table and per-message contracts. */
@@ -303,9 +306,7 @@ function escapeCompactFallbackCell(value: string): string {
 }
 
 function escapeSlackBasicTableCell(value: string, mrkdwnSafe: boolean): string {
-  // escapeSlackMrkdwn doubles backslashes before the TSV layer escapes row delimiters.
-  const escaped = mrkdwnSafe ? escapeSlackMrkdwn(value) : value.replaceAll("\\", "\\\\");
-  return escaped.replaceAll("\t", "\\t").replaceAll("\r", "\\r").replaceAll("\n", "\\n");
+  return escapeCompactFallbackCell(mrkdwnSafe ? escapeSlackMrkdwn(value) : value);
 }
 
 function renderSlackBasicTableRows(value: unknown, mrkdwnSafe: boolean): string | undefined {

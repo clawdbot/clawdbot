@@ -1,6 +1,11 @@
 // Repo-local helpers for environment, network, filesystem, and time fixtures.
 export { jsonResponse, requestBodyText, requestUrl } from "../test-helpers/http.js";
 export { mockPinnedHostnameResolution } from "../test-helpers/ssrf.js";
+export {
+  PROXY_FIXTURE_HOST,
+  PROXY_FIXTURE_PAYLOAD,
+  withProxyFixture,
+} from "../test-fixtures/proxy-fixture.js";
 export { createWindowsCmdShimFixture } from "../test-helpers/windows-cmd-shim.js";
 export { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 export { useIsolatedStateGuard } from "../test-utils/state-path-guard.js";

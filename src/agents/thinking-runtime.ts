@@ -11,6 +11,7 @@ import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAvailableAgentHarnessPolicy } from "./harness/availability.js";
 import { resolveAutoAgentHarnessId } from "./harness/support.js";
+import type { AgentRuntimePolicyScope } from "./model-runtime-policy.js";
 import { resolveSessionRuntimeOverrideForProvider } from "./session-runtime-compat.js";
 
 export function hasResolvedThinkingCatalogEntry(params: {
@@ -57,19 +58,19 @@ export function concretizeAgentRuntime(runtime: string): string {
 }
 
 /** Resolves an explicit session override before configured model/provider policy. */
-export function resolveEffectiveAgentRuntime(params: {
-  cfg: OpenClawConfig;
-  provider: string;
-  modelId: string;
-  modelApi?: string | null;
-  modelBaseUrl?: unknown;
-  agentId?: string;
-  sessionKey?: string;
-  sessionEntry?: Pick<
-    SessionEntry,
-    "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked"
-  >;
-}): string {
+export function resolveEffectiveAgentRuntime(
+  params: {
+    cfg: OpenClawConfig;
+    provider: string;
+    modelId: string;
+    modelApi?: string | null;
+    modelBaseUrl?: unknown;
+    sessionEntry?: Pick<
+      SessionEntry,
+      "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked"
+    >;
+  } & AgentRuntimePolicyScope,
+): string {
   const sessionRuntime = resolveSessionRuntimeOverrideForProvider({
     provider: params.provider,
     entry: params.sessionEntry,
@@ -94,6 +95,9 @@ export function resolveEffectiveAgentRuntime(params: {
         provider: params.provider,
         modelId: params.modelId,
         config: params.cfg,
+        ...(params.agentScope
+          ? { agentScope: params.agentScope, sessionKey: params.sessionKey }
+          : {}),
       }) ?? "openclaw"
     );
   }

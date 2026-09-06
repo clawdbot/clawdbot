@@ -546,4 +546,64 @@ describe("setupCommand", () => {
       });
     },
   );
+
+  it("uses systemAgent.agentId in multi-agent explicit mode", async () => {
+    await withTempHome(async (home) => {
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const configDir = path.join(home, ".openclaw");
+      const configPath = path.join(configDir, "openclaw.json");
+      const deps = createSetupDeps(home);
+      const agentAWorkspace = path.join(home, "agent-a-workspace");
+      const agentBWorkspace = path.join(home, "agent-b-workspace");
+      const preexisting: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          entries: {
+            "agent-a": { workspace: agentAWorkspace },
+            "agent-b": { workspace: agentBWorkspace },
+          },
+          defaults: { systemAgent: { agentId: "agent-a" } },
+        },
+        gateway: { mode: "local" },
+      };
+
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(configPath, JSON.stringify(preexisting), "utf-8");
+
+      await setupCommand(undefined, runtime, deps);
+
+      expect(runtime.exit).not.toHaveBeenCalledWith(1);
+      expect(requireFirstWorkspaceParams(deps.ensureAgentWorkspace).dir).toBe(agentAWorkspace);
+      expect(deps.resolveSessionTranscriptsDir).toHaveBeenCalledWith("agent-a");
+    });
+  });
+
+  it("gives an actionable error when baseline setup has no ambient owner", async () => {
+    await withTempHome(async (home) => {
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const configDir = path.join(home, ".openclaw");
+      const configPath = path.join(configDir, "openclaw.json");
+      const deps = createSetupDeps(home);
+      const preexisting: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          entries: { "agent-a": {}, "agent-b": {} },
+        },
+        gateway: { mode: "local" },
+      };
+
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(configPath, JSON.stringify(preexisting), "utf-8");
+
+      await expect(setupCommand(undefined, runtime, deps)).rejects.toThrow(
+        "Multiple agents are configured, but baseline setup has no explicit owner. Set agents.defaults.systemAgent.agentId.",
+      );
+      expect(deps.ensureAgentWorkspace).not.toHaveBeenCalled();
+      expect(deps.resolveSessionTranscriptsDir).not.toHaveBeenCalled();
+    });
+  });
 });

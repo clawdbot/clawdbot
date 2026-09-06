@@ -46,6 +46,10 @@ const SUPPORTED_CONSTRAINT_ONLY_KEYS = new Set([
   "minLength",
   "maxLength",
   "pattern",
+  // Zod emits `format` for .url()/.email(); isJsonSchemaValueValid enforces the
+  // formats TypeBox knows and admits unknown ones, so the field stays editable
+  // instead of pushing every plugin URL/email setting into Raw mode.
+  "format",
   "minItems",
   "maxItems",
   "uniqueItems",

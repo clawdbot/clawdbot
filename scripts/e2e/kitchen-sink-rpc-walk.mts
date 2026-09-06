@@ -14,6 +14,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import { appendBoundedTail } from "../lib/bounded-output-tail.mjs";
 import {
   createBoundedResponseTooLargeError,
   readBoundedResponseText,
@@ -462,20 +463,6 @@ function readJson(file: string): unknown {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
-export function appendBoundedOutput(
-  buffer: CapturedOutput,
-  chunk: string | Uint8Array,
-  maxChars = resolveKitchenSinkRpcConfig().outputCaptureChars,
-) {
-  const text = String(chunk);
-  const combined = `${buffer.text}${text}`;
-  const overflowChars = Math.max(0, combined.length - maxChars);
-  return {
-    text: overflowChars > 0 ? combined.slice(overflowChars) : combined,
-    truncatedChars: buffer.truncatedChars + overflowChars,
-  };
-}
-
 function formatCapturedOutput(label: string, buffer: CapturedOutput) {
   return buffer.truncatedChars > 0
     ? `[${label} truncated ${buffer.truncatedChars} chars]\n${buffer.text}`
@@ -583,10 +570,10 @@ export function runCommand(
       forceKillTimer.unref();
     }, resolvedTimeoutMs);
     child.stdout?.on("data", (chunk) => {
-      stdout = appendBoundedOutput(stdout, chunk, outputCaptureChars);
+      stdout = appendBoundedTail(stdout, chunk, outputCaptureChars);
     });
     child.stderr?.on("data", (chunk) => {
-      stderr = appendBoundedOutput(stderr, chunk, outputCaptureChars);
+      stderr = appendBoundedTail(stderr, chunk, outputCaptureChars);
     });
     child.on("error", (error) => {
       clearTimeout(timer);

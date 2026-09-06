@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { codePointCountExceeds } from "@openclaw/normalization-core/code-points";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type {
   PluginHookSkillProposalEvaluateEvent,
@@ -21,7 +20,7 @@ export function normalizeSkillProposalCorrelationId(value: string | undefined): 
   if (!normalized) {
     return undefined;
   }
-  if (codePointCountExceeds(normalized, MAX_SKILL_PROPOSAL_CORRELATION_ID_LENGTH)) {
+  if (Array.from(normalized).length > MAX_SKILL_PROPOSAL_CORRELATION_ID_LENGTH) {
     throw new Error(
       `Skill proposal correlation id exceeds ${MAX_SKILL_PROPOSAL_CORRELATION_ID_LENGTH} characters.`,
     );

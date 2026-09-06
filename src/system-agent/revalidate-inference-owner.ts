@@ -6,7 +6,9 @@ import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { getPluginRegistryForContext } from "../plugins/runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
 import {
   createSystemAgentVerifiedInferenceBinding,
@@ -26,6 +28,11 @@ export function loadSetupInferencePluginGeneration(params: {
   selection: AgentHarnessPluginSelection;
   resolvePluginMetadataSnapshot?: typeof resolvePluginMetadataSnapshot;
 }) {
+  // Revalidation must select the probed artifacts: switching a built Gateway
+  // owner to source files would report drift even when neither tree changed.
+  const preferBuiltPluginArtifacts = getPluginRuntimeLoadContext(
+    getPluginRegistryForContext() ?? undefined,
+  )?.preferBuiltPluginArtifacts;
   // The install lease may have cached absence before writing the package.
   // This post-mutation owner must capture new facts without retiring that lease's cache.
   return withPluginCache(createPluginCache(), () => {
@@ -43,6 +50,7 @@ export function loadSetupInferencePluginGeneration(params: {
         config: params.config,
         workspaceDir: params.workspaceDir,
         metadataSnapshot: generation.metadataSnapshot,
+        preferBuiltPluginArtifacts,
         selections: [params.selection],
       }),
     );

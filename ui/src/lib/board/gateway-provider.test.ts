@@ -638,8 +638,7 @@ describe("gateway board provider lifecycle", () => {
 
       await provider.applyOps([{ kind: "tab_update", tabId: "main", chatDock: "left" }]);
       await provider.grant("canvas-cv-1", "granted");
-      // Astral characters make the 80-cap distinguish code points from UTF-16 units.
-      const longTitle = "\u{1f4cc} Pinned ".repeat(20).trim();
+      const longTitle = "📌 Pinned ".repeat(20).trim();
       await provider.pinWidget({ docId: "cv-1", title: longTitle });
       await provider.pinMcpApp({
         viewId: "mcp-app-source",

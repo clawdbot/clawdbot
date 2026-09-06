@@ -69,6 +69,57 @@ function receiveHello(connection: HandshakeConnection): void {
 describe("GatewayProtocolClient connect handshake", () => {
   afterEach(() => vi.useRealTimers());
 
+  it.each([
+    { retryable: true, retryAfterMs: 90_000, delayMs: 90_000 },
+    { retryable: false, retryAfterMs: 90_000, delayMs: 10 },
+    { retryable: true, retryAfterMs: 1, delayMs: 10 },
+    { retryable: true, retryAfterMs: 0, delayMs: 10 },
+    { retryable: true, retryAfterMs: undefined, delayMs: 10 },
+  ])(
+    "treats usable retry hints as floors while advancing backoff: %j",
+    async ({ retryable, retryAfterMs, delayMs }) => {
+      vi.useFakeTimers();
+      const { client, connections } = createHandshakeClient();
+      try {
+        client.start();
+        const first = connections[0];
+        assert(first);
+        receiveConnectChallenge(first);
+        const sent = first.send.mock.calls[0];
+        assert(sent);
+        const request = JSON.parse(sent[0]) as { id: string };
+        first.handlers.message(
+          JSON.stringify({
+            type: "res",
+            id: request.id,
+            ok: false,
+            error: {
+              code: "UNAVAILABLE",
+              message: "temporarily unavailable",
+              retryable,
+              retryAfterMs,
+            },
+          }),
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(delayMs - 1);
+        expect(connections).toHaveLength(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(connections).toHaveLength(2);
+
+        const second = connections[1];
+        assert(second);
+        second.close(1006, "transport unavailable");
+        await vi.advanceTimersByTimeAsync(19);
+        expect(connections).toHaveLength(2);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(connections).toHaveLength(3);
+      } finally {
+        client.stop();
+      }
+    },
+  );
+
   it.each(["before response", "before publication"])(
     "rejects hello when the connect deadline closes the transport %s",
     async (closingOrder) => {

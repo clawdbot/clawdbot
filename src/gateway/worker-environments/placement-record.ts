@@ -1,5 +1,16 @@
 import type { WorkerSessionPlacementState } from "./placement-state.js";
 
+export const FORCED_WORKER_ABANDONMENT_ERROR =
+  "Worker result abandoned by forced operator teardown";
+
+export function isForceAbandonedWorkerPlacement(
+  placement: WorkerSessionPlacementRecord | undefined,
+): placement is Extract<WorkerSessionPlacementRecord, { state: "failed" }> {
+  return (
+    placement?.state === "failed" && placement.recoveryError === FORCED_WORKER_ABANDONMENT_ERROR
+  );
+}
+
 export type WorkerSessionPlacementIdentity = {
   sessionId: string;
   agentId: string;

@@ -5,7 +5,6 @@ import {
   createLazyRuntimeNamedExport,
 } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveAskUserQuestionOptionIndices } from "openclaw/plugin-sdk/reply-payload";
-import { codePointCountExceeds, countCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
 import { readDiscordComponentSpec, type DiscordComponentMessageSpec } from "./components.js";
 
 type DiscordComponentSendFn = typeof import("./send.components.js").sendDiscordComponentMessage;
@@ -13,7 +12,7 @@ type OutboundPayload = Parameters<NonNullable<ChannelOutboundAdapter["sendPayloa
 
 const DISCORD_MESSAGE_COMPONENT_LIMIT = 40;
 const DISCORD_TEXT_DISPLAY_LIMIT = 2000;
-const DISCORD_CONTEXT_PREFIX_LENGTH = countCodePoints("-# ");
+const DISCORD_CONTEXT_PREFIX_LENGTH = Array.from("-# ").length;
 
 const DISCORD_PRESENTATION_TEXT_LIMIT = DISCORD_TEXT_DISPLAY_LIMIT - DISCORD_CONTEXT_PREFIX_LENGTH;
 
@@ -117,7 +116,7 @@ export function isDiscordComponentSpecWithinMessageLimit(params: {
   includesMedia?: boolean;
 }): boolean {
   const countedSpec = addPayloadTextFallback(params.spec, { text: params.fallbackText });
-  if (countedSpec.text && codePointCountExceeds(countedSpec.text, DISCORD_TEXT_DISPLAY_LIMIT)) {
+  if (countedSpec.text && Array.from(countedSpec.text).length > DISCORD_TEXT_DISPLAY_LIMIT) {
     return false;
   }
   return (

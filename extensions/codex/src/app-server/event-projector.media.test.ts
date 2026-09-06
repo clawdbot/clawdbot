@@ -18,6 +18,7 @@ import {
   turnCompleted,
   type EmbeddedRunAttemptParams,
 } from "./event-projector.test-harness.js";
+import type { CodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
 
 registerCodexEventProjectorTestLifecycle();
 
@@ -119,11 +120,15 @@ describe("CodexAppServerEventProjector media projection", () => {
   });
 
   it("fetches saved-path-only remote images over the bounded Codex command protocol", async () => {
-    const readRemoteWorkspaceFile = vi.fn(async () => ({ dataBase64: tinyPngBase64 }));
+    const readRemoteWorkspaceFile = vi.fn<CodexRemoteWorkspaceFileReader>(async () => ({
+      dataBase64: tinyPngBase64,
+    }));
+    const runAbort = new AbortController();
     const projector = await createProjector(undefined, {
       remoteWorkspaceRoot: "/remote/codex-workspace",
       readRemoteWorkspaceFile,
       remoteWorkspaceRequestTimeoutMs: 90_000,
+      runAbortSignal: runAbort.signal,
     });
     const savedPath = "/remote/codex-home/generated_images/session-1/ig_saved_only.png";
 
@@ -143,7 +148,7 @@ describe("CodexAppServerEventProjector media projection", () => {
     expect(readRemoteWorkspaceFile).toHaveBeenCalledWith({
       path: savedPath,
       maxBytes: expect.any(Number),
-      signal: undefined,
+      signal: expect.any(AbortSignal),
       timeoutMs: 90_000,
     });
     expect(result.toolMediaUrls).toHaveLength(1);
@@ -151,13 +156,17 @@ describe("CodexAppServerEventProjector media projection", () => {
     await expect(fs.readFile(result.toolMediaUrls?.[0] ?? "")).resolves.toEqual(
       Buffer.from(tinyPngBase64, "base64"),
     );
+    const signal = readRemoteWorkspaceFile.mock.calls[0]?.[0].signal;
+    expect(signal?.aborted).toBe(false);
+    runAbort.abort();
+    expect(signal?.aborted).toBe(true);
   });
 
   it.each([false, true])(
     "fences direct tool-result callbacks after blocked media when projection closed=%s",
     async (closed) => {
       const media = createDeferred<{ dataBase64: string }>();
-      const readRemoteWorkspaceFile = vi.fn(() => media.promise);
+      const readRemoteWorkspaceFile = vi.fn<CodexRemoteWorkspaceFileReader>(() => media.promise);
       const onToolResult = vi.fn();
       const projector = await createProjector(
         { ...(await createParams()), verboseLevel: "full", onToolResult },
@@ -190,10 +199,13 @@ describe("CodexAppServerEventProjector media projection", () => {
       );
       try {
         await vi.waitFor(() => expect(readRemoteWorkspaceFile).toHaveBeenCalledOnce());
+        const signal = readRemoteWorkspaceFile.mock.calls[0]?.[0].signal;
+        expect(signal?.aborted === true).toBe(false);
         expect(onToolResult).not.toHaveBeenCalled();
         if (closed) {
           await projector.closeProjection();
         }
+        expect(signal?.aborted === true).toBe(closed);
         media.resolve({ dataBase64: tinyPngBase64 });
         await pending;
         if (closed) {
@@ -595,16 +607,18 @@ describe("CodexAppServerEventProjector media projection", () => {
     expect(result.hostOwnedToolMediaUrls).toBeUndefined();
   });
 
-  it("propagates message-tool-only source reply delivery telemetry", async () => {
+  it("propagates source reply delivery without destination telemetry", async () => {
     const projector = await createProjector();
 
     const result = projector.buildResult({
       ...buildEmptyToolTelemetry(),
       didSendViaMessagingTool: true,
       didDeliverSourceReplyViaMessageTool: true,
+      sourceReplyDelivered: true,
     });
 
     expect(result.didSendViaMessagingTool).toBe(true);
     expect(result.didDeliverSourceReplyViaMessageTool).toBe(true);
+    expect(result.sourceReplyDelivered).toBe(true);
   });
 });

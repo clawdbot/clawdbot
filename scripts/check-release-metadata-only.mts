@@ -15,6 +15,7 @@ const VERSION_ONLY_TEXT_PATHS = new Set([
   "apps/android/Config/Version.properties",
   "apps/android/version.json",
   "apps/macos/Sources/OpenClaw/Resources/Info.plist",
+  "apps/mobile/version.json",
 ]);
 
 function normalizePath(input: string) {

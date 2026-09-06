@@ -1,6 +1,5 @@
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { codePointCountExceeds } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   createTelegramNonIdempotentRequestWithDiag,
   createTelegramRequestWithDiag,
@@ -38,9 +37,7 @@ export async function editForumTopicTelegram(
   if (nameProvided && !trimmedName) {
     throw new Error("Telegram forum topic name is required");
   }
-  // tdlib's clean_name caps topic titles at 128 code points and silently truncates
-  // overflow; rejecting here keeps the excess visible instead of quietly shortened.
-  if (trimmedName && codePointCountExceeds(trimmedName, 128)) {
+  if (trimmedName && Array.from(trimmedName).length > 128) {
     throw new Error("Telegram forum topic name must be 128 characters or fewer");
   }
   const iconProvided = opts.iconCustomEmojiId !== undefined;
@@ -161,7 +158,7 @@ export async function createForumTopicTelegram(
     throw new Error("Forum topic name is required");
   }
   const trimmedName = name.trim();
-  if (codePointCountExceeds(trimmedName, 128)) {
+  if (Array.from(trimmedName).length > 128) {
     throw new Error("Forum topic name must be 128 characters or fewer");
   }
 

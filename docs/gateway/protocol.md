@@ -45,6 +45,11 @@ that supervise the Gateway as a child process, see
   the gateway closes or drops the frame. These events carry `surface`, byte
   sizes, limits, and a safe reason code, never message bodies, attachment
   contents, raw frame bytes, tokens, cookies, or secrets.
+- The Gateway offers `permessage-deflate`. Peers that negotiate it (browsers, `ws`
+  clients) receive frames of 4 KiB and up compressed; smaller frames such as
+  streaming deltas stay raw. Context takeover is disabled in both directions, so
+  each frame compresses independently. Peers that do not offer the extension are
+  unaffected. Payload limits apply to the inflated size.
 
 Frame shapes:
 
@@ -66,6 +71,13 @@ Authenticated operator requests share a bounded queue for starting RPC handlers.
 When waiting capacity is exhausted, the Gateway returns retryable `UNAVAILABLE`
 before the method runs; retry within the request's budget. Started requests
 complete concurrently, so responses can arrive out of order.
+
+Ordinary UI/SDK requests may outlive a socket disconnect, but cannot start a
+handler in a retiring Gateway instance. Shutdown fences new request entry and
+joins pending handler loading and authorization before releasing their runtime.
+Already-started methods retain their own shutdown behavior; shutdown does not
+wait for every RPC to finish. Exact pending node progress and result replies
+remain available during node cleanup, until transport shutdown seals entry.
 
 Clients should branch on `code` and `details.code`; `message` remains human-readable
 and can change except where a compatibility note says otherwise. Method-level
@@ -90,11 +102,12 @@ Side-effecting methods require idempotency keys (see schema).
 
 ## Gateway-controlled WebRTC Talk
 
-`talk.client.create` accepts the additive capability
-`gateway-control-v1`. It is currently available only for OpenAI GA Realtime
-sessions with resolvable Platform API-key authentication. A successful result
-includes `clientControl: { owner: "gateway" }`, a 60-second single-use Gateway
-broker token in `clientSecret`, and the relative
+`talk.client.create` accepts the additive capability `gateway-control-v1`.
+OpenAI GA Realtime requires resolvable Platform API-key authentication for this
+mode. Native GPT-Live retains its configured ChatGPT OAuth or Platform
+API-key authentication. A successful result includes
+`clientControl: { owner: "gateway" }`, a 60-second single-use Gateway broker
+token in `clientSecret`, and the relative
 `offerUrl: "/plugins/openai/realtime/calls"`.
 
 The client sends only `application/sdp` to that route with the broker token. It
@@ -104,6 +117,11 @@ transcript, steering, cancellation, and close lifecycle. Clients that omit the
 capability retain the existing browser session behavior. A Gateway or
 configured authentication path that cannot provide the requested owner returns
 `UNAVAILABLE`; it never downgrades the request to client-owned control.
+
+Clients must close their local media peer if the Gateway connection is lost or
+a `talk.event` for their current `voiceSessionId` contains
+`talkEvent.type: "session.closed"`. Ignore terminal events for other calls;
+a recoverable `session.error` alone is not a close notification.
 
 ## Handshake
 
@@ -190,6 +208,10 @@ Gateway responds with `hello-ok`:
 reports the negotiated role and the current socket's effective authorization
 scopes even when no device token is issued (shape above). `deviceToken`, when
 present, is the primary reusable credential for the same device and role.
+`controlUiUrl` optionally advertises the Gateway's configured public Control UI
+origin and base path for shareable links, independent of the client's tunnel or
+development-server address. It is omitted when `gateway.publicOrigin` is unset
+or the Control UI is disabled. It contains no credentials and grants no access.
 `policy.attachments` is optional (older gateways omit it) and advertises
 the decoded-size ceilings chat attachments face on `chat.send`, `sessions.send`,
 and session-creation initial turns:
@@ -226,6 +248,16 @@ accepted by the active Gateway runtime. Clients can compare it with
 `config.get.configRevisionHash` to determine whether a newer saved config still
 needs a restart. `config.get.hash` remains the raw root-file revision used by
 config write conflict guards.
+
+The snapshot's optional `controlUiIdentityUrl` advertises the active Gateway's
+HTTPS dashboard URL when it uses trusted-proxy or Tailscale Serve identity.
+Operator clients can open this URL for personal browser sign-in instead of
+forwarding shared device credentials. The URL includes the Control UI base path;
+clients must use normal HTTPS trust instead of native TLS pins and must not send
+native connection tokens or passwords to it. Re-read it from each authenticated
+hello snapshot and discard it when that connection closes. If the managed Serve
+route exits or is replaced, the Gateway closes connections that received its
+identity URL with code `1012`; reconnect to discover the current route.
 
 `openclaw.setup.verify` additionally checks the Gateway's current application and
 restart state before and after its live inference probe. It returns
@@ -430,6 +462,8 @@ method scope (`operator.pairing`), based on the pending request's declared
 In this table, `fs.listDir` is the node command relayed through `node.invoke`.
 The top-level Gateway `fs.listDir` RPC needs `operator.write` for
 workspace-contained host browsing and `operator.admin` when `nodeId` is present.
+Pass directory paths exactly as returned by `fs.listDir`: whitespace in directory
+names, including trailing spaces, is significant.
 
 ### Caps/commands/permissions (node)
 
@@ -479,6 +513,51 @@ Gateways that predate this acknowledged action return it as unhandled, so the Ma
 node reconnects once and lets disconnect cleanup remove the old connection state.
 See [Active computer presence](/nodes/presence) for selection, privacy, model
 context, and notification-routing behavior.
+
+### Node host stats
+
+Connected CLI node hosts and the macOS app's shared node-host worker send a
+resource snapshot immediately after connecting, then every 60 seconds. They call
+`node.event` with `event: "node.host.stats"` and an object `payload` (or its JSON
+encoding in `payloadJSON`):
+
+```json
+{
+  "event": "node.host.stats",
+  "payload": {
+    "cpuCount": 8,
+    "loadAverage": [1.25, 1.1, 0.9],
+    "memoryTotalBytes": 17179869184,
+    "memoryFreeBytes": 4294967296,
+    "diskTotalBytes": 1000000000000,
+    "diskAvailableBytes": 250000000000
+  }
+}
+```
+
+`cpuCount` is an integer from 1 to 4096. Optional `loadAverage` contains the
+1-, 5-, and 15-minute averages, each finite and between 0 and 100000. Windows
+has no load average; hosts omit the field when all three readings are zero.
+Memory and disk values are non-negative integer bytes, with free or available
+bytes no greater than their total. Disk fields appear together only when the
+host can read capacity for the volume containing its home directory, independent
+of the worker's current directory.
+
+The Gateway accepts updates only from the current node connection and stamps
+`updatedAtMs` with its own receipt time; nodes never send a timestamp. Successful
+updates appear as `hostStats` in `node.list` and `node.describe` and broadcast
+`node.hostStats` with `{ nodeId, hostStats }` to read-scoped operators, using
+`dropIfSlow: true`. Stats are operator-facing and do not update model-visible
+node context. When received, the Gateway persists the snapshot as `lastHostStats`
+on the paired node record. Disconnecting or reconnecting without a new snapshot
+leaves the previous value intact.
+`node.list` and `node.describe` use live session stats while connected and
+project the saved snapshot as `hostStats` while offline, keeping its original
+`updatedAtMs` so clients can show the last-known age.
+
+The structured `node.event` result uses `reason: "updated"`, `"stale_connection"`,
+or `"invalid_payload"`. An older Gateway may return `handled: false`; the node
+continues at the normal cadence without an immediate retry.
 
 ### Node background alive event
 
@@ -585,8 +664,8 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `channels.start` (`operator.admin`) starts one channel account runtime without re-authenticating. Params `{ channel, accountId? }`; omitted `accountId` selects the default account. Responds `{ channel, accountId, started, outcome }`, with `started` true only when the resulting runtime snapshot reports `running: true`. `outcome` carries the account lifecycle decision: `{ status: "handed-off" }`, `{ status: "retry", reason }`, or `{ status: "skipped", reason }`. The RPC is a manual override of automatic-start suppression; no `manual` parameter is accepted. This is not a provider-connectivity check; see [Per-account recovery](/cli/channels#per-account-recovery-non-destructive) for reasons and recovery guidance.
     - `channels.stop` (`operator.admin`) stops one channel account runtime without clearing auth state. Params `{ channel, accountId? }`; omitted `accountId` selects the default account. Responds `{ channel, accountId, stopped }`, with `stopped` true when the resulting runtime snapshot does not report `running: true`. Unlike `channels.logout`, it retains the account's credentials.
     - `channels.logout` logs out a specific channel/account where the channel supports it.
-    - `web.login.start` starts a QR/web login flow for the current QR-capable web channel provider.
-    - `web.login.wait` waits for that flow to complete and starts the channel on success.
+    - `web.login.start` starts a QR/web login flow. Params include optional `{ channel, accountId, force, timeoutMs, verbose }`. When `channel` is present, the Gateway normalizes its canonical id or alias and dispatches only to that installed channel plugin. Omitting `channel` preserves the legacy behavior of selecting the first loaded QR-capable provider. A provider may return an opaque `sessionKey` with its QR response.
+    - `web.login.wait` waits for that flow to complete and starts the channel on success. Params include optional `{ channel, accountId, sessionKey, timeoutMs, currentQrDataUrl }`. Use the same `channel` as `web.login.start` and pass its returned `sessionKey` through unchanged so the provider can correlate the wait request with the QR session. Omitting `channel` retains the same legacy provider fallback as `web.login.start`.
     - `push.test` sends a test APNs push to a registered iOS node.
     - `voicewake.get` returns the stored wake-word triggers.
     - `voicewake.set` updates wake-word triggers and broadcasts the change.
@@ -626,14 +705,14 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `talk.session.appendAudio` appends base64 PCM input audio to gateway-owned realtime relay and transcription sessions.
     - `talk.session.cancelOutput` stops assistant audio output, primarily for VAD-gated barge-in in gateway relay sessions. Send the current `talk.event.turnId`; the result is `applied`, `stale`, or `idle`.
     - `talk.session.submitToolResult` completes a provider tool call emitted by a gateway-owned realtime relay session. The request waits for any asynchronous completion signal exposed by the provider bridge; failed submissions keep the linked run active and do not emit a successful tool-result event. Pass `options: { willContinue: true }` for interim tool output or `options: { suppressResponse: true }` when the provider bridge advertises suppression support and the result should not start another response.
-    - `talk.session.steer` sends active-run voice control into a gateway-owned agent-backed Talk session: `{ sessionId, text, mode? }`, where `mode` is `status`, `steer`, `cancel`, or `followup`; omitted mode is classified from the spoken text.
+    - `talk.session.steer` sends active-run voice control into a gateway-owned agent-backed Talk session: `{ sessionId, text, mode? }`, where `mode` is `status`, `steer`, `cancel`, or `followup`; omitted mode is classified from the spoken text. It selects only work bound to that logical voice call, not another call sharing the connection and agent session.
     - `talk.session.close` closes a gateway-owned relay, transcription, or managed-room session and emits terminal Talk events.
     - `talk.mode` sets/broadcasts the current Talk mode state for WebChat/Control UI clients.
     - `talk.client.create` creates or resumes a client-owned realtime provider session using `webrtc` or `provider-websocket` while the gateway owns credentials, instructions, tool policy, and the returned `voiceSessionId`. Clients pass `sessionKey` and reuse `voiceSessionId` when replacing the provider transport during one call. Clients that negotiate `gateway-control-v1` keep WebRTC media direct but move the provider control channel and tool lifecycle to the Gateway.
     - `talk.client.transcript` appends one finalized `{ role, text }` item to the normal agent session. The required `entryId` is idempotent within `voiceSessionId`; retries do not duplicate transcript messages.
     - `talk.client.close` closes the logical voice session after pending transcript writes. Closing is idempotent and may deliver a mutation-only call digest to the session's last non-WebChat channel.
     - `talk.client.toolCall` lets client-owned realtime transports forward provider tool calls to gateway policy. The first supported tool is `openclaw_agent_consult`; clients get `runId`, `agentId`, and canonical `agentSessionKey` and wait for normal chat lifecycle events before submitting the provider-specific tool result. Use the returned target for `chat.abort` and `chat.history`; keep the original key for voice-session requests. Voice-bound high-impact actions return `VOICE_CONFIRMATION_REQUIRED:<id>` until a later finalized user utterance explicitly confirms that exact final execution action and the next consult supplies the `confirmationId`; policy or hook rewrites require confirmation again.
-    - `talk.client.steer` sends active-run voice control for client-owned realtime transports. The gateway resolves the active embedded run from `sessionKey` and returns a structured accepted/rejected result instead of silently dropping steering.
+    - `talk.client.steer` sends session-scoped active-run voice control for client-owned realtime transports. The gateway resolves owned active work from `sessionKey`, without a voice call ID, and returns a structured accepted/rejected result instead of silently dropping steering. Provider-attached Gateway controls are call-scoped instead.
     - `talk.event` is the single Talk event channel for realtime, transcription, STT/TTS, managed-room, telephony, and meeting adapters.
     - `talk.speak` synthesizes speech through the active Talk speech provider.
     - `tts.status` returns TTS enabled state, active provider, fallback providers, and provider config state.
@@ -668,9 +747,11 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `agents.files.list`, `agents.files.get`, and `agents.files.set` manage the bootstrap workspace files exposed for an agent.
     - `audit.activity.list` returns the versioned metadata-only activity ledger; `audit.run.inspect` discovers execution ids or inspects one exact execution identity context; `audit.list` remains the compatibility-safe run/tool RPC.
     - `agents.workspace.list` and `agents.workspace.get` (`operator.read`) expose read-only, paginated browsing of an agent's workspace directory for clients in the trusted operator domain described in [Operator scopes](/gateway/operator-scopes). Requests accept workspace-relative paths only; reads stay confined to the realpathed workspace root (symlink and hardlink escapes rejected), size-capped, and limited to UTF-8 text plus common image types (base64). Responses do not expose the host workspace path. There are no write operations in this namespace.
+    - `transcripts.list` (`operator.read`) lists durable meeting captures newest first. Optional `limit` accepts 1–200 (default 50); `providerId` filters the source. The `sessions` result includes selectors, provider/source locators, times, active state, utterance counts, participants, summary availability, optional model/heuristic provenance, and an overview preview capped at 280 characters. Source locators expose only `providerId`, `accountId`, `guildId`, `channelId`, and `meetingUrl`, never free-form metadata.
+    - `transcripts.get` (`operator.read`) accepts `selector` and optional `includeUtterances`. It returns the session and stored summary, including its canonical Markdown; requested utterances are sanitized and bounded by the capture limit of 2,000. Missing summaries omit `summary` rather than generating notes. Both transcript methods read across one trusted Gateway domain, like `agents.workspace.*`; separate domains are required for reader isolation. They do not export files or change capture state. See [Transcripts CLI](/cli/transcripts#gateway-and-control-ui-reads).
     - `tasks.list`, `tasks.get`, and `tasks.cancel` expose the gateway task ledger to SDK and operator clients. See [Task ledger RPCs](#task-ledger-rpcs) below.
     - `artifacts.list`, `artifacts.get`, and `artifacts.download` expose transcript-derived artifact summaries and downloads for an explicit `sessionKey`, `runId`, or `taskId` scope. Run and task queries resolve the owning session server-side and only return transcript media with matching provenance; unsafe or local URL sources return unsupported downloads instead of fetching server-side.
-    - `environments.list` and `environments.status` (`operator.read`) remain available without cloud-worker profiles and preserve gateway-local and node environment discovery. Node environments include the durable `sessionHost` identity used to keep a known offline host visible, while current connected inventory is authoritative over that history. Missing identity means false. Exact bounded `{ total, available }` worker slots are live-only and omitted offline; worker-turn admission consumes a slot, while node-backed remote-exec does not. Configured profile summaries expose their bounded, canonically ordered `executionModes` array plus the existing singular `executionMode` primary/default display projection. Current clients select profiles only by membership in `executionModes`. Configured cloud workers and durable records left by earlier profiles add `worker` metadata with `providerId`, optional `leaseId`, `state`, `ageMs`, optional `idleMs`, and `attachedSessionIds`. Worker lifecycle states are `requested`, `provisioning`, `bootstrapping`, `ready`, `attached`, `idle`, `draining`, `destroying`, `destroyed`, `failed`, and `orphaned`. A connected node may also include `workerBundle: { status: "installed", version }` or `workerBundle: { status: "missing" }`. This optional observation is reconnect-scoped and reports validation of one Gateway-retained bundle; it is not launch authority. The public result never exposes the bundle hash, Gateway namespace, node filesystem path, receipt, or protocol-feature details.
+    - `environments.list` and `environments.status` (`operator.read`) remain available without cloud-worker profiles and preserve gateway-local and node environment discovery. `environments.list` also accepts an optional `runtimeId` from callers with `operator.write`. That request adds one Gateway-owned `requiredNodeCommand` result to each connected node when the runtime requires a node command. Its closed state is `invocable`, `pending-approval`, `undeclared`, or `unauthorized`; it never exposes the node's full pending declaration. Node environments include the durable `sessionHost` identity used to keep a known offline host visible, while current connected inventory is authoritative over that history. Missing identity means false. Exact bounded `{ total, available }` worker slots are live-only and omitted offline; worker-turn admission consumes a slot, while node-backed remote-exec does not. Configured profile summaries expose their bounded, canonically ordered `executionModes` array plus the existing singular `executionMode` primary/default display projection. Current clients select profiles only by membership in `executionModes`. Configured cloud workers and durable records left by earlier profiles add `worker` metadata with `providerId`, optional `leaseId`, `state`, `ageMs`, optional `idleMs`, and `attachedSessionIds`. Worker lifecycle states are `requested`, `provisioning`, `bootstrapping`, `ready`, `attached`, `idle`, `draining`, `destroying`, `destroyed`, `failed`, and `orphaned`. A connected node may also include `workerBundle: { status: "installed", version }` or `workerBundle: { status: "missing" }`. This optional observation is reconnect-scoped and reports validation of one Gateway-retained bundle; it is not launch authority. The public result never exposes the bundle hash, Gateway namespace, node filesystem path, receipt, or protocol-feature details.
     - `environments.create` (`{ profileId, idempotencyKey }`) provisions an environment from a configured plugin provider profile; retries with the same key reuse the durable operation. Direct creation without a session does not select an execution mode, so the provider uses its intentional default; Crabbox prepares `worker-turn`. `environments.destroy` (`{ environmentId }`) requests idempotent teardown of a durable worker environment. Both require `operator.admin`, are control-plane writes, and return the same environment summary shape used by status responses.
     - `worker.desktop.observe` (`{ environmentId, control? }`, `operator.admin`) starts or reuses the environment's desktop forward and returns `{ transport, wsPath, expiresAtMs, control, vncPassword? }`. `wsPath` carries a single-use 60-second token for the Gateway's desktop observer WebSocket; reconnecting requires a fresh observe call. Environments with an observable desktop advertise `worker.desktop: true` in `environments.list`. The method is advertised only when the `cloudWorkers.desktop` lab is enabled. See [Cloud workers](/gateway/cloud-workers#desktop-interactive).
     - `agent.identity.get` returns the effective assistant identity for an agent or session.
@@ -684,7 +765,8 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `sessions.messages.subscribe` and `sessions.messages.unsubscribe` toggle transcript/message event subscriptions for one session. Pass `includeApprovals: true` to also receive sanitized `session.approval` lifecycle events for approvals whose persisted audience includes that exact session and whose reviewer binding authorizes the subscribing client. The subscribe response then includes a bounded pending `approvalReplay`; it is authoritative when `truncated` is false. The opt-in is per subscribe call, not sticky: re-subscribing to the same session without `includeApprovals: true` removes an existing approval subscription. In addition to normal session-read authority, this opt-in requires `operator.admin`, or `operator.approvals` on a paired device.
     - `sessions.preview` returns bounded transcript previews for specific session keys.
     - `sessions.describe` returns one gateway session row for an exact session key.
-    - `sessions.resolve` resolves or canonicalizes a session target by key, raw session ID, label, or Control UI short ID. Ambiguous short IDs return a bounded candidate list as a successful RPC result.
+    - `sessions.github.options`, `sessions.github.publish`, `sessions.github.status`, and `sessions.github.confirm` accept optional `agentId` alongside `sessionKey`. Carry the selected session's agent through all four calls, especially for the shared key `global`, which does not identify its owner. An explicit agent must be configured and match any agent-qualified session key; malformed, unknown, or conflicting owners return `INVALID_REQUEST` before publication. Tool-originated publication remains bound to the tool caller's session and agent.
+    - `sessions.resolve` resolves or canonicalizes a session target by key, raw session ID, label, Control UI short ID, or `reference: { key, slug? }`. A reference searches visible active and archived sessions: its exact canonical key wins, then an optional display-name slug is matched against UUID-backed sessions. Reference discovery retains session-list visibility rules; the separate `key` selector retains exact-key read semantics. Ambiguous references and short IDs return at most ten candidates as a successful RPC result. Set `allowMissing: true` to receive `{ ok: false }` when no session matches.
     - `sessions.create` creates a new session entry. When sandbox containment applies, local `cwd` and project paths are checked against the selected agent's canonical workspace: aliases inside it are accepted, and symlinks resolving outside it are rejected. Optional `model`, `contextWindow`, and `thinkingLevel` values persist the initial model, advertised context-window choice, and reasoning overrides atomically; optional `category` assigns the session to a custom group and registers that group when first used. `worktree: true` provisions a managed worktree; optional `worktreeBaseRef`/`worktreeName` select the base ref and branch name, and `execNode` (`operator.admin`) binds session exec to a node host. Without `worktreeName`, OpenClaw derives a readable name from the session label or generated first-message title, then falls back to a crustacean-themed name; names already occupied by another owner, local branch, or unmanaged path receive a numeric suffix. The created worktree is echoed in the result and persisted on the session row (`worktree: { id, branch, repoRoot }`). When the entry is created but its nested initial `chat.send` is rejected, the successful result includes `runStarted: false` and `runError`; clients can preserve the prompt and retry against the returned session key. A caller that passes `parentSessionKey` with `emitCommandHooks: true` should also declare the lifecycle disposition of a distinct child: `succeedsParent: true` ends the parent with `session_end`, while `false` keeps the parent active and emits only the child's `session_start`. Omitting `succeedsParent` preserves the legacy parent-rollover behavior for existing clients. The disposition requires both parent linkage and command hooks; a fork cannot succeed its parent. Main-session reset-in-place behavior is unchanged because no distinct child is created. New rows are stamped with write-once creation provenance (`createdVia`, `createdActor`, `createdAt`) from the trusted creation seam; adopting an existing key never restamps it. For human profile actors, `createdActor.label` is resolved from the current user profile when the row is projected and is never stored on the session entry, so profile renames do not drift. Session rows also carry `parentSessionKey` (navigation parent, persisted), `controlOwnerSessionKey` (runtime controller when live), `forkSource` (exact source key + transcript generation for forks), and `previousSessionId` (prior transcript generation under the same key).
     - `sessions.dispatch` moves an authorized local OpenClaw or Codex session with a live, registry-owned session managed worktree to a paired device or configured cloud profile. Pass `{ key, deviceId, agentId? }` for an explicit device, `{ key, autoDevice: true, agentId? }` for automatic paired-device selection, `{ key, profileId, machineClass?, agentId? }` for an explicit profile, or `{ key, agentId? }` to look up the managed worktree's normalized origin in `cloudWorkers.projectProfiles`. These target modes are mutually exclusive and explicit targets take precedence over project-profile lookup. Automatic selection ranks worker-slot runtimes by available slots and then device ID; runtimes without worker slots use device ID order. If a candidate becomes ineligible during dispatch, up to three ranked candidates are attempted; other errors are not retried. Explicit and automatic device dispatch require `operator.write`; explicit-profile and project-profile dispatch require `operator.admin`. A missing origin, unmatched mapping, or mapping to an unconfigured profile returns a typed `INVALID_REQUEST` without provisioning or falling back to another target. Malformed params use the write scope before schema validation. A missing cloud profile hides only cloud targets; eligible paired-device dispatch remains available. Dispatch closes local turn admission before draining active work and returns only after placement reaches `active`, with worker-child ownership for `worker-turn` or Gateway-owned harness execution for `remote-exec`. Arbitrary plain directories are not dispatchable; after admission, the workspace transport may use manifest mirroring if the managed worktree's Git metadata later becomes unavailable. SSH fallback candidates rotate only for idempotent probes, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands fail closed and are not replayed. Dispatch is one-way; worker-to-local pull-back is not part of this RPC.
     - `sessions.reclaim` (`operator.write`) safely stops a session placement by key. It waits for an in-flight dispatch, drains admitted work, reconciles active workspace changes, and retries pending failed-environment teardown through the placement owner. Callers never need raw environment-destroy authority.
@@ -700,7 +782,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - Chat execution still uses `chat.history`, `chat.send`, `chat.abort`, and `chat.inject`. Its `sessionInfo` uses the same aggregate `hasActiveRun` and optional complete-exact `activeRunIds` semantics as `sessions.list`. `chat.history` is display-normalized for UI clients: inline directive tags are stripped from visible text, plain-text tool-call XML payloads (`<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks) and leaked ASCII/full-width model control tokens are stripped, pure silent-token assistant rows (exact `NO_REPLY` / `no_reply`) are omitted, and oversized rows can be replaced with placeholders.
       Tail responses can include an opaque `deltaCursor`. Pass it back as `cursor` to `chat.history` or `chat.startup` instead of `offset` or `messageId`. A successful catch-up returns `{ kind: "delta", messages, deltaCursor, sessionInfo }`; replay each `messages` entry through the same reducer as a live `session.message` payload. `{ kind: "reset" }` means the cursor is invalid, stale, belongs to another session, crossed a reset or compaction, or is too far behind; fetch a normal tail page. Catch-up never returns a partial page or continuation: more than 200 raw events or the 1 MB payload budget resets to a tail fetch.
     - `chat.message.get` is the additive bounded full-message reader for a single visible transcript entry. Pass `sessionKey`, optional `agentId` when session selection is agent-scoped, and a transcript `messageId` previously surfaced through `chat.history`; the gateway returns the same display-normalized projection without the lightweight history truncation cap when the stored entry is still available and not oversized.
-    - `chat.toolTitles` returns short purpose titles for tool calls rendered in the Control UI (batched, max 24 items with bounded inputs). The feature is opt-in via `gateway.controlUi.toolTitles` (default off); disabled gateways answer `{ titles: {}, disabled: true }` with no model call so clients stop asking. When enabled, titles use standard utility-model routing: an explicitly configured `utilityModel` (an operator decision that, like all utility tasks, may send bounded task content to the chosen provider), else the session provider's declared small-model default so no new egress destination appears implicitly; an empty `utilityModel` disables them entirely. Titles never fall back to the primary model. Results cache in the per-agent state database keyed by tool name + input, so repeated views never re-bill the same calls.
+    - `chat.toolTitles` is deprecated. It validates the existing bounded request shape and returns `{ titles: {}, disabled: true }` so older clients stop requesting titles. It makes no model calls and does not access the old title cache. Current Control UI clients display descriptions supplied with tool calls automatically.
     - `chat.send` accepts one-turn `fastMode: "auto"` to use fast mode for model calls started before the auto cutoff, then start later retry, fallback, tool-result, or continuation calls without fast mode. The cutoff defaults to 60 seconds (`DEFAULT_FAST_MODE_AUTO_ON_SECONDS`) and can be configured per model with `agents.defaults.models["<provider>/<model>"].params.fastAutoOnSeconds`. A `chat.send` caller can pass one-turn `fastAutoOnSeconds` to override the cutoff for that request. Pass `queueMode` (`steer`, `followup`, `collect`, or `interrupt`) to override the stored queue mode for this request only; explicit Control UI steer actions use `queueMode: "steer"`. Interrupt mode captures and aborts the session's current admitted turn, waits for that exact owner to settle, then starts the new turn; an idle session starts normally. A steer send targets the selected session's current state: the Gateway atomically injects the message into that session's direct active run, or starts a new turn when the session is idle. Activity in descendant subagent sessions never makes the selected session busy for this decision. `expectedLeafEntryId` is an independent transcript-branch compare-and-swap for non-steer interactive sends: pass the displayed branch leaf (or deliberate `null` for an authoritative empty transcript) and the send rejects with `details.reason: "active-leaf-changed"` if another client switched transcript branches first; steer sends ignore it.
 
     - `chat.send`, `sessions.send`, and initial-turn `sessions.create` acknowledgments report admission separately from transcript persistence. Optional `messageSeq` is the one-based position from an actual committed user-turn receipt; it is absent while the input exists only in pending custody. `status: "started"` and `runStarted: true` alone do not establish a transcript row. Reconcile provisional input by its submission identity against accepted custody or canonical transcript identity, never a predicted position or matching content.
@@ -1089,7 +1171,12 @@ return sanitized task summaries, not raw runtime state.
   - Params: optional `status` (`"queued"`, `"running"`, `"completed"`,
     `"failed"`, `"cancelled"`, or `"timed_out"`) or an array of those statuses,
     optional `agentId`, optional `sessionKey`, optional `limit` from `1` to
-    `500`, and optional string `cursor`.
+    `500`, optional string `cursor`, and optional `sortBy` (`"updatedAt"` or
+    `"endedAt"`). Ordering is descending; omitted `sortBy` uses last activity.
+    Use `"endedAt"` with terminal status filters when page membership must
+    reflect completion order. Legacy terminal rows without a stored `endedAt`
+    use their recorded terminal activity time, then creation time, as the
+    canonical completion timestamp before pagination.
   - Result: `{ "tasks": TaskSummary[], "nextCursor"?: string }`.
 - `tasks.get` requires `operator.read`.
   - Params: `{ "taskId": string }`.

@@ -22,12 +22,12 @@ import {
   resolveUpdateDoctorExecutionPolicy,
   type UpdateRunResult,
 } from "../../infra/update-runner.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveCliName } from "../cli-name.js";
 import { createUpdateProgress } from "./progress.js";
 import {
   DEFAULT_PACKAGE_NAME,
-  createGlobalCommandRunner,
   readPackageName,
   readPackageVersion,
   resolveGlobalManager,
@@ -39,7 +39,7 @@ import { resolveUpdateTargetEnv } from "./update-command-service-env.js";
 
 const CLI_NAME = resolveCliName();
 
-export async function runPackageInstallUpdate(params: {
+export type PackageInstallUpdateParams = {
   root: string;
   installKind: "git" | "package" | "unknown";
   tag: string;
@@ -56,9 +56,12 @@ export async function runPackageInstallUpdate(params: {
   nodeRunner?: string;
   installEnv?: NodeJS.ProcessEnv;
   installTarget?: ResolvedGlobalInstallTarget;
-}): Promise<UpdateRunResult> {
+};
+
+export async function runPackageInstallUpdate(
+  params: PackageInstallUpdateParams,
+): Promise<UpdateRunResult> {
   const installEnv = params.installEnv ?? (await createGlobalInstallEnv());
-  const runCommand = createGlobalCommandRunner();
   let installTarget = params.installTarget;
   if (!installTarget) {
     const manager = await resolveGlobalManager({
@@ -68,7 +71,7 @@ export async function runPackageInstallUpdate(params: {
     });
     installTarget = await resolveGlobalInstallTarget({
       manager,
-      runCommand,
+      runCommand: runCommandWithTimeout,
       timeoutMs: params.timeoutMs,
       pkgRoot: params.root,
       honorPackageRoot: params.honorPackageRoot === true,
@@ -105,7 +108,7 @@ export async function runPackageInstallUpdate(params: {
     installSpec,
     packageName,
     packageRoot: pkgRoot,
-    runCommand,
+    runCommand: runCommandWithTimeout,
     timeoutMs: params.timeoutMs,
     ...(installEnv === undefined ? {} : { env: installEnv }),
     runStep: (stepParams) =>

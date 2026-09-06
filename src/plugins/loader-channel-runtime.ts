@@ -38,7 +38,6 @@ export function loadSetupRuntimeChannelCandidate(params: {
   cfg: OpenClawConfig;
   entry: NormalizedPluginsConfig["entries"][string] | undefined;
   seenIds: Map<string, PluginRecord["origin"]>;
-  candidateOrigin: PluginRecord["origin"];
   logger: PluginLogger;
   pushPluginLoadError: (message: string) => void;
 }): boolean {
@@ -54,8 +53,6 @@ export function loadSetupRuntimeChannelCandidate(params: {
       registry: registryBuilder.registry,
       record,
       seenIds: params.seenIds,
-      pluginId: record.id,
-      origin: params.candidateOrigin,
       phase,
       error,
       logPrefix: `[plugins] ${record.id} ${message} from ${record.source}: `,
@@ -229,6 +226,6 @@ export function loadSetupRuntimeChannelCandidate(params: {
     return true;
   }
   registryBuilder.registry.plugins.push(record);
-  params.seenIds.set(record.id, params.candidateOrigin);
+  params.seenIds.set(record.id, record.origin);
   return true;
 }

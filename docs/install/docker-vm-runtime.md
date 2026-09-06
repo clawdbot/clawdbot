@@ -44,9 +44,15 @@ export OPENCLAW_AUTH_PROFILE_SECRET_DIR="$HOME/.openclaw-auth-profile-secrets"
 ```
 
 Override those paths before setup if your VM uses a dedicated data disk. Keep
-all three directories in backups. The auth-profile secret directory contains
-the local encryption key for OAuth-backed auth profile token material, so it
-must persist but remain separate from `OPENCLAW_CONFIG_DIR`.
+all three directories in backups. Current OAuth token material is stored as
+plaintext in SQLite under `OPENCLAW_CONFIG_DIR`, including access, refresh, and
+ID-token values. Treat the config directory and its backups or copies as
+credentials.
+
+The auth-profile secret directory contains only the local key used to recover
+legacy encrypted OAuth sidecar credentials. It must persist for that recovery
+path and remain separate from `OPENCLAW_CONFIG_DIR`, but it does not encrypt
+current SQLite rows or protect a state-only backup or copy.
 
 ## Run the maintained Docker setup
 
@@ -160,7 +166,7 @@ truth. Long-lived state must survive restarts, rebuilds, and reboots.
 | Agent workspace      | `/home/node/.openclaw/workspace/`   | Workspace mount             | Code and agent artifacts                                                                   |
 | Channel credentials  | `/home/node/.openclaw/credentials/` | Config mount                | Channel credential material                                                                |
 | Model auth profiles  | `/home/node/.openclaw/`             | Config mount                | Shared `state/openclaw.sqlite`; agent-local `agents/<agentId>/agent/openclaw-agent.sqlite` |
-| Auth-profile key     | `/home/node/.config/openclaw/`      | Secret-directory mount      | Encryption key material; keep separate from the config mount                               |
+| Auth-profile key     | `/home/node/.config/openclaw/`      | Secret-directory mount      | Legacy encrypted-sidecar recovery key; does not protect current SQLite rows                |
 | Skill state          | `/home/node/.openclaw/skills/`      | Config mount                | Skill-level state                                                                          |
 | External binaries    | `/usr/local/bin/`                   | Docker image                | Must be baked at build time                                                                |
 | Node and OS packages | Container filesystem                | Docker image                | Rebuilt with the image; do not install at runtime                                          |

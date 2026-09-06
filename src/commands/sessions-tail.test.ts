@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
+import { ExpectedCliError } from "../cli/failure-output.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -363,9 +364,14 @@ describe("sessionsTailCommand", () => {
     expect(output).not.toContain("stale ok");
   });
 
-  it("continues following when SQLite trajectory rows are appended", async () => {
+  it.each([
+    { signal: "SIGINT" as const, exitCode: 130 },
+    { signal: "SIGTERM" as const, exitCode: 143 },
+  ])("continues following until $signal and exits with $exitCode", async ({ signal, exitCode }) => {
     vi.useFakeTimers();
     const runtime = makeRuntime();
+    const sigintListeners = process.listenerCount("SIGINT");
+    const sigtermListeners = process.listenerCount("SIGTERM");
     await writeSessionEntry();
     appendSqliteTrajectoryRuntimeEvents({ agentId: "main", sessionId: "session-one", storePath }, [
       makeEvent({
@@ -398,18 +404,24 @@ describe("sessionsTailCommand", () => {
     try {
       await vi.advanceTimersByTimeAsync(1_000);
     } finally {
-      process.emit("SIGTERM", "SIGTERM");
+      process.emit(signal, signal);
       await run;
     }
 
     const output = runtimeOutput(runtime);
     expect(output).toContain("tool.result");
     expect(output).toContain("sqlite ok");
+    expect(runtime.exit).toHaveBeenCalledOnce();
+    expect(runtime.exit).toHaveBeenCalledWith(exitCode);
+    expect(process.listenerCount("SIGINT")).toBe(sigintListeners);
+    expect(process.listenerCount("SIGTERM")).toBe(sigtermListeners);
   });
 
   it("exits unsuccessfully when the followed trajectory store becomes unreadable", async () => {
     vi.useFakeTimers();
     const runtime = makeRuntime();
+    const sigintListeners = process.listenerCount("SIGINT");
+    const sigtermListeners = process.listenerCount("SIGTERM");
     await writeSessionEntry();
     await appendEvents([makeEvent({ type: "session.started", ts: "2026-05-18T12:04:17.000Z" })]);
 
@@ -429,7 +441,26 @@ describe("sessionsTailCommand", () => {
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining(`Failed to read trajectory progress for ${sessionKey}`),
     );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(vi.mocked(runtime.exit).mock.calls).toEqual([[1]]);
+    expect(process.listenerCount("SIGINT")).toBe(sigintListeners);
+    expect(process.listenerCount("SIGTERM")).toBe(sigtermListeners);
+  });
+
+  it.each([
+    { agent: "" },
+    { agent: "   " },
+    { agent: "", sessionKey },
+    { agent: "   ", sessionKey },
+  ])("rejects an explicit blank agent without inferring a store: %j", async (opts) => {
+    mocks.getRuntimeConfig.mockReturnValue({});
+    const runtime = makeRuntime();
+    const result = sessionsTailCommand(opts, runtime);
+
+    await expect(result).rejects.toBeInstanceOf(ExpectedCliError);
+    await expect(result).rejects.toMatchObject({ message: "--agent must not be blank" });
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("resolves the target store from a fully qualified non-default agent session key", async () => {

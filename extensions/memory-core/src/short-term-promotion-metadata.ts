@@ -1,6 +1,5 @@
 // Memory Core plugin module formats deterministic recall metadata for promoted entries.
 import { extractProjectKeysFromCuratedEntry } from "openclaw/plugin-sdk/memory-core-host-engine-curated";
-import { sliceCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { PromotionCandidate } from "./short-term-promotion-types.js";
 
 const MAX_PROMOTION_TRIGGER_PHRASE_CHARS = 64;
@@ -18,7 +17,7 @@ function normalizePromotionTriggerPhrase(value: string): string {
     .replace(/[\r\n,;]+/gu, " ")
     .replace(/\s+/gu, " ")
     .trim();
-  return sliceCodePoints(singleLine, 0, MAX_PROMOTION_TRIGGER_PHRASE_CHARS).trimEnd();
+  return Array.from(singleLine).slice(0, MAX_PROMOTION_TRIGGER_PHRASE_CHARS).join("").trimEnd();
 }
 
 function resolvePromotionProjectKey(

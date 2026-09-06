@@ -1,7 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { lstatSync, mkdirSync, readlinkSync, realpathSync, rmdirSync, statSync } from "node:fs";
 import path from "node:path";
-import { countCodePoints } from "@openclaw/normalization-core/code-points";
 import { resolveStateDir } from "../config/paths.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -11,6 +10,10 @@ import {
 } from "./agent-deletion-journal.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "./openclaw-agent-db-registry-listing.js";
+import {
+  invalidateOpenClawAgentDatabaseValidation,
+  invalidateOpenClawAgentDatabaseValidationsForAgent,
+} from "./openclaw-agent-db-validation-cache.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
 import { resolveOpenClawAgentDatabaseStoredPath } from "./openclaw-state-db.paths.js";
@@ -71,7 +74,7 @@ function shouldProbeUnicodeCaseVariants(left: string, right: string): boolean {
   // Keep dotted-I expansions distinct even on filesystems that collapse them.
   // That existing isolation contract avoids locale-sensitive owner aliasing.
   return !(
-    countCodePoints(left) !== countCodePoints(right) &&
+    Array.from(left).length !== Array.from(right).length &&
     lowercaseEquivalent &&
     !uppercaseEquivalent
   );
@@ -621,7 +624,7 @@ export function registerOpenClawAgentDatabase(params: {
   const lastSeenAt = Date.now();
   runOpenClawStateWriteTransaction(
     (database) => {
-      assertAgentDeletionPathFence(database.db, deletionFence);
+      assertAgentDeletionPathFence(database, deletionFence);
       const storedPath = resolveOpenClawAgentDatabaseStoredPath(database.path, params.path);
       const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database.db);
       executeSqliteQuerySync(
@@ -646,6 +649,7 @@ export function registerOpenClawAgentDatabase(params: {
     },
     { env: params.env },
   );
+  invalidateOpenClawAgentDatabaseValidation(params.path);
   invalidateRegisteredAgentDatabasesMemo({ env: params.env });
 }
 
@@ -702,6 +706,7 @@ export function unregisterOpenClawAgentDatabase(params: {
     },
     { env: params.env },
   );
+  invalidateOpenClawAgentDatabaseValidation(params.path);
   invalidateRegisteredAgentDatabasesMemo({ env: params.env });
 }
 
@@ -720,5 +725,6 @@ export function unregisterOpenClawAgentDatabases(params: {
     },
     { env: params.env },
   );
+  invalidateOpenClawAgentDatabaseValidationsForAgent(params.agentId);
   invalidateRegisteredAgentDatabasesMemo({ env: params.env });
 }

@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import { sliceCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
 
 function shortSessionHash(sessionKey: string): string {
   return createHash("sha256").update(sessionKey).digest("hex").slice(0, 32);
@@ -42,7 +41,7 @@ export function resolveDiscussionLabel(
 export function truncateDiscussionDisplayTitle(label: string): string {
   // Mirror the server's normalization (trim after the 200-rune cut) so the
   // display_title equality assertions cannot fail on a whitespace boundary.
-  return sliceCodePoints(label, 0, 200).trim();
+  return Array.from(label).slice(0, 200).join("").trim();
 }
 
 export function slugifyDiscussionLabel(label: string, sessionKey: string): string {

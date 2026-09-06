@@ -1,3 +1,4 @@
+import type { GatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import type { FailoverReason } from "./signal.js";
 
 type AssistantRequestFailureCopyFacts = {
@@ -5,6 +6,22 @@ type AssistantRequestFailureCopyFacts = {
   model?: string;
   reason?: FailoverReason | null;
   status?: number;
+  storageFailure?: GatewayStorageFailure;
+};
+
+const STORAGE_FAILURE_COPY: Record<GatewayStorageFailure, string> = {
+  SQLITE_BUSY:
+    "the Gateway state database was busy (SQLite: database is locked). Retry; if it repeats, check Gateway storage health.",
+  SQLITE_LOCKED:
+    "the Gateway state database was locked (SQLite: database table is locked). Retry; if it repeats, check Gateway storage health.",
+  SQLITE_FULL:
+    "the Gateway state database was full (SQLite: database or disk is full). Free disk space on the Gateway host and retry.",
+  SQLITE_READONLY:
+    "the Gateway state database was read-only (SQLite: attempt to write a readonly database). Check Gateway storage permissions and retry.",
+  SQLITE_IOERR:
+    "the Gateway state database had an I/O error (SQLite: disk I/O error). Check Gateway storage health and filesystem access before retrying.",
+  transcript_writer_fenced:
+    "the transcript writer no longer owned this session. Retry in the current session; if it repeats, check Gateway logs.",
 };
 
 const ASSISTANT_REQUEST_FAILURE_REASON = {
@@ -30,6 +47,9 @@ const ASSISTANT_REQUEST_FAILURE_REASON = {
 export function renderAssistantRequestFailureCopy(
   facts: AssistantRequestFailureCopyFacts,
 ): string | undefined {
+  if (facts.storageFailure) {
+    return `⚠️ Agent run failed: ${STORAGE_FAILURE_COPY[facts.storageFailure]}`;
+  }
   const provider = facts.provider?.trim();
   const model = facts.model?.trim();
   const target = provider && model ? `${provider}/${model}` : provider || model;
@@ -46,8 +66,11 @@ export function renderAssistantRequestFailureCopy(
     httpStatus <= 599
       ? `HTTP ${httpStatus}`
       : undefined;
-  if (!target && !reason && !status) {
-    return undefined;
+  // A recognized provider terminal can have no displayable reason.
+  const unclassified =
+    !facts.reason || facts.reason === "unclassified" || facts.reason === "unknown";
+  if (!reason && !status && (!target || unclassified)) {
+    return target ? `⚠️ Agent run failed (${model ? "model" : "provider"}: ${target}).` : undefined;
   }
   const details = [reason, status].filter(Boolean);
   const summary = `⚠️ ${target ? `${target} request failed` : "LLM request failed"}${details.length > 0 ? ` (${details.join(", ")})` : ""}.`;

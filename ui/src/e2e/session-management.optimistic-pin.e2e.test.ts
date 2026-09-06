@@ -13,6 +13,7 @@ import {
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
+const rosterMatch = { includeGlobal: true };
 
 const candidateKey = "agent:main:candidate";
 const companionKey = "agent:main:companion";
@@ -68,13 +69,13 @@ suite.define(() => {
       // optimistic snapshot write in the mutation owner.
       await expect.poll(() => zoneEntry.count()).toBe(1);
       await expect.poll(() => row.count()).toBe(0);
-      expect(await gateway.getRequests("sessions.list")).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(1);
       await captureUiProof(suite, page, "optimistic-pin-02-pinned-while-in-flight.png");
 
       await gateway.setMethodResponse("sessions.list", pinnedList());
       await gateway.resolveDeferred("sessions.patch", { ok: true, key: candidateKey, path: "" });
 
-      await expect.poll(() => gateway.getRequests("sessions.list")).toHaveLength(2);
+      await expect.poll(() => gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(2);
       await expect.poll(() => zoneEntry.count()).toBe(1);
       await expect.poll(() => row.count()).toBe(0);
       expect(await page.locator("[data-sidebar-session-error]").count()).toBe(0);
@@ -167,13 +168,13 @@ suite.define(() => {
       // unpin already replaced locally.
       await gateway.setMethodResponse("sessions.list", pinnedList());
       await gateway.resolveDeferred("sessions.patch", { ok: true, key: candidateKey, path: "" });
-      await expect.poll(() => gateway.getRequests("sessions.list")).toHaveLength(2);
+      await expect.poll(() => gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(2);
       await expect.poll(() => row.count()).toBe(1);
       expect(await zoneEntry.count()).toBe(0);
 
       await gateway.setMethodResponse("sessions.list", unpinnedList());
       await gateway.resolveDeferred("sessions.patch", { ok: true, key: candidateKey, path: "" });
-      await expect.poll(() => gateway.getRequests("sessions.list")).toHaveLength(3);
+      await expect.poll(() => gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(3);
       await expect.poll(() => row.count()).toBe(1);
       expect(await zoneEntry.count()).toBe(0);
       await captureUiProof(suite, page, "optimistic-pin-06-newest-intent-wins.png");

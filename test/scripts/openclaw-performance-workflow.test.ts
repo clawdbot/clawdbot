@@ -42,6 +42,7 @@ type WorkflowJob = {
   outputs?: Record<string, string>;
   permissions?: Record<string, string>;
   "runs-on"?: string;
+  "timeout-minutes"?: number;
   steps?: WorkflowStep[];
   strategy?: {
     matrix?: {
@@ -53,6 +54,19 @@ type WorkflowJob = {
 type Workflow = {
   env?: Record<string, string>;
   jobs?: Record<string, WorkflowJob>;
+  on?: {
+    workflow_dispatch?: {
+      inputs?: Record<
+        string,
+        {
+          default?: boolean | string;
+          options?: string[];
+          required?: boolean;
+          type?: string;
+        }
+      >;
+    };
+  };
 };
 
 function readWorkflow(): Workflow {
@@ -111,6 +125,109 @@ function runCandidateTrustClassification({
 }
 
 describe("OpenClaw performance workflow", () => {
+  it("keeps Vitest pair benchmarking opt-in and exact-head bound", () => {
+    const workflow = readWorkflow();
+    const inputs = workflow.on?.workflow_dispatch?.inputs;
+    const benchmark = workflow.jobs?.vitest_pair;
+    const validation = findStep("Validate Vitest pair request", "vitest_pair");
+    const helper = findStep("Checkout Vitest pair helper", "vitest_pair");
+    const candidate = findStep("Checkout Vitest pair candidate", "vitest_pair");
+    const baseline = findStep("Checkout Vitest pair baseline", "vitest_pair");
+    const run = findStep("Run Vitest pair benchmark", "vitest_pair");
+    const finalize = findStep("Finalize Vitest pair artifact", "vitest_pair");
+    const upload = findStep("Upload Vitest pair artifact", "vitest_pair");
+
+    expect(inputs?.mode).toMatchObject({
+      default: "kova",
+      required: false,
+      type: "choice",
+      options: ["kova", "vitest-pair"],
+    });
+    expect(inputs?.baseline_ref).toMatchObject({
+      default: "",
+      required: false,
+      type: "string",
+    });
+    expect(benchmark?.if).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'vitest-pair' }}",
+    );
+    expect(benchmark?.["runs-on"]).toBe("ubuntu-24.04");
+    expect(benchmark?.["timeout-minutes"]).toBe(180);
+    expect(benchmark?.permissions).toEqual({ contents: "read" });
+    expect(JSON.stringify(benchmark)).not.toContain("secrets.");
+    expect(JSON.stringify(benchmark)).not.toContain("cache-mode");
+    expect(validation.run).toContain('[[ "$RUN_ATTEMPT" == "1" ]]');
+    expect(validation.run).toContain('[[ "$BASELINE_REF" =~ ^[0-9a-f]{40}$ ]]');
+    expect(validation.run).toContain('[[ "$TARGET_REF" =~ ^[0-9a-f]{40}$ ]]');
+    expect(validation.run).toContain('[[ "$TARGET_REF" == "$WORKFLOW_SHA" ]]');
+    for (const checkout of [helper, candidate, baseline]) {
+      expect(checkout.with?.["persist-credentials"]).toBe(false);
+      expect(checkout.with?.["fetch-depth"]).toBe(1);
+    }
+    expect(helper.with?.ref).toBe("${{ github.workflow_sha }}");
+    expect(candidate.with?.ref).toBe("${{ github.workflow_sha }}");
+    expect(baseline.with?.ref).toBe("${{ inputs.baseline_ref }}");
+    expect(run.run).toContain("scripts/vitest-pair-benchmark.mts");
+    expect(run.run).toContain("--baseline-sha");
+    expect(run.run).toContain("--candidate-sha");
+    expect(run.run).toContain('--scratch "$VITEST_PAIR_ROOT/scratch"');
+    expect(finalize.if).toBe("${{ always() }}");
+    expect(upload.if).toBe("${{ always() }}");
+    expect(upload.with?.name).toBe("vitest-pair-${{ github.run_id }}-${{ github.run_attempt }}");
+    expect(upload.with?.name).not.toContain("inputs.");
+    expect(upload.with?.["if-no-files-found"]).toBe("error");
+    expect(upload.with?.["retention-days"]).toBe(30);
+  });
+
+  posixIt("retains a terminal manifest when slash-containing refs fail validation", () => {
+    const validation = findStep("Validate Vitest pair request", "vitest_pair");
+    const root = tempDirs.make("vitest-pair-invalid-ref-");
+    const output = join(root, "results");
+    mkdirSync(output);
+    const target = "a".repeat(40);
+    const result = spawnSync("bash", ["-c", validation.run ?? ""], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        BASELINE_REF: "refs/heads/main",
+        RUN_ATTEMPT: "1",
+        TARGET_REF: target,
+        VITEST_PAIR_OUTPUT: output,
+        WORKFLOW_SHA: target,
+      },
+    });
+
+    expect(result.status).toBe(1);
+    expect(JSON.parse(readFileSync(join(output, "terminal-manifest.json"), "utf8"))).toMatchObject({
+      status: "failure",
+      phase: "input-validation",
+      error: "baseline_ref must be an exact lowercase 40-character SHA",
+    });
+  });
+
+  it("fully isolates Vitest pair mode from Kova and publication", () => {
+    const jobs = readWorkflow().jobs;
+    const guard = jobs?.vitest_pair_guard;
+    const verify = findStep("Verify isolated Vitest pair result", "vitest_pair_guard");
+
+    for (const name of ["resolve_target", "kova", "source_performance"] as const) {
+      expect(jobs?.[name]?.if).toContain("inputs.mode != 'vitest-pair'");
+    }
+    expect(jobs?.publish?.if).toContain("inputs.mode != 'vitest-pair'");
+    expect(jobs?.artifact_only_guard?.if).toContain("inputs.mode != 'vitest-pair'");
+    expect(guard?.needs).toEqual([
+      "resolve_target",
+      "kova",
+      "source_performance",
+      "publish",
+      "artifact_only_guard",
+      "vitest_pair",
+    ]);
+    expect(guard?.permissions).toEqual({ contents: "read" });
+    expect(verify.run).toContain('"$result" != "skipped"');
+    expect(verify.run).toContain('"$VITEST_PAIR_RESULT" != "success"');
+  });
+
   it("uses an optional dispatch identifier to name parent-owned runs", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
 
@@ -525,10 +642,11 @@ describe("OpenClaw performance workflow", () => {
 
     expect(baseline.if).toBeUndefined();
     expect(baseline.env?.CLAWGRIT_REPORTS_TOKEN).toBeUndefined();
+    expect(baseline.env?.GH_TOKEN).toBe("${{ github.token }}");
+    expect(run).toContain('remote = "https://github.com/openclaw/clawgrit-reports.git"');
     expect(run).toContain(
-      '"remote", "add", "origin", "https://github.com/openclaw/clawgrit-reports.git"',
+      'fetch(reports, "main", blobless=True, max_attempts=3, retry_failures=True)',
     );
-    expect(run).toContain('"fetch", "--filter=blob:none", "--depth=1", "origin", "main"');
     expect(run).toContain('"ls-tree", "--name-only", "FETCH_HEAD", "--", pointer');
     expect(run).toContain('"show", f"FETCH_HEAD:{pointer}"');
     expect(run).toContain('"sparse-checkout", "init", "--no-cone"');
@@ -648,7 +766,7 @@ describe("OpenClaw performance workflow", () => {
 
     expect(publisher?.needs).toEqual(["resolve_target", "kova", "source_performance"]);
     expect(publisher?.if).toBe(
-      "${{ always() && needs.resolve_target.outputs.secret_eligible == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_reports == true)) && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' && needs.source_performance.result != 'cancelled' }}",
+      "${{ always() && (github.event_name == 'schedule' || inputs.mode != 'vitest-pair') && needs.resolve_target.outputs.secret_eligible == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_reports == true)) && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' && needs.source_performance.result != 'cancelled' }}",
     );
     expect(publisher?.["runs-on"]).toBe("ubuntu-24.04");
     expect(publisher?.permissions?.actions).toBe("read");
@@ -690,7 +808,7 @@ describe("OpenClaw performance workflow", () => {
 
     expect(guard?.needs).toEqual(["resolve_target", "kova", "publish"]);
     expect(guard?.if).toBe(
-      "${{ always() && github.event_name == 'workflow_dispatch' && inputs.publish_reports != true }}",
+      "${{ always() && github.event_name == 'workflow_dispatch' && inputs.mode != 'vitest-pair' && inputs.publish_reports != true }}",
     );
     expect(guard?.permissions?.contents).toBe("read");
     expect(verify.env?.PUBLISH_RESULT).toBe("${{ needs.publish.result }}");
@@ -761,7 +879,7 @@ describe("OpenClaw performance workflow", () => {
     );
   });
 
-  it("keeps app credentials out of artifact processing and scopes them to Git push", () => {
+  it("keeps app credentials out of artifact processing and scopes them to report Git operations", () => {
     const workflow = readWorkflow();
     const kovaJob = workflow.jobs?.kova;
     const artifact = findStep("Resolve Kova artifact", "publish");
@@ -813,10 +931,10 @@ describe("OpenClaw performance workflow", () => {
     expect(publish.if).toContain("steps.prepare.outputs.already_published != 'true'");
     expect(publish.run).not.toContain("${{ steps.kova.outputs.");
     expect(publish.run).toContain('os.environ.pop("CLAWGRIT_REPORTS_APP_TOKEN", "")');
-    expect(publish.run).toContain('"GIT_CONFIG_KEY_0": "core.hooksPath"');
-    expect(publish.run).toContain('"GIT_CONFIG_VALUE_0": "/dev/null"');
-    expect(publish.run).toContain('"GIT_CONFIG_KEY_1": "http.https://github.com/.extraheader"');
-    expect(publish.run).toContain('"GIT_CONFIG_VALUE_1": f"AUTHORIZATION: basic {auth_header}"');
+    expect(publish.run).toContain('local = ("-c", "core.hooksPath=/dev/null")');
+    expect(publish.run).toContain(
+      'git_auth_environment("https://github.com/openclaw/clawgrit-reports.git", token)',
+    );
     expect(publish.run).not.toContain("export GIT_CONFIG_");
     expect(readFileSync(WORKFLOW, "utf8")).not.toContain("https://x-access-token:");
   });

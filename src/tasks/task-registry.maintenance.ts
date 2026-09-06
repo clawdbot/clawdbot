@@ -243,13 +243,14 @@ function buildSessionEntryLookup(entries: SessionEntrySummary[]): SessionEntryLo
   };
 }
 
+// Reconciliation needs existence and recovery metadata, never saved prompt snapshots.
 function getSessionEntryLookup(
   storePath: string,
   context?: BackingSessionLookupContext,
 ): SessionEntryLookup {
   if (!context) {
     return buildSessionEntryLookup(
-      taskRegistryMaintenanceRuntime.listSessionEntries({ storePath }),
+      taskRegistryMaintenanceRuntime.listSessionEntries({ storePath, projection: "list" }),
     );
   }
   const cached = context.sessionEntriesByPath.get(storePath);
@@ -257,7 +258,7 @@ function getSessionEntryLookup(
     return cached;
   }
   const lookup = buildSessionEntryLookup(
-    taskRegistryMaintenanceRuntime.listSessionEntries({ storePath }),
+    taskRegistryMaintenanceRuntime.listSessionEntries({ storePath, projection: "list" }),
   );
   context.sessionEntriesByPath.set(storePath, lookup);
   return lookup;

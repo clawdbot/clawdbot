@@ -4,6 +4,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { attachModelProviderLocalServiceReconciler } from "../agents/provider-local-service-reconcile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getLoadedRuntimePluginRegistry,
@@ -31,8 +32,6 @@ import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-s
 import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
 import type {
   ProviderPlugin,
-  ProviderExtraParamsForTransportContext,
-  ProviderPrepareExtraParamsContext,
   ProviderResolveAuthProfileIdContext,
   ProviderFollowupFallbackRouteContext,
   ProviderFollowupFallbackRouteResult,
@@ -74,7 +73,10 @@ export function attachModelProviderRuntimePluginHandle<TModel extends object>(
   model: TModel,
   runtimeHandle: ProviderRuntimePluginHandle,
 ): TModel {
-  const next = { ...model } as TModel & ModelWithProviderRuntimePluginHandle;
+  const next = attachModelProviderLocalServiceReconciler(
+    model,
+    runtimeHandle.plugin?.reconcileLocalService,
+  ) as TModel & ModelWithProviderRuntimePluginHandle;
   next[MODEL_PROVIDER_RUNTIME_PLUGIN_HANDLE_SYMBOL] = runtimeHandle;
   return next;
 }
@@ -194,7 +196,7 @@ function findProviderRuntimePluginInRegistry(params: {
   provider: string;
   ownerRefs: readonly string[];
 }): ProviderPlugin | undefined {
-  return listProviderRuntimePluginsInRegistry(params.registry).find((plugin) => {
+  const entry = params.registry.providers.find(({ provider: plugin }) => {
     if (params.ownerRefs.length > 0) {
       return (
         matchesProviderLiteralId(plugin, params.provider) ||
@@ -203,14 +205,7 @@ function findProviderRuntimePluginInRegistry(params: {
     }
     return matchesProviderPluginRef(plugin, params.provider);
   });
-}
-
-function listProviderRuntimePluginsInRegistry(
-  registry: PluginRegistry,
-): Array<ProviderPlugin & { pluginId: string }> {
-  return registry.providers.map((entry) =>
-    Object.assign({}, entry.provider, { pluginId: entry.pluginId }),
-  );
+  return entry ? Object.assign({}, entry.provider, { pluginId: entry.pluginId }) : undefined;
 }
 
 function hasConfiguredModelProvider(params: {
@@ -234,12 +229,16 @@ export function resolveLoadedProviderPluginsForHooks(params: {
 }): ProviderPlugin[] | undefined {
   const filterRegistryPlugins = (registry: PluginRegistry) => {
     const onlyPluginIds = params.onlyPluginIds ? new Set(params.onlyPluginIds) : undefined;
-    return listProviderRuntimePluginsInRegistry(registry).filter(
-      (plugin) =>
-        (!onlyPluginIds || onlyPluginIds.has(plugin.pluginId)) &&
-        (!params.providerRefs?.length ||
-          params.providerRefs.some((providerRef) => matchesProviderPluginRef(plugin, providerRef))),
-    );
+    return registry.providers
+      .filter(
+        ({ pluginId, provider }) =>
+          (!onlyPluginIds || onlyPluginIds.has(pluginId)) &&
+          (!params.providerRefs?.length ||
+            params.providerRefs.some((providerRef) =>
+              matchesProviderPluginRef(provider, providerRef),
+            )),
+      )
+      .map(({ pluginId, provider }) => Object.assign({}, provider, { pluginId }));
   };
   const generationRegistry = getPluginRuntimeGenerationRegistry();
   if (generationRegistry) {
@@ -437,34 +436,6 @@ export function ensureProviderRuntimePluginHandle(
   return params.runtimeHandle;
 }
 
-export function prepareProviderExtraParams(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  runtimeHandle?: ProviderRuntimePluginHandle;
-  context: ProviderPrepareExtraParamsContext;
-}) {
-  return (
-    ensureProviderRuntimePluginHandle(params).plugin?.prepareExtraParams?.(params.context) ??
-    undefined
-  );
-}
-
-export function resolveProviderExtraParamsForTransport(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  runtimeHandle?: ProviderRuntimePluginHandle;
-  context: ProviderExtraParamsForTransportContext;
-}) {
-  return (
-    ensureProviderRuntimePluginHandle(params).plugin?.extraParamsForTransport?.(params.context) ??
-    undefined
-  );
-}
-
 export function resolveProviderAuthProfileId(params: {
   provider: string;
   config?: OpenClawConfig;
@@ -490,19 +461,6 @@ export function resolveProviderFollowupFallbackRoute(params: {
   return (
     ensureProviderRuntimePluginHandle(params).plugin?.followupFallbackRoute?.(params.context) ??
     undefined
-  );
-}
-
-export function wrapProviderStreamFn(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  runtimeHandle?: ProviderRuntimePluginHandle;
-  context: ProviderWrapStreamFnContext;
-}) {
-  return (
-    ensureProviderRuntimePluginHandle(params).plugin?.wrapStreamFn?.(params.context) ?? undefined
   );
 }
 

@@ -91,6 +91,63 @@ describe("OpenClaw profile schema", () => {
 });
 
 describe("OpenClaw profile reader", () => {
+  it.each([
+    ["anchor", "agent: &agent {}", "anchors"],
+    ["alias", "agent: *agent", "aliases"],
+    ["tag", "agent: !!map {}", "explicit tags"],
+    ["merge", "agent: { <<: {} }", "merge keys"],
+  ])(
+    "rejects profile YAML %s with its profile diagnostic",
+    async (_label, declaration, feature) => {
+      const root = tempDirs.make("openclaw-claw-profile-yaml-");
+      await mkdir(join(root, "profiles"));
+      const manifestPath = join(root, "openclaw.claw.json");
+      await writeFile(manifestPath, JSON.stringify({ schemaVersion: 1, agent: { id: "triage" } }));
+      await writeFile(join(root, "profiles", "openclaw.yml"), `schemaVersion: 1\n${declaration}\n`);
+
+      const result = await readClawManifestFile(manifestPath);
+
+      expect(result).toMatchObject({
+        ok: false,
+        diagnostics: [
+          {
+            level: "error",
+            phase: "parse",
+            path: "$",
+            code: "unsupported_openclaw_profile_yaml_feature",
+            message: `profiles/openclaw.yml uses ${feature}; OpenClaw profile YAML must map directly to JSON data.`,
+          },
+        ],
+      });
+    },
+  );
+
+  it.each([
+    ["duplicate key", "schemaVersion: 1\nschemaVersion: 1\nagent: {}\n"],
+    ["invalid syntax", "schemaVersion: 1\nagent: [\n"],
+  ])("reports a profile YAML %s as a parse failure", async (_label, profile) => {
+    const root = tempDirs.make("openclaw-claw-profile-yaml-invalid-");
+    await mkdir(join(root, "profiles"));
+    const manifestPath = join(root, "openclaw.claw.json");
+    await writeFile(manifestPath, JSON.stringify({ schemaVersion: 1, agent: { id: "triage" } }));
+    await writeFile(join(root, "profiles", "openclaw.yml"), profile);
+
+    const result = await readClawManifestFile(manifestPath);
+
+    expect(result).toMatchObject({
+      ok: false,
+      diagnostics: [
+        {
+          level: "error",
+          phase: "parse",
+          path: "$",
+          code: "invalid_openclaw_profile",
+          message: expect.stringContaining("Could not parse profiles/openclaw.yml:"),
+        },
+      ],
+    });
+  });
+
   it("loads and integrity-binds the conventional profile", async () => {
     const root = tempDirs.make("openclaw-claw-profile-");
     await mkdir(join(root, "profiles"));

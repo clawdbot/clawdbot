@@ -185,13 +185,13 @@ export async function retireCodexConversationThreadBinding(params: {
   allowUntracked?: boolean;
   afterClear?: () => Promise<void>;
 }): Promise<boolean> {
-  const expected = await params.bindingStore.read(params.identity);
+  const expected = params.bindingStore.read(params.identity);
   if (!expected || (params.expectedThreadId && expected.threadId !== params.expectedThreadId)) {
     return false;
   }
   return await withCodexAppServerThreadMutation(expected.threadId, () =>
     params.bindingStore.withLease(params.identity, async () => {
-      const current = await params.bindingStore.read(params.identity);
+      const current = params.bindingStore.read(params.identity);
       if (
         !current ||
         !isSameCodexAppServerThreadOwner(current, expected) ||

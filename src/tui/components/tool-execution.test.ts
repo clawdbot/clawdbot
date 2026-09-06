@@ -1,6 +1,6 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
-import { splitAnsiSegments } from "../../../packages/terminal-core/src/ansi-sequences.js";
+import { iterateAnsiSegments } from "../../../packages/terminal-core/src/ansi-sequences.js";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { ToolExecutionComponent } from "./tool-execution.js";
 
@@ -164,7 +164,7 @@ describe("ToolExecutionComponent", () => {
     const raw = lines.join("\n");
     const normalized = normalizeTestText(raw).replace(/[\u2067\u2069]/gu, "");
     const linkedRtl = lines.find((line) => line.includes("عنصر") && line.includes("\x1b]8;;"));
-    const targets = splitAnsiSegments(raw).flatMap((segment) => {
+    const targets = [...iterateAnsiSegments(raw)].flatMap((segment) => {
       if (segment.kind !== "ansi" || !segment.value.startsWith("\x1b]8;;")) {
         return [];
       }

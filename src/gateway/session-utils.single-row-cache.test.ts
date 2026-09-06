@@ -36,6 +36,7 @@ const subagentRegistryReadMock = vi.hoisted(() => {
     }
     return {
       runsByControllerSessionKey,
+      swarmRunsByRequesterSessionKey: new Map(),
       getDisplaySubagentRun: vi.fn(
         (childSessionKey: string) => runsByChildSessionKey.get(childSessionKey) ?? null,
       ),
@@ -76,10 +77,11 @@ const subagentRegistryReadMock = vi.hoisted(() => {
 
 vi.mock("../agents/subagents/registry/subagent-registry-read.js", () => subagentRegistryReadMock);
 
+import { listSessionFixture } from "./session-list.test-support.js";
 import {
   buildGatewaySessionInfo,
-  listSessionsFromStoreAsync,
   loadGatewaySessionEntryReadOnly,
+  loadGatewaySessionLifecycleSnapshot,
   loadGatewaySessionRow,
   loadSessionEntry,
 } from "./session-utils.js";
@@ -219,6 +221,42 @@ describe("single gateway session row child projections", () => {
     vi.clearAllMocks();
   });
 
+  test("retains the loaded owner after a qualified main alias becomes global", async () => {
+    await withStateDirEnv("openclaw-single-row-global-owner-", async () => {
+      const cfg: OpenClawConfig = {
+        session: { scope: "global" },
+        agents: {
+          entries: {
+            main: { default: true, model: { primary: "openai/gpt-5.4" } },
+            research: { model: { primary: "openai/gpt-5.5" } },
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(cfg, cfg);
+      await replaceSessionEntry(
+        { agentId: "research", sessionKey: "global" },
+        { sessionId: "research-main", updatedAt: 42 },
+      );
+      const key = "agent:research:main";
+      expect(loadGatewaySessionEntryReadOnly(key)).toMatchObject({
+        agentId: "research",
+        canonicalKey: "global",
+        entry: { sessionId: "research-main" },
+      });
+      expect.soft(loadGatewaySessionLifecycleSnapshot(key).row).toMatchObject({
+        key: "global",
+        sessionId: "research-main",
+        agentId: "research",
+        model: "gpt-5.5",
+      });
+      expect(loadGatewaySessionRow(key, { agentId: "research" })).toMatchObject({
+        key: "global",
+        agentId: "research",
+        model: "gpt-5.5",
+      });
+    });
+  });
+
   test.each([undefined, false])(
     "reads only the selected session while preserving projections and hidden effects (clone: %s)",
     async (clone) => {
@@ -273,6 +311,9 @@ describe("single gateway session row child projections", () => {
             });
             expect(metadata.entry?.skillsSnapshot).toBeUndefined();
             expect(metadata.entry?.systemPromptReport).toBeUndefined();
+            expect(parse.mock.calls.some(([value]) => value.includes("saved skill prompt"))).toBe(
+              false,
+            );
             expect(loadSessionEntry("main", { agentId: MAIN_AGENT_ID, clone })).toMatchObject({
               agentId: metadata.agentId,
               canonicalKey: metadata.canonicalKey,
@@ -324,11 +365,10 @@ describe("single gateway session row child projections", () => {
       async ({ now, storePath }) => {
         const store: Record<string, SessionEntry> = {
           "agent:main:subagent:parent-a": parentSession("parent-a", now),
-          "agent:main:subagent:child-a": runningChildSession(
-            "child-a",
-            "agent:main:subagent:parent-a",
-            now,
-          ),
+          "agent:main:subagent:child-a": {
+            ...runningChildSession("child-a", "agent:main:subagent:parent-a", now),
+            skillsSnapshot: { prompt: "child saved skill prompt", skills: [] },
+          },
           "agent:main:subagent:parent-b": parentSession("parent-b", now),
           "agent:main:subagent:child-b": runningChildSession(
             "child-b",
@@ -351,7 +391,9 @@ describe("single gateway session row child projections", () => {
           const loaded = loadGatewaySessionEntryReadOnly("agent:main:subagent:parent-a", {
             clone: false,
             includeStoreChildEntries: true,
+            projection: "list",
           });
+          expect(loaded.store["agent:main:subagent:child-a"]?.skillsSnapshot).toBeUndefined();
           const entriesSpy = vi.spyOn(Object, "entries");
           try {
             const row = buildGatewaySessionInfo({ ...loaded, key: loaded.canonicalKey, now });
@@ -445,7 +487,7 @@ describe("single gateway session row child projections", () => {
           },
         } as OpenClawConfig;
 
-        const asyncListed = await listSessionsFromStoreAsync({
+        const asyncListed = await listSessionFixture({
           cfg,
           storePath,
           store,

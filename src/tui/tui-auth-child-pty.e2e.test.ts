@@ -55,7 +55,7 @@ async function waitForProcessExit(pid: number, timeoutMs: number): Promise<void>
   throw new Error(`auth child ${String(pid)} remained alive`);
 }
 
-describe.sequential("TUI auth child lifecycle", () => {
+describe("TUI auth child lifecycle", { concurrent: false }, () => {
   afterEach(async () => {
     await disposeActiveTuiFixtures();
     for (const dir of tempDirs.splice(0)) {

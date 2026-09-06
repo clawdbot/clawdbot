@@ -1,8 +1,8 @@
 // Stores interactive plugin state and dedupe caches.
-import { createDedupeCache, resolveGlobalDedupeCache } from "../infra/dedupe.js";
-import type { DedupeCache } from "../infra/dedupe.js";
+import { resolveGlobalDedupeCache, type DedupeCache } from "../infra/dedupe.js";
+
 type InteractiveState = {
-  callbackDedupe: ReturnType<typeof createDedupeCache>;
+  callbackDedupe: DedupeCache;
   inflightCallbackDedupe: Set<string>;
 };
 
@@ -11,30 +11,19 @@ const PLUGIN_INTERACTIVE_CALLBACK_DEDUPE_KEY = Symbol.for(
   "openclaw.pluginInteractiveCallbackDedupe",
 );
 
-function createInteractiveCallbackDedupe(): DedupeCache {
-  return resolveGlobalDedupeCache(PLUGIN_INTERACTIVE_CALLBACK_DEDUPE_KEY, {
-    ttlMs: 5 * 60_000,
-    maxSize: 4096,
-  });
-}
-
-function createInteractiveState(): InteractiveState {
-  return {
-    callbackDedupe: createInteractiveCallbackDedupe(),
-    inflightCallbackDedupe: new Set<string>(),
-  };
-}
-
 function hydrateInteractiveState(value: unknown): InteractiveState {
   const state =
-    typeof value === "object" && value !== null
-      ? (value as Partial<InteractiveState>)
-      : ({} as Partial<InteractiveState>);
+    typeof value === "object" && value !== null ? (value as Partial<InteractiveState>) : undefined;
 
+  // Module copies can leave legacy partial state. Preserve its in-flight Set,
+  // but rebind the callback cache to the current process-global owner.
   return {
-    callbackDedupe: createInteractiveCallbackDedupe(),
+    callbackDedupe: resolveGlobalDedupeCache(PLUGIN_INTERACTIVE_CALLBACK_DEDUPE_KEY, {
+      ttlMs: 5 * 60_000,
+      maxSize: 4096,
+    }),
     inflightCallbackDedupe:
-      state.inflightCallbackDedupe instanceof Set
+      state?.inflightCallbackDedupe instanceof Set
         ? state.inflightCallbackDedupe
         : new Set<string>(),
   };
@@ -42,20 +31,9 @@ function hydrateInteractiveState(value: unknown): InteractiveState {
 
 function getState() {
   const globalStore = globalThis as Record<PropertyKey, unknown>;
-  const existing = globalStore[PLUGIN_INTERACTIVE_STATE_KEY];
-  if (existing !== undefined) {
-    const hydrated = hydrateInteractiveState(existing);
-    globalStore[PLUGIN_INTERACTIVE_STATE_KEY] = hydrated;
-    return hydrated;
-  }
-
-  const created = createInteractiveState();
-  globalStore[PLUGIN_INTERACTIVE_STATE_KEY] = created;
-  return created;
-}
-
-function getPluginInteractiveCallbackDedupeState() {
-  return getState().callbackDedupe;
+  const hydrated = hydrateInteractiveState(globalStore[PLUGIN_INTERACTIVE_STATE_KEY]);
+  globalStore[PLUGIN_INTERACTIVE_STATE_KEY] = hydrated;
+  return hydrated;
 }
 
 /** Claims an interactive callback dedupe key while the callback is in flight. */
@@ -97,6 +75,7 @@ export function releasePluginInteractiveCallbackDedupe(dedupeKey: string | undef
 
 /** Clears plugin interactive handlers and callback dedupe state. */
 export function clearPluginInteractiveHandlersState(): void {
-  getPluginInteractiveCallbackDedupeState().clear();
-  getState().inflightCallbackDedupe.clear();
+  const state = getState();
+  state.callbackDedupe.clear();
+  state.inflightCallbackDedupe.clear();
 }

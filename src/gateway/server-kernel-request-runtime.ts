@@ -1,9 +1,12 @@
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { retireQuestionChannelGateway } from "../infra/question-channel-runtime.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
+import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
 import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
 import { attachInitialGatewayLifetimeSidecars } from "./server-lifetime-sidecars.js";
+import type { GatewayHostLifecycle } from "./server-public.js";
 import { enforceSharedGatewaySessionGenerationForConfigWrite } from "./server-shared-auth-generation.js";
 import {
   getHealthCache,
@@ -19,6 +22,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   coreRuntime: GatewayCoreRuntime;
   log: GatewayLogger;
   logHealth: GatewayLogger;
+  hostLifecycle?: GatewayHostLifecycle;
 }) {
   const { coreRuntime: runtime, log, logHealth } = params;
   const {
@@ -28,6 +32,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     unavailableGatewayMethods,
     sessionCompanion,
     sessionObserver,
+    mentionInbox,
     getMcpAppSandboxPort,
     ensureSandboxHostPort,
     getPortalService,
@@ -121,6 +126,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   const gatewayRequestContext = await startupTrace.measure("gateway.request-context", async () => {
     const { createGatewayRequestContext } = await import("./server-request-context.js");
     return createGatewayRequestContext({
+      trackExecution: (run) => runtime.connectionWork.track(run),
       deps,
       configRevisionProjector,
       runtimeState,
@@ -131,6 +137,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       getGatewayMethodRegistry: getAttachedGatewayMethodRegistry,
       gatewayTlsFingerprint: gatewayTls.enabled ? gatewayTls.fingerprintSha256 : undefined,
       sessionObserver,
+      mentionInbox,
       getMcpAppSandboxPort,
       ensureSandboxHostPort,
       getPortalService,
@@ -232,6 +239,15 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       getConfigReloaderHotReloadStatus: kernel.getConfigReloaderHotReloadStatus,
     });
   });
+  kernel.addGatewayLifetimeSidecar({
+    stop: async () => {
+      // Received mutations and their finalizers join before lifetime sidecars stop.
+      // Retire this exact context too when no request ever bound its coordinator.
+      retireQuestionChannelGateway(runtime.connectionWork.signal);
+      await gatewayRequestContext.scopeUpgradeCoordinator?.close();
+    },
+  });
+  gatewayRequestContext.requestEntryLifetime = runtime.requestEntryLifetime;
   bindApprovalPublicationContext(gatewayRequestContext);
   await attachInitialGatewayLifetimeSidecars({
     chatMetadataLifecycle,
@@ -262,6 +278,27 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   gatewayInstanceRuntimeRef.current = gatewayInstanceRuntime;
   gatewayRequestContext.resolveGatewayContext = () =>
     gatewayInstanceRuntime.isAvailable() ? gatewayRequestContext : undefined;
+  // Detached RPC replies retain this availability fence after the request ends.
+  // Shutdown must still recognize them as work owned by this exact Gateway.
+  bindGatewayContextResolver(
+    gatewayRequestContext.resolveGatewayContext,
+    runtime.resolvePluginGatewayContext,
+  );
+  const hostLifecycle = params.hostLifecycle;
+  if (hostLifecycle) {
+    gatewayRequestContext.hostLifecycle = {
+      externalRestart: hostLifecycle.externalRestart,
+      request: (action, assertCaller) =>
+        hostLifecycle.request(action, () => {
+          if (!gatewayInstanceRuntime.isAvailable()) {
+            throw new Error(
+              "Gateway lifecycle is unavailable for this closed instance. Reconnect and retry.",
+            );
+          }
+          assertCaller();
+        }),
+    };
+  }
   gatewayRequestContext.approvalEvents = gatewayInstanceRuntime.approvalEvents;
   gatewayRequestContext.recoveryRuntime = gatewayInstanceRuntime.recovery;
   gatewayRequestContext.createAgentTurnFacade = gatewayInstanceRuntime.createAgentTurnFacade;

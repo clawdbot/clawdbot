@@ -92,6 +92,7 @@ async function callSubagentGatewayWithDispatchMode(
     const isChildRunLaunch = request.method === "agent";
     const forceSyntheticClient = isChildRunLaunch || scopes != null;
     const dispatch = async (workerIdentity?: WorkerTurnExecutionIdentity) => {
+      request.assertDispatchCurrent?.();
       const operationalRunInstance = gatewayCaller?.workerTurnClaim
         ? workerIdentity?.operationalRunInstance
         : gatewayCaller?.operationalRunInstance;
@@ -121,6 +122,7 @@ async function callSubagentGatewayWithDispatchMode(
         withInProcessAgentRuntimeIdentity(
           {
             expectFinal: request.expectFinal,
+            sessionMutationCommitGuard: request.assertDispatchCurrent,
             ...(allowModelOverride ? { allowSyntheticModelOverride: true } : {}),
             ...(options?.agentRunTracking ? { agentRunTracking: options.agentRunTracking } : {}),
             ...(gatewayContextResolver ? { resolveGatewayContext: gatewayContextResolver } : {}),
@@ -150,8 +152,9 @@ async function callSubagentGatewayWithDispatchMode(
       : await dispatch();
     return { response, dispatchMode: "in_process" };
   }
-  const dispatchAgentRequest = (timeoutMs?: number | null) =>
-    sessionSpawnContext && gatewayCaller?.operationalRunInstance
+  const dispatchAgentRequest = (timeoutMs?: number | null) => {
+    request.assertDispatchCurrent?.();
+    return sessionSpawnContext && gatewayCaller?.operationalRunInstance
       ? runWithGatewaySessionSpawnContext(sessionSpawnContext, () =>
           runWithGatewaySessionSpawnParentExecutionIdentity(parentExecutionIdentityToken, () =>
             callGatewayTool(
@@ -162,11 +165,21 @@ async function callSubagentGatewayWithDispatchMode(
                 expectFinal: request.expectFinal,
                 scopes,
                 requireAgentRuntimeIdentity: true,
+                ...(request.assertDispatchCurrent
+                  ? {
+                      dispatchAuthority: {
+                        version: 2,
+                        kind: "source-bound",
+                        assertCurrent: request.assertDispatchCurrent,
+                      },
+                    }
+                  : {}),
               },
             ),
           ),
         )
       : deps.callGateway(typeof timeoutMs === "number" ? { ...request, timeoutMs } : request);
+  };
   // Only agent launches have an idempotency key backed by authoritative Gateway state.
   // Other methods must not repeat after a transport-ambiguous failure.
   const response =

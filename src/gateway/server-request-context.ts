@@ -28,6 +28,7 @@ type GatewayRequestContextClient = GatewayClient & {
 };
 
 type GatewayRequestContextParams = {
+  trackExecution: GatewayRequestContext["trackExecution"];
   deps: GatewayRequestContext["deps"];
   configRevisionProjector: GatewayRequestContext["configRevisionProjector"];
   runtimeState: Pick<
@@ -40,6 +41,7 @@ type GatewayRequestContextParams = {
   gatewayTlsFingerprint?: GatewayRequestContext["gatewayTlsFingerprint"];
   sessionCompanion: SessionCompanionService;
   sessionObserver: SessionObserverService;
+  mentionInbox?: GatewayRequestContext["mentionInbox"];
   getMcpAppSandboxPort?: GatewayRequestContext["getMcpAppSandboxPort"];
   ensureSandboxHostPort?: GatewayRequestContext["ensureSandboxHostPort"];
   getPortalService?: () => GatewayRequestContext["portalService"];
@@ -177,6 +179,7 @@ export function createGatewayRequestContext(
 ): GatewayRequestContextWithClientLookup {
   const scopeUpgradeCoordinator = new ScopeUpgradeCoordinator();
   const context: GatewayRequestContextWithClientLookup = {
+    trackExecution: params.trackExecution,
     deps: params.deps,
     configRevisionProjector: params.configRevisionProjector,
     // Keep cron reads live so config hot reload can swap cron/store state without rebuilding
@@ -195,6 +198,7 @@ export function createGatewayRequestContext(
     sessionViewerPresence: params.runtimeState.sessionViewerPresence,
     sessionCompanion: params.sessionCompanion,
     sessionObserver: params.sessionObserver,
+    mentionInbox: params.mentionInbox,
     notifyPluginMetadataChanged: params.notifyPluginMetadataChanged,
     getMcpAppSandboxPort: params.getMcpAppSandboxPort,
     ensureSandboxHostPort: params.ensureSandboxHostPort,

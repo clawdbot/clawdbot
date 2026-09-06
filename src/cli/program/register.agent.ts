@@ -204,7 +204,10 @@ export function registerAgentsCommands(program: Command): void {
     .command("set-identity")
     .description("Update an agent identity (name/theme/emoji/avatar)")
     .option("--agent <id>", "Agent id to update")
-    .option("--workspace <dir>", "Workspace directory used to locate the agent + IDENTITY.md")
+    .option(
+      "--workspace <dir>",
+      "Locate the agent and IDENTITY.md; does not change the stored workspace",
+    )
     .option("--identity-file <path>", "Explicit IDENTITY.md path to read")
     .option("--from-identity", "Read values from IDENTITY.md", false)
     .option("--name <name>", "Identity name")

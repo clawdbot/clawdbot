@@ -1,3 +1,4 @@
+import type { HumanMention } from "@openclaw/gateway-protocol";
 import type { MediaKind } from "@openclaw/media-core/constants";
 /**
  * Chat message types for the UI layer.
@@ -9,6 +10,8 @@ import type {
 import type { BrowserTabTarget } from "../../components/browser/browser-target.ts";
 import type { toolIcons } from "../../components/icons-tools.ts";
 import type { SenderIdentity } from "./sender-label.ts";
+
+export type { HumanMention };
 
 export type BrowserAnnotationAttachment = {
   modelContext: string;
@@ -59,6 +62,7 @@ export type ChatComposerMemoryFallback = {
   awaitingDefaults?: true;
   goalMode?: ChatGoalDraftMode;
   message: string;
+  mentions?: readonly HumanMention[];
   attachments: ChatAttachment[];
   storageFailed: boolean;
   draftRetry?: ChatComposerDraftRetry;
@@ -89,6 +93,7 @@ export type ToolApprovalReview = {
 export type ChatQueueItem = {
   id: string;
   text: string;
+  mentions?: readonly HumanMention[];
   createdAt: number;
   /** Operator-owned queue position; absent means "wherever arrival put it". */
   orderKey?: number;
@@ -262,6 +267,13 @@ export type MessageContentItem =
   | {
       type: "thinking";
       thinking: string;
+    }
+  | {
+      type: "omitted_media";
+      media: {
+        kind: "image";
+        sizeBytes?: number;
+      };
     }
   | {
       type: "attachment";

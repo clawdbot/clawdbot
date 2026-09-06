@@ -1,5 +1,6 @@
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
+import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "../code-mode-control-tools.js";
 import {
   applyEmbeddedAttemptToolsAllow,
@@ -56,6 +57,13 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
       });
       const allowedTools = filterTools(baselineTools, toolsAllow);
       if (!catalog) {
+        const executableTools: AnyAgentTool[] = [];
+        for (const tool of allowedTools) {
+          if (isAgentTool(tool)) {
+            executableTools.push(tool);
+          }
+        }
+        finalizeAgentToolAvailability(executableTools);
         return {
           tools: allowedTools,
           callableToolNames: normalizeUniqueStringEntries(allowedTools.map((tool) => tool.name)),

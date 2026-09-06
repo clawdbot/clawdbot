@@ -1,19 +1,15 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { pathExists, root } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-safety.js";
-import { findContainingAllowedSkillSymlinkTarget } from "../loading/symlink-targets.js";
 
 const ALLOWED_SUPPORT_FILE_ROOTS = new Set(
   "assets examples references scripts templates".split(" "),
 );
 export const MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES = 256 * 1024;
 
-type WorkspaceSkillSymlinkWritePolicy = {
-  allowWrites: boolean;
-  allowedTargetRealPaths: readonly string[];
-};
 type WorkspaceSkillSupportFileWrite = { path: string; content: string };
 type WorkspaceSkillSupportFileRestoration = {
   path: string;
@@ -21,10 +17,9 @@ type WorkspaceSkillSupportFileRestoration = {
   proposedContentHash: string;
 };
 
-type WorkspaceSkillWriteTargetParams = {
-  workspaceDir: string;
+type SkillsRootWriteTargetParams = {
+  skillsRoot: string;
   filePath: string;
-  symlinkPolicy: WorkspaceSkillSymlinkWritePolicy;
 };
 
 type PreparedWorkspaceSkillFileMutation = {
@@ -38,7 +33,7 @@ type PreparedWorkspaceSkillFileMutation = {
 
 export type PreparedWorkspaceSkillMutation = {
   mode: "create" | "update";
-  workspaceDir: string;
+  skillsRoot: string;
   skillDir: string;
   skillFile: PreparedWorkspaceSkillFileMutation;
   supportFiles: Array<PreparedWorkspaceSkillFileMutation & { path: string }>;
@@ -79,12 +74,10 @@ export function assertWorkspaceSkillSupportPathSetIsFileOnly(paths: readonly str
     if (!filePath.includes("/")) {
       throw new Error("Support file paths must include a file below an allowed support directory.");
     }
-  }
-  for (let index = 1; index < sorted.length; index += 1) {
-    const previous = sorted[index - 1];
-    const current = sorted[index];
-    if (previous && current?.startsWith(`${previous}/`)) {
-      throw new Error(`Support file paths cannot overlap: ${previous} and ${current}`);
+    // A parent may not neighbor its descendant when another name sorts between them.
+    const ancestor = sorted.find((candidate) => filePath.startsWith(`${candidate}/`));
+    if (ancestor) {
+      throw new Error(`Support file paths cannot overlap: ${ancestor} and ${filePath}`);
     }
   }
 }
@@ -120,20 +113,19 @@ export async function readWorkspaceSupportFile(params: {
 }
 
 export async function prepareWorkspaceSkillMutation(params: {
-  workspaceDir: string;
+  skillsRoot: string;
   skillDir: string;
   skillFile: string;
   content: string;
   supportFiles?: readonly WorkspaceSkillSupportFileWrite[];
   mode: "create" | "update";
-  symlinkPolicy: WorkspaceSkillSymlinkWritePolicy;
 }): Promise<PreparedWorkspaceSkillMutation> {
-  assertInsideWorkspace(params.workspaceDir, params.skillDir, "skill directory");
+  assertInsideSkillsRoot(params.skillsRoot, params.skillDir, "skill directory");
+  await fs.mkdir(params.skillsRoot, { recursive: true });
   const supportFiles = normalizeSupportFiles(params.supportFiles ?? []);
-  const skillTarget = await resolveWorkspaceSkillWriteTarget({
-    workspaceDir: params.workspaceDir,
+  const skillTarget = await resolveSkillsRootWriteTarget({
+    skillsRoot: params.skillsRoot,
     filePath: params.skillFile,
-    symlinkPolicy: params.symlinkPolicy,
   });
   const previousContent = await readWorkspaceSkillFile(params.skillFile);
   if (params.mode === "create" && previousContent !== null) {
@@ -146,10 +138,9 @@ export async function prepareWorkspaceSkillMutation(params: {
   const preparedSupportFiles: PreparedWorkspaceSkillMutation["supportFiles"] = [];
   for (const file of supportFiles) {
     const filePath = path.join(params.skillDir, ...file.path.split("/"));
-    const target = await resolveWorkspaceSkillWriteTarget({
-      workspaceDir: params.workspaceDir,
+    const target = await resolveSkillsRootWriteTarget({
+      skillsRoot: params.skillsRoot,
       filePath,
-      symlinkPolicy: params.symlinkPolicy,
     });
     const previousSupportContent = await readWorkspaceSupportFile({
       skillDir: params.skillDir,
@@ -170,7 +161,7 @@ export async function prepareWorkspaceSkillMutation(params: {
 
   return {
     mode: params.mode,
-    workspaceDir: params.workspaceDir,
+    skillsRoot: params.skillsRoot,
     skillDir: params.skillDir,
     skillFile: {
       filePath: params.skillFile,
@@ -184,34 +175,32 @@ export async function prepareWorkspaceSkillMutation(params: {
 }
 
 export async function prepareWorkspaceSkillRestoration(params: {
-  workspaceDir: string;
+  skillsRoot: string;
   skillDir: string;
   skillFile: string;
   previousContent: string | null;
   proposedContentHash: string;
   supportFiles?: readonly WorkspaceSkillSupportFileRestoration[];
   mode: "create" | "update";
-  symlinkPolicy: WorkspaceSkillSymlinkWritePolicy;
 }): Promise<PreparedWorkspaceSkillMutation> {
-  assertInsideWorkspace(params.workspaceDir, params.skillDir, "skill directory");
+  assertInsideSkillsRoot(params.skillsRoot, params.skillDir, "skill directory");
+  await fs.mkdir(params.skillsRoot, { recursive: true });
   const supportFiles = (params.supportFiles ?? []).map((file) => ({
     path: normalizeWorkspaceSkillSupportPath(file.path),
     previousContent: file.previousContent,
     proposedContentHash: file.proposedContentHash,
   }));
   assertWorkspaceSkillSupportPathSetIsFileOnly(supportFiles.map((file) => file.path));
-  const skillTarget = await resolveWorkspaceSkillWriteTarget({
-    workspaceDir: params.workspaceDir,
+  const skillTarget = await resolveSkillsRootWriteTarget({
+    skillsRoot: params.skillsRoot,
     filePath: params.skillFile,
-    symlinkPolicy: params.symlinkPolicy,
   });
   const preparedSupportFiles: PreparedWorkspaceSkillMutation["supportFiles"] = [];
   for (const file of supportFiles) {
     const filePath = path.join(params.skillDir, ...file.path.split("/"));
-    const target = await resolveWorkspaceSkillWriteTarget({
-      workspaceDir: params.workspaceDir,
+    const target = await resolveSkillsRootWriteTarget({
+      skillsRoot: params.skillsRoot,
       filePath,
-      symlinkPolicy: params.symlinkPolicy,
     });
     preparedSupportFiles.push({
       path: file.path,
@@ -224,7 +213,7 @@ export async function prepareWorkspaceSkillRestoration(params: {
   }
   return {
     mode: params.mode,
-    workspaceDir: params.workspaceDir,
+    skillsRoot: params.skillsRoot,
     skillDir: params.skillDir,
     skillFile: {
       filePath: params.skillFile,
@@ -417,78 +406,44 @@ async function readPreparedWorkspaceFile(
   return read.buffer.toString("utf8");
 }
 
-async function resolveWorkspaceSkillWriteTarget(
-  params: WorkspaceSkillWriteTargetParams,
+async function resolveSkillsRootWriteTarget(
+  params: SkillsRootWriteTargetParams,
 ): Promise<{ rootDir: string; relativePath: string }> {
-  assertInsideWorkspace(params.workspaceDir, params.filePath, "skill file");
-  const workspaceDir = path.resolve(params.workspaceDir);
+  assertInsideSkillsRoot(params.skillsRoot, params.filePath, "skill file");
+  const skillsRoot = path.resolve(params.skillsRoot);
   const filePath = path.resolve(params.filePath);
-  const aliasTarget = await resolveWorkspaceAliasTarget({ workspaceDir, filePath });
-  if (!aliasTarget) {
-    return { rootDir: workspaceDir, relativePath: path.relative(workspaceDir, filePath) };
-  }
-  const allowedRoot = params.symlinkPolicy.allowWrites
-    ? findContainingAllowedSkillSymlinkTarget(
-        params.symlinkPolicy.allowedTargetRealPaths,
-        aliasTarget.realTarget,
-      )
-    : null;
-  if (!allowedRoot) {
-    throw new Error(
-      `Skill file resolves through an untrusted symlink target: ${params.filePath}. Configure skills.load.allowSymlinkTargets and enable skills.workshop.allowSymlinkTargetWrites for intentional Skill Workshop symlink writes.`,
-    );
-  }
-  return {
-    rootDir: allowedRoot,
-    relativePath: path.relative(allowedRoot, aliasTarget.realTarget),
-  };
+  return { rootDir: skillsRoot, relativePath: path.relative(skillsRoot, filePath) };
 }
 
-async function resolveWorkspaceAliasTarget(params: {
-  workspaceDir: string;
-  filePath: string;
-}): Promise<{ realTarget: string } | null> {
-  const workspaceRealPath = (await tryRealpath(params.workspaceDir)) ?? params.workspaceDir;
-  const realTarget = await resolveRealPathThroughExistingAncestors(
-    params.workspaceDir,
-    params.filePath,
-  );
-  return isPathInside(workspaceRealPath, realTarget) ? null : { realTarget };
-}
-
-async function resolveRealPathThroughExistingAncestors(
-  workspaceDir: string,
-  filePath: string,
-): Promise<string> {
-  const segments = path.relative(workspaceDir, filePath).split(path.sep).filter(Boolean);
-  let lexicalCursor = workspaceDir;
-  let realCursor = (await tryRealpath(workspaceDir)) ?? workspaceDir;
-  for (const segment of segments) {
-    lexicalCursor = path.join(lexicalCursor, segment);
-    realCursor = (await tryRealpath(lexicalCursor)) ?? path.join(realCursor, segment);
-  }
-  return path.resolve(realCursor);
-}
-
-async function tryRealpath(filePath: string): Promise<string | null> {
-  try {
-    return await fs.realpath(filePath);
-  } catch {
-    return null;
-  }
-}
-
-export function assertInsideWorkspace(
-  workspaceDir: string,
+export function assertInsideSkillsRoot(
+  skillsRoot: string,
   targetPath: string,
   label: string,
 ): void {
-  const resolvedWorkspaceDir = path.resolve(workspaceDir);
+  const resolvedRoot = path.resolve(skillsRoot);
   const resolvedTarget = path.resolve(targetPath);
-  if (
-    resolvedTarget !== resolvedWorkspaceDir &&
-    !isPathInside(resolvedWorkspaceDir, resolvedTarget)
-  ) {
-    throw new Error(`${label} must stay inside the workspace.`);
+  if (resolvedTarget !== resolvedRoot && !isPathInside(resolvedRoot, resolvedTarget)) {
+    throw new Error(`${label} must stay inside the Skill Workshop directory.`);
+  }
+  const rootRealPath = tryRealpathSync(resolvedRoot) ?? resolvedRoot;
+  let lexicalCursor = resolvedRoot;
+  let realCursor = rootRealPath;
+  for (const segment of path
+    .relative(resolvedRoot, resolvedTarget)
+    .split(path.sep)
+    .filter(Boolean)) {
+    lexicalCursor = path.join(lexicalCursor, segment);
+    realCursor = tryRealpathSync(lexicalCursor) ?? path.join(realCursor, segment);
+  }
+  if (realCursor !== rootRealPath && !isPathInside(rootRealPath, path.resolve(realCursor))) {
+    throw new Error(`${label} must stay inside the Skill Workshop directory.`);
+  }
+}
+
+function tryRealpathSync(filePath: string): string | null {
+  try {
+    return fsSync.realpathSync(filePath);
+  } catch {
+    return null;
   }
 }

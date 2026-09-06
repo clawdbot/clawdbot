@@ -52,8 +52,6 @@ private enum GatewayConnectionWaitOwner {
 @Observable
 // swiftlint:disable type_body_length file_length
 final class NodeAppModel {
-    private nonisolated static let watchMessageMaxImmediateRetryAttempts = 3
-
     struct AgentDeepLinkPrompt: Identifiable, Equatable {
         let id: String
         let messagePreview: String
@@ -317,12 +315,6 @@ final class NodeAppModel {
         case mismatchedOwner
     }
 
-    private enum WatchMessageSendOutcome {
-        case sent
-        case retry
-        case discard
-    }
-
     private struct PersistedWatchExecApprovalBridgeState: Codable {
         var approvals: [ExecApprovalPrompt]
         var pendingApprovalReadbacks: [PersistedExecApprovalReadback]?
@@ -339,7 +331,6 @@ final class NodeAppModel {
     private let pushWakeLogger = Logger(subsystem: "ai.openclawfoundation.app", category: "PushWake")
     private let pendingActionLogger = Logger(subsystem: "ai.openclawfoundation.app", category: "PendingAction")
     private let locationWakeLogger = Logger(subsystem: "ai.openclawfoundation.app", category: "LocationWake")
-    private let watchReplyLogger = Logger(subsystem: "ai.openclawfoundation.app", category: "WatchReply")
     private let watchExecApprovalLogger = Logger(subsystem: "ai.openclawfoundation.app", category: "WatchExecApproval")
     private let execApprovalNotificationLogger = Logger(
         subsystem: "ai.openclawfoundation.app",
@@ -471,6 +462,7 @@ final class NodeAppModel {
     // Secondary "operator" connection: used for chat/talk/config/voicewake requests.
     private let operatorGateway = GatewayNodeSession()
     private var nodeGatewayTask: Task<Void, Never>?
+    @ObservationIgnored private var nodeHostStatsTask: Task<Void, Never>?
     private var operatorGatewayTask: Task<Void, Never>?
     @ObservationIgnored private var gatewaySessionResetTask: Task<Void, Never>?
     @ObservationIgnored private var gatewaySessionResetGeneration: UInt64 = 0
@@ -538,10 +530,14 @@ final class NodeAppModel {
     }
 
     private var lastSignificantLocationWakeAt: Date?
-    @ObservationIgnored let watchMessageOutbox = WatchMessageOutbox()
-    @ObservationIgnored private var watchMessageInFlightIDs = Set<String>()
-    @ObservationIgnored var watchMessageRetryAttempts: [String: Int] = [:]
-    @ObservationIgnored private var watchMessageRetryTask: Task<Void, Never>?
+    private var watchChatStorageWarning: String?
+    private var watchChatAdmissionWarning: String?
+    var watchChatDeliveryWarning: String? {
+        self.watchChatStorageWarning ?? self.watchChatAdmissionWarning
+    }
+
+    @ObservationIgnored private var watchReplyCoordinator: WatchReplyCoordinator?
+    @ObservationIgnored private var preparedWatchJournal: OpenClawWatchMessageJournal?
     @ObservationIgnored private let appleReviewDemoChatTransport = LocalFixtureChatTransport(fixture: .appleReviewDemo)
     @ObservationIgnored private var clientDatabases: OpenClawClientDatabases?
     @ObservationIgnored private var chatTranscriptCachesByGatewayID:
@@ -773,7 +769,12 @@ final class NodeAppModel {
         }
         guard let clientDatabases else { return false }
         do {
+            // Account for any old-app source before Forget makes its deletion irreversible.
+            self.preparedWatchJournal = nil
+            _ = try await self.watchMessageJournal()
+            guard self.clientDatabases === clientDatabases else { throw CancellationError() }
             try clientDatabases.stageGatewayRemoval(gatewayID: gatewayID)
+            self.watchReplyCoordinator?.retire(gatewayStableID: gatewayID)
             await self.chatTranscriptCachesByGatewayID[gatewayKey]?.retire()
             return true
         } catch {
@@ -788,6 +789,9 @@ final class NodeAppModel {
               let clientDatabases
         else { return false }
         do {
+            guard try !WatchMessageLegacyDefaults.prepare(.standard).hasSource else {
+                throw WatchMessagingError.admissionUnavailable
+            }
             try clientDatabases.commitGatewayRemoval(gatewayID: gatewayID)
             self.quarantinedChatOfflineGatewayIDs.remove(gatewayKey)
             self.chatTranscriptCachesByGatewayID.removeValue(forKey: gatewayKey)
@@ -834,6 +838,8 @@ final class NodeAppModel {
 
         // Full reset retires every open handle before removing SQLite sidecars,
         // so deleted transcript bytes cannot survive in WAL or journal pages.
+        await self.watchReplyCoordinator?.stopAndWait()
+        self.retireWatchMessageJournal()
         for cache in self.chatTranscriptCachesByGatewayID.values {
             await cache.retire()
         }
@@ -863,6 +869,7 @@ final class NodeAppModel {
     /// Debug launch reset runs before Chat can create a cache actor, so direct
     /// file removal preserves the launch flag's synchronous startup contract.
     func purgeChatTranscriptCacheBeforeStartup() {
+        self.retireWatchMessageJournal()
         var closeError: (any Error)?
         do {
             try self.clientDatabases?.close()
@@ -896,6 +903,8 @@ final class NodeAppModel {
     }
 
     private func removeAllChatDatabaseFiles() throws {
+        // Full reset owns both stores. Retire old text before deleting its hash receipts.
+        WatchMessageLegacyDefaults.removeAll(.standard)
         #if DEBUG
         if let testRemoveAllChatDatabaseFilesHandler {
             try testRemoveAllChatDatabaseFilesHandler()
@@ -934,8 +943,6 @@ final class NodeAppModel {
     private static let backgroundAliveLastTriggerKey = "gateway.backgroundAlive.lastTrigger"
     private static let preferredCameraFacingKey = "camera.preferredFacing"
     private static let foregroundResumeHealthTimeoutSeconds = 1
-    private static let watchChatCompletionWaitMs = 75000
-    private static let watchChatRunWaitSliceMs = 60000
 
     var cameraHUDText: String?
     var cameraHUDKind: CameraHUDKind?
@@ -1012,10 +1019,17 @@ final class NodeAppModel {
                 await self?.handleWatchMessagingStatusChanged(status)
             }
         }
-        self.watchMessagingService.setReplyHandler { [weak self] event in
-            Task { @MainActor in
-                await self?.handleWatchQuickReply(event)
-            }
+        self.watchMessagingService.setChatDeliveryHandler { [weak self] command in
+            guard let self else { throw WatchMessagingError.admissionUnavailable }
+            try await self.admitWatchChatDelivery(command)
+        }
+        self.watchMessagingService.setChatDeliveryReceiptAckHandler { [weak self] acknowledgment in
+            guard let self else { throw WatchMessagingError.admissionUnavailable }
+            let coordinator = try await self.watchChatCoordinator()
+            try await coordinator.acknowledge(acknowledgment)
+        }
+        self.watchMessagingService.setLegacyChatRejectedHandler { [weak self] in
+            Task { @MainActor in self?.rejectLegacyWatchChat() }
         }
         self.watchMessagingService.setExecApprovalResolveHandler { [weak self] event in
             Task { @MainActor in
@@ -1041,6 +1055,7 @@ final class NodeAppModel {
                 guard let self else { return }
                 GatewayDiagnostics.log(
                     "node app model: watch app snapshot request id=\(event.requestId)")
+                await self.flushQueuedWatchMessagesIfAvailable()
                 await self.syncWatchAppSnapshot(reason: "watch_app_request", includeChat: true)
             }
         }
@@ -2311,7 +2326,7 @@ final class NodeAppModel {
               var params = try? decodeParams(OpenClawWatchNotifyParams.self, from: req.paramsJSON)
         else { return req }
         // Gateway identity comes from the installed node route, never the request payload.
-        params.gatewayStableID = trimmedOrNil(gatewayStableID)
+        params.gatewayStableID = GatewayStableIdentifier.exact(gatewayStableID)
         guard let paramsJSON = try? encodePayload(params) else { return req }
         return BridgeInvokeRequest(
             type: req.type,
@@ -3205,7 +3220,9 @@ extension NodeAppModel {
             return try Self.successfulInvokeResponse(req, payload: payload)
         case OpenClawWatchCommand.notify.rawValue:
             let params = try Self.decodeParams(OpenClawWatchNotifyParams.self, from: req.paramsJSON)
-            let normalizedParams = Self.normalizeWatchNotifyParams(params)
+            let gatewayStableID = GatewayStableIdentifier.exact(params.gatewayStableID)
+            var normalizedParams = Self.normalizeWatchNotifyParams(params)
+            normalizedParams.gatewayStableID = gatewayStableID
             let title = normalizedParams.title
             let body = normalizedParams.body
             if title.isEmpty, body.isEmpty {
@@ -3216,14 +3233,28 @@ extension NodeAppModel {
                         code: .invalidRequest,
                         message: "INVALID_REQUEST: empty watch notification"))
             }
-            let gatewayStableID = currentWatchChatGatewayStableID()
-            self.watchMessageOutbox.recordPromptRoute(
-                promptID: normalizedParams.promptId,
-                gatewayStableID: gatewayStableID)
+            let generation = self.gatewayConnectGeneration
+            let context: OpenClawWatchChatDeliveryContext?
+            // Informational alerts may outlive their route, but they cannot borrow
+            // the currently selected Gateway's authority to issue a reply target.
+            if GatewayStableIdentifier.matches(gatewayStableID, self.currentWatchChatGatewayStableID()) {
+                let logicalSession = normalizedParams.sessionKey ?? self.chatSessionKey
+                let agentID = SessionKey.agentId(from: logicalSession)
+                    ?? (normalizedParams.sessionKey == nil ? self.chatDeliveryAgentId : self.gatewayDefaultAgentId)
+                context = await self.makeWatchChatDeliveryContext(
+                    sessionKey: logicalSession, agentID: agentID, gatewayStableID: gatewayStableID)
+            } else {
+                context = nil
+            }
+            try Task.checkCancellation()
+            guard generation == self.gatewayConnectGeneration else { throw CancellationError() }
+            // The prompt and its immutable delivery context name the same issued target.
+            normalizedParams.sessionKey = context?.sessionKey ?? normalizedParams.sessionKey
             let result = try await watchMessagingService.sendNotification(
                 id: req.id,
                 params: normalizedParams,
-                gatewayStableID: gatewayStableID)
+                gatewayStableID: gatewayStableID,
+                chatDeliveryContext: context)
             try Task.checkCancellation()
             if result.queuedForDelivery || !result.deliveredImmediately {
                 let invokeID = req.id
@@ -3235,6 +3266,7 @@ extension NodeAppModel {
                         invokeID: invokeID,
                         params: normalizedParams,
                         gatewayStableID: gatewayStableID,
+                        chatDeliveryContext: context,
                         sendResult: result,
                         notificationCenter: notificationCenter)
                 }
@@ -3249,7 +3281,7 @@ extension NodeAppModel {
         }
     }
 
-    func sendDirectWatchSetup() async throws -> WatchNotificationSendResult {
+    func sendDirectWatchSetup(includeVoice: Bool = false) async throws -> WatchNotificationSendResult {
         struct SetupCodeResponse: Decodable {
             var setupCode: String
         }
@@ -3264,6 +3296,9 @@ extension NodeAppModel {
                 NSLocalizedDescriptionKey: "The iPhone connection needs operator.admin access.",
             ])
         }
+        guard let route = await self.operatorGateway.currentRoute() else {
+            throw CancellationError()
+        }
         let status = await watchMessagingService.status()
         guard status.supported, status.paired, status.appInstalled else {
             throw NSError(domain: "WatchDirectSetup", code: 3, userInfo: [
@@ -3273,8 +3308,11 @@ extension NodeAppModel {
 
         let response = try await operatorGateway.request(
             method: "device.pair.setupCode",
-            paramsJSON: #"{"includeQr":false,"bootstrapProfile":"node"}"#,
-            timeoutSeconds: 20)
+            paramsJSON: includeVoice
+                ? #"{"includeQr":false,"bootstrapProfile":"voice-node"}"#
+                : #"{"includeQr":false,"bootstrapProfile":"node"}"#,
+            timeoutSeconds: 20,
+            ifCurrentRoute: route)
         let setup = try JSONDecoder().decode(SetupCodeResponse.self, from: response)
         guard let setupLink = GatewayConnectDeepLink.fromSetupCode(setup.setupCode),
               setupLink.connectionEndpoints.contains(where: \.tls)
@@ -3283,6 +3321,8 @@ extension NodeAppModel {
                 NSLocalizedDescriptionKey: "Direct Apple Watch mode requires a trusted HTTPS Gateway endpoint.",
             ])
         }
+        try Task.checkCancellation()
+        guard await self.operatorGateway.currentRoute() == route else { throw CancellationError() }
         return try await self.watchMessagingService.sendDirectNodeSetup(setupCode: setup.setupCode)
     }
 
@@ -3587,6 +3627,7 @@ extension NodeAppModel {
         }
 
         self.gatewayRouteGeneration &+= 1
+        self.stopNodeHostStatsPublisher()
         self.activeGatewayConnectConfig = nextConfig
         prepareForGatewayConnect(
             stableID: effectiveStableID,
@@ -3679,6 +3720,7 @@ extension NodeAppModel {
         self.talkMode.updateGatewayConnected(false)
         self.voiceWake.invalidatePendingCommand()
         self.gatewayRouteGeneration &+= 1
+        self.stopNodeHostStatsPublisher()
         nodeGatewayTask?.cancel()
         self.nodeGatewayTask = nil
         operatorGatewayTask?.cancel()
@@ -4416,6 +4458,8 @@ extension NodeAppModel {
         let shouldContinue = self.gatewayRouteCheck(
             generation: routeGeneration,
             stableID: stableID)
+        await self.startNodeHostStatsPublisher(shouldContinue: shouldContinue)
+        guard shouldContinue() else { return }
         await onNodeGatewayConnected(shouldContinue: shouldContinue)
         guard shouldContinue() else { return }
         SignificantLocationMonitor.startIfNeeded(
@@ -4604,7 +4648,50 @@ extension NodeAppModel {
 
     private func handleNodeGatewayRouteInvalidated(routeGeneration: UInt64, stableID: String) {
         guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return }
+        self.stopNodeHostStatsPublisher()
         self.invalidateNodePushToTalkRoute()
+    }
+
+    private func stopNodeHostStatsPublisher() {
+        self.nodeHostStatsTask?.cancel()
+        self.nodeHostStatsTask = nil
+    }
+
+    private func startNodeHostStatsPublisher(
+        shouldContinue: @escaping @MainActor @Sendable () -> Bool) async
+    {
+        self.stopNodeHostStatsPublisher()
+        guard let route = await self.nodeGateway.currentRoute(), shouldContinue(), self.gatewayConnected else { return }
+        let gateway = self.nodeGateway
+        self.nodeHostStatsTask = Task {
+            var failureLogged = false
+            let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "NodeHostStats")
+            // App route generations survive socket reconnects; the captured route fences both.
+            while !Task.isCancelled, shouldContinue(), await gateway.currentRoute() == route {
+                guard !Task.isCancelled, shouldContinue() else { return }
+                let sent: Bool
+                do {
+                    let payload = try NodeHostStatsReporter.makePayload()
+                    let payloadJSON = try Self.encodePayload(payload)
+                    sent = await gateway.sendEvent(
+                        event: NodeHostStatsReporter.eventName,
+                        payloadJSON: payloadJSON,
+                        ifCurrentRoute: route)
+                } catch {
+                    sent = false
+                }
+                guard !Task.isCancelled, shouldContinue() else { return }
+                if !sent, !failureLogged {
+                    logger.debug("Node host stats publish failed")
+                    failureLogged = true
+                }
+                do {
+                    try await Task.sleep(for: .seconds(NodeHostStatsReporter.intervalSeconds))
+                } catch {
+                    return
+                }
+            }
+        }
     }
 
     func invalidateNodePushToTalkRoute() {
@@ -5058,11 +5145,6 @@ extension NodeAppModel {
             }
             return
         }
-        if changed {
-            // Immediate retries are bounded per connection. A real reconnect grants queued
-            // messages a fresh budget so one exhausted head cannot strand the durable outbox.
-            self.watchMessageRetryAttempts.removeAll()
-        }
         Task { [weak self] in
             guard let self else { return }
             await self.flushPendingExecApprovalResolvedPushes()
@@ -5074,7 +5156,7 @@ extension NodeAppModel {
             if changed, approvalStateIsAuthoritative {
                 await self.flushPendingWatchExecApprovalResolutions()
             }
-            await self.flushQueuedWatchMessagesIfAvailable()
+            await self.flushQueuedWatchMessagesIfAvailable(resetRetryBudget: changed)
             guard changed else { return }
             await self.syncWatchAppSnapshot(reason: "operator_online")
         }
@@ -5528,69 +5610,6 @@ extension NodeAppModel {
         }
     }
 
-    private func handleWatchQuickReply(_ event: WatchQuickReplyEvent) async {
-        let replyID = event.replyId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let actionID = event.actionId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !replyID.isEmpty, !actionID.isEmpty else {
-            self.watchReplyLogger.info("watch reply dropped: missing replyId/actionId")
-            return
-        }
-        let payloadGatewayID = GatewayStableIdentifier.exact(event.gatewayStableID)
-        let currentGatewayID = self.currentWatchChatGatewayStableID()
-        let routedGatewayID = GatewayStableIdentifier.exact(
-            self.watchMessageOutbox.gatewayStableID(forPromptID: event.promptId))
-        let sourceGatewayID: String? = if let payloadGatewayID {
-            payloadGatewayID
-        } else if let routedGatewayID {
-            routedGatewayID
-        } else {
-            nil
-        }
-        if let sourceGatewayID,
-           let currentGatewayID,
-           !GatewayStableIdentifier.matches(currentGatewayID, sourceGatewayID)
-        {
-            self.watchReplyLogger.info("watch reply dropped: stale gateway target")
-            return
-        }
-        guard let sourceGatewayID else {
-            self.watchReplyLogger.info("watch reply dropped: unresolved gateway target")
-            return
-        }
-        let message = WatchAppCommandEvent(
-            commandId: replyID,
-            command: .sendChat,
-            sessionKey: event.sessionKey,
-            gatewayStableID: sourceGatewayID,
-            text: Self.makeWatchReplyAgentMessage(event),
-            sentAtMs: event.sentAtMs,
-            transport: event.transport,
-            messageKind: .quickReply)
-        await self.handleWatchMessage(message)
-    }
-
-    private static func makeWatchReplyAgentMessage(_ event: WatchQuickReplyEvent) -> String {
-        let actionLabel = event.actionLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let promptId = event.promptId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let transport = event.transport.trimmingCharacters(in: .whitespacesAndNewlines)
-        let summary = actionLabel?.isEmpty == false ? actionLabel! : event.actionId
-        var lines: [String] = []
-        lines.append("Watch reply: \(summary)")
-        lines.append("promptId=\(promptId.isEmpty ? "unknown" : promptId)")
-        lines.append("actionId=\(event.actionId)")
-        lines.append("replyId=\(event.replyId)")
-        if !transport.isEmpty {
-            lines.append("transport=\(transport)")
-        }
-        if let sentAtMs = event.sentAtMs {
-            lines.append("sentAtMs=\(sentAtMs)")
-        }
-        if let note = event.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
-            lines.append("note=\(note)")
-        }
-        return lines.joined(separator: "\n")
-    }
-
     private func restorePersistedWatchExecApprovalBridgeState() {
         guard let data = UserDefaults.standard.data(forKey: Self.watchExecApprovalBridgeStateKey),
               let state = try? JSONDecoder().decode(PersistedWatchExecApprovalBridgeState.self, from: data)
@@ -5793,6 +5812,7 @@ extension NodeAppModel {
         guard status.supported, status.paired, status.appInstalled else { return }
         guard status.reachable || status.activationState == "activated" else { return }
         let reason = status.reachable ? "watch_reachable" : "watch_activated"
+        await self.flushQueuedWatchMessagesIfAvailable()
         await self.syncWatchAppSnapshot(reason: reason, includeChat: status.reachable)
         guard self.isBackgrounded else { return }
         await self.syncWatchExecApprovalSnapshot(reason: reason)
@@ -6203,11 +6223,11 @@ extension NodeAppModel {
         }
     }
 
-    private func makeWatchChatPreview() async -> WatchChatPreview {
+    private func makeWatchChatPreview(sessionKey: String, agentID: String?) async -> WatchChatPreview {
         do {
             let payload: OpenClawChatHistoryPayload
             if self.isAppleReviewDemoModeEnabled {
-                payload = try await self.appleReviewDemoChatTransport.requestHistory(sessionKey: self.chatSessionKey)
+                payload = try await self.appleReviewDemoChatTransport.requestHistory(sessionKey: sessionKey)
             } else {
                 guard self.isOperatorGatewayConnected else {
                     return WatchChatPreview(
@@ -6215,8 +6235,8 @@ extension NodeAppModel {
                         status: OpenClawWatchAppStatus(code: .chatConnectIPhone),
                         statusText: "Connect iPhone chat to read messages")
                 }
-                payload = try await IOSGatewayChatTransport(gateway: self.operatorSession)
-                    .requestHistory(sessionKey: self.chatSessionKey)
+                payload = try await IOSGatewayChatTransport(gateway: self.operatorSession, globalAgentId: agentID)
+                    .requestHistory(sessionKey: sessionKey)
             }
 
             let items = OpenClawChatHistoryPresentation.makeWatchItems(from: payload.messages ?? [])
@@ -6236,7 +6256,8 @@ extension NodeAppModel {
     }
 
     private func makeWatchAppSnapshot(
-        chatPreview: WatchChatPreview? = nil) -> OpenClawWatchAppSnapshotMessage
+        chatPreview: WatchChatPreview? = nil,
+        chatDeliveryContext: OpenClawWatchChatDeliveryContext? = nil) -> OpenClawWatchAppSnapshotMessage
     {
         self.pruneExpiredWatchExecApprovalPrompts()
         let watchGatewayConnected = self.isAppleReviewDemoModeEnabled
@@ -6264,7 +6285,8 @@ extension NodeAppModel {
             chatStatus: chatPreview?.status,
             chatStatusText: chatPreview?.statusText,
             sentAtMs: Int64(Date().timeIntervalSince1970 * 1000),
-            snapshotId: UUID().uuidString)
+            snapshotId: UUID().uuidString,
+            chatDeliveryContext: chatDeliveryContext)
     }
 
     private func makeWatchGatewayStatus(connected: Bool) -> OpenClawWatchAppStatus {
@@ -6400,11 +6422,11 @@ extension NodeAppModel {
         }
         switch event.command {
         case .refresh:
-            break
+            await self.flushQueuedWatchMessagesIfAvailable()
         case .openChat:
             self.openChat(sessionKey: event.sessionKey ?? self.chatSessionKey)
         case .sendChat:
-            await self.handleWatchChatCommand(event)
+            self.rejectLegacyWatchChat()
             return
         case .startTalk:
             guard !self.isAppleReviewDemoModeEnabled else { break }
@@ -6418,352 +6440,184 @@ extension NodeAppModel {
             includeChat: true)
     }
 
-    private func handleWatchChatCommand(_ event: WatchAppCommandEvent) async {
-        if self.currentWatchChatGatewayStableID() == nil {
-            // Startup may deliver a route-tagged Watch action before restoring that route.
-            // Queue it without publishing an ownerless snapshot that would erase Watch routing.
-            await self.handleWatchMessage(event)
-            return
+    func watchMessageJournal() async throws -> OpenClawWatchMessageJournal {
+        var databaseOwner = self.clientDatabases
+        do {
+            guard UIApplication.shared.isProtectedDataAvailable else { throw WatchMessagingError.admissionUnavailable }
+            if self.clientDatabases == nil { self.clientDatabases = Self.makeClientDatabases() }
+            databaseOwner = self.clientDatabases
+            guard let databases = databaseOwner else { throw WatchMessagingError.admissionUnavailable }
+            let journal = databases.watchMessages
+            if self.preparedWatchJournal !== journal {
+                let snapshot = try WatchMessageLegacyDefaults.prepare(.standard)
+                try await journal.importLegacy(snapshot.legacyImport, nowMs: WatchMessagingPayloadCodec.nowMs())
+                guard self.clientDatabases === databases else { throw CancellationError() }
+                // Another caller may have completed this same preparation while import awaited.
+                guard self.preparedWatchJournal !== journal else { return journal }
+                guard try WatchMessageLegacyDefaults.finish(snapshot, defaults: .standard) else {
+                    throw WatchMessagingError.admissionUnavailable
+                }
+                self.preparedWatchJournal = journal
+                self.clearWatchChatStorageWarning(for: journal)
+            }
+            return journal
+        } catch {
+            guard !(error is CancellationError), !Task.isCancelled,
+                  self.clientDatabases === databaseOwner
+            else { throw error }
+            self.watchChatStorageWarning = String(
+                localized: "Watch delivery storage is unavailable. Try again on iPhone.")
+            throw error
         }
-        guard self.watchMessageTargetsCurrentGateway(event) else {
-            GatewayDiagnostics.log("watch chat send skipped: stale gateway target")
-            await self.syncWatchAppSnapshot(reason: "watch_chat_stale_gateway", includeChat: true)
-            return
-        }
-        await self.handleWatchMessage(event)
     }
 
-    private func handleWatchMessage(_ event: WatchAppCommandEvent) async {
-        let eventGatewayID = self.normalizedWatchMessageGatewayStableID(event)
-        let isAvailable = self.isWatchMessageSendAvailable()
-        let routeGeneration = self.gatewayRouteGeneration
-        if isAvailable, !self.watchMessageTargetsCurrentGateway(event) {
-            GatewayDiagnostics.log("watch message send skipped: stale gateway target")
-            return
+    func clearWatchChatStorageWarning(for journal: OpenClawWatchMessageJournal) {
+        self.updateWatchChatStorageWarning(nil, for: journal)
+    }
+
+    private func updateWatchChatStorageWarning(_ message: String?, for journal: OpenClawWatchMessageJournal) {
+        // A live SQLite handle does not resolve failed re-import or a replacement owner's warning.
+        guard !Task.isCancelled, self.preparedWatchJournal === journal,
+              self.clientDatabases?.watchMessages === journal
+        else { return }
+        self.watchChatStorageWarning = message
+    }
+
+    private func retireWatchMessageJournal() {
+        self.watchReplyCoordinator?.stop()
+        self.watchReplyCoordinator = nil
+        self.preparedWatchJournal = nil
+    }
+
+    private func watchChatCoordinator() async throws -> WatchReplyCoordinator {
+        let journal = try await self.watchMessageJournal()
+        if let coordinator = self.watchReplyCoordinator { return coordinator }
+        let coordinator = WatchReplyCoordinator(
+            journal: journal,
+            gateway: self.operatorSession,
+            messaging: self.watchMessagingService,
+            reportStorageWarning: { [weak self] message in
+                self?.updateWatchChatStorageWarning(message, for: journal)
+            })
+        self.watchReplyCoordinator = coordinator
+        return coordinator
+    }
+
+    func admitWatchChatDelivery(
+        _ command: OpenClawWatchChatDeliveryCommand,
+        destination: OpenClawWatchMessageReceiptDestination = .watch) async throws
+    {
+        let coordinator: WatchReplyCoordinator
+        let entry: OpenClawWatchMessageEntry
+        do {
+            coordinator = try await self.watchChatCoordinator()
+            entry = try await coordinator.admit(command, destination: destination)
+        } catch let error as OpenClawWatchChatDeliveryError {
+            if destination == .watch, OpenClawWatchChatDeliveryCodec.isPermanentRejectionCode(error.code) {
+                // Rejected work never entered phone custody. Only its exact Watch row
+                // consumes this denial; there is no phone journal row or receipt ACK.
+                let receipt = OpenClawWatchChatDeliveryReceipt(
+                    context: command.context,
+                    commandId: command.commandId,
+                    state: .rejected(code: error.code, message: error.message))
+                do {
+                    _ = try await self.watchMessagingService.sendChatDeliveryReceipt(receipt)
+                } catch {
+                    GatewayDiagnostics.log("watch rejection receipt could not be transferred")
+                }
+            }
+            throw error
         }
-        switch self.watchMessageOutbox.ingest(
-            event,
-            gatewayStableID: eventGatewayID)
-        {
-        case .dropMissingFields:
-            GatewayDiagnostics.log("watch message send skipped: missing id/text")
-        case .dropMissingTarget:
-            GatewayDiagnostics.log("watch message send skipped: missing gateway target")
-        case let .deduped(messageID):
-            GatewayDiagnostics.log("watch message send deduped id=\(messageID)")
-        case let .queue(queuedEvent):
-            guard !isAvailable else {
-                await self.deliverWatchMessage(queuedEvent)
-                return
-            }
-            GatewayDiagnostics.log("watch message send queued id=\(queuedEvent.commandId)")
-            if self.watchMessageKind(queuedEvent) == .chat,
-               self.currentWatchChatGatewayStableID() != nil
-            {
-                await self.syncWatchAppSnapshot(reason: "watch_chat_queued", includeChat: true)
-            }
-            guard let gatewayStableID = queuedEvent.gatewayStableID,
-                  self.watchMessageTargetsCurrentGateway(queuedEvent)
-            else { return }
+        guard entry.phase == .queued,
+              GatewayStableIdentifier.matches(command.context.gatewayStableID, self.currentWatchChatGatewayStableID())
+        else { return }
+        let generation = self.gatewayRouteGeneration
+        Task { [weak self] in
+            guard let self else { return }
             let connected = await self.ensureOperatorConnectionForWatchInteraction(
                 timeoutMs: 12000,
                 reason: "watch_message",
-                routeGeneration: routeGeneration,
-                gatewayStableID: gatewayStableID)
-            guard connected, self.watchMessageTargetsCurrentGateway(queuedEvent) else {
-                GatewayDiagnostics.log("watch message remains queued: gateway target unavailable")
-                return
-            }
-            await self.flushQueuedWatchMessagesIfAvailable()
+                routeGeneration: generation,
+                gatewayStableID: command.context.gatewayStableID)
+            if connected { await coordinator.resume(gatewayStableID: command.context.gatewayStableID) }
         }
     }
 
-    @discardableResult
-    private func deliverWatchMessage(_ event: WatchAppCommandEvent) async -> Bool {
-        // Keep one owner through reply observation so retry drains cannot resend a
-        // live turn. Other message IDs, including urgent quick replies, stay unblocked.
-        guard self.watchMessageInFlightIDs.insert(event.commandId).inserted else { return false }
-        defer { self.watchMessageInFlightIDs.remove(event.commandId) }
-        switch await self.forwardWatchMessage(event) {
-        case .sent, .discard:
-            self.watchMessageOutbox.removeQueuedMessage(
-                messageID: event.commandId,
-                gatewayStableID: self.normalizedWatchMessageGatewayStableID(event))
-            self.watchMessageRetryAttempts[event.commandId] = nil
-            return true
-        case .retry:
-            self.scheduleWatchMessageRetry(messageID: event.commandId)
-            return false
-        }
+    func rejectLegacyWatchChat() {
+        self.watchChatAdmissionWarning = String(
+            localized: "Update OpenClaw on iPhone and Apple Watch before sending Watch messages.")
+        GatewayDiagnostics.log("watch chat rejected: upgrade_required")
     }
 
-    private func flushQueuedWatchMessagesIfAvailable() async {
-        guard let gatewayStableID = currentWatchChatGatewayStableID() else { return }
-        while GatewayStableIdentifier.matches(
-            self.currentWatchChatGatewayStableID(),
-            gatewayStableID)
-        {
-            guard let event = watchMessageOutbox.nextQueuedMessage(
-                isAvailable: isWatchMessageSendAvailable(),
-                gatewayStableID: gatewayStableID,
-                excludingMessageIDs: self.watchMessageInFlightIDs)
-            else { return }
-            guard self.watchMessageTargetsCurrentGateway(event) else { return }
-            guard await self.deliverWatchMessage(event) else { return }
-        }
+    func recordWatchChatAdmissionFailure() {
+        self.watchChatAdmissionWarning = String(localized: "Watch reply was not saved. Open iPhone and try again.")
+        GatewayDiagnostics.log("watch chat rejected: admission_unavailable")
     }
 
-    private func scheduleWatchMessageRetry(messageID: String) {
-        guard self.isWatchMessageSendAvailable(), self.watchMessageRetryTask == nil else { return }
-        let attempt = (watchMessageRetryAttempts[messageID] ?? 0) + 1
-        guard attempt <= Self.watchMessageMaxImmediateRetryAttempts else {
-            GatewayDiagnostics.log("watch message retry deferred until reconnect id=\(messageID)")
-            return
+    private func flushQueuedWatchMessagesIfAvailable(resetRetryBudget: Bool = false) async {
+        do {
+            let coordinator = try await self.watchChatCoordinator()
+            await coordinator.resume(
+                gatewayStableID: self.currentWatchChatGatewayStableID(),
+                resetRetryBudget: resetRetryBudget)
+        } catch {
+            GatewayDiagnostics.log("watch chat journal preparation did not finish")
         }
-        self.watchMessageRetryAttempts[messageID] = attempt
-        let delayNanoseconds = UInt64(500 * (1 << (attempt - 1))) * 1_000_000
-        self.watchMessageRetryTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: delayNanoseconds)
-            guard let self else { return }
-            self.watchMessageRetryTask = nil
-            await self.flushQueuedWatchMessagesIfAvailable()
-        }
-    }
-
-    private func isWatchMessageSendAvailable() -> Bool {
-        self.isAppleReviewDemoModeEnabled || self.isOperatorGatewayConnected
     }
 
     private func currentWatchChatGatewayStableID() -> String? {
         GatewayStableIdentifier.exact(self.connectedGatewayID)
     }
 
-    private func normalizedWatchMessageGatewayStableID(_ event: WatchAppCommandEvent) -> String? {
-        GatewayStableIdentifier.exact(event.gatewayStableID)
-    }
-
-    private func watchMessageTargetsCurrentGateway(_ event: WatchAppCommandEvent) -> Bool {
-        guard let eventGatewayID = self.normalizedWatchMessageGatewayStableID(event),
-              let currentGatewayID = self.currentWatchChatGatewayStableID()
-        else { return false }
-        return GatewayStableIdentifier.matches(eventGatewayID, currentGatewayID)
-    }
-
     private func watchAppCommandTargetsCurrentGatewayIfTagged(_ event: WatchAppCommandEvent) -> Bool {
-        guard let eventGatewayID = normalizedWatchMessageGatewayStableID(event) else {
-            // Ownerless commands predate route tagging and remain valid for compatibility.
+        guard let eventGatewayID = GatewayStableIdentifier.exact(event.gatewayStableID) else {
+            // The remaining ephemeral controls retain the shipped ownerless wire contract.
             return true
         }
-        return GatewayStableIdentifier.matches(
-            eventGatewayID,
-            self.currentWatchChatGatewayStableID())
+        return GatewayStableIdentifier.matches(eventGatewayID, self.currentWatchChatGatewayStableID())
     }
 
-    private func watchMessageKind(_ event: WatchAppCommandEvent) -> WatchMessageKind {
-        event.messageKind ?? .chat
+    nonisolated static func watchThinkingOverride(for kind: OpenClawWatchChatDeliveryKind) -> String? {
+        // Free-form Watch chat follows the session; only quick replies request a cheap level.
+        kind == .quickReply ? "low" : nil
     }
 
-    nonisolated static func watchThinkingOverride(for messageKind: WatchMessageKind) -> String? {
-        // Free-form Watch chat has no one-turn thinking control, so it must not
-        // invent an override. Quick replies intentionally use a cheap level.
-        switch messageKind {
-        case .chat:
-            nil
-        case .quickReply:
-            "low"
-        }
-    }
-
-    private func forwardWatchMessage(_ event: WatchAppCommandEvent) async -> WatchMessageSendOutcome {
-        guard self.watchMessageTargetsCurrentGateway(event) else {
-            GatewayDiagnostics.log("watch message send skipped: stale gateway target")
-            return .retry
-        }
-        let text = event.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !text.isEmpty else {
-            GatewayDiagnostics.log("watch chat send skipped: empty text")
-            return .discard
-        }
-
-        let messageKind = self.watchMessageKind(event)
-        let fallbackSessionKey = messageKind == .quickReply ? self.mainSessionKey : self.chatSessionKey
-        let sessionKey = (event.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
-            ? event.sessionKey!
-            : fallbackSessionKey
-        if messageKind == .chat {
-            self.focusChatSession(sessionKey)
-        }
-        let thinkingOverride = Self.watchThinkingOverride(for: messageKind)
-
-        do {
-            let submittedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
-            if self.isAppleReviewDemoModeEnabled {
-                let response = try await appleReviewDemoChatTransport.sendMessage(
-                    sessionKey: sessionKey,
-                    message: text,
-                    // Demo mode has no Gateway session from which to resolve an omitted level.
-                    thinking: thinkingOverride ?? "auto",
-                    idempotencyKey: event.commandId,
-                    attachments: [])
-                if messageKind == .quickReply {
-                    await self.finishForwardedWatchMessage(event)
-                    return .sent
-                }
-                let history = try await appleReviewDemoChatTransport.requestHistory(sessionKey: sessionKey)
-                if let replyText = OpenClawChatHistoryPresentation.replyText(
-                    from: history.messages ?? [],
-                    runID: response.runId,
-                    submittedText: text,
-                    submittedAtMs: submittedAtMs)
-                {
-                    await self.sendWatchChatCompletion(commandId: event.commandId, replyText: replyText)
-                }
-                await self.syncWatchAppSnapshot(reason: "watch_chat_completed", includeChat: true)
-                return .sent
-            }
-
-            guard self.isOperatorGatewayConnected else {
-                GatewayDiagnostics.log("watch chat send skipped: operator gateway disconnected")
-                return .retry
-            }
-            guard self.watchMessageTargetsCurrentGateway(event),
-                  let operatorRoute = await operatorSession.currentRoute(),
-                  isOperatorGatewayConnected,
-                  watchMessageTargetsCurrentGateway(event)
-            else {
-                GatewayDiagnostics.log("watch chat send skipped: gateway route changed before dispatch")
-                return .retry
-            }
-
-            let transport = IOSGatewayChatTransport(gateway: operatorSession)
-            let completionDeadline = Date().addingTimeInterval(
-                Double(Self.watchChatCompletionWaitMs) / 1000)
-            let response = try await transport.sendMessage(
-                sessionKey: sessionKey,
-                message: text,
-                thinking: thinkingOverride,
-                idempotencyKey: event.commandId,
-                attachments: [],
-                ifCurrentRoute: operatorRoute)
-            if messageKind == .quickReply {
-                await self.finishForwardedWatchMessage(event)
-                return .sent
-            }
-            await self.syncWatchAppSnapshot(reason: "watch_chat_sent", includeChat: true)
-            _ = await transport.waitForRunCompletion(
-                runId: response.runId,
-                timeoutMs: Self.watchChatRunWaitSliceMs,
-                ifCurrentRoute: operatorRoute)
-            if let replyText = await waitForWatchChatReply(
-                transport: transport,
-                sessionKey: sessionKey,
-                runId: response.runId,
-                submittedText: text,
-                submittedAtMs: submittedAtMs,
-                deadline: completionDeadline,
-                expectedRoute: operatorRoute)
-            {
-                guard self.watchMessageTargetsCurrentGateway(event),
-                      await self.operatorSession.currentRoute() == operatorRoute
-                else {
-                    GatewayDiagnostics.log("watch chat completion skipped: gateway route changed")
-                    return .discard
-                }
-                await self.sendWatchChatCompletion(commandId: event.commandId, replyText: replyText)
-            }
-            await self.syncWatchAppSnapshot(
-                reason: "watch_chat_completed",
-                includeChat: true,
-                shouldContinue: { self.watchMessageTargetsCurrentGateway(event) })
-            return .sent
-        } catch is CancellationError {
-            if !self.watchMessageTargetsCurrentGateway(event) {
-                GatewayDiagnostics.log("watch chat send canceled: gateway target changed")
-                return .discard
-            }
-            GatewayDiagnostics.log("watch chat send canceled before dispatch")
-            return .retry
-        } catch {
-            GatewayDiagnostics.log("watch chat send failed error=\(error.localizedDescription)")
-            if Self.shouldDiscardFailedWatchMessage(error) {
-                GatewayDiagnostics.log("watch message discarded after permanent send failure id=\(event.commandId)")
-                return .discard
-            }
-            return .retry
-        }
-    }
-
-    private func waitForWatchChatReply(
-        transport: IOSGatewayChatTransport,
+    private func makeWatchChatDeliveryContext(
         sessionKey: String,
-        runId: String,
-        submittedText: String,
-        submittedAtMs: Int64,
-        deadline: Date,
-        expectedRoute: GatewayNodeSessionRoute) async -> String?
+        agentID: String?,
+        gatewayStableID: String?) async -> OpenClawWatchChatDeliveryContext?
     {
-        var inputRunIDs: [String]? = [runId]
-        repeat {
-            guard await self.operatorSession.currentRoute() == expectedRoute else { return nil }
-            do {
-                let payload = try await transport.requestHistory(
-                    sessionKey: sessionKey,
-                    inputRunIDs: inputRunIDs,
-                    ifCurrentRoute: expectedRoute)
-                if let replyText = OpenClawChatHistoryPresentation.replyText(
-                    from: payload.messages ?? [],
-                    runID: runId,
-                    submittedText: submittedText,
-                    submittedAtMs: submittedAtMs,
-                    inputConsumptions: payload.inputConsumptions)
-                {
-                    return replyText
-                }
-            } catch is CancellationError {
-                return nil
-            } catch {
-                if inputRunIDs != nil,
-                   IOSGatewayChatTransport.isUnsupportedHistoryInputRunIDsError(error),
-                   Date() < deadline
-                {
-                    // Probe old gateways once per turn, not once per history poll.
-                    inputRunIDs = nil
-                    continue
-                }
-            }
-            guard Date() < deadline else { return nil }
-            try? await Task.sleep(for: .seconds(1))
-        } while !Task.isCancelled
-        return nil
-    }
-
-    private func sendWatchChatCompletion(commandId: String, replyText: String) async {
+        guard let gatewayStableID = GatewayStableIdentifier.exact(gatewayStableID),
+              let agentID = agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !agentID.isEmpty, !self.isAppleReviewDemoModeEnabled
+        else { return nil }
+        let key = sessionKey
+        guard !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, key.lowercased() != "unknown" else {
+            return nil
+        }
+        if let scopedAgent = SessionKey.agentId(from: key) {
+            guard scopedAgent.lowercased() == agentID else { return nil }
+        } else if key.lowercased().hasPrefix("agent:") {
+            return nil
+        }
         do {
-            _ = try await self.watchMessagingService.sendChatCompletion(
-                OpenClawWatchChatCompletionMessage(
-                    commandId: commandId,
-                    replyText: replyText,
-                    sentAtMs: Int64(Date().timeIntervalSince1970 * 1000)))
+            let journal = try await self.watchMessageJournal()
+            guard let route = try await journal.route(gatewayStableID: gatewayStableID),
+                  let generation = route.owner.routeGeneration
+            else { return nil }
+            let target = IOSGatewayChatTransport.sessionTarget(for: key, selectedAgentID: agentID)
+            let context = OpenClawWatchChatDeliveryContext(
+                gatewayStableID: gatewayStableID,
+                routeGeneration: generation,
+                agentId: agentID,
+                sessionKey: key,
+                deliverySessionKey: target.sessionKey,
+                sessionRoutingContract: route.routingIdentity.contract)
+            try OpenClawWatchChatDeliveryCodec.validateContext(context)
+            return context
         } catch {
-            GatewayDiagnostics.log(
-                "watch chat completion failed commandId=\(commandId) error=\(error.localizedDescription)")
+            return nil
         }
-    }
-
-    private nonisolated static func shouldDiscardFailedWatchMessage(_ error: Error) -> Bool {
-        guard let gatewayError = error as? GatewayResponseError else { return false }
-        guard gatewayError.code == "INVALID_REQUEST" else { return false }
-        return !gatewayError.message.lowercased().hasSuffix("retry.")
-    }
-
-    private func finishForwardedWatchMessage(_ event: WatchAppCommandEvent) async {
-        if self.watchMessageKind(event) == .chat {
-            await self.syncWatchAppSnapshot(reason: "watch_chat_sent", includeChat: true)
-            return
-        }
-        self.watchReplyLogger.info(
-            "watch reply forwarded replyId=\(event.commandId, privacy: .public)")
-        self.openChatRequestID &+= 1
     }
 
     private func syncWatchAppSnapshot(
@@ -6773,13 +6627,19 @@ extension NodeAppModel {
     {
         guard shouldContinue() else { return }
         let deliveryGeneration = self.gatewayConnectGeneration
-        let chatPreview = includeChat ? await makeWatchChatPreview() : nil
+        let sessionKey = self.chatSessionKey
+        let agentID = self.chatDeliveryAgentId
+        let context = await self.makeWatchChatDeliveryContext(
+            sessionKey: sessionKey, agentID: agentID, gatewayStableID: self.currentWatchChatGatewayStableID())
+        let chatPreview = includeChat ? await makeWatchChatPreview(sessionKey: sessionKey, agentID: agentID) : nil
         guard shouldContinue() else { return }
-        guard deliveryGeneration == self.gatewayConnectGeneration else {
+        guard deliveryGeneration == self.gatewayConnectGeneration,
+              sessionKey.utf8.elementsEqual(self.chatSessionKey.utf8), agentID == self.chatDeliveryAgentId
+        else {
             await self.syncWatchAppSnapshot(reason: "\(reason)_route_repair")
             return
         }
-        let message = self.makeWatchAppSnapshot(chatPreview: chatPreview)
+        let message = self.makeWatchAppSnapshot(chatPreview: chatPreview, chatDeliveryContext: context)
         do {
             guard shouldContinue() else { return }
             _ = try await self.watchMessagingService.syncAppSnapshot(message)
@@ -10011,6 +9871,9 @@ extension NodeAppModel {
             self.stageGatewaySetupLink(link)
         case .dashboard:
             self.dashboardNavigationRequestID &+= 1
+        case .gatewayAdd:
+            self.recordShareEvent(
+                "This browser sign-in link is for the OpenClaw Mac app. Use a device pairing link on iOS.")
         }
     }
 
@@ -10253,12 +10116,6 @@ extension NodeAppModel {
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
-    }
-}
-
-extension NodeAppModel {
-    func _bridgeConsumeMirroredWatchReply(_ event: WatchQuickReplyEvent) async {
-        await self.handleWatchQuickReply(event)
     }
 }
 
@@ -10661,14 +10518,6 @@ extension NodeAppModel {
         case .unavailable:
             "unavailable"
         }
-    }
-
-    nonisolated static func _test_shouldDiscardFailedWatchMessage(
-        code: String,
-        message: String = "test") -> Bool
-    {
-        self.shouldDiscardFailedWatchMessage(
-            GatewayResponseError(method: "chat.send", code: code, message: message, details: nil))
     }
 
     static func _test_resetPersistedWatchExecApprovalBridgeState() {

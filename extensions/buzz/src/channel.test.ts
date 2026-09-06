@@ -14,23 +14,41 @@ describe("Buzz channel guidance", () => {
   });
 
   it.each([
-    { mode: "off", automatic: true, flat: true },
-    { mode: "all", automatic: true, flat: false },
-    { mode: "off", automatic: false, flat: false },
-  ] as const)(
-    "routes $mode automatic=$automatic without flattening explicit tools",
-    ({ mode, automatic, flat }) => {
-      const original = { threadId: "thread-root", replyToId: "requested-parent" };
-      const transport =
-        buzzPlugin.threading?.resolveReplyTransport?.({
-          cfg: {},
-          ...original,
-          replyToIsExplicit: !automatic,
-          replyDelivery: automatic ? { replyToMode: mode } : undefined,
-        }) ?? original;
-      expect(transport).toEqual(flat ? { threadId: null, replyToId: null } : original);
+    {
+      label: "automatic off",
+      replyDelivery: { replyToMode: "off" as const },
+      explicit: false,
+      expected: { threadId: null, replyToId: null },
     },
-  );
+    {
+      label: "automatic all",
+      replyDelivery: { replyToMode: "all" as const },
+      explicit: false,
+      expected: { threadId: "thread-root", replyToId: "thread-root" },
+    },
+    {
+      label: "implicit message tool",
+      replyDelivery: undefined,
+      explicit: false,
+      expected: { threadId: "thread-root", replyToId: "thread-root" },
+    },
+    {
+      label: "explicit child",
+      replyDelivery: undefined,
+      explicit: true,
+      expected: { threadId: "thread-root", replyToId: "requested-parent" },
+    },
+  ])("routes $label replies at the intended depth", ({ replyDelivery, explicit, expected }) => {
+    const original = { threadId: "thread-root", replyToId: "requested-parent" };
+    const transport =
+      buzzPlugin.threading?.resolveReplyTransport?.({
+        cfg: {},
+        ...original,
+        replyToIsExplicit: explicit,
+        replyDelivery,
+      }) ?? original;
+    expect(transport).toEqual(expected);
+  });
   it("advertises directory room targets and native mention syntax", () => {
     const hints = buzzPlugin.agentPrompt?.messageToolHints?.({} as never) ?? [];
 

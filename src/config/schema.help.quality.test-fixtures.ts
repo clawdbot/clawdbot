@@ -488,6 +488,5 @@ export const FINAL_BACKLOG_TARGET_KEYS = [
   "skills.load.allowSymlinkTargets",
   "skills.load.extraDirs",
   "skills.load.watch",
-  "skills.workshop.allowSymlinkTargetWrites",
   "ui.seamColor",
 ] as const;

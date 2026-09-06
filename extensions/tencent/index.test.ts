@@ -2,12 +2,13 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import {
+  createRuntimeEnv,
   registerProviderPlugin,
   requireRegisteredProvider,
   resolveProviderPluginChoice,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import tencentPlugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -93,43 +94,125 @@ function captureTencentPayload(params: {
 }
 
 describe("tencent provider plugin", () => {
-  it("registers Tencent TokenHub api-key auth metadata", async () => {
+  it.each([
+    ["tencent-tokenhub", "Tencent TokenHub", "TOKENHUB_API_KEY", "tokenhub-api-key"],
+    ["tencent-tokenplan", "Tencent TokenPlan", "TOKENPLAN_API_KEY", "tokenplan-api-key"],
+  ])("registers %s api-key auth metadata", async (providerId, label, envVar, choiceId) => {
     const { providers } = await registerTencentPlugin();
-    const provider = requireRegisteredProvider(providers, "tencent-tokenhub");
-    const resolved = resolveProviderPluginChoice({
-      providers,
-      choice: "tokenhub-api-key",
-    });
+    const provider = requireRegisteredProvider(providers, providerId);
+    const resolved = resolveProviderPluginChoice({ providers, choice: choiceId });
 
-    expect(provider.id).toBe("tencent-tokenhub");
-    expect(provider.label).toBe("Tencent TokenHub");
-    expect(provider.envVars).toEqual(["TOKENHUB_API_KEY"]);
+    expect(providers.map((entry) => entry.id)).toEqual(["tencent-tokenhub", "tencent-tokenplan"]);
+    expect(provider).toMatchObject({
+      id: providerId,
+      label,
+      docsPath: "/providers/tencent",
+      envVars: [envVar],
+      catalog: { order: "simple" },
+      staticCatalog: { order: "simple" },
+    });
     expect(provider.auth).toHaveLength(1);
-    if (!resolved) {
-      throw new Error("expected Tencent TokenHub api-key auth choice");
-    }
-    expect(resolved.provider.id).toBe("tencent-tokenhub");
-    expect(resolved.method.id).toBe("api-key");
+    expect(resolved?.provider.id).toBe(providerId);
+    expect(resolved?.method).toMatchObject({
+      id: "api-key",
+      label,
+      hint: `Hy via ${label} Gateway`,
+      kind: "api_key",
+      starterModel: `${providerId}/hy3`,
+      wizard: {
+        choiceId,
+        choiceLabel: label,
+        groupId: "tencent",
+        groupLabel: "Tencent Cloud",
+        groupHint: label,
+      },
+    });
   });
 
-  it("registers Tencent TokenPlan api-key auth metadata", async () => {
-    const { providers } = await registerTencentPlugin();
-    const provider = requireRegisteredProvider(providers, "tencent-tokenplan");
-    const resolved = resolveProviderPluginChoice({
-      providers,
-      choice: "tokenplan-api-key",
-    });
+  it.each([
+    {
+      providerId: "tencent-tokenhub",
+      choiceId: "tokenhub-api-key",
+      flagValue: "tokenhub-test-key",
+      envVar: "TOKENHUB_API_KEY",
+      aliases: {
+        "tencent-tokenhub/hy3": { alias: "Hy3 (TokenHub)" },
+        "tencent-tokenhub/hy3-preview": { alias: "Hy3 preview (TokenHub)" },
+      },
+    },
+    {
+      providerId: "tencent-tokenplan",
+      choiceId: "tokenplan-api-key",
+      flagValue: "tokenplan-test-key",
+      envVar: "TOKENPLAN_API_KEY",
+      aliases: { "tencent-tokenplan/hy3": { alias: "Hy3 (TokenPlan)" } },
+    },
+  ] as const)(
+    "configures only $providerId through its registered auth method",
+    async ({ providerId, choiceId, flagValue, envVar, aliases }) => {
+      const { providers } = await registerTencentPlugin();
+      const provider = requireRegisteredProvider(providers, providerId);
+      const resolveApiKey = vi.fn(async () => ({
+        key: "stored-test-key",
+        source: "profile" as const,
+      }));
+      const toApiKeyCredential = vi.fn(() => null);
+      const method = provider.auth[0];
+      if (!method?.runNonInteractive) {
+        throw new Error("expected Tencent noninteractive auth method");
+      }
+      const config = await method.runNonInteractive({
+        authChoice: choiceId,
+        config: {},
+        baseConfig: {},
+        opts: { tokenhubApiKey: "tokenhub-test-key", tokenplanApiKey: "tokenplan-test-key" },
+        runtime: createRuntimeEnv(),
+        resolveApiKey,
+        toApiKeyCredential,
+      });
 
-    expect(provider.id).toBe("tencent-tokenplan");
-    expect(provider.label).toBe("Tencent TokenPlan");
-    expect(provider.envVars).toEqual(["TOKENPLAN_API_KEY"]);
-    expect(provider.auth).toHaveLength(1);
-    if (!resolved) {
-      throw new Error("expected Tencent TokenPlan api-key auth choice");
-    }
-    expect(resolved.provider.id).toBe("tencent-tokenplan");
-    expect(resolved.method.id).toBe("api-key");
-  });
+      expect(resolveApiKey).toHaveBeenCalledExactlyOnceWith({
+        provider: providerId,
+        flagValue,
+        flagName: `--${choiceId}`,
+        envVar,
+      });
+      expect(toApiKeyCredential).not.toHaveBeenCalled();
+      expect(Object.keys(config?.models?.providers ?? {})).toEqual([providerId]);
+      expect(config?.models?.providers?.[providerId]?.models.map((model) => model.id)).toEqual(
+        manifest.modelCatalog.providers[providerId].models.map((model) => model.id),
+      );
+      expect(config?.agents?.defaults?.model).toEqual({ primary: `${providerId}/hy3` });
+      expect(config?.agents?.defaults?.models).toEqual(aliases);
+    },
+  );
+
+  it.each(["tencent-tokenhub", "tencent-tokenplan"])(
+    "isolates %s static and augmented catalog results",
+    async (providerId) => {
+      const { providers } = await registerTencentPlugin();
+      const provider = requireRegisteredProvider(providers, providerId);
+      const first = await runSingleProviderCatalog({ catalog: provider.staticCatalog });
+      const expected = structuredClone(first);
+      const model = first.models[0];
+      if (!model) {
+        throw new Error("expected Tencent static model");
+      }
+      model.input.push("image");
+      model.cost.input = 999;
+      expect(await runSingleProviderCatalog({ catalog: provider.staticCatalog })).toEqual(expected);
+
+      const context = { env: {}, entries: [] };
+      const augmented = await provider.augmentModelCatalog?.(context);
+      expect(augmented?.map((entry) => entry.id)).toEqual(expected.models.map((entry) => entry.id));
+      if (!augmented?.[0]?.input) {
+        throw new Error("expected Tencent model input modalities");
+      }
+      const expectedAugmented = structuredClone(augmented);
+      augmented[0].input.push("image");
+      expect(await provider.augmentModelCatalog?.(context)).toEqual(expectedAugmented);
+    },
+  );
 
   it("builds the static Tencent TokenHub model catalog with reasoning flags", async () => {
     const provider = await getTokenHubProvider();

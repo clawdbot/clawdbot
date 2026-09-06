@@ -116,7 +116,9 @@ async function repairBrokenSessionTranscriptFile(params: {
       .replace(/[:.]/g, "-")}.bak`;
     await fs.copyFile(params.filePath, backupPath);
     result.backupPath = backupPath;
-    const dirMode = (await fs.stat(path.dirname(params.filePath))).mode;
+    // Keep the directory's current permission bits; raw stat.mode includes
+    // file-type bits that fs-safe's final directory-mode check rejects.
+    const dirMode = (await fs.stat(path.dirname(params.filePath))).mode & 0o7777;
     // A copy fallback can truncate the source on failure. Keep the completed backup
     // and require rename without changing file or directory permissions.
     await replaceFileAtomic({

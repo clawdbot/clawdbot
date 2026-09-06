@@ -3,7 +3,6 @@ import {
   listNativeCommandSpecsForConfig,
   type NativeCommandSpec,
 } from "openclaw/plugin-sdk/native-command-registry";
-import { sliceCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { createClickClackClient } from "./http-client.js";
 import type { CoreConfig } from "./types.js";
 
@@ -24,7 +23,7 @@ type ClickClackCommandMenuLogger = {
 };
 
 function truncateCodePoints(value: string, maxLength: number): string {
-  return sliceCodePoints(value, 0, maxLength);
+  return Array.from(value).slice(0, maxLength).join("");
 }
 
 function commandArgsHint(spec: NativeCommandSpec): string {

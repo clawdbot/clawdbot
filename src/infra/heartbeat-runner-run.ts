@@ -71,9 +71,6 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
     policySessionKey: outboundPolicySessionKey,
   });
   const outboundIdentity = resolveAgentOutboundIdentity(cfg, agentId);
-  const canAttemptHeartbeatOk = Boolean(
-    visibility.showOk && delivery.channel !== "none" && delivery.to,
-  );
   const hasChatDelivery = Boolean(
     delivery.channel !== "none" && delivery.to && (visibility.showAlerts || visibility.showOk),
   );
@@ -104,7 +101,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
         })
       : undefined;
   const maybeSendHeartbeatOk = async () => {
-    if (!canAttemptHeartbeatOk || delivery.channel === "none" || !delivery.to) {
+    if (!visibility.showOk || delivery.channel === "none" || !delivery.to) {
       return false;
     }
     try {
@@ -169,6 +166,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
       wake,
       prepared,
       outcome,
+      replyPayloadSource: agentRun.replyPayload,
       maybeSendHeartbeatOk,
       outboundSession,
       outboundIdentity,

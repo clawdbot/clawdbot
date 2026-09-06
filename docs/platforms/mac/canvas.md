@@ -30,7 +30,7 @@ surfaces, not in the panel.
 - Only one widget panel is visible at a time.
 - The app remembers the panel's size and position per session.
 
-Canvas can be disabled from **Settings -> Allow Canvas**. When it is disabled,
+Canvas can be disabled from **Dashboard → Settings → This Mac → Capabilities**. When it is disabled,
 panel commands return `CANVAS_DISABLED`.
 
 ## Agent path

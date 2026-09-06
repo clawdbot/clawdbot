@@ -15,7 +15,7 @@ import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { loadSqliteTrajectoryRuntimeEventRowsSync } from "../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
-import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
+import { resolveCommandSessionStoreTargets } from "./session-store-targets.js";
 import { formatTextCell } from "./text-format.js";
 
 type SessionsTailOptions = {
@@ -44,6 +44,7 @@ type TrajectorySnapshot = {
   events: TrajectoryEvent[];
   maxStorageSeq: number;
 };
+type FollowOutcome = "ERROR" | "SIGINT" | "SIGTERM";
 
 const DEFAULT_TAIL_COUNT = 80;
 const SESSION_KEY_PAD = 30;
@@ -217,11 +218,11 @@ function readNewSqliteFollowEvents(state: SqliteFollowState): TrajectoryEvent[] 
   return rows.map((row) => row.event);
 }
 
-async function followSelections(
+function followSelections(
   selections: TailSelection[],
   runtime: RuntimeEnv,
   initialSnapshots: Map<TailSelection, TrajectorySnapshot>,
-): Promise<void> {
+): Promise<FollowOutcome> {
   const states = selections.map((selection): SqliteFollowState => {
     const snapshot = initialSnapshots.get(selection);
     return {
@@ -230,7 +231,8 @@ async function followSelections(
     };
   });
 
-  await new Promise<void>((resolve) => {
+  return new Promise((resolve) => {
+    let finished = false;
     const interval = setInterval(() => {
       for (const state of states) {
         try {
@@ -241,24 +243,30 @@ async function followSelections(
               error,
             )}`,
           );
-          runtime.exit(1);
+          return finish("ERROR");
         }
       }
     }, FOLLOW_INTERVAL_MS);
 
-    const stop = () => {
-      clearInterval(interval);
-      process.off("SIGINT", stop);
-      process.off("SIGTERM", stop);
-      resolve();
+    const finish = (outcome: FollowOutcome) => {
+      if (!finished) {
+        finished = true;
+        clearInterval(interval);
+        process.off("SIGINT", stopSigint);
+        process.off("SIGTERM", stopSigterm);
+        resolve(outcome);
+      }
     };
-    process.once("SIGINT", stop);
-    process.once("SIGTERM", stop);
+    const stopSigint = () => finish("SIGINT");
+    const stopSigterm = () => finish("SIGTERM");
+    process.once("SIGINT", stopSigint);
+    process.once("SIGTERM", stopSigterm);
   });
 }
 
 function resolveTailTargetAgent(opts: SessionsTailOptions): string | undefined {
-  if (opts.agent?.trim() || opts.store?.trim() || opts.allAgents === true) {
+  // Keep explicit blanks for the selector to reject instead of inferring a different owner.
+  if (opts.agent !== undefined || opts.store !== undefined || opts.allAgents === true) {
     return opts.agent;
   }
   return opts.sessionKey?.trim() ? resolveAgentIdFromSessionKey(opts.sessionKey) : undefined;
@@ -277,18 +285,14 @@ export async function sessionsTailCommand(
   }
 
   const cfg = getRuntimeConfig();
-  const targets = resolveSessionStoreTargetsOrExit({
+  const targets = resolveCommandSessionStoreTargets({
     cfg,
     opts: {
       store: opts.store,
       agent: resolveTailTargetAgent(opts),
       allAgents: opts.allAgents,
     },
-    runtime,
   });
-  if (!targets) {
-    return;
-  }
 
   const selections: TailSelection[] = [];
   for (const target of targets) {
@@ -322,6 +326,7 @@ export async function sessionsTailCommand(
   }
 
   if (opts.follow) {
-    await followSelections(selected, runtime, followSnapshots);
+    const outcome = await followSelections(selected, runtime, followSnapshots);
+    runtime.exit(outcome === "ERROR" ? 1 : outcome === "SIGINT" ? 130 : 143);
   }
 }

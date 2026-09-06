@@ -126,12 +126,10 @@ describe("entry root help fast path", () => {
   it("structures root help rendering failures for JSON console style", async () => {
     const logging = await import("./logging.js");
     logging.setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle: "json" });
-    const stderrSpy = vi
-      .spyOn(process.stderr, "write")
-      .mockImplementation(() => true as unknown as ReturnType<typeof process.stderr.write>);
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code) => {
       throw new Error(`exit ${String(code)}`);
-    }) as typeof process.exit);
+    });
 
     try {
       await expect(

@@ -4,30 +4,53 @@ import type {
   TranscriptMessageAppendResult,
 } from "../config/sessions/session-accessor.js";
 import {
+  readSessionTranscriptContextMessages,
+  type SessionTranscriptContextVersion,
+} from "../config/sessions/session-accessor.sqlite-model-context.js";
+import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.types.js";
+import {
   runWithSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
+  withSessionContextAdmission,
 } from "../config/sessions/session-transcript-read-fence.js";
 import type {
   TranscriptTurnAdmission,
   TranscriptEntryAnchor,
 } from "../config/sessions/transcript-entry-anchor.js";
 import type { AgentMessage } from "./agent-core.js";
-import {
-  withProjectedSessionTranscriptWriteLock,
-  type InternalSessionTranscriptWriteLockContext,
-  type InternalSessionTranscriptWriteLockParams,
+import type {
+  InternalSessionTranscriptWriteLockContext,
+  InternalSessionTranscriptWriteLockParams,
 } from "./session-transcript-lock-runtime.js";
-import {
-  readSessionTranscriptEvents,
-  resolveSessionTranscriptIdentity,
-  type SessionTranscriptTargetParams,
-} from "./session-transcript-runtime.js";
+import type { SessionTranscriptTargetParams } from "./session-transcript-runtime.js";
+
+export { resolveSessionTranscriptReadFence as captureCodexSessionTranscriptReadAdmission } from "../config/sessions/session-transcript-read-fence.js";
+export { validateSessionTranscriptContextAdmission as validateCodexSessionTranscriptReadAdmission } from "../config/sessions/session-accessor.sqlite-model-context.js";
+export { validateSessionTranscriptContextVersion as validateCodexSessionTranscriptContextVersion } from "../config/sessions/session-accessor.sqlite-model-context.js";
+export type { SessionTranscriptContextVersion } from "../config/sessions/session-accessor.sqlite-model-context.js";
+
+/** The native evidence consumer remains lazy inside one readonly transcript snapshot. */
+export function readCodexSessionContext<T>(
+  target: SessionTranscriptRuntimeTarget,
+  read: (
+    messages: Iterable<AgentMessage>,
+    header: unknown,
+    version?: SessionTranscriptContextVersion,
+  ) => T,
+  admission?: TranscriptTurnAdmission,
+): T {
+  return withSessionContextAdmission(target, admission, () =>
+    readSessionTranscriptContextMessages(target, read),
+  );
+}
 
 /** Reads the bundled Codex mirror strictly before one admitted user row. */
 export async function readCodexSessionTranscriptEventsBeforeAdmission(
   params: SessionTranscriptTargetParams,
   admission: TranscriptTurnAdmission,
 ) {
+  const { readSessionTranscriptEvents, resolveSessionTranscriptIdentity } =
+    await import("./session-transcript-runtime.js");
   const target = await resolveSessionTranscriptIdentity(params);
   if (
     target.agentId !== admission.agentId ||
@@ -64,6 +87,8 @@ export async function withCodexSessionTranscriptMirrorWriteLock<T>(
   params: InternalSessionTranscriptWriteLockParams,
   run: (context: CodexSessionTranscriptMirrorWriteLockContext) => Promise<T> | T,
 ): Promise<T> {
+  const { withProjectedSessionTranscriptWriteLock } =
+    await import("./session-transcript-lock-runtime.js");
   return await withProjectedSessionTranscriptWriteLock(params, run, (context, locked) => ({
     ...context,
     appendMessageWithMessageSequence: (options) =>

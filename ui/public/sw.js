@@ -145,7 +145,8 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Cache-first for hashed assets; network-first for HTML/other.
+  // Cache-first for hashed assets; network-first for other paths. Versioned
+  // public URLs reuse the HTTP immutable cache; unversioned/custom files revalidate.
   if (url.pathname.includes("/assets/")) {
     event.respondWith(
       caches.match(event.request).then(

@@ -28,9 +28,6 @@ import {
   isScheduledTaskDefinitelyNotRunning,
   isStartupEntryInstalled,
   launchFallbackTaskScript,
-  normalizeTaskResultCode,
-  NOT_YET_RUN_RESULT_CODES,
-  probeScheduledTaskExists,
   readScheduledTaskRuntime,
   removeStartupEntries,
   resolveFallbackRuntime,
@@ -42,6 +39,7 @@ import {
   terminateInstalledStartupRuntime,
   waitForScheduledTaskRunningEvidence,
 } from "./schtasks-runtime.js";
+import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
 import { ScheduledTaskAutoStartRecoveryError } from "./schtasks-update-recovery.js";
 import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
 import type {
@@ -70,11 +68,14 @@ async function shouldFallbackScheduledTaskLaunch(params: {
     if (runtime?.status === "running") {
       return { state: "running", signature: runtimeSignature(runtime) };
     }
-    const normalizedResult = normalizeTaskResultCode(runtime?.lastRunResult);
-    if (normalizedResult && NOT_YET_RUN_RESULT_CODES.has(normalizedResult)) {
+    if (runtime?.status !== "stopped") {
+      return { state: "other", signature: runtimeSignature(runtime) };
+    }
+    // SCHED_S_TASK_HAS_NOT_RUN is history, and only a stopped task is a fallback candidate.
+    if (runtime.lastRunResult === "267011") {
       return { state: "not-yet-run", signature: runtimeSignature(runtime) };
     }
-    return normalizedResult === "0x0"
+    return runtime.lastRunResult === "0"
       ? { state: "stopped-success", signature: runtimeSignature(runtime) }
       : { state: "other", signature: runtimeSignature(runtime) };
   };

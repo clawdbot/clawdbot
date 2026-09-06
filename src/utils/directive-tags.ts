@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { sliceCodePoints } from "@openclaw/normalization-core/code-points";
+import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 // Directive tag helpers parse inline directive tags from user text.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
@@ -132,7 +132,7 @@ export function sanitizeReplyDirectiveId(rawReplyToId?: string): string | undefi
   // UTF-16 length is an upper bound on the number of code points.
   return sanitized.length <= MAX_REPLY_DIRECTIVE_ID_LENGTH
     ? sanitized
-    : sliceCodePoints(sanitized, 0, MAX_REPLY_DIRECTIVE_ID_LENGTH);
+    : truncateCodePoints(sanitized, MAX_REPLY_DIRECTIVE_ID_LENGTH);
 }
 
 export function stripInlineDirectiveTagsForDelivery(text: string): StripInlineDirectiveTagsResult {

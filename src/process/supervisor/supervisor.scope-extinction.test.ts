@@ -52,7 +52,7 @@ describe("process supervisor scope extinction", () => {
     });
 
     expect(run.waitForExtinction).toBeUndefined();
-    const drain = supervisor.waitForScope("scope:ordinary-child");
+    const drain = run.wait();
     const drained = vi.fn();
     void drain.then(drained);
     await Promise.resolve();
@@ -60,9 +60,158 @@ describe("process supervisor scope extinction", () => {
 
     adapter.settle(0);
     await expect(run.wait()).resolves.toMatchObject({ reason: "exit", exitCode: 0 });
-    await expect(drain).resolves.toBeUndefined();
+    await expect(drain).resolves.toMatchObject({ exitCode: 0 });
     expect(adapter.disposeMock).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    { failed: false, acquired: true },
+    { failed: true, acquired: true },
+    { failed: true, acquired: false },
+  ])(
+    "retains extinction until its scope joins (failed=$failed, acquired=$acquired)",
+    async ({ failed, acquired }) => {
+      const extinction = createDeferred();
+      const adapter = Object.assign(createStubChildAdapter(), {
+        waitForExtinction: () => extinction.promise,
+      });
+      createChildAdapterMock.mockResolvedValue(adapter);
+      const supervisor = createProcessSupervisor();
+      const scopeKey = "scope:one-shot-late-join";
+      const cleanup = acquired
+        ? supervisor.acquireScopeCleanup(scopeKey, { requireProcessTree: true })
+        : () => supervisor.waitForScope!(scopeKey);
+      const run = await spawnChild(supervisor, {
+        sessionId: scopeKey,
+        scopeKey,
+        argv: createSilentIdleArgv(),
+      });
+      adapter.settle(0);
+      await expect(run.wait()).resolves.toMatchObject({ exitCode: 0 });
+      if (failed) {
+        extinction.reject(new Error("cleanup identity lost"));
+        await expect(run.waitForExtinction!()).rejects.toThrow("cleanup identity lost");
+        await expect(cleanup()).rejects.toThrow("cleanup identity lost");
+        await expect(cleanup()).rejects.toThrow("cleanup identity lost");
+      } else {
+        extinction.resolve();
+        await run.waitForExtinction!();
+        await expect(cleanup()).resolves.toBeUndefined();
+      }
+      // The released owner must neither poison a new run nor retain the old admission.
+      if (acquired) {
+        await expect(
+          supervisor.acquireScopeCleanup(scopeKey, { requireProcessTree: true })(),
+        ).resolves.toBeUndefined();
+      }
+      if (failed) {
+        await expect(supervisor.shutdown()).rejects.toThrow("cleanup identity lost");
+      } else {
+        await supervisor.shutdown();
+      }
+    },
+  );
+
+  it.each(["child", "pty", "external"] as const)(
+    "keeps %s execution available but reports unsupported one-shot cleanup",
+    async (mode) => {
+      const adapter = createStubChildAdapter();
+      createChildAdapterMock.mockResolvedValue(adapter);
+      createPtyAdapterMock.mockResolvedValue(adapter);
+      const supervisor = createProcessSupervisor();
+      const scopeKey = `scope:unsupported-${mode}`;
+      const cleanup = supervisor.acquireScopeCleanup(scopeKey, { requireProcessTree: true });
+      const run = await supervisor.spawn({
+        mode: mode === "pty" ? "pty" : "child",
+        argv: createSilentIdleArgv(),
+        backendId: "test",
+        sessionId: scopeKey,
+        scopeKey,
+        ...(mode === "external" ? { cleanupOwnership: "external" as const } : {}),
+      });
+      adapter.emitStdout("tool execution remains available");
+      adapter.settle(0);
+      await expect(run.wait()).resolves.toMatchObject({
+        exitCode: 0,
+        stdout: "tool execution remains available",
+      });
+      await expect(cleanup()).rejects.toThrow("cannot confirm owned execution-tree settlement");
+      await supervisor.shutdown();
+    },
+  );
+
+  it("allows graceful descendant cleanup after a one-shot root result", async () => {
+    const extinction = createDeferred();
+    const adapter = Object.assign(createStubChildAdapter(), {
+      waitForExtinction: () => extinction.promise,
+    });
+    createChildAdapterMock.mockResolvedValue(adapter);
+    const supervisor = createProcessSupervisor();
+    const scopeKey = "scope:graceful-one-shot";
+    const cleanup = supervisor.acquireScopeCleanup(scopeKey, { requireProcessTree: true });
+    const run = await spawnChild(supervisor, {
+      sessionId: scopeKey,
+      scopeKey,
+      argv: createSilentIdleArgv(),
+    });
+    adapter.settle(0);
+    await run.wait();
+    const closing = cleanup();
+    expect(adapter.killMock).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+    extinction.resolve();
+    await closing;
+    await supervisor.shutdown();
+  });
+
+  it.each(["scope", "shutdown"] as const)(
+    "keeps timed-out construction cleanup joinable through %s",
+    async (join) => {
+      vi.useFakeTimers();
+      const startup = createDeferred<StubChildAdapter>();
+      const extinction = createDeferred();
+      const adapter = Object.assign(createStubChildAdapter(), {
+        waitForExtinction: () => extinction.promise,
+      });
+      createChildAdapterMock.mockReturnValueOnce(startup.promise);
+      const supervisor = createProcessSupervisor();
+      const scopeKey = "scope:timed-out-construction";
+      const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, { requireProcessTree: false });
+      const pending = spawnChild(supervisor, {
+        sessionId: "timed-out-construction",
+        scopeKey,
+        argv: createSilentIdleArgv(),
+        timeoutMs: 25,
+      });
+      try {
+        await vi.advanceTimersByTimeAsync(25);
+        const run = await pending;
+        await expect(run.wait()).resolves.toMatchObject({ reason: "overall-timeout" });
+        const drain = join === "scope" ? cleanupScope() : supervisor.shutdown();
+        const drained = vi.fn();
+        void drain.then(drained, drained);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(drained).not.toHaveBeenCalled();
+
+        startup.resolve(adapter);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(adapter.killMock).toHaveBeenCalledWith("SIGKILL");
+        expect(drained).not.toHaveBeenCalled();
+        expect(adapter.disposeMock).not.toHaveBeenCalled();
+
+        adapter.settle(null, "SIGKILL");
+        extinction.resolve();
+        await expect(drain).resolves.toBeUndefined();
+        expect(adapter.disposeMock).toHaveBeenCalledOnce();
+      } finally {
+        startup.resolve(adapter);
+        adapter.settle(null, "SIGKILL");
+        extinction.resolve();
+        await pending;
+        await supervisor.shutdown();
+        await cleanupScope();
+      }
+    },
+  );
 
   it("preserves root output when authoritative extinction settles first", async () => {
     const adapter = createStubChildAdapter();
@@ -142,41 +291,50 @@ describe("process supervisor scope extinction", () => {
     async (reuseRunId) => {
       const first = createStubChildAdapter();
       const sibling = createStubChildAdapter({ pid: 4321 });
-      const [firstExtinction, siblingExtinction] = [createDeferred(), createDeferred()];
-      first.waitForExtinction = async () => await firstExtinction.promise;
+      const siblingExtinction = createDeferred();
       sibling.waitForExtinction = async () => await siblingExtinction.promise;
       const startup = createDeferred<StubChildAdapter>();
       createChildAdapterMock.mockReturnValueOnce(startup.promise).mockResolvedValueOnce(sibling);
 
       const supervisor = createProcessSupervisor();
-      const pending = ["failed-owner", "pending-owner"].map((sessionId) =>
-        spawnChild(supervisor, {
-          ...(reuseRunId ? { runId: "same-agent-run" } : {}),
-          sessionId,
-          scopeKey: "scope:failed-drain",
-          argv: createSilentIdleArgv(),
-        }),
-      );
+      const cleanupScope = supervisor.acquireScopeCleanup("scope:failed-drain", {
+        requireProcessTree: false,
+      });
+      const sharedId = reuseRunId ? { runId: "same-agent-run" } : {};
+      const firstPending = spawnChild(supervisor, {
+        ...sharedId,
+        sessionId: "failed-owner",
+        scopeKey: "scope:failed-drain",
+        argv: createSilentIdleArgv(),
+      });
+      const siblingRun = await spawnChild(supervisor, {
+        ...sharedId,
+        sessionId: "pending-owner",
+        scopeKey: "scope:failed-drain",
+        argv: createSilentIdleArgv(),
+      });
       supervisor.cancelScope("scope:failed-drain");
-      const drain = supervisor.waitForScope("scope:failed-drain");
+      const drain = cleanupScope();
       startup.resolve(first);
-      const runs = await Promise.all(pending);
-      expect(first.killMock).toHaveBeenCalledWith("SIGTERM");
+      const firstRun = await firstPending;
+      expect(first.killMock).toHaveBeenCalledWith("SIGKILL");
+      expect(first.disposeMock).not.toHaveBeenCalled();
+      first.settle(null, "SIGKILL");
+      await firstRun.waitForExtinction?.();
+      expect(first.disposeMock).toHaveBeenCalled();
       expect(sibling.killMock).toHaveBeenCalledWith("SIGTERM");
-      expect(supervisor.getRecord(runs[1]!.runId)).toMatchObject({ pid: sibling.pid });
-      first.settle(0);
+      expect(supervisor.getRecord(siblingRun.runId)).toMatchObject({ pid: sibling.pid });
       sibling.settle(0);
-      await Promise.all(runs.map((run) => run.wait()));
+      await Promise.all([firstRun.wait(), siblingRun.wait()]);
 
       const drained = vi.fn();
       void drain.then(drained, drained);
-      firstExtinction.reject(new Error("first owner lost authority"));
       await Promise.resolve();
       expect(drained).not.toHaveBeenCalled();
       expect(sibling.disposeMock).not.toHaveBeenCalled();
 
-      siblingExtinction.resolve();
-      await expect(drain).rejects.toThrow("first owner lost authority");
+      siblingExtinction.reject(new Error("sibling owner lost authority"));
+      await expect(drain).rejects.toThrow("sibling owner lost authority");
       expect(sibling.disposeMock).toHaveBeenCalledTimes(1);
     },
   );

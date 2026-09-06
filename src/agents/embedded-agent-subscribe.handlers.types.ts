@@ -3,12 +3,14 @@
  * Message, tool, compaction, and liveness handlers all mutate this single
  * state shape while keeping their implementation files decoupled.
  */
+import type { AgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import type { InlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import type { FenceScanState } from "../../packages/markdown-core/src/fences.js";
 import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
+import type { ThinkingContent } from "../llm/types.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { AssistantPhase } from "../shared/chat-message-content.js";
 import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
@@ -30,7 +32,6 @@ import type {
 } from "./embedded-agent-utils.js";
 import type { McpConnectAction } from "./mcp-connect-action.js";
 import type { McpAppChannelView } from "./mcp-ui-resource.js";
-import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
 import type { ToolErrorSummary } from "./tool-error-summary.js";
@@ -206,6 +207,7 @@ export type EmbeddedAgentSubscribeState = {
   messagingToolSentMediaUrls: string[];
   messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[];
   messageToolOnlySourceReplyDelivered: boolean;
+  sourceReplyDelivered?: true;
   pendingMessagingTexts: Map<string, string>;
   pendingMessagingTargets: Map<string, MessagingToolSend>;
   successfulCronAdds: number;
@@ -264,7 +266,7 @@ export type EmbeddedAgentSubscribeContext = {
     final?: boolean;
     finalReply?: ReplyDirectiveParseResult;
   }) => void | Promise<void>;
-  emitReasoningStream: (text: string) => void;
+  emitReasoningStream: (text: string | ThinkingContent, fallback?: string) => void;
   consumePartialReplyDirectives: (
     text: string,
     options?: { final?: boolean },
@@ -374,6 +376,7 @@ type ToolHandlerState = Pick<
   | "messagingToolSentMediaUrls"
   | "messagingToolSourceReplyPayloads"
   | "messageToolOnlySourceReplyDelivered"
+  | "sourceReplyDelivered"
   | "messagingToolSentTargets"
   | "heartbeatToolResponse"
   | "successfulCronAdds"

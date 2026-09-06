@@ -146,6 +146,8 @@ One-shot jobs delete only after `completionStatus: "succeeded"`. Required-delive
 
 ### Recurring jobs
 
+Configured intervals and stagger windows retain millisecond precision in human-readable output: `--every 90s` displays as `every 1m 30s`, and `--stagger 1001ms` as `stagger 1s 1ms`. Use `automations show <job-id>` for the full duration when the list column is truncated. Relative next-run and last-run labels remain rounded.
+
 Recurring jobs use exponential retry backoff after consecutive errors: 30s, 1m, 5m, 15m, 60m. The schedule returns to normal after the next successful run.
 
 Skipped runs are tracked separately from execution errors. They do not affect retry backoff, but `openclaw automations edit <job-id> --failure-alert-include-skipped` can opt failure alerts into repeated skipped-run notifications.
@@ -160,7 +162,7 @@ Automation jobs, pending runtime state, and run history live in the shared SQLit
 
 ```bash
 openclaw automations run <job-id>
-openclaw automations runs --id <job-id> --run-id <run-id>
+openclaw automations runs <job-id> --run-id <run-id>
 ```
 
 Add `--wait` when a script should block until that exact queued run records a terminal status:
@@ -317,10 +319,13 @@ openclaw automations run <job-id>
 openclaw automations run <job-id> --due
 openclaw automations run <job-id> --wait --wait-timeout 10m
 openclaw automations run <job-id> --wait --wait-timeout 10m --poll-interval 2s
-openclaw automations runs --id <job-id> --limit 50
-openclaw automations runs --id <job-id> --limit 50 --json
-openclaw automations runs --id <job-id> --run-id <run-id>
+openclaw automations runs <job-id> --limit 50
+openclaw automations runs <job-id> --limit 50 --json
+openclaw automations runs <job-id> --run-id <run-id>
 ```
+
+`automations runs` is the preferred spelling. `cron runs` and the leaf-local
+`--id <job-id>` form remain supported compatibility aliases.
 
 `openclaw automations list` shows enabled jobs by default. Pass `--all` to include disabled jobs, or `--agent <id>` to show only jobs whose effective normalized agent id matches; jobs without a stored agent id count as the configured default agent.
 

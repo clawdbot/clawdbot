@@ -1,4 +1,4 @@
-import { sliceCodePoints } from "@openclaw/normalization-core/code-points";
+import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 import {
   ErrorCodes,
   errorShape,
@@ -521,7 +521,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       typeof requestParams.preview === "string"
         ? {
             ...requestParams,
-            preview: sliceCodePoints(requestParams.preview.trim(), 0, 400),
+            preview: truncateCodePoints(requestParams.preview.trim(), 400),
           }
         : requestParams;
     if (!assertValidParams(params, validateSessionTypingParams, "session.typing", respond)) {

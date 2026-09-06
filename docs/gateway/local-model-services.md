@@ -2,7 +2,7 @@
 summary: "Start local model servers on demand before OpenClaw model and embedding requests"
 read_when:
   - You want OpenClaw to start a local model server only when its model or embedding provider is selected
-  - You run ds4, inferrs, vLLM, llama.cpp, MLX, or another OpenAI-compatible local server
+  - You run ds4, llmman, vLLM, llama.cpp, MLX, or another OpenAI-compatible local server
   - You need to control cold start, readiness, and idle shutdown for local providers
 title: "Local model services"
 ---
@@ -88,51 +88,42 @@ Set `timeoutSeconds` on the provider entry (not `localService`) so slow cold sta
 | `readyTimeoutMs` | no       | Startup readiness deadline. Default: `120000`.                                                                                       |
 | `idleStopMs`     | no       | Idle shutdown delay for an OpenClaw-started process. `0` or omitted keeps it alive until OpenClaw exits.                             |
 
-## Inferrs example
+## llmman example
 
-Inferrs is a custom OpenAI-compatible `/v1` backend, so the same `localService` API works with an `inferrs` provider entry:
+llmman is a custom OpenAI-compatible `/v1` backend, so the same `localService` API works with an `llmman` provider entry. It listens on `127.0.0.1:17434` by default; `LLMMAN_HOST` overrides the bind address, while `LLMMAN_LLM_LIBRARY` overrides GPU auto-detection. Its API has no authentication, so keep the default loopback bind unless a trusted network boundary restricts access.
 
 ```json5
 {
   agents: {
     defaults: {
-      model: { primary: "inferrs/google/gemma-4-E2B-it" },
+      model: { primary: "llmman/gemma4" },
     },
   },
   models: {
     mode: "merge",
     providers: {
-      inferrs: {
-        baseUrl: "http://127.0.0.1:8080/v1",
-        apiKey: "inferrs-local",
+      llmman: {
+        baseUrl: "http://127.0.0.1:17434/v1",
+        apiKey: "llmman-local",
         api: "openai-completions",
         timeoutSeconds: 300,
         localService: {
-          command: "/opt/homebrew/bin/inferrs",
-          args: [
-            "serve",
-            "google/gemma-4-E2B-it",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            "8080",
-            "--device",
-            "metal",
-          ],
-          healthUrl: "http://127.0.0.1:8080/v1/models",
+          command: "/opt/homebrew/bin/llmman",
+          args: ["serve", "gemma4"],
+          env: { LLMMAN_CONTEXT_LENGTH: "65536" },
+          healthUrl: "http://127.0.0.1:17434/v1/models",
           readyTimeoutMs: 180000,
           idleStopMs: 0,
         },
         models: [
           {
-            id: "google/gemma-4-E2B-it",
-            name: "Gemma 4 E2B (inferrs)",
+            id: "gemma4",
+            name: "Gemma 4 (llmman)",
             reasoning: false,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 131072,
+            contextWindow: 65536,
             maxTokens: 4096,
-            compat: { requiresStringContent: true },
           },
         ],
       },
@@ -141,7 +132,7 @@ Inferrs is a custom OpenAI-compatible `/v1` backend, so the same `localService` 
 }
 ```
 
-Replace `command` with the result of `which inferrs` on the machine running OpenClaw. Full inferrs setup: [Inferrs](/providers/inferrs).
+Replace `command` with the result of `which llmman` on the machine running OpenClaw. Full llmman setup: [llmman](/providers/llmman).
 
 ## ds4 example
 
@@ -188,7 +179,7 @@ Full setup, context sizing, and verification commands: [ds4](/providers/ds4).
   <Card title="Local models" href="/gateway/local-models" icon="server">
     Local model setup, provider choices, and safety guidance.
   </Card>
-  <Card title="Inferrs" href="/providers/inferrs" icon="cpu">
-    Run OpenClaw through the inferrs OpenAI-compatible local server.
+  <Card title="llmman" href="/providers/llmman" icon="cpu">
+    Run OpenClaw through the llmman OpenAI-compatible local server.
   </Card>
 </CardGroup>

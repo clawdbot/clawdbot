@@ -5,10 +5,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { resolveInternalSessionEffectsIdentity } from "../../../config/sessions/internal-session-key.js";
 import { readNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { createFixtureSkillEntry } from "../../../skills/test-support/test-helpers.js";
-import {
-  runSkillExperienceReview,
-  type ExperienceReviewCandidate,
-} from "../../../skills/workshop/experience-review.js";
+import { runSkillExperienceReview } from "../../../skills/workshop/experience-review.js";
+import { createExperienceReviewCandidate } from "../../../skills/workshop/experience-review.test-support.js";
 import {
   bindActiveOperatorTurnAuthority,
   createCronCreatorAuthorityCapability,
@@ -82,7 +80,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
         senderId: "sender-1",
       },
     },
-  ])("keeps cache state identical for $label", async ({ context }) => {
+  ])("preserves caller-dependent tool schemas for $label", async ({ context }) => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-review-parity-"));
     tempPaths.push(workspaceDir);
     const foregroundPromptContext = {
@@ -109,7 +107,6 @@ describe("runEmbeddedAttempt skill policy projections", () => {
     const snapshots: Array<{
       toolNames: string[];
       toolDigest: string;
-      systemPromptDigest: string;
     }> = [];
     hoisted.createOpenClawCodingToolsMock.mockImplementation((...args: unknown[]) => {
       const options = args[0] as {
@@ -142,7 +139,6 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       return {
         toolNames,
         toolDigest: snapshot.toolDigest,
-        systemPromptDigest: snapshot.systemPromptDigest,
       };
     };
 
@@ -161,27 +157,20 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       snapshots.push(captureToolSurface(params));
       return { meta: { durationMs: 1 } };
     });
-    const reviewCandidate: ExperienceReviewCandidate = {
-      ctx: {
-        agentId: "main",
-        runId,
-        sessionId: "review-session",
-        sessionKey: "agent:main:review",
-        workspaceDir,
-        modelProviderId: "openai",
-        modelId: "gpt-test",
-        skillWorkshopAvailable: true,
-        foregroundPromptContext,
-      },
-      config: { skills: { workshop: { autonomous: { mode: "propose" } } } },
-    };
+    const reviewCandidate = await createExperienceReviewCandidate(
+      runId,
+      [{ role: "user", content: "Inspect the available tools.", timestamp: 1 }],
+      { workspaceDir, modelId: "gpt-test" },
+    );
+    reviewCandidate.ctx.foregroundPromptContext = foregroundPromptContext;
+    reviewCandidate.config = { skills: { workshop: { autonomous: { mode: "propose" } } } };
     await runSkillExperienceReview(reviewCandidate, {
-      getCurrentConfig: () => reviewCandidate.config ?? {},
+      getCurrentConfig: () => reviewCandidate.config,
     });
     expect(snapshots[1]).toEqual(snapshots[0]);
   });
 
-  it("keeps review prompt digests equal on a private session without persistence", async () => {
+  it("preserves tool schemas and source bytes while hiding unreadable review skills", async () => {
     const sessionRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-review-parity-"));
     tempPaths.push(sessionRoot);
     const transcriptFile = path.join(sessionRoot, "transcript.jsonl");
@@ -235,6 +224,12 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       const session = review ? reviewSession : foregroundSession;
       resetEmbeddedAttemptHarness();
       hoisted.createOpenClawCodingToolsMock.mockReturnValue(codingTools);
+      hoisted.resolveEmbeddedRunSkillEntriesMock.mockReturnValue({
+        shouldLoadSkillEntries: true,
+        skillEntries: [createFixtureSkillEntry("demo")],
+        loadSkillEntries: vi.fn(() => [createFixtureSkillEntry("demo")]),
+      });
+      hoisted.resolveSkillsPromptForRunMock.mockReturnValue(skillsPrompt);
       await createContextEngineAttemptRunner({
         contextEngine: createContextEngineBootstrapAndAssemble(),
         sessionKey: session.sessionKey,
@@ -274,7 +269,6 @@ describe("runEmbeddedAttempt skill policy projections", () => {
                 skillWorkshopProposalOnly: true,
                 disableTrajectory: true,
                 verboseLevel: "off" as const,
-                suppressToolErrorWarnings: true,
                 trigger: "user" as const,
               }
             : {}),
@@ -285,6 +279,9 @@ describe("runEmbeddedAttempt skill policy projections", () => {
         | undefined;
       const tools = sessionOptions?.customTools ?? [];
       expect(tools.some((tool) => tool.name === "message")).toBe(true);
+      expect(hoisted.embeddedSystemPromptInputs.at(-1)).toMatchObject({
+        skillsPrompt: review ? "" : skillsPrompt,
+      });
       snapshots.push(
         beginPromptCacheObservation({
           sessionId: session.sessionId,
@@ -303,30 +300,37 @@ describe("runEmbeddedAttempt skill policy projections", () => {
         status: "rejected",
         reason: {
           message:
-            "Unavailable during skill review. Use skill_workshop or finish with NOTHING_TO_LEARN.",
+            "Unavailable during skill review. Do not retry this tool. Continue with skill_workshop under the review instructions.",
         },
       },
     ]);
     expect(execute).not.toHaveBeenCalled();
-    expect(snapshots[1]?.systemPromptDigest).toBe(snapshots[0]?.systemPromptDigest);
     expect(snapshots[1]?.toolDigest).toBe(snapshots[0]?.toolDigest);
     expect(await fs.readFile(transcriptFile)).toEqual(beforeTranscript);
     expect(await fs.readFile(storeFile)).toEqual(beforeStore);
   });
 
-  it("keeps wildcard allowlists equivalent to an unrestricted attempt", async () => {
+  it("exposes Code Mode skills only when read is available and executable", async () => {
     const observed: Array<{
       label: string;
       skillsPrompt?: string;
       skillsListAvailable: boolean;
     }> = [];
 
-    for (const testCase of [
+    const cases: Array<{
+      label: string;
+      toolsAllow?: string[];
+      toolExecutionAllow?: string[];
+    }> = [
       { label: "undefined", toolsAllow: undefined },
       { label: "wildcard", toolsAllow: ["*"] },
       { label: "mixed wildcard", toolsAllow: ["message", "*"] },
       { label: "finite", toolsAllow: ["message"] },
-    ]) {
+      { label: "read executable", toolExecutionAllow: ["skill_workshop", "read"] },
+      { label: "read denied", toolExecutionAllow: ["skill_workshop"] },
+      { label: "execution denied", toolExecutionAllow: [] },
+    ];
+    for (const testCase of cases) {
       resetEmbeddedAttemptHarness();
       hoisted.resolveEmbeddedRunSkillEntriesMock.mockReturnValue({
         shouldLoadSkillEntries: true,
@@ -342,6 +346,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
         attemptOverrides: {
           disableTools: false,
           toolsAllow: testCase.toolsAllow,
+          toolExecutionAllow: testCase.toolExecutionAllow,
           config: { tools: { codeMode: true } },
         },
       });
@@ -368,6 +373,9 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       { label: "wildcard", skillsPrompt, skillsListAvailable: true },
       { label: "mixed wildcard", skillsPrompt, skillsListAvailable: true },
       { label: "finite", skillsPrompt: undefined, skillsListAvailable: false },
+      { label: "read executable", skillsPrompt, skillsListAvailable: true },
+      { label: "read denied", skillsPrompt: "", skillsListAvailable: false },
+      { label: "execution denied", skillsPrompt: "", skillsListAvailable: false },
     ]);
   });
   it("gates catalog-hidden tools during review while skill_workshop stays callable", async () => {
