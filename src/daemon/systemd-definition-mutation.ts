@@ -9,6 +9,7 @@ import { sha256Hex } from "../infra/crypto-digest.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { withFileLock } from "../infra/file-lock.js";
 import { canonicalPathFromExistingAncestor, findExistingAncestor } from "../infra/fs-safe.js";
+import { readServiceFileState, type GatewayServiceStagedFiles } from "./service-stage.js";
 import {
   assertServiceDefinitionWritable,
   type GatewayServiceEnv,
@@ -25,6 +26,8 @@ import { assertNoSystemSystemdOwnership, isSystemSystemdOwnershipError } from ".
 type Snapshot = { contents: Buffer; mode: number } | null;
 type SystemdDefinitionMutation = {
   snapshots: Map<string, Snapshot>;
+  stagedFiles: GatewayServiceStagedFiles["files"];
+  assertCurrent: () => Promise<void>;
   publish: (file: string, contents: string | Buffer, mode: number) => Promise<void>;
   restore: (file: string, snapshot: Snapshot) => Promise<void>;
 };
@@ -245,6 +248,7 @@ export async function withSystemdDefinitionMutation<T>(
     }
     const allowed = new Set([unit, generated, `${unit}.bak`]);
     const publications = new Map<string, string>();
+    const stagedFiles: GatewayServiceStagedFiles["files"] = [];
     const publish = async (
       file: string,
       contents: string | Buffer,
@@ -256,6 +260,8 @@ export async function withSystemdDefinitionMutation<T>(
       }
       await refresh(true);
       const previous = initial.snapshots.get(file) ?? null;
+      const before = await readServiceFileState(file);
+      await refresh(true);
       const directory = await fs.realpath(path.dirname(file));
       const temporary = path.join(directory, `${path.basename(file)}.${randomUUID()}.tmp`);
       try {
@@ -282,6 +288,18 @@ export async function withSystemdDefinitionMutation<T>(
         publications.set(file, published);
         try {
           await refresh(true, file === unit && previous === null);
+          const after = await readServiceFileState(file);
+          if (
+            !after ||
+            after.dev !== written.dev ||
+            after.ino !== written.ino ||
+            after.sha256 !== sha256Hex(Buffer.from(contents)) ||
+            after.mode !== mode
+          ) {
+            throw new Error("Managed service artifact changed after publication.");
+          }
+          await refresh(true);
+          stagedFiles.push({ sourcePath: file, before, after });
         } catch (error) {
           // Roll back only our unchanged publication; a failing rollback must not recurse.
           if (rollback) {
@@ -317,7 +335,21 @@ export async function withSystemdDefinitionMutation<T>(
       }
       publications.delete(file);
     };
-    return await run({ snapshots: initial.snapshots, publish, restore });
+    return await run({
+      snapshots: initial.snapshots,
+      stagedFiles,
+      assertCurrent: async () => {
+        await refresh(true);
+        for (const file of stagedFiles) {
+          if (!isDeepStrictEqual(await readServiceFileState(file.sourcePath), file.after)) {
+            throw new Error("Staged service identity changed before native load.");
+          }
+        }
+        await refresh(true);
+      },
+      publish,
+      restore,
+    });
   };
   const lockOptions = () => {
     const timeoutMs = remainingTimeoutMs();

@@ -2392,6 +2392,58 @@ describe("stageSystemdService", () => {
     }
   }
 
+  it.each(["sealed", "refused", "changed", "touched"] as const)(
+    "loads only the unchanged sealed native definition: %s",
+    async (scenario) => {
+      await withStageFixture(async ({ env, unitPath, envFilePath }) => {
+        execFileMock.mockImplementation(execFileSuccess());
+        const beforeLoad = vi.fn(async (staged: { files: readonly { sourcePath: string }[] }) => {
+          expect(staged.files.map((file) => file.sourcePath)).toContain(unitPath);
+          expect(await fs.readFile(unitPath, "utf8")).toContain("ExecStart=");
+          expect(await fs.readFile(envFilePath, "utf8")).toContain("managed-value");
+          // The writer has completed, but no native activation edge may run
+          // until this awaited checkpoint callback has returned.
+          await Promise.resolve();
+          expect(
+            execFileMock.mock.calls.some(([, args]) =>
+              args.some((arg) => ["daemon-reload", "enable", "restart", "start"].includes(arg)),
+            ),
+          ).toBe(false);
+          if (scenario === "sealed") {
+            return;
+          }
+          if (scenario === "refused") {
+            throw new Error("checkpoint not sealed");
+          }
+          if (scenario === "touched") {
+            await fs.utimes(envFilePath, 1, 1);
+          } else {
+            await fs.appendFile(envFilePath, "# concurrent edit\n");
+          }
+        });
+        const installing = installSystemdService({
+          ...gatewayPortSystemdServiceFixture(env, "18789"),
+          environment: { TEST_SETTING: "managed-value" },
+          environmentValueSources: { TEST_SETTING: "file" },
+          beforeLoad,
+        });
+        if (scenario === "sealed") {
+          await expect(installing).resolves.toMatchObject({ unitPath });
+        } else {
+          await expect(installing).rejects.toThrow(
+            scenario === "refused" ? "checkpoint not sealed" : "changed",
+          );
+        }
+        expect(beforeLoad).toHaveBeenCalledOnce();
+        expect(
+          execFileMock.mock.calls.some(([, args]) =>
+            args.some((arg) => ["daemon-reload", "enable", "restart", "start"].includes(arg)),
+          ),
+        ).toBe(scenario === "sealed");
+      });
+    },
+  );
+
   function mockSystemctlStatusOk(): void {
     execFileMock.mockImplementationOnce(systemctlUserSuccess("status"));
   }

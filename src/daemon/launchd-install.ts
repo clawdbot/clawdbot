@@ -317,6 +317,9 @@ async function activateLaunchAgent(params: {
 export async function installLaunchAgent(
   args: GatewayServiceInstallArgs,
 ): Promise<{ plistPath: string }> {
+  if (args.beforeLoad) {
+    throw new Error("Deferred native service load is not supported on this platform.");
+  }
   await assertExternalLaunchAgentMutation(args.env, "install");
   const targetPlistPath = resolveLaunchAgentPlistPath(args.env);
   const previousContents = await readExistingLaunchAgentPlist(targetPlistPath);

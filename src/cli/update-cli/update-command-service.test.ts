@@ -89,6 +89,46 @@ describe("maybeRestartService", () => {
     });
   });
 
+  it.each(["seal refused", "target install failed", "missing entrypoint"])(
+    "never falls back to restart after gated install failure: %s",
+    async (reason) => {
+      const serviceLoadBoundary = { assertCurrent: vi.fn(), seal: vi.fn() };
+      if (reason === "missing entrypoint") {
+        const actual = await vi.importActual<typeof import("./update-command-service-command.js")>(
+          "./update-command-service-command.js",
+        );
+        mocks.runUpdatedInstallGatewayCommand.mockImplementationOnce(
+          actual.runUpdatedInstallGatewayCommand,
+        );
+      } else {
+        mocks.runUpdatedInstallGatewayCommand.mockRejectedValueOnce(new Error(reason));
+      }
+      const onVerified = vi.fn();
+      await expect(
+        maybeRestartService({
+          shouldRestart: true,
+          result: { status: "ok", mode: "npm", steps: [], durationMs: 0 },
+          opts: { json: true, run },
+          refreshServiceEnv: true,
+          serviceEnv: { HOME: "/home/operator" },
+          serviceInstallEnv: {},
+          serviceLoadBoundary,
+          gatewayPort: 18789,
+          restartScriptPath: "/tmp/openclaw-sealed-restart.sh",
+          timeoutMs: 1_000,
+          onVerified,
+        }),
+      ).rejects.toMatchObject({ name: "UpdateServiceLoadBoundaryError" });
+      expect(mocks.runUpdatedInstallGatewayCommand).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ serviceLoadBoundary }),
+        "install",
+      );
+      expect(mocks.runRestartScript).not.toHaveBeenCalled();
+      expect(mocks.waitForGatewayHealthyRestart).not.toHaveBeenCalled();
+      expect(onVerified).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["new-build", undefined])(
     "enforces the available Git identity after restart: %s",
     async (buildId) => {

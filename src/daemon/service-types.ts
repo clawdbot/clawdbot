@@ -1,5 +1,6 @@
-/** Shared daemon service argument, state, and command config contracts. */
 import type { GatewayServiceRuntime } from "./service-runtime.js";
+/** Shared daemon service argument, state, and command config contracts. */
+import type { GatewayServiceStagedFiles } from "./service-stage.js";
 
 /** Environment map passed to service renderers and platform supervisors. */
 export type GatewayServiceEnv = Record<string, string | undefined>;
@@ -17,6 +18,8 @@ export type GatewayServiceInstallArgs = {
   // Verified before a config rewrite; Windows uses this to bridge a transient
   // listener gap while replacing a Startup-folder fallback.
   startupFallbackTakeoverRuntime?: GatewayServiceRuntime;
+  /** Await durable caller sealing before native load; currently systemd only. */
+  beforeLoad?: (staged: GatewayServiceStagedFiles) => Promise<void>;
 };
 
 export type GatewayServiceStageArgs = GatewayServiceInstallArgs;

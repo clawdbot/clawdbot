@@ -38,6 +38,7 @@ import {
 } from "./update-command-result.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
+import type { UpdateServiceLoadBoundary } from "./update-command-service-load.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 import {
@@ -53,6 +54,7 @@ import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 const CLI_NAME = resolveCliName();
 
 export type FinishUpdateParams = UpdateRestartParams & {
+  serviceLoadBoundary?: UpdateServiceLoadBoundary;
   failure?: { cause: unknown; detail: string };
   previousInstallRoot?: string;
   installKindChanged: boolean;
@@ -73,6 +75,9 @@ export type FinishUpdateParams = UpdateRestartParams & {
 };
 
 export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRunResult> {
+  if (params.serviceLoadBoundary && process.platform !== "linux") {
+    throw new Error("Deferred native service loading is not supported on this platform.");
+  }
   let rollbackAttempted = false;
   let postVerificationRepairAttempted = false;
   let rollbackStopState: PreManagedServiceStop | undefined;
@@ -496,6 +501,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
           result: resultWithPostUpdate,
           opts: params.opts,
           refreshServiceEnv: refreshGatewayServiceEnv,
+          serviceLoadBoundary: params.serviceLoadBoundary,
           serviceUpdateVerdict,
           serviceEnv: gatewayServiceEnv,
           serviceInstallEnv: gatewayServiceInstallEnv,

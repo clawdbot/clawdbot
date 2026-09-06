@@ -33,6 +33,10 @@ import {
   runUpdatedInstallGatewayCommand,
 } from "./update-command-service-command.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
+import {
+  UpdateServiceLoadBoundaryError,
+  type UpdateServiceLoadBoundary,
+} from "./update-command-service-load.js";
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
 import {
   assertGatewayServiceManagementAllowedForUpdate,
@@ -182,6 +186,7 @@ export async function recordFailedUpdateGatewayState(
 }
 
 export async function maybeRestartService(params: {
+  serviceLoadBoundary?: UpdateServiceLoadBoundary;
   shouldRestart: boolean;
   result: UpdateRunResult;
   opts: UpdateCommandOptions;
@@ -306,6 +311,14 @@ export async function maybeRestartService(params: {
 
   if (activation.shouldRestart) {
     if (
+      activation.serviceLoadBoundary &&
+      (!activation.refreshServiceEnv || activation.serviceInstallEnv === null || preserveDefinition)
+    ) {
+      throw new UpdateServiceLoadBoundaryError(
+        "Deferred load requires an admitted writable service refresh.",
+      );
+    }
+    if (
       requiresInstallRootRefresh &&
       (!activation.refreshServiceEnv || activation.serviceInstallEnv === null)
     ) {
@@ -353,6 +366,11 @@ export async function maybeRestartService(params: {
             recordUpdateGatewayHealth(params.opts.run, health, activation.gatewayPort);
           }
         } catch (err) {
+          if (activation.serviceLoadBoundary) {
+            throw new UpdateServiceLoadBoundaryError("Service staging or sealing failed.", {
+              cause: err,
+            });
+          }
           defaultRuntime.error(
             `Failed to refresh gateway service environment from updated install: ${String(err)}`,
           );
@@ -492,6 +510,9 @@ export async function maybeRestartService(params: {
         defaultRuntime.log("");
       }
     } catch (err) {
+      if (err instanceof UpdateServiceLoadBoundaryError) {
+        throw err;
+      }
       defaultRuntime.error(
         `Gateway: restart failed: ${String(err)}. Code update remains installed; a service stopped for update may still be stopped. ` +
           "Run `openclaw gateway status --deep` and ask its service owner to restart it manually.",

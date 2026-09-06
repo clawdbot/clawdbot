@@ -298,6 +298,9 @@ async function activateScheduledTask(params: {
 export async function installScheduledTask(
   args: GatewayServiceInstallArgs,
 ): Promise<{ scriptPath: string }> {
+  if (args.beforeLoad) {
+    throw new Error("Deferred native service load is not supported on this platform.");
+  }
   const installedCommand = await readScheduledTaskCommand(args.env).catch(() => null);
   const fallbackEnv = resolveScheduledTaskActivationEnv(args.env, installedCommand?.environment);
   // Capture ownership before repair changes the port/profile that locates the old process.

@@ -38,6 +38,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { formatCliCommand } from "../command-format.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
+import { waitForGatewayServiceLoad } from "./install-load.js";
 import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "./response.js";
 import {
   createDaemonInstallActionContext,
@@ -163,6 +164,13 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     return;
   }
 
+  if (
+    opts.deferActivation &&
+    (process.platform !== "linux" || !process.send || !process.connected)
+  ) {
+    fail("Deferred service load requires Linux and the updater IPC channel.");
+    return;
+  }
   const service = resolveGatewayService();
   let loaded;
   try {
@@ -289,6 +297,12 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     }
   }
 
+  // Native staging cannot attribute unrelated config writes. Require prior
+  // config preparation; do not generate defaults or credentials in this phase.
+  if (opts.deferActivation && (!configSnapshot.valid || cfg.gateway?.mode === undefined)) {
+    fail("Deferred service load requires valid, prepared gateway configuration.");
+    return;
+  }
   if (configSnapshot.valid && cfg.gateway?.mode === undefined) {
     const baseConfig = configSnapshot.sourceConfig ?? configSnapshot.config;
     await replaceConfigFile({
@@ -308,7 +322,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     warn("No gateway.mode found. Set gateway.mode=local for managed gateway install.");
   }
 
-  if (loaded && !opts.force && !autoRefreshMessage) {
+  if (loaded && !opts.force && !autoRefreshMessage && !opts.deferActivation) {
     emit({
       ok: true,
       result: "already-installed",
@@ -326,7 +340,10 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     config: cfg,
     env: installEnv,
     explicitToken: opts.token,
-    generateIfMissing: { snapshot: configSnapshot, writeOptions: configWriteOptions },
+    requireExisting: opts.deferActivation,
+    ...(opts.deferActivation
+      ? {}
+      : { generateIfMissing: { snapshot: configSnapshot, writeOptions: configWriteOptions } }),
   });
   if (tokenResolution.unavailableReason) {
     fail(`Gateway install blocked: ${tokenResolution.unavailableReason}`);
@@ -363,6 +380,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
         workingDirectory,
         environment,
         environmentValueSources,
+        ...(opts.deferActivation ? { beforeLoad: waitForGatewayServiceLoad } : {}),
       });
     },
   });

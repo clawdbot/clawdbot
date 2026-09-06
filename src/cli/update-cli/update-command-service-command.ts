@@ -5,6 +5,10 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { runDaemonInstall } from "../daemon-cli/install.js";
 import { resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
 import { resolveUpdatedInstallCommandEnv } from "./update-command-service-env.js";
+import {
+  runGatewayInstallWithLoadBoundary,
+  type UpdateServiceLoadBoundary,
+} from "./update-command-service-load.js";
 
 const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
 export const DEFINITION_DENIAL = /\bSERVICE_DEFINITION_(?:SEALED|UNKNOWN):[^\n]*/;
@@ -43,6 +47,7 @@ export async function runUpdatedInstallGatewayCommand(
     invocationCwd?: string;
     signal?: AbortSignal;
     assertCurrent?: () => void;
+    serviceLoadBoundary?: UpdateServiceLoadBoundary;
   },
   action: "install" | "restart",
   preserveDefinition = false,
@@ -51,7 +56,11 @@ export async function runUpdatedInstallGatewayCommand(
   const installing = action === "install";
   const entrypoint = await resolveGatewayInstallEntrypoint(params.result.root);
   if (!entrypoint) {
-    if (installing && !isPackageManagerUpdateMode(params.result.mode ?? "unknown")) {
+    if (
+      !params.serviceLoadBoundary &&
+      installing &&
+      !isPackageManagerUpdateMode(params.result.mode ?? "unknown")
+    ) {
       params.signal?.throwIfAborted();
       params.assertCurrent?.();
       await runDaemonInstall({ force: true, json: params.opts.json || undefined });
@@ -81,6 +90,23 @@ export async function runUpdatedInstallGatewayCommand(
   });
   params.signal?.throwIfAborted();
   params.assertCurrent?.();
+  const boundary = params.serviceLoadBoundary;
+  if (installing && boundary) {
+    return await runGatewayInstallWithLoadBoundary({
+      argv: [nodeRunner, entrypoint, ...args, "--defer-activation"],
+      cwd: params.result.root,
+      env: commandEnv,
+      signal: params.signal,
+      boundary: {
+        ...boundary,
+        // The handoff adds an executor fence; it must not replace the repair owner.
+        assertCurrent: () => {
+          params.assertCurrent?.();
+          boundary.assertCurrent();
+        },
+      },
+    });
+  }
   const res = await runCommandWithTimeout([nodeRunner, entrypoint, ...args], {
     // The complete owned env must not regain selectors removed during capture.
     baseEnv: {},

@@ -1,5 +1,5 @@
 // Gateway service command registration shared by `gateway` and legacy `daemon` CLIs.
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { isGatewayServiceEnv } from "../../daemon/constants.js";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -90,6 +90,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
   parent
     .command("install")
     .description("Install the Gateway service (launchd/systemd/schtasks)")
+    .addOption(new Option("--defer-activation", "Updater service-load handoff").hideHelp())
     .option("--port <port>", "Gateway port")
     .option("--runtime <runtime>", "Daemon runtime (node|bun). Default: node")
     .option("--token <token>", "Gateway token (token auth)")

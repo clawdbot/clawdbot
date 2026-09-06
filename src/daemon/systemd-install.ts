@@ -254,14 +254,18 @@ export async function refreshLegacySystemdServiceMetadata(
   );
 }
 
-async function writeSystemdUnit({
-  env,
-  programArguments,
-  workingDirectory,
-  environment,
-  environmentValueSources,
-  description,
-}: Omit<GatewayServiceInstallArgs, "stdout">): Promise<{ unitPath: string; backedUp: boolean }> {
+async function writeSystemdUnit(
+  {
+    env,
+    programArguments,
+    workingDirectory,
+    environment,
+    environmentValueSources,
+    description,
+    beforeLoad,
+  }: Omit<GatewayServiceInstallArgs, "stdout">,
+  load?: () => Promise<void>,
+): Promise<{ unitPath: string; backedUp: boolean }> {
   await assertSystemdAvailable(env);
   await assertNoSystemGatewayOwnership(env);
 
@@ -397,6 +401,15 @@ async function writeSystemdUnit({
       }
       throw error;
     }
+    // Do not catch a seal refusal as publication failure: retain staged material,
+    // leave native state untouched, and let recovery reconcile the pending intent.
+    if (load) {
+      if (beforeLoad) {
+        await beforeLoad({ files: structuredClone(mutation.stagedFiles) });
+        await mutation.assertCurrent();
+      }
+      await load();
+    }
     return { unitPath, backedUp: existingUnit !== null };
   });
 }
@@ -525,8 +538,11 @@ async function activateSystemdService(params: { env: GatewayServiceEnv }) {
 export async function installSystemdService(
   args: GatewayServiceInstallArgs,
 ): Promise<{ unitPath: string }> {
-  const { unitPath, backedUp } = await writeSystemdUnit(args);
-  await activateSystemdService({ env: args.env });
+  const load = () => activateSystemdService({ env: args.env });
+  const { unitPath, backedUp } = await writeSystemdUnit(args, args.beforeLoad ? load : undefined);
+  if (!args.beforeLoad) {
+    await load();
+  }
   if (
     args.warn &&
     hasGatewayServiceLauncherOverride(await readSystemdServiceExecStart(args.env).catch(() => null))
