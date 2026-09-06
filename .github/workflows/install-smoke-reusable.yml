@@ -120,6 +120,11 @@ jobs:
           run_bun_global_install_smoke="$workflow_bun_global_install_smoke"
           run_install_smoke=true
           target_sha="$(git rev-parse HEAD)"
+          if [[ "${{ inputs.allow_frozen_target_scenario_omissions && '1' || '0' }}" == "1" ]]; then
+            # The source checkout is shallow; ancestry makes frozen omission authorization closed.
+            git fetch --quiet --unshallow --no-tags --filter=blob:none origin \
+              '+refs/heads/extended-stable/*:refs/remotes/origin/extended-stable/*'
+          fi
           fs_safe_native_contract="$(node .release-harness/scripts/resolve-fs-safe-native-contract.mjs \
             "$target_sha" "${{ steps.workflow.outputs.workflow_sha }}" \
             "${{ inputs.allow_frozen_target_scenario_omissions && '1' || '0' }}")"
