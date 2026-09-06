@@ -213,9 +213,147 @@ export function reapOwnedChildZombiesAfterTreeKill(params: {
   });
 }
 
+type ProcRow = {
+  pid: number;
+  ppid: number;
+  pgid: number;
+  state: string;
+};
+
+function parseLinuxProcRow(stat: string): ProcRow | undefined {
+  const rparen = stat.lastIndexOf(")");
+  if (rparen < 0) {
+    return undefined;
+  }
+  const pid = Number.parseInt(stat.slice(0, stat.indexOf(" ")), 10);
+  const rest = stat.slice(rparen + 2).split(" ");
+  const state = rest[0] ?? "";
+  const ppid = Number.parseInt(rest[1] ?? "", 10);
+  const pgid = Number.parseInt(rest[2] ?? "", 10);
+  if (!Number.isSafeInteger(pid) || pid <= 0) {
+    return undefined;
+  }
+  if (!Number.isSafeInteger(ppid) || !Number.isSafeInteger(pgid)) {
+    return undefined;
+  }
+  return { pid, ppid, pgid, state };
+}
+
+/** Live or zombie processes still carrying the owned process group. */
+function readOwnedPgidMembers(pgid: number, excludeTracked: Set<number>): ProcRow[] {
+  if (process.platform !== "linux" || pgid <= 0) {
+    return [];
+  }
+  let entries: string[];
+  try {
+    entries = readdirSync("/proc");
+  } catch {
+    return [];
+  }
+  const rows: ProcRow[] = [];
+  for (const entry of entries) {
+    if (!/^\d+$/u.test(entry)) {
+      continue;
+    }
+    let stat: string;
+    try {
+      stat = readFileSync(`/proc/${entry}/stat`, "utf8");
+    } catch {
+      continue;
+    }
+    const row = parseLinuxProcRow(stat);
+    if (!row || row.pgid !== pgid || excludeTracked.has(row.pid)) {
+      continue;
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
+export type RetainAdoptedCleanupHandle = {
+  /** Stop retaining cleanup early (tests / dispose). */
+  stop: () => void;
+};
+
+export type RetainAdoptedCleanupOptions = {
+  rootPid: number;
+  excludeTrackedPids?: readonly number[];
+  /** Safety ceiling so a stuck live pgid member cannot retain forever. */
+  maxRetainMs?: number;
+  /** Test seam: override scheduler (defaults to setImmediate / setTimeout(0)). */
+  schedule?: (callback: () => void) => void;
+  /** Test seam: clock for the safety ceiling. */
+  now?: () => number;
+};
+
 /**
- * Schedule a scoped adopted-zombie reap after the Node-tracked child exits so
- * libuv can consume the root's status first. Safe to call at signal time.
+ * Keep scoped cleanup alive until the owned process group has drained and a
+ * quiet scan finds no adopted zombies. Covers delayed adoption where an
+ * intermediate still holds an exited grandchild at the root's first exit scan.
+ * Does not use waitpid(-1) or SIGCHLD.
+ */
+export function retainAdoptedChildZombieCleanup(
+  options: RetainAdoptedCleanupOptions,
+): RetainAdoptedCleanupHandle {
+  const rootPid = options.rootPid;
+  const excludeTrackedPids = options.excludeTrackedPids ?? [rootPid];
+  const excludeSet = normalizeIdSet(excludeTrackedPids);
+  const maxRetainMs = options.maxRetainMs ?? 30_000;
+  const now = options.now ?? Date.now;
+  const schedule =
+    options.schedule ??
+    ((callback: () => void) => {
+      // Yield to the event loop while live pgid members remain; retention is
+      // still lifecycle-driven by pgid drain (not a fixed "hope it adopted" delay).
+      setTimeout(callback, 0);
+    });
+  const startedAt = now();
+  let stopped = false;
+  let quietScans = 0;
+  let scheduled = false;
+
+  const stop = () => {
+    stopped = true;
+  };
+
+  const tick = () => {
+    scheduled = false;
+    if (stopped || process.platform === "win32") {
+      return;
+    }
+    reapOwnedChildZombiesAfterTreeKill({
+      rootPid,
+      usedProcessGroup: true,
+      excludeTrackedPids,
+    });
+    const members = readOwnedPgidMembers(rootPid, excludeSet);
+    const liveOrZombieRemain = members.length > 0;
+    if (!liveOrZombieRemain) {
+      quietScans += 1;
+    } else {
+      quietScans = 0;
+    }
+    if (quietScans >= 2) {
+      stop();
+      return;
+    }
+    if (now() - startedAt >= maxRetainMs) {
+      stop();
+      return;
+    }
+    if (!scheduled) {
+      scheduled = true;
+      schedule(tick);
+    }
+  };
+
+  schedule(tick);
+  return { stop };
+}
+
+/**
+ * Schedule retained adopted-zombie cleanup after the Node-tracked child exits
+ * so libuv can consume the root's status first. Safe to call at signal time.
  */
 export function scheduleAdoptedChildZombieReapAfterExit(
   child: {
@@ -225,23 +363,32 @@ export function scheduleAdoptedChildZombieReapAfterExit(
     once: (event: "exit", listener: () => void) => unknown;
   },
   usedProcessGroup: boolean,
-): void {
+): RetainAdoptedCleanupHandle | undefined {
   const rootPid = child.pid;
   if (typeof rootPid !== "number" || rootPid <= 0 || !usedProcessGroup) {
-    return;
+    return undefined;
   }
-  const run = () => {
-    reapOwnedChildZombiesAfterTreeKill({
+  const start = () =>
+    retainAdoptedChildZombieCleanup({
       rootPid,
-      usedProcessGroup: true,
       excludeTrackedPids: [rootPid],
     });
-  };
   if (child.exitCode !== null || child.signalCode !== null) {
-    setImmediate(run);
-    return;
+    let handle: RetainAdoptedCleanupHandle | undefined;
+    setImmediate(() => {
+      handle = start();
+    });
+    return {
+      stop: () => handle?.stop(),
+    };
   }
+  let handle: RetainAdoptedCleanupHandle | undefined;
   child.once("exit", () => {
-    setImmediate(run);
+    setImmediate(() => {
+      handle = start();
+    });
   });
+  return {
+    stop: () => handle?.stop(),
+  };
 }
