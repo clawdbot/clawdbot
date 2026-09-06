@@ -13,7 +13,11 @@ import {
   type SessionMessageEnvelope,
   type SessionMessageIdentity,
 } from "./session-projection-message-identity.js";
-import { reduceSessionProjectionRunEventImpl } from "./session-projection-run-event.js";
+export {
+  reduceSessionProjectionRunEvent,
+  type SessionProjectionGatewayRunEvent,
+  type SessionProjectionRunTransition,
+} from "./session-projection-run-event.js";
 
 export {
   normalizeSessionProjectionRunId,
@@ -56,18 +60,6 @@ export type SessionProjectionRun = {
   stopReason?: string;
   errorKind?: string;
   errorMessage?: string;
-};
-
-export type SessionProjectionGatewayRunEvent = {
-  state?: unknown;
-  yielded?: unknown;
-  seq?: unknown;
-} & Partial<Record<"runId" | "message" | "stopReason" | "errorKind" | "errorMessage", unknown>>;
-
-export type SessionProjectionRunTransition = {
-  projection: SessionProjectionState;
-  previousRun: SessionProjectionRun | undefined;
-  currentRun: SessionProjectionRun | undefined;
 };
 
 export type SessionProjectionEntry = {
@@ -759,13 +751,4 @@ export function reduceSessionProjection(
     default:
       return state;
   }
-}
-
-/** Normalizes Gateway run envelopes once for every browser and terminal adapter. */
-export function reduceSessionProjectionRunEvent(
-  projection: SessionProjectionState,
-  event: SessionProjectionGatewayRunEvent,
-  scope: SessionProjectionScope = {},
-): SessionProjectionRunTransition | null {
-  return reduceSessionProjectionRunEventImpl(projection, event, scope);
 }

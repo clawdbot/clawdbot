@@ -41,12 +41,12 @@ describe("recovered assistant errors", () => {
     const failures = Array.from({ length: 4 }, (_, attempt) => ({
       ...failed,
       content,
-      __openclaw: { ...failed.__openclaw, id: `attempt-${attempt}`, seq: attempt + 2 },
+      __openclaw: { ...failed["__openclaw"], id: `attempt-${attempt}`, seq: attempt + 2 },
     }));
-    const final = { ...answer, __openclaw: { ...answer.__openclaw, seq: 6 } };
+    const final = { ...answer, __openclaw: { ...answer["__openclaw"], seq: 6 } };
     const raw = [user, ...failures, final];
     const original = structuredClone(raw);
-    expect(projectedIds(raw)).toEqual([user.__openclaw, final.__openclaw]);
+    expect(projectedIds(raw)).toEqual([user["__openclaw"], final["__openclaw"]]);
     expect(buildSessionHistorySnapshot({ rawMessages: raw }).history.messages).toEqual([
       user,
       final,
