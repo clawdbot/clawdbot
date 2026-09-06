@@ -247,6 +247,8 @@ After the first successful pairing, Android auto-reconnects on launch to the act
 
 Android retries temporary connection losses automatically. For a fresh attempt with the saved endpoint, open **Settings → Gateway** and tap **Reconnect**. **Disconnect** stops the connections and suppresses automatic reconnect for the current app session; it does not forget the pairing. Authentication or pairing errors can pause retries until you address the reported problem.
 
+Gateway summary rows wrap long labels and values. Tap **Instance ID** in **Settings → Gateway** to copy this phone's full identifier.
+
 Official setup codes connect Android as a node and grant full Gateway operator
 access by default over `wss://`. Plaintext non-loopback `ws://` setup
 automatically uses limited access for bearer-token safety. **Settings → Gateway**
