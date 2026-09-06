@@ -658,6 +658,9 @@ export async function processCompletionsStream(
       await cooperativeScheduler.afterEvent();
     }
   }
+  // The SDK can end an aborted SSE iterator normally; cancellation must win
+  // before buffered terminal markers can promote provisional tool calls.
+  throwIfModelStreamAborted(options?.signal);
   if (!finishReason && (directMode || options?.sawStreamDONE?.() === false)) {
     throw new Error("Stream ended without finish_reason");
   }
@@ -705,10 +708,6 @@ export async function processCompletionsStream(
   }
 }
 
-function resolveOpenAICompletionsReasoningEffort(options: OpenAICompletionsOptions | undefined) {
-  return options?.reasoningEffort ?? options?.reasoning ?? "high";
-}
-
 export function shouldEmitOpenAICompletionsReasoning(
   model: OpenAIModeModel,
   options: OpenAICompletionsOptions | undefined,
@@ -716,7 +715,7 @@ export function shouldEmitOpenAICompletionsReasoning(
   if (!model.reasoning) {
     return false;
   }
-  const effort = resolveOpenAICompletionsReasoningEffort(options);
+  const effort = options?.reasoningEffort ?? options?.reasoning ?? "high";
   if (!effort || !isOpenAICompletionsThinkingEnabled(effort)) {
     return false;
   }

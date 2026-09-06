@@ -6,7 +6,7 @@ import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { listAgentEntries, resolveAgentDir } from "../agents/agent-scope-config.js";
 import { readAuthProfileStoreForTest } from "../agents/auth-profiles/oauth-test-utils.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
-import type { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
+import type { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import {
@@ -614,15 +614,20 @@ function createConfigTransformHarness(
       followUp: { mode: "auto", requiresRestart: false },
     };
   });
-  const readSnapshot = vi.fn(async () => ({
-    exists: true as const,
-    valid: true as const,
-    path: "/tmp/openclaw.json",
-    issues: [],
-    config: state.runtimeConfig,
-    sourceConfig: state.sourceConfig,
-    runtimeConfig: state.runtimeConfig,
-  }));
+  const readSnapshot = vi.fn(async () =>
+    createConfigFileSnapshot({
+      exists: true,
+      valid: true,
+      path: "/tmp/openclaw.json",
+      raw: JSON.stringify(state.sourceConfig),
+      parsed: state.sourceConfig,
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+      sourceConfig: state.sourceConfig,
+      runtimeConfig: state.runtimeConfig,
+    }),
+  );
   return {
     transform,
     readSnapshot,
@@ -748,6 +753,7 @@ describe("detectSetupInference", () => {
       expect.objectContaining({
         candidates: [],
         manualProviders: [expect.objectContaining({ id: "fixture-api-key" })],
+        nativeSessionCatalogPreferenceRequired: true,
       }),
     );
   });
@@ -1027,7 +1033,7 @@ describe("detectSetupInference", () => {
     ]);
   });
 
-  it("lists provider-owned sign-ins in CLI order without compatibility aliases", () => {
+  it("lists manual-only provider sign-ins in the human picker in CLI order", () => {
     const choices: ProviderAuthChoiceMetadata[] = [
       {
         pluginId: "google",
@@ -1131,6 +1137,13 @@ describe("detectSetupInference", () => {
         featured: true,
       },
       {
+        id: "xai-device-code",
+        brandId: "xai",
+        label: "xAI device code",
+        kind: "device-code",
+        featured: false,
+      },
+      {
         id: "github-copilot",
         brandId: "github-copilot",
         label: "GitHub Copilot",
@@ -1173,6 +1186,11 @@ describe("detectSetupInference", () => {
     ];
 
     expect(listSetupInferencePrepareOptions(choices)).toEqual([
+      {
+        id: "hidden",
+        brandId: "hidden",
+        label: "Hidden",
+      },
       {
         id: "lmstudio",
         brandId: "lmstudio",
@@ -2067,6 +2085,7 @@ describe("activateSetupInference", () => {
     const stateDir = await suiteTempRootTracker.make("case");
     await fs.mkdir(path.join(stateDir, "state"), { recursive: true });
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const configHarness = createPreRosterConfigTransformHarness();
     const events: string[] = [];
     const ensureCodex = vi.fn(
       async (params: {
@@ -2084,7 +2103,10 @@ describe("activateSetupInference", () => {
         beforePersistentEffect: () => {
           events.push("lock");
         },
-        deps: { ensureCodexRuntimePlugin: ensureCodex as never },
+        deps: {
+          ensureCodexRuntimePlugin: ensureCodex as never,
+          transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+        },
       });
 
       expect(result.ok).toBe(true);
@@ -4751,6 +4773,7 @@ describe("activateSetupInference", () => {
     expect(ensureCodex).toHaveBeenCalledOnce();
     expect(ensureCodex).toHaveBeenCalledWith(
       expect.objectContaining({
+        reviewOfficialArtifacts: true,
         cfg: expect.objectContaining({
           agents: expect.objectContaining({
             defaults: { model: { primary: "openai/gpt-5.4" } },
@@ -5259,6 +5282,66 @@ describe("activateSetupInference", () => {
     });
     expect(persistedConfig.plugins?.installs).toBeUndefined();
   });
+
+  it.each([false, true])(
+    "honors native discovery %s through selected-agent Codex installation",
+    async (enabled) => {
+      const config: OpenClawConfig = {
+        agents: { entries: { main: { default: true }, research: {} } },
+        plugins: {
+          entries: {
+            anthropic: { config: { sessionCatalog: { enabled: false } } },
+            codex: { config: { sessionCatalog: { enabled: false } } },
+          },
+        },
+      };
+      const persistence = createConfigTransformHarness(config);
+      const assertPreference = (cfg: OpenClawConfig) => {
+        for (const pluginId of ["anthropic", "codex"]) {
+          expect(cfg.plugins?.entries?.[pluginId]?.config).toMatchObject({
+            sessionCatalog: { enabled },
+          });
+        }
+      };
+      const ensureCodex = vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => {
+        assertPreference(cfg);
+        expect(cfg.plugins?.installs?.codex).toBeUndefined();
+        return {
+          ok: true as const,
+          required: true,
+          cfg: {
+            ...cfg,
+            plugins: {
+              ...cfg.plugins,
+              installs: {
+                codex: {
+                  source: "npm" as const,
+                  spec: "@openclaw/codex",
+                  installPath: "/tmp/plugins/codex-consent-fixture",
+                },
+              },
+            },
+          },
+        };
+      });
+      const result = await activateCodexSetup({
+        agentId: "research",
+        nativeSessionCatalogsEnabled: enabled,
+        deps: {
+          readConfigFileSnapshot: persistence.readSnapshot,
+          ensureCodexRuntimePlugin: ensureCodex,
+          transformConfigWithPendingPluginInstalls: persistence.transform as never,
+          markRetainedManagedNpmInstall: vi.fn(async () => true),
+        },
+      });
+      expect(result.ok).toBe(true);
+      expect(ensureCodex).toHaveBeenCalledOnce();
+      expect(persistence.transform).toHaveBeenCalledOnce();
+      assertPreference(persistence.current());
+      expect(persistence.current().agents?.entries?.research?.model).toBeDefined();
+      expect(persistence.current().agents?.entries?.main?.model).toBeUndefined();
+    },
+  );
 
   it("does not run or persist when the codex runtime install fails", async () => {
     const runEmbeddedAgent = vi.fn();

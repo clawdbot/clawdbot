@@ -18,6 +18,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { extractStoredAssistantText } from "./chat-history-text.js";
 
 const callGatewayMock = vi.fn();
@@ -283,6 +284,7 @@ async function executeFireAndForgetA2AFrom(
     bindingTeamId?: string;
   },
 ) {
+  setActivePluginRegistry(createSessionConversationTestRegistry());
   const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
   vi.mocked(runSessionsSendA2AFlow).mockClear();
   const targetSessionKey = "agent:other:discord:group:ops";
@@ -1321,6 +1323,7 @@ describe("sessions_send gating", () => {
   });
 
   it("rejects direct thread session targets before dispatching an agent run", async () => {
+    setActivePluginRegistry(createSessionConversationTestRegistry());
     loadConfigMock.mockReturnValue({
       session: { scope: "per-sender", mainKey: "main" },
       tools: {
@@ -1388,6 +1391,7 @@ describe("sessions_send gating", () => {
   });
 
   it("rejects label targets that resolve to canonical thread sessions", async () => {
+    setActivePluginRegistry(createSessionConversationTestRegistry());
     loadConfigMock.mockReturnValue({
       session: { scope: "per-sender", mainKey: "main" },
       tools: {
@@ -1417,6 +1421,7 @@ describe("sessions_send gating", () => {
   });
 
   it("does not disclose a resolved thread session key from a sessionId target", async () => {
+    setActivePluginRegistry(createSessionConversationTestRegistry());
     loadConfigMock.mockReturnValue({
       session: { scope: "per-sender", mainKey: "main" },
       tools: {

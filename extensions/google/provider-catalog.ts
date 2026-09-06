@@ -1,62 +1,28 @@
-// Google provider module implements model/runtime integration.
 import {
-  getCachedLiveProviderModelRows,
+  buildLiveModelProviderConfig,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  asOptionalRecord,
   asPositiveSafeInteger,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { isGoogleTextGenerationModelId, resolveGoogleStaticModelId } from "./provider-models.js";
 
-const GOOGLE_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
-const GOOGLE_GEMINI_MODELS_ENDPOINT = `${GOOGLE_GEMINI_BASE_URL}/models?pageSize=1000`;
 const GOOGLE_VERTEX_BASE_URL = "https://{location}-aiplatform.googleapis.com";
 const GOOGLE_GEMINI_MODELS_CACHE_TTL_MS = 60_000;
-const GOOGLE_GEMINI_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const;
-const GOOGLE_GEMINI_TEXT_MODEL_ROWS: ReadonlyArray<
-  readonly [
-    id: string,
-    name: string,
-    prefersCodeMode: boolean,
-    thinkingLevelMap?: ModelDefinitionConfig["thinkingLevelMap"],
-  ]
-> = [
-  ["gemini-2.5-pro", "Gemini 2.5 Pro", false],
-  ["gemini-2.5-flash", "Gemini 2.5 Flash", false],
-  ["gemini-2.5-flash-lite", "Gemini 2.5 Flash-Lite", false],
-  ["gemini-3.5-flash", "Gemini 3.5 Flash", true],
-  ["gemini-3.6-flash", "Gemini 3.6 Flash", true],
-  ["gemini-3.7-flash", "Gemini 3.7 Flash", true, { minimal: null }],
-  ["gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite", true],
-  ["gemini-3.1-pro-preview", "Gemini 3.1 Pro Preview", true],
-  ["gemini-3.1-flash-lite", "Gemini 3.1 Flash Lite", true],
-  ["gemini-3-flash-preview", "Gemini 3 Flash Preview", true],
-];
-const GOOGLE_GEMINI_TEXT_MODELS: ModelDefinitionConfig[] = GOOGLE_GEMINI_TEXT_MODEL_ROWS.map(
-  ([id, name, prefersCodeMode, thinkingLevelMap]): ModelDefinitionConfig => {
-    const model: ModelDefinitionConfig = {
-      id,
-      name,
-      reasoning: true,
-      input: ["text", "image"],
-      cost: GOOGLE_GEMINI_COST,
-      contextWindow: 1_048_576,
-      maxTokens: 65_536,
-    };
-    if (thinkingLevelMap) {
-      model.thinkingLevelMap = thinkingLevelMap;
-    }
-    if (prefersCodeMode) {
-      model.compat = { codeMode: "preferred" };
-    }
-    return model;
-  },
-);
+const GOOGLE_GEMINI_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
+  providerId: "google",
+  catalog: manifest.modelCatalog.providers.google,
+});
+const GOOGLE_GEMINI_MODELS_ENDPOINT = `${GOOGLE_GEMINI_MANIFEST_PROVIDER.baseUrl}/models?pageSize=1000`;
+const GOOGLE_GEMINI_TEXT_MODELS = GOOGLE_GEMINI_MANIFEST_PROVIDER.models;
 const GOOGLE_GEMINI_TEXT_MODEL_BY_ID = new Map(
   GOOGLE_GEMINI_TEXT_MODELS.map((model) => [model.id, model]),
 );
@@ -64,10 +30,19 @@ const GOOGLE_GEMINI_TEXT_MODEL_IDS: ReadonlySet<string> = new Set(
   GOOGLE_GEMINI_TEXT_MODEL_BY_ID.keys(),
 );
 
+function requireGoogleManifestCost(): NonNullable<ModelDefinitionConfig["cost"]> {
+  const cost = GOOGLE_GEMINI_TEXT_MODELS[0]?.cost;
+  if (!cost) {
+    throw new Error("Google manifest model catalog must declare a cost for its first model");
+  }
+  return cost;
+}
+
+const GOOGLE_GEMINI_COST = requireGoogleManifestCost();
+
 export function buildGoogleStaticCatalogProvider(): ModelProviderConfig {
   return {
-    baseUrl: GOOGLE_GEMINI_BASE_URL,
-    api: "google-generative-ai",
+    ...GOOGLE_GEMINI_MANIFEST_PROVIDER,
     models: GOOGLE_GEMINI_TEXT_MODELS.map((model) => ({
       ...model,
       input: [...model.input, "video"],
@@ -76,11 +51,11 @@ export function buildGoogleStaticCatalogProvider(): ModelProviderConfig {
 }
 
 function readGoogleLiveModels(body: unknown): readonly unknown[] {
-  if (!body || typeof body !== "object" || Array.isArray(body)) {
-    return [];
+  const record = asOptionalRecord(body);
+  if (!record || (record.models !== undefined && !Array.isArray(record.models))) {
+    throw new Error("Google models.list returned an invalid model list");
   }
-  const models = (body as { models?: unknown }).models;
-  return Array.isArray(models) ? models : [];
+  return record.models ?? [];
 }
 
 function googleLiveModelInput(id: string): ModelDefinitionConfig["input"] {
@@ -95,10 +70,10 @@ function googleLiveModelInput(id: string): ModelDefinitionConfig["input"] {
 }
 
 function buildGoogleLiveModel(row: unknown): ModelDefinitionConfig | undefined {
-  if (!row || typeof row !== "object" || Array.isArray(row)) {
-    return undefined;
+  const record = asOptionalRecord(row);
+  if (!record) {
+    throw new Error("Google models.list returned an invalid model row");
   }
-  const record = row as Record<string, unknown>;
   const resourceName = normalizeOptionalString(record.name);
   const id = resourceName?.startsWith("models/") ? resourceName.slice("models/".length) : undefined;
   const methods = record.supportedGenerationMethods;
@@ -146,45 +121,28 @@ function parseGoogleLiveModels(rows: readonly unknown[]): ModelDefinitionConfig[
 }
 
 export async function buildGoogleLiveCatalogProvider(params: {
+  discoveryMode?: "strict";
   apiKey?: string;
   discoveryApiKey?: string;
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
 }): Promise<ModelProviderConfig> {
-  const fallback = {
-    ...buildGoogleStaticCatalogProvider(),
-    ...(params.apiKey ? { apiKey: params.apiKey } : {}),
-  };
-  try {
-    const rows = await getCachedLiveProviderModelRows({
-      providerId: "google",
-      endpoint: GOOGLE_GEMINI_MODELS_ENDPOINT,
-      apiKey: params.apiKey,
-      discoveryApiKey: params.discoveryApiKey,
-      fetchGuard: params.fetchGuard,
-      signal: params.signal,
-      ttlMs: GOOGLE_GEMINI_MODELS_CACHE_TTL_MS,
-      auditContext: "google-model-discovery",
-      readRows: readGoogleLiveModels,
-      buildRequestHeaders: ({ discoveryApiKey, apiKey }) => ({
-        Accept: "application/json",
-        ...((discoveryApiKey ?? apiKey) ? { "x-goog-api-key": discoveryApiKey ?? apiKey } : {}),
-      }),
-      shouldCacheRows: (modelRows) => parseGoogleLiveModels(modelRows).length > 0,
-    });
-    const models = parseGoogleLiveModels(rows);
-    if (models.length === 0) {
-      return fallback;
-    }
-    return {
-      ...fallback,
-      models,
-    };
-  } catch {
-    // Discovery is advisory. Offline setup, expired credentials, and transient
-    // provider failures retain the bundled catalog instead of hiding Google.
-    return fallback;
-  }
+  const { models, ...providerConfig } = buildGoogleStaticCatalogProvider();
+  return await buildLiveModelProviderConfig({
+    providerId: "google",
+    endpoint: GOOGLE_GEMINI_MODELS_ENDPOINT,
+    providerConfig,
+    models,
+    ...params,
+    ttlMs: GOOGLE_GEMINI_MODELS_CACHE_TTL_MS,
+    auditContext: "google-model-discovery",
+    readRows: readGoogleLiveModels,
+    buildRequestHeaders: ({ discoveryApiKey, apiKey }) => ({
+      Accept: "application/json",
+      ...((discoveryApiKey ?? apiKey) ? { "x-goog-api-key": discoveryApiKey ?? apiKey } : {}),
+    }),
+    projectRows: parseGoogleLiveModels,
+  });
 }
 
 export function buildGoogleVertexStaticCatalogProvider(): ModelProviderConfig {

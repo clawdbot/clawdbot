@@ -9,10 +9,8 @@ import {
 import type { MediaUnderstandingProvider } from "./types.js";
 
 const resolvePluginCapabilityProvidersMock = vi.hoisted(() => vi.fn());
-const resolvePluginCapabilityProviderMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../plugins/capability-provider-runtime.js", () => ({
-  resolvePluginCapabilityProvider: resolvePluginCapabilityProviderMock,
   resolvePluginCapabilityProviders: resolvePluginCapabilityProvidersMock,
 }));
 
@@ -38,8 +36,6 @@ describe("media-understanding provider registry", () => {
   beforeEach(() => {
     resolvePluginCapabilityProvidersMock.mockReset();
     resolvePluginCapabilityProvidersMock.mockReturnValue([]);
-    resolvePluginCapabilityProviderMock.mockReset();
-    resolvePluginCapabilityProviderMock.mockReturnValue(undefined);
   });
 
   it("loads media providers from the capability runtime", () => {
@@ -192,62 +188,6 @@ describe("media-understanding provider registry", () => {
       key: "mediaUnderstandingProviders",
       cfg,
     });
-  });
-
-  it("resolves an explicitly requested provider the plural resolve leaves out", () => {
-    const extractStructured = vi.fn(async () => ({ text: "{}" }));
-    // A warm gateway resolves only active providers, so a lazy owner is absent.
-    resolvePluginCapabilityProvidersMock.mockReturnValue([
-      createMediaProvider({ id: "groq", capabilities: ["image", "audio"] }),
-    ]);
-    resolvePluginCapabilityProviderMock.mockReturnValue(
-      createMediaProvider({ id: "lazy-vision", capabilities: ["image"], extractStructured }),
-    );
-
-    const registry = buildMediaUnderstandingRegistry(
-      undefined,
-      undefined,
-      undefined,
-      "Lazy-Vision",
-    );
-
-    expect(requireMediaProvider(registry, "lazy-vision").extractStructured).toBe(extractStructured);
-    expect(resolvePluginCapabilityProviderMock).toHaveBeenCalledWith({
-      key: "mediaUnderstandingProviders",
-      providerId: "Lazy-Vision",
-      cfg: undefined,
-    });
-  });
-
-  it("keeps a requested provider's own hooks ahead of the config-derived image entry", () => {
-    const extractStructured = vi.fn(async () => ({ text: "{}" }));
-    resolvePluginCapabilityProviderMock.mockReturnValue(
-      createMediaProvider({ id: "lazy-vision", capabilities: ["image"], extractStructured }),
-    );
-    const cfg = {
-      models: {
-        providers: {
-          "lazy-vision": {
-            models: [{ id: "vision-1", input: ["text", "image"] }],
-          },
-        },
-      },
-    } as never;
-
-    const registry = buildMediaUnderstandingRegistry(undefined, cfg, undefined, "lazy-vision");
-
-    expect(requireMediaProvider(registry, "lazy-vision").extractStructured).toBe(extractStructured);
-  });
-
-  it("skips by-id resolution when the requested id already normalizes into the registry", () => {
-    resolvePluginCapabilityProvidersMock.mockReturnValue([
-      createMediaProvider({ id: "google", capabilities: ["image"] }),
-    ]);
-
-    const registry = buildMediaUnderstandingRegistry(undefined, undefined, undefined, "gemini");
-
-    expect(requireMediaProvider(registry, "gemini").id).toBe("google");
-    expect(resolvePluginCapabilityProviderMock).not.toHaveBeenCalled();
   });
 
   it("does not auto-register providers with audio or video only inputs", () => {

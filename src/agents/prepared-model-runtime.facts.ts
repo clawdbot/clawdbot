@@ -33,12 +33,14 @@ import {
   loadBundledProviderStaticCatalogContextModels,
 } from "./embedded-agent-runner/model.static-catalog.js";
 import { createStaticModelIdMatcher } from "./embedded-agent-runner/model.static-id.js";
+import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import {
   buildConfiguredModelCatalog,
   parseConfiguredModelVisibilityEntries,
 } from "./model-selection-shared.js";
 import { ensureOpenClawModelsJson, planOpenClawModelsJsonSource } from "./models-config.js";
 import { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
+import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
 import {
   loadPersistedPluginModelCatalogsReadOnly,
   resolvePluginModelCatalogOwnerPluginId,
@@ -51,10 +53,7 @@ import type {
   PreparedModelRuntimeCatalogFacts,
   PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.catalog-contract.js";
-import {
-  modelCatalogEntryKey,
-  prepareConfiguredRuntimeFacts,
-} from "./prepared-model-runtime.configured-catalog.js";
+import { prepareConfiguredRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
 import { completeConfiguredRuntimeModels } from "./prepared-model-runtime.configured-completion.js";
 import {
   collectPreparedModelRuntimeConfiguredRefs,
@@ -160,6 +159,7 @@ export async function prepareWorkspaceBuildGroup(
     includeCredentialProviders?: boolean;
     getConfiguredHarnessRuntimes?: () => readonly string[];
     basePluginIds?: readonly string[];
+    onStage?: (stage: string) => void;
   } = {},
   loadInboundPluginRegistry?: PreparedInboundRegistryLoader,
   reusablePluginGeneration?: PreparedModelRuntimePluginGeneration,
@@ -182,6 +182,9 @@ export async function prepareWorkspaceBuildGroup(
     throw new Error("prepared model runtime workspace group is empty");
   }
   const env = input.env ?? process.env;
+  const reportStage = (stage: string) =>
+    options.onStage?.(`${stage}; agent ${input.agentId ?? "standalone"}`);
+  reportStage("workspace plugins");
   const pluginMetadataStartedAt = performance.now();
   const pluginMetadataSnapshot =
     preparedPluginMetadataSnapshot ??
@@ -278,6 +281,7 @@ export async function prepareWorkspaceBuildGroup(
       ]),
     ].toSorted((left, right) => left.localeCompare(right));
     const staticProviderCatalogStartedAt = performance.now();
+    reportStage("static provider catalog");
     let preparedStaticProviderCatalog = reusablePluginGeneration
       ? reusablePluginGeneration.preparedStaticProviderCatalog
       : catalogMode === "static"
@@ -318,6 +322,7 @@ export async function prepareWorkspaceBuildGroup(
     const preparedSyntheticAuthProviders = preparedStaticProviderCatalog?.providers ?? [];
     // Static Gateway publication consumes discovery entrypoints; the run owns activation.
     const ambientCredentialsStartedAt = performance.now();
+    reportStage("ambient credentials");
     const ambientCredentials = await prepareAmbientAgentCredentialsForDiscovery({
       config: input.config,
       env,
@@ -351,6 +356,7 @@ export async function prepareWorkspaceBuildGroup(
     });
     const ambientCredentialsMs = performance.now() - ambientCredentialsStartedAt;
     const agentFactsStartedAt = performance.now();
+    reportStage("agent facts");
     const agentBaseFacts = inputs.map((candidate) =>
       withAgentRosterFactsBatch(candidate.config, () =>
         prepareAgentFacts(
@@ -364,6 +370,7 @@ export async function prepareWorkspaceBuildGroup(
     );
     const agentFactsMs = performance.now() - agentFactsStartedAt;
     const configuredProjectionStartedAt = performance.now();
+    reportStage("configured model projection");
     const providerStaticModels =
       reusablePluginGeneration?.providerStaticModels ??
       (catalogMode === "static"
@@ -372,6 +379,7 @@ export async function prepareWorkspaceBuildGroup(
             cfg: input.config,
             env,
             metadataSnapshot: pluginMetadataSnapshot,
+            registeredProviders: runtimePluginRegistry?.providers,
             ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
           }));
     // Provider definitions are process/config facts. Which refs are admitted remains agent-owned.
@@ -410,16 +418,20 @@ export async function prepareWorkspaceBuildGroup(
         ],
         resolveRuntimeModel: resolveConfiguredManifestModel,
       });
-      const configuredEntryKeys = new Set(configuredCatalogEntries.map(modelCatalogEntryKey));
+      const configuredEntryKeys = new Set(
+        configuredCatalogEntries.map(resolveModelCatalogIdentityKey),
+      );
       for (const configured of configuredRuntimeModels) {
         configuredEntryKeys.add(
-          modelCatalogEntryKey({ provider: configured.provider, id: configured.modelId }),
+          resolveModelCatalogIdentityKey({ provider: configured.provider, id: configured.modelId }),
         );
       }
       const configuredGeneratedCatalogPluginIds = [
         ...new Set(
           facts.configuredModelRefs.flatMap(({ provider, modelId }) => {
-            if (configuredEntryKeys.has(modelCatalogEntryKey({ provider, id: modelId }))) {
+            if (
+              configuredEntryKeys.has(resolveModelCatalogIdentityKey({ provider, id: modelId }))
+            ) {
               return [];
             }
             const pluginId = resolvePluginModelCatalogOwnerPluginId({
@@ -624,9 +636,14 @@ export async function prepareAgentCatalogSource(
   } = {},
 ): Promise<PreparedModelRuntimeCatalogSource> {
   const { env, input, providerIds } = agentFacts;
+  const normalizeProvider = createPreparedModelCatalogProviderNormalizer(
+    pluginGeneration.pluginMetadataSnapshot,
+    input.config,
+    env,
+  );
   const providerOutcomes = new Map<string, ProviderCatalogOutcome>();
   const recordProviderOutcome = (outcome: ProviderCatalogOutcome) => {
-    const provider = normalizeProviderId(outcome.provider);
+    const provider = normalizeProvider(outcome.provider);
     if (provider) {
       providerOutcomes.set(`${provider}\0${outcome.profileId ?? ""}`, { ...outcome, provider });
     }

@@ -1,8 +1,9 @@
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { describe, expect, it, vi } from "vitest";
 import { terminateCodexAppServerOrphan } from "./transport-process-containment.js";
 import * as processSnapshot from "./transport-process-snapshot.js";
@@ -25,23 +26,26 @@ const delay = (ms: number) =>
     setTimeout(resolve, ms);
   });
 
-function listProcesses(): ProcessRow[] {
-  return execFileSync("ps", ["-axo", "pid=,command="], {
-    encoding: "utf8",
-  })
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const match = /^(\d+)\s+(.*)$/.exec(line);
-      if (!match) {
-        throw new Error(`unexpected ps row: ${line}`);
-      }
-      return {
+async function listProcesses(tempDir: string): Promise<ProcessRow[]> {
+  // Stream and retain only owned fixtures: unrelated host command lines can
+  // exceed execFileSync's buffer and must not leak into a failed assertion.
+  const child = spawn("ps", ["-axo", "pid=,command="], { stdio: ["ignore", "pipe", "ignore"] });
+  const closed = once(child, "close");
+  const rows: ProcessRow[] = [];
+  for await (const line of createInterface({ input: child.stdout })) {
+    if (!line.includes(tempDir)) {
+      continue;
+    }
+    const match = /^\s*(\d+)\s+(.*)$/.exec(line);
+    if (match) {
+      rows.push({
         pid: Number(match[1]),
         command: match[2] ?? "",
-      };
-    });
+      });
+    }
+  }
+  expect((await closed)[0]).toBe(0);
+  return rows;
 }
 
 async function waitForFixtureEvents(logPath: string, count: number): Promise<FixtureEvent[]> {
@@ -67,8 +71,7 @@ async function readFixtureEvents(logPath: string): Promise<FixtureEvent[]> {
 async function removeTaskOwnedFixtureProcesses(tempDir: string): Promise<void> {
   const deadline = Date.now() + 2_000;
   while (Date.now() < deadline) {
-    const allRows = listProcesses();
-    const ownedRows = allRows.filter((row) => row.command.includes(tempDir));
+    const ownedRows = await listProcesses(tempDir);
     if (ownedRows.length === 0) {
       return;
     }
@@ -83,7 +86,7 @@ async function removeTaskOwnedFixtureProcesses(tempDir: string): Promise<void> {
     }
     await delay(20);
   }
-  const survivors = listProcesses().filter((row) => row.command.includes(tempDir));
+  const survivors = await listProcesses(tempDir);
   if (survivors.length > 0) {
     throw new Error(`task-owned process fixture survived cleanup: ${JSON.stringify(survivors)}`);
   }
@@ -195,11 +198,11 @@ process.stdin.on("end", () => process.exit(0));
           forceKillDelayMs: 500,
           exitTimeoutMs: 2_000,
         }),
-      ).resolves.toBe(true);
+      ).resolves.toEqual({ exited: true, cleanup: "closed" });
       expect(root.exitCode).toBe(0);
       expect(root.signalCode).toBeNull();
 
-      const survivors = listProcesses().filter((row) => row.command.includes(tempDir));
+      const survivors = await listProcesses(tempDir);
       expect(survivors).toEqual([]);
     } finally {
       await removeTaskOwnedFixtureProcesses(tempDir);
@@ -214,6 +217,7 @@ process.stdin.on("end", () => process.exit(0));
     ["root-resumed", false],
     ["traced", false],
     ["uninterruptible", false],
+    ["unconfirmed-termination", false],
     ["snapshot-failure", true],
     ["inspection-timeout", true],
     ["extended", false],
@@ -315,6 +319,12 @@ process.stdin.on("end", () => process.exit(0));
           [stoppedRoot, { ...sentinelIdentity, state: "U" }],
           [stoppedRoot, { ...sentinelIdentity, state: "U" }],
         ],
+        "unconfirmed-termination": [
+          runningTree,
+          runningTree,
+          [stoppedRoot, { ...sentinelIdentity, state: "U" }],
+          [stoppedRoot, { ...sentinelIdentity, state: "U" }],
+        ],
         "snapshot-failure": [runningTree, runningTree, rootStoppedTree, rootStoppedTree, undefined],
         "inspection-timeout": [runningTree, runningTree, "deadline"],
         extended: [
@@ -326,7 +336,22 @@ process.stdin.on("end", () => process.exit(0));
       };
       const snapshots = scenarios[mode];
       let inspection = 0;
+      let descendantSignalled = false;
+      const actualSnapshot = processSnapshot.readCodexAppServerProcessSnapshot;
+      const actualKill = process.kill.bind(process);
+      const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+        const signalled = actualKill(pid, signal);
+        if (pid === sentinelPid && signal === "SIGKILL") {
+          descendantSignalled = true;
+        }
+        return signalled;
+      });
       const readSnapshot = async (inspectionDeadline: number): Promise<PosixProcess[]> => {
+        // Identity faults exercise signalling; cleanup needs a separate OS
+        // observation. A queued kill alone must not certify an uninterruptible child.
+        if (descendantSignalled && mode !== "unconfirmed-termination") {
+          return await actualSnapshot(inspectionDeadline);
+        }
         const rows = snapshots[Math.min(inspection++, snapshots.length - 1)];
         if (rows === "deadline") {
           await delay(Math.max(1, inspectionDeadline - Date.now()));
@@ -350,15 +375,19 @@ process.stdin.on("end", () => process.exit(0));
       restoreInspection = () => {
         snapshotSpy.mockRestore();
         processSpy.mockRestore();
+        killSpy.mockRestore();
       };
       const closed = await closeCodexAppServerTransportAndWait(root, {
         forceKillDelayMs: 500,
         exitTimeoutMs: 2_000,
       });
       restoreInspection();
-      expect(closed).toBe(true);
+      expect(closed).toEqual({
+        exited: true,
+        cleanup: sentinelSurvived || mode === "unconfirmed-termination" ? "uncertain" : "closed",
+      });
       expect(root.exitCode).toBe(0);
-      const survived = listProcesses().some(
+      const survived = (await listProcesses(tempDir)).some(
         (row) => row.pid === sentinelPid && row.command.includes(tempDir),
       );
       expect(survived).toBe(sentinelSurvived);

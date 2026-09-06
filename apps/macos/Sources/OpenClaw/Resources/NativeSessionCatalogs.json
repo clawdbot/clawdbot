@@ -1,0 +1,26 @@
+[
+  {
+    "pluginId": "anthropic",
+    "label": "Claude Code",
+    "legacyDefaultEnabled": true,
+    "description": "Existing native Claude Code conversations on this Gateway and eligible paired nodes.",
+    "nodeCommands": [
+      "anthropic.claude.sessions.list.v1",
+      "anthropic.claude.sessions.read.v1",
+      "anthropic.claude.terminal.resume.v1"
+    ]
+  },
+  {
+    "pluginId": "codex",
+    "label": "Codex",
+    "legacyDefaultEnabled": true,
+    "description": "Existing native Codex conversations on this Gateway and eligible paired nodes.",
+    "nodeCommands": [
+      "codex.appServer.threads.list.v1",
+      "codex.appServer.thread.turns.list.v1",
+      "codex.sessionCatalog.transcript.read.v1",
+      "codex.terminal.resume.v1",
+      "codex.cli.sessions.list"
+    ]
+  }
+]

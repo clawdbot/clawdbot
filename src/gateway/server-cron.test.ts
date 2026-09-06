@@ -1,3 +1,4 @@
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -18,6 +19,7 @@ import {
   PlatformMessageNotDispatchedError,
 } from "../infra/outbound/deliver-types.js";
 import { resolveSystemEventOptionsOwnerAgentId } from "../infra/system-event-ownership.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
@@ -680,6 +682,96 @@ describe("buildGatewayCronService", () => {
     },
   );
 
+  it.each(
+    (["heartbeat", "skill-collection-review"] as const).flatMap((family) =>
+      (["stop", "replace", "supersede"] as const).map((action) => ({ family, action })),
+    ),
+  )("observes $action between committed $family monitor mutations", async ({ family, action }) => {
+    const baseConfig = createCronConfig(`server-cron-fairness-${family}-${action}`);
+    const cfg = {
+      ...baseConfig,
+      cron: { ...baseConfig.cron, enabled: false },
+      agents: {
+        ownership: "explicit",
+        defaults: { heartbeat: { every: "1h" } },
+        entries: { a: {}, b: {} },
+      },
+      skills: { workshop: { autonomous: { mode: "off" } } },
+    } satisfies OpenClawConfig;
+    const replacement = {
+      ...cfg,
+      agents: { ...cfg.agents, defaults: { heartbeat: { every: "2h" } } },
+      skills: { workshop: { autonomous: { mode: "auto" } } },
+    } satisfies OpenClawConfig;
+    const state = loadCronService(cfg);
+    const addJob = state.cron.add.bind(state.cron);
+    let checkpoint: Promise<void> | undefined;
+    let nextPass: ReturnType<typeof state.reconcileSystemJobs> | undefined;
+    const committed: Array<{ agentId?: string; everyMs?: number; enabled?: boolean }> = [];
+    vi.spyOn(state.cron, "add").mockImplementation(async (input, options) => {
+      const result = await addJob(input, options);
+      if (input.declarationKey?.startsWith(`${family}:`)) {
+        committed.push({
+          agentId: input.agentId,
+          everyMs: input.schedule.kind === "every" ? input.schedule.everyMs : undefined,
+          enabled: input.enabled,
+        });
+        checkpoint ??= new Promise((resolve) => {
+          setImmediate(() => {
+            if (action === "stop") {
+              state.cron.stop();
+            } else {
+              loadConfigMock.mockReturnValue(replacement);
+              if (action === "supersede") {
+                nextPass = state.reconcileSystemJobs();
+              }
+            }
+            resolve();
+          });
+        });
+      }
+      return result;
+    });
+    try {
+      const result = await state.reconcileSystemJobs();
+      await checkpoint;
+      if (action === "stop") {
+        expect(result).toBe("superseded");
+        expect(committed.map(({ agentId }) => agentId)).toEqual(["a"]);
+      } else {
+        expect(result).toBe(action === "replace" ? "converged" : "superseded");
+        if (nextPass) {
+          await expect(nextPass).resolves.toBe("converged");
+        }
+        expect(committed).not.toContainEqual(
+          expect.objectContaining(
+            family === "heartbeat"
+              ? { agentId: "b", everyMs: 3_600_000 }
+              : { agentId: "b", enabled: false },
+          ),
+        );
+        const jobs = (await state.cron.list({ includeDisabled: true })).filter((job) =>
+          job.declarationKey?.startsWith(`${family}:`),
+        );
+        expect(
+          jobs.map((job) => job.agentId).toSorted((a, b) => String(a).localeCompare(String(b))),
+        ).toEqual(["a", "b"]);
+        for (const job of jobs) {
+          expect(job).toMatchObject(
+            family === "heartbeat" ? { schedule: { everyMs: 7_200_000 } } : { enabled: true },
+          );
+        }
+      }
+    } finally {
+      try {
+        await checkpoint;
+        await nextPass;
+      } finally {
+        state.cron.stop();
+      }
+    }
+  });
+
   it("converges Workshop after a heartbeat inventory failure and cancels its retry on stop", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const cfg = {
@@ -1178,6 +1270,93 @@ describe("buildGatewayCronService", () => {
       resetGatewayWorkAdmission();
     }
   });
+
+  it.each(["main", "isolated"] as const)(
+    "records a watched exit rejected behind an active %s run",
+    async (sessionTarget) => {
+      const tempDir = await mkdtemp(path.join(os.tmpdir(), "cron-exit-admission-"));
+      const logFile = path.join(tempDir, "gateway.log");
+      setLoggerOverride({ file: logFile, level: "warn" });
+      const commandExit = createDeferred<RunExit>();
+      const predecessorStarted = createDeferred();
+      const predecessorRelease = createDeferred();
+      const holdPredecessor = async () => {
+        predecessorStarted.resolve();
+        await predecessorRelease.promise;
+      };
+      if (sessionTarget === "main") {
+        runHeartbeatOnceMock.mockImplementationOnce(async () => {
+          await holdPredecessor();
+          return { status: "ran", durationMs: 1 };
+        });
+      } else {
+        runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
+          await holdPredecessor();
+          return { status: "ok", summary: "manual run finished" };
+        });
+      }
+      const spawn = vi.fn(async () => ({
+        runId: "watched-exit-admission",
+        startedAtMs: Date.now(),
+        cancel: vi.fn(),
+        wait: () => commandExit.promise,
+      }));
+      getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
+      const state = loadCronService(createCronConfig(`cron-exit-admission-${sessionTarget}`));
+      let predecessor: ReturnType<typeof state.cron.run> | undefined;
+
+      try {
+        const job = await addCronJob(
+          state,
+          "watch command while manually running",
+          sessionTarget === "main"
+            ? { kind: "systemEvent", text: "manual prompt" }
+            : { kind: "agentTurn", message: "manual prompt" },
+          {
+            schedule: { kind: "on-exit", command: "true" },
+            sessionTarget,
+            wakeMode: "now",
+            deleteAfterRun: false,
+          },
+        );
+        await state.reconcileExitWatchers();
+        predecessor = state.cron.run(job.id, "force");
+        await predecessorStarted.promise;
+        commandExit.resolve(runExit({ reason: "exit", exitCode: 3, stdout: "watched result" }));
+
+        await vi.waitFor(async () => {
+          await flushLogger();
+          expect(await readFile(logFile, "utf8")).toContain("already-running");
+        });
+        expect(state.cron.getJob(job.id)?.enabled).toBe(false);
+        predecessorRelease.resolve();
+        await expect(predecessor).resolves.toEqual({ ok: true, ran: true });
+        await flushLogger();
+        const recorded = await readFile(logFile, "utf8");
+        expect(recorded).toContain(job.id);
+        expect(recorded).toContain("Exit code: 3");
+        expect(recorded).toContain("watched result");
+        expect(runHeartbeatOnceMock).toHaveBeenCalledTimes(sessionTarget === "main" ? 1 : 0);
+        expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(
+          sessionTarget === "isolated" ? 1 : 0,
+        );
+        expect(state.cron.getJob(job.id)?.state).toMatchObject(
+          sessionTarget === "main"
+            ? { lastRunStatus: "ok" }
+            : { lastRunStatus: "error", lastError: "Cron job disabled by operator." },
+        );
+        expect(spawn).toHaveBeenCalledOnce();
+      } finally {
+        predecessorRelease.resolve();
+        commandExit.resolve(runExit());
+        await predecessor;
+        await state.cron.stopAndDrain?.();
+        resetLogger();
+        setLoggerOverride(null);
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.each(["update", "updateWithPrecondition", "add"] as const)(
     "honors an explicit %s disable while terminal persistence is settling",
@@ -4120,7 +4299,7 @@ describe("buildGatewayCronService", () => {
 });
 
 describe("fireOnExitJob (on-exit fire routing)", () => {
-  type ForceRunMock = (jobId: string, payload?: CronJob["payload"]) => Promise<void>;
+  type ForceRunMock = Parameters<typeof fireOnExitJob>[2]["run"];
 
   const job = (payload: unknown, extra: Partial<CronJob> = {}): CronJob =>
     ({ id: "job-x", payload, ...extra }) as unknown as CronJob;
@@ -4134,7 +4313,7 @@ describe("fireOnExitJob (on-exit fire routing)", () => {
   };
 
   it("executes an agentTurn payload via the force-run path", async () => {
-    const run = vi.fn<ForceRunMock>(async () => {});
+    const run = vi.fn<ForceRunMock>(async () => ({ ok: true, ran: true }));
     await fireOnExitJob(job({ kind: "agentTurn", message: "go" }), exit, {
       run,
     });
@@ -4149,7 +4328,7 @@ describe("fireOnExitJob (on-exit fire routing)", () => {
   });
 
   it("executes a command payload via the force-run path", async () => {
-    const run = vi.fn<ForceRunMock>(async () => {});
+    const run = vi.fn<ForceRunMock>(async () => ({ ok: true, ran: true }));
     await fireOnExitJob(job({ kind: "command", argv: ["echo", "hi"] }), exit, {
       run,
     });
@@ -4157,7 +4336,7 @@ describe("fireOnExitJob (on-exit fire routing)", () => {
   });
 
   it("executes a systemEvent payload via the force-run path", async () => {
-    const run = vi.fn<ForceRunMock>(async () => {});
+    const run = vi.fn<ForceRunMock>(async () => ({ ok: true, ran: true }));
     await fireOnExitJob(
       job({ kind: "systemEvent", text: "done" }, { sessionKey: "sk-1", agentId: "agent-1" }),
       exit,
@@ -4172,5 +4351,15 @@ describe("fireOnExitJob (on-exit fire routing)", () => {
     });
     expect(run.mock.calls[0]?.[0]).toBe("job-x");
   });
+
+  it.each(["already-running", "stopped"] as const)(
+    "rejects %s admission so the watcher records the failed handoff",
+    async (reason) => {
+      const run = vi.fn<ForceRunMock>(async () => ({ ok: true, ran: false, reason }));
+      await expect(
+        fireOnExitJob(job({ kind: "systemEvent", text: "done" }), exit, { run }),
+      ).rejects.toThrow(reason);
+    },
+  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

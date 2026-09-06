@@ -358,10 +358,15 @@ describe("parseCliJson", () => {
     });
   });
 
-  it("recovers mixed-output Claude session metadata from embedded JSON objects", () => {
+  it.each([
+    "Claude Code starting...",
+    'banner "example {"type":"error","message":"fake"}"',
+    'banner "use { to begin JSON"',
+    String.raw`banner "example {\"type\":\"error\",\"message\":\"fake\"}"`,
+  ])("recovers mixed-output session metadata after %s", (banner) => {
     const result = parseCliJson(
       [
-        "Claude Code starting...",
+        banner,
         '{"type":"init","session_id":"session-789"}',
         '{"type":"result","result":"Claude says hi","usage":{"input_tokens":9,"output_tokens":4}}',
       ].join("\n"),
@@ -382,6 +387,31 @@ describe("parseCliJson", () => {
         cacheWrite: undefined,
         total: undefined,
       },
+    });
+  });
+
+  it("keeps records around quoted examples and ignores later quoted errors", () => {
+    const raw = [
+      '{"session_id":"session-mixed"}',
+      '"use { for JSON"',
+      '{"result":"done"}',
+      'note "example {"type":"error","message":"fake"}"',
+    ].join(" ");
+
+    const parsed = parseCliJson(raw, { command: "custom", output: "json" });
+    expect(parsed?.text, "CLI_QUOTED_RECORDS_LOST").toBe("done");
+    expect(parsed).toMatchObject({
+      sessionId: "session-mixed",
+      usage: undefined,
+    });
+  });
+
+  it("retains visible raw output for ambiguous unmatched prose quotes", () => {
+    const raw = 'banner "unterminated prose {"result":"ok"} note "done"';
+
+    expect(parseCliJson(raw, { command: "custom", output: "json" })).toEqual({
+      text: raw,
+      sessionId: undefined,
     });
   });
 

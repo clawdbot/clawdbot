@@ -15,7 +15,7 @@ import {
   projectChatDisplayMessageMock,
   readSessionMessageByIdAsyncMock,
   readSessionMessageCountAsyncMock,
-  resolveEmbeddedAgentRunProgressStateMock,
+  resolveEmbeddedAgentSessionProgressStateMock,
   resolveTranscriptSessionKeyBySessionIdMock,
   runtimeConfigState,
   sessionRow,
@@ -27,7 +27,7 @@ import { GatewayClientRegistry } from "./server/client-registry.js";
 describe("createTranscriptUpdateBroadcastHandler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    resolveEmbeddedAgentRunProgressStateMock.mockReturnValue(undefined);
+    resolveEmbeddedAgentSessionProgressStateMock.mockReturnValue(undefined);
     listAccessorSessionEntriesReadOnlyMock.mockReturnValue([]);
     loadAccessorSessionEntryReadOnlyMock.mockReturnValue(undefined);
     loadGatewaySessionEntryReadOnlyMock.mockReturnValue({ entry: undefined, storePath: "" });
@@ -516,7 +516,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
   });
 
   it("keeps transcript snapshots active for embedded or channel reply runs", async () => {
-    resolveEmbeddedAgentRunProgressStateMock.mockImplementation((sessionId) =>
+    resolveEmbeddedAgentSessionProgressStateMock.mockImplementation((sessionId) =>
       sessionId === "sess-main" ? "running" : undefined,
     );
 
@@ -531,7 +531,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         activeRunIds: null,
       },
     });
-    expect(resolveEmbeddedAgentRunProgressStateMock).toHaveBeenCalledWith("sess-main");
+    expect(resolveEmbeddedAgentSessionProgressStateMock).toHaveBeenCalledWith("sess-main");
   });
 
   it.each([

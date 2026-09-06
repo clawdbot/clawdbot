@@ -1241,7 +1241,8 @@ export async function handleControlUiHttpRequest(
   ) {
     // Future filesystem clocks must not make later replacements look unmodified;
     // clamp to response origination as in resolveByteResponse.
-    const lastModifiedMs = Math.floor(Math.min(safeFile.mtimeMs, Date.now()) / 1_000) * 1_000;
+    const originatedAtMs = Date.now();
+    const lastModifiedMs = Math.floor(Math.min(safeFile.mtimeMs, originatedAtMs) / 1_000) * 1_000;
     const representation = resolveOpenedControlUiRepresentation({
       req,
       sourceFile: safeFile,
@@ -1255,7 +1256,7 @@ export async function handleControlUiHttpRequest(
       return true;
     }
     // Negotiation failures precede preconditions; release the selected representation on 304.
-    if (isControlUiFileUnmodified(req, lastModifiedMs)) {
+    if (isControlUiFileUnmodified(req, lastModifiedMs, originatedAtMs)) {
       fs.closeSync(representation.bodyFile.fd);
       respondControlUiNotModified(res, { immutable: immutableAsset, lastModifiedMs });
       return true;

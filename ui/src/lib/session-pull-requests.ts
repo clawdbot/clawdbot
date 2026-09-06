@@ -58,7 +58,7 @@ export type SessionPullRequestSnapshotStore = {
     owner: object,
     sessionKey: string,
   ) => Promise<ControlUiSessionPullRequestSnapshot | undefined>;
-  refresh: (sessionKey: string) => void;
+  refresh: (sessionKey: string) => boolean;
   get: (sessionKey: string) => ControlUiSessionPullRequestSnapshot | undefined;
   subscribe: (listener: () => void) => () => void;
 };
@@ -464,11 +464,12 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     refresh: (sessionKey) => {
       const key = sessionKey.trim();
       if (!key || !watchedKeys().includes(key)) {
-        return;
+        return false;
       }
       pendingRefreshKeys.add(key);
       retry.reset();
       scheduleSync();
+      return true;
     },
     get: (sessionKey) => snapshots.get(sessionKey),
     subscribe: (listener) => {

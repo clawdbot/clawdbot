@@ -51,22 +51,128 @@ type BridgeState = {
   admissionFailure?: CodeModeWorkerFailure;
 };
 
+const USER_SOURCE_FILE = "openclaw-code-mode:user.js";
+const GENERATED_SOURCE_FILE = "openclaw-code-mode:generated.js";
+const SOURCE_LOCATION_KEY = "__openclawSourceLocation";
+
+type SourceLocation = {
+  file: typeof USER_SOURCE_FILE | typeof GENERATED_SOURCE_FILE;
+  lineOffset: number;
+  lineCount: number;
+  columnOffset: number;
+  endColumn: number;
+};
+
+function sourceExtent(source: string): { lines: number; lastColumn: number } {
+  let lines = 1;
+  let lastLineStart = 0;
+  for (const match of source.matchAll(/\r\n|[\r\n\u2028\u2029]/gu)) {
+    lines += 1;
+    lastLineStart = match.index + match[0].length;
+  }
+  // QuickJS columns count UTF-8 bytes, while JavaScript string indices count UTF-16 units.
+  return { lines, lastColumn: Buffer.byteLength(source.slice(lastLineStart), "utf8") + 1 };
+}
+
+function readSourceLocation(vm: QuickJS): SourceLocation | undefined {
+  // Old snapshots have no record. Read data descriptors without invoking guest getters.
+  const descriptor = vm.global.getOwnPropertyDescriptor(SOURCE_LOCATION_KEY);
+  if (!descriptor) {
+    return undefined;
+  }
+  try {
+    if (
+      descriptor.writable ||
+      descriptor.configurable ||
+      descriptor.enumerable ||
+      !descriptor.value?.isString ||
+      descriptor.value.length > 256
+    ) {
+      return undefined;
+    }
+    const value: unknown = JSON.parse(descriptor.value.toString());
+    if (!isRecord(value)) {
+      return undefined;
+    }
+    const { file, lineOffset, lineCount, columnOffset, endColumn } = value;
+    const isOffset = (offset: unknown): offset is number =>
+      typeof offset === "number" && Number.isSafeInteger(offset) && offset >= 0;
+    if (
+      (file !== USER_SOURCE_FILE && file !== GENERATED_SOURCE_FILE) ||
+      !isOffset(lineOffset) ||
+      !isOffset(lineCount) ||
+      lineCount === 0 ||
+      !isOffset(columnOffset) ||
+      !isOffset(endColumn) ||
+      endColumn === 0 ||
+      !Number.isSafeInteger(lineOffset + lineCount) ||
+      (lineCount === 1 && endColumn <= columnOffset)
+    ) {
+      return undefined;
+    }
+    return { file, lineOffset, lineCount, columnOffset, endColumn };
+  } catch {
+    return undefined;
+  } finally {
+    descriptor.value?.dispose();
+    descriptor.get?.dispose();
+    descriptor.set?.dispose();
+  }
+}
+
+function normalizeSourceStack(
+  stack: string | undefined,
+  location?: SourceLocation,
+): string | undefined {
+  if (!stack || !location) {
+    return stack;
+  }
+  // Leave arbitrary guest stack text opaque instead of copying every line into an array.
+  return stack.replace(
+    /^[^\S\r\n]+at [^\r\n]*openclaw-code-mode:(?:user|controller)\.js:\d+:\d+\)?(?:\r?\n|$)/gmu,
+    (frame) => {
+      const match = /openclaw-code-mode:user\.js:(\d+):(\d+)(?=\)?(?:\r?\n)?$)/u.exec(frame);
+      if (!match) {
+        return "";
+      }
+      const line = Number(match[1]) - location.lineOffset;
+      const originalColumn = Number(match[2]);
+      const column = originalColumn - (line === 1 ? location.columnOffset : 0);
+      if (
+        line < 1 ||
+        line > location.lineCount ||
+        column < 1 ||
+        (line === location.lineCount && originalColumn > location.endColumn)
+      ) {
+        return "";
+      }
+      return frame.replace(match[0], `${location.file}:${line}:${column}`);
+    },
+  );
+}
+
 // QuickJS error stacks are backtrace frames only ("    at file:line:col"), with
 // no leading "Name: message" header like V8. Returning .stack alone therefore
 // dropped the actual cause, surfacing failures to the model as a bare location
 // (e.g. "at openclaw-code-mode:user.js:2:37"). Lead with name+message so the
 // model can self-correct, and keep the frames for location.
-function formatQuickJsError(name: string, message: string, stack: string | undefined): string {
+function formatQuickJsError(
+  name: string,
+  message: string,
+  stack: string | undefined,
+  location?: SourceLocation,
+): string {
   const header = message ? `${name}: ${message}` : name;
-  if (!stack || stack.split(/\r?\n/, 1)[0] === header) {
+  const sourceStack = normalizeSourceStack(stack, location);
+  if (!sourceStack || sourceStack.split(/\r?\n/, 1)[0] === header) {
     return header;
   }
-  return `${header}\n${stack}`;
+  return `${header}\n${sourceStack}`;
 }
 
-function errorMessage(error: unknown): string {
+function errorMessage(error: unknown, location?: SourceLocation): string {
   if (error instanceof JSException) {
-    return formatQuickJsError(error.name, error.message, error.stack);
+    return formatQuickJsError(error.name, error.message, error.stack, location);
   }
   if (error instanceof Error) {
     return error.message || String(error);
@@ -74,8 +180,25 @@ function errorMessage(error: unknown): string {
   return String(error);
 }
 
-function buildUserSource(code: string): string {
-  return `globalThis.__openclawResult = (async () => {\n${code}\n})()`;
+function buildUserSource(
+  code: string,
+  prelude = "",
+  language?: CodeModeLanguage,
+): { source: string; location: SourceLocation } {
+  const prefix = `globalThis.__openclawResult = (async () => {\n${prelude}`;
+  const before = sourceExtent(prefix);
+  const body = sourceExtent(code);
+  const columnOffset = before.lastColumn - 1;
+  return {
+    source: `${prefix}${code}\n})()`,
+    location: {
+      file: language === "typescript" ? GENERATED_SOURCE_FILE : USER_SOURCE_FILE,
+      lineOffset: before.lines - 1,
+      lineCount: body.lines,
+      columnOffset,
+      endColumn: body.lastColumn + (body.lines === 1 ? columnOffset : 0),
+    },
+  };
 }
 
 function trackPromiseRejection(
@@ -280,7 +403,15 @@ function workerFailureResult(params: {
     return failedWorkerResult(params.error.code, params.error.message, output);
   }
   if (output.length > 0) {
-    return failedWorkerResult("internal_error", errorMessage(params.error), output);
+    return failedWorkerResult(
+      "internal_error",
+      errorMessage(params.error, readSourceLocation(params.vm)),
+      output,
+    );
+  }
+  if (params.error instanceof JSException) {
+    // Preserve guest coordinates before the VM is disposed and the outer catch formats the error.
+    throw new Error(errorMessage(params.error, readSourceLocation(params.vm)));
   }
   throw params.error;
 }
@@ -308,7 +439,7 @@ async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Pr
       }
       const text =
         dumped instanceof Error
-          ? formatQuickJsError(dumped.name, dumped.message, dumped.stack)
+          ? formatQuickJsError(dumped.name, dumped.message, dumped.stack, readSourceLocation(vm))
           : errorMessage(dumped);
       throw new Error(text);
     });
@@ -438,11 +569,12 @@ async function run(input: CodeModeWorkerPayload): Promise<CodeModeWorkerResult> 
     config,
     prepare: () => {
       if (input.kind === "exec") {
-        vm.evalCode(
-          buildUserSource(`${input.prelude ?? ""}${source}`),
-          "openclaw-code-mode:user.js",
-          EvalFlags.ASYNC,
-        ).dispose();
+        const program = buildUserSource(source, input.prelude, input.language);
+        // Immutable guest state travels with the existing VM snapshot and its byte limit.
+        vm.newString(JSON.stringify(program.location)).consume((location) =>
+          vm.global.defineProp(SOURCE_LOCATION_KEY, location),
+        );
+        vm.evalCode(program.source, USER_SOURCE_FILE, EvalFlags.ASYNC).dispose();
         return;
       }
       vm.global.getProp("__openclawSettleBridge").consume((settle) => {

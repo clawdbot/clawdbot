@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "../pages/new-session/cloud-profile-discovery.ts";
@@ -483,8 +484,7 @@ suite.define(() => {
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [startupStatus]),
         );
       }
-      const describeRequestsAfterNavigation = (await gateway.getRequests("sessions.describe"))
-        .length;
+      await gateway.waitForRequest("sessions.describe", { match: { key: sessionKey } });
       await expect.poll(() => page.url()).toContain(controlUiSessionPath(sessionKey));
       await expect
         .poll(() => page.locator(".agent-chat__composer-combobox textarea").isDisabled())
@@ -541,11 +541,24 @@ suite.define(() => {
         ["starting", 4, "Starting…"],
       ] as const) {
         await publishPlacement(state, generation, label, state === "starting");
+        await page.clock.runFor(250);
         expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
       }
-      expect(await gateway.getRequests("sessions.describe")).toHaveLength(
-        describeRequestsAfterNavigation,
-      );
+      // This single-page fixture pairs each Swarm child read with its parent read.
+      // Placement updates must not add an unpaired describe for the same session.
+      const parentReads = (await gateway.getRequests()).filter((request) => {
+        const params = asNullableRecord(request.params);
+        return (
+          (request.method === "sessions.describe" && params?.key === sessionKey) ||
+          (request.method === "sessions.list" && params?.spawnedBy === sessionKey)
+        );
+      });
+      for (let index = 0; index < parentReads.length; index += 2) {
+        expect(parentReads.slice(index, index + 2)).toMatchObject([
+          { method: "sessions.list", params: { spawnedBy: sessionKey } },
+          { method: "sessions.describe", params: { key: sessionKey } },
+        ]);
+      }
       const neutralRow = page.locator('[data-session-key="agent:cloud:neutral-e2e"] a');
       await neutralRow.waitFor();
       await neutralRow.click();

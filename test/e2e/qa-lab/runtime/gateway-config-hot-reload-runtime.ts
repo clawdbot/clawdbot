@@ -34,7 +34,6 @@ import { proveHotReloadPluginPolicy } from "./gateway-config-hot-reload-plugin-p
 import { proveHotReloadPolicyAdmission } from "./gateway-config-hot-reload-policy-admission.js";
 import { proveHotReloadPolicy } from "./gateway-config-hot-reload-policy.js";
 import { proveHotReloadRequests } from "./gateway-config-hot-reload-requests.js";
-import { startHotReloadAttachmentRetention } from "./gateway-config-hot-reload-retention.js";
 import { proveHotReloadSecurity } from "./gateway-config-hot-reload-security.js";
 import { proveHotReloadServicePolicy } from "./gateway-config-hot-reload-service-policy.js";
 import { proveHotReloadTerminalDeferredRestart } from "./gateway-config-hot-reload-terminal-deferred.js";
@@ -71,9 +70,6 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
   let passedChecks = 0;
   let channels: Awaited<ReturnType<typeof proveHotReloadChannels>> | undefined;
   let security: Awaited<ReturnType<typeof proveHotReloadSecurity>> | undefined;
-  let retention: Awaited<ReturnType<typeof startHotReloadAttachmentRetention>> | undefined;
-  const pluginPolicyAbort = new AbortController();
-  let pluginPolicy: Promise<void> | undefined;
   await runQaGatewayFixture(
     async () => {
       await fs.access(path.join(repoRoot, "dist/control-ui/index.html"));
@@ -115,7 +111,6 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         },
         mutateConfig: (cfg) => ({
           ...cfg,
-          attachments: { ...cfg.attachments, ttlHours: 24 },
           agents: {
             ...cfg.agents,
             defaults: { ...cfg.agents?.defaults, utilityModel: MODEL },
@@ -306,13 +301,6 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         verifyContinuity,
         proveGroup,
       };
-      retention = await startHotReloadAttachmentRetention({
-        gateway: activeGateway,
-        patch,
-        verifyContinuity,
-        appendLog,
-      });
-      void retention.completion.catch(() => {});
       await proveGroup("heartbeat and Workshop monitors", async () => {
         for (const [every, mode] of [
           ["1h", "auto"],
@@ -521,7 +509,6 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         const pairingObservation = await pairingFixture.run({
           gateway: activeGateway,
           operator: primary.client,
-          patchConfig: patch,
           existingNode: node,
         });
         await verifyContinuity(
@@ -664,7 +651,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         proveGroup,
         verifyContinuity,
       });
-      pluginPolicy = proveHotReloadPluginPolicy({
+      await proveHotReloadPluginPolicy({
         gateway: activeGateway,
         unaffectedNode: node,
         temporaryRoot,
@@ -675,11 +662,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         http,
         proveGroup,
         verifyContinuity,
-        appendLog,
-        signal: pluginPolicyAbort.signal,
       });
-      // Join this owner below; real cleanup intervals overlap independent Gateway fixtures.
-      void pluginPolicy.catch(() => {});
       channels = await proveHotReloadChannels({ repoRoot, outputDir, appendLog });
       failures.push(...channels.failures);
       security = await proveHotReloadSecurity({ repoRoot, outputDir, appendLog });
@@ -694,8 +677,6 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
       failures.push(...servicePolicy.failures);
       const otel = await proveHotReloadOtel({ repoRoot, outputDir, appendLog });
       failures.push(...otel.failures);
-      await pluginPolicy;
-      await proveGroup("attachments.ttlHours", () => retention!.completion);
       await checkContinuity();
       passedChecks =
         evidence.length +
@@ -759,11 +740,6 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
           "SSH remote identity command with real isolated sshd",
         ],
       };
-    },
-    async () => {
-      pluginPolicyAbort.abort();
-      await pluginPolicy?.catch(() => {});
-      await retention?.stop();
     },
     () => {
       if (gateway) {

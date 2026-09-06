@@ -129,12 +129,6 @@ export function extractSnapshot(result: ChromeMcpToolResult): ChromeMcpSnapshotN
   return snapshot;
 }
 
-function extractJsonBlock(text: string): unknown {
-  const match = text.match(/```json\s*([\s\S]*?)\s*```/i);
-  const raw = match?.[1]?.trim() || text.trim();
-  return raw ? JSON.parse(raw) : null;
-}
-
 function extractMessageText(result: ChromeMcpToolResult): string {
   const message = extractStructuredContent(result).message;
   if (typeof message === "string" && message.trim()) {
@@ -195,7 +189,11 @@ export function extractJsonMessage(result: ChromeMcpToolResult): unknown {
   let lastError: unknown;
   for (const candidate of candidates) {
     try {
-      return extractJsonBlock(candidate);
+      // MCP fence delimiters occupy lines; backticks inside JSON strings are data.
+      const match = candidate.match(
+        /^[\t ]*```json[\t ]*\r?\n([\s\S]*?)\r?\n[\t ]*```[\t ]*\r?$/im,
+      );
+      return JSON.parse(match?.[1]?.trim() || candidate.trim());
     } catch (err) {
       lastError = err;
     }

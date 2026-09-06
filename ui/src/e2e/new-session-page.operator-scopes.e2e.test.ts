@@ -1,5 +1,8 @@
 import { expect, it } from "vitest";
-import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  tooltipTitleText,
+} from "./control-ui-e2e-suite.test-support.ts";
 import {
   SESSION_LIST_DEFAULTS,
   createNewSessionPageE2eSuite,
@@ -19,11 +22,7 @@ async function openDraft(
     "sessions.dispatch",
   ],
 ) {
-  const context = await suite.browser.newContext({
-    locale: "en-US",
-    serviceWorkers: "block",
-    viewport: { height: 900, width: 1280 },
-  });
+  const context = await suite.browser.newContext(createControlUiE2eContextOptions());
   const page = await context.newPage();
   const gateway = await installMockGateway(page, {
     featureMethods,

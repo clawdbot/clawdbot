@@ -76,8 +76,8 @@ export class ChatPane extends ChatPaneLayoutRender {
     if (!state) {
       return html`<main class="app-shell app-shell--booting" aria-busy="true"></main>`;
     }
-    void this.ensureTaskSuggestionCloudProfiles();
     const selectedSession = selectedChatSessionRow(state);
+    const swarmTarget = this.resolveChatReadTarget();
     const selectedSessionArchived = this.isCurrentSessionArchived(state);
     const mutationAccess = readChatPaneMutationAccess(
       this.context.gateway.snapshot,
@@ -304,7 +304,8 @@ export class ChatPane extends ChatPaneLayoutRender {
           hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null),
         personalReady:
           !hasAbortableSessionRun(state) &&
-          !isCloudWorkerPlacementState(placement?.state) &&
+          (!isCloudWorkerPlacementState(placement?.state) ||
+            (Boolean(publicationRow.repositoryWorkspaceId) && placement?.state === "active")) &&
           !workspaceConflict,
         isPresented: () => this.presented,
         isCurrent: () => {
@@ -506,7 +507,7 @@ export class ChatPane extends ChatPaneLayoutRender {
               (composerState.capabilityMenuView === "skills" ||
                 composerState.capabilityMenuView.startsWith("library:")),
           ),
-      swarmSessions: this.swarmHydrator?.rows ?? [],
+      swarm: swarmTarget ? { ...swarmTarget, sessions: this.swarmHydrator?.rows ?? [] } : undefined,
       sessionHost: {
         assistantAgentId: state.assistantAgentId,
         agentsList: state.agentsList,
@@ -642,7 +643,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         state.chatReplyTarget = null;
         state.requestUpdate?.();
       },
-      onSetReply: selectedSessionArchived ? undefined : setReply,
+      onSetReply: sessionDisabledBanner ? undefined : setReply,
       replyMessageAccess: catalogKey || selectedSessionArchived ? undefined : replyMessageAccess,
       onRewindMessage: selectedSessionArchived ? undefined : sessionActionCallbacks.onRewindMessage,
       onForkMessage: sessionActionCallbacks.onForkMessage,

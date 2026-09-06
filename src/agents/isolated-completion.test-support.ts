@@ -163,6 +163,7 @@ export function resetIsolatedCompletionTestState(): void {
   vi.clearAllMocks();
   preparedModelRuntime = {
     config: {},
+    agentDir: "/tmp/agent",
     metadataSnapshot: createEmptyPluginMetadataSnapshot("/tmp/workspace"),
     pluginRegistry: createEmptyPluginRegistry(),
     workspaceDir: "/tmp/workspace",

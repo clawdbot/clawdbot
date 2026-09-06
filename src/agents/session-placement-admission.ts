@@ -15,6 +15,7 @@ import { resolveEmbeddedRunSessionLanePolicy } from "./embedded-agent-runner/run
 import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import type { SandboxContext } from "./sandbox/types.js";
+import { beginForegroundSessionMaintenance } from "./session-maintenance/coordinator.js";
 import {
   resolveSessionPlacementForcedTerminalSettlement,
   resolveSessionPlacementTurnSettlementAssertion,
@@ -165,6 +166,11 @@ export async function withLocalSessionPlacementTurnSettlement(
     assertOwnerCurrent();
   };
   assertCurrent();
+  const releaseForeground =
+    resolveEmbeddedRunSessionLanePolicy(options.trigger, options.inputProvenance).priority ===
+    "foreground"
+      ? await beginForegroundSessionMaintenance(claim.sessionKey ?? claim.sessionId)
+      : undefined;
   const releaseQueuedContext = retainQueuedAgentRunContext(claim.runId, lifecycleGeneration);
   let releaseCapacityWait: (() => void) | undefined;
   try {
@@ -210,6 +216,7 @@ export async function withLocalSessionPlacementTurnSettlement(
       },
     );
   } finally {
+    releaseForeground?.();
     releaseCapacityWait?.();
     releaseQueuedContext?.("abandoned");
   }

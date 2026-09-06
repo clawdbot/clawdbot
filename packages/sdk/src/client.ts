@@ -44,7 +44,6 @@ import type {
 // into current Gateway RPC methods and normalize event streams for consumers.
 const MAX_REPLAY_RUNS = 100;
 const MAX_REPLAY_EVENTS_PER_RUN = 500;
-const MAX_NORMALIZED_REPLAY_EVENTS = 2000;
 
 /** Connection and transport options for the OpenClaw SDK client. */
 export type OpenClawOptions = {
@@ -276,9 +275,7 @@ export class OpenClaw {
   readonly environments: EnvironmentsNamespace;
 
   private readonly transport: OpenClawTransport;
-  private readonly normalizedEvents = new EventHub<OpenClawEvent>({
-    replayLimit: MAX_NORMALIZED_REPLAY_EVENTS,
-  });
+  private readonly normalizedEvents = new EventHub<OpenClawEvent>();
   private readonly replayByRunId = new Map<string, OpenClawEvent[]>();
   private connected = false;
   private closed = false;
@@ -336,6 +333,7 @@ export class OpenClaw {
         await this.eventPumpPromise?.catch(() => {});
       } finally {
         this.normalizedEvents.close();
+        this.replayByRunId.clear();
         this.eventPumpPromise = null;
         this.eventPumpReady = null;
         this.connected = false;
@@ -447,15 +445,11 @@ export class OpenClaw {
       return event;
     };
     const matches = (event: OpenClawEvent) => event.runId === runId;
-    const liveSource = this.normalizedEvents.stream(matches, { replay: true });
+    const liveSource = this.normalizedEvents.stream(matches);
+    // Iterator creation subscribes before replay yields, so live events queue behind the snapshot.
     const live = liveSource[Symbol.asyncIterator]();
-    const seen = new Set<string>();
     try {
       for (const event of replayEvents) {
-        if (seen.has(event.id)) {
-          continue;
-        }
-        seen.add(event.id);
         const runEvent = toRunStreamEvent(event);
         if (!runEvent || (filter && !filter(runEvent))) {
           continue;
@@ -467,10 +461,6 @@ export class OpenClaw {
         if (next.done) {
           break;
         }
-        if (seen.has(next.value.id)) {
-          continue;
-        }
-        seen.add(next.value.id);
         const runEvent = toRunStreamEvent(next.value);
         if (!runEvent || (filter && !filter(runEvent))) {
           continue;
@@ -596,6 +586,7 @@ export class Run {
     readonly sessionKey?: string,
   ) {}
 
+  /** Replay this run's retained in-memory tail, then stream live events. */
   events(filter?: (event: OpenClawEvent) => boolean): AsyncIterable<OpenClawEvent> {
     return this.client.runEvents(this.id, filter);
   }

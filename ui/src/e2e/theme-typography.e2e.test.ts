@@ -244,7 +244,7 @@ suite.define(() => {
     async (theme, body, chat, faces, chatSmoothing) => {
       const timestamp = Date.now();
       const text =
-        "Typography carries the theme: chat prose renders in the reading face while chrome, chips, and code keep their own.";
+        "Typography carries the theme: chat prose renders in the reading face while chrome, chips, and code keep their own: `const example = 1`.";
       const { themeRequests, page } = await openThemedChat(theme, "dark", {
         historyMessages: [
           {
@@ -263,6 +263,7 @@ suite.define(() => {
       await expect
         .poll(() => page.locator(".chat-text").last().textContent())
         .toContain("Typography");
+      await page.locator(".chat-text code").waitFor({ state: "visible" });
 
       const report = await page.evaluate(async () => {
         await document.fonts.ready;
@@ -273,6 +274,9 @@ suite.define(() => {
         return {
           buildId: document.documentElement.getAttribute("data-openclaw-control-ui-build-id"),
           chatFontFamily: lastChat ? primary(getComputedStyle(lastChat).fontFamily) : null,
+          codeFontFamily: lastChat?.querySelector("code")
+            ? primary(getComputedStyle(lastChat.querySelector("code")!).fontFamily)
+            : null,
           chatFontSmoothing: lastChat
             ? getComputedStyle(lastChat).getPropertyValue("-webkit-font-smoothing")
             : null,
@@ -301,6 +305,7 @@ suite.define(() => {
       );
       expect(report.bodyFontFamily).toBe(body);
       expect(report.chatFontFamily).toBe(chat);
+      expect(report.codeFontFamily).toBe("JetBrains Mono");
       // Serif chat faces opt out of the app-wide `antialiased` thinning
       // (applyChatFontSmoothing) so their hairlines stay crisp.
       expect(report.chatFontSmoothing).toBe(chatSmoothing);

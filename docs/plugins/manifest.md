@@ -41,6 +41,43 @@ See [Plugins](/tools/plugin) for the full plugin system guide, and [Capability m
 
 **Do not use it for:** registering native runtime hooks, declaring the full plugin runtime entrypoint, or npm install metadata. Those belong in your plugin code and `package.json`.
 
+## Native conversation discovery
+
+Plugins exposing conversations created outside OpenClaw declare
+`setup.nativeSessionCatalog` with a `label`, optional `description`, and optional
+`nodeCommands` containing their catalog read/list/resume command names. The
+contract uses the plugin's existing `config.sessionCatalog.enabled` preference.
+Core checks this preference before registered catalog reads, lists, activity
+checks, and the declared node commands execute. Schema-generated defaults for
+`enabled` remain available in plugin-local configuration, but the root runtime
+config retains only an authored value so a default cannot impersonate consent.
+
+Declare commands that expose the native catalog, not independently authorized
+execution transports. Disabling discovery must preserve turns in an already-bound
+conversation; those turns retain their existing execution and node permissions.
+
+New declarations default to off when no preference is authored, including plugins
+installed after configuration creation. Their schemas should also default `enabled`
+to `false`. New configuration files persist `false` for the host-generated catalog
+inventory, including installable official plugins. Explicit values are always kept.
+These opt-out-only entries do not request installation or widen a plugin allowlist;
+an explicit plugin selection or other authored configuration still does.
+
+The host-generated `legacyDefaultEnabled: true` declaration preserves the shipped
+Claude/Codex implicit-on behavior only for existing readable configurations. It is
+an upgrade exception, not a permission an installed third-party manifest can grant.
+Future catalogs do not inherit that exception merely by joining the generated
+inventory. Existing undeclared catalogs retain their previous behavior.
+
+Onboarding offers an unchecked enablement choice when all declared catalogs are
+off; selecting an agent does not imply consent. Explicit selection persists the
+choice for installed declarations too. Detection itself writes no preferences.
+
+Run `pnpm native-catalogs:gen` after changing these declarations and
+`pnpm native-catalogs:check` to verify the official catalog metadata and packaged
+macOS resource. The required `pnpm check` preflight runs this verification. Fresh native configuration creation fails if its privacy-default
+resource is missing.
+
 ## Minimal example
 
 ```json
@@ -174,6 +211,7 @@ See [Plugins](/tools/plugin) for the full plugin system guide, and [Capability m
 | `dashboard`                          | No       | `object`                     | Dashboard widget data bindings and action verbs. Each entry is validated against a Gateway method registered by this plugin with the required read or write scope. See [dashboard reference](#dashboard-reference).                                                                                                                                                                              |
 | `mcpServers`                         | No       | `Record<string, object>`     | Static MCP server definitions contributed while this plugin is enabled. Relative command arguments and working directories resolve from the plugin root. Operator `mcp.servers` entries override or disable definitions with the same name. See [MCP server reference](#mcp-server-reference).                                                                                                   |
 | `contracts`                          | No       | `object`                     | Static capability ownership snapshot for external auth hooks, embeddings, speech, realtime transcription, realtime voice, media-understanding, image/video/music generation, web fetch, web search, worker providers, document/web-content extraction, and tool ownership.                                                                                                                       |
+| `transcriptSources`                  | No       | `Record<string, object>`     | Static transcript source names and auto-start locator requirements for IDs declared in `contracts.transcriptSourceProviders`. See [Transcript sources reference](#transcript-sources-reference).                                                                                                                                                                                                 |
 | `configContracts`                    | No       | `object`                     | Manifest-owned config behavior consumed by generic core helpers: dangerous-flag detection, SecretRef migration targets, and legacy config-path narrowing. See [configContracts reference](#configcontracts-reference).                                                                                                                                                                           |
 | `mediaUnderstandingProviderMetadata` | No       | `Record<string, object>`     | Cheap media-understanding defaults for provider ids declared in `contracts.mediaUnderstandingProviders`.                                                                                                                                                                                                                                                                                         |
 | `imageGenerationProviderMetadata`    | No       | `Record<string, object>`     | Cheap image-generation auth metadata for provider ids declared in `contracts.imageGenerationProviders`, including provider-owned auth aliases and base-url guards.                                                                                                                                                                                                                               |
@@ -213,6 +251,28 @@ Set `doctorContract.configRepair: true` when the doctor-contract module exports
 non-empty `legacyConfigRules`, a `normalizeCompatibilityConfig` function, or
 both. One declaration covers the complete config-repair artifact.
 
+Bundled plugins declare each state migration in execution order so Doctor can
+plan its owner and receipt without loading plugin code:
+
+```json
+{
+  "doctorContract": {
+    "stateMigrations": [
+      { "id": "legacy-cache-to-state" },
+      { "id": "session-owner-repair", "doctorOnly": true, "phase": "after-session-repair" }
+    ]
+  }
+}
+```
+
+The array must match the migration IDs, order, `doctorOnly` flags, and phases
+exported by the doctor-contract module. The older value `true` still declares
+the dynamic module. Installed external plugin manifests remain outside the
+copied-state and candidate content identity, including when they use the
+descriptor array. Candidate validation must bind those artifacts separately.
+Until then, Doctor records an explicit planning refusal instead of treating an
+installed manifest as write authority.
+
 The Codex plugin sets `doctorHealthChecks: true` when its public API exports
 health-check registration. Doctor checks the selected plugin's trust before
 loading this surface. Older installed versions without the declaration skip
@@ -227,6 +287,40 @@ distributed separately. This lets `doctor --fix` migrate older configuration
 before plugin installation or capability consent. An installed plugin's doctor
 contract remains authoritative; retained entrypoints do not expose state
 migrations, install plugins, or grant capabilities.
+
+## Transcript sources reference
+
+`transcriptSources` maps provider IDs to static setup descriptors. Each key must
+also appear in this plugin's `contracts.transcriptSourceProviders`; descriptors
+for undeclared IDs are ignored. Names and setup controls are available from the
+prepared manifest snapshot without importing provider runtime.
+
+```json
+{
+  "contracts": { "transcriptSourceProviders": ["captions"] },
+  "transcriptSources": {
+    "captions": {
+      "name": "Captions",
+      "autoStart": { "accountId": "optional", "meetingUrl": "required" }
+    }
+  }
+}
+```
+
+`name` is an optional display name. `autoStart` advertises setup controls to
+Gateway clients through `transcripts.status`. Its only keys are `accountId`,
+`guildId`, `channelId`, and `meetingUrl`; each value must be `"required"` or
+`"optional"`. An explicit empty object supports setup without locator controls.
+Omit `autoStart` for sources that only attach to an already-active meeting bot.
+Malformed objects, unknown locator keys, or invalid modes do not advertise
+partial setup. Title and custom session ID remain existing configuration fields, not locator
+descriptor keys.
+
+Setup requires an enabled plugin. Runtime capabilities remain observed facts:
+an absent `canStart` does not hide the manifest descriptor, while an observed
+`canStart: false` prevents new setup. The descriptor does not change acceptance
+of existing `transcripts.autoStart` config or provider start semantics. Existing
+source edits preserve configured fields when metadata is unavailable.
 
 ## backupResources reference
 
@@ -951,6 +1045,8 @@ Each `dangerousFlags` entry supports:
 
 Capability owners fail cold when their provider is unavailable, so a stale credential never remains active. Route owners may retain the last-known-good value while their full plugin config and provider definition stay unchanged.
 
+Declared paths also control Settings redaction, including wildcards and fields behind local schema references. Structured SecretRefs retain `source` and `provider` while `id` is concealed; plaintext secrets are fully concealed. Unrelated Settings saves preserve the original reference. Changing its source or provider requires an explicit identifier.
+
 For plugins declaring `secretInputs`, `configSchema` validates the pre-resolution source config paired with the runtime config. A valid SecretRef is not rejected because its resolved credential is a string with a different shape. Invalid plaintext source values still fail validation. Runtime loading, CLI registration, and root command discovery use the same rule; plugins receive resolved values with defaults selected from the source config, without changing either input.
 
 Concrete paths preserve literal record keys and array indices: `headers["X.Trace"]` remains distinct from `headers.X.Trace`, and record key `["0"]` remains distinct from array index `[0]`. Plugin IDs containing dots are quoted the same way, such as `plugins.entries["example.plugin"].config.headers["X.Trace"]`.
@@ -1451,18 +1547,9 @@ not change the Gateway's existing refresh and restart lifecycle.
 
 ### OpenClaw Provider Index
 
-The OpenClaw Provider Index is OpenClaw-owned preview metadata for providers whose plugins may not be installed yet. It is not part of a plugin manifest. Plugin manifests remain the installed-plugin authority. The Provider Index is the internal fallback contract that future installable-provider and pre-install model picker surfaces will consume when a provider plugin is not installed.
+The compiled OpenClaw Provider Index is retired. Model metadata comes from plugin manifests, provider-owned discovery, and the hosted model catalog, with configured overrides applied by model resolution. See [Model listing](/cli/models#list) for catalog sources and refresh behavior.
 
-Catalog authority order:
-
-1. User config.
-2. Installed plugin manifest `modelCatalog`.
-3. Model catalog cache from explicit refresh.
-4. OpenClaw Provider Index preview rows.
-
-The Provider Index must not contain secrets, enabled state, runtime hooks, or live account-specific model data. Its preview catalogs use the same `modelCatalog` provider row shape as plugin manifests, but should stay limited to stable display metadata unless runtime adapter fields such as `api`, `baseUrl`, pricing, or compatibility flags are intentionally kept aligned with the installed plugin manifest. Providers with live `/models` discovery should write refreshed rows through the explicit model catalog cache path instead of making normal listing or onboarding call provider APIs.
-
-Provider Index entries may also carry installable-plugin metadata for providers whose plugin has moved out of core or is otherwise not installed yet. This metadata mirrors the channel catalog pattern: package name, npm install spec, expected integrity, and cheap auth-choice labels are enough to show an installable setup option. Once the plugin is installed, its manifest wins and the Provider Index entry is ignored for that provider.
+Provider setup uses installed manifest metadata and the official external plugin catalog. The external catalog supplies install hints and auth-choice labels for plugins that are not installed; installed plugin owners take precedence. Install hints remain in `package.json#openclaw.install`, not in a separate compiled provider index.
 
 `openclaw doctor --fix` migrates a small, closed set of legacy top-level manifest capability keys into `contracts.*`: `speechProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders`, and `tools`. None of these (or any other capability list) are read as top-level manifest fields anymore; normal manifest loading only recognizes them under `contracts`.
 
@@ -1523,6 +1610,8 @@ Official install-on-demand metadata should declare `npmSpec` as the default and 
 Exact npm version pinning already lives in `npmSpec`, for example `"npmSpec": "@wecom/wecom-openclaw-plugin@1.2.3"`. Official external catalog entries should pair exact specs with `expectedIntegrity` so update flows fail closed if the fetched npm artifact no longer matches the pinned release. Interactive onboarding still offers trusted registry npm specs, including bare package names and dist-tags, for compatibility. Catalog diagnostics can distinguish exact, floating, integrity-pinned, missing-integrity, package-name mismatch, and invalid default-choice sources. They also warn when `expectedIntegrity` is present but there is no valid npm source it can pin. When `expectedIntegrity` is present, install/update flows enforce it; when it is omitted, the registry resolution is recorded without an integrity pin.
 
 Channel plugins should provide `openclaw.setupEntry` when status, channel list, or SecretRef scans need to identify configured accounts without loading the full runtime. The setup entry should expose channel metadata plus setup-safe config, status, and secrets adapters; keep network clients, gateway listeners, and transport runtimes in the main extension entrypoint.
+
+Before the first setup-entry load, OpenClaw applies the selected plugin root's file-boundary and hardlink policy, even when discovery metadata is already cached. Validated setup modules remain cached for that plugin cache generation; this check does not rediscover metadata on each status call.
 
 Runtime entrypoint fields do not override package-boundary checks for source entrypoint fields. For example, `openclaw.runtimeExtensions` cannot make an escaping `openclaw.extensions` path loadable.
 

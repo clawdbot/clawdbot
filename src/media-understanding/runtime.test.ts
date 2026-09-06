@@ -212,6 +212,7 @@ describe("media-understanding runtime", () => {
         outcome: "disabled",
         attachments: [],
         attachmentDispositions: { 0: { kind: "capability-disabled" } },
+        attachmentProcessing: { 0: "omitted" },
         nativeVisionActive: false,
       },
     });
@@ -927,13 +928,7 @@ describe("media-understanding runtime", () => {
       contentType: "json",
     });
 
-    // The raw caller id rides along so the registry can resolve a lazy owner by id.
-    expect(mocks.buildMediaUnderstandingRegistry).toHaveBeenCalledWith(
-      undefined,
-      {},
-      undefined,
-      "Vision-Plugin",
-    );
+    expect(mocks.buildMediaUnderstandingRegistry).toHaveBeenCalledWith(undefined, {});
     expect(mocks.getMediaUnderstandingProvider).toHaveBeenCalledWith(
       "Vision-Plugin",
       providerRegistry,

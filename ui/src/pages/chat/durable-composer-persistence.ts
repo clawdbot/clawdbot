@@ -64,6 +64,8 @@ export function chatAttachmentDraftSignature(
   goalMode?: ChatGoalDraftMode | null,
   mentions?: readonly HumanMention[],
 ): string {
+  // Admission and recovery mint a new ID for each payload. Preview URLs and
+  // moving the same bytes between Blob/data-URL storage do not change that owner.
   return JSON.stringify([
     text,
     goalMode ?? null,

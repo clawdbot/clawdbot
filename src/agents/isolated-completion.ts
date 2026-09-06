@@ -8,7 +8,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
-import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -174,7 +173,7 @@ function hasCliSideEffectEvidence(result: {
 }
 
 async function runCliIsolatedCompletion(params: {
-  request: RunIsolatedCompletionParams;
+  request: RunIsolatedCompletionParams & { config: OpenClawConfig };
   provider: string;
   modelProvider: string;
   agentId: string;
@@ -187,7 +186,7 @@ async function runCliIsolatedCompletion(params: {
       const { runCliAgent } = await import("./cli-runner.runtime.js");
       params.request.assertCurrent?.();
       const sessionId = `isolated-completion-${randomUUID()}`;
-      const config = params.request.config ?? getRuntimeConfig();
+      const config = params.request.config;
       const preparedRunAdmission = prepareSystemAgentRunAdmission(
         config,
         sessionId,
@@ -397,61 +396,76 @@ async function prepareHostAuthorization(params: {
 
 /** Run one fresh, zero-tool completion through its selected runtime. */
 export async function runIsolatedCompletion(
-  request: RunIsolatedCompletionParams,
+  params: RunIsolatedCompletionParams,
 ): Promise<IsolatedCompletionResult> {
-  // Native callbacks may be retained; their authority ends with this completion.
+  // Snapshot caller choices and validators before admission yields; callbacks expire on close.
+  const input = {
+    ...params,
+    streamParams: params.streamParams && { ...params.streamParams },
+  };
   let closed = false;
   const assertCurrent = () => {
     if (closed) {
       throw new IsolatedCompletionError("runtime-unavailable", "Isolated completion has ended.");
     }
-    request.assertCurrent?.();
-    request.abortSignal?.throwIfAborted();
+    input.assertCurrent?.();
+    input.abortSignal?.throwIfAborted();
   };
   assertCurrent();
-  const config = request.config ?? {};
-  const agentId = request.agentId ?? resolveDefaultAgentId(config);
-  const agentDir = request.agentDir ?? resolveAgentDir(config, agentId);
-  const workspaceDir = request.workspaceDir ?? resolveAgentWorkspaceDir(config, agentId);
+  const requestConfig = input.config ?? {};
+  const agentId = input.agentId ?? resolveDefaultAgentId(requestConfig);
+  const requestAgentDir = input.agentDir ?? resolveAgentDir(requestConfig, agentId);
+  const requestedWorkspaceDir =
+    input.workspaceDir ?? resolveAgentWorkspaceDir(requestConfig, agentId);
   const canonicalProvider = resolveCliRuntimeCanonicalProvider({
-    runtime: request.provider,
-    config,
+    runtime: input.provider,
+    config: requestConfig,
     includeSetupRegistry: true,
   });
-  const provider = canonicalProvider ?? request.provider;
+  const provider = canonicalProvider ?? input.provider;
   // Canonicalizing a CLI model ref must not discard its explicit execution owner.
   const runtimeOverride =
-    request.agentHarnessRuntimeOverride ?? (canonicalProvider ? request.provider : undefined);
+    input.agentHarnessRuntimeOverride ?? (canonicalProvider ? input.provider : undefined);
   const lease = await acquireAgentRunPreparedModelRuntime(
     {
-      config,
+      config: requestConfig,
       agentId,
-      agentDir,
-      workspaceDir,
-      runtimePluginSelections: [
+      agentDir: requestAgentDir,
+      workspaceDir: requestedWorkspaceDir,
+      preserveWorkspaceDirOnRefresh: input.workspaceDir !== undefined,
+    },
+    {
+      catalogMode: "static",
+      abortSignal: input.abortSignal,
+      deriveRuntimePluginSelections: () => [
         {
           provider,
-          modelId: request.model,
+          modelId: input.model,
           ...(runtimeOverride ? { runtime: runtimeOverride } : {}),
           agentId,
         },
       ],
     },
-    { catalogMode: "static", abortSignal: request.abortSignal },
   );
-  const pluginRegistry = lease.snapshot.pluginRegistry;
   try {
     assertCurrent();
     const run = async (): Promise<IsolatedCompletionResult> => {
+      // A new admission owns config and directories; the caller keeps its explicit route and profile.
+      const context = {
+        config: lease.snapshot.config,
+        agentId,
+        agentDir: lease.snapshot.agentDir,
+        workspaceDir: lease.snapshot.workspaceDir ?? requestedWorkspaceDir,
+      };
+      const { config, agentDir, workspaceDir } = context;
+      const request = { ...input, ...context, assertCurrent };
       await ensureSelectedAgentHarnessPlugin({
         provider,
         modelId: request.model,
-        config,
-        agentId,
+        ...context,
         agentHarnessId: runtimeOverride,
         agentHarnessRuntimeOverride: runtimeOverride,
-        workspaceDir,
-        pluginRegistry,
+        pluginRegistry: lease.snapshot.pluginRegistry,
       });
       assertCurrent();
       const runtime =
@@ -461,18 +475,14 @@ export async function runIsolatedCompletion(
         request,
         provider,
         runtime,
-        agentId,
-        agentDir,
-        workspaceDir,
+        ...context,
       });
       if (cliOwner) {
         const completion = await runCliIsolatedCompletion({
-          request: { ...request, assertCurrent },
+          request,
           provider: cliOwner,
           modelProvider: provider,
-          agentId,
-          agentDir,
-          workspaceDir,
+          ...context,
         });
         return {
           text: completion.text,
@@ -494,10 +504,7 @@ export async function runIsolatedCompletion(
       const commonParams = {
         provider,
         modelId: request.model,
-        config,
-        agentId,
-        agentDir,
-        workspaceDir,
+        ...context,
         systemPrompt: request.systemPrompt,
         prompt: request.prompt,
         timeoutMs: request.timeoutMs,
@@ -545,10 +552,8 @@ export async function runIsolatedCompletion(
             modelId: runtimeModel.id,
             modelApi: runtimeModel.api,
             modelBaseUrl: runtimeModel.baseUrl,
-            config,
+            ...context,
             env: process.env,
-            agentDir,
-            workspaceDir,
             authProfileStore,
             sessionAuthProfileId: request.authProfileId,
             sessionAuthProfileSource: request.authProfileId ? "user" : undefined,
@@ -628,14 +633,11 @@ export async function runIsolatedCompletion(
               };
             } else {
               authorization = await prepareHostAuthorization({
-                config,
-                agentId,
-                agentDir,
+                ...context,
                 provider,
                 modelId: request.model,
                 authProfileId:
                   attempt?.kind === "profile" ? attempt.profileId : request.authProfileId,
-                workspaceDir,
                 preparedModelRuntime: lease.snapshot,
               });
               modelMaxTokens = authorization.model.maxTokens;
@@ -677,16 +679,12 @@ export async function runIsolatedCompletion(
         }
       } else {
         const authorization = await prepareHostAuthorization({
-          config,
-          agentId,
-          agentDir,
+          ...context,
           provider,
           modelId: request.model,
           authProfileId: request.authProfileId,
-          workspaceDir,
           preparedModelRuntime: lease.snapshot,
         });
-        assertCurrent();
         const harnessParams: AgentHarnessIsolatedCompletionParams = {
           ...commonParams,
           streamParams: clampIsolatedStreamParams(
@@ -717,7 +715,7 @@ export async function runIsolatedCompletion(
     };
     const result = await withPluginRuntimeGenerationScope(lease.snapshot, run);
     assertCurrent();
-    if (!result.text && request.outputTextPolicy !== "strict-visible") {
+    if (!result.text && input.outputTextPolicy !== "strict-visible") {
       throw new IsolatedCompletionError(
         "output-rejected",
         "Isolated completion returned empty output.",

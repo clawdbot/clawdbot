@@ -499,7 +499,10 @@ describe("plugin background completions", () => {
       await started.promise;
       const second = complete(runtime);
       await vi.waitFor(() => expect(getBackgroundWorkSnapshot().queuedCount).toBe(1));
-      const rejected = expect(first).rejects.toThrow(/caller cancelled|timeout/u);
+      const rejected =
+        reason === "timeout"
+          ? expect(first).rejects.toMatchObject({ name: "TimeoutError" })
+          : expect(first).rejects.toThrow("caller cancelled");
       if (reason === "caller cancellation") {
         controller.abort(new Error("caller cancelled"));
       }

@@ -1,5 +1,4 @@
-// Process supervisor types describe supervised runs, states, and termination reasons.
-export type RunState = "starting" | "running" | "exiting" | "exited";
+// Process supervisor types describe supervised runs and termination reasons.
 
 export type TerminationReason =
   | "manual-cancel"
@@ -9,21 +8,10 @@ export type TerminationReason =
   | "signal"
   | "exit";
 
-export type RunRecord = {
-  runId: string;
-  sessionId: string;
-  backendId: string;
-  scopeKey?: string;
-  pid?: number;
-  processGroupId?: number;
-  startedAtMs: number;
-  lastOutputAtMs: number;
-  createdAtMs: number;
-  updatedAtMs: number;
-  state: RunState;
-  terminationReason?: TerminationReason;
-  exitCode?: number | null;
-  exitSignal?: NodeJS.Signals | number | null;
+/** Producer-owned activity; a settled result does not establish descendant extinction. */
+export type ProcessRunActivity = {
+  readonly resultSettled: boolean;
+  readonly lastOutputAtMs: number;
 };
 
 export type RunExit = {
@@ -39,6 +27,7 @@ export type RunExit = {
 };
 
 export type ManagedRun = {
+  readonly activity: ProcessRunActivity;
   runId: string;
   pid?: number;
   startedAtMs: number;
@@ -52,7 +41,7 @@ export type ManagedRun = {
 };
 
 export type ManagedRunStdin = {
-  write: (data: string, cb?: (err?: Error | null) => void) => void;
+  write: (data: string | Buffer, cb?: (err?: Error | null) => void) => void;
   end: () => void;
   destroy?: () => void;
   destroyed?: boolean;
@@ -97,8 +86,6 @@ type SpawnBaseInput = {
   /** Revalidate the caller at deferred spawn and private-input delivery boundaries. */
   assertCurrent?: () => void;
   runId?: string;
-  sessionId: string;
-  backendId: string;
   scopeKey?: string;
   replaceExistingScope?: boolean;
   cwd?: string;
@@ -145,15 +132,19 @@ type SpawnAnchoredShellInput = SpawnBaseInput & {
 
 export type SpawnInput = SpawnChildInput | SpawnPtyInput | SpawnAnchoredShellInput;
 
+/**
+ * required-all includes external execution; owned-only leaves explicit backend
+ * lifetimes with that backend; transport-only makes no execution-tree claim.
+ */
+export type ProcessScopeCleanupPolicy = "required-all" | "owned-only" | "transport-only";
+
 export interface ProcessSupervisor {
   /** Register before spawning; close caller admission before joining this exact cleanup owner. */
   acquireScopeCleanup(
     scopeKey: string,
-    options: { requireProcessTree: boolean },
+    options: { processTree: ProcessScopeCleanupPolicy },
   ): () => Promise<void>;
   spawn(input: SpawnInput): Promise<ManagedRun>;
   cancel(runId: string, reason?: TerminationReason): void;
   cancelScope(scopeKey: string, reason?: TerminationReason): void;
-  waitForScope?: (scopeKey: string) => Promise<void>;
-  getRecord(runId: string): RunRecord | undefined;
 }

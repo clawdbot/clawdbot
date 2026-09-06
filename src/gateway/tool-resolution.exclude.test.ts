@@ -13,6 +13,7 @@ type CreateOpenClawToolsArg = {
   agentAccountId?: string;
   agentChannel?: string;
   clientCaps?: string[];
+  pinnedWidgetAuthoring?: boolean;
   cronCreatorToolAllowlist?: Array<string | { name: string; pluginId?: string }>;
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
@@ -130,16 +131,23 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     return args;
   }
 
-  it("passes gateway client capabilities into tool construction", () => {
-    resolveGatewayScopedTools({
-      cfg: {} as OpenClawConfig,
-      sessionKey: "agent:main:direct:test",
-      surface: "loopback",
-      clientCaps: ["tool-events", "inline-widgets"],
-    });
+  it.each(["loopback", "http"] as const)(
+    "passes client capabilities but restricts pinned authoring on the %s surface",
+    (surface) => {
+      resolveGatewayScopedTools({
+        cfg: {} as OpenClawConfig,
+        sessionKey: "agent:main:direct:test",
+        surface,
+        clientCaps: ["tool-events", "inline-widgets"],
+        pinnedWidgetAuthoring: true,
+      });
 
-    expect(readCreateToolsArgs().clientCaps).toEqual(["tool-events", "inline-widgets"]);
-  });
+      expect(readCreateToolsArgs().clientCaps).toEqual(["tool-events", "inline-widgets"]);
+      expect(readCreateToolsArgs().pinnedWidgetAuthoring).toBe(
+        surface === "loopback" ? true : undefined,
+      );
+    },
+  );
 
   it("hands loopback ask_user the originating-channel prompt sender", () => {
     resolveGatewayScopedTools({

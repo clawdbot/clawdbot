@@ -430,6 +430,7 @@ export const sharedVitestConfig = {
       sourcePackageAlias("retry"),
       sourcePackageAlias("session-url-contract", "parse"),
       sourcePackageAlias("session-url-contract", "share-build"),
+      sourcePackageAlias("session-url-contract", "public-share"),
       sourcePackageAlias("session-url-contract"),
       sourcePackageAlias("workboard-contract"),
       ...sourcePackageAliasesFromExports("acp-core", acpCorePackageJson.exports),

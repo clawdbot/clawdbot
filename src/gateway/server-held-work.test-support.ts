@@ -52,9 +52,10 @@ export async function observeHeldGatewayWorkDrain(getSignal?: () => AbortSignal 
       },
       { interval: 1, timeout: 10_000 },
     );
-    await nextTurn();
+    await Promise.race([closing, nextTurn()]);
     expect(drainIndex, "Gateway close must enter the held work owner").toBeGreaterThanOrEqual(0);
     expect(connections.size, "Gateway connections must release before held work").toBe(0);
+    expect(closed, "Gateway close must remain pending while work is held").toBe(false);
     expect(
       observation.mock.settledResults[drainIndex]?.type,
       "Gateway work drain must remain pending while work is held",

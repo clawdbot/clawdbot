@@ -410,7 +410,7 @@ export function replaceSessionEntrySync(scope: SessionAccessScope, entry: Sessio
     writeSessionEntry(database, resolved.sessionKey, entry);
     current = readSessionIdentitySnapshot(database, identityKeys);
   }, toDatabaseOptions(resolved));
-  emitCommittedSessionIdentityDiff(previous, current);
+  emitCommittedSessionIdentityDiff(resolved.agentId, previous, current);
 }
 
 /** Patches one entry in the additive SQLite session store. */
@@ -545,7 +545,7 @@ async function patchSqliteSessionEntrySnapshot(
         options.onCommitted?.(cloneSessionEntry(result));
       }
     } finally {
-      emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
+      emitCommittedSessionIdentityDiff(resolved.agentId, previousIdentity, currentIdentity);
     }
     return result;
   });

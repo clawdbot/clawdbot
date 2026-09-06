@@ -179,6 +179,9 @@ export async function runMediaUnderstandingFile(
   const decisionBase = {
     capability: params.capability,
     attachments: [],
+    attachmentProcessing: Object.fromEntries(
+      attachments.map(({ index }) => [index, "omitted" as const]),
+    ),
     ...(params.capability === "image" ? { nativeVisionActive: false } : {}),
   };
   if (attachments.length === 0) {
@@ -363,7 +366,7 @@ export async function extractStructuredWithModel(params: ExtractStructuredWithMo
   }
   const provider = getMediaUnderstandingProvider(
     params.provider,
-    buildMediaUnderstandingRegistry(undefined, params.cfg, undefined, params.provider),
+    buildMediaUnderstandingRegistry(undefined, params.cfg),
   );
   if (!provider?.extractStructured) {
     throw new Error(`Provider does not support structured extraction: ${params.provider}`);

@@ -107,6 +107,11 @@ MMR then reorders the scored hybrid candidate set to reduce redundant
 snippets. It does not change scores, threshold eligibility, or make another
 provider call.
 
+Search preserves keyword matches when every ranked result falls below the
+configured minimum score. Hybrid search can also fill remaining result slots
+with keyword-only matches. These rules also apply in project sessions;
+semantic-only matches still need to meet the configured minimum score.
+
 ## Deterministic trigger recall
 
 On eligible interactive turns, the builtin engine also compares the inbound

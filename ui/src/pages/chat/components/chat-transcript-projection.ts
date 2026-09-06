@@ -299,7 +299,7 @@ export function projectChatTranscript(
     embedSandboxMode: props.embedSandboxMode ?? "scripts",
     allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
     fetchLinkFavicon: props.fetchLinkFavicon,
-    showAssistantAvatar: false,
+    showAssistantAvatar: avatarPlacement === "gutter" && Boolean(assistantIdentity.avatar),
   } satisfies StreamGroupOptions;
   const streamGroupOptions = {
     ...sharedMessageRenderOptions,
@@ -372,9 +372,6 @@ export function projectChatTranscript(
       latestAssistant: item.key === latestAssistantItemKey,
     } satisfies Parameters<typeof renderMessageGroup>[1];
   };
-  const renderGroupItem = (item: MessageGroup) => {
-    return renderMessageGroup(item, renderGroupOptions(item));
-  };
   // Only the working indicator shows live usage, so rows without one keep
   // memoizing across usage patches.
   const workingUsageKey = `usage:${runOutputTokens ?? ""}`;
@@ -436,7 +433,7 @@ export function projectChatTranscript(
         return nothing;
       }
       if (item.groups.length === 1) {
-        return renderGroupItem(firstGroup);
+        return renderMessageGroup(firstGroup, renderGroupOptions(firstGroup));
       }
       return renderActivityGroup(item.groups, renderGroupOptions(firstGroup));
     }
@@ -450,7 +447,7 @@ export function projectChatTranscript(
       });
     }
     if (item.kind === "group") {
-      return renderGroupItem(item);
+      return renderMessageGroup(item, renderGroupOptions(item));
     }
     if (item.kind === "question") {
       return renderStreamGroup([item], {

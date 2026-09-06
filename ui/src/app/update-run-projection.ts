@@ -63,7 +63,7 @@ export function projectUpdateRun(run: UpdateRunRecord, connected = true) {
     {
       name: "inference",
       state:
-        facts.inferenceProbe === "skipped"
+        facts.inferenceProbe === "skipped" || facts.inferenceProbe === "unavailable"
           ? "warn"
           : booleanState(
               facts.inferenceProbe === undefined ? undefined : facts.inferenceProbe === "passed",
