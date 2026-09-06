@@ -6,14 +6,13 @@ import {
   type ThinkLevel,
 } from "../../auto-reply/thinking.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
-import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { isValidAgentHarnessSessionStoreEntry } from "../../sessions/agent-harness-session-key.js";
-import { shouldPreserveSessionAuthProfileOverride } from "../../sessions/auth-profile-preservation.js";
+import { shouldPreserveUnavailableSessionAuthProfileOverride } from "../../sessions/auth-profile-preservation.js";
 import {
   applyModelOverrideToSessionEntry,
   ModelSelectionLockedError,
@@ -439,11 +438,12 @@ export async function resolveEmbeddedModelSelection(params: {
   if (sessionEntryForAttempt && authProfileId) {
     const entry = sessionEntryForAttempt;
     const agentDir = resolveAgentDir(params.cfg, params.sessionAgentId);
-    const profile = ensureAuthProfileStore(agentDir, {
+    const store = ensureAuthProfileStore(agentDir, {
       profileId: authProfileId,
       config: params.cfg,
       allowKeychainPrompt: false,
-    }).profiles[authProfileId];
+    });
+    const profile = store.profiles[authProfileId];
     const validationHarnessPolicy = resolveAvailableAgentHarnessPolicy({
       provider: providerForAuthProfileValidation,
       modelId: model,
@@ -489,18 +489,15 @@ export async function resolveEmbeddedModelSelection(params: {
           credential: profile,
         }),
       );
-    const preserveUnavailableSelection =
-      !profile &&
-      resolveCollapsedSessionAuthPinSource(entry) === "user" &&
-      shouldPreserveSessionAuthProfileOverride({
-        cfg: params.cfg,
-        agentDir,
-        entry,
-        currentProvider: entry.providerOverride ?? defaultProvider,
-        provider: providerForAuthProfileValidation,
-        metadataSnapshot: params.pluginsEnabled ? params.manifestMetadataSnapshot : { plugins: [] },
-      });
-    // Missing credentials do not revoke an explicit same-provider selection; auth owns recovery.
+    const preserveUnavailableSelection = shouldPreserveUnavailableSessionAuthProfileOverride({
+      store,
+      cfg: params.cfg,
+      agentDir,
+      entry,
+      currentProvider: entry.providerOverride ?? defaultProvider,
+      provider: providerForAuthProfileValidation,
+      metadataSnapshot: params.pluginsEnabled ? params.manifestMetadataSnapshot : { plugins: [] },
+    });
     if (!profileMatchesRuntime && !preserveUnavailableSelection) {
       if (hasExplicitRunOverride || autoFallbackPrimaryProbe) {
         sessionEntryForAttempt = {
