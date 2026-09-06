@@ -5,7 +5,7 @@ import {
   type PackageInstallUpdateParams,
 } from "./update-command-package.js";
 
-export type PackageUpdatePreparation = Omit<
+type PackageUpdatePreparation = Omit<
   PackageInstallUpdateParams,
   "allowGatewayActivation" | "allowGatewayServiceRepair" | "managedServiceEnv"
 >;

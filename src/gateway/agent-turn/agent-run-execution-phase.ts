@@ -48,9 +48,8 @@ import {
   type RestoredCronContinuation,
 } from "./agent-handler-helpers.js";
 import {
-  resolveAgentRestartRecoveryChannelContext,
+  resolveAgentRestartRecoveryContext,
   resolveAgentRestartRecoveryExecutionIdentityAdmission,
-  resolveAgentRestartRecoveryPinnedWidgetAuthoring,
 } from "./agent-restart-recovery-context.js";
 import type { PreparedAgentRunDispatch } from "./agent-run-admission-phase.js";
 import { withAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
@@ -277,13 +276,15 @@ export function startAgentRunExecution(params: {
         params.context.validateAgentRuntimeApprovalAuthority?.(agentRuntimeIdentity) === true
           ? resolveExecutionIdentitySpawnFacts(agentRuntimeIdentity)
           : undefined;
-      const restartRecoveryChannelContext = resolveAgentRestartRecoveryChannelContext({
+      const restartRecoveryContext = resolveAgentRestartRecoveryContext({
+        isRestartRecoveryResumeRun: params.isRestartRecoveryResumeRun,
         canUseInternalRuntimeHandoff: params.canUseInternalRuntimeHandoff,
         expectedExistingSessionId: params.request.expectedExistingSessionId,
         resolvedSessionId: params.resolvedSessionId,
         runId: params.runId,
         sessionEntry: params.sessionEntry,
       });
+      const restartRecoveryChannelContext = restartRecoveryContext?.channel;
       const runContext = {
         messageChannel:
           restartRecoveryChannelContext?.channel ?? params.delivery.originMessageChannel,
@@ -397,14 +398,7 @@ export function startAgentRunExecution(params: {
               toolsAllow: pluginSubagentToolsAllow ?? params.restoredCronContinuation?.toolsAllow,
               runtimePluginToolGrant,
               trustedInternalHandoff: prepared.trustedInternalHandoff,
-              pinnedWidgetAuthoring: resolveAgentRestartRecoveryPinnedWidgetAuthoring({
-                isRestartRecoveryResumeRun: params.isRestartRecoveryResumeRun,
-                canUseInternalRuntimeHandoff: params.canUseInternalRuntimeHandoff,
-                expectedExistingSessionId: params.request.expectedExistingSessionId,
-                resolvedSessionId: params.resolvedSessionId,
-                runId: params.runId,
-                sessionEntry: params.sessionEntry,
-              }),
+              pinnedWidgetAuthoring: restartRecoveryContext?.pinnedWidgetAuthoring,
               toolsAllowIsDefault: params.restoredCronContinuation?.toolsAllowIsDefault,
               scheduledToolPolicy: params.restoredCronContinuation
                 ? resolveScheduledToolPolicyContext({

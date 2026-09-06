@@ -150,10 +150,7 @@ export function recordPluginConfiguredUnavailable(params: {
 export function formatAutoEnabledActivationReason(
   reasons: readonly string[] | undefined,
 ): string | undefined {
-  if (!reasons || reasons.length === 0) {
-    return undefined;
-  }
-  return reasons.join("; ");
+  return reasons?.length ? reasons.join("; ") : undefined;
 }
 
 // A plugin-thrown error may expose throwing `cause`/`code` accessors; diagnostics inside the
@@ -271,12 +268,9 @@ export function formatPluginFailureSummary(failedPlugins: PluginRecord[]): strin
   const grouped = new Map<NonNullable<PluginRecord["failurePhase"]>, string[]>();
   for (const plugin of failedPlugins) {
     const phase = plugin.failurePhase ?? "load";
-    const ids = grouped.get(phase);
-    if (ids) {
-      ids.push(plugin.id);
-      continue;
-    }
-    grouped.set(phase, [plugin.id]);
+    const ids = grouped.get(phase) ?? [];
+    ids.push(plugin.id);
+    grouped.set(phase, ids);
   }
   return [...grouped.entries()].map(([phase, ids]) => `${phase}: ${ids.join(", ")}`).join("; ");
 }

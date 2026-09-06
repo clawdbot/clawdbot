@@ -811,6 +811,9 @@ describe("createCopilotToolBridge", () => {
         attemptParams: {
           agentAccountId: "acct-1",
           toolBindings,
+          clientCaps: ["inline-widgets"],
+          taskSuggestionDeliveryMode: "gateway",
+          approvalReviewerDeviceId: "reviewer-device",
           senderId: "sender-1",
           senderName: "Ada",
           senderUsername: "ada",
@@ -845,6 +848,9 @@ describe("createCopilotToolBridge", () => {
       expect(opts).toMatchObject({
         agentAccountId: "acct-1",
         toolBindings,
+        clientCaps: ["inline-widgets"],
+        taskSuggestionDeliveryMode: "gateway",
+        approvalReviewerDeviceId: "reviewer-device",
         senderId: "sender-1",
         senderName: "Ada",
         senderUsername: "ada",

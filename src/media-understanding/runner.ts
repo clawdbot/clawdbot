@@ -71,6 +71,7 @@ import {
 import type {
   MediaAttachment,
   MediaAttachmentDisposition,
+  MediaAttachmentProcessing,
   MediaUnderstandingCapability,
   MediaUnderstandingDecision,
   MediaUnderstandingModelDecision,
@@ -665,10 +666,12 @@ async function runAttachmentEntries(params: {
 }): Promise<{
   output: MediaUnderstandingOutput | null;
   attempts: MediaUnderstandingModelDecision[];
+  processing: MediaAttachmentProcessing;
 }> {
   const { entries, capability } = params;
   const attachmentIndex = params.attachment.index;
   const attempts: MediaUnderstandingModelDecision[] = [];
+  let processing: MediaAttachmentProcessing = "omitted";
   for await (const candidate of entries) {
     const { entry } = candidate;
     const entryType = entry.type ?? (entry.command ? "cli" : "provider");
@@ -716,6 +719,8 @@ async function runAttachmentEntries(params: {
         continue;
       }
       const result = attempt.value;
+      // Successful empty CLI/API output was processed; unavailable auth was not.
+      processing = "completed";
       if (result?.text) {
         const decision = buildModelDecision({ entry, entryType, outcome: "success" });
         if (result.provider) {
@@ -729,7 +734,7 @@ async function runAttachmentEntries(params: {
           decision.observedBackend = result.observedBackend;
         }
         attempts.push(decision);
-        return { output: result, attempts };
+        return { output: result, attempts, processing };
       }
       attempts.push(
         buildModelDecision({ entry, entryType, outcome: "skipped", reason: "empty output" }),
@@ -766,7 +771,7 @@ async function runAttachmentEntries(params: {
     }
   }
 
-  return { output: null, attempts };
+  return { output: null, attempts, processing };
 }
 
 function hasFailedMediaAttempt(attachments: MediaUnderstandingDecision["attachments"]): boolean {
@@ -803,6 +808,12 @@ export async function runCapability(params: {
     policy: config.attachments,
   });
   const selectedAttachmentIndexes = selection.selected.map((attachment) => attachment.index);
+  const attachmentProcessing: Record<number, MediaAttachmentProcessing> = Object.fromEntries(
+    [...selectedAttachmentIndexes, ...selection.droppedAttachmentIndexes].map((index) => [
+      index,
+      "omitted",
+    ]),
+  );
   const activeProvider = params.activeModel?.provider?.trim();
   // One memoized owner for the native-vision fact. Probed lazily — only when
   // the skip branch must decide, or an image decision carries a renderable
@@ -854,6 +865,7 @@ export async function runCapability(params: {
       outcome,
       attachments,
       attachmentDispositions,
+      attachmentProcessing,
       ...(nativeVisionActive !== undefined ? { nativeVisionActive } : {}),
     };
   };
@@ -982,7 +994,7 @@ export async function runCapability(params: {
   const attachmentDecisions: MediaUnderstandingDecision["attachments"] = [];
   const attachmentDispositions = buildDispositions({ kind: "failed" }, { kind: "not-selected" });
   for (const attachment of selection.selected) {
-    const { output, attempts } = await runAttachmentEntries({
+    const { output, attempts, processing } = await runAttachmentEntries({
       capability,
       cfg,
       ctx,
@@ -1010,6 +1022,7 @@ export async function runCapability(params: {
     if (output) {
       outputs.push(output);
     }
+    attachmentProcessing[attachment.index] = processing;
     attachmentDispositions[attachment.index] = output
       ? { kind: "handled" }
       : attempts.length > 0
