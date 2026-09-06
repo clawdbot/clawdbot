@@ -462,7 +462,7 @@ function hasDisplayableSessionMessage(message: unknown): boolean {
   return Boolean(text) || hasNonText;
 }
 
-function readSessionProjectionFinalMessageIdentity(message: unknown): string | null {
+export function readSessionProjectionFinalMessageIdentity(message: unknown): string | null {
   const display = readSessionMessageDisplayContent(message);
   if (!display.text && !display.hasNonText) {
     return null;

@@ -99,10 +99,6 @@ export type ChatPageHost = ChatHost &
     fallbackStatus: FallbackStatus | null;
     observerDigest: SessionObserverDigest | null;
     knownAgentRunIds: Set<string>;
-    /** `sessionKey|runId` scopes that already forced a PR-chips refresh mid-stream. */
-    streamPullRequestRefreshKeys?: Set<string>;
-    /** Rolling stream suffix so a PR URL split across delta chunks still matches. */
-    streamPullRequestTail?: { scope: string; text: string };
     waitingApprovalStatuses: Map<string, WaitingApprovalStatus>;
     waitingApprovalResolvedIds: Set<string>;
     chatRunStatus: ChatProps["runStatus"];
@@ -163,6 +159,6 @@ export type ChatPageHost = ChatHost &
     exportCurrentChat?: () => Promise<ChatExportResult> | ChatExportResult;
     refreshCurrentSessionTools?: () => Promise<void>;
     refreshCurrentChat?: () => Promise<void>;
-    refreshSessionPullRequests?: (options?: { refresh?: boolean }) => Promise<void>;
+    refreshSessionPullRequests?: (options?: { refresh?: boolean }) => boolean;
     retireSessionCompanion?: (sessionKey: string, agentId?: string | null) => void;
   };

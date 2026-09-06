@@ -13,6 +13,7 @@ import {
   type PaneSessionHandoff,
   preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
+import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
 import { setChatError } from "./chat-send-queue-state.ts";
@@ -185,6 +186,9 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     this.minutePoll.stop();
     if (this.state) {
       retireChatBranchRequests(this.state);
+      // Unwatch can cancel an admitted refresh before sync; a later presentation
+      // must not inherit a receipt for work its watch no longer owns.
+      retirePullRequestRefreshes(this.state);
     }
     this.swarmHydrator?.dispose();
     this.swarmHydrator = null;

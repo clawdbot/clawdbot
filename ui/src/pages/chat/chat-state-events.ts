@@ -30,7 +30,9 @@ import { chatScopedEventSessionMatches } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import {
   pullRequestLinksIn,
+  refreshPullRequestsForFinalReply,
   refreshPullRequestsForStreamedLinks,
+  retirePullRequestRefreshes,
 } from "./chat-pull-request-refresh.ts";
 import { clearPendingQueueItemsForRun } from "./chat-queue.ts";
 import { flushChatQueueForEvent, resumeStoredChatOutboxes } from "./chat-send-actions.ts";
@@ -365,6 +367,11 @@ function handleSessionsChangedEvent(
     state.retireSessionCompanion?.(event.key, event.agentId);
   }
   const resetsSelectedSession = matchesChat && resetsSession;
+  const changesBranchTopology =
+    matchesChat && typeof source?.reason === "string" && BRANCH_TOPOLOGY_REASONS.has(source.reason);
+  if (resetsSelectedSession || changesBranchTopology) {
+    retirePullRequestRefreshes(state);
+  }
   if (
     matchesChat &&
     state.client &&
@@ -382,11 +389,7 @@ function handleSessionsChangedEvent(
     // only proof that its old live and pending transcript no longer exists.
     reduceChatSessionProjection(state, { type: "sessionReset" }, { scope });
   }
-  if (
-    matchesChat &&
-    typeof source?.reason === "string" &&
-    BRANCH_TOPOLOGY_REASONS.has(source.reason)
-  ) {
+  if (changesBranchTopology) {
     retireChatBranchRequests(state);
     state.chatBranches = [];
     state.chatBranchesSessionKey = null;
@@ -579,8 +582,8 @@ export function handlePageGatewayEvent(
       if (shouldCelebrateFirstReply && result === "final") {
         fireFirstReplyConfetti();
       }
-      if (shouldRefreshPullRequests) {
-        void state.refreshSessionPullRequests?.({ refresh: true });
+      if (shouldRefreshPullRequests && payload) {
+        refreshPullRequestsForFinalReply(state, payload);
       }
       const shouldRecoverMissingTerminal = Boolean(
         recoveryRunId &&
