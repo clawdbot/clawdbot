@@ -1,9 +1,10 @@
 /** Canonical binding codec and synchronous generation-aware reads; no lifecycle or auth loading. */
 import { createHash } from "node:crypto";
+import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-registration";
+import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { z } from "zod";
 import { CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN } from "./config-contracts.js";
 import { normalizeCodexServiceTier } from "./config-utils.js";
@@ -414,41 +415,28 @@ export function readCurrentCodexAppServerBinding(
     : undefined;
 }
 
-/** Host lineage is recorded in the same transaction as its successor generation. */
-export function readCodexBindingSessionEntry(params: {
-  identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>;
-  config?: OpenClawConfig;
-  storePath?: string;
-}) {
-  const { identity } = params;
-  return identity.sessionKey?.trim()
-    ? getSessionEntry({
-        agentId: identity.agentId,
-        sessionKey: identity.sessionKey.trim(),
-        storePath:
-          params.storePath?.trim() ||
-          resolveStorePath(params.config?.session?.store, { agentId: identity.agentId }),
-        hydrateSkillPromptRefs: false,
-        readConsistency: "latest",
-      })
-    : undefined;
+export class CodexSupervisionBindingReplacementError extends Error {
+  constructor(threadId: string, operation: string) {
+    super(
+      `Refusing to replace supervised Codex thread ${threadId} while ${operation}; ` +
+        "its native user-home connection and model ownership must be preserved",
+    );
+    this.name = "CodexSupervisionBindingReplacementError";
+  }
 }
 
-/** Synchronous model selection recognizes the predecessor; admission rewrites its fence. */
-export function readCodexSessionOwnershipBinding(params: {
-  bindingStore: {
-    read(identity: CodexAppServerBindingIdentity): CodexAppServerThreadBinding | undefined;
-  };
-  identity: CodexAppServerBindingIdentity;
-  config?: OpenClawConfig;
-  storePath?: string;
-}): CodexAppServerThreadBinding | undefined {
-  const binding = params.bindingStore.read(params.identity);
-  if (binding || params.identity.kind !== "session") {
-    return binding;
+export function assertCodexBindingMayBeReplaced(
+  binding: CodexAppServerThreadBinding | undefined,
+  operation: string,
+  expected?: EmbeddedRunAttemptParamsV2["expectedSessionRuntimeOwnership"],
+): void {
+  // A native-prepared attempt has no host-selected model for a replacement thread.
+  if (expected) {
+    throw new AgentHarnessPreflightError(
+      `Codex native model ownership prevents ${operation}. Continue or compact the original session in its native runtime, or create a new chat with a concrete model; the original binding was preserved.`,
+    );
   }
-  const entry = readCodexBindingSessionEntry({ ...params, identity: params.identity });
-  return entry?.sessionId === params.identity.sessionId && entry.previousSessionId
-    ? params.bindingStore.read({ ...params.identity, sessionId: entry.previousSessionId })
-    : undefined;
+  if (binding?.connectionScope === "supervision") {
+    throw new CodexSupervisionBindingReplacementError(binding.threadId, operation);
+  }
 }

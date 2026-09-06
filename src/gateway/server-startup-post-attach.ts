@@ -471,7 +471,7 @@ async function hydrateConfiguredExternalCliAuth(params: {
     (await Promise.all([
       import("../agents/agent-scope.js"),
       import("../agents/prepared-model-runtime.configured.js"),
-      import("../agents/auth-profiles/store.js"),
+      import("../agents/auth-profiles/store-runtime.js"),
       import("../agents/auth-profiles/external-cli-discovery.js"),
     ]).then(([scope, configured, store, external]) => ({
       listAgentIds: scope.listAgentIds,

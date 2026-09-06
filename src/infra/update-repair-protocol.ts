@@ -85,11 +85,7 @@ export type UpdateRepairWorkerMessage = z.infer<typeof updateRepairWorkerMessage
 export type UpdateRepairParentMessage = z.infer<typeof updateRepairParentMessageSchema>;
 export const UPDATE_REPAIR_IPC_MAX_BYTES = 64 * 1024;
 
-export type UpdateRepairTarget = {
-  stateDir: string;
-  configPath: string;
-  workspaceDir: string;
-  installRoot: string;
+export type UpdateRepairTarget = Extract<UpdateRepairParentMessage, { type: "start" }>["target"] & {
   candidateRoot?: string;
   environment?: NodeJS.ProcessEnv;
 };

@@ -95,10 +95,10 @@ native session's model and connection.
 ### Bound native session ownership
 
 The optional `resolveSessionRuntimeOwnership({ config, agentId, sessionId,
-sessionKey, assertCurrent })` callback reports private binding ownership. Core
-calls it only on the exact pinned harness after validating the durable session
-identity. `sessionId` and `assertCurrent` are required; `config`, `agentId`, and
-`sessionKey` are optional. Return synchronously:
+sessionKey, storePath, readPreviousSessionId, assertCurrent })` callback reports
+private binding ownership. Core calls it only on the exact pinned harness after
+validating the durable session identity. `sessionId` and `assertCurrent` are
+required; the remaining parameters are optional. Return synchronously:
 
 - `{ model: "native", auth: "native" }` when the binding owns both model selection
   and authentication through its native connection.
@@ -124,6 +124,15 @@ Read the existing private binding synchronously. Call `assertCurrent()` before
 and after the read. Do not discover models, reclaim a generation, start a client,
 authenticate, or mutate the binding. The assertion expires when the callback
 returns. This ownership fact is neither execution authority nor credential readiness.
+
+If the current binding is absent, `readPreviousSessionId?.()` reads the latest
+predecessor for this exact physical session from the caller-selected store. It
+returns `undefined` when the row is missing or has been replaced. It takes no
+arguments and expires when the ownership callback returns. Use it only on a
+binding miss, rather than loading the general session runtime or carrying a
+lineage snapshot across awaited preparation; a current binding needs no lineage
+read. The predecessor identifies a binding to inspect, not permission to reclaim
+or execute it.
 
 The Codex implementation reports native model ownership from `preserveNativeModel`.
 It reports native auth only for the separate private supervision connection;
@@ -196,6 +205,13 @@ native harnesses:
 Harnesses may use the plan for decisions that need to match OpenClaw behavior,
 but treat it as host-owned attempt state: do not mutate it or use it to switch
 providers/models inside a turn.
+
+For model-visible reply policy, `buildHarnessVisibleReplyGuidance` from
+`openclaw/plugin-sdk/agent-harness-runtime` accepts the prepared delivery mode,
+actual message-tool availability, and resolved `requireExplicitMessageTarget`
+fact. Supply these facts for each turn. Harnesses with a separate static prompt
+can use the same seam's `buildUiPresentationPrompt` for stable UI guidance,
+leaving delivery and target instructions in late context.
 
 For auxiliary session control calls, `resolveSessionModelRef` from
 `openclaw/plugin-sdk/model-session-runtime` resolves the current model selection.

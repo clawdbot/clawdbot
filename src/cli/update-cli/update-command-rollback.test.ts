@@ -41,6 +41,7 @@ vi.mock("./update-command-service.js", () => ({
 vi.mock("../daemon-cli/restart-health-probe.js", () => ({
   confirmGatewayReachable: mocks.reachable,
 }));
+import * as packageModule from "./update-command-package.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
@@ -48,7 +49,10 @@ import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 let candidateRoot: string;
 let previousRoot: string;
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
 async function readPreviousConfig(env: NodeJS.ProcessEnv) {
   const snapshot = await createConfigIO({ env, pluginValidation: "skip" }).readConfigFileSnapshot();
   return snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig;
@@ -298,6 +302,7 @@ describe("verified package rollback", () => {
   );
   it.each([
     { change: "none", previousVerified: true, restored: true, service: "stopped" },
+    { change: "identity-read-failed", previousVerified: true, restored: true, service: "stopped" },
     { change: "shared", previousVerified: true, restored: false, service: "stopped" },
     { change: "agent", previousVerified: true, restored: false, service: "stopped" },
     { change: "during-stop", previousVerified: true, restored: false, service: "stopped" },
@@ -346,6 +351,11 @@ describe("verified package rollback", () => {
         exitCode: 0,
         durationMs: 1,
       }));
+      if (change === "identity-read-failed") {
+        vi.spyOn(packageModule, "readPackageUpdateIdentity").mockRejectedValueOnce(
+          new Error("Diagnostic identity read failed after verified restoration"),
+        );
+      }
       const outcome = await rollbackFailedUpdate({
         result,
         previousRoot,
@@ -375,7 +385,9 @@ describe("verified package rollback", () => {
         timeoutMs: 1_000,
       });
       expect(outcome.rolledBack).toBe(restored);
-      expect(rollback, JSON.stringify(outcome)).toHaveBeenCalledTimes(change === "none" ? 1 : 0);
+      expect(rollback, JSON.stringify(outcome)).toHaveBeenCalledTimes(
+        change === "none" || change === "identity-read-failed" ? 1 : 0,
+      );
       expect(mocks.restart).toHaveBeenCalledTimes(restored ? 1 : 0);
       if (service !== "stopped") {
         expect(mocks.stop).not.toHaveBeenCalled();

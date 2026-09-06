@@ -579,25 +579,6 @@ function addManifestChannelPlugins(
   }
 }
 
-function resolveReadOnlyWorkspaceDir(
-  cfg: OpenClawConfig,
-  options: ReadOnlyChannelPluginOptions,
-): string | undefined {
-  return options.workspaceDir ?? tryResolveConfiguredAgentWorkspaceDir(cfg, options.env);
-}
-
-function listExternalChannelManifestRecords(
-  records: readonly PluginManifestRecord[],
-): PluginManifestRecord[] {
-  return records.filter((plugin) => plugin.origin !== "bundled" && plugin.channels.length > 0);
-}
-
-function listBundledChannelManifestRecords(
-  records: readonly PluginManifestRecord[],
-): PluginManifestRecord[] {
-  return records.filter((plugin) => plugin.origin === "bundled" && plugin.channels.length > 0);
-}
-
 function resolveExternalReadOnlyChannelPluginIds(params: {
   cfg: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
@@ -645,7 +626,8 @@ export function resolveReadOnlyChannelPluginsForConfig(
   options: ReadOnlyChannelPluginOptions = {},
 ): ReadOnlyChannelPluginResolution {
   const env = options.env ?? process.env;
-  const workspaceDir = resolveReadOnlyWorkspaceDir(cfg, options);
+  const workspaceDir =
+    options.workspaceDir ?? tryResolveConfiguredAgentWorkspaceDir(cfg, options.env);
   const includeSetupFallbackPlugins = options.includeSetupFallbackPlugins === true;
   const loadedChannelPlugins = listChannelPlugins();
   const manifestRecords =
@@ -663,8 +645,12 @@ export function resolveReadOnlyChannelPluginsForConfig(
           stateDir: options.stateDir,
           env,
         }).plugins);
-  const bundledManifestRecords = listBundledChannelManifestRecords(manifestRecords);
-  const externalManifestRecords = listExternalChannelManifestRecords(manifestRecords);
+  const bundledManifestRecords = manifestRecords.filter(
+    (plugin) => plugin.origin === "bundled" && plugin.channels.length > 0,
+  );
+  const externalManifestRecords = manifestRecords.filter(
+    (plugin) => plugin.origin !== "bundled" && plugin.channels.length > 0,
+  );
   const activationSourceConfig = options.activationSourceConfig ?? cfg;
   const configuredChannelIds = uniqueStrings([
     ...listConfiguredChannelIdsForReadOnlyScope({

@@ -85,16 +85,7 @@ function ensureXaiResponsesEncryptedReasoningInclude(
   payloadObj.include = include;
 }
 
-type ReplayableInputImagePart =
-  | {
-      type: "input_image";
-      source: { type: "url"; url: string } | { type: "base64"; media_type: string; data: string };
-    }
-  | { type: "input_image"; image_url: string; detail?: string };
-
-function isReplayableInputImagePart(
-  part: Record<string, unknown>,
-): part is ReplayableInputImagePart {
+function isReplayableInputImagePart(part: Record<string, unknown>): boolean {
   if (part.type !== "input_image") {
     return false;
   }
@@ -189,19 +180,22 @@ function normalizeXaiResponsesToolResultPayload(
     }
 
     const outputParts = itemObj.output as Array<Record<string, unknown>>;
-    const textOutput = outputParts
-      .filter(
-        (part): part is { type: "input_text"; text: string } =>
-          part.type === "input_text" && typeof part.text === "string",
-      )
-      .map((part) => part.text)
-      .join("");
-    const images = includeImages ? outputParts.filter(isReplayableInputImagePart) : [];
-    if (images.length > 0) {
-      imageContentParts.push(
-        { type: "input_text", text: `Image(s) from tool result #${toolResultIndex}:` },
-        ...images,
-      );
+    let textOutput = "";
+    const imageStart = imageContentParts.length;
+    for (const part of outputParts) {
+      if (part.type === "input_text" && typeof part.text === "string") {
+        textOutput += part.text;
+      }
+      if (includeImages && isReplayableInputImagePart(part)) {
+        // Emit one ownership label before this result's first replayable image.
+        if (imageContentParts.length === imageStart) {
+          imageContentParts.push({
+            type: "input_text",
+            text: `Image(s) from tool result #${toolResultIndex}:`,
+          });
+        }
+        imageContentParts.push(part);
+      }
     }
     return {
       ...itemObj,

@@ -592,13 +592,10 @@ private fun ApprovalsSettingsScreen(
   onBack: () -> Unit,
 ) {
   val isConnected by viewModel.isConnected.collectAsState()
-  val execApprovals by viewModel.execApprovals.collectAsState()
-  val execApprovalsRefreshing by viewModel.execApprovalsRefreshing.collectAsState()
-  val execApprovalsErrorText by viewModel.execApprovalsErrorText.collectAsState()
-  val execApprovalsNotice by viewModel.execApprovalsNotice.collectAsState()
+  val inbox by viewModel.execApprovalInbox.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
-  val issueCount = execApprovals.count { it.errorText != null } + pendingToolCalls.count { it.isError == true }
+  val issueCount = inbox.approvals.count { it.errorText != null } + pendingToolCalls.count { it.isError == true }
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
@@ -610,26 +607,26 @@ private fun ApprovalsSettingsScreen(
     SettingsMetricPanel(
       rows =
         listOf(
-          SettingsMetric(nativeString("Gateway Pending"), execApprovals.size.toString()),
+          SettingsMetric(nativeString("Gateway Pending"), inbox.approvals.size.toString()),
           SettingsMetric(nativeString("Thread Activity"), pendingToolCalls.size.toString()),
           SettingsMetric(nativeString("Issues"), issueCount.toString()),
           SettingsMetric(nativeString("Active Runs"), pendingRunCount.toString()),
         ),
     )
     ClawSecondaryButton(
-      text = if (execApprovalsRefreshing) nativeString("Refreshing") else nativeString("Refresh"),
+      text = if (inbox.refreshing) nativeString("Refreshing") else nativeString("Refresh"),
       onClick = viewModel::refreshExecApprovals,
-      enabled = isConnected && !execApprovalsRefreshing,
+      enabled = isConnected && !inbox.refreshing,
       modifier = Modifier.fillMaxWidth(),
     )
-    if (execApprovalsErrorText != null) {
+    inbox.errorText?.let { errorText ->
       ClawPanel {
-        Text(text = gatewayExecApprovalTextForDisplay(execApprovalsErrorText ?: ""), style = ClawTheme.type.body, color = ClawTheme.colors.warning)
+        Text(text = gatewayExecApprovalTextForDisplay(errorText), style = ClawTheme.type.body, color = ClawTheme.colors.warning)
       }
     }
-    // Terminal outcomes always retire their card first, so the notice renders as a
-    // standalone banner above the list; it stays visible until the user dismisses it.
-    execApprovalsNotice?.let { notice ->
+    // The inbox publishes terminal notices with their cards retired in the same snapshot.
+    // Keep the banner independent of remaining cards until the user dismisses it.
+    inbox.notice?.let { notice ->
       ExecApprovalNotice(notice = notice, onDismiss = { viewModel.dismissExecApprovalsNotice(notice) })
     }
     if (!isConnected) {
@@ -639,7 +636,7 @@ private fun ApprovalsSettingsScreen(
           Text(text = nativeString("Connect the gateway to load approval requests in the app."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
       }
-    } else if (execApprovals.isEmpty()) {
+    } else if (inbox.approvals.isEmpty()) {
       ClawPanel {
         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
           Text(text = nativeString("No gateway approvals."), style = ClawTheme.type.section, color = ClawTheme.colors.text)
@@ -648,7 +645,7 @@ private fun ApprovalsSettingsScreen(
       }
     } else {
       ExecApprovalsPanel(
-        approvals = execApprovals,
+        approvals = inbox.approvals,
         onResolve = viewModel::resolveExecApproval,
       )
     }

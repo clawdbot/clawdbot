@@ -21,6 +21,20 @@ Related: [Memory](/concepts/memory) concept, [Dreaming](/concepts/dreaming),
 [Memory config reference](/reference/memory-config), [Memory Wiki](/plugins/memory-wiki),
 [wiki](/cli/wiki), [Plugins](/tools/plugin).
 
+## JSON availability
+
+With `--json`, `search`, `promote`, `promote-explain`, `rem-harness`,
+`rem-backfill`, and `session-backfill` report when the memory backend is
+unavailable before any work runs:
+
+- Disabled memory returns `{"agentId":"main","status":"disabled"}` with a successful exit.
+- Backend acquisition failures return the standard `{"ok":false,"error":{"type":"cli_error","message":"..."}}` envelope, plus `agentId`, and exit with code 1.
+
+Handle these outcomes before reading the command's normal result fields. An
+enabled search with no matches still returns `{"results":[]}`. `status --json`
+keeps its aggregate array of available agents, including `[]` when all are
+disabled; acquisition failures still set a nonzero exit code.
+
 ## `memory status`
 
 ```bash

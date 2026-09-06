@@ -9,7 +9,7 @@ import type { SystemPromptRuntimeInfo } from "../system-prompt.js";
 
 type EmbeddedSystemPromptParams = Omit<
   Parameters<typeof buildConfiguredAgentSystemPrompt>[0],
-  "toolNames" | "toolSummaries" | "requireExplicitMessageTarget" | "fsWorkspaceOnly"
+  "toolNames" | "toolSummaries" | "fsWorkspaceOnly"
 > & {
   reasoningTagHint: boolean;
   runtimeInfo: SystemPromptRuntimeInfo & {

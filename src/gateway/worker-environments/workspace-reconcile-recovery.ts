@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { FsSafeError, root as openFsSafeRoot } from "../../infra/fs-safe.js";
+import { root as openFsSafeRoot } from "../../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import {
   createStagedInputPathMatcher,
@@ -34,6 +34,7 @@ import {
   entryMatches,
   localPath,
   readWorkspaceTreeFile,
+  removeEmptyWorkspaceDirectory,
 } from "./workspace-reconcile-fs.js";
 
 const PATCH_TIMEOUT_MS = 10 * 60_000;
@@ -552,30 +553,7 @@ async function restoreWorkspaceJournalDirectories(params: WorkspaceRecoveryConte
     if (baseDirectoryPaths.has(entryPath) || baseEntryPaths.has(entryPath)) {
       continue;
     }
-    let children: string[];
-    try {
-      children = await workspaceRoot.list(entryPath);
-    } catch (error) {
-      if (error instanceof FsSafeError && ["not-found", "path-alias"].includes(error.code)) {
-        continue;
-      }
-      throw error;
-    }
-    if (children.length > 0) {
-      continue;
-    }
-    try {
-      await workspaceRoot.remove(entryPath);
-    } catch (error) {
-      if (error instanceof FsSafeError && ["not-found", "path-alias"].includes(error.code)) {
-        continue;
-      }
-      const racedChildren = await workspaceRoot.list(entryPath).catch(() => undefined);
-      if (racedChildren?.length) {
-        continue;
-      }
-      throw error;
-    }
+    await removeEmptyWorkspaceDirectory(workspaceRoot, entryPath);
   }
 }
 

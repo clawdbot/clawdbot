@@ -666,12 +666,15 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
           reason: "wrapper-retirement-failed",
           jsonMode: Boolean(params.opts.json),
         });
-        const reported = printFinalResult(
-          completedResult({
+        const reported = await reportResult(
+          {
             ...resultWithPostUpdate,
             status: "error",
             reason: "wrapper-retirement-failed",
-          }),
+          },
+          false,
+          undefined,
+          false,
         );
         throw new UpdateCommandFailure(reported, 1, retirement.error);
       }

@@ -69,6 +69,7 @@ import {
   resolveProviderEndpoint,
   transformTransportMessages,
 } from "./host-policy.js";
+import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
 import {
   copyProviderAcceptanceObserver,
   createEmptyTransportUsage,
@@ -440,6 +441,7 @@ function createAnthropicTransportClient(params: {
   options: AnthropicTransportOptions | undefined;
 }) {
   const { model, context, apiKey, options } = params;
+  const optionHeaders = resolveOpencodeSessionHeaders(model, options);
   const needsInterleavedBeta =
     (options?.interleavedThinking ?? true) && !supportsClaudeAdaptiveThinking(model);
   // Kimi's Anthropic thinking SSE is already well-formed for this parser, but
@@ -463,7 +465,7 @@ function createAnthropicTransportClient(params: {
           },
           model.headers,
           getAiTransportHost().buildCopilotDynamicHeaders(context.messages),
-          options?.headers,
+          optionHeaders,
         ),
         fetch,
       }),
@@ -484,7 +486,7 @@ function createAnthropicTransportClient(params: {
             ...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
           },
           omitFoundryBearerCredentialHeaders(model.headers),
-          options?.headers,
+          optionHeaders,
         ),
         fetch,
       }),
@@ -511,7 +513,7 @@ function createAnthropicTransportClient(params: {
             "x-app": "cli",
           },
           model.headers,
-          options?.headers,
+          optionHeaders,
         ),
         fetch,
       }),
@@ -529,7 +531,7 @@ function createAnthropicTransportClient(params: {
       ...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
     },
     model.headers,
-    options?.headers,
+    optionHeaders,
   );
   return {
     client: createAnthropicMessagesClient({

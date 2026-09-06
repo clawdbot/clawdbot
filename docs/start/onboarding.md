@@ -76,31 +76,47 @@ and proceeds to AI checks without taking over its CLI or service installation.
 See [Gateway on macOS](/platforms/mac/bundled-gateway#automatic-setup).
 </Step>
 <Step title="Connect your AI">
-If the connected Gateway already has a configured agent model, the app
-verifies it with a real completion before opening the normal dashboard.
-A configured model name alone does not skip verification. Fresh or incomplete
-Gateways continue through provider setup.
+If the connected Gateway already has a configured agent model, it appears as
+**Current model**. Select it to verify that exact route with a real completion
+and open the normal dashboard. Opening onboarding does not test an existing
+route or choose a different provider.
 
 Once the Gateway is ready, onboarding looks for AI access you already have:
 a Claude Code or Codex login, `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`, or a
 tool-capable model with at least 16K of measured effective context already
 loaded in a reachable LM Studio or Ollama server. Detection runs on the
-Gateway host, including when the macOS app connects to a Linux Gateway. The best
-option is tested with a real completion and only saved
-after it answers. If setup fails, the app shows the reason so you can retry or
-choose another connection. If several options are found you can
-switch between them before continuing. Automatic local discovery never pulls
-or downloads a model. Ollama checks `/api/ps` for loaded models; an eligible
+Gateway host, including when the macOS app connects to a Linux Gateway. Detection
+only presents choices: it does not test, activate, install, or save any candidate.
+Select the connection you want before OpenClaw runs a real completion and saves it.
+In particular, an existing Codex subscription is never selected automatically.
+If setup fails, the app keeps the detailed reason visible so you can retry or
+choose another connection. Local discovery never pulls or downloads a model.
+Ollama checks `/api/ps` for loaded models; an eligible
 model that is only installed on disk requires explicit setup through
 **Choose connection** → **Local only**. See [Ollama](/providers/ollama).
 
-When a connection needs a runtime plugin, the app and dashboard show the
+The provider picker is built from installed manifests and OpenClaw's official
+provider-plugin catalog, so installable providers such as Meta appear before their
+plugin is present. When a connection needs a runtime plugin, the app and dashboard show the
 staged package's source and capabilities, with integrity when available before installing or
-enabling it. Review the details, then explicitly confirm acceptance to continue.
+enabling it, including verified first-party packages. Review the details, then
+explicitly confirm acceptance to continue.
 Declining or confirmed cancellation stops that attempt without selecting another
 inference route. When the Gateway confirms that the live AI test failed before
 saving the connection, the app shows the failure and lets you retry or choose a
 different connection. Runtime plugins installed for that attempt are kept.
+
+Fresh installs also ask whether existing native provider conversations should
+appear in the sidebar. This is discovery in place, not transcript copying, and is
+off until selected. Turning it off persists `sessionCatalog.enabled=false` for
+the available native catalog plugins; existing upgraded installations keep their
+current behavior.
+
+For a custom OpenAI- or Anthropic-compatible endpoint on a local Gateway, choose
+**Custom OpenAI/Anthropic-compatible endpoint** and complete the Gateway-owned
+wizard. When the Gateway is remote, the Mac does not collect that host's secret;
+run `openclaw onboard --auth-choice custom-api-key` on the Gateway host, then
+return to the app and refresh detection.
 
 If the result is uncertain or settings may already have been saved, the app keeps
 replacement setup blocked while it checks the Gateway. **Check again** repeats

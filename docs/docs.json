@@ -933,6 +933,10 @@
       "destination": "/channels/telegram"
     },
     {
+      "source": "/reference/templates/CLAUDE",
+      "destination": "/reference/templates/AGENTS"
+    },
+    {
       "source": "/templates/AGENTS",
       "destination": "/reference/templates/AGENTS"
     },
@@ -2114,7 +2118,16 @@
                   "reference/templates/HEARTBEAT",
                   "reference/templates/IDENTITY",
                   "reference/templates/SOUL",
-                  "reference/templates/USER"
+                  "reference/templates/USER",
+                  {
+                    "group": "Dev agent templates",
+                    "pages": [
+                      "reference/templates/AGENTS.dev",
+                      "reference/templates/IDENTITY.dev",
+                      "reference/templates/SOUL.dev",
+                      "reference/templates/USER.dev"
+                    ]
+                  }
                 ]
               },
               {
@@ -2169,6 +2182,39 @@
                   "releases/2026.9.1",
                   "releases/2026.8.2",
                   "releases/2026.8.1",
+                  {
+                    "group": "v2026.8.1 sections",
+                    "pages": [
+                      "releases/2026.8.1/installation-and-onboarding",
+                      "releases/2026.8.1/the-new-web-ui",
+                      "releases/2026.8.1/updates-and-maintenance",
+                      "releases/2026.8.1/messaging",
+                      "releases/2026.8.1/memory",
+                      "releases/2026.8.1/skills",
+                      "releases/2026.8.1/native-apps",
+                      "releases/2026.8.1/models-and-providers",
+                      "releases/2026.8.1/automations-and-scheduling",
+                      "releases/2026.8.1/browser-and-computer-use",
+                      "releases/2026.8.1/plugins-and-integrations",
+                      "releases/2026.8.1/security-and-privacy",
+                      "releases/2026.8.1/quality-of-life-improvements",
+                      "releases/2026.8.1/other-bug-fixes",
+                      "releases/2026.8.1/maintainer-and-internal-changes",
+                      {
+                        "group": "Maintenance changes",
+                        "pages": [
+                          "releases/2026.8.1/maintenance-changes-part-1",
+                          "releases/2026.8.1/maintenance-changes-part-2",
+                          "releases/2026.8.1/maintenance-changes-part-3",
+                          "releases/2026.8.1/maintenance-changes-part-4",
+                          "releases/2026.8.1/maintenance-changes-part-5",
+                          "releases/2026.8.1/maintenance-changes-part-6",
+                          "releases/2026.8.1/maintenance-changes-part-7",
+                          "releases/2026.8.1/maintenance-changes-part-8"
+                        ]
+                      }
+                    ]
+                  },
                   "releases/2026.7.1",
                   "releases/2026.6.11"
                 ]

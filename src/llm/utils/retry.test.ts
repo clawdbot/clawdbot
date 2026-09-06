@@ -71,6 +71,18 @@ describe("isRetryableAssistantError", () => {
     ).toBe(false);
   });
 
+  it.each([
+    { errorCode: "ERR_WEBSOCKET_NON_RETRYABLE_CLOSE", expected: false },
+    { errorCode: "ERR_WEBSOCKET_TRANSPORT", expected: true },
+  ])("honors structured WebSocket retry disposition $errorCode", ({ errorCode, expected }) => {
+    expect(
+      isRetryableAssistantError({
+        ...errorMessage("WebSocket closed: policy reason included ECONNRESET"),
+        errorCode,
+      }),
+    ).toBe(expected);
+  });
+
   it("retries an incomplete terminal stream that retained visible partial text", () => {
     expect(
       isRetryableAssistantError({

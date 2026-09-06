@@ -510,10 +510,10 @@ export function createGrepToolDefinition(
 
                 const rawOutput = outputLines.join("\n");
                 // Apply byte truncation. There is no line limit here because the match limit already capped rows.
-                const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
-                let output = truncation.content;
-                const details: Omit<GrepToolDetails, "content"> = {};
-                // Build actionable notices for truncation and match limits.
+                const { content, ...truncation } = truncateHead(rawOutput, {
+                  maxLines: Number.MAX_SAFE_INTEGER,
+                });
+                const details: GrepToolDetails = { content };
                 const notices: string[] = [];
                 if (matchLimitReached) {
                   notices.push(
@@ -530,12 +530,12 @@ export function createGrepToolDefinition(
                   details.linesTruncated = true;
                 }
                 if (notices.length > 0) {
-                  output += `\n\n[${notices.join(". ")}]`;
+                  details.content += `\n\n[${notices.join(". ")}]`;
                 }
                 settle(() =>
                   resolve({
-                    content: [{ type: "text", text: output }],
-                    details: { ...details, content: output },
+                    content: [{ type: "text", text: details.content }],
+                    details,
                   }),
                 );
               })().catch((err: unknown) => {

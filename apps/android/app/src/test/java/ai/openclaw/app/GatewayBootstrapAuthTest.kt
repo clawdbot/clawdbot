@@ -1601,6 +1601,7 @@ class GatewayBootstrapAuthTest {
       agentId: String,
       sessionKey: String,
       messages: List<ChatMessage>,
+      sessionInfo: ChatSessionEntry?,
     ) = Unit
 
     override suspend fun deleteSession(

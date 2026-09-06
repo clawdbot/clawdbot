@@ -73,25 +73,20 @@ export function resolveBootstrapWarningSignaturesSeen(report?: {
   return single ? [single] : [];
 }
 
-/** Compares raw bootstrap files with the injected context files the agent received. */
+/**
+ * Matches injected content by source path, because basenames can repeat even
+ * when the total budget drops one of those files. Account before remapping
+ * source paths into the prompt workspace.
+ */
 export function buildBootstrapInjectionStats(params: {
   bootstrapFiles: WorkspaceBootstrapFile[];
   injectedFiles: EmbeddedContextFile[];
 }): BootstrapInjectionStat[] {
   const injectedByPath = new Map<string, string>();
-  const injectedByBaseName = new Map<string, string>();
   for (const file of params.injectedFiles) {
     const pathValue = normalizeOptionalString(file.path) ?? "";
-    if (!pathValue) {
-      continue;
-    }
-    if (!injectedByPath.has(pathValue)) {
+    if (pathValue && !injectedByPath.has(pathValue)) {
       injectedByPath.set(pathValue, file.content);
-    }
-    const normalizedPath = pathValue.replace(/\\/g, "/");
-    const baseName = path.posix.basename(normalizedPath);
-    if (!injectedByBaseName.has(baseName)) {
-      injectedByBaseName.set(baseName, file.content);
     }
   }
   return params.bootstrapFiles.map((file) => {
@@ -104,10 +99,7 @@ export function buildBootstrapInjectionStats(params: {
       normalizeOptionalString(file.name) ??
       (normalizedPath ? path.posix.basename(normalizedPath) : "bootstrap");
     const rawChars = file.missing ? 0 : (file.content ?? "").trimEnd().length;
-    const injected =
-      (pathValue ? injectedByPath.get(pathValue) : undefined) ??
-      injectedByPath.get(name) ??
-      injectedByBaseName.get(name);
+    const injected = pathValue ? injectedByPath.get(pathValue) : undefined;
     const injectedChars = injected ? injected.length : 0;
     const truncated = !file.missing && injectedChars < rawChars;
     return {
