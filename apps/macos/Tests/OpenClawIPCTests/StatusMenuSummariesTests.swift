@@ -11,59 +11,40 @@ import Testing
 struct StatusMenuSummariesTests {
     @Test func `Automations shows the full enabled count beyond its preview`() async throws {
         try await self.withFixture(cronJobCount: 201) { fixture in
-            fixture.recordCronProof(["stage": "fixture-entered"])
-            do {
-                _ = try await fixture.control.request(method: "health")
-                fixture.recordCronProof([
-                    "stage": "health-returned", "connected": String(fixture.control.state == .connected),
-                ])
-                try #require(fixture.control.state == .connected)
-                let lease = try #require(await fixture.gateway.captureServerLease())
-                await fixture.cron.refreshJobs()
-                let jobs = fixture.cron.summary.jobs
-                fixture.recordCronProof([
-                    "stage": "refresh-returned", "storeJobs": String(jobs.count),
-                    "firstJob": jobs.first?.id ?? "absent", "lastJob": jobs.last?.id ?? "absent",
-                    "selectedRevision": fixture.gateway.selectedEndpointRevision.map(String.init) ?? "absent",
-                    "leaseRevision": lease.endpointRevision.map(String.init) ?? "absent",
-                    "routeCurrent": String(fixture.gateway.serverLeaseMatchesCurrentRoute(lease)),
-                    "leaseCurrent": String(fixture.gateway.serverLeaseMatchesCurrentState(lease)),
-                ])
-                _ = AppKitTestSupport.application
-                let item = NSMenuItem()
-                fixture.summaries.configureAutomations(item)
-                let preview = try #require(item.submenu).items.filter {
-                    ($0.representedObject as? String)?.hasPrefix("cron.job.") == true
-                }
-                fixture.recordCronProof(["stage": "row-configured", "previewCount": String(preview.count)])
-                let row = try #require(item.view)
-                row.appearance = NSAppearance(named: .aqua)
-                let window = NSWindow(contentRect: row.frame, styleMask: [.titled], backing: .buffered, defer: false)
-                window.isReleasedWhenClosed = false
-                window.contentView = row
-                defer {
-                    window.orderOut(nil)
-                    window.contentView = nil
-                    window.close()
-                    item.view = nil
-                }
-                window.orderFront(nil)
-                row.layoutSubtreeIfNeeded()
-                let texts = try await cronSummaryProofTexts(
-                    in: row, title: item.title, fixtureEvents: fixture.cronProofEvents.value)
-                try #require(fixture.gateway.serverLeaseMatchesCurrentRoute(lease))
-                try #require(!jobs.isEmpty)
-                try #require(fixture.requests.value.contains { $0.method == "cron.list" && $0.owner == "A" })
-                try #require(preview.count == 8)
-                let text = try #require(texts.first { $0.hasPrefix("\(item.title), ") })
-                #expect(text == "\(item.title), 201")
-            } catch {
-                let nsError = error as NSError
-                fixture.recordCronProof([
-                    "stage": "failed", "errorDomain": nsError.domain, "errorCode": String(nsError.code),
-                ])
-                throw error
+            _ = try await fixture.control.request(method: "health")
+            try #require(fixture.control.state == .connected)
+            let lease = try #require(await fixture.gateway.captureServerLease())
+            await fixture.cron.refreshJobs()
+            let jobs = fixture.cron.summary.jobs
+            _ = AppKitTestSupport.application
+            let item = NSMenuItem()
+            fixture.summaries.configureAutomations(item)
+            let preview = try #require(item.submenu).items.filter {
+                ($0.representedObject as? String)?.hasPrefix("cron.job.") == true
             }
+            let row = try #require(item.view)
+            let window = NSWindow(contentRect: row.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = row
+            defer {
+                window.orderOut(nil)
+                window.contentView = nil
+                window.close()
+                item.view = nil
+            }
+            window.orderFront(nil)
+            row.layoutSubtreeIfNeeded()
+            let elements = try await AppKitTestSupport.accessibilityElements(in: row)
+            let texts = elements.filter { $0.accessibilityRole?() == .staticText }.compactMap {
+                let value: Any? = $0.accessibilityValue?()
+                return value as? String
+            }
+            try #require(fixture.gateway.serverLeaseMatchesCurrentRoute(lease))
+            try #require(!jobs.isEmpty)
+            try #require(fixture.requests.value.contains { $0.method == "cron.list" && $0.owner == "A" })
+            try #require(preview.count == 8)
+            let text = try #require(texts.first { $0.hasPrefix("\(item.title), ") })
+            #expect(text == "\(item.title), 201")
         }
     }
 
@@ -195,8 +176,6 @@ private final class UsageGatewayFixture {
     let revision = LockIsolated<UInt64>(1)
     let requests = LockIsolated<[Request]>([])
     let coldUsage = LockIsolated(false)
-    let cronProofEvents = LockIsolated<[[String: String]]>([])
-    let recordCronProof: @Sendable ([String: String]) -> Void
     let session: GatewayTestWebSocketSession
     let gateway: GatewayConnection
     let control: ControlChannel
@@ -207,22 +186,6 @@ private final class UsageGatewayFixture {
         let revision = self.revision
         let requests = self.requests
         let coldUsage = self.coldUsage
-        let cronProofEvents = self.cronProofEvents
-        self.recordCronProof = { fields in
-            guard cronJobCount > 0 else { return }
-            let recorded = cronProofEvents.withValue { events -> [String: String]? in
-                guard events.count < 32 else { return nil }
-                let event = events.count == 31 ? ["stage": "truncated", "limit": "32"] :
-                    fields.mapValues { String($0.prefix(256)) }
-                events.append(event)
-                return event
-            }
-            if let recorded {
-                let fields = recorded.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }
-                print("CRON_SUMMARY_PROOF " + fields.joined(separator: " "))
-            }
-        }
-        let recordCronProof = self.recordCronProof
         self.session = GatewayTestWebSocketSession(taskFactory: {
             let owner = revision.value == 1 ? "A" : "B"
             return GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
@@ -237,16 +200,6 @@ private final class UsageGatewayFixture {
                 guard let frame = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let method = frame["method"] as? String else { return }
                 requests.withValue { $0.append(Request(owner: owner, method: method)) }
-                let isCronProofRequest = method == "health" || method == "cron.list"
-                if isCronProofRequest {
-                    let params = frame["params"] as? [String: Any]
-                    recordCronProof([
-                        "stage": "request", "owner": owner, "method": method,
-                        "includeDisabled": (params?["includeDisabled"] as? Bool).map(String.init) ?? "absent",
-                        "limit": (params?["limit"] as? Int).map(String.init) ?? "absent",
-                    ])
-                }
-                var responseFacts = ["stage": "response-emitted", "owner": owner, "method": method]
                 let payload: String
                 switch method {
                 case "usage.status":
@@ -274,8 +227,6 @@ private final class UsageGatewayFixture {
                     let params = frame["params"] as? [String: Any]
                     let limit = min(params?["limit"] as? Int ?? 200, 200)
                     let count = min(cronJobCount, limit)
-                    responseFacts["total"] = String(cronJobCount)
-                    responseFacts["returnedJobs"] = String(count)
                     // GRDB also overloads joined; these interpolations must remain JSON strings.
                     let jobs = (0..<count).map { index -> String in
                         let id = String(format: "job-%03d", index)
@@ -295,10 +246,7 @@ private final class UsageGatewayFixture {
                     payload = #"{"ok":true}"#
                 }
                 let response = #"{"type":"res","id":"\#(id)","ok":true,"payload":\#(payload)}"#
-                let responseData = Data(response.utf8)
-                if cronJobCount > 0, method == "cron.list" { recordCronProof(cronSummaryWireFacts(responseData)) }
-                socket.emitReceiveSuccess(.data(responseData))
-                if isCronProofRequest { recordCronProof(responseFacts) }
+                socket.emitReceiveSuccess(.data(Data(response.utf8)))
             })
         })
         self.gateway = GatewayConnection(

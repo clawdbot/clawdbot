@@ -4772,18 +4772,6 @@ jobs:
             exit 1
           fi
 
-      - name: Upload temporary Cron summary proof
-        if: ${{ always() && matrix.phase == 'tests' && steps.swift-test.outputs.debug-tests-built == 'true' && hashFiles('apps/macos/Tests/OpenClawIPCTests/CronSummaryProof.swift') != '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: macos-cron-summary-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            .artifacts/mac-cron-summary-proof/summary.png
-            .artifacts/mac-cron-summary-proof/summary-label.txt
-            .artifacts/mac-cron-summary-proof/response.json
-          if-no-files-found: error
-          retention-days: 7
-
       - name: Render isolated macOS health fixtures
         id: health-render
         if: ${{ !cancelled() && steps.swift-test.outputs.debug-tests-built == 'true' && hashFiles('scripts/test-macos-health-render.sh') != '' }}
