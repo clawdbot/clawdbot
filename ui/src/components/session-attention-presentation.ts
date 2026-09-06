@@ -48,9 +48,15 @@ export function sessionAttentionSubtitle(attention: SidebarSessionAttention): st
     case "approval":
       return t("sessionsView.waitingForApproval");
     case "error":
-      return t("sessionsView.runFailedReason", {
-        reason: formatWebUiIconErrorText(attention.reason),
-      });
+      return t(
+        attention.sourceSessionLabel
+          ? "sessionsView.childRunFailedReason"
+          : "sessionsView.runFailedReason",
+        {
+          session: attention.sourceSessionLabel ?? "",
+          reason: formatWebUiIconErrorText(attention.reason),
+        },
+      );
     case "agent":
       return attention.note;
     case "none":

@@ -33,7 +33,7 @@ export type SidebarSessionAttention =
   | { kind: "question" }
   | { kind: "approval" }
   | { kind: "agent"; note: string; icon: SessionAgentAttentionIconId }
-  | { kind: "error"; reason: string };
+  | { kind: "error"; reason: string; sourceSessionLabel?: string };
 
 /** Client-owned attention that can name a session before its row is loaded. */
 export type SidebarKnownSessionAttention = {

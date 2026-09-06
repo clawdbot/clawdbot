@@ -5,8 +5,6 @@ import {
 } from "../lib/sessions/session-key.ts";
 import {
   SIDEBAR_SESSION_NO_ATTENTION,
-  rowDemandsVisibility,
-  RowVisibilityReason,
   sidebarSessionAttentionPriority,
   type SidebarKnownSessionAttention,
   type SidebarRecentSession,
@@ -107,13 +105,17 @@ export function projectSessionTree(params: {
       SIDEBAR_SESSION_NO_ATTENTION,
     );
     // Accepted gap: an unloaded failed child needs expansion before its error attention can surface.
-    // Child attention is transitive just like live-run counts: a collapsed
-    // ancestor remains actionable even when the blocked descendant is hidden.
+    // Preserve the failing descendant when lifting attention: a child failure
+    // must not claim that a healthy ancestor's own run failed.
     const attention = children.reduce(
       (current, child) =>
-        rowDemandsVisibility(child, RowVisibilityReason.Attention) &&
         sidebarSessionAttentionPriority(child.attention) > sidebarSessionAttentionPriority(current)
-          ? child.attention
+          ? child.attention.kind === "error"
+            ? {
+                ...child.attention,
+                sourceSessionLabel: child.attention.sourceSessionLabel ?? child.label,
+              }
+            : child.attention
           : current,
       sidebarSessionAttentionPriority(unloadedChildAttention) >
         sidebarSessionAttentionPriority(projected.attention)

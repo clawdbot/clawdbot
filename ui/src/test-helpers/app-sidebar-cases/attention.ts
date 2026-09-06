@@ -339,6 +339,65 @@ describe("AppSidebar session attention", () => {
     expect(sidebar.textContent).toContain("Run failed: Provider credits exhausted");
   });
 
+  it.each(["running", "done"] as const)(
+    "attributes a descendant failure without marking the %s parent run failed",
+    async (status) => {
+      const childKey = "agent:main:subagent:worker";
+      const failedKey = "agent:main:subagent:failed-attempt";
+      const sessionsHarness = createSessionsHarness("main", [sessionKey]);
+      const parent: GatewaySessionRow = {
+        key: sessionKey,
+        kind: "direct",
+        label: "Healthy parent",
+        updatedAt: 3,
+        status,
+        childSessions: [childKey],
+      };
+      const child: GatewaySessionRow = {
+        key: childKey,
+        kind: "direct",
+        label: "Working child",
+        updatedAt: 3,
+        status: "running",
+        spawnedBy: sessionKey,
+        childSessions: [failedKey],
+      };
+      const failure = failedRow(failedKey, {
+        label: "Initial attempt",
+        spawnedBy: childKey,
+      });
+      setRows(sessionsHarness, [parent, child, failure]);
+      const { sidebar } = await mountSidebar(
+        createGateway({} as GatewayBrowserClient),
+        sessionsHarness.sessions,
+      );
+      const parentRow = () => sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
+      const warning = "Child run failed (Initial attempt): Provider credits exhausted";
+      expect(parentRow()?.textContent).toContain(warning);
+      expect(parentRow()?.querySelector('[aria-label="Active run"]')).not.toBeNull();
+
+      sidebar
+        .querySelector<HTMLButtonElement>(`[data-child-session-toggle="${sessionKey}"]`)
+        ?.click();
+      await sidebar.updateComplete;
+      expect(sidebar.querySelector(`[data-session-key="${childKey}"]`)?.textContent).toContain(
+        warning,
+      );
+      sidebar
+        .querySelector<HTMLButtonElement>(`[data-child-session-toggle="${childKey}"]`)
+        ?.click();
+      await sidebar.updateComplete;
+      expect(sidebar.querySelector(`[data-session-key="${failedKey}"]`)?.textContent).toContain(
+        "Run failed: Provider credits exhausted",
+      );
+
+      setRows(sessionsHarness, [parent, child, { ...failure, lastReadAt: 3 }]);
+      await sidebar.updateComplete;
+      expect(parentRow()?.querySelector('[data-session-attention="error"]')).toBeNull();
+      expect(parentRow()?.querySelector('[aria-label="Active run"]')).not.toBeNull();
+    },
+  );
+
   it("keeps a read failure dismissed after the sessions list refreshes", async () => {
     const sessionsHarness = createSessionsHarness("main", [sessionKey]);
     setRows(sessionsHarness, [failedRow()]);

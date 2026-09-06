@@ -1234,6 +1234,7 @@ export const en: TranslationMap & {
     waitingForAnswer: "Waiting for your answer",
     waitingForApproval: "Waiting for approval",
     runFailedReason: "Run failed: {reason}",
+    childRunFailedReason: "Child run failed ({session}): {reason}",
     runErrorTimedOut: "Timed out",
     runErrorUnknown: "Unknown error",
     attentionRequired: "Session needs attention",
