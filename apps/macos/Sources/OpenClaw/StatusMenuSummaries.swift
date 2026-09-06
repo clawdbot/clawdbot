@@ -99,7 +99,7 @@ final class StatusMenuSummaries: NSObject {
     func refresh(onUpdate: @escaping @MainActor () -> Void) {
         self.updateHandler = onUpdate
         self.nodes.start()
-        self.cron.start(.statusMenu)
+        self.cron.start()
         if self.eventTask == nil {
             GatewayPushSubscription.restartTask(
                 task: &self.eventTask,
@@ -114,7 +114,7 @@ final class StatusMenuSummaries: NSObject {
     func menuDidClose() {
         self.updateHandler = nil
         self.nodes.stop()
-        self.cron.stop(.statusMenu)
+        self.cron.stop()
         SimpleTaskSupport.stop(task: &self.eventTask)
         self.cancelRefresh()
         self.usageState?.retryAttempts = 0

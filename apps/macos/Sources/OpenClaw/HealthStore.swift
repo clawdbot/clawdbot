@@ -95,7 +95,6 @@ final class HealthStore {
         let revision: UInt64?
         var lease: GatewayConnection.ServerLease?
         var snapshot: HealthSnapshot?
-        var lastSuccess: Date?
         var lastError: String?
     }
 
@@ -113,10 +112,6 @@ final class HealthStore {
     private var activeRefresh: Refresh?
     var snapshot: HealthSnapshot? {
         self.sourceIsCurrent ? self.output.snapshot : nil
-    }
-
-    var lastSuccess: Date? {
-        self.sourceIsCurrent ? self.output.lastSuccess : nil
     }
 
     var lastError: String? {
@@ -257,7 +252,6 @@ final class HealthStore {
             guard self.refreshIsCurrent(refresh) else { return }
             if let decoded = decodeHealthSnapshot(from: data) {
                 self.output.snapshot = decoded
-                self.output.lastSuccess = Date()
                 self.output.lastError = nil
                 if previousError != nil {
                     Self.logger.info("health refresh recovered")

@@ -4,6 +4,7 @@ import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runt
 import {
   createProviderOperationDeadline,
   executeProviderOperationWithRetry,
+  readProviderBinaryResponse,
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   waitProviderOperationPollInterval,
@@ -246,12 +247,13 @@ async function downloadGeneratedVideoFromUri(params: {
             `Failed to download Google generated video: ${response.status} ${response.statusText}`,
           );
         }
-        const buffer = await readResponseWithLimit(response, params.maxBytes, {
+        const downloadLabel = "Google generated video download";
+        const buffer = await readProviderBinaryResponse(response, downloadLabel, "video", {
+          maxBytes: params.maxBytes,
           chunkTimeoutMs: params.timeoutMs,
-          onOverflow: ({ maxBytes }) =>
-            new Error(`Google generated video download exceeds ${maxBytes} bytes`),
+          onOverflow: ({ maxBytes }) => new Error(`${downloadLabel} exceeds ${maxBytes} bytes`),
           onIdleTimeout: ({ chunkTimeoutMs }) =>
-            new Error(`Google generated video download stalled after ${chunkTimeoutMs}ms`),
+            new Error(`${downloadLabel} stalled after ${chunkTimeoutMs}ms`),
         });
         return {
           buffer,

@@ -376,9 +376,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         onNavigate: (routeId, options) => host.navigate(routeId, options),
         onOpenApprovals: () => host.openApprovals(),
         onPreload: (routeId) => context.preload(routeId),
-        onSearchQueryChange: (nextQuery) => {
-          void host.handleSettingsSearchQueryChange(nextQuery);
-        },
+        onSearchQueryChange: (nextQuery) => void host.handleSettingsSearchQueryChange(nextQuery),
         preloadTimers: host.settingsPreloadTimers,
         saveIndicator: {
           status: runtimeConfig.configAutoSaveStatus,
@@ -391,7 +389,8 @@ export function renderApplicationShell(host: ShellViewHost) {
             runtimeConfig.configSaving ||
             (runtimeConfig.configFormDirty && runtimeConfig.configFormMode === "raw") ||
             updateBusy,
-          onRetry: () => void context.runtimeConfig.save(),
+          onRetry: () => void context.runtimeConfig.retry(),
+          onSave: () => void context.runtimeConfig.save(),
           onReload: () => void context.runtimeConfig.discardDraft(),
           onApply: () => void context.runtimeConfig.apply(),
         },

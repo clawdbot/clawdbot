@@ -97,12 +97,10 @@ export function resolveSessionSharingTarget(params: {
 export function resolveSessionSharingTargets(params: {
   cfg: OpenClawConfig;
   targets: readonly { sessionKey: string; agentId?: string }[];
-  targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
 }): Array<SessionSharingTarget | null> {
   return resolveGatewaySessionStoreTargetsReadOnly({
     cfg: params.cfg,
     targets: params.targets.map(({ sessionKey, agentId }) => ({ key: sessionKey, agentId })),
-    targetDiscoveryCache: params.targetDiscoveryCache,
   }).map(toSessionSharingTarget);
 }
 

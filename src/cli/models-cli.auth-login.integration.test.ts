@@ -7,7 +7,7 @@ import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.j
 import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store.js";
 import { testing as authStoreTesting } from "../agents/auth-profiles/store.test-support.js";
 import type { ProviderPlugin } from "../plugins/types.js";
-import { writeConfigMachineState } from "../state/config-machine-state.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { registerModelsCli } from "./models-cli.js";

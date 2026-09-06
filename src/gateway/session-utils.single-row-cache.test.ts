@@ -76,10 +76,11 @@ const subagentRegistryReadMock = vi.hoisted(() => {
 
 vi.mock("../agents/subagents/registry/subagent-registry-read.js", () => subagentRegistryReadMock);
 
+import { listSessionFixture } from "./session-list.test-support.js";
 import {
   buildGatewaySessionInfo,
-  listSessionsFromStoreAsync,
   loadGatewaySessionEntryReadOnly,
+  loadGatewaySessionLifecycleSnapshot,
   loadGatewaySessionRow,
   loadSessionEntry,
 } from "./session-utils.js";
@@ -217,6 +218,42 @@ describe("single gateway session row child projections", () => {
     resetPluginRuntimeStateForTest();
     subagentRegistryReadMock.setSubagentRunsForTest([]);
     vi.clearAllMocks();
+  });
+
+  test("retains the loaded owner after a qualified main alias becomes global", async () => {
+    await withStateDirEnv("openclaw-single-row-global-owner-", async () => {
+      const cfg: OpenClawConfig = {
+        session: { scope: "global" },
+        agents: {
+          entries: {
+            main: { default: true, model: { primary: "openai/gpt-5.4" } },
+            research: { model: { primary: "openai/gpt-5.5" } },
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(cfg, cfg);
+      await replaceSessionEntry(
+        { agentId: "research", sessionKey: "global" },
+        { sessionId: "research-main", updatedAt: 42 },
+      );
+      const key = "agent:research:main";
+      expect(loadGatewaySessionEntryReadOnly(key)).toMatchObject({
+        agentId: "research",
+        canonicalKey: "global",
+        entry: { sessionId: "research-main" },
+      });
+      expect.soft(loadGatewaySessionLifecycleSnapshot(key).row).toMatchObject({
+        key: "global",
+        sessionId: "research-main",
+        agentId: "research",
+        model: "gpt-5.5",
+      });
+      expect(loadGatewaySessionRow(key, { agentId: "research" })).toMatchObject({
+        key: "global",
+        agentId: "research",
+        model: "gpt-5.5",
+      });
+    });
   });
 
   test.each([undefined, false])(
@@ -449,7 +486,7 @@ describe("single gateway session row child projections", () => {
           },
         } as OpenClawConfig;
 
-        const asyncListed = await listSessionsFromStoreAsync({
+        const asyncListed = await listSessionFixture({
           cfg,
           storePath,
           store,

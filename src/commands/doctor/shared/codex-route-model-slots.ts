@@ -2,7 +2,6 @@ import { asOptionalRecord as asMutableRecord } from "@openclaw/normalization-cor
 import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import {
   isBlockedLegacyCodexModelRef,
-  isOpenAICodexModelRef,
   normalizeRuntimeString,
   toCanonicalOpenAIModelRef,
   type LegacyCodexModelIdentity,
@@ -47,15 +46,11 @@ export function collectStringModelSlot(params: {
   if (typeof params.value !== "string") {
     return false;
   }
-  const model = params.value.trim();
-  if (!model || !isOpenAICodexModelRef(model)) {
-    return false;
-  }
   return Boolean(
     recordCodexModelHit({
       hits: params.hits,
       path: params.path,
-      model,
+      model: params.value.trim(),
       runtime: params.runtime,
       blockedModelIdentities: params.blockedModelIdentities,
     }),
@@ -183,26 +178,59 @@ export function rewriteStringModelSlot(params: {
   runtime?: string;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): boolean {
-  if (!params.container) {
+  if (typeof params.container?.[params.key] !== "string") {
     return false;
   }
-  const value = params.container[params.key];
-  const model = typeof value === "string" ? value.trim() : "";
-  if (!model || !isOpenAICodexModelRef(model)) {
-    return false;
-  }
-  const canonicalModel = recordCodexModelHit({
-    hits: params.hits,
-    path: params.path,
-    model,
-    runtime: params.runtime,
-    blockedModelIdentities: params.blockedModelIdentities,
+  return rewriteModelReferenceSlot({
+    ...params,
+    resolve: (model, path) => recordCodexModelHit({ ...params, model, path }),
   });
-  if (!canonicalModel) {
+}
+
+/** Mutates model selectors; the return value reports only primary changes for runtime-policy callers. */
+export function rewriteModelReferenceSlot(params: {
+  container: MutableRecord | undefined;
+  key: string;
+  path: string;
+  resolve: (model: string, path: string, role: "primary" | "fallback") => string | null | undefined;
+}): boolean {
+  const { container, key, path, resolve } = params;
+  if (!container) {
     return false;
   }
-  params.container[params.key] = canonicalModel;
-  return true;
+  const value = container[key];
+  if (typeof value === "string") {
+    const replacement = resolve(value.trim(), path, "primary");
+    if (replacement === undefined || replacement === value) {
+      return false;
+    }
+    if (replacement === null) {
+      delete container[key];
+    } else {
+      container[key] = replacement;
+    }
+    return true;
+  }
+  const record = asMutableRecord(value);
+  if (!record) {
+    return false;
+  }
+  const primaryChanged = rewriteModelReferenceSlot({
+    container: record,
+    key: "primary",
+    path: `${path}.primary`,
+    resolve,
+  });
+  if (Array.isArray(record.fallbacks)) {
+    record.fallbacks = record.fallbacks.flatMap((entry, index) => {
+      if (typeof entry !== "string") {
+        return [entry];
+      }
+      const replacement = resolve(entry.trim(), `${path}.fallbacks.${index}`, "fallback");
+      return replacement === null ? [] : [replacement ?? entry];
+    });
+  }
+  return primaryChanged;
 }
 
 export function rewriteModelConfigSlot(params: {
@@ -213,41 +241,16 @@ export function rewriteModelConfigSlot(params: {
   runtime?: string;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): boolean {
-  if (!params.container) {
-    return false;
-  }
-  const value = params.container[params.key];
-  if (typeof value === "string") {
-    return rewriteStringModelSlot(params);
-  }
-  const record = asMutableRecord(value);
-  if (!record) {
-    return false;
-  }
-  const rewrotePrimary = rewriteStringModelSlot({
-    hits: params.hits,
-    container: record,
-    key: "primary",
-    path: `${params.path}.primary`,
-    runtime: params.runtime,
-    blockedModelIdentities: params.blockedModelIdentities,
-  });
-  if (Array.isArray(record.fallbacks)) {
-    record.fallbacks = record.fallbacks.map((entry, index) => {
-      if (typeof entry !== "string") {
-        return entry;
-      }
-      const model = entry.trim();
-      const canonicalModel = recordCodexModelHit({
-        hits: params.hits,
-        path: `${params.path}.fallbacks.${index}`,
+  return rewriteModelReferenceSlot({
+    ...params,
+    resolve: (model, path, role) =>
+      recordCodexModelHit({
+        ...params,
         model,
-        blockedModelIdentities: params.blockedModelIdentities,
-      });
-      return canonicalModel ?? entry;
-    });
-  }
-  return rewrotePrimary;
+        path,
+        runtime: role === "primary" ? params.runtime : undefined,
+      }),
+  });
 }
 
 export function rewriteModelsMap(params: {
@@ -260,17 +263,13 @@ export function rewriteModelsMap(params: {
     return;
   }
   for (const legacyRef of Object.keys(params.models)) {
-    const canonicalModel = toCanonicalOpenAIModelRef(legacyRef);
-    if (!canonicalModel) {
-      continue;
-    }
-    const recorded = recordCodexModelHit({
+    const canonicalModel = recordCodexModelHit({
       hits: params.hits,
       path: `${params.path}.${legacyRef}`,
       model: legacyRef,
       blockedModelIdentities: params.blockedModelIdentities,
     });
-    if (!recorded) {
+    if (!canonicalModel) {
       continue;
     }
     const legacyEntry = params.models[legacyRef] ?? {};

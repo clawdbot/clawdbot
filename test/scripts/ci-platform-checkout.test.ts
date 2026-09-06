@@ -345,6 +345,10 @@ it.concurrent.each([
     let workflowRevision = "";
     let candidateAction = files[action];
     let candidateEvidenceScripts: Record<string, string> = evidenceScripts;
+    const existingExcludes = retained
+      ? "/saved-artifact/\n/.ci-harness/\n"
+      : "# Existing local excludes\r\n/saved-artifact/";
+    let readSourceStatus: (() => string[]) | undefined;
     await withCiCheckoutFixture(
       `${linux ? "linux:" : ""}configured`,
       (root) => {
@@ -357,15 +361,30 @@ it.concurrent.each([
           .split(/\r?\n/u)[0];
         const gitConfig = path.join(root, "gitconfig");
         writeFileSync(gitConfig, "");
+        const gitTemplate = path.join(root, "git-template");
+        mkdirSync(path.join(gitTemplate, "info"), { recursive: true });
+        writeFileSync(path.join(gitTemplate, "info/exclude"), existingExcludes);
         const gitEnv = {
           GIT_CONFIG_NOSYSTEM: "1",
           GIT_CONFIG_GLOBAL: gitConfig,
+          GIT_TEMPLATE_DIR: gitTemplate,
           GIT_TERMINAL_PROMPT: "0",
           GIT_AUTHOR_NAME: "Checkout fixture",
           GIT_AUTHOR_EMAIL: "checkout@example.invalid",
           GIT_COMMITTER_NAME: "Checkout fixture",
           GIT_COMMITTER_EMAIL: "checkout@example.invalid",
         };
+        readSourceStatus = () =>
+          execFileSync(
+            expectDefined(git, "real Git executable"),
+            ["-C", path.join(root, "workspace"), "status", "--porcelain", "--untracked-files=all"],
+            {
+              env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ...gitEnv },
+              encoding: "utf8",
+            },
+          )
+            .split(/\r?\n/u)
+            .filter(Boolean);
         const run = (...args: string[]) =>
           execFileSync(expectDefined(git, "real Git executable"), ["-C", source, ...args], {
             env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ...gitEnv },
@@ -498,6 +517,11 @@ it.concurrent.each([
           expect(existsSync(harness)).toBe(false);
           return;
         }
+        const sourceStatus = expectDefined(readSourceStatus, "native source status");
+        expect(sourceStatus()).toEqual([]);
+        expect(readFileSync(path.join(workspace, ".git/info/exclude"), "utf8")).toBe(
+          retained ? existingExcludes : `${existingExcludes}\n/.ci-harness/\n`,
+        );
         if (workflow === "same") {
           expect(existsSync(path.join(harness, ".git"))).toBe(false);
         }
@@ -535,6 +559,20 @@ it.concurrent.each([
         }
         writeFileSync(path.join(workspace, action), "later candidate edit\n");
         expect(readFileSync(path.join(harness, action), "utf8")).toBe(files[action]);
+        for (const name of [
+          "saved-artifact/ignored.txt",
+          "nested/.ci-harness/source.ts",
+          "untracked-source.ts",
+        ]) {
+          mkdirSync(path.dirname(path.join(workspace, name)), { recursive: true });
+          writeFileSync(path.join(workspace, name), "later source or artifact\n");
+        }
+        const dirty = sourceStatus();
+        expect(dirty).toContain(` M ${action}`);
+        expect(dirty.filter((line) => line.startsWith("?? "))).toEqual([
+          "?? nested/.ci-harness/source.ts",
+          "?? untracked-source.ts",
+        ]);
       },
     );
   },

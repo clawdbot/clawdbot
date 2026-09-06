@@ -1236,8 +1236,8 @@ export interface SkillWorkshopCollectionReviews {
   create_time: number;
   dropped_json: string;
   kept_names_json: string;
+  owner_agent_id: string;
   review_id: string;
-  workspace_dir: string;
   written_names_json: string;
 }
 
@@ -1266,7 +1266,6 @@ export interface SkillWorkshopProposalRollbacks {
 
 export interface SkillWorkshopProposals {
   applied_at: string | null;
-  claim_released_time: number | null;
   created_at: string;
   draft_hash: string;
   kind: string;
@@ -1283,7 +1282,6 @@ export interface SkillWorkshopProposals {
   status: string;
   status_reason: string | null;
   updated_at: string;
-  workspace_dir: string;
 }
 
 export interface StateLeases {

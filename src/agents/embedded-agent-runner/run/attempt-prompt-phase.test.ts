@@ -368,6 +368,7 @@ describe("runEmbeddedAttemptPromptPhase", () => {
 
     await expect(runEmbeddedAttemptPromptPhase(fixture.input)).resolves.toEqual({
       promptStartedAt: expect.any(Number),
+      transcriptLeafId: "leaf-1",
     });
 
     expect(fixture.order).toEqual([
@@ -474,6 +475,7 @@ describe("runEmbeddedAttemptPromptPhase", () => {
 
     await expect(runEmbeddedAttemptPromptPhase(fixture.input)).resolves.toEqual({
       promptStartedAt: expect.any(Number),
+      transcriptLeafId: "leaf-1",
     });
 
     expect(fixture.order.slice(-4)).toEqual([

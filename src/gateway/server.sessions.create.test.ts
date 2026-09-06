@@ -32,6 +32,7 @@ import {
   loadTranscriptEvents,
   onSessionIdentityMutation,
   replaceSessionEntrySync,
+  resolveSessionEntryAccessTarget,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -4030,9 +4031,9 @@ test.each([undefined, "main"])(
     expect(created.ok, JSON.stringify(created.error)).toBe(true);
     expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
     expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
-    // Auto-parented operator sessions must stay spawn-capable roots: without the
-    // explicit depth, spawn admission derives depth 1 from parentSessionKey and
-    // rejects all sessions_spawn calls at the default maxSpawnDepth of 1.
+    // Auto-parented operator sessions must stay depth-zero roots. This preserves
+    // their operator identity and makes explicit finite spawn-depth caps apply
+    // from the correct origin.
     expect(created.payload?.entry?.spawnDepth).toBe(0);
   },
 );
@@ -6104,6 +6105,59 @@ test("sessions.get reads selected global messages from the requested agent store
     const renderedMessages = JSON.stringify(result.payload?.messages ?? []);
     expect(renderedMessages).toContain("work global");
     expect(renderedMessages).not.toContain("main global");
+  } finally {
+    testState.sessionStorePath = undefined;
+    testState.sessionConfig = undefined;
+    testState.agentsConfig = undefined;
+  }
+});
+
+test("sessions.create checks selected global initialization in the requested agent store", async () => {
+  const { mainStorePath, workStorePath } = await createSelectedGlobalSessionStore();
+  try {
+    await writeSessionStore({
+      storePath: mainStorePath,
+      entries: {
+        global: sessionStoreEntry("sess-main-initializing", { initializationPending: true }),
+      },
+    });
+
+    const created = await directSessionReq<{ key?: string }>("sessions.create", {
+      key: "global",
+      agentId: "work",
+    });
+
+    expect(created.ok, JSON.stringify(created)).toBe(true);
+    expect(created.payload).toMatchObject({ key: "global" });
+    expect(
+      loadSessionEntry({ agentId: "work", sessionKey: "global", storePath: workStorePath }),
+    ).toBeDefined();
+    expect(
+      loadSessionEntry({ agentId: "main", sessionKey: "global", storePath: mainStorePath }),
+    ).toMatchObject({ sessionId: "sess-main-initializing", initializationPending: true });
+
+    await writeSessionStore({
+      storePath: workStorePath,
+      agentId: "work",
+      entries: {
+        global: sessionStoreEntry("sess-work-initializing", { initializationPending: true }),
+      },
+    });
+    expect(
+      resolveSessionEntryAccessTarget({
+        cfg: getRuntimeConfig(),
+        sessionKey: "global",
+        agentId: "work",
+      }).entry,
+    ).toMatchObject({ sessionId: "sess-work-initializing", initializationPending: true });
+    const blocked = await directSessionReq("sessions.create", { key: "global", agentId: "work" });
+    expect(blocked).toMatchObject({
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        message: "Session global is still initializing; retry creation later.",
+      },
+    });
   } finally {
     testState.sessionStorePath = undefined;
     testState.sessionConfig = undefined;

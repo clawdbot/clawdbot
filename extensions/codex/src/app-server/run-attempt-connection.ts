@@ -385,7 +385,8 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   preDynamicStartupStages.mark("app-server-policy");
   preDynamicStartupStages.mark("native-hook-relay");
   const terminalState = {
-    turnSucceeded: false,
+    // SAFETY: Finalization records a settled status only after native completion and local outcome checks.
+    settledTurnStatus: undefined as "completed" | "failed" | undefined,
     explicitCancellationObserved: false,
     explicitCancellationReason: undefined as unknown,
     terminalOutcomeFrozen: false,

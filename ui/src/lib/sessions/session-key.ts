@@ -197,7 +197,9 @@ export function resolveUiConversationIdentity(
   if (!parsed && (!isMain || !knownDefaults)) {
     return { sessionKey: raw };
   }
-  const agentId = parsed ? normalizeAgentId(parsed.agentId) : resolveUiDefaultAgentId(host);
+  const agentId = normalizeAgentId(
+    parsed?.agentId ?? normalizeOptionalString(agentIdOverride) ?? resolveUiDefaultAgentId(host),
+  );
   let canonicalKey = normalizeSessionKeyForUiComparison(raw);
   if (isMain && knownDefaults) {
     const defaults = readSessionDefaults(host);
@@ -221,6 +223,15 @@ export function resolveUiConversationIdentity(
 
 export function hasUiSessionDefaults(host: UiSessionDefaultsHost): boolean {
   return host.agentsList != null || readSessionDefaults(host) !== undefined;
+}
+
+/** Artifact snapshots and events retain global in their owner-qualified wire key. */
+export function scopedSessionArtifactKey(sessionKey: string, agentId?: string): string {
+  const key = sessionKey.trim();
+  if (!key || parseAgentSessionKey(key) || !agentId?.trim()) {
+    return key;
+  }
+  return `agent:${normalizeAgentId(agentId)}:${key}`;
 }
 
 export function canonicalUiSessionKeyForPersistence(

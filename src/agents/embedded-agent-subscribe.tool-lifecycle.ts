@@ -4,7 +4,7 @@ import {
 } from "./embedded-agent-subscribe.handlers.tools.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { buildToolLifecycleErrorResult } from "./embedded-agent-tool-results.js";
-import type { ToolEffectReceipt } from "./tool-effect-receipt.js";
+import { markToolExecutionNotStarted, type ToolEffectReceipt } from "./tool-effect-receipt.js";
 import { consumeTrustedToolNoStartError } from "./tool-result-error.js";
 
 type ToolTerminal = {
@@ -50,15 +50,15 @@ export function createEmbeddedToolLifecycleRunner(
     } catch (error) {
       const trustedNoStart = consumeTrustedToolNoStartError(error);
       const result = buildToolLifecycleErrorResult(error);
+      if (trustedNoStart) {
+        markToolExecutionNotStarted(result);
+      }
       const terminal = await finishToolLifecycle(ctx, toolParams, {
         executionStarted,
         isError: true,
         result,
       });
-      const effectReceipt = trustedNoStart
-        ? ({ state: "not_started" } as const)
-        : terminal.effectReceipt;
-      await toolParams.onTerminal?.({ ...terminal, effectReceipt });
+      await toolParams.onTerminal?.(terminal);
       throw error;
     }
     const terminal = await finishToolLifecycle(ctx, toolParams, {

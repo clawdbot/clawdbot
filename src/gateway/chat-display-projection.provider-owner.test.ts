@@ -19,3 +19,21 @@ it("projects recorded errors without discovering unrelated provider policy", () 
   });
   expect(classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
 });
+
+it("projects the persisted storage failure with actionable copy", () => {
+  expect(
+    projectChatDisplayMessage({
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: "database is locked",
+      content: [],
+    }),
+  ).toMatchObject({
+    content: [
+      {
+        type: "text",
+        text: "⚠️ Agent run failed: the Gateway state database was busy (SQLite: database is locked). Retry; if it repeats, check Gateway storage health.",
+      },
+    ],
+  });
+});

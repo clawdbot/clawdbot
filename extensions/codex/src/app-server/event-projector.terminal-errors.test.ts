@@ -24,6 +24,7 @@ registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector terminal errors", () => {
   it.each([
+    { codexErrorInfo: "rateLimitExceeded", status: 429 },
     { codexErrorInfo: "serverOverloaded", status: 503, code: "OVERLOADED" },
     { codexErrorInfo: "internalServerError", status: 500 },
     ...[
@@ -198,11 +199,16 @@ describe("CodexAppServerEventProjector terminal errors", () => {
   });
 
   it("does not fail a completed reply after a retryable app-server error notification", async () => {
-    const projector = await createProjector();
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
 
     await projector.handleNotification(agentMessageDelta("still working"));
     await projector.handleNotification(
-      appServerError({ message: "stream disconnected", willRetry: true }),
+      appServerError({
+        message: "Rate limit reached",
+        willRetry: true,
+        codexErrorInfo: "rateLimitExceeded",
+      }),
     );
     await projector.handleNotification(
       turnCompleted([{ type: "agentMessage", id: "msg-1", text: "final answer" }]),
@@ -217,6 +223,12 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     });
     expect(result.lastAssistant?.stopReason).toBe("stop");
     expect(result.lastAssistant?.errorMessage).toBeUndefined();
+    expect(onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "run_status",
+        data: { phase: "retrying", message: "Rate limited. The provider is retrying." },
+      }),
+    );
   });
 
   it("uses nested app-server error messages for terminal errors", async () => {
@@ -247,6 +259,12 @@ describe("CodexAppServerEventProjector terminal errors", () => {
       message: "This request was blocked by the provider's cyber policy.",
       codexErrorInfo: "cyberPolicy",
       category: "cyber",
+    },
+    {
+      label: "typed misalignment",
+      message: "This request was blocked due to a misalignment policy violation.",
+      codexErrorInfo: "misalignmentPolicyViolation",
+      category: "misalignment",
     },
   ])(
     "keeps $label refusals terminal when error is followed by failed turn completion",
@@ -279,6 +297,7 @@ describe("CodexAppServerEventProjector terminal errors", () => {
         ],
       });
       expect(result.lastAssistant).toBe(terminalAssistant);
+      expect(projector.settledTurnFailureFinalizationAllowed).toBe(false);
       expect(
         result.messagesSnapshot.filter(
           (candidate) =>
@@ -293,7 +312,6 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     { codexErrorInfo: "serverOverloaded", expected: true },
     { codexErrorInfo: "usageLimitExceeded", expected: false },
     { codexErrorInfo: "unauthorized", expected: false },
-    { codexErrorInfo: "misalignmentPolicyViolation", expected: false },
     { codexErrorInfo: "other", expected: false },
   ])(
     "projects $codexErrorInfo terminal error recovery eligibility as $expected",
