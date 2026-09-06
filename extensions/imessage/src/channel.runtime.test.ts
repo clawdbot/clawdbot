@@ -466,7 +466,10 @@ describe("imessagePlugin pairing.notifyApproval", () => {
     );
     expect(request).toHaveBeenCalledExactlyOnceWith(
       "send",
-      expect.objectContaining({ to: "+15551234567", text: expect.any(String) }),
+      expect.objectContaining({
+        to: "+15551234567",
+        text: "✅ OpenClaw access approved. Send a message to start chatting.",
+      }),
       expect.any(Object),
     );
   });
