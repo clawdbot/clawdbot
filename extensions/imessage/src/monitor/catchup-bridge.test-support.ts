@@ -9,7 +9,7 @@ import {
 } from "../state-contract.js";
 import { installIMessageStateRuntimeForTest } from "../test-support/runtime.js";
 import { runIMessageCatchup } from "./catchup-bridge.js";
-import { advanceIMessageCatchupCursor, resolveCatchupConfig } from "./catchup.js";
+import { resolveCatchupConfig } from "./catchup.js";
 import type { IMessagePayload } from "./types.js";
 
 type RpcCall = {
@@ -504,5 +504,4 @@ describe("runIMessageCatchup", () => {
     expect(second.cursorAfter.lastSeenRowid).toBe(100);
     expect(dispatched).toEqual(Array.from({ length: 100 }, (_, index) => index + 1));
   });
-
 });
