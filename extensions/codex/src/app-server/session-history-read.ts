@@ -22,6 +22,40 @@ export type ResolvedCodexHistoryTarget =
       >;
     };
 
+export type CodexHistoryReadFailure =
+  | { code: "history_read_failed" }
+  | {
+      code: "history_consumer_failed";
+      reason?:
+        | "settled_turn_item_limit"
+        | "settled_turn_size_limit"
+        | "settled_turn_unsupported_content"
+        | "settled_turn_invalid_evidence";
+    };
+
+export type CodexHistoryReadResult<T> = {
+  value: T | undefined;
+  failure?: CodexHistoryReadFailure;
+};
+
+function sanitizeConsumerFailure(error: unknown): CodexHistoryReadFailure {
+  const message = error instanceof Error ? error.message : "";
+  let reason: Extract<CodexHistoryReadFailure, { code: "history_consumer_failed" }>["reason"];
+  if (message.startsWith("Codex settled-turn ")) {
+    reason = message.includes("item limit")
+      ? "settled_turn_item_limit"
+      : message.includes("byte limit") || message.includes("oversized")
+        ? "settled_turn_size_limit"
+        : message.includes("does not support") || message.includes("unsupported")
+          ? "settled_turn_unsupported_content"
+          : "settled_turn_invalid_evidence";
+  }
+  return {
+    code: "history_consumer_failed",
+    ...(reason ? { reason } : {}),
+  };
+}
+
 export function consumeCodexHistory<T>(
   messages: Iterable<AgentMessage>,
   header: unknown,
@@ -55,40 +89,51 @@ export async function readCodexNativeHistory<T>(
   read: (messages: Iterable<AgentMessage>) => T,
   admission?: TranscriptTurnAdmission,
   onSnapshot?: (version: SessionTranscriptContextVersion | undefined) => void,
-): Promise<T | undefined> {
+): Promise<CodexHistoryReadResult<T>> {
+  let consumerFailure: CodexHistoryReadFailure | undefined;
   const consume = (
     messages: Iterable<AgentMessage>,
     header: unknown,
     version?: SessionTranscriptContextVersion,
   ) => {
     onSnapshot?.(version);
-    return consumeCodexHistory(messages, header, sessionId, read);
+    try {
+      return consumeCodexHistory(messages, header, sessionId, read);
+    } catch (error) {
+      consumerFailure = sanitizeConsumerFailure(error);
+      throw error;
+    }
   };
   try {
     if (target.kind === "empty") {
-      return read([]);
+      return { value: consume([], { type: "session", id: sessionId }) };
     }
     if (target.kind === "sqlite") {
-      return readCodexSessionContext(target.target, consume, admission);
+      return { value: readCodexSessionContext(target.target, consume, admission) };
     }
     // The legacy file codec is needed only for explicit file imports, never native SQLite reads.
     const { buildSessionContext, migrateSessionEntries, parseSessionEntries } =
       await import("openclaw/plugin-sdk/agent-sessions");
     const entries = parseSessionEntries(await fs.readFile(target.sessionFile, "utf-8"));
-    return consume(
-      (function* () {
-        migrateSessionEntries(entries);
-        const sessionEntries = entries.filter(
-          (entry): entry is SessionEntry => isRecord(entry) && entry.type !== "session",
-        );
-        yield* buildSessionContext(sessionEntries).messages;
-      })(),
-      entries[0],
-    );
+    return {
+      value: consume(
+        (function* () {
+          migrateSessionEntries(entries);
+          const sessionEntries = entries.filter(
+            (entry): entry is SessionEntry => isRecord(entry) && entry.type !== "session",
+          );
+          yield* buildSessionContext(sessionEntries).messages;
+        })(),
+        entries[0],
+      ),
+    };
   } catch (error) {
-    if (isRecord(error) && error.code === "ENOENT") {
-      return read([]);
+    if (consumerFailure) {
+      return { value: undefined, failure: consumerFailure };
     }
-    return undefined;
+    if (isRecord(error) && error.code === "ENOENT") {
+      return { value: consume([], { type: "session", id: sessionId }) };
+    }
+    return { value: undefined, failure: { code: "history_read_failed" } };
   }
 }

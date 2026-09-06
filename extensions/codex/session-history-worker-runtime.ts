@@ -69,6 +69,27 @@ export async function readCodexHistoryMessagesInWorker(
   return result.kind === "messages" ? result.messages : undefined;
 }
 
+function describeSettledHistoryFailure(result: CodexHistoryWorkerResult): string | undefined {
+  if (!result.failure) {
+    return undefined;
+  }
+  if (result.failure.code === "history_consumer_failed") {
+    switch (result.failure.reason) {
+      case "settled_turn_item_limit":
+        return "Codex settled-turn projection exceeds the item limit";
+      case "settled_turn_size_limit":
+        return "Codex settled-turn projection exceeds the size limit";
+      case "settled_turn_unsupported_content":
+        return "Codex settled-turn projection found unsupported content";
+      case "settled_turn_invalid_evidence":
+        return "Codex settled-turn projection found invalid evidence";
+      default:
+        return "Codex settled-turn history projection failed";
+    }
+  }
+  return "Codex settled-turn history read failed";
+}
+
 export async function projectCodexSettledHistoryInWorker(
   target: CodexMirroredSessionHistoryTarget & SettledTurnMessages,
   signal?: AbortSignal,
@@ -86,5 +107,9 @@ export async function projectCodexSettledHistoryInWorker(
     undefined,
     signal,
   );
+  const failure = describeSettledHistoryFailure(result);
+  if (failure) {
+    throw new Error(failure);
+  }
   return result.kind === "settled" ? result.data : undefined;
 }

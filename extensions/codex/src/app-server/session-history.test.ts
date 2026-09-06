@@ -3,13 +3,14 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog, type AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { CURRENT_SESSION_VERSION, SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readCodexNativeHistory } from "./session-history-read.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import {
   captureCodexSettledTurnFinalizationContext,
@@ -185,6 +186,55 @@ function settledFixture() {
 }
 
 describe("readCodexMirroredSessionHistoryMessages", () => {
+  it("does not expose arbitrary consumer errors across the history boundary", async () => {
+    const result = await readCodexNativeHistory({ kind: "empty" }, "session-id", () => {
+      throw new Error("private transcript detail");
+    });
+
+    expect(result).toEqual({
+      value: undefined,
+      failure: { code: "history_consumer_failed" },
+    });
+    expect(JSON.stringify(result)).not.toContain("private transcript detail");
+  });
+
+  it("preserves a sanitized settled-turn projection failure for capture diagnostics", async () => {
+    const { marker, sessionTarget } = await writeSqliteSession({ incognito: true });
+    for (let index = 0; index < 201; index += 1) {
+      await appendSessionTranscriptMessageByIdentity({
+        ...sessionTarget,
+        message: { role: "user", content: `prior-${index}`, timestamp: index + 3 },
+      });
+    }
+    const { settledMessages } = settledFixture();
+    for (const message of settledMessages) {
+      await appendSessionTranscriptMessageByIdentity({ ...sessionTarget, message });
+    }
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+    try {
+      await expect(
+        captureCodexSettledTurnFinalizationContext({
+          ...sessionTarget,
+          sessionTarget,
+          sessionFile: marker,
+          model: "gpt-5.6-luna",
+          settledMessages,
+          mirroredMessages: settledMessages,
+          turnId: "settled",
+        }),
+      ).resolves.toBeUndefined();
+      expect(warn).toHaveBeenCalledWith(
+        "codex settled-turn finalization context capture failed",
+        expect.objectContaining({
+          error: "Codex settled-turn projection exceeds the item limit",
+          turnId: "settled",
+        }),
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it.each([
     { oversized: false, incognito: false },
     { oversized: true, incognito: false },

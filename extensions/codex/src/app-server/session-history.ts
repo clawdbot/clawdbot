@@ -117,7 +117,7 @@ export async function readCodexMirroredSessionHistoryMessages(
           "codex mirrored model context",
         );
       } else {
-        result = await readCodexNativeHistory(resolved, target.sessionId, read, admission);
+        result = (await readCodexNativeHistory(resolved, target.sessionId, read, admission)).value;
       }
     }
     signal?.throwIfAborted();

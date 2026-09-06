@@ -5,6 +5,7 @@ import type { TranscriptTurnAdmission } from "openclaw/plugin-sdk/session-transc
 import type { JsonValue } from "./src/app-server/protocol.js";
 import {
   readCodexNativeHistory,
+  type CodexHistoryReadFailure,
   type ResolvedCodexHistoryTarget,
 } from "./src/app-server/session-history-read.js";
 import {
@@ -22,7 +23,7 @@ export type CodexHistoryWorkerInput = ReadInput &
 export type CodexHistoryWorkerResult = (
   | { kind: "messages"; messages: AgentMessage[] | undefined }
   | { kind: "settled"; data: JsonValue[] | undefined }
-) & { version?: SessionTranscriptContextVersion };
+) & { version?: SessionTranscriptContextVersion; failure?: CodexHistoryReadFailure };
 
 // This top-level plugin entry is packaged in both standalone and bundled builds.
 export const codexHistoryWorkerUrl = new URL(import.meta.url);
@@ -37,29 +38,33 @@ export async function runCodexHistoryWorkerInput(
     version = value;
   };
   if (request.kind === "messages") {
+    const result = await readCodexNativeHistory(
+      request.target,
+      request.sessionId,
+      (messages) => Array.from(messages),
+      request.admission,
+      onSnapshot,
+    );
     return {
       kind: request.kind,
-      messages: await readCodexNativeHistory(
-        request.target,
-        request.sessionId,
-        (messages) => Array.from(messages),
-        request.admission,
-        onSnapshot,
-      ),
+      messages: result.value,
       version,
+      ...(result.failure ? { failure: result.failure } : {}),
     };
   }
   if (request.kind === "settled") {
+    const result = await readCodexNativeHistory(
+      request.target,
+      request.sessionId,
+      (messages) => projectVerifiedSettledCodexMessages(messages, request.evidence),
+      request.admission,
+      onSnapshot,
+    );
     return {
       kind: request.kind,
-      data: await readCodexNativeHistory(
-        request.target,
-        request.sessionId,
-        (messages) => projectVerifiedSettledCodexMessages(messages, request.evidence),
-        request.admission,
-        onSnapshot,
-      ),
+      data: result.value,
       version,
+      ...(result.failure ? { failure: result.failure } : {}),
     };
   }
   throw new Error("Invalid Codex history worker operation");
