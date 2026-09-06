@@ -1,7 +1,9 @@
 // Real routing and browser storage; Gateway/provider sign-in is mocked.
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
+import type { ApplicationContext } from "../app/context.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -45,6 +47,21 @@ const gatewayOptions = {
     "wizard.cancel": { status: "cancelled" },
   },
 };
+
+async function openFirstRunWithBackNavigation(page: Page): Promise<void> {
+  await page.goto(`${suite.server.baseUrl}settings/connection`);
+  await page.locator('.settings-sidebar__item[href="/settings/connection"]').waitFor();
+  await page.evaluate(() => {
+    const app = document.querySelector("openclaw-app") as HTMLElement & {
+      runtime?: { context: Pick<ApplicationContext, "navigate"> };
+    };
+    if (!app.runtime) {
+      throw new Error("Control UI runtime is unavailable");
+    }
+    app.runtime.context.navigate("model-setup", { search: "?firstRun=1" });
+  });
+  await page.waitForURL((url) => url.pathname === "/settings/model-setup");
+}
 
 suite.define(() => {
   it.each(["Yes", "No", "Cancel"] as const)(
@@ -135,6 +152,9 @@ suite.define(() => {
             },
           });
           await page.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=1`);
+          await page.locator('[data-candidate-kind="openai-api-key"] button').waitFor();
+          expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(0);
+          await page.locator('[data-candidate-kind="openai-api-key"] button').click();
           const start = await gateway.waitForRequest("openclaw.setup.activate.start");
           const sessionId = asOptionalRecord(start.params)?.sessionId;
           expect(start.params).toEqual({
@@ -214,7 +234,7 @@ suite.define(() => {
         { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 800 } },
         async ({ page }) => {
           const gateway = await installMockGateway(page, gatewayOptions);
-          await page.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=1`);
+          await openFirstRunWithBackNavigation(page);
           const signIn = page.locator('[data-auth-choice="provider-login"] button');
           await signIn.click();
           await page.getByText("Complete provider sign-in").waitFor();
@@ -226,14 +246,15 @@ suite.define(() => {
             .getByRole("button", { name: "Cancel", exact: true })
             .click();
           await gateway.waitForRequest("wizard.cancel");
-          await expect.poll(() => page.locator("openclaw-modal-dialog").count()).toBe(0);
-          await page.locator('.settings-sidebar__item[href="/settings/connection"]').click();
+          expect(await page.locator("openclaw-modal-dialog").count()).toBe(1);
+          // Browser navigation remains available while cancellation is unconfirmed.
+          await page.goBack();
           await expect.poll(() => page.locator("openclaw-model-setup-page").count()).toBe(0);
           expect(await readReceipt()).not.toBeNull();
           if (acknowledgement === "before return") {
             await gateway.resolveDeferred("wizard.cancel");
           }
-          await page.goBack();
+          await page.goForward();
           await signIn.waitFor();
           if (acknowledgement === "after return") {
             await gateway.resolveDeferred("wizard.cancel");
@@ -260,7 +281,7 @@ suite.define(() => {
       { locale: "en-US", serviceWorkers: "block" },
       async ({ page, context }) => {
         const gateway = await installMockGateway(page, gatewayOptions);
-        await page.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=1`);
+        await openFirstRunWithBackNavigation(page);
         await page.locator('[data-auth-choice="provider-login"] button').click();
         await page.getByText("Complete provider sign-in").waitFor();
         await gateway.deferNext("wizard.cancel");
@@ -269,25 +290,34 @@ suite.define(() => {
           .getByRole("button", { name: "Cancel", exact: true })
           .click();
         await gateway.waitForRequest("wizard.cancel");
-        await page.locator('.settings-sidebar__item[href="/settings/connection"]').click();
+        expect(await page.locator("openclaw-modal-dialog").count()).toBe(1);
+        await page.goBack();
         await expect.poll(() => page.locator("openclaw-model-setup-page").count()).toBe(0);
 
         const replacement = await context.newPage();
         const nextGateway = await installMockGateway(replacement, gatewayOptions);
-        // Opening ordinary Model Setup explicitly leaves first-run intent. A
-        // later onboarding visit can start a separate operation in this tab.
-        await replacement.goto(`${suite.server.baseUrl}settings/model-setup`);
+        await replacement.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=1`);
         await replacement.locator('[data-auth-choice="provider-login"] button').waitFor();
+        const deadlineMs = await replacement.evaluate(
+          (key) => JSON.parse(localStorage.getItem(key)!).deadlineMs as number,
+          receiptKey,
+        );
+        // The existing receipt deadline, followed by an explicit retry, admits
+        // another intent. No ordinary settings visit may clear another tab's receipt.
+        await replacement.clock.setFixedTime(new Date(deadlineMs + 1));
+        await replacement
+          .locator(".model-setup__recovery")
+          .getByRole("button", { name: "Check again", exact: true })
+          .click();
         await expect
           .poll(() => replacement.evaluate((key) => localStorage.getItem(key), receiptKey))
           .toBeNull();
-        await replacement.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=1`);
         await replacement.locator('[data-auth-choice="provider-login"] button').click();
         await replacement.getByText("Complete provider sign-in").waitFor();
         const receipt = await replacement.evaluate((key) => localStorage.getItem(key), receiptKey);
         expect(receipt).not.toBeNull();
         await gateway.resolveDeferred("wizard.cancel");
-        await page.goBack();
+        await page.goForward();
         await page.locator('[data-auth-choice="provider-login"] button').waitFor();
         expect(await replacement.evaluate((key) => localStorage.getItem(key), receiptKey)).toBe(
           receipt,

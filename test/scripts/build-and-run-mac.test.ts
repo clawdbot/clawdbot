@@ -122,8 +122,6 @@ describe("scripts/build-and-run-mac.sh", () => {
         scriptPath,
         "scripts/prepare-apple-mermaid.mjs",
         "scripts/pnpm-runner.mts",
-        "scripts/lib/windows-cmd-helpers-runtime.mts",
-        "scripts/lib/record-shared.mjs",
         "scripts/windows-cmd-helpers.mjs",
       ]) {
         const target = join(root, path);
@@ -137,7 +135,7 @@ describe("scripts/build-and-run-mac.sh", () => {
       mkdirSync(resources, { recursive: true });
       writeFileSync(join(resources, "stale.js"), "stale");
       symlinkSync(process.execPath, join(binDir, "node"));
-      const expectedArgs = ["--filter", "@openclaw/mermaid-renderer", "build"];
+      const expectedArgs = ["--dir", "packages/mermaid-renderer", "build"];
       if (runner === "corepack") {
         expectedArgs.unshift("pnpm");
       }

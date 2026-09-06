@@ -204,7 +204,7 @@ describe("forkCodexUpstreamSession", () => {
       await expect(
         forkCodexUpstreamSession(params, {
           bindingStore: {
-            read: vi.fn(async () => ({
+            read: vi.fn(() => ({
               threadId: "thread-canonical",
               connectionScope: "supervision",
               supervisionSourceThreadId:
@@ -265,7 +265,7 @@ describe("forkCodexUpstreamSession", () => {
     );
 
     const result = await forkCodexUpstreamSession(forkParams(), {
-      bindingStore: { read: vi.fn(async () => undefined) } as unknown as CodexAppServerBindingStore,
+      bindingStore: { read: vi.fn(() => undefined) } as unknown as CodexAppServerBindingStore,
       controlFactory,
       harnessRuntimeId: "codex",
       runtime: createPluginRuntimeMock(),
@@ -285,7 +285,7 @@ describe("forkCodexUpstreamSession", () => {
 
       const result = await forkCodexUpstreamSession(forkParams(), {
         bindingStore: {
-          read: vi.fn(async () => ({
+          read: vi.fn(() => ({
             threadId: "thread-canonical",
             connectionScope: "supervision",
             supervisionSourceThreadId: "thread-source",

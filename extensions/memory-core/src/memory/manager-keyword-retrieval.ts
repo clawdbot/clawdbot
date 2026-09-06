@@ -20,7 +20,8 @@ import {
   searchPathKeyword,
   type ExactPathSpecificity,
 } from "./manager-search.js";
-import { applyProjectRanking } from "./project-ranking.js";
+import { loadMemorySourceFileState } from "./manager-source-state.js";
+import { applyProjectRanking, projectScoreMultiplier } from "./project-ranking.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
 const SNIPPET_MAX_CHARS = 700;
@@ -168,17 +169,6 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
     });
   }
 
-  private rankKeywordOnlyResults(
-    results: KeywordSearchHit[],
-    preferExactBody = true,
-  ): KeywordSearchHit[] {
-    return results
-      .toSorted((left, right) => compareKeywordSearchHits(left, right, preferExactBody))
-      .map((entry) =>
-        entry.exactPathSpecificity > 0 ? Object.assign(entry, { score: 1 }) : entry,
-      );
-  }
-
   protected async finalizeKeywordOnlyResults(params: {
     results: KeywordSearchHit[];
     temporalDecay?: { enabled: boolean; halfLifeDays: number };
@@ -200,13 +190,35 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
       results: decayInputs,
       temporalDecay: params.temporalDecay,
       workspaceDir: this.workspaceDir,
+      sessionSourceMtimes: this.loadSessionSourceMtimes(params.results),
     });
-    const ranked = applyProjectRanking(
-      this.rankKeywordOnlyResults(applyImportanceMultiplier(decayed), !appliesTemporalDecay),
-      params.activeProjectKeys,
-    );
+    // Preserve specificity and adjusted body relevance before normalizing exact public scores.
+    const ranked = applyProjectRanking(applyImportanceMultiplier(decayed), params.activeProjectKeys)
+      .toSorted((left, right) => compareKeywordSearchHits(left, right, !appliesTemporalDecay))
+      .map((entry) =>
+        entry.exactPathSpecificity > 0
+          ? Object.assign(entry, {
+              score: projectScoreMultiplier(entry.projectKey, params.activeProjectKeys),
+            })
+          : entry,
+      );
     return this.toMemorySearchResults(
       this.selectScoredResults(ranked, params.maxResults, params.minScore, 0),
+    );
+  }
+
+  protected loadSessionSourceMtimes(
+    results: ReadonlyArray<Pick<MemorySearchResult, "path" | "source">>,
+  ): ReadonlyMap<string, number | undefined> | undefined {
+    const paths = results.filter((entry) => entry.source === "sessions").map((entry) => entry.path);
+    if (paths.length === 0) {
+      return undefined;
+    }
+    return new Map(
+      loadMemorySourceFileState({ db: this.db, source: "sessions", paths }).map((row) => [
+        row.path,
+        row.mtime,
+      ]),
     );
   }
 
@@ -229,6 +241,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
         ...(typeof row?.project_key === "string" && row.project_key.trim()
           ? { projectKey: row.project_key.trim() }
           : {}),
+        ...(row?.provenance ? { provenance: row.provenance } : {}),
       };
     });
   }
@@ -292,7 +305,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
       ],
       exactPathQuery,
     );
-    return this.attachRecallMetadata(this.limitKeywordSearchHits(merged, limit));
+    return this.limitKeywordSearchHits(merged, limit);
   }
 
   protected async searchKeywordWithFallback(
@@ -309,21 +322,21 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
     ).catch(() => []);
     const nonExactResults = fullQueryResults.filter((result) => result.exactPathSpecificity === 0);
     if (nonExactResults.length >= limit) {
-      return fullQueryResults;
+      return this.attachRecallMetadata(fullQueryResults);
     }
 
     // Supplement thin candidate pools for conversational queries, but cap the
     // extra FTS probes so long prompts cannot fan out into unbounded sqlite work.
     const fallbackTerms = this.resolveKeywordFallbackTerms(query);
     if (fallbackTerms.length === 0) {
-      return fullQueryResults;
+      return this.attachRecallMetadata(fullQueryResults);
     }
     const strictFtsQuery = buildFtsQuery(query)?.toLowerCase();
     const keywordFtsQuery = buildFtsQuery(fallbackTerms.join(" "))?.toLowerCase();
     if (fullQueryResults.length > 0 && strictFtsQuery === keywordFtsQuery) {
       // Expansion did not normalize this already-matching keyword query; OR
       // probes can only weaken its strict relevance before importance ranking.
-      return fullQueryResults;
+      return this.attachRecallMetadata(fullQueryResults);
     }
 
     const resultSets = await Promise.all(
@@ -336,9 +349,13 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
         ).catch(() => []),
       ),
     );
-    return this.limitKeywordSearchHits(
-      this.mergeKeywordSearchHits([fullQueryResults, ...resultSets], query),
-      limit,
+    // Enrich only the retained candidates after all probes deduplicate. Provenance
+    // and recall annotations share one read under the search generation lease.
+    return this.attachRecallMetadata(
+      this.limitKeywordSearchHits(
+        this.mergeKeywordSearchHits([fullQueryResults, ...resultSets], query),
+        limit,
+      ),
     );
   }
 

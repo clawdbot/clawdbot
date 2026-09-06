@@ -11,6 +11,7 @@ export type PreparedGatewaySessionLifecycle = {
   spawnedCwd?: string;
   sessionRoot?: string;
   worktree?: NonNullable<SessionEntry["worktree"]>;
+  repositoryWorkspaceId?: string;
   rollback?: () => Promise<void>;
 };
 

@@ -120,17 +120,28 @@ describe("Synthetic live catalog", () => {
     );
   });
 
-  it.each(["failure", "empty", "unusable"])("keeps offline seeds on %s discovery", async (mode) => {
-    if (mode === "failure") {
-      fetchGuard.mockRejectedValueOnce(new Error("fixture unavailable"));
-    } else {
-      respond(mode === "empty" ? [] : [{ id: "missing-metadata" }]);
-    }
-    const provider = await registerSingleProviderPlugin(plugin);
-    await expect(provider.catalog?.run(context())).resolves.toEqual({
-      provider: { ...buildSyntheticProvider(), apiKey: "SYNTHETIC_API_KEY" },
-    });
-  });
+  it.each(["failure", "empty", "unusable"])(
+    "does not substitute seeds for %s discovery",
+    async (mode) => {
+      if (mode === "failure") {
+        fetchGuard.mockRejectedValueOnce(new Error("fixture unavailable"));
+      } else {
+        respond(mode === "empty" ? [] : [{ id: "missing-metadata" }]);
+      }
+      const provider = await registerSingleProviderPlugin(plugin);
+      await expect(provider.catalog?.run(context())).resolves.toEqual(
+        mode === "failure"
+          ? {
+              providers: {},
+              outcomes: [{ provider: "synthetic", status: "unavailable" }],
+            }
+          : {
+              provider: { ...buildSyntheticProvider(), apiKey: "SYNTHETIC_API_KEY", models: [] },
+              outcomes: [{ provider: "synthetic", status: "ready" }],
+            },
+      );
+    },
+  );
 
   it("does not send a custom proxy credential to Synthetic's fixed model endpoint", async () => {
     const provider = await registerSingleProviderPlugin(plugin);

@@ -280,8 +280,14 @@ describe("pw-tools-core", () => {
     await fs.mkdir(path.dirname(uploadPath), { recursive: true });
     await fs.writeFile(uploadPath, "fixture", "utf8");
     const canonicalUploadPath = await fs.realpath(uploadPath);
-    const fileChooser = { setFiles: vi.fn(async () => {}) };
-    const waitForEvent = vi.fn(async (_eventValue: string, _opts: unknown) => fileChooser);
+    const fileChooser = {
+      setFiles: vi.fn(
+        async (_paths: string[], _options: { timeout: number; signal: AbortSignal }) => {},
+      ),
+    };
+    const waitForEvent = vi.fn(
+      async (_eventValue: string, _opts: { timeout: number; signal: AbortSignal }) => fileChooser,
+    );
     setPwToolsCoreCurrentPage({
       waitForEvent,
       keyboard: { press: vi.fn(async () => {}) },
@@ -298,13 +304,19 @@ describe("pw-tools-core", () => {
       await Promise.resolve();
 
       expect(waitForEvent).toHaveBeenCalledWith("filechooser", {
-        timeout: 120_000,
+        timeout: 0,
+        signal: expect.any(AbortSignal),
       });
       await vi.waitFor(() => {
-        expect(fileChooser.setFiles).toHaveBeenCalledWith([canonicalUploadPath], {
-          timeout: 120_000,
+        expect(fileChooser.setFiles).toHaveBeenCalledExactlyOnceWith([canonicalUploadPath], {
+          timeout: expect.any(Number),
+          signal: expect.any(AbortSignal),
         });
       });
+      const { timeout, signal } = fileChooser.setFiles.mock.calls[0]![1];
+      expect(timeout).toBeGreaterThan(0);
+      expect(timeout).toBeLessThanOrEqual(120_000);
+      expect(signal.aborted).toBe(false);
     } finally {
       await fs.rm(uploadPath, { force: true });
     }

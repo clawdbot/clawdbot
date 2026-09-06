@@ -20,9 +20,9 @@ import {
   buildIMessageApprovalConversationKeyForInbound,
   enumerateApprovalTargetKeys,
   normalizeConversationKey,
-  normalizeIMessageGuid,
   type IMessageApprovalConversationKey,
 } from "./approval-target-keys.js";
+import { normalizeIMessageGuid } from "./message-guid.js";
 import type { IMessagePayload, IMessagePoll } from "./monitor/types.js";
 import { getOptionalIMessageRuntime } from "./runtime.js";
 import { normalizeIMessageHandle } from "./targets.js";

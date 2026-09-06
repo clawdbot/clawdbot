@@ -1,5 +1,6 @@
 // Video runner tests cover provider request wiring, auth/config precedence, and
 // provider output handling for video attachments.
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import {
   formatAudioTranscripts,
@@ -33,16 +34,6 @@ vi.mock("../agents/model-auth.js", async () => {
   const { createAvailableModelAuthMockModule } = await import("./runner.test-mocks.js");
   return createAvailableModelAuthMockModule();
 });
-
-type CapabilityResult = Awaited<ReturnType<typeof runCapability>>;
-
-function requireCapabilityOutput(result: CapabilityResult, index: number) {
-  const output = result.outputs[index];
-  if (!output) {
-    throw new Error(`expected media-understanding output at index ${index}`);
-  }
-  return output;
-}
 
 describe("runCapability video provider wiring", () => {
   it("truncates provider output without splitting a boundary emoji", async () => {
@@ -93,7 +84,7 @@ describe("runCapability video provider wiring", () => {
         ]),
       });
 
-      const output = requireCapabilityOutput(result, 0);
+      const output = expectDefined(result.outputs[0], "media output 0");
       expect(output.text).toBe(prefix);
       expect(output.text).not.toContain(String.fromCharCode(0xd83d));
     });
@@ -160,7 +151,7 @@ describe("runCapability video provider wiring", () => {
           ]),
         });
 
-        const output = requireCapabilityOutput(result, 0);
+        const output = expectDefined(result.outputs[0], "media output 0");
         expect(output.text).toBe("video ok");
         expect(output.provider).toBe("moonshot");
         expect(seenBaseUrl).toBe("https://entry.example/v1");
@@ -232,7 +223,7 @@ describe("runCapability video provider wiring", () => {
             });
 
             expect(result.decision.outcome).toBe("success");
-            const output = requireCapabilityOutput(result, 0);
+            const output = expectDefined(result.outputs[0], "media output 0");
             expect(output.provider).toBe("moonshot");
             expect(output.text).toBe("moonshot");
           });
@@ -290,7 +281,7 @@ describe("runCapability video provider wiring", () => {
         });
 
         expect(result.decision.outcome).toBe("success");
-        const output = requireCapabilityOutput(result, 0);
+        const output = expectDefined(result.outputs[0], "media output 0");
         expect(output.provider).toBe("moonshot");
         expect(output.model).toBe("kimi-k2.5");
         expect(seenModel).toBe("kimi-k2.5");
@@ -348,7 +339,7 @@ describe("runCapability video provider wiring", () => {
           });
 
           expect(result.decision.outcome).toBe("success");
-          const output = requireCapabilityOutput(result, 0);
+          const output = expectDefined(result.outputs[0], "media output 0");
           expect(output.provider).toBe("moonshot");
           expect(output.model).toBe("provider-default");
           expect(seenModel).toBeUndefined();
@@ -402,7 +393,7 @@ describe("runCapability video provider wiring", () => {
         });
 
         expect(result.decision.outcome).toBe("success");
-        const output = requireCapabilityOutput(result, 0);
+        const output = expectDefined(result.outputs[0], "media output 0");
         expect(output.provider).toBe("moonshot");
         expect(output.model).toBe("kimi-k2.5");
         expect(seenModel).toBe("kimi-k2.5");

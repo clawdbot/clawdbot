@@ -1,3 +1,4 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   buildControlUiFocusPath,
@@ -8,6 +9,7 @@ import { beforeEach, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -273,6 +275,9 @@ suite.define(() => {
                 )) >= 2,
             )
             .toBe(true);
+          // A generic automatic retry used to wake one second after this
+          // first settled frame. Close must remain authoritative beyond it.
+          await page.waitForTimeout(1_500);
           if (documentRequests > 1) {
             await reloaded;
           }
@@ -358,10 +363,12 @@ suite.define(() => {
       await expect.poll(failure.headCount).toBe(1);
       expect(failure.chunkRequestCount()).toBe(1);
       if (captureUiProof) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "failure.png"),
-        });
+        await writeFile(
+          path.join(artifactDir, "failure.png"),
+          await takeControlUiViewportScreenshot(page, error, [
+            error.getByRole("button", { name: "Retry", exact: true }),
+          ]),
+        );
       }
 
       await retryThroughReload(page, error);
@@ -370,11 +377,12 @@ suite.define(() => {
       await expect.poll(failure.chunkRequestCount).toBe(2);
       expect(await page.locator("openclaw-command-palette").count()).toBe(1);
       if (captureUiProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(artifactDir, "recovered.png"),
-        });
+        await writeFile(
+          path.join(artifactDir, "recovered.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".cmd-palette"), [
+            page.getByRole("combobox", { name: "Search chats and commands…" }),
+          ]),
+        );
       }
     } finally {
       await suite.closeBrowserContext(context);
@@ -454,6 +462,7 @@ suite.define(() => {
       webChrome: true,
       pathname: "",
       readySelector: ".sidebar-brand",
+      preserveCollapsedNavigation: false,
       proofName: "native-titlebar",
     },
     {
@@ -461,8 +470,9 @@ suite.define(() => {
       chunk: /\/assets\/sidebar-attention-[A-Za-z0-9_-]{8}\.js(?:\?.*)?$/u,
       label: "sidebar-attention",
       webChrome: false,
-      pathname: "settings/appearance",
-      readySelector: ".shell--settings",
+      pathname: "chat/main?nav=collapsed",
+      readySelector: ".shell--nav-collapsed",
+      preserveCollapsedNavigation: true,
       proofName: "sidebar-attention",
     },
   ])("recovers $name visibly after its chunk fails", async (testCase) => {
@@ -495,6 +505,13 @@ suite.define(() => {
           });
         }
 
+        if (testCase.preserveCollapsedNavigation) {
+          await page.evaluate(() => {
+            const url = new URL(window.location.href);
+            url.searchParams.set("nav", "collapsed");
+            window.history.replaceState(window.history.state, "", url);
+          });
+        }
         await retryThroughReload(page, error);
         if (testCase.webChrome) {
           const toolbar = page.locator(".macos-titlebar-controls");

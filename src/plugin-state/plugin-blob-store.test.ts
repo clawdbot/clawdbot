@@ -75,6 +75,14 @@ describe("plugin blob store", () => {
         code: "PLUGIN_BLOB_LIMIT_EXCEEDED",
       });
       expect((await store.entries()).map((entry) => entry.key)).toEqual(["one"]);
+      await store.register("one", new Uint8Array([4, 5, 6, 7]), { order: 3 });
+      await expect(store.lookup("one")).resolves.toMatchObject({ sizeBytes: 4 });
+      await store.register("one", new Uint8Array(), { order: 4 });
+      await store.register("one", new Uint8Array([8]), { order: 5 });
+      await expect(store.lookup("one")).resolves.toMatchObject({
+        bytes: new Uint8Array([8]),
+        metadata: { order: 5 },
+      });
     });
   });
 
@@ -92,6 +100,13 @@ describe("plugin blob store", () => {
       vi.setSystemTime(1_002);
       await store.register("three", new Uint8Array([3]), { order: 3 });
       expect((await store.entries()).map((entry) => entry.key)).toEqual(["two", "three"]);
+
+      await store.clear();
+      await store.register("zeta", new Uint8Array([1]), { order: 1 });
+      await store.register("alpha", new Uint8Array([2]), { order: 2 });
+      vi.setSystemTime(999);
+      await store.register("protected", new Uint8Array([3]), { order: 3 });
+      expect((await store.entries()).map((entry) => entry.key)).toEqual(["protected", "zeta"]);
     });
   });
 
@@ -103,12 +118,21 @@ describe("plugin blob store", () => {
       await store.register("one", new Uint8Array([1]), { order: 1 }, { ttlMs: 10 });
       vi.setSystemTime(2_011);
       await store.register("two", new Uint8Array([2]), { order: 2 }, { ttlMs: 10 });
-      await expect(store.deleteExpiredKey("one")).resolves.toEqual(
-        expect.objectContaining({ key: "one", metadata: { order: 1 } }),
-      );
+      await expect(store.deleteExpiredKey("one")).resolves.toEqual({
+        key: "one",
+        metadata: { order: 1 },
+        sizeBytes: 1,
+        createdAt: 2_000,
+        expiresAt: 2_010,
+      });
       await expect(store.deleteExpiredKey("two")).resolves.toBeUndefined();
       await expect(store.deleteExpired()).resolves.toEqual([]);
       await expect(store.lookup("two")).resolves.toMatchObject({ metadata: { order: 2 } });
+      vi.setSystemTime(2_022);
+      await expect(store.deleteExpired()).resolves.toEqual([
+        { key: "two", metadata: { order: 2 }, sizeBytes: 1, createdAt: 2_011, expiresAt: 2_021 },
+      ]);
+      await expect(store.deleteExpired()).resolves.toEqual([]);
     });
   });
 
@@ -203,6 +227,65 @@ describe("plugin blob store", () => {
       ).toThrow(/incompatible options/);
     });
   });
+
+  it.each(["reject-new", "evict-oldest"] as const)(
+    "enforces the physical plugin row limit across namespaces with %s",
+    async (overflowPolicy) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(6_000);
+      await withOpenClawTestState({ label: "plugin-blob-plugin-quota" }, async (state) => {
+        const store = createPluginBlobStore<{ owner: string }>(
+          "diffs",
+          options(state.env, { overflowPolicy }),
+        );
+        const emptyNamespace = createPluginBlobStore<{ owner: string }>(
+          "diffs",
+          options(state.env, { namespace: "empty", overflowPolicy }),
+        );
+        const { db } = openOpenClawStateDatabase({ env: state.env });
+        db.exec(`WITH RECURSIVE entries(n) AS (
+          VALUES (1) UNION ALL SELECT n + 1 FROM entries WHERE n < 49999
+        ) INSERT INTO plugin_blob_entries
+          (plugin_id, namespace, entry_key, metadata_json, blob, created_at, expires_at)
+          SELECT 'diffs', 'sibling', 'expired-' || n, '{"owner":"sibling"}', zeroblob(0), 1, 2
+          FROM entries`);
+        await store.register("one", new Uint8Array([1]), { owner: "one" });
+        await store.register("one", new Uint8Array([1, 2]), { owner: "replacement" });
+
+        const write = store.register("two", new Uint8Array([3]), { owner: "two" });
+        if (overflowPolicy === "reject-new") {
+          await expect(write).rejects.toMatchObject({ code: "PLUGIN_BLOB_LIMIT_EXCEEDED" });
+          await expect(store.lookup("one")).resolves.toMatchObject({
+            sizeBytes: 2,
+            metadata: { owner: "replacement" },
+          });
+          await expect(store.lookup("two")).resolves.toBeUndefined();
+        } else {
+          await expect(write).resolves.toBeUndefined();
+          await expect(store.lookup("one")).resolves.toBeUndefined();
+          await expect(store.lookup("two")).resolves.toMatchObject({ metadata: { owner: "two" } });
+        }
+
+        await expect(
+          emptyNamespace.register("blocked", new Uint8Array([4]), { owner: "blocked" }),
+        ).rejects.toMatchObject({ code: "PLUGIN_BLOB_LIMIT_EXCEEDED" });
+        await expect(emptyNamespace.lookup("blocked")).resolves.toBeUndefined();
+        expect(
+          db
+            .prepare("SELECT COUNT(*) AS count FROM plugin_blob_entries WHERE plugin_id = ?")
+            .get("diffs"),
+        ).toEqual({ count: 50_000 });
+        const sibling = createPluginBlobStore<{ owner: string }>(
+          "diffs",
+          options(state.env, { namespace: "sibling", overflowPolicy }),
+        );
+        await expect(sibling.deleteExpiredKey("expired-1")).resolves.toMatchObject({
+          metadata: { owner: "sibling" },
+          sizeBytes: 0,
+        });
+      });
+    },
+  );
 
   it("isolates plugin ids and namespaces and persists across reopen", async () => {
     await withOpenClawTestState({ label: "plugin-blob-isolation" }, async (state) => {
@@ -342,6 +425,11 @@ describe("plugin blob store", () => {
       ).run("diffs", "artifacts", "corrupt", "{", Buffer.from([7]), 1, null);
       await expect(store.lookup("corrupt")).rejects.toMatchObject({
         code: "PLUGIN_BLOB_CORRUPT",
+        operation: "lookup",
+      });
+      await expect(store.entries()).rejects.toMatchObject({
+        code: "PLUGIN_BLOB_CORRUPT",
+        operation: "entries",
       });
     });
   });
@@ -360,7 +448,10 @@ describe("plugin blob store", () => {
       ).run("diffs", "artifacts", "corrupt", "{", Buffer.from([7]), 5_000, 5_010);
 
       vi.setSystemTime(5_011);
-      await expect(store.deleteExpired()).rejects.toMatchObject({ code: "PLUGIN_BLOB_CORRUPT" });
+      await expect(store.deleteExpired()).rejects.toMatchObject({
+        code: "PLUGIN_BLOB_CORRUPT",
+        operation: "sweep",
+      });
       expect(
         db
           .prepare(
@@ -372,6 +463,7 @@ describe("plugin blob store", () => {
 
       await expect(store.deleteExpiredKey("corrupt")).rejects.toMatchObject({
         code: "PLUGIN_BLOB_CORRUPT",
+        operation: "sweep",
       });
       expect(
         db

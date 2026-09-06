@@ -5,7 +5,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   resolveCompactDurationParts,
   resolveSingleUnitDurationParts,
-  type DurationUnit,
+  type DurationPart,
 } from "../../../src/infra/format-time/format-duration-internal.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { formatUiError } from "./format-error.ts";
@@ -30,20 +30,40 @@ type FormatRelativeTimestampOptions = {
   suffix?: boolean;
 };
 
-function formatUnit(value: number | bigint, unit: DurationUnit): string {
-  return new Intl.NumberFormat(i18n.getLocale(), {
+let localeFormatters:
+  | {
+      locale: string;
+      units: Partial<Record<DurationPart["unit"], Intl.NumberFormat>>;
+      relative?: Intl.RelativeTimeFormat;
+    }
+  | undefined;
+
+function getLocaleFormatters() {
+  const locale = i18n.getLocale();
+  // Keep one locale's closed unit set; switching languages releases the old
+  // formatters without retaining labels or subscribing to component lifetimes.
+  if (localeFormatters?.locale !== locale) {
+    localeFormatters = { locale, units: {} };
+  }
+  return localeFormatters;
+}
+
+export function formatUnit({ value, unit }: DurationPart): string {
+  const formatters = getLocaleFormatters();
+  return (formatters.units[unit] ??= new Intl.NumberFormat(formatters.locale, {
     style: "unit",
     unit,
     unitDisplay: "narrow",
     maximumFractionDigits: 0,
-  }).format(value);
+  })).format(value);
 }
 
 function formatRelative(value: number, unit: RelativeTimeUnit): string {
-  return new Intl.RelativeTimeFormat(i18n.getLocale(), {
+  const formatters = getLocaleFormatters();
+  return (formatters.relative ??= new Intl.RelativeTimeFormat(formatters.locale, {
     numeric: "auto",
     style: "narrow",
-  }).format(value, unit);
+  })).format(value, unit);
 }
 
 export function formatTimeAgo(
@@ -56,12 +76,10 @@ export function formatTimeAgo(
   }
 
   const { value, unit } = bucketRelativeTimeMs(durationMs);
-  if (unit === "second") {
-    if (options.suffix !== false) {
-      return t("common.justNow");
-    }
+  if (unit === "second" && options.suffix !== false) {
+    return t("common.justNow");
   }
-  return options.suffix === false ? formatUnit(value, unit) : formatRelative(-value, unit);
+  return options.suffix === false ? formatUnit({ value, unit }) : formatRelative(-value, unit);
 }
 
 export function formatRelativeTimestamp(
@@ -78,7 +96,7 @@ export function formatRelativeTimestamp(
   const { value, unit } = bucketRelativeTimeMs(Math.abs(diff));
   if (unit === "second") {
     if (options.suffix === false) {
-      return formatUnit(value, unit);
+      return formatUnit({ value, unit });
     }
     return isPast ? t("common.justNow") : formatRelative(value, unit);
   }
@@ -96,22 +114,18 @@ export function formatRelativeTimestamp(
   }
 
   const signedValue = isPast ? -value : value;
-  return options.suffix === false ? formatUnit(value, unit) : formatRelative(signedValue, unit);
+  return options.suffix === false ? formatUnit({ value, unit }) : formatRelative(signedValue, unit);
 }
 
 export function formatDurationCompact(ms?: number | null): string | undefined {
-  return resolveCompactDurationParts(ms)
-    ?.map(({ value, unit }) => formatUnit(value, unit))
-    .join(" ");
+  return resolveCompactDurationParts(ms)?.map(formatUnit).join(" ");
 }
 
 export function formatDurationHuman(ms?: number | null, fallback = t("common.na")): string {
   if (ms == null || !Number.isFinite(ms) || ms < 0) {
     return fallback;
   }
-  return resolveSingleUnitDurationParts(ms)
-    .map(({ value, unit }) => formatUnit(value, unit))
-    .join(" ");
+  return resolveSingleUnitDurationParts(ms).map(formatUnit).join(" ");
 }
 
 export function formatUnknownText(

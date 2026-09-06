@@ -370,21 +370,6 @@ h3.plugins-subheader {
   color: var(--danger);
 }
 
-.plugins-remove-confirm {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  color: var(--danger);
-  font-size: var(--control-ui-text-xs);
-  white-space: nowrap;
-}
-
-.plugins-remove-confirm .btn.danger {
-  border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
-  background: var(--danger-subtle);
-  color: var(--danger);
-}
-
 .plugins-group__link {
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
@@ -986,11 +971,6 @@ h3.plugins-subheader {
 @media (max-width: 560px) {
   .plugins-toolbar--fields > .settings-segmented {
     height: auto;
-  }
-
-  .plugins-remove-confirm {
-    flex-wrap: wrap;
-    white-space: normal;
   }
 
   .plugins-row-message {

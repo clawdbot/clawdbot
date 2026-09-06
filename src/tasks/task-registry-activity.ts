@@ -80,13 +80,13 @@ function markChanged(taskId: string, activity: TaskActivityOverlayState): void {
   scheduleFlush(taskId, activity);
 }
 
-/** Folds streaming-only fields and returns true when durable task mutation should be skipped. */
-export function recordTaskActivityEvent(task: TaskRecord, event: AgentEventPayload): boolean {
+/** Folds transient text and file activity into the in-memory task overlay. */
+export function recordTaskActivityEvent(task: TaskRecord, event: AgentEventPayload): void {
   const textStream = event.stream;
   if (textStream === "assistant" || textStream === "thinking") {
     const activity = activityFor(task);
     if (textStream === "thinking" && activity.hasAssistantActivity) {
-      return true;
+      return;
     }
     const key = textStream === "assistant" ? "assistantText" : "thinkingText";
     let cumulative: string;
@@ -95,13 +95,13 @@ export function recordTaskActivityEvent(task: TaskRecord, event: AgentEventPaylo
     } else if (typeof event.data.delta === "string") {
       cumulative = activity[key] + event.data.delta;
     } else {
-      return true;
+      return;
     }
     // Retain only a suffix for delta-only producers; full snapshots remain authoritative.
     activity[key] = sliceUtf16Safe(cumulative, -STREAM_TEXT_BUFFER_CHARS);
     const snippet = lastLineSnippet(cumulative);
     if (!snippet) {
-      return true;
+      return;
     }
     if (textStream === "assistant") {
       activity.hasAssistantActivity = true;
@@ -111,36 +111,36 @@ export function recordTaskActivityEvent(task: TaskRecord, event: AgentEventPaylo
       activity.lastActivity = snippet;
       markChanged(task.taskId, activity);
     }
-    return true;
+    return;
   }
 
   if (event.stream !== "tool") {
-    return false;
+    return;
   }
   const toolName = typeof event.data.name === "string" ? event.data.name : "";
   const kind = resolveFileMutationToolName(toolName);
   if (!kind) {
-    return false;
+    return;
   }
   const toolCallId = normalizeOptionalString(event.data.toolCallId);
   if (event.data.phase === "start") {
     const args = asOptionalObjectRecord(event.data.args);
     const delta = args ? readCompletedFileMutationDelta(kind, args) : undefined;
     if (!toolCallId || !delta) {
-      return false;
+      return;
     }
     const activity = activityFor(task);
     if (
       !activity.pendingDiffByToolCallId.has(toolCallId) &&
       activity.pendingDiffByToolCallId.size >= MAX_PENDING_DIFFS
     ) {
-      return false;
+      return;
     }
     activity.pendingDiffByToolCallId.set(toolCallId, delta);
-    return false;
+    return;
   }
   if (event.data.phase !== "result") {
-    return false;
+    return;
   }
   const activity = taskActivityByTaskId.get(task.taskId);
   const delta = toolCallId ? activity?.pendingDiffByToolCallId.get(toolCallId) : undefined;
@@ -148,7 +148,7 @@ export function recordTaskActivityEvent(task: TaskRecord, event: AgentEventPaylo
     activity?.pendingDiffByToolCallId.delete(toolCallId);
   }
   if (event.data.isError === true || !delta || !activity) {
-    return event.data.isError !== true;
+    return;
   }
   let changed = delta.added > 0 || delta.removed > 0;
   for (const file of delta.files) {
@@ -161,7 +161,6 @@ export function recordTaskActivityEvent(task: TaskRecord, event: AgentEventPaylo
     activity.removed += delta.removed;
     markChanged(task.taskId, activity);
   }
-  return true;
 }
 
 export function getTaskActivitySnapshot(taskId: string): TaskActivitySnapshot | undefined {

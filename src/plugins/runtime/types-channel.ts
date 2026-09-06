@@ -17,6 +17,7 @@ import type {
   MatchesMentionWithExplicit,
 } from "../../auto-reply/reply/mentions.types.js";
 import type { CreateReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.runtime-types.js";
+import type { ChannelRuntimeContextRegistry } from "../../channels/plugins/channel-runtime-surface.types.js";
 import type { LoadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.types.js";
 import type { ResolveMarkdownTableMode } from "../../config/markdown-tables.types.js";
 import type {
@@ -42,39 +43,6 @@ type RuntimeThreadBindingLifecycleRecord =
       idleTimeoutMs?: number;
       maxAgeMs?: number;
     };
-
-type PluginRuntimeChannelContextKey = {
-  channelId: string;
-  accountId?: string | null;
-  capability: string;
-};
-
-type PluginRuntimeChannelContextEvent = {
-  type: "registered" | "unregistered";
-  key: {
-    channelId: string;
-    accountId?: string;
-    capability: string;
-  };
-  context?: unknown;
-};
-
-type PluginRuntimeChannelContextRegistry = {
-  register: (
-    params: PluginRuntimeChannelContextKey & {
-      context: unknown;
-      abortSignal?: AbortSignal;
-    },
-  ) => { dispose: () => void };
-  // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Runtime context values are caller-typed by key.
-  get: <T = unknown>(params: PluginRuntimeChannelContextKey) => T | undefined;
-  watch: (params: {
-    channelId?: string;
-    accountId?: string | null;
-    capability?: string;
-    onEvent: (event: PluginRuntimeChannelContextEvent) => void;
-  }) => () => void;
-};
 
 export type PluginRuntimeChannel = {
   text: {
@@ -205,5 +173,5 @@ export type PluginRuntimeChannel = {
       maxAgeMs: number;
     }) => RuntimeThreadBindingLifecycleRecord[];
   };
-  runtimeContexts: PluginRuntimeChannelContextRegistry;
+  runtimeContexts: ChannelRuntimeContextRegistry;
 };

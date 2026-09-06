@@ -210,8 +210,6 @@ export function createCronExitWatchers(
       let run: ManagedRun;
       try {
         run = await handlers.getProcessSupervisor().spawn({
-          sessionId: `cron-exit:${job.id}`,
-          backendId: "cron-exit-watch",
           scopeKey: scopeKey(job.id),
           replaceExistingScope: true,
           mode: "child",

@@ -1,11 +1,13 @@
 use crate::gateway_ws::GatewayClient;
-use crate::quickchat::{position_quickchat, QuickChatState, QUICKCHAT_LABEL};
+use crate::quickchat::{position_quickchat, require_quickchat_webview, QuickChatState};
+#[cfg(target_os = "linux")]
+use gtk::prelude::*;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tauri::webview::{NewWindowResponse, WebviewBuilder};
 use tauri::{
     AppHandle, LogicalPosition, LogicalSize, Manager, State, Url, Webview, WebviewUrl, Window,
@@ -21,6 +23,50 @@ const QUICKCHAT_WIDGET_LABEL_PREFIX: &str = "quickchat-widget-";
 const QUICKCHAT_WIDGET_MAX_COUNT: usize = 32;
 const QUICKCHAT_WIDGET_MAX_URL_BYTES: usize = 4096;
 
+#[cfg(target_os = "linux")]
+mod compact_content {
+    use gtk::glib;
+    use gtk::subclass::prelude::*;
+
+    #[derive(Default)]
+    pub struct Content;
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for Content {
+        const NAME: &'static str = "OpenClawQuickChatContent";
+        type Type = super::QuickChatContent;
+        type ParentType = gtk::Box;
+    }
+
+    impl ObjectImpl for Content {}
+
+    impl WidgetImpl for Content {
+        fn request_mode(&self) -> gtk::SizeRequestMode {
+            gtk::SizeRequestMode::ConstantSize
+        }
+
+        fn preferred_width(&self) -> (i32, i32) {
+            let width = super::QUICKCHAT_WIDTH as i32;
+            (width, width)
+        }
+
+        fn preferred_height(&self) -> (i32, i32) {
+            let height = super::QUICKCHAT_COMPACT_WINDOW_HEIGHT as i32;
+            (height, height)
+        }
+    }
+
+    impl ContainerImpl for Content {}
+    impl BoxImpl for Content {}
+}
+
+#[cfg(target_os = "linux")]
+gtk::glib::wrapper! {
+    pub struct QuickChatContent(ObjectSubclass<compact_content::Content>)
+        @extends gtk::Box, gtk::Container, gtk::Widget,
+        @implements gtk::Buildable, gtk::Orientable;
+}
+
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QuickChatWidgetLayout {
@@ -34,7 +80,6 @@ pub struct QuickChatWidgetLayout {
     visible: bool,
 }
 
-#[derive(Clone)]
 struct RendererSession {
     id: String,
     epoch: u64,
@@ -45,9 +90,14 @@ struct RendererSession {
 
 #[derive(Clone, Default)]
 pub struct QuickChatWidgetState {
-    views: Arc<Mutex<HashSet<String>>>,
-    sync: Arc<AsyncMutex<()>>,
-    active_session: Arc<Mutex<Option<RendererSession>>>,
+    // Session arbitration and child changes share one lock so queued hide/reload cannot race a sync.
+    inner: Arc<AsyncMutex<WidgetState>>,
+}
+
+#[derive(Default)]
+struct WidgetState {
+    views: HashSet<String>,
+    active_session: Option<RendererSession>,
 }
 
 fn quickchat_window_height(has_widgets: bool, expanded: bool) -> f64 {
@@ -79,6 +129,131 @@ fn resize_window_if_needed(window: &Window, height: f64) -> Result<bool, String>
     Ok(true)
 }
 
+#[cfg(target_os = "linux")]
+async fn with_gtk_widget(
+    webview: &Webview,
+    update: impl FnOnce(gtk::Widget) -> Result<(), String> + Send + 'static,
+) -> Result<(), String> {
+    let (reply, response) = tokio::sync::oneshot::channel();
+    webview
+        .with_webview(move |platform| {
+            let _ = reply.send(update(platform.inner().upcast()));
+        })
+        .map_err(|error| format!("Could not access the Quick Chat native view: {error}"))?;
+    response
+        .await
+        .map_err(|_| "Quick Chat native view closed before layout completed.".to_string())?
+}
+
+#[cfg(target_os = "linux")]
+async fn prepare_widget_surface(webview: &Webview) -> Result<(), String> {
+    let app = webview.app_handle().clone();
+    with_gtk_widget(webview, move |primary| {
+        let parent = primary
+            .parent()
+            .ok_or_else(|| "Quick Chat native view has no layout container.".to_string())?;
+        if parent.is::<QuickChatContent>() {
+            return Ok(());
+        }
+        let vbox = parent
+            .downcast::<gtk::Box>()
+            .map_err(|_| "Quick Chat native layout container is unavailable.".to_string())?;
+        let window = primary
+            .toplevel()
+            .and_then(|widget| widget.downcast::<gtk::Window>().ok())
+            .ok_or_else(|| "Quick Chat native window is unavailable.".to_string())?;
+        let overlay = gtk::Overlay::new();
+        let fixed = gtk::Fixed::new();
+        let content: QuickChatContent = gtk::glib::Object::new();
+        vbox.remove(&primary);
+        // The app owns preferred size; WebKit's natural size must not raise compact-window hints.
+        content.set_orientation(gtk::Orientation::Vertical);
+        content.pack_start(&primary, true, true, 0);
+        overlay.add(&content);
+        fixed.set_halign(gtk::Align::Fill);
+        fixed.set_valign(gtk::Align::Fill);
+        overlay.add_overlay(&fixed);
+        // Only the overlay's wrapper passes input through; WebKit's own GdkWindows retain input.
+        overlay.set_overlay_pass_through(&fixed, true);
+        vbox.pack_start(&overlay, true, true, 0);
+        content.show();
+        fixed.show();
+        overlay.show();
+        let fixed = fixed.downgrade();
+        // Give WebKit's IME and widget handlers first refusal; an unhandled key is replayed by WebKit.
+        // Primary-view popovers keep their own Escape handling.
+        window.connect_key_press_event(move |window, event| {
+            if event.keyval() == gtk::gdk::keys::constants::Escape
+                && fixed.upgrade().is_some_and(|fixed| {
+                    window
+                        .focused_widget()
+                        .is_some_and(|focus| focus.is_ancestor(&fixed))
+                })
+            {
+                if !window.propagate_key_event(event) {
+                    crate::quickchat::request_hide(&app);
+                }
+                gtk::glib::Propagation::Stop
+            } else {
+                gtk::glib::Propagation::Proceed
+            }
+        });
+        Ok(())
+    })
+    .await
+}
+
+async fn set_widget_bounds(
+    webview: &Webview,
+    position: LogicalPosition<f64>,
+    size: LogicalSize<f64>,
+) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    return with_gtk_widget(webview, move |widget| {
+        let parent = widget
+            .parent()
+            .ok_or_else(|| "Quick Chat widget has no layout container.".to_string())?;
+        let fixed = match parent.downcast::<gtk::Fixed>() {
+            Ok(fixed) => fixed,
+            Err(parent) => {
+                let vbox = parent.downcast::<gtk::Box>().map_err(|_| {
+                    "Quick Chat widget layout container is unavailable.".to_string()
+                })?;
+                let overlay = vbox
+                    .children()
+                    .into_iter()
+                    .find_map(|child| child.downcast::<gtk::Overlay>().ok())
+                    .ok_or_else(|| "Quick Chat widget surface is unavailable.".to_string())?;
+                let fixed = overlay
+                    .children()
+                    .into_iter()
+                    .find_map(|child| child.downcast::<gtk::Fixed>().ok())
+                    .ok_or_else(|| "Quick Chat widget layout is unavailable.".to_string())?;
+                vbox.remove(&widget);
+                fixed.put(&widget, 0, 0);
+                fixed
+            }
+        };
+        // Wry's GtkBox-created views ignore bounds even after reparenting; GTK owns this layout.
+        let (x, y) = (position.x.round() as i32, position.y.round() as i32);
+        let (width, height) = (size.width.round() as i32, size.height.round() as i32);
+        widget.set_size_request(width, height);
+        fixed.move_(&widget, x, y);
+        widget.size_allocate(&gtk::Allocation::new(x, y, width, height));
+        Ok(())
+    })
+    .await;
+    #[cfg(not(target_os = "linux"))]
+    {
+        webview
+            .set_position(position)
+            .map_err(|error| format!("Could not position Quick Chat widget: {error}"))?;
+        webview
+            .set_size(size)
+            .map_err(|error| format!("Could not resize Quick Chat widget: {error}"))
+    }
+}
+
 impl QuickChatWidgetState {
     fn validate_session_id(session_id: &str) -> Result<(), String> {
         if session_id.trim().is_empty() || session_id.len() > 128 {
@@ -100,249 +275,117 @@ impl QuickChatWidgetState {
             && generation > active.closed_generation
     }
 
-    fn view_labels(&self) -> Result<HashSet<String>, String> {
-        self.views
-            .lock()
-            .map_err(|_| "Quick Chat widget state is unavailable.".to_string())
-            .map(|views| views.clone())
-    }
-
-    fn store_view_labels(&self, labels: HashSet<String>) -> Result<(), String> {
-        *self
-            .views
-            .lock()
-            .map_err(|_| "Quick Chat widget state is unavailable.".to_string())? = labels;
-        Ok(())
-    }
-
     fn close_views(
         app: &AppHandle,
-        labels: &HashSet<String>,
+        labels: &mut HashSet<String>,
         parent_hidden: bool,
-    ) -> (HashSet<String>, Option<String>) {
-        let mut retained = HashSet::new();
+    ) -> Result<(), String> {
         let mut first_error = None;
-        for label in labels {
+        labels.retain(|label| {
             let Some(webview) = app.get_webview(label) else {
-                continue;
+                return false;
             };
             if let Err(error) = webview.hide() {
-                retained.insert(label.clone());
                 if !parent_hidden {
                     first_error.get_or_insert_with(|| {
                         format!("Could not hide stale Quick Chat widget {label}: {error}")
                     });
                 }
-                continue;
+                return true;
             }
-            if webview.close().is_err() {
-                // A hidden child is safe to retain and retry later; only hide failure
-                // can leave stale content visible and must abort the transition.
-                retained.insert(label.clone());
-            }
-        }
-        (retained, first_error)
+            // A hidden child is safe to retain and retry later; only hide failure
+            // can leave stale content visible and must abort the transition.
+            webview.close().is_err()
+        });
+        first_error.map_or(Ok(()), Err)
     }
 
-    #[cfg(test)]
-    fn activate_session(
+    pub async fn start_session(
         &self,
+        webview: &Webview,
         session_id: &str,
         renderer_epoch: u64,
-    ) -> Result<(bool, bool), String> {
+    ) -> Result<bool, String> {
         Self::validate_session_id(session_id)?;
         if renderer_epoch == 0 {
             return Err("Quick Chat renderer epoch is invalid.".to_string());
         }
-        let mut active = self
-            .active_session
-            .lock()
-            .map_err(|_| "Quick Chat renderer session is unavailable.".to_string())?;
-        if let Some(current) = active.as_ref() {
+        let mut state = self.inner.lock().await;
+        if let Some(current) = state.active_session.as_ref() {
             if current.id == session_id && current.epoch == renderer_epoch {
-                return Ok((true, false));
+                return Ok(true);
             }
             if current.epoch >= renderer_epoch {
-                return Ok((false, false));
+                return Ok(false);
             }
         }
-        *active = Some(RendererSession {
+        let window = webview.window();
+        if !state.views.is_empty() {
+            window.hide().map_err(|error| {
+                format!("Could not hide Quick Chat before renderer cleanup: {error}")
+            })?;
+        }
+        Self::close_views(window.app_handle(), &mut state.views, true)?;
+        #[cfg(target_os = "linux")]
+        prepare_widget_surface(webview).await?;
+        state.active_session = Some(RendererSession {
             id: session_id.to_string(),
             epoch: renderer_epoch,
             active_generation: 0,
             closed_generation: 0,
             hidden: true,
         });
-        Ok((true, true))
+        Ok(true)
     }
 
-    #[cfg(test)]
-    fn session_snapshot(
+    pub async fn set_visible(
         &self,
+        window: &Window,
+        visible: bool,
         session_id: &str,
         renderer_epoch: u64,
-    ) -> Result<Option<(u64, u64, bool)>, String> {
-        self.active_session
-            .lock()
-            .map_err(|_| "Quick Chat renderer session is unavailable.".to_string())
-            .map(|active| {
-                active.as_ref().and_then(|active| {
-                    (active.id == session_id && active.epoch == renderer_epoch).then_some((
-                        active.active_generation,
-                        active.closed_generation,
-                        active.hidden,
-                    ))
-                })
-            })
-    }
-
-    pub async fn start_session(
-        &self,
-        app: &AppHandle,
-        session_id: &str,
-        renderer_epoch: u64,
+        generation: u64,
+        hide_requested: &AtomicBool,
     ) -> Result<bool, String> {
         Self::validate_session_id(session_id)?;
-        if renderer_epoch == 0 {
-            return Err("Quick Chat renderer epoch is invalid.".to_string());
-        }
-        let _sync = self.sync.lock().await;
+        let mut state = self.inner.lock().await;
+        let WidgetState {
+            views,
+            active_session,
+        } = &mut *state;
+        let Some(active) = active_session.as_mut() else {
+            return Ok(false);
+        };
+        if active.id != session_id
+            || active.epoch != renderer_epoch
+            || generation < active.active_generation
         {
-            let active = self
-                .active_session
-                .lock()
-                .map_err(|_| "Quick Chat renderer session is unavailable.".to_string())?;
-            if let Some(current) = active.as_ref() {
-                if current.id == session_id && current.epoch == renderer_epoch {
-                    return Ok(true);
-                }
-                if current.epoch >= renderer_epoch {
-                    return Ok(false);
-                }
-            }
+            return Ok(false);
         }
-        let labels = self.view_labels()?;
-        if !labels.is_empty() {
-            app.get_webview_window(QUICKCHAT_LABEL)
-                .ok_or_else(|| "Quick Chat window is unavailable.".to_string())?
+        // Hide the parent before cleanup; revealing it must wait until stale children are hidden.
+        if !visible {
+            window
                 .hide()
-                .map_err(|error| {
-                    format!("Could not hide Quick Chat before renderer cleanup: {error}")
-                })?;
+                .map_err(|error| format!("Could not hide Quick Chat: {error}"))?;
         }
-        let (retained, cleanup_error) = Self::close_views(app, &labels, true);
-        self.store_view_labels(retained)?;
-        if let Some(error) = cleanup_error {
-            return Err(error);
+        Self::close_views(window.app_handle(), views, !visible)?;
+        if visible {
+            window
+                .show()
+                .map_err(|error| format!("Could not show Quick Chat: {error}"))?;
         }
-        *self
-            .active_session
-            .lock()
-            .map_err(|_| "Quick Chat renderer session is unavailable.".to_string())? =
-            Some(RendererSession {
-                id: session_id.to_string(),
-                epoch: renderer_epoch,
-                active_generation: 0,
-                closed_generation: 0,
-                hidden: true,
-            });
-        Ok(true)
-    }
-
-    pub async fn activate(
-        &self,
-        window: &Window,
-        session_id: &str,
-        renderer_epoch: u64,
-        generation: u64,
-        hide_requested: &AtomicBool,
-    ) -> Result<bool, String> {
-        Self::validate_session_id(session_id)?;
-        let _sync = self.sync.lock().await;
-        {
-            let active = self
-                .active_session
-                .lock()
-                .map_err(|_| "Quick Chat renderer session is unavailable.".to_string())?;
-            let Some(active) = active.as_ref() else {
-                return Ok(false);
-            };
-            if active.id != session_id
-                || active.epoch != renderer_epoch
-                || generation < active.active_generation
-            {
-                return Ok(false);
-            }
-        }
-        let labels = self.view_labels()?;
-        let (retained, cleanup_error) = Self::close_views(window.app_handle(), &labels, false);
-        self.store_view_labels(retained)?;
-        if let Some(error) = cleanup_error {
-            return Err(error);
-        }
-        window
-            .show()
-            .map_err(|error| format!("Could not show Quick Chat: {error}"))?;
-        {
-            let mut active = self
-                .active_session
-                .lock()
-                .map_err(|_| "Quick Chat renderer session is unavailable.".to_string())?;
-            let active = active.as_mut().expect("renderer session held by sync lock");
-            active.active_generation = generation;
-            active.hidden = false;
-        }
-        hide_requested.store(false, Ordering::SeqCst);
-        Ok(true)
-    }
-
-    pub async fn hide(
-        &self,
-        app: &AppHandle,
-        window: &Window,
-        session_id: &str,
-        renderer_epoch: u64,
-        generation: u64,
-        hide_requested: &AtomicBool,
-    ) -> Result<bool, String> {
-        Self::validate_session_id(session_id)?;
-        let _sync = self.sync.lock().await;
-        {
-            let active = self
-                .active_session
-                .lock()
-                .map_err(|_| "Quick Chat renderer session is unavailable.".to_string())?;
-            let Some(active) = active.as_ref() else {
-                return Ok(false);
-            };
-            if active.id != session_id
-                || active.epoch != renderer_epoch
-                || generation < active.active_generation
-            {
-                return Ok(false);
-            }
-        }
-        window
-            .hide()
-            .map_err(|error| format!("Could not hide Quick Chat: {error}"))?;
-        let labels = self.view_labels()?;
-        let (retained, _) = Self::close_views(app, &labels, true);
-        self.store_view_labels(retained)?;
-        {
-            let mut active = self
-                .active_session
-                .lock()
-                .map_err(|_| "Quick Chat renderer session is unavailable.".to_string())?;
-            let active = active.as_mut().expect("renderer session held by sync lock");
-            active.active_generation = generation;
-            active.hidden = true;
+        active.active_generation = generation;
+        active.hidden = !visible;
+        if !visible {
             active.closed_generation = active.closed_generation.max(generation);
         }
-        hide_requested.store(true, Ordering::SeqCst);
-        let _ = window.set_size(LogicalSize::new(
-            QUICKCHAT_WIDTH,
-            QUICKCHAT_COMPACT_WINDOW_HEIGHT,
-        ));
+        hide_requested.store(!visible, Ordering::SeqCst);
+        if !visible {
+            let _ = window.set_size(LogicalSize::new(
+                QUICKCHAT_WIDTH,
+                QUICKCHAT_COMPACT_WINDOW_HEIGHT,
+            ));
+        }
         Ok(true)
     }
 
@@ -358,18 +401,12 @@ impl QuickChatWidgetState {
         generation: u64,
     ) -> Result<(), String> {
         Self::validate_session_id(session_id)?;
-        let _sync = self.sync.lock().await;
-        {
-            let active = self
-                .active_session
-                .lock()
-                .map_err(|_| "Quick Chat renderer session is unavailable.".to_string())?;
-            let Some(active) = active.as_ref() else {
-                return Ok(());
-            };
-            if !Self::session_allows_sync(active, session_id, renderer_epoch, generation) {
-                return Ok(());
-            }
+        let mut state = self.inner.lock().await;
+        let Some(active) = state.active_session.as_ref() else {
+            return Ok(());
+        };
+        if !Self::session_allows_sync(active, session_id, renderer_epoch, generation) {
+            return Ok(());
         }
         let window = webview.window();
         if !has_widgets && !widgets.is_empty() {
@@ -393,11 +430,7 @@ impl QuickChatWidgetState {
         if visible_count > 1 {
             return Err("Quick Chat can show only one widget at a time.".to_string());
         }
-        let current = self
-            .views
-            .lock()
-            .map_err(|_| "Quick Chat widget state is unavailable.".to_string())?
-            .clone();
+        let current = &state.views;
         let mut desired = HashSet::new();
         for (_, label, _) in &prepared {
             if !desired.insert(label.clone()) {
@@ -405,114 +438,86 @@ impl QuickChatWidgetState {
             }
         }
 
-        let cleanup_created = |labels: &HashSet<String>| {
-            for label in labels {
+        let mut created = HashSet::new();
+        let result: Result<HashSet<String>, String> = async {
+            let mut reconciled = Vec::with_capacity(prepared.len());
+            for (widget, label, url) in prepared {
+                let position = LogicalPosition::new(widget.x, widget.y);
+                let size = LogicalSize::new(widget.width, widget.height);
+                let existing = current
+                    .contains(&label)
+                    .then(|| app.get_webview(&label))
+                    .flatten();
+                let webview = match existing {
+                    Some(webview) => webview,
+                    None => {
+                        if let Some(orphan) = app.get_webview(&label) {
+                            let _ = orphan.close();
+                        }
+                        let allowed_url = url.clone();
+                        // Widget labels intentionally match no Tauri capability. Linux cannot isolate
+                        // iframe IPC, so agent-authored scripts must stay in separate child WebViews.
+                        let mut builder =
+                            WebviewBuilder::new(label.clone(), WebviewUrl::External(url))
+                                .incognito(true)
+                                .transparent(true)
+                                .on_navigation(move |candidate| {
+                                    same_widget_document(candidate, &allowed_url)
+                                })
+                                .on_new_window(|_, _| NewWindowResponse::Deny);
+                        if widget.sandbox == "strict" {
+                            builder = builder.disable_javascript();
+                        }
+                        let webview =
+                            window.add_child(builder, position, size).map_err(|error| {
+                                format!("Could not create Quick Chat widget: {error}")
+                            })?;
+                        created.insert(label.clone());
+                        webview
+                    }
+                };
+                set_widget_bounds(&webview, position, size).await?;
+                reconciled.push((widget.visible, webview));
+            }
+
+            let mut committed = desired.clone();
+            for label in current.difference(&desired) {
                 if let Some(webview) = app.get_webview(label) {
+                    webview.hide().map_err(|error| {
+                        format!("Could not hide obsolete Quick Chat widget: {error}")
+                    })?;
+                    if webview.close().is_err() {
+                        committed.insert(label.clone());
+                    }
+                }
+            }
+
+            for (visible, webview) in &reconciled {
+                let result = if *visible {
+                    webview.show()
+                } else {
+                    webview.hide()
+                };
+                result.map_err(|error| {
+                    format!("Could not update Quick Chat widget visibility: {error}")
+                })?;
+            }
+            // Growing for widgets must re-anchor the window so its bottom edge stays in the work area.
+            if resize_window_if_needed(&window, quickchat_window_height(has_widgets, expanded))? {
+                position_quickchat(window.app_handle(), &window)?;
+            }
+            Ok(committed)
+        }
+        .await;
+        if result.is_err() {
+            // Only this sync's newly created children roll back; existing instances keep their state.
+            for label in created {
+                if let Some(webview) = app.get_webview(&label) {
                     let _ = webview.close();
                 }
             }
-        };
-        let parent = window.clone();
-        let mut created = HashSet::new();
-        let mut reconciled = Vec::with_capacity(prepared.len());
-        for (widget, label, url) in prepared {
-            let position = LogicalPosition::new(widget.x, widget.y);
-            let size = LogicalSize::new(widget.width, widget.height);
-            let existing = current
-                .contains(&label)
-                .then(|| app.get_webview(&label))
-                .flatten();
-            let webview = match existing {
-                Some(webview) => webview,
-                None => {
-                    if let Some(orphan) = app.get_webview(&label) {
-                        let _ = orphan.close();
-                    }
-                    let allowed_url = url.clone();
-                    // Widget labels intentionally match no Tauri capability. Linux cannot isolate
-                    // iframe IPC, so agent-authored scripts must stay in separate child WebViews.
-                    let mut builder = WebviewBuilder::new(label.clone(), WebviewUrl::External(url))
-                        .incognito(true)
-                        .transparent(true)
-                        .on_navigation(move |candidate| {
-                            same_widget_document(candidate, &allowed_url)
-                        })
-                        .on_new_window(|_, _| NewWindowResponse::Deny);
-                    if widget.sandbox == "strict" {
-                        builder = builder.disable_javascript();
-                    }
-                    match parent.add_child(builder, position, size) {
-                        Ok(webview) => {
-                            created.insert(label.clone());
-                            webview
-                        }
-                        Err(error) => {
-                            cleanup_created(&created);
-                            return Err(format!("Could not create Quick Chat widget: {error}"));
-                        }
-                    }
-                }
-            };
-            if let Err(error) = webview.set_position(position) {
-                cleanup_created(&created);
-                return Err(format!("Could not position Quick Chat widget: {error}"));
-            }
-            if let Err(error) = webview.set_size(size) {
-                cleanup_created(&created);
-                return Err(format!("Could not resize Quick Chat widget: {error}"));
-            }
-            reconciled.push((widget.visible, webview));
         }
-
-        let mut committed = desired.clone();
-        for label in current.difference(&desired) {
-            if let Some(webview) = app.get_webview(label) {
-                if let Err(error) = webview.hide() {
-                    cleanup_created(&created);
-                    return Err(format!(
-                        "Could not hide obsolete Quick Chat widget: {error}"
-                    ));
-                }
-                if webview.close().is_err() {
-                    committed.insert(label.clone());
-                }
-            }
-        }
-
-        for (visible, webview) in &reconciled {
-            let result = if *visible {
-                webview.show()
-            } else {
-                webview.hide()
-            };
-            if let Err(error) = result {
-                cleanup_created(&created);
-                return Err(format!(
-                    "Could not update Quick Chat widget visibility: {error}"
-                ));
-            }
-        }
-        match resize_window_if_needed(&window, quickchat_window_height(has_widgets, expanded)) {
-            // Growing for widgets has to re-anchor the window the same way the
-            // expand path does. Resizing alone keeps the old top edge, so a
-            // taller window can hang off the bottom of the work area.
-            Ok(true) => {
-                if let Err(error) = position_quickchat(window.app_handle(), &window) {
-                    cleanup_created(&created);
-                    return Err(error);
-                }
-            }
-            Ok(false) => {}
-            Err(error) => {
-                cleanup_created(&created);
-                return Err(error);
-            }
-        }
-
-        *self.views.lock().map_err(|_| {
-            cleanup_created(&created);
-            "Quick Chat widget state is unavailable.".to_string()
-        })? = committed;
+        state.views = result?;
         Ok(())
     }
 }
@@ -522,9 +527,7 @@ pub async fn quickchat_refresh_widget_surface(
     webview: Webview,
     gateway: State<'_, GatewayClient>,
 ) -> Result<Option<String>, String> {
-    if webview.label() != QUICKCHAT_LABEL || webview.window().label() != QUICKCHAT_LABEL {
-        return Err("Quick Chat command is available only to the Quick Chat webview.".to_string());
-    }
+    require_quickchat_webview(&webview)?;
     gateway.refresh_canvas_surface().await
 }
 
@@ -540,9 +543,7 @@ pub async fn quickchat_sync_widgets(
     renderer_epoch: u64,
     generation: u64,
 ) -> Result<(), String> {
-    if webview.label() != QUICKCHAT_LABEL || webview.window().label() != QUICKCHAT_LABEL {
-        return Err("Quick Chat command is available only to the Quick Chat webview.".to_string());
-    }
+    require_quickchat_webview(&webview)?;
     state
         .widget_state()
         .sync(
@@ -738,64 +739,29 @@ mod tests {
     }
 
     #[test]
-    fn new_renderer_session_resets_closed_generations() {
-        let state = QuickChatWidgetState::default();
-        assert_eq!(
-            state
-                .activate_session("renderer-a", 100)
-                .expect("activate first"),
-            (true, true)
-        );
-        {
-            let mut active = state.active_session.lock().expect("session state");
-            let active = active.as_mut().expect("active renderer");
-            active.active_generation = 8;
-            active.hidden = true;
+    fn widget_sync_requires_current_visible_renderer_and_open_generation() {
+        for (session_id, epoch, generation, hidden, allowed) in [
+            ("renderer", 100, 8, false, true),
+            ("renderer", 100, 6, false, true),
+            ("renderer", 100, 5, false, false),
+            ("renderer", 100, 4, false, false),
+            ("renderer", 100, 8, true, false),
+            ("previous", 100, 8, false, false),
+            ("renderer", 99, 8, false, false),
+        ] {
+            let active = RendererSession {
+                id: "renderer".to_string(),
+                epoch: 100,
+                active_generation: 8,
+                closed_generation: 5,
+                hidden,
+            };
+            assert_eq!(
+                QuickChatWidgetState::session_allows_sync(&active, session_id, epoch, generation),
+                allowed,
+                "unexpected sync decision for {session_id}/{epoch}/{generation}, hidden={hidden}"
+            );
         }
-        assert_eq!(
-            state
-                .session_snapshot("renderer-a", 100)
-                .expect("first renderer state"),
-            Some((8, 0, true))
-        );
-        assert_eq!(
-            state
-                .activate_session("stale-renderer", 99)
-                .expect("reject stale"),
-            (false, false)
-        );
-        assert_eq!(
-            state
-                .activate_session("renderer-b", 101)
-                .expect("activate second"),
-            (true, true)
-        );
-        assert_eq!(
-            state
-                .session_snapshot("renderer-a", 100)
-                .expect("old session"),
-            None
-        );
-        assert_eq!(
-            state
-                .session_snapshot("renderer-b", 101)
-                .expect("new session"),
-            Some((0, 0, true))
-        );
-    }
-
-    #[test]
-    fn hidden_renderer_rejects_widget_syncs() {
-        let state = QuickChatWidgetState::default();
-        state
-            .activate_session("renderer", 100)
-            .expect("activate renderer");
-        let active = state.active_session.lock().expect("session state");
-        let active = active.as_ref().expect("active renderer");
-        assert!(active.hidden);
-        assert!(!QuickChatWidgetState::session_allows_sync(
-            active, "renderer", 100, 1
-        ));
     }
 
     #[test]

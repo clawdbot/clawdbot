@@ -1,5 +1,7 @@
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog, type AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { CodexHistoryRejection } from "./history-rejection.js";
 import { captureCodexSettledTurnFinalizationContext } from "./settled-turn-context.js";
 import { attachCodexMirrorIdentity, attachUpstreamUserText } from "./upstream-prompt-provenance.js";
 
@@ -7,9 +9,24 @@ const mocks = vi.hoisted(() => ({
   readHistory: vi.fn(),
 }));
 
-vi.mock("./session-history.js", () => ({
-  readCodexMirroredSessionHistory: mocks.readHistory,
-}));
+vi.mock("../../session-history-worker-runtime.js", async () => {
+  const { projectVerifiedSettledCodexMessages } = await import("./settled-turn-evidence.js");
+  const { codexHistoryRejectionReason } = await import("./history-rejection.js");
+  return {
+    projectCodexSettledHistoryInWorker: async (
+      params: Parameters<typeof projectVerifiedSettledCodexMessages>[1],
+    ) => {
+      try {
+        const value = await mocks.readHistory(params, (messages: Iterable<AgentMessage>) =>
+          projectVerifiedSettledCodexMessages(messages, params),
+        );
+        return { status: "ok", value };
+      } catch (error) {
+        return { status: "rejected", reason: codexHistoryRejectionReason(error) };
+      }
+    },
+  };
+});
 
 function message(value: unknown, identity: string): AgentMessage {
   return attachCodexMirrorIdentity(value as AgentMessage, identity);
@@ -66,6 +83,9 @@ async function captureContext(params: {
   mirroredMessages: AgentMessage[];
   settledMessages: AgentMessage[];
   turnId?: string;
+  model?: string;
+  modelProvider?: string;
+  authProfileId?: string;
 }) {
   mocks.readHistory.mockImplementation(
     (_target, read: (messages: Iterable<AgentMessage>) => unknown) => read(params.historyMessages),
@@ -76,6 +96,9 @@ async function captureContext(params: {
     mirroredMessages: params.mirroredMessages,
     settledMessages: params.settledMessages,
     turnId: params.turnId ?? "turn-2",
+    model: params.model ?? "gpt-5.6-luna",
+    modelProvider: params.modelProvider,
+    authProfileId: params.authProfileId,
   });
 }
 
@@ -84,34 +107,122 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
     mocks.readHistory.mockReset();
   });
 
-  it("freezes the complete active branch exactly through the current tool-result boundary", async () => {
-    const prior = message({ role: "user", content: "Alice is the recipient." }, "turn-1:prompt");
-    const settledMessages = settledTurn();
-    const later = message({ role: "user", content: "later message" }, "turn-3:prompt");
-    const historyMessages = [prior, ...settledMessages, later];
+  it.each([
+    { ending: "abort", rejected: false },
+    { ending: "abort", rejected: true },
+    { ending: "closure", rejected: false },
+    { ending: "closure", rejected: true },
+  ])(
+    "keeps owner $ending ahead of capture diagnostics (rejected=$rejected)",
+    async ({ ending, rejected }) => {
+      const messages = settledTurn();
+      const reading = createDeferred<void>();
+      const finish = createDeferred<void>();
+      const controller = new AbortController();
+      let active = true;
+      mocks.readHistory.mockImplementationOnce(async (_target, read) => {
+        reading.resolve();
+        await finish.promise;
+        if (rejected) {
+          throw new CodexHistoryRejection("field_limit");
+        }
+        return read(messages);
+      });
+      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+      const pending = captureCodexSettledTurnFinalizationContext({
+        sessionFile: "/tmp/session.jsonl",
+        sessionId: "session-1",
+        mirroredMessages: messages,
+        settledMessages: messages,
+        turnId: "turn-2",
+        model: "gpt-5.6-luna",
+        signal: controller.signal,
+        assertActive: () => {
+          if (!active) {
+            throw new Error("synthetic owner closed");
+          }
+        },
+      });
+      await reading.promise;
+      if (ending === "abort") {
+        controller.abort(new Error("synthetic capture aborted"));
+      } else {
+        active = false;
+      }
+      finish.resolve();
+      try {
+        await expect(pending).resolves.toBeUndefined();
+        expect(warn).toHaveBeenCalledWith(
+          "codex settled-turn finalization context capture failed",
+          { reason: ending === "abort" ? "cancelled" : "history_read_failed" },
+        );
+      } finally {
+        warn.mockRestore();
+      }
+    },
+  );
 
-    const context = await captureContext({
-      historyMessages,
-      mirroredMessages: settledMessages,
-      settledMessages,
-      turnId: "turn-2",
-    });
+  it.each([undefined, "openai"])(
+    "freezes source selection and the exact settled branch (provider: %s)",
+    async (modelProvider) => {
+      const prior = message({ role: "user", content: "Alice is the recipient." }, "turn-1:prompt");
+      const settledMessages = settledTurn();
+      const later = message({ role: "user", content: "later message" }, "turn-3:prompt");
+      const historyMessages = [prior, ...settledMessages, later];
+      const selection = { model: "gpt-5.6-luna", modelProvider, authProfileId: "openai:captured" };
 
-    Object.assign(prior, { content: "changed after capture" });
-    expect(context?.data).toEqual([
-      {
-        type: "message",
-        role: "user",
-        content: [{ type: "input_text", text: "Alice is the recipient." }],
-      },
-      { type: "message", role: "user", content: [{ type: "input_text", text: "Send it." }] },
-      { type: "function_call", call_id: "call-2", name: "message", arguments: "{}" },
-      { type: "function_call_output", call_id: "call-2", output: "sent" },
-    ]);
-    expect(Object.isFrozen(context)).toBe(true);
-    expect(Object.isFrozen(context?.data)).toBe(true);
-    expect(Object.isFrozen(context?.data[0])).toBe(true);
-  });
+      const context = await captureContext({
+        historyMessages,
+        mirroredMessages: settledMessages,
+        settledMessages,
+        turnId: "turn-2",
+        ...selection,
+      });
+
+      Object.assign(prior, { content: "changed after capture" });
+      Object.assign(selection, { model: "changed-model", authProfileId: "openai:changed" });
+      expect(context?.data).toEqual([
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Alice is the recipient." }],
+        },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "Send it." }] },
+        { type: "function_call", call_id: "call-2", name: "message", arguments: "{}" },
+        { type: "function_call_output", call_id: "call-2", output: "sent" },
+      ]);
+      expect(context?.selection).toEqual({
+        model: "gpt-5.6-luna",
+        modelProvider,
+        authProfileId: "openai:captured",
+      });
+      expect(Object.isFrozen(context)).toBe(true);
+      expect(Object.isFrozen(context?.data)).toBe(true);
+      expect(Object.isFrozen(context?.data[0])).toBe(true);
+      expect(Object.isFrozen(context?.selection)).toBe(true);
+    },
+  );
+
+  it.each([undefined, ""])(
+    "refuses missing model %j without reading transcript evidence",
+    async (model) => {
+      const messages = settledTurn();
+      mocks.readHistory.mockImplementation(
+        (_target, read: (messages: Iterable<AgentMessage>) => unknown) => read(messages),
+      );
+      await expect(
+        captureCodexSettledTurnFinalizationContext({
+          sessionFile: "/tmp/session.jsonl",
+          sessionId: "session-1",
+          mirroredMessages: messages,
+          settledMessages: messages,
+          turnId: "turn-2",
+          model,
+        }),
+      ).resolves.toBeUndefined();
+      expect(mocks.readHistory).not.toHaveBeenCalled();
+    },
+  );
 
   it("refuses unannotated host prompts even with the same durable key and adjacent native messages", async () => {
     const turn = settledHostPromptTurn();
@@ -200,6 +311,7 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
       captureCodexSettledTurnFinalizationContext({
         sessionFile: "/tmp/session.jsonl",
         sessionId: "session-1",
+        model: "gpt-5.6-luna",
         mirroredMessages: settledTurn(),
         settledMessages: settledTurn(),
         turnId: "turn-2",
@@ -238,6 +350,7 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
       captureCodexSettledTurnFinalizationContext({
         sessionFile: "/tmp/session.jsonl",
         sessionId: "session-1",
+        model: "gpt-5.6-luna",
         mirroredMessages: settledMessages,
         settledMessages,
         turnId: "turn-2",

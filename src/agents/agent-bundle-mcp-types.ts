@@ -12,6 +12,12 @@ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { McpCodexToolAnnotations } from "./mcp-codex-tool-approval.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
+export type SessionMcpConfigReload = {
+  cfg: OpenClawConfig;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  reloadPlugins?: boolean;
+};
+
 /** Materialized MCP tools plus diagnostics and cleanup handle for one run. */
 export type BundleMcpToolRuntime = {
   tools: AnyAgentTool[];
@@ -138,6 +144,8 @@ export type SessionMcpRuntime = {
   lastUsedAt: number;
   activeLeases?: number;
   acquireLease?: () => () => void;
+  /** Terminal server outcome recorded at retirement, with no callable tools. */
+  readonly retiredCatalog?: McpToolCatalog;
   /** Lists tools if needed and may connect MCP transports. */
   getCatalog: () => Promise<McpToolCatalog>;
   /** Returns the cached catalog only; must not start runtimes, connect transports, or issue tools/list. */
@@ -155,18 +163,26 @@ export type SessionMcpRuntime = {
   ) => Promise<ListResourceTemplatesResult>;
   listPrompts?: (serverName: string) => Promise<unknown>;
   getPrompt?: (serverName: string, name: string, args?: Record<string, string>) => Promise<unknown>;
+  /** Joins cleanup already owned by this runtime, without closing live shared peers.
+   * Rejects when an earlier retirement or disposal could not confirm closure. */
+  joinCleanup?: () => Promise<void>;
   dispose: () => Promise<void>;
 };
 
-/** One requester call's runtime and immutable catalog publication version. */
-export type RequesterScopedMcpRuntimeHandle = {
+/** Acquisition owns a lease before any caller can observe the runtime. */
+export type SessionMcpRuntimeLease = {
   runtime: SessionMcpRuntime;
+  releaseLease: () => void;
+};
+
+/** One requester call's lease and immutable catalog publication version. */
+export type RequesterScopedMcpRuntimeHandle = SessionMcpRuntimeLease & {
   advertisedCatalogConfigFingerprint: string;
 };
 
 /** Manager for session-scoped MCP runtimes and their idle lifecycle. */
 export type SessionMcpRuntimeManager = {
-  getOrCreate: (params: {
+  acquire: (params: {
     sessionId: string;
     sessionKey?: string;
     workspaceDir: string;
@@ -178,12 +194,12 @@ export type SessionMcpRuntimeManager = {
     agentAccountId?: string | null;
     messageChannel?: string | null;
     toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
-  }) => Promise<SessionMcpRuntime>;
+  }) => Promise<SessionMcpRuntimeLease>;
   /**
    * Requester-scoped partition only — never creates static transports.
    * Undefined when no scoped servers, no senderId, or nothing resolves.
    */
-  getOrCreateRequesterScoped: (params: {
+  acquireRequesterScoped: (params: {
     sessionId: string;
     sessionKey?: string;
     workspaceDir: string;
@@ -215,6 +231,7 @@ export type SessionMcpRuntimeManager = {
   /** Required retirement stays armed when a stopping run creates or reuses a runtime. */
   deferRetirement: (sessionId: string, opts?: { retainAcrossReuse?: boolean }) => boolean;
   completeDeferredRetirement: (sessionId: string, runtime?: SessionMcpRuntime) => Promise<boolean>;
+  reloadConfig: (params: SessionMcpConfigReload) => Promise<void>;
   disposeAll: () => Promise<void>;
   sweepIdleRuntimes: () => Promise<number>;
   listSessionIds: () => string[];

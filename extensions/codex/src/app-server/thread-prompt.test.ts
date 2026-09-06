@@ -64,11 +64,10 @@ describe("buildDeveloperInstructions delegation guidance", () => {
     expect(instructions).toContain("## Delegation");
     expect(instructions).toContain("delegate via native `spawn_agent`");
     expect(instructions).toContain("spawn `sessions_spawn` with `visible=true`");
+    expect(instructions).toContain("Announcing spawns notify when the run ends");
+    expect(instructions).toContain("Collectors require explicit result collection instead.");
     expect(instructions.indexOf("## Delegation")).toBeGreaterThan(
       instructions.indexOf("When a native child's result belongs in a later turn"),
-    );
-    expect(instructions.indexOf("## Delegation")).toBeLessThan(
-      instructions.indexOf("For the current source conversation"),
     );
   });
 
@@ -232,5 +231,30 @@ describe("buildDeveloperInstructions UI presentation guidance", () => {
     const instructions = buildDeveloperInstructions(createParams(overrides), { dynamicTools });
 
     expect(instructions).not.toContain("## UI Presentation");
+  });
+});
+
+describe("buildDeveloperInstructions delivery-mode stability", () => {
+  it.each([false, true])("keeps thread policy stable with message available=%s", (available) => {
+    const dynamicTools: CodexDynamicToolSpec[] = available
+      ? [
+          {
+            type: "function",
+            name: "message",
+            description: "Send messages",
+            inputSchema: { type: "object" },
+          },
+        ]
+      : [];
+    const instructions = (["automatic", "message_tool_only", "automatic"] as const).map(
+      (sourceReplyDeliveryMode) =>
+        buildDeveloperInstructions(createParams({ sourceReplyDeliveryMode }), { dynamicTools }),
+    );
+
+    expect(instructions[1]).toBe(instructions[0]);
+    expect(instructions[2]).toBe(instructions[0]);
+    if (!available) {
+      expect(instructions[0]).not.toContain("message(action=send)");
+    }
   });
 });

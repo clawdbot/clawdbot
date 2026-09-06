@@ -104,8 +104,6 @@ describe("process supervisor oversized timer deadlines", () => {
 
               const supervisor = createProcessSupervisor();
               const run = await supervisor.spawn({
-                backendId: "test",
-                sessionId: `timeout-overflow-${mode}`,
                 [timeoutField]: durationMs,
                 mode,
                 argv: [process.execPath, "-e", ""],
@@ -191,8 +189,6 @@ describe("process supervisor oversized timer deadlines", () => {
           adapterMock.mockResolvedValue(adapter);
 
           const run = await createProcessSupervisor().spawn({
-            backendId: "test",
-            sessionId: `late-timeout-${mode}`,
             [timeoutField]: MAX_TIMER_TIMEOUT_MS + trailingDurationMs,
             mode,
             argv: [process.execPath, "-e", ""],

@@ -313,7 +313,7 @@ function validateTurnsWithConsecutiveMerge<TRole extends "assistant" | "user">(p
     lastRole = msgRole;
   }
 
-  return result;
+  return result.length === messages.length ? messages : result;
 }
 
 function mergeConsecutiveAssistantTurns(
@@ -375,13 +375,19 @@ function normalizeUserContentForMerge(content: unknown): UserContentBlock[] {
   return [];
 }
 
+export const mergeConsecutiveUserMessages = (messages: AgentMessage[]): AgentMessage[] =>
+  validateTurnsWithConsecutiveMerge({ messages, role: "user", merge: mergeConsecutiveUserTurns });
+
 /**
  * Validates and fixes conversation turn sequences for Anthropic API.
  * Anthropic requires strict alternating user→assistant pattern.
  * Merges consecutive user messages together.
  * Also strips dangling tool_use blocks that lack corresponding tool_result blocks.
  */
-export function validateAnthropicTurns(messages: AgentMessage[]): AgentMessage[] {
+export function validateAnthropicTurns(
+  messages: AgentMessage[],
+  options: { mergeConsecutiveUserTurns?: boolean } = {},
+): AgentMessage[] {
   // Merge first so an injected assistant turn cannot hide the tool result that
   // resolves the preceding signed tool call. Stripping first would destroy the
   // active Anthropic tool-use turn before the adjacent turns can be repaired.
@@ -392,9 +398,12 @@ export function validateAnthropicTurns(messages: AgentMessage[]): AgentMessage[]
   });
   const stripped = stripDanglingAnthropicToolUses(mergedAssistant);
 
-  return validateTurnsWithConsecutiveMerge({
-    messages: stripped,
-    role: "user",
-    merge: mergeConsecutiveUserTurns,
-  });
+  // Merging user turns re-renders them as one multi-block message whose later
+  // blocks never carry their own timestamp stamp, so the bytes differ from the
+  // active turn that produced the following thinking signature. Prefix-bound
+  // replay keeps consecutive user turns separate; the Messages API accepts them.
+  if (options.mergeConsecutiveUserTurns === false) {
+    return stripped;
+  }
+  return mergeConsecutiveUserMessages(stripped);
 }

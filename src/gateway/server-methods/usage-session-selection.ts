@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import type { GatewayStoredSessionTargets } from "../../config/sessions/combined-store-gateway.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   resolveSessionFilePathCore,
@@ -88,14 +89,14 @@ type StoredUsageSession = { key: string; entry: SessionEntry };
 
 function buildStoreBySessionIdentity(
   store: Record<string, SessionEntry>,
-  agentIdBySessionKey: ReadonlyMap<string, string>,
+  targetsBySessionKey: GatewayStoredSessionTargets,
 ) {
   const matchesByIdentity = new Map<string, Array<[string, SessionEntry]>>();
   for (const [key, entry] of Object.entries(store)) {
     if (!entry?.sessionId) {
       continue;
     }
-    const agentId = expectDefined(agentIdBySessionKey.get(key), "stored session owner");
+    const agentId = expectDefined(targetsBySessionKey.get(key), "stored session owner").agentId;
     const identity = usageSessionIdentity(agentId, entry.sessionId);
     const matches = matchesByIdentity.get(identity) ?? [];
     matches.push([key, entry]);
@@ -120,7 +121,7 @@ function buildStoreBySessionIdentity(
     { sessionId: string; matches: Array<[string, SessionEntry]> }
   >();
   for (const { key, entry } of storeByIdentity.values()) {
-    const agentId = expectDefined(agentIdBySessionKey.get(key), "stored session owner");
+    const agentId = expectDefined(targetsBySessionKey.get(key), "stored session owner").agentId;
     for (const sessionId of entry.usageFamilySessionIds ?? []) {
       const identity = usageSessionIdentity(agentId, sessionId);
       if (!storeByIdentity.has(identity)) {
@@ -202,20 +203,20 @@ export async function selectUsageSessions(params: {
   } = params;
   // Load session store for named sessions only on a result-cache miss.
   const sessionStoreOpts = effectiveAgentId ? { agentId: effectiveAgentId } : {};
-  const { store, agentIdBySessionKey } = loadCombinedSessionStoreForGatewayCore(
+  const { store, targetsBySessionKey } = loadCombinedSessionStoreForGatewayCore(
     config,
     sessionStoreOpts,
   );
   const scopedStore = Object.fromEntries(
     Object.entries(store).filter(
       ([key, entry]) =>
-        (!effectiveAgentId || agentIdBySessionKey.get(key) === effectiveAgentId) &&
+        (!effectiveAgentId || targetsBySessionKey.get(key)?.agentId === effectiveAgentId) &&
         (!visibilityFilter || visibilityFilter(key, entry)),
     ),
   );
   const { storeByIdentity: storeBySessionIdentity, familyOwners } = buildStoreBySessionIdentity(
     scopedStore,
-    agentIdBySessionKey,
+    targetsBySessionKey,
   );
   // Only an individual instance can skip discovery. Families need the actual
   // historical sources, including retained JSONL artifacts beside SQLite windows.
