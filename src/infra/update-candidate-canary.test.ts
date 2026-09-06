@@ -4,7 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
+import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "./update-control-plane-sentinel.js";
 import {
   POST_CORE_UPDATE_RESULT_PATH_ENV,
@@ -220,6 +222,62 @@ describe("update candidate canary", () => {
     ).toEqual(["SIGTERM", "SIGKILL"]);
     expect(result.logTail.join("\n")).toContain("startupz: started");
     await expect(fs.access(childEnv.OPENCLAW_STATE_DIR!)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("reuses caller-owned rehearsal changes across validations until the caller disposes them", async () => {
+    const config: OpenClawConfig = { logging: { level: "info" } };
+    const observed: Array<{ configPath: string; level: string | undefined }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        const configPath = childEnv.OPENCLAW_CONFIG_PATH!;
+        const current = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+        observed.push({ configPath, level: current.logging?.level });
+        return Response.json({ status: "started", ready: true });
+      }),
+    );
+    const rehearsal = await prepareUpdateCandidateRehearsal({
+      config,
+      stateDir: root,
+      env: {},
+      timeoutMs: 3_000,
+    });
+    try {
+      const first = await validateUpdateCandidateCanary({
+        root,
+        stateDir: root,
+        config,
+        env: {},
+        rehearsal,
+        timeoutMs: 3_000,
+      });
+      expect(first.status).toBe("ok");
+      const copied = JSON.parse(await fs.readFile(rehearsal.configPath, "utf8")) as OpenClawConfig;
+      copied.logging = { ...copied.logging, level: "debug" };
+      const repairedConfig = JSON.stringify(copied);
+      await fs.writeFile(rehearsal.configPath, repairedConfig);
+      const second = await validateUpdateCandidateCanary({
+        root,
+        stateDir: root,
+        config,
+        env: {},
+        rehearsal,
+        timeoutMs: 3_000,
+      });
+      expect(second.status).toBe("ok");
+      expect(observed).toEqual([
+        { configPath: rehearsal.configPath, level: "info" },
+        { configPath: rehearsal.configPath, level: "info" },
+        { configPath: rehearsal.configPath, level: "debug" },
+        { configPath: rehearsal.configPath, level: "debug" },
+      ]);
+      expect(mocks.snapshot).toHaveBeenCalledOnce();
+      expect(await fs.readFile(rehearsal.configPath, "utf8")).toBe(repairedConfig);
+      await expect(fs.access(rehearsal.stateDir)).resolves.toBeUndefined();
+    } finally {
+      await rehearsal.cleanup();
+    }
+    await expect(fs.access(rehearsal.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it.each(["snapshot", "doctor", "plugins", "runtime", "readiness"] as const)(

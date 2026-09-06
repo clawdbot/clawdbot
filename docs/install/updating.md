@@ -903,6 +903,11 @@ config validation, plugin resolution, or canary startup fails. It repairs the
 staged candidate and reruns the failed check while the old Gateway keeps serving.
 Only a passing validation allows activation; otherwise the update fails and
 discards the candidate without stopping the service.
+Before activation, repair shares one disposable rehearsal state/config snapshot
+across its turns and validation, then independently validates surviving candidate
+changes before activation; configuration changes are never promoted and
+stop as `repair-requires-config-change`, naming the changed top-level keys for
+the operator to inspect with `openclaw triage` or apply with `openclaw doctor --fix`.
 
 Git source updates keep the selected source revision. Repair may restore
 dependencies, generated runtime files, or state, but a candidate with changed

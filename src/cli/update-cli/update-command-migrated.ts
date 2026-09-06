@@ -9,6 +9,7 @@ import {
   readUpdateStateSchemaVersions,
   updateStateSchemaVersionsMatch,
 } from "../../infra/update-candidate-state.js";
+import type { UpdateRequesterAuthority } from "../../infra/update-requester-authority.js";
 import type { UpdateRunStep } from "../../infra/update-run-record.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
@@ -90,7 +91,12 @@ export async function inspectActivatedUpdateState(
 }
 
 export type MigratedUpdateFinalizationInput = {
-  params: Omit<FinishUpdateParams, "packageTransaction" | "preManagedServiceStop"> & {
+  params: Omit<FinishUpdateParams, "packageTransaction" | "preManagedServiceStop" | "opts"> & {
+    opts: Omit<FinishUpdateParams["opts"], "run"> & {
+      run?: Omit<NonNullable<FinishUpdateParams["opts"]["run"]>, "requesterAuthority"> & {
+        requesterAuthority?: Pick<UpdateRequesterAuthority, "requester">;
+      };
+    };
     preManagedServiceStop?: Omit<
       NonNullable<FinishUpdateParams["preManagedServiceStop"]>,
       "windowsTaskAutoStartRecovery"
@@ -142,9 +148,19 @@ export async function continueMigratedUpdateInFreshProcess(
       stopState = serializableStop;
     }
     const resultPath = path.join(scratchDir, "result.json");
+    const { requesterAuthority, ...runIdentity } = run;
     const input: MigratedUpdateFinalizationInput = {
       params: {
         ...serializable,
+        opts: {
+          ...params.opts,
+          run: {
+            ...runIdentity,
+            ...(requesterAuthority
+              ? { requesterAuthority: { requester: requesterAuthority.requester } }
+              : {}),
+          },
+        },
         result,
         rollbackBlockedReason: params.rollbackBlockedReason ?? "state-migrated-no-rollback",
         ...(preManagedServiceStop ? { preManagedServiceStop: stopState } : {}),

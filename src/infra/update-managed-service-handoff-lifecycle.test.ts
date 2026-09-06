@@ -26,6 +26,7 @@ import {
   registerManagedSystemdHandoffConvergenceTests,
   registerManagedHandoffOwnerTests,
 } from "./update-managed-service-handoff-lifecycle.test-support.js";
+import { runManagedRepairAuthorityBoundary } from "./update-managed-service-handoff-repair.test-support.js";
 import {
   registerManagedRecoveryOutcomeTests,
   registerManagedTerminalResultTests,
@@ -77,6 +78,7 @@ vi.mock("./tmp-openclaw-dir.js", async (importOriginal) => ({
 }));
 
 const tempDirs = new Set<string>();
+const managedProcessCleanups = new Set<() => Promise<void>>();
 
 beforeEach(async () => {
   // Helpers in one fixture share a coordinator without touching the operator's database.
@@ -102,6 +104,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.useRealTimers();
+  await Promise.all([...managedProcessCleanups].map((cleanup) => cleanup()));
+  managedProcessCleanups.clear();
   for (const cleanup of mockedHandoffLeaseCleanups) {
     cleanup();
   }
@@ -114,6 +118,7 @@ afterEach(async () => {
 const runManagedServiceManagerBoundary = createManagedServiceManagerBoundary({
   spawnMock,
   tempDirs,
+  cleanups: managedProcessCleanups,
 });
 
 describe("managed service update handoff", () => {
@@ -237,6 +242,47 @@ describe("managed service update handoff", () => {
         payload: { status: "error", stats: { reason: "owner_required" } },
       });
     },
+  );
+
+  itUnix.each(
+    (["validating", "verifying"] as const).flatMap((phase) =>
+      [false, true].map((revoke) => ({ phase, revoke })),
+    ),
+  )(
+    "guards $phase repair effects with the current chat requester (revoked=$revoke)",
+    async ({ phase, revoke }) => {
+      const { commands, parentSignal, repairEffects, helperExitCode, log, run } =
+        await runManagedRepairAuthorityBoundary(runManagedServiceManagerBoundary, phase, revoke);
+      expect(commands).toEqual([]);
+      expect(parentSignal).toBeNull();
+      expect(repairEffects).toEqual({
+        firstSpawn: true,
+        secondSpawn: !revoke,
+        firstExec: true,
+        secondExec: !revoke,
+        secondWrite: !revoke,
+      });
+      expect(helperExitCode, log).toBe(revoke ? 1 : 0);
+      expect(run?.repair).toHaveLength(1);
+      if (revoke) {
+        expect(run?.steps).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              step: "repairing",
+              status: "failed",
+              detail: expect.stringContaining("requester-revoked"),
+            }),
+          ]),
+        );
+        expect(
+          run?.steps.find((step) => step.step === "repairing" && step.status === "failed")?.detail,
+        ).toContain(phase === "validating" ? "candidate rehearsal" : "live");
+        expect(run?.repair[0]?.reason).toBe("requester-revoked");
+      } else {
+        expect(run?.repair[0]).toMatchObject({ status: "succeeded" });
+      }
+    },
+    120_000,
   );
 
   itUnix("expires admission without interrupting the serving generation", async () => {

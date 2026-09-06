@@ -30,6 +30,18 @@ export async function withUpdateRepairEnvironment<T>(
   const [io, paths] = await Promise.all([import("../config/io.js"), import("../config/paths.js")]);
   const previousConfig = io.getRuntimeConfigSnapshot();
   const previousEnv = io.snapshotEnv(process.env);
+  if (target.environment) {
+    for (const key of Object.keys(process.env)) {
+      if (target.environment[key] === undefined) {
+        delete process.env[key];
+      }
+    }
+    for (const [key, value] of Object.entries(target.environment)) {
+      if (value !== undefined) {
+        process.env[key] = value;
+      }
+    }
+  }
   Object.assign(
     process.env,
     installationTargetEnv({

@@ -173,18 +173,31 @@ export function renderUpdateRunReport(
     lines.push(`Gateway downtime: ${formatDurationPrecise(run.downtimeMs)}.`);
   }
   const nextAction = opts.nextAction ?? run.origin.nextAction;
+  const repairStopReason = run.repair.at(-1)?.reason ?? run.reason;
+  const repairHint =
+    run.status === "failed" && repairStopReason === "requester-revoked"
+      ? nextAction
+        ? "Repair stopped because the chat requester is no longer a command owner. Further recovery requires a current command owner."
+        : "Repair stopped because the chat requester is no longer a command owner. A current command owner must start a new update, or the operator can run openclaw triage locally."
+      : run.status === "failed" && repairStopReason === "repair-requires-config-change"
+        ? nextAction
+          ? "Rehearsal config changes were not promoted. Review the named top-level keys before continuing recovery."
+          : "Rehearsal config changes were not promoted. Review the named top-level keys, then run openclaw doctor --fix under your own authority, or openclaw triage."
+        : undefined;
   const hints =
     run.status === "running"
       ? recoveryHints(run)
-      : [
-          ...new Set(
-            [
-              opts.doctorHint ?? facts.doctorHint ?? run.origin.doctorHint,
-              ...recoveryHints(run, nextAction),
-              nextAction,
-            ].filter((line): line is string => Boolean(line)),
-          ),
-        ];
+      : repairHint
+        ? [repairHint, ...(nextAction ? [nextAction] : [])]
+        : [
+            ...new Set(
+              [
+                opts.doctorHint ?? facts.doctorHint ?? run.origin.doctorHint,
+                ...recoveryHints(run, nextAction),
+                nextAction,
+              ].filter((line): line is string => Boolean(line)),
+            ),
+          ];
   lines.push(...hints);
   const next = hints.at(-1);
   const body = [headline, ...lines.filter((line) => line !== next)].join("\n");

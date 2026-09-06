@@ -1,10 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { runUpdateCommandRepair } from "../cli/update-cli/update-command-repair.js";
+import { admitUpdateCommandRun } from "../cli/update-cli/update-command-run.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { toErrorObject } from "./errors.js";
+import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
 import { prepareUnattendedUpdateRepair } from "./update-repair-agent.js";
 import type { UpdateRepairEvent, UpdateRepairParams } from "./update-repair-protocol.js";
+import * as requesterOwner from "./update-requester-authority.js";
+import { createUpdateRun, getUpdateRun, recordUpdateRunPhase } from "./update-run-ledger.js";
 
 async function candidate(root: string, runtime: string) {
   const directory = path.join(root, "dist/infra");
@@ -30,27 +35,49 @@ function repairParams(state: {
 }
 
 describe("fresh candidate repair process", () => {
-  it("uses candidate imports after old chunks are removed and leaves restart validation in the parent", async () => {
-    await withOpenClawTestState(
-      { prefix: "repair-child-boundary-", layout: "home" },
-      async (state) => {
-        await state.writeConfig({
-          agents: { defaults: { model: { primary: "unconfigured/repair" } } },
-        });
-        const obsolete = path.join(state.workspaceDir, "old-runtime.mjs");
-        await fs.writeFile(
-          obsolete,
-          'throw new Error("Old runtime cannot execute after replacement");',
-        );
-        await candidate(
-          state.workspaceDir,
-          `
+  it.each([
+    {
+      source: "external",
+      requester: { channel: "synthetic", senderId: "owner" },
+      needsAuthority: true,
+    },
+    {
+      source: "internal",
+      requester: { channel: "webchat", senderId: "owner" },
+      needsAuthority: false,
+    },
+    { source: "channel-less", requester: { senderId: "owner" }, needsAuthority: false },
+  ])(
+    "preserves $source requester authority through replacement and candidate repair",
+    async ({ requester, needsAuthority }) => {
+      await withOpenClawTestState(
+        {
+          prefix: "repair-child-boundary-",
+          layout: "home",
+          env: { [UPDATE_RUN_ID_ENV]: undefined },
+        },
+        async (state) => {
+          await state.writeConfig({
+            commands: { ownerAllowFrom: needsAuthority ? ["owner"] : [] },
+            plugins: { enabled: false },
+            agents: { defaults: { model: { primary: "unconfigured/repair" } } },
+          });
+          const obsolete = path.join(state.workspaceDir, "old-runtime.mjs");
+          await fs.writeFile(
+            obsolete,
+            'throw new Error("Old runtime cannot execute after replacement");',
+          );
+          await candidate(
+            state.workspaceDir,
+            `
         import fs from "node:fs";
         let start;
         const send = message => process.send(message);
         process.on("message", message => {
           if (message.type === "start") {
             start = message;
+            const expectedRequester = ${JSON.stringify(needsAuthority ? requester : null)};
+            if (JSON.stringify(start.requester ?? null) !== JSON.stringify(expectedRequester)) process.exit(8);
             fs.writeFileSync("child-pid", String(process.pid));
             send({ type: "validate", id: 1 });
           } else if (message.type === "validation-result" && message.id === 1) {
@@ -66,50 +93,101 @@ describe("fresh candidate repair process", () => {
         });
         send({ type: "ready" });
       `,
-        );
-        await fs.rm(obsolete);
-        const events: UpdateRepairEvent[] = [];
-        let validations = 0;
-        let restarts = 0;
-        const result = await prepareUnattendedUpdateRepair({
-          ...repairParams(state),
-          onEvent: (event) => events.push(event),
-          validate: async (signal) => {
-            signal.throwIfAborted();
-            validations += 1;
-            const childPid = Number(
-              await fs.readFile(path.join(state.workspaceDir, "child-pid"), "utf8"),
+          );
+          const prepareAuthority = requesterOwner.createManagedUpdateRequesterAuthority;
+          // A late factory call would import chunks removed by replacement. Keep
+          // that module-availability boundary observable without touching this checkout.
+          const prepare = vi
+            .spyOn(requesterOwner, "createManagedUpdateRequesterAuthority")
+            .mockImplementation(async (...args) => {
+              await fs.access(obsolete);
+              return prepareAuthority(...args);
+            });
+          try {
+            const requested = createUpdateRun(
+              {
+                trigger: needsAuthority ? "chat" : "api",
+                origin: { requester },
+              },
+              { env: state.env },
             );
-            expect(childPid).not.toBe(process.pid);
-            const repaired = await fs
-              .readFile(path.join(state.workspaceDir, "candidate-repaired"), "utf8")
-              .catch(() => "");
-            if (repaired) {
-              expect(repaired).toBe(state.stateDir);
-              expect(events.at(-1)?.type).toBe("turn-started");
-              restarts += 1;
-            }
-            return {
-              ok: Boolean(repaired),
-              score: repaired ? 1 : 0,
-              summary: repaired ? "Parent verified restart" : "Service stopped",
-            };
-          },
-        });
-        expect(result).toMatchObject({
-          status: "repaired",
-          attempts: [{ validation: { ok: true } }],
-        });
-        expect(validations).toBe(2);
-        expect(restarts).toBe(1);
-        expect(events.map((event) => event.type)).toEqual([
-          "turn-started",
-          "turn-finished",
-          "stopped",
-        ]);
-      },
-    );
-  });
+            process.env[UPDATE_RUN_ID_ENV] = requested.runId;
+            const run = await admitUpdateCommandRun({ opts: {}, root: state.workspaceDir });
+            // The candidate passed staging without entering repair. Its first repair
+            // occurs only after activation, when the parent cannot load old modules.
+            recordUpdateRunPhase(
+              run.runId,
+              "validating",
+              {
+                step: { step: "candidate validation", status: "completed" },
+              },
+              { env: run.env },
+            );
+            recordUpdateRunPhase(run.runId, "verifying", undefined, { env: run.env });
+            expect(getUpdateRun(run.runId, { env: run.env })?.repair).toEqual([]);
+            await fs.rm(obsolete);
+            const events: UpdateRepairEvent[] = [];
+            let validations = 0;
+            let restarts = 0;
+            const result = await runUpdateCommandRepair({
+              root: state.workspaceDir,
+              env: run.env,
+              run,
+              phase: "verifying",
+              result: {
+                status: "error",
+                mode: "npm",
+                root: state.workspaceDir,
+                reason: "startup-failed",
+                steps: [],
+                durationMs: 0,
+              },
+              onEvent: (event) => events.push(event),
+              validate: async (signal) => {
+                signal.throwIfAborted();
+                validations += 1;
+                const childPid = Number(
+                  await fs.readFile(path.join(state.workspaceDir, "child-pid"), "utf8"),
+                );
+                expect(childPid).not.toBe(process.pid);
+                const repaired = await fs
+                  .readFile(path.join(state.workspaceDir, "candidate-repaired"), "utf8")
+                  .catch(() => "");
+                if (repaired) {
+                  expect(repaired).toBe(state.stateDir);
+                  expect(events.at(-1)?.type).toBe("turn-started");
+                  restarts += 1;
+                }
+                return {
+                  ok: Boolean(repaired),
+                  score: repaired ? 1 : 0,
+                  summary: repaired ? "Parent verified restart" : "Service stopped",
+                };
+              },
+            });
+            expect(result).toMatchObject({
+              status: "repaired",
+              attempts: [{ validation: { ok: true } }],
+            });
+            expect(validations).toBe(2);
+            expect(restarts).toBe(1);
+            expect(prepare).toHaveBeenCalledTimes(needsAuthority ? 1 : 0);
+            expect(getUpdateRun(run.runId, { env: run.env })?.origin.requester).toEqual(requester);
+            expect(getUpdateRun(run.runId, { env: run.env })?.repair).toEqual([
+              expect.objectContaining({ status: "succeeded" }),
+            ]);
+            expect(events.map((event) => event.type)).toEqual([
+              "turn-started",
+              "turn-finished",
+              "stopped",
+            ]);
+          } finally {
+            prepare.mockRestore();
+          }
+        },
+      );
+    },
+  );
 
   it("cancels the child and drains the parent oracle before returning", async () => {
     await withOpenClawTestState(

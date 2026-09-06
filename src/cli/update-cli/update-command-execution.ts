@@ -1,10 +1,12 @@
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
 import { validateUpdateCandidateCanary } from "../../infra/update-candidate-canary.js";
+import type { UpdateCandidateRehearsal } from "../../infra/update-candidate-rehearsal.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import { readControlPlaneUpdateSentinelMeta } from "../../infra/update-control-plane-sentinel.js";
 import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
@@ -217,7 +219,7 @@ export async function executeMutableUpdate(params: {
   let candidateSchemaVersions: OpenClawSchemaVersions | undefined;
   let previousVerified = false;
   let candidateFailureReason: string | undefined;
-  let validatedConfigHash: string | null | undefined;
+  let validatedConfigSnapshot: { config: OpenClawConfig; hash?: string | null } | undefined;
   const originalRecovery = () =>
     params.installKind === "git"
       ? readCurrentGitUpdateRecovery(params.root)
@@ -368,17 +370,26 @@ export async function executeMutableUpdate(params: {
         env: params.opts.run.env,
       });
     }
-    const validate = async (signal?: AbortSignal) => {
+    const validate = async (
+      signal?: AbortSignal,
+      rehearsal?: UpdateCandidateRehearsal,
+      assertCurrent?: () => void,
+    ) => {
       signal?.throwIfAborted();
-      const snapshot = await withOwnedManagedUpdateEnv(env, () =>
-        readConfigFileSnapshot({ skipPluginValidation: true, observe: false }),
-      );
+      const snapshot = rehearsal
+        ? { config: rehearsal.sourceConfig, hash: rehearsal.sourceConfigHash }
+        : (validatedConfigSnapshot ??
+          (await withOwnedManagedUpdateEnv(env, () =>
+            readConfigFileSnapshot({ skipPluginValidation: true, observe: false }),
+          )));
       const validation = await validateUpdateCandidateCanary({
         root,
         config: snapshot.config,
         stateDir: resolveStateDir(env),
         env,
         signal,
+        rehearsal,
+        assertCurrent,
         nodeRunner: params.packageUpdateNodeRunner,
         timeoutMs: Math.min(params.updateStepTimeoutMs, 5 * 60_000),
         onStep: (step) => {
@@ -386,7 +397,7 @@ export async function executeMutableUpdate(params: {
         },
       });
       if (validation.status === "ok") {
-        validatedConfigHash = snapshot.hash;
+        validatedConfigSnapshot = snapshot;
         candidateSchemaVersions = validation.candidateSchemaVersions;
       }
       return validation;
@@ -415,8 +426,8 @@ export async function executeMutableUpdate(params: {
           steps: failedValidation.steps,
           durationMs: failedValidation.durationMs,
         },
-        validate: async (signal) => {
-          validation = await validate(signal);
+        validate: async (signal, assertCurrent, rehearsal) => {
+          validation = await validate(signal, rehearsal, assertCurrent);
           return {
             ok: validation.status === "ok",
             score: validation.steps.filter((step) => step.exitCode === 0).length,
@@ -428,9 +439,20 @@ export async function executeMutableUpdate(params: {
         },
       });
       if (repair.status !== "repaired") {
+        if (
+          repair.reason === "repair-requires-config-change" ||
+          repair.reason === "requester-revoked"
+        ) {
+          candidateFailureReason = repair.reason;
+        }
         return failedValidation.steps;
       }
       candidateFailureReason = undefined;
+      // Repair's disposable state is gone; only surviving candidate changes may authorize activation.
+      validation = await validate();
+      if (validation.status === "error") {
+        candidateFailureReason = validation.reason;
+      }
     }
     return validation.steps;
   };
@@ -439,7 +461,10 @@ export async function executeMutableUpdate(params: {
     const snapshot = await withOwnedManagedUpdateEnv(env, () =>
       readConfigFileSnapshot({ skipPluginValidation: true, observe: false }),
     );
-    if (validatedConfigHash !== undefined && snapshot.hash !== validatedConfigHash) {
+    if (
+      validatedConfigSnapshot?.hash !== undefined &&
+      snapshot.hash !== validatedConfigSnapshot.hash
+    ) {
       throw new UpdatePreMutationError(
         "invalid-config",
         "Config changed during candidate validation; rerun the update before activating.",

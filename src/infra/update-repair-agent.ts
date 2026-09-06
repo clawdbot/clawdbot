@@ -10,6 +10,7 @@ import {
   type UpdateRepairValidation,
 } from "./update-repair-protocol.js";
 import { runUpdateRepairWorker } from "./update-repair-worker.js";
+import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 
 type RepairAttempt = UpdateRepairResult["attempts"][number];
 
@@ -148,6 +149,9 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
     finalValidation = await validateRepair(params, signal);
     assertCurrent();
     params.onEvent?.({ type: "validation", turn: 0, validation: finalValidation });
+    if (finalValidation.stopReason) {
+      return stop("unrepaired", finalValidation.stopReason);
+    }
     if (finalValidation.ok) {
       return stop("repaired");
     }
@@ -198,7 +202,10 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
             timeoutMs,
             maxToolCalls: budget.maxToolCalls,
             signal: turnSignal,
-            isCurrent: params.isCurrent,
+            isCurrent: () => {
+              assertCurrent();
+              return true;
+            },
           }),
         );
       } finally {
@@ -228,13 +235,27 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
       // Even failed/timed-out turns may have changed files. Validate after the
       // runner has drained; never infer repair from its self-reported result.
       try {
+        assertCurrent();
         finalValidation = await validateRepair(params, signal);
         attempt.validation = finalValidation;
         params.onEvent?.({ type: "validation", turn, validation: finalValidation });
+      } catch (error) {
+        if (error instanceof UpdateRequesterRevokedError) {
+          attempt.validation = {
+            ...attempt.validation,
+            stopReason: error.code,
+            summary: error.code,
+          };
+          finalValidation = attempt.validation;
+        }
+        throw error;
       } finally {
         params.onEvent?.({ type: "turn-finished", ...attempt });
       }
       assertCurrent();
+      if (finalValidation.stopReason) {
+        return stop("unrepaired", finalValidation.stopReason);
+      }
       if (finalValidation.score < previousScore) {
         return stop("unrepaired", "Validation regressed after repair.");
       }

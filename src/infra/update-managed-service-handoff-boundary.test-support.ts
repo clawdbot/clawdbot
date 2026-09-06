@@ -1,9 +1,7 @@
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { pathToFileURL } from "node:url";
 import { expect, vi, type Mock } from "vitest";
 import { waitForFile } from "../../test/helpers/process-wait.js";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "../../test/vitest/vitest.timeouts.js";
@@ -29,6 +27,15 @@ import {
   type ManagedServiceManagerBoundaryOptions,
   type ManagedServiceManagerBoundaryResult,
 } from "./update-managed-service-handoff-lifecycle.test-support.js";
+import { createManagedServiceBoundaryCleanup } from "./update-managed-service-handoff-process.test-support.js";
+import {
+  managedRepairUpdaterScript,
+  prepareManagedRepairSpawnEnv,
+  readManagedRepairEffects,
+  releaseManagedRepairInference,
+  type ManagedRepairBoundary,
+} from "./update-managed-service-handoff-repair.test-support.js";
+import { prepareManagedServiceRuntimeFixture } from "./update-managed-service-handoff-runtime.test-support.js";
 import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
 
 type GatewayRestartSentinelDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_sentinel">;
@@ -60,9 +67,11 @@ function readRestartSentinelPayload(env: NodeJS.ProcessEnv, key = "current"): un
 export function createManagedServiceManagerBoundary({
   spawnMock,
   tempDirs,
+  cleanups,
 }: {
   spawnMock: Mock;
   tempDirs: Set<string>;
+  cleanups: Set<() => Promise<void>>;
 }) {
   return async function runManagedServiceManagerBoundary(
     kind: "systemd" | "launchd",
@@ -77,6 +86,7 @@ export function createManagedServiceManagerBoundary({
       revokeWhileValidating?: boolean;
       replaceLedgerWriter?: boolean;
       beforeParkNotice?: "acknowledged" | "stalled" | "rejected";
+      repair?: ManagedRepairBoundary;
     },
   ): Promise<ManagedServiceManagerBoundaryResult> {
     const { spawn } =
@@ -171,64 +181,29 @@ export function createManagedServiceManagerBoundary({
       OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
       PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
     };
-    const run = options?.ledger ? createUpdateRun({ trigger: "api" }, { env }) : undefined;
-    // Source children run from the helper's durable cwd, outside this checkout.
-    const sourceRuntimeImport = `
-    const { register } = await import(${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm/api")).href)});
-    register({ tsconfig: ${JSON.stringify(path.resolve("tsconfig.json"))} });
-  `;
-    const ledgerRuntimeImport = `
-    ${sourceRuntimeImport}
-    const ledger = await import(${JSON.stringify(new URL("./update-run-ledger.ts", import.meta.url).href)});
-  `;
-    if (run) {
-      await fs.appendFile(
-        recoveryModulePath,
-        `
-      ${ledgerRuntimeImport}
-      export const { getUpdateRun, recordUpdateRunPhase, recordUpdateRunVerification } = ledger;
-      ${options?.replaceLedgerWriter ? 'export function finishUpdateRun() { throw new Error("the previous runtime must not finalize the candidate"); }' : "export const { finishUpdateRun } = ledger;"}
-    `,
-      );
-    }
-    if (options?.requester) {
-      await fs.writeFile(statePath, "{}");
-      await fs.writeFile(
-        env.OPENCLAW_CONFIG_PATH,
-        JSON.stringify({
-          commands: { ownerAllowFrom: ["slack:owner"] },
-          channels: { slack: { enabled: true } },
-        }),
-      );
-      await fs.appendFile(
-        recoveryModulePath,
-        `
-      export async function isManagedUpdateRequesterOwner(requester) {
-        const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8"));
-        state.ownerChecked = true;
-        fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));
-        ${
-          options.cancelAtActivation === "requester"
-            ? `state.ownerChecks = (state.ownerChecks || 0) + 1;
-        fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));
-        if (state.ownerChecks === 2) {
-          fs.writeFileSync(${JSON.stringify(activationGatePath)}, "requester");
-          while (!fs.existsSync(${JSON.stringify(activationReleasePath)})) {
-            await new Promise((resolve) => setTimeout(resolve, 5));
-          }
-        }
-        return true;`
-            : `${sourceRuntimeImport}
-        const runtime = await import(${JSON.stringify(new URL("../cli/daemon-cli/lifecycle-context.ts", import.meta.url).href)});
-        return runtime.isManagedUpdateRequesterOwner(requester);`
-        }
-      }
-    `,
-      );
-    }
+    const run = options?.ledger
+      ? createUpdateRun(
+          {
+            trigger: options.requester ? "chat" : "api",
+            origin: options.requester ? { requester: options.requester } : {},
+          },
+          { env },
+        )
+      : undefined;
+    const { sourceRuntimeImport, ledgerRuntimeImport } = await prepareManagedServiceRuntimeFixture({
+      recoveryModulePath,
+      statePath,
+      configPath: env.OPENCLAW_CONFIG_PATH,
+      activationGatePath,
+      activationReleasePath,
+      ledger: Boolean(run),
+      options,
+    });
     let helper: import("node:child_process").ChildProcess | undefined;
     let helperCompletion: Promise<number | null> | undefined;
     let helperLogPath: string | undefined;
+    const cleanup = createManagedServiceBoundaryCleanup(() => [helper, parent]);
+    cleanups.add(cleanup);
     try {
       await startManagedServiceUpdateHandoff({
         runId: run?.runId,
@@ -315,11 +290,19 @@ export function createManagedServiceManagerBoundary({
           updaterScript;
       }
       if (options?.controlDisconnect === "transferred") {
-        const continuation = options.validationResult
-          ? `process.stdout.write(JSON.stringify({root:${JSON.stringify(root)},status:${JSON.stringify(options.validationResult === "failed" ? "error" : "skipped")},mode:"npm",reason:${JSON.stringify(options.validationResult === "failed" ? "candidate-validation-failed" : "already-current")}}));`
-          : options.runnerFallback
-            ? `void (async () => { ${sourceRuntimeImport} const { activateManagedServiceUpdateHandoff } = await import(${JSON.stringify(new URL("./update-managed-service-handoff.ts", import.meta.url).href)}); await activateManagedServiceUpdateHandoff(); ${updaterScript} })().catch((error) => { console.error(error); process.exit(18); });`
-            : `process.stdin.once("data", (reply) => { if (reply.toString() !== "parked\\n") process.exit(18); ${updaterScript} }); process.stdout.write("park\\n");`;
+        const continuation =
+          options.repair && run
+            ? await managedRepairUpdaterScript({
+                root,
+                runId: run.runId,
+                sourceRuntimeImport,
+                phase: options.repair.phase,
+              })
+            : options.validationResult
+              ? `process.stdout.write(JSON.stringify({root:${JSON.stringify(root)},status:${JSON.stringify(options.validationResult === "failed" ? "error" : "skipped")},mode:"npm",reason:${JSON.stringify(options.validationResult === "failed" ? "candidate-validation-failed" : "already-current")}}));`
+              : options.runnerFallback
+                ? `void (async () => { ${sourceRuntimeImport} const { activateManagedServiceUpdateHandoff } = await import(${JSON.stringify(new URL("./update-managed-service-handoff.ts", import.meta.url).href)}); await activateManagedServiceUpdateHandoff(); ${updaterScript} })().catch((error) => { console.error(error); process.exit(18); });`
+                : `process.stdin.once("data", (reply) => { if (reply.toString() !== "parked\\n") process.exit(18); ${updaterScript} }); process.stdout.write("park\\n");`;
         updaterScript = `
         const validationFs = require("node:fs");
         const validationStartedAt = Date.now();
@@ -372,7 +355,9 @@ export function createManagedServiceManagerBoundary({
           outputPath: String(generated.triageContextPath),
         });
       }
-      let helperEnv = childEnv;
+      let helperEnv = options?.repair
+        ? await prepareManagedRepairSpawnEnv(root, childEnv)
+        : childEnv;
       if (options?.launchdTeardown?.clockEachCommandMs || options?.recoveryClockAdvanceMs) {
         const preloadPath = path.join(root, "launchd-clock-preload.cjs");
         await fs.writeFile(
@@ -514,6 +499,15 @@ export function createManagedServiceManagerBoundary({
               ? waitForHandoffResponse(runningHelper.stdout, "before-park")
               : undefined;
             await fs.writeFile(validationReleasePath, "activate");
+            if (options.repair) {
+              await Promise.race([
+                options.repair.inferencePending,
+                completion.then(() => {
+                  throw new Error(`Repair updater exited before inference: ${stderr}`);
+                }),
+              ]);
+              await releaseManagedRepairInference(options.repair, root, env.OPENCLAW_CONFIG_PATH);
+            }
             if (notice) {
               await notice;
               await expect(pathExists(commandsPath)).resolves.toBe(false);
@@ -567,7 +561,9 @@ export function createManagedServiceManagerBoundary({
         }
         const code = await completion;
         const helperLog = await fs.readFile(String(generated.logPath), "utf8").catch(() => "");
-        expect(code, `${stderr}\n${helperLog}`).toBe(options.helperExitCode ?? 0);
+        if (!options.repair) {
+          expect(code, `${stderr}\n${helperLog}`).toBe(options.helperExitCode ?? 0);
+        }
         await expect(pathExists(updaterPath)).resolves.toBe(activated);
       } else if (options?.parentExitTimeoutMs !== undefined) {
         const timeout = options.parentExitTimeoutMs + (options.launchdTeardown ? 8_000 : 3_000);
@@ -658,6 +654,12 @@ export function createManagedServiceManagerBoundary({
           }
         : null;
       return {
+        ...(options?.repair
+          ? {
+              repairEffects: readManagedRepairEffects(root),
+              helperExitCode: runningHelper.exitCode,
+            }
+          : {}),
         ...(run ? { run: getUpdateRun(run.runId, { env }) } : {}),
         commands: (await fs.readFile(commandsPath, "utf8").catch(() => ""))
           .trim()
@@ -700,9 +702,7 @@ export function createManagedServiceManagerBoundary({
         await parentClosed;
         await helperCompletion;
       }
-      if (helper && helper.exitCode === null && helper.signalCode === null) {
-        helper.kill("SIGKILL");
-      }
+      await cleanup();
       if (options?.recoveryChecksServiceIdentity) {
         await awaitEmulatedRecoveryHandoffExit(statePath);
       }

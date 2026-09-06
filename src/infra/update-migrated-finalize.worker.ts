@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { finishUpdateRun } from "../cli/daemon-cli.js";
+import type { UpdateCommandOptions } from "../cli/update-cli/shared.js";
 import type {
   MigratedUpdateFinalizationInput,
   MigratedUpdateFinalizationResult,
@@ -11,6 +12,7 @@ import { createWindowsTaskAutoStartRecovery } from "../cli/update-cli/update-com
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { createManagedUpdateRequesterAuthority } from "./update-requester-authority.js";
 import { getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
 
 async function finalizeMigratedUpdate(): Promise<void> {
@@ -35,14 +37,28 @@ async function finalizeMigratedUpdate(): Promise<void> {
   const input = JSON.parse(
     Buffer.concat(chunks).toString("utf8"),
   ) as MigratedUpdateFinalizationInput; // SAFETY: Only the typed parent continuation serializes this private input.
-  const run = input.params.opts.run;
+  const transferredRun = input.params.opts.run;
   if (
-    !run ||
+    !transferredRun ||
     (input.params.rollbackBlockedReason !== "state-migrated-no-rollback" &&
       input.params.rollbackBlockedReason !== "rollback-state-unverified")
   ) {
     throw new Error("Candidate finalization requires its migrated update run.");
   }
+  const { requesterAuthority: descriptor, ...runIdentity } = transferredRun;
+  // Parent closures cannot cross JSON. Only the fresh installed runtime rebinds
+  // the captured requester to the same current installation policy.
+  const run: NonNullable<UpdateCommandOptions["run"]> = {
+    ...runIdentity,
+    ...(descriptor
+      ? {
+          requesterAuthority: await createManagedUpdateRequesterAuthority(
+            descriptor.requester,
+            runIdentity.env,
+          ),
+        }
+      : {}),
+  };
   for (const step of input.bufferedSteps) {
     recordUpdateRunStep(run.runId, step, { env: run.env });
   }
@@ -72,6 +88,7 @@ async function finalizeMigratedUpdate(): Promise<void> {
   try {
     result = await finishUpdate({
       ...input.params,
+      opts: { ...input.params.opts, run },
       ...(stopped
         ? { preManagedServiceStop: { ...stopped, windowsTaskAutoStartRecovery: windowsRecovery } }
         : {}),

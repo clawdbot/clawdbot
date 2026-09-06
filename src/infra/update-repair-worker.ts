@@ -178,6 +178,7 @@ export async function runUpdateRepairWorker(
         const start = updateRepairParentMessageSchema.parse({
           type: "start",
           runId: params.runId,
+          requester: params.requester,
           target: params.target,
           failure: failureContext,
           context: { beforeVersion, targetVersion, symptoms },

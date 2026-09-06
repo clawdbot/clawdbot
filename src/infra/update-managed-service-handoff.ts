@@ -25,7 +25,6 @@ import {
 } from "../shared/pid-alive.js";
 import { SKIPPED_UPDATE_OUTCOMES } from "../shared/update-outcome.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { isInternalMessageChannel } from "../utils/message-channel.js";
 import { resolveExecutableFromPathEnv } from "./executable-path.js";
 import { resolveInstallationTarget } from "./installation-target-context.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
@@ -44,6 +43,7 @@ import { applyDevUpdateTargetEnv, type DevUpdateTarget } from "./update-dev-targ
 import { verifyPackageUpdateRecovery } from "./update-global.js";
 import { resolveUpdateInstallRoot } from "./update-install-root.js";
 import { MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX } from "./update-managed-service-handoff-cleanup.js";
+import { resolveManagedUpdateRequester } from "./update-requester-authority.js";
 import type { UpdateRestartSentinelMeta } from "./update-restart-sentinel-payload.js";
 import { readCurrentGitUpdateRecovery } from "./update-runner-git-recovery.js";
 import { looksLikeGitCheckout } from "./update-runner-install-surface.js";
@@ -1858,10 +1858,7 @@ async function spawnManagedServiceUpdateHandoff(
   const helperParams = {
     runId: metaFile.meta.runId,
     beforePark: Boolean(params.beforePark),
-    requester:
-      params.requester?.channel && !isInternalMessageChannel(params.requester.channel)
-        ? params.requester
-        : undefined,
+    requester: resolveManagedUpdateRequester(params.requester),
     parentPid,
     parentStartIdentity: String(parentStartIdentity),
     parentExitTimeoutMs,

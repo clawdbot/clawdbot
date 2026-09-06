@@ -9,6 +9,10 @@ import {
   type UpdateRepairWorkerMessage,
   type UpdateRepairValidation,
 } from "./update-repair-protocol.js";
+import {
+  createManagedUpdateRequesterAuthority,
+  UpdateRequesterRevokedError,
+} from "./update-requester-authority.js";
 import { getUpdateRun } from "./update-run-ledger.js";
 
 const controller = new AbortController();
@@ -75,41 +79,49 @@ process.on("message", (raw: unknown) => {
           defaultWorkspaceDir: message.target.workspaceDir,
         }),
       };
-      void runUpdateRepairLoop({
-        target: message.target,
-        context: { ...message.failure, ...message.context, phase: "verifying" },
-        budget: message.budget,
-        signal: controller.signal,
-        isCurrent: () => {
-          if (!process.connected || controller.signal.aborted) {
-            return false;
-          }
-          if (!message.runId) {
-            return true;
-          }
-          const run = getUpdateRun(message.runId, { env: ledgerEnv });
-          return run?.status === "running" && run.phase === "repairing";
-        },
-        onEvent: (event) => send({ type: "event", event }),
-        validate: async (signal) => {
-          signal.throwIfAborted();
-          const id = ++requestId;
-          const deferred = createDeferredCore<UpdateRepairValidation>();
-          const abort = () => {
-            send({ type: "cancel-validation", id });
-            deferred.reject(toErrorObject(signal.reason, "Repair validation cancelled."));
-          };
-          pending = { id, ...deferred };
-          signal.addEventListener("abort", abort, { once: true });
-          try {
-            send({ type: "validate", id });
-            return await deferred.promise;
-          } finally {
-            signal.removeEventListener("abort", abort);
-            pending = undefined;
-          }
-        },
-      })
+      void (async () => {
+        const requesterAuthority = message.requester
+          ? await createManagedUpdateRequesterAuthority(message.requester, ledgerEnv)
+          : undefined;
+        return runUpdateRepairLoop({
+          target: message.target,
+          context: { ...message.failure, ...message.context, phase: "verifying" },
+          budget: message.budget,
+          signal: controller.signal,
+          isCurrent: () => {
+            if (!process.connected || controller.signal.aborted) {
+              return false;
+            }
+            if (requesterAuthority?.isCurrent() === false) {
+              throw new UpdateRequesterRevokedError();
+            }
+            if (!message.runId) {
+              return true;
+            }
+            const run = getUpdateRun(message.runId, { env: ledgerEnv });
+            return run?.status === "running" && run.phase === "repairing";
+          },
+          onEvent: (event) => send({ type: "event", event }),
+          validate: async (signal) => {
+            signal.throwIfAborted();
+            const id = ++requestId;
+            const deferred = createDeferredCore<UpdateRepairValidation>();
+            const abort = () => {
+              send({ type: "cancel-validation", id });
+              deferred.reject(toErrorObject(signal.reason, "Repair validation cancelled."));
+            };
+            pending = { id, ...deferred };
+            signal.addEventListener("abort", abort, { once: true });
+            try {
+              send({ type: "validate", id });
+              return await deferred.promise;
+            } finally {
+              signal.removeEventListener("abort", abort);
+              pending = undefined;
+            }
+          },
+        });
+      })()
         .then((result) => {
           closeOpenClawStateDatabase();
           send({ type: "result", result }, () => process.exit(0));

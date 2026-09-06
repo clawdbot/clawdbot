@@ -9,6 +9,7 @@ import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { ManagedRunStdin } from "../process/supervisor/types.js";
+import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import { cancelBackgroundExecSession } from "./bash-process-control.js";
 import {
   acknowledgeNotifyOnExit,
@@ -261,6 +262,7 @@ async function sleepPollInterval(ms: number, signal?: AbortSignal): Promise<void
 export function createProcessTool(
   defaults?: ProcessToolDefaults,
 ): AgentToolWithMeta<typeof processSchema, unknown> {
+  const assertSourceCurrent = captureAgentToolSourceExecutionGuard();
   if (defaults?.cleanupMs !== undefined) {
     setJobTtlMs(defaults.cleanupMs);
   }
@@ -303,6 +305,11 @@ export function createProcessTool(
     description: describeProcessTool({ hasCronTool: defaults?.hasCronTool === true }),
     parameters: processSchema,
     execute: async (_toolCallId, args, signal, _onUpdate): Promise<AgentToolResult<unknown>> => {
+      const assertCurrent = () => {
+        signal?.throwIfAborted();
+        assertSourceCurrent();
+      };
+      assertCurrent();
       const action = (args as { action?: unknown }).action;
       if (!PROCESS_TOOL_ACTIONS.includes(action as ProcessToolAction)) {
         return failText(
@@ -534,6 +541,7 @@ export function createProcessTool(
           }
           await writeProcessStdin(resolved.stdin, params.data ?? "");
           if (params.eof) {
+            assertCurrent();
             resolved.stdin.end();
           }
           return runningSessionResult(

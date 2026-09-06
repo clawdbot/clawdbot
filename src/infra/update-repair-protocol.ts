@@ -11,6 +11,7 @@ export const updateRepairValidationSchema = z.object({
   ok: z.boolean(),
   score: z.number().finite(),
   summary: z.string(),
+  stopReason: z.string().max(1024).optional(),
 });
 const text = z.string().max(1024);
 const wireValidation = updateRepairValidationSchema.extend({ summary: text });
@@ -55,6 +56,9 @@ export const updateRepairParentMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("start"),
     runId: text.optional(),
+    requester: z
+      .object({ channel: text.optional(), accountId: text.optional(), senderId: text.optional() })
+      .optional(),
     target: z.object({
       stateDir: z.string(),
       configPath: z.string(),
@@ -87,6 +91,7 @@ export type UpdateRepairTarget = {
   workspaceDir: string;
   installRoot: string;
   candidateRoot?: string;
+  environment?: NodeJS.ProcessEnv;
 };
 export type UpdateRepairValidation = z.infer<typeof updateRepairValidationSchema>;
 export type UpdateRepairResult = Extract<UpdateRepairWorkerMessage, { type: "result" }>["result"];
@@ -95,6 +100,7 @@ export type UpdateRepairParams = {
   target: UpdateRepairTarget;
   nodeRunner?: string;
   runId?: string;
+  requester?: { channel?: string; accountId?: string; senderId?: string };
   context: TriageUpdateFailure & {
     phase: "validating" | "verifying";
     beforeVersion?: string;

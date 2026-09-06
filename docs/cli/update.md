@@ -450,7 +450,12 @@ targets do not support automatic schema-neutral rollback; see
 Candidate Doctor, config, plugin, or canary validation failures enter a bounded
 `repairing` phase using configured inference. The updater reruns the failed
 check after each attempt and activates only after it passes. Failed or unavailable
-repair discards the candidate and leaves the serving Gateway untouched. See
+repair discards the candidate and leaves the serving Gateway untouched.
+Pre-activation repair uses disposable rehearsal state and configuration, then
+independently validates surviving candidate changes before activation, and
+`repair-requires-config-change` reports changed top-level keys that require
+operator-run `openclaw doctor --fix` or `openclaw triage`; post-activation repair
+uses the live installation. See
 [Unattended repair](/install/updating#unattended-repair-on-your-own-inference) for
 budgets, permitted repairs, and attempt reports.
 
