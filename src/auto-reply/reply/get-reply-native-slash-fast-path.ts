@@ -481,6 +481,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     typing: params.typing,
     allowTextCommands: directiveResult.result.allowTextCommands,
     inlineStatusRequested: directiveResult.result.inlineStatusRequested,
+    inlineCommand: directiveResult.result.inlineCommand,
     command: directiveResult.result.command,
     skillCommands: loadedSkillCommands ?? directiveResult.result.skillCommands,
     directives: directiveResult.result.directives,

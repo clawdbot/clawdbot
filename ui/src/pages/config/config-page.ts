@@ -99,6 +99,12 @@ export type { ConfigPageId } from "./config-sections.ts";
 
 type ConfigFormMode = "form" | "raw";
 type ConfigSelection = { activeSection: string | null; activeSubsection: string | null };
+type SessionObserverModelsResult = {
+  gateway: ApplicationContext["gateway"];
+  client: GatewayBrowserClient;
+  agentId: string;
+  models: ModelCatalogEntry[];
+};
 // Keys settable through this page's setSetting helper. Whether a key syncs
 // across devices is owned by app/server-prefs.ts, not by this type.
 type ConfigPageSetting =
@@ -327,13 +333,6 @@ export class ConfigPage extends OpenClawLightDomElement {
   private systemInfoGatewaySource: ApplicationContext["gateway"] | null = null;
   private systemInfoClient: GatewayBrowserClient | null = null;
   private updateStatusClient: GatewayBrowserClient | null = null;
-  private sessionObserverModelsClient: GatewayBrowserClient | null = null;
-  private sessionObserverModelsAgentId: string | null = null;
-  private sessionObserverModelsRequest: {
-    client: GatewayBrowserClient;
-    agentId: string;
-    promise: Promise<void>;
-  } | null = null;
   private readonly systemInfoPolling = new PollController(
     this,
     SESSION_OBSERVER_STATUS_POLL_INTERVAL_MS,
@@ -360,9 +359,10 @@ export class ConfigPage extends OpenClawLightDomElement {
         : initialState,
     onComplete: (systemInfo) => {
       this.systemInfo = systemInfo;
-      const client = this.systemInfoRequestClient();
-      if (client) {
-        void this.ensureSessionObserverModels(client, this.context.agentSelection.state.selectedId);
+      // Status polling must not restart a slow catalog read. Changed owners
+      // still replace pending work through the model task's reactive args.
+      if (this.sessionObserverModelsTask.status !== TaskStatus.PENDING) {
+        void this.sessionObserverModelsTask.run();
       }
     },
     onError: (error) => {
@@ -372,6 +372,40 @@ export class ConfigPage extends OpenClawLightDomElement {
         this.systemInfoPolling.stop();
       }
     },
+  });
+  private readonly sessionObserverModelsTask: Task<
+    readonly [ApplicationContext["gateway"] | null, GatewayBrowserClient | null, string | null],
+    SessionObserverModelsResult
+  > = new Task(this, {
+    args: () =>
+      [
+        this.systemInfoGatewaySource,
+        this.systemInfo ? this.systemInfoRequestClient() : null,
+        this.context?.agentSelection.state.selectedId ?? null,
+      ] as const,
+    task: async ([gateway, client, agentId], { signal }) => {
+      if (!gateway || !client || !agentId) {
+        this.resetSessionObserverModels(!agentId);
+        return initialState;
+      }
+      const previous = this.sessionObserverModelsTask.value;
+      if (
+        previous?.gateway !== gateway ||
+        previous.client !== client ||
+        previous.agentId !== agentId
+      ) {
+        this.resetSessionObserverModels();
+      }
+      // Keep same-owner options visible during refresh; the shared store owns
+      // cache freshness/coalescing and Task fences publication after retirement.
+      const { models } = await loadModelCatalog(client, { agentId, preparedOnly: true, signal });
+      return { gateway, client, agentId, models };
+    },
+    onComplete: ({ models }) => {
+      this.sessionObserverModels = models;
+      this.sessionObserverModelsUnavailable = false;
+    },
+    onError: () => this.resetSessionObserverModels(true),
   });
   private readonly hiddenSessionCatalogLabelsTask = new Task(this, {
     args: () => {
@@ -432,7 +466,6 @@ export class ConfigPage extends OpenClawLightDomElement {
     .watch(
       () => this.context?.agentSelection,
       (selection, notify) => selection.subscribe(notify),
-      (selection) => this.synchronizeSessionObserverAgent(selection.state.selectedId),
     )
     .watch(
       () => this.context?.nativeDeviceSettings ?? undefined,
@@ -758,6 +791,8 @@ export class ConfigPage extends OpenClawLightDomElement {
 
   private invalidateSystemInfoRequest() {
     void this.systemInfoTask.run([null, null]);
+    void this.sessionObserverModelsTask.run([null, null, null]);
+    this.resetSessionObserverModels();
   }
 
   private systemInfoRequestClient(): GatewayBrowserClient | null {
@@ -778,73 +813,8 @@ export class ConfigPage extends OpenClawLightDomElement {
     return gateway.client;
   }
 
-  private synchronizeSessionObserverAgent(agentId: string | null) {
-    if (
-      this.sessionObserverModelsAgentId === agentId &&
-      (agentId !== null || this.sessionObserverModelsUnavailable)
-    ) {
-      return;
-    }
-    this.resetSessionObserverModels(!agentId);
-    const client = this.systemInfoRequestClient();
-    if (this.systemInfo && client) {
-      void this.ensureSessionObserverModels(client, agentId);
-    }
-  }
-
-  private ensureSessionObserverModels(
-    client: GatewayBrowserClient,
-    agentId: string | null,
-  ): Promise<void> {
-    if (!agentId) {
-      this.resetSessionObserverModels(true);
-      return Promise.resolve();
-    }
-    if (
-      this.sessionObserverModelsClient === client &&
-      this.sessionObserverModelsAgentId === agentId
-    ) {
-      return Promise.resolve();
-    }
-    const existing = this.sessionObserverModelsRequest;
-    if (existing?.client === client && existing.agentId === agentId) {
-      return existing.promise;
-    }
-    const gatewaySource = this.systemInfoGatewaySource;
-    const isCurrent = () =>
-      this.isConnected &&
-      this.systemInfoGatewaySource === gatewaySource &&
-      this.context.gateway.snapshot.client === client &&
-      this.context.agentSelection.state.selectedId === agentId &&
-      // Agent selection can cycle A -> B -> A while the first A load is still pending.
-      this.sessionObserverModelsRequest?.promise === promise;
-    const promise = loadModelCatalog(client, { agentId, preparedOnly: true })
-      .then(({ models }) => {
-        if (isCurrent()) {
-          this.sessionObserverModels = models;
-          this.sessionObserverModelsClient = client;
-          this.sessionObserverModelsAgentId = agentId;
-          this.sessionObserverModelsUnavailable = false;
-        }
-      })
-      .catch(() => {
-        if (isCurrent()) {
-          this.resetSessionObserverModels(true);
-        }
-      })
-      .finally(() => {
-        if (this.sessionObserverModelsRequest?.promise === promise) {
-          this.sessionObserverModelsRequest = null;
-        }
-      });
-    this.sessionObserverModelsRequest = { client, agentId, promise };
-    return promise;
-  }
-
   private resetSessionObserverModels(unavailable = false) {
     this.sessionObserverModels = [];
-    this.sessionObserverModelsClient = null;
-    this.sessionObserverModelsAgentId = null;
     this.sessionObserverModelsUnavailable = unavailable;
   }
 

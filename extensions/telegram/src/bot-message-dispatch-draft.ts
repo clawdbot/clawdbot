@@ -14,7 +14,7 @@ import type {
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 import { createTelegramDraftStream, type TelegramDraftPreview } from "./draft-stream.js";
 import { renderTelegramHtmlText } from "./format.js";
-import type { DraftLaneState, LaneName } from "./lane-delivery.js";
+import type { DraftLaneState, LaneName } from "./lane-delivery-text-deliverer.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import { splitTelegramReasoningText } from "./reasoning-lane-coordinator.js";

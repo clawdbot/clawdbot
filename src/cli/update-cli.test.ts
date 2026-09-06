@@ -560,7 +560,8 @@ vi.mock("../runtime.js", async (importOriginal) => ({
 vi.mock("../commands/triage.js", () => ({ triageCommand }));
 
 const { runGatewayUpdate } = await import("../infra/update-runner.js");
-const { getUpdateRun, listUpdateRuns } = await import("../infra/update-run-ledger.js");
+const { createUpdateRun, getUpdateRun, listUpdateRuns } =
+  await import("../infra/update-run-ledger.js");
 // Real recovery dependencies need the initialized runtime and child-process mocks.
 const { runUpdateFailureTriage } = await import("../infra/update-triage.js");
 const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
@@ -3759,23 +3760,38 @@ describe("update-cli", () => {
     );
   });
 
-  it("post-core resume children exit after writing a plugin update result", async () => {
-    const resultDir = createCaseDir("openclaw-post-core-result");
-    const resultPath = path.join(resultDir, "plugins.json");
-    await fs.mkdir(resultDir, { recursive: true });
+  it.each([false, true])(
+    "post-core resume children leave run ownership with the parent (forwarded run=%s)",
+    async (forwardedRun) => {
+      const resultDir = createCaseDir("openclaw-post-core-result");
+      const resultPath = path.join(resultDir, "plugins.json");
+      await fs.mkdir(resultDir, { recursive: true });
+      const parentRun = forwardedRun
+        ? createUpdateRun({
+            trigger: "cli",
+            before: { version: "2026.9.1" },
+            target: { version: "2026.9.2" },
+          })
+        : undefined;
+      const runsBefore = listUpdateRuns();
 
-    await runPostCoreCommand(
-      { restart: false },
-      { OPENCLAW_UPDATE_POST_CORE_RESULT_PATH: resultPath },
-    );
+      await runPostCoreCommand(
+        { restart: false },
+        {
+          OPENCLAW_UPDATE_POST_CORE_RESULT_PATH: resultPath,
+          OPENCLAW_UPDATE_RUN_ID: parentRun?.runId,
+        },
+      );
 
-    const result = JSON.parse(await fs.readFile(resultPath, "utf-8")) as {
-      status?: string;
-    };
-    expect(result.status).toBe("ok");
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
-    expectNoSideEffects(runGatewayUpdate, spawn);
-  });
+      const result = JSON.parse(await fs.readFile(resultPath, "utf-8")) as {
+        status?: string;
+      };
+      expect(result.status).toBe("ok");
+      expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
+      expectNoSideEffects(runGatewayUpdate, spawn);
+      expect(listUpdateRuns()).toEqual(runsBefore);
+    },
+  );
 
   it("post-core resume mode uses the parent install records snapshot for missing payload warnings", async () => {
     const resultDir = createCaseDir("openclaw-post-core-records");
@@ -7186,6 +7202,51 @@ describe("update-cli", () => {
     }
   });
 
+  it.each(["interrupted", "completed"] as const)(
+    "refuses mutation through a %s Windows task recovery owner",
+    async (outcome) => {
+      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      const processOnSpy = vi.spyOn(process, "on");
+      const processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+      const { maybeStopManagedServiceBeforeMutableUpdate, UpdateCommandAbort } =
+        await import("./update-cli/update-command-service.js");
+      mockRunningManagedGateway(["node", path.join(process.cwd(), "dist", "index.js"), "gateway"]);
+      suspendScheduledTaskAutoStartForUpdate.mockResolvedValue(true);
+      resumeScheduledTaskAutoStartAfterUpdate.mockResolvedValue(true);
+      const stopped = await maybeStopManagedServiceBeforeMutableUpdate({
+        root: process.cwd(),
+        updateInstallKind: "package",
+        shouldRestart: true,
+        jsonMode: true,
+      });
+      const recovery = requireValue(stopped.windowsTaskAutoStartRecovery, "task recovery owner");
+      try {
+        if (outcome === "interrupted") {
+          const listener = processOnSpy.mock.calls.find(([event]) => event === "SIGINT")?.[1];
+          if (typeof listener !== "function") {
+            throw new Error("missing task recovery signal handler");
+          }
+          listener();
+        } else {
+          await recovery.restore();
+          recovery.complete();
+        }
+        expect(() => recovery.beginMutation()).toThrow(UpdateCommandAbort);
+      } finally {
+        await recovery.restore();
+        recovery.complete();
+        if (outcome === "interrupted") {
+          await vi.waitFor(() => expect(processExitSpy).toHaveBeenCalledWith(130));
+        }
+        platformSpy.mockRestore();
+        processOnSpy.mockRestore();
+        processExitSpy.mockRestore();
+      }
+      expect(resumeScheduledTaskAutoStartAfterUpdate).toHaveBeenCalledOnce();
+      expect(packageInstallCommandCall()).toBeUndefined();
+    },
+  );
+
   it("does not restore autostart on a pinned Windows task replaced during service stop", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     mockRunningManagedGateway(["node", path.join(process.cwd(), "dist", "index.js"), "gateway"]);
@@ -7222,19 +7283,39 @@ describe("update-cli", () => {
     expect(packageInstallCommandCall()).toBeUndefined();
   });
 
-  it.each(["SIGINT", "SIGBREAK"] as const)(
-    "restores Windows Scheduled Task autostart on %s during suspension",
-    async (signal) => {
+  it.each(
+    (["SIGINT", "SIGBREAK"] as const).flatMap((signal) =>
+      (["suspension", "schema preflight"] as const).map((phase) => ({ signal, phase })),
+    ),
+  )(
+    "restores Windows Scheduled Task autostart on $signal during $phase",
+    async ({ signal, phase }) => {
       const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       const processOnSpy = vi.spyOn(process, "on");
       const processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
-      let finishSuspension: ((suspended: boolean) => void) | undefined;
-      suspendScheduledTaskAutoStartForUpdate.mockImplementationOnce(
-        () =>
-          new Promise<boolean>((resolve) => {
-            finishSuspension = resolve;
-          }),
-      );
+      const gate = createDeferred();
+      const entered = createDeferred();
+      const waitForSignal = async () => {
+        entered.resolve();
+        await gate.promise;
+      };
+      suspendScheduledTaskAutoStartForUpdate.mockImplementationOnce(async () => {
+        if (phase === "suspension") {
+          await waitForSignal();
+        }
+        return true;
+      });
+      if (phase === "schema preflight") {
+        vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
+          packageTargetStatus({ schemaVersions: { state: 3, agent: 11 } }),
+        );
+        databasePreflightMocks.preflightOpenClawDatabaseSchemas
+          .mockReturnValueOnce({ incompatible: [], indeterminate: [] })
+          .mockImplementationOnce(async () => {
+            await waitForSignal();
+            return { incompatible: [], indeterminate: [] };
+          });
+      }
       resumeScheduledTaskAutoStartAfterUpdate.mockResolvedValue(true);
       mockPackageInstallStatus(createCaseDir("openclaw-update-suspension-signal"));
       primeServiceCommand(["openclaw", "gateway", "run"], {
@@ -7244,31 +7325,42 @@ describe("update-cli", () => {
       serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
 
       const updatePromise = updateCommand({ yes: true, restart: false });
-      await vi.waitFor(() => expect(suspendScheduledTaskAutoStartForUpdate).toHaveBeenCalledOnce());
-      const signalListener = processOnSpy.mock.calls.find(([event]) => event === signal)?.[1];
-      if (typeof signalListener !== "function" || !finishSuspension) {
-        throw new Error(`expected armed ${signal} recovery and pending task suspension`);
-      }
-      signalListener();
-      signalListener();
-      expect(resumeScheduledTaskAutoStartAfterUpdate).not.toHaveBeenCalled();
-      finishSuspension(true);
+      try {
+        await Promise.race([
+          entered.promise,
+          updatePromise.then(() => {
+            throw new Error(`update completed before ${phase}`);
+          }),
+        ]);
+        const signalListener = processOnSpy.mock.calls.find(([event]) => event === signal)?.[1];
+        if (typeof signalListener !== "function") {
+          throw new Error(`expected armed ${signal} recovery during ${phase}`);
+        }
+        signalListener();
+        signalListener();
+        expect(resumeScheduledTaskAutoStartAfterUpdate).not.toHaveBeenCalled();
+        expect(packageInstallCommandCall()).toBeUndefined();
+        gate.resolve();
 
-      await updatePromise;
-      expect(resumeScheduledTaskAutoStartAfterUpdate).toHaveBeenCalledTimes(1);
-      expect(serviceStop).not.toHaveBeenCalled();
-      expect(packageInstallCommandCall()).toBeUndefined();
-      expect(listUpdateRuns({ limit: 1 })).toMatchObject([
-        { phase: "finished", status: "skipped", reason: "cancelled" },
-      ]);
-      expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
-      await vi.waitFor(() => {
-        expect(processExitSpy).toHaveBeenCalledTimes(2);
-        expect(processExitSpy).toHaveBeenCalledWith(130);
-      });
-      platformSpy.mockRestore();
-      processOnSpy.mockRestore();
-      processExitSpy.mockRestore();
+        await updatePromise;
+        expect(resumeScheduledTaskAutoStartAfterUpdate).toHaveBeenCalledOnce();
+        expect(serviceStop).not.toHaveBeenCalled();
+        expect(packageInstallCommandCall()).toBeUndefined();
+        expect(listUpdateRuns({ limit: 1 })).toMatchObject([
+          { phase: "finished", status: "skipped", reason: "cancelled" },
+        ]);
+        expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+        await vi.waitFor(() => {
+          expect(processExitSpy).toHaveBeenCalledTimes(2);
+          expect(processExitSpy).toHaveBeenCalledWith(130);
+        });
+      } finally {
+        gate.resolve();
+        await updatePromise;
+        platformSpy.mockRestore();
+        processOnSpy.mockRestore();
+        processExitSpy.mockRestore();
+      }
     },
   );
 

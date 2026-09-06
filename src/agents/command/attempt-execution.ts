@@ -1155,6 +1155,7 @@ export function runAgentAttempt(params: {
               }),
             ),
             scheduledToolPolicy: params.opts.scheduledToolPolicy,
+            pinnedWidgetAuthoring: params.opts.pinnedWidgetAuthoring,
             cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
             cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
             oneShotCliRun: params.opts.oneShotCliRun,
@@ -1388,6 +1389,7 @@ export function runAgentAttempt(params: {
       ? params.opts.trustedInternalHandoff
       : undefined,
     scheduledToolPolicy: params.opts.scheduledToolPolicy,
+    pinnedWidgetAuthoring: params.opts.pinnedWidgetAuthoring,
     cronCreatorAuthorityCapability: params.opts.cronCreatorAuthorityCapability,
     skillLibraryAuthoring: params.opts.skillLibraryAuthoring,
     internalEvents: params.opts.internalEvents,

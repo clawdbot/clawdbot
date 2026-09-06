@@ -12,7 +12,7 @@ import {
   markGatewayRestartTrace,
   startGatewayRestartTrace,
 } from "../../gateway/restart-trace.js";
-import type { GatewayHostLifecycle } from "../../gateway/server-public.js";
+import type { GatewayHostLifecycle, GatewayStartupOperation } from "../../gateway/server-public.js";
 import { GatewayStartupCleanupError } from "../../gateway/server-shutdown.js";
 import type { startGatewayServer } from "../../gateway/server.js";
 import { flushDiagnosticsTimeline } from "../../infra/diagnostics-timeline.js";
@@ -30,6 +30,7 @@ import { flushLogger } from "../../logging/logger.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runOutsideGatewayRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
@@ -103,12 +104,54 @@ async function waitForHealthyGatewayChild(
   return false;
 }
 
+function createGatewayStartupOperations(): {
+  run: GatewayStartupOperation;
+  signal: AbortSignal;
+  close(): void;
+  failedWith(error: unknown): boolean;
+  stopCompletion?: Promise<void>;
+  drain(): Promise<void>;
+} {
+  const scope = new AsyncWorkScope();
+  let failure: { error: unknown } | undefined;
+  const run: GatewayStartupOperation = async (operation) => {
+    if (scope.isClosing) {
+      throw scope.signal.reason;
+    }
+    return await scope.track(async () => {
+      try {
+        return await operation(scope.signal);
+      } catch (error) {
+        if (!scope.signal.aborted || error !== scope.signal.reason) {
+          failure ??= { error };
+        }
+        throw error;
+      }
+    });
+  };
+  return {
+    run,
+    signal: scope.signal,
+    close: () => scope.beginClose(),
+    failedWith: (error: unknown) => failure !== undefined && failure.error === error,
+    async drain() {
+      await scope.drain();
+      // AsyncWorkScope joins descendants with allSettled; failed cleanup must
+      // still make the accepted stop fail rather than certify a clean exit.
+      if (failure) {
+        throw failure.error;
+      }
+    },
+  };
+}
+
 export async function runGatewayLoop(params: {
   start: (params?: {
     processStartedAt?: number;
     startupStartedAt?: number;
     requestHotReloadRecovery?: GatewayRestartEmitter;
     hostLifecycle?: GatewayHostLifecycle;
+    startupOperation?: GatewayStartupOperation;
   }) => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
   runtime: RuntimeEnv;
   /** Grants this run loop authority over the process it exclusively owns. */
@@ -148,6 +191,7 @@ export async function runGatewayLoop(params: {
   let lock = await acquireGatewayLock({ port: params.lockPort });
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
   let hostLifecycle: ReturnType<typeof createGatewayHostLifecycle> | undefined;
+  let startupOperations = createGatewayStartupOperations();
   let terminalHostedStop: ReturnType<typeof createGatewayHostLifecycle> | undefined;
   let shuttingDown = false;
   let restartResolver: (() => void) | null = null;
@@ -611,6 +655,12 @@ export async function runGatewayLoop(params: {
   const runAcceptedRequest = (acceptedRequest: GatewayRunSignalRequest) => {
     const { action, restartIntent } = acceptedRequest;
     const isRestart = action !== "stop";
+    const acceptedStartupOperations = startupOperations;
+    if (acceptedRequest.action === "stop") {
+      // A queued restart still needs startup's close handle. Only an effective
+      // stop cancels preflight, including a stop overriding that queued restart.
+      acceptedStartupOperations.close();
+    }
     if (action === "restart") {
       activeRestartRequest = acceptedRequest;
     } else if (!isRestart) {
@@ -654,7 +704,7 @@ export async function runGatewayLoop(params: {
       };
     }
 
-    void (async () => {
+    const completion = (async () => {
       let managedUpdateOwner: GatewayRestartIntent["successorOwner"];
       let managedUpdateCancellation:
         | false
@@ -828,6 +878,9 @@ export async function runGatewayLoop(params: {
           : restartDrainTimeoutMs === undefined
             ? SHUTDOWN_TIMEOUT_MS - RESTART_CLOSE_REPLY_DRAIN_SHUTDOWN_RESERVE_MS
             : Math.max(0, (restartDrainDeadlineAt ?? Date.now()) - Date.now());
+        if (acceptedRequest.action === "stop") {
+          await acceptedStartupOperations.drain();
+        }
         await server?.close({
           reason: isRestart ? "gateway restarting" : "gateway stopping",
           restartExpectedMs: isRestart ? 1500 : null,
@@ -883,6 +936,14 @@ export async function runGatewayLoop(params: {
         }
       }
     })();
+    if (acceptedRequest.action === "stop") {
+      acceptedStartupOperations.stopCompletion = completion;
+    }
+    // Startup can still be awaiting unrelated work; observe shutdown immediately
+    // while retaining its rejecting promise for the cancelled startup's join.
+    void completion.catch((error: unknown) => {
+      gatewayLog.error(`gateway lifecycle completion failed: ${formatErrorMessage(error)}`);
+    });
   };
   const flushPendingStartupRequest = (opts: { allowMissingServer?: boolean } = {}) => {
     if (!pendingStartupRequest || !restartResolver) {
@@ -1175,6 +1236,10 @@ export async function runGatewayLoop(params: {
     // SIGTERM/SIGINT still exit after a graceful shutdown.
     let isFirstIteration = true;
     for (;;) {
+      const iterationStartupOperations = isFirstIteration
+        ? startupOperations
+        : createGatewayStartupOperations();
+      startupOperations = iterationStartupOperations;
       await hostLifecycle?.retire();
       const iterationHost = createGatewayHostLifecycle({
         processOwner: {
@@ -1203,7 +1268,9 @@ export async function runGatewayLoop(params: {
           startupStartedAt,
           requestHotReloadRecovery: eagerLifecycleRuntime.requestGatewayRestartWithSignalAdmission,
           hostLifecycle: iterationHost.capability,
+          startupOperation: iterationStartupOperations.run,
         });
+        iterationStartupOperations.close();
         server = startedServer;
         startupFailedWithoutServerHandle = false;
         await new Promise<void>((resolve, reject) => {
@@ -1215,6 +1282,18 @@ export async function runGatewayLoop(params: {
           flushPendingStartupRequest();
         });
       } catch (err) {
+        iterationStartupOperations.close();
+        if (
+          iterationStartupOperations.stopCompletion &&
+          (err === iterationStartupOperations.signal.reason ||
+            iterationStartupOperations.failedWith(err))
+        ) {
+          await iterationStartupOperations.stopCompletion;
+          if (err === iterationStartupOperations.signal.reason) {
+            return;
+          }
+          throw err;
+        }
         await iterationHost.retire();
         const failedServer = server;
         server = null;

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { HostedGatewayStop } from "../../daemon/hosted-stop.js";
-import type { GatewayServer } from "../../gateway/server-public.js";
+import type { GatewayServer, GatewayStartupOperation } from "../../gateway/server-public.js";
 import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
 import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
 import type { GatewayBootLifecycleCompletion } from "../../infra/gateway-boot-lifecycle.js";
@@ -1145,6 +1145,7 @@ describe("runGatewayLoop", () => {
           startupStartedAt: expect.any(Number),
           requestHotReloadRecovery: requestGatewayRestartWithSignalAdmission,
           hostLifecycle: { request: expect.any(Function) },
+          startupOperation: expect.any(Function),
         });
         expect(runtime.exit).toHaveBeenCalledWith(0);
         expect(stopManagedProviderLocalServices).toHaveBeenCalledOnce();
@@ -2137,6 +2138,141 @@ describe("runGatewayLoop", () => {
       vi.useRealTimers();
     }
   });
+
+  it.each(["stop", "restart-then-stop", "cleanup-failure"] as const)(
+    "joins admitted startup cleanup for %s before exiting",
+    async (scenario) => {
+      vi.clearAllMocks();
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const entered = createDeferredCore<AbortSignal>();
+        const cleanup = createDeferredCore();
+        const activeDrain = createDeferredCore();
+        waitForGatewayActiveWork.mockImplementationOnce(async () => {
+          await activeDrain.promise;
+          return { drained: true, snapshot: idleActiveWorkSnapshot };
+        });
+        const cleanupFailure = new Error("startup snapshot cleanup failed");
+        const completeBoot = vi.fn();
+        const close = createCloseMock();
+        const { runtime, exited } = createRuntimeWithExitSignal();
+        const { runGatewayLoop } = await import("./run-loop.js");
+        const start: Parameters<typeof runGatewayLoop>[0]["start"] = async (options) => {
+          await options!.startupOperation!(async (signal) => {
+            entered.resolve(signal);
+            await new Promise<void>((resolve) => {
+              signal.addEventListener("abort", () => resolve(), { once: true });
+            });
+            await cleanup.promise;
+            throw scenario === "cleanup-failure" ? cleanupFailure : signal.reason;
+          });
+          return createGatewayServer(close);
+        };
+        const loop = runGatewayLoop({ start, runtime, completeBoot });
+        const settled = Promise.allSettled([loop]);
+        let loopFinished = false;
+        void settled.then(() => {
+          loopFinished = true;
+        });
+        const signal = await entered.promise;
+        try {
+          if (scenario === "restart-then-stop") {
+            captureSignal("SIGUSR1")();
+            await waitForLoopCondition(
+              () => markGatewaySigusr1RestartHandled.mock.calls.length > 0,
+              "expected queued startup restart",
+            );
+            expect(signal.aborted).toBe(false);
+          }
+          captureSignal("SIGINT")();
+          expect(signal.aborted).toBe(true);
+          // A duplicate signal cannot bypass the already admitted cleanup join.
+          captureSignal("SIGINT")();
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          expect(runtime.exit).not.toHaveBeenCalled();
+          expect(completeBoot).not.toHaveBeenCalled();
+          cleanup.resolve();
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          expect(loopFinished).toBe(false);
+          expect(runtime.exit).not.toHaveBeenCalled();
+          expect(completeBoot).not.toHaveBeenCalled();
+          activeDrain.resolve();
+          await expect(exited).resolves.toBe(scenario === "cleanup-failure" ? 1 : 0);
+          if (scenario === "cleanup-failure") {
+            expect(await settled).toEqual([{ status: "rejected", reason: cleanupFailure }]);
+            expect(completeBoot).toHaveBeenCalledExactlyOnceWith({
+              outcome: "forced_stop",
+              reason: "gateway.stop_close_failed",
+            });
+          } else {
+            expect(await settled).toEqual([{ status: "fulfilled", value: undefined }]);
+            expect(completeBoot).toHaveBeenCalledExactlyOnceWith({
+              outcome: "clean_stop",
+              reason: "gateway.stop",
+            });
+          }
+          expect(close).not.toHaveBeenCalled();
+        } finally {
+          if (!signal.aborted) {
+            captureSignal("SIGINT")();
+          }
+          cleanup.resolve();
+          activeDrain.resolve();
+          await settled;
+        }
+      });
+    },
+  );
+
+  it.each(["stopped", "started"] as const)(
+    "refuses retained startup work after %s",
+    async (phase) => {
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const entered = createDeferredCore<GatewayStartupOperation>();
+        const resumeStartup = createDeferredCore();
+        const close = createCloseMock();
+        const acquireResource = vi.fn(async () => {});
+        const { runtime, exited } = createRuntimeWithExitSignal();
+        const { runGatewayLoop } = await import("./run-loop.js");
+        const start: Parameters<typeof runGatewayLoop>[0]["start"] = async (options) => {
+          entered.resolve(options!.startupOperation!);
+          if (phase === "stopped") {
+            await resumeStartup.promise;
+            await options!.startupOperation!(acquireResource);
+          }
+          return createGatewayServer(close);
+        };
+        const loop = runGatewayLoop({ start, runtime });
+        const observed = loop.catch(() => {});
+        const startupOperation = await entered.promise;
+        try {
+          if (phase === "stopped") {
+            captureSignal("SIGINT")();
+            await exited;
+          } else {
+            await new Promise<void>((resolve) => {
+              setImmediate(resolve);
+            });
+          }
+          await expect(startupOperation(acquireResource)).rejects.toMatchObject({
+            name: "AbortError",
+          });
+          expect(acquireResource).not.toHaveBeenCalled();
+        } finally {
+          resumeStartup.resolve();
+          if (phase === "started") {
+            captureSignal("SIGINT")();
+            await exited;
+          } else {
+            await observed;
+          }
+        }
+      });
+    },
+  );
 
   it("processes SIGINT immediately before startup returns a server", async () => {
     vi.clearAllMocks();

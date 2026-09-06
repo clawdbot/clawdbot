@@ -33,6 +33,7 @@ import {
   loadBundledProviderStaticCatalogContextModels,
 } from "./embedded-agent-runner/model.static-catalog.js";
 import { createStaticModelIdMatcher } from "./embedded-agent-runner/model.static-id.js";
+import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import {
   buildConfiguredModelCatalog,
   parseConfiguredModelVisibilityEntries,
@@ -372,6 +373,7 @@ export async function prepareWorkspaceBuildGroup(
             cfg: input.config,
             env,
             metadataSnapshot: pluginMetadataSnapshot,
+            registeredProviders: runtimePluginRegistry?.providers,
             ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
           }));
     // Provider definitions are process/config facts. Which refs are admitted remains agent-owned.
@@ -624,9 +626,14 @@ export async function prepareAgentCatalogSource(
   } = {},
 ): Promise<PreparedModelRuntimeCatalogSource> {
   const { env, input, providerIds } = agentFacts;
+  const normalizeProvider = createPreparedModelCatalogProviderNormalizer(
+    pluginGeneration.pluginMetadataSnapshot,
+    input.config,
+    env,
+  );
   const providerOutcomes = new Map<string, ProviderCatalogOutcome>();
   const recordProviderOutcome = (outcome: ProviderCatalogOutcome) => {
-    const provider = normalizeProviderId(outcome.provider);
+    const provider = normalizeProvider(outcome.provider);
     if (provider) {
       providerOutcomes.set(`${provider}\0${outcome.profileId ?? ""}`, { ...outcome, provider });
     }

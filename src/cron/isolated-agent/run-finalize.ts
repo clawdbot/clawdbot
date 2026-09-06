@@ -5,6 +5,10 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
+import {
+  buildAgentRunTerminalReplySnapshot,
+  normalizeAgentRunTerminalReplySnapshot,
+} from "../../agents/agent-run-terminal-reply.js";
 import { resolveAuthoredModelContextTokens } from "../../agents/context-resolution.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { hasIntentionalTerminalCompletion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
@@ -64,6 +68,14 @@ export async function finalizeCronRun(params: {
 }): Promise<RunCronAgentTurnResult> {
   const { prepared, execution } = params;
   const finalRunResult = execution.runResult;
+  const replyDisposition = (
+    normalizeAgentRunTerminalReplySnapshot(finalRunResult.meta?.terminalReply) ??
+    buildAgentRunTerminalReplySnapshot({
+      visibleText: finalRunResult.meta?.finalAssistantVisibleText,
+      rawText: finalRunResult.meta?.finalAssistantRawText,
+      terminalReplyKind: finalRunResult.meta?.terminalReplyKind,
+    })
+  ).disposition;
   const payloads = finalRunResult.payloads ?? [];
   const cleanupRunSession = async (reason: string) => {
     await cleanupCronRunSessionAfterRun({
@@ -217,6 +229,7 @@ export async function finalizeCronRun(params: {
       provider: providerUsed,
       model: modelUsed,
       config: prepared.cfgWithAgentDefaults,
+      agentDir: prepared.agentDir,
     });
     if (hasBillableUsage(usage)) {
       // Monetary facts do not establish token/context counters; unknown cost clears old dollars.
@@ -285,6 +298,7 @@ export async function finalizeCronRun(params: {
     return prepared.withRunSession({
       status: "error",
       error: params.abortReason(),
+      replyDisposition,
       diagnostics: mergeCronRunDiagnostics(
         prepared.preflightDiagnostics,
         createCronRunDiagnosticsFromAgentResult(finalRunResult, { finalStatus: "error" }),
@@ -311,6 +325,7 @@ export async function finalizeCronRun(params: {
     return prepared.withRunSession({
       status: "error",
       error,
+      replyDisposition,
       diagnostics: mergeCronRunDiagnostics(
         prepared.preflightDiagnostics,
         createCronRunDiagnosticsFromAgentResult(finalRunResult, { finalStatus: "error" }),
@@ -357,6 +372,7 @@ export async function finalizeCronRun(params: {
         : {}),
       summary,
       outputText,
+      replyDisposition,
       deliveryState: result?.deliveryState,
       delivered: result?.delivered,
       deliveryAttempted: result?.deliveryAttempted,
@@ -450,6 +466,7 @@ export async function finalizeCronRun(params: {
       error,
       summary: error,
       outputText: error,
+      replyDisposition,
       delivered: false,
       deliveryAttempted: false,
       diagnostics: mergeCronRunDiagnostics(
@@ -498,6 +515,7 @@ export async function finalizeCronRun(params: {
     runEndedAt: execution.runEndedAt,
     timeoutMs: prepared.timeoutMs,
     resolvedDelivery: prepared.resolvedDelivery,
+    deliveryPlan: prepared.deliveryPlan,
     deliveryRequested: prepared.deliveryRequested,
     undeliveredRunStatus: hasFatalErrorPayload || pendingPresentationWarningError ? "error" : "ok",
     skipDelivery: skipHeartbeatDelivery
@@ -538,6 +556,7 @@ export async function finalizeCronRun(params: {
       (deliveryResult.result.status === "error" ? deliveryResult.result.error : undefined);
     const resultWithDeliveryMeta: RunCronAgentTurnResult = {
       ...deliveryResult.result,
+      replyDisposition,
       deliveryState: deliveryResult.deliveryState,
       delivered: deliveryResult.result.delivered ?? deliveryResult.delivered,
       deliveryAttempted:

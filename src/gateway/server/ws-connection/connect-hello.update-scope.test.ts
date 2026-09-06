@@ -448,6 +448,9 @@ describe("sendGatewayHello update detail scope", () => {
     expect(helloPayload(context)?.features.capabilities).toContain(
       GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT,
     );
+    expect(helloPayload(context)?.features.capabilities).toContain(
+      GATEWAY_SERVER_CAPS.PROGRESS_CARD_AGENT_SCOPE,
+    );
     expect(helloPayload(context)?.features.capabilities).toContain("session-scoped-chat-metadata");
   });
 

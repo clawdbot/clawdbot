@@ -1,102 +1,58 @@
-import assert from "node:assert/strict";
-import { dirname } from "node:path";
+import fs from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-// The runner captures Date.now and safe timers at import time. This fixture runs
-// in its own process so its clock cannot leak into the enclosing Vitest worker.
-let clock = 1_000;
-const timers = new Set();
-Date.now = () => clock;
-globalThis.setTimeout = (callback, delay, ...args) => {
-  const timer = { delay, callback: () => callback(...args) };
-  timers.add(timer);
-  return timer;
-};
-globalThis.clearTimeout = (timer) => timers.delete(timer);
-
-const { startTests, test } = await import("@vitest/runner");
-const filepath = fileURLToPath(import.meta.url);
-const firstFireAt = Number(process.argv[2]);
-const names = new Map();
-const batches = [];
-const completed = [];
-const checkpoints = [];
-const snapshot = () =>
-  structuredClone({ batches, completed, pendingDelays: [...timers].map((timer) => timer.delay) });
-function fireTimers(elapsed) {
-  clock = 1_000 + elapsed;
-  for (const timer of [...timers]) {
-    timers.delete(timer);
-    timer.callback();
-  }
+// Exercise the installed v5 producer through a native worker and public runner
+// hooks. Standalone @vitest/runner would silently resolve ancestor v4 in worktrees.
+export function createTaskUpdateFixture(firstFireAt, parent = tmpdir()) {
+  const root = fs.mkdtempSync(path.resolve(parent, "vitest-task-updates-"));
+  const observation = path.join(root, "observation.json");
+  const packageRoot = path.dirname(fileURLToPath(import.meta.resolve("vitest/package.json")));
+  // Literal module URLs keep the generated runner and preload traceable.
+  const runner = fileURLToPath(new URL("./vitest-runner-task-updates.runner.mjs", import.meta.url));
+  const clock = fileURLToPath(new URL("./vitest-runner-task-updates.clock.mjs", import.meta.url));
+  const config = path.join(root, "vitest.config.mjs");
+  fs.writeFileSync(path.join(root, "package.json"), '{"type":"module","workspaces":[]}');
+  fs.writeFileSync(
+    path.join(root, "passive.test.mjs"),
+    'test("completed case", () => {}); test("independent next case", () => {});',
+  );
+  fs.writeFileSync(
+    config,
+    `export default ${JSON.stringify({
+      root,
+      test: {
+        globals: true,
+        include: ["passive.test.mjs"],
+        runner,
+        execArgv: ["--import", clock],
+        provide: { firstFireAt, observation },
+        pool: "threads",
+        maxWorkers: 1,
+        fileParallelism: false,
+        fsModuleCache: false,
+        cache: false,
+      },
+    })};`,
+  );
+  return {
+    root,
+    observation,
+    args: [
+      path.join(packageRoot, "vitest.mjs"),
+      "run",
+      "--config",
+      config,
+      "--configLoader=native",
+    ],
+    env: {
+      PATH: process.env.PATH,
+      SystemRoot: process.env.SystemRoot,
+      HOME: root,
+      USERPROFILE: root,
+      CI: "1",
+      NO_COLOR: "1",
+    },
+  };
 }
-
-const files = await startTests([filepath], {
-  config: {
-    root: dirname(filepath),
-    setupFiles: [],
-    name: "task-updates",
-    passWithNoTests: false,
-    testNamePattern: undefined,
-    allowOnly: true,
-    sequence: { hooks: "stack", setupFiles: "list", seed: 1 },
-    chaiConfig: undefined,
-    maxConcurrency: 1,
-    testTimeout: 5_000,
-    hookTimeout: 10_000,
-    retry: 0,
-    includeTaskLocation: false,
-    tags: [],
-    tagsFilter: undefined,
-    strictTags: true,
-  },
-  importFile() {
-    // Register ordinary passive tests through the public collector; neither
-    // test's execution depends on the reporter observing its completion.
-    test("completed case", () => {});
-    test("independent next case", () => {});
-  },
-  onCollected(files) {
-    for (const file of files) {
-      names.set(file.id, file.name);
-      for (const task of file.tasks) names.set(task.id, task.name);
-    }
-  },
-  onAfterRunTask(task) {
-    completed.push({ name: task.name, state: task.result.state });
-  },
-  onBeforeRunTask(task) {
-    if (task.name !== "independent next case") return;
-    // runTest has queued the previous test-finished, but has not produced the
-    // next test-prepare. No later task event or file flush can rescue delivery.
-    checkpoints.push(snapshot());
-    assert.deepEqual(completed, [{ name: "completed case", state: "pass" }]);
-    assert.deepEqual(
-      [...timers].map((timer) => timer.delay),
-      [100],
-    );
-    fireTimers(firstFireAt);
-    checkpoints.push(snapshot());
-    if (firstFireAt < 100) {
-      fireTimers(firstFireAt + 100);
-      checkpoints.push(snapshot());
-    }
-  },
-  async onTaskUpdate(packs, events) {
-    // Copy synchronously: the runner clears events and mutates task results.
-    batches.push({
-      results: packs.map(([id, result]) => ({ name: names.get(id), state: result?.state })),
-      events: events.map(([id, event]) => ({ name: names.get(id), event })),
-    });
-  },
-});
-const final = snapshot();
-fireTimers(firstFireAt + 200);
-console.log(
-  JSON.stringify({
-    checkpoints,
-    final,
-    drained: snapshot(),
-    fileStates: files.map((file) => file.result.state),
-  }),
-);

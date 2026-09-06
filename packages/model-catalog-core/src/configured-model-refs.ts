@@ -16,25 +16,35 @@ export const AGENT_MODEL_CONFIG_KEYS = [
   "pdfModel",
 ] as const;
 
-/** List raw refs from one string or primary/fallback model selector. */
-export function listModelRefsFromConfigValue(value: unknown): string[] {
+/** Visit raw selector refs without changing values, order, or fallback indices. */
+export function visitModelSelectorRefs(
+  value: unknown,
+  path: string,
+  visit: (path: string, value: string, role: "primary" | "fallback") => void,
+): void {
   if (typeof value === "string") {
-    return [value];
+    visit(path, value, "primary");
+    return;
   }
   if (!isRecord(value)) {
-    return [];
+    return;
   }
-  const refs: string[] = [];
   if (typeof value.primary === "string") {
-    refs.push(value.primary);
+    visit(`${path}.primary`, value.primary, "primary");
   }
   if (Array.isArray(value.fallbacks)) {
-    for (const fallback of value.fallbacks) {
+    for (const [index, fallback] of value.fallbacks.entries()) {
       if (typeof fallback === "string") {
-        refs.push(fallback);
+        visit(`${path}.fallbacks.${index}`, fallback, "fallback");
       }
     }
   }
+}
+
+/** List raw refs from one string or primary/fallback model selector. */
+export function listModelRefsFromConfigValue(value: unknown): string[] {
+  const refs: string[] = [];
+  visitModelSelectorRefs(value, "", (_path, ref) => refs.push(ref));
   return refs;
 }
 
@@ -49,21 +59,8 @@ export function collectConfiguredModelRefs(
       refs.push({ path, value: value.trim() });
     }
   };
-  const collectModelConfig = (path: string, value: unknown) => {
-    if (typeof value === "string") {
-      pushModelRef(path, value);
-      return;
-    }
-    if (!isRecord(value)) {
-      return;
-    }
-    pushModelRef(`${path}.primary`, value.primary);
-    if (Array.isArray(value.fallbacks)) {
-      for (const [index, entry] of value.fallbacks.entries()) {
-        pushModelRef(`${path}.fallbacks.${index}`, entry);
-      }
-    }
-  };
+  const collectModelConfig = (path: string, value: unknown) =>
+    visitModelSelectorRefs(value, path, pushModelRef);
   const collectFromAgent = (path: string, agent: unknown, includeEntrySelectors = false) => {
     if (!isRecord(agent)) {
       return;

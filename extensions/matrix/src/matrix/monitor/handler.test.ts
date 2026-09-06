@@ -2855,7 +2855,8 @@ describe("matrix monitor handler durable inbound dedupe", () => {
     );
     expect(callArg(sendMessageMatrixMock, 0, 2, "notice options")).toMatchObject({
       accountId: "ops",
-      replyToId: "$thread-root",
+      replyToId: undefined,
+      fallbackReplyToId: "$thread-root",
       threadId: "$thread-root",
       deliveryQueueId: "matrix:restart-recovery-tombstone:ops:!room:example.org:$tombstone-event",
       deliveryPartIndex: 0,
@@ -3126,6 +3127,7 @@ describe("matrix monitor handler draft streaming", () => {
 
   function createStreamingHarness(opts?: {
     replyToMode?: "off" | "first" | "all" | "batched";
+    threadReplies?: "inbound" | "always";
     blockStreamingEnabled?: boolean;
     streaming?: "partial" | "quiet" | "progress" | "off";
     previewToolProgressEnabled?: boolean;
@@ -3165,6 +3167,7 @@ describe("matrix monitor handler draft streaming", () => {
       previewToolProgressEnabled: opts?.previewToolProgressEnabled ?? false,
       blockStreamingEnabled: opts?.blockStreamingEnabled ?? false,
       replyToMode: opts?.replyToMode ?? "off",
+      threadReplies: opts?.threadReplies,
       client: { redactEvent: redactEventMock },
       logVerboseMessage,
       createReplyDispatcherWithTyping: (params: Record<string, unknown> | undefined) => {
@@ -4923,18 +4926,26 @@ describe("matrix monitor handler draft streaming", () => {
   it.each([
     {
       name: "an implicit reply with reply mode first",
+      threadReplies: undefined,
       replyToMode: "first" as const,
       payload: { text: "Final text", replyToId: "$different_msg" },
     },
     {
       name: "an explicit reply tag with reply mode off",
+      threadReplies: undefined,
+      replyToMode: "off" as const,
+      payload: { text: "Final text", replyToId: "$different_msg", replyToTag: true },
+    },
+    {
+      name: "an explicit reply inside a thread",
+      threadReplies: "always" as const,
       replyToMode: "off" as const,
       payload: { text: "Final text", replyToId: "$different_msg", replyToTag: true },
     },
   ])(
     "redacts stale draft when $name targets a different event",
-    async ({ replyToMode, payload }) => {
-      const { dispatch, redactEventMock } = createStreamingHarness({ replyToMode });
+    async ({ replyToMode, payload, threadReplies }) => {
+      const { dispatch, redactEventMock } = createStreamingHarness({ replyToMode, threadReplies });
       const { deliver, opts, finish } = await dispatch();
 
       // Simulate streaming: partial reply creates draft message.
@@ -4956,23 +4967,37 @@ describe("matrix monitor handler draft streaming", () => {
     },
   );
 
-  it("finalizes the existing draft when an implicit reply is suppressed by off mode", async () => {
-    const { dispatch, redactEventMock } = createStreamingHarness({ replyToMode: "off" });
-    const { deliver, opts, finish } = await dispatch();
+  it.each([
+    { name: "off mode", replyToMode: "off" as const, threadReplies: undefined },
+    { name: "thread fallback", replyToMode: "first" as const, threadReplies: "always" as const },
+  ])(
+    "finalizes the existing draft when an implicit reply is only $name",
+    async ({ replyToMode, threadReplies }) => {
+      const { dispatch, redactEventMock } = createStreamingHarness({ replyToMode, threadReplies });
+      const { deliver, opts, finish } = await dispatch();
 
-    opts.onPartialReply?.({ text: "Partial reply" });
-    await waitForMatrixState(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
+      opts.onPartialReply?.({ text: "Partial reply" });
+      await waitForMatrixState(() => {
+        expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+      });
+      if (threadReplies) {
+        expect(
+          callArg(sendSingleTextMessageMatrixMock, 0, 2, "thread preview options"),
+        ).toMatchObject({
+          threadId: "$msg1",
+          replyToId: undefined,
+        });
+      }
 
-    deliverMatrixRepliesMock.mockClear();
-    await deliver({ text: "Final text", replyToId: "$suppressed_implicit" }, { kind: "final" });
+      deliverMatrixRepliesMock.mockClear();
+      await deliver({ text: "Final text", replyToId: "$suppressed_implicit" }, { kind: "final" });
 
-    expect(editMessageMatrixMock).toHaveBeenCalledOnce();
-    expect(redactEventMock).not.toHaveBeenCalled();
-    expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
-    await finish();
-  });
+      expect(editMessageMatrixMock).toHaveBeenCalledOnce();
+      expect(redactEventMock).not.toHaveBeenCalled();
+      expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
+      await finish();
+    },
+  );
 
   it("redacts stale draft when final payload intentionally drops reply threading", async () => {
     const { dispatch, redactEventMock } = createStreamingHarness({ replyToMode: "first" });

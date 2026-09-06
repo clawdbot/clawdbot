@@ -39,7 +39,7 @@ describe("subagent spawn envelope", () => {
   );
 
   it.each([
-    { childDepth: undefined, maxSpawnDepth: undefined, parent: "main agent", spawning: false },
+    { childDepth: undefined, maxSpawnDepth: undefined, parent: "main agent", spawning: true },
     { childDepth: 1, maxSpawnDepth: 2, parent: "main agent", spawning: true },
     { childDepth: 2, maxSpawnDepth: 2, parent: "parent orchestrator", spawning: false },
   ])(
@@ -56,6 +56,13 @@ describe("subagent spawn envelope", () => {
       expect(systemPrompt).toContain("no full cat");
     },
   );
+
+  it("describes the bounded default recursive depth", () => {
+    const envelope = buildEnvelope();
+
+    expect(envelope.message).toContain("depth 1/5");
+    expect(envelope.systemPrompt).toContain("May delegate descendants");
+  });
 
   it.each([false, true])(
     "gates ACP guidance without overriding collector restrictions: acp=%s",

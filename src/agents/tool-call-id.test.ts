@@ -3,29 +3,17 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import { castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
+import { sparseAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "./tool-call-id.js";
 
 const buildDuplicateIdCollisionInput = () =>
   castAgentMessages([
-    {
-      role: "assistant",
-      content: [
-        { type: "toolCall", id: "call_a|b", name: "read", arguments: {} },
-        { type: "toolCall", id: "call_a:b", name: "read", arguments: {} },
-      ],
-    },
-    {
-      role: "toolResult",
-      toolCallId: "call_a|b",
-      toolName: "read",
-      content: [{ type: "text", text: "one" }],
-    },
-    {
-      role: "toolResult",
-      toolCallId: "call_a:b",
-      toolName: "read",
-      content: [{ type: "text", text: "two" }],
-    },
+    sparseAssistant([
+      { type: "toolCall", id: "call_a|b", name: "read", arguments: {} },
+      { type: "toolCall", id: "call_a:b", name: "read", arguments: {} },
+    ]),
+    buildToolResult({ toolCallId: "call_a|b", toolName: "read", text: "one" }),
+    buildToolResult({ toolCallId: "call_a:b", toolName: "read", text: "two" }),
   ]);
 
 const readToolCall = (id: string) => ({
@@ -51,10 +39,7 @@ const buildToolResult = (params: {
 function sanitizeSingleToolCallId(id: string, mode: "strict" | "strict9" = "strict"): string {
   const out = sanitizeToolCallIdsForCloudCodeAssist(
     castAgentMessages([
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id, name: "read", arguments: {} }],
-      },
+      sparseAssistant([{ type: "toolCall", id, name: "read", arguments: {} }]),
       buildToolResult({ toolCallId: id, text: "ok" }),
     ]),
     mode,
@@ -77,13 +62,10 @@ const signedReadAssistant = (signature: string, id: string) => ({
 
 const buildRepeatedEditIdInput = (params: { includeToolUseId?: boolean } = {}) =>
   castAgentMessages([
-    {
-      role: "assistant",
-      content: [
-        { type: "toolCall", id: "edit:22", name: "edit", arguments: {} },
-        { type: "toolCall", id: "edit:22", name: "edit", arguments: {} },
-      ],
-    },
+    sparseAssistant([
+      { type: "toolCall", id: "edit:22", name: "edit", arguments: {} },
+      { type: "toolCall", id: "edit:22", name: "edit", arguments: {} },
+    ]),
     buildToolResult({
       toolCallId: "edit:22",
       toolName: "edit",
@@ -201,16 +183,8 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
   describe("strict mode (default)", () => {
     it("is a no-op for already-valid non-colliding IDs", () => {
       const input = castAgentMessages([
-        {
-          role: "assistant",
-          content: [{ type: "toolCall", id: "call1", name: "read", arguments: {} }],
-        },
-        {
-          role: "toolResult",
-          toolCallId: "call1",
-          toolName: "read",
-          content: [{ type: "text", text: "ok" }],
-        },
+        sparseAssistant([{ type: "toolCall", id: "call1", name: "read", arguments: {} }]),
+        buildToolResult({ toolCallId: "call1", toolName: "read", text: "ok" }),
       ]);
 
       const out = sanitizeToolCallIdsForCloudCodeAssist(input);
@@ -219,16 +193,8 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
 
     it("strips non-alphanumeric characters from tool call IDs", () => {
       const input = castAgentMessages([
-        {
-          role: "assistant",
-          content: [{ type: "toolCall", id: "call|item:123", name: "read", arguments: {} }],
-        },
-        {
-          role: "toolResult",
-          toolCallId: "call|item:123",
-          toolName: "read",
-          content: [{ type: "text", text: "ok" }],
-        },
+        sparseAssistant([{ type: "toolCall", id: "call|item:123", name: "read", arguments: {} }]),
+        buildToolResult({ toolCallId: "call|item:123", toolName: "read", text: "ok" }),
       ]);
 
       const out = sanitizeToolCallIdsForCloudCodeAssist(input);
@@ -265,25 +231,12 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       const longA = `call_${"a".repeat(60)}`;
       const longB = `call_${"a".repeat(59)}b`;
       const input = castAgentMessages([
-        {
-          role: "assistant",
-          content: [
-            { type: "toolCall", id: longA, name: "read", arguments: {} },
-            { type: "toolCall", id: longB, name: "read", arguments: {} },
-          ],
-        },
-        {
-          role: "toolResult",
-          toolCallId: longA,
-          toolName: "read",
-          content: [{ type: "text", text: "one" }],
-        },
-        {
-          role: "toolResult",
-          toolCallId: longB,
-          toolName: "read",
-          content: [{ type: "text", text: "two" }],
-        },
+        sparseAssistant([
+          { type: "toolCall", id: longA, name: "read", arguments: {} },
+          { type: "toolCall", id: longB, name: "read", arguments: {} },
+        ]),
+        buildToolResult({ toolCallId: longA, toolName: "read", text: "one" }),
+        buildToolResult({ toolCallId: longB, toolName: "read", text: "two" }),
       ]);
 
       const out = sanitizeToolCallIdsForCloudCodeAssist(input);
@@ -296,23 +249,19 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
   describe("strict mode (alphanumeric only)", () => {
     it("strips underscores and hyphens from tool call IDs", () => {
       const input = castAgentMessages([
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "toolCall",
-              id: "plugin_login_1768799841527_1",
-              name: "login",
-              arguments: {},
-            },
-          ],
-        },
-        {
-          role: "toolResult",
+        sparseAssistant([
+          {
+            type: "toolCall",
+            id: "plugin_login_1768799841527_1",
+            name: "login",
+            arguments: {},
+          },
+        ]),
+        buildToolResult({
           toolCallId: "plugin_login_1768799841527_1",
           toolName: "login",
-          content: [{ type: "text", text: "ok" }],
-        },
+          text: "ok",
+        }),
       ]);
 
       const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict");
@@ -325,13 +274,10 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       const nativeId = "toolu_01ABCDEF1234567890";
       const nonNativeId = "call_123|fc_123";
       const input = castAgentMessages([
-        {
-          role: "assistant",
-          content: [
-            { type: "toolUse", id: nativeId, name: "read", input: { path: "IDENTITY.md" } },
-            { type: "toolUse", id: nonNativeId, name: "read", input: { path: "README.md" } },
-          ],
-        },
+        sparseAssistant([
+          { type: "toolUse", id: nativeId, name: "read", input: { path: "IDENTITY.md" } },
+          { type: "toolUse", id: nonNativeId, name: "read", input: { path: "README.md" } },
+        ]),
         {
           role: "toolResult",
           toolCallId: nativeId,
@@ -377,19 +323,11 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
 
     it("preserves replay-safe signed-thinking tool ids when requested", () => {
       const input = castAgentMessages([
-        {
-          role: "assistant",
-          content: [
-            { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
-            { type: "toolCall", id: "call_1", name: "read", arguments: {} },
-          ],
-        },
-        {
-          role: "toolResult",
-          toolCallId: "call_1",
-          toolName: "read",
-          content: [{ type: "text", text: "ok" }],
-        },
+        sparseAssistant([
+          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+        ]),
+        buildToolResult({ toolCallId: "call_1", toolName: "read", text: "ok" }),
       ]);
 
       const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict", {
@@ -406,10 +344,7 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
 
     it("rewrites earlier mutable ids away from later preserved signed ids", () => {
       const input = castAgentMessages([
-        {
-          role: "assistant",
-          content: [readToolCall("call_1")],
-        },
+        sparseAssistant([readToolCall("call_1")]),
         buildToolResult({ toolCallId: "call_1", text: "first" }),
         signedReadAssistant("sig_1", "call1"),
         buildToolResult({ toolCallId: "call1", text: "second" }),
@@ -460,10 +395,7 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
 
     it("rewrites OpenAI-shaped tool result id aliases with the matching assistant id", () => {
       const input = castAgentMessages([
-        {
-          role: "assistant",
-          content: [readToolCall("call_mock_image_generate_1")],
-        },
+        sparseAssistant([readToolCall("call_mock_image_generate_1")]),
         {
           role: "toolResult",
           call_id: "call_mock_image_generate_1",
@@ -495,10 +427,7 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
 
     it("keeps an existing canonical tool result id when raw aliases match the assistant", () => {
       const input = castAgentMessages([
-        {
-          role: "assistant",
-          content: [readToolCall("call_mock_image_generate_1")],
-        },
+        sparseAssistant([readToolCall("call_mock_image_generate_1")]),
         {
           role: "toolResult",
           toolCallId: "callmockimagegenerate1",
@@ -543,16 +472,10 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
 
     it("preserves native Kimi function ids across assistant/toolResult pairs", () => {
       const input = castAgentMessages([
-        {
-          role: "assistant",
-          content: [{ type: "toolCall", id: "functions.read:0", name: "read", arguments: {} }],
-        },
-        {
-          role: "toolResult",
-          toolCallId: "functions.read:0",
-          toolName: "read",
-          content: [{ type: "text", text: "ok" }],
-        },
+        sparseAssistant([
+          { type: "toolCall", id: "functions.read:0", name: "read", arguments: {} },
+        ]),
+        buildToolResult({ toolCallId: "functions.read:0", toolName: "read", text: "ok" }),
       ]);
 
       const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict");
@@ -561,13 +484,10 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
 
     it("preserves native Kimi ids while sanitizing non-Kimi siblings", () => {
       const input = castAgentMessages([
-        {
-          role: "assistant",
-          content: [
-            { type: "toolCall", id: "functions.read:0", name: "read", arguments: {} },
-            { type: "toolCall", id: "call_a|b", name: "read", arguments: {} },
-          ],
-        },
+        sparseAssistant([
+          { type: "toolCall", id: "functions.read:0", name: "read", arguments: {} },
+          { type: "toolCall", id: "call_a|b", name: "read", arguments: {} },
+        ]),
         buildToolResult({ toolCallId: "functions.read:0", text: "native" }),
         buildToolResult({ toolCallId: "call_a|b", text: "sanitized" }),
       ]);
@@ -587,15 +507,13 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
 
     it("disambiguates repeated native Kimi ids after preserving the first occurrence", () => {
       const input = castAgentMessages([
-        {
-          role: "assistant",
-          content: [{ type: "toolCall", id: "functions.read:0", name: "read", arguments: {} }],
-        },
+        sparseAssistant([
+          { type: "toolCall", id: "functions.read:0", name: "read", arguments: {} },
+        ]),
         buildToolResult({ toolCallId: "functions.read:0", text: "one" }),
-        {
-          role: "assistant",
-          content: [{ type: "toolCall", id: "functions.read:0", name: "read", arguments: {} }],
-        },
+        sparseAssistant([
+          { type: "toolCall", id: "functions.read:0", name: "read", arguments: {} },
+        ]),
         buildToolResult({ toolCallId: "functions.read:0", text: "two" }),
       ]);
 
@@ -618,15 +536,13 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
 
     it("uses OpenAI-style ids for repeated native Kimi ids when requested", () => {
       const input = castAgentMessages([
-        {
-          role: "assistant",
-          content: [{ type: "toolCall", id: "functions.read:0", name: "read", arguments: {} }],
-        },
+        sparseAssistant([
+          { type: "toolCall", id: "functions.read:0", name: "read", arguments: {} },
+        ]),
         buildToolResult({ toolCallId: "functions.read:0", text: "one" }),
-        {
-          role: "assistant",
-          content: [{ type: "toolCall", id: "functions.read:0", name: "read", arguments: {} }],
-        },
+        sparseAssistant([
+          { type: "toolCall", id: "functions.read:0", name: "read", arguments: {} },
+        ]),
         buildToolResult({ toolCallId: "functions.read:0", text: "two" }),
       ]);
       const options = { duplicateToolCallIdStyle: "openai" as const };
@@ -663,16 +579,8 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
   describe("strict9 mode (Mistral tool call IDs)", () => {
     it("is a no-op for already-valid 9-char alphanumeric IDs", () => {
       const input = castAgentMessages([
-        {
-          role: "assistant",
-          content: [{ type: "toolCall", id: "abc123XYZ", name: "read", arguments: {} }],
-        },
-        {
-          role: "toolResult",
-          toolCallId: "abc123XYZ",
-          toolName: "read",
-          content: [{ type: "text", text: "ok" }],
-        },
+        sparseAssistant([{ type: "toolCall", id: "abc123XYZ", name: "read", arguments: {} }]),
+        buildToolResult({ toolCallId: "abc123XYZ", toolName: "read", text: "ok" }),
       ]);
 
       const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict9");
@@ -681,25 +589,12 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
 
     it("enforces alphanumeric IDs with length 9", () => {
       const input = castAgentMessages([
-        {
-          role: "assistant",
-          content: [
-            { type: "toolCall", id: "call_abc|item:123", name: "read", arguments: {} },
-            { type: "toolCall", id: "call_abc|item:456", name: "read", arguments: {} },
-          ],
-        },
-        {
-          role: "toolResult",
-          toolCallId: "call_abc|item:123",
-          toolName: "read",
-          content: [{ type: "text", text: "one" }],
-        },
-        {
-          role: "toolResult",
-          toolCallId: "call_abc|item:456",
-          toolName: "read",
-          content: [{ type: "text", text: "two" }],
-        },
+        sparseAssistant([
+          { type: "toolCall", id: "call_abc|item:123", name: "read", arguments: {} },
+          { type: "toolCall", id: "call_abc|item:456", name: "read", arguments: {} },
+        ]),
+        buildToolResult({ toolCallId: "call_abc|item:123", toolName: "read", text: "one" }),
+        buildToolResult({ toolCallId: "call_abc|item:456", toolName: "read", text: "two" }),
       ]);
 
       const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict9");
@@ -723,10 +618,9 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
 
     it("rewrites native Kimi function ids in strict9 mode", () => {
       const input = castAgentMessages([
-        {
-          role: "assistant",
-          content: [{ type: "toolCall", id: "functions.read:0", name: "read", arguments: {} }],
-        },
+        sparseAssistant([
+          { type: "toolCall", id: "functions.read:0", name: "read", arguments: {} },
+        ]),
         buildToolResult({ toolCallId: "functions.read:0", text: "ok" }),
       ]);
 

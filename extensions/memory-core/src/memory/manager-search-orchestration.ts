@@ -1,4 +1,3 @@
-// Memory Core plugin module owns public search orchestration.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { classifyMemoryMultimodalPath } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
@@ -137,6 +136,9 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         opts?.onDebug,
       );
       const sessionStartSync = this.claimSessionWarmSync(opts?.sessionKey);
+      const searchSyncEnabled =
+        (this.settings.sync.onSearch || sessionStartSync) &&
+        (this.purpose === "default" || this.purpose === "cli");
       if (
         !embeddingBootstrapKeywordOnly &&
         preflight.shouldInitializeProvider &&
@@ -176,9 +178,16 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         : this.refreshIndexIdentityDirty({
             providerKeyKnown: this.providerInitialized,
           });
-      if (indexIdentity.status === "missing" && hasIndexedContent) {
-        // Missing metadata cannot identify a safe published generation. Repair it
-        // synchronously before a detached handoff or a read-generation lease.
+      const shouldRepairIdentity =
+        hasIndexedContent &&
+        (indexIdentity.status === "missing" ||
+          (searchSyncEnabled &&
+            indexIdentity.status === "mismatched" &&
+            indexIdentity.owner === "openclaw" &&
+            indexIdentity.code === "chunking_version"));
+      if (shouldRepairIdentity) {
+        // Missing metadata has no safe generation; chunking upgrades need a full
+        // rebuild. Repair before a read-generation lease can block its writer.
         await this.syncAdmitted(
           { reason: "search", force: true },
           { allowEmbeddingBootstrapFallback: true },
@@ -186,14 +195,13 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           log.warn(`memory sync failed (search-identity-repair): ${formatErrorMessage(err)}`);
         });
       }
-      let repairedIndexIdentity =
-        indexIdentity.status === "missing" && hasIndexedContent
-          ? embeddingBootstrapKeywordOnly
-            ? this.refreshKeywordFallbackIndexIdentity()
-            : this.refreshIndexIdentityDirty({
-                providerKeyKnown: this.providerInitialized,
-              })
-          : indexIdentity;
+      let repairedIndexIdentity = shouldRepairIdentity
+        ? embeddingBootstrapKeywordOnly
+          ? this.refreshKeywordFallbackIndexIdentity()
+          : this.refreshIndexIdentityDirty({
+              providerKeyKnown: this.providerInitialized,
+            })
+        : indexIdentity;
       if (
         repairedIndexIdentity.status === "mismatched" &&
         !embeddingBootstrapKeywordOnly &&
@@ -207,9 +215,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         return [];
       }
       const backgroundSearchSync = startAsyncSearchSync({
-        enabled:
-          (this.settings.sync.onSearch || sessionStartSync) &&
-          (this.purpose === "default" || this.purpose === "cli"),
+        enabled: searchSyncEnabled,
         dirty: this.dirty,
         sessionsDirty: this.sessionsDirty,
         sync: async (params) => await this.syncPublishedIndexInBackground(params),
@@ -272,11 +278,11 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         Math.max(1, Math.floor(maxResults * hybrid.candidateMultiplier)),
       );
 
-      // FTS-only mode: no embedding provider available
-      if (embeddingBootstrapKeywordOnly || !this.provider) {
+      // Reply-path lexical recall skips query embedding and the semantic provider lease.
+      if (embeddingBootstrapKeywordOnly || !this.provider || opts?.lexicalOnly) {
         this.assertRequiredProviderAvailable("search");
         if (!this.fts.enabled || !this.fts.available) {
-          log.warn("memory search: no provider and FTS unavailable");
+          log.warn("memory search: keyword-only search has no available FTS index");
           return [];
         }
 
@@ -329,17 +335,6 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       const releaseSemanticProvider = this.acquireProviderUse(semanticProvider);
       try {
         keywordResults = await loadKeywordResults();
-        // lexicalOnly is a reply-path contract: no query embedding, no vector
-        // search, no network. Callers accept keyword-only recall quality.
-        if (opts?.lexicalOnly) {
-          return await this.finalizeKeywordOnlyResults({
-            results: keywordResults,
-            temporalDecay: hybrid.temporalDecay,
-            maxResults,
-            minScore,
-            activeProjectKeys: opts?.activeProjectKeys,
-          });
-        }
         try {
           queryVec = await this.embedQueryWithRetry(
             cleaned,
@@ -442,9 +437,12 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           results: vectorResults,
           temporalDecay: hybrid.temporalDecay,
           workspaceDir: this.workspaceDir,
+          sessionSourceMtimes: this.loadSessionSourceMtimes(vectorResults),
         });
+        // Decay and importance can reverse the order returned by vector retrieval.
         return applyProjectRanking(applyImportanceMultiplier(decayed), opts?.activeProjectKeys)
           .filter((entry) => entry.score >= minScore)
+          .toSorted((left, right) => right.score - left.score)
           .slice(0, maxResults);
       }
 
@@ -564,6 +562,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       temporalDecay: params.temporalDecay,
       activeProjectKeys: params.activeProjectKeys,
       workspaceDir: this.workspaceDir,
+      sessionSourceMtimes: this.loadSessionSourceMtimes([...params.vector, ...params.keyword]),
     });
   }
 }

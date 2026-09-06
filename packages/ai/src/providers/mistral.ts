@@ -9,6 +9,7 @@ import type {
   FunctionTool,
 } from "@mistralai/mistralai/models/components";
 import { Chat } from "@mistralai/mistralai/sdk/chat";
+import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
@@ -668,7 +669,7 @@ async function consumeChatStream(
             output.content.push(currentBlock);
             stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
           }
-          currentBlock.thinking += thinkingDelta;
+          appendAssistantThinking(currentBlock, thinkingDelta);
           stream.push({
             type: "thinking_delta",
             contentIndex: blockIndex(),

@@ -472,9 +472,9 @@ date context. Falls back to the host timezone.
 
 ### `agents.defaults.modelSelectionScope`
 
-Optional scope for chat commands and Gateway session model updates without an explicit scope.
-There is no default value: leaving it unset preserves each surface's existing
-behavior.
+Scope for chat commands and Gateway session model updates without an explicit scope.
+The default is `"session"`: changing a model in one chat does not change other
+chats or the configured default, including when the caller is an owner/admin.
 
 ```json5
 {
@@ -482,15 +482,14 @@ behavior.
 }
 ```
 
-| Value       | Effect                                                                                                                                                                                                                                             |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `"session"` | Change only the current session's model selection.                                                                                                                                                                                                 |
-| `"agent"`   | Also update the current agent's explicit primary at `agents.entries.<agent>.model`, creating that primary when needed. Never change the shared global fallback.                                                                                    |
-| `"global"`  | Also update the shared `agents.defaults.model` fallback. Do not replace other agents' explicit primaries or other sessions' pins.                                                                                                                  |
-| Unset       | Keep the existing surface behavior: direct owner/admin chat commands, Discord pickers, and Gateway session model updates request an effective configured-default update; Telegram callback pickers and the embedded local TUI remain session-only. |
+| Value       | Effect                                                                                                                                                          |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `"session"` | Change only the current session's model selection.                                                                                                              |
+| `"agent"`   | Also update the current agent's explicit primary at `agents.entries.<agent>.model`, creating that primary when needed. Never change the shared global fallback. |
+| `"global"`  | Also update the shared `agents.defaults.model` fallback. Do not replace other agents' explicit primaries or other sessions' pins.                               |
+| Unset       | Change only the current session, the same as `"session"`.                                                                                                       |
 
-An effective configured-default update writes the agent's explicit primary when
-one exists, otherwise the shared global fallback. Explicit `/model` flags
+Agent/global writes require an explicit scope flag or configuration choice. Explicit `/model` flags
 `-s`/`--session`, `-a`/`--agent`, and `-g`/`--global` take precedence over the setting.
 Without owner/admin authority, bare commands remain session-only and explicit
 `-a` or `-g` requests are rejected. Telegram callback pickers and the embedded local TUI remain
@@ -661,7 +660,7 @@ An explicit request `agentId` always wins, followed by `systemAgent.agentId`, a 
         enabled: false, // disable embedded proactive auto-compaction (default: true)
         mode: "safeguard", // default | safeguard
         provider: "my-provider", // id of a registered compaction provider plugin (optional)
-        thinkingLevel: "low", // default; use "inherit" to reuse the session level
+        thinkingLevel: "low", // optional override; omit for the provider default
         timeoutSeconds: 180,
         keepRecentTokens: 50000,
         recentTurnsPreserve: 3,
@@ -688,7 +687,7 @@ An explicit request `agentId` always wins, followed by `systemAgent.agentId`, a 
 - `enabled`: when `false`, disables threshold-driven auto-compaction inside the embedded agent runtime. OpenClaw's preflight and overflow-recovery compaction paths and manual `/compact` remain available. Default: `true`.
 - `mode`: `default` or `safeguard` (chunked summarization for long histories). See [Compaction](/concepts/compaction).
 - `provider`: id of a registered compaction provider plugin. When set, the provider's `summarize()` is called instead of built-in LLM summarization. Falls back to built-in on failure. Setting a provider forces `mode: "safeguard"`. See [Compaction](/concepts/compaction).
-- `thinkingLevel`: thinking level used only for embedded OpenClaw compaction summaries (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `adaptive`, `max`, `ultra`, or `inherit`). It defaults to `low`; set `inherit` to reuse the session's current thinking level. The selected level is clamped to the compaction model/runtime. Native Codex app-server compaction ignores this setting because the native compact request has no per-operation thinking override; OpenClaw logs a warning when configured.
+- `thinkingLevel`: thinking level used only for embedded OpenClaw compaction summaries (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `adaptive`, `max`, `ultra`, or `inherit`). When omitted, the provider can supply a compaction preference; otherwise it defaults to `low`. Native local Ollama prefers `off` so summarization does not spend its request budget on thinking. Set `inherit` to reuse the session's current thinking level, or choose an explicit level to override the provider default. The selected level is clamped to the compaction model/runtime. Native Codex app-server compaction ignores this setting because the native compact request has no per-operation thinking override; OpenClaw logs a warning when configured.
 - `timeoutSeconds`: safety window for each model request in built-in compaction. Multi-stage compaction refreshes the window when its next serial model request starts, so a complete compaction can exceed this value while an unresponsive request is still aborted. Plugin-owned compaction receives one window for the complete operation. Default: `180`.
 - `keepRecentTokens`: agent cut-point budget for keeping the most recent transcript tail verbatim. Default: `20000`.
 - `recentTurnsPreserve`: number of most recent user/assistant turns kept verbatim outside safeguard summarization. Default: `3`.
@@ -1115,7 +1114,7 @@ for provider examples and precedence.
 - `subagents.requireAgentId`: when true, block `sessions_spawn` calls that omit `agentId` (forces explicit profile selection; default: false).
 - `subagents.maxConcurrent`: max concurrent child-agent runs across subagent execution. Default: `8`.
 - `subagents.maxChildrenPerAgent`: max active children a single agent session can spawn. Default: `5`.
-- `subagents.maxSpawnDepth`: max nesting depth for sub-agent spawning (`1`-`5`). Default: `1` (no nesting).
+- `subagents.maxSpawnDepth`: max nesting depth for sub-agent spawning (`1`-`5`). Default: `5`; set `1` to make direct children leaves.
 - `subagents.archiveAfterMinutes`: age before completed subagent state is archived. Default: `60`.
 
 ---

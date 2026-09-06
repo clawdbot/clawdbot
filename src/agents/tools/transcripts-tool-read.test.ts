@@ -2,10 +2,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { activeSessions } from "../../transcripts/capture.js";
 import type { TranscriptSourceProvider } from "../../transcripts/provider-types.js";
 import { TranscriptsStore, transcriptSessionSelector } from "../../transcripts/store.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
-import { activeSessions } from "./transcripts-tool-runtime.js";
 import { createTranscriptsTool } from "./transcripts-tool.js";
 
 const { getProvider } = vi.hoisted(() => ({ getProvider: vi.fn() }));
@@ -113,7 +113,12 @@ describe("transcripts read actions", () => {
         authorize,
       },
     });
-    activeSessions.set(session.sessionId, { session, providerId: "voice", phase: "active" });
+    activeSessions.set(session.sessionId, {
+      session,
+      providerId: "voice",
+      provider: {},
+      phase: "active",
+    });
     await store.writeSession({ ...session, source: { providerId: "voice", guildId: "other" } });
     await store.writeSummary(
       summarizeTranscripts({ session, utterances: [{ text: "Other guild notes" }] }),
@@ -142,7 +147,12 @@ describe("transcripts read actions", () => {
   });
 
   it("bounds model-facing notes and reports active captures without summaries", async () => {
-    activeSessions.set(session.sessionId, { session, providerId: "voice", phase: "active" });
+    activeSessions.set(session.sessionId, {
+      session,
+      providerId: "voice",
+      provider: {},
+      phase: "active",
+    });
     expect((await run({ action: "show", sessionId: "meeting" })).details).toMatchObject({
       active: true,
     });

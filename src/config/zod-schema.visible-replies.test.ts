@@ -1,113 +1,49 @@
 // Covers visible-reply config schema parsing and defaults.
 import { describe, expect, it } from "vitest";
-import { validateConfigObjectRaw } from "./validation.js";
+import { validateConfigObjectRaw } from "./validation-core.js";
 
 describe("visible reply config schema", () => {
-  it("coerces boolean global visibleReplies values to the enum contract", () => {
-    const automatic = validateConfigObjectRaw({
-      messages: {
-        visibleReplies: true,
-      },
-    });
-    const toolOnly = validateConfigObjectRaw({
-      messages: {
-        visibleReplies: false,
-      },
-    });
+  describe.each(["global", "groupChat"] as const)("%s visibleReplies", (scope) => {
+    it.each([
+      [true, "automatic"],
+      [false, "message_tool"],
+    ] as const)("coerces %s to %s", (visibleReplies, expected) => {
+      const messages = scope === "global" ? { visibleReplies } : { groupChat: { visibleReplies } };
+      const result = validateConfigObjectRaw({ messages });
 
-    expect(automatic.ok).toBe(true);
-    expect(toolOnly.ok).toBe(true);
-    if (automatic.ok) {
-      expect(automatic.config.messages?.visibleReplies).toBe("automatic");
-    }
-    if (toolOnly.ok) {
-      expect(toolOnly.config.messages?.visibleReplies).toBe("message_tool");
-    }
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const parsed =
+          scope === "global" ? result.config.messages : result.config.messages?.groupChat;
+        expect(parsed?.visibleReplies).toBe(expected);
+      }
+    });
   });
 
-  it("coerces boolean groupChat visibleReplies values to the enum contract", () => {
-    const automatic = validateConfigObjectRaw({
-      messages: {
-        groupChat: {
-          visibleReplies: true,
-        },
-      },
-    });
-    const toolOnly = validateConfigObjectRaw({
-      messages: {
-        groupChat: {
-          visibleReplies: false,
-        },
-      },
-    });
+  it.each(["user_request", "room_event"] as const)(
+    "accepts enum unmentioned group inbound value %s",
+    (unmentionedInbound) => {
+      const result = validateConfigObjectRaw({ messages: { groupChat: { unmentionedInbound } } });
 
-    expect(automatic.ok).toBe(true);
-    expect(toolOnly.ok).toBe(true);
-    if (automatic.ok) {
-      expect(automatic.config.messages?.groupChat?.visibleReplies).toBe("automatic");
-    }
-    if (toolOnly.ok) {
-      expect(toolOnly.config.messages?.groupChat?.visibleReplies).toBe("message_tool");
-    }
-  });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.config.messages?.groupChat?.unmentionedInbound).toBe(unmentionedInbound);
+      }
+    },
+  );
 
-  it("keeps invalid visibleReplies values rejected", () => {
-    const result = validateConfigObjectRaw({
-      messages: {
-        visibleReplies: "visible",
-      },
-    });
+  it.each([
+    { messages: { visibleReplies: "visible" }, path: "messages.visibleReplies" },
+    {
+      messages: { groupChat: { unmentionedInbound: true } },
+      path: "messages.groupChat.unmentionedInbound",
+    },
+  ])("rejects unsupported values at $path", ({ messages, path }) => {
+    const result = validateConfigObjectRaw({ messages });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      const visibleRepliesIssue = result.issues.find(
-        (issue) => issue.path === "messages.visibleReplies",
-      );
-      expect(visibleRepliesIssue?.path).toBe("messages.visibleReplies");
-    }
-  });
-
-  it("accepts enum unmentioned group inbound values", () => {
-    const legacy = validateConfigObjectRaw({
-      messages: {
-        groupChat: {
-          unmentionedInbound: "user_request",
-        },
-      },
-    });
-    const roomEvent = validateConfigObjectRaw({
-      messages: {
-        groupChat: {
-          unmentionedInbound: "room_event",
-        },
-      },
-    });
-
-    expect(legacy.ok).toBe(true);
-    expect(roomEvent.ok).toBe(true);
-    if (legacy.ok) {
-      expect(legacy.config.messages?.groupChat?.unmentionedInbound).toBe("user_request");
-    }
-    if (roomEvent.ok) {
-      expect(roomEvent.config.messages?.groupChat?.unmentionedInbound).toBe("room_event");
-    }
-  });
-
-  it("rejects boolean unmentioned group inbound values", () => {
-    const result = validateConfigObjectRaw({
-      messages: {
-        groupChat: {
-          unmentionedInbound: true,
-        },
-      },
-    });
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      const issue = result.issues.find(
-        (candidate) => candidate.path === "messages.groupChat.unmentionedInbound",
-      );
-      expect(issue?.path).toBe("messages.groupChat.unmentionedInbound");
+      expect(result.issues).toContainEqual(expect.objectContaining({ path }));
     }
   });
 });

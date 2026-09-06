@@ -38,11 +38,17 @@ export const sessionEntryMetadataJson =
 export function selectSessionEntryRows(
   database: Pick<OpenClawAgentDatabase, "db">,
   projection: "full" | "list",
+  fullEntryKeys: readonly string[] = [],
 ) {
+  const metadata = fullEntryKeys.length
+    ? /* kysely-allow-raw: one row snapshot preserves complete selected entries beside sibling metadata. */ sql<string>`CASE WHEN session_key IN ${sqliteStringSet(fullEntryKeys)} THEN entry_json ELSE ${sessionEntryMetadataJson.expression} END`.as(
+        "entry_json",
+      )
+    : sessionEntryMetadataJson;
   return getNodeSqliteKysely<SessionStatusDatabase>(database.db)
     .selectFrom("session_nodes")
     .select("session_key")
-    .select(projection === "full" ? "entry_json" : sessionEntryMetadataJson)
+    .select(projection === "full" ? "entry_json" : metadata)
     .$if(hasSqliteSessionOwnerColumns(database.db), (query) =>
       query.select([
         "owner_actor_type",

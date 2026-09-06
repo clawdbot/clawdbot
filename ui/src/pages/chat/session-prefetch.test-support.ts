@@ -1,5 +1,4 @@
 import { IDBFactory } from "fake-indexeddb";
-import type { ReactiveController } from "lit";
 import { vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -16,8 +15,8 @@ export type SessionPrefetchUpdate = {
   client: GatewayBrowserClient | null;
   listRevision: number;
   openSessionKeys: readonly string[];
-  /** Presented panes still fetching their transcript; omitted panes report committed. */
   loadingSessionKeys?: readonly string[];
+  hiddenConversationSessionKeys?: readonly string[];
   rows: readonly GatewaySessionRow[] | null;
 };
 
@@ -60,26 +59,12 @@ export function createSessionPrefetchFixture() {
   vi.setSystemTime(PREFETCH_TEST_NOW);
   vi.stubGlobal("indexedDB", new IDBFactory());
   let visibility: DocumentVisibilityState = "visible";
-  const originalVisibility = Object.getOwnPropertyDescriptor(document, "visibilityState");
-  Object.defineProperty(document, "visibilityState", {
-    configurable: true,
-    get: () => visibility,
-  });
+  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
   const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
-  const originalRequestIdleCallback = Object.getOwnPropertyDescriptor(
-    window,
-    "requestIdleCallback",
+  vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) =>
+    window.setTimeout(() => callback({ didTimeout: false, timeRemaining: () => 50 }), 0),
   );
-  const originalCancelIdleCallback = Object.getOwnPropertyDescriptor(window, "cancelIdleCallback");
-  Object.defineProperty(window, "requestIdleCallback", {
-    configurable: true,
-    value: (callback: IdleRequestCallback) =>
-      window.setTimeout(() => callback({ didTimeout: false, timeRemaining: () => 50 }), 0),
-  });
-  Object.defineProperty(window, "cancelIdleCallback", {
-    configurable: true,
-    value: (handle: number) => window.clearTimeout(handle),
-  });
+  vi.stubGlobal("cancelIdleCallback", (handle: number) => window.clearTimeout(handle));
   Object.defineProperty(navigator, "locks", { configurable: true, value: undefined });
   const cache: ChatMessageCache = new Map();
   const store = new SessionSnapshotStore(cache);
@@ -92,20 +77,15 @@ export function createSessionPrefetchFixture() {
     rows: null,
   };
   const connection = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
-  const gatewayListeners = new Set<() => void>();
   const context = {
     agents: { state: { agentsList: null } },
     gateway: {
       snapshot: { assistantAgentId: "main", hello: null },
-      subscribe: (listener: () => void) => {
-        gatewayListeners.add(listener);
-        return () => gatewayListeners.delete(listener);
-      },
+      subscribe: () => () => undefined,
     },
     sessions: {
-      captureConnectionScope: () => connection.capture(),
-      isConnectionScopeCurrent: (scope: Parameters<typeof connection.isCurrent>[0]) =>
-        connection.isCurrent(scope),
+      captureConnectionScope: connection.capture,
+      isConnectionScopeCurrent: connection.isCurrent,
       subscribe: () => () => undefined,
       get canonicalListRevision() {
         return current.listRevision;
@@ -116,8 +96,8 @@ export function createSessionPrefetchFixture() {
     },
   };
   const host = Object.assign(document.createElement("div"), {
-    addController: (_controller: ReactiveController) => undefined,
-    removeController: (_controller: ReactiveController) => undefined,
+    addController: () => undefined,
+    removeController: () => undefined,
     requestUpdate: () => undefined,
     updateComplete: Promise.resolve(true),
   });
@@ -137,6 +117,8 @@ export function createSessionPrefetchFixture() {
       ...update.openSessionKeys.map((sessionKey) =>
         Object.assign(document.createElement("openclaw-chat-pane"), {
           sessionKey,
+          conversationPresented:
+            update.hiddenConversationSessionKeys?.includes(sessionKey) !== true,
           transcriptLoading: update.loadingSessionKeys?.includes(sessionKey) === true,
         }),
       ),
@@ -160,25 +142,10 @@ export function createSessionPrefetchFixture() {
       store.disconnect();
       await store.whenIdle();
       await clearStoredChatSnapshots();
-      if (originalVisibility) {
-        Object.defineProperty(document, "visibilityState", originalVisibility);
-      } else {
-        Reflect.deleteProperty(document, "visibilityState");
-      }
       if (originalLocks) {
         Object.defineProperty(navigator, "locks", originalLocks);
       } else {
         Reflect.deleteProperty(navigator, "locks");
-      }
-      if (originalRequestIdleCallback) {
-        Object.defineProperty(window, "requestIdleCallback", originalRequestIdleCallback);
-      } else {
-        Reflect.deleteProperty(window, "requestIdleCallback");
-      }
-      if (originalCancelIdleCallback) {
-        Object.defineProperty(window, "cancelIdleCallback", originalCancelIdleCallback);
-      } else {
-        Reflect.deleteProperty(window, "cancelIdleCallback");
       }
       vi.useRealTimers();
       vi.restoreAllMocks();

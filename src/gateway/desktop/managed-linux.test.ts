@@ -41,6 +41,9 @@ function createFakeSupervisor() {
     scopeKey?: string;
   }> = [];
   const supervisor: ProcessSupervisor = {
+    acquireScopeCleanup() {
+      throw new Error("Desktop fixture does not own a cleanup scope");
+    },
     async spawn(input) {
       inputs.push(input);
       let settle!: (exit: RunExit) => void;
