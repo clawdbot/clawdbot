@@ -22,7 +22,7 @@ import {
   readSessionMessagesWithSourceAsync,
 } from "./session-transcript-readers.js";
 
-// Session history state owns the SSE-friendly projection of transcript JSONL:
+// Session history state owns the SSE-friendly transcript projection:
 // raw messages are projected for display, paginated by transcript seq, then
 // incrementally updated until cursor/window semantics require a full refresh.
 type SessionHistoryTranscriptMeta = {
@@ -46,7 +46,7 @@ type SessionHistorySnapshot = {
   history: PaginatedSessionHistory;
   rawTranscriptSeq: number;
   turnBoundaryPending: boolean;
-  streamErrorFallbackPending: boolean;
+  assistantErrorPending: boolean;
 };
 
 type InlineSessionHistoryAppend = {
@@ -256,7 +256,7 @@ export function buildSessionHistorySnapshot(params: {
       resolveMessageSeq(rawHistoryMessages.at(-1)) ??
       rawHistoryMessages.length,
     turnBoundaryPending: projected.turnBoundaryPending,
-    streamErrorFallbackPending: projected.streamErrorFallbackPending,
+    assistantErrorPending: projected.assistantErrorPending,
   };
 }
 
@@ -269,7 +269,7 @@ export class SessionHistorySseState {
   private sentHistory: PaginatedSessionHistory;
   private rawTranscriptSeq: number;
   private turnBoundaryPending: boolean;
-  private streamErrorFallbackPending: boolean;
+  private assistantErrorPending: boolean;
   private transcriptPath: string | undefined;
 
   static fromRawSnapshot(params: SessionHistoryStateSnapshot): SessionHistorySseState {
@@ -285,7 +285,7 @@ export class SessionHistorySseState {
     this.sentHistory = snapshot.history;
     this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
     this.turnBoundaryPending = snapshot.turnBoundaryPending;
-    this.streamErrorFallbackPending = snapshot.streamErrorFallbackPending;
+    this.assistantErrorPending = snapshot.assistantErrorPending;
     this.transcriptPath = normalizeTranscriptPathForComparison(params.transcriptPath);
   }
 
@@ -336,11 +336,11 @@ export class SessionHistorySseState {
       includeCommentaryFallbacks: true,
       maxChars: this.maxChars,
       turnBoundaryPending: hadPendingTurnBoundary,
-      streamErrorFallbackPending: this.streamErrorFallbackPending,
+      assistantErrorPending: this.assistantErrorPending,
     });
     this.turnBoundaryPending = nextProjection.turnBoundaryPending;
-    this.streamErrorFallbackPending = nextProjection.streamErrorFallbackPending;
-    if (nextProjection.streamErrorFallbackRepaired) {
+    this.assistantErrorPending = nextProjection.assistantErrorPending;
+    if (nextProjection.assistantErrorRecoveryObserved) {
       // Keep only the pending bit here: retaining raw transcript context would
       // undo the bounded SSE memory contract. The caller rereads canonical
       // history so full projection can remove the already-emitted placeholder.
@@ -429,7 +429,7 @@ export class SessionHistorySseState {
     const snapshot = this.buildSnapshot(rawSnapshot);
     this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
     this.turnBoundaryPending = snapshot.turnBoundaryPending;
-    this.streamErrorFallbackPending = snapshot.streamErrorFallbackPending;
+    this.assistantErrorPending = snapshot.assistantErrorPending;
     this.transcriptPath = normalizeTranscriptPathForComparison(rawSnapshot.transcriptPath);
     this.sentHistory = snapshot.history;
     return snapshot.history;
