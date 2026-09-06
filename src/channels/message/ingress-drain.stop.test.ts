@@ -37,7 +37,7 @@ describe("terminal ingress Stop ownership", () => {
         );
         const abandoned = createDeferred();
         merged.abortSignal.addEventListener("abort", () => {
-          void merged.onAbandoned().then(() => abandoned.resolve());
+          void Promise.resolve(merged.onAbandoned()).then(() => abandoned.resolve());
         });
         prepareDiscardIngressClaims([merged.abortSignal, lifecycles[0]!.abortSignal])();
         await abandoned.promise;
