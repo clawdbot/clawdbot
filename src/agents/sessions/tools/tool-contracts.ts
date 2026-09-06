@@ -5,7 +5,6 @@
  */
 import { Type, type Static } from "typebox";
 import type { Edit } from "./edit-diff.js";
-import type { TruncationResult } from "./truncate.js";
 
 export interface BashToolInput {
   command: string;
@@ -13,7 +12,7 @@ export interface BashToolInput {
 }
 
 export interface BashToolDetails {
-  truncation?: TruncationResult;
+  truncation?: ReadToolTruncationDetails;
   fullOutputPath?: string;
 }
 
@@ -48,7 +47,7 @@ export interface FindToolInput {
 
 export interface FindToolDetails {
   content: string;
-  truncation?: TruncationResult;
+  truncation?: ReadToolTruncationDetails;
   resultLimitReached?: number;
 }
 
@@ -64,7 +63,7 @@ export interface GrepToolInput {
 
 export interface GrepToolDetails {
   content: string;
-  truncation?: TruncationResult;
+  truncation?: ReadToolTruncationDetails;
   matchLimitReached?: number;
   linesTruncated?: boolean;
 }

@@ -523,7 +523,11 @@ export function createGrepToolDefinition(
                 }
                 if (truncation.truncated) {
                   notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
-                  details.truncation = truncation;
+                  // Metadata only: the truncated text already rides in details.content, and
+                  // duplicating it pushes the Code Mode value past the output budget, erasing
+                  // the entire result.
+                  const { content: _content, ...truncationDetails } = truncation;
+                  details.truncation = truncationDetails;
                 }
                 if (linesTruncated) {
                   notices.push(`Some lines truncated to ${GREP_MAX_LINE_LENGTH} chars`);

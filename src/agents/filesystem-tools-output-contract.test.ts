@@ -155,6 +155,75 @@ describe("filesystem tool output contracts", () => {
     },
   );
 
+  it("keeps oversized find output inside the Code Mode value budget", async () => {
+    // Enough long filenames that the raw listing crosses DEFAULT_MAX_BYTES, so the result
+    // carries truncation metadata. The duplicated truncation content used to double the
+    // details JSON past the Code Mode output budget, replacing the whole value with a
+    // truncation marker and erasing the listing the model was supposed to see.
+    const longName = "f".repeat(240);
+    await Promise.all(
+      Array.from({ length: 260 }, (_, index) =>
+        fs.writeFile(path.join(tmpDir, `${longName}-${index}.txt`), "fixture\n"),
+      ),
+    );
+    const tool = createFindTool(tmpDir, {
+      operations: {
+        exists: (absolutePath) =>
+          fs.access(absolutePath).then(
+            () => true,
+            () => false,
+          ),
+        glob: async (pattern, cwd, options) => {
+          const matches: string[] = [];
+          for await (const match of fs.glob(pattern, { cwd })) {
+            matches.push(match);
+          }
+          return matches.toSorted().slice(0, options.limit);
+        },
+      },
+    }) as unknown as AnyAgentTool;
+    const args = { pattern: "*.txt" };
+
+    const direct = await tool.execute("direct-find", args);
+    const directDetails = direct.details as
+      | { content: string; truncation?: { truncated?: boolean } }
+      | undefined;
+    expect(directDetails?.truncation?.truncated).toBe(true);
+    expect("content" in (directDetails?.truncation ?? {})).toBe(false);
+
+    const result = await callThroughCodeMode(tool, args);
+    expect(result).toMatchObject({ status: "completed" });
+    const value = result.value as { content?: string; truncation?: { truncated?: boolean } };
+    expect(value.content).toContain(longName);
+    expect(value.truncation?.truncated).toBe(true);
+    expect("content" in (value.truncation ?? {})).toBe(false);
+  });
+
+  it("keeps oversized grep output inside the Code Mode value budget", async () => {
+    // Same duplication invariant as find: 100 capped match rows with a long directory
+    // prefix cross DEFAULT_MAX_BYTES, and the duplicated truncation content used to blow
+    // the Code Mode value budget and erase the matches.
+    const longDir = path.join(tmpDir, "d".repeat(60));
+    await fs.mkdir(longDir, { recursive: true });
+    const matchLine = `${"m".repeat(500)}\n`;
+    await fs.writeFile(path.join(longDir, "sample.txt"), matchLine.repeat(120), "utf8");
+    const tool = createGrepTool(tmpDir) as unknown as AnyAgentTool;
+    const args = { pattern: "m+" };
+
+    const direct = await tool.execute("direct-grep", args);
+    const directDetails = direct.details as
+      | { content: string; truncation?: { truncated?: boolean } }
+      | undefined;
+    expect(directDetails?.truncation?.truncated).toBe(true);
+    expect("content" in (directDetails?.truncation ?? {})).toBe(false);
+
+    const result = await callThroughCodeMode(tool, args);
+    expect(result).toMatchObject({ status: "completed" });
+    const value = result.value as { content?: string; truncation?: { truncated?: boolean } };
+    expect(value.content).toContain("sample.txt:");
+    expect(value.truncation?.truncated).toBe(true);
+  });
+
   it("validates read text, image, truncation, and optional-not-found results", async () => {
     await fs.writeFile(path.join(tmpDir, "notes.txt"), "ordinary text\n", "utf8");
     await fs.writeFile(path.join(tmpDir, "pixel.png"), Buffer.from(ONE_PIXEL_PNG_BASE64, "base64"));

@@ -35,7 +35,7 @@ interface DecodeLane {
 
 interface OutputSnapshot {
   content: string;
-  truncation: TruncationResult;
+  truncation: Omit<TruncationResult, "content">;
   fullOutputPath?: string;
 }
 
@@ -162,9 +162,12 @@ export class OutputAccumulator {
       this.ensureTempFile();
     }
 
+    // Metadata only: the truncated text already rides in `content`, and duplicating it in the
+    // snapshot doubles the Code Mode value past the output budget, erasing the entire result.
+    const { content: _content, ...truncationMetadata } = truncation;
     return {
       content: truncation.content,
-      truncation,
+      truncation: truncationMetadata,
       fullOutputPath: this.tempFile?.path,
     };
   }
