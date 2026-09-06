@@ -41,7 +41,7 @@ type SkillProposalOrigin = {
   messageId?: string;
 };
 
-type SkillProposalRecord = {
+export type SkillProposalRecord = {
   id: string;
   kind: SkillProposalKind;
   status: SkillProposalStatus;
@@ -174,13 +174,29 @@ export function proposalFromManifest(
   };
 }
 
+function proposalBaseFromRecord(record: SkillProposalRecord) {
+  const updatedAt = parseDateMs(record.updatedAt);
+  const createdAt = parseDateMs(record.createdAt);
+  return {
+    key: record.id,
+    kind: record.kind,
+    slug: record.target.skillKey,
+    name: record.title || record.target.skillName,
+    oneLine: record.description,
+    status: record.status,
+    version: proposedVersionNumber(record.proposedVersion),
+    createdAt,
+    updatedAt,
+    recencyGroup: recencyGroup(updatedAt || createdAt),
+    ageLabel: compactAgeLabel(updatedAt || createdAt),
+  };
+}
+
 export function proposalFromInspect(
   result: SkillProposalInspectResult,
   previous: SkillWorkshopProposal | undefined,
 ): SkillWorkshopProposal {
   const record = result.record;
-  const updatedAt = parseDateMs(record.updatedAt);
-  const createdAt = parseDateMs(record.createdAt);
   const revisionHash = result.revisionHash?.trim() || null;
   const evaluation =
     record.evaluation?.revisionHash === revisionHash
@@ -189,22 +205,12 @@ export function proposalFromInspect(
         ? previous.evaluation
         : undefined;
   return {
-    key: record.id,
-    kind: record.kind,
-    slug: record.target.skillKey,
-    name: record.title || record.target.skillName,
-    oneLine: record.description,
+    ...proposalBaseFromRecord(record),
     body: stripProposalFrontmatter(result.content),
     bodyLoaded: true,
-    status: record.status,
     ...(record.origin ? { origin: record.origin } : {}),
-    version: proposedVersionNumber(record.proposedVersion),
     revisionHash,
     ...(evaluation ? { evaluation } : {}),
-    createdAt,
-    updatedAt,
-    recencyGroup: recencyGroup(updatedAt || createdAt),
-    ageLabel: compactAgeLabel(updatedAt || createdAt),
     supportFiles: supportFilesFromInspect(result),
     isNew: previous?.isNew ?? false,
   };
@@ -215,30 +221,46 @@ export function proposalFromEvaluation(
   previous: SkillWorkshopProposal,
 ): SkillWorkshopProposal {
   const record = result.record;
-  const updatedAt = parseDateMs(record.updatedAt);
-  const createdAt = parseDateMs(record.createdAt);
   return {
-    key: record.id,
-    kind: record.kind,
-    slug: record.target.skillKey,
-    name: record.title || record.target.skillName,
-    oneLine: record.description,
+    ...proposalBaseFromRecord(record),
     body: previous.body,
     bodyLoaded: previous.bodyLoaded,
-    status: record.status,
     ...(record.origin
       ? { origin: record.origin }
       : previous.origin
         ? { origin: previous.origin }
         : {}),
-    version: proposedVersionNumber(record.proposedVersion),
     revisionHash: result.evaluation.revisionHash,
     evaluation: result.evaluation,
-    createdAt,
-    updatedAt,
-    recencyGroup: recencyGroup(updatedAt || createdAt),
-    ageLabel: compactAgeLabel(updatedAt || createdAt),
     supportFiles: previous.supportFiles,
     isNew: previous.isNew,
+  };
+}
+
+// Builds the proposal row from the authoritative apply/reject RPC result
+// record. The mutation record carries the terminal status and record-sourced
+// fields, but not the transcript body/revision hash, so those UI-derived
+// fields are preserved from the pre-action row when one exists.
+export function proposalFromApplyRecord(
+  record: SkillProposalRecord,
+  previous: SkillWorkshopProposal | undefined,
+): SkillWorkshopProposal {
+  return {
+    ...proposalBaseFromRecord(record),
+    body: previous?.body ?? "",
+    bodyLoaded: previous?.bodyLoaded ?? false,
+    ...(record.origin
+      ? { origin: record.origin }
+      : previous?.origin
+        ? { origin: previous.origin }
+        : {}),
+    revisionHash: previous?.revisionHash ?? null,
+    ...(record.evaluation
+      ? { evaluation: record.evaluation }
+      : previous?.evaluation
+        ? { evaluation: previous.evaluation }
+        : {}),
+    supportFiles: previous?.supportFiles ?? [],
+    isNew: previous?.isNew ?? false,
   };
 }

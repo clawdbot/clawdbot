@@ -20,12 +20,14 @@ import {
 } from "../../lib/skill-workshop/index.ts";
 import {
   parseDateMs,
+  proposalFromApplyRecord,
   proposalFromEvaluation,
   proposalFromInspect,
   proposalFromManifest,
   type SkillProposalEvaluateResult,
   type SkillProposalInspectResult,
   type SkillProposalManifest,
+  type SkillProposalRecord,
 } from "./proposal-records.ts";
 import { createSkillWorkshopHistoryScanState, type SkillWorkshopState } from "./state.ts";
 export {
@@ -66,6 +68,15 @@ function loadedSkillWorkshopAgentParams(
   return {
     agentId: state.skillWorkshopAgentId ?? skillWorkshopAgentParams(context).agentId,
   };
+}
+
+// The live session-resolved agent is still the one that dispatched the
+// action. Uses the live read (skillWorkshopAgentParams) rather than the cached
+// state.skillWorkshopAgentId, because a disconnected follow-up refresh does not
+// rebase that cache; the live read catches an in-flight scope switch whether
+// or not the refresh ran.
+function isStillRequestAgent(context: SkillWorkshopContext, requestAgentId: string): boolean {
+  return skillWorkshopAgentParams(context).agentId === requestAgentId;
 }
 
 function resetSkillWorkshopAgentScope(state: SkillWorkshopState, agentId: string): void {
@@ -379,6 +390,11 @@ function markSkillWorkshopRevisionChanged(
   );
 }
 
+type SkillProposalApplyResult = {
+  record: SkillProposalRecord;
+  targetSkillFile: string;
+};
+
 export async function runSkillWorkshopLifecycleAction(
   state: SkillWorkshopState,
   context: SkillWorkshopContext,
@@ -405,25 +421,61 @@ export async function runSkillWorkshopLifecycleAction(
   state.skillWorkshopActionBusy = { key: proposalId, action };
   state.skillWorkshopActionNotice = null;
   state.skillWorkshopError = null;
+  const requestAgentId = loadedSkillWorkshopAgentParams(state, context).agentId;
   try {
     const requestParams = {
-      ...loadedSkillWorkshopAgentParams(state, context),
+      agentId: requestAgentId,
       proposalId,
       expectedRevisionHash,
     };
-    await client.request(method, requestParams);
+    if (state.skillWorkshopAgentId === null) {
+      state.skillWorkshopAgentId = requestAgentId;
+    }
+    // The mutation RPC returns the authoritative terminal record (apply wraps
+    // it in `{ record, targetSkillFile }`, reject returns the record itself),
+    // so it is the completion authority. The follow-up refresh is only
+    // synchronization and cannot itself confirm the action completed.
+    const result = await client.request<SkillProposalApplyResult | SkillProposalRecord>(
+      method,
+      requestParams,
+    );
+    const record = result && "record" in result ? result.record : result;
+    if (!record || record.status !== (action === "apply" ? "applied" : "rejected")) {
+      if (!isStillRequestAgent(context, requestAgentId)) {
+        return;
+      }
+      if (!state.skillWorkshopError) {
+        state.skillWorkshopError = t("skillWorkshop.notices.confirmUnconfirmed");
+      }
+      return;
+    }
+    // The follow-up refresh only synchronizes rendering; the authoritative
+    // RPC record is applied afterward so it always wins over any refresh
+    // staleness and the visible row matches the success notice. Body/revision
+    // are preserved from the pre-action row since the mutation record does not
+    // carry them.
     await refreshAfterMutation(state, context, proposalId);
-    const updated = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
+    // Publish only while the live session-resolved agent is still the one that
+    // dispatched the action; a disconnected refresh does not rebase the cached scope.
+    if (!isStillRequestAgent(context, requestAgentId)) {
+      return;
+    }
+    const existing = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
+    mergeProposal(state, proposalFromApplyRecord(record, existing ?? previous));
+    const updated =
+      state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId) ?? previous;
     showActionNotice(
       state,
-      updated ?? previous,
+      updated,
       t(action === "apply" ? "skillWorkshop.notices.applied" : "skillWorkshop.notices.rejected"),
     );
   } catch (err) {
     if (readSkillProposalRevisionChangedError(err)) {
       await refreshAfterMutation(state, context, proposalId);
-      markSkillWorkshopRevisionChanged(state, proposalId, previous);
-    } else {
+      if (isStillRequestAgent(context, requestAgentId)) {
+        markSkillWorkshopRevisionChanged(state, proposalId, previous);
+      }
+    } else if (isStillRequestAgent(context, requestAgentId)) {
       state.skillWorkshopError = formatUiError(err);
     }
   } finally {
