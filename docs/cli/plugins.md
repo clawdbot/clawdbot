@@ -4,7 +4,7 @@ read_when:
   - You want to install or manage Gateway plugins or compatible bundles
   - You want to scaffold or validate a simple tool plugin
   - You want to debug plugin load failures
-title: "Plugins"
+title: "Plugins CLI"
 sidebarTitle: "Plugins"
 ---
 

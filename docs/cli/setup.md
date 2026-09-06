@@ -5,7 +5,7 @@ read_when:
   - You're doing first-run setup with the onboarding wizard
   - You want to set the default workspace path
   - You need the baseline-only setup flag for scripts
-title: "Setup"
+title: "Setup CLI"
 ---
 
 # `openclaw setup`
