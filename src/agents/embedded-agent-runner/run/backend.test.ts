@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { makeEmbeddedRunnerAttempt } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import {
   getCoreTtsAttemptResultMediaUrls,
   markCoreTtsAttemptResult,
@@ -7,6 +8,7 @@ import { runEmbeddedAttemptWithBackend } from "./backend.js";
 
 const harnessMocks = vi.hoisted(() => ({
   runAttempt: vi.fn(),
+  settleRequester: vi.fn(),
 }));
 
 vi.mock("../../harness/selection.js", () => ({
@@ -15,10 +17,77 @@ vi.mock("../../harness/selection.js", () => ({
 }));
 
 vi.mock("../../subagents/registry/subagent-registry.js", () => ({
-  settleRequesterAfterSessionSpawns: vi.fn(),
+  settleRequesterAfterSessionSpawns: harnessMocks.settleRequester,
 }));
 
 describe("embedded attempt backend", () => {
+  beforeEach(() => {
+    harnessMocks.runAttempt.mockReset();
+    harnessMocks.settleRequester.mockReset();
+  });
+
+  it.each([
+    { yielded: true, settled: true, accepted: true, expected: true },
+    { yielded: true, settled: false, accepted: true, expected: undefined },
+    { yielded: false, settled: true, accepted: true, expected: undefined },
+    { yielded: true, settled: false, accepted: false, expected: undefined },
+  ])(
+    "requires core settlement before acknowledging continuation ($yielded/$settled/$accepted)",
+    async ({ yielded, settled, accepted, expected }) => {
+      harnessMocks.settleRequester.mockReturnValue(settled);
+      harnessMocks.runAttempt.mockResolvedValueOnce(
+        makeEmbeddedRunnerAttempt({
+          agentHarnessId: "codex",
+          yieldDetected: yielded,
+          // A harness-supplied value must not manufacture core settlement.
+          requesterContinuationSettled: true,
+          acceptedSessionSpawns: accepted
+            ? [{ runId: "child", childSessionKey: "agent:main:subagent:child" }]
+            : [],
+        }),
+      );
+      const result = await runEmbeddedAttemptWithBackend({
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        runId: "parent",
+      } as never);
+      expect(result.requesterContinuationSettled).toBe(expected);
+    },
+  );
+
+  it("does not return a continuation acknowledgment when registry persistence throws", async () => {
+    harnessMocks.settleRequester.mockImplementation(() => {
+      throw new Error("storage unavailable");
+    });
+    harnessMocks.runAttempt.mockResolvedValueOnce(
+      makeEmbeddedRunnerAttempt({
+        agentHarnessId: "codex",
+        yieldDetected: true,
+        acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:subagent:child" }],
+      }),
+    );
+    await expect(
+      runEmbeddedAttemptWithBackend({
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        runId: "parent",
+      } as never),
+    ).rejects.toThrow("storage unavailable");
+  });
+
+  it("preserves the built-in runner's completed settlement", async () => {
+    harnessMocks.runAttempt.mockResolvedValueOnce(
+      makeEmbeddedRunnerAttempt({
+        agentHarnessId: "openclaw",
+        yieldDetected: true,
+        requesterContinuationSettled: true,
+      }),
+    );
+    const result = await runEmbeddedAttemptWithBackend({} as never);
+    expect(result.requesterContinuationSettled).toBe(true);
+    expect(harnessMocks.settleRequester).not.toHaveBeenCalled();
+  });
+
   it.each([true, false])(
     "keeps runtime model selection only for prepared ownership (%s)",
     async (runtimeOwned) => {

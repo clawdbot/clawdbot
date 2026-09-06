@@ -15,5 +15,8 @@ export function copyAttemptDeliveryState(attempt: EmbeddedRunAttemptResult) {
     heartbeatToolResponse: attempt.heartbeatToolResponse,
     successfulCronAdds: attempt.successfulCronAdds,
     acceptedSessionSpawns: attempt.acceptedSessionSpawns,
+    ...(attempt.requesterContinuationSettled === true
+      ? { requesterContinuationSettled: true as const }
+      : {}),
   };
 }

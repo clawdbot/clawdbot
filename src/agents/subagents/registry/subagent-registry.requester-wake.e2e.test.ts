@@ -9,6 +9,8 @@ import {
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
+import type { deliverAgentCommandResult } from "../../command/delivery.js";
+import type { EmbeddedAgentRunResult } from "../../embedded-agent-runner/types.js";
 import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -46,6 +48,17 @@ type GatewayRequest = Omit<CallGatewayOptions, "params"> & {
   };
 };
 
+type GatewayDeliveryStatus = NonNullable<
+  Awaited<ReturnType<typeof deliverAgentCommandResult>>["deliveryStatus"]
+>;
+
+type GatewayResponse = {
+  status?: string;
+  runId?: string;
+  messages?: Array<Record<string, unknown>>;
+  result?: Partial<EmbeddedAgentRunResult> & { deliveryStatus?: Partial<GatewayDeliveryStatus> };
+};
+
 let lifecycleHandler: ((event: LifecycleEvent) => void) | undefined;
 let agentCallGates = new Map<string, Promise<void>>();
 let releaseAgentCallGate: (() => void) | undefined;
@@ -64,7 +77,7 @@ const sendMessageMock = vi.fn<typeof import("../../../infra/outbound/message.js"
   }),
 );
 
-const callGatewayMock = vi.fn(async (request: GatewayRequest) => {
+const callGatewayMock = vi.fn(async (request: GatewayRequest): Promise<GatewayResponse> => {
   if (request.method === "agent.wait") {
     return { status: "pending" };
   }
@@ -584,6 +597,241 @@ describe("requester settle wake product flow", () => {
       lastDropReason: undefined,
     });
   });
+
+  it.each([
+    { runtime: "cli", acceptNextChild: true },
+    { runtime: "cli", acceptNextChild: false },
+    { runtime: "native", acceptNextChild: true },
+  ] as const)(
+    "preserves serial continuation without replaying an accepted wave ($runtime, next child accepted=$acceptNextChild)",
+    async ({ runtime, acceptNextChild }) => {
+      vi.setSystemTime(100_000);
+      const context = {} as GatewayRequestContext;
+      context.resolveGatewayContext = () => context;
+      registry.initSubagentRegistry();
+      registry.activateSubagentRegistry(() => context);
+      const alpha = {
+        runId: "run-serial-alpha",
+        childSessionKey: "agent:main:subagent:serial-alpha",
+        expectsCompletionMessage: true,
+      };
+      const beta = {
+        runId: "run-serial-beta",
+        childSessionKey: "agent:main:subagent:serial-beta",
+        expectsCompletionMessage: true,
+      };
+      const { withLocalSessionPlacementTurnSettlement } =
+        await import("../../session-placement-admission.js");
+      const yieldTurn = async (requesterTurnRunId: string, accepted: (typeof alpha)[]) => {
+        const result = await createSessionsYieldTool({
+          sessionId: "sess-main",
+          claimYield: () =>
+            registry.markRequesterTurnYielded({
+              requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+              requesterAgentId: "main",
+              requesterTurnRunId,
+            }) > 0,
+          onYield: () => {},
+        }).execute(`yield-${requesterTurnRunId}`, {});
+        expect(result).toMatchObject({
+          details: { status: accepted.length > 0 ? "yielded" : "error" },
+        });
+        if (runtime === "native") {
+          const harnessSelection = await import("../../harness/selection.js");
+          const { runEmbeddedAttemptWithBackend } =
+            await import("../../embedded-agent-runner/run/backend.js");
+          const { makeEmbeddedRunnerAttempt } =
+            await import("../../test-helpers/embedded-agent-runner-e2e-fixtures.js");
+          const { makeTerminalInput } =
+            await import("../../embedded-agent-runner/run/terminal-resolution.test-support.js");
+          const { resolveEmbeddedRunTerminal } =
+            await import("../../embedded-agent-runner/run/terminal-resolution.js");
+          const { AuthStorage, ModelRegistry } = await import("../../sessions/index.js");
+          const admission = prepareSystemAgentRunAdmission(
+            {},
+            requesterTurnRunId,
+            "main",
+            "serial-requester-wake-test",
+          );
+          const harnessAttempt = vi.spyOn(harnessSelection, "runAgentHarnessAttempt");
+          try {
+            // Harness execution is synthetic; backend settlement and terminal
+            // projection are real. Placement cannot repair this path afterward.
+            harnessAttempt.mockResolvedValue(
+              makeEmbeddedRunnerAttempt({
+                agentHarnessId: "codex",
+                yieldDetected: true,
+                acceptedSessionSpawns: accepted,
+              }),
+            );
+            const admittedRunContext = await admission.admit("embedded");
+            const runParams = {
+              sessionId: "sess-main",
+              sessionKey: MAIN_REQUESTER_SESSION_KEY,
+              agentId: "main",
+              runId: requesterTurnRunId,
+              admittedRunContext,
+            };
+            const input = makeTerminalInput({ runParams });
+            // Keep the real attempt contract complete without reading credentials
+            // or executing the mocked harness's model transport.
+            const authStorage = AuthStorage.inMemory();
+            const attempt = await runEmbeddedAttemptWithBackend({
+              ...runParams,
+              agentDir: input.runParams.agentDir,
+              workspaceDir: input.runParams.workspaceDir,
+              prompt: input.runParams.prompt,
+              timeoutMs: input.runParams.timeoutMs,
+              sessionFile: "/tmp/serial-requester-wake-test/session.jsonl",
+              provider: input.provider,
+              modelId: input.modelId,
+              model: {
+                id: input.modelId,
+                name: input.modelId,
+                api: "openai-responses",
+                provider: input.provider,
+                baseUrl: "https://example.invalid",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 16_000,
+                maxTokens: 2_048,
+              },
+              authStorage,
+              authProfileStore: input.attemptAuthProfileStore,
+              modelRegistry: ModelRegistry.inMemory(authStorage),
+              thinkLevel: "off",
+            });
+            expect(harnessAttempt).toHaveBeenCalledTimes(1);
+            for (const child of accepted) {
+              expect(registry.getSubagentRunByRunId(child.runId)).toMatchObject({
+                requesterTurnRunId: undefined,
+                requesterSettleWake: {
+                  status: "pending",
+                  requesterYieldBatch: true,
+                  batchRunIds: accepted.map((spawn) => spawn.runId).toSorted(),
+                },
+              });
+            }
+            const terminal = await resolveEmbeddedRunTerminal(
+              makeTerminalInput({ attempt, runParams, agentHarnessId: "codex" }),
+            );
+            expect(terminal.action).toBe("complete");
+            if (terminal.action !== "complete") {
+              throw new Error("yielded native requester did not complete its turn");
+            }
+            expect(terminal.result.meta.yielded).toBe(true);
+            expect(terminal.result.requesterContinuationSettled).toBe(true);
+            expect(terminal.result.acceptedSessionSpawns).toEqual(accepted);
+            expect(terminal.result.payloads ?? []).toEqual([]);
+            return terminal.result;
+          } finally {
+            harnessAttempt.mockRestore();
+            admission.close();
+          }
+        }
+        return await withLocalSessionPlacementTurnSettlement(
+          {
+            sessionId: "sess-main",
+            sessionKey: MAIN_REQUESTER_SESSION_KEY,
+            agentId: "main",
+            runId: requesterTurnRunId,
+          },
+          async () => ({
+            payloads: [],
+            acceptedSessionSpawns: accepted,
+            meta: {
+              durationMs: 1,
+              yielded: accepted.length > 0,
+              executionTrace: { runner: "cli", attempts: [], fallbackUsed: false },
+            },
+          }),
+        );
+      };
+      const ordinaryGatewayCall = callGatewayMock.getMockImplementation()!;
+      let firstWakeReturned = false;
+      let visibleFinals = 0;
+      await callGatewayMock.withImplementation(
+        async (request) => {
+          if (
+            request.method !== "agent" ||
+            !request.params?.idempotencyKey?.startsWith("announce:requester-settle:")
+          ) {
+            return await ordinaryGatewayCall(request);
+          }
+          if (!firstWakeReturned) {
+            // Gateway preflight uses this exact idempotency key as the run ID.
+            const requesterTurnRunId = request.params.idempotencyKey;
+            if (acceptNextChild) {
+              const firstEndedAt = registry.getSubagentRunByRunId(alpha.runId)?.execution.endedAt;
+              expect(firstEndedAt).toEqual(expect.any(Number));
+              vi.setSystemTime(firstEndedAt! + 1);
+              await spawnVisibleChild({ ...beta, requesterTurnRunId });
+              expect(registry.getSubagentRunByRunId(beta.runId)?.createdAt).toBeGreaterThan(
+                firstEndedAt!,
+              );
+            }
+            const result = await yieldTurn(requesterTurnRunId, acceptNextChild ? [beta] : []);
+            firstWakeReturned = true;
+            return { runId: requesterTurnRunId, status: "ok", result };
+          }
+          visibleFinals += 1;
+          return await ordinaryGatewayCall(request);
+        },
+        async () => {
+          const requesterTurnRunId = "requester-serial-initial";
+          await spawnVisibleChild({ ...alpha, requesterTurnRunId });
+          await yieldTurn(requesterTurnRunId, [alpha]);
+          emitCompleted(alpha.runId, alpha.childSessionKey, "alpha findings");
+          await vi.waitFor(() => expect(firstWakeReturned).toBe(true));
+          await vi.advanceTimersByTimeAsync(0);
+          expect(getRequesterWakeCalls()).toHaveLength(1);
+          expect(visibleFinals).toBe(0);
+          if (acceptNextChild) {
+            expect(registry.countActiveDescendantRuns(MAIN_REQUESTER_SESSION_KEY, "main")).toBe(1);
+            expect(registry.getSubagentRunByRunId(beta.runId)).toMatchObject({
+              requesterTurnRunId: undefined,
+              requesterSettleWake: {
+                status: "pending",
+                batchRunIds: [beta.runId],
+                requesterYieldBatch: true,
+              },
+            });
+            emitCompleted(beta.runId, beta.childSessionKey, "beta findings");
+          } else {
+            expect(registry.getSubagentRunByRunId(beta.runId)).toBeUndefined();
+          }
+          // Cross both native retry deadlines; a transferred obligation must not
+          // start an extra parent turn, while an empty failed handoff must recover.
+          await vi.advanceTimersByTimeAsync(151_000);
+          await registry.testing.sweepOnceForTests();
+          await vi.advanceTimersByTimeAsync(0);
+          for (const child of acceptNextChild ? [alpha, beta] : [alpha]) {
+            await waitForDeliveredCleanup(child.runId);
+          }
+          const wakeIdentities = getRequesterWakeCalls().map((request) => ({
+            sourceSessionKey: request.params?.inputProvenance?.sourceSessionKey,
+            idempotencyKey: request.params?.idempotencyKey,
+          }));
+          expect(wakeIdentities).toEqual([
+            {
+              sourceSessionKey: alpha.childSessionKey,
+              idempotencyKey: expect.not.stringContaining(":retry-"),
+            },
+            {
+              sourceSessionKey: acceptNextChild ? beta.childSessionKey : alpha.childSessionKey,
+              idempotencyKey: acceptNextChild
+                ? expect.not.stringContaining(":retry-")
+                : expect.stringContaining(":retry-"),
+            },
+          ]);
+          expect(visibleFinals).toBe(1);
+          expect(sendMessageMock).not.toHaveBeenCalled();
+          expect(registry.countActiveDescendantRuns(MAIN_REQUESTER_SESSION_KEY, "main")).toBe(0);
+        },
+      );
+    },
+  );
 
   it("caps a stale requester batch despite foreign active work in a global session", async () => {
     vi.setSystemTime(100_000);

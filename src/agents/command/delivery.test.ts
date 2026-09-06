@@ -824,6 +824,16 @@ describe("deliverAgentCommandResult payload normalization", () => {
     );
   });
 
+  it("preserves settled continuation through empty command output normalization", async () => {
+    const delivered = await deliverAgentCommandResultForTest({
+      omitReplyTarget: true,
+      opts: { deliver: false },
+      payloads: [],
+      result: { requesterContinuationSettled: true },
+    });
+    expect(delivered.requesterContinuationSettled).toBe(true);
+  });
+
   it("preserves committed message-tool delivery evidence when automatic delivery is disabled", async () => {
     const runtime = { log: vi.fn(), error: vi.fn() };
 
