@@ -829,10 +829,11 @@ describe("runHeartbeatOnce", () => {
       nowMs?: number;
       getReplyFromConfig?: HeartbeatDeps["getReplyFromConfig"];
       listActiveEmbeddedRunSessionKeys?: HeartbeatDeps["listActiveEmbeddedRunSessionKeys"];
+      getQueueSize?: HeartbeatDeps["getQueueSize"];
     },
   ): HeartbeatDeps => ({
     whatsapp: sendWhatsApp,
-    getQueueSize: () => 0,
+    getQueueSize: options?.getQueueSize ?? (() => 0),
     nowMs: () => options?.nowMs ?? 0,
     webAuthExists: async () => true,
     hasActiveWebListener: () => true,
@@ -1830,6 +1831,7 @@ describe("runHeartbeatOnce", () => {
     unscheduled?: boolean;
     queueCronEvent?: boolean;
     queueSystemEvent?: boolean;
+    busyMainQueue?: boolean;
     replyText?: string;
   }) {
     const tmpDir = await createCaseDir("openclaw-hb");
@@ -1904,7 +1906,15 @@ describe("runHeartbeatOnce", () => {
       reason: params.reason,
       ...(params.source ? { sessionKey } : {}),
       ...(params.source ? { heartbeat: { target: "last" as const } } : {}),
-      deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
+      deps: createHeartbeatDeps(sendWhatsApp, {
+        getReplyFromConfig: replySpy,
+        ...(params.busyMainQueue
+          ? {
+              getQueueSize: ((lane?: string) =>
+                lane === "main" ? 2 : 0) as HeartbeatDeps["getQueueSize"],
+            }
+          : null),
+      }),
     });
     return { res, replySpy, sendWhatsApp, workspaceDir };
   }
@@ -1923,6 +1933,24 @@ describe("runHeartbeatOnce", () => {
       expect(calledCtx.Body).toContain("Heartbeat monitor scratch:");
       expect(calledCtx.Body).toContain("Check server logs");
       expect(calledCtx.Body).not.toContain("HEARTBEAT.md");
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
+  it("skips an empty scheduled heartbeat before the busy main queue (#137492)", async () => {
+    const { res, replySpy, sendWhatsApp } = await runHeartbeatScratchScenario({
+      fileState: "empty",
+      reason: "interval",
+      busyMainQueue: true,
+    });
+    try {
+      // Pre-fix this returned requests-in-flight and the wake queued behind
+      // busy work until it timed out; empty scheduled wakes must settle now.
+      expect(res.status).toBe("skipped");
+      expect(res.status === "skipped" ? res.reason : undefined).toBe("empty-heartbeat-file");
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(sendWhatsApp).not.toHaveBeenCalled();
     } finally {
       replySpy.mockRestore();
     }
