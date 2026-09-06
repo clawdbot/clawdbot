@@ -9,6 +9,17 @@ sidebarTitle: "Offline and reconnect"
 
 What survives a dropped connection, and how the Control UI recovers when it returns.
 
+## Gateway updates and suspended tabs
+
+An open tab checks the active UI build when it returns to the foreground, comes back online,
+or is restored from browser history. If an update finished while the tab was suspended, it
+can recover without receiving the original update notification or opening a new tab.
+
+Automatic reloads wait for the page to be reachable and respect unsaved-work protection.
+The current route and stored drafts survive the reload. If browser storage is unavailable
+or reload protection blocks recovery, reload the tab after saving your work;
+do not clear site data while drafts or queued messages still need recovery.
+
 ## Connection loss and reconnect
 
 Once a session is established, a dropped Gateway connection does not log you out. The dashboard
