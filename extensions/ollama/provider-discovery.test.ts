@@ -3,7 +3,6 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createModel } from "./model.test-support.js";
@@ -15,18 +14,12 @@ const createConfiguredModel = () =>
   createModel("gpt-oss:20b", "GPT-OSS 20B", { contextWindow: 8_192, maxTokens: 81_920 });
 
 afterEach(() => {
-  clearLiveCatalogCacheForTests();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
 
 describe("Ollama provider", () => {
   const createAgentDir = () => mkdtempSync(join(tmpdir(), "openclaw-test-"));
-
-  const enableDiscoveryEnv = () => {
-    vi.stubEnv("VITEST", "");
-    vi.stubEnv("NODE_ENV", "development");
-  };
 
   const fetchCallUrls = (fetchMock: ReturnType<typeof vi.fn>): string[] =>
     fetchMock.mock.calls.map(([input]) => String(input));
@@ -36,16 +29,6 @@ describe("Ollama provider", () => {
 
   const stubOllamaFetch = (fetchMock: ReturnType<typeof vi.fn>) => {
     vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
-  };
-
-  const countWarnCallsIncluding = (warnSpy: ReturnType<typeof vi.spyOn>, text: string): number => {
-    let count = 0;
-    for (const [message] of warnSpy.mock.calls) {
-      if (String(message).includes(text)) {
-        count++;
-      }
-    }
-    return count;
   };
 
   const expectDiscoveryCallCounts = (
@@ -222,7 +205,6 @@ describe("Ollama provider", () => {
   });
 
   it("discovers per-model context windows from /api/show", async () => {
-    enableDiscoveryEnv();
     const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/tags")) {
@@ -256,7 +238,6 @@ describe("Ollama provider", () => {
 
   it("auto-registers ollama provider when models are discovered locally", async () => {
     await withoutAmbientOllamaEnv(async () => {
-      enableDiscoveryEnv();
       const fetchMock = vi.fn(async (input: unknown) => {
         const url = String(input);
         if (url.endsWith("/api/tags")) {
@@ -286,7 +267,6 @@ describe("Ollama provider", () => {
 
   it("does not warn when Ollama is unreachable and not explicitly configured", async () => {
     await withoutAmbientOllamaEnv(async () => {
-      enableDiscoveryEnv();
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       const fetchMock = vi
         .fn()
@@ -305,37 +285,7 @@ describe("Ollama provider", () => {
     });
   });
 
-  it("warns when Ollama is unreachable and explicitly configured", async () => {
-    await withoutAmbientOllamaEnv(async () => {
-      enableDiscoveryEnv();
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-      const fetchMock = vi
-        .fn()
-        .mockRejectedValue(new Error("connect ECONNREFUSED 127.0.0.1:11434"));
-      stubOllamaFetch(fetchMock);
-
-      await runOllamaCatalog({
-        config: {
-          models: {
-            providers: {
-              ollama: {
-                baseUrl: "http://127.0.0.1:11435/v1",
-                api: "openai-completions",
-                models: [],
-              },
-            },
-          },
-        },
-        env: { VITEST: "", NODE_ENV: "development" },
-      });
-
-      expect(countWarnCallsIncluding(warnSpy, "Ollama")).toBeGreaterThan(0);
-      warnSpy.mockRestore();
-    });
-  });
-
   it("falls back to default context window when /api/show fails", async () => {
-    enableDiscoveryEnv();
     const fetchMock = vi.fn(async (input: unknown) => {
       const url = String(input);
       if (url.endsWith("/api/tags")) {
@@ -359,7 +309,6 @@ describe("Ollama provider", () => {
   });
 
   it("caps /api/show requests when /api/tags returns a very large model list", async () => {
-    enableDiscoveryEnv();
     const manyModels = Array.from({ length: 250 }, (_, idx) => ({
       name: `model-${idx}`,
       modified_at: "",

@@ -1,5 +1,7 @@
 // Ollama plugin module implements discovery shared behavior.
-import { getCachedLiveCatalogValue } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { isRfc1918Ipv4Address } from "@openclaw/net-policy/ip";
+import type { ProviderCatalogResult } from "openclaw/plugin-sdk/plugin-entry";
+import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type {
   ModelProviderConfig,
   ModelDefinitionConfig,
@@ -29,6 +31,7 @@ export type OllamaPluginConfig = {
 };
 
 type OllamaDiscoveryContext = {
+  providerIds?: readonly string[];
   config: {
     models?: {
       providers?: Record<string, OllamaProviderConfigInput | undefined>;
@@ -38,6 +41,7 @@ type OllamaDiscoveryContext = {
   resolveProviderApiKey: (providerId: string) => {
     apiKey?: unknown;
     discoveryApiKey?: unknown;
+    profileId?: string;
   };
 };
 
@@ -106,10 +110,6 @@ function resolveOllamaDiscoveryAuth(params: {
   return { apiKey: OLLAMA_DEFAULT_API_KEY };
 }
 
-function shouldSkipAmbientOllamaDiscovery(env: NodeJS.ProcessEnv): boolean {
-  return Boolean(env.VITEST) || env.NODE_ENV === "test";
-}
-
 const LOCAL_OLLAMA_HOSTNAMES = new Set([
   "localhost",
   "0.0.0.0",
@@ -120,21 +120,6 @@ const LOCAL_OLLAMA_HOSTNAMES = new Set([
   "host.orb.internal",
 ]);
 const LOOPBACK_OLLAMA_HOSTNAMES = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1", "::"]);
-
-function isIpv4PrivateRange(host: string): boolean {
-  if (!/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
-    return false;
-  }
-  const octets = host.split(".").map((part) => Number.parseInt(part, 10));
-  if (octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
-    return false;
-  }
-  const [a, b] = octets;
-  if (a === undefined || b === undefined) {
-    return false;
-  }
-  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
-}
 
 function isIpv6LocalRange(host: string): boolean {
   const lower = host.toLowerCase();
@@ -159,7 +144,7 @@ export function isLocalOllamaBaseUrl(baseUrl: string | undefined | null): boolea
     LOCAL_OLLAMA_HOSTNAMES.has(host) ||
     isLoopbackHost(host) ||
     host.endsWith(".local") ||
-    isIpv4PrivateRange(host) ||
+    isRfc1918Ipv4Address(host) ||
     isIpv6LocalRange(host) ||
     (!host.includes(".") && !host.includes(":"))
   );
@@ -278,9 +263,12 @@ export async function resolveOllamaDiscoveryResult(params: {
   pluginConfig: OllamaPluginConfig;
   buildProvider: (
     configuredBaseUrl?: string,
-    opts?: { apiKey?: string; quiet?: boolean },
+    opts?: { apiKey?: string; quiet?: boolean; discoveryMode?: "strict" },
   ) => Promise<ModelProviderConfig>;
-}): Promise<{ provider: ModelProviderConfig } | null> {
+}): Promise<ProviderCatalogResult> {
+  if (params.ctx.providerIds && !params.ctx.providerIds.includes(OLLAMA_PROVIDER_ID)) {
+    return null;
+  }
   const explicit = params.ctx.config.models?.providers?.ollama;
   const hasExplicitModels = Array.isArray(explicit?.models) && explicit.models.length > 0;
   const hasMeaningfulExplicitConfig = hasMeaningfulExplicitOllamaConfig(explicit);
@@ -335,43 +323,29 @@ export async function resolveOllamaDiscoveryResult(params: {
   if (!hasOllamaDiscoveryOptIn && !hasMeaningfulExplicitConfig) {
     return null;
   }
-  if (
-    !hasRealOllamaKey &&
-    !hasMeaningfulExplicitConfig &&
-    shouldSkipAmbientOllamaDiscovery(params.ctx.env)
-  ) {
-    return null;
-  }
-
   const quiet = !hasRealOllamaKey && !hasMeaningfulExplicitConfig;
-  const provider = await getCachedLiveCatalogValue({
-    keyParts: [
-      OLLAMA_PROVIDER_ID,
-      "models",
-      resolveOllamaApiBase(configuredBaseUrl),
-      discoveryApiKey,
-      quiet,
-    ],
-    load: async () =>
-      await params.buildProvider(configuredBaseUrl, {
+  return await runLiveProviderCatalog({
+    providerId: OLLAMA_PROVIDER_ID,
+    profileId: resolvedOllamaAuth.profileId,
+    run: async () => {
+      const provider = await params.buildProvider(configuredBaseUrl, {
+        discoveryMode: "strict",
         quiet,
         ...(discoveryApiKey ? { apiKey: discoveryApiKey } : {}),
-      }),
-  });
-  if (provider.models?.length === 0 && !ollamaKey && !explicit?.apiKey) {
-    return null;
-  }
-  const api = explicit?.api ?? provider.api;
-  return {
-    provider: {
-      ...provider,
-      baseUrl: resolveOllamaRuntimeBaseUrl({
-        api,
-        configuredBaseUrl,
-        discoveredBaseUrl: provider.baseUrl,
-      }),
-      api,
-      ...(apiKey ? { apiKey } : {}),
+      });
+      const api = explicit?.api ?? provider.api;
+      return {
+        provider: {
+          ...provider,
+          baseUrl: resolveOllamaRuntimeBaseUrl({
+            api,
+            configuredBaseUrl,
+            discoveredBaseUrl: provider.baseUrl,
+          }),
+          api,
+          ...(apiKey ? { apiKey } : {}),
+        },
+      };
     },
-  };
+  });
 }
