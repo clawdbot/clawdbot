@@ -1,27 +1,68 @@
 /* @vitest-environment jsdom */
 
+import { html } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
-import type {
-  ApplicationContext,
-  ApplicationGateway,
-  ApplicationGatewaySnapshot,
-} from "../../app/context.ts";
+import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import * as modelCatalogStore from "../../lib/model-catalog-store.ts";
+import {
+  createApplicationContextProvider,
+  createApplicationGateway,
+} from "../../test-helpers/application-context.ts";
+import { settleLitElement, settleLitElements } from "../../test-helpers/lit-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { ConfigPage } from "./config-page.ts";
 
 beforeEach(() => {
   vi.stubGlobal("localStorage", createStorageMock());
+  vi.useFakeTimers();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  const pages = document.querySelectorAll<ConfigPage>("openclaw-config-page");
   document.body.replaceChildren();
+  await settleLitElements(pages);
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
+
+async function mount(client: GatewayBrowserClient) {
+  const source = createApplicationGateway({
+    client,
+    phase: "connected",
+    hello: { features: { methods: ["system.info"] } },
+  } as ApplicationGatewaySnapshot);
+  const subscribe = () => () => undefined;
+  const context = {
+    gateway: source.gateway,
+    agentSelection: { state: { selectedId: "main" }, subscribe },
+    runtimeConfig: { state: { configSnapshot: {}, configSchema: {} }, subscribe },
+    theme: { serverSelection: null, subscribe },
+    overlays: { snapshot: {}, subscribe },
+    config: { subscribe },
+    webPush: { subscribe },
+  } as unknown as ApplicationContext;
+  const page = new ConfigPage();
+  page.pageId = "appearance";
+  // Exercise the actual host, subscriptions and Tasks; browser recovery tests own the picker UI.
+  vi.spyOn(page, "render").mockReturnValue(html``);
+  const provider = createApplicationContextProvider(context);
+  provider.append(page);
+  document.body.append(provider);
+  await settleLitElement(page);
+  const state = page as unknown as {
+    sessionObserverModels: ModelCatalogEntry[];
+    sessionObserverModelsUnavailable: boolean;
+    sessionObserverModelsTask: {
+      run: () => Promise<void>;
+      taskComplete: Promise<unknown>;
+    };
+  };
+  return { page, state, source, provider, context };
+}
 
 describe("ConfigPage session observer models", () => {
   it.each(["client", "source"] as const)(
@@ -32,47 +73,21 @@ describe("ConfigPage session observer models", () => {
       vi.spyOn(modelCatalogStore, "loadModelCatalog")
         .mockReturnValueOnce(first.promise)
         .mockReturnValueOnce(second.promise);
-      const firstClient = {} as GatewayBrowserClient;
-      const secondClient = replacement === "client" ? ({} as GatewayBrowserClient) : firstClient;
-      const gateway = {
-        snapshot: {
-          client: firstClient,
-          phase: "connected",
-          hello: { features: { methods: ["system.info"] } },
-        },
-      } as unknown as ApplicationGateway;
-      const page = new ConfigPage();
-      page.pageId = "appearance";
-      const state = page as unknown as {
-        context: ApplicationContext;
-        systemInfoGatewaySource: ApplicationGateway;
-        systemInfo: unknown;
-        sessionObserverModels: ModelCatalogEntry[];
-        sessionObserverModelsUnavailable: boolean;
-        sessionObserverModelsTask: {
-          run: () => Promise<void>;
-          hostUpdate: () => void;
-          taskComplete: Promise<unknown>;
-        };
-      };
-      Object.defineProperty(page, "isConnected", { configurable: true, value: true });
-      state.context = {
-        gateway,
-        agentSelection: { state: { selectedId: "main" } },
-      } as ApplicationContext;
-      state.systemInfoGatewaySource = gateway;
-      state.systemInfo = {};
-
-      const firstLoad = state.sessionObserverModelsTask.run();
-      (gateway as { snapshot: ApplicationGatewaySnapshot }).snapshot = {
-        client: secondClient,
-        phase: "connected",
-        hello: { features: { methods: ["system.info"] } },
-      } as ApplicationGatewaySnapshot;
-      const nextGateway = replacement === "source" ? { ...gateway } : gateway;
-      state.context = { ...state.context, gateway: nextGateway };
-      state.systemInfoGatewaySource = nextGateway;
-      state.sessionObserverModelsTask.hostUpdate();
+      const firstClient = {
+        request: vi.fn().mockResolvedValue({}),
+      } as unknown as GatewayBrowserClient;
+      const secondClient =
+        replacement === "client"
+          ? ({ request: vi.fn().mockResolvedValue({}) } as unknown as GatewayBrowserClient)
+          : firstClient;
+      const { page, state, source, provider, context } = await mount(firstClient);
+      const snapshot = { ...source.gateway.snapshot, client: secondClient };
+      if (replacement === "source") {
+        provider.setContext({ ...context, gateway: createApplicationGateway(snapshot).gateway });
+      } else {
+        source.publish(snapshot);
+      }
+      await settleLitElement(page);
       const secondLoad = state.sessionObserverModelsTask.taskComplete;
       const currentModels = [{ id: "small", name: "Small", provider: "openai" }];
       second.resolve({ models: currentModels });
@@ -80,7 +95,8 @@ describe("ConfigPage session observer models", () => {
       expect(state.sessionObserverModels).toEqual(currentModels);
 
       first.resolve({ models: [{ id: "stale", name: "Stale", provider: "old" }] });
-      await firstLoad;
+      await first.promise;
+      await settleLitElement(page);
       expect(state.sessionObserverModels).toEqual(currentModels);
       expect(modelCatalogStore.loadModelCatalog).toHaveBeenCalledTimes(2);
       expect(modelCatalogStore.loadModelCatalog).toHaveBeenNthCalledWith(1, firstClient, {
@@ -101,7 +117,10 @@ describe("ConfigPage session observer models", () => {
     const writer = deferred<ModelCatalogResult>();
     const secondMain = deferred<ModelCatalogResult>();
     let mainRequests = 0;
-    const request = vi.fn((_method: string, params: unknown) => {
+    const request = vi.fn((method: string, params: unknown) => {
+      if (method === "system.info") {
+        return Promise.resolve({});
+      }
       const agentId = (params as { agentId?: string }).agentId;
       if (agentId === "writer") {
         return writer.promise;
@@ -110,35 +129,11 @@ describe("ConfigPage session observer models", () => {
       return mainRequests === 1 ? firstMain.promise : secondMain.promise;
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const gateway = {
-      snapshot: { client, phase: "connected", hello: { features: { methods: ["system.info"] } } },
-    } as unknown as ApplicationGateway;
-    const selectionState = { selectedId: "main" as string | null };
-    const page = new ConfigPage();
-    page.pageId = "appearance";
-    const state = page as unknown as {
-      context: ApplicationContext;
-      systemInfoGatewaySource: ApplicationGateway;
-      systemInfo: unknown;
-      sessionObserverModels: ModelCatalogEntry[];
-      sessionObserverModelsUnavailable: boolean;
-      sessionObserverModelsTask: {
-        run: () => Promise<void>;
-        hostUpdate: () => void;
-        taskComplete: Promise<unknown>;
-      };
-    };
-    Object.defineProperty(page, "isConnected", { configurable: true, value: true });
-    state.context = {
-      gateway,
-      agentSelection: { state: selectionState },
-    } as ApplicationContext;
-    state.systemInfoGatewaySource = gateway;
-    state.systemInfo = {};
-
-    const mainLoad = state.sessionObserverModelsTask.run();
-    selectionState.selectedId = "writer";
-    state.sessionObserverModelsTask.hostUpdate();
+    const { page, state, context } = await mount(client);
+    const selection = context.agentSelection.state as { selectedId: string | null };
+    selection.selectedId = "writer";
+    page.requestUpdate();
+    await settleLitElement(page);
     const writerLoad = state.sessionObserverModelsTask.taskComplete;
     const writerModels = [{ id: "writer-model", name: "Writer Model", provider: "openai" }];
     writer.resolve({ models: writerModels });
@@ -146,32 +141,31 @@ describe("ConfigPage session observer models", () => {
     expect(state.sessionObserverModels).toEqual(writerModels);
 
     modelCatalogStore.invalidateModelCatalogCache(client);
-    selectionState.selectedId = "main";
-    state.sessionObserverModelsTask.hostUpdate();
+    selection.selectedId = "main";
+    page.requestUpdate();
+    await settleLitElement(page);
     const secondMainLoad = state.sessionObserverModelsTask.taskComplete;
     const currentMainModels = [{ id: "current-main", name: "Current Main", provider: "openai" }];
     secondMain.resolve({ models: currentMainModels });
     await secondMainLoad;
-    firstMain.resolve({
-      models: [{ id: "stale-main", name: "Stale Main", provider: "openai" }],
-    });
-    await mainLoad;
-
+    firstMain.resolve({ models: [{ id: "stale-main", name: "Stale Main", provider: "openai" }] });
+    await firstMain.promise;
+    await settleLitElement(page);
     expect(state.sessionObserverModels).toEqual(currentMainModels);
-    for (const [index, agentId] of ["main", "writer", "main"].entries()) {
-      expect(request).toHaveBeenNthCalledWith(
-        index + 1,
+    expect(request.mock.calls.filter(([method]) => method === "models.list")).toEqual(
+      ["main", "writer", "main"].map((agentId) => [
         "models.list",
         { agentId, preparedOnly: true, view: "configured" },
         { signal: expect.any(AbortSignal) },
-      );
-    }
+      ]),
+    );
 
-    selectionState.selectedId = null;
-    state.sessionObserverModelsTask.hostUpdate();
+    selection.selectedId = null;
+    page.requestUpdate();
+    await settleLitElement(page);
     expect(state.sessionObserverModels).toEqual([]);
     expect(state.sessionObserverModelsUnavailable).toBe(true);
-    expect(request).toHaveBeenCalledTimes(3);
+    expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(3);
   });
 
   it("keeps a slow refresh through status polls and retires it on disconnect", async () => {
@@ -189,49 +183,40 @@ describe("ConfigPage session observer models", () => {
         : Promise.resolve({ models: signals.length === 1 ? original : fresh });
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const gateway = {
-      snapshot: { client, phase: "connected", hello: { features: { methods: ["system.info"] } } },
-    } as unknown as ApplicationGateway;
-    const page = new ConfigPage();
-    page.pageId = "appearance";
-    const state = page as unknown as {
-      context: ApplicationContext;
-      systemInfoGatewaySource: ApplicationGateway;
-      sessionObserverModels: ModelCatalogEntry[];
-      sessionObserverModelsTask: {
-        run: (args: readonly [ApplicationGateway, GatewayBrowserClient, string]) => Promise<void>;
-      };
-      systemInfoTask: {
-        run: (args: readonly [ApplicationGateway, GatewayBrowserClient]) => Promise<void>;
-      };
-    };
-    Object.defineProperty(page, "isConnected", { configurable: true, value: true });
-    state.context = {
-      gateway,
-      agentSelection: { state: { selectedId: "main" } },
-    } as ApplicationContext;
-    state.systemInfoGatewaySource = gateway;
-    const args = [gateway, client, "main"] as const;
-    await state.sessionObserverModelsTask.run(args);
+    const { page, state, provider } = await mount(client);
     modelCatalogStore.invalidateModelCatalogCache(client);
-    const pending = state.sessionObserverModelsTask.run(args);
+    const pending = state.sessionObserverModelsTask.run();
     expect(state.sessionObserverModels).toEqual(original);
-
-    for (let poll = 0; poll < 3; poll += 1) {
-      await state.systemInfoTask.run([gateway, client]);
-    }
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(4);
     expect(signals).toHaveLength(2);
     expect(signals[1]?.aborted).toBe(false);
-    page.disconnectedCallback();
+    page.remove();
     expect(signals[1]?.aborted).toBe(true);
     expect(state.sessionObserverModels).toEqual([]);
     await pending;
 
-    state.systemInfoGatewaySource = gateway;
-    await state.sessionObserverModelsTask.run(args);
+    provider.append(page);
+    await settleLitElement(page);
     stale.resolve({ models: original });
-    await stale.promise;
+    await settleLitElement(page);
     expect(state.sessionObserverModels).toEqual(fresh);
     expect(signals).toHaveLength(3);
+  });
+
+  it("stops status polling outside Appearance while the page remains mounted", async () => {
+    const request = vi.fn((method: string) =>
+      Promise.resolve(method === "models.list" ? { models: [] } : {}),
+    );
+    const { page } = await mount({ request } as unknown as GatewayBrowserClient);
+    expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(1);
+    page.pageId = "advanced";
+    await settleLitElement(page);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(page.isConnected).toBe(true);
+    expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(1);
+    page.pageId = "appearance";
+    await settleLitElement(page);
+    expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(2);
   });
 });

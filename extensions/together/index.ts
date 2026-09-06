@@ -15,7 +15,7 @@ export default defineSingleProviderPluginEntry({
     label: "Together",
     docsPath: "/providers/together",
     manifestAuth: { applyConfig: applyTogetherConfig },
-    catalog: { liveModelDiscovery: true },
+    catalog: { liveModelDiscovery: true, discoveryMode: "strict" },
     classifyFailoverReason: ({ errorMessage }) =>
       /\bconcurrency limit\b.*\b(?:breached|reached)\b/i.test(errorMessage)
         ? "rate_limit"

@@ -154,7 +154,6 @@ describe("Gateway Control UI identity", () => {
             expect(JSON.parse(bootstrap.getBody())).toMatchObject({
               assistantAgentId: "ops",
               assistantName: "Synthetic assistant",
-              localMediaPreviewRoots: expect.arrayContaining([workspace]),
             });
             expect(identityReads().length).toBeGreaterThan(0);
           } finally {

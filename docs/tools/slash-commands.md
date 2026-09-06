@@ -42,6 +42,7 @@ command handling is enabled for the surface.
       including code indentation. Only the recognized directive, its arguments,
       and an adjacent separator (or its own line ending when alone on a line)
       are removed. Text with no recognized directive is unchanged.
+      Added prompt context is not scanned for text commands or stripped as directives.
     - In **directive-only** messages (the message is only directives), they
       persist to the session and reply with an acknowledgement.
       `/exec security=... ask=...` is the exception: these options apply only

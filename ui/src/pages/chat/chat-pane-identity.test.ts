@@ -122,7 +122,6 @@ describe("chat pane assistant identity snapshots", () => {
     Object.assign(context.config.current, {
       allowExternalEmbedUrls: false,
       embedSandboxMode: "strict",
-      localMediaPreviewRoots: [],
       serverVersion: null,
     });
     Object.assign(context.config, { subscribe: () => () => undefined });
@@ -197,7 +196,7 @@ describe("chat pane assistant identity snapshots", () => {
   });
 
   it("keeps a session-specific assistant identity across ordinary gateway snapshots", () => {
-    const client = {} as GatewayBrowserClient;
+    const client = createGatewayBrowserClientFixture();
     const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
     const state = (pane as unknown as { state: ChatPageHost }).state;
     state.client = client;
@@ -213,8 +212,8 @@ describe("chat pane assistant identity snapshots", () => {
   });
 
   it("resets a session-specific identity when the logical connection changes", () => {
-    const client = {} as GatewayBrowserClient;
-    const nextClient = {} as GatewayBrowserClient;
+    const client = createGatewayBrowserClientFixture();
+    const nextClient = createGatewayBrowserClientFixture();
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
     state.assistantName = "Session Agent";
 

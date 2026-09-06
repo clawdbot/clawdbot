@@ -761,7 +761,7 @@ process.exitCode = 1;
     };
     try {
       console.log(`${fault}: ${JSON.stringify({ result, ...evidence, stderr })}`);
-      expect(result, stderr).toEqual({ code: 1, signal: null });
+      expect(result, stderr).toEqual({ code: 1, signal: null, groupJoined: true });
       expect(existsSync(evidence.outerRoot), "outer runner did not remove its own namespace").toBe(
         false,
       );

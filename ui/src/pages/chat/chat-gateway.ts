@@ -1,8 +1,11 @@
 import {
   hasSessionProjectionAcceptedFinal,
+  isSessionProjectionErrorMessage,
   reduceSessionProjectionRunEvent,
 } from "@openclaw/gateway-client/browser";
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { t } from "../../i18n/index.ts";
 import { accumulatedStreamText } from "../../lib/chat/chat-types.ts";
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
@@ -52,13 +55,6 @@ import {
 
 export type { ChatEventPayload } from "./chat-history.ts";
 
-type AssistantMessageNormalizationOptions = {
-  roleRequirement: "required" | "optional";
-  roleCaseSensitive?: boolean;
-  requireContentArray?: boolean;
-  allowTextField?: boolean;
-};
-
 function chatEventSessionMatches(state: ChatState, payload: ChatEventPayload): boolean {
   return chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId);
 }
@@ -93,64 +89,27 @@ function resolveDeltaChatStreamText(
   return typeof snapshot === "string" ? snapshot : null;
 }
 
-function normalizeAssistantMessage(
-  message: unknown,
-  options: AssistantMessageNormalizationOptions,
-): Record<string, unknown> | null {
-  if (!message || typeof message !== "object") {
-    return null;
-  }
-  const candidate = message as Record<string, unknown>;
-  const roleValue = candidate.role;
-  if (typeof roleValue === "string") {
-    const role = options.roleCaseSensitive ? roleValue : normalizeLowercaseStringOrEmpty(roleValue);
-    if (role !== "assistant") {
-      return null;
-    }
-  } else if (options.roleRequirement === "required") {
-    return null;
-  }
-
-  if (options.requireContentArray) {
-    return Array.isArray(candidate.content) ? candidate : null;
-  }
-  if (!("content" in candidate) && !(options.allowTextField && "text" in candidate)) {
-    return null;
-  }
-  return candidate;
-}
-
 function normalizeAbortedAssistantMessage(message: unknown): Record<string, unknown> | null {
-  return normalizeAssistantMessage(message, {
-    roleRequirement: "required",
-    roleCaseSensitive: true,
-    requireContentArray: true,
-  });
+  const candidate = asRecord(message);
+  return candidate?.role === "assistant" && Array.isArray(candidate.content) ? candidate : null;
 }
 
 function normalizeFinalAssistantMessage(message: unknown): Record<string, unknown> | null {
-  const normalized = normalizeAssistantMessage(message, {
-    roleRequirement: "optional",
-    allowTextField: true,
-  });
-  if (!normalized) {
+  const candidate = asRecord(message);
+  if (
+    !candidate ||
+    (typeof candidate.role === "string" &&
+      normalizeLowercaseStringOrEmpty(candidate.role) !== "assistant") ||
+    (!("content" in candidate) && typeof candidate.text !== "string")
+  ) {
     return null;
   }
   const assistant =
-    typeof normalized.role === "string" ? normalized : { ...normalized, role: "assistant" };
-  // Older final envelopes carry their visible reply in `text`. Canonicalize
-  // before reducing so replay identity includes the delivered content.
+    typeof candidate.role === "string" ? candidate : { ...candidate, role: "assistant" };
+  // Canonicalize text-only finals before reducing so replay identity includes the reply.
   return !Object.hasOwn(assistant, "content") && typeof assistant.text === "string"
     ? { ...assistant, content: [{ type: "text", text: assistant.text }] }
     : assistant;
-}
-
-function normalizeChatErrorComparisonText(text: string): string {
-  return text
-    .replace(/^⚠️\s*/u, "")
-    .replace(/^Error:\s*/iu, "")
-    .replace(/\s+/gu, " ")
-    .trim();
 }
 
 function formatGatewayErrorDetail(payload: ChatEventPayload): string | null {
@@ -182,23 +141,6 @@ function resolveGatewayErrorText(
   }
   const messageText = message ? extractText(message)?.trim() : null;
   return messageText || "chat error";
-}
-
-function payloadMessageIsErrorProjection(
-  payload: ChatEventPayload,
-  message: Record<string, unknown>,
-): boolean {
-  const messageText = extractText(message)?.trim();
-  if (!messageText) {
-    return false;
-  }
-  const errorText = payload.errorMessage?.trim();
-  if (!errorText) {
-    return false;
-  }
-  return (
-    normalizeChatErrorComparisonText(messageText) === normalizeChatErrorComparisonText(errorText)
-  );
 }
 
 function appendCachedChatMessage(
@@ -324,7 +266,11 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     });
   };
   const previousTerminalRun = projectedRun?.previousRun;
-  if (previousTerminalRun && previousTerminalRun.status !== "streaming") {
+  if (
+    previousTerminalRun &&
+    previousTerminalRun.status !== "streaming" &&
+    projectedRun.currentRun?.status !== "streaming"
+  ) {
     if (payload.state === "delta") {
       return null;
     }
@@ -369,7 +315,9 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   }
   if (
     !state.chatRunId &&
-    (!previousTerminalRun || previousTerminalRun.status === "streaming") &&
+    (!previousTerminalRun ||
+      previousTerminalRun.status === "streaming" ||
+      projectedRun?.currentRun?.status === "streaming") &&
     sessionMatches &&
     typeof payload.runId === "string" &&
     (payload.state !== "status" || isPendingLocalChatRun(state, payload.runId))
@@ -410,12 +358,24 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     if (!payload.runId || payload.runId !== state.chatRunId) {
       return null;
     }
-    if (payload.phase) {
+    const status = payload.retry
+      ? typeof payload.seq === "number" && {
+          phase: "retrying" as const,
+          seq: payload.seq,
+          message: t("chat.startupStatus.retrying", {
+            attempt: String(payload.retry.attempt),
+            maxAttempts: String(payload.retry.maxAttempts),
+          }),
+        }
+      : payload.phase && {
+          phase: payload.phase,
+          ...(payload.seq === undefined ? {} : { seq: payload.seq }),
+        };
+    if (status) {
       reconcileChatRunStartup(state, {
         state: "status",
         runId: payload.runId,
-        phase: payload.phase,
-        ...(payload.seq === undefined ? {} : { seq: payload.seq }),
+        ...status,
       });
     }
     return payload.state;
@@ -521,7 +481,8 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     const visiblePayloadMessage =
       payloadMessage && !shouldHideAssistantChatMessage(payloadMessage) ? payloadMessage : null;
     const projectedErrorMessage = Boolean(
-      visiblePayloadMessage && payloadMessageIsErrorProjection(payload, visiblePayloadMessage),
+      visiblePayloadMessage &&
+      isSessionProjectionErrorMessage(visiblePayloadMessage, payload.errorMessage),
     );
     if (hadActiveRunBeforeEvent) {
       if (visiblePayloadMessage && !projectedErrorMessage) {

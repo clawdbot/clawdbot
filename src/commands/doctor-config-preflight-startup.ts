@@ -1,5 +1,8 @@
+import { isDeepStrictEqual } from "node:util";
 import { note } from "../../packages/terminal-core/src/note.js";
 import type { ConfigSnapshotReadMeasure } from "../config/io.js";
+import type { ConfigFileSnapshot } from "../config/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   MigrationCheckpointIdentity,
   StartupMigrationLease,
@@ -14,6 +17,7 @@ import {
   migrationCheckpointIdentitiesMatch,
   resolveMigrationCheckpointIdentity,
 } from "./doctor-config-preflight-checkpoint.js";
+import { measureDoctorConfigPreflightStep } from "./doctor-config-preflight-measure.js";
 import type { DoctorConfigPreflightPluginSnapshotRead } from "./doctor-config-preflight-plugin-index.js";
 import {
   formatStartupPluginVerificationFailure,
@@ -21,6 +25,7 @@ import {
   runStartupUpgradeConvergence,
 } from "./doctor-config-preflight-plugin-verification.js";
 import {
+  throwStartupMigrationGuardRejected,
   throwStartupMigrationIdentityChanged,
   throwStartupMigrationRefusal,
 } from "./doctor-startup-migration-refusal.js";
@@ -38,13 +43,66 @@ type MigrationCheckpoint = {
   }) => void;
 };
 
+/** Settle package repairs before state migrations select their plugin owners. */
+export async function prepareStartupMigrationPlugins(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  measure?: ConfigSnapshotReadMeasure;
+  converge: boolean;
+  lease: StartupMigrationLease | undefined;
+  snapshotRead: DoctorConfigPreflightPluginSnapshotRead;
+  readRefreshedSnapshot: () => Promise<DoctorConfigPreflightPluginSnapshotRead>;
+  beforeStateMigrations?: (snapshot: ConfigFileSnapshot) => Promise<boolean>;
+}): Promise<DoctorConfigPreflightPluginSnapshotRead> {
+  if (params.converge) {
+    if (!params.lease) {
+      throw new Error("Startup plugin convergence requires the startup migration lease.");
+    }
+    params.lease.heartbeat();
+  }
+  setActiveDegradedPlugins([]);
+  const convergence = await (
+    params.converge ? runStartupUpgradeConvergence : refreshStartupPluginQuarantine
+  )(params);
+  setActiveDegradedPlugins(convergence.quarantinedPlugins);
+  if (convergence.blockingDiagnostic) {
+    throwStartupMigrationRefusal(
+      formatStartupPluginVerificationFailure(convergence.blockingDiagnostic),
+    );
+  }
+  if (!params.converge) {
+    return params.snapshotRead;
+  }
+  const refreshed = await params.readRefreshedSnapshot();
+  const snapshot = params.snapshotRead.snapshot;
+  if (
+    snapshot.path !== refreshed.snapshot.path ||
+    !isDeepStrictEqual(
+      snapshot.sourceConfig ?? snapshot.config,
+      refreshed.snapshot.sourceConfig ?? refreshed.snapshot.config,
+    )
+  ) {
+    throwStartupMigrationIdentityChanged();
+  }
+  if (
+    params.beforeStateMigrations &&
+    !(await measureDoctorConfigPreflightStep(
+      "converged-config-guard",
+      () => params.beforeStateMigrations?.(refreshed.snapshot),
+      params.measure,
+    ))
+  ) {
+    throwStartupMigrationGuardRejected();
+  }
+  return refreshed;
+}
+
 /** Completes startup verification and returns the accepted config and metadata generation. */
 export async function completeStartupMigrationPreflight(params: {
   freshConfigGuardAllowed: boolean | undefined;
   gatewayStartupCheckpointRequired: boolean;
   migrationCheckpoint: MigrationCheckpoint | undefined;
   migrationCheckpointIdentity: MigrationCheckpointIdentity | null;
-  measure?: ConfigSnapshotReadMeasure;
   readConfigSnapshotForPreflight: (
     allowCurrentPluginMetadata?: boolean,
   ) => Promise<DoctorConfigPreflightPluginSnapshotRead>;
@@ -59,7 +117,6 @@ export async function completeStartupMigrationPreflight(params: {
 }): Promise<DoctorConfigPreflightPluginSnapshotRead> {
   let snapshotRead = params.snapshotRead;
   const snapshot = snapshotRead.snapshot;
-  const baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
   if (
     (params.shouldRecordStateCheckpoint || params.shouldRecordStartupCheckpoint) &&
     params.startupMigrationHeartbeatError
@@ -92,43 +149,21 @@ export async function completeStartupMigrationPreflight(params: {
         ]),
       );
     }
-    setActiveDegradedPlugins([]);
-    if (snapshot.valid) {
-      const pluginConvergence = params.shouldRecordStartupCheckpoint
-        ? await runStartupUpgradeConvergence({
-            cfg: baseConfig,
-            env: process.env,
-            ...(params.measure ? { measure: params.measure } : {}),
-          })
-        : await refreshStartupPluginQuarantine({
-            cfg: baseConfig,
-            env: process.env,
-            ...(params.measure ? { measure: params.measure } : {}),
-          });
-      setActiveDegradedPlugins(pluginConvergence.quarantinedPlugins);
-      if (pluginConvergence.blockingDiagnostic) {
-        throwStartupMigrationRefusal(
-          formatStartupPluginVerificationFailure(pluginConvergence.blockingDiagnostic),
-        );
+    if (snapshot.valid && params.shouldRecordStartupCheckpoint) {
+      const convergedSnapshotRead = await params.readConfigSnapshotForPreflight(false);
+      const convergedBaseConfig =
+        convergedSnapshotRead.snapshot.sourceConfig ?? convergedSnapshotRead.snapshot.config ?? {};
+      const convergedIdentity = resolveMigrationCheckpointIdentity({
+        snapshot: convergedSnapshotRead.snapshot,
+        baseConfig: convergedBaseConfig,
+        pluginMigrationFingerprint: convergedSnapshotRead.pluginMigrationFingerprint,
+      });
+      if (
+        !migrationCheckpointIdentitiesMatch(params.migrationCheckpointIdentity, convergedIdentity)
+      ) {
+        throwStartupMigrationIdentityChanged();
       }
-      if (params.shouldRecordStartupCheckpoint) {
-        const convergedSnapshotRead = await params.readConfigSnapshotForPreflight(false);
-        const convergedBaseConfig =
-          convergedSnapshotRead.snapshot.sourceConfig ??
-          convergedSnapshotRead.snapshot.config ??
-          {};
-        const convergedIdentity = resolveMigrationCheckpointIdentity({
-          snapshot: convergedSnapshotRead.snapshot,
-          baseConfig: convergedBaseConfig,
-          pluginMigrationFingerprint: convergedSnapshotRead.pluginMigrationFingerprint,
-        });
-        if (
-          !migrationCheckpointIdentitiesMatch(params.migrationCheckpointIdentity, convergedIdentity)
-        ) {
-          throwStartupMigrationIdentityChanged();
-        }
-        snapshotRead = convergedSnapshotRead;
-      }
+      snapshotRead = convergedSnapshotRead;
     }
     recordStartupMigrationWarnings(params.startupMigrationWarnings);
   }

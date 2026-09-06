@@ -166,6 +166,7 @@ export function createFixture(
     "src/infra/runtime-process-entrypoints.ts",
     "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
     "packages/normalization-core/src/mountinfo-path.ts",
+    "packages/normalization-core/src/record-coerce.ts",
   ]);
   for (const source of runtimeEntryOwners) {
     write(source, fs.readFileSync(path.join(sourceRoot, source), "utf8"));

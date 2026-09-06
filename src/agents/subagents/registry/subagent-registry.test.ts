@@ -21,6 +21,7 @@ import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-ru
 import type { AgentEventPayload } from "../../../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import {
+  bindGatewayContextResolver,
   getGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
   getSharedGatewayContextResolver,
@@ -444,7 +445,6 @@ describe("subagent registry seam flow", () => {
   });
   let mod: RegistryHarness;
   const recoveryRuntime: GatewayRecoveryRuntime = {
-    abortAgent: vi.fn(),
     dispatchAgent: mocks.dispatchRecoveryAgent as GatewayRecoveryRuntime["dispatchAgent"],
     waitForAgent: (params, timeoutMs) =>
       mocks.callGateway({
@@ -454,14 +454,14 @@ describe("subagent registry seam flow", () => {
       }) as never,
     sendRecoveryNotice: vi.fn(),
   };
-  const activateRegistry = () =>
-    mod.activateSubagentRegistry(
-      () =>
-        ({
-          recoveryRuntime,
-          resolveGatewayContext: () => ({ recoveryRuntime }),
-        }) as never,
-    );
+  const activateRegistry = () => {
+    const gatewayContext = {
+      recoveryRuntime,
+      resolveGatewayContext: () => gatewayContext as never,
+    };
+    bindGatewayContextResolver(recoveryRuntime, gatewayContext.resolveGatewayContext);
+    mod.activateSubagentRegistry(gatewayContext.resolveGatewayContext);
+  };
   const hydrateAndActivateRegistry = () => {
     mod.initSubagentRegistry();
     activateRegistry();
@@ -1716,80 +1716,100 @@ describe("subagent registry seam flow", () => {
     );
   });
 
-  it("rehydrates persisted collector FIFO queues after admission reopens", async () => {
-    const now = Date.now();
-    mockSingleCollectorConcurrency();
-    const queuedRunOverrides = {
-      groupId: "logical-group",
-      queuedLaunch: {
-        authorization: { modelOverride: { provider: "openai", model: "gpt-5.4" } },
-        maxConcurrent: 2,
-      },
-    };
-    mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
-      runs: Map<string, unknown>;
-    }) => {
-      params.runs.set(
-        "run-queued-one",
-        makeQueuedRun({ ...queuedRunOverrides, runId: "run-queued-one", createdAt: now }),
-      );
-      params.runs.set(
-        "run-queued-two",
-        makeQueuedRun({
-          ...queuedRunOverrides,
-          runId: "run-queued-two",
-          createdAt: now + 1,
-        }),
-      );
-      return 2;
-    }) as never);
-    mocks.loadSessionStore.mockReturnValue({
-      "agent:main:subagent:run-queued-one": { sessionId: "session-one", updatedAt: now },
-      "agent:main:subagent:run-queued-two": { sessionId: "session-two", updatedAt: now },
-    });
-    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
-      if (request.method === "agent") {
-        return { runId: "gateway-run-one" };
-      }
-      return request.method === "agent.wait" ? { status: "pending" } : {};
-    });
-
-    const suspension = tryBeginGatewaySuspendAdmission(() => {});
-    expect(suspension?.commit()).toBe(true);
-    hydrateAndActivateRegistry();
-    await Promise.resolve();
-    expect(mocks.callGateway.mock.calls.filter(([request]) => request.method === "agent")).toEqual(
-      [],
-    );
-
-    suspension?.release();
-    await waitForFast(() => {
-      const agentCalls = mocks.callGateway.mock.calls.filter(
-        ([request]) => request.method === "agent",
-      );
-      expect(agentCalls).toHaveLength(1);
-      expect(agentCalls[0]?.[0]).toMatchObject({
-        params: {
-          idempotencyKey: "run-queued-one",
-          provider: "openai",
-          model: "gpt-5.4",
+  it.each(["running", "interrupted"] as const)(
+    "rehydrates persisted collector FIFO queues after a %s owner releases capacity",
+    async (executionStatus) => {
+      const now = Date.now();
+      mockSingleCollectorConcurrency();
+      const queuedRunOverrides = {
+        groupId: "logical-group",
+        queuedLaunch: {
+          authorization: { modelOverride: { provider: "openai", model: "gpt-5.4" } },
+          maxConcurrent: 2,
         },
-        scopes: ["operator.admin"],
+      };
+      mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
+        runs: Map<string, unknown>;
+      }) => {
+        params.runs.set(
+          "run-active",
+          createSubagentRunRecord({
+            runId: "run-active",
+            childSessionKey: "agent:main:subagent:run-active",
+            groupId: "logical-group",
+            collect: true,
+            schedulerSlotId: "slot-active",
+            createdAt: now - 1_000,
+            execution: { status: executionStatus, startedAt: now - 1_000 },
+          }),
+        );
+        params.runs.set(
+          "run-queued-one",
+          makeQueuedRun({ ...queuedRunOverrides, runId: "run-queued-one", createdAt: now }),
+        );
+        params.runs.set(
+          "run-queued-two",
+          makeQueuedRun({
+            ...queuedRunOverrides,
+            runId: "run-queued-two",
+            createdAt: now + 1,
+          }),
+        );
+        return 3;
+      }) as never);
+      mocks.loadSessionStore.mockReturnValue({
+        "agent:main:subagent:run-active": {
+          sessionId: "session-active",
+          updatedAt: now,
+        },
+        "agent:main:subagent:run-queued-one": { sessionId: "session-one", updatedAt: now },
+        "agent:main:subagent:run-queued-two": { sessionId: "session-two", updatedAt: now },
       });
-    });
-    expect(mod.getSubagentRunByRunId("run-queued-one")?.execution?.status).toBe("running");
-    const acceptedRun = mod.getSubagentRunByRunId("gateway-run-one");
-    expect(acceptedRun).toMatchObject({
-      runId: "gateway-run-one",
-      swarmRunId: "run-queued-one",
-      schedulerSlotId: "run-queued-one",
-      execution: { status: "running" },
-    });
-    expect(acceptedRun).not.toHaveProperty("startedAt");
-    expect(acceptedRun).not.toHaveProperty("sessionStartedAt");
-    expect(acceptedRun?.execution).not.toHaveProperty("startedAt");
-    expect(mod.getSubagentRunByRunId("run-queued-two")?.execution?.status).toBe("queued");
-  });
+      mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+        if (request.method === "agent") {
+          return { runId: "gateway-run-one" };
+        }
+        return request.method === "agent.wait" ? { status: "pending" } : {};
+      });
+
+      const suspension = tryBeginGatewaySuspendAdmission(() => {});
+      expect(suspension?.commit()).toBe(true);
+      hydrateAndActivateRegistry();
+      await Promise.resolve();
+      expect(
+        mocks.callGateway.mock.calls.filter(([request]) => request.method === "agent"),
+      ).toEqual([]);
+
+      suspension?.release();
+      expect(releaseSwarmRun("slot-active")).toBe(true);
+      await waitForFast(() => {
+        const agentCalls = mocks.callGateway.mock.calls.filter(
+          ([request]) => request.method === "agent",
+        );
+        expect(agentCalls).toHaveLength(1);
+        expect(agentCalls[0]?.[0]).toMatchObject({
+          params: {
+            idempotencyKey: "run-queued-one",
+            provider: "openai",
+            model: "gpt-5.4",
+          },
+          scopes: ["operator.admin"],
+        });
+      });
+      expect(mod.getSubagentRunByRunId("run-queued-one")?.execution?.status).toBe("running");
+      const acceptedRun = mod.getSubagentRunByRunId("gateway-run-one");
+      expect(acceptedRun).toMatchObject({
+        runId: "gateway-run-one",
+        swarmRunId: "run-queued-one",
+        schedulerSlotId: "run-queued-one",
+        execution: { status: "running" },
+      });
+      expect(acceptedRun).not.toHaveProperty("startedAt");
+      expect(acceptedRun).not.toHaveProperty("sessionStartedAt");
+      expect(acceptedRun?.execution).not.toHaveProperty("startedAt");
+      expect(mod.getSubagentRunByRunId("run-queued-two")?.execution?.status).toBe("queued");
+    },
+  );
 
   it("preserves a lifecycle start that arrives before collector acceptance returns", async () => {
     const startedAt = 12_345;
@@ -5355,7 +5375,7 @@ describe("subagent registry seam flow", () => {
     mockPendingAgentWait();
     mocks.loadSessionStore.mockReturnValue(
       createSessionStore({
-        updatedAt: 333,
+        updatedAt: Date.now(),
         status: "running",
         abortedLastRun: true,
       }),
@@ -5864,7 +5884,7 @@ describe("subagent registry seam flow", () => {
       verifiesAnnouncement: true,
     },
     {
-      name: "publishes restart lifecycle end events only after killed reconciliation",
+      name: "preserves restart lifecycle end events for recovery",
       runId: "run-restart-end",
       task: "restart task",
       phase: "end" as const,
@@ -5872,7 +5892,7 @@ describe("subagent registry seam flow", () => {
       verifiesAnnouncement: false,
     },
     {
-      name: "publishes restart lifecycle error events only after killed reconciliation",
+      name: "preserves restart lifecycle error events for recovery",
       runId: "run-restart-error",
       task: "restart error task",
       phase: "error" as const,
@@ -5901,6 +5921,21 @@ describe("subagent registry seam flow", () => {
       data: { phase, startedAt: 10, endedAt: 20, ...event },
     });
 
+    if (event.stopReason === "restart") {
+      await waitForFast(() => {
+        const run = findRequesterRun(runId);
+        expect(run?.execution).toMatchObject({
+          status: "interrupted",
+          interruptedAt: 20,
+          interruptionReason: "gateway-restart",
+        });
+        expect(run?.execution.endedAt).toBeUndefined();
+        expect(run?.execution.outcome).toBeUndefined();
+        expect(run?.endedReason).toBeUndefined();
+      });
+      expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      return;
+    }
     await waitForFast(() => {
       const run = findRequesterRun(runId);
       expect(run?.endedReason).toBe("subagent-killed");

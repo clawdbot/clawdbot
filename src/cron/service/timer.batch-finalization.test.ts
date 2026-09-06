@@ -2,6 +2,7 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createCronRegressionState,
   createDueIsolatedJob,
   noopLogger,
   setupCronRegressionFixtures,
@@ -46,13 +47,9 @@ function createBatchState(params: {
   onEvent?: Parameters<typeof createCronServiceState>[0]["onEvent"];
   isAgentAvailable?: Parameters<typeof createCronServiceState>[0]["isAgentAvailable"];
 }) {
-  const state = createCronServiceState({
-    cronEnabled: true,
+  const state = createCronRegressionState({
     storePath: params.storePath,
-    log: noopLogger,
     nowMs: () => params.nowMs,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: params.runIsolatedAgentJob,
     isAgentAvailable: params.isAgentAvailable,
     maxMissedJobsPerRestart: 40,
@@ -169,13 +166,9 @@ describe("cron batch outcome finalization", () => {
         status: "ok" as const,
         summary: "finished before terminal store failure",
       }));
-      const state = createCronServiceState({
-        cronEnabled: true,
+      const state = createCronRegressionState({
         storePath: store.storePath,
-        log: noopLogger,
         nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob,
         onEvent: (event) => events.push(event),
       });
@@ -220,13 +213,9 @@ describe("cron batch outcome finalization", () => {
         expect(events.filter((event) => event.action === "finished")).toEqual([]);
 
         database.exec(`DROP TRIGGER IF EXISTS ${triggerName}`);
-        recoveryState = createCronServiceState({
-          cronEnabled: true,
+        recoveryState = createCronRegressionState({
           storePath: store.storePath,
-          log: noopLogger,
           nowMs: () => startedAt + 1,
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
           runIsolatedAgentJob,
           onEvent: (event) => events.push(event),
         });
@@ -570,13 +559,9 @@ describe("cron batch outcome finalization", () => {
     job.state.runningAtMs = dueAt;
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
-    const state = createCronServiceState({
-      cronEnabled: true,
+    const state = createCronRegressionState({
       storePath: store.storePath,
-      log: noopLogger,
       nowMs: () => dueAt + 10,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
     });
     const database = openOpenClawStateDatabase().db;

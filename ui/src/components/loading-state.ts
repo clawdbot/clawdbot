@@ -1,6 +1,6 @@
 import { html } from "lit";
 import { t } from "../i18n/index.ts";
-import "./openclaw-mascot.ts";
+import { renderLoadingSkeleton } from "./loading-skeleton.ts";
 
 export function renderLoadingState() {
   return html`
@@ -10,7 +10,7 @@ export function renderLoadingState() {
       aria-live="polite"
       aria-label=${t("common.loading")}
     >
-      <openclaw-mascot mood="thinking" .size=${120}></openclaw-mascot>
+      ${renderLoadingSkeleton()}
     </section>
   `;
 }

@@ -2,6 +2,10 @@
  * Embedded-agent run orchestration implementation.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  createAgentLifecycleTerminalBackstop,
+  resolveAgentLifecycleTerminalMetadata,
+} from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -30,6 +34,8 @@ import {
   resolveModelFallbackAvailability,
   resolveRunModelFallbacksOverride,
 } from "../agent-scope.js";
+import { createAssistantErrorTranscript } from "../assistant-error-transcript.js";
+import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
 import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
 import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
 import {
@@ -45,6 +51,7 @@ import {
   applyAgentRunSessionTargetIdentity,
   resolveAgentRunSessionTarget,
 } from "../run-session-target.js";
+import { resolveAgentRunErrorLifecycleFields } from "../run-termination.js";
 import {
   resolveSessionSuspensionTarget,
   suspendSession,
@@ -57,7 +64,7 @@ import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.
 import { waitForDeferredTurnMaintenanceForSession } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
-import { executePreparedEmbeddedRun } from "./run-execution.js";
+import { runPreparedEmbeddedLoop } from "./run-loop.js";
 import {
   createEmbeddedRunStageSummaryEmitter,
   createEmbeddedRunStageTracker,
@@ -474,33 +481,84 @@ async function runEmbeddedAgentInternal(
             };
           }
 
-          return await executePreparedEmbeddedRun({
-            runParams: params,
-            sessionAdmission,
-            contextEngineAgentId,
-            provider,
-            modelId,
-            agentDir,
-            workspaceResolution,
-            workspaceDir: resolvedWorkspace,
-            bootstrapWorkspaceDir: canonicalWorkspace,
-            isCanonicalWorkspace,
-            globalLane,
-            hookRunner,
-            hookContext: hookCtx,
-            fallbackConfigured,
-            isProbeSession,
-            resolvedSessionKey,
-            resolvedToolResultFormat,
-            startedAtMs: started,
-            startupStages,
-            emitStartupStageSummary,
-            progressController,
-            laneController,
-            lifecycleGeneration,
-            suspendForFailure,
-            preparedModelRuntime,
-          });
+          const assistantErrorTranscript =
+            params.assistantErrorTranscript ?? createAssistantErrorTranscript(params);
+          const terminal =
+            (params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd)
+              ? undefined
+              : createAgentLifecycleTerminalBackstop({
+                  runId: params.runId,
+                  sessionKey: params.sessionKey,
+                  startedAt: started,
+                  getLifecycleGeneration: () => lifecycleGeneration,
+                  resolveTerminationFields: (error) =>
+                    resolveAgentRunErrorLifecycleFields(error, params.abortSignal),
+                  onTerminalEvent: (event) =>
+                    runBestEffortCallback({
+                      callback: () => params.onAgentEvent?.(event),
+                      label: "lifecycle agent event",
+                      log,
+                    }),
+                });
+          try {
+            let failed = true;
+            let result: EmbeddedAgentRunResult;
+            try {
+              result = await runPreparedEmbeddedLoop({
+                runParams: {
+                  ...params,
+                  assistantErrorTranscript,
+                  deferTerminalLifecycle: true,
+                  onAgentEvent: terminal
+                    ? (event) => {
+                        terminal.note(event);
+                        return params.onAgentEvent?.(event);
+                      }
+                    : params.onAgentEvent,
+                },
+                sessionAdmission,
+                contextEngineAgentId,
+                provider,
+                modelId,
+                agentDir,
+                workspaceResolution,
+                workspaceDir: resolvedWorkspace,
+                bootstrapWorkspaceDir: canonicalWorkspace,
+                isCanonicalWorkspace,
+                globalLane,
+                hookRunner,
+                hookContext: hookCtx,
+                fallbackConfigured,
+                isProbeSession,
+                resolvedSessionKey,
+                resolvedToolResultFormat,
+                startedAtMs: started,
+                startupStages,
+                emitStartupStageSummary,
+                progressController,
+                laneController,
+                lifecycleGeneration,
+                suspendForFailure,
+                preparedModelRuntime,
+              });
+              failed = Boolean(result.meta.error) || result.meta.stopReason === "error";
+            } finally {
+              // Settle the fenced error append before publishing this logical run's terminal.
+              if (!params.assistantErrorTranscript) {
+                await assistantErrorTranscript.settle(failed && !params.abortSignal?.aborted);
+              }
+            }
+            const error = result.meta.error?.message ?? terminal?.getDeferredError();
+            terminal?.emit(
+              error ? "error" : "end",
+              error ? new Error(error) : result,
+              resolveAgentLifecycleTerminalMetadata(result.meta),
+            );
+            return result;
+          } catch (error) {
+            terminal?.emit("error", error);
+            throw error;
+          }
         };
         const runWithPreparedRuntime = () =>
           withPluginRuntimeGenerationScope(preparedModelRuntime, runPrepared);

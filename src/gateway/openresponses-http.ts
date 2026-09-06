@@ -41,9 +41,12 @@ import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-s
 import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import { defaultRuntime } from "../runtime.js";
 import {
-  isReplaceableAssistantStreamEvent,
-  resolveAssistantStreamDeltaText,
-  resolveAssistantStreamSnapshotText,
+  mergeAssistantText,
+  mergePendingAssistantText,
+  resolveAssistantResultText,
+  resolveAssistantTextCompletion,
+  resolveAssistantTextInput,
+  type AssistantTextSnapshot,
 } from "./agent-event-assistant-text.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -256,17 +259,6 @@ function writeSseEvent(res: ServerResponse, event: StreamingEvent) {
   res.write(`data: ${JSON.stringify(event)}\n\n`);
 }
 
-function resolveResponsePayloadText(result: unknown): string {
-  const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
-  return Array.isArray(payloads)
-    ? payloads
-        .flatMap((payload) =>
-          typeof payload.text === "string" && payload.text ? [payload.text] : [],
-        )
-        .join("\n\n")
-    : "";
-}
-
 type ResolvedResponsesLimits = {
   maxBodyBytes: number;
   maxUrlParts: number;
@@ -471,6 +463,10 @@ export async function handleOpenResponsesHttpRequest(
   if (!handled) {
     return true;
   }
+  const abortController = new AbortController();
+  // The signal owns preparation; SSE installs presentation cleanup below.
+  let onDisconnect = () => {};
+  watchClientDisconnect(req, res, abortController, () => onDisconnect());
   const modelOverrideAuth = authorizeOpenAiCompatibleHttpModelOverride(req, handled.requestAuth);
   if (!modelOverrideAuth.allowed) {
     sendMissingScopeForbidden(res, modelOverrideAuth.missingScope);
@@ -536,6 +532,7 @@ export async function handleOpenResponsesHttpRequest(
     }
   };
   try {
+    abortController.signal.throwIfAborted();
     if (Array.isArray(payload.input)) {
       for (const item of payload.input) {
         if (item.type === "message" && typeof item.content !== "string") {
@@ -559,7 +556,11 @@ export async function handleOpenResponsesHttpRequest(
                       data: source.data,
                       mediaType: source.media_type,
                     };
-              const image = await extractImageContentFromSource(imageSource, limits.images);
+              const image = await extractImageContentFromSource(
+                imageSource,
+                limits.images,
+                abortController.signal,
+              );
               images.push(image);
               continue;
             }
@@ -576,6 +577,7 @@ export async function handleOpenResponsesHttpRequest(
                       filename: source.filename,
                     },
               limits: limits.files,
+              signal: abortController.signal,
             });
             const rawText = file.text;
             if (rawText?.trim()) {
@@ -610,6 +612,9 @@ export async function handleOpenResponsesHttpRequest(
       }
     }
   } catch (err) {
+    if (abortController.signal.aborted) {
+      return true;
+    }
     logWarn(`openresponses: request parsing failed: ${String(err)}`);
     sendInvalidRequest(res, "invalid request");
     return true;
@@ -715,7 +720,6 @@ export async function handleOpenResponsesHttpRequest(
     storeResponseSession(responseId, sessionKey, responseSessionScope);
   const outputItemId = `msg_${randomUUID()}`;
   const deps = createDefaultDeps();
-  const abortController = new AbortController();
   const streamMaxTokens =
     typeof payload.max_output_tokens === "number" ? payload.max_output_tokens : undefined;
   const streamTemperature =
@@ -731,7 +735,6 @@ export async function handleOpenResponsesHttpRequest(
       : undefined;
 
   if (!stream) {
-    const stopWatchingDisconnect = watchClientDisconnect(req, res, abortController);
     try {
       const result = await runResponsesAgentCommand({
         message: prompt.message,
@@ -757,7 +760,7 @@ export async function handleOpenResponsesHttpRequest(
       if (readAgentRunTerminalOutcome(result) === "failed") {
         throw new Error("agent run failed");
       }
-      const assistantText = resolveResponsePayloadText(result);
+      const assistantText = resolveAssistantResultText(result);
       const usage = extractUsageFromResult(result);
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
@@ -862,8 +865,6 @@ export async function handleOpenResponsesHttpRequest(
       }
       rememberResponseSession();
       sendJson(res, 500, createFailedResponse({ code: "api_error", message: "internal error" }));
-    } finally {
-      stopWatchingDisconnect();
     }
     return true;
   }
@@ -874,19 +875,18 @@ export async function handleOpenResponsesHttpRequest(
 
   setSseHeaders(res);
 
-  let accumulatedText = "";
+  let assistantText: AssistantTextSnapshot = { text: "" };
   let streamedAssistantText = "";
-  let bufferedReplaceableAssistantContent = "";
-  let sawAssistantDelta = false;
+  let pendingAssistantText: AssistantTextSnapshot | undefined;
+  let finalResultText: string | undefined;
+  let finalToolCalls: PendingToolCall[] | undefined;
   let unrepresentableAssistantReplacement = false;
   let closed = false;
   let unsubscribe = () => {};
-  let stopWatchingDisconnect = () => {};
   let finalUsage: Usage | undefined;
-  let finalizeStatus: ResponseResource["status"] | null = null;
-  let finalizeRequested: { status: ResponseResource["status"]; text: string } | null = null;
+  let finalizeRequested: { status: ResponseResource["status"]; errorMessage?: string } | null =
+    null;
   let finalizeScheduled = false;
-  let finalizeErrorMessage: string | undefined;
   let terminalLifecyclePhase: "end" | "error" = "end";
 
   const maybeFinalize = () => {
@@ -911,11 +911,29 @@ export async function handleOpenResponsesHttpRequest(
         return;
       }
       const usage = finalUsage;
-      const finalText =
-        accumulatedText || bufferedReplaceableAssistantContent || finalizeRequested.text;
-
+      const finalText = resolveAssistantTextCompletion({
+        assistantText,
+        pending: pendingAssistantText,
+        resultText: finalResultText,
+        streamedText: streamedAssistantText,
+        fallbackText: finalToolCalls ? "" : "No response from OpenClaw.",
+      });
+      if (!finalText.startsWith(streamedAssistantText)) {
+        finalizeUnrepresentableAssistantReplacement();
+        return;
+      }
+      const delta = finalText.slice(streamedAssistantText.length);
+      if (delta) {
+        writeSseEvent(res, {
+          type: "response.output_text.delta",
+          item_id: outputItemId,
+          output_index: 0,
+          content_index: 0,
+          delta,
+        });
+      }
+      streamedAssistantText = finalText;
       closed = true;
-      stopWatchingDisconnect();
       unsubscribe();
 
       writeSseEvent(res, {
@@ -937,7 +955,10 @@ export async function handleOpenResponsesHttpRequest(
       const completedItem = createAssistantOutputItem({
         id: outputItemId,
         text: finalText,
-        phase: finalizeRequested.status === "completed" ? "final_answer" : "commentary",
+        phase:
+          finalizeRequested.status === "completed" && !finalToolCalls
+            ? "final_answer"
+            : "commentary",
         status: "completed",
       });
 
@@ -947,17 +968,39 @@ export async function handleOpenResponsesHttpRequest(
         item: completedItem,
       });
 
+      const output: OutputItem[] = [completedItem];
+      for (const functionCall of finalToolCalls ?? []) {
+        const item = createFunctionCallOutputItem({
+          id: `call_${randomUUID()}`,
+          callId: functionCall.id,
+          name: functionCall.name,
+          arguments: functionCall.arguments,
+        });
+        const outputIndex = output.length;
+        writeSseEvent(res, {
+          type: "response.output_item.added",
+          output_index: outputIndex,
+          item,
+        });
+        const completedCall: OutputItem = { ...item, status: "completed" };
+        writeSseEvent(res, {
+          type: "response.output_item.done",
+          output_index: outputIndex,
+          item: completedCall,
+        });
+        output.push(completedCall);
+      }
       const finalResponse = createResponseResource({
         ...responseIdentity,
         model,
         status: finalizeRequested.status,
-        output: [completedItem],
+        output,
         usage,
         ...(finalizeRequested.status === "failed"
           ? {
               error: {
                 code: "server_error",
-                message: finalizeErrorMessage || "Agent run failed",
+                message: finalizeRequested.errorMessage || "Agent run failed",
               },
             }
           : {}),
@@ -973,17 +1016,11 @@ export async function handleOpenResponsesHttpRequest(
     });
   };
 
-  const requestFinalize = (
-    status: ResponseResource["status"],
-    text: string,
-    errorMessage?: string,
-  ) => {
+  const requestFinalize = (status: ResponseResource["status"], errorMessage?: string) => {
     if (finalizeRequested) {
       return;
     }
-    finalizeStatus = status;
-    finalizeErrorMessage = errorMessage;
-    finalizeRequested = { status, text };
+    finalizeRequested = { status, errorMessage };
     maybeFinalize();
   };
 
@@ -993,7 +1030,6 @@ export async function handleOpenResponsesHttpRequest(
     }
     // Failure is terminal even when an earlier lifecycle event is waiting for usage.
     closed = true;
-    stopWatchingDisconnect();
     unsubscribe();
     writeSseEvent(res, { type: "response.failed", response });
     writeDone(res);
@@ -1059,65 +1095,46 @@ export async function handleOpenResponsesHttpRequest(
     }
 
     if (evt.stream === "assistant") {
-      if (isReplaceableAssistantStreamEvent(evt)) {
-        const snapshot = resolveAssistantStreamSnapshotText(evt);
-        if (snapshot) {
-          bufferedReplaceableAssistantContent = snapshot;
+      const input = resolveAssistantTextInput(evt.data);
+      if (!input) {
+        return;
+      }
+      // Once a provisional replacement begins, even its terminal text echo
+      // stays held until the run result selects the authoritative output.
+      if (input.replaceable || pendingAssistantText) {
+        pendingAssistantText = mergePendingAssistantText(
+          pendingAssistantText ?? assistantText,
+          input,
+        );
+        if (
+          !input.replaceable &&
+          input.replace &&
+          input.text !== undefined &&
+          pendingAssistantText.text.startsWith(streamedAssistantText)
+        ) {
+          unrepresentableAssistantReplacement = false;
         }
         return;
       }
 
-      const text = evt.data?.text;
-      const replace = evt.data?.replace === true;
-      if (replace && typeof text === "string") {
-        accumulatedText = text;
-        if (toolChoiceConstraint) {
-          return;
-        }
-        // Responses deltas can only append. A conflicting replacement must
-        // fail after usage resolves instead of claiming inconsistent success.
-        if (!text.startsWith(streamedAssistantText)) {
-          unrepresentableAssistantReplacement = true;
-          return;
-        }
+      assistantText = mergeAssistantText(assistantText, input, "append-only");
+      // Unconfirmed tool-choice prose may still be corrected before it is sent.
+      if (toolChoiceConstraint) {
+        return;
+      }
+      // Keep physical wire progress separate from a corrected item snapshot.
+      if (!assistantText.text.startsWith(streamedAssistantText)) {
+        unrepresentableAssistantReplacement = true;
+        return;
+      }
+      if (input.replace && input.text !== undefined) {
         unrepresentableAssistantReplacement = false;
-        const replacementDelta = text.slice(streamedAssistantText.length);
-        if (replacementDelta) {
-          sawAssistantDelta = true;
-          streamedAssistantText = text;
-          writeSseEvent(res, {
-            type: "response.output_text.delta",
-            item_id: outputItemId,
-            output_index: 0,
-            content_index: 0,
-            delta: replacementDelta,
-          });
-        }
-        return;
       }
-
-      const content =
-        typeof text === "string" && text.startsWith(streamedAssistantText)
-          ? text.slice(streamedAssistantText.length)
-          : resolveAssistantStreamDeltaText(evt);
+      const content = assistantText.text.slice(streamedAssistantText.length);
       if (!content) {
         return;
       }
-      streamedAssistantText += content;
-
-      // Hold assistant prose until the tool-choice contract is confirmed. A
-      // `required`/pinned request must reject text-only turns, so streaming
-      // deltas now could leak output we may have to fail. Buffered text is
-      // still flushed as commentary if a matching tool call arrives, matching
-      // the openai-http.ts streaming buffer.
-      if (toolChoiceConstraint) {
-        accumulatedText += content;
-        return;
-      }
-
-      sawAssistantDelta = true;
-      accumulatedText += content;
-
+      streamedAssistantText = assistantText.text;
       writeSseEvent(res, {
         type: "response.output_text.delta",
         item_id: outputItemId,
@@ -1131,14 +1148,12 @@ export async function handleOpenResponsesHttpRequest(
     if (evt.stream === "lifecycle") {
       const phase = evt.data?.phase;
       if (phase === "end" || phase === "error") {
-        const finalText =
-          accumulatedText || bufferedReplaceableAssistantContent || "No response from OpenClaw.";
         const finalStatus = phase === "error" ? "failed" : "completed";
         const errorMessage =
           phase === "error" && typeof evt.data?.error === "string"
             ? evt.data.error.trim()
             : undefined;
-        requestFinalize(finalStatus, finalText, errorMessage);
+        requestFinalize(finalStatus, errorMessage);
       }
     }
   });
@@ -1155,11 +1170,11 @@ export async function handleOpenResponsesHttpRequest(
   res.once("finish", releaseStreamRootWork);
   res.once("close", releaseStreamRootWork);
 
-  stopWatchingDisconnect = watchClientDisconnect(req, res, abortController, () => {
+  onDisconnect = () => {
     closed = true;
     unsubscribe();
     releaseStreamRootWork();
-  });
+  };
 
   void (async () => {
     try {
@@ -1197,15 +1212,10 @@ export async function handleOpenResponsesHttpRequest(
 
       finalUsage = extractUsageFromResult(result);
 
-      if (unrepresentableAssistantReplacement) {
-        finalizeUnrepresentableAssistantReplacement();
-        return;
-      }
-
       // Check for pending client tool calls BEFORE maybeFinalize() because the
       // lifecycle:end event may already have requested finalization.
       const resultAny = result as { meta?: unknown };
-      const resultPayloadText = resolveResponsePayloadText(result);
+      const resultPayloadText = resolveAssistantResultText(result);
       const meta = resultAny.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
@@ -1229,128 +1239,9 @@ export async function handleOpenResponsesHttpRequest(
         return;
       }
 
-      if (
-        !closed &&
-        stopReason === "tool_calls" &&
-        pendingToolCalls &&
-        pendingToolCalls.length > 0
-      ) {
-        const usage = finalUsage ?? createEmptyUsage();
-        const finalText =
-          accumulatedText || resultPayloadText || bufferedReplaceableAssistantContent;
-
-        if (finalText && !sawAssistantDelta) {
-          sawAssistantDelta = true;
-          writeSseEvent(res, {
-            type: "response.output_text.delta",
-            item_id: outputItemId,
-            output_index: 0,
-            content_index: 0,
-            delta: finalText,
-          });
-        }
-        writeSseEvent(res, {
-          type: "response.output_text.done",
-          item_id: outputItemId,
-          output_index: 0,
-          content_index: 0,
-          text: finalText,
-        });
-        writeSseEvent(res, {
-          type: "response.content_part.done",
-          item_id: outputItemId,
-          output_index: 0,
-          content_index: 0,
-          part: { type: "output_text", text: finalText },
-        });
-
-        const completedItem = createAssistantOutputItem({
-          id: outputItemId,
-          text: finalText,
-          phase: "commentary",
-          status: "completed",
-        });
-        writeSseEvent(res, {
-          type: "response.output_item.done",
-          output_index: 0,
-          item: completedItem,
-        });
-
-        // Emit one `function_call` output item per pending call, preserving
-        // arrival order. `output_index` continues past the assistant
-        // message at index 0 so the SSE stream keeps a single, monotonic
-        // index per response. Pre-#52288 the streaming path read only
-        // `pendingToolCalls[0]` and hard-coded `output_index: 1`, so a turn
-        // with multiple client tool calls dropped every call past the
-        // first.
-        const functionCallItems: OutputItem[] = [];
-        let nextStreamOutputIndex = 1;
-        for (const functionCall of pendingToolCalls) {
-          const functionCallItemId = `call_${randomUUID()}`;
-          const functionCallItem = createFunctionCallOutputItem({
-            id: functionCallItemId,
-            callId: functionCall.id,
-            name: functionCall.name,
-            arguments: functionCall.arguments,
-          });
-          writeSseEvent(res, {
-            type: "response.output_item.added",
-            output_index: nextStreamOutputIndex,
-            item: functionCallItem,
-          });
-          const completedFunctionCallItem = createFunctionCallOutputItem({
-            id: functionCallItemId,
-            callId: functionCall.id,
-            name: functionCall.name,
-            arguments: functionCall.arguments,
-            status: "completed",
-          });
-          writeSseEvent(res, {
-            type: "response.output_item.done",
-            output_index: nextStreamOutputIndex,
-            item: completedFunctionCallItem,
-          });
-          functionCallItems.push(completedFunctionCallItem);
-          nextStreamOutputIndex += 1;
-        }
-
-        const completedResponse = createResponseResource({
-          ...responseIdentity,
-          model,
-          status: "completed",
-          output: [completedItem, ...functionCallItems],
-          usage,
-        });
-        closed = true;
-        stopWatchingDisconnect();
-        unsubscribe();
-        rememberResponseSession();
-        writeSseEvent(res, { type: "response.completed", response: completedResponse });
-        writeDone(res);
-        res.end();
-        return;
-      }
-
-      // Fallback: if no streaming deltas were received, send the full response as text
-      if (!sawAssistantDelta) {
-        const content =
-          resultPayloadText || bufferedReplaceableAssistantContent || "No response from OpenClaw.";
-
-        accumulatedText = content;
-        sawAssistantDelta = true;
-        if (finalizeStatus !== null) {
-          finalizeRequested = { status: finalizeStatus, text: content };
-        }
-
-        writeSseEvent(res, {
-          type: "response.output_text.delta",
-          item_id: outputItemId,
-          output_index: 0,
-          content_index: 0,
-          delta: content,
-        });
-      }
-
+      finalResultText = resultPayloadText;
+      finalToolCalls =
+        stopReason === "tool_calls" && pendingToolCalls?.length ? pendingToolCalls : undefined;
       maybeFinalize();
     } catch (err) {
       if (closed || abortController.signal.aborted) {
@@ -1389,7 +1280,7 @@ export async function handleOpenResponsesHttpRequest(
     } finally {
       releaseAgentRootWork?.();
       // Existing provider terminals must not be replaced or emitted twice.
-      if (finalizeStatus === null && (terminalLifecyclePhase === "error" || !closed)) {
+      if (finalizeRequested === null && (terminalLifecyclePhase === "error" || !closed)) {
         emitAgentEvent({
           runId: responseId,
           stream: "lifecycle",

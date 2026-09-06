@@ -143,8 +143,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
           sessionKey: params.sessionKey,
           preserveToolNames,
         });
-    const uncompactedProjection = filterRuntimeCompatibleTools(projectedUncompactedTools);
-    let effectiveTools = [...uncompactedProjection.tools];
+    let effectiveTools = filterRuntimeCompatibleTools(projectedUncompactedTools).tools;
     const codeModeTools = codeModeControlsEnabled
       ? createCodeModeTools({
           config: params.config,
@@ -184,7 +183,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
           sessionKey: params.sessionKey,
           preserveToolNames,
         });
-    effectiveTools = [...filterRuntimeCompatibleTools(projectedCompactedTools).tools];
+    effectiveTools = filterRuntimeCompatibleTools(projectedCompactedTools).tools;
     if (!compacted.catalogRegistered) {
       finalizeAgentToolAvailability(effectiveTools);
     }

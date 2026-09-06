@@ -307,6 +307,10 @@ deadline controls, and one prepared `authorization`:
   snapshot restricted to the single profile selected for that call. Core owns
   automatic fallback order and invokes the harness separately for each candidate.
 
+Each new isolated completion uses the configuration and agent/workspace directories
+of its admitted runtime generation. Explicit model, auth-profile, and runtime
+selections remain fixed while that generation is prepared.
+
 Host-authorized calls must use the supplied model and credential without substitution.
 Bundled host-authorized harnesses share one host-prepared completion helper that
 preserves the exact route, deadline, sampling options, and empty tool surface.
@@ -696,6 +700,12 @@ bounded action fact while keeping identity and policy authority closure-bound. T
 binds the host-resolved run, sandbox, requester, route, and approval identity;
 plugins must not reconstruct those fields or retain the capability after the
 attempt returns. Calls made after attempt settlement fail closed.
+
+For native-history recovery, optional `prepareContextMedia({ message, maxChars })`
+reconstructs saved user attachments under that same host authority and current
+media policy. Include its returned text and images in the native context budget;
+do not append them as an unbounded suffix. See the
+[runtime media contract](/plugins/sdk-runtime) for limits and older-host behavior.
 
 When trajectory capture has a valid host-owned session target,
 `params.hostCapabilities.trajectory` provides closure-bound `recordEvent(...)`

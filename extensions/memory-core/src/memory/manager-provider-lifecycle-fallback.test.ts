@@ -15,7 +15,6 @@ describe("memory index", () => {
   it("does not activate fallback during search when index identity is already mismatched", async () => {
     const cfg = createCfg({
       fallback: "fallback-provider",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const manager = await getPersistentManager(cfg);
 
@@ -162,7 +161,6 @@ describe("memory index", () => {
   it("reinitializes the configured provider after probe-time local degradation", async () => {
     const cfg = createCfg({
       fallback: "fallback-provider",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const manager = await getPersistentManager(cfg);
 
@@ -326,7 +324,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "openai",
       minScore: 0.35,
-      hybrid: { enabled: true },
     });
     const manager = await getFreshManager(cfg);
     try {
@@ -349,7 +346,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "openai",
       minScore: 0.35,
-      hybrid: { enabled: true },
     });
     const manager = await getFreshManager(cfg);
     try {

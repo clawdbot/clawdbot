@@ -287,62 +287,71 @@ function startPendingSessionDeliveryRuntime(params: {
   maxEnqueuedAt: number;
   resolveGatewayContext?: GatewayContextResolver;
 }): () => Promise<void> {
-  let stopped = false;
+  const controller = new AbortController();
+  const { signal } = controller;
   let recovery: Promise<void> | undefined;
   let stopPromise: Promise<void> | undefined;
   let stopRuntime: (() => Promise<void>) | undefined;
   // Delay session continuation recovery so the gateway has time to publish ready state and
   // request routing before replaying restart-sentinel deliveries.
   const timer = setTimeout(() => {
-    recovery = runWithGatewayIndependentRootWorkAdmission(async () => {
-      const {
-        deliverQueuedSessionDelivery,
-        recoverPendingRestartContinuationDeliveries,
-        settleQueuedSessionDelivery,
-      } = await import("./server-restart-sentinel.js");
-      if (stopped) {
-        return;
-      }
-      const logRecovery = params.log.child("session-delivery-recovery");
-      stopRuntime = startSessionDeliveryRuntime({
-        deliver: (entry, context = {}) =>
-          deliverQueuedSessionDelivery({
+    recovery = runWithGatewayIndependentRootWorkAdmission(
+      async () => {
+        const {
+          deliverQueuedSessionDelivery,
+          recoverPendingRestartContinuationDeliveries,
+          settleQueuedSessionDelivery,
+        } = await import("./server-restart-sentinel.js");
+        if (signal.aborted) {
+          return;
+        }
+        const logRecovery = params.log.child("session-delivery-recovery");
+        stopRuntime = startSessionDeliveryRuntime({
+          deliver: (entry, context = {}) =>
+            deliverQueuedSessionDelivery({
+              deps: params.deps,
+              entry,
+              ...(context.stateDir !== undefined ? { stateDir: context.stateDir } : {}),
+              ...(params.resolveGatewayContext
+                ? { resolveGatewayContext: params.resolveGatewayContext }
+                : {}),
+            }),
+          log: logRecovery,
+          onSettled: settleQueuedSessionDelivery,
+        });
+        try {
+          await recoverPendingRestartContinuationDeliveries({
             deps: params.deps,
-            entry,
-            ...(context.stateDir !== undefined ? { stateDir: context.stateDir } : {}),
+            log: logRecovery,
+            maxEnqueuedAt: params.maxEnqueuedAt,
             ...(params.resolveGatewayContext
               ? { resolveGatewayContext: params.resolveGatewayContext }
               : {}),
-          }),
-        log: logRecovery,
-        onSettled: settleQueuedSessionDelivery,
-      });
-      try {
-        await recoverPendingRestartContinuationDeliveries({
-          deps: params.deps,
-          log: logRecovery,
-          maxEnqueuedAt: params.maxEnqueuedAt,
-          ...(params.resolveGatewayContext
-            ? { resolveGatewayContext: params.resolveGatewayContext }
-            : {}),
-        });
-      } finally {
-        // Recovery and scheduling are independent safeguards. A transient
-        // recovery failure must not leave persisted rows without timers.
-        if (!stopped) {
-          await schedulePendingSessionDeliveries();
+          });
+        } finally {
+          // Recovery and scheduling are independent safeguards. A transient
+          // recovery failure must not leave persisted rows without timers.
+          if (!signal.aborted) {
+            await schedulePendingSessionDeliveries();
+          }
         }
+      },
+      "runtime:session-delivery-recovery",
+      signal,
+    ).catch((err: unknown) => {
+      const ownedCancellation =
+        signal.aborted &&
+        (err === signal.reason || (err instanceof Error && err.cause === signal.reason));
+      if (!ownedCancellation) {
+        params.log.error(`Session delivery recovery failed: ${String(err)}`);
       }
-    }, "runtime:session-delivery-recovery").catch((err: unknown) =>
-      params.log.error(`Session delivery recovery failed: ${String(err)}`),
-    );
+    });
   }, 1_250);
   timer.unref?.();
   return () => {
-    stopped = true;
+    // Cancel queued admission, but join imports and work already admitted before their runtime closes.
+    controller.abort();
     clearTimeout(timer);
-    // Join the import as well as admitted recovery and drains before their
-    // Gateway dependencies disappear. Clearing the timer alone cannot do that.
     stopPromise ??= Promise.all([recovery, stopRuntime?.()]).then(() => {});
     return stopPromise;
   };

@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createResponsesAssistantOutput } from "../../packages/ai/src/providers/openai-responses-shared.js";
 import { processResponsesStream } from "../../packages/ai/src/transports/openai-responses-stream-internal.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { runAgentLoop } from "../plugin-sdk/agent-core.js";
 import {
   createSubscribedSessionHarness,
   createTextEndBlockReplyHarness,
@@ -21,7 +22,6 @@ import {
   createOpenAiResponsesTextEvent,
   type OpenAiResponsesTextEventPhase,
 } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
-import { runAgentLoop } from "./runtime/index.js";
 
 describe("text_end snapshot reconciliation", () => {
   it.each([

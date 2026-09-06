@@ -39,7 +39,6 @@ import {
   detailPluginStartupTrace,
   isAuthorizedDreamingSidecarPlugin,
   matchesScopedPluginOrDreamingSidecar,
-  pushPluginValidationError,
   safeRealpathOrResolve,
   validatePluginConfig,
 } from "./loader-shared.js";
@@ -176,7 +175,6 @@ export function loadRuntimePluginCandidate(params: {
       registry,
       record,
       seenIds: state.seenIds,
-      origin: candidate.origin,
       degradedPlugin,
     });
     return;
@@ -202,13 +200,12 @@ export function loadRuntimePluginCandidate(params: {
     candidate.origin !== "bundled" &&
     !trustedLocalScopedChannelSetupImport;
   const pushPluginLoadError = (message: string) =>
-    pushPluginValidationError({
+    recordPluginError({
       registry,
       seenIds: state.seenIds,
-      pluginId,
-      origin: candidate.origin,
       record,
-      message,
+      phase: "validation",
+      error: message,
     });
   const missingDependencyHint = resolveExternalPluginRuntimeDependencyRepairHint({
     pluginId,
@@ -506,8 +503,6 @@ export function loadRuntimePluginCandidate(params: {
       registry,
       record,
       seenIds: state.seenIds,
-      pluginId,
-      origin: candidate.origin,
       phase: "load",
       error,
       logPrefix: `[plugins] ${record.id} failed to load from ${record.source}: `,
@@ -537,7 +532,6 @@ export function loadRuntimePluginCandidate(params: {
       cfg: context.cfg,
       entry,
       seenIds: state.seenIds,
-      candidateOrigin: candidate.origin,
       logger: params.logger,
       pushPluginLoadError,
     })
@@ -657,8 +651,6 @@ export function loadRuntimePluginCandidate(params: {
       registry,
       record,
       seenIds: state.seenIds,
-      pluginId,
-      origin: candidate.origin,
       phase: "register",
       error,
       logPrefix: `[plugins] ${record.id} failed during register from ${record.source}: `,

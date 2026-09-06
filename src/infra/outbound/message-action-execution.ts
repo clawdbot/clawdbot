@@ -465,6 +465,10 @@ export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<Me
       if (options.length < 2) {
         throw new Error("pollOption requires at least two values");
       }
+      let content = readToolStringParam(params, "message", { allowEmpty: true, trim: false });
+      if (content !== undefined && !content.trim()) {
+        content = "";
+      }
       const allowMultiselect = readBooleanParam(params, "pollMulti") ?? false;
       const durationHours = readPositiveIntegerParam(params, "pollDurationHours", {
         message: "pollDurationHours must be a positive integer",
@@ -473,7 +477,7 @@ export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<Me
       return {
         to,
         question,
-        content: readToolStringParam(params, "message", { allowEmpty: true }) ?? undefined,
+        content,
         options,
         maxSelections: resolvePollMaxSelections(options.length, allowMultiselect),
         durationHours: durationHours ?? undefined,

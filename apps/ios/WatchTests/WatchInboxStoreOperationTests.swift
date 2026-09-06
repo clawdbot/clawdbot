@@ -224,6 +224,56 @@ struct WatchInboxStoreOperationTests {
         }
     }
 
+    @Test func `restored approvals reject invalid IDs without normalizing Unicode`() throws {
+        try Self.withStore { store, defaults in
+            let gatewayStableID = "watch-test-gateway"
+            let composedID = "approval-\u{00E9}"
+            let decomposedID = "approval-e\u{0301}"
+            #expect(composedID == decomposedID)
+
+            let approvals = [composedID, decomposedID].map { approvalID in
+                WatchExecApprovalItem(
+                    id: approvalID,
+                    gatewayStableID: gatewayStableID,
+                    commandText: "echo \(approvalID)",
+                    allowedDecisions: [.allowOnce])
+            }
+            #expect(store.consume(
+                execApprovalSnapshot: WatchExecApprovalSnapshotMessage(
+                    approvals: approvals,
+                    gatewayStableID: gatewayStableID,
+                    sentAtMs: 100,
+                    snapshotId: "unicode-approvals"),
+                transport: "test"))
+
+            let persistedStateKey = "watch.inbox.state.v2"
+            let persistedData = try #require(defaults.data(forKey: persistedStateKey))
+            var persistedState = try #require(
+                JSONSerialization.jsonObject(with: persistedData) as? [String: Any])
+            var persistedApprovals = try #require(
+                persistedState["execApprovals"] as? [[String: Any]])
+            #expect(persistedApprovals.count == 2)
+            let validRecord = try #require(persistedApprovals.first)
+            for invalidID in ["", ".", ".."] {
+                var invalidRecord = validRecord
+                var invalidApproval = try #require(invalidRecord["approval"] as? [String: Any])
+                invalidApproval["id"] = invalidID
+                invalidRecord["approval"] = invalidApproval
+                persistedApprovals.append(invalidRecord)
+            }
+            persistedState["execApprovals"] = persistedApprovals
+            let injectedData = try JSONSerialization.data(withJSONObject: persistedState)
+            defaults.set(injectedData, forKey: persistedStateKey)
+
+            let restored = WatchInboxStore(defaults: defaults, requestNotificationAuthorization: false)
+            let restoredIDs = restored.sortedExecApprovals.map(\.approvalID)
+            #expect(restoredIDs.count == 2)
+            #expect(restoredIDs.allSatisfy { !["", ".", ".."].contains($0) })
+            #expect(restoredIDs.contains { Array($0.utf8) == Array(composedID.utf8) })
+            #expect(restoredIDs.contains { Array($0.utf8) == Array(decomposedID.utf8) })
+        }
+    }
+
     @Test func `switching chat sessions retires voice replies and the previous preview`() throws {
         try Self.withStore { store, defaults in
             var original = Self.snapshot(id: "original-session")
