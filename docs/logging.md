@@ -284,6 +284,24 @@ OpenTelemetry log export is enabled, using the same bounded attributes as file
 logs. Configure `diagnostics.otel.logsExporter` to choose OTLP, stdout JSONL, or
 both sinks.
 
+### Slow agent database opens
+
+The `slow OpenClaw agent database open` warning includes `phaseDurationsMs` when
+a persistent database open takes at least one second:
+
+| Phase           | Work included                                                                                           |
+| --------------- | ------------------------------------------------------------------------------------------------------- |
+| `open`          | Permissions, handle eviction, and opening the connection.                                               |
+| `validation`    | Integrity, version, and owner checks, including Worker waiting and revalidation during async admission. |
+| `configuration` | Connection and WAL settings.                                                                            |
+| `schema`        | Schema initialization or convergence when needed.                                                       |
+| `registration`  | Post-validation eviction and permissions, cleanup setup, and shared-state registration.                 |
+
+The integer millisecond durations partition `elapsedMs`, measured with a
+monotonic clock after lease acquisition. Live cache hits remain quiet. These
+are elapsed durations, including asynchronous waits, rather than CPU time or
+proof that the main event loop was blocked for the whole interval.
+
 ### Slow reply preparation
 
 When a reply spends a long time preparing, inspect the normal Gateway logs:

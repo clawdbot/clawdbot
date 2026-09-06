@@ -106,7 +106,8 @@ export function isChannelProgressDraftWorkToolName(name: string | null | undefin
 }
 
 function stripTrailingEllipsis(text: string): string {
-  return text.replace(/(?:\s*(?:\.{3}|\u2026))+$/u, "").trimEnd();
+  // Start at a whitespace-run boundary instead of retrying every blank line.
+  return text.replace(/(?<!\s)(?:\s*(?:\.{3}|\u2026))+$/u, "").trimEnd();
 }
 
 export function isPotentialTruncatedFinal(finalText: string): boolean {

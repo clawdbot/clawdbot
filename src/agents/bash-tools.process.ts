@@ -153,7 +153,7 @@ function resolvePollWaitMs(value: unknown) {
 }
 
 function failText(text: string): AgentToolResult<unknown> {
-  return textResult(text, { status: "failed" });
+  return textResult(text, { status: "failed", error: text });
 }
 
 function recordPollRetrySuggestion(sessionId: string, hasNewOutput: boolean): number | undefined {
@@ -513,25 +513,25 @@ export function createProcessTool(
             retentionCapNote(record) +
             (slice || (scopedSession ? "(no output yet)" : "(no output recorded)")) +
             defaultTailNote(totalLines, window.usingDefaultTail);
-          return textResult(
-            runtime
-              ? text + buildInputWaitHint(runtime)
-              : appendExecTimeoutRetryGuidance(text, record.exitReason),
-            {
-              ...(runtime
-                ? {
-                    status: record.exited ? "completed" : "running",
-                    sessionId: params.sessionId,
-                    name: deriveSessionName(record.command),
-                    ...runningSessionInputDetails(runtime),
-                  }
-                : finishedSessionDetails(params.sessionId, record)),
-              total: totalLines,
-              totalLines,
-              totalChars,
-              truncated: record.truncated,
-            },
-          );
+          const output = runtime
+            ? text + buildInputWaitHint(runtime)
+            : appendExecTimeoutRetryGuidance(text, record.exitReason);
+          return textResult(output, {
+            ...(runtime
+              ? {
+                  status: record.exited ? "completed" : "running",
+                  sessionId: params.sessionId,
+                  name: deriveSessionName(record.command),
+                  ...runningSessionInputDetails(runtime),
+                }
+              : finishedSessionDetails(params.sessionId, record)),
+            // Code Mode reads details, so preserve the requested page and its recovery hints.
+            output,
+            total: totalLines,
+            totalLines,
+            totalChars,
+            truncated: record.truncated,
+          });
         }
 
         case "write": {

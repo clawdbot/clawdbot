@@ -20,6 +20,7 @@ import {
 import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -31,14 +32,7 @@ function buildAssistantMessage(text: string) {
     api: "messages" as const,
     provider: "anthropic" as const,
     model: "sonnet-4.6" as const,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "stop" as const,
     timestamp: Date.now(),
   };
