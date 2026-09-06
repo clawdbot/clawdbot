@@ -103,7 +103,7 @@ export async function inspectMemorySourceState(params: {
  * boundary, so this reports the skip with the next recovery step and must not
  * change which files get indexed.
  */
-export async function resolveSkippedExtraMemoryRootIssues(params: {
+async function resolveSkippedExtraMemoryRootIssues(params: {
   workspaceDir: string;
   extraPaths?: MemoryExtraPath[];
   eligibleEntries: readonly Pick<MemoryFileEntry, "absPath">[];

@@ -114,9 +114,10 @@ describe("memory source inspection extra-path diagnostics", () => {
     "names a symlinked extra-path root that contributes nothing while canonical memory stays healthy",
     async () => {
       const workspaceDir = tempDirs.make("openclaw-memory-source-symlink-");
-      const vaultDir = path.join(path.dirname(workspaceDir), "obsidian-vault");
+      // The vault root must come from the tracker: a sibling of the allocated
+      // workspace would escape cleanup and be shared across runs.
+      const vaultDir = tempDirs.make("openclaw-memory-source-vault-");
       await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
-      await fs.mkdir(vaultDir, { recursive: true });
       await fs.writeFile(path.join(workspaceDir, "memory", "notes.md"), "# Canonical\n");
       await fs.writeFile(path.join(vaultDir, "vault-note.md"), "# Vault\n");
       await fs.symlink(vaultDir, path.join(workspaceDir, "obsidian"), "dir");
@@ -138,9 +139,8 @@ describe("memory source inspection extra-path diagnostics", () => {
     "names the symlink root even when it is the only configured source",
     async () => {
       const workspaceDir = tempDirs.make("openclaw-memory-source-symlink-only-");
-      const vaultDir = path.join(path.dirname(workspaceDir), "obsidian-vault");
+      const vaultDir = tempDirs.make("openclaw-memory-source-vault-");
       await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
-      await fs.mkdir(vaultDir, { recursive: true });
       await fs.writeFile(path.join(vaultDir, "vault-note.md"), "# Vault\n");
       await fs.symlink(vaultDir, path.join(workspaceDir, "obsidian"), "dir");
 
