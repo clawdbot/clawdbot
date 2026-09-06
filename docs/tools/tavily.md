@@ -155,7 +155,7 @@ the separate `tavily_extract` cache.
   </Accordion>
 
   <Accordion title="Custom base URL">
-    Override `plugins.entries.tavily.config.webSearch.baseUrl`, or set `TAVILY_BASE_URL`, if you front Tavily through a proxy. Config takes priority over the env var. The default is `https://api.tavily.com`.
+    Override `plugins.entries.tavily.config.webSearch.baseUrl`, or set `TAVILY_BASE_URL`, if you front Tavily through a proxy. Config takes priority over the env var. The default is `https://api.tavily.com`. A non-default `baseUrl` is honored as typed, including a private, internal or loopback host, and requests are permitted to that host only. Cloud-metadata destinations are always refused, as is a hostname whose DNS answer is a loopback, link-local or cloud-metadata address; with an HTTP(S) proxy in the environment, the proxy resolves the hostname.
   </Accordion>
 
   <Accordion title="`chunks_per_source` requires `query`">

@@ -2,8 +2,9 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 
-// Capture every call to postTrustedWebToolsJson so we can assert on extraHeaders.
+// Capture every call to the guarded post helpers so we can assert on their arguments.
 const postTrustedWebToolsJson = vi.fn();
+const postPinnedTrustedHostWebToolsJson = vi.fn();
 const writeCache = vi.fn();
 const assertPluginCapabilitySecretAvailable = vi.fn();
 const resolveTavilyBaseUrl = vi.fn(() => "https://api.tavily.com");
@@ -16,6 +17,7 @@ vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-web-search")>()),
   DEFAULT_CACHE_TTL_MINUTES: 5,
   normalizeCacheKey: (k: string) => k,
+  postPinnedTrustedHostWebToolsJson,
   postTrustedWebToolsJson,
   readCache: () => undefined,
   resolveCacheTtlMs: () => 300_000,
@@ -42,9 +44,14 @@ describe("tavily client X-Client-Source header", () => {
   beforeEach(() => {
     assertPluginCapabilitySecretAvailable.mockReset();
     postTrustedWebToolsJson.mockReset();
+    postPinnedTrustedHostWebToolsJson.mockReset();
     writeCache.mockReset();
     resolveTavilyBaseUrl.mockReset().mockReturnValue("https://api.tavily.com");
     postTrustedWebToolsJson.mockImplementation(
+      async (_params: unknown, parse: (r: Response) => Promise<unknown>) =>
+        parse(Response.json({ results: [] })),
+    );
+    postPinnedTrustedHostWebToolsJson.mockImplementation(
       async (_params: unknown, parse: (r: Response) => Promise<unknown>) =>
         parse(Response.json({ results: [] })),
     );
@@ -78,11 +85,13 @@ describe("tavily client X-Client-Source header", () => {
     resolveTavilyBaseUrl.mockReturnValueOnce("https://proxy.example/api/tavily/");
     await runTavilyExtract({ urls: ["https://example.com"] });
 
-    expect(postTrustedWebToolsJson).toHaveBeenCalledTimes(2);
-    expect(postTrustedWebToolsJson.mock.calls[0]?.[0]?.url).toBe(
+    // A non-default host is posted through the pinned trusted-host helper.
+    expect(postTrustedWebToolsJson).not.toHaveBeenCalled();
+    expect(postPinnedTrustedHostWebToolsJson).toHaveBeenCalledTimes(2);
+    expect(postPinnedTrustedHostWebToolsJson.mock.calls[0]?.[0]?.url).toBe(
       "https://proxy.example/api/tavily/search",
     );
-    expect(postTrustedWebToolsJson.mock.calls[1]?.[0]?.url).toBe(
+    expect(postPinnedTrustedHostWebToolsJson.mock.calls[1]?.[0]?.url).toBe(
       "https://proxy.example/api/tavily/extract",
     );
   });
@@ -97,6 +106,69 @@ describe("tavily client X-Client-Source header", () => {
     expect(postTrustedWebToolsJson.mock.calls[0]?.[0]?.url).toBe("https://api.tavily.com/search");
     expect(postTrustedWebToolsJson.mock.calls[1]?.[0]?.url).toBe("https://api.tavily.com/extract");
   });
+
+  it.each(["https://api.tavily.com", "https://api.tavily.com/", " https://API.tavily.com/ "])(
+    "posts to the hosted API through the trusted endpoint helper for base URL %j",
+    async (baseUrl) => {
+      resolveTavilyBaseUrl.mockReturnValue(baseUrl);
+      const controller = new AbortController();
+
+      await runTavilySearch({ query: "hosted", signal: controller.signal });
+
+      expect(postPinnedTrustedHostWebToolsJson).not.toHaveBeenCalled();
+      expect(postTrustedWebToolsJson).toHaveBeenCalledOnce();
+      expect(postTrustedWebToolsJson.mock.calls[0]?.[0]).toEqual({
+        url: "https://api.tavily.com/search",
+        timeoutSeconds: 30,
+        apiKey: "test-key",
+        body: { query: "hosted", max_results: 5 },
+        errorLabel: "Tavily Search",
+        extraHeaders: { "X-Client-Source": "openclaw" },
+        signal: controller.signal,
+      });
+    },
+  );
+
+  it.each([
+    ["search", "https://tavily.gateway.internal", "https://tavily.gateway.internal/search"],
+    ["extract", "http://10.0.0.5:8080/tavily/", "http://10.0.0.5:8080/tavily/extract"],
+  ] as const)(
+    "posts %s to a non-default base URL through the pinned trusted-host helper",
+    async (kind, baseUrl, url) => {
+      resolveTavilyBaseUrl.mockReturnValue(baseUrl);
+      const controller = new AbortController();
+
+      if (kind === "search") {
+        await runTavilySearch({ query: "private", signal: controller.signal });
+      } else {
+        await runTavilyExtract({ urls: ["https://example.com"], signal: controller.signal });
+      }
+
+      expect(postTrustedWebToolsJson).not.toHaveBeenCalled();
+      expect(postPinnedTrustedHostWebToolsJson).toHaveBeenCalledOnce();
+      expect(postPinnedTrustedHostWebToolsJson.mock.calls[0]?.[0]).toEqual(
+        kind === "search"
+          ? {
+              url,
+              timeoutSeconds: 30,
+              apiKey: "test-key",
+              body: { query: "private", max_results: 5 },
+              errorLabel: "Tavily Search",
+              extraHeaders: { "X-Client-Source": "openclaw" },
+              signal: controller.signal,
+            }
+          : {
+              url,
+              timeoutSeconds: 60,
+              apiKey: "test-key",
+              body: { urls: ["https://example.com"] },
+              errorLabel: "Tavily Extract",
+              extraHeaders: { "X-Client-Source": "openclaw" },
+              signal: controller.signal,
+            },
+      );
+    },
+  );
 
   it("runTavilySearch sends X-Client-Source: openclaw", async () => {
     await runTavilySearch({ query: "test query" });

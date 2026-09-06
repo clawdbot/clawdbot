@@ -4,6 +4,7 @@ import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   normalizeCacheKey,
+  postPinnedTrustedHostWebToolsJson,
   postTrustedWebToolsJson,
   readCache,
   resolveCacheTtlMs,
@@ -100,20 +101,28 @@ function normalizeTavilyPublishedDate(value: unknown): string | undefined {
     : undefined;
 }
 
-function resolveEndpoint(baseUrl: string, pathname: string): string {
+function resolveBaseUrl(baseUrl: string): URL {
   const trimmed = baseUrl.trim();
-  if (!trimmed) {
-    return `${DEFAULT_TAVILY_BASE_URL}${pathname}`;
+  if (trimmed) {
+    try {
+      return new URL(trimmed);
+    } catch {
+      // Unparsable overrides fall back to the hosted API below.
+    }
   }
-  try {
-    const url = new URL(trimmed);
-    // Always append the endpoint pathname to the base URL path,
-    // supporting both bare hosts and reverse-proxy path prefixes.
-    url.pathname = url.pathname.replace(/\/$/, "") + pathname;
-    return url.toString();
-  } catch {
-    return `${DEFAULT_TAVILY_BASE_URL}${pathname}`;
-  }
+  return new URL(DEFAULT_TAVILY_BASE_URL);
+}
+
+function resolveEndpoint(baseUrl: string, pathname: string): string {
+  const url = resolveBaseUrl(baseUrl);
+  // Always append the endpoint pathname to the base URL path,
+  // supporting both bare hosts and reverse-proxy path prefixes.
+  url.pathname = url.pathname.replace(/\/$/, "") + pathname;
+  return url.toString();
+}
+
+function usesDefaultTavilyHost(baseUrl: string): boolean {
+  return resolveBaseUrl(baseUrl).hostname === new URL(DEFAULT_TAVILY_BASE_URL).hostname;
 }
 
 async function postTavilyJson(params: {
@@ -126,7 +135,13 @@ async function postTavilyJson(params: {
   responseMaxBytes?: number;
   signal?: AbortSignal;
 }): Promise<Record<string, unknown>> {
-  return postTrustedWebToolsJson(
+  // The hosted API keeps the trusted-endpoint guard. Any other base URL names an
+  // operator-run endpoint that may sit on a private host, so the guard trusts
+  // exactly that host while still checking the addresses it resolves to.
+  const postJson = usesDefaultTavilyHost(params.baseUrl)
+    ? postTrustedWebToolsJson
+    : postPinnedTrustedHostWebToolsJson;
+  return postJson(
     {
       url: resolveEndpoint(params.baseUrl, params.pathname),
       timeoutSeconds: params.timeoutSeconds,

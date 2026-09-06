@@ -1,8 +1,14 @@
 // Shared web-search tests cover HTTP error ownership and module-local cache isolation.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type { IncomingHttpHeaders } from "node:http";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SsrFBlockedError } from "../../infra/net/ssrf.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
-import { postTrustedWebToolsJson, throwWebSearchApiError } from "./web-search-provider-common.js";
+import {
+  postPinnedTrustedHostWebToolsJson,
+  postTrustedWebToolsJson,
+  throwWebSearchApiError,
+} from "./web-search-provider-common.js";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -95,6 +101,102 @@ describe("web provider HTTP errors", () => {
     await expect(
       throwWebSearchApiError(new Response("quota exceeded", { status: 429 }), "Search"),
     ).rejects.toThrow("Search API error (429): quota exceeded");
+  });
+});
+
+describe("pinned trusted-host web provider endpoints", () => {
+  const PROXY_ENV_KEYS = [
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "no_proxy",
+  ] as const;
+
+  beforeEach(() => {
+    // The loopback server must be reached directly, not through an env proxy.
+    for (const key of PROXY_ENV_KEYS) {
+      vi.stubEnv(key, "");
+    }
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("honors an operator-configured loopback endpoint that the trusted helper refuses", async () => {
+    // The operator typed the loopback address; the pinned helper delivers the same
+    // request shape the trusted helper sends to the hosted API.
+    const requests: Array<{ method?: string; headers: IncomingHttpHeaders; body: string }> = [];
+    await withServer(
+      (request, response) => {
+        let body = "";
+        request.on("data", (chunk: Buffer) => {
+          body += chunk.toString();
+        });
+        request.on("end", () => {
+          requests.push({ method: request.method, headers: request.headers, body });
+          response.setHeader("content-type", "application/json");
+          response.end('{"results":[]}');
+        });
+      },
+      async (baseUrl) => {
+        const params = {
+          url: `${baseUrl}/search`,
+          timeoutSeconds: 5,
+          apiKey: "s7Key",
+          body: { query: "test" },
+          errorLabel: "Search",
+          extraHeaders: { "X-Client-Source": "openclaw" },
+        };
+        const parse = (response: Response) => response.json();
+
+        await expect(postTrustedWebToolsJson(params, parse)).rejects.toBeInstanceOf(
+          SsrFBlockedError,
+        );
+        expect(requests).toHaveLength(0);
+
+        await expect(postPinnedTrustedHostWebToolsJson(params, parse)).resolves.toEqual({
+          results: [],
+        });
+        expect(requests).toHaveLength(1);
+        expect(requests[0]?.method).toBe("POST");
+        expect(requests[0]?.headers).toMatchObject({
+          accept: "application/json",
+          authorization: "Bearer s7Key",
+          "content-type": "application/json",
+          "x-client-source": "openclaw",
+        });
+        expect(requests[0]?.body).toBe('{"query":"test"}');
+      },
+    );
+  });
+
+  it("shares the redacted, bounded non-2xx error path", async () => {
+    const apiKey = "synthetic-web-key-long";
+    await withServer(
+      (_request, response) => {
+        response.writeHead(401);
+        response.end(`rejected ${apiKey}`);
+      },
+      async (baseUrl) => {
+        const error = await postPinnedTrustedHostWebToolsJson(
+          {
+            url: `${baseUrl}/search`,
+            timeoutSeconds: 5,
+            apiKey,
+            body: { query: "test" },
+            errorLabel: "Search",
+            maxErrorBytes: 15,
+          },
+          (response) => response.json(),
+        ).catch((cause: unknown) => cause);
+        expect(error).toEqual(new Error("Search API error (401): rejected ***"));
+      },
+    );
   });
 });
 

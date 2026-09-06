@@ -12,6 +12,9 @@ import {
   withTrustedEnvProxyGuardedFetchMode,
 } from "../../infra/net/fetch-guard.js";
 import {
+  isCloudMetadataHostnameOrIp,
+  mergeSsrFPolicies,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
   ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
   type SsrFPolicy,
 } from "../../infra/net/ssrf.js";
@@ -103,6 +106,37 @@ export async function withSelfHostedWebToolsEndpoint<T>(
     {
       ...params,
       policy: WEB_TOOLS_SELF_HOSTED_NETWORK_SSRF_POLICY,
+      useEnvProxy: true,
+    },
+    run,
+  );
+}
+
+/**
+ * Runs a fetch for one operator-configured endpoint with exact-host trust. The
+ * host named in `params.url` is honored as typed, including loopback and
+ * private addresses, because the operator chose it. A cloud-metadata
+ * destination is refused in every mode. A configured name whose DNS answer is
+ * loopback, unspecified, link-local or cloud-metadata is refused, since that
+ * answer was not the operator's choice. Every other host, including a redirect
+ * target, is refused. With an env proxy the proxy resolves the name, as for
+ * every trusted call.
+ */
+export async function withPinnedTrustedHostWebToolsEndpoint<T>(
+  params: WebToolEndpointFetchOptions,
+  run: (result: { response: Response; finalUrl: string }) => Promise<T>,
+): Promise<T> {
+  const pinnedPolicy = ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(params.url);
+  if (!pinnedPolicy || isCloudMetadataHostnameOrIp(new URL(params.url).hostname)) {
+    // Not an http(s) URL, or a cloud-metadata destination: let the strict guard
+    // reject it rather than widen the policy. The strict pre-DNS check runs in
+    // direct and env-proxy mode alike, so no request or lookup follows.
+    return await withWebToolsNetworkGuard(params, run);
+  }
+  return await withWebToolsNetworkGuard(
+    {
+      ...params,
+      policy: mergeSsrFPolicies(pinnedPolicy, ssrfPolicyFromHttpBaseUrlAllowedHostname(params.url)),
       useEnvProxy: true,
     },
     run,

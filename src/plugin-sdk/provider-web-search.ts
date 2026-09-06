@@ -34,6 +34,7 @@ export {
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
   resolveSiteName,
+  postPinnedTrustedHostWebToolsJson,
   postTrustedWebToolsJson,
   throwWebSearchApiError,
   withSelfHostedWebSearchEndpoint,
