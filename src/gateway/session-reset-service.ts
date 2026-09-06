@@ -41,6 +41,7 @@ import {
 } from "../auto-reply/reply/session-hooks.js";
 import {
   clearSessionResetRuntimeState,
+  createSessionResetCleanupGuard,
   SessionResetCleanupError,
   stopSessionResetSubagents,
 } from "../auto-reply/reply/session-reset-cleanup.js";
@@ -353,6 +354,14 @@ async function ensureSessionRuntimeCleanup(params: {
   sessionLifecycleRevision?: string;
   assertCurrent?: () => void;
 }) {
+  const assertCurrent = createSessionResetCleanupGuard({
+    storePath: params.target.storePath,
+    sessionKey: params.target.canonicalKey,
+    expectedSession: params.sessionId
+      ? { sessionId: params.sessionId, lifecycleRevision: params.sessionLifecycleRevision }
+      : undefined,
+    assertCurrent: params.assertCurrent,
+  });
   // Session lifecycle mutation owns this heavy runtime edge; read-only gateway
   // commands such as status must not load the embedded-agent barrel.
   const [embeddedAgent, mcpTools, { clearFinishedSessionsForScopes }] = await Promise.all([
@@ -360,9 +369,8 @@ async function ensureSessionRuntimeCleanup(params: {
     import("../agents/agent-bundle-mcp-tools.js"),
     import("../agents/bash-process-registry.js"),
   ]);
-  params.assertCurrent?.();
   const closeTrackedBrowserTabs = async () => {
-    params.assertCurrent?.();
+    assertCurrent();
     const closeKeys = new Set<string>([
       params.key,
       params.target.canonicalKey,
@@ -374,10 +382,26 @@ async function ensureSessionRuntimeCleanup(params: {
       sessionKeys: [...closeKeys],
       onWarn: (message) => logVerbose(message),
     });
-    params.assertCurrent?.();
+    assertCurrent();
   };
 
-  params.assertCurrent?.();
+  try {
+    assertCurrent();
+    await stopSessionResetSubagents({
+      cfg: params.cfg,
+      sessionKey: params.target.canonicalKey,
+      agentId: resolveLifecycleAgentId(params.cfg, params.target.agentId),
+      assertCurrent,
+    });
+  } catch (error) {
+    if (error instanceof SessionResetCleanupError) {
+      return errorShape(ErrorCodes.UNAVAILABLE, error.message);
+    }
+    throw error;
+  }
+  // Parent admissions are already drained. Reject stale or incomplete child cleanup
+  // before discarding queues or interrupting a newly accepted reply operation.
+  assertCurrent();
   const queueKeys = new Set<string>(params.target.storeKeys);
   queueKeys.add(params.target.canonicalKey);
   if (params.sessionId) {
@@ -393,31 +417,14 @@ async function ensureSessionRuntimeCleanup(params: {
     activeReplySessionId: params.sessionId,
     agentId: resolveLifecycleAgentId(params.cfg, params.target.agentId),
   });
-  try {
-    await stopSessionResetSubagents({
-      cfg: params.cfg,
-      sessionKey: params.target.canonicalKey,
-      agentId: resolveLifecycleAgentId(params.cfg, params.target.agentId),
-      storePath: params.target.storePath,
-      expectedSession: params.sessionId
-        ? { sessionId: params.sessionId, lifecycleRevision: params.sessionLifecycleRevision }
-        : undefined,
-      assertCurrent: params.assertCurrent,
-    });
-  } catch (error) {
-    if (error instanceof SessionResetCleanupError) {
-      return errorShape(ErrorCodes.UNAVAILABLE, error.message);
-    }
-    throw error;
-  }
   if (!params.sessionId) {
-    params.assertCurrent?.();
+    assertCurrent();
     clearBootstrapSnapshot(params.target.canonicalKey);
     await closeTrackedBrowserTabs();
     return undefined;
   }
   const sessionId = params.sessionId;
-  params.assertCurrent?.();
+  assertCurrent();
   const cleanupProviderResources = () => {
     try {
       cleanupSessionResources(sessionId);
@@ -496,16 +503,17 @@ async function ensureSessionRuntimeCleanup(params: {
   // Active tool/app leases keep in-flight work alive until their final release.
   await retireMcpRuntime(true);
   const ended = await embeddedAgent.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
-  params.assertCurrent?.();
+  assertCurrent();
   // A stopping run can create or reuse its runtime while we wait. Retire again
   // after a clean stop; otherwise keep the required marker armed for late work.
   await retireMcpRuntime(!ended);
-  params.assertCurrent?.();
+  assertCurrent();
   clearBootstrapSnapshot(params.target.canonicalKey);
   if (ended && !embeddedAgent.isEmbeddedAgentRunActive(sessionId)) {
-    params.assertCurrent?.();
+    assertCurrent();
     mcpRunEndWatcherState.cancellations.get(sessionId)?.();
     await mcpRetirementWatcher;
+    assertCurrent();
     cleanupProviderResources();
     await closeTrackedBrowserTabs();
     return undefined;

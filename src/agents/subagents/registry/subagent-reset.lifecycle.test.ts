@@ -1,6 +1,13 @@
 /** Explicit reset retires child work without erasing its durable conversations. */
 import { expect, it, vi } from "vitest";
 import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-context.js";
+import {
+  clearSessionQueues,
+  enqueueFollowupRun,
+  getFollowupQueueDepth,
+} from "../../../auto-reply/reply/queue.js";
+import { createQueueTestRun } from "../../../auto-reply/reply/queue.test-helpers.js";
+import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import { initSessionState } from "../../../auto-reply/reply/session.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import {
@@ -352,7 +359,7 @@ it("lifecycle requester cleanup respects agent ownership without granting ordina
 });
 
 it.each(["sessionId", "lifecycleRevision"] as const)(
-  "RPC reset preserves children of a replacement parent after a hook changes %s",
+  "RPC reset preserves runtime and children of a replacement parent after a hook changes %s",
   async (field) => {
     const storePath = await writeSubagentSessionEntry({
       stateDir: fixture.stateDir,
@@ -361,11 +368,28 @@ it.each(["sessionId", "lifecycleRevision"] as const)(
       defaultSessionId: "parent",
       lifecycleRevision: "original",
     });
+    const cancel = vi.fn();
+    let replacementReply: ReturnType<typeof createReplyOperation> | undefined;
     const replaceParent = async () => {
       await patchSessionEntryCore({ storePath, sessionKey: parentKey }, (entry) => ({
         ...entry,
         [field]: "replacement",
       }));
+      replacementReply = createReplyOperation({
+        sessionKey: parentKey,
+        sessionId: field === "sessionId" ? "replacement" : "parent",
+        resetTriggered: false,
+      });
+      replacementReply.attachBackend({ kind: "embedded", cancel, isStreaming: () => false });
+      replacementReply.setPhase("running");
+      enqueueFollowupRun(
+        parentKey,
+        createQueueTestRun({ prompt: "replacement follow-up" }),
+        { mode: "followup" },
+        "none",
+        undefined,
+        false,
+      );
       await writeSubagentSessionEntry({
         stateDir: fixture.stateDir,
         agentId: "main",
@@ -404,7 +428,11 @@ it.each(["sessionId", "lifecycleRevision"] as const)(
       expect(findTaskByRunId("replacement-child")?.status).toBe("running");
       expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
       expect(loadSessionEntry({ storePath, sessionKey: parentKey })?.[field]).toBe("replacement");
+      expect.soft(cancel).not.toHaveBeenCalled();
+      expect(getFollowupQueueDepth(parentKey)).toBe(1);
     } finally {
+      replacementReply?.complete();
+      clearSessionQueues([parentKey]);
       unregisterInternalHook("command:reset", replaceParent);
     }
   },

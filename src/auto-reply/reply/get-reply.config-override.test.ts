@@ -17,6 +17,7 @@ import {
   registerGetReplyRuntimeOverrides,
 } from "./get-reply.test-fixtures.js";
 import "./get-reply.test-runtime-mocks.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { bindPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import {
   REPLY_OPERATION_RUN_STATE,
@@ -205,9 +206,10 @@ describe("getReplyFromConfig configOverride", () => {
     const message = "Reset did not complete. Inspect remaining tasks and retry /reset.";
     mocks.initSessionState.mockRejectedValueOnce(new SessionResetCleanupError(message));
     const runState: ReplyOperationRunState = {};
-    await expect(
-      getReplyFromConfig(buildGetReplyCtx(), { [REPLY_OPERATION_RUN_STATE]: runState }, {}),
-    ).resolves.toEqual({ text: message });
+    const opts: InternalGetReplyOptions = { [REPLY_OPERATION_RUN_STATE]: runState };
+    await expect(getReplyFromConfig(buildGetReplyCtx(), opts, {})).resolves.toEqual({
+      text: message,
+    });
     expect(runState.preRunRejection).toBe("session-directive-rejected");
     expect(runPreparedReplyMock).not.toHaveBeenCalled();
   });

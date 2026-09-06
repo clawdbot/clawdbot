@@ -137,6 +137,7 @@ import {
 } from "./session-parent-fork-prepare.js";
 import {
   clearSessionResetRuntimeState,
+  createSessionResetCleanupGuard,
   stopSessionResetSubagents,
 } from "./session-reset-cleanup.js";
 import { resolveAuthorizedSessionResetCommand } from "./session-reset-command.js";
@@ -533,9 +534,12 @@ async function initSessionStateAttempt(
             cfg: params.cfg,
             sessionKey: candidate.sessionKey,
             agentId: attemptContext.agentId,
-            storePath: attemptContext.storePath,
-            expectedSession: afterDrain,
-            assertCurrent: () => params.signal?.throwIfAborted(),
+            assertCurrent: createSessionResetCleanupGuard({
+              sessionKey: candidate.sessionKey,
+              storePath: attemptContext.storePath,
+              expectedSession: afterDrain,
+              assertCurrent: () => params.signal?.throwIfAborted(),
+            }),
           });
         }
       },

@@ -13,16 +13,16 @@ import { clearReplyRunForResetBySessionId } from "./reply-run-registry.js";
 
 export class SessionResetCleanupError extends Error {}
 
-/** Reset must report unfinished child cleanup before committing a fresh conversation. */
-export async function stopSessionResetSubagents(
-  params: Parameters<typeof killSessionSubagentRuns>[0] & {
-    storePath: string;
-    expectedSession: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined;
-  },
-): Promise<void> {
+/** Bind runtime cleanup to the parent incarnation accepted before asynchronous work. */
+export function createSessionResetCleanupGuard(params: {
+  storePath: string;
+  sessionKey: string;
+  expectedSession: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined;
+  assertCurrent?: () => void;
+}): () => void {
   const sessionId = params.expectedSession?.sessionId;
   const lifecycleRevision = params.expectedSession?.lifecycleRevision;
-  const assertCurrent = () => {
+  return () => {
     params.assertCurrent?.();
     const current = loadExactSessionEntryReadOnly({
       storePath: params.storePath,
@@ -30,19 +30,30 @@ export async function stopSessionResetSubagents(
       clone: false,
     })?.entry;
     if (current?.sessionId !== sessionId || current?.lifecycleRevision !== lifecycleRevision) {
-      throw new Error("Session changed before subagent cleanup. Retry reset.");
+      throw new SessionResetCleanupError(
+        "Reset did not complete because the session changed before cleanup. Retry /reset.",
+      );
     }
   };
+}
+
+/** Reset must report unfinished child cleanup before committing a fresh conversation. */
+export async function stopSessionResetSubagents(
+  params: Parameters<typeof killSessionSubagentRuns>[0] & { assertCurrent: () => void },
+): Promise<void> {
   try {
     // Hooks and child finalizers can yield after reset accepted its parent. Fence
     // that incarnation before selection and at every child cancellation boundary.
-    assertCurrent();
-    const result = await killSessionSubagentRuns({ ...params, assertCurrent });
-    assertCurrent();
+    params.assertCurrent();
+    const result = await killSessionSubagentRuns(params);
+    params.assertCurrent();
     if (result.status === "error") {
       throw new Error(result.error);
     }
   } catch (cause) {
+    if (cause instanceof SessionResetCleanupError) {
+      throw cause;
+    }
     throw new SessionResetCleanupError(
       "Reset did not complete because some subagent tasks could not be stopped. Inspect the remaining tasks and retry /reset.",
       { cause },
