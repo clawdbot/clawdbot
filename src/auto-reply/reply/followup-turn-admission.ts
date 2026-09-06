@@ -34,6 +34,7 @@ import {
   type FollowupRun,
 } from "./queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
+import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import {
   createReplySessionEntryHandle,
@@ -253,6 +254,10 @@ export async function admitFollowupTurn(params: {
       sessionKey: replySessionKey,
     });
     const queued: FollowupRun = { ...params.queued, run };
+    // Queued turns own the same frozen caller policy as foreground admission
+    // (agent-runner-run.ts). Without it, CLI route binding throws before launch
+    // and embedded runs cannot be steered because their authority is unknown.
+    operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(queued));
     const sessionEntryHandle = createReplySessionEntryHandle({
       sessionEntry: activeEntry,
       sessionKey: replySessionKey,
