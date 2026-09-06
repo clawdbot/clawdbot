@@ -127,6 +127,8 @@ flow:
           value: []
         - set: receipts
           value: []
+        - set: failures
+          value: []
         - set: editCliCompleted
           value: false
         - set: editVerified
@@ -165,14 +167,15 @@ flow:
                       label: isEdit ? 'message-1' : `message-${index + 1}`,
                       phase: isEdit ? 'edit' : 'send', kind: message.kind,
                       contentType,
-                      ...(isEdit ? { observerIdStayedEqual: message.messageId === vars.proofs[0]?.observerMessageId } : { accountMessageIdsDiffer: message.botApiMessageId === undefined ? null : String(vars.receipts[index].botMessageId) !== String(message.botApiMessageId) }),
+                      ...(isEdit ? { observerIdStayedEqual: message.messageId === vars.editTarget?.observerMessageId } : { accountMessageIdsDiffer: message.botApiMessageId === undefined ? null : String(vars.receipts[index].botMessageId) !== String(message.botApiMessageId) }),
                       richMessage: tree(message.richMessage)
                     });
                   }
                   const artifact = {
                     transport: 'Telegram Test Server', topology: 'leased DM', scenarioInvokesModel: false,
                     receipts: vars.receipts.slice(0, 11).map((receipt, index) => ({ case: receipt.case, label: `message-${index + 1}` })),
-                    cases: vars.proofs.slice(0, 11).map((proof, index) => ({ case: proof.case, label: `message-${index + 1}`, accountMessageIdsDiffer: proof.accountMessageIdsDiffer, richMessage: tree(proof.richMessage) })),
+                    cases: vars.proofs.slice(0, 11).map(proof => ({ case: proof.case, label: proof.label, accountMessageIdsDiffer: proof.accountMessageIdsDiffer, richMessage: tree(proof.richMessage) })),
+                    failures: vars.failures.map(failure => ({ case: failure.case, label: failure.label, contentType: failure.contentType, full: failure.full, matchesPattern: failure.matchesPattern, richMessage: tree(failure.richMessage) })),
                     edit: { completedWithBotReceipt: vars.editCliCompleted, verified: vars.editVerified },
                     candidates, unmatched: { count: unmatchedCount, contentTypes: [...unmatchedTypes] }
                   };
@@ -185,6 +188,7 @@ flow:
               - forEach:
                   items: { ref: fixtures }
                   item: fixture
+                  index: fixtureIndex
                   actions:
                     - set: marker
                       value:
@@ -215,16 +219,27 @@ flow:
                             expr: |
                               readTelegramMessages().find(message => message.kind === 'message' && message.text.split('\n').includes(marker))
                         - 30000
-                    - assert:
-                        expr: "received.contentType === 'messageRichMessage' && received.richMessage?.is_full === true && containsPattern(received.richMessage.blocks, fixture.pattern)"
-                        message:
-                          expr: "`Native rich composition failed: ${fixture.id}; content=${received.contentType}; full=${received.richMessage?.is_full}`"
-                    - set: proofs
+                    - set: observation
                       value:
-                        expr: "proofs.concat([{ case: fixture.id, botMessageId: receipt.messageId, observerMessageId: received.messageId, marker, accountMessageIdsDiffer: received.botApiMessageId === undefined ? null : String(receipt.messageId) !== String(received.botApiMessageId), richMessage: received.richMessage }])"
-              - set: editTarget
-                value:
-                  expr: "proofs[0]"
+                        expr: "({ case: fixture.id, label: `message-${fixtureIndex + 1}`, botMessageId: receipt.messageId, observerMessageId: received.messageId, marker, accountMessageIdsDiffer: received.botApiMessageId === undefined ? null : String(receipt.messageId) !== String(received.botApiMessageId), richMessage: received.richMessage })"
+                    - if:
+                        expr: "fixtureIndex === 0"
+                        then:
+                          - set: editTarget
+                            value: { ref: observation }
+                    - set: verdict
+                      value:
+                        expr: "({ contentType: received.contentType?.slice(0, 64) ?? 'unknown', full: received.richMessage?.is_full === true, matchesPattern: containsPattern(received.richMessage?.blocks, fixture.pattern) })"
+                    - if:
+                        expr: "verdict.contentType === 'messageRichMessage' && verdict.full && verdict.matchesPattern"
+                        then:
+                          - set: proofs
+                            value:
+                              expr: "proofs.concat([observation])"
+                        else:
+                          - set: failures
+                            value:
+                              expr: "failures.concat([{ ...observation, ...verdict }])"
               - set: editMarker
                 value:
                   expr: "`QA-RICH-${runId}-edit-END`"
@@ -244,16 +259,18 @@ flow:
                       expr: |
                         readTelegramMessages().find(message => message.kind === 'edit' && message.messageId === editTarget.observerMessageId && message.text.split('\n').includes(editMarker))
                   - 30000
-              - assert:
+              - set: editVerified
+                value:
                   expr: |
                     edited.kind === 'edit' && edited.contentType === 'messageRichMessage' && edited.richMessage?.is_full === true &&
                     containsPattern(edited.richMessage.blocks, { '@type': 'pageBlockList' }) && containsPattern(edited.richMessage.blocks, fixtures[1].pattern) &&
                     readTelegramMessages().filter(message => message.text.split('\n').some(line =>
                       line === editMarker || receipts.some(receipt => receipt.marker === line)
                     )).length === fixtures.length
-                  message: editing must preserve the styled link on the same native message without a replacement bubble
-              - set: editVerified
-                value: true
+              - assert:
+                  expr: "failures.length === 0 && proofs.length === fixtures.length && editVerified"
+                  message:
+                    expr: "`Native rich composition failed: ${failures.map(failure => failure.case).join(', ') || 'edit'}; editing must preserve the styled link on the same native message without a replacement bubble`"
             finally:
               - call: captureEvidence
                 saveAs: evidenceSummary
