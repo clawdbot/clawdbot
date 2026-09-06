@@ -526,8 +526,10 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
           providerId,
           run: async () => {
             const { resolveImplicitBedrockProvider } = await import("./discovery.js");
+            const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);
             const implicit = await resolveImplicitBedrockProvider({
-              pluginConfig: resolveCurrentPluginConfig(ctx.config),
+              discoveryMode: "strict",
+              pluginConfig: currentPluginConfig,
               env: ctx.env,
             });
             return implicit ? { provider: implicit } : null;

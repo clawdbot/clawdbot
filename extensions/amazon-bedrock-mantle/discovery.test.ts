@@ -548,6 +548,7 @@ describe("bedrock mantle discovery", () => {
 
     await expect(
       discoverMantleModels({
+        discoveryMode: "strict",
         region: testRegion,
         bearerToken: "test-token",
         fetchFn: mockFetch as unknown as typeof fetch,
@@ -561,6 +562,7 @@ describe("bedrock mantle discovery", () => {
 
     await expect(
       discoverMantleModels({
+        discoveryMode: "strict",
         region: testRegion,
         bearerToken: "test-token",
         fetchFn: mockFetch as unknown as typeof fetch,
@@ -621,6 +623,7 @@ describe("bedrock mantle discovery", () => {
 
     await expect(
       discoverMantleModels({
+        discoveryMode: "strict",
         region: testRegion,
         bearerToken: "test-token",
         fetchFn: mockFetch as unknown as typeof fetch,
@@ -639,6 +642,7 @@ describe("bedrock mantle discovery", () => {
 
     await expect(
       discoverMantleModels({
+        discoveryMode: "strict",
         region: testRegion,
         bearerToken: "test-token",
         fetchFn: mockFetch,
@@ -722,6 +726,7 @@ describe("bedrock mantle discovery", () => {
 
       now += 7200_000;
       const params = {
+        discoveryMode: "strict" as const,
         region: testRegion,
         bearerToken: "test-token",
         fetchFn: mockFetch,
@@ -753,20 +758,56 @@ describe("bedrock mantle discovery", () => {
     expect(mockFetch).toHaveBeenCalledTimes(3);
   });
 
-  it("preserves and caches a successful empty catalog without IAM generation", async () => {
-    const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(modelDiscoveryResponse({ data: [] }));
-    const tokenProviderFactory = vi.fn(() => {
-      throw new Error("Explicit bearer takes precedence");
-    });
-    const params = {
-      env: { AWS_REGION: "eu-south-1", AWS_BEARER_TOKEN_BEDROCK: "empty-catalog" },
-      fetchFn,
-      tokenProviderFactory,
-    };
-    await expect(resolveImplicitMantleProvider(params)).resolves.toMatchObject({ models: [] });
-    await expect(resolveImplicitMantleProvider(params)).resolves.toMatchObject({ models: [] });
-    expect(fetchFn).toHaveBeenCalledTimes(1);
-    expect(tokenProviderFactory).not.toHaveBeenCalled();
+  it.each([undefined, "strict"] as const)(
+    "preserves the %s empty resolver contract without IAM generation",
+    async (discoveryMode) => {
+      const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(modelDiscoveryResponse({ data: [] }));
+      const tokenProviderFactory = vi.fn(() => {
+        throw new Error("Explicit bearer takes precedence");
+      });
+      const params = {
+        env: {
+          AWS_REGION: "eu-south-1",
+          AWS_BEARER_TOKEN_BEDROCK: `empty-catalog-${discoveryMode}`,
+        },
+        discoveryMode,
+        fetchFn,
+        tokenProviderFactory,
+      };
+      const first = await resolveImplicitMantleProvider(params);
+      const second = await resolveImplicitMantleProvider(params);
+      if (discoveryMode === "strict") {
+        expect(first).toMatchObject({ models: [] });
+        expect(second).toMatchObject({ models: [] });
+      } else {
+        expect(first).toBeNull();
+        expect(second).toBeNull();
+      }
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(tokenProviderFactory).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves advisory failure defaults without sharing stale rows across credentials", async () => {
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(modelDiscoveryResponse({ data: [{ id: "public-model" }] }))
+      .mockRejectedValue(new Error("offline"));
+    const params = { region: testRegion, bearerToken: "first", fetchFn };
+    const first = await discoverMantleModels({ ...params, now: () => 1000 });
+    await expect(discoverMantleModels({ ...params, now: () => 7201000 })).resolves.toEqual(first);
+    await expect(
+      discoverMantleModels({ ...params, discoveryMode: "strict", now: () => 7201000 }),
+    ).rejects.toThrow("offline");
+    await expect(
+      discoverMantleModels({ ...params, bearerToken: "second", now: () => 7201000 }),
+    ).resolves.toEqual([]);
+    await expect(
+      resolveImplicitMantleProvider({
+        env: { AWS_REGION: "us-east-2", AWS_BEARER_TOKEN_BEDROCK: "public-implicit-failure" },
+        fetchFn,
+      }),
+    ).resolves.toBeNull();
   });
 
   // ---------------------------------------------------------------------------

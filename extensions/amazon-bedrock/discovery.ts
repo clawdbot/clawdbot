@@ -217,8 +217,7 @@ type InferenceProfileSummary = NonNullable<
 
 type BedrockDiscoveryCacheEntry = {
   expiresAt: number;
-  value?: ModelDefinitionConfig[];
-  inFlight?: Promise<ModelDefinitionConfig[]>;
+  result: Promise<ModelDefinitionConfig[]>;
 };
 
 const discoveryCache = new Map<string, BedrockDiscoveryCacheEntry>();
@@ -237,16 +236,6 @@ function normalizeProviderFilter(filter?: string[]): string[] {
       .filter((entry): entry is string => Boolean(entry)),
   );
   return Array.from(normalized).toSorted();
-}
-
-function buildCacheKey(params: {
-  region: string;
-  providerFilter: string[];
-  refreshIntervalSeconds: number;
-  defaultContextWindow: number;
-  defaultMaxTokens: number;
-}): string {
-  return JSON.stringify(params);
 }
 
 function includesTextModalities(modalities?: Array<string>): boolean {
@@ -496,9 +485,10 @@ function resolveInferenceProfiles(
 // Public API
 // ---------------------------------------------------------------------------
 
-/** Discover Bedrock models and inference profiles for one region/config. */
+/** Public discovery is advisory by default; catalog owners opt into strict acquisition. */
 export async function discoverBedrockModels(params: {
   region: string;
+  discoveryMode?: "strict";
   config?: BedrockDiscoveryConfig;
   now?: () => number;
   clientFactory?: (region: string) => BedrockClient;
@@ -510,8 +500,9 @@ export async function discoverBedrockModels(params: {
   const providerFilter = normalizeProviderFilter(params.config?.providerFilter);
   const defaultContextWindow = resolveDefaultContextWindow(params.config);
   const defaultMaxTokens = resolveDefaultMaxTokens(params.config);
-  const cacheKey = buildCacheKey({
+  const cacheKey = JSON.stringify({
     region: params.region,
+    discoveryMode: params.discoveryMode,
     providerFilter,
     refreshIntervalSeconds,
     defaultContextWindow,
@@ -522,16 +513,9 @@ export async function discoverBedrockModels(params: {
   if (refreshIntervalSeconds > 0) {
     const cached = discoveryCache.get(cacheKey);
     if (cached && isFutureDateTimestampMs(cached.expiresAt, { nowMs: now })) {
-      if (cached.value) {
-        return cached.value;
-      }
-      if (cached.inFlight) {
-        return cached.inFlight;
-      }
+      return cached.result;
     }
-    if (cached) {
-      discoveryCache.delete(cacheKey);
-    }
+    discoveryCache.delete(cacheKey);
   }
 
   const sdk = await loadBedrockControlPlaneSdk();
@@ -555,7 +539,13 @@ export async function discoverBedrockModels(params: {
         }),
         fetchInferenceProfileSummaries(client, (input) =>
           sdk.createListInferenceProfilesCommand(input),
-        ),
+        ).catch((error) => {
+          if (params.discoveryMode === "strict") {
+            throw error;
+          }
+          discoveryCache.delete(cacheKey);
+          return [];
+        }),
       ]);
 
       const discovered: ModelDefinitionConfig[] = [];
@@ -613,43 +603,31 @@ export async function discoverBedrockModels(params: {
       // Discovery owns the short-lived control-plane client and its socket agents.
       client.destroy();
     }
-  })();
+  })().catch((error) => {
+    discoveryCache.delete(cacheKey);
+    if (params.discoveryMode === "strict") {
+      throw error;
+    }
+    return [];
+  });
 
   if (refreshIntervalSeconds > 0) {
     const expiresAt = resolveExpiresAtMsFromDurationSeconds(refreshIntervalSeconds, { nowMs: now });
     if (expiresAt !== undefined) {
       discoveryCache.set(cacheKey, {
         expiresAt,
-        inFlight: discoveryPromise,
+        result: discoveryPromise,
       });
     }
   }
 
-  try {
-    const value = await discoveryPromise;
-    if (refreshIntervalSeconds > 0) {
-      const expiresAt = resolveExpiresAtMsFromDurationSeconds(refreshIntervalSeconds, {
-        nowMs: now,
-      });
-      if (expiresAt !== undefined) {
-        discoveryCache.set(cacheKey, {
-          expiresAt,
-          value,
-        });
-      }
-    }
-    return value;
-  } catch (error) {
-    if (refreshIntervalSeconds > 0) {
-      discoveryCache.delete(cacheKey);
-    }
-    throw error;
-  }
+  return discoveryPromise;
 }
 
-/** Resolve the implicit Bedrock provider config from env, plugin config, and discovery. */
+/** Public resolution keeps advisory null results; strict catalog callers retain acquired empties. */
 export async function resolveImplicitBedrockProvider(params: {
   pluginConfig?: { discovery?: BedrockDiscoveryConfig };
+  discoveryMode?: "strict";
   env?: NodeJS.ProcessEnv;
   clientFactory?: (region: string) => BedrockClient;
 }): Promise<ModelProviderConfig | null> {
@@ -671,9 +649,13 @@ export async function resolveImplicitBedrockProvider(params: {
     "us-east-1";
   const models = await discoverBedrockModels({
     region,
+    discoveryMode: params.discoveryMode,
     config: discoveryConfig,
     clientFactory: params.clientFactory,
   });
+  if (models.length === 0 && params.discoveryMode !== "strict") {
+    return null;
+  }
   return {
     baseUrl: `https://bedrock-runtime.${region}.amazonaws.com`,
     api: "bedrock-converse-stream",

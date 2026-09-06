@@ -322,12 +322,12 @@ const discoveryCache = new Map<string, MantleCacheEntry>();
  * ```
  *
  * Results are cached per region and bearer credential for `DEFAULT_REFRESH_INTERVAL_SECONDS`.
- * Failed acquisitions propagate to the catalog owner, which retains compatible last-good models.
+ * Public calls retain advisory results; strict catalog calls propagate acquisition failures.
  */
-/** Discover Mantle models for one region/config. */
 export async function discoverMantleModels(params: {
   region: string;
   bearerToken: string;
+  discoveryMode?: "strict";
   fetchFn?: typeof fetch;
   now?: () => number;
 }): Promise<ModelDefinitionConfig[]> {
@@ -340,40 +340,49 @@ export async function discoverMantleModels(params: {
   ) {
     return cached.models;
   }
-  discoveryCache.delete(region);
+  if (cached?.bearerToken !== bearerToken) {
+    discoveryCache.delete(region);
+  }
 
   const endpoint = `${mantleEndpoint(region)}/v1/models`;
 
-  const response = await fetchFn(endpoint, {
-    method: "GET",
-    signal: AbortSignal.timeout(MANTLE_DISCOVERY_TIMEOUT_MS),
-    headers: {
-      Authorization: `Bearer ${bearerToken}`,
-      Accept: "application/json",
-    },
-  });
+  try {
+    const response = await fetchFn(endpoint, {
+      method: "GET",
+      signal: AbortSignal.timeout(MANTLE_DISCOVERY_TIMEOUT_MS),
+      headers: {
+        Authorization: `Bearer ${bearerToken}`,
+        Accept: "application/json",
+      },
+    });
 
-  if (!response.ok) {
-    await response.body?.cancel().catch(() => undefined);
-    throw new LiveModelCatalogHttpError("amazon-bedrock-mantle", response.status);
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new LiveModelCatalogHttpError("amazon-bedrock-mantle", response.status);
+    }
+
+    const body = await readMantleModelDiscoveryJson(response);
+    const models = body.data
+      .filter((model) => model.id?.trim())
+      .map((model) => ({
+        id: model.id,
+        name: model.id,
+        reasoning: inferReasoningSupport(model.id),
+        input: ["text" as const],
+        cost: DEFAULT_COST,
+        contextWindow: DEFAULT_CONTEXT_WINDOW,
+        maxTokens: DEFAULT_MAX_TOKENS,
+      }))
+      .toSorted((left, right) => left.id.localeCompare(right.id));
+
+    discoveryCache.set(region, { bearerToken, models, fetchedAt: now() });
+    return models;
+  } catch (error) {
+    if (params.discoveryMode === "strict") {
+      throw error;
+    }
+    return cached?.bearerToken === bearerToken ? cached.models : [];
   }
-
-  const body = await readMantleModelDiscoveryJson(response);
-  const models = body.data
-    .filter((model) => model.id?.trim())
-    .map((model) => ({
-      id: model.id,
-      name: model.id,
-      reasoning: inferReasoningSupport(model.id),
-      input: ["text" as const],
-      cost: DEFAULT_COST,
-      contextWindow: DEFAULT_CONTEXT_WINDOW,
-      maxTokens: DEFAULT_MAX_TOKENS,
-    }))
-    .toSorted((left, right) => left.id.localeCompare(right.id));
-
-  discoveryCache.set(region, { bearerToken, models, fetchedAt: now() });
-  return models;
 }
 
 // ---------------------------------------------------------------------------
@@ -389,9 +398,10 @@ export async function discoverMantleModels(params: {
  * - Region from AWS_REGION / AWS_DEFAULT_REGION / default us-east-1
  * - Models discovered from `/v1/models`
  */
-/** Resolve implicit Mantle provider config from env, IAM token support, and discovery. */
+/** Public resolution keeps advisory null results; strict catalog callers retain acquired empties. */
 export async function resolveImplicitMantleProvider(params: {
   env?: NodeJS.ProcessEnv;
+  discoveryMode?: "strict";
   pluginConfig?: { discovery?: MantleDiscoveryConfig };
   fetchFn?: typeof fetch;
   tokenProviderFactory?: MantleBearerTokenProviderFactory;
@@ -423,8 +433,12 @@ export async function resolveImplicitMantleProvider(params: {
   const models = await discoverMantleModels({
     region,
     bearerToken,
+    discoveryMode: params.discoveryMode,
     fetchFn: params.fetchFn,
   });
+  if (models.length === 0 && params.discoveryMode !== "strict") {
+    return null;
+  }
 
   log.debug?.("Mantle provider resolved", { region, modelCount: models.length });
 
