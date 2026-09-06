@@ -1,6 +1,28 @@
 // Exposes the Node pairing surface used by gateway and CLI flows.
 import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 
+export type NodeApprovalSurface = {
+  caps: string[];
+  commands: string[];
+  permissions?: Record<string, boolean>;
+};
+
+export function intersectNodePermissionSurface(params: {
+  approved: Record<string, boolean> | undefined;
+  declared: Record<string, boolean> | undefined;
+}): Record<string, boolean> | undefined {
+  const entries: Array<[string, boolean]> = [];
+  for (const [key, declaredValue] of Object.entries(params.declared ?? {})) {
+    const approvedValue = params.approved?.[key];
+    if (!declaredValue) {
+      entries.push([key, false]);
+    } else if (approvedValue !== undefined) {
+      entries.push([key, approvedValue]);
+    }
+  }
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
 /** Normalize capability/command lists for node approval-surface comparison. */
 export function normalizeNodeApprovalSurfaceList(value: readonly string[] | undefined): string[] {
   return normalizeArrayBackedTrimmedStringList(value) ?? [];

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Adds richer mobile chat controls, remote desktop viewing, live subagent progress, session organization, easier agent switching, and reply notifications.
+- Improves queued-message and offline-history recovery, shared attachments, Talk playback, photo orientation, notification consent, and Gateway proxy connections.
+
+## 2026.8.11
+
+- Choose one of eight session colors from existing session menus, with matching sidebar stripes and chat title dots; select Default to clear a color.
+
 ## 2026.8.10
 
 - Chat keeps the keyboard available when you tap the message composer and preserves a stable sidebar layout while typing.

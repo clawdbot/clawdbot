@@ -60,10 +60,12 @@ type OpenExternalUrlSafeOptions = ResolveSafeExternalUrlOptions & {
   baseHref?: string;
 };
 
-export function reserveExternalWindowForDeferredNavigation(): WindowProxy | null {
+export function reserveExternalWindowForDeferredNavigation(
+  opts: { popup?: boolean } = {},
+): WindowProxy | null {
   // Reserve while user activation is live, then detach the opener before any
   // caller-controlled URL can be loaded into the new browsing context.
-  const opened = window.open("about:blank", "_blank");
+  const opened = window.open("about:blank", "_blank", opts.popup ? "popup" : undefined);
   if (opened) {
     opened.opener = null;
   }

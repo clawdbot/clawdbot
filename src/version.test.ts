@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSuiteTempRootTracker } from "./test-helpers/temp-dir.js";
 import {
   VERSION,
@@ -94,6 +94,23 @@ describe("version resolution", () => {
       await writeJsonFixture(root, "build-info.json", { buildId: "x".repeat(97) });
       expect(readBuildIdFromBuildInfoForModuleUrl(moduleUrl)).toBeNull();
     });
+  });
+
+  it("captures the runtime commit from startup provenance once", async () => {
+    let startupCommit = "aaaaaaa";
+    vi.doMock("./infra/git-commit.js", () => ({
+      resolveLoadedCommitHash: () => startupCommit,
+    }));
+    vi.resetModules();
+    try {
+      const runtimeVersion = await import("./version.js");
+      expect(runtimeVersion.resolveRuntimeServiceCommit()).toBe("aaaaaaa");
+      startupCommit = "bbbbbbb";
+      expect(runtimeVersion.resolveRuntimeServiceCommit()).toBe("aaaaaaa");
+    } finally {
+      vi.doUnmock("./infra/git-commit.js");
+      vi.resetModules();
+    }
   });
 
   it("returns null when no version metadata exists", async () => {

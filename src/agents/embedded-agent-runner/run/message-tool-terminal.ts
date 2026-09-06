@@ -1,14 +1,26 @@
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import { readEmbeddedMessageDeliveryFact } from "../../embedded-agent-message-delivery.js";
-/**
- * Detects message-tool-only sends that delivered a visible source reply.
- */
 import {
   isDeliveredMessageToolOnlySourceReplyResult,
   resolveMessageToolSourceReplyFinal,
 } from "../../embedded-agent-message-tool-source-reply.js";
+import {
+  extractMessagingToolSend,
+  extractMessagingToolSendResult,
+  isDeliveredMessagingToolSendToCurrentSource,
+} from "../../embedded-agent-messaging-extraction.js";
 import type { AfterToolCallContext, AfterToolCallResult, Agent } from "../../runtime/index.js";
 import { readToolResultDetails } from "../../tool-result-error.js";
+
+type MessageToolTerminalRoute = Omit<
+  Parameters<typeof isDeliveredMessagingToolSendToCurrentSource>[0],
+  "send" | "deliveredPayload"
+> & {
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  currentMessageId?: string | number;
+  replyToMode?: "off" | "first" | "all" | "batched";
+  hasRepliedRef?: { value: boolean };
+};
 
 function argsRecordForToolCall(context: AfterToolCallContext): Record<string, unknown> {
   if (context.args && typeof context.args === "object" && !Array.isArray(context.args)) {
@@ -20,27 +32,56 @@ function argsRecordForToolCall(context: AfterToolCallContext): Record<string, un
     : {};
 }
 
-/**
- * Determines whether a `message.send` tool call delivered a visible source reply
- * in message-tool-only delivery mode. Only implicit-route, non-dry-run,
- * delivered sends qualify; explicit routes and errors are not source replies.
- */
-function isDeliveredMessageToolOnlySourceReply(params: {
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  context: AfterToolCallContext;
-  hookResult?: AfterToolCallResult;
-}): boolean {
+/** Detects message-tool-only sends that delivered a visible current-source reply. */
+function isDeliveredMessageToolOnlySourceReply(
+  params: MessageToolTerminalRoute & {
+    context: AfterToolCallContext;
+    hookResult?: AfterToolCallResult;
+  },
+): boolean {
+  const toolName = params.context.toolCall.name;
+  const toolArgs = argsRecordForToolCall(params.context);
+  const extractionArgs =
+    toolName === "message" &&
+    params.currentProvider &&
+    typeof toolArgs.provider !== "string" &&
+    typeof toolArgs.channel !== "string"
+      ? { ...toolArgs, provider: params.currentProvider }
+      : toolArgs;
+  const pendingSend = extractMessagingToolSend(toolName, extractionArgs, {
+    config: params.config,
+    currentChannelId: params.currentChannelId,
+    currentMessagingTarget: params.currentMessagingTarget,
+    currentThreadId: params.currentThreadId,
+    currentMessageId: params.currentMessageId,
+    replyToMode: params.replyToMode,
+    hasRepliedRef: params.hasRepliedRef,
+  });
+  const confirmedSend =
+    pendingSend && extractMessagingToolSendResult(pendingSend, params.context.result);
   const deliveryFact = readEmbeddedMessageDeliveryFact(
     readToolResultDetails(params.context.result)?.messageDelivery,
   );
   const isError = params.hookResult?.isError ?? params.context.isError;
   return isDeliveredMessageToolOnlySourceReplyResult({
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-    toolName: params.context.toolCall.name,
-    args: argsRecordForToolCall(params.context),
-    result: params.context.result,
-    hookResult: params.hookResult,
+    toolName,
+    args: toolArgs,
+    result: params.hookResult ?? params.context.result,
+    // Middleware may retain a delivery summary while redacting its source receipt.
+    hookResult: params.context.result,
     isError,
+    allowExplicitSourceRoute: isDeliveredMessagingToolSendToCurrentSource({
+      send: confirmedSend,
+      config: params.config,
+      currentProvider: params.currentProvider,
+      currentAccountId: params.currentAccountId,
+      currentChannelId: params.currentChannelId,
+      currentMessagingTarget: params.currentMessagingTarget,
+      currentThreadId: params.currentThreadId,
+      sessionKey: params.sessionKey,
+      deliveredPayload: params.context.result,
+    }),
     ...(deliveryFact
       ? {
           deliveryConfirmed:
@@ -50,12 +91,12 @@ function isDeliveredMessageToolOnlySourceReply(params: {
   });
 }
 
-/** Installs an after-tool hook that records source reply delivery evidence. */
-export function installMessageToolOnlyTerminalHook(params: {
-  agent: Agent;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  onDeliveredSourceReply?: () => void;
-}): void {
+export function installMessageToolOnlyTerminalHook(
+  params: MessageToolTerminalRoute & {
+    agent: Agent;
+    onDeliveredSourceReply?: () => void;
+  },
+): void {
   if (params.sourceReplyDeliveryMode !== "message_tool_only") {
     return;
   }
@@ -64,7 +105,7 @@ export function installMessageToolOnlyTerminalHook(params: {
     const hookResult = await previousAfterToolCall?.(context, signal);
     if (
       isDeliveredMessageToolOnlySourceReply({
-        sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+        ...params,
         context,
         hookResult,
       })

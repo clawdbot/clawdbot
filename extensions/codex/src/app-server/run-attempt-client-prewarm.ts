@@ -36,6 +36,7 @@ export function prewarmCodexAttemptClient(params: {
   // The real startup later leases this same keyed client. Beginning the
   // non-leased acquire now removes process/auth initialization from the cold path.
   void getSharedCodexAppServerClient({
+    assertCurrent: connection.assertCurrent,
     startOptions: appServer.start,
     pluginConfig,
     ...(startupPreparedAuth

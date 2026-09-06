@@ -11,8 +11,9 @@ import type { ChannelType, Client, User } from "../internal/discord.js";
 import type { DiscordChannelConfigResolved, DiscordGuildEntryResolved } from "./allow-list.js";
 import type { DiscordIngressLifecycle } from "./ingress.js";
 import type { DiscordAvatarResolver } from "./message-avatar.js";
+import type { DiscordChannelInfo } from "./message-channel-info.js";
 import type { DiscordHistoryEntry } from "./message-handler.history.js";
-import type { DiscordChannelInfo, DiscordMediaInfo } from "./message-utils.js";
+import type { DiscordMediaInfo } from "./message-media.js";
 import type { DiscordThreadBindingLookup } from "./reply-delivery.js";
 import type { DiscordSenderIdentity } from "./sender-identity.js";
 import type { DiscordThreadChannel } from "./threading.js";
@@ -130,6 +131,7 @@ export type DiscordMessagePreflightParams = DiscordMessagePreflightSharedFields 
   threadBindings: DiscordThreadBindingLookup;
   discordRestFetch?: typeof fetch;
   avatarResolver?: DiscordAvatarResolver;
+  precedingMessages?: readonly DiscordMessageEvent["message"][];
   data: DiscordMessageEvent;
   client: Client;
 };

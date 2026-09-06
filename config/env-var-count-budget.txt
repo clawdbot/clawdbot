@@ -2,4 +2,5 @@
 # Ratchet: lower this number when cleanup removes names; never raise it without owner approval.
 # Worker bundle installation no longer injects OPENCLAW_STATE_DIR into a remote npm process.
 # The internal Node-version check no longer contributes a false OPENCLAW_* name.
-501
+# The next-turn runtime-context preface constant no longer exists as an OPENCLAW_* name.
+498

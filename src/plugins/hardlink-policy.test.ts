@@ -34,4 +34,14 @@ describe("plugin hardlink policy", () => {
       }),
     ).toBe(true);
   });
+
+  it("allows hardlinked immutable Nix-store plugin files in Nix mode", () => {
+    expect(
+      shouldRejectHardlinkedPluginFiles({
+        origin: "config",
+        rootDir: "/nix/store/openclaw-plugin",
+        env: nixEnv,
+      }),
+    ).toBe(false);
+  });
 });

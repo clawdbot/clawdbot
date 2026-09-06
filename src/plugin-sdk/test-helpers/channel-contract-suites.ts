@@ -66,23 +66,12 @@ type ChannelActionsContractCase = {
   name: string;
   cfg: OpenClawConfig;
   expectedActions: readonly ChannelMessageActionName[];
-  expectedCanonicalOutboundActions?: readonly ChannelMessageActionName[];
   expectedCapabilities?: readonly ChannelMessageCapability[];
   beforeTest?: () => void;
 };
 
-function hasCanonicalOutboundAction(
-  plugin: Pick<ChannelPlugin, "outbound">,
-  action: ChannelMessageActionName,
-) {
-  if (action !== "poll") {
-    return false;
-  }
-  return Boolean(plugin.outbound?.sendPoll);
-}
-
 export function installChannelActionsContractSuite(params: {
-  plugin: Pick<ChannelPlugin, "id" | "actions" | "outbound">;
+  plugin: Pick<ChannelPlugin, "id" | "actions">;
   cases: readonly ChannelActionsContractCase[];
   unsupportedAction?: ChannelMessageActionName;
 }) {
@@ -107,29 +96,14 @@ export function installChannelActionsContractSuite(params: {
       expect(sortStrings(actions)).toEqual(sortStrings(testCase.expectedActions));
       expect(sortStrings(capabilities)).toEqual(sortStrings(testCase.expectedCapabilities ?? []));
 
-      const canonicalOutboundActions = new Set(testCase.expectedCanonicalOutboundActions ?? []);
-      for (const action of canonicalOutboundActions) {
-        expect(actions).toContain(action);
-        expect(hasCanonicalOutboundAction(params.plugin, action)).toBe(true);
-        expect(params.plugin.actions?.supportsAction).toBeTypeOf("function");
-        expect(params.plugin.actions?.supportsAction?.({ action })).toBe(false);
-      }
-
-      if (params.plugin.actions?.supportsAction) {
-        for (const action of testCase.expectedActions) {
-          if (canonicalOutboundActions.has(action)) {
-            continue;
-          }
-          expect(params.plugin.actions.supportsAction({ action })).toBe(true);
-        }
-        if (
-          params.unsupportedAction &&
-          !testCase.expectedActions.includes(params.unsupportedAction)
-        ) {
-          expect(params.plugin.actions.supportsAction({ action: params.unsupportedAction })).toBe(
-            false,
-          );
-        }
+      if (
+        params.plugin.actions?.supportsAction &&
+        params.unsupportedAction &&
+        !testCase.expectedActions.includes(params.unsupportedAction)
+      ) {
+        expect(params.plugin.actions.supportsAction({ action: params.unsupportedAction })).toBe(
+          false,
+        );
       }
     });
   }

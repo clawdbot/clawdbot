@@ -1,8 +1,8 @@
 // Signal integration coverage for durable ingress after a partially visible final reply.
 import { buildExecApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
+import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
-import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   createTestRegistry,
   resetPluginRuntimeStateForTest,
@@ -18,13 +18,20 @@ import { signalPlugin } from "../channel.js";
 import { maybeResolveSignalQuestionReaction } from "../question-reactions.js";
 import type { SignalIngressLifecycle } from "../signal-ingress.js";
 
-const { getReplyFromConfigMock, resolveQuestionReactionMock, sendMessageSignalMock } = vi.hoisted(
-  () => ({
-    getReplyFromConfigMock: vi.fn(),
-    resolveQuestionReactionMock: vi.fn(),
-    sendMessageSignalMock: vi.fn(),
-  }),
-);
+const {
+  getReplyFromConfigMock,
+  registerQuestionDeliveryMock,
+  resolveQuestionReactionMock,
+  sendMessageSignalMock,
+} = vi.hoisted(() => ({
+  getReplyFromConfigMock: vi.fn(),
+  registerQuestionDeliveryMock:
+    vi.fn<
+      typeof import("openclaw/plugin-sdk/question-gateway-runtime").questionGatewayRuntime.registerChannelDelivery
+    >(),
+  resolveQuestionReactionMock: vi.fn(),
+  sendMessageSignalMock: vi.fn(),
+}));
 
 vi.mock("openclaw/plugin-sdk/question-gateway-runtime", async (importOriginal) => {
   const actual =
@@ -33,6 +40,8 @@ vi.mock("openclaw/plugin-sdk/question-gateway-runtime", async (importOriginal) =
     ...actual,
     questionGatewayRuntime: {
       ...actual.questionGatewayRuntime,
+      // The fixture supplies a pending host question alongside its answer endpoint.
+      registerChannelDelivery: registerQuestionDeliveryMock,
       resolveReaction: resolveQuestionReactionMock,
     },
   };
@@ -104,6 +113,7 @@ describe("Signal partial final delivery ingress boundary", () => {
     );
     clearSignalApprovalReactionTargetsForTest();
     getReplyFromConfigMock.mockReset();
+    registerQuestionDeliveryMock.mockReset();
     resolveQuestionReactionMock.mockReset().mockResolvedValue({
       status: "answered",
       questionId: "ask-partial",
@@ -288,6 +298,11 @@ describe("Signal partial final delivery ingress boundary", () => {
 
     expect(sendMessageSignalMock).toHaveBeenCalledOnce();
     expect(await queue.listPending({ limit: "all" })).toEqual([]);
+    expect(registerQuestionDeliveryMock).toHaveBeenCalledExactlyOnceWith({
+      questionId,
+      deliveryId: "signal-reaction:default:+15550001111:1700000006000",
+      finalize: expect.any(Function),
+    });
     await expect(
       maybeResolveSignalQuestionReaction({
         cfg,

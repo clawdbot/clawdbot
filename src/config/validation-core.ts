@@ -1,6 +1,5 @@
 import path from "node:path";
 import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import {
   listAgentEntries,
@@ -10,6 +9,8 @@ import {
   resolveAmbientOwnerAgentId,
   tryResolveAmbientOwnerAgentId,
 } from "../agents/agent-scope.js";
+import { resolveSandboxDockerEnv, resolveSandboxScope } from "../agents/sandbox/config-contract.js";
+import { getContainerEnvFileEntryIssue } from "../infra/container-env-file.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   hasAvatarUriScheme,
@@ -31,11 +32,7 @@ import {
 } from "./legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { materializeRuntimeConfig } from "./materialize.js";
-import {
-  isModelPolicyCompatSelector,
-  isValidExactModelPolicyRef,
-  parseModelPolicyWildcardRef,
-} from "./model-policy-ref.js";
+import { createModelPolicyRefValidator } from "./model-policy-ref.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 import { collectRawBundledChannelConfigIssues } from "./validation-channel-rules.js";
 import {
@@ -256,31 +253,13 @@ function validateGatewayTailscaleAuth(config: OpenClawConfig): ConfigValidationI
 function collectModelPolicyAllowIssues(config: OpenClawConfig): ConfigValidationIssue[] {
   const issues: ConfigValidationIssue[] = [];
   const defaultModels = config.agents?.defaults?.models;
-  const collectAliases = (...modelMaps: Array<typeof defaultModels | undefined>): Set<string> => {
-    const aliases = new Set<string>();
-    for (const models of modelMaps) {
-      for (const entry of Object.values(models ?? {})) {
-        const alias = normalizeLowercaseStringOrEmpty(entry?.alias);
-        if (alias) {
-          aliases.add(alias);
-        }
-      }
-    }
-    return aliases;
-  };
   const validateRefs = (
     refs: readonly string[] | undefined,
     configPath: string,
-    aliases: Set<string>,
+    isValidRef: (raw: string) => boolean,
   ) => {
     for (const [index, raw] of (refs ?? []).entries()) {
-      const trimmed = raw.trim();
-      if (
-        aliases.has(normalizeLowercaseStringOrEmpty(trimmed)) ||
-        isModelPolicyCompatSelector(trimmed) ||
-        isValidExactModelPolicyRef(trimmed) ||
-        parseModelPolicyWildcardRef(trimmed)
-      ) {
+      if (isValidRef(raw)) {
         continue;
       }
       issues.push({
@@ -292,11 +271,10 @@ function collectModelPolicyAllowIssues(config: OpenClawConfig): ConfigValidation
     }
   };
 
-  const defaultAliases = collectAliases(defaultModels);
   validateRefs(
     config.agents?.defaults?.modelPolicy?.allow,
     "agents.defaults.modelPolicy.allow",
-    defaultAliases,
+    createModelPolicyRefValidator(defaultModels),
   );
   for (const { entry: agent, source } of listAgentEntriesWithSource(config)) {
     const pathPrefix =
@@ -304,8 +282,81 @@ function collectModelPolicyAllowIssues(config: OpenClawConfig): ConfigValidation
     validateRefs(
       agent.modelPolicy?.allow,
       `${pathPrefix}.modelPolicy.allow`,
-      collectAliases(defaultModels, agent.models),
+      createModelPolicyRefValidator(defaultModels, agent.models),
     );
+  }
+  return issues;
+}
+
+function collectSandboxContainerEnvIssues(
+  config: OpenClawConfig,
+  sourceRaw?: unknown,
+): ConfigValidationIssue[] {
+  const agents = listAgentEntriesWithSource(config);
+  if (
+    !config.agents?.defaults?.sandbox?.docker?.env &&
+    !agents.some(({ entry }) => entry.sandbox?.docker?.env)
+  ) {
+    return [];
+  }
+  const issues: ConfigValidationIssue[] = [];
+  const seen = new Set<string>();
+  const authoredAgents = isRecord(sourceRaw) ? listAgentEntriesWithSource(sourceRaw) : agents;
+  const authoredById = new Map(authoredAgents.map((agent) => [agent.entry.id, agent]));
+
+  const defaultSandbox = config.agents?.defaults?.sandbox;
+  const effectiveAgents = agents.length > 0 ? agents : [undefined];
+  for (const agent of effectiveAgents) {
+    const agentSandbox = agent?.entry.sandbox;
+    const scope = resolveSandboxScope({ scope: agentSandbox?.scope ?? defaultSandbox?.scope });
+    const backend = agentSandbox?.backend?.trim() || defaultSandbox?.backend?.trim() || "docker";
+    if (backend !== "docker" && backend !== "podman") {
+      continue;
+    }
+    const env = resolveSandboxDockerEnv({
+      scope,
+      globalEnv: defaultSandbox?.docker?.env,
+      agentEnv: agentSandbox?.docker?.env,
+    });
+    const authoredAgent = agent ? (authoredById.get(agent.entry.id) ?? agent) : undefined;
+    for (const [key, value] of Object.entries(env)) {
+      const reason = getContainerEnvFileEntryIssue(key, value);
+      if (!reason) {
+        continue;
+      }
+      const agentOwnsValue =
+        scope !== "shared" &&
+        authoredAgent !== undefined &&
+        Object.hasOwn(authoredAgent.entry.sandbox?.docker?.env ?? {}, key);
+      const pathSegments =
+        agentOwnsValue && authoredAgent
+          ? authoredAgent.source.kind === "entries"
+            ? ["agents", "entries", authoredAgent.source.key, "sandbox", "docker", "env", key]
+            : ["agents", "list", authoredAgent.source.index, "sandbox", "docker", "env", key]
+          : ["agents", "defaults", "sandbox", "docker", "env", key];
+      const issuePath = pathSegments.join(".");
+      const issueIdentity = JSON.stringify([issuePath, reason]);
+      if (seen.has(issueIdentity)) {
+        continue;
+      }
+      seen.add(issueIdentity);
+      const backendName = backend === "podman" ? "Podman" : "Docker";
+      const remediation =
+        reason === "invalid-name"
+          ? `Rename key ${JSON.stringify(key)} to use letters, digits, and underscores without a leading digit.`
+          : `Use a single-line, non-NUL value for key ${JSON.stringify(key)}, or deliver multiline material through a mounted file or custom image.`;
+      issues.push(
+        withConfigIssuePath(
+          {
+            path: issuePath,
+            message:
+              `${backendName} sandbox backend requires portable environment names and single-line, non-NUL values because the secure env-file transport is line-delimited. ` +
+              `${remediation} SSH/OpenShell backends may keep multiline values. Run openclaw doctor to report the invalid path; manual remediation is required.`,
+          },
+          pathSegments,
+        ),
+      );
+    }
   }
   return issues;
 }
@@ -322,6 +373,7 @@ export function validateConfigObjectRaw(
     validateBundledChannels?: boolean;
     preservedLegacyRootKeys?: readonly string[];
     env?: NodeJS.ProcessEnv;
+    homedir?: () => string;
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
   const legacyDefaultAgentId = isRecord(raw)
@@ -387,7 +439,14 @@ export function validateConfigObjectRaw(
   if (policyIssues.length > 0) {
     return { ok: false, issues: policyIssues };
   }
-  const duplicates = findDuplicateAgentDirs(validatedConfig);
+  const sandboxContainerEnvIssues = collectSandboxContainerEnvIssues(
+    validatedConfig,
+    opts?.sourceRaw,
+  );
+  if (sandboxContainerEnvIssues.length > 0) {
+    return { ok: false, issues: sandboxContainerEnvIssues };
+  }
+  const duplicates = findDuplicateAgentDirs(validatedConfig, opts);
   if (duplicates.length > 0) {
     return {
       ok: false,
@@ -427,7 +486,7 @@ export function validateConfigObject(
   return {
     ok: true,
     config: attachAgentListProjection(
-      materializeRuntimeConfig(result.config, "snapshot", {
+      materializeRuntimeConfig(result.config, {
         manifestRegistry: opts?.manifestRegistry,
       }),
     ),

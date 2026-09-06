@@ -13,6 +13,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { SessionWorkStartInvalidatedError } from "./lifecycle.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
+import { readSessionEntryInstanceId } from "./session-accessor.sqlite-entry-identity.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 
 type SuggestionDatabase = Pick<OpenClawAgentKyselyDatabase, "session_suggestions">;
@@ -68,27 +69,7 @@ function assertSessionInstance(
   if (expectedSessionId === undefined) {
     return;
   }
-  const row =
-    database.db /* sqlite-allow-raw: sync session-instance check inside the suggestion write transaction */
-      .prepare("SELECT current_session_id, entry_json FROM session_nodes WHERE session_key = ?")
-      .get(sessionKey) as { current_session_id?: string; entry_json?: string } | undefined;
-  let entrySessionId: string | undefined;
-  try {
-    const entry = row?.entry_json ? (JSON.parse(row.entry_json) as unknown) : undefined;
-    const candidate =
-      entry && typeof entry === "object" && !Array.isArray(entry)
-        ? (entry as { sessionId?: unknown }).sessionId
-        : undefined;
-    entrySessionId = typeof candidate === "string" ? candidate : undefined;
-  } catch {
-    entrySessionId = undefined;
-  }
-  if (
-    !row ||
-    entrySessionId === undefined ||
-    row.current_session_id !== entrySessionId ||
-    entrySessionId !== expectedSessionId
-  ) {
+  if (readSessionEntryInstanceId(database, sessionKey) !== expectedSessionId) {
     throw new SessionWorkStartInvalidatedError("session changed before suggestion mutation");
   }
 }
@@ -106,8 +87,11 @@ function pruneResolvedSessionSuggestions(
       .where("session_key", "=", sessionKey)
       .where("state", "!=", "pending")
       .orderBy("created_at", "desc")
-      .orderBy("id", "desc"),
-  ).rows.slice(MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS);
+      .orderBy("id", "desc")
+      // SQLite requires LIMIT for OFFSET; -1 preserves the unbounded deletion tail.
+      .limit((eb) => eb.lit(-1))
+      .offset((eb) => eb.lit(MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS)),
+  ).rows;
   if (resolvedRows.length === 0) {
     return;
   }
@@ -152,21 +136,27 @@ export function addSessionSuggestion(
     assertSessionInstance(database, sessionKey, params.expectedSessionId);
     const db = suggestionDb(database);
     pruneResolvedSessionSuggestions(database, sessionKey);
-    const pendingRows = executeSqliteQuerySync(
+    // Compare decoded IDs in JS; binding the author here changes malformed-ID
+    // matching and can move binding errors ahead of the session-cap error.
+    const pendingCounts = executeSqliteQuerySync(
       database.db,
       db
         .selectFrom("session_suggestions")
-        .select("author_id")
+        .select((eb) => ["author_id", eb.fn.countAll<number>().as("count")])
         .where("session_key", "=", sessionKey)
-        .where("state", "=", "pending"),
-    ).rows;
-    if (pendingRows.length >= MAX_PENDING_SESSION_SUGGESTIONS_PER_SESSION) {
+        .where("state", "=", "pending")
+        .groupBy("author_id"),
+    ).rows.reduce(
+      (counts, row) => ({
+        session: counts.session + row.count,
+        author: counts.author + (row.author_id === suggestion.authorId ? row.count : 0),
+      }),
+      { session: 0, author: 0 },
+    );
+    if (pendingCounts.session >= MAX_PENDING_SESSION_SUGGESTIONS_PER_SESSION) {
       throw new Error("session pending suggestion limit reached");
     }
-    if (
-      pendingRows.filter((row) => row.author_id === suggestion.authorId).length >=
-      MAX_PENDING_SESSION_SUGGESTIONS_PER_AUTHOR
-    ) {
+    if (pendingCounts.author >= MAX_PENDING_SESSION_SUGGESTIONS_PER_AUTHOR) {
       throw new Error("author pending suggestion limit reached");
     }
     executeSqliteQuerySync(

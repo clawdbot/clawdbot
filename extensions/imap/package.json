@@ -1,0 +1,21 @@
+{
+  "name": "@openclaw/imap",
+  "version": "2026.9.2",
+  "private": true,
+  "description": "OpenClaw inbound IMAP email trigger plugin",
+  "type": "module",
+  "dependencies": {
+    "imapflow": "1.7.6",
+    "mailauth": "5.0.2",
+    "mailparser": "3.9.15"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "@types/mailparser": "3.4.6"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

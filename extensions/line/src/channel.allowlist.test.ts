@@ -6,12 +6,6 @@ import { linePlugin } from "./channel.js";
 const allowlist = linePlugin.allowlist;
 
 describe("line allowlist adapter", () => {
-  it("exposes the config-edit contract", () => {
-    expect(allowlist?.applyConfigEdit).toBeTypeOf("function");
-    expect(allowlist?.readConfig).toBeTypeOf("function");
-    expect(allowlist?.supportsScope).toBeTypeOf("function");
-  });
-
   it.each([
     { scope: "dm", expected: true },
     { scope: "group", expected: true },

@@ -179,7 +179,9 @@ describe("AppSidebar catalog terminal ownership", () => {
       const catalog = sidebar.querySelector('[data-session-section="catalog:codex"]');
       expect(catalog?.querySelector('[data-session-key="agent:jarvis:adopted-codex"]')).toBeNull();
       expect(
-        catalog?.querySelector('[data-session-key="catalog:codex:gateway%3Alocal:thread-1"]'),
+        catalog?.querySelector(
+          '[data-session-key="agent:main:catalog:codex:gateway%3Alocal:thread-1"]',
+        ),
       ).not.toBeNull();
     } finally {
       vi.useRealTimers();

@@ -245,6 +245,27 @@ describe("legacy managed outgoing image migration", () => {
     expect(fs.lstatSync(malformedPath).isSymbolicLink()).toBe(true);
   });
 
+  it.each([
+    ["root before original", true, '""'],
+    ["original only", false, 'original.""'],
+  ])("rejects empty unexpected fields before mutation: %s", async (_label, root, field) => {
+    const legacy = await writeLegacyRecord({ stateDir });
+    const original = { ...legacy.record.original, "": 1, later: 2 };
+    const record = root
+      ? { ...legacy.record, "": 1, later: 2, original }
+      : { ...legacy.record, original };
+    await fsp.writeFile(legacy.sourcePath, JSON.stringify(record));
+    const result = migrate(stateDir);
+    expect(result.warnings).toEqual([
+      `Failed reading legacy managed outgoing image state: Error: legacy managed image record has unexpected field ${field}`,
+    ]);
+    await expect(fsp.access(legacy.originalPath)).resolves.toBeUndefined();
+    expect(fs.readdirSync(path.dirname(legacy.sourcePath))).toEqual([
+      path.basename(legacy.sourcePath),
+    ]);
+    expect(readManagedImageRecord(legacy.record.attachmentId, stateDir)).toBeNull();
+  });
+
   it("keeps JSON when the source changes before cleanup", async () => {
     const legacy = await writeLegacyRecord({ stateDir });
 

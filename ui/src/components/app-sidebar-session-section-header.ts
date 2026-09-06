@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { startHoverMarqueeFromEvent, stopHoverMarqueeFromEvent } from "../lib/hover-marquee.ts";
 import { writeSidebarSectionDragData } from "../lib/sessions/drag.ts";
 
 export function renderSidebarSessionSectionHeader(params: {
@@ -13,16 +14,16 @@ export function renderSidebarSessionSectionHeader(params: {
   const draggable = params.draggable !== false && !params.disabledReason;
   return html`
     <div
-      class="sidebar-recent-sessions__head ${draggable
-        ? "sidebar-recent-sessions__head--draggable"
-        : ""}"
+      class="sidebar-recent-sessions__head ${
+        draggable ? "sidebar-recent-sessions__head--draggable" : ""
+      }"
       draggable=${draggable ? "true" : "false"}
       title=${params.disabledReason ?? nothing}
       @mousedown=${(event: MouseEvent) => {
         const header = event.currentTarget as HTMLElement;
         header.toggleAttribute(
           "data-section-drag-blocked",
-          Boolean((event.target as HTMLElement).closest("button")),
+          Boolean((event.target as HTMLElement).closest("button, a")),
         );
       }}
       @mouseup=${(event: MouseEvent) => {
@@ -34,11 +35,11 @@ export function renderSidebarSessionSectionHeader(params: {
           return;
         }
         const header = event.currentTarget as HTMLElement;
-        const startedFromButton =
-          Boolean((event.target as HTMLElement).closest("button")) ||
+        const startedFromControl =
+          Boolean((event.target as HTMLElement).closest("button, a")) ||
           header.hasAttribute("data-section-drag-blocked");
         header.removeAttribute("data-section-drag-blocked");
-        if (startedFromButton) {
+        if (startedFromControl) {
           event.preventDefault();
           return;
         }
@@ -51,6 +52,8 @@ export function renderSidebarSessionSectionHeader(params: {
         (event.currentTarget as HTMLElement).removeAttribute("data-section-drag-blocked");
         params.onFinishDrag();
       }}
+      @mouseenter=${startHoverMarqueeFromEvent}
+      @mouseleave=${stopHoverMarqueeFromEvent}
       @contextmenu=${params.onContextMenu ?? nothing}
     >
       <span class="sidebar-session-group-drag-handle" aria-hidden="true"></span>

@@ -254,6 +254,17 @@ is always emitted at `info` level regardless of
 `OPENCLAW_DEBUG_MODEL_TRANSPORT`, so basic model transport hygiene is visible
 without debug flags.
 
+`[anthropic] replayed thinking dropped: N block(s)` is a warning when Anthropic
+reports dropping invalidated thinking from replay. It includes the mismatch
+reasons and up to five affected message paths, not the thinking content. No
+debug flag is required.
+
+`[anthropic] server-side context edit: cleared N tool results (M input tokens)`
+is an info-level line when Anthropic reports applying server-side tool-result
+clearing. It contains counts only, without tool arguments or result content, and
+requires no debug flag. See [Session pruning](/concepts/session-pruning#direct-anthropic-api-key-requests)
+for the routes and thresholds that enable clearing.
+
 ### Trace correlation
 
 File logs are JSONL. When a log call carries a valid diagnostic trace context,
@@ -272,6 +283,36 @@ Talk lifecycle log records also flow to diagnostics-otel log export when
 OpenTelemetry log export is enabled, using the same bounded attributes as file
 logs. Configure `diagnostics.otel.logsExporter` to choose OTLP, stdout JSONL, or
 both sinks.
+
+### Slow reply preparation
+
+When a reply spends a long time preparing, inspect the normal Gateway logs:
+
+```bash
+openclaw logs --follow --plain | rg 'timings|agent turn milestone|liveness warning'
+```
+
+Reply resolver, dispatch, and agent-turn preparation milestones include stage
+durations, elapsed time, and available run/session identifiers. Without profiler
+flags, they warn at 10 seconds elapsed or 5 seconds in one preparation stage. Codex preparation also
+logs each completed slow stage immediately, including failures, and emits a
+`native-turn-handoff` summary before submitting the native turn. Timing records
+contain stage names and identifiers, not prompts or tool arguments.
+
+Use the first `turn_accepted`, `model_call_started`, `tool_execution_started`, and
+`assistant_output_started` milestones to separate startup from later activity.
+Delayed first assistant/tool activity is logged once at `info` by default,
+because provider and tool latency is not itself a preparation warning.
+These are runtime observations: native turn acceptance does not prove that a
+provider request has started. Whole-turn summaries remain profiler-only because
+their totals include model and tool time. Compare the individual preparation
+stages before attributing a long turn to Gateway startup. A simultaneous
+`liveness warning` with high event-loop delay
+can explain delays across several sessions.
+
+For shorter delays, [profiler flags](/diagnostics/flags#profiler-flags) lower the
+warning thresholds. They are not required to diagnose a multi-second startup
+stall.
 
 ### Model call size and timing
 
@@ -310,10 +351,26 @@ exec output, and patch summaries):
 - Sensitive-value redaction is always enabled.
 - `logging.redactPatterns`: list of regex strings that replaces the default set for log/transcript output. For Control UI tool payloads, custom patterns apply on top of the built-in defaults, so adding a pattern never weakens redaction of values already caught by the defaults.
 
-File logs and session transcripts stay JSONL, but matching secret values are
-masked before the line or message is written to disk. Redaction is best-effort:
+File logs use JSONL; active session transcripts live in the
+[per-agent SQLite database](/reference/database-schemas#database-layout). Matching
+secret values are masked before the line or message is persisted. Redaction is best-effort:
 it applies to text-bearing message content and log strings, not every
 identifier or binary payload field.
+
+Transcript redaction does not replace the live arguments used to execute tools.
+Canonical assistant tool-call IDs and matching tool-result IDs remain unchanged
+so stored history can correlate with live tool events. This exemption applies
+only to protocol metadata; the same values in arguments, results, or nested
+payloads still pass through redaction.
+
+Model-visible tool-result text uses narrower assignment matching so source code
+remains intact. Registered secrets and explicit credential forms, including
+structured fields, authorization headers, URL credentials, and known token
+formats, remain masked. Direct reads of `.env` files apply
+broader assignment masking before their content becomes a tool result. Other
+config and source reads preserve opaque values; register actual secrets instead
+of relying on key-name matching. Bare source assignments such as
+`token = timeObserverToken` remain unchanged.
 
 The built-in defaults cover common API credentials and payment-credential field
 names such as card number, CVC/CVV, shared payment token, and payment credential

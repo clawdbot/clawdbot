@@ -1,6 +1,9 @@
 import { html } from "lit";
 import { t } from "../../i18n/index.ts";
+import { registerDebugEnglish } from "../../i18n/locales/en-debug.ts";
 import type { CommandLaneDiagnostics } from "../../lib/gateway-diagnostics.ts";
+
+registerDebugEnglish();
 
 export function renderCommandLaneRows(
   diagnostics: CommandLaneDiagnostics,

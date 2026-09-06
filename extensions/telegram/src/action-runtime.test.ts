@@ -34,6 +34,9 @@ function handleTelegramAction(
   });
 }
 const reactMessageTelegram = vi.fn(async () => ({ ok: true }));
+const getTelegramAllowedReactions = vi.fn<typeof telegramActionRuntime.getTelegramAllowedReactions>(
+  async () => null,
+);
 const sendMessageTelegram = vi.fn(
   async (_to: string, _text: string, _opts?: Record<string, unknown>) => ({
     messageId: "789",
@@ -168,6 +171,8 @@ const sendDurableMessageBatch = vi.fn(
             index: 0,
           },
         ],
+        threadId: params.threadId == null ? undefined : String(params.threadId),
+        replyToId: params.reply?.replyToId ?? params.replyToId,
         sentAt: Date.now(),
       },
     } as const;
@@ -354,6 +359,7 @@ describe("handleTelegramAction", () => {
     installTopicNameStoreForTest();
     Object.assign(telegramActionRuntime, originalTelegramActionRuntime, {
       reactMessageTelegram,
+      getTelegramAllowedReactions,
       sendDurableMessageBatch,
       sendMessageTelegram,
       sendPollTelegram,
@@ -366,6 +372,7 @@ describe("handleTelegramAction", () => {
       createForumTopicTelegram,
     });
     reactMessageTelegram.mockClear();
+    getTelegramAllowedReactions.mockReset().mockResolvedValue(null);
     sendDurableMessageBatch.mockClear();
     sendMessageTelegram.mockClear();
     sendPollTelegram.mockClear();
@@ -602,6 +609,11 @@ describe("handleTelegramAction", () => {
       ok: false,
       warning: "Reaction unavailable: ✅",
     } as unknown as Awaited<ReturnType<typeof reactMessageTelegram>>);
+    getTelegramAllowedReactions.mockResolvedValueOnce([
+      { type: "emoji", emoji: "👍" },
+      { type: "custom_emoji", custom_emoji_id: "5231419410191111111" },
+      { type: "emoji", emoji: "🔥" },
+    ]);
     const result = await handleTelegramAction(defaultReactionAction, reactionConfig("minimal"));
     const textPayload = result.content.find((item) => item.type === "text");
     expect(textPayload?.type).toBe("text");
@@ -611,8 +623,218 @@ describe("handleTelegramAction", () => {
       added?: string;
     };
     expect(parsed.ok).toBe(false);
-    expect(parsed.warning).toBe("Reaction unavailable: ✅");
+    expect(parsed.warning).toBe(
+      "Reaction unavailable: ✅ This chat allows: 👍 🔥; numeric custom IDs 5231419410191111111.",
+    );
+    expect(parsed.warning).not.toContain("disallow list");
     expect(parsed.added).toBe("✅");
+  });
+
+  it("bounds allowed-reaction guidance when Telegram rejects a reaction", async () => {
+    reactMessageTelegram.mockRejectedValueOnce(new Error("400: REACTION_INVALID"));
+    getTelegramAllowedReactions.mockResolvedValueOnce(
+      Array.from({ length: 25 }, (_, index) => ({
+        type: "custom_emoji" as const,
+        custom_emoji_id: String(index),
+      })),
+    );
+
+    const details = resultDetails(
+      await handleTelegramAction(defaultReactionAction, reactionConfig("minimal")),
+    );
+
+    expect(details).toMatchObject({
+      ok: false,
+      reason: "REACTION_INVALID",
+      hint: expect.stringContaining("This chat allows:"),
+    });
+    expect(String(details.hint)).toContain("numeric custom IDs 0, 1, 2");
+    expect(String(details.hint)).not.toContain("20");
+    expect(details.hint).not.toContain("disallow list");
+  });
+
+  it("keeps standard reactions ahead of custom IDs within the hint bound", async () => {
+    reactMessageTelegram.mockRejectedValueOnce(new Error("400: REACTION_INVALID"));
+    getTelegramAllowedReactions.mockResolvedValueOnce([
+      ...Array.from({ length: 20 }, (_, index) => ({
+        type: "custom_emoji" as const,
+        custom_emoji_id: String(index),
+      })),
+      { type: "emoji" as const, emoji: "👍" as const },
+    ]);
+
+    const details = resultDetails(
+      await handleTelegramAction(defaultReactionAction, reactionConfig("minimal")),
+    );
+
+    expect(details).toMatchObject({
+      ok: false,
+      reason: "REACTION_INVALID",
+      hint: expect.stringContaining("This chat allows:"),
+    });
+    expect(String(details.hint)).toContain("This chat allows: 👍; numeric custom IDs 0, 1, 2");
+    expect(String(details.hint)).not.toContain("19");
+  });
+
+  it("surfaces custom-only alternatives after a rejected reaction", async () => {
+    reactMessageTelegram.mockRejectedValueOnce(new Error("400: REACTION_INVALID"));
+    getTelegramAllowedReactions.mockResolvedValueOnce([
+      { type: "custom_emoji", custom_emoji_id: "5231419410191111111" },
+    ]);
+
+    const details = resultDetails(
+      await handleTelegramAction(defaultReactionAction, reactionConfig("minimal")),
+    );
+
+    expect(details.hint).toBe(
+      "This reaction is unavailable. This chat allows: numeric custom IDs 5231419410191111111.",
+    );
+  });
+
+  it("offers standard alternatives when Telegram reports an unrestricted chat", async () => {
+    reactMessageTelegram.mockRejectedValueOnce(new Error("400: REACTION_INVALID"));
+
+    const details = resultDetails(
+      await handleTelegramAction(defaultReactionAction, reactionConfig("minimal")),
+    );
+
+    expect(details.hint).toBe(
+      "This reaction is unavailable. This chat allows: ❤ 👍 👎 🔥 🥰 👏 😁 🤔 🤯 😱 🤬 😢 🎉 🤩 🤮 💩 🙏 👌 🕊 🤡.",
+    );
+  });
+
+  it("does not describe a failed allowed-reaction lookup as unrestricted", async () => {
+    reactMessageTelegram.mockRejectedValueOnce(new Error("400: REACTION_INVALID"));
+    getTelegramAllowedReactions.mockRejectedValueOnce(new Error("getChat failed"));
+
+    const details = resultDetails(
+      await handleTelegramAction(defaultReactionAction, reactionConfig("minimal")),
+    );
+
+    expect(details.hint).toBe("This reaction is unavailable.");
+  });
+
+  it("lists permitted standard and custom reactions with an optional limit", async () => {
+    getTelegramAllowedReactions.mockResolvedValueOnce([
+      { type: "emoji", emoji: "👍" },
+      { type: "custom_emoji", custom_emoji_id: "5231419410191111111" },
+      { type: "emoji", emoji: "🔥" },
+    ]);
+
+    const details = resultDetails(
+      await handleTelegramAction(
+        { action: "emoji-list", chatId: "-1001", limit: 2 },
+        telegramConfig(),
+      ),
+    );
+
+    expect(details).toEqual({
+      ok: true,
+      emojis: [
+        { name: "👍", identifier: "👍" },
+        { identifier: "5231419410191111111", type: "custom_emoji" },
+      ],
+    });
+    expect(getTelegramAllowedReactions).toHaveBeenCalledWith(
+      "-1001",
+      expect.objectContaining({ token: "tok" }),
+    );
+  });
+
+  it("returns bounded standard reactions when Telegram reports no chat restriction", async () => {
+    const details = resultDetails(
+      await handleTelegramAction({ action: "emoji-list", chatId: "-1001" }, telegramConfig()),
+    );
+
+    expect(details.note).toBe("All standard Telegram reactions are allowed.");
+    expect(details.emojis).toEqual(expect.arrayContaining([{ name: "👍", identifier: "👍" }]));
+    expect((details.emojis as unknown[]).length).toBeLessThanOrEqual(100);
+  });
+
+  it("caps explicitly requested reaction-list limits at 100", async () => {
+    getTelegramAllowedReactions.mockResolvedValueOnce(
+      Array.from({ length: 120 }, (_, index) => ({
+        type: "custom_emoji" as const,
+        custom_emoji_id: String(index),
+      })),
+    );
+
+    const details = resultDetails(
+      await handleTelegramAction(
+        { action: "emoji-list", chatId: "-1001", limit: 200 },
+        telegramConfig(),
+      ),
+    );
+
+    expect(details.emojis).toHaveLength(100);
+  });
+
+  it("defaults delegated reaction discovery to the trusted current Telegram chat", async () => {
+    await handleTelegramAction({ action: "emoji-list" }, telegramConfig(), {
+      conversationReadOrigin: "delegated",
+      requesterAccountId: "default",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "telegram:-1001:topic:77",
+        currentThreadTs: "77",
+      },
+    });
+
+    expect(getTelegramAllowedReactions).toHaveBeenCalledWith("-1001", expect.anything());
+  });
+
+  it.each([
+    {
+      name: "a different chat",
+      chatId: "-1002",
+      requesterAccountId: "default",
+      currentChannelProvider: "telegram",
+    },
+    {
+      name: "a different account",
+      chatId: "-1001",
+      requesterAccountId: "other",
+      currentChannelProvider: "telegram",
+    },
+    {
+      name: "a different provider",
+      chatId: "-1001",
+      requesterAccountId: "default",
+      currentChannelProvider: "discord",
+    },
+  ])("rejects delegated reaction discovery for $name", async (testCase) => {
+    await expect(
+      handleTelegramAction({ action: "emoji-list", chatId: testCase.chatId }, telegramConfig(), {
+        conversationReadOrigin: "delegated",
+        requesterAccountId: testCase.requesterAccountId,
+        toolContext: {
+          currentChannelProvider: testCase.currentChannelProvider,
+          currentChannelId: "telegram:-1001",
+        },
+      }),
+    ).rejects.toThrow("exact current chat and account");
+    expect(getTelegramAllowedReactions).not.toHaveBeenCalled();
+  });
+
+  it("allows direct operators to inspect an explicitly selected sibling chat", async () => {
+    await handleTelegramAction({ action: "emoji-list", chatId: "-1002" }, telegramConfig(), {
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "telegram:-1001",
+      },
+    });
+
+    expect(getTelegramAllowedReactions).toHaveBeenCalledWith("-1002", expect.anything());
+  });
+
+  it("rejects reaction discovery when the existing reactions action gate is disabled", async () => {
+    await expect(
+      handleTelegramAction(
+        { action: "emoji-list", chatId: "-1001" },
+        telegramConfig({ actions: { reactions: false } }),
+      ),
+    ).rejects.toThrow("actions.reactions");
+    expect(getTelegramAllowedReactions).not.toHaveBeenCalled();
   });
 
   it("adds reactions when reactionLevel is extensive", async () => {
@@ -864,10 +1086,12 @@ describe("handleTelegramAction", () => {
         action: "sendMessage",
         to: "@testchannel",
         content: "Hello, Telegram!",
+        messageThreadId: 77,
       },
       telegramConfig(),
       {
         gatewayClientScopes: ["operator.write"],
+        deliveryRetryOwner: "caller",
         sessionKey: "agent:main:telegram:direct:123",
         reply: {
           replyToId: "456",
@@ -882,27 +1106,36 @@ describe("handleTelegramAction", () => {
     const options = requireRecord(call[2], "text message options");
     expect(options.token).toBe("tok");
     expect(options.mediaUrl).toBeUndefined();
+    expect(options.messageThreadId).toBe(77);
     const durableCall = mockCall(sendDurableMessageBatch, 0, "durable text message");
     expect(requireRecord(durableCall[0], "durable text message params")).toMatchObject({
       channel: "telegram",
       to: "@testchannel",
       durability: "required",
       gatewayClientScopes: ["operator.write"],
+      threadId: 77,
+      // The gateway-owned plugin send must inherit the caller's retry ownership,
+      // or the failed row stays replay-eligible and duplicates (#124279).
+      deliveryRetryOwner: "caller",
       session: { key: "agent:main:telegram:direct:123", agentId: "main" },
       reply: { replyToId: "456", source: "implicit", mode: "first" },
       payloads: [{ text: "Hello, Telegram!" }],
     });
-    expect(result.content).toStrictEqual([
-      {
-        type: "text",
-        text: '{\n  "ok": true,\n  "messageId": "789",\n  "chatId": "123"\n}',
-      },
-    ]);
-    expect(result.details).toStrictEqual({
+    const details = resultDetails(result);
+    // Source-reply reconciliation reads `receipt` off this result (#133051); dropping it
+    // makes a successfully delivered Telegram reply look unconfirmed and fail closed.
+    expect(details).toStrictEqual({
       ok: true,
       messageId: "789",
       chatId: "123",
+      receipt: {
+        threadId: "77",
+        replyToId: "456",
+      },
     });
+    expect(result.content).toStrictEqual([
+      { type: "text", text: JSON.stringify(details, null, 2) },
+    ]);
   });
 
   it("persists sendMessage action deliveries before Telegram platform send", async () => {
@@ -1686,7 +1919,7 @@ describe("handleTelegramAction", () => {
     },
   );
 
-  it("stores created forum topic names in the account-scoped cache", async () => {
+  it("stores created forum topic thread names in the account-scoped cache", async () => {
     createForumTopicTelegram.mockResolvedValueOnce({
       topicId: 99,
       name: "Topic",
@@ -1698,7 +1931,7 @@ describe("handleTelegramAction", () => {
     } as OpenClawConfig;
 
     await handleTelegramAction(
-      { action: "createForumTopic", accountId: "work", chatId: "alias-chat", name: "Topic" },
+      { action: "createForumTopic", accountId: "work", chatId: "alias-chat", threadName: "Topic" },
       cfg,
     );
 
@@ -1707,7 +1940,7 @@ describe("handleTelegramAction", () => {
     await expect(getTopicName("alias-chat", 99, scope)).resolves.toBeUndefined();
   });
 
-  it("stores edited forum topic names in the account-scoped cache", async () => {
+  it("stores edited forum topic thread names in the account-scoped cache", async () => {
     editForumTopicTelegram.mockResolvedValueOnce({
       ok: true,
       chatId: "-100123",
@@ -1725,12 +1958,68 @@ describe("handleTelegramAction", () => {
         accountId: "work",
         chatId: "alias-chat",
         messageThreadId: 42,
-        name: "New",
+        threadName: "New",
       },
       cfg,
     );
 
     await expect(getTopicName("-100123", 42, topicCacheScopeFor(cfg, "work"))).resolves.toBe("New");
+  });
+
+  it("prefers name over threadName for forum topic actions", async () => {
+    const cfg = telegramConfig({
+      actions: { createForumTopic: true, editForumTopic: true },
+    });
+
+    await handleTelegramAction(
+      { action: "createForumTopic", chatId: "123", name: "Primary", threadName: "Alias" },
+      cfg,
+    );
+    await handleTelegramAction(
+      {
+        action: "editForumTopic",
+        chatId: "123",
+        messageThreadId: 42,
+        name: "Primary",
+        threadName: "Alias",
+      },
+      cfg,
+    );
+
+    expect(mockCall(createForumTopicTelegram, 0, "topic create")[1]).toBe("Primary");
+    expect(mockCall(editForumTopicTelegram, 0, "topic edit")[2]).toMatchObject({
+      name: "Primary",
+    });
+  });
+
+  it("preserves structured validation when a created topic has no name", async () => {
+    const cfg = telegramConfig({ actions: { createForumTopic: true } });
+
+    await expect(
+      handleTelegramAction({ action: "createForumTopic", chatId: "123" }, cfg),
+    ).rejects.toMatchObject({
+      name: "ToolInputError",
+      status: 400,
+      message: "name required",
+    });
+  });
+
+  it("preserves icon-only forum topic edits", async () => {
+    const cfg = telegramConfig({ actions: { editForumTopic: true } });
+    await handleTelegramAction(
+      {
+        action: "editForumTopic",
+        chatId: "123",
+        messageThreadId: 42,
+        iconCustomEmojiId: "emoji-1",
+      },
+      cfg,
+    );
+
+    expect(mockCall(editForumTopicTelegram, 0, "icon-only topic edit")[2]).toMatchObject({
+      name: undefined,
+      iconCustomEmojiId: "emoji-1",
+    });
   });
 
   it.each([
@@ -1747,19 +2036,35 @@ describe("handleTelegramAction", () => {
       expectedOptions: { mediaUrl: "https://example.com/image.jpg" },
     },
     {
-      name: "quoteText",
+      name: "quoteText preserving exact whitespace",
       params: {
         action: "sendMessage",
         to: "123456",
         content: "Replying now",
         replyToMessageId: 144,
-        quoteText: "The text you want to quote",
+        quoteText: "  The text you want to quote\n  ",
       },
       expectedTo: "123456",
       expectedContent: "Replying now",
       expectedOptions: {
         replyToMessageId: 144,
-        quoteText: "The text you want to quote",
+        quoteText: "  The text you want to quote\n  ",
+      },
+    },
+    {
+      name: "snake-case quoteText preserving exact whitespace",
+      params: {
+        action: "sendMessage",
+        to: "123456",
+        content: "Replying now",
+        replyToMessageId: 144,
+        quote_text: " \nThe text you want to quote  ",
+      },
+      expectedTo: "123456",
+      expectedContent: "Replying now",
+      expectedOptions: {
+        replyToMessageId: 144,
+        quoteText: " \nThe text you want to quote  ",
       },
     },
     {

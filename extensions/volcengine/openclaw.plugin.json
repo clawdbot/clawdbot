@@ -1,5 +1,6 @@
 {
   "id": "volcengine",
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
   },
@@ -46,6 +47,10 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "volcengine": "volcengine",
+      "volcengine-plan": "volcengine-coding-plan"
+    },
     "providers": {
       "volcengine": {
         "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
@@ -352,7 +357,9 @@
   },
   "contracts": {
     "speechProviders": [
-      "volcengine"
+      "volcengine",
+      "bytedance",
+      "doubao"
     ]
   }
 }

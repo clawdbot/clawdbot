@@ -94,6 +94,7 @@ export async function prepareTelegramOutbound<T extends string | number | undefi
   messageIdInput?: T;
   thread?: {
     messageThreadId?: number;
+    directMessagesTopicId?: number;
     replyToMessageId?: number;
     replyQuoteText?: string;
     useReplyIdAsQuoteSource?: boolean;
@@ -116,7 +117,8 @@ export async function prepareTelegramOutbound<T extends string | number | undefi
   const threadSpec = params.thread
     ? resolveTelegramSendThreadSpec({
         targetMessageThreadId: target.messageThreadId,
-        targetDirectMessagesTopicId: target.directMessagesTopicId,
+        targetDirectMessagesTopicId:
+          params.thread.directMessagesTopicId ?? target.directMessagesTopicId,
         messageThreadId: params.thread.messageThreadId,
         chatType: target.chatType,
       })

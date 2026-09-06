@@ -120,7 +120,6 @@ export async function prepareAgentRequestRouting(params: {
         cfg: params.cfg,
         sessionId: requestedSessionId,
         agentId,
-        clone: false,
       });
       agentId = sessionIdTarget.agentId ?? agentId;
     } catch (error) {
@@ -233,6 +232,7 @@ export async function prepareAgentRequestRouting(params: {
     ? loadSessionEntry(requestedSessionKey, {
         ...(agentId ? { agentId } : {}),
         clone: false,
+        projection: "list",
       })
     : undefined;
   return {
@@ -279,6 +279,7 @@ function dropReboundExecApprovalFollowup(params: {
       loadSessionEntry(params.requestedSessionKeyRaw, {
         ...(params.agentId ? { agentId: params.agentId } : {}),
         clone: false,
+        projection: "list",
       }).entry?.sessionId,
     );
   } catch {

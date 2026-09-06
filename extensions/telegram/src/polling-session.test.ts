@@ -2404,6 +2404,7 @@ describe("TelegramPollingSession", () => {
 
       expect(worker.workerStop).not.toHaveBeenCalled();
       expectLogExcludes(log, "Polling stall detected");
+      expectLogExcludes(log, "isolated polling worker poll-start");
     } finally {
       watchdogHarness.restore();
       abort.abort();
@@ -2711,7 +2712,7 @@ describe("TelegramPollingSession", () => {
     });
   });
 
-  it("fails buffered spooled claims instead of requeueing when deferred processing times out", async () => {
+  it("requeues buffered spooled claims when deferred processing times out", async () => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();
       const log = vi.fn();
@@ -2731,15 +2732,15 @@ describe("TelegramPollingSession", () => {
 
       await waitForTelegramTestState(() => expect(participants).toHaveLength(1));
       await waitForTelegramTestState(async () =>
-        expect(await failedUpdateIds(tempDir)).toEqual([42]),
+        expect(await pendingUpdateIds(tempDir, "all")).toEqual([42]),
       );
-      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+      expect(await failedUpdateIds(tempDir)).toEqual([]);
       expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]);
       // Core drain watchdog log (display-id stripped of zero padding).
       expectLogIncludes(log, "claim→adoption stalled for event");
       expectLogIncludes(log, "handler-timeout");
-      expectLogExcludes(log, "spooled update 42 failed; keeping for retry");
-      expect(await failedUpdateReasons(tempDir)).toEqual([{ id: 42, reason: "handler-timeout" }]);
+      expectLogIncludes(log, "spooled update 42 failed; keeping for retry");
+      expect(await failedUpdateReasons(tempDir)).toEqual([]);
       abort.abort();
       stopWorker();
       await runPromise;
@@ -3512,9 +3513,8 @@ describe("TelegramPollingSession", () => {
     });
   });
 
-  it("recovers a lone active spooled handler owned by a replaced session (#84158)", async () => {
-    // Core drain: a lone hanging claim is dead-lettered by the adoption-stall
-    // watchdog so a replacement session is not blocked forever on that lane.
+  it("retries a lone active spooled handler in a replacement session (#84158)", async () => {
+    // Core drain releases a hanging claim so a replacement session retries it.
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const firstAbort = new AbortController();
     const secondAbort = new AbortController();
@@ -3524,7 +3524,9 @@ describe("TelegramPollingSession", () => {
       releaseTurn = resolve;
     });
     const handleUpdate = vi.fn(async () => {
-      await turnDone;
+      if (handleUpdate.mock.calls.length === 1) {
+        await turnDone;
+      }
     });
     createTelegramBotMock.mockImplementation(() => makeIsolatedBot({ handleUpdate }));
     await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "lone active topic turn")]);
@@ -3558,10 +3560,10 @@ describe("TelegramPollingSession", () => {
       });
       const firstRunPromise = firstSession.runUntilAbort();
       await waitForTelegramTestState(() => expect(handleUpdate).toHaveBeenCalledTimes(1));
-      // Watchdog dead-letters the hanging claim before the session is replaced.
+      // Watchdog releases the hanging claim before the session is replaced.
       await vi.advanceTimersByTimeAsync(1_000);
       await waitForTelegramTestState(async () =>
-        expect(await failedUpdateIds(tempDir)).toEqual([42]),
+        expect(await pendingUpdateIds(tempDir, "all")).toEqual([42]),
       );
       firstAbort.abort();
       await vi.advanceTimersByTimeAsync(16_000);
@@ -3578,10 +3580,12 @@ describe("TelegramPollingSession", () => {
         },
       });
       const secondRunPromise = secondSession.runUntilAbort();
-      await vi.advanceTimersByTimeAsync(1_000);
-      // Tombstoned/failed claim is not re-dispatched; replacement is unblocked.
-      expect(handleUpdate).toHaveBeenCalledTimes(1);
-      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await waitForTelegramTestState(() => expect(handleUpdate).toHaveBeenCalledTimes(2));
+      await waitForTelegramTestState(async () =>
+        expect(await pendingUpdateIds(tempDir, "all")).toEqual([]),
+      );
+      expect(await failedUpdateIds(tempDir)).toEqual([]);
 
       secondAbort.abort();
       await vi.advanceTimersByTimeAsync(20_000);
@@ -4434,10 +4438,8 @@ describe("TelegramPollingSession", () => {
     }
   });
 
-  it("fails a timed-out spooled handler and drains later same-lane updates without restart", async () => {
-    // Core drain: adoption-stall dead-letters 42 and frees the lane for 43 on
-    // the same bot. Session restart on handler timeout is removed private-drain
-    // behavior; the user-visible outcome is 42 failed and 43 processed.
+  it("retries a timed-out spooled handler before later same-lane updates without restart", async () => {
+    // Core drain releases 42 for retry before 43 on the same bot.
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const abort = new AbortController();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
@@ -4451,11 +4453,13 @@ describe("TelegramPollingSession", () => {
       init: vi.fn(async () => undefined),
       handleUpdate: vi.fn(async (update: { update_id?: number }) => {
         events.push(`bot:${update.update_id}`);
-        if (update.update_id === 42) {
+        if (update.update_id === 42 && events.filter((event) => event === "bot:42").length === 1) {
           // Hang until the core watchdog aborts the drain lifecycle.
           await new Promise<void>(() => {});
         }
-        abort.abort();
+        if (update.update_id === 43) {
+          abort.abort();
+        }
       }),
       stop: vi.fn(async () => undefined),
     };
@@ -4482,11 +4486,8 @@ describe("TelegramPollingSession", () => {
       const runPromise = session.runUntilAbort();
       await waitForTelegramTestState(() => expect(events).toEqual(["bot:42"]));
 
-      await vi.advanceTimersByTimeAsync(1_000);
-      await waitForTelegramTestState(async () =>
-        expect(await failedUpdateIds(tempDir)).toEqual([42]),
-      );
-      await waitForTelegramTestState(() => expect(events).toEqual(["bot:42", "bot:43"]));
+      await vi.advanceTimersByTimeAsync(2_000);
+      await waitForTelegramTestState(() => expect(events).toEqual(["bot:42", "bot:42", "bot:43"]));
       await vi.advanceTimersByTimeAsync(15_000);
       await runPromise;
 
@@ -4494,6 +4495,7 @@ describe("TelegramPollingSession", () => {
       expect(worker.createWorker).toHaveBeenCalledTimes(1);
       expect(createTelegramBotMock).toHaveBeenCalledTimes(1);
       expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+      expect(await failedUpdateIds(tempDir)).toEqual([]);
       expectLogIncludes(log, "handler-timeout");
     } finally {
       abort.abort();

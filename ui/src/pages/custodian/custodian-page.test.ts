@@ -379,30 +379,6 @@ describe("custodian page", () => {
     ]);
   });
 
-  it("continues to the welcome when the bounded history request times out", async () => {
-    const request = vi.fn(
-      async (method: string, _params?: unknown, options?: { timeoutMs?: number }) => {
-        if (method === "openclaw.chat.history") {
-          expect(options).toEqual({ timeoutMs: 15_000 });
-          throw new Error("history request timed out");
-        }
-        return {
-          sessionId: "engine-session-after-history-timeout",
-          reply: "Welcome without history.",
-          action: "none",
-        };
-      },
-    );
-    const { context } = createContext(request, ["openclaw.chat", "openclaw.chat.history"]);
-    const { page } = await mountPage(context);
-
-    await waitForFast(() => expect(page.textContent).toContain("Welcome without history."));
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "openclaw.chat.history",
-      "openclaw.chat",
-    ]);
-  });
-
   it("refreshes durable rows for a same-ownership client replacement", async () => {
     let historyCalls = 0;
     const request = vi.fn(async (method: string, _params?: unknown) => {
@@ -475,14 +451,13 @@ describe("custodian page", () => {
     expect(replacementRequest).not.toHaveBeenCalled();
   });
 
-  it("keeps loaded transcript rows when a welcome retry cannot refresh them", async () => {
+  it("keeps loaded transcript rows while retrying the welcome without reloading history", async () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce({
         turns: [{ role: "assistant", text: "Loaded transcript row", at: 1 }],
       })
       .mockRejectedValueOnce(new Error("temporary welcome failure"))
-      .mockRejectedValueOnce(new Error("temporary history failure"))
       .mockResolvedValueOnce({
         sessionId: "engine-session-after-retry",
         reply: "Recovered welcome.",
@@ -498,13 +473,12 @@ describe("custodian page", () => {
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "openclaw.chat.history",
       "openclaw.chat",
-      "openclaw.chat.history",
       "openclaw.chat",
     ]);
     expect(page.textContent).toContain("Loaded transcript row");
   });
 
-  it("keeps failed sensitive replies masked for correction and retry", async () => {
+  it("keeps a sent sensitive reply masked when its response fails", async () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce({
@@ -513,14 +487,21 @@ describe("custodian page", () => {
         sensitive: true,
         action: "none",
       })
-      .mockRejectedValueOnce(new Error("Request failed"));
+      .mockImplementationOnce((_method, _params, options?: { onSent?: () => void }) => {
+        options?.onSent?.();
+        return Promise.reject(new Error("Request failed"));
+      });
     const { context } = createContext(request);
     const { page } = await mountPage(context);
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     await page.updateComplete;
-    const input = page.querySelector<HTMLInputElement>(
-      '.agent-chat__composer-combobox input[type="password"]',
-    )!;
+    const input = await waitForFast(() => {
+      const candidate = page.querySelector<HTMLInputElement>(
+        '.agent-chat__composer-combobox input[type="password"]',
+      );
+      expect(candidate).not.toBeNull();
+      return candidate!;
+    });
     input.value = "test-token-placeholder";
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
     await page.updateComplete;
@@ -530,6 +511,7 @@ describe("custodian page", () => {
     await waitForFast(() => expect(page.querySelector('[role="alert"]')).not.toBeNull());
     await page.updateComplete;
     expect(input.isConnected).toBe(true);
+    expect(input.value).toBe("");
     expect(page.textContent).toContain("Sensitive reply sent");
     expect(page.innerHTML).not.toContain("test-token-placeholder");
   });
@@ -697,9 +679,13 @@ describe("custodian page", () => {
     const { page } = await mountPage(context);
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
 
-    const input = page.querySelector<HTMLInputElement>(
-      '.agent-chat__composer-combobox input[type="password"]',
-    )!;
+    const input = await waitForFast(() => {
+      const candidate = page.querySelector<HTMLInputElement>(
+        '.agent-chat__composer-combobox input[type="password"]',
+      );
+      expect(candidate).not.toBeNull();
+      return candidate!;
+    });
     input.value = "test-token-placeholder";
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
     await page.updateComplete;

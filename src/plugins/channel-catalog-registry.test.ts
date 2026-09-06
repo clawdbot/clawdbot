@@ -34,7 +34,6 @@ async function loadWithMocks(params: {
   loadRecords?: (env: NodeJS.ProcessEnv | undefined) => Record<string, PluginInstallRecord>;
 }): Promise<{
   module: typeof import("./channel-catalog-registry.js");
-  lifecycle: typeof import("./plugin-metadata-lifecycle.js");
   discoverSpy: ReturnType<typeof vi.fn>;
   loadRecordsSpy: ReturnType<typeof vi.fn>;
 }> {
@@ -52,8 +51,7 @@ async function loadWithMocks(params: {
     import.meta.url,
     `./channel-catalog-registry.js?case=${++loadCase}`,
   );
-  const lifecycle = await import("./plugin-metadata-lifecycle.js");
-  return { module, lifecycle, discoverSpy, loadRecordsSpy };
+  return { module, discoverSpy, loadRecordsSpy };
 }
 
 function firstDiscoverOptions(discoverSpy: ReturnType<typeof vi.fn>): Record<string, unknown> {
@@ -93,55 +91,6 @@ function createChannelCandidate(params: {
 }
 
 describe("listChannelCatalogEntries", () => {
-  it("reuses one discovery result for repeated calls in the same scope", async () => {
-    const { module, discoverSpy, loadRecordsSpy } = await loadWithMocks({});
-
-    module.listChannelCatalogEntries({ env: ENV });
-    module.listChannelCatalogEntries({ env: ENV });
-
-    expect(discoverSpy).toHaveBeenCalledTimes(1);
-    expect(loadRecordsSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it("clears the discovery memo through the plugin metadata lifecycle owner", async () => {
-    const { module, lifecycle, discoverSpy } = await loadWithMocks({});
-
-    module.listChannelCatalogEntries({ origin: "bundled", env: ENV });
-    lifecycle.clearPluginMetadataLifecycleCaches();
-    module.listChannelCatalogEntries({ origin: "bundled", env: ENV });
-
-    expect(discoverSpy).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not share discovery across differing input scopes", async () => {
-    const { module, discoverSpy } = await loadWithMocks({});
-    const installRecords = {};
-    const baseline = {
-      env: ENV,
-      workspaceDir: "/tmp/workspace-a",
-      extraPaths: ["/tmp/plugins/a"],
-      installRecords,
-    };
-    const otherInstallRecords: Record<string, PluginInstallRecord> = {};
-
-    module.listChannelCatalogEntries(baseline);
-    module.listChannelCatalogEntries({ ...baseline, workspaceDir: "/tmp/workspace-b" });
-    module.listChannelCatalogEntries({
-      ...baseline,
-      env: { HOME: "/tmp/openclaw-other-home" },
-    });
-    module.listChannelCatalogEntries({ ...baseline, extraPaths: ["/tmp/plugins/b"] });
-    module.listChannelCatalogEntries({ ...baseline, installRecords: otherInstallRecords });
-    module.listChannelCatalogEntries({ ...baseline, installRecords: otherInstallRecords });
-    otherInstallRecords.telegram = {
-      source: "npm",
-      spec: "@openclaw/telegram@1.0.0",
-    } as PluginInstallRecord;
-    module.listChannelCatalogEntries({ ...baseline, installRecords: otherInstallRecords });
-
-    expect(discoverSpy).toHaveBeenCalledTimes(6);
-  });
-
   it("forwards lazily loaded install records to discovery when origin is unspecified", async () => {
     const { module, discoverSpy, loadRecordsSpy } = await loadWithMocks({});
 
@@ -234,7 +183,6 @@ describe("listChannelCatalogEntries", () => {
 
     expect(
       module.listChannelCatalogEntries({
-        installRecords: {},
         discovery: {
           candidates: [createChannelCandidate({ pluginId: "package-plugin" })],
           diagnostics: [],

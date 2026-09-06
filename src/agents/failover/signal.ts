@@ -9,6 +9,7 @@ export const FAILOVER_REASONS = PROTOCOL_FAILOVER_REASONS;
 export type FailoverReason = (typeof FAILOVER_REASONS)[number];
 export type FailoverSignal = {
   status?: number;
+  retryAfterMs?: number;
   code?: string;
   errorType?: string;
   message?: string;

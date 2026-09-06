@@ -13,13 +13,14 @@ import {
   clearCliSession,
   getCliSessionBinding,
   hashCliSessionText,
+  isCliSessionInvalidatingFailoverReason,
   resolveCliSessionClearReason,
   resolveCliSessionReuse,
   setCliSessionBinding,
-  setCliSessionId,
   shouldClearFailedCliSessionBinding,
 } from "./cli-session.js";
 import { FailoverError } from "./failover-error.js";
+import { FAILOVER_REASONS } from "./failover/signal.js";
 
 describe("cli-session helpers", () => {
   it("persists binding metadata alongside legacy session ids", () => {
@@ -175,9 +176,6 @@ describe("cli-session helpers", () => {
       reseedReceipt: receipt,
     });
     setCliSessionBinding(entry, "claude-cli", { sessionId: "cli-session-1" });
-    expect(getCliSessionBinding(entry, "claude-cli")?.reseedReceipt).toEqual(receipt);
-
-    setCliSessionId(entry, "claude-cli", "cli-session-1");
     expect(getCliSessionBinding(entry, "claude-cli")?.reseedReceipt).toEqual(receipt);
 
     setCliSessionBinding(entry, "claude-cli", { sessionId: "cli-session-2" });
@@ -628,26 +626,20 @@ describe("cli-session helpers", () => {
   });
 
   it("shares failed reused-session cleanup policy across CLI entry points", () => {
-    const failover = new FailoverError("session expired", {
-      reason: "session_expired",
-      provider: "claude-cli",
-      model: "claude-opus-4-8",
-    });
     const abort = Object.assign(new Error("aborted"), { name: "AbortError" });
 
     const binding = { sessionId: "reused" };
     const forkBinding = { sessionId: "fork-source", forkNextResume: true as const };
 
-    expect(shouldClearFailedCliSessionBinding({ error: failover, binding })).toBe(true);
-    expect(shouldClearFailedCliSessionBinding({ error: failover, binding: forkBinding })).toBe(
-      true,
-    );
-    expect(resolveCliSessionClearReason(failover)).toBe("session_expired");
     expect(shouldClearFailedCliSessionBinding({ error: abort, binding })).toBe(true);
     expect(shouldClearFailedCliSessionBinding({ error: abort, binding: forkBinding })).toBe(false);
     expect(
       shouldClearFailedCliSessionBinding({
-        error: failover,
+        error: new FailoverError("session expired", {
+          reason: "session_expired",
+          provider: "claude-cli",
+          model: "claude-opus-4-8",
+        }),
         binding,
         hasNewGeneratedMediaTask: true,
       }),
@@ -656,6 +648,17 @@ describe("cli-session helpers", () => {
     expect(
       shouldClearFailedCliSessionBinding({ error: new Error("provider failed"), binding }),
     ).toBe(false);
-    expect(shouldClearFailedCliSessionBinding({ error: failover })).toBe(false);
+    expect(shouldClearFailedCliSessionBinding({ error: abort })).toBe(false);
+  });
+
+  it.each(FAILOVER_REASONS)("only clears binding for a provider-expired session: %s", (reason) => {
+    const error = new FailoverError("failover", { reason, provider: "claude-cli" });
+    const invalidatesSession = reason === "session_expired";
+
+    expect(FAILOVER_REASONS).toHaveLength(16);
+    expect(isCliSessionInvalidatingFailoverReason(reason)).toBe(invalidatesSession);
+    expect(shouldClearFailedCliSessionBinding({ error, binding: { sessionId: "reused" } })).toBe(
+      invalidatesSession,
+    );
   });
 });

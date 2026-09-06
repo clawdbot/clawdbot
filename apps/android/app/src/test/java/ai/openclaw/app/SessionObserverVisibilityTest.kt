@@ -18,7 +18,8 @@ class SessionObserverVisibilityTest {
         GatewaySession.RequestLease(
           endpointStableId = "gateway",
           isCurrentImpl = { firstSocketIsCurrent },
-        ) { method, params, _ ->
+        ) { method, params, _, withEnqueue ->
+          withEnqueue {}
           requests.add(method to params)
           ""
         }
@@ -26,7 +27,8 @@ class SessionObserverVisibilityTest {
         GatewaySession.RequestLease(
           endpointStableId = "gateway",
           isCurrentImpl = { secondSocketIsCurrent },
-        ) { method, params, _ ->
+        ) { method, params, _, withEnqueue ->
+          withEnqueue {}
           requests.add(method to params)
           ""
         }
@@ -91,7 +93,8 @@ class SessionObserverVisibilityTest {
       var loseBackgroundReply = true
       val requests = mutableListOf<Pair<String, String?>>()
       val lease =
-        GatewaySession.RequestLease(endpointStableId = "gateway") { method, params, _ ->
+        GatewaySession.RequestLease(endpointStableId = "gateway") { method, params, _, withEnqueue ->
+          withEnqueue {}
           requests.add(method to params)
           if (params == """{"visible":false}""" && loseBackgroundReply) {
             loseBackgroundReply = false

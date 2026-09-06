@@ -1,5 +1,4 @@
 // Matrix API module exposes the plugin public contract.
-export { matrixPlugin } from "./src/channel.js";
 export { MatrixClient } from "./src/matrix/sdk.js";
 export {
   openMatrixIdbSnapshotStoreOptions,
@@ -8,8 +7,8 @@ export {
 export {
   normalizeMatrixStorageMetadata,
   openMatrixStorageMetaStoreOptions,
-} from "./src/matrix/client/storage.js";
-export type { MatrixStorageMetadata } from "./src/matrix/client/storage.js";
+} from "./src/matrix/client/storage-metadata.js";
+export type { MatrixStorageMetadata } from "./src/matrix/client/storage-metadata.js";
 export type {
   EncryptedFile,
   MatrixDeviceVerificationStatus,

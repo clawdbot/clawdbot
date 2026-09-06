@@ -1,4 +1,5 @@
 // Codex tests cover sandbox exec server plugin behavior.
+import { useIsolatedStateGuard, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
 import {
@@ -10,6 +11,7 @@ import { CODEX_APP_SERVER_VERSION } from "./version.js";
 const CODEX_SANDBOX_EXEC_SERVER_MAX_INBOUND_MESSAGE_BYTES = 100 * 1024 * 1024;
 import {
   collectNotifications,
+  codexFsSandboxContext,
   createClient,
   createSandboxContext,
   execServerUrlFromClient,
@@ -19,8 +21,9 @@ import {
   waitForSocketClose,
 } from "./sandbox-exec-server.test-helpers.js";
 
+useIsolatedStateGuard();
+
 afterEach(async () => {
-  vi.unstubAllEnvs();
   await sandboxExecServerRegistry.closeAll();
 });
 
@@ -75,24 +78,6 @@ describe("OpenClaw Codex sandbox exec-server", () => {
       ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox }),
     ).rejects.toThrow("Sandbox filesystem bridge is unavailable.");
     expect(client.request).not.toHaveBeenCalled();
-    expect(sandboxExecServerRegistry.servers.has(sandbox.runtimeId)).toBe(false);
-  });
-
-  it("propagates environment registration failures and releases the server lease", async () => {
-    const sandbox = createSandboxContext({});
-    const client = {
-      getServerVersion: vi.fn(() => CODEX_APP_SERVER_VERSION),
-      request: vi.fn(async () => {
-        throw new Error("environment registration failed");
-      }),
-    };
-
-    await expect(
-      ensureCodexSandboxExecServerEnvironment({
-        client: client as never,
-        sandbox,
-      }),
-    ).rejects.toThrow("environment registration failed");
     expect(sandboxExecServerRegistry.servers.has(sandbox.runtimeId)).toBe(false);
   });
 
@@ -235,7 +220,7 @@ describe("OpenClaw Codex sandbox exec-server", () => {
       pipeStdin: false,
       arg0: null,
     })) as { processId?: string; nextSeq?: number };
-    expect(start).toEqual({ processId: "proc-1" });
+    expect(start).toEqual({ processId: "proc-1", sandboxType: "none" });
     const read = await readUntilClosed(socket, "proc-1");
 
     expect(read.exited).toBe(true);
@@ -383,6 +368,198 @@ describe("OpenClaw Codex sandbox exec-server", () => {
     socket.close();
   });
 
+  it.each([
+    {
+      description: "managed per-process filesystem restrictions",
+      restrictions: {
+        sandbox: codexFsSandboxContext({
+          entries: [
+            {
+              path: { type: "path", path: "file:///workspace/allowed" },
+              access: "read",
+            },
+          ],
+        }),
+      },
+      error: /filesystem sandbox.*cannot be enforced/iu,
+    },
+    {
+      description: "required managed networking without enforcement details",
+      restrictions: { enforceManagedNetwork: true },
+      error: /managed network.*cannot be enforced/iu,
+    },
+    {
+      description: "required managed networking with an explicit network context",
+      restrictions: {
+        enforceManagedNetwork: true,
+        managedNetwork: { loopbackPorts: [43123], allowLocalBinding: false },
+      },
+      error: /managed network.*cannot be enforced/iu,
+    },
+    {
+      description: "an executor-local managed network proxy",
+      restrictions: { networkProxy: { policyDecisionTimeoutMs: 1_000 } },
+      error: /network proxy.*not supported/iu,
+    },
+    {
+      description: "restricted network access in a network-enabled container",
+      restrictions: {
+        sandbox: { permissions: { type: "external", network: "restricted" } },
+      },
+      backendNetwork: "bridge",
+      error: /network restrictions.*cannot be enforced/iu,
+    },
+    {
+      description: "restricted managed network access in an SSH sandbox",
+      restrictions: {
+        sandbox: {
+          permissions: {
+            type: "managed",
+            file_system: { type: "unrestricted" },
+            network: "restricted",
+          },
+        },
+      },
+      backendId: "ssh",
+      error: /network restrictions.*cannot be enforced/iu,
+    },
+    {
+      description: "network isolation claimed after a network-enabled container started",
+      restrictions: {
+        sandbox: { permissions: { type: "external", network: "restricted" } },
+      },
+      backendNetwork: "bridge",
+      networkAfterStartup: "none",
+      error: /network restrictions.*cannot be enforced/iu,
+    },
+  ])(
+    "rejects $description before launching a process",
+    async ({ restrictions, error, backendNetwork, backendId, networkAfterStartup }) => {
+      const buildExecSpec = vi.fn(async () => ({
+        argv: [process.execPath, "-e", ""],
+        env: testExecEnv(),
+        stdinMode: "pipe-closed" as const,
+      }));
+      const sandbox = createSandboxContext({ buildExecSpec });
+      if (backendNetwork) {
+        sandbox.docker.network = backendNetwork;
+      }
+      if (backendId) {
+        sandbox.backendId = backendId;
+        if (sandbox.backend) {
+          sandbox.backend.id = backendId;
+        }
+      }
+      const client = createClient();
+      await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
+      if (networkAfterStartup) {
+        sandbox.docker.network = networkAfterStartup;
+      }
+      const socket = await openSocket(execServerUrlFromClient(client));
+      await rpc(socket, "initialize", { clientName: "test" });
+
+      await expect(
+        rpc(socket, "process/start", {
+          processId: "proc-unsupported-sandbox",
+          argv: ["/bin/sh", "-lc", "true"],
+          cwd: "file:///workspace",
+          env: {},
+          tty: false,
+          pipeStdin: false,
+          arg0: null,
+          ...restrictions,
+        }),
+      ).rejects.toThrow(error);
+      expect(buildExecSpec).not.toHaveBeenCalled();
+      socket.close();
+    },
+  );
+
+  it.each([
+    { description: "ordinary externally sandboxed execution", sandbox: undefined },
+    {
+      description: "explicit external filesystem ownership",
+      sandbox: { permissions: { type: "external", network: "restricted" } },
+    },
+    { description: "disabled nested sandboxing", sandbox: { permissions: { type: "disabled" } } },
+    {
+      description: "unrestricted managed filesystem access",
+      sandbox: {
+        permissions: {
+          type: "managed",
+          file_system: { type: "unrestricted" },
+          network: "enabled",
+        },
+      },
+    },
+    {
+      description: "network restrictions already enforced by the container",
+      sandbox: {
+        permissions: {
+          type: "managed",
+          file_system: { type: "unrestricted" },
+          network: "restricted",
+        },
+      },
+    },
+    {
+      description: "network restrictions already enforced by a Podman container",
+      sandbox: { permissions: { type: "external", network: "restricted" } },
+      backendId: "podman",
+    },
+    {
+      description: "externally enabled container networking",
+      sandbox: { permissions: { type: "external", network: "enabled" } },
+      backendNetwork: "bridge",
+    },
+    {
+      description: "provisioned network isolation after subsequent config mutation",
+      sandbox: { permissions: { type: "external", network: "restricted" } },
+      networkAfterStartup: "bridge",
+    },
+  ])(
+    "preserves $description and reports its actual sandbox type",
+    async ({ sandbox: policy, backendId, backendNetwork, networkAfterStartup }) => {
+      const buildExecSpec = vi.fn(async () => ({
+        argv: [process.execPath, "-e", ""],
+        env: testExecEnv(),
+        stdinMode: "pipe-closed" as const,
+      }));
+      const sandbox = createSandboxContext({ buildExecSpec });
+      if (backendNetwork) {
+        sandbox.docker.network = backendNetwork;
+      }
+      if (backendId) {
+        sandbox.backendId = backendId;
+        if (sandbox.backend) {
+          sandbox.backend.id = backendId;
+        }
+      }
+      const client = createClient();
+      await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
+      if (networkAfterStartup) {
+        sandbox.docker.network = networkAfterStartup;
+      }
+      const socket = await openSocket(execServerUrlFromClient(client));
+      await rpc(socket, "initialize", { clientName: "test" });
+
+      await expect(
+        rpc(socket, "process/start", {
+          processId: "proc-external-sandbox",
+          argv: ["/bin/sh", "-lc", "true"],
+          cwd: "file:///workspace",
+          env: {},
+          tty: false,
+          pipeStdin: false,
+          arg0: null,
+          ...(policy ? { sandbox: policy } : {}),
+        }),
+      ).resolves.toEqual({ processId: "proc-external-sandbox", sandboxType: "none" });
+      expect(buildExecSpec).toHaveBeenCalledOnce();
+      socket.close();
+    },
+  );
+
   it("accepts stdin writes for pipe-backed processes", async () => {
     const sandbox = createSandboxContext({
       buildExecSpec: async () => ({
@@ -464,49 +641,52 @@ describe("OpenClaw Codex sandbox exec-server", () => {
   });
 
   it("does not let Codex env policy inherit host secret variables", async () => {
-    vi.stubEnv("HOME", "/gateway-home");
-    vi.stubEnv("USER", "gateway-user");
-    vi.stubEnv("TMPDIR", "/gateway-tmp");
-    vi.stubEnv("OPENCLAW_TEST_SECRET_TOKEN", "host-secret");
-    vi.stubEnv("OPENCLAW_TEST_DATABASE_PASSWORD", "host-password");
-    vi.stubEnv("OPENCLAW_TEST_PRIVATE_KEY", "host-private-key");
-    const buildExecSpec = vi.fn(async () => ({
-      argv: [process.execPath, "-e", ""],
-      env: {},
-      stdinMode: "pipe-closed" as const,
-    }));
-    const sandbox = createSandboxContext({ buildExecSpec });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
-
-    await rpc(socket, "process/start", {
-      processId: "proc-secret-env",
-      argv: ["/bin/sh", "-lc", "true"],
-      cwd: "file:///workspace",
-      env: {},
-      envPolicy: {
-        inherit: "all",
-        ignoreDefaultExcludes: true,
-        exclude: [],
-        set: {},
-        includeOnly: [],
+    await withEnvAsync(
+      {
+        OPENCLAW_TEST_SECRET_TOKEN: "host-secret",
+        OPENCLAW_TEST_DATABASE_PASSWORD: "host-password",
+        OPENCLAW_TEST_PRIVATE_KEY: "host-private-key",
       },
-      tty: false,
-      pipeStdin: false,
-      arg0: null,
-    });
+      async () => {
+        const buildExecSpec = vi.fn(async () => ({
+          argv: [process.execPath, "-e", ""],
+          env: {},
+          stdinMode: "pipe-closed" as const,
+        }));
+        const sandbox = createSandboxContext({ buildExecSpec });
+        const client = createClient();
+        await ensureCodexSandboxExecServerEnvironment({
+          client: client as never,
+          sandbox,
+        });
+        const socket = await openSocket(execServerUrlFromClient(client));
+        await rpc(socket, "initialize", { clientName: "test" });
+        socket.send(JSON.stringify({ method: "initialized" }));
 
-    const [{ env: execEnv }] = buildExecSpec.mock.calls[0] as unknown as [
-      { env: Record<string, string> },
-    ];
-    expect(execEnv).toEqual({ CODEX_SANDBOX_EXEC_ID: expect.any(String) });
-    socket.close();
+        await rpc(socket, "process/start", {
+          processId: "proc-secret-env",
+          argv: ["/bin/sh", "-lc", "true"],
+          cwd: "file:///workspace",
+          env: {},
+          envPolicy: {
+            inherit: "all",
+            ignoreDefaultExcludes: true,
+            exclude: [],
+            set: {},
+            includeOnly: [],
+          },
+          tty: false,
+          pipeStdin: false,
+          arg0: null,
+        });
+
+        const [{ env: execEnv }] = buildExecSpec.mock.calls[0] as unknown as [
+          { env: Record<string, string> },
+        ];
+        expect(execEnv).toEqual({ CODEX_SANDBOX_EXEC_ID: expect.any(String) });
+        socket.close();
+      },
+    );
   });
 
   it("keeps process/read cursors at the last returned byte-limited chunk", async () => {

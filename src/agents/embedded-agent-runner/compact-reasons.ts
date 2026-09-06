@@ -3,6 +3,8 @@
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import type { CompactionSafeguardCancellation } from "../agent-hooks/compaction-safeguard-runtime.js";
 import { extractFailoverHttpStatus } from "../failover/retry-evidence.js";
 
 const MAX_COMPACTION_REASON_DETAIL_CHARS = 100;
@@ -17,15 +19,23 @@ function isGenericCompactionCancelledReason(reason: string): boolean {
   return normalized === "compaction cancelled" || normalized === "error: compaction cancelled";
 }
 
-/** Prefer a safeguard cancel reason when the runtime only reports generic cancellation. */
-export function resolveCompactionFailureReason(params: {
-  reason: string;
-  safeguardCancelReason?: string | null;
-}): string {
-  if (isGenericCompactionCancelledReason(params.reason) && params.safeguardCancelReason) {
-    return params.safeguardCancelReason;
-  }
-  return params.reason;
+/** Project display text and failure provenance together, without classifying intentional declines. */
+export function resolveCompactionFailure(params: {
+  error: unknown;
+  safeguardCancellation?: CompactionSafeguardCancellation | null;
+  abortSignal?: AbortSignal;
+}): { reason: string; error: unknown } {
+  const reason = formatErrorMessage(params.error);
+  // AgentSessionCompaction wraps hook cancellation in a plain Error("Compaction cancelled").
+  // Only that wrapper yields to safeguard provenance; genuine errors and caller aborts win.
+  const cancellation =
+    !params.abortSignal?.aborted &&
+    params.error instanceof Error &&
+    params.error.name === "Error" &&
+    isGenericCompactionCancelledReason(reason)
+      ? params.safeguardCancellation
+      : undefined;
+  return { reason: cancellation?.reason ?? reason, error: cancellation?.error ?? params.error };
 }
 
 /** Bucket a raw compaction reason into stable telemetry/status classes. */

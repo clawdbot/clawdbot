@@ -1,5 +1,15 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
+import {
+  appendQaChildOutput,
+  appendQaChildOutputTail,
+  createQaChildOutputCapture,
+  createQaChildOutputTail,
+  QA_CHILD_STDERR_TAIL_BYTES,
+  QA_CHILD_STDOUT_MAX_BYTES,
+  readQaChildOutput,
+  readQaChildOutputTail,
+} from "./child-output.js";
 import { createQaPosixCommandSettlement } from "./posix-command-settlement.js";
 import { runQaWindowsTaskkill } from "./windows-system-tools.js";
 
@@ -8,6 +18,7 @@ export type QaScenarioCommandExecution = {
   command: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
+  onOutput?: (stream: "stderr" | "stdout", chunk: Buffer) => void;
   timeoutMs?: number;
 };
 
@@ -17,6 +28,8 @@ export type QaScenarioCommandResult = {
   signal?: NodeJS.Signals | null;
   stdout: string;
   stderr: string;
+  stdoutTruncated?: true;
+  stderrTruncated?: true;
 };
 
 type QaScenarioCommandTerminalResult = Pick<
@@ -40,8 +53,10 @@ export function runQaScenarioCommandLifecycle(
       env: execution.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
+    // Logs are diagnostics, not native test verdicts: bound retention without
+    // failing noisy commands or truncating their live onOutput stream.
+    const stdout = createQaChildOutputCapture();
+    const stderr = createQaChildOutputTail();
     const commandLabel = path.basename(execution.command);
     createQaPosixCommandSettlement({
       child,
@@ -103,8 +118,10 @@ export function runQaScenarioCommandLifecycle(
         resolve({
           ...result,
           ...(settlementFailure && result.exitCode === 0 ? { exitCode: 1 } : {}),
-          stdout: Buffer.concat(stdout).toString("utf8"),
-          stderr: Buffer.concat(stderr).toString("utf8"),
+          stdout: readQaChildOutput(stdout),
+          stderr: readQaChildOutputTail(stderr),
+          ...(stdout.exceeded ? { stdoutTruncated: true } : {}),
+          ...(stderr.truncated ? { stderrTruncated: true } : {}),
           ...(settlementFailure
             ? result.failureMessage
               ? { failureMessage: `${result.failureMessage}; settlement: ${settlementFailure}` }
@@ -112,12 +129,33 @@ export function runQaScenarioCommandLifecycle(
             : {}),
         });
       },
-      onStderrData: (chunk) => stderr.push(Buffer.from(chunk)),
-      onStdoutData: (chunk) => stdout.push(Buffer.from(chunk)),
+      onStderrData: (chunk) => {
+        const buffered = Buffer.from(chunk);
+        appendQaChildOutputTail(stderr, buffered);
+        execution.onOutput?.("stderr", buffered);
+      },
+      onStdoutData: (chunk) => {
+        const buffered = Buffer.from(chunk);
+        appendQaChildOutput(stdout, buffered);
+        execution.onOutput?.("stdout", buffered);
+      },
       processGroupId: isWindows ? undefined : child.pid,
       verifyAfterMs: timeoutForceSettleMs,
     });
   });
+}
+
+export function formatQaScenarioCommandOutput(result: QaScenarioCommandResult): string {
+  return [
+    result.stdoutTruncated
+      ? `[stdout truncated to first ${QA_CHILD_STDOUT_MAX_BYTES} bytes]\n`
+      : "",
+    result.stdout,
+    result.stderrTruncated
+      ? `\n[stderr truncated to last ${QA_CHILD_STDERR_TAIL_BYTES} bytes]\n`
+      : "",
+    result.stderr,
+  ].join("");
 }
 
 export function resetQaScenarioCommandCleanupTimings() {

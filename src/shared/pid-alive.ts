@@ -1,15 +1,20 @@
-// PID liveness helpers check whether process ids still refer to active processes.
+// Native Node callers load this source closure without a TypeScript import resolver.
 import childProcess from "node:child_process";
 import fsSync from "node:fs";
+import { resolveDiagnosticProcessEnv } from "../infra/process-env.ts";
+import { readWindowsProcessStartTimeSync } from "../infra/windows-process-start.ts";
 
-const DARWIN_PS_TIMEOUT_MS = 1000;
+const PROCESS_START_TIMEOUT_MS = 1000;
+// Cache only a successful self read: this identity lasts for the process.
+// Failed reads must retry, and foreign PIDs must stay fresh to detect PID reuse.
+let selfStartTime: number | null = null;
 
 function isValidPid(pid: number): boolean {
   return Number.isInteger(pid) && pid > 0;
 }
 
 /**
- * Check if a process is a zombie on Linux by reading /proc/<pid>/status.
+ * Check if every thread has exited by reading Linux /proc/<pid>/status.
  * Returns false on non-Linux platforms or if the proc file can't be read.
  */
 function isZombieProcess(pid: number): boolean {
@@ -19,7 +24,9 @@ function isZombieProcess(pid: number): boolean {
   try {
     const status = fsSync.readFileSync(`/proc/${pid}/status`, "utf8");
     const stateMatch = status.match(/^State:\s+(\S)/m);
-    return stateMatch?.[1] === "Z";
+    // pthread_exit can leave a zombie leader with live workers; missing thread
+    // evidence must not revoke a live process's locks or cleanup obligations.
+    return stateMatch?.[1] === "Z" && /^Threads:[ \t]+1[ \t]*$/m.test(status);
   } catch {
     return false;
   }
@@ -40,10 +47,7 @@ export function isPidAlive(pid: number): boolean {
       return false;
     }
   }
-  if (isZombieProcess(pid)) {
-    return false;
-  }
-  return true;
+  return !isZombieProcess(pid);
 }
 
 /** Returns true only when the PID is invalid, missing, or known to be a Linux zombie. */
@@ -59,14 +63,15 @@ export function isPidDefinitelyDead(pid: number): boolean {
   return isZombieProcess(pid);
 }
 
-function getDarwinProcessStartTime(pid: number): number | null {
+function getDarwinProcessStartTime(pid: number, env: NodeJS.ProcessEnv): number | null {
   try {
     const startedAt = childProcess
       .execFileSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
         encoding: "utf8",
-        env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
+        env: { ...resolveDiagnosticProcessEnv(env), LC_ALL: "C", TZ: "UTC" },
         stdio: ["ignore", "pipe", "ignore"],
-        timeout: DARWIN_PS_TIMEOUT_MS,
+        timeout: PROCESS_START_TIMEOUT_MS,
+        killSignal: "SIGKILL",
       })
       .trim();
     // Darwin's lstart output has no timezone. Force UTC for both ps and parsing so
@@ -80,10 +85,7 @@ function getDarwinProcessStartTime(pid: number): number | null {
 
 /** Read the Linux procfs start identity used by Linux-owned runtime state. */
 export function getProcessStartTime(pid: number): number | null {
-  if (!isValidPid(pid)) {
-    return null;
-  }
-  if (process.platform !== "linux") {
+  if (!isValidPid(pid) || process.platform !== "linux") {
     return null;
   }
   try {
@@ -105,9 +107,26 @@ export function getProcessStartTime(pid: number): number | null {
 }
 
 /** Read a cross-platform process identity for filesystem lock ownership. */
-export function getFileLockProcessStartTime(pid: number): number | null {
+export function getFileLockProcessStartTime(
+  pid: number,
+  env: NodeJS.ProcessEnv = process.env,
+  windowsTimeoutMs?: number,
+): number | null {
   if (!isValidPid(pid)) {
     return null;
   }
-  return process.platform === "darwin" ? getDarwinProcessStartTime(pid) : getProcessStartTime(pid);
+  const isSelf = pid === process.pid;
+  if (isSelf && selfStartTime !== null) {
+    return selfStartTime;
+  }
+  const startTime =
+    process.platform === "darwin"
+      ? getDarwinProcessStartTime(pid, env)
+      : process.platform === "win32"
+        ? readWindowsProcessStartTimeSync(pid, windowsTimeoutMs, env)
+        : getProcessStartTime(pid);
+  if (isSelf && startTime !== null) {
+    selfStartTime = startTime;
+  }
+  return startTime;
 }

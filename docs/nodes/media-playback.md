@@ -58,6 +58,10 @@ Playback conversion is lazy:
    route falls back to the original bytes. The client can then show its
    unplayable-media fallback and keep the download action available.
 
+The Control UI checks rendition readiness with `HEAD` before loading the inline
+player. It shows **Preparing playback** while conversion is pending and keeps
+the download action available when playback is unavailable.
+
 Transcoding accepts sources up to 20 minutes and never raises the normal audio
 or video byte cap. Cached playback renditions use a fixed seven-day retention
 that Gateway maintenance enforces at startup and hourly, independently of
@@ -71,11 +75,25 @@ artifact through `artifacts.download`, which returns inline base64 bytes when
 the artifact is byte-backed or a short-lived, ticketed URL when it is
 Gateway-managed.
 
+Download filenames preserve Unicode characters and literal percent sequences
+such as `%20`.
+
+Native clients resolve ticketed media against the connected Gateway URL,
+preserving its reverse-proxy path prefix. A Gateway reached at
+`wss://gateway.example/openclaw` loads managed media beneath
+`https://gateway.example/openclaw/api/chat/media/outgoing/`, not the server root.
+
 The ticketed byte routes support:
 
 - `Range` requests with HTTP `206 Partial Content` for seeking
-- `ETag` and `If-Range` for safe resume behavior
+- `ETag` and `If-Range` for safe resume of immutable managed originals
 - `HEAD` requests with the same content metadata and no response body
+
+Local assistant files can change, and playback renditions can become available
+after a conversion retry. These responses revalidate without reusable validators:
+cached ETags or modification dates cannot suppress fresh bytes, and `If-Range`
+requests receive the full representation. Ordinary `Range` requests still support
+seeking. Managed playback responses remain private to the client cache.
 
 Do not copy a ticketed URL into durable configuration. Clients reacquire a
 ticket from the authenticated Gateway when needed.
@@ -85,8 +103,9 @@ ticket from the authenticated Gateway when needed.
 Chat attachments may include `sizeBytes`, `durationMs`, `width`, and `height`.
 OpenClaw also uses `ffprobe`, when available, to fill audio duration and video
 duration/dimensions for media facts and the Control UI `?meta=1` availability
-probe. Probing is best-effort: a missing or failed probe leaves fields absent
-instead of rejecting the attachment.
+probe. Video dimensions account for quarter-turn display rotation; image
+dimensions account for EXIF orientation. Probing is best-effort: a missing or
+failed probe leaves fields absent instead of rejecting the attachment.
 
 Gateway-managed assistant attachments use these per-file caps:
 

@@ -5,14 +5,10 @@
  * Supports text and media (URL) sending with markdown stripping and chunking.
  */
 
-import {
-  createMessageReceiptFromOutboundResults,
-  defineChannelMessageAdapter,
-  type ChannelMessageSendResult,
-  type MessageReceiptPartKind,
-} from "openclaw/plugin-sdk/channel-outbound";
+import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
+import { getClientManager } from "./client-manager-registry.js";
 import { resolveTwitchAccountContext } from "./config.js";
 import { TWITCH_CHAT_MESSAGE_LIMIT } from "./constants.js";
 import { sendMessageTwitchInternal } from "./send.js";
@@ -21,7 +17,6 @@ import type {
   ChannelOutboundContext,
   OutboundDeliveryResult,
 } from "./types.js";
-import { chunkTextForTwitch } from "./utils/markdown.js";
 import { missingTargetError, normalizeTwitchChannel } from "./utils/twitch.js";
 
 /**
@@ -42,14 +37,12 @@ export const twitchOutbound: ChannelOutboundAdapter = {
     },
   },
 
-  /** Twitch chat message limit is 500 characters */
+  // The client manager chunks after the sender strips Markdown once.
+  // A core chunker would reparse literal Markdown and could erase visible text.
   textChunkLimit: TWITCH_CHAT_MESSAGE_LIMIT,
 
   /** Strip internal assistant tool-trace scaffolding before delivery */
   sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
-
-  /** Word-boundary chunker with markdown stripping */
-  chunker: chunkTextForTwitch,
 
   /**
    * Resolve target from context.
@@ -109,7 +102,7 @@ export const twitchOutbound: ChannelOutboundAdapter = {
   /**
    * Send a text message to a Twitch channel.
    *
-   * Strips markdown if enabled, validates account configuration,
+   * Strips Markdown, validates account configuration,
    * and sends the message via the Twitch client.
    *
    * @param params - Send parameters including target, text, and config
@@ -132,7 +125,12 @@ export const twitchOutbound: ChannelOutboundAdapter = {
     }
 
     const resolvedAccountId = accountId ?? resolveTwitchAccountContext(cfg).accountId;
-    const { account, availableAccountIds } = resolveTwitchAccountContext(cfg, resolvedAccountId);
+    const {
+      account,
+      accountId: normalizedAccountId,
+      availableAccountIds,
+      configured,
+    } = resolveTwitchAccountContext(cfg, resolvedAccountId);
     if (!account) {
       throw new Error(
         `Twitch account not found: ${resolvedAccountId}. ` +
@@ -145,21 +143,29 @@ export const twitchOutbound: ChannelOutboundAdapter = {
       throw new Error("No channel specified and no default channel in account config");
     }
 
-    const result = await sendMessageTwitchInternal(
-      normalizeTwitchChannel(channel),
+    if (!configured) {
+      throw new Error(
+        `Account ${normalizedAccountId} is not properly configured. ` +
+          "Required: username, clientId, and accessToken (config or env for default account).",
+      );
+    }
+    // A target that normalizes to empty still uses the account's default channel.
+    const deliveryChannel = normalizeTwitchChannel(channel) || account.channel;
+    if (!deliveryChannel) {
+      throw new Error("No channel specified and no default channel in account config");
+    }
+    const result = await sendMessageTwitchInternal({
+      channel: normalizeTwitchChannel(deliveryChannel),
       text,
       cfg,
-      resolvedAccountId,
-      true, // stripMarkdown
-      console,
-    );
-
-    if (!result.ok) {
-      throw new Error(result.error ?? "Send failed");
-    }
+      account,
+      accountId: normalizedAccountId,
+      clientManager: getClientManager(normalizedAccountId),
+    });
 
     return {
       channel: "twitch",
+      ...(result.outcome ? { outcome: result.outcome } : {}),
       messageId: result.messageId,
       receipt: result.receipt,
       timestamp: Date.now(),
@@ -204,65 +210,7 @@ export const twitchOutbound: ChannelOutboundAdapter = {
   },
 };
 
-function toTwitchMessageSendResult(
-  result: OutboundDeliveryResult,
-  kind: MessageReceiptPartKind,
-): ChannelMessageSendResult {
-  const receipt =
-    result.receipt ??
-    createMessageReceiptFromOutboundResults({
-      results: result.messageId ? [{ channel: "twitch", messageId: result.messageId }] : [],
-      kind,
-    });
-  return {
-    messageId: result.messageId || receipt.primaryPlatformMessageId,
-    receipt,
-  };
-}
-
-export const twitchMessageAdapter = defineChannelMessageAdapter({
+export const twitchMessageAdapter = createChannelMessageAdapterFromOutbound({
   id: "twitch",
-  durableFinal: {
-    capabilities: {
-      text: true,
-      media: true,
-      messageSendingHooks: true,
-    },
-  },
-  send: {
-    text: async (ctx) => {
-      if (!twitchOutbound.sendText) {
-        throw new Error("Twitch text sending is not available.");
-      }
-      const { onDeliveryResult, ...outboundCtx } = ctx;
-      const result = await twitchOutbound.sendText({
-        ...outboundCtx,
-        ...(onDeliveryResult
-          ? {
-              onDeliveryResult: async (progress) => {
-                await onDeliveryResult(toTwitchMessageSendResult(progress, "text"));
-              },
-            }
-          : {}),
-      });
-      return toTwitchMessageSendResult(result, "text");
-    },
-    media: async (ctx) => {
-      if (!twitchOutbound.sendMedia) {
-        throw new Error("Twitch media sending is not available.");
-      }
-      const { onDeliveryResult, ...outboundCtx } = ctx;
-      const result = await twitchOutbound.sendMedia({
-        ...outboundCtx,
-        ...(onDeliveryResult
-          ? {
-              onDeliveryResult: async (progress) => {
-                await onDeliveryResult(toTwitchMessageSendResult(progress, "media"));
-              },
-            }
-          : {}),
-      });
-      return toTwitchMessageSendResult(result, "media");
-    },
-  },
+  outbound: twitchOutbound,
 });

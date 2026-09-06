@@ -1,0 +1,38 @@
+title: Codex heartbeat compaction preserves exact runtime authority
+
+scenario:
+  id: gateway-codex-heartbeat-compaction
+  surface: runtime
+  coverage:
+    primary:
+      - session-memory.compaction
+    secondary:
+      - session-memory.compaction-retry-policy
+  objective: Verify that a forced system heartbeat compacts an oversized Codex-owned host transcript once, survives Gateway loss before native synchronization, fences substituted or revoked writers before provider I/O, and leaves the next Codex turn usable.
+  successCriteria:
+    - A real built Gateway creates the native binding through a Codex setup turn, then runs the system heartbeat through cron.list, cron.run mode force, and cron.runs.
+    - Fresh restricted ownership commits one host SQLite compaction, count, and byte latch without sending thread/compact/start; the same session completes one successor Codex turn.
+    - Upgraded codex/openclaw ownership exposes one durable host compaction and checkpoint while session:compact:after is held and before any thread/compact/start, then receives exactly one definite native rejection without changing the committed state; the same session remains usable.
+    - A separate upgraded case atomically persists the host event, count, and byte latch before checkpoint persistence or native dispatch, survives SIGKILL and restart on the same state, and forces the unchanged heartbeat without repeating host or native compaction before one successful successor turn.
+    - Writer substitution and an authorized sessions.reset held behind session:compact:before cause zero summary-provider, native compaction, or stale Codex turn/start requests through terminal and no compaction events, checkpoints, count changes, or byte-latch changes; each adds exactly one successor turn/start, while reset appends exactly one boundary and advances the lifecycle.
+    - Every case records before, held, terminal, and after SQLite snapshots plus provider counts, Codex requests, Gateway logs, and QA Channel transcript.
+  regressionRefs:
+    - https://github.com/openclaw/openclaw/pull/136533
+  codeRefs:
+    - test/e2e/qa-lab/runtime/gateway-codex-heartbeat-compaction.ts
+    - test/e2e/qa-lab/runtime/codex-heartbeat-compaction-app-server.fixture.mjs
+    - test/e2e/qa-lab/runtime/gateway-compaction-provider.fixture.ts
+    - test/e2e/qa-lab/runtime/gateway-compaction-state.fixture.ts
+    - src/auto-reply/reply/agent-runner-memory.ts
+    - src/agents/embedded-agent-runner/compact.queued-execution.ts
+    - extensions/codex/src/app-server/compact.ts
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/gateway-codex-heartbeat-compaction.ts
+    timeoutMs: 660000
+    summary: Run after OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build. The producer launches an isolated built Gateway per case, creates a real Codex binding through the deterministic app-server fixture, forces the system-owned heartbeat monitor, and records joined SQLite, provider, app-server, channel, and process evidence.
+    config:
+      requiredProviderMode: mock-openai
+    args:
+      - --artifact-base
+      - ${outputDir}

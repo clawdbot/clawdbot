@@ -18,6 +18,7 @@ import {
   type SystemAgentOverview,
 } from "./overview.js";
 import {
+  hasCurrentSystemAgentOwnerPluginArtifacts,
   resolveSystemAgentVerifiedInferenceRoute,
   type SystemAgentVerifiedInferenceBinding,
 } from "./verified-inference.js";
@@ -125,12 +126,13 @@ async function runOneShot(
   // The planner may take long enough for the verified route to change. Never
   // apply its result under a different inference owner.
   await requireVerifiedInference(opts);
+  const approved = opts.yes === true || !isPersistentSystemAgentOperation(operation);
+  if (approved && isPersistentSystemAgentOperation(operation)) {
+    await requirePersistentApplyInference(opts, runtime);
+  }
   await executeSystemAgentOperation(operation, runtime, {
-    approved: opts.yes === true || !isPersistentSystemAgentOperation(operation),
+    approved,
     deps: systemAgentCommandDepsFromOptions(opts),
-    beforePersistentApply: async () => {
-      await requirePersistentApplyInference(opts, runtime);
-    },
   });
 }
 
@@ -146,6 +148,59 @@ export async function runSystemAgent(
   // Hold one immutable authority snapshot for the whole run. A caller that
   // mutates its input object cannot swap inference owners between planning and apply.
   const boundOpts: RunSystemAgentOptions = { ...opts, verifiedInference: binding };
+  const run = () => runBoundSystemAgent(boundOpts, runtime);
+  const route = binding.execution;
+  if (route.runner !== "embedded" || route.agentHarnessRuntimeOverride === "openclaw") {
+    return await run();
+  }
+  const { resolveAgentWorkspaceDir } = await import("../agents/agent-scope.js");
+  const { loadAgentRuntimePluginRegistryHandle } = await import("../agents/runtime-plugins.js");
+  const { withPluginLifecycleLease } = await import("../plugins/plugin-lifecycle-lease.js");
+  const { withPluginRuntimeRegistryScope } =
+    await import("../plugins/runtime/gateway-request-scope.js");
+  const readSnapshot =
+    boundOpts.deps?.readConfigFileSnapshot ??
+    (await import("../config/config.js")).readConfigFileSnapshot;
+  const registry = await withPluginLifecycleLease({}, async (lease) => {
+    const snapshot = await readSnapshot();
+    const currentArtifacts = await hasCurrentSystemAgentOwnerPluginArtifacts(binding, {
+      ...boundOpts.deps,
+      readConfigFileSnapshot: async () => snapshot,
+    });
+    if (!currentArtifacts) {
+      throw new SystemAgentInferenceUnavailableError("conversation");
+    }
+    const config = snapshot.runtimeConfig ?? snapshot.config;
+    const workspaceDir = resolveAgentWorkspaceDir(config, route.agentId);
+    // Validate and import under the same lifecycle lease. Frozen probe config could
+    // otherwise re-enable a revoked owner or another configured harness during loading.
+    lease.assertOwned();
+    return loadAgentRuntimePluginRegistryHandle({
+      basePluginIds: [],
+      config,
+      workspaceDir,
+      selections: [
+        {
+          provider: route.provider,
+          modelId: route.model,
+          runtime: route.agentHarnessRuntimeOverride,
+          agentId: route.agentId,
+        },
+      ],
+    });
+  });
+  if (!registry) {
+    throw new SystemAgentInferenceUnavailableError("conversation");
+  }
+  // Probe scope has ended; CLI preflight needs its private harness before the first
+  // run prepares an owner. Do not pin metadata or hold the install lease across chat.
+  await withPluginRuntimeRegistryScope(registry, run);
+}
+
+async function runBoundSystemAgent(
+  boundOpts: RunSystemAgentOptions,
+  runtime: RuntimeEnv,
+): Promise<void> {
   await requireVerifiedInference(boundOpts);
   if (boundOpts.json) {
     const overview = await (boundOpts.loadOverview ?? loadSystemAgentOverview)();

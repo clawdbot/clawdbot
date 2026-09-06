@@ -2,22 +2,23 @@
 // Deliberately client-side chrome (like nav width / dock layout), not gateway
 // state: dismissing a nag on one device should not acknowledge it everywhere.
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import type { ScopeUpgradeState } from "../app/device-scope-upgrade-availability.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 
-const SIDEBAR_ATTENTION_KINDS = [
-  "updateAvailable",
+const SIDEBAR_ATTENTION_DISMISSAL_KINDS = [
   "cronFailed",
   "cronOverdue",
   "modelAuthExpired",
-  "pendingApproval",
+  "scopeUpgrade",
+  "updateAvailable",
 ] as const;
-export type SidebarAttentionKind = (typeof SIDEBAR_ATTENTION_KINDS)[number];
 
-export type SidebarAttentionDismissals = Partial<Record<SidebarAttentionKind, string>>;
+export type SidebarAttentionKind = (typeof SIDEBAR_ATTENTION_DISMISSAL_KINDS)[number];
+export type SidebarAttentionDismissal = { kind: SidebarAttentionKind; signature: string };
 
-// Minimal chip shape the snooze logic needs; keeps this module free of the
-// component's item type so the two files cannot form an import cycle.
-type DismissableChip = { kind: SidebarAttentionKind; signature: string };
+export type SidebarAttentionDismissals = Partial<Record<SidebarAttentionKind, string[]>>;
 
 const DISMISSED_STORE_PREFIX = "openclaw.control.sidebarAttention.v1:";
 
@@ -32,14 +33,20 @@ export function loadDismissals(gatewayUrl: string): SidebarAttentionDismissals {
   }
   try {
     const parsed: unknown = JSON.parse(storage.getItem(dismissalStoreKey(gatewayUrl)) ?? "null");
-    if (!parsed || typeof parsed !== "object") {
+    const record = asNullableRecord(parsed);
+    if (!record) {
       return {};
     }
     const result: SidebarAttentionDismissals = {};
-    for (const kind of SIDEBAR_ATTENTION_KINDS) {
-      const value = (parsed as Record<string, unknown>)[kind];
-      if (typeof value === "string") {
-        result[kind] = value;
+    for (const kind of SIDEBAR_ATTENTION_DISMISSAL_KINDS) {
+      const value = record[kind];
+      const signatures = Array.isArray(value)
+        ? value.filter((entry): entry is string => typeof entry === "string")
+        : typeof value === "string"
+          ? [value]
+          : [];
+      if (signatures.length > 0) {
+        result[kind] = [...new Set(signatures)];
       }
     }
     return result;
@@ -48,7 +55,7 @@ export function loadDismissals(gatewayUrl: string): SidebarAttentionDismissals {
   }
 }
 
-export function saveDismissals(gatewayUrl: string, dismissals: SidebarAttentionDismissals) {
+function saveDismissals(gatewayUrl: string, dismissals: SidebarAttentionDismissals) {
   const storage = getSafeLocalStorage();
   if (!storage) {
     return;
@@ -69,14 +76,61 @@ export function saveDismissals(gatewayUrl: string, dismissals: SidebarAttentionD
  * caller-held snapshot: another tab may have dismissed a different chip since
  * this tab last loaded, and a blind write would drop that entry.
  */
-export function addDismissal(
+export function dismissSidebarAttention(
   gatewayUrl: string,
-  kind: SidebarAttentionKind,
-  signature: string,
+  dismissal: SidebarAttentionDismissal,
 ): SidebarAttentionDismissals {
-  const next = { ...loadDismissals(gatewayUrl), [kind]: signature };
+  const stored = loadDismissals(gatewayUrl);
+  const next = {
+    ...stored,
+    [dismissal.kind]: [...new Set([...(stored[dismissal.kind] ?? []), dismissal.signature])],
+  };
   saveDismissals(gatewayUrl, next);
   return next;
+}
+
+export function resolveScopeUpgradeDismissal(params: {
+  scopes: readonly string[] | undefined;
+  state: ScopeUpgradeState;
+}): SidebarAttentionDismissal | null {
+  // Manual repair and an actionable upgrade are distinct incidents.
+  return (params.state.phase === "guidance" || params.state.phase === "available") && params.scopes
+    ? {
+        kind: "scopeUpgrade",
+        signature: JSON.stringify([params.state.phase, ...params.scopes.toSorted()]),
+      }
+    : null;
+}
+
+export function resolveUpdateAttentionDismissal(params: {
+  gatewayBootId?: string | null;
+  updateAvailable?: UpdateAvailable | null;
+  updateSchedule?: UpdateScheduleState | null;
+}): SidebarAttentionDismissal | null {
+  const target = params.updateSchedule?.target;
+  const version =
+    (target?.kind === "package" ? target.version : target?.upstreamSha) ??
+    params.updateAvailable?.upstreamSha ??
+    params.updateAvailable?.latestVersion;
+  const gatewayBootId = params.gatewayBootId?.trim();
+  const normalizedVersion = version?.trim();
+  return gatewayBootId && normalizedVersion
+    ? {
+        kind: "updateAvailable",
+        signature: JSON.stringify([normalizedVersion, gatewayBootId]),
+      }
+    : null;
+}
+
+export function isUpdateAttentionForced(tone: "danger" | "info" | "warn" | null | undefined) {
+  return tone === "warn" || tone === "danger";
+}
+
+export function isSidebarAttentionDismissed(
+  dismissals: SidebarAttentionDismissals,
+  dismissal: SidebarAttentionDismissal,
+): boolean {
+  return dismissals[dismissal.kind]?.includes(dismissal.signature) === true;
 }
 
 /**
@@ -84,22 +138,70 @@ export function addDismissal(
  * that clears and later recurs surfaces again instead of staying hidden by a
  * stale snooze. Returns the input object when nothing changed.
  */
-export function pruneDismissals(
+function pruneDismissals(
   dismissals: SidebarAttentionDismissals,
-  items: readonly DismissableChip[],
+  active: readonly SidebarAttentionDismissal[],
+  scope?: { cronInventoryComplete: boolean; modelAuthAgentId: string | null },
 ): SidebarAttentionDismissals {
   const next: SidebarAttentionDismissals = {};
   let changed = false;
-  for (const kind of SIDEBAR_ATTENTION_KINDS) {
+  for (const kind of SIDEBAR_ATTENTION_DISMISSAL_KINDS) {
     const stored = dismissals[kind];
-    if (stored === undefined) {
+    if (!stored) {
       continue;
     }
-    if (items.some((item) => item.kind === kind && item.signature === stored)) {
-      next[kind] = stored;
-    } else {
+    const current = stored.filter((signature) => {
+      // Selected-agent responses are partial: they may re-arm their own auth
+      // warning, but only an all-agent cron inventory may re-arm cron entries.
+      const authoritative =
+        !scope ||
+        (kind === "modelAuthExpired"
+          ? Boolean(
+              scope.modelAuthAgentId &&
+              (!signature.startsWith("agent:") ||
+                signature.startsWith(`agent:${scope.modelAuthAgentId}\n`)),
+            )
+          : kind === "cronFailed" || kind === "cronOverdue"
+            ? scope.cronInventoryComplete
+            : true);
+      return (
+        !authoritative ||
+        active.some((dismissal) => dismissal.kind === kind && dismissal.signature === signature)
+      );
+    });
+    if (current.length > 0) {
+      next[kind] = current;
+    }
+    if (current.length !== stored.length) {
       changed = true;
     }
   }
   return changed ? next : dismissals;
+}
+
+export function reconcileSidebarAttentionDismissals(params: {
+  active: readonly SidebarAttentionDismissal[];
+  gatewayUrl: string;
+  scope?: { cronInventoryComplete: boolean; modelAuthAgentId: string | null };
+}): SidebarAttentionDismissals {
+  const stored = loadDismissals(params.gatewayUrl);
+  const pruned = pruneDismissals(stored, params.active, params.scope);
+  if (pruned !== stored) {
+    saveDismissals(params.gatewayUrl, pruned);
+  }
+  return pruned;
+}
+
+export function clearSidebarAttentionDismissal(
+  gatewayUrl: string,
+  kind: SidebarAttentionKind,
+): SidebarAttentionDismissals {
+  const stored = loadDismissals(gatewayUrl);
+  if (!stored[kind]) {
+    return stored;
+  }
+  const next = { ...stored };
+  delete next[kind];
+  saveDismissals(gatewayUrl, next);
+  return next;
 }

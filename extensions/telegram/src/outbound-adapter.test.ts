@@ -351,6 +351,88 @@ describe("telegramOutbound", () => {
     });
   });
 
+  it.each([
+    { name: "a nested reaction target", nestedReplyToId: "777" },
+    { name: "a numeric nested reaction target", nestedReplyToId: 777 },
+    {
+      name: "a nested reaction target instead of a different outer reply",
+      nestedReplyToId: "777",
+      outerReplyToId: "888",
+    },
+    {
+      name: "a nested reaction target without turning accompanying text into a reply",
+      nestedReplyToId: "777",
+      text: "Done",
+    },
+    {
+      name: "a nested reaction target while preserving a different text reply",
+      nestedReplyToId: "777",
+      outerReplyToId: "888",
+      text: "Done",
+    },
+  ])("honors $name", async ({ nestedReplyToId, outerReplyToId, text }) => {
+    reactMessageTelegramMock.mockResolvedValueOnce({ ok: true });
+    if (text) {
+      sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-text", chatId: "12345" });
+    }
+
+    const result = await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      ...(outerReplyToId ? { replyToId: outerReplyToId } : {}),
+      payload: {
+        ...(text ? { text } : {}),
+        channelData: {
+          telegram: {
+            reaction: { emoji: "🔥", replyToId: nestedReplyToId },
+          },
+        },
+      },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(reactMessageTelegramMock).toHaveBeenCalledWith("12345", 777, "🔥", expect.any(Object));
+    if (text) {
+      expect(sendMessageTelegramMock).toHaveBeenCalledWith(
+        "12345",
+        text,
+        expect.objectContaining({
+          replyToMessageId: outerReplyToId ? Number(outerReplyToId) : undefined,
+        }),
+      );
+      expect(result.messageId).toBe("tg-text");
+    } else {
+      expect(sendMessageTelegramMock).not.toHaveBeenCalled();
+      expect(result.messageId).toBe("777");
+    }
+  });
+
+  it.each(["0", "-1", "12.5", "9007199254740992", "invalid"])(
+    "rejects invalid explicit nested reaction target %s without using the outer reply",
+    async (nestedReplyToId) => {
+      reactMessageTelegramMock.mockResolvedValueOnce({ ok: true });
+      sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-text", chatId: "12345" });
+
+      await expect(
+        telegramOutbound.sendPayload!({
+          cfg: {} as never,
+          to: "12345",
+          text: "",
+          replyToId: "888",
+          payload: {
+            text: "Done",
+            channelData: { telegram: { reaction: { emoji: "🔥", replyToId: nestedReplyToId } } },
+          },
+          deps: { sendTelegram: sendMessageTelegramMock },
+        }),
+      ).rejects.toThrow("Telegram reaction requires a reply target");
+
+      expect(reactMessageTelegramMock).not.toHaveBeenCalled();
+      expect(sendMessageTelegramMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("applies reaction payloads before sending visible text", async () => {
     reactMessageTelegramMock.mockResolvedValueOnce({ ok: true });
     sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-text", chatId: "12345" });

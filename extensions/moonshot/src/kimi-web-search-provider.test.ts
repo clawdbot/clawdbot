@@ -1,11 +1,11 @@
-// Moonshot tests cover kimi web search provider plugin behavior.
-import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
-import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
+import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { testing } from "../test-api.js";
 import { createKimiWebSearchProvider } from "./kimi-web-search-provider.js";
 
-const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
+const globalBaseUrl = "https://api.moonshot.ai/v1";
+const cnBaseUrl = "https://api.moonshot.cn/v1";
+const explicitBaseUrl = "https://kimi.example/v1";
+const explicitWebSearch = { baseUrl: `${explicitBaseUrl}/`, model: "kimi-k2" };
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -14,9 +14,12 @@ function jsonResponse(body: unknown): Response {
   });
 }
 
-async function executeKimiSearch(query: string): Promise<Record<string, unknown>> {
+async function executeKimiSearch(
+  query: string,
+  cacheTtlMinutes?: number,
+): Promise<Record<string, unknown>> {
   const provider = createKimiWebSearchProvider();
-  const tool = provider.createTool({ config: {}, searchConfig: {} });
+  const tool = provider.createTool({ config: {}, searchConfig: { cacheTtlMinutes } });
   if (!tool) {
     throw new Error("Expected tool definition");
   }
@@ -31,6 +34,7 @@ function expectStringFieldContains(result: Record<string, unknown>, field: strin
 
 describe("kimi web search provider", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -53,70 +57,54 @@ describe("kimi web search provider", () => {
     });
   });
 
-  it("uses configured model and base url overrides with sane defaults", () => {
-    expect(testing.resolveKimiModel()).toBe("kimi-k2.6");
-    expect(testing.resolveKimiModel({ model: "kimi-k2" })).toBe("kimi-k2");
-    expect(testing.resolveKimiBaseUrl()).toBe("https://api.moonshot.ai/v1");
-    expect(testing.resolveKimiBaseUrl({ baseUrl: "https://kimi.example/v1" })).toBe(
-      "https://kimi.example/v1",
-    );
-  });
-
-  it("inherits native Moonshot chat baseUrl when kimi baseUrl is unset", () => {
-    const cnConfig = {
-      models: { providers: { moonshot: { baseUrl: "https://api.moonshot.cn/v1" } } },
-    } as unknown as OpenClawConfig;
-    const cnConfigWithTrailingSlash = {
-      models: { providers: { moonshot: { baseUrl: "https://api.moonshot.cn/v1/" } } },
-    } as unknown as OpenClawConfig;
-
-    expect(testing.resolveKimiBaseUrl(undefined, cnConfig)).toBe("https://api.moonshot.cn/v1");
-    expect(testing.resolveKimiBaseUrl(undefined, cnConfigWithTrailingSlash)).toBe(
-      "https://api.moonshot.cn/v1",
-    );
-  });
-
-  it("does not inherit non-native Moonshot baseUrl for web search", () => {
-    const proxyConfig = {
-      models: { providers: { moonshot: { baseUrl: "https://proxy.example/v1" } } },
-    } as unknown as OpenClawConfig;
-
-    expect(testing.resolveKimiBaseUrl(undefined, proxyConfig)).toBe("https://api.moonshot.ai/v1");
-  });
-
-  it("keeps explicit kimi baseUrl over models.providers.moonshot.baseUrl", () => {
-    const moonshotConfig = {
-      models: { providers: { moonshot: { baseUrl: "https://api.moonshot.cn/v1" } } },
-    } as unknown as OpenClawConfig;
-
-    expect(
-      testing.resolveKimiBaseUrl({ baseUrl: "https://api.moonshot.ai/v1" }, moonshotConfig),
-    ).toBe("https://api.moonshot.ai/v1");
-  });
-
-  it("extracts unique citations from search results and tool call arguments", () => {
-    expect(
-      testing.extractKimiCitations({
-        search_results: [{ url: "https://a.test" }, { url: "https://b.test" }],
-        choices: [
-          {
-            message: {
-              tool_calls: [
-                {
-                  function: {
-                    arguments: JSON.stringify({
-                      url: "https://a.test",
-                      search_results: [{ url: "https://c.test" }],
-                    }),
+  it.each([
+    ["defaults", undefined, {}, globalBaseUrl, "kimi-k2.6"],
+    ["inherits native CN", `${cnBaseUrl}/`, {}, cnBaseUrl, "kimi-k2.6"],
+    ["rejects proxy inheritance", "https://proxy.example/v1", {}, globalBaseUrl, "kimi-k2.6"],
+    ["prefers explicit Kimi config", cnBaseUrl, explicitWebSearch, explicitBaseUrl, "kimi-k2"],
+  ])(
+    "applies %s configuration at the tool boundary",
+    async (name, chatBaseUrl, webSearch, baseUrl, model) => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        jsonResponse({
+          search_results: [{ url: "https://a.test" }],
+          choices: [{ finish_reason: "stop", message: { content: "Grounded answer" } }],
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const tool = createKimiWebSearchProvider().createTool({
+        config: {
+          ...(chatBaseUrl
+            ? { models: { providers: { moonshot: { baseUrl: chatBaseUrl, models: [] } } } }
+            : {}),
+          plugins: {
+            entries: {
+              moonshot: {
+                config: {
+                  webSearch: {
+                    apiKey: "kimi-config-key",
+                    ...webSearch,
                   },
                 },
-              ],
+              },
             },
           },
-        ],
-      }),
-    ).toEqual(["https://a.test", "https://b.test", "https://c.test"]);
-  });
+        },
+        searchConfig: {},
+      } as never);
+      if (!tool) {
+        throw new Error("Expected tool definition");
+      }
+
+      await tool.execute({ query: `Kimi boundary ${name}` });
+      expect(fetchMock.mock.calls[0]?.[0]).toBe(`${baseUrl}/chat/completions`);
+      const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+      expect(headers.get("Authorization")).toBe("Bearer kimi-config-key");
+      expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+        model,
+      });
+    },
+  );
 
   it("returns a structured failure for ungrounded chat-only responses", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
@@ -176,6 +164,7 @@ describe("kimi web search provider", () => {
   it("accepts final responses backed by Kimi web search tool replay", async () => {
     const toolArguments = JSON.stringify({
       query: "OpenClaw GitHub repository",
+      search_results: [{ url: "https://github.com/openclaw/openclaw" }],
       usage: { total_tokens: 1200 },
     });
     const fetchMock = vi
@@ -218,7 +207,7 @@ describe("kimi web search provider", () => {
 
       expect(result.provider).toBe("kimi");
       expectStringFieldContains(result, "content", "OpenClaw is available on GitHub.");
-      expect(result.citations).toEqual([]);
+      expect(result.citations).toEqual(["https://github.com/openclaw/openclaw"]);
       expect(result).not.toHaveProperty("error");
     });
   });
@@ -332,24 +321,49 @@ describe("kimi web search provider", () => {
     });
   });
 
-  it("returns original tool arguments as tool content", () => {
-    const rawArguments = '  {"query":"MacBook Neo","usage":{"total_tokens":123}}  ';
-
-    expect(
-      testing.extractKimiToolResultContent({
-        function: {
-          arguments: rawArguments,
-        },
+  it.each([0, 1])("honors the current Kimi cache TTL of %s minutes", async (cacheTtlMinutes) => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    let content = "Original grounded answer";
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        search_results: [{ url: "https://example.com/kimi" }],
+        choices: [{ finish_reason: "stop", message: { content } }],
       }),
-    ).toBe(rawArguments);
+    );
+    vi.stubGlobal("fetch", fetchMock);
 
-    expect(
-      testing.extractKimiToolResultContent({
-        function: {
-          arguments: "   ",
-        },
-      }),
-    ).toBeUndefined();
+    await withEnvAsync({ KIMI_API_KEY: "kimi-test-key" }, async () => {
+      const query = `Kimi current request cache TTL ${cacheTtlMinutes}`;
+      await executeKimiSearch(query, 15);
+      await expect(executeKimiSearch(query, 15)).resolves.toMatchObject({
+        cached: true,
+        content: expect.stringContaining("Original grounded answer"),
+      });
+      expect(fetchMock).toHaveBeenCalledOnce();
+
+      now.mockReturnValue(1_060_000);
+      content = "Fresh grounded answer";
+      const fresh = await executeKimiSearch(query, cacheTtlMinutes);
+      expect(fresh).not.toHaveProperty("cached");
+      expectStringFieldContains(fresh, "content", "Fresh grounded answer");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+
+      if (cacheTtlMinutes === 0) {
+        await expect(executeKimiSearch(query, 0)).resolves.not.toHaveProperty("cached");
+        expect(fetchMock).toHaveBeenCalledTimes(3);
+        await expect(executeKimiSearch(query, 15)).resolves.toMatchObject({
+          cached: true,
+          content: expect.stringContaining("Original grounded answer"),
+        });
+        expect(fetchMock).toHaveBeenCalledTimes(3);
+      } else {
+        await expect(executeKimiSearch(query, cacheTtlMinutes)).resolves.toEqual({
+          ...fresh,
+          cached: true,
+        });
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+      }
+    });
   });
 
   it("forwards the execution abort signal to an in-flight Kimi search", async () => {
@@ -415,16 +429,6 @@ describe("kimi web search provider", () => {
       await tool.execute({ query });
 
       expect(fetchMock).toHaveBeenCalledTimes(2);
-    });
-  });
-
-  it("uses config apiKey when provided", () => {
-    expect(testing.resolveKimiApiKey({ apiKey: "kimi-test-key" })).toBe("kimi-test-key");
-  });
-
-  it("falls back to env apiKey", () => {
-    withEnv({ [kimiApiKeyEnv]: "kimi-env-key" }, () => {
-      expect(testing.resolveKimiApiKey({})).toBe("kimi-env-key");
     });
   });
 });

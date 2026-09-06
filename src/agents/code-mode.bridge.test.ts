@@ -29,7 +29,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
   });
 
   it("drains a nested combinator after its outer race wins", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const events: string[] = [];
     const nestedStarted = createDeferred();
@@ -140,7 +140,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
           code: `
             const ids = [];
             for (let index = 0; index < 5; index += 1) {
-              const called = await fake_create_ticket({ value: index });
+              const called = await fake_create_ticket({ value: String(index) });
               ids.push(called.input.value);
             }
             return ids;
@@ -150,8 +150,168 @@ describe("Code Mode bridge settlement and cancellation", () => {
     );
 
     expect(details.status).toBe("completed");
-    expect(details.value).toEqual([0, 1, 2, 3, 4]);
+    expect(details.value).toEqual(["0", "1", "2", "3", "4"]);
     expect(ticket.execute).toHaveBeenCalledTimes(5);
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
+  it("rejects an over-cap bridge frontier before dispatching its admitted prefix", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const config = {
+      tools: { codeMode: { enabled: true, maxPendingToolCalls: 2 } },
+    } as never;
+    const ctx = {
+      config,
+      runtimeConfig: config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    };
+    const codeModeTools = createCodeModeTools(ctx);
+    const mutation = pluginTool("fake_mutation", "Record a side effect");
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, mutation],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+        "code-call-frontier-overflow",
+        {
+          code: `return await Promise.all(
+            Array.from({ length: 3 }, (_, index) => fake_mutation({ index })),
+          );`,
+        },
+      ),
+    );
+
+    expect(mutation.execute).not.toHaveBeenCalled();
+    expect(details).toMatchObject({
+      status: "failed",
+      code: "invalid_input",
+      bridgeDispatchStarted: false,
+    });
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
+  it("yields nested exec before the Code Mode deadline when continuation args are omitted", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const config = {
+      tools: { codeMode: { enabled: true, timeoutMs: 10_000 } },
+    } as never;
+    const ctx = {
+      config,
+      runtimeConfig: config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    };
+    const codeModeTools = createCodeModeTools(ctx);
+    const shell = pluginToolWithExecute("exec", "Run shell", async (_toolCallId, input) =>
+      jsonResult(input),
+    );
+    shell.parameters = Type.Object({
+      command: Type.String(),
+      yieldMs: Type.Optional(Type.Number()),
+      background: Type.Optional(Type.Boolean()),
+    });
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, shell],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+        "code-call-shell-yield",
+        {
+          code: `return [
+            await exec({ command: "default" }),
+            await exec({ command: "explicit", yieldMs: 4_000 }),
+            await exec({ command: "background", background: true }),
+          ];`,
+        },
+      ),
+    );
+
+    expect(details).toMatchObject({
+      status: "completed",
+      value: [
+        { command: "default", yieldMs: 1_000 },
+        { command: "explicit", yieldMs: 4_000 },
+        { command: "background", background: true },
+      ],
+    });
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
+  it("bounds nested exec yield by the shared remaining deadline", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+    const catalogRef = createToolSearchCatalogRef();
+    const config = {
+      tools: { codeMode: { enabled: true, timeoutMs: 10_000 } },
+    } as never;
+    const ctx = {
+      config,
+      runtimeConfig: config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    };
+    const codeModeTools = createCodeModeTools(ctx);
+    const consumeBudget = pluginToolWithExecute(
+      "fake_consume_budget",
+      "Consume most of the shared Code Mode deadline",
+      async () => {
+        vi.advanceTimersByTime(9_600);
+        return jsonResult({ consumed: true });
+      },
+    );
+    const shell = pluginToolWithExecute("exec", "Run shell", async (_toolCallId, input) =>
+      jsonResult(input),
+    );
+    shell.parameters = Type.Object({
+      command: Type.String(),
+      yieldMs: Type.Optional(Type.Number()),
+      background: Type.Optional(Type.Boolean()),
+    });
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, consumeBudget, shell],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+        "code-call-late-shell-yield",
+        {
+          code: `
+            await fake_consume_budget({});
+            return await exec({ command: "late" });
+          `,
+        },
+      ),
+    );
+
+    expect(details).toMatchObject({
+      status: "completed",
+      value: { command: "late", yieldMs: 100 },
+    });
+    expect(consumeBudget.execute).toHaveBeenCalledOnce();
+    expect(shell.execute).toHaveBeenCalledOnce();
     expect(testing.activeRuns.size).toBe(0);
   });
 
@@ -205,7 +365,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
   });
 
   it("keeps the actual winner when the later-started nested tool settles first", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const events: string[] = [];
     const firstStarted = createDeferred();
@@ -304,7 +464,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
   ])(
     "drains a detached audit started $label before an awaited nested call",
     async ({ auditCode }) => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
       const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
       const events: string[] = [];
       let auditCompleted = false;
@@ -378,7 +538,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
   );
 
   it("drains a race winner's detached audit and its slower race branch", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const events: string[] = [];
     const loserStarted = createDeferred();
@@ -503,7 +663,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
   it.each(["race", "any"] as const)(
     "preserves the Promise.%s winner while draining the slower nested tool",
     async (combinator) => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
       const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
       const events: string[] = [];
       const slowStarted = createDeferred();
@@ -579,7 +739,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
   );
 
   it("preserves fail-fast Promise.all while draining the slower nested tool", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const events: string[] = [];
     const slowStarted = createDeferred();
@@ -658,40 +818,6 @@ describe("Code Mode bridge settlement and cancellation", () => {
     expect(slowCompleted).toBe(true);
     expect(slowAborted).toBe(false);
     expect(testing.activeRuns.size).toBe(0);
-  });
-
-  it("marks failures after nested tool dispatch as non-retryable bridge failures", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    const sideEffect = pluginToolWithExecute("fake_side_effect", "Side effect", async () =>
-      jsonResult({ ok: true }),
-    );
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, sideEffect],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
-
-    const details = resultDetails(
-      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
-        "code-call-post-dispatch-failure",
-        {
-          code: `
-            await fake_side_effect({});
-            throw new Error("after dispatch");
-          `,
-        },
-      ),
-    );
-
-    expect(sideEffect.execute).toHaveBeenCalledOnce();
-    expect(details).toMatchObject({
-      status: "failed",
-      failurePhase: "bridge",
-      bridgeDispatchStarted: true,
-    });
   });
 
   it("returns an actionable bounded result when a nested tool result exceeds the output budget", async () => {

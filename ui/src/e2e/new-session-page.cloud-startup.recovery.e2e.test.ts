@@ -1,32 +1,90 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   SESSION_LIST_DEFAULTS,
   WORKSPACE,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
+  expectPastedPngImage,
   installMockGateway,
+  ONE_PIXEL_PNG_B64,
+  pastePng,
   pollLocatorText,
   replaceGatewayClient,
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 suite.define(() => {
-  it("retries an ambiguous cloud create with the same session key and machine class", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+  it("retries an ambiguous cloud create with the same account, session key and machine class", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { width: 1280, height: 900 },
+      ...(captureUiProof
+        ? { recordVideo: { dir: suite.artifactDir, size: { width: 1280, height: 900 } } }
+        : {}),
+    });
     const page = await context.newPage();
     const message = "recover the cloud create";
+    const account = {
+      authProfileId: "personal:person-a:openai:one",
+      provider: "openai",
+      label: "Test Person · Personal account",
+      authType: "api_key",
+      selected: false,
+    };
+    const model = {
+      id: "gpt-5.6-luna",
+      provider: "openai",
+      name: "Luna",
+      reasoning: true,
+      effectiveFastMode: true,
+    };
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.create"],
+      agentModel: "openai/gpt-5.6-luna",
+      presenceUsers: [{ id: "person-a", name: "Test Person", self: true }],
+      models: [{ ...model, available: false, unavailableReason: "missing-auth" }],
       workspaceGit: true,
       methodResponses: {
+        "users.listModelAccounts": { profileId: "person-a", accounts: [account], links: [] },
+        "chat.metadata": {
+          cases: [
+            {
+              match: { authProfileId: account.authProfileId },
+              response: {
+                commands: [],
+                models: [{ ...model, available: true }],
+                accountSelection: {
+                  kind: "personal",
+                  authProfileId: account.authProfileId,
+                  label: account.label,
+                  source: "user",
+                },
+              },
+            },
+            {
+              match: {},
+              response: {
+                commands: [],
+                models: [{ ...model, available: false, unavailableReason: "missing-auth" }],
+                accountSelection: { kind: "automatic", label: "Automatic" },
+              },
+            },
+          ],
+        },
         "agents.list": {
           agents: [
             {
               id: "cloud",
               identity: { name: "Cloud" },
               name: "Cloud",
+              model: { primary: "openai/gpt-5.6-luna" },
               workspace: WORKSPACE,
               workspaceGit: true,
             },
@@ -74,8 +132,29 @@ suite.define(() => {
         .poll(() => page.locator("#new-session-where-trigger").getAttribute("data-machine-class"))
         .toBe("fast");
       await page.locator(".new-session-page__message").fill(message);
+      await pastePng(page.locator(".new-session-page__message"));
+      await page.locator('[data-chat-model-select="true"]').click();
+      const picker = page.locator(".chat-model-account__picker");
+      await picker.locator("[data-chat-account-trigger]").click();
+      await picker.getByRole("menuitemradio", { name: account.label, exact: true }).click();
+      await expect
+        .poll(() =>
+          page.getByRole("button", { name: "Start session" }).getAttribute("aria-disabled"),
+        )
+        .toBe("false");
+      await page.keyboard.press("Escape");
+      await page.locator('[data-chat-thinking-select="true"]').click();
+      const fastMode = page.locator("[data-chat-speed-toggle]");
+      await expect.poll(() => fastMode.getAttribute("aria-checked")).toBe("true");
+      await fastMode.click();
+      await expect.poll(() => fastMode.getAttribute("aria-checked")).toBe("false");
+      await page.keyboard.press("Escape");
       await page.getByRole("button", { name: "Start session" }).click();
       const firstCreate = await gateway.waitForRequest("sessions.create");
+      expect(firstCreate.params).toMatchObject({
+        fastMode: false,
+        model: `openai/gpt-5.6-luna@${account.authProfileId}`,
+      });
       const firstKey = (firstCreate.params as { key?: string }).key;
       if (!firstKey) {
         throw new Error("expected the first recovery create to include a session key");
@@ -94,17 +173,53 @@ suite.define(() => {
       await pollLocatorText(
         page.locator("#new-session-where-trigger .new-session-page__trigger-label"),
       ).toBe("aws · fast");
+      await gateway.waitForRequest("chat.metadata");
+      try {
+        await expect
+          .poll(() =>
+            page.getByRole("button", { name: "Start session" }).getAttribute("aria-disabled"),
+          )
+          .toBe("false");
+      } finally {
+        if (captureUiProof) {
+          await writeFile(
+            path.join(suite.artifactDir, "personal-account-recovery.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+              page.locator(".new-session-page__message"),
+            ]),
+          );
+        }
+      }
       await page.getByRole("button", { name: "Start session" }).click();
       const retryCreate = await gateway.waitForRequest("sessions.create");
-      expect(retryCreate.params).toMatchObject({ key: firstKey, message: "", worktree: true });
+      expect(retryCreate.params).toMatchObject({
+        key: firstKey,
+        message: "",
+        worktree: true,
+        fastMode: false,
+        model: `openai/gpt-5.6-luna@${account.authProfileId}`,
+      });
+      expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
+      await gateway.deferNext("sessions.dispatch");
       await gateway.resolveDeferred("sessions.create", { key: firstKey });
 
       expect(await gateway.waitForRequest("sessions.dispatch")).toMatchObject({
         params: { key: firstKey, agentId: "cloud", profileId: "aws", machineClass: "fast" },
       });
+      expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+      await gateway.resolveDeferred("sessions.dispatch");
       expect(await gateway.waitForRequest("sessions.send")).toMatchObject({
-        params: { key: firstKey, agentId: "cloud", message },
+        params: {
+          key: firstKey,
+          agentId: "cloud",
+          message,
+          attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
+        },
       });
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.send")).toHaveLength(1);
+      expect(await gateway.getRequests("users.selectModelAccount")).toHaveLength(0);
       await page.waitForURL((url) => url.pathname === controlUiSessionPath(firstKey), {
         timeout: 30_000,
       });
@@ -138,9 +253,6 @@ suite.define(() => {
         "environments.list": {
           environments: [],
           profiles: [{ id: "aws", providerId: "crabbox" }],
-        },
-        "sessions.describe": {
-          session: { sessionId: "session-late-cloud-create" },
         },
         "sessions.patch": { ok: true },
         "worktrees.branches": {
@@ -177,7 +289,10 @@ suite.define(() => {
         history.pushState(null, "", "new?agent=cloud");
         dispatchEvent(new PopStateEvent("popstate"));
       });
-      await gateway.resolveDeferred("sessions.create", { key: sessionKey });
+      await gateway.resolveDeferred("sessions.create", {
+        key: sessionKey,
+        sessionId: "session-late-cloud-create",
+      });
       const archive = await gateway.waitForRequest("sessions.patch");
       expect(archive.params).toMatchObject({
         key: sessionKey,
@@ -219,7 +334,195 @@ suite.define(() => {
     }
   });
 
-  it("retries an unpersisted cloud turn with its original recovery identity", async () => {
+  it.each([
+    { name: "successful", cleanupError: undefined },
+    { name: "failed", cleanupError: "cleanup unavailable" },
+  ])(
+    "keeps the replacement cloud task intact after $name late cleanup",
+    async ({ cleanupError }) => {
+      const viewport = { height: 900, width: 1_280 };
+      const context = await suite.browser.newContext({
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport,
+        ...(captureUiProof
+          ? {
+              recordVideo: {
+                dir: path.join(suite.artifactDir, "cloud-session-recovery"),
+                size: viewport,
+              },
+            }
+          : {}),
+      });
+      const page = await context.newPage();
+      const message = "restart this interrupted cloud task";
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["sessions.create"],
+        workspaceGit: true,
+        methodResponses: {
+          "agents.list": {
+            agents: [
+              {
+                id: "cloud",
+                identity: { name: "Cloud" },
+                name: "Cloud",
+                workspace: WORKSPACE,
+                workspaceGit: true,
+              },
+            ],
+            defaultId: "cloud",
+            mainKey: "main",
+            scope: "agent",
+          },
+          "environments.list": {
+            environments: [],
+            profiles: [{ id: "aws", providerId: "crabbox" }],
+          },
+          "worktrees.branches": {
+            branches: [{ kind: "local", name: "main" }],
+            defaultBranch: "main",
+            repositoryStatus: "git",
+          },
+          "sessions.patch": { ok: true },
+          "sessions.delete": { deleted: true },
+          "sessions.dispatch": {
+            placement: { state: "active", environmentId: "worker-replacement-create" },
+          },
+          "sessions.send": { runId: "run-replacement-create", status: "started" },
+        },
+      });
+      const readRecovery = () =>
+        page.evaluate(() => {
+          const key = Object.keys(sessionStorage).find((candidate) =>
+            candidate.startsWith("openclaw.new-session.session-placement-recovery.v1:"),
+          );
+          return key
+            ? (JSON.parse(sessionStorage.getItem(key) ?? "null") as {
+                sessionKey: string;
+                message: string;
+                messageId: string;
+                phase: string;
+                target: { kind: string; profileId: string };
+              })
+            : null;
+        });
+
+      try {
+        await page.goto(`${suite.server.baseUrl}new`);
+        await gateway.waitForRequest("environments.list");
+        await page.locator("#new-session-where-trigger").click();
+        await page
+          .locator("wa-popover.new-session-page__where-popover")
+          .getByRole("button", { name: "Cloud · aws" })
+          .click();
+        const composer = page.locator(".new-session-page__message");
+        await composer.fill(message);
+        const start = page.getByRole("button", { name: "Start session" });
+        await start.click();
+        const firstCreate = await gateway.waitForRequest("sessions.create");
+        const abandonedKey = String((firstCreate.params as { key?: string }).key);
+
+        await page.evaluate(() => {
+          history.pushState(null, "", "new?agent=cloud");
+          dispatchEvent(new PopStateEvent("popstate"));
+        });
+        const interrupted = page.getByRole("alert").filter({ hasText: "interrupted" });
+        await interrupted.waitFor();
+        await expect.poll(() => composer.isDisabled()).toBe(true);
+        await expect.poll(() => start.isDisabled()).toBe(true);
+        if (captureUiProof) {
+          await mkdir(path.join(suite.artifactDir, "cloud-session-recovery"), { recursive: true });
+          await writeFile(
+            path.join(suite.artifactDir, "cloud-session-recovery", "01-interrupted.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [interrupted]),
+          );
+        }
+        const reset = interrupted.getByRole("button", { name: "Reset", exact: true });
+        expect(await reset.count()).toBe(1);
+        await reset.click();
+
+        await expect.poll(() => interrupted.count()).toBe(0);
+        await expect.poll(() => composer.isEnabled()).toBe(true);
+        await expect.poll(() => composer.inputValue()).toBe(message);
+        await expect.poll(() => start.isEnabled()).toBe(true);
+        expect(await readRecovery()).toBeNull();
+        if (captureUiProof) {
+          await writeFile(
+            path.join(suite.artifactDir, "cloud-session-recovery", "02-recovered.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [composer]),
+          );
+        }
+
+        const previousCreateCount = (await gateway.getRequests("sessions.create")).length;
+        await gateway.deferNext("sessions.create");
+        await start.click();
+        const nextCreate = await gateway.waitForRequest("sessions.create", {
+          after: previousCreateCount,
+        });
+        const nextKey = String((nextCreate.params as { key?: string }).key);
+        expect(nextKey).not.toBe(abandonedKey);
+        const nextRecovery = await readRecovery();
+        expect(nextRecovery).toMatchObject({
+          sessionKey: nextKey,
+          message,
+          phase: "creating",
+          target: { kind: "profile", profileId: "aws" },
+        });
+
+        await gateway.deferNext("sessions.delete");
+        await gateway.resolveDeferred("sessions.create", {
+          key: abandonedKey,
+          sessionId: "session-abandoned-create",
+        });
+        const deleted = await gateway.waitForRequest("sessions.delete");
+        expect(deleted.params).toMatchObject({
+          key: abandonedKey,
+          archivedOnly: true,
+          expectedSessionId: "session-abandoned-create",
+        });
+        if (cleanupError) {
+          await gateway.rejectDeferred("sessions.delete", {
+            code: "UNAVAILABLE",
+            message: cleanupError,
+          });
+          await page
+            .getByRole("alert")
+            .filter({ hasText: cleanupError })
+            .waitFor({ state: "visible" });
+        } else {
+          await gateway.resolveDeferred("sessions.delete", { deleted: true });
+        }
+        const pendingPrompt = page.locator(".new-session-page__starting .chat-group.user");
+        await pendingPrompt.waitFor({ state: "visible" });
+        await pollLocatorText(pendingPrompt).toContain(message);
+        await pollLocatorText(
+          page.locator(".new-session-page__starting .chat-working-indicator"),
+        ).toContain("Starting");
+        expect(await composer.count()).toBe(0);
+        await expect.poll(readRecovery).toMatchObject({
+          sessionKey: nextKey,
+          messageId: nextRecovery?.messageId,
+          message,
+          phase: "creating",
+        });
+
+        await gateway.resolveDeferred("sessions.create", { key: nextKey });
+        expect(await gateway.waitForRequest("sessions.dispatch")).toMatchObject({
+          params: { key: nextKey, agentId: "cloud", profileId: "aws" },
+        });
+        expect(await gateway.waitForRequest("sessions.send")).toMatchObject({
+          params: { key: nextKey, agentId: "cloud", message },
+        });
+        await page.waitForURL((url) => url.pathname === controlUiSessionPath(nextKey), {
+          timeout: 30_000,
+        });
+      } finally {
+        await context.close();
+      }
+    },
+  );
+
+  it("checks an unconfirmed cloud turn without replay when composer storage is unavailable", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -255,7 +558,7 @@ suite.define(() => {
           defaultBranch: "main",
           repositoryStatus: "git",
         },
-        "sessions.create": { key: sessionKey },
+        "sessions.create": { key: sessionKey, sessionId: "session-storage-recovery" },
         "sessions.dispatch": {
           ok: true,
           key: sessionKey,
@@ -277,7 +580,14 @@ suite.define(() => {
           count: 1,
           defaults: SESSION_LIST_DEFAULTS,
           path: "",
-          sessions: [{ key: sessionKey, kind: "direct", updatedAt: Date.now() }],
+          sessions: [
+            {
+              key: sessionKey,
+              sessionId: "session-storage-recovery",
+              kind: "direct",
+              updatedAt: Date.now(),
+            },
+          ],
           ts: Date.now(),
         },
         "chat.history": {
@@ -310,6 +620,7 @@ suite.define(() => {
         };
       });
       await page.locator(".new-session-page__message").fill(message);
+      await pastePng(page.locator(".new-session-page__message"));
       await page.getByRole("button", { name: "Start session" }).click();
       const firstSend = await gateway.waitForRequest("sessions.send");
       await waitForCommittedChatRoute(page);
@@ -318,23 +629,54 @@ suite.define(() => {
         message: "send outcome unknown",
       });
 
-      const alert = page.locator('.chat-cloud-startup-error[role="alert"]');
+      const alert = page.getByRole("alert").filter({ hasText: "send outcome unknown" });
       await pollLocatorText(alert).toContain("send outcome unknown");
       expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
       await replaceGatewayClient(page);
-      await expect.poll(async () => (await gateway.getRequests("sessions.send")).length).toBe(2);
-
-      const sends = await gateway.getRequests("sessions.send");
-      expect(sends).toHaveLength(2);
-      expect(sends[1]?.params).toMatchObject({
-        idempotencyKey: (firstSend.params as { idempotencyKey: string }).idempotencyKey,
-        key: sessionKey,
+      const retainedTurn = page.locator(".chat-group.user", { hasText: message });
+      const checkDelivery = retainedTurn.getByRole("button", {
+        name: "Check delivery",
+        exact: true,
+      });
+      await checkDelivery.waitFor({ state: "visible" });
+      const historyCount = (await gateway.getRequests("chat.history")).length;
+      await checkDelivery.click();
+      // Background history loads may arrive before this action's request.
+      await expect
+        .poll(async () => (await gateway.getRequests("chat.history")).slice(historyCount))
+        .toContainEqual(
+          expect.objectContaining({
+            params: {
+              sessionKey,
+              limit: 1000,
+              inputRunIds: [(firstSend.params as { idempotencyKey: string }).idempotencyKey],
+            },
+          }),
+        );
+      await pollLocatorText(page.getByRole("alert")).toContain("No matching user message");
+      await expectPastedPngImage(retainedTurn.locator("img.chat-message-image"));
+      await expect
+        .poll(() => page.locator(".agent-chat__composer-combobox textarea").isDisabled())
+        .toBe(true);
+      const recovery = await page.evaluate(() => {
+        const key = Object.keys(sessionStorage).find((candidate) =>
+          candidate.startsWith("openclaw.new-session.session-placement-recovery.v1:"),
+        );
+        return key ? JSON.parse(sessionStorage.getItem(key) ?? "null") : null;
+      });
+      expect(recovery).toMatchObject({
+        phase: "paused",
+        reason: "unconfirmed",
+        messageId: (firstSend.params as { idempotencyKey: string }).idempotencyKey,
+        sessionKey,
         message,
+        attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
+        target: { kind: "profile", profileId: "aws" },
       });
       expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-      const dispatches = await gateway.getRequests("sessions.dispatch");
-      expect(dispatches).toHaveLength(2);
-      expect(dispatches[1]?.params).toMatchObject({ profileId: "aws" });
+      expect(await gateway.getRequests("sessions.send")).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.reclaim")).toHaveLength(0);
     } finally {
       await context.close();
     }

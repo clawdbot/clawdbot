@@ -1,6 +1,7 @@
 // Voice Call tests cover media stream plugin behavior.
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import type {
@@ -10,7 +11,6 @@ import type {
 } from "openclaw/plugin-sdk/realtime-transcription";
 import { createTalkSessionController, type TalkEvent } from "openclaw/plugin-sdk/realtime-voice";
 import { describe, expect, it, vi } from "vitest";
-import { WebSocket } from "ws";
 import { MediaStreamHandler } from "./media-stream.js";
 import {
   connectWs,
@@ -18,6 +18,7 @@ import {
   waitForClose,
   withTimeout,
 } from "./websocket-test-support.js";
+import { WebSocket } from "./websocket.js";
 
 const createStubSession = (): RealtimeTranscriptionSession => ({
   connect: async () => {},
@@ -61,14 +62,6 @@ const requireRecord = (value: unknown, label: string): Record<string, unknown> =
     throw new Error(`Expected ${label} to be a record`);
   }
   return value as Record<string, unknown>;
-};
-
-const requireFirstMockCall = <T extends unknown[]>(calls: readonly T[], label: string): T => {
-  const call = calls.at(0);
-  if (!call) {
-    throw new Error(`Expected ${label}`);
-  }
-  return call;
 };
 
 const requireTalkEvent = (events: TalkEvent[], type: TalkEvent["type"]) => {
@@ -623,10 +616,7 @@ describe("MediaStreamHandler security hardening", () => {
     }
     completeUpgrade({} as WebSocket);
     expect(fakeWss.emit).toHaveBeenCalledOnce();
-    const emitCall = requireFirstMockCall(
-      fakeWss.emit.mock.calls,
-      "websocket connection emit call",
-    );
+    const emitCall = expectDefined(fakeWss.emit.mock.calls.at(0), "websocket connection emit call");
     expect(emitCall[0]).toBe("connection");
     if (!emitCall[1]) {
       throw new Error("Expected websocket connection argument");
@@ -711,8 +701,8 @@ describe("MediaStreamHandler security hardening", () => {
       await vi.waitFor(() => {
         expect(shouldAcceptStream).toHaveBeenCalledOnce();
       });
-      const acceptedStreamCall = requireFirstMockCall(
-        shouldAcceptStream.mock.calls,
+      const acceptedStreamCall = expectDefined(
+        shouldAcceptStream.mock.calls.at(0),
         "accepted stream call",
       );
       const acceptedStream = requireRecord(acceptedStreamCall[0], "accepted stream params");

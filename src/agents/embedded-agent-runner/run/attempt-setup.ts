@@ -46,6 +46,7 @@ import type { SandboxContext } from "../../sandbox/types.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-repair.js";
 import type { AgentSession } from "../../sessions/index.js";
+import { isToolExecutionAllowed } from "../../tool-policy-shared.js";
 import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { log } from "../logger.js";
@@ -55,6 +56,7 @@ import {
   mapSandboxSkillUsagePaths,
   resolveSandboxSkillRuntimeInputs,
 } from "../sandbox-skills.js";
+import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
@@ -71,6 +73,7 @@ import {
   buildAfterTurnRuntimeContext,
   resolveAttemptFsWorkspaceOnly,
 } from "./attempt-prompt-helpers.js";
+import { resolveAttemptStreamAuthProfileId } from "./attempt-run-decisions.js";
 import {
   createEmbeddedRunStageSummaryEmitter,
   createEmbeddedRunStageTracker,
@@ -98,67 +101,77 @@ type AttemptWorkspaceParams = Pick<
   | "execOverrides"
   | "permissionMode"
   | "sandboxSessionKey"
+  | "sandboxAgentId"
   | "sessionId"
   | "sessionKey"
   | "sessionRoot"
-  | "skillWorkshopCollectionReconcile"
   | "skillsSnapshot"
+  | "requireWritableSandbox"
+  | "requireWorkspaceOnly"
   | "workspaceDir"
 >;
 
 /** Resolves the shared workspace and sandbox policy used by native and plugin harnesses. */
 export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspaceParams) {
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+    agentId: params.agentId,
+  });
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   await fs.mkdir(resolvedWorkspace, { recursive: true });
-  const sandboxSessionKey =
-    params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
-  // Collection review is a host-owned maintenance run with one restricted tool.
-  // Sandboxing would hide that tool or redirect it to a disposable workspace.
-  const sandbox = params.skillWorkshopCollectionReconcile
-    ? null
-    : await resolveSandboxContext({
-        config: params.config,
-        execOverrides: params.execOverrides,
-        sessionKey: sandboxSessionKey,
-        skillsSnapshot: params.skillsSnapshot,
-        workspaceDir: resolvedWorkspace,
-      });
+  const sessionKey = params.sessionKey?.trim() || params.sessionId;
+  const sandboxSessionKey = params.sandboxSessionKey?.trim() || sessionKey;
+  const sandbox = await resolveSandboxContext({
+    config: params.config,
+    // Independent policy sessions keep their own owner; unscoped execution retains its prepared one.
+    agentId:
+      params.sandboxAgentId ?? (sandboxSessionKey === sessionKey ? sessionAgentId : undefined),
+    execOverrides: params.execOverrides,
+    sessionKey: sandboxSessionKey,
+    skillsSnapshot: params.skillsSnapshot,
+    workspaceDir: resolvedWorkspace,
+  });
   const effectiveWorkspace =
     sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : resolvedWorkspace;
-  const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
-  if (params.permissionMode && !params.sessionRoot) {
-    throw new Error("session permission mode requires a recorded session root");
+  if (params.requireWritableSandbox && sandbox?.enabled && sandbox.workspaceAccess !== "rw") {
+    throw new Error("sandbox workspace is not read-write; collection review skipped");
   }
-  const sessionPermissionPolicy =
-    params.permissionMode && params.sessionRoot
-      ? { root: params.sessionRoot, mode: params.permissionMode }
-      : undefined;
+  const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
+  // Recorded roots pin worktree/explicit-cwd boundaries; rootless sessions use
+  // the agent's canonical workspace as their permission boundary.
+  const sessionPermissionRoot = params.sessionRoot ?? (await fs.realpath(resolvedWorkspace));
+  const sessionPermissionPolicy = params.permissionMode
+    ? {
+        root: sessionPermissionRoot,
+        mode: params.permissionMode,
+      }
+    : undefined;
   if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
     throw new Error(
       "cwd override is not supported for sandboxed embedded agent runs; omit cwd or use the agent workspace as cwd",
     );
   }
   await fs.mkdir(effectiveWorkspace, { recursive: true });
-  const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.config,
-    agentId: params.agentId,
-  });
   return {
-    defaultAgentId,
     effectiveCwd: sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace),
-    effectiveFsWorkspaceOnly: resolveAttemptFsWorkspaceOnly({
-      config: params.config,
-      sessionAgentId,
-    }),
+    effectiveFsWorkspaceOnly:
+      params.requireWorkspaceOnly === true ||
+      resolveAttemptFsWorkspaceOnly({
+        config: params.config,
+        sessionAgentId,
+      }),
     effectiveWorkspace,
     resolvedWorkspace,
+    sessionPermissionRoot,
     sessionPermissionPolicy,
     sandbox,
     sandboxSessionKey,
     sessionAgentId,
   };
 }
+
+export type EmbeddedAttemptSetup = Awaited<ReturnType<typeof prepareEmbeddedAttemptSetup>>;
 
 export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptParams) {
   // Ultra is a logical orchestration mode, not a provider effort. Preserve it for
@@ -271,6 +284,9 @@ export function installEmbeddedAttemptContextGuards(input: {
   getPrePromptMessageCount: () => number;
   getPromptCache: () => EmbeddedRunAttemptResult["promptCache"];
   getPromptCacheRetention: () => PromptCacheRetention;
+  getCompactionReplayEnabled: () => boolean;
+  getServerToolClearingEnabled: () => boolean;
+  toolResultPromptProjectionState: ToolResultPromptProjectionState;
   getSystemPrompt: () => string;
   onCurrentTurnImageFailure?: (count: number) => void;
   isOpenAIResponsesApi: boolean;
@@ -304,6 +320,12 @@ export function installEmbeddedAttemptContextGuards(input: {
       ? {
           midTurnPrecheck: {
             enabled: true,
+            getReplay: () => ({
+              model: attempt.model,
+              sessionId: attempt.sessionId,
+              authProfileId: resolveAttemptStreamAuthProfileId(attempt),
+              enabled: input.getCompactionReplayEnabled(),
+            }),
             contextTokenBudget,
             reserveTokens: () => settingsManager.getCompactionReserveTokens(),
             toolResultMaxChars,
@@ -343,10 +365,14 @@ export function installEmbeddedAttemptContextGuards(input: {
         lastCacheTouchAt,
         dropThinkingBlocksForEstimate: input.dropThinkingBlocksForEstimate,
         now: Date.now(),
+        projectionState: input.toolResultPromptProjectionState,
+        // Server-side clearing owns new rounds; earlier client projections still
+        // replay so the prefix already sent for this session does not change.
+        pruneNewRounds: !input.getServerToolClearingEnabled(),
+        onPruned: () => {
+          lastCacheTouchAt = Date.now();
+        },
       });
-      if (projected !== sourceMessages) {
-        lastCacheTouchAt = Date.now();
-      }
       return projected;
     };
   }
@@ -471,15 +497,19 @@ export function installEmbeddedAttemptContextGuards(input: {
   };
 }
 
-type AttemptSetup = Awaited<ReturnType<typeof prepareEmbeddedAttemptSetup>>;
-
 export function prepareEmbeddedAttemptSkills(params: {
   attempt: EmbeddedRunAttemptParams;
   effectiveWorkspace: string;
-  sandbox: AttemptSetup["sandbox"];
+  sandbox: EmbeddedAttemptSetup["sandbox"];
   sessionAgentId: string;
 }) {
-  if (params.attempt.operation === "settled-tool-finalization") {
+  const executionAllow = params.attempt.toolExecutionAllow;
+  // Retained schemas are not execution permission. An unreadable skill catalog
+  // creates impossible prerequisites and exposes an ungated Code Mode reader.
+  if (
+    params.attempt.operation === "settled-tool-finalization" ||
+    (executionAllow && !isToolExecutionAllowed(executionAllow, "read"))
+  ) {
     return {
       restoreSkillEnv: () => {},
       skillUsagePaths: undefined,
@@ -534,6 +564,7 @@ export function prepareEmbeddedAttemptSkills(params: {
       skillsPromptWorkspaceDir,
     });
     const skillsPrompt = resolveSkillsPrompt({
+      contextTokenBudget: params.attempt.contextTokenBudget,
       skillsSnapshot,
       entries: promptSkillEntries,
       loadEntries: createSandboxPromptEntryLoader({

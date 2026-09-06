@@ -86,7 +86,11 @@ describe("announce loop guard (#18264)", () => {
       waitForAgent: vi.fn(async () => ({ status: "pending" })),
       sendRecoveryNotice: vi.fn(),
     };
-    registry.activateSubagentRegistry(() => ({ recoveryRuntime }) as never);
+    const gatewayContext = {
+      recoveryRuntime,
+      resolveGatewayContext: () => gatewayContext as never,
+    };
+    registry.activateSubagentRegistry(gatewayContext.resolveGatewayContext);
   }
 
   function requireRunById(runs: SubagentRunRecord[], runId: string): SubagentRunRecord {

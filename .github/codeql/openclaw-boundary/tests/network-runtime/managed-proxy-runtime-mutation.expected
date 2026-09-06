@@ -1,0 +1,2 @@
+| packages/net-policy/src/client-ts.ts:3:1:3:50 | process ... m:8080" | Only managed proxy owner scopes may mutate proxy-related process.env or GLOBAL_AGENT runtime state. |
+| src/infra/net/proxy/proxy-lifecycle.ts:5:3:5:52 | process ... m:8080" | Only managed proxy owner scopes may mutate proxy-related process.env or GLOBAL_AGENT runtime state. |

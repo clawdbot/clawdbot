@@ -13,6 +13,7 @@ import {
 import { listChatCommands } from "./commands-registry.js";
 import { parseActivationCommand } from "./group-activation.js";
 import { markInboundContextLabel } from "./reply/inbound-context-marker.js";
+import { resolveAuthorizedSessionResetCommand } from "./reply/session-reset-command.js";
 import { parseSendPolicyCommand } from "./send-policy.js";
 import type { MsgContext } from "./templating.js";
 import { installDiscordRegistryHooks } from "./test-helpers/command-auth-registry-fixture.js";
@@ -807,17 +808,27 @@ describe("resolveCommandAuthorization", () => {
         );
         const channelId = validTelegram ? "telegram" : failingProvider;
         const channelConfig = channelMode === "configured" ? { allowFrom: ["123"] } : {};
-        const auth = resolveCommandAuthorization({
-          ctx: { SenderId: "123" } as MsgContext,
+        const params = {
+          ctx: { SenderId: "123", commandText: "/reset", rawText: "/reset" } as MsgContext,
           cfg: {
             commands: { allowFrom: { [allowKey]: ["123"] } },
             channels: { [channelId]: channelConfig },
           } as OpenClawConfig,
           commandAuthorized,
+        };
+        const auth = resolveCommandAuthorization(params);
+        const reset = resolveAuthorizedSessionResetCommand({
+          ...params,
+          agentId: "main",
+          isGroup: false,
         });
 
         expect(auth.providerId).toBe(expectedProvider);
         expect(auth.isAuthorizedSender).toBe(expectedAuthorized);
+        expect(reset.resetAuthorized).toBe(expectedAuthorized);
+        expect(reset.resetCommand.matchedResetTriggerLower).toBe(
+          expectedAuthorized ? "/reset" : undefined,
+        );
       },
     );
 

@@ -3,9 +3,10 @@ import {
   buildChannelInboundEventContext,
   type PreparedInboundReply,
 } from "openclaw/plugin-sdk/channel-inbound";
+import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { finalizeInboundContext as finalizeCoreInboundContext } from "openclaw/plugin-sdk/reply-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { vi, type Mock } from "vitest";
-import type { RuntimeEnv, RuntimeLogger } from "../../runtime-api.js";
 import type {
   MatrixConfig,
   MatrixRoomConfig,
@@ -77,7 +78,6 @@ type MatrixHandlerTestHarnessOptions = {
   blockStreamingEnabled?: boolean;
   dmEnabled?: boolean;
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
-  textLimit?: number;
   mediaMaxBytes?: number;
   startupMs?: number;
   startupGraceMs?: number;
@@ -106,9 +106,10 @@ type MatrixHandlerTestHarnessOptions = {
   };
   resolveHumanDelayConfig?: () => undefined;
   dispatchInboundMessage?: MatrixDispatchInboundMessage;
+  runChannelInboundEvent?: MatrixMonitorHandlerParams["core"]["channel"]["inbound"]["run"];
   runPrepared?: MatrixRunPreparedMock;
   inboundDeduper?: MatrixMonitorHandlerParams["inboundDeduper"];
-  shouldAckReaction?: () => boolean;
+  shouldAckReaction?: MatrixMonitorHandlerParams["core"]["channel"]["reactions"]["shouldAckReaction"];
   enqueueSystemEvent?: (...args: unknown[]) => void;
   getRoomInfo?: MatrixMonitorHandlerParams["getRoomInfo"];
   getMemberDisplayName?: MatrixMonitorHandlerParams["getMemberDisplayName"];
@@ -218,7 +219,7 @@ export function createMatrixHandlerTestHarness(
         dispatchResult,
       };
     });
-  const run = vi.fn(
+  const defaultRun = vi.fn(
     async (
       params: Parameters<MatrixMonitorHandlerParams["core"]["channel"]["inbound"]["run"]>[0],
     ) => {
@@ -257,7 +258,17 @@ export function createMatrixHandlerTestHarness(
             cfg: turn.cfg,
             dispatcherOptions: {
               ...turn.dispatcherOptions,
-              deliver: turn.delivery.deliver,
+              // Core resolves the plan's prepared payload before any delivery branch
+              // reads it; a harness that skips that step tests a different pipeline.
+              deliver: async (
+                payload: Parameters<typeof turn.delivery.deliver>[0],
+                info: Parameters<typeof turn.delivery.deliver>[1],
+              ) => {
+                const prepared = turn.delivery.preparePayload
+                  ? await turn.delivery.preparePayload(payload, info)
+                  : payload;
+                return prepared === null ? undefined : await turn.delivery.deliver(prepared, info);
+              },
               onError: turn.delivery.onError,
             },
             replyOptions: turn.replyOptions,
@@ -266,6 +277,7 @@ export function createMatrixHandlerTestHarness(
       });
     },
   );
+  const run = options.runChannelInboundEvent ?? defaultRun;
   const dmPolicy = options.dmPolicy ?? "open";
   const allowFrom = options.allowFrom ?? (dmPolicy === "open" ? ["*"] : []);
   const cfgForHandler =
@@ -369,7 +381,6 @@ export function createMatrixHandlerTestHarness(
     blockStreamingEnabled: options.blockStreamingEnabled ?? false,
     dmEnabled: options.dmEnabled ?? true,
     dmPolicy,
-    textLimit: options.textLimit ?? 8_000,
     mediaMaxBytes: options.mediaMaxBytes ?? 10_000_000,
     startupMs: options.startupMs ?? 0,
     startupGraceMs: options.startupGraceMs ?? 0,

@@ -1,19 +1,22 @@
 /** Builds manifest registry records from installed plugin index snapshots. */
-import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   resolveChannelSetupFieldCliAttributeName,
   type ChannelSetupFieldMetadata,
 } from "../channels/plugins/setup-contract.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { tryReadJsonSync } from "../infra/json-files.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { listBundledSourceOverlayDirs } from "./bundled-source-overlays.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
-import type { PluginCandidate } from "./discovery.js";
-import { hashJson, hashStableJson } from "./installed-plugin-index-hash.js";
+import { discoverConfiguredPluginLoadPaths, type PluginCandidate } from "./discovery.js";
+import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
+import { hashStableJson } from "./installed-plugin-index-hash.js";
 import {
   isInstalledPluginIndexInstallOwnerAmbiguous,
   resolveInstalledPluginIndexInstallOwner,
@@ -31,33 +34,27 @@ import {
   getPackageManifestMetadata,
   normalizeManifestChannelCommandDefaults,
   type OpenClawPackageManifest,
-  type PackageManifest,
   type PluginPackageChannel,
   type PluginPackageChannelCliOption,
 } from "./manifest.js";
-import { isPathInside, safeRealpathSync } from "./path-safety.js";
+import {
+  parsePluginCacheJson,
+  pluginCacheExistsSync,
+  pluginCacheRealpathSync,
+  readPluginCacheFile,
+} from "./plugin-cache-files.js";
+import { getPluginCache } from "./plugin-cache.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
-import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import {
   normalizePluginDependencySpecs,
   type PluginDependencySpecMap,
 } from "./status-dependencies-core.js";
-
-const installedManifestRegistryIndexFingerprintCache = new WeakMap<InstalledPluginIndex, string>();
-const installedPackageMetadataCache = new Map<string, InstalledPackageMetadata>();
-const MAX_INSTALLED_PACKAGE_METADATA_CACHE_ENTRIES = 256;
 
 type InstalledPackageMetadata = {
   packageManifest?: OpenClawPackageManifest;
   packageDependencies?: PluginDependencySpecMap;
   packageOptionalDependencies?: PluginDependencySpecMap;
 };
-
-function clearInstalledManifestRegistryProcessCaches(): void {
-  installedPackageMetadataCache.clear();
-}
-
-registerPluginMetadataProcessMemoLifecycleClear(clearInstalledManifestRegistryProcessCaches);
 
 function isDeepFrozenJsonLike(value: unknown, seen = new WeakSet<object>()): boolean {
   if (!value || typeof value !== "object") {
@@ -74,64 +71,10 @@ function isDeepFrozenJsonLike(value: unknown, seen = new WeakSet<object>()): boo
   return Object.values(value).every((entry) => isDeepFrozenJsonLike(entry, seen));
 }
 
-function isRelativePathInsideOrEqual(relativePath: string): boolean {
-  return (
-    relativePath === "" ||
-    (relativePath !== ".." &&
-      !relativePath.startsWith(`..${path.sep}`) &&
-      !path.isAbsolute(relativePath))
-  );
-}
-
-function resolvePackageJsonPath(
-  record: InstalledPluginIndexRecord,
-  realpathCache: Map<string, string>,
-): string | undefined {
-  if (!record.packageJson?.path) {
-    return undefined;
-  }
-  const rootDir = resolveInstalledPluginRootDir(record);
-  const realRootDir = safeRealpathSync(rootDir, realpathCache) ?? path.resolve(rootDir);
-  const packageJsonPath = path.resolve(realRootDir, record.packageJson.path);
-  const relative = path.relative(realRootDir, packageJsonPath);
-  if (!isRelativePathInsideOrEqual(relative)) {
-    return undefined;
-  }
-  const packageJsonRealPath = safeRealpathSync(packageJsonPath, realpathCache);
-  if (!packageJsonRealPath || !isPathInside(realRootDir, packageJsonRealPath)) {
-    return undefined;
-  }
-  return packageJsonPath;
-}
-
-function rememberInstalledPackageMetadata(
-  key: string | undefined,
-  metadata: InstalledPackageMetadata,
-): InstalledPackageMetadata {
-  if (key) {
-    installedPackageMetadataCache.set(key, metadata);
-    pruneMapToMaxSize(installedPackageMetadataCache, MAX_INSTALLED_PACKAGE_METADATA_CACHE_ENTRIES);
-  }
-  return metadata;
-}
-
-function buildInstalledPackageMetadataCacheKey(
-  record: InstalledPluginIndexRecord,
-): string | undefined {
-  if (!record.packageJson?.path || !record.packageJson.hash) {
-    return undefined;
-  }
-  return hashJson({
-    rootDir: path.resolve(resolveInstalledPluginRootDir(record)),
-    packageJson: record.packageJson,
-    packageChannel: record.packageChannel ?? null,
-  });
-}
-
 export function resolveInstalledManifestRegistryIndexFingerprint(
   index: InstalledPluginIndex,
 ): string {
-  const cached = installedManifestRegistryIndexFingerprintCache.get(index);
+  const cached = getPluginCache().metadata.indexFingerprints.get(index);
   if (cached) {
     return cached;
   }
@@ -145,22 +88,18 @@ export function resolveInstalledManifestRegistryIndexFingerprint(
     policyHash: index.policyHash,
     installRecords: index.installRecords,
     diagnostics: index.diagnostics,
+    // Only bundledDist changes runtime selection; legacy absence and build stamps hash alike.
     plugins: index.plugins.map(
       ({ doctorContractFile: _doctorContractFile, packageBuild, ...plugin }) => ({
         ...plugin,
-        ...(packageBuild
-          ? {
-              packageBuild:
-                packageBuild.bundledDist === undefined
-                  ? {}
-                  : { bundledDist: packageBuild.bundledDist },
-            }
-          : {}),
+        ...(packageBuild?.bundledDist === undefined
+          ? {}
+          : { packageBuild: { bundledDist: packageBuild.bundledDist } }),
       }),
     ),
   });
   if (isDeepFrozenJsonLike(index)) {
-    installedManifestRegistryIndexFingerprintCache.set(index, fingerprint);
+    getPluginCache().metadata.indexFingerprints.set(index, fingerprint);
   }
   return fingerprint;
 }
@@ -173,7 +112,7 @@ function resolveFallbackPluginSource(record: InstalledPluginIndexRecord): string
   const rootDir = resolveInstalledPluginRootDir(record);
   for (const entry of DEFAULT_PLUGIN_ENTRY_CANDIDATES) {
     const candidate = path.join(rootDir, entry);
-    if (fs.existsSync(candidate)) {
+    if (pluginCacheExistsSync(candidate)) {
       return candidate;
     }
   }
@@ -201,23 +140,18 @@ function normalizePackageChannelConfiguredState(
   if (!isRecord(configuredState)) {
     return undefined;
   }
-  const env = isRecord(configuredState.env)
-    ? {
-        ...(normalizeOptionalTrimmedStringList(configuredState.env.allOf)?.length
-          ? { allOf: normalizeOptionalTrimmedStringList(configuredState.env.allOf) }
-          : {}),
-        ...(normalizeOptionalTrimmedStringList(configuredState.env.anyOf)?.length
-          ? { anyOf: normalizeOptionalTrimmedStringList(configuredState.env.anyOf) }
-          : {}),
-      }
-    : undefined;
+  const rawEnv = isRecord(configuredState.env) ? configuredState.env : undefined;
+  const allOf = rawEnv ? normalizeOptionalTrimmedStringList(rawEnv.allOf) : undefined;
+  const anyOf = rawEnv ? normalizeOptionalTrimmedStringList(rawEnv.anyOf) : undefined;
+  const env =
+    allOf || anyOf ? { ...(allOf ? { allOf } : {}), ...(anyOf ? { anyOf } : {}) } : undefined;
   const specifier = normalizeOptionalString(configuredState.specifier);
   const exportName = normalizeOptionalString(configuredState.exportName);
-  return specifier || exportName || (env && Object.keys(env).length > 0)
+  return specifier || exportName || env
     ? {
         ...(specifier ? { specifier } : {}),
         ...(exportName ? { exportName } : {}),
-        ...(env && Object.keys(env).length > 0 ? { env } : {}),
+        ...(env ? { env } : {}),
       }
     : undefined;
 }
@@ -383,6 +317,16 @@ function normalizePackageChannelSetup(setup: unknown): PluginPackageChannel["set
   return { fields };
 }
 
+const PACKAGE_CHANNEL_NORMALIZERS = [
+  ["exposure", normalizePackageChannelExposure],
+  ["commands", normalizeManifestChannelCommandDefaults],
+  ["configuredState", normalizePackageChannelConfiguredState],
+  ["persistedAuthState", normalizePackageChannelPersistedAuthState],
+  ["doctorCapabilities", normalizePackageChannelDoctorCapabilities],
+  ["setup", normalizePackageChannelSetup],
+  ["cliAddOptions", normalizePackageChannelCliOptions],
+] as const;
+
 function normalizePersistedPackageChannel(value: unknown): PluginPackageChannel | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -400,12 +344,15 @@ function normalizePersistedPackageChannel(value: unknown): PluginPackageChannel 
     "docsLabel",
     "blurb",
     "systemImage",
-    "selectionDocsPrefix",
   ] as const) {
     const normalized = normalizeOptionalString(value[key]);
     if (normalized) {
       channel[key] = normalized;
     }
+  }
+  const selectionDocsPrefix = readStringValue(value.selectionDocsPrefix);
+  if (selectionDocsPrefix !== undefined) {
+    channel.selectionDocsPrefix = selectionDocsPrefix;
   }
   if (typeof value.order === "number" && Number.isFinite(value.order)) {
     channel.order = value.order;
@@ -430,15 +377,7 @@ function normalizePersistedPackageChannel(value: unknown): PluginPackageChannel 
       channel[key] = value[key];
     }
   }
-  for (const [key, normalize] of [
-    ["exposure", normalizePackageChannelExposure],
-    ["commands", normalizeManifestChannelCommandDefaults],
-    ["configuredState", normalizePackageChannelConfiguredState],
-    ["persistedAuthState", normalizePackageChannelPersistedAuthState],
-    ["doctorCapabilities", normalizePackageChannelDoctorCapabilities],
-    ["setup", normalizePackageChannelSetup],
-    ["cliAddOptions", normalizePackageChannelCliOptions],
-  ] as const) {
+  for (const [key, normalize] of PACKAGE_CHANNEL_NORMALIZERS) {
     const normalized = normalize(value[key]);
     if (normalized) {
       Object.assign(channel, { [key]: normalized });
@@ -472,72 +411,61 @@ function normalizePreparedManifestRecord(record: PluginManifestRecord): PluginMa
 
 function resolveInstalledPackageMetadata(
   record: InstalledPluginIndexRecord,
-  realpathCache: Map<string, string>,
+  env: NodeJS.ProcessEnv,
 ): InstalledPackageMetadata {
-  const cacheKey = buildInstalledPackageMetadataCacheKey(record);
-  const cached = cacheKey ? installedPackageMetadataCache.get(cacheKey) : undefined;
-  if (cached) {
-    return cached;
-  }
   const recordPackageChannel = normalizePersistedPackageChannel(record.packageChannel);
   const fallbackPackageManifest = recordPackageChannel
-    ? {
-        channel: recordPackageChannel,
-      }
+    ? { channel: recordPackageChannel }
     : undefined;
-  const packageJsonPath = record.packageJson?.path
-    ? resolvePackageJsonPath(record, realpathCache)
-    : undefined;
-  if (!packageJsonPath) {
-    return rememberInstalledPackageMetadata(
-      cacheKey,
-      fallbackPackageManifest ? { packageManifest: fallbackPackageManifest } : {},
-    );
+  const fallback = fallbackPackageManifest ? { packageManifest: fallbackPackageManifest } : {};
+  if (!record.packageJson?.path) {
+    return fallback;
   }
-  const packageJson = tryReadJsonSync<PackageManifest>(packageJsonPath);
-  if (packageJson) {
-    const packageManifest = getPackageManifestMetadata(packageJson);
-    const dependencies = normalizePluginDependencySpecs({
-      dependencies: packageJson.dependencies,
-      optionalDependencies: packageJson.optionalDependencies,
-    });
-    if (!packageManifest) {
-      return rememberInstalledPackageMetadata(cacheKey, {
-        ...(fallbackPackageManifest ? { packageManifest: fallbackPackageManifest } : {}),
-        packageDependencies: dependencies.dependencies,
-        packageOptionalDependencies: dependencies.optionalDependencies,
-      });
-    }
-    const packageChannel = normalizePersistedPackageChannel(packageManifest.channel);
-    const channel =
-      recordPackageChannel || packageChannel
-        ? {
-            ...recordPackageChannel,
-            ...packageChannel,
-          }
-        : undefined;
-    const { channel: _ignoredChannel, ...packageManifestWithoutChannel } = packageManifest;
-    return rememberInstalledPackageMetadata(cacheKey, {
-      packageManifest: {
-        ...packageManifestWithoutChannel,
-        ...(channel ? { channel } : {}),
-      },
+  const rootDir = resolveInstalledPluginRootDir(record);
+  const file = readPluginCacheFile({
+    rootDir,
+    relativePath: record.packageJson.path,
+    rejectHardlinks: shouldRejectHardlinkedPluginFiles({ origin: record.origin, rootDir, env }),
+  });
+  const parsed = file.ok ? parsePluginCacheJson(file) : undefined;
+  if (!parsed?.ok || !isRecord(parsed.value)) {
+    return fallback;
+  }
+  const packageJson = parsed.value;
+  const packageManifest = getPackageManifestMetadata(packageJson);
+  const dependencies = normalizePluginDependencySpecs({
+    dependencies: packageJson.dependencies,
+    optionalDependencies: packageJson.optionalDependencies,
+  });
+  if (!packageManifest) {
+    return {
+      ...fallback,
       packageDependencies: dependencies.dependencies,
       packageOptionalDependencies: dependencies.optionalDependencies,
-    });
+    };
   }
-  return rememberInstalledPackageMetadata(
-    cacheKey,
-    fallbackPackageManifest ? { packageManifest: fallbackPackageManifest } : {},
-  );
+  const packageChannel = normalizePersistedPackageChannel(packageManifest.channel);
+  const channel =
+    recordPackageChannel || packageChannel
+      ? { ...recordPackageChannel, ...packageChannel }
+      : undefined;
+  const { channel: _ignoredChannel, ...packageManifestWithoutChannel } = packageManifest;
+  return {
+    packageManifest: {
+      ...packageManifestWithoutChannel,
+      ...(channel ? { channel } : {}),
+    },
+    packageDependencies: dependencies.dependencies,
+    packageOptionalDependencies: dependencies.optionalDependencies,
+  };
 }
 
 function toPluginCandidate(
   record: InstalledPluginIndexRecord,
-  realpathCache: Map<string, string>,
+  env: NodeJS.ProcessEnv,
 ): PluginCandidate {
   const rootDir = resolveInstalledPluginRootDir(record);
-  const packageMetadata = resolveInstalledPackageMetadata(record, realpathCache);
+  const packageMetadata = resolveInstalledPackageMetadata(record, env);
   return recordPluginCandidateInstallOwner(
     {
       idHint: record.pluginId,
@@ -566,7 +494,25 @@ function toPluginCandidate(
   );
 }
 
+/** Selects installed owners without projecting unrelated manifest fields. */
+export function selectInstalledPluginManifestRecords(
+  index: InstalledPluginIndex,
+  registry: PluginManifestRegistry,
+  pluginIds: ReadonlySet<string> | null,
+  includeDisabled?: boolean,
+): PluginManifestRecord[] {
+  const enabledPluginIds = new Set(
+    index.plugins
+      .filter((plugin) => includeDisabled || plugin.enabled)
+      .map((plugin) => plugin.pluginId),
+  );
+  return registry.plugins.filter(
+    (plugin) => enabledPluginIds.has(plugin.id) && (!pluginIds || pluginIds.has(plugin.id)),
+  );
+}
+
 export function loadPluginManifestRegistryForInstalledIndex(params: {
+  registryPath?: string;
   index: InstalledPluginIndex;
   manifestRegistry?: PluginManifestRegistry;
   config?: OpenClawConfig;
@@ -584,7 +530,6 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
       }
       const env = params.env ?? process.env;
       const pluginIdSet = params.pluginIds?.length ? new Set(params.pluginIds) : null;
-      const realpathCache = new Map<string, string>();
       const diagnostics = pluginIdSet
         ? params.index.diagnostics.filter((diagnostic) => {
             const pluginId = diagnostic.pluginId;
@@ -592,24 +537,50 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
           })
         : params.index.diagnostics;
       if (params.manifestRegistry && !params.bundledChannelConfigCollector) {
-        const enabledPluginIds = new Set(
-          params.index.plugins
-            .filter((plugin) => params.includeDisabled || plugin.enabled)
-            .map((plugin) => plugin.pluginId),
-        );
         return {
-          plugins: params.manifestRegistry.plugins
-            .filter((plugin) => enabledPluginIds.has(plugin.id))
-            .filter((plugin) => !pluginIdSet || pluginIdSet.has(plugin.id))
-            .map(normalizePreparedManifestRecord),
+          plugins: selectInstalledPluginManifestRecords(
+            params.index,
+            params.manifestRegistry,
+            pluginIdSet,
+            params.includeDisabled,
+          ).map(normalizePreparedManifestRecord),
           diagnostics: [...diagnostics],
         };
       }
+      // These selections belong to this process, not the persisted installation inventory.
+      const sourceRoots = new Set(
+        listBundledSourceOverlayDirs({ bundledRoot: resolveBundledPluginsDir(env), env }).map(
+          (root) => pluginCacheRealpathSync(root) ?? root,
+        ),
+      );
+      const loadPaths = params.config?.plugins?.load?.paths ?? [];
+      const configuredSources = new Set(
+        loadPaths.length > 0
+          ? discoverConfiguredPluginLoadPaths({
+              loadPaths,
+              env,
+              workspaceDir: params.workspaceDir,
+            }).candidates.map(
+              (candidate) => pluginCacheRealpathSync(candidate.source) ?? candidate.source,
+            )
+          : [],
+      );
       const candidates = params.index.plugins
         .filter((plugin) => params.includeDisabled || plugin.enabled)
         .filter((plugin) => !pluginIdSet || pluginIdSet.has(plugin.pluginId))
-        .map((plugin) => toPluginCandidate(plugin, realpathCache));
+        .map((plugin) => {
+          const candidate = toPluginCandidate(plugin, env);
+          if (
+            candidate.origin === "bundled" &&
+            (sourceRoots.has(pluginCacheRealpathSync(candidate.rootDir) ?? candidate.rootDir) ||
+              configuredSources.has(pluginCacheRealpathSync(candidate.source) ?? candidate.source))
+          ) {
+            candidate.sourcePreferred = true;
+          }
+          return candidate;
+        });
       return loadPluginManifestRegistryCore({
+        registryPath: params.registryPath,
         config: params.config,
         workspaceDir: params.workspaceDir,
         env,

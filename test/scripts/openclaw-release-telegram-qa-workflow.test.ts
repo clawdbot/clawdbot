@@ -364,7 +364,10 @@ describe("release Telegram QA workflow", () => {
       "timeout-minutes": 210,
     });
     expect(caller?.environment).toBeUndefined();
-    expect(caller?.["continue-on-error"]).toBeUndefined();
+    expect(caller?.outputs?.conclusion).toBe(
+      "${{ steps.dispatch.outputs.conclusion || steps.dispatch.outcome }}",
+    );
+    expect(caller?.["continue-on-error"]).toBe(true);
 
     const trusted = job("trusted_identity");
     expect(trusted).toMatchObject({

@@ -117,8 +117,9 @@ function parseExternalOwnership(
 export function inspectOpenClawStateOwnershipFromDatabase(
   database: DatabaseSync,
   databasePath: string,
+  configMachineStateTableReady = false,
 ): OpenClawExternalStateOwnership | null {
-  if (!tableExists(database, "config_machine_state")) {
+  if (!configMachineStateTableReady && !tableExists(database, "config_machine_state")) {
     return null;
   }
   const row = database
@@ -272,7 +273,9 @@ export async function assertOpenClawStateWriteAllowedAtPath(options: {
   databasePath: string;
   env?: NodeJS.ProcessEnv;
   recoverOrphanedSidecars?: boolean;
+  signal?: AbortSignal;
 }): Promise<void> {
+  options.signal?.throwIfAborted();
   const databasePath = path.resolve(options.databasePath);
   const recoverOrphanedSidecars = options.recoverOrphanedSidecars !== false;
   if (recoverOrphanedSidecars) {
@@ -290,8 +293,9 @@ export async function assertOpenClawStateWriteAllowedAtPath(options: {
     );
     return;
   }
-  const prepared = await prepareSqliteReadOnlyLocation(databasePath);
+  const prepared = await prepareSqliteReadOnlyLocation(databasePath, { signal: options.signal });
   try {
+    options.signal?.throwIfAborted();
     assertOwnershipAllowsWrite(
       inspectOwnershipThroughConnection(prepared.location, databasePath),
       databasePath,
@@ -307,8 +311,15 @@ export function assertOpenClawStateWriteAllowed(options: {
   database: DatabaseSync;
   databasePath: string;
   env?: NodeJS.ProcessEnv;
+  // Only the shared-state lifecycle owner may carry this positive schema fact.
+  // Close/reopen and replacement bootstrap a new owner before setting it again.
+  schemaReady?: boolean;
 }): void {
   const resolvedPath = path.resolve(options.databasePath);
-  const status = inspectOpenClawStateOwnershipFromDatabase(options.database, resolvedPath);
+  const status = inspectOpenClawStateOwnershipFromDatabase(
+    options.database,
+    resolvedPath,
+    options.schemaReady,
+  );
   assertOwnershipAllowsWrite(status, resolvedPath, options.env ?? process.env);
 }

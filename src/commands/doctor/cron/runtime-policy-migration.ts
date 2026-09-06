@@ -1,6 +1,10 @@
 // Doctor-only runtime policy repair for migrated cron Codex model refs.
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
-import { tryResolveDefaultAgentId } from "../../../agents/agent-scope-config.js";
+import { tryResolveAmbientOwnerAgentId } from "../../../agents/agent-scope-config.js";
+import {
+  inheritLegacyDefaultAgentId,
+  tryGetLegacyDefaultAgentId,
+} from "../../../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
 import {
@@ -8,7 +12,11 @@ import {
   normalizeRuntimeString,
   type LegacyCodexModelIdentity,
 } from "../shared/codex-route-model-ref.js";
-import type { CronCodexRuntimePolicyTarget } from "./store-migration.js";
+import type { ModelRefRepair } from "../shared/retired-model-ref-repair.js";
+import {
+  cronCodexRuntimePolicyTargetKey,
+  type CronCodexRuntimePolicyTarget,
+} from "./store-migration.js";
 
 type MutableRecord = Record<string, unknown>;
 
@@ -25,13 +33,18 @@ function ensureRecord(container: MutableRecord, key: string): MutableRecord {
 function resolvePolicyOwner(params: {
   cfg: OpenClawConfig;
   target: CronCodexRuntimePolicyTarget;
-}): { owner: MutableRecord; path: string } | undefined {
+}): { owner: MutableRecord; path: string; agentId: string } | undefined {
   const root = isRecord(params.cfg) ? params.cfg : {};
   const agents = ensureRecord(root, "agents");
   const requestedAgentId = params.target.agentId
     ? normalizeAgentId(params.target.agentId)
     : undefined;
-  const defaultAgentId = tryResolveDefaultAgentId(params.cfg);
+  // The roster writer pins ownerless jobs to the retained legacy owner.
+  // Plan policy for that durable owner, which can differ from the system agent.
+  const defaultAgentId = tryResolveAmbientOwnerAgentId(
+    params.cfg,
+    tryGetLegacyDefaultAgentId(params.cfg),
+  );
   const effectiveAgentId = requestedAgentId ?? defaultAgentId;
   if (!effectiveAgentId) {
     return undefined;
@@ -42,7 +55,11 @@ function resolvePolicyOwner(params: {
     : undefined;
   const keyedRecord = asOptionalRecord(keyedEntry?.[1]);
   if (keyedEntry && keyedRecord) {
-    return { owner: keyedRecord, path: `agents.entries.${keyedEntry[0]}` };
+    return {
+      owner: keyedRecord,
+      path: `agents.entries.${keyedEntry[0]}`,
+      agentId: effectiveAgentId,
+    };
   }
   const list = Array.isArray(agents.list) ? agents.list : [];
   const owner = list.find((entry) => {
@@ -51,10 +68,14 @@ function resolvePolicyOwner(params: {
   });
   const record = asOptionalRecord(owner);
   if (record) {
-    return { owner: record, path: `agents.list.${effectiveAgentId}` };
+    return { owner: record, path: `agents.list.${effectiveAgentId}`, agentId: effectiveAgentId };
   }
   return !requestedAgentId || requestedAgentId === defaultAgentId
-    ? { owner: ensureRecord(agents, "defaults"), path: "agents.defaults" }
+    ? {
+        owner: ensureRecord(agents, "defaults"),
+        path: "agents.defaults",
+        agentId: effectiveAgentId,
+      }
     : undefined;
 }
 
@@ -79,7 +100,7 @@ export function repairCronCodexRuntimePolicies(params: {
       changedTargets: [],
     };
   }
-  const next = structuredClone(params.cfg);
+  const next = inheritLegacyDefaultAgentId(params.cfg, structuredClone(params.cfg));
   const changes: string[] = [];
   const warnings: string[] = [];
   const blockedTargets: CronCodexRuntimePolicyTarget[] = [];
@@ -158,8 +179,38 @@ export function planCronCodexRefRewriteAgainstPersistedConfig(params: {
   cfg: OpenClawConfig;
   targets: ReadonlyArray<CronCodexRuntimePolicyTarget>;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
+  resolveFinalModelRef?: (input: { modelRef: string; agentId: string }) => ModelRefRepair;
 }): { warnings: string[]; blockedTargets: CronCodexRuntimePolicyTarget[] } {
-  const policyPlan = repairCronCodexRuntimePolicies(params);
+  const planningConfig = inheritLegacyDefaultAgentId(params.cfg, structuredClone(params.cfg));
+  const targets = params.targets.map((original) => {
+    const blocked = isBlockedLegacyCodexModelRef({
+      modelRef: original.legacyModelRef ?? original.modelRef,
+      blockedModelIdentities: params.blockedModelIdentities,
+    });
+    const owner = blocked
+      ? undefined
+      : resolvePolicyOwner({ cfg: planningConfig, target: original });
+    const decision =
+      owner && params.resolveFinalModelRef
+        ? params.resolveFinalModelRef({ modelRef: original.modelRef, agentId: owner.agentId })
+        : { kind: "unchanged" as const };
+    const planned =
+      decision.kind === "clear"
+        ? undefined
+        : decision.kind === "replace"
+          ? { ...original, modelRef: decision.modelRef }
+          : original;
+    return { original, planned };
+  });
+  const policyPlan = repairCronCodexRuntimePolicies({
+    ...params,
+    targets: targets.flatMap(({ planned }) => (planned ? [planned] : [])),
+  });
+  const blockedKeys = new Set(
+    [...policyPlan.blockedTargets, ...policyPlan.changedTargets].map(
+      cronCodexRuntimePolicyTargetKey,
+    ),
+  );
   // Keep every raw stored identity: the downstream filter matches on the raw
   // (agentId, modelRef) key, so collapsing identities that merely normalize to
   // the same agent would let the sibling job bypass the block.
@@ -171,6 +222,8 @@ export function planCronCodexRefRewriteAgainstPersistedConfig(params: {
           `Retained the legacy cron route for ${target.modelRef} because its model-scoped agentRuntime.id="codex" policy is not present in persisted config; rerun doctor --fix.`,
       ),
     ],
-    blockedTargets: [...policyPlan.blockedTargets, ...policyPlan.changedTargets],
+    blockedTargets: targets.flatMap(({ original, planned }) =>
+      planned && blockedKeys.has(cronCodexRuntimePolicyTargetKey(planned)) ? [original] : [],
+    ),
   };
 }

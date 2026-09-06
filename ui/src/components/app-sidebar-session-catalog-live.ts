@@ -63,17 +63,6 @@ export function sessionCatalogListClient(
   return snapshot.client;
 }
 
-function isLegacyProgressIdRejection(error: unknown): boolean {
-  if (!(error instanceof GatewayRequestError) || error.gatewayCode !== "INVALID_REQUEST") {
-    return false;
-  }
-  const message = error.message.toLowerCase();
-  return (
-    message.includes("progressid") &&
-    /(?:unexpected|unknown|unrecognized) property|additional propert(?:y|ies)/.test(message)
-  );
-}
-
 function isSessionsCatalogHostEvent(value: unknown): value is SessionsCatalogHostEvent {
   const event = asNullableRecord(value);
   const catalog = asNullableRecord(event?.catalog);
@@ -103,10 +92,9 @@ export class SessionCatalogLiveState {
   requestGeneration: number | null = null;
   sawChange = false;
   refreshPending = false;
-  progressive = true;
 
   private activationTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  private connectionEpoch = 0;
+  private activationQueueIfActive = false;
   private refetchOwner: symbol | null = null;
   private presenceSignature: string | null = null;
   private progressSequence = 0;
@@ -137,47 +125,6 @@ export class SessionCatalogLiveState {
     this.sawChange = false;
     this.refreshPending = false;
     this.refetchOwner = null;
-  }
-
-  resetConnection() {
-    this.retireConnection(true);
-  }
-
-  retireConnection(reset = false): void {
-    this.clear();
-    if (reset) {
-      this.connectionEpoch += 1;
-      this.progressive = true;
-    }
-  }
-
-  async requestList(
-    client: GatewayBrowserClient,
-    agentId: string,
-    progressId: string,
-  ): Promise<SessionsCatalogListResult> {
-    const connectionEpoch = this.connectionEpoch;
-    const baseParams = { agentId, limitPerHost: 40 };
-    let progressive = this.progressive;
-    let result: SessionsCatalogListResult;
-    try {
-      result = await client.request("sessions.catalog.list", {
-        ...baseParams,
-        ...(progressive ? { progressId } : {}),
-      });
-    } catch (error) {
-      if (!progressive || !isLegacyProgressIdRejection(error)) {
-        throw error;
-      }
-      // Older Gateways advertise the list method but reject the additive field.
-      // Retry once without streaming, then keep that connection on final pages.
-      result = await client.request("sessions.catalog.list", baseParams);
-      progressive = false;
-    }
-    if (connectionEpoch === this.connectionEpoch) {
-      this.progressive = progressive;
-    }
-    return result;
   }
 
   mergeFinal(catalogs: SessionCatalog[], currentCatalogs: readonly SessionCatalog[]) {
@@ -309,7 +256,15 @@ export class SessionCatalogLiveState {
       const rawId = typeof record.deviceId === "string" ? record.deviceId : record.instanceId;
       const id = typeof rawId === "string" ? rawId.trim().toLowerCase() : "";
       const mode = typeof record.mode === "string" ? record.mode.trim().toLowerCase() : "";
-      if (!id || mode === "gateway") {
+      // Catalog hosts are native nodes. Browser/operator churn cannot change that inventory;
+      // older nodes may omit mode, so only then does the authenticated role decide.
+      const isNodePresence = mode
+        ? mode === "node"
+        : Array.isArray(record.roles) &&
+          record.roles.some(
+            (role) => typeof role === "string" && role.trim().toLowerCase() === "node",
+          );
+      if (!id || !isNodePresence) {
         continue;
       }
       const reason = typeof record.reason === "string" ? record.reason.trim().toLowerCase() : "";
@@ -351,9 +306,11 @@ export class SessionCatalogLiveState {
     }
     const currentCatalog = params.catalogs.find((catalog) => catalog.id === event.catalog.id);
     let catalogs: SessionCatalog[];
+    let nextCatalog: SessionCatalog;
     if (!currentCatalog) {
-      catalogs = [...params.catalogs, { ...event.catalog, hosts: [freshHost] }].toSorted(
-        (left, right) => left.id.localeCompare(right.id),
+      nextCatalog = { ...event.catalog, hosts: [freshHost] };
+      catalogs = [...params.catalogs, nextCatalog].toSorted((left, right) =>
+        left.id.localeCompare(right.id),
       );
     } else {
       const currentHost = currentCatalog.hosts.find((host) => host.hostId === freshHost.hostId);
@@ -364,20 +321,30 @@ export class SessionCatalogLiveState {
       const hosts = currentHost
         ? currentCatalog.hosts.map((host) => (host.hostId === freshHost.hostId ? mergedHost : host))
         : [...currentCatalog.hosts, mergedHost];
+      nextCatalog = {
+        ...event.catalog,
+        hosts: hosts.toSorted((left, right) => left.label.localeCompare(right.label)),
+      };
       catalogs = params.catalogs.map((catalog) =>
-        catalog.id === event.catalog.id
-          ? {
-              ...event.catalog,
-              hosts: hosts.toSorted((left, right) => left.label.localeCompare(right.label)),
-            }
-          : catalog,
+        catalog.id === event.catalog.id ? nextCatalog : catalog,
       );
     }
-    if (JSON.stringify(catalogs) === JSON.stringify(params.catalogs)) {
+    const currentHost = currentCatalog?.hosts.find((host) => host.hostId === freshHost.hostId);
+    const nextHost = nextCatalog.hosts.find((host) => host.hostId === freshHost.hostId);
+    const sameCatalogMetadata =
+      currentCatalog !== undefined &&
+      currentCatalog.label === nextCatalog.label &&
+      JSON.stringify(currentCatalog.capabilities) === JSON.stringify(nextCatalog.capabilities) &&
+      JSON.stringify(currentCatalog.error) === JSON.stringify(nextCatalog.error);
+    if (sameCatalogMetadata && JSON.stringify(currentHost) === JSON.stringify(nextHost)) {
       return null;
     }
     const materialChange =
-      sessionCatalogMaterialSnapshot(catalogs) !== sessionCatalogMaterialSnapshot(params.catalogs);
+      !currentCatalog ||
+      !currentHost ||
+      !nextHost ||
+      sessionCatalogMaterialSnapshot([{ ...nextCatalog, hosts: [nextHost] }]) !==
+        sessionCatalogMaterialSnapshot([{ ...currentCatalog, hosts: [currentHost] }]);
     this.sawChange ||= materialChange;
     return { catalogs, catalogId: event.catalog.id, materialChange };
   }
@@ -397,14 +364,20 @@ export class SessionCatalogLiveState {
     visible: boolean;
     connected: boolean;
     generation: number;
+    queueIfActive: boolean;
     refresh: () => void;
   }) {
     if (!params.visible || !params.connected) {
       return;
     }
+    // Focus can fire without a hidden interval. Preserve the existing freshness poll and
+    // do not queue behind an active request unless a real visibility/presence change occurred.
+    if (!params.queueIfActive && this.timer !== null) {
+      return;
+    }
     this.cancelTimer();
     if (this.requestGeneration === params.generation) {
-      this.refreshPending = true;
+      this.refreshPending ||= params.queueIfActive;
       return;
     }
     params.refresh();
@@ -412,6 +385,7 @@ export class SessionCatalogLiveState {
 
   cancelActivation() {
     this.cancelTimer("activationTimer");
+    this.activationQueueIfActive = false;
   }
 
   cancelScheduledRefreshes() {
@@ -419,7 +393,8 @@ export class SessionCatalogLiveState {
     this.cancelActivation();
   }
 
-  scheduleActivation(refresh: () => void) {
+  scheduleActivation(queueIfActive: boolean, refresh: (queueIfActive: boolean) => void) {
+    this.activationQueueIfActive ||= queueIfActive;
     if (this.activationTimer !== null) {
       return;
     }
@@ -427,7 +402,9 @@ export class SessionCatalogLiveState {
     // One short window keeps the burst to a single fleet scan.
     this.activationTimer = globalThis.setTimeout(() => {
       this.activationTimer = null;
-      refresh();
+      const shouldQueue = this.activationQueueIfActive;
+      this.activationQueueIfActive = false;
+      refresh(shouldQueue);
     }, 50);
   }
 }
@@ -463,7 +440,11 @@ export async function refreshSessionCatalogsLive(params: {
     client === params.currentClient();
   const revisionIsCurrent = () => requestIsCurrent() && revision === params.currentRevision();
   try {
-    const result = await live.requestList(client, params.agentId, progressId);
+    const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
+      agentId: params.agentId,
+      limitPerHost: 40,
+      progressId,
+    });
     if (!requestIsCurrent() || !result?.catalogs) {
       return;
     }

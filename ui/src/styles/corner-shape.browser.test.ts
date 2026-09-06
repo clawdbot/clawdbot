@@ -76,10 +76,10 @@ const CORNER_CASES: readonly CornerCase[] = [
     superelliptical: "17.5px",
   },
   {
-    circular: "10px",
+    circular: "20px",
     markup: '<div class="agent-chat__input">Composer</div>',
     selector: ".agent-chat__input",
-    superelliptical: "12.5px",
+    superelliptical: "25px",
   },
   {
     circular: "10px",
@@ -115,6 +115,12 @@ const CORNER_CASES: readonly CornerCase[] = [
     superelliptical: "12.5px",
   },
   {
+    circular: "20px",
+    markup: '<div class="agent-chat__input"><div class="slash-menu">Menu</div></div>',
+    selector: ".agent-chat__input .slash-menu",
+    superelliptical: "25px",
+  },
+  {
     circular: "6px",
     markup: "",
     selector: ".slash-menu-item",
@@ -139,13 +145,8 @@ const CORNER_CASES: readonly CornerCase[] = [
     superelliptical: "8.5px",
   },
   {
-    // Real DOM shape from chat-thread-interactions.ts. Found and fixed
-    // alongside the two P2s above during a final invariant sweep of every
-    // selector in the base.css corner block: this one already scaled its
-    // (bottom-only) radius but never carried corner-shape, same "radius
-    // grew, shape didn't follow" gap as the menu items. Its only non-zero
-    // corners are the bottom two (`border-radius: 0 0 var(...) var(...)`),
-    // so this is the one case that needs the bottom-left probe.
+    // The search bar rounds only its bottom corners. Probe bottom-left to
+    // verify its radius and shape stay aligned with the adjacent card.
     circular: "14px",
     corner: "bottomLeft",
     markup: '<div class="agent-chat__search-bar"><input type="text" /></div>',
@@ -203,6 +204,10 @@ const EXCLUDED_CASES: readonly CornerCase[] = [
 
 const ALL_CASES = [...CORNER_CASES, ...ROUND_CASES, ...EXCLUDED_CASES];
 
+// CSSOM can serialize the same circular shape as round or superellipse(1).
+// https://drafts.csswg.org/css-borders-4/#valdef-corner-shape-value-round
+const CIRCULAR_SHAPE = expect.stringMatching(/^(?:round|superellipse\(1\))$/);
+
 // The radius tokens themselves, read at :root exactly like
 // collectMcpAppStyleVariables() in mcp-app-theme.ts reads them for embedded
 // MCP apps. They must stay canonical/unscaled even under the superelliptical
@@ -223,6 +228,8 @@ function readUiCss(): string {
     "ui/src/styles/layout.css",
     "ui/src/styles/option-card.css",
     "ui/src/styles/chat/layout.css",
+    "ui/src/styles/chat/message-layout.css",
+    "ui/src/styles/chat/composer.css",
     "ui/src/styles/settings-controls.css",
     "ui/src/styles/settings.css",
     "ui/src/pages/activity/run-inspector.css",
@@ -296,14 +303,14 @@ beforeAll(async () => {
     return;
   }
   const css = readUiCss();
-  expect(css.split(SUPPORTS_CONDITION)).toHaveLength(2);
+  expect(css).toContain(SUPPORTS_CONDITION);
   fixtureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "corner-shape-"));
   superellipticalFixture = path.join(fixtureDirectory, "superelliptical.html");
   circularFixture = path.join(fixtureDirectory, "circular.html");
   fs.writeFileSync(superellipticalFixture, fixtureDocument(css), "utf8");
   fs.writeFileSync(
     circularFixture,
-    fixtureDocument(css.replace(SUPPORTS_CONDITION, UNSUPPORTED_CONDITION)),
+    fixtureDocument(css.replaceAll(SUPPORTS_CONDITION, UNSUPPORTED_CONDITION)),
     "utf8",
   );
   browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
@@ -328,11 +335,11 @@ describeCornerShape("Control UI corner curvature", () => {
         ]),
         ...ROUND_CASES.map((corner) => [
           corner.selector,
-          { radius: corner.superelliptical, shape: "round" },
+          { radius: corner.superelliptical, shape: CIRCULAR_SHAPE },
         ]),
         ...EXCLUDED_CASES.map((corner) => [
           corner.selector,
-          { radius: corner.superelliptical, shape: "round" },
+          { radius: corner.superelliptical, shape: CIRCULAR_SHAPE },
         ]),
       ]),
     );
@@ -343,7 +350,10 @@ describeCornerShape("Control UI corner curvature", () => {
 
     expect(probe).toEqual(
       Object.fromEntries(
-        ALL_CASES.map((corner) => [corner.selector, { radius: corner.circular, shape: "round" }]),
+        ALL_CASES.map((corner) => [
+          corner.selector,
+          { radius: corner.circular, shape: CIRCULAR_SHAPE },
+        ]),
       ),
     );
   });

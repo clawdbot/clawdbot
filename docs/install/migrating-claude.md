@@ -124,8 +124,10 @@ When `--from` points at a project root, OpenClaw imports only that project's Cla
 Apply refuses to continue when the plan reports conflicts (a file or config value already exists at the target).
 
 <Warning>
-Rerun with `--overwrite` only when replacing the existing target is intentional. Providers may still write item-level backups for overwritten files in the migration report directory.
+Rerun with `--overwrite` only when replacing the existing target is intentional.
 </Warning>
+
+Before overwriting a skill generated from a Claude command, OpenClaw backs up its whole directory and records the path in the item's `details.backupPath` in `report.json`. That path remains available if the overwrite fails. If the command source cannot be read, migration reports an error without changing the existing skill.
 
 For a fresh OpenClaw install, conflicts are unusual. They typically appear when you re-run the import on a setup that already has user edits.
 

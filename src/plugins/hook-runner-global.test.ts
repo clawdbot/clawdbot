@@ -74,6 +74,25 @@ describe("hook-runner-global", () => {
     await expectGlobalRunnerState({ hasRunner: false });
   });
 
+  it("checks scoped reply dispatch with only the host dispatch kind", async () => {
+    const registry = createMockPluginRegistry([]);
+    registry.typedHooks.push({
+      pluginId: "acp-dispatch",
+      hookName: "reply_dispatch",
+      handler: vi.fn(),
+      eligibleDispatchKinds: ["acp"],
+      source: "test",
+    });
+    const mod = await importHookRunnerGlobalModule();
+    setActivePluginRegistry(registry);
+    mod.initializeGlobalHookRunner(registry);
+
+    expect(mod.hasGlobalHooks("reply_dispatch", { dispatchKind: "agent" })).toBe(false);
+    expect(mod.hasGlobalHooks("reply_dispatch", { dispatchKind: "acp" })).toBe(true);
+    expect(mod.hasGlobalHooks("reply_dispatch", {})).toBe(true);
+    expect(mod.hasGlobalHooks("reply_dispatch")).toBe(true);
+  });
+
   it.each([
     {
       hookName: "before_tool_call" as const,

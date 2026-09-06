@@ -80,22 +80,6 @@ export function computeChatAudioWaveformPeaks(
   return maximum > 0 ? peaks.map((peak) => peak / maximum) : peaks;
 }
 
-function trimChatAudioBlobCache(): void {
-  while (
-    chatAudioBlobCache.size > CHAT_AUDIO_BLOB_CACHE_MAX_ENTRIES ||
-    [...chatAudioBlobCache.values()].reduce((total, entry) => total + entry.sizeBytes, 0) >
-      CHAT_AUDIO_BLOB_CACHE_MAX_BYTES
-  ) {
-    const evictable = [...chatAudioBlobCache].find(([, entry]) => entry.retainCount === 0);
-    if (!evictable) {
-      return;
-    }
-    const [cacheKey, entry] = evictable;
-    chatAudioBlobCache.delete(cacheKey);
-    URL.revokeObjectURL(entry.blobUrl);
-  }
-}
-
 function makeRoomForChatAudioBlob(sizeBytes: number): boolean {
   if (sizeBytes > CHAT_AUDIO_BLOB_CACHE_MAX_BYTES) {
     return false;
@@ -117,15 +101,10 @@ function makeRoomForChatAudioBlob(sizeBytes: number): boolean {
   return true;
 }
 
-export function retainCachedChatAudioBlob(
-  cacheKey: string,
-): { value: CachedChatAudioBlob; release: () => void } | null {
-  const entry = chatAudioBlobCache.get(cacheKey);
-  if (!entry) {
-    return null;
-  }
-  chatAudioBlobCache.delete(cacheKey);
-  chatAudioBlobCache.set(cacheKey, entry);
+function retainChatAudioBlobEntry(entry: ChatAudioBlobCacheEntry): {
+  value: CachedChatAudioBlob;
+  release: () => void;
+} {
   entry.retainCount += 1;
   let released = false;
   return {
@@ -135,13 +114,23 @@ export function retainCachedChatAudioBlob(
         return;
       }
       released = true;
-      const current = chatAudioBlobCache.get(cacheKey);
-      if (current && current.retainCount > 0) {
-        current.retainCount -= 1;
-      }
-      trimChatAudioBlobCache();
+      // Insertion enforces both cache caps and never evicts a retained entry.
+      // Release only makes this exact entry eligible for a later insertion.
+      entry.retainCount -= 1;
     },
   };
+}
+
+export function retainCachedChatAudioBlob(
+  cacheKey: string,
+): { value: CachedChatAudioBlob; release: () => void } | null {
+  const entry = chatAudioBlobCache.get(cacheKey);
+  if (!entry) {
+    return null;
+  }
+  chatAudioBlobCache.delete(cacheKey);
+  chatAudioBlobCache.set(cacheKey, entry);
+  return retainChatAudioBlobEntry(entry);
 }
 
 export function cacheAndRetainChatAudioBlob(
@@ -159,22 +148,7 @@ export function cacheAndRetainChatAudioBlob(
     URL.revokeObjectURL(value.blobUrl);
     return null;
   }
-  const entry = { ...value, retainCount: 1 };
+  const entry = { ...value, retainCount: 0 };
   chatAudioBlobCache.set(cacheKey, entry);
-  trimChatAudioBlobCache();
-  let released = false;
-  return {
-    value: entry,
-    release: () => {
-      if (released) {
-        return;
-      }
-      released = true;
-      const current = chatAudioBlobCache.get(cacheKey);
-      if (current && current.retainCount > 0) {
-        current.retainCount -= 1;
-      }
-      trimChatAudioBlobCache();
-    },
-  };
+  return retainChatAudioBlobEntry(entry);
 }

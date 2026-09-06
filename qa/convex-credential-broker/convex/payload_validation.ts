@@ -20,6 +20,7 @@ const E164_RE = /^\+[1-9]\d{6,14}$/u;
 const BUZZ_ROOM_ID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const BUZZ_PRIVATE_KEY_HEX_RE = /^[0-9a-f]{64}$/iu;
+const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/u;
 const SHA256_HEX_RE = /^[a-f0-9]{64}$/u;
 const TELEGRAM_CHAT_ID_RE = /^-?\d+$/u;
 const TELEGRAM_USER_ID_RE = /^\d+$/u;
@@ -218,30 +219,39 @@ function normalizeTelegramCredentialPayload(
   } satisfies Record<string, unknown>;
 }
 
-function normalizeTelegramUserCredentialPayload(
+function normalizeTelegramTestUserbotCredentialPayload(
   payload: Record<string, unknown>,
   createFailure: PayloadValidationFailureFactory,
 ) {
-  const kind = "telegram-user";
+  const kind = "telegram-test-userbot";
+  if (payload.schemaVersion !== 1 || payload.environment !== "test") {
+    throwPayloadError(
+      createFailure,
+      `Credential payload for kind "${kind}" must use schemaVersion 1 and environment "test".`,
+    );
+  }
   const groupId = requirePayloadString(payload, "groupId", kind, createFailure);
-  if (!TELEGRAM_CHAT_ID_RE.test(groupId)) {
-    throwPayloadError(
-      createFailure,
-      'Credential payload for kind "telegram-user" must include a numeric "groupId" string.',
-    );
-  }
+  const sutBotId = requirePayloadString(payload, "sutBotId", kind, createFailure);
   const testerUserId = requirePayloadString(payload, "testerUserId", kind, createFailure);
-  if (!TELEGRAM_USER_ID_RE.test(testerUserId)) {
+  if (!TELEGRAM_CHAT_ID_RE.test(groupId)) {
+    throwPayloadError(createFailure, `Credential payload for kind "${kind}" has invalid groupId.`);
+  }
+  if (!TELEGRAM_USER_ID_RE.test(sutBotId) || !TELEGRAM_USER_ID_RE.test(testerUserId)) {
     throwPayloadError(
       createFailure,
-      'Credential payload for kind "telegram-user" must include a numeric "testerUserId" string.',
+      `Credential payload for kind "${kind}" has invalid bot or tester identity.`,
     );
   }
-  const telegramApiId = requirePayloadString(payload, "telegramApiId", kind, createFailure);
-  if (!TELEGRAM_USER_ID_RE.test(telegramApiId)) {
+  const tdlibArchiveBase64 = requirePayloadString(
+    payload,
+    "tdlibArchiveBase64",
+    kind,
+    createFailure,
+  );
+  if (!BASE64_RE.test(tdlibArchiveBase64) || tdlibArchiveBase64.length % 4 !== 0) {
     throwPayloadError(
       createFailure,
-      'Credential payload for kind "telegram-user" must include a numeric "telegramApiId" string.',
+      `Credential payload for kind "${kind}" has invalid tdlibArchiveBase64.`,
     );
   }
   const tdlibArchiveSha256 = requirePayloadString(
@@ -250,47 +260,26 @@ function normalizeTelegramUserCredentialPayload(
     kind,
     createFailure,
   ).toLowerCase();
-  const desktopTdataArchiveSha256 = requirePayloadString(
-    payload,
-    "desktopTdataArchiveSha256",
-    kind,
-    createFailure,
-  ).toLowerCase();
   if (!SHA256_HEX_RE.test(tdlibArchiveSha256)) {
     throwPayloadError(
       createFailure,
-      'Credential payload for kind "telegram-user" must include "tdlibArchiveSha256" as a SHA-256 hex string.',
+      `Credential payload for kind "${kind}" has invalid tdlibArchiveSha256.`,
     );
   }
-  if (!SHA256_HEX_RE.test(desktopTdataArchiveSha256)) {
-    throwPayloadError(
-      createFailure,
-      'Credential payload for kind "telegram-user" must include "desktopTdataArchiveSha256" as a SHA-256 hex string.',
-    );
-  }
-
   return {
+    schemaVersion: 1,
+    environment: "test",
     groupId,
     sutToken: requirePayloadString(payload, "sutToken", kind, createFailure),
+    sutUsername: requirePayloadString(payload, "sutUsername", kind, createFailure).replace(
+      /^@/u,
+      "",
+    ),
+    sutBotId,
     testerUserId,
-    testerUsername: requirePayloadString(payload, "testerUsername", kind, createFailure),
-    telegramApiId,
-    telegramApiHash: requirePayloadString(payload, "telegramApiHash", kind, createFailure),
-    tdlibDatabaseEncryptionKey: requirePayloadString(
-      payload,
-      "tdlibDatabaseEncryptionKey",
-      kind,
-      createFailure,
-    ),
-    tdlibArchiveBase64: requirePayloadString(payload, "tdlibArchiveBase64", kind, createFailure),
+    tdlibArchiveBase64,
     tdlibArchiveSha256,
-    desktopTdataArchiveBase64: requirePayloadString(
-      payload,
-      "desktopTdataArchiveBase64",
-      kind,
-      createFailure,
-    ),
-    desktopTdataArchiveSha256,
+    tdlibVersion: requirePayloadString(payload, "tdlibVersion", kind, createFailure),
   } satisfies Record<string, unknown>;
 }
 
@@ -397,7 +386,7 @@ const credentialPayloadNormalizers: Record<
   buzz: normalizeBuzzCredentialPayload,
   discord: normalizeDiscordCredentialPayload,
   telegram: normalizeTelegramCredentialPayload,
-  "telegram-user": normalizeTelegramUserCredentialPayload,
+  "telegram-test-userbot": normalizeTelegramTestUserbotCredentialPayload,
   whatsapp: normalizeWhatsAppCredentialPayload,
 };
 

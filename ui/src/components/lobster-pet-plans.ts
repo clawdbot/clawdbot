@@ -9,12 +9,12 @@ import type {
   LobsterRunOutcome,
 } from "./lobster-pet-contract.ts";
 import {
-  LOBSTER_PET_PALETTES,
   canonicalLobsterLook,
   lobsterPetName,
   mulberry32,
   SPOT_ZONES,
 } from "./lobster-pet-look.ts";
+import { LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
 
 export { SPOT_ZONES };
 
@@ -179,13 +179,13 @@ export const BAR_ZONE = [18, 50] as const;
 export const BAR_MAX_SCALE = 1.7;
 
 // Visit cadence: seeded per load, the pet is a guest, not a fixture. A share
-// of loads gets no visit at all; the rest get a first arrival within minutes,
+// of loads gets no visit at all; the rest get a delayed first arrival,
 // stays of a few minutes, and long gaps between returns. Disconnects summon
 // the pet regardless of schedule (unless dismissed or disabled).
-export const VISIT_SHY_CHANCE = 0.25;
-export const VISIT_FIRST_DELAY_MS = [15_000, 180_000] as const;
+export const VISIT_SHY_CHANCE = 0.5;
+export const VISIT_FIRST_DELAY_MS = [120_000, 600_000] as const;
 export const VISIT_STAY_MS = [90_000, 300_000] as const;
-export const VISIT_GAP_MS = [360_000, 1_080_000] as const;
+export const VISIT_GAP_MS = [1_800_000, 3_600_000] as const;
 
 // Rare-event loads, planned per seed so tests can probe them purely: a molt
 // load sheds its shell during the first idle act and sizes up one tier; a

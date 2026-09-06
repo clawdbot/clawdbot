@@ -2,6 +2,13 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
   runOpenClawStateWriteTransaction,
@@ -15,7 +22,6 @@ import {
   type AcpEventLedgerEntry,
   type AcpEventLedgerReplay,
   type AcpLedgerOptions,
-  type AcpLedgerSession,
   type AcpMutableLedgerState,
 } from "./event-ledger.types.js";
 
@@ -23,55 +29,17 @@ export { createInMemoryAcpEventLedger } from "./event-ledger.memory.js";
 export type { AcpEventLedger, AcpEventLedgerReplay } from "./event-ledger.types.js";
 
 function normalizeSqliteInteger(value: number | bigint | null): number {
-  if (typeof value === "bigint") {
-    return Number(value);
-  }
-  return typeof value === "number" ? value : 0;
+  return value === null ? 0 : sqliteNumber(value);
 }
 
-type AcpReplaySessionRow = {
-  session_id: string;
-  session_key: string;
-  cwd: string;
-  complete: number | bigint;
-  created_at: number | bigint;
-  updated_at: number | bigint;
-  next_seq: number | bigint;
-};
-
-type AcpReplayEventRow = {
-  session_id: string;
-  seq: number | bigint;
-  at: number | bigint;
-  session_key: string;
-  run_id: string | null;
-  update_json: string;
-};
-
-function sqliteRowToLedgerSession(db: DatabaseSync, row: AcpReplaySessionRow): AcpLedgerSession {
-  const events = db
-    .prepare(
-      `SELECT session_id, seq, at, session_key, run_id, update_json
-         FROM acp_replay_events
-        WHERE session_id = ?
-        ORDER BY seq ASC`,
-    )
-    .all(row.session_id)
-    .flatMap((eventRow) => {
-      const normalized = sqliteRowToLedgerEvent(eventRow as AcpReplayEventRow);
-      return normalized ? [normalized] : [];
-    });
-  return {
-    sessionId: row.session_id,
-    sessionKey: row.session_key,
-    cwd: row.cwd,
-    complete: normalizeSqliteInteger(row.complete) === 1,
-    createdAt: normalizeSqliteInteger(row.created_at),
-    updatedAt: normalizeSqliteInteger(row.updated_at),
-    nextSeq: normalizeSqliteInteger(row.next_seq),
-    events,
-  };
-}
+type AcpLedgerDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "acp_replay_sessions" | "acp_replay_events"
+>;
+type AcpReplayEventRow = Pick<
+  AcpLedgerDatabase["acp_replay_events"],
+  "session_id" | "seq" | "at" | "session_key" | "run_id" | "update_json"
+>;
 
 function sqliteRowToLedgerEvent(row: AcpReplayEventRow): AcpEventLedgerEntry | undefined {
   let update: unknown;
@@ -90,31 +58,29 @@ function sqliteRowToLedgerEvent(row: AcpReplayEventRow): AcpEventLedgerEntry | u
   });
 }
 
-function readSqliteSessionById(db: DatabaseSync, sessionId: string): AcpLedgerSession | undefined {
-  const row = db
-    .prepare(
-      `SELECT session_id, session_key, cwd, complete, created_at, updated_at, next_seq
-         FROM acp_replay_sessions
-        WHERE session_id = ?`,
-    )
-    .get(sessionId) as AcpReplaySessionRow | undefined;
-  return row ? sqliteRowToLedgerSession(db, row) : undefined;
+function sqliteSessionMetadataQuery(db: DatabaseSync) {
+  return getNodeSqliteKysely<AcpLedgerDatabase>(db)
+    .selectFrom("acp_replay_sessions")
+    .select(["session_id", "session_key", "cwd", "complete", "next_seq"]);
 }
 
-function readLatestCompleteSqliteSessionByKey(
-  db: DatabaseSync,
-  sessionKey: string,
-): AcpLedgerSession | undefined {
-  const row = db
-    .prepare(
-      `SELECT session_id, session_key, cwd, complete, created_at, updated_at, next_seq
-         FROM acp_replay_sessions
-        WHERE session_key = ? AND complete = 1
-        ORDER BY updated_at DESC, session_id ASC
-        LIMIT 1`,
-    )
-    .get(sessionKey) as AcpReplaySessionRow | undefined;
-  return row ? sqliteRowToLedgerSession(db, row) : undefined;
+function readSqliteSessionById(db: DatabaseSync, sessionId: string) {
+  return executeSqliteQueryTakeFirstSync(
+    db,
+    sqliteSessionMetadataQuery(db).where("session_id", "=", sessionId),
+  );
+}
+
+function readLatestCompleteSqliteSessionByKey(db: DatabaseSync, sessionKey: string) {
+  return executeSqliteQueryTakeFirstSync(
+    db,
+    sqliteSessionMetadataQuery(db)
+      .where("session_key", "=", sessionKey)
+      .where("complete", "=", 1)
+      .orderBy("updated_at", "desc")
+      .orderBy("session_id", "asc")
+      .limit(1),
+  );
 }
 
 function upsertSqliteSession(
@@ -127,12 +93,12 @@ function upsertSqliteSession(
     complete: boolean;
     reset?: boolean;
   },
-): AcpLedgerSession {
+): number {
   const now = state.now();
-  const existing = readSqliteSessionById(db, params.sessionId);
-  if (!params.reset && existing) {
+  const existing = params.reset ? undefined : readSqliteSessionById(db, params.sessionId);
+  if (existing) {
     const cwd = params.cwd || existing.cwd;
-    const complete = existing.complete || params.complete ? 1 : 0;
+    const complete = normalizeSqliteInteger(existing.complete) === 1 || params.complete ? 1 : 0;
     // SET expressions read the pre-update row, so the aggregate sheds the old
     // key/cwd lengths and gains the new ones; drift here would silently
     // unbound the byte budget.
@@ -149,13 +115,7 @@ function upsertSqliteSession(
       now,
       params.sessionId,
     );
-    return {
-      ...existing,
-      sessionKey: params.sessionKey,
-      cwd,
-      complete: complete === 1,
-      updatedAt: now,
-    };
+    return normalizeSqliteInteger(existing.next_seq);
   }
 
   if (params.reset) {
@@ -192,16 +152,7 @@ function upsertSqliteSession(
     now,
     rowBytes,
   );
-  return {
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    cwd: params.cwd,
-    complete: params.complete,
-    createdAt: existing?.createdAt ?? now,
-    updatedAt: now,
-    nextSeq: 1,
-    events: [],
-  };
+  return 1;
 }
 
 // Session rows carry a running footprint aggregate (row overhead plus their
@@ -340,7 +291,7 @@ function appendSqliteUpdate(
     update: SessionUpdate;
   },
 ): void {
-  const session = upsertSqliteSession(db, state, {
+  const nextSeq = upsertSqliteSession(db, state, {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     cwd: "",
@@ -359,7 +310,7 @@ function appendSqliteUpdate(
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     params.sessionId,
-    session.nextSeq,
+    nextSeq,
     now,
     params.sessionKey,
     params.runId ?? null,
@@ -377,21 +328,37 @@ function appendSqliteUpdate(
     params.sessionKey.length + eventBytes,
     params.sessionKey,
     now,
-    session.nextSeq + 1,
+    nextSeq + 1,
     params.sessionId,
   );
   trimSqliteLedger(db, state);
 }
 
-function buildSqliteReplay(session: AcpLedgerSession | undefined): AcpEventLedgerReplay {
-  if (!session?.complete) {
+function buildSqliteReplay(
+  db: DatabaseSync,
+  session: ReturnType<typeof readSqliteSessionById>,
+): AcpEventLedgerReplay {
+  if (!session || normalizeSqliteInteger(session.complete) !== 1) {
     return { complete: false, events: [] };
   }
+  // Only eligible replays load history; appends and session metadata changes
+  // must not decode all prior payloads while holding the write transaction.
+  const events = executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<AcpLedgerDatabase>(db)
+      .selectFrom("acp_replay_events")
+      .select(["session_id", "seq", "at", "session_key", "run_id", "update_json"])
+      .where("session_id", "=", session.session_id)
+      .orderBy("seq", "asc"),
+  ).rows.flatMap((row) => {
+    const event = sqliteRowToLedgerEvent(row);
+    return event ? [event] : [];
+  });
   return {
     complete: true,
-    sessionId: session.sessionId,
-    sessionKey: session.sessionKey,
-    events: session.events.map((event) => cloneAcpLedgerValue(event)),
+    sessionId: session.session_id,
+    sessionKey: session.session_key,
+    events,
   };
 }
 
@@ -448,20 +415,20 @@ export function createSqliteAcpEventLedger(
     async readReplay(replayParams) {
       return read((db) => {
         const session = readSqliteSessionById(db, replayParams.sessionId);
-        if (session?.sessionKey !== replayParams.sessionKey) {
+        if (session?.session_key !== replayParams.sessionKey) {
           return { complete: false, events: [] };
         }
-        return buildSqliteReplay(session);
+        return buildSqliteReplay(db, session);
       });
     },
 
     async readReplayBySessionId(replayParams) {
-      return read((db) => buildSqliteReplay(readSqliteSessionById(db, replayParams.sessionId)));
+      return read((db) => buildSqliteReplay(db, readSqliteSessionById(db, replayParams.sessionId)));
     },
 
     async readReplayBySessionKey(replayParams) {
       return read((db) =>
-        buildSqliteReplay(readLatestCompleteSqliteSessionByKey(db, replayParams.sessionKey)),
+        buildSqliteReplay(db, readLatestCompleteSqliteSessionByKey(db, replayParams.sessionKey)),
       );
     },
   };

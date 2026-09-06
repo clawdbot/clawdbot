@@ -4,6 +4,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import type { DockPanelPlacement } from "../dock-panel-layout.ts";
 import { icons } from "../icons.ts";
 import { renderPanelEmptyState } from "../panel-empty-state.ts";
+import { renderPanelLoadingSkeleton } from "../panel-loading-skeleton.ts";
 import {
   TerminalOpenTimeoutError,
   TerminalOpenUnusableSessionError,
@@ -75,16 +76,20 @@ export function renderTerminalPanelViewport({
   uploadController,
 }: TerminalPanelViewportParams): TemplateResult {
   return html`
-    ${error
-      ? html`<div class="tp-error" role="alert">
-          <span>${error.text}</span>
-          ${error.retry
-            ? html`<button class="btn btn--sm" type="button" @click=${error.retry}>
-                ${t("common.retry")}
-              </button>`
-            : nothing}
-        </div>`
-      : nothing}
+    ${
+      error
+        ? html`<div class="tp-error" role="alert">
+            <span>${error.text}</span>
+            ${
+              error.retry
+                ? html`<button class="btn btn--sm" type="button" @click=${error.retry}>
+                    ${t("common.retry")}
+                  </button>`
+                : nothing
+            }
+          </div>`
+        : nothing
+    }
     <wa-tab-panel
       id="terminal-tab-panel"
       class="tp-viewport"
@@ -96,19 +101,20 @@ export function renderTerminalPanelViewport({
       @dragleave=${uploadController.handleDragLeave}
       @drop=${uploadController.handleDrop}
     >
-      ${connecting
-        ? html`<div class="tp-connecting" role="status">
-            <span class="tp-connecting__spinner" aria-hidden="true"></span>
-            <span>${t("terminal.connecting")}</span>
-          </div>`
-        : nothing}
-      ${!activeId && !connecting && !error
-        ? renderPanelEmptyState({
-            icon: icons.terminal,
-            heading: t("chat.sidePanel.terminal"),
-            description: t("chat.sidePanel.terminalEmpty"),
-          })
-        : nothing}
+      ${
+        connecting
+          ? renderPanelLoadingSkeleton("terminal", t("terminal.connecting"), false, true)
+          : nothing
+      }
+      ${
+        !activeId && !connecting && !error
+          ? renderPanelEmptyState({
+              icon: icons.terminal,
+              heading: t("chat.sidePanel.terminal"),
+              description: t("chat.sidePanel.terminalEmpty"),
+            })
+          : nothing
+      }
       ${renderTerminalUploadLayer(uploadController)}
     </wa-tab-panel>
   `;

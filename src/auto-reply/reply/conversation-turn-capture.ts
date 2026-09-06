@@ -23,6 +23,7 @@ import {
   preparePersistedUserTurnMessageForTranscriptWrite,
   type UserTurnInput,
 } from "../../sessions/user-turn-transcript.js";
+import { buildChannelUserTurnSender } from "../../sessions/user-turn-transcript.metadata.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 
 const EPOCH_MILLISECONDS_THRESHOLD = 1_000_000_000_000;
@@ -127,11 +128,7 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
     },
     sender:
       conversation.kind === "group" || conversation.kind === "channel"
-        ? {
-            id: normalizeOptionalString(params.ctx.SenderId),
-            name: normalizeOptionalString(params.ctx.SenderName),
-            username: normalizeOptionalString(params.ctx.SenderUsername),
-          }
+        ? buildChannelUserTurnSender(params.ctx)
         : undefined,
   };
   const claim = await claimPendingConversationTurnReply({

@@ -7,6 +7,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
 import { isPrimaryBootstrapRun } from "./bootstrap-routing.js";
+import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
 import {
   isRuntimeToolAllowed,
   isToolAllowedByPolicies,
@@ -31,12 +32,6 @@ function expandProgressCardPolicyNames(
     : undefined;
 }
 
-/**
- * Registration helpers for optional OpenClaw-owned tools.
- *
- * This keeps model/runtime gating separate from tool construction so callers can
- * assemble candidate tools first, then filter by config and execution contract.
- */
 /** Drops disabled optional tools while preserving candidate order. */
 export function collectPresentOpenClawTools(
   candidates: readonly (AnyAgentTool | null | undefined)[],
@@ -58,13 +53,9 @@ export function shouldIncludeProgressCardToolForOpenClawTools(params: {
   if (params.config?.tools?.updatePlan === false) {
     return false;
   }
-  const deny = uniqueStrings([
-    ...(params.config?.tools?.deny ?? []),
-    ...(params.pluginToolDenylist ?? []),
-  ]);
   if (
     !isToolAllowedByPolicyName("progress_card", {
-      deny: expandShippedCoreToolPolicyNames(deny),
+      deny: expandShippedCoreToolPolicyNames(params.pluginToolDenylist),
     }) ||
     !isRuntimeToolAllowed("progress_card", params.runtimeToolAllowlist)
   ) {
@@ -94,16 +85,26 @@ export function shouldIncludeProgressCardToolForOpenClawTools(params: {
       effective.globalProviderPolicy,
       effective.agentPolicy,
       effective.agentProviderPolicy,
+      resolveRequesterToolPolicies({
+        config: params.config,
+        agentId: params.agentId,
+        sessionKey: params.agentSessionKey,
+        senderPolicyMode: "never",
+      }).subagentPolicy,
     ].map(expandProgressCardPolicyNames),
   );
 }
 
-/** Includes ask_user only on a primary session and when normal deny policy permits it. */
-export function shouldIncludeAskUserToolForOpenClawTools(params: {
+type PrimarySessionToolRegistrationParams = {
   config?: OpenClawConfig;
   agentSessionKey?: string;
   pluginToolDenylist?: string[];
-}): boolean {
+};
+
+function shouldIncludePrimarySessionToolForOpenClawTools(
+  toolName: "ask_user" | "secrets",
+  params: PrimarySessionToolRegistrationParams,
+): boolean {
   const sessionKey = params.agentSessionKey?.trim();
   if (!sessionKey) {
     return false;
@@ -112,5 +113,19 @@ export function shouldIncludeAskUserToolForOpenClawTools(params: {
     ...(params.config?.tools?.deny ?? []),
     ...(params.pluginToolDenylist ?? []),
   ]);
-  return isPrimaryBootstrapRun(sessionKey) && isToolAllowedByPolicyName("ask_user", { deny });
+  return isPrimaryBootstrapRun(sessionKey) && isToolAllowedByPolicyName(toolName, { deny });
+}
+
+/** Includes ask_user only on a primary session and when normal deny policy permits it. */
+export function shouldIncludeAskUserToolForOpenClawTools(
+  params: PrimarySessionToolRegistrationParams,
+): boolean {
+  return shouldIncludePrimarySessionToolForOpenClawTools("ask_user", params);
+}
+
+/** Keeps credential management on primary sessions allowed by the normal tool policy. */
+export function shouldIncludeSecretsToolForOpenClawTools(
+  params: PrimarySessionToolRegistrationParams,
+): boolean {
+  return shouldIncludePrimarySessionToolForOpenClawTools("secrets", params);
 }

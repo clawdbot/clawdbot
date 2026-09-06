@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
+import * as apiProviderAuthChoices from "../../auth-choice.apply.api-providers.js";
 import { commitNonInteractiveOnboardConfig } from "../config-write.js";
 import { applyNonInteractiveAuthChoice } from "./auth-choice.js";
 
@@ -25,7 +26,11 @@ vi.mock("../api-keys.js", () => ({
   resolveNonInteractiveApiKey,
 }));
 
-const resolveManifestDeprecatedProviderAuthChoice = vi.hoisted(() => vi.fn(() => undefined));
+const resolveManifestDeprecatedProviderAuthChoice = vi.hoisted(() =>
+  vi.fn<
+    typeof import("../../../plugins/provider-auth-choices.js").resolveManifestDeprecatedProviderAuthChoice
+  >(() => undefined),
+);
 const resolveManifestProviderAuthChoices = vi.hoisted(() => vi.fn(() => []));
 vi.mock("../../../plugins/provider-auth-choices.js", () => ({
   resolveManifestDeprecatedProviderAuthChoice,
@@ -67,19 +72,22 @@ describe("applyNonInteractiveAuthChoice", () => {
   it("rejects an unknown auth choice and lists the valid choices", async () => {
     const runtime = createRuntime();
     const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    const message =
+      'Unknown --auth-choice "definitely-not-a-provider". Valid choices: custom-api-key, skip, demo-provider-api-key.';
 
     const result = await applyNonInteractiveAuthChoice({
       nextConfig,
       authChoice: "definitely-not-a-provider",
-      opts: {} as never,
+      opts: { json: true },
       runtime: runtime as never,
       baseConfig: nextConfig,
       target,
     });
 
     expect(result).toBeNull();
-    expect(runtime.error).toHaveBeenCalledWith(
-      'Unknown --auth-choice "definitely-not-a-provider". Valid choices: custom-api-key, skip, demo-provider-api-key.',
+    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(message);
+    expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
+      JSON.stringify({ ok: false, phase: "options", message }, null, 2),
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
@@ -105,6 +113,34 @@ describe("applyNonInteractiveAuthChoice", () => {
     );
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("resolves generic provider auth from the selected agent workspace", async () => {
+    const runtime = createRuntime();
+    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    const resolvedConfig = { auth: { profiles: { "demo-provider:default": { mode: "api_key" } } } };
+    applyNonInteractivePluginProviderChoice.mockResolvedValueOnce(resolvedConfig as never);
+    const normalize = vi
+      .spyOn(apiProviderAuthChoices, "normalizeApiKeyTokenProviderAuthChoice")
+      .mockImplementation((params) =>
+        params.workspaceDir === target.workspaceDir ? "demo-provider-api-key" : params.authChoice,
+      );
+
+    try {
+      const result = await applyNonInteractiveAuthChoice({
+        nextConfig,
+        authChoice: "apiKey",
+        opts: { tokenProvider: "demo-provider" },
+        runtime: runtime as never,
+        baseConfig: nextConfig,
+        target,
+      });
+
+      expect(result).toBe(resolvedConfig);
+      expect(runtime.error).not.toHaveBeenCalled();
+    } finally {
+      normalize.mockRestore();
+    }
   });
 
   it("resolves plugin provider auth before builtin custom-provider handling", async () => {
@@ -236,6 +272,47 @@ describe("applyNonInteractiveAuthChoice", () => {
     expect(apiKeyParams?.envVarName).toBe("CUSTOM_API_KEY");
     expect(apiKeyParams?.agentDir).toBe(target.agentDir);
     expect(apiKeyParams?.secretInputMode).toBe("ref");
+  });
+
+  it("keeps a custom provider model on the configured explicit-fleet system agent", async () => {
+    const runtime = createRuntime();
+    const nextConfig: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: {
+          systemAgent: { agentId: "ops" },
+          model: { primary: "anthropic/global" },
+        },
+        entries: {
+          main: { model: { primary: "anthropic/main" } },
+          ops: { model: { primary: "openai/ops" } },
+        },
+      },
+    };
+    resolveNonInteractiveApiKey.mockResolvedValueOnce(null);
+
+    const result = await applyNonInteractiveAuthChoice({
+      nextConfig,
+      authChoice: "custom-api-key",
+      opts: {
+        customBaseUrl: "https://models.custom.local/v1",
+        customModelId: "local-large",
+      } as never,
+      runtime: runtime as never,
+      baseConfig: nextConfig,
+      target: {
+        agentId: "ops",
+        agentDir: "/tmp/ops-agent",
+        workspaceDir: "/tmp/ops-workspace",
+      },
+    });
+
+    expect(result?.agents?.defaults?.model).toEqual({ primary: "anthropic/global" });
+    expect(result?.agents?.entries?.ops?.model).toEqual({
+      primary: "custom-models-custom-local/local-large",
+    });
+    expect(result?.agents?.entries?.main?.model).toEqual({ primary: "anthropic/main" });
+    expect(result?.models?.providers?.["custom-models-custom-local"]).toBeDefined();
   });
 
   it("never commits an existing profile key as plaintext during custom secret-ref onboarding", async () => {
@@ -572,5 +649,86 @@ describe("applyNonInteractiveAuthChoice", () => {
     expect(result?.models?.providers?.["custom-models-custom-local"]?.models?.[0]?.input).toEqual([
       "text",
     ]);
+  });
+
+  it.each([
+    {
+      name: "warns before dispatching a manifest replacement",
+      authChoice: "claude-cli",
+      hasReplacement: true,
+      expectedError: undefined,
+    },
+    {
+      name: "keeps direct oauth as an unknown choice",
+      authChoice: "oauth",
+      hasReplacement: true,
+      expectedError:
+        'Unknown --auth-choice "oauth". Valid choices: custom-api-key, skip, demo-provider-api-key.',
+    },
+    {
+      name: "rejects the original alias when replacement metadata is missing",
+      authChoice: "claude-cli",
+      hasReplacement: false,
+      expectedError:
+        'Unknown --auth-choice "claude-cli". Valid choices: custom-api-key, skip, demo-provider-api-key.',
+    },
+  ])("$name", async ({ authChoice, hasReplacement, expectedError }) => {
+    const runtime = createRuntime();
+    const nextConfig: OpenClawConfig = { agents: { defaults: {} } };
+    const resolvedConfig: OpenClawConfig = { agents: { defaults: { workspace: "/tmp/resolved" } } };
+    const warning = 'Auth choice "claude-cli" is deprecated; using Fixture Provider setup instead.';
+    resolveManifestDeprecatedProviderAuthChoice.mockImplementation((choice, scope) =>
+      hasReplacement &&
+      choice === "claude-cli" &&
+      scope?.config === nextConfig &&
+      scope.workspaceDir === target.workspaceDir &&
+      scope.env === process.env
+        ? {
+            pluginId: "fixture-provider",
+            providerId: "fixture-provider",
+            methodId: "api-key",
+            choiceId: "demo-provider-api-key",
+            choiceLabel: "  Fixture Provider  ",
+            deprecatedChoiceIds: ["claude-cli"],
+          }
+        : undefined,
+    );
+    if (!expectedError) {
+      applyNonInteractivePluginProviderChoice.mockResolvedValueOnce(resolvedConfig as never);
+    }
+
+    const result = await applyNonInteractiveAuthChoice({
+      nextConfig,
+      authChoice,
+      opts: {},
+      runtime: runtime as never,
+      baseConfig: nextConfig,
+      target,
+    });
+
+    expect(writeWizardConfigFile).not.toHaveBeenCalled();
+    expect(resolveNonInteractiveApiKey).not.toHaveBeenCalled();
+    if (expectedError) {
+      expect(result).toBeNull();
+      expect(runtime.error).toHaveBeenCalledExactlyOnceWith(expectedError);
+      expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+      expect(runtime.log).not.toHaveBeenCalled();
+      expect(applyNonInteractivePluginProviderChoice).not.toHaveBeenCalled();
+      return;
+    }
+
+    expect(result).toBe(resolvedConfig);
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledExactlyOnceWith(warning);
+    expect(applyNonInteractivePluginProviderChoice).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ authChoice: "demo-provider-api-key", nextConfig, target }),
+    );
+    const warningOrder = runtime.log.mock.invocationCallOrder[0];
+    const dispatchOrder = applyNonInteractivePluginProviderChoice.mock.invocationCallOrder[0];
+    if (warningOrder === undefined || dispatchOrder === undefined) {
+      throw new Error("Expected legacy warning and plugin dispatch");
+    }
+    expect(warningOrder).toBeLessThan(dispatchOrder);
   });
 });

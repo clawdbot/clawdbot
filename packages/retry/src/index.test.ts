@@ -83,9 +83,15 @@ describe("RetrySupervisor", () => {
 });
 
 describe("retryAsync", () => {
-  it.each([0, 0.5])(
-    "never rounds an honorable Retry-After below its floor with jitter=%s",
-    async (jitter) => {
+  it.each([
+    ["fractional floor without jitter", 1.4, 0, 10, 0, 2],
+    ["fractional floor with jitter", 1.4, 0, 10, 0.5, 2],
+    ["server hint below the cap", 1_000, 1, 60_000, 0.5, 1_000],
+    ["server hint at the cap", 1_000, 1, 1_000, 0.5, 1_000],
+    ["symmetric jitter above the cap", 10_000, 1, 1_000, 0.5, 500],
+  ] as const)(
+    "respects Retry-After: %s",
+    async (_name, retryAfterMs, minDelayMs, maxDelayMs, jitter, expectedDelay) => {
       const sleeps: number[] = [];
       const run = createRetryRunner({ sleep: async (ms) => void sleeps.push(ms) });
       const operation = vi
@@ -96,14 +102,14 @@ describe("retryAsync", () => {
       await expect(
         run(operation, {
           attempts: 2,
-          minDelayMs: 0,
-          maxDelayMs: 10,
+          minDelayMs,
+          maxDelayMs,
           jitter,
           random: () => 0,
-          retryAfterMs: () => 1.4,
+          retryAfterMs: () => retryAfterMs,
         }),
       ).resolves.toBe("ok");
-      expect(sleeps).toEqual([2]);
+      expect(sleeps).toEqual([expectedDelay]);
     },
   );
 

@@ -1,9 +1,84 @@
 import Foundation
+import OpenClawKit
 import OpenClawProtocol
 import Testing
 @testable import OpenClawChatUI
 
 struct ChatGatewayRequestTests {
+    @Test(arguments: [
+        ("global", "research", "global", Optional("research")),
+        ("agent:research:global", "research", "agent:research:global", nil),
+        ("main", "research", "agent:research:main", nil),
+        ("agent:research:workbench", "research", "agent:research:workbench", nil),
+    ])
+    func `progress requests retain raw global owner and preserve old qualified schema`(
+        key: String,
+        owner: String,
+        expectedKey: String,
+        expectedOwner: String?)
+    {
+        let request = OpenClawChatGatewayRequests.progressCardGet(sessionKey: key, agentID: owner)
+        #expect(request.method == "progressCard.get")
+        #expect(request.params["sessionKey"]?.value as? String == expectedKey)
+        #expect(request.params["agentId"]?.value as? String == expectedOwner)
+        #expect(Set(request.params.keys) == (expectedOwner == nil ? ["sessionKey"] : ["sessionKey", "agentId"]))
+    }
+
+    @Test func `progress payloads validate the captured agent without replacing null`() throws {
+        let valid = Data(
+            #"{"card":{"sessionKey":"agent:research:global","revision":1,"updatedAt":10,"markdown":"Research","steps":[]}}"#
+                .utf8)
+        #expect(try OpenClawChatGatewayPayloadCodec.decodeProgressCard(valid, agentID: "research")?
+            .markdown == "Research")
+        #expect(throws: (any Error).self) {
+            try OpenClawChatGatewayPayloadCodec.decodeProgressCard(valid, agentID: "main")
+        }
+        #expect(try OpenClawChatGatewayPayloadCodec.decodeProgressCard(
+            Data(#"{"card":null}"#.utf8), agentID: "research") == nil)
+    }
+
+    @Test(arguments: [[String]?.none, [], ["api.example.test"]])
+    func `question host consent uses protocol field`(hosts: [String]?) throws {
+        let request = OpenClawChatGatewayRequests.resolveQuestion(
+            id: "ask_secret", answers: ["credential": ["  synthetic-value  "]], secretStoreAllowedHosts: hosts)
+        let data = try JSONEncoder().encode(request.params)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["secretStoreAllowedHosts"] as? [String] == hosts)
+        let envelope = try #require(object["answers"] as? [String: [String: [String]]])
+        #expect(envelope == ["answers": ["credential": ["  synthetic-value  "]]])
+    }
+
+    @Test func `question answer response decodes canonical marker`() throws {
+        let data = Data(#"{"status":"answered","answers":{"answers":{"credential":["stored"]}}}"#.utf8)
+        let answers = try OpenClawChatGatewayPayloadCodec.decodeQuestionAnswer(data)
+        let encoded = try JSONEncoder().encode(answers)
+        let object = try JSONSerialization.jsonObject(with: encoded) as? [String: [String: [String]]]
+        #expect(object == ["answers": ["credential": ["stored"]]])
+        for invalid in [
+            #"{"status":"cancelled"}"#,
+            #"{"status":"pending","answers":{"answers":{}}}"#,
+            #"{"status":"answered"}"#,
+        ] {
+            #expect(throws: (any Error).self) {
+                try OpenClawChatGatewayPayloadCodec.decodeQuestionAnswer(Data(invalid.utf8))
+            }
+        }
+    }
+
+    @Test(arguments: [[String]?.none, [], ["watch-run", "queued-source"]])
+    func `history requests consumption only for supplied input runs`(inputRunIDs: [String]?) {
+        let request = OpenClawChatGatewayRequests.history(
+            sessionKey: "global",
+            agentID: "reviewer",
+            inputRunIDs: inputRunIDs)
+
+        #expect(request.method == "chat.history")
+        #expect(request.params["sessionKey"]?.value as? String == "global")
+        #expect(request.params["agentId"]?.value as? String == "reviewer")
+        #expect(request.params["inputRunIds"]?.value as? [String] ==
+            (inputRunIDs?.isEmpty == false ? inputRunIDs : nil))
+    }
+
     @Test func `models list scopes worker catalogs and preserves default scope`() {
         let worker = OpenClawChatGatewayRequests.modelsList(agentID: " worker ")
         let defaultAgent = OpenClawChatGatewayRequests.modelsList(agentID: nil)
@@ -68,7 +143,8 @@ struct ChatGatewayRequestTests {
         let request = OpenClawChatGatewayRequests.sessionsList(
             limit: 12,
             search: "  incident  ",
-            archived: true)
+            archived: true,
+            agentID: " Reviewer ")
 
         #expect(request.method == "sessions.list")
         #expect(request.timeoutMs == 15000)
@@ -77,6 +153,14 @@ struct ChatGatewayRequestTests {
         #expect(request.params["limit"]?.value as? Int == 12)
         #expect(request.params["search"]?.value as? String == "incident")
         #expect(request.params["archived"]?.value as? Bool == true)
+        #expect(request.params["agentId"]?.value as? String == "Reviewer")
+
+        let unscoped = OpenClawChatGatewayRequests.sessionsList(
+            limit: nil,
+            search: nil,
+            archived: false,
+            agentID: "   ")
+        #expect(unscoped.params["agentId"] == nil)
     }
 
     @Test func `child session request encodes focused pagination filters`() {
@@ -101,18 +185,79 @@ struct ChatGatewayRequestTests {
             agentID: "reviewer",
             label: .some(nil),
             category: .some(nil),
+            color: .some(nil),
             pinned: true,
             archived: nil,
-            unread: false)
+            unreadPatch: nil)
 
         #expect(request.method == "sessions.patch")
         #expect(request.params["key"]?.value as? String == "global")
         #expect(request.params["agentId"]?.value as? String == "reviewer")
         #expect(request.params["label"]?.value is NSNull)
         #expect(request.params["category"]?.value is NSNull)
+        #expect(request.params["color"]?.value is NSNull)
         #expect(request.params["pinned"]?.value as? Bool == true)
-        #expect(request.params["unread"]?.value as? Bool == false)
         #expect(request.params["archived"] == nil)
+    }
+
+    @Test(arguments: ["blue", nil] as [String?])
+    func `session color patch sets names without changing unrelated fields`(color: String?) throws {
+        let request = OpenClawChatGatewayRequests.patchSession(
+            sessionKey: "agent:main:work",
+            agentID: "main",
+            label: nil,
+            category: nil,
+            color: color.map { .some($0) },
+            pinned: nil,
+            archived: nil,
+            unreadPatch: nil)
+        let data = try JSONEncoder().encode(request.params)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["color"] as? String == color)
+        #expect(object.count == (color == nil ? 2 : 3))
+    }
+
+    @Test func `session read acknowledgement encodes an absent manual marker as null`() {
+        let request = OpenClawChatGatewayRequests.patchSession(
+            sessionKey: "main",
+            agentID: nil,
+            label: nil,
+            category: nil,
+            pinned: nil,
+            archived: nil,
+            unreadPatch: .automaticRead(expectedMarkedUnreadAt: nil))
+
+        #expect(request.params["expectedMarkedUnreadAt"]?.value is NSNull)
+    }
+
+    @Test func `explicit session read uses the legacy-compatible payload`() {
+        let request = OpenClawChatGatewayRequests.patchSession(
+            sessionKey: "main",
+            agentID: nil,
+            label: nil,
+            category: nil,
+            pinned: nil,
+            archived: nil,
+            unreadPatch: .read)
+
+        #expect(request.params["unread"]?.value as? Bool == false)
+        #expect(request.params["readIntent"] == nil)
+        #expect(request.params["expectedMarkedUnreadAt"] == nil)
+    }
+
+    @Test func `session read routing separates explicit automatic and legacy requests`() {
+        #expect(OpenClawChatSessionUnreadPatch.routed(
+            unread: false,
+            expectedMarkedUnreadAt: nil,
+            supportsReadContract: true) == .read)
+        #expect(OpenClawChatSessionUnreadPatch.routed(
+            unread: false,
+            expectedMarkedUnreadAt: .some(nil),
+            supportsReadContract: true) == .automaticRead(expectedMarkedUnreadAt: nil))
+        #expect(OpenClawChatSessionUnreadPatch.routed(
+            unread: false,
+            expectedMarkedUnreadAt: .some(10),
+            supportsReadContract: false) == .read)
     }
 
     @Test func `settings patch request encodes default model as null`() {
@@ -157,6 +302,85 @@ struct ChatGatewayRequestTests {
         #expect(reset.params["fastMode"]?.value is NSNull)
         #expect(reset.params["verboseLevel"]?.value is NSNull)
         #expect(automatic.params["fastMode"]?.value as? String == "auto")
+    }
+
+    @Test func `settings patch request preserves permission and sparse tool overrides`() throws {
+        let overrides = OpenClawChatSessionToolOverrides(
+            webSearch: false,
+            skills: ["release": false],
+            mcpServers: ["github": true],
+            mcpToolsDeny: ["github": ["create_issue", "delete_issue"]])
+        let request = OpenClawChatGatewayRequests.patchSessionSettings(
+            sessionKey: "global",
+            agentID: "reviewer",
+            expectedSessionID: "sess-global",
+            expectedPermissionMode: .some(.guarded),
+            expectedToolOverrides: .some(OpenClawChatSessionToolOverrides(webSearch: false)),
+            permissionMode: .some(.workspace),
+            toolOverrides: .some(overrides),
+            supportsSessionSettingsContract: true,
+            supportsSessionSettingsCAS: true)
+
+        #expect(request.params["expectedSessionId"]?.value as? String == "sess-global")
+        #expect(request.params["expectedPermissionMode"]?.value as? String == "guarded")
+        #expect(request.params["permissionMode"]?.value as? String == "workspace")
+        let encoded = try JSONEncoder().encode(request.params["toolOverrides"])
+        let value = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        let expectedEncoded = try JSONEncoder().encode(request.params["expectedToolOverrides"])
+        let expectedValue = try #require(
+            JSONSerialization.jsonObject(with: expectedEncoded) as? [String: Any])
+        #expect(expectedValue["webSearch"] as? Bool == false)
+        #expect(value["webSearch"] as? Bool == false)
+        #expect((value["skills"] as? [String: Bool])?["release"] == false)
+        #expect((value["mcpServers"] as? [String: Bool])?["github"] == true)
+        #expect((value["mcpToolsDeny"] as? [String: [String]])?["github"] == [
+            "create_issue",
+            "delete_issue",
+        ])
+
+        let reset = OpenClawChatGatewayRequests.patchSessionSettings(
+            sessionKey: "global",
+            agentID: "reviewer",
+            expectedPermissionMode: .some(.workspace),
+            expectedToolOverrides: .some(nil),
+            permissionMode: .some(nil),
+            toolOverrides: .some(nil),
+            supportsSessionSettingsContract: true,
+            supportsSessionSettingsCAS: true)
+        #expect(reset.params["permissionMode"]?.value is NSNull)
+        #expect(reset.params["expectedPermissionMode"]?.value as? String == "workspace")
+        #expect(reset.params["expectedToolOverrides"]?.value is NSNull)
+        #expect(reset.params["toolOverrides"]?.value is NSNull)
+
+        let releasedGateway = OpenClawChatGatewayRequests.patchSessionSettings(
+            sessionKey: "global",
+            agentID: "reviewer",
+            expectedSessionID: "sess-global",
+            expectedPermissionMode: .some(nil),
+            expectedToolOverrides: .some(nil),
+            permissionMode: .some(.workspace),
+            toolOverrides: .some(overrides))
+        #expect(releasedGateway.params["expectedSessionId"] == nil)
+        #expect(releasedGateway.params["expectedPermissionMode"] == nil)
+        #expect(releasedGateway.params["expectedToolOverrides"] == nil)
+        #expect(releasedGateway.params["permissionMode"] == nil)
+        #expect(releasedGateway.params["toolOverrides"] == nil)
+    }
+
+    @Test func `composer catalog requests preserve their owner scope`() {
+        let skills = OpenClawChatGatewayRequests.composerSkillsStatus(agentID: "reviewer")
+        let config = OpenClawChatGatewayRequests.composerConfigGet()
+        let tools = OpenClawChatGatewayRequests.composerToolsEffective(
+            sessionKey: "agent:reviewer:main",
+            agentID: "reviewer")
+
+        #expect(skills.method == "skills.status")
+        #expect(skills.params["agentId"]?.value as? String == "reviewer")
+        #expect(config.method == "config.get")
+        #expect(config.params.isEmpty)
+        #expect(tools.method == "tools.effective")
+        #expect(tools.params["sessionKey"]?.value as? String == "agent:reviewer:main")
+        #expect(tools.params["agentId"]?.value as? String == "reviewer")
     }
 
     @Test func `fork and create requests preserve routing identity`() {
@@ -254,7 +478,109 @@ struct ChatGatewayRequestTests {
         #expect(delete.params["name"]?.value as? String == "Personal")
     }
 
-    @Test func `rename clear archive and fork use session mutation contracts`() {
+    private actor MutationRequestRecorder {
+        var requests: [OpenClawChatGatewayRequest] = []
+
+        func send(_ request: OpenClawChatGatewayRequest) -> Data {
+            self.requests.append(request)
+            return Data()
+        }
+    }
+
+    @Test func `gateway mutation lease forwards nullable fields and request timeouts`() async throws {
+        let recorder = MutationRequestRecorder()
+        let lease = OpenClawChatSessionMutationRouteLease(
+            sessionTarget: {
+                OpenClawChatSessionTarget.resolve(
+                    $0,
+                    selectedAgentID: "reviewer",
+                    policy: .scopeBareKeysToSelectedAgent)
+            },
+            unreadAckContract: true,
+            request: { await recorder.send($0) })
+        try await lease.patchSession(
+            key: "work",
+            expectedSessionID: " session-a ",
+            label: .some(nil),
+            category: .some("Work"),
+            color: .some("blue"),
+            pinned: false,
+            archived: nil,
+            unread: nil)
+        try await lease.patchSession(
+            key: "work",
+            expectedSessionID: "session-a",
+            label: nil,
+            category: nil,
+            color: .some(nil),
+            pinned: nil,
+            archived: true,
+            unread: nil)
+        try await lease.deleteSession(key: "work")
+
+        let requests = await recorder.requests
+        try #require(requests.map(\.method) == ["sessions.patch", "sessions.patch", "sessions.delete"])
+        #expect(requests.map(\.timeoutMs) == [15000, 600_000, 600_000])
+        #expect(requests[0].params == [
+            "key": AnyCodable("agent:reviewer:work"),
+            "expectedSessionId": AnyCodable("session-a"),
+            "label": AnyCodable(NSNull()),
+            "category": AnyCodable("Work"),
+            "color": AnyCodable("blue"),
+            "pinned": AnyCodable(false),
+        ])
+        #expect(requests[1].params == [
+            "key": AnyCodable("agent:reviewer:work"),
+            "expectedSessionId": AnyCodable("session-a"),
+            "color": AnyCodable(NSNull()),
+            "archived": AnyCodable(true),
+        ])
+        #expect(requests[2].params == [
+            "key": AnyCodable("agent:reviewer:work"),
+            "deleteTranscript": AnyCodable(true),
+        ])
+    }
+
+    @Test func `unknown captured read capability only blocks read mutations`() async throws {
+        let recorder = MutationRequestRecorder()
+        let lease = OpenClawChatSessionMutationRouteLease(
+            sessionTarget: { OpenClawChatSessionTarget(sessionKey: $0, agentID: nil) },
+            unreadAckContract: nil,
+            request: { await recorder.send($0) })
+        try await lease.patchSession(
+            key: "agent:reviewer:work",
+            label: nil,
+            category: nil,
+            pinned: true,
+            archived: nil,
+            unread: nil)
+        try await lease.patchSession(
+            key: "agent:reviewer:work",
+            label: nil,
+            category: nil,
+            pinned: nil,
+            archived: nil,
+            unread: true)
+        await #expect(throws: OpenClawChatTransportSendError.self) {
+            try await lease.patchSession(
+                key: "agent:reviewer:work",
+                expectedMarkedUnreadAt: .some(nil),
+                label: nil,
+                category: nil,
+                pinned: nil,
+                archived: nil,
+                unread: false)
+        }
+        let requests = await recorder.requests
+        try #require(requests.count == 2)
+        #expect(requests.allSatisfy { $0.method == "sessions.patch" })
+        #expect(requests[0].params["pinned"]?.value as? Bool == true)
+        #expect(requests[0].params["unread"] == nil)
+        #expect(requests[1].params["unread"]?.value as? Bool == true)
+        #expect(requests.allSatisfy { $0.params["expectedMarkedUnreadAt"] == nil })
+    }
+
+    @Test func `rename clear archive delete and fork use session mutation contracts`() {
         let rename = OpenClawChatGatewayRequests.patchSession(
             sessionKey: "agent:main:child",
             agentID: nil,
@@ -262,7 +588,7 @@ struct ChatGatewayRequestTests {
             category: nil,
             pinned: nil,
             archived: nil,
-            unread: nil)
+            unreadPatch: nil)
         let archive = OpenClawChatGatewayRequests.patchSession(
             sessionKey: "agent:main:child",
             agentID: nil,
@@ -271,7 +597,7 @@ struct ChatGatewayRequestTests {
             category: nil,
             pinned: nil,
             archived: true,
-            unread: nil)
+            unreadPatch: nil)
         let restore = OpenClawChatGatewayRequests.patchSession(
             sessionKey: "agent:main:child",
             agentID: nil,
@@ -280,18 +606,24 @@ struct ChatGatewayRequestTests {
             category: nil,
             pinned: nil,
             archived: false,
-            unread: nil)
+            unreadPatch: nil)
         let fork = OpenClawChatGatewayRequests.forkSession(
             parentSessionKey: "agent:main:child",
+            agentID: nil)
+        let delete = OpenClawChatGatewayRequests.deleteSession(
+            sessionKey: "agent:main:child",
             agentID: nil)
 
         #expect(rename.params["label"]?.value is NSNull)
         #expect(archive.params["archived"]?.value as? Bool == true)
         #expect(archive.params["expectedSessionId"]?.value as? String == "session-child")
         #expect(archive.timeoutMs == 600_000)
+        #expect(delete.method == "sessions.delete")
+        #expect(delete.timeoutMs == 600_000)
         #expect(restore.params["expectedSessionId"]?.value as? String == "session-child")
         #expect(restore.timeoutMs == 15000)
         #expect(fork.method == "sessions.create")
+        #expect(fork.timeoutMs == 15000)
         #expect(fork.params["parentSessionKey"]?.value as? String == "agent:main:child")
         #expect(fork.params["fork"]?.value as? Bool == true)
     }
@@ -299,14 +631,17 @@ struct ChatGatewayRequestTests {
     @Test func `chat metadata request selects session agent before fallback`() {
         let scoped = OpenClawChatGatewayRequests.chatMetadata(
             sessionKey: "agent:reviewer:main",
-            fallbackAgentID: "fallback")
+            fallbackAgentID: "fallback",
+            includeSessionKey: true)
         #expect(scoped.method == "chat.metadata")
         #expect(scoped.params["agentId"]?.value as? String == "reviewer")
+        #expect(scoped.params["sessionKey"]?.value as? String == "agent:reviewer:main")
 
         let global = OpenClawChatGatewayRequests.chatMetadata(
             sessionKey: "global",
             fallbackAgentID: "reviewer")
         #expect(global.params["agentId"]?.value as? String == "reviewer")
+        #expect(global.params["sessionKey"] == nil)
     }
 
     @Test func `commands request selects session agent before fallback`() {
@@ -328,6 +663,10 @@ struct ChatGatewayRequestTests {
             sessionKey: "global",
             agentID: " reviewer ",
             expectedSessionRoutingContract: " per-sender|main|reviewer ",
+            expectedSessionSettings: OpenClawChatSessionSettingsExpectation(
+                permissionMode: .guarded,
+                toolOverrides: OpenClawChatSessionToolOverrides(webSearch: false)),
+            supportsSessionSettingsCAS: true,
             message: "hello",
             thinking: " low ",
             idempotencyKey: "send-1",
@@ -337,10 +676,16 @@ struct ChatGatewayRequestTests {
         #expect(request.timeoutMs == 30000)
         #expect(request.params["agentId"]?.value as? String == "reviewer")
         #expect(request.params["expectedSessionRoutingContract"]?.value as? String == "per-sender|main|reviewer")
+        #expect(request.params["expectedPermissionMode"]?.value as? String == "guarded")
+        let expectedTools = try JSONEncoder().encode(request.params["expectedToolOverrides"])
+        let expectedToolsValue = try #require(
+            JSONSerialization.jsonObject(with: expectedTools) as? [String: Any])
+        #expect(expectedToolsValue["webSearch"] as? Bool == false)
         #expect(request.params["thinking"]?.value as? String == "low")
         #expect(request.params["timeoutMs"] == nil)
         let encoded = try JSONEncoder().encode(request.params["attachments"])
-        #expect(String(decoding: encoded, as: UTF8.self).contains("a.png"))
+        let json = try #require(String(bytes: encoded, encoding: .utf8))
+        #expect(json.contains("a.png"))
     }
 
     @Test func `send request omits inherited thinking override`() {
@@ -348,14 +693,19 @@ struct ChatGatewayRequestTests {
             sessionKey: "global",
             agentID: nil,
             expectedSessionRoutingContract: nil,
+            expectedSessionSettings: OpenClawChatSessionSettingsExpectation(
+                permissionMode: nil,
+                toolOverrides: nil),
             message: "inherit",
             thinking: nil,
             idempotencyKey: "send-inherit",
             attachments: [])
         #expect(inherited.params["thinking"] == nil)
+        #expect(inherited.params["expectedPermissionMode"] == nil)
+        #expect(inherited.params["expectedToolOverrides"] == nil)
     }
 
-    @Test func `question resolve request preserves answer arrays`() throws {
+    @Test func `question resolve request uses the gateway answer envelope`() throws {
         let request = OpenClawChatGatewayRequests.resolveQuestion(
             id: "ask_123",
             answers: ["meal": ["Pizza", "Salad"]])
@@ -363,8 +713,9 @@ struct ChatGatewayRequestTests {
         #expect(request.method == "question.resolve")
         let data = try JSONEncoder().encode(request.params)
         let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        let answers = try #require(object["answers"] as? [String: Any])
-        #expect(answers["meal"] as? [String] == ["Pizza", "Salad"])
+        let envelope = try #require(object["answers"] as? [String: Any])
+        let answers = try #require(envelope["answers"] as? [String: [String]])
+        #expect(answers == ["meal": ["Pizza", "Salad"]])
     }
 
     @Test func `question get request carries id`() {
@@ -393,6 +744,73 @@ struct ChatGatewayRequestTests {
 }
 
 struct ChatGatewayPayloadCodecTests {
+    @Test func `hello operator scopes preserve the exact advertised authorization`() {
+        let snapshot = Snapshot(
+            presence: [],
+            health: [:],
+            stateversion: StateVersion(presence: 0, health: 0),
+            uptimems: 0)
+        let hello = HelloOk(
+            type: "hello-ok",
+            _protocol: 3,
+            server: [:],
+            features: [:],
+            snapshot: snapshot,
+            auth: ["scopes": AnyCodable([
+                AnyCodable("operator.read"),
+                AnyCodable("operator.admin"),
+            ])],
+            policy: [:])
+        let missing = HelloOk(
+            type: "hello-ok",
+            _protocol: 3,
+            server: [:],
+            features: [:],
+            snapshot: snapshot,
+            auth: [:],
+            policy: [:])
+
+        #expect(hello.advertisedOperatorScopes() == ["operator.read", "operator.admin"])
+        #expect(missing.advertisedOperatorScopes() == nil)
+    }
+
+    @Test(arguments: [
+        nil,
+        [],
+        [["runId": "watch-run", "consumedByEventId": "aggregate-user"]],
+    ] as [[[String: String]]?])
+    func `history decoding preserves optional input consumption receipts`(consumptions: [[String: String]]?) throws {
+        var object: [String: Any] = ["sessionKey": "main", "messages": []]
+        object["inputConsumptions"] = consumptions
+        let payload = try JSONDecoder().decode(
+            OpenClawChatHistoryPayload.self,
+            from: JSONSerialization.data(withJSONObject: object))
+        let encoded = try #require(JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(payload)) as? [String: Any])
+
+        #expect(encoded["inputConsumptions"] as? [[String: String]] == consumptions)
+    }
+
+    @Test func `session row decodes permission and every tool override family`() throws {
+        let row = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(#"""
+        {
+          "key":"main","permissionMode":"guarded","toolOverrides":{
+            "webSearch":false,
+            "skills":{"release":false},
+            "mcpServers":{"github":true},
+            "mcpToolsDeny":{"github":["create_issue"]}
+          }
+        }
+        """#.utf8))
+
+        #expect(row.permissionMode == .guarded)
+        #expect(row.toolOverrides == OpenClawChatSessionToolOverrides(
+            webSearch: false,
+            skills: ["release": false],
+            mcpServers: ["github": true],
+            mcpToolsDeny: ["github": ["create_issue"]]))
+    }
+
     @Test func `session key extracts canonical agent identity`() {
         #expect(OpenClawChatSessionKey.agentID(from: " agent:Reviewer:main ") == "Reviewer")
         #expect(OpenClawChatSessionKey.agentID(from: "agent::main") == nil)
@@ -420,16 +838,22 @@ struct ChatGatewayPayloadCodecTests {
     }
 
     @Test func `model choices preserve metadata and replace blank names`() throws {
-        let choices = try OpenClawChatGatewayPayloadCodec.decodeModelChoices(Data(
-            #"{"models":[{"id":"gpt-5","name":"  ","provider":"openai","contextWindow":200000,"reasoning":true}]}"#
-                .utf8))
+        let payload = Data(
+            #"{"models":[{"id":"gpt-5","name":"  ","provider":"openai","available":false,"unavailableReason":"missing-auth","unavailableUntil":1234,"contextWindow":200000,"reasoning":true}]}"#
+                .utf8)
+        let choices = try OpenClawChatGatewayPayloadCodec.decodeModelChoices(payload)
+        let metadataChoices = try OpenClawChatGatewayPayloadCodec.decodeChatMetadataModelChoices(payload)
 
         #expect(choices == [OpenClawChatModelChoice(
             modelID: "gpt-5",
             name: "gpt-5",
             provider: "openai",
+            available: false,
+            unavailableReason: "missing-auth",
+            unavailableUntil: 1234,
             contextWindow: 200_000,
             reasoning: true)])
+        #expect(metadataChoices == choices)
     }
 
     @Test func `command choice normalizes source aliases and identity`() {
@@ -597,6 +1021,14 @@ struct ChatGatewayPayloadCodecTests {
         #expect(event.sessionkey == "agent:main:main")
         #expect(event.revision.value as? Int == 7)
 
+        guard case .chatMetadataChanged = OpenClawChatGatewayPayloadCodec.event(from: EventFrame(
+            type: "event",
+            event: "chat.metadata.changed"))
+        else {
+            Issue.record("expected chatMetadataChanged")
+            return
+        }
+
         #expect(OpenClawChatGatewayPayloadCodec.event(from: EventFrame(
             type: "event",
             event: "unknown")) == nil)
@@ -620,6 +1052,7 @@ struct ChatGatewayPayloadCodecTests {
             "reason": AnyCodable("message"),
             "updatedAt": AnyCodable(200),
         ])
+        #expect(partial?.colorPresent == false)
         #expect(partial?.agentStatusPresent == false)
         #expect(partial?.observerDigestPresent == false)
         #expect(partial?.statusPresent == false)
@@ -628,11 +1061,14 @@ struct ChatGatewayPayloadCodecTests {
         let cleared = try? decode([
             "sessionKey": AnyCodable("main"),
             "reason": AnyCodable("patch"),
+            "color": AnyCodable(NSNull()),
             "agentStatus": AnyCodable(NSNull()),
             "observerDigest": AnyCodable(NSNull()),
             "status": AnyCodable(NSNull()),
             "lastRunError": AnyCodable(NSNull()),
         ])
+        #expect(cleared?.colorPresent == true)
+        #expect(cleared?.color == nil)
         #expect(cleared?.agentStatusPresent == true)
         #expect(cleared?.observerDigestPresent == true)
         #expect(cleared?.statusPresent == true)
@@ -643,9 +1079,11 @@ struct ChatGatewayPayloadCodecTests {
         let data = Data("""
         {
           "sessionKey": null,
+          "color": null,
           "status": null,
           "session": {
             "key": "agent:main:child",
+            "color": "blue",
             "agentId": "main",
             "parentSessionKey": "agent:main:parent",
             "status": "running",
@@ -659,6 +1097,8 @@ struct ChatGatewayPayloadCodecTests {
         let event = try JSONDecoder().decode(OpenClawChatSessionsChangedEvent.self, from: data)
         #expect(event.reason.isEmpty)
         #expect(event.sessionKey == nil)
+        #expect(event.color == nil)
+        #expect(event.colorPresent)
         #expect(event.agentId == "main")
         #expect(event.parentSessionKey == "agent:main:parent")
         #expect(event.status == nil)
@@ -676,6 +1116,7 @@ struct ChatGatewayPayloadCodecTests {
             reason: "run-progress",
             updatedAt: 200,
             lastReadAt: 100,
+            color: nil,
             agentStatus: .init(note: "Reviewing", expiresAt: 500, attention: "hand"),
             observerDigest: .init(
                 runId: "run-1",
@@ -688,10 +1129,13 @@ struct ChatGatewayPayloadCodecTests {
             hasActiveRun: true,
             activeRunIds: ["run-1"],
             startedAt: 50,
-            endedAt: nil)
+            endedAt: nil,
+            colorPresent: true)
 
         let data = try JSONEncoder().encode(event)
         let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["colorPresent"] == nil)
+        #expect(object["color"] is NSNull)
         #expect(object["agentStatusPresent"] == nil)
         #expect(object["observerDigestPresent"] == nil)
         #expect(object["statusPresent"] == nil)

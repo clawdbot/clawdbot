@@ -1,5 +1,5 @@
 // Run diagnostic event tests cover emitted diagnostics from isolated cron runs.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onDiagnosticEvent,
   onInternalDiagnosticEvent,
@@ -11,14 +11,12 @@ vi.mock("../../agents/auth-profiles/source-check.js", () => ({
   hasAnyAuthProfileStoreSource: vi.fn(() => false),
 }));
 
+import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
-  clearFastTestEnv,
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
   makeCronSessionEntry,
-  resetRunCronIsolatedAgentTurnHarness,
   resolveCronSessionMock,
-  restoreFastTestEnv,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
@@ -55,17 +53,11 @@ type EventRecord = {
 };
 
 describe("runCronIsolatedAgentTurn diagnostic events", () => {
-  let previousFastTestEnv: string | undefined;
+  setupRunCronIsolatedAgentTurnSuite();
 
   beforeEach(() => {
-    previousFastTestEnv = clearFastTestEnv();
-    resetRunCronIsolatedAgentTurnHarness();
     resetDiagnosticStateForTest();
     resetDiagnosticEventsForTest();
-  });
-
-  afterEach(() => {
-    restoreFastTestEnv(previousFastTestEnv);
   });
 
   it("emits a paired queued/processing/idle/processed lifecycle for an isolated cron run", async () => {
@@ -274,7 +266,13 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
     });
     expect(usageEvents[0]?.durationMs).toEqual(expect.any(Number));
     expect(usageEvents[0]?.durationMs).toBeGreaterThanOrEqual(0);
-    expect(result?.usage).toEqual({ input_tokens: 50, output_tokens: 100, total_tokens: 160 });
+    expect(result?.usage).toEqual({
+      input_tokens: 50,
+      output_tokens: 100,
+      total_tokens: 160,
+      cache_read_tokens: 7,
+      cache_write_tokens: 3,
+    });
   });
 
   it("does not emit model.usage when diagnostics are disabled", async () => {
@@ -346,7 +344,20 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
     });
   });
 
-  it("preserves total-only model usage in cron diagnostics", async () => {
+  it.each([
+    { name: "total-only model usage", usage: { total: 42 }, expectedTotal: 42, cost: undefined },
+    {
+      name: "cost-only positive total",
+      usage: { cost: { total: 0.25 } },
+      expectedTotal: 0,
+      cost: 0.25,
+    },
+    { name: "cost-only zero total", usage: { cost: { total: 0 } }, expectedTotal: 0, cost: 0 },
+  ])("preserves $name in cron diagnostics", async ({ usage, expectedTotal, cost }) => {
+    const cronSession = makeCronSession({
+      sessionEntry: makeCronSessionEntry({ estimatedCostUsd: 1.25 }),
+    });
+    resolveCronSessionMock.mockReturnValue(cronSession);
     const usageEvents: Array<{
       type: string;
       usage?: { input?: number; output?: number; promptTokens?: number; total?: number };
@@ -363,7 +374,7 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
         payloads: [{ text: "test output" }],
         meta: {
           agentMeta: {
-            usage: { total: 42 },
+            usage,
           },
         },
       },
@@ -383,8 +394,21 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
       input: 0,
       output: 0,
       promptTokens: 0,
-      total: 42,
+      total: expectedTotal,
     });
-    expect(usageEvents[0]?.costUsd).toBeUndefined();
+    expect(usageEvents[0]?.costUsd).toBe(cost);
+    if (cost !== undefined) {
+      expect(cronSession.sessionEntry.estimatedCostUsd).toBe(cost);
+      for (const key of [
+        "inputTokens",
+        "outputTokens",
+        "cacheRead",
+        "cacheWrite",
+        "totalTokens",
+      ] as const) {
+        expect(cronSession.sessionEntry[key]).toBeUndefined();
+      }
+      expect(cronSession.sessionEntry.totalTokensFresh).not.toBe(true);
+    }
   });
 });

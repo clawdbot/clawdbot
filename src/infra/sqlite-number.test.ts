@@ -1,7 +1,31 @@
 // Tests for SQLite number normalization.
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { normalizeSqliteNumber } from "./sqlite-number.js";
+import { coerceRequiredSqliteNumber, normalizeSqliteNumber } from "./sqlite-number.js";
+
+describe("coerceRequiredSqliteNumber", () => {
+  it.each([
+    ["number", 5, 5],
+    ["negative zero", -0, -0],
+    ["NaN", Number.NaN, Number.NaN],
+    ["positive infinity", Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
+    ["negative infinity", Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY],
+    ["zero bigint", BigInt(0), 0],
+    ["safe bigint", BigInt(Number.MAX_SAFE_INTEGER), Number.MAX_SAFE_INTEGER],
+    [
+      "unsafe positive bigint",
+      BigInt(Number.MAX_SAFE_INTEGER) + BigInt(1),
+      Number(BigInt(Number.MAX_SAFE_INTEGER) + BigInt(1)),
+    ],
+    [
+      "unsafe negative bigint",
+      BigInt(-Number.MAX_SAFE_INTEGER) - BigInt(1),
+      Number(BigInt(-Number.MAX_SAFE_INTEGER) - BigInt(1)),
+    ],
+  ] as const)("preserves the required %s conversion contract", (_name, value, expected) => {
+    expect(Object.is(coerceRequiredSqliteNumber(value), expected)).toBe(true);
+  });
+});
 
 describe("normalizeSqliteNumber", () => {
   it("returns number value unchanged", () => {

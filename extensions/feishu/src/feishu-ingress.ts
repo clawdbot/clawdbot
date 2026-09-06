@@ -316,6 +316,7 @@ export function buildFeishuFlushIngressLifecycle(
         handedOff = true;
         transportLifecycle.onDeferred();
       },
+      onDeferredHeartbeat: () => transportLifecycle.onDeferredHeartbeat?.(),
       onAdoptionFinalizing: () => {
         transportLifecycle.onAdoptionFinalizing();
       },

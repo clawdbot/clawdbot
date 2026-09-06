@@ -1,79 +1,76 @@
 import { isDeepStrictEqual } from "node:util";
 import type {
-  WorkerGitHubPublishParams,
-  WorkerSessionsSendParams,
   WorkerSessionsSpawnParams,
   WorkerSessionToolResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerSkillWorkshopParams } from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { buildSubagentExecutionSessionSpawnContext } from "../../agents/subagents/spawn/subagent-spawn-execution-identity.js";
-import {
-  getGatewayToolCallerIdentity,
-  withGatewayToolCallerIdentity,
-} from "../../agents/tools/gateway-caller-context.js";
+import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
   callInProcessGatewayToolWithCreation,
+  type AgentToolGatewayRequestCaller,
   type InProcessGatewayCaller,
+  runWithGatewayToolCleanupContext,
   withAgentToolGatewayRuntimeIdentity,
 } from "../../agents/tools/in-process-gateway.js";
 import { runWithScopedSessionAccess } from "../../agents/tools/scoped-session-access.js";
-import { createSessionsSendTool } from "../../agents/tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "../../agents/tools/sessions-spawn-tool.js";
-import { jsonResult } from "../../agents/tools/tool-results.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { inheritSessionCreationPolicy } from "../../config/sessions/session-entry-provenance.js";
 import { sha256Base64Url, sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { WORKER_TOOL_NAMES } from "../../worker/tool-authority.js";
-import type { GitHubPublicationCoordinator } from "../github-publication.js";
+import type { GatewayContextResolver } from "../server-methods/types.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
-import {
-  getWorkerTurnExecutionIdentityCapability,
-  type WorkerTurnExecutionIdentity,
-} from "./placement-turn-claim-events.js";
+import { getWorkerTurnExecutionIdentityCapability } from "./placement-turn-claim-events.js";
 import type { WorkerPlacementDispatchContract } from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import {
+  createWorkerPortalToolExecutor,
+  type WorkerPortalToolExecutorDependencies,
+  type WorkerPortalToolRequest,
+} from "./worker-portal-tool-executor.js";
+import {
+  applyWorkerSessionToolPolicy,
+  type WorkerSessionOperationRequest,
+} from "./worker-session-tool-policy.js";
+import {
   serializeWorkerSessionToolResult as serializeResult,
   workerSessionToolErrorResult as errorResult,
+  WorkerSessionToolOutcomeUnknownError,
 } from "./worker-session-tool-result.js";
+import { executeWorkerSessionSend } from "./worker-session-tool-send.js";
 import {
   assertWorkerSessionToolChild as assertExactChild,
   resolveWorkerSessionToolSource as exactSource,
   resolveWorkerSessionToolTarget as exactAuthorizedTarget,
   workerSessionRelationKey as relationKey,
   type WorkerSessionToolSource as ExactSource,
-  type WorkerSessionToolTarget as ExactTarget,
 } from "./worker-session-tool-topology.js";
+import { invokeWorkerSkillAuthoring } from "./worker-skill-authoring.js";
 
 type WorkerSessionToolRequest =
+  | WorkerPortalToolRequest
+  | WorkerSessionOperationRequest
   | {
       identity: WorkerConnectionIdentity;
-      toolName: "sessions_spawn";
-      request: WorkerSessionsSpawnParams;
       signal?: AbortSignal;
-    }
-  | {
-      identity: WorkerConnectionIdentity;
-      toolName: "sessions_send";
-      request: WorkerSessionsSendParams;
-      signal?: AbortSignal;
-    }
-  | {
-      identity: WorkerConnectionIdentity;
-      toolName: "github_publish";
-      request: WorkerGitHubPublishParams;
-      signal?: AbortSignal;
+      toolName: "skill_workshop";
+      request: WorkerSkillWorkshopParams;
     };
 
-class WorkerSessionToolOutcomeUnknownError extends Error {
-  constructor(cause: unknown) {
-    super("Worker session operation outcome is unknown; it was not replayed", { cause });
-    this.name = "WorkerSessionToolOutcomeUnknownError";
-  }
-}
+type WorkerSessionToolAuthority = {
+  assertSource: () => void;
+  collectExecutionIdentity: boolean;
+  callGateway: <T = Record<string, unknown>>(
+    request: Parameters<AgentToolGatewayRequestCaller>[0],
+    sessionSpawnContext?: ReturnType<typeof buildSubagentExecutionSessionSpawnContext>,
+  ) => Promise<T>;
+};
 
 function computeRequestDigest(value: unknown): string {
   return sha256Base64Url(`openclaw.worker-session-tool-request.v1\0${JSON.stringify(value)}`);
@@ -83,42 +80,118 @@ function operationKey(operationSeed: string, purpose: string): string {
   return sha256Base64Url(`openclaw.worker-session-tool-operation.v1\0${operationSeed}\0${purpose}`);
 }
 
-function throwIfAborted(signal: AbortSignal | undefined): void {
-  signal?.throwIfAborted();
-}
-
-function childSessionKey(params: { operationSeed: string; targetAgentId: string }): string {
-  const suffix = sha256HexPrefixCore(
-    `openclaw.worker-session-tool-operation.v1\0${params.operationSeed}\0child-session`,
+function childSessionKey(operationSeed: string, targetAgentId: string): string {
+  return `agent:${targetAgentId}:dashboard:cloud-${sha256HexPrefixCore(
+    `openclaw.worker-session-tool-operation.v1\0${operationSeed}\0child-session`,
     32,
-  );
-  return `agent:${params.targetAgentId}:dashboard:cloud-${suffix}`;
+  )}`;
 }
 
 export function createWorkerSessionToolExecutor(params: {
+  resolveGatewayContext: GatewayContextResolver;
   placements: WorkerSessionPlacementStore;
   environments: Pick<WorkerEnvironmentService, "get">;
   dispatchChild: WorkerPlacementDispatchContract["dispatch"];
-  githubPublication: Pick<GitHubPublicationCoordinator, "requestForClaim">;
+  portals: WorkerPortalToolExecutorDependencies["portals"];
 }) {
   const inFlight = new Map<string, Promise<string>>();
+  const executePortal = createWorkerPortalToolExecutor(params);
 
-  const spawn = async (operation: {
-    source: ExactSource;
-    identity: WorkerConnectionIdentity;
-    request: WorkerSessionsSpawnParams;
-    operationSeed: string;
-    childSessionKey: string;
-    signal?: AbortSignal;
-  }) => {
-    throwIfAborted(operation.signal);
+  const runWithSource = async <T>(
+    operation: { source: ExactSource; identity: WorkerConnectionIdentity; signal?: AbortSignal },
+    run: (authority: WorkerSessionToolAuthority) => Promise<T>,
+  ): Promise<T> => {
+    const capability = getWorkerTurnExecutionIdentityCapability(
+      params.placements,
+      operation.source.turnClaim,
+    );
+    if (!capability) {
+      throw new Error("Worker source turn has no operational owner");
+    }
+    return await capability.run((owner) =>
+      withGatewayToolCallerIdentity(
+        {
+          agentId: owner.agentId,
+          sessionKey: owner.sessionKey,
+          gatewayContextResolver: params.resolveGatewayContext,
+          operationalRunInstance: owner.operationalRunInstance,
+          executionIdentityToken: owner.executionIdentityToken,
+          receiptAuthority: owner.receiptAuthority,
+          workerTurnClaim: owner.turnClaim,
+          workerTurnExecutionIdentityCapability: capability,
+          ...(operation.signal ? { approvalSignals: [operation.signal] } : {}),
+        },
+        async () => {
+          const assertSource = () => {
+            operation.signal?.throwIfAborted();
+            owner.receiptAuthority();
+            const source = exactSource({
+              identity: operation.identity,
+              placements: params.placements,
+            });
+            if (source.agentId !== owner.agentId || source.sessionKey !== owner.sessionKey) {
+              throw new Error("Worker source turn owner changed");
+            }
+          };
+          const callGateway = async <R = Record<string, unknown>>(
+            request: Parameters<AgentToolGatewayRequestCaller>[0],
+            sessionSpawnContext?: ReturnType<typeof buildSubagentExecutionSessionSpawnContext>,
+          ): Promise<R> => {
+            assertSource();
+            return await capability.run(() =>
+              callAgentToolGatewayRequest<R>(
+                withAgentToolGatewayRuntimeIdentity(
+                  {
+                    ...request,
+                    ...(operation.signal ? { signal: operation.signal } : {}),
+                  },
+                  {
+                    kind: "agentRuntime",
+                    agentId: owner.agentId,
+                    sessionKey: owner.sessionKey,
+                    operationalRunInstance: owner.operationalRunInstance,
+                    delegatedAuthority: {
+                      kind: "worker",
+                      ...owner.delegatedAuthority,
+                      turnClaim: owner.turnClaim,
+                    },
+                    ...(owner.executionIdentityToken
+                      ? { executionIdentity: owner.executionIdentityToken }
+                      : {}),
+                    ...(sessionSpawnContext ? { sessionSpawnContext } : {}),
+                  },
+                ),
+              ),
+            );
+          };
+          assertSource();
+          return await run({
+            assertSource,
+            callGateway,
+            collectExecutionIdentity: owner.executionIdentityToken !== undefined,
+          });
+        },
+      ),
+    );
+  };
+
+  const spawn = async (
+    operation: {
+      source: ExactSource;
+      identity: WorkerConnectionIdentity;
+      request: WorkerSessionsSpawnParams;
+      operationSeed: string;
+      childSessionKey: string;
+      signal?: AbortSignal;
+    },
+    { assertSource, callGateway, collectExecutionIdentity }: WorkerSessionToolAuthority,
+  ) => {
     const sourceEnvironment = params.environments.get(operation.identity.environmentId);
     if (
       !sourceEnvironment ||
       sourceEnvironment.state !== "attached" ||
       sourceEnvironment.ownerEpoch !== operation.identity.ownerEpoch ||
-      sourceEnvironment.attachedSessionIds.length !== 1 ||
-      sourceEnvironment.attachedSessionIds[0] !== operation.source.sessionId
+      !isDeepStrictEqual(sourceEnvironment.attachedSessionIds, [operation.source.sessionId])
     ) {
       throw new Error("Worker source environment changed before child spawn");
     }
@@ -126,27 +199,18 @@ export function createWorkerSessionToolExecutor(params: {
     const authorizedTools = WORKER_TOOL_NAMES.filter((name) =>
       params.placements.isWorkerTurnToolAuthorized(operation.source.turnClaim, name),
     );
-    const lineageCapability = getWorkerTurnExecutionIdentityCapability(params.placements, {
-      sessionId: operation.source.sessionId,
-      environmentId: operation.source.turnClaim.owner.environmentId,
-      ownerEpoch: operation.source.turnClaim.owner.ownerEpoch,
-      runId: operation.source.turnClaim.runId,
-    });
-    let workerIdentity: WorkerTurnExecutionIdentity | undefined;
     const gatewayCall: InProcessGatewayCaller = async <T = Record<string, unknown>>(
       method: string,
       requestParams: Record<string, unknown>,
     ): Promise<T> => {
       if (method !== "sessions.create") {
-        return await callAgentToolGatewayRequest<T>({
-          method,
-          params: requestParams,
-          ...(operation.signal ? { signal: operation.signal } : {}),
-          timeoutMs: null,
-        });
+        // Cleanup settles the already-created child even after its source closes.
+        return await runWithGatewayToolCleanupContext(
+          () => callAgentToolGatewayRequest<T>({ method, params: requestParams, timeoutMs: null }),
+          params.resolveGatewayContext,
+        );
       }
-      throwIfAborted(operation.signal);
-      exactSource({ identity: operation.identity, placements: params.placements });
+      assertSource();
       let loaded = loadGatewaySessionEntryReadOnly(operation.childSessionKey, {
         agentId: targetAgentId,
       });
@@ -170,8 +234,10 @@ export function createWorkerSessionToolExecutor(params: {
           entry: loaded.entry,
         };
       } else {
+        const { source } = operation;
         const createParams: Record<string, unknown> = {
           ...requestParams,
+          ...(source.entry.permissionMode ? { permissionMode: source.entry.permissionMode } : {}),
           key: operation.childSessionKey,
         };
         delete createParams.task;
@@ -182,11 +248,13 @@ export function createWorkerSessionToolExecutor(params: {
             createParams,
             {
               via: "spawn",
-              actor: { type: "agent", id: operation.source.agentId },
-              requesterSessionKey: operation.source.sessionKey,
+              ...inheritSessionCreationPolicy(source.entry, { type: "agent", id: source.agentId }),
+              requesterSessionKey: source.sessionKey,
               inheritedToolPolicy: { version: 1, allow: authorizedTools, deny: [] },
             },
             {
+              resolveGatewayContext: params.resolveGatewayContext,
+              sessionMutationCommitGuard: assertSource,
               ...(operation.signal ? { signal: operation.signal } : {}),
               timeoutMs: null,
             },
@@ -248,21 +316,24 @@ export function createWorkerSessionToolExecutor(params: {
           }
         };
         const childPlacement = params.placements.get(childSessionId);
-        throwIfAborted(operation.signal);
-        exactSource({ identity: operation.identity, placements: params.placements });
+        assertSource();
         if (childPlacement?.state !== "active") {
           try {
-            await params.dispatchChild({
-              sessionId: childSessionId,
-              sessionKey: operation.childSessionKey,
-              agentId: targetAgentId,
-              profileId: sourceEnvironment.profileId,
-              executionMode: "worker-turn",
-              inheritedProfile: {
-                providerId: sourceEnvironment.providerId,
-                profileSnapshot: sourceEnvironment.profileSnapshot,
+            await params.dispatchChild(
+              {
+                sessionId: childSessionId,
+                sessionKey: operation.childSessionKey,
+                agentId: targetAgentId,
+                profileId: sourceEnvironment.profileId,
+                executionMode: "worker-turn",
+                inheritedProfile: {
+                  providerId: sourceEnvironment.providerId,
+                  profileSnapshot: sourceEnvironment.profileSnapshot,
+                },
               },
-            });
+              undefined,
+              assertSource,
+            );
           } catch (error) {
             try {
               assertActiveChildPlacement();
@@ -272,8 +343,7 @@ export function createWorkerSessionToolExecutor(params: {
           }
         }
         assertActiveChildPlacement();
-        exactSource({ identity: operation.identity, placements: params.placements });
-        throwIfAborted(operation.signal);
+        assertSource();
         assertExactChild({
           childSessionKey: operation.childSessionKey,
           childSessionId,
@@ -283,8 +353,7 @@ export function createWorkerSessionToolExecutor(params: {
         });
         const childRunId = operationKey(operation.operationSeed, "initial-task");
         const config = getRuntimeConfig();
-        const gatewayCaller = getGatewayToolCallerIdentity();
-        const sessionSpawnContext = lineageCapability
+        const sessionSpawnContext = collectExecutionIdentity
           ? buildSubagentExecutionSessionSpawnContext({
               enabled: true,
               backend: "subagent",
@@ -310,8 +379,7 @@ export function createWorkerSessionToolExecutor(params: {
             let sendResult: Record<string, unknown> | undefined;
             for (let attempt = 0; attempt < 2; attempt += 1) {
               try {
-                throwIfAborted(operation.signal);
-                exactSource({ identity: operation.identity, placements: params.placements });
+                assertSource();
                 assertExactChild({
                   childSessionKey: operation.childSessionKey,
                   childSessionId,
@@ -337,38 +405,7 @@ export function createWorkerSessionToolExecutor(params: {
                   ...(operation.signal ? { signal: operation.signal } : {}),
                   timeoutMs: null,
                 } as const;
-                sendResult =
-                  lineageCapability && workerIdentity
-                    ? await lineageCapability.run(async (identity) => {
-                        if (
-                          identity !== workerIdentity ||
-                          gatewayCaller?.agentId !== identity.agentId ||
-                          gatewayCaller.sessionKey !== identity.sessionKey ||
-                          gatewayCaller.operationalRunInstance !==
-                            identity.operationalRunInstance ||
-                          gatewayCaller.executionIdentityToken !==
-                            identity.executionIdentityToken ||
-                          gatewayCaller.workerTurnClaim !== identity.turnClaim
-                        ) {
-                          throw new Error("worker child admission identity changed");
-                        }
-                        return await callAgentToolGatewayRequest(
-                          withAgentToolGatewayRuntimeIdentity(request, {
-                            kind: "agentRuntime",
-                            agentId: identity.agentId,
-                            sessionKey: identity.sessionKey,
-                            operationalRunInstance: identity.operationalRunInstance,
-                            delegatedAuthority: {
-                              kind: "worker",
-                              ...identity.delegatedAuthority,
-                              turnClaim: identity.turnClaim,
-                            },
-                            executionIdentity: identity.executionIdentityToken,
-                            sessionSpawnContext,
-                          }),
-                        );
-                      })
-                    : await callAgentToolGatewayRequest(request);
+                sendResult = await callGateway(request, sessionSpawnContext);
                 break;
               } catch (error) {
                 if (attempt === 1) {
@@ -407,139 +444,34 @@ export function createWorkerSessionToolExecutor(params: {
       expectedParentSessionId: operation.source.sessionId,
       ...(operation.signal ? { signal: operation.signal } : {}),
     });
-    const executeSpawn = () =>
-      tool.execute(operation.request.toolCallId, {
-        task: operation.request.task,
-        ...(operation.request.label ? { label: operation.request.label } : {}),
-        ...(operation.request.agentId ? { agentId: operation.request.agentId } : {}),
-        ...(operation.request.model ? { model: operation.request.model } : {}),
-        ...(operation.request.runTimeoutSeconds === undefined
-          ? {}
-          : { runTimeoutSeconds: operation.request.runTimeoutSeconds }),
-        expectsCompletionMessage: false,
-        visible: true,
-        worktree: true,
-      });
-    return lineageCapability
-      ? await lineageCapability.run(async (identity) => {
-          workerIdentity = identity;
-          try {
-            return await withGatewayToolCallerIdentity(
-              {
-                agentId: identity.agentId,
-                sessionKey: identity.sessionKey,
-                operationalRunInstance: identity.operationalRunInstance,
-                executionIdentityToken: identity.executionIdentityToken,
-                workerTurnClaim: identity.turnClaim,
-                workerTurnExecutionIdentityCapability: lineageCapability,
-              },
-              executeSpawn,
-            );
-          } finally {
-            workerIdentity = undefined;
-          }
-        })
-      : await executeSpawn();
-  };
-
-  const send = async (operation: {
-    source: ExactSource;
-    identity: WorkerConnectionIdentity;
-    target: ExactTarget;
-    request: WorkerSessionsSendParams;
-    idempotencyKey: string;
-    signal?: AbortSignal;
-  }) => {
-    throwIfAborted(operation.signal);
-    exactSource({ identity: operation.identity, placements: params.placements });
-    const config = getRuntimeConfig();
-    const executeFencedSend = async () => {
-      const assertCurrentTarget = () => {
-        const target = exactAuthorizedTarget({
-          source: operation.source,
-          requestedSessionKey: operation.request.sessionKey,
-          placements: params.placements,
-        });
-        if (
-          target.sessionId !== operation.target.sessionId ||
-          target.topologyParent?.sessionKey !== operation.target.topologyParent?.sessionKey ||
-          target.topologyParent?.sessionId !== operation.target.topologyParent?.sessionId
-        ) {
-          throw new Error("Worker sessions_send target incarnation changed");
-        }
-      };
-      assertCurrentTarget();
-      const tool = createSessionsSendTool({
-        agentSessionKey: operation.source.sessionKey,
-        expectedTargetSessionId: operation.target.sessionId,
-        idempotencyKey: operation.idempotencyKey,
-        config,
-        ...(operation.signal ? { signal: operation.signal } : {}),
-        callGateway: (request) =>
-          callAgentToolGatewayRequest({
-            ...request,
-            ...(operation.signal ? { signal: operation.signal } : {}),
-          }),
-      });
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        try {
-          throwIfAborted(operation.signal);
-          exactSource({ identity: operation.identity, placements: params.placements });
-          assertCurrentTarget();
-          return await tool.execute(operation.request.toolCallId, {
-            sessionKey: operation.target.sessionKey,
-            message: operation.request.message,
-            ...(operation.request.timeoutSeconds === undefined
-              ? {}
-              : { timeoutSeconds: operation.request.timeoutSeconds }),
-          });
-        } catch (error) {
-          if (attempt === 1) {
-            throw new WorkerSessionToolOutcomeUnknownError(error);
-          }
-        }
-      }
-      throw new WorkerSessionToolOutcomeUnknownError(
-        new Error("Worker sessions_send did not return a result"),
-      );
-    };
-    const topologyParent = operation.target.topologyParent;
-    if (!topologyParent) {
-      return await executeFencedSend();
-    }
-    // Sibling authority exists only while the exact shared parent exists. Hold
-    // that third incarnation through target admission and the message effect.
-    return await runWithScopedSessionAccess({
-      cfg: config,
-      expectedSessionId: topologyParent.sessionId,
-      targetSessionKey: topologyParent.sessionKey,
-      ...(operation.signal ? { signal: operation.signal } : {}),
-      run: executeFencedSend,
+    return await tool.execute(operation.request.toolCallId, {
+      task: operation.request.task,
+      ...(operation.request.label ? { label: operation.request.label } : {}),
+      ...(operation.request.agentId ? { agentId: operation.request.agentId } : {}),
+      ...(operation.request.model ? { model: operation.request.model } : {}),
+      ...(operation.request.runTimeoutSeconds === undefined
+        ? {}
+        : { runTimeoutSeconds: operation.request.runTimeoutSeconds }),
+      expectsCompletionMessage: false,
+      visible: true,
+      worktree: true,
     });
   };
 
   return async (request: WorkerSessionToolRequest): Promise<WorkerSessionToolResult> => {
     const source = exactSource({ identity: request.identity, placements: params.placements });
-    if (request.toolName === "github_publish") {
-      const assertPublicationAuthority = () => {
-        const current = exactSource({ identity: request.identity, placements: params.placements });
-        if (!params.placements.isWorkerTurnToolAuthorized(current.turnClaim, request.toolName)) {
-          throw new Error("Worker session tool authority changed");
-        }
-      };
-      assertPublicationAuthority();
-      throwIfAborted(request.signal);
-      const publication = await params.githubPublication.requestForClaim({
-        claim: source.turnClaim,
-        sessionKey: source.sessionKey,
-        agentId: source.agentId,
-        idempotencyKey: request.request.toolCallId,
-        ...(request.request.title ? { title: request.request.title } : {}),
-        ...(request.request.body ? { body: request.request.body } : {}),
-        assertCurrent: assertPublicationAuthority,
-      });
-      assertPublicationAuthority();
-      return { resultJson: serializeResult(jsonResult(publication)) };
+    if (request.toolName === "skill_workshop") {
+      if (!params.placements.isWorkerTurnToolAuthorized(source.turnClaim, "skill_workshop")) {
+        throw new Error("Worker Workshop is not authorized.");
+      }
+      request.signal?.throwIfAborted();
+      const result = await invokeWorkerSkillAuthoring(source.turnClaim, request.request);
+      exactSource({ identity: request.identity, placements: params.placements });
+      request.signal?.throwIfAborted();
+      return { resultJson: serializeResult(result) };
+    }
+    if (request.toolName === "portal") {
+      return await executePortal(request);
     }
     const requestDigest = computeRequestDigest(
       request.toolName === "sessions_spawn"
@@ -603,65 +535,95 @@ export function createWorkerSessionToolExecutor(params: {
           ),
       };
     }
+    const completeOperation = (result: unknown, failed = false) => {
+      const resultJson = serializeResult(result);
+      return params.placements.completeWorkerSessionToolOperation({
+        sourceSessionId: source.sessionId,
+        sourceClaimId,
+        toolCallId: request.request.toolCallId,
+        requestDigest,
+        resultJson,
+        failed,
+      })
+        ? resultJson
+        : serializeResult(errorResult(new Error("Worker session operation lost ownership")));
+    };
     const operation = (async () => {
+      let operationRequest = request;
       let result: unknown;
       let failed = false;
       try {
-        const target =
-          request.toolName === "sessions_send"
-            ? exactAuthorizedTarget({
-                source,
-                requestedSessionKey: request.request.sessionKey,
-                placements: params.placements,
-              })
-            : undefined;
-        let childKey = started.childSessionKey;
-        if (request.toolName === "sessions_spawn" && !childKey) {
-          const targetAgentId = normalizeAgentId(request.request.agentId ?? source.agentId);
-          childKey = childSessionKey({
-            operationSeed: started.operationSeed,
-            targetAgentId,
-          });
-          if (
-            !params.placements.bindWorkerSessionToolOperationChild({
-              sourceSessionId: source.sessionId,
-              sourceClaimId,
-              toolCallId: request.request.toolCallId,
-              requestDigest,
-              childSessionKey: childKey,
-            })
-          ) {
-            throw new Error("Worker child spawn operation changed before execution");
-          }
-        }
-        result =
-          request.toolName === "sessions_spawn"
-            ? await spawn({
-                source,
-                identity: request.identity,
-                request: request.request,
-                operationSeed: started.operationSeed,
-                childSessionKey: childKey!,
-                ...(request.signal ? { signal: request.signal } : {}),
-              })
-            : await send({
-                source,
-                identity: request.identity,
-                target: target!,
-                request: request.request,
-                idempotencyKey: `worker-session-send:${operationKey(
-                  started.operationSeed,
-                  "target-send",
-                )}`,
-                ...(request.signal ? { signal: request.signal } : {}),
-              });
+        // Only the elected durable owner runs policy; retries reuse its terminal result.
+        result = await runWithSource(
+          { source, identity: request.identity, signal: request.signal },
+          async (authority) => {
+            const policy = await applyWorkerSessionToolPolicy({ request, source });
+            authority.assertSource();
+            if ("result" in policy) {
+              return policy.result;
+            }
+            operationRequest = policy.request;
+            const target =
+              operationRequest.toolName === "sessions_send"
+                ? exactAuthorizedTarget({
+                    source,
+                    requestedSessionKey: operationRequest.request.sessionKey,
+                  })
+                : undefined;
+            let childKey = started.childSessionKey;
+            if (operationRequest.toolName === "sessions_spawn" && !childKey) {
+              const targetAgentId = normalizeAgentId(
+                operationRequest.request.agentId ?? source.agentId,
+              );
+              childKey = childSessionKey(started.operationSeed, targetAgentId);
+              if (
+                !params.placements.bindWorkerSessionToolOperationChild({
+                  sourceSessionId: source.sessionId,
+                  sourceClaimId,
+                  toolCallId: operationRequest.request.toolCallId,
+                  requestDigest,
+                  childSessionKey: childKey,
+                })
+              ) {
+                throw new Error("Worker child spawn operation changed before execution");
+              }
+            }
+            return operationRequest.toolName === "sessions_spawn"
+              ? await spawn(
+                  {
+                    source,
+                    identity: operationRequest.identity,
+                    request: operationRequest.request,
+                    operationSeed: started.operationSeed,
+                    childSessionKey: childKey!,
+                    ...(operationRequest.signal ? { signal: operationRequest.signal } : {}),
+                  },
+                  authority,
+                )
+              : await executeWorkerSessionSend({
+                  assertSource: authority.assertSource,
+                  callGateway: authority.callGateway,
+                  source,
+                  target: target!,
+                  request: operationRequest.request,
+                  idempotencyKey: `worker-session-send:${operationKey(
+                    started.operationSeed,
+                    "target-send",
+                  )}`,
+                  ...(operationRequest.signal ? { signal: operationRequest.signal } : {}),
+                });
+          },
+        );
       } catch (error) {
-        if (error instanceof WorkerSessionToolOutcomeUnknownError || request.signal?.aborted) {
+        if (
+          error instanceof WorkerSessionToolOutcomeUnknownError ||
+          operationRequest.signal?.aborted
+        ) {
           if (
             !params.placements.abandonWorkerSessionToolOperation({
               sourceSessionId: source.sessionId,
               sourceClaimId,
-              toolCallId: request.request.toolCallId,
+              toolCallId: operationRequest.request.toolCallId,
               requestDigest,
             })
           ) {
@@ -680,20 +642,7 @@ export function createWorkerSessionToolExecutor(params: {
         failed = true;
         result = errorResult(error);
       }
-      const resultJson = serializeResult(result);
-      if (
-        !params.placements.completeWorkerSessionToolOperation({
-          sourceSessionId: source.sessionId,
-          sourceClaimId,
-          toolCallId: request.request.toolCallId,
-          requestDigest,
-          resultJson,
-          failed,
-        })
-      ) {
-        return serializeResult(errorResult(new Error("Worker session operation lost ownership")));
-      }
-      return resultJson;
+      return completeOperation(result, failed);
     })();
     inFlight.set(inFlightKey, operation);
     try {

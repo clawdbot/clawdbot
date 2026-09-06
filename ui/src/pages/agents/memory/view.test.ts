@@ -2,102 +2,27 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { i18n } from "../../../i18n/index.ts";
-import type { TranslationMap } from "../../../i18n/lib/types.ts";
-import { en } from "../../../i18n/locales/en.ts";
-import { fullDreamingViewAccess } from "./view.test-helpers.ts";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  fullDreamingViewAccess,
+  installDreamingViewTestTranslations,
+} from "./view.test-helpers.ts";
 import { createDreamingViewState, renderDreaming, type DreamingViewState } from "./view.ts";
 
 type DreamingProps = Parameters<typeof renderDreaming>[0];
 
 let viewState = createDreamingViewState();
-let restoreTranslations = () => {};
+const restoreTranslations = installDreamingViewTestTranslations();
 
-const asTranslationMap = (value: string | TranslationMap | undefined): TranslationMap =>
-  value && typeof value === "object" ? value : {};
-
-beforeAll(() => {
-  const dreaming = asTranslationMap(en.dreaming);
-  const wiki = asTranslationMap(dreaming.wiki);
-  i18n.registerTranslation("en", {
-    ...en,
-    dreaming: {
-      ...dreaming,
-      wiki: {
-        ...wiki,
-        pageTypes: {
-          entity: "entity",
-          concept: "concept",
-          source: "source",
-          synthesis: "synthesis",
-          report: "report",
-        },
-        pageGroups: {
-          sources: "Sources",
-          syntheses: "Syntheses",
-          reports: "Reports",
-          entities: "Entities",
-          concepts: "Concepts",
-        },
-        counts: {
-          pageOne: "{count} page",
-          pages: "{count} pages",
-          claimRowOne: "{count} claim row",
-          claimRows: "{count} claim rows",
-          openQuestionOne: "{count} open question",
-          openQuestions: "{count} open questions",
-          contradictionOne: "{count} contradiction",
-          contradictions: "{count} contradictions",
-          chats: "{count} chats",
-          sensitive: "{count} sensitive",
-          signals: "{count} signals",
-          messages: "{count} messages",
-          userMessages: "{count} user",
-          assistantMessages: "{count} assistant",
-        },
-        pageGroupSummary: "{label} · {count}",
-        noPagesYet: "No pages yet",
-        sectionPageSummary: "{label}: {count}",
-        questionCountOnPages: "{questionCount} on {pageCount}",
-        risk: {
-          needsReview: "needs review",
-          low: "low risk",
-          medium: "medium risk",
-          high: "high risk",
-          unknown: "unknown risk",
-        },
-        pageNotFound: "No wiki page found for {lookup}.",
-        previewTruncated: "Showing the first chunk of this page.",
-        previewTruncatedWithTotal: "Showing the first chunk of this page ({count} total lines).",
-        importedClusterSummary: "Imported chats clustered around {label}.",
-        withheldDigestOne: "{count} digest was withheld pending review.",
-        withheldDigests: "{count} digests were withheld pending review.",
-        details: "Details",
-        hideDetails: "Hide details",
-        vault: "Vault",
-        fullVaultBreakdown: "Full vault breakdown: {breakdown}.",
-        selectedSection: "Selected section: {summary}.",
-        latestUpdate: "Latest update {date}.",
-      },
-    },
-  });
-  restoreTranslations = () => i18n.registerTranslation("en", en);
-});
-
-afterAll(() => {
-  restoreTranslations();
-});
+afterAll(() => restoreTranslations());
 
 const setDreamSubTab = (tab: DreamingViewState["activeSubTab"]) => (viewState.activeSubTab = tab);
 
-function setDreamDiarySubTab(tab: DreamingViewState["activeDiarySubTab"]) {
-  viewState.activeDiarySubTab = tab;
-}
+const setDreamDiarySubTab = (tab: DreamingViewState["activeDiarySubTab"]) =>
+  (viewState.activeDiarySubTab = tab);
 
-function setDreamAdvancedWaitingSort(sort: DreamingViewState["advancedWaitingSort"]) {
-  viewState.advancedWaitingSort = sort;
-}
+const setDreamAdvancedWaitingSort = (sort: DreamingViewState["advancedWaitingSort"]) =>
+  (viewState.advancedWaitingSort = sort);
 
 function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
   const props: DreamingProps = {
@@ -164,6 +89,7 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
       sourceType: "chatgpt",
       totalItems: 2,
       totalClusters: 2,
+      truncated: false,
       clusters: [
         {
           key: "topic/travel",
@@ -232,6 +158,7 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
     wikiOverview: {
       totalItems: 1,
       totalPages: 2,
+      truncated: false,
       pageCounts: {
         synthesis: 1,
         entity: 0,
@@ -612,6 +539,7 @@ describe("dreaming view", () => {
       wikiOverview: {
         totalItems: 1,
         totalPages: 1,
+        truncated: false,
         pageCounts: {
           synthesis: 0,
           entity: 0,
@@ -859,6 +787,7 @@ describe("dreaming view", () => {
       const firstCluster = expectDefined(wikiOverview.clusters[0], "first memory wiki cluster");
       props.wikiOverview = {
         ...wikiOverview,
+        truncated: false,
         clusters: [
           ...wikiOverview.clusters,
           { ...firstCluster, key: "concept", label: "Concepts" },

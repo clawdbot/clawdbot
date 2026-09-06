@@ -1,13 +1,20 @@
 // Pane-local search, context menus, selection actions, and presentation resets.
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
-import type { SessionsListResult } from "../../../api/types.ts";
+import type { ChatPendingInputsPage } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { GatewayBrowserClient } from "../../../api/gateway.ts";
+import type {
+  AgentsListResult,
+  GatewaySessionRow,
+  SessionsListResult,
+} from "../../../api/types.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
-import { copyMarkdownLabel } from "../../../components/copy-button.ts";
+import { copyMarkdownLabel, handleCopyButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
+import { releaseMarkdownTables } from "../../../components/markdown-tables.ts";
+import type { PersonActivityRouting } from "../../../components/person-activity-link.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
@@ -16,20 +23,20 @@ import type {
   ChatQueueItem,
   ChatStreamSegment,
 } from "../../../lib/chat/chat-types.ts";
-import {
-  buildCompanionQuestionPrefill,
-  buildMoreDetailsCompanionQuestion,
-} from "../../../lib/chat/companion-question.ts";
+import { buildCompanionQuestionPrefill } from "../../../lib/chat/companion-question.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
-import { copyToClipboard } from "../../../lib/clipboard.ts";
-import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
-import type { ChatRunStartupStatus } from "../chat-run-startup.ts";
+import type { TurnRecapWatch } from "../chat-progress.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
+import type { ChatRunUiStatus } from "../run-lifecycle.ts";
+import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
+import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.ts";
+import type { MessageActionDetails } from "./chat-message-markdown.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
+import type { ChatSendStatusActions } from "./chat-message-send-status.ts";
 import {
   dismissConfirmedActionPopovers,
   openChatRewindConfirmation,
@@ -39,6 +46,7 @@ import { handleChatSelectionPointerUp, removeChatSelectionPopup } from "./chat-s
 import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
 
 export type ChatThreadState = {
+  turnRecapWatch: TurnRecapWatch | null;
   searchOpen: boolean;
   searchQuery: string;
   searchFocusPending: boolean;
@@ -51,7 +59,7 @@ export type ChatThreadState = {
   };
 };
 
-export type ReplyMessageAccess = {
+type ReplyMessageAccess = {
   revision: number;
   navigationId: string | null;
   read: (messageId: string) => unknown;
@@ -59,43 +67,62 @@ export type ReplyMessageAccess = {
   open: (messageId: string) => void;
 };
 
-export type ChatThreadProps = {
+export type ChatThreadProps = ChatSendStatusActions & {
+  compactionStatus?: CompactionStatus | null;
   paneId: string;
+  /** Routing for peer sender names in a shared session. */
+  personActivity?: PersonActivityRouting;
   sessionKey: string;
+  presented?: boolean;
+  gatewayClient?: GatewayBrowserClient | null;
+  selectedSession: GatewaySessionRow | undefined;
   boardProvider?: BoardProvider;
   announceTranscript?: boolean;
   loading: boolean;
-  historyLoading?: boolean;
+  /** Older-history pagination: renders the auto-load sentinel plus the in-flow boundary row. */
+  historyPagination?: ChatHistoryBoundaryProps;
   messages: unknown[];
   toolMessages: unknown[];
+  browserTabPreviewsActive?: boolean;
   guardianNotices?: ChatGuardianNotice[];
   streamSegments: ChatStreamSegment[];
   stream: string | null;
   streamStartedAt: number | null;
+  /** Browser-local active run identity, retained across transient disconnects. */
   runId?: string | null;
-  runOutputTokens?: number | null;
+  runUsageById?: ReadonlyMap<string, RunOutputUsage>;
+  runStatus?: ChatRunUiStatus | null;
   queue: ChatQueueItem[];
+  pendingInputs?: ChatPendingInputsPage["items"];
   showThinking: boolean;
   showToolCalls: boolean;
   persistCommentary?: boolean;
   runActive?: boolean;
   runWorking?: boolean;
-  startupStatus?: ChatRunStartupStatus | null;
+  startupLabel?: string;
   waitingApproval?: boolean;
   questionPrompts?: readonly QuestionPrompt[];
   sessions: SessionsListResult | null;
+  /** Host context resolving global-alias session keys (scope=global fleets). */
   sessionHost?: UiSessionDefaultsHost | null;
   assistantName: string;
   assistantAvatar: string | null;
+  senderAgentAvatars?: ReadonlyMap<string, string | null>;
+  agents?: AgentsListResult["agents"];
+  /** Configured main-session key; an agent's main source labels as the agent. */
+  mainKey?: string;
+  currentAgentId?: string;
   assistantAvatarUrl?: string | null;
   userId?: string | null;
   userName?: string | null;
   userAvatar?: string | null;
+  avatarPlacement?: "none";
   basePath?: string;
   resourceBasePath?: string;
   fullMessageAgentId?: string;
   loadFullAssistantMessage?: SidebarFullMessageLoader | null;
-  localMediaPreviewRoots?: string[];
+  mediaPolicyEpoch?: number;
+  connectionEpoch?: number;
   assistantAttachmentAuthToken?: string | null;
   resolveArtifactDownload?: ArtifactDownloadResolver;
   canvasPluginSurfaceUrl?: string | null;
@@ -109,9 +136,9 @@ export type ChatThreadProps = {
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   onOpenSessionLink?: (target: SessionLinkTarget) => void;
   onOpenSessionCheckpoints?: () => void | Promise<void>;
-  onAssistantAttachmentLoaded?: () => void;
   onRequestOpenImage?: () => number;
   onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
+  onAssistantAttachmentLoaded?: () => void;
   onRequestUpdate?: () => void;
   onChatScroll?: (event: Event) => void;
   onHistoryIntent?: (event: Event) => void;
@@ -122,7 +149,6 @@ export type ChatThreadProps = {
   onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
   onForkMessage?: (entryId: string) => Promise<void> | void;
   onFocusComposer?: () => void;
-  onCompanionQuestion?: (question: string) => void;
   onCompanionPrefill?: (question: string) => void;
   onOpenSession?: (sessionKey: string) => void;
   modelSetupRequired?: boolean;
@@ -139,12 +165,12 @@ type TranscriptInteractionProps = Pick<
   | "onRewindMessage"
   | "onForkMessage"
   | "onFocusComposer"
-  | "onCompanionQuestion"
   | "onCompanionPrefill"
 >;
 
 function createTranscriptState(): ChatThreadState {
   return {
+    turnRecapWatch: null,
     searchOpen: false,
     searchQuery: "",
     searchFocusPending: false,
@@ -167,7 +193,7 @@ export function getTranscriptState(paneId: string): ChatThreadState {
   return state;
 }
 
-function dismissThreadPortals(paneId?: string, owner?: ParentNode): void {
+export function dismissThreadPortals(paneId?: string, owner?: ParentNode): void {
   removeReplyContextMenu(paneId);
   if (owner) {
     dismissConfirmedActionPopovers(owner);
@@ -179,6 +205,8 @@ function dismissThreadPortals(paneId?: string, owner?: ParentNode): void {
 
 export function resetTranscriptSession(paneId: string, owner?: ParentNode): void {
   dismissThreadPortals(paneId, owner);
+  // Retained panes keep their DOM, so their native table modals need explicit retirement.
+  owner?.querySelectorAll<HTMLElement>(".chat-thread").forEach(releaseMarkdownTables);
   const state = transcriptStates.get(paneId);
   if (state) {
     // Search input belongs to the outgoing transcript. Other fields are pane
@@ -218,18 +246,20 @@ export function renderTranscriptSearch(
         placeholder=${t("chat.thread.searchPlaceholder")}
         aria-label=${t("chat.thread.search")}
         .value=${state.searchQuery}
-        ${state.searchFocusPending
-          ? ref((element) => {
-              if (element instanceof HTMLInputElement) {
-                state.searchFocusPending = false;
-                queueMicrotask(() => {
-                  if (element.isConnected) {
-                    element.focus({ preventScroll: true });
-                  }
-                });
-              }
-            })
-          : nothing}
+        ${
+          state.searchFocusPending
+            ? ref((element) => {
+                if (element instanceof HTMLInputElement) {
+                  state.searchFocusPending = false;
+                  queueMicrotask(() => {
+                    if (element.isConnected) {
+                      element.focus({ preventScroll: true });
+                    }
+                  });
+                }
+              })
+            : nothing
+        }
         @input=${(event: Event) => {
           state.searchQuery = (event.target as HTMLInputElement).value;
           requestUpdate();
@@ -294,44 +324,28 @@ export function toggleTranscriptSearch(
   requestUpdate();
 }
 
-let activeReplyContextMenu: HTMLElement | null = null;
-let activeReplyContextMenuPaneId: string | null = null;
-let contextMenuDocumentClickHandler: ((event: MouseEvent) => void) | null = null;
-let contextMenuDocumentContextMenuHandler: ((event: MouseEvent) => void) | null = null;
-let contextMenuKeydownHandler: ((event: KeyboardEvent) => void) | null = null;
+let activeReplyContextMenu: {
+  element: HTMLElement;
+  paneId: string;
+  listeners: AbortController;
+} | null = null;
 
 function removeReplyContextMenu(paneId?: string) {
-  if (paneId && paneId !== activeReplyContextMenuPaneId) {
+  const owner = activeReplyContextMenu;
+  if (paneId && paneId !== owner?.paneId) {
     return;
   }
-  if (activeReplyContextMenu) {
-    dismissConfirmedActionPopovers(activeReplyContextMenu);
-    activeReplyContextMenu.remove();
+  if (owner) {
+    dismissConfirmedActionPopovers(owner.element);
+    owner.element.remove();
   }
   activeReplyContextMenu = null;
-  activeReplyContextMenuPaneId = null;
   const fallbackMenu = document.querySelector<HTMLElement>(".chat-reply-context-menu");
   if (fallbackMenu) {
     dismissConfirmedActionPopovers(fallbackMenu);
     fallbackMenu.remove();
   }
-  if (contextMenuDocumentClickHandler) {
-    document.removeEventListener("click", contextMenuDocumentClickHandler);
-    contextMenuDocumentClickHandler = null;
-  }
-  if (contextMenuDocumentContextMenuHandler) {
-    document.removeEventListener("contextmenu", contextMenuDocumentContextMenuHandler, true);
-    contextMenuDocumentContextMenuHandler = null;
-  }
-  if (contextMenuKeydownHandler) {
-    document.removeEventListener("keydown", contextMenuKeydownHandler);
-    contextMenuKeydownHandler = null;
-  }
-}
-
-function stableReplyMessageId(senderLabel: string | undefined, text: string): string {
-  const source = `${senderLabel ?? ""}\n${text}`;
-  return `reply:${fnv1aUtf16(source).toString(16)}`;
+  owner?.listeners.abort();
 }
 
 function createReplyContextMenuButton(onClick: () => void): HTMLButtonElement {
@@ -348,14 +362,16 @@ function createMessageActionContextButton(params: {
   label: string;
   disabled: boolean;
   tooltip: string;
-  onClick: () => void;
+  onClick: (event: Event) => void;
 }): { element: HTMLElement; button: HTMLButtonElement } {
   const button = document.createElement("button");
   button.type = "button";
   button.disabled = params.disabled;
   button.setAttribute("role", "menuitem");
-  button.setAttribute("aria-label", params.label);
-  button.textContent = params.label;
+  const label = document.createElement("span");
+  label.dataset.copyLabel = "";
+  label.textContent = params.label;
+  button.append(label);
   button.addEventListener("click", params.onClick);
   const tooltip = document.createElement("openclaw-tooltip");
   tooltip.content = params.tooltip;
@@ -394,19 +410,10 @@ function toggleTouchMessageMeta(event: PointerEvent): void {
 
 export function handleTranscriptPointerUp(event: PointerEvent, props: TranscriptInteractionProps) {
   toggleTouchMessageMeta(event);
-  if (
-    typeof props.onCompanionQuestion !== "function" ||
-    typeof props.onCompanionPrefill !== "function"
-  ) {
+  if (event.button !== 0 || event.ctrlKey || typeof props.onCompanionPrefill !== "function") {
     return;
   }
   handleChatSelectionPointerUp(event, {
-    onMoreDetails: (selection) => {
-      const question = buildMoreDetailsCompanionQuestion(selection);
-      if (question) {
-        props.onCompanionQuestion?.(question);
-      }
-    },
     onAskSideChat: (selection) => {
       const question = buildCompanionQuestionPrefill(selection);
       if (question) {
@@ -432,7 +439,9 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
   if (event.composedPath().some((target) => target instanceof HTMLAnchorElement)) {
     return;
   }
-  const bubble = (event.target as HTMLElement).closest(".chat-bubble");
+  const bubble = (event.target as HTMLElement).closest<
+    HTMLElement & { messageActions?: MessageActionDetails | null }
+  >(".chat-bubble");
   if (!bubble) {
     return;
   }
@@ -446,11 +455,10 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
   ) {
     return;
   }
-  const senderEl = group.querySelector(".chat-sender-name");
-  const senderLabel = senderEl?.textContent?.trim() ?? undefined;
-  const text = truncateUtf16Safe((bubble as HTMLElement).dataset.messageText?.trim() ?? "", 500);
-  const entryId = (bubble as HTMLElement).dataset.entryId?.trim() ?? "";
-  const messageId = (bubble as HTMLElement).dataset.messageId?.trim() ?? "";
+  // The menu and footer consume the same target, including attachment-only replies.
+  const replyTarget = bubble.messageActions?.replyTarget;
+  const entryId = bubble.dataset.entryId?.trim() ?? "";
+  const messageId = bubble.dataset.messageId?.trim() ?? "";
   const isUserMessage = group.classList.contains("user") && Boolean(entryId);
   // Grouped rows can contain several bubbles. Match the clicked bubble to its
   // own action owner so copy never targets a sibling message.
@@ -458,7 +466,8 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
     (element) => element.dataset.messageActionsFor === messageId,
   );
   const copyButton = actionOwner?.querySelector<HTMLButtonElement>(".chat-copy-btn");
-  const canReply = Boolean(text && props.onSetReply);
+  const ownsRunFrame = group.dataset.chatRowKey?.startsWith("agent-run:") === true;
+  const canReply = Boolean(replyTarget && props.onSetReply && (!ownsRunFrame || actionOwner));
   const canRewind = isUserMessage && typeof props.onRewindMessage === "function";
   const canCopy = Boolean(copyButton);
   const canFork = isUserMessage && typeof props.onForkMessage === "function";
@@ -484,23 +493,22 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
       label: t("chat.messages.copySelection"),
       disabled: false,
       tooltip: t("chat.messages.copySelection"),
-      onClick: () => {
-        void copyToClipboard(selectedText);
-        removeReplyContextMenu();
+      onClick: (copyEvent) => {
+        void handleCopyButton(copyEvent, selectedText, t("chat.messages.copySelection")).then(
+          (copied) => {
+            if (copied) {
+              removeReplyContextMenu(props.paneId);
+            }
+          },
+        );
       },
     });
     menu.append(action.element);
     focusCandidates.push(action.button);
   }
-  if (canReply) {
-    const replyMessageId = messageId || stableReplyMessageId(senderLabel, text);
+  if (canReply && replyTarget) {
     const replyButton = createReplyContextMenuButton(() => {
-      props.onSetReply?.({
-        messageId: replyMessageId,
-        text,
-        senderLabel,
-        ...(entryId ? { sourceMessageId: entryId } : {}),
-      });
+      props.onSetReply?.(replyTarget);
       removeReplyContextMenu();
       props.onFocusComposer?.();
     });
@@ -555,8 +563,8 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
     focusCandidates.push(action.button);
   }
   document.body.appendChild(menu);
-  activeReplyContextMenu = menu;
-  activeReplyContextMenuPaneId = props.paneId;
+  const owner = { element: menu, paneId: props.paneId, listeners: new AbortController() };
+  activeReplyContextMenu = owner;
 
   const menuRect = menu.getBoundingClientRect();
   let left = event.clientX;
@@ -571,15 +579,10 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
   menu.style.top = `${Math.max(0, top)}px`;
   focusCandidates.find((button) => !button.disabled)?.focus();
   requestAnimationFrame(() => {
-    if (!menu.isConnected || activeReplyContextMenu !== menu) {
+    if (!menu.isConnected || activeReplyContextMenu !== owner) {
       return;
     }
-    contextMenuDocumentClickHandler = (nextEvent: MouseEvent) => {
-      if (!menu.contains(nextEvent.target as Node | null)) {
-        removeReplyContextMenu();
-      }
-    };
-    contextMenuDocumentContextMenuHandler = (nextEvent: MouseEvent) => {
+    const handleOutsideEvent = (nextEvent: MouseEvent) => {
       if (!menu.contains(nextEvent.target as Node | null)) {
         removeReplyContextMenu();
       }
@@ -592,10 +595,10 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
         props.onFocusComposer?.();
       }
     };
-    contextMenuKeydownHandler = handleKeydown;
-    document.addEventListener("click", contextMenuDocumentClickHandler);
+    const { signal } = owner.listeners;
+    document.addEventListener("click", handleOutsideEvent, { signal });
     // Capture closes this owner even when the next menu stops event propagation.
-    document.addEventListener("contextmenu", contextMenuDocumentContextMenuHandler, true);
-    document.addEventListener("keydown", handleKeydown);
+    document.addEventListener("contextmenu", handleOutsideEvent, { capture: true, signal });
+    document.addEventListener("keydown", handleKeydown, { signal });
   });
 }

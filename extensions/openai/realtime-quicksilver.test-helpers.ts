@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { Readable } from "node:stream";
-import { vi } from "vitest";
+import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
+import { vi, type Mock } from "vitest";
 import { createOpenAIQuicksilverBrowserSessionBroker } from "./realtime-quicksilver-session.js";
 
 export class FakeSocket extends EventEmitter {
@@ -49,7 +49,7 @@ export function createRequest(params: {
   contentType?: string;
   body?: string;
 }): IncomingMessage {
-  return Object.assign(Readable.from([params.body ?? "v=offer\r\n"]), {
+  return Object.assign(createMockIncomingRequest([params.body ?? "v=offer\r\n"]), {
     method: params.method ?? "POST",
     headers: {
       ...(params.token ? { authorization: `Bearer ${params.token}` } : {}),
@@ -61,11 +61,11 @@ export function createRequest(params: {
       ...(params.origin ? { origin: params.origin } : {}),
       ...(params.host ? { host: params.host } : {}),
     },
-  }) as unknown as IncomingMessage;
+  });
 }
 
 export function createPreflightRequest(origin: string, host?: string): IncomingMessage {
-  return Object.assign(Readable.from([]), {
+  return Object.assign(createMockIncomingRequest([]), {
     method: "OPTIONS",
     headers: {
       origin,
@@ -74,7 +74,7 @@ export function createPreflightRequest(origin: string, host?: string): IncomingM
       "access-control-request-headers": "authorization,content-type",
       "access-control-request-private-network": "true",
     },
-  }) as unknown as IncomingMessage;
+  });
 }
 
 export function createResponseHarness(): {
@@ -119,7 +119,7 @@ export function createBroker(params?: {
 }) {
   const sockets: FakeSocket[] = [];
   const socketRequests: Array<{ url: string; headers?: Record<string, string> }> = [];
-  const logger = { debug: vi.fn(), warn: vi.fn() };
+  const logger = { debug: vi.fn() as Mock, warn: vi.fn() as Mock };
   const realtime = createOpenAIQuicksilverBrowserSessionBroker({
     getConfig: () => ({
       gateway: { controlUi: { allowedOrigins: ["https://control.example"] } },

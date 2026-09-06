@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventListener, GatewayHelloOk } from "../api/gateway.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import {
-  scopedSessionPullRequestKey,
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
 } from "./session-pull-requests.ts";
+import { scopedSessionArtifactKey } from "./sessions/session-key.ts";
 
 function createHello(): GatewayHelloOk {
   return {
@@ -53,6 +53,7 @@ function createGatewayHarness() {
       return snapshot;
     },
     connection: { gatewayUrl: "ws://example.test", token: "", bootstrapToken: "", password: "" },
+    connectionRevision: 0,
     eventLog: [],
     subscribe: subscribeSnapshots,
     subscribeEvents,
@@ -163,6 +164,20 @@ describe("session pull request snapshot store", () => {
       const owner = {};
       const listener = vi.fn();
       const globalAlias = reason === "rewind";
+      harness.setSnapshot({
+        ...harness.gateway.snapshot,
+        hello: {
+          ...createHello(),
+          snapshot: {
+            sessionDefaults: {
+              defaultAgentId: "main",
+              mainKey: "main",
+              mainSessionKey: globalAlias ? "global" : "agent:main:main",
+              scope: globalAlias ? "global" : "per-sender",
+            },
+          },
+        },
+      });
       const key = globalAlias ? "agent:work:main" : "agent:main:demo";
       const otherKey = "agent:main:other";
       store.watch(owner, [key, otherKey]);
@@ -621,7 +636,7 @@ describe("session pull request snapshot store", () => {
   });
 
   it("scopes global aliases without changing canonical keys", () => {
-    expect(scopedSessionPullRequestKey("global", "Work")).toBe("agent:work:global");
-    expect(scopedSessionPullRequestKey("agent:work:main", "main")).toBe("agent:work:main");
+    expect(scopedSessionArtifactKey("global", "Work")).toBe("agent:work:global");
+    expect(scopedSessionArtifactKey("agent:work:main", "main")).toBe("agent:work:main");
   });
 });

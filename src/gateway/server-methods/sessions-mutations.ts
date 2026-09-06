@@ -4,6 +4,7 @@ import {
   ErrorCodes,
   errorShape,
   missingScopeErrorShape,
+  type SessionsPatchManyResult,
   validateSessionsAssignOwnerParams,
   validateSessionsPatchManyParams,
   validateSessionsPatchParams,
@@ -14,6 +15,10 @@ import { assignSessionOwner } from "../../config/sessions/session-accessor.js";
 import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
+import {
+  projectAssignableSessionOwner,
+  projectSessionActor,
+} from "../session-identity-projection.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
   authorizeIncognitoSessionTarget,
@@ -23,11 +28,13 @@ import {
 } from "../session-sharing.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import type { SessionActorProfileIdentity } from "../session-utils-contracts.js";
-import { projectAssignableSessionOwner, projectSessionActor } from "../session-utils-row.js";
+import { projectSessionPatchResult } from "../session-utils-model.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
-import { executeSessionPatch, executeSessionPatchMany } from "./sessions-patch-engine.js";
+import { executeSessionPatchMutations } from "./sessions-patch-engine.js";
+import { createCommitGuard } from "./sessions-patch-errors.js";
+import { sessionPatchTargetIdentity } from "./sessions-patch-expectations.js";
 import { loadSessionsRuntimeModule, requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -58,18 +65,34 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const executed = await executeSessionPatchMany({
+    const targets = params.targets;
+    const executed = await executeSessionPatchMutations({
       client,
       context,
       patch: params.patch,
-      sessionMutationAuthorization,
-      targets: params.targets,
+      targets: targets.map((target) => ({
+        ...target,
+        commitGuard: createCommitGuard(target.key.trim(), () =>
+          sessionMutationAuthorization?.assertTargetCurrent({
+            sessionKey: target.key.trim(),
+            ...(target.agentId ? { agentId: target.agentId } : {}),
+          }),
+        ),
+      })),
     });
     if (!executed.ok) {
       respond(false, undefined, executed.error);
       return;
     }
-    respond(true, { outcomes: executed.outcomes }, undefined);
+    const outcomes: SessionsPatchManyResult["outcomes"] = [];
+    for (const [index, outcome] of executed.outcomes.entries()) {
+      const target = targets[index]!;
+      const identity = { key: target.key, ...(target.agentId ? { agentId: target.agentId } : {}) };
+      outcomes.push(
+        outcome.ok ? { ok: true, ...identity } : { ok: false, ...identity, error: outcome.error },
+      );
+    }
+    respond(true, { outcomes }, undefined);
   },
   "sessions.patch": async ({ params, respond, context, client, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateSessionsPatchParams, "sessions.patch", respond)) {
@@ -88,17 +111,39 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
-    const executed = await executeSessionPatch({
+    const patch = { ...params, key };
+    const target = sessionPatchTargetIdentity(patch);
+    const executed = await executeSessionPatchMutations({
       client,
       context,
-      patch: { ...params, key },
-      sessionMutationAuthorization,
+      patch,
+      targets: [
+        {
+          ...target,
+          commitGuard: createCommitGuard(target.key, sessionMutationAuthorization?.assertCurrent),
+        },
+      ],
     });
     if (!executed.ok) {
       respond(false, undefined, executed.error);
       return;
     }
-    respond(true, executed.result, undefined);
+    const outcome = executed.outcomes[0]!;
+    if (!outcome.ok) {
+      respond(false, undefined, outcome.error);
+      return;
+    }
+    const prepared = executed.preparedByIndex[0]!;
+    respond(
+      true,
+      projectSessionPatchResult({
+        ...prepared,
+        cfg: executed.cfg,
+        entry: outcome.entry,
+        modelCatalog: await executed.catalogs.available(prepared.targetAgentId),
+      }),
+      undefined,
+    );
   },
   "sessions.assignOwner": async ({ params, respond, context, client }) => {
     if (
@@ -147,7 +192,8 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     }
     const authorizeView = (candidate: NonNullable<typeof target>) =>
       authorizeIncognitoSessionTarget({ client, sessionKey: key, target: candidate }) ??
-      (createSessionListEntryFilter({ client })?.(candidate.storeKey, candidate.entry) === false
+      (createSessionListEntryFilter({ client, cfg })?.(candidate.storeKey, candidate.entry) ===
+      false
         ? errorShape(ErrorCodes.FORBIDDEN, "session is not visible to this connection")
         : null);
     const visibilityError = authorizeView(target);
@@ -337,6 +383,12 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       reason,
       commandSource: "gateway:sessions.reset",
       creation: resolveOperatorSessionCreation(client),
+      ...(client?.authenticatedUserProfile
+        ? { requestingOperatorProfileId: client.authenticatedUserProfile.profileId }
+        : {}),
+      ...(client?.internal?.operatorRoleActor
+        ? { operatorRoleActor: client.internal.operatorRoleActor }
+        : {}),
       authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
       armSessionDiffBaselineCapture: true,
       workerPlacementContext: context,
@@ -348,10 +400,10 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     }
     if ("incognitoDeleted" in result) {
       respond(true, { ok: true, key: result.key, deleted: true }, undefined);
-      // The session is gone, not reset: clients drop rows and navigate away
-      // only on "delete" (a non-delete reason merges a rowless no-op event).
       emitSessionsChanged(context, {
         sessionKey: result.key,
+        agentId: result.agentId,
+        sessionId: result.deletedSessionId,
         reason: "delete",
       });
       return;

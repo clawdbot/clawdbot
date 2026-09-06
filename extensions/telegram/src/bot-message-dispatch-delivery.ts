@@ -36,13 +36,13 @@ import { resolveTelegramReplyId } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { mergeTelegramPartialDeliveryError } from "./chunk-delivery.js";
 import { canonicalizeTelegramPresentationPayload } from "./interactive-fallback.js";
+import { createLaneDeliveryStateTracker } from "./lane-delivery-state.js";
 import {
-  createLaneDeliveryStateTracker,
   createLaneTextDeliverer,
   type DraftLaneState,
   type LaneDeliveryResult,
   type LaneName,
-} from "./lane-delivery.js";
+} from "./lane-delivery-text-deliverer.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import {
   createTelegramPromptContextProjectionSequence,
@@ -68,6 +68,7 @@ type TelegramSendPayloadOptions = {
   promptContextSequence?: TelegramPromptContextProjectionSequence;
   textMode?: "html";
   onPlatformSendDispatch?: () => Promise<void>;
+  assertPlatformSendAuthorized?: () => void;
   bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
 };
 
@@ -231,7 +232,7 @@ export async function sendPayload(
     isSingleUseReplyToMode(turn.replyToMode) &&
     !targetsDifferentMessage;
   const deliverablePayload = consumedSingleUseReply
-    ? (({ replyToId: _, replyToTag: _tag, replyToCurrent: _current, ...rest }) => rest)(
+    ? (({ replyToId: _replyToId, replyToTag: _tag, replyToCurrent: _current, ...rest }) => rest)(
         targetedPayload,
       )
     : targetedPayload;
@@ -317,6 +318,7 @@ export async function sendPayload(
       mediaLoader: turn.telegramDeps.loadWebMedia,
       promptContextSequence: projectionSequence,
       onPlatformSendDispatch: options?.onPlatformSendDispatch,
+      assertPlatformSendAuthorized: options?.assertPlatformSendAuthorized,
       ...(options?.textMode ? { textMode: options.textMode } : {}),
     });
     if (!result.delivered) {
@@ -437,22 +439,46 @@ async function materializeAnswerLaneBeforeRotation(turn: Turn): Promise<void> {
   await handlePreviewFinalizedResult(turn, result);
 }
 
+async function cleanupProgressWithoutBlockingFinal(
+  phase: "discard" | "teardown",
+  cleanup: () => Promise<void>,
+): Promise<void> {
+  try {
+    await cleanup();
+  } catch (err) {
+    // Preview cleanup is best-effort; dropping the durable final is worse than
+    // leaving stale progress visible for Telegram to expire or replace later.
+    logVerbose(
+      `telegram progress ${phase} failed before final delivery: ${formatErrorMessage(err)}`,
+    );
+  }
+}
+
 async function deliverTelegramProgressModeFinalAnswer(
   turn: Turn,
   payload: ReplyPayload,
   text: string,
   promptContextSequence: TelegramPromptContextProjectionSequence,
   onPlatformSendDispatch?: () => Promise<void>,
+  assertPlatformSendAuthorized?: () => void,
   bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T,
 ): Promise<LaneDeliveryResult> {
   const afterAcceptedDraft = turn.answerLane.stream?.hasConsumedReplyTarget?.() === true;
+  // Seal pending preview updates before the durable final send. This bounds
+  // final latency to one in-flight edit and prevents stale progress overtaking it.
+  await cleanupProgressWithoutBlockingFinal("discard", async () => {
+    await turn.answerLane.stream?.discard?.();
+  });
   if (payload.isError === true) {
-    await teardownProgressWindow(turn);
+    await cleanupProgressWithoutBlockingFinal("teardown", async () => {
+      await teardownProgressWindow(turn);
+    });
     const delivered = await sendPayload(turn, applyTextToPayload(payload, text), {
       afterAcceptedDraft,
       durable: true,
       promptContextSequence,
       onPlatformSendDispatch,
+      assertPlatformSendAuthorized,
       bindPendingFinalDelivery,
     });
     if (!delivered) {
@@ -467,11 +493,14 @@ async function deliverTelegramProgressModeFinalAnswer(
     durable: true,
     promptContextSequence,
     onPlatformSendDispatch,
+    assertPlatformSendAuthorized,
     bindPendingFinalDelivery,
   });
   // The final must dispatch before the activity window retires, so the answer
   // lane cannot accept follow-ups against a stale preview message.
-  await teardownProgressWindow(turn);
+  await cleanupProgressWithoutBlockingFinal("teardown", async () => {
+    await teardownProgressWindow(turn);
+  });
   if (!delivered) {
     return { kind: "skipped" };
   }
@@ -486,6 +515,7 @@ export async function deliverFinalAnswerText(
   text: string,
   buttons?: TelegramInlineButtons,
   onPlatformSendDispatch?: () => Promise<void>,
+  assertPlatformSendAuthorized?: () => void,
   bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T,
 ): Promise<LaneDeliveryResult> {
   const transcriptFinal = await turn.resolveCurrentTurnTranscriptFinal();
@@ -509,6 +539,7 @@ export async function deliverFinalAnswerText(
       finalText,
       promptContextSequence,
       onPlatformSendDispatch,
+      assertPlatformSendAuthorized,
       bindPendingFinalDelivery,
     );
   } else {
@@ -526,6 +557,7 @@ export async function deliverFinalAnswerText(
       allowStream: !usesNativeTelegramQuote(turn, answerPayload),
       promptContextSequence,
       onPlatformSendDispatch,
+      assertPlatformSendAuthorized,
       bindPendingFinalDelivery,
     });
     if (!isFollowUp && result.kind !== "skipped") {

@@ -1,29 +1,27 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 // Tracks active reply runs so stop, queue, and status commands can coordinate.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import {
   isAgentEventLifecycleGenerationCurrent,
   registerAgentEventLifecycleRotationHandler,
 } from "../../infra/agent-events.js";
+import { hasGatewayContextOwner } from "../../plugins/runtime/gateway-request-scope.js";
 import * as replyRunSettle from "./reply-run-finalization-lease.js";
 import {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   replyMessageInjectionTargetOperation,
   replyRunInterruptTargetOperation,
   type ReplyOperation,
-  type ReplyOperationPhase,
   type ReplyRunInterruptTarget,
   type ReplyRunRegistry,
 } from "./reply-run-registry.contracts.js";
 import { resolveReplyMessageInjectionRejection } from "./reply-run-registry.message-injection.js";
-import {
-  createReplyOperation,
-  expireStaleReplyOperation,
-  forceClearReplyOperation,
-} from "./reply-run-registry.operation.js";
+import { createReplyOperation, forceClearReplyOperation } from "./reply-run-registry.operation.js";
 import {
   clearReplyRunState,
   evictReplyOperationByOperation,
+  expireStaleReplyOperation,
   getAttachedBackend,
   isReplyOperationPreBackendPhase,
   isReplyRunCompacting,
@@ -217,9 +215,7 @@ export function supersedeReplyRunByRunId(runId: string, beforeCancel: () => void
     if (normalizeOptionalString(backend?.runId) !== expectedRunId) {
       continue;
     }
-    beforeCancel();
-    backend?.cancel("superseded");
-    return true;
+    return operation.supersede(beforeCancel);
   }
   return false;
 }
@@ -230,12 +226,6 @@ export function resolveActiveReplyRunThreadId(sessionKey: string): string | numb
 
 export function isReplyRunActiveForSessionId(sessionId: string): boolean {
   return resolveReplyRunForCurrentSessionId(sessionId) !== undefined;
-}
-
-export function resolveReplyRunPhaseForSessionId(
-  sessionId: string,
-): ReplyOperationPhase | undefined {
-  return resolveReplyRunForCurrentSessionId(sessionId)?.phase;
 }
 
 export function isReplyRunAbortableForCompaction(sessionId: string): boolean {
@@ -269,11 +259,14 @@ export function clearReplyRunForResetBySessionId(sessionId: string): void {
   if (!operation || isReplyOperationPreBackendPhase(operation.phase)) {
     return;
   }
-  operation.abortForRestart();
-  // Backend cancellation may synchronously retire this operation and admit a
-  // replacement. Only clear the exact archived operation resolved above.
-  if (replyRunState.activeRunsByKey.get(operation.key) === operation) {
-    operation.complete();
+  try {
+    operation.abortForRestart();
+  } finally {
+    // Backend cancellation may synchronously retire this operation and admit a
+    // replacement. Only clear the exact archived operation resolved above.
+    if (replyRunState.activeRunsByKey.get(operation.key) === operation) {
+      operation.complete();
+    }
   }
 }
 
@@ -384,27 +377,55 @@ export async function waitForReplyRunSuccessorAdmission(
     : { settled: true };
 }
 
-export function abortActiveReplyRuns(opts: {
-  mode: "all" | "compacting";
-  onAbortError?: (sessionId: string, error: unknown) => void;
-}): boolean {
-  let aborted = false;
-  for (const operation of replyRunState.activeRunsByKey.values()) {
+function abortReplyRuns(
+  operations: Iterable<ReplyOperation>,
+  opts: {
+    mode: "all" | "compacting";
+    onAbortError?: (sessionId: string, error: unknown) => void;
+  },
+  isCurrent?: (operation: ReplyOperation) => boolean,
+): number {
+  let aborted = 0;
+  for (const operation of operations) {
+    if (isCurrent && !isCurrent(operation)) {
+      continue;
+    }
     if (opts.mode === "compacting" && !isReplyRunCompacting(operation)) {
       continue;
     }
     try {
       if (operation.abortForRestart()) {
-        aborted = true;
+        aborted += 1;
       }
     } catch (error) {
       if (operation.result?.kind === "aborted" && operation.result.code === "aborted_for_restart") {
-        aborted = true;
+        aborted += 1;
       }
       opts.onAbortError?.(operation.sessionId, error);
     }
   }
   return aborted;
+}
+
+export function abortActiveReplyRuns(opts: Parameters<typeof abortReplyRuns>[1]): boolean {
+  return abortReplyRuns(replyRunState.activeRunsByKey.values(), opts) > 0;
+}
+
+/** Snapshot before durable marking; never cancel another instance or a replacement after the await. */
+export function captureGatewayReplyRunRestartAbort(resolveGatewayContext: GatewayContextResolver) {
+  const operations = Array.from(replyRunState.activeRunsByKey.values()).filter((operation) =>
+    hasGatewayContextOwner(operation, resolveGatewayContext),
+  );
+  return (onAbortError: (sessionId: string, error: unknown) => void): number =>
+    abortReplyRuns(
+      operations,
+      { mode: "all", onAbortError },
+      (operation) =>
+        replyRunState.activeRunsByKey.get(operation.key) === operation &&
+        operation.lifecycleGeneration !== undefined &&
+        isAgentEventLifecycleGenerationCurrent(operation.lifecycleGeneration) &&
+        hasGatewayContextOwner(operation, resolveGatewayContext),
+    );
 }
 
 export function getActiveReplyRunCount(): number {

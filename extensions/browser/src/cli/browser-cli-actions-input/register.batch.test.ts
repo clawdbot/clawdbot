@@ -70,6 +70,7 @@ describe("browser action input batch command", () => {
       actions: SAMPLE_ACTIONS,
       targetId: "tab-1",
     });
+    expect(mocks.callBrowserRequest.mock.calls.at(-1)?.[2]).toEqual({ timeoutMs: 65_000 });
   });
 
   it("omits stopOnError by default so the route applies its fail-fast default", async () => {

@@ -152,14 +152,6 @@ export function buildMatrixReplyArtifact(
   };
 }
 
-export function buildMatrixNoticeArtifact(event: MatrixQaObservedEvent) {
-  return {
-    bodyPreview: truncateMatrixQaPreview(event.body?.trim()),
-    eventId: event.eventId,
-    sender: event.sender,
-  };
-}
-
 export function buildMatrixReplyDetails(label: string, artifact: MatrixQaReplyArtifact) {
   return [
     `${label} event: ${artifact.eventId}`,
@@ -646,6 +638,9 @@ export async function runNoReplyExpectedScenario(params: {
         ...buildMatrixReplyDetails("unexpected reply", unexpectedReply),
       ].join("\n"),
     );
+  }
+  if (!observedTriggerEvent) {
+    throw new Error("Matrix no-reply observation did not observe the trigger event");
   }
   advanceMatrixQaActorCursor({
     actorId: params.actorId,

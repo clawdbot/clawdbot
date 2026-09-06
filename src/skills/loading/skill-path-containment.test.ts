@@ -11,11 +11,12 @@ import {
   setMockSkillsHomeEnv,
   type SkillsHomeEnvSnapshot,
 } from "../test-support/home-env.test-support.js";
-import { readSkillFrontmatterSafe } from "./local-loader.js";
+import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
+import { loadSingleSkillDirectory } from "./local-loader.js";
 import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
 
 vi.mock("./plugin-skills.js", () => ({
-  resolvePluginSkillDirs: () => [],
+  resolvePluginSkillRoots: () => [],
 }));
 
 let fakeHome = "";
@@ -27,6 +28,15 @@ async function createTempWorkspaceDir() {
   const workspaceDir = path.join(tempRoot, `workspace-${++workspaceCaseIndex}`);
   await fs.mkdir(workspaceDir, { recursive: true });
   return workspaceDir;
+}
+
+async function writeHardlinkedSkill(params: { dir: string; name: string; description: string }) {
+  const sourceDir = path.join(tempRoot, `hardlink-source-${++workspaceCaseIndex}`);
+  await writeSkill({ ...params, dir: sourceDir });
+  await fs.mkdir(params.dir, { recursive: true });
+  const skillFilePath = path.join(params.dir, "SKILL.md");
+  await fs.link(path.join(sourceDir, "SKILL.md"), skillFilePath);
+  expect((await fs.stat(skillFilePath)).nlink).toBeGreaterThan(1);
 }
 
 function captureWarningLogger() {
@@ -97,6 +107,90 @@ afterAll(async () => {
 });
 
 describe("skill path containment", () => {
+  it.each([
+    { source: "bundled", expectedSource: "openclaw-bundled" },
+    { source: "custodian", expectedSource: "openclaw-custodian" },
+  ] as const)("loads hardlinked packaged $source skills", async ({ source, expectedSource }) => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const bundledSkillsDir = path.join(workspaceDir, "package", "skills");
+    const skillRoot =
+      source === "bundled"
+        ? bundledSkillsDir
+        : path.join(path.dirname(bundledSkillsDir), "custodian-skills");
+    const skillName = `${source}-hardlinked-skill`;
+    await writeHardlinkedSkill({
+      dir: path.join(skillRoot, skillName),
+      name: skillName,
+      description: `Packaged ${source} skill`,
+    });
+    const warn = captureWarningLogger();
+
+    const entries = loadTestWorkspaceSkills(workspaceDir, {
+      bundledSkillsDir,
+      agentId: "ops",
+      config: {
+        agents: {
+          defaults: { systemAgent: { agentId: "ops" } },
+          entries: { ops: {} },
+        },
+      },
+    });
+
+    expect(entries).toEqual([
+      expect.objectContaining({
+        skill: expect.objectContaining({ name: skillName, source: expectedSource }),
+      }),
+    ]);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { source: "workspace", expectedSource: "openclaw-workspace" },
+    { source: "managed", expectedSource: "openclaw-managed" },
+    { source: "config-extra", expectedSource: "openclaw-extra" },
+  ] as const)(
+    "rejects hardlinked $source skills while preserving ordinary files",
+    async ({ source, expectedSource }) => {
+      const workspaceDir = await createTempWorkspaceDir();
+      const skillRoot =
+        source === "workspace"
+          ? path.join(workspaceDir, "skills")
+          : source === "managed"
+            ? path.join(workspaceDir, ".managed")
+            : path.join(workspaceDir, "extra-skills");
+      const rejectedSkillName = `${source}-hardlinked-skill`;
+      const acceptedSkillName = `${source}-ordinary-skill`;
+      await writeHardlinkedSkill({
+        dir: path.join(skillRoot, rejectedSkillName),
+        name: rejectedSkillName,
+        description: `Untrusted ${source} hardlink`,
+      });
+      await writeSkill({
+        dir: path.join(skillRoot, acceptedSkillName),
+        name: acceptedSkillName,
+        description: `Ordinary ${source} skill`,
+      });
+      const warn = captureWarningLogger();
+
+      const entries = loadTestWorkspaceSkills(
+        workspaceDir,
+        source === "config-extra"
+          ? { config: { skills: { load: { extraDirs: [skillRoot] } } } }
+          : undefined,
+      );
+
+      expect(entries).toEqual([
+        expect.objectContaining({
+          skill: expect.objectContaining({ name: acceptedSkillName, source: expectedSource }),
+        }),
+      ]);
+      const warningLine = firstWarningLine(warn);
+      expect(warningLine).toContain("Skipping invalid skill:");
+      expect(warningLine).toContain(rejectedSkillName);
+      expect(warningLine).toMatch(/hardlink/iu);
+    },
+  );
+
   it.runIf(process.platform !== "win32")(
     "skips workspace skill paths that resolve outside the workspace root",
     async () => {
@@ -137,6 +231,37 @@ describe("skill path containment", () => {
       expect(warningLine).toContain(`root=${path.join(workspaceDir, "skills")}`);
       expect(warningLine).toContain(`requested=${requestedPath}`);
       expect(warningLine).toContain("resolved=");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects symlinked skills in the Workshop-owned directory",
+    async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      const config = {
+        agents: { entries: { main: { agentDir: path.join(workspaceDir, ".agent") } } },
+      };
+      const workshopSkillsDir = resolveWorkshopSkillsDir(config, "main");
+      const outsideDir = await createTempWorkspaceDir();
+      const outsideSkillDir = path.join(outsideDir, "outside-workshop-skill");
+      await writeSkill({
+        dir: outsideSkillDir,
+        name: "outside-workshop-skill",
+        description: "Outside Workshop",
+      });
+      await fs.mkdir(workshopSkillsDir, { recursive: true });
+      await fs.symlink(
+        outsideSkillDir,
+        path.join(workshopSkillsDir, "outside-workshop-skill"),
+        "dir",
+      );
+      const warn = captureWarningLogger();
+
+      const entries = loadTestWorkspaceSkills(workspaceDir, { config, agentId: "main" });
+
+      expect(entries).toEqual([]);
+      expect(firstWarningLine(warn)).toContain("source=openclaw-workshop");
+      expect(firstWarningLine(warn)).toContain("reason=symlink-escape");
     },
   );
 
@@ -296,10 +421,11 @@ describe("skill path containment", () => {
         description: "Readable from filesystem root",
       });
 
-      const frontmatter = readSkillFrontmatterSafe({
-        rootDir: path.parse(skillDir).root,
-        filePath: path.join(skillDir, "SKILL.md"),
-      });
+      const frontmatter = loadSingleSkillDirectory({
+        skillDir,
+        source: "openclaw-workspace",
+        rootRealPath: path.parse(skillDir).root,
+      })?.frontmatter;
 
       expect(frontmatter?.name).toBe("root-allowed");
       expect(frontmatter?.description).toBe("Readable from filesystem root");

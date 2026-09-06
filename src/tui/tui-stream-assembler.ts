@@ -1,7 +1,6 @@
 // Assembles streamed backend events into TUI-visible messages.
 import {
   composeThinkingAndContent,
-  extractAssistantAttachmentText,
   extractContentFromMessage,
   extractThinkingFromMessage,
   resolveFinalAssistantText,
@@ -18,7 +17,7 @@ type RunStreamState = {
   displayText: string;
 };
 
-type BoundaryDropMode = "off" | "streamed-only" | "streamed-or-incoming";
+type BoundaryDropMode = "streamed-only" | "streamed-or-incoming";
 
 // Pull text blocks out of provider-style content arrays while remembering non-text blocks.
 function extractTextBlocksAndSignals(message: unknown): {
@@ -92,9 +91,6 @@ function shouldPreserveBoundaryDroppedText(params: {
   streamedTextBlocks: string[];
   nextContentBlocks: string[];
 }) {
-  if (params.boundaryDropMode === "off") {
-    return false;
-  }
   const sawEligibleNonTextContent =
     params.boundaryDropMode === "streamed-or-incoming"
       ? params.streamedSawNonTextContentBlocks || params.incomingSawNonTextContentBlocks
@@ -154,7 +150,7 @@ export class TuiStreamAssembler {
     state: RunStreamState,
     message: unknown,
     showThinking: boolean,
-    opts?: { boundaryDropMode?: BoundaryDropMode },
+    opts: { boundaryDropMode: BoundaryDropMode },
   ) {
     const thinkingText = extractThinkingFromMessage(message);
     const contentText = extractContentFromMessage(message);
@@ -165,9 +161,8 @@ export class TuiStreamAssembler {
     }
     if (contentText) {
       const nextContentBlocks = textBlocks.length > 0 ? textBlocks : [contentText];
-      const boundaryDropMode = opts?.boundaryDropMode ?? "off";
       const shouldKeepStreamedBoundaryText = shouldPreserveBoundaryDroppedText({
-        boundaryDropMode,
+        boundaryDropMode: opts.boundaryDropMode,
         streamedSawNonTextContentBlocks: state.sawNonTextContentBlocks,
         incomingSawNonTextContentBlocks: sawNonTextContentBlocks,
         streamedTextBlocks: state.contentBlocks,
@@ -217,22 +212,14 @@ export class TuiStreamAssembler {
     // Late finals must not insert an evicted run and displace a live stream.
     const state = this.runs.get(runId) ?? this.createRunState();
     const streamedContentText = state.contentText;
-    const streamedTextBlocks = [...state.contentBlocks];
-    const streamedSawNonTextContentBlocks = state.sawNonTextContentBlocks;
     this.updateRunState(state, message, showThinking, {
       boundaryDropMode: "streamed-only",
     });
-    const shouldKeepStreamedText =
-      streamedSawNonTextContentBlocks &&
-      isDroppedBoundaryTextBlockSubset({
-        streamedTextBlocks,
-        finalTextBlocks: state.contentBlocks,
-      });
     const responseText = resolveFinalAssistantText({
-      finalText: shouldKeepStreamedText ? streamedContentText : state.contentText,
+      finalText: state.contentText,
       streamedText: streamedContentText,
       errorMessage,
-      attachmentText: extractAssistantAttachmentText(message),
+      message,
     });
     // Thinking is optional presentation around the selected response content;
     // it must not hide errors or attachments when the final has no text.

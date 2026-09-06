@@ -12,6 +12,7 @@ import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-run
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareWhatsAppOutboundMedia } from "../outbound-media-contract.js";
+import { markdownToWhatsApp } from "../text-runtime.js";
 import { resolveWhatsAppOutboundMentions } from "./outbound-mentions.js";
 import { createWebSendApi } from "./send-api.js";
 import { normalizeWhatsAppSendResult, type WhatsAppSendResult } from "./send-result.js";
@@ -328,6 +329,35 @@ describe("createWebSendApi", () => {
       mentions: ["277038292303944@lid"],
     });
   });
+
+  it.each([
+    { messageText: "Run `notify @15551234567" },
+    { messageText: "Run `notify\n@15551234567" },
+    { messageText: "Run ``notify ` @15551234567" },
+    { messageText: "literal \\` ping @15551234567", nativeMention: true },
+    { messageText: "literal \\\\` inside @15551234567" },
+  ])(
+    "only sends native mentions for visible phone numbers outside inline code: $messageText",
+    async ({ messageText, nativeMention }) => {
+      api = createWebSendApi({
+        sock: { sendMessage, sendPresenceUpdate },
+        defaultAccountId: "main",
+        resolveOutboundMentions: ({ jid, text }) =>
+          resolveWhatsAppOutboundMentions({
+            chatJid: jid,
+            text,
+            participants: [{ id: "15551234567@s.whatsapp.net" }],
+          }),
+      });
+
+      await api.sendMessage("120363000000000000@g.us", markdownToWhatsApp(messageText));
+
+      expect(sendMessage).toHaveBeenCalledWith("120363000000000000@g.us", {
+        text: messageText,
+        ...(nativeMention ? { mentions: ["15551234567@s.whatsapp.net"] } : {}),
+      });
+    },
+  );
 
   it("supports image media with caption", async () => {
     const payload = Buffer.from("img");

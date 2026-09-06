@@ -1,4 +1,5 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
+import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -10,6 +11,10 @@ import type {
   AgentTool,
   ThinkingLevel,
 } from "../runtime/index.js";
+import {
+  takeCodeModeResponseSource,
+  prepareCodeModeSourceAppend,
+} from "../transcript-code-mode-source.js";
 import type {
   AgentSessionConfig,
   AgentSessionEvent,
@@ -266,6 +271,7 @@ export abstract class AgentSessionBase {
             content: result.content,
             details: result.details,
             isError,
+            ...(result.terminate !== undefined ? { terminate: result.terminate } : {}),
           }),
       );
 
@@ -275,8 +281,7 @@ export abstract class AgentSessionBase {
       this.extensionModifiedToolResultIds.add(toolCall.id);
 
       return {
-        content: hookResult.content,
-        details: hookResult.details,
+        ...hookResult,
         isError: hookResult.isError ?? isError,
       };
     };
@@ -373,8 +378,10 @@ export abstract class AgentSessionBase {
       retireQueuedUserMessage(event.message);
     }
 
+    const sourceSlots =
+      event.type === "message_end" ? takeCodeModeResponseSource(event.message) : undefined;
     // Emit to extensions first
-    const messageChangedByExtension = await this.emitExtensionEvent(event);
+    const messageChanged = await this.emitExtensionEvent(event);
     const publishAfterPersistence = event.type === "message_end" && event.message.role === "user";
 
     // Notify all listeners
@@ -410,10 +417,14 @@ export abstract class AgentSessionBase {
           this.extensionModifiedToolResultIds.delete(event.message.toolCallId);
         let entryId: string;
         try {
-          entryId = this.sessionManager.appendMessage(event.message, {
-            invalidateSerializedPrefixCache:
-              messageChangedByExtension || toolResultChangedByExtension,
-          });
+          // Normalize live delivery facts before persistence makes its redacted copy.
+          // Stored arguments must never replace the values used for tool execution.
+          applyAssistantDeliveryDirectives(event.message);
+          const appendOptions = {
+            invalidateSerializedPrefixCache: messageChanged || toolResultChangedByExtension,
+          };
+          prepareCodeModeSourceAppend(appendOptions, event.message, sourceSlots);
+          entryId = this.sessionManager.appendMessage(event.message, appendOptions);
         } catch (error) {
           if (event.message.role === "user") {
             reportSteeringMessagePersistenceFailure(event.message, error);
@@ -421,10 +432,6 @@ export abstract class AgentSessionBase {
           throw error;
         }
         if (event.message.role === "assistant") {
-          const persisted = this.sessionManager.getEntry(entryId);
-          if (persisted?.type === "message" && persisted.message.role === "assistant") {
-            replaceAgentMessageInPlace(event.message, persisted.message);
-          }
           this.lastAssistantEntryId = entryId;
         } else if (event.message.role === "user") {
           // A queued user message_end normally follows a committed append before listeners consume it.
@@ -465,23 +472,13 @@ export abstract class AgentSessionBase {
       return false;
     }
 
-    for (const message of event.messages.toReversed()) {
-      if (message.role === "assistant") {
-        return this.isRetryableError(message);
-      }
-    }
-    return false;
+    const lastAssistant = event.messages.findLast((message) => message.role === "assistant");
+    return lastAssistant !== undefined && this.isRetryableError(lastAssistant);
   }
 
   /** Find the last assistant message in agent state (including aborted ones) */
   protected findLastAssistantMessage(): AssistantMessage | undefined {
-    const messages = this.agent.state.messages;
-    for (const msg of messages.toReversed()) {
-      if (msg.role === "assistant") {
-        return msg;
-      }
-    }
-    return undefined;
+    return this.agent.state.messages.findLast((message) => message.role === "assistant");
   }
 
   /** Emit extension events based on agent events */

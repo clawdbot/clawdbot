@@ -3,9 +3,28 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { withTimeout } from "../utils/with-timeout.js";
 import { CronService } from "./service.js";
 import { writeCronStoreSnapshot } from "./service.test-harness.js";
+import { getSuspensionVisibleCronTaskRunCount } from "./service/active-run-cancellation.js";
+import type { CronJob } from "./types.js";
+
+const sqliteTransactionLabels = vi.hoisted(() => [] as string[]);
+
+vi.mock("../state/openclaw-state-db.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../state/openclaw-state-db.js")>();
+  const runOpenClawStateWriteTransaction: typeof actual.runOpenClawStateWriteTransaction = (
+    operation,
+    options,
+    transactionOptions,
+  ) => {
+    sqliteTransactionLabels.push(transactionOptions?.operationLabel ?? "state.write");
+    return actual.runOpenClawStateWriteTransaction(operation, options, transactionOptions);
+  };
+  return { ...actual, runOpenClawStateWriteTransaction };
+});
 
 const noopLogger = {
   debug: vi.fn(),
@@ -42,22 +61,27 @@ async function makeStorePath() {
 }
 
 function createDeferredIsolatedRun() {
-  let resolveRun: ((value: IsolatedRunResult) => void) | undefined;
-  let resolveRunStarted: (() => void) | undefined;
-  const runStarted = new Promise<void>((resolve) => {
-    resolveRunStarted = resolve;
-  });
+  const result = createDeferred<IsolatedRunResult>();
+  const started = createDeferred();
   const runIsolatedAgentJob = vi.fn(async () => {
-    resolveRunStarted?.();
-    return await new Promise<IsolatedRunResult>((resolve) => {
-      resolveRun = resolve;
-    });
+    started.resolve();
+    return await result.promise;
   });
   return {
     runIsolatedAgentJob,
-    runStarted,
-    completeRun: (result: IsolatedRunResult) => {
-      resolveRun?.(result);
+    runStarted: started.promise,
+    completeRun: result.resolve,
+    settle: async (run?: Promise<unknown>) => {
+      // The caller stops scheduling first; storage must outlive the admitted core and tick.
+      result.resolve({ status: "ok", summary: "done" });
+      try {
+        await run;
+      } finally {
+        await vi.waitFor(() => {
+          expect(getSuspensionVisibleCronTaskRunCount()).toBe(0);
+          expect(getActiveGatewayRootWorkCount()).toBe(0);
+        });
+      }
     },
   };
 }
@@ -76,7 +100,84 @@ function expectCronStatus(
   }
 }
 
+function futureJob(id: string, nowMs: number, withNextRun = true): CronJob {
+  return {
+    id,
+    name: id,
+    enabled: true,
+    createdAtMs: nowMs,
+    updatedAtMs: nowMs,
+    schedule: { kind: "every", everyMs: 60_000, anchorMs: nowMs },
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "agentTurn", message: id },
+    state: withNextRun ? { nextRunAtMs: nowMs + 60_000 } : {},
+  };
+}
+
 describe("CronService read ops while job is running", () => {
+  it("keeps started read operations observational across a large stable store", async () => {
+    const nowMs = Date.parse("2026-08-30T12:00:00.000Z");
+    const store = await makeStorePath();
+    const jobs = Array.from({ length: 100 }, (_, index) => futureJob(`stable-${index}`, nowMs));
+    await writeCronStoreSnapshot({ storePath: store.storePath, jobs });
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      nowMs: () => nowMs,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    try {
+      await cron.start();
+      sqliteTransactionLabels.length = 0;
+
+      await cron.status();
+      await cron.list({ includeDisabled: true });
+      await cron.listPage({ limit: 25 });
+      await cron.readJob(jobs[0]!.id);
+
+      expect(
+        sqliteTransactionLabels.filter((label) => label === "cron.schedule-unowned"),
+      ).toHaveLength(0);
+    } finally {
+      cron.stop();
+      await store.cleanup();
+    }
+  });
+
+  it("retains one durable missing-schedule repair before the scheduler starts", async () => {
+    const nowMs = Date.parse("2026-08-30T12:00:00.000Z");
+    const store = await makeStorePath();
+    const job = futureJob("unstarted-missing-next", nowMs, false);
+    await writeCronStoreSnapshot({ storePath: store.storePath, jobs: [job] });
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      nowMs: () => nowMs,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    try {
+      sqliteTransactionLabels.length = 0;
+      await expect(cron.readJob(job.id)).resolves.toMatchObject({
+        state: { nextRunAtMs: nowMs + 60_000 },
+      });
+      expect(
+        sqliteTransactionLabels.filter((label) => label === "cron.schedule-unowned"),
+      ).toHaveLength(1);
+    } finally {
+      cron.stop();
+      await store.cleanup();
+    }
+  });
+
   it.each([
     { deleteAfterRun: true, status: "ok" },
     { deleteAfterRun: false, status: "ok" },
@@ -166,6 +267,7 @@ describe("CronService read ops while job is running", () => {
       } finally {
         cron.stop();
         restartedCron?.stop();
+        await isolatedRun.settle();
         vi.clearAllTimers();
         vi.useRealTimers();
         await store.cleanup();
@@ -251,6 +353,7 @@ describe("CronService read ops while job is running", () => {
       expect(internal.state?.running).toBe(false);
     } finally {
       cron.stop();
+      await isolatedRun.settle();
       vi.clearAllTimers();
       vi.useRealTimers();
       await store.cleanup();
@@ -273,6 +376,7 @@ describe("CronService read ops while job is running", () => {
         runIsolatedAgentJob: isolatedRun.runIsolatedAgentJob,
       });
       let restartedCron: CronService | undefined;
+      let run: ReturnType<CronService["run"]> | undefined;
 
       try {
         await cron.start();
@@ -287,7 +391,7 @@ describe("CronService read ops while job is running", () => {
           delivery: { mode: "none" },
         });
 
-        const run = cron.run(job.id, "force");
+        run = cron.run(job.id, "force");
         await isolatedRun.runStarted;
         await cron.update(job.id, {
           schedule: { kind: "at", at: new Date(intermediateAt).toISOString() },
@@ -325,6 +429,7 @@ describe("CronService read ops while job is running", () => {
       } finally {
         cron.stop();
         restartedCron?.stop();
+        await isolatedRun.settle(run);
         await store.cleanup();
       }
     },
@@ -344,6 +449,7 @@ describe("CronService read ops while job is running", () => {
       requestHeartbeat,
       runIsolatedAgentJob: isolatedRun.runIsolatedAgentJob,
     });
+    let runPromise: ReturnType<CronService["run"]> | undefined;
 
     try {
       await cron.start();
@@ -361,7 +467,7 @@ describe("CronService read ops while job is running", () => {
         delivery: { mode: "none" },
       });
 
-      const runPromise = cron.run(job.id, "force");
+      runPromise = cron.run(job.id, "force");
       await isolatedRun.runStarted;
 
       await expect(
@@ -386,6 +492,7 @@ describe("CronService read ops while job is running", () => {
       expect(completed[0]?.state.runningAtMs).toBeUndefined();
     } finally {
       cron.stop();
+      await isolatedRun.settle(runPromise);
       await store.cleanup();
     }
   });

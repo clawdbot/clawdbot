@@ -10,6 +10,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import {
   type GoogleChatConfigAccessorAccount,
   inspectGoogleChatAccount,
+  isGoogleChatAccountConfigured,
   listGoogleChatAccountIds,
   resolveDefaultGoogleChatAccountId,
   resolveGoogleChatConfigAccessorAccount,
@@ -71,12 +72,6 @@ const googleChatConfigAdapter = createScopedChannelConfigAdapter<
     }),
   resolveDefaultTo: (account) => account.config.defaultTo,
 });
-
-function isGoogleChatAccountConfigured(account: ResolvedGoogleChatAccount): boolean {
-  return account.tokenStatus
-    ? account.tokenStatus !== "missing"
-    : account.credentialSource !== "none";
-}
 
 type GoogleChatPluginBase = Pick<
   ChannelPlugin<ResolvedGoogleChatAccount>,

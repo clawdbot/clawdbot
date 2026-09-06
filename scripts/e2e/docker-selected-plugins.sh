@@ -2,13 +2,14 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SOURCE_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}"
 source "$ROOT_DIR/scripts/lib/docker-build.sh"
 source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
 
 IMAGE_NAME="${OPENCLAW_DOCKER_SELECTED_PLUGINS_E2E_IMAGE:-openclaw-docker-selected-plugins-e2e:local}"
 DEPENDENCY_ONLY_IMAGE="${IMAGE_NAME}-dependency-only"
 CONTAINER_NAME="openclaw-docker-selected-plugins-e2e-$$"
-SELECTED_PLUGINS="${OPENCLAW_DOCKER_SELECTED_PLUGINS:-slack,msteams clickclack,slack}"
+SELECTED_PLUGINS="${OPENCLAW_DOCKER_SELECTED_PLUGINS:-slack,msteams clickclack,slack,whatsapp}"
 BUILD_GIT_COMMIT="${OPENCLAW_DOCKER_SELECTED_PLUGINS_E2E_GIT_COMMIT:-0123456789abcdef0123456789abcdef01234567}"
 BUILD_TIMESTAMP="${OPENCLAW_DOCKER_SELECTED_PLUGINS_E2E_BUILD_TIMESTAMP:-2026-07-10T12:34:56.000Z}"
 UNKNOWN_LOG="$(mktemp -t openclaw-docker-selected-plugins-unknown.XXXXXX)"
@@ -35,8 +36,8 @@ else
     env DOCKER_BUILDKIT=1 docker build \
     --target workspace-deps \
     --build-arg OPENCLAW_EXTENSIONS=missing-plugin \
-    -f "$ROOT_DIR/Dockerfile" \
-    "$ROOT_DIR" >"$UNKNOWN_LOG" 2>&1
+    -f "$SOURCE_ROOT/Dockerfile" \
+    "$SOURCE_ROOT" >"$UNKNOWN_LOG" 2>&1
   unknown_status=$?
   set -e
   if [ "$unknown_status" -eq 0 ] || ! grep -Fq \
@@ -46,13 +47,13 @@ else
     exit 1
   fi
 
-  echo "Proving manifest ids and known dependency-only plugins remain stageable..."
+  echo "Proving manifest ids and selected plugin dependencies remain stageable..."
   docker_build_run docker-selected-plugins-dependency-only \
     --target workspace-deps \
     --build-arg OPENCLAW_EXTENSIONS=whatsapp,kimi \
     -t "$DEPENDENCY_ONLY_IMAGE" \
-    -f "$ROOT_DIR/Dockerfile" \
-    "$ROOT_DIR"
+    -f "$SOURCE_ROOT/Dockerfile" \
+    "$SOURCE_ROOT"
   DEPENDENCY_ONLY_IMAGE_BUILT=1
   docker_e2e_docker_run_cmd run --rm \
     --entrypoint sh \
@@ -65,8 +66,8 @@ else
     --build-arg "OPENCLAW_BUILD_TIMESTAMP=$BUILD_TIMESTAMP" \
     --build-arg "OPENCLAW_EXTENSIONS=$SELECTED_PLUGINS" \
     -t "$IMAGE_NAME" \
-    -f "$ROOT_DIR/Dockerfile" \
-    "$ROOT_DIR"
+    -f "$SOURCE_ROOT/Dockerfile" \
+    "$SOURCE_ROOT"
 fi
 
 echo "Inspecting selected plugins from the final runtime image..."

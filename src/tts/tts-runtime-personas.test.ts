@@ -2,6 +2,13 @@ import { rmSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  activateSecretsRuntimeSnapshot,
+  clearSecretsRuntimeSnapshot,
+  prepareSecretsRuntimeSnapshot,
+} from "../secrets/runtime.js";
+import { discoverConfigSecretTargetsByIds } from "../secrets/target-registry.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
   clearRuntimeConfigSnapshot,
   createMockSpeechProvider,
   getTtsPersona,
@@ -29,6 +36,7 @@ describe("TTS runtime persona behavior", () => {
   afterEach(() => {
     setTtsMachinePrefsPathResolver();
     clearRuntimeConfigSnapshot();
+    clearSecretsRuntimeSnapshot();
     delete (Object.prototype as Record<string, unknown>).polluted;
     synthesizeMock.mockClear();
     prepareSynthesisMock.mockClear();
@@ -137,6 +145,131 @@ describe("TTS runtime persona behavior", () => {
         rmSync(mediaDir, { recursive: true, force: true });
       }
     }
+  });
+
+  it.each(["base", "global", "agent"] as const)(
+    "materializes %s TTS SecretRefs before selected-persona synthesis",
+    async (scope) => {
+      await withOpenClawTestState({ label: "tts-persona-secrets" }, async (state) => {
+        const personaRef = {
+          source: "env",
+          provider: "default",
+          id: "TEST_TTS_PERSONA_KEY",
+        } as const;
+        const expectedKey = scope === "base" ? "base-fixture-key" : "persona-fixture-key";
+        const personas = {
+          "reader.uk": {
+            provider: "mock",
+            providers: {
+              mock: {
+                voice: "persona-voice",
+                ...(scope === "base" ? {} : { apiKey: personaRef }),
+              },
+            },
+          },
+        };
+        const cfg: OpenClawConfig = {
+          plugins: { enabled: false },
+          tts: {
+            auto: "off",
+            provider: "mock",
+            persona: "reader.uk",
+            providers: {
+              mock: {
+                apiKey: { source: "env", provider: "default", id: "TEST_TTS_BASE_KEY" },
+                model: "base-model",
+              },
+            },
+            ...(scope === "agent" ? {} : { personas }),
+          },
+          ...(scope === "agent" ? { agents: { entries: { reader: { tts: { personas } } } } } : {}),
+        };
+        installSpeechProviders([
+          createMockSpeechProvider("mock", {
+            isConfigured: ({ providerConfig }) => providerConfig.apiKey === expectedKey,
+          }),
+        ]);
+        const snapshot = await prepareSecretsRuntimeSnapshot({
+          config: cfg,
+          env: {
+            TEST_TTS_BASE_KEY: "base-fixture-key",
+            TEST_TTS_PERSONA_KEY: "persona-fixture-key",
+          },
+          agentDirs: [state.agentDir()],
+          includeAuthStoreRefs: false,
+          manifestRegistry: { plugins: [] },
+        });
+        const result = await synthesizeSpeech({
+          text: "Read this fixture.",
+          cfg: snapshot.config,
+          agentId: scope === "agent" ? "reader" : undefined,
+          prefsPath: state.path("tts-prefs.json"),
+          disableFallback: true,
+        });
+        expect(result).toMatchObject({ success: true, audioBuffer: Buffer.from("voice") });
+        expect(
+          requireFirstSynthesisRequest("resolved persona synthesis").providerConfig,
+        ).toMatchObject({
+          apiKey: expectedKey,
+          model: "base-model",
+          voice: "persona-voice",
+        });
+        expect(snapshot.sourceConfig).toEqual(cfg);
+        expect(snapshot.warnings).toEqual([]);
+        const prefix = scope === "agent" ? "agents.entries.*.tts" : "tts";
+        const targetId =
+          scope === "base" ? "tts.providers.*.apiKey" : `${prefix}.personas.*.providers.*.apiKey`;
+        const targets = discoverConfigSecretTargetsByIds(cfg, new Set([targetId]));
+        expect(targets).toMatchObject([
+          {
+            providerId: "mock",
+            path:
+              scope === "base"
+                ? "tts.providers.mock.apiKey"
+                : `${scope === "agent" ? "agents.entries.reader.tts" : "tts"}.personas["reader.uk"].providers.mock.apiKey`,
+          },
+        ]);
+      });
+    },
+  );
+
+  it("keeps a missing persona SecretRef unavailable before any synthesis request", async () => {
+    await withOpenClawTestState({ label: "tts-persona-unavailable" }, async (state) => {
+      await import("./tts.js");
+      const ref = {
+        source: "env",
+        provider: "default",
+        id: "TEST_TTS_MISSING_PERSONA_KEY",
+      } as const;
+      const cfg: OpenClawConfig = {
+        plugins: { enabled: false },
+        tts: {
+          provider: "mock",
+          persona: "reader",
+          providers: { mock: { apiKey: "other-fixture-key" } },
+          personas: { reader: { providers: { mock: { apiKey: ref } } } },
+        },
+      };
+      const snapshot = await prepareSecretsRuntimeSnapshot({
+        config: cfg,
+        env: {},
+        agentDirs: [state.agentDir()],
+        includeAuthStoreRefs: false,
+        manifestRegistry: { plugins: [] },
+        allowUnavailableSecretOwners: true,
+      });
+      activateSecretsRuntimeSnapshot(snapshot);
+      await expect(
+        synthesizeSpeech({
+          text: "Do not use another credential.",
+          cfg: snapshot.config,
+          prefsPath: state.path("tts-prefs.json"),
+          disableFallback: true,
+        }),
+      ).rejects.toMatchObject({ code: "SECRET_SURFACE_UNAVAILABLE", ownerId: "tts" });
+      expect(snapshot.config.tts?.personas?.reader?.providers?.mock?.apiKey).toEqual(ref);
+      expect(synthesizeMock).not.toHaveBeenCalled();
+    });
   });
 
   it("does not mark skipped unregistered providers as missing persona bindings", async () => {

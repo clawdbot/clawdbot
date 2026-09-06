@@ -4,9 +4,14 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { openNodeSqliteDatabase } from "../../src/infra/node-sqlite.js";
 import {
   COMMITTED_WAL_SENTINEL,
+  formatReliabilityStderr,
   STRESS_TABLE_SQL,
   type ProfileConfig,
 } from "./sqlite-reliability-contract.js";
+import {
+  waitForReliabilityWorkerExit,
+  type ReliabilityWorkerExit,
+} from "./sqlite-reliability-process.js";
 
 type WriterReadyMessage = {
   kind: "ready";
@@ -49,12 +54,9 @@ export type WriterHandle = {
   stopped: boolean;
 };
 
-export type WriterExit = {
-  code: number | null;
-  signal: NodeJS.Signals | null;
-};
-
 const WRITER_MESSAGE_TIMEOUT_MS = 30_000;
+const WORKER_EXIT_TIMEOUT_MESSAGE =
+  "SQLite reliability writer did not exit after termination was requested.";
 
 export function startWriter(databasePath: string, profile: ProfileConfig): WriterHandle {
   const child = fork(
@@ -92,7 +94,7 @@ export async function waitForWriterMessage<T extends WriterMessage["kind"]>(
       cleanup();
       reject(
         new Error(
-          `SQLite reliability writer timed out waiting for ${kind}.${formatWriterStderr(writer)}`,
+          `SQLite reliability writer timed out waiting for ${kind}.${formatReliabilityStderr(writer.stderr.join(""))}`,
         ),
       );
     }, WRITER_MESSAGE_TIMEOUT_MS);
@@ -116,7 +118,7 @@ export async function waitForWriterMessage<T extends WriterMessage["kind"]>(
       cleanup();
       reject(
         new Error(
-          `SQLite reliability writer exited before ${kind}: code=${String(code)} signal=${String(signal)}.${formatWriterStderr(writer)}`,
+          `SQLite reliability writer exited before ${kind}: code=${String(code)} signal=${String(signal)}.${formatReliabilityStderr(writer.stderr.join(""))}`,
         ),
       );
     };
@@ -133,11 +135,6 @@ export async function waitForWriterMessage<T extends WriterMessage["kind"]>(
   });
 }
 
-function formatWriterStderr(writer: WriterHandle): string {
-  const text = writer.stderr.join("").trim();
-  return text ? ` stderr=${JSON.stringify(text)}` : "";
-}
-
 export async function stopWriter(writer: WriterHandle): Promise<WriterResultMessage> {
   if (writer.stopped) {
     throw new Error("SQLite reliability writer was already stopped.");
@@ -145,46 +142,19 @@ export async function stopWriter(writer: WriterHandle): Promise<WriterResultMess
   const result = await waitForWriterMessage(writer, "result", () => {
     writer.child.send?.({ kind: "stop" });
   });
-  await waitForChildExit(writer.child);
+  await waitForReliabilityWorkerExit(writer.child, WORKER_EXIT_TIMEOUT_MESSAGE);
   writer.stopped = true;
   return result;
 }
 
-async function waitForChildExit(child: ChildProcess): Promise<WriterExit> {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return { code: child.exitCode, signal: child.signalCode };
-  }
-  return await new Promise<WriterExit>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error("SQLite reliability writer did not exit after termination was requested."));
-    }, WRITER_MESSAGE_TIMEOUT_MS);
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      cleanup();
-      resolve({ code, signal });
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    const cleanup = () => {
-      clearTimeout(timeout);
-      child.off("exit", onExit);
-      child.off("error", onError);
-    };
-    child.on("exit", onExit);
-    child.on("error", onError);
-  });
-}
-
-export async function crashWriter(writer: WriterHandle): Promise<WriterExit> {
+export async function crashWriter(writer: WriterHandle): Promise<ReliabilityWorkerExit> {
   if (writer.stopped) {
     throw new Error("SQLite reliability writer was already stopped.");
   }
   if (!writer.child.kill("SIGKILL")) {
     throw new Error("SQLite reliability writer exited before the crash signal was delivered.");
   }
-  const exit = await waitForChildExit(writer.child);
+  const exit = await waitForReliabilityWorkerExit(writer.child, WORKER_EXIT_TIMEOUT_MESSAGE);
   writer.stopped = true;
   return exit;
 }
@@ -195,7 +165,9 @@ export async function terminateWriter(writer: WriterHandle): Promise<void> {
     return;
   }
   writer.child.kill();
-  await waitForChildExit(writer.child).catch(() => undefined);
+  await waitForReliabilityWorkerExit(writer.child, WORKER_EXIT_TIMEOUT_MESSAGE).catch(
+    () => undefined,
+  );
   writer.stopped = true;
 }
 

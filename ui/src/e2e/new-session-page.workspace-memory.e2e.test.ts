@@ -1,6 +1,8 @@
+import path from "node:path";
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
+import { finishElementAnimations } from "../test-helpers/animations.ts";
 import {
   MOVED_WORKSPACE,
   PICKED,
@@ -15,7 +17,6 @@ import {
   installMockGateway,
   navigateInApp,
   pollLocatorText,
-  projectProofArtifactDir,
   waitForCommittedChatRoute,
   waitForCommittedNewSessionDraft,
 } from "./new-session-page.test-support.ts";
@@ -28,6 +29,7 @@ const DESKTOP_CONTEXT: BrowserContextOptions = {
 };
 const MOBILE_CONTEXT: BrowserContextOptions = {
   ...BASE_CONTEXT,
+  hasTouch: true,
   viewport: { height: 740, width: 364 },
 };
 const MODELS = [
@@ -100,8 +102,20 @@ async function withNewSessionPage(
   }
 }
 
+function projectProofRecording(): BrowserContextOptions {
+  return captureUiProofEnabled
+    ? {
+        recordVideo: {
+          dir: path.join(suite.artifactDir, "project-registry"),
+          size: { height: 900, width: 1280 },
+        },
+        viewport: { height: 900, width: 1280 },
+      }
+    : {};
+}
+
 suite.define(() => {
-  it("keeps rail privacy visible and reveals the mobile footer mode on hover or focus", async () => {
+  it("keeps rail privacy visible and shows the mobile footer mode without hover", async () => {
     await withNewSessionPage(MOBILE_CONTEXT, async (page) => {
       await installMockGateway(page, {
         models: [
@@ -118,16 +132,16 @@ suite.define(() => {
             contextWindow: 200_000,
           },
         ],
+        allowedSessionVisibilities: ["shared", "draft"],
         hasMultipleSessionSharingIdentities: true,
       });
       await page.goto(`${suite.server.baseUrl}new`);
       const footer = page.locator(".new-session-page__composer .agent-chat__composer-footer");
       const attach = page.getByRole("button", { name: "Add attachment" });
       const takePhoto = page.getByRole("menuitem", { name: "Take photo" });
-      const draft = page.getByRole("switch", { name: "Draft" });
+      const draft = page.locator('.new-session-page__draft-toggle[aria-label^="Draft:"]');
       const incognito = page.getByRole("switch", { name: "Incognito" });
       const model = page.locator(".new-session-page__composer .chat-composer-model-control");
-      const message = page.locator(".new-session-page__message");
       await Promise.all([
         footer.waitFor(),
         attach.waitFor(),
@@ -141,18 +155,6 @@ suite.define(() => {
       await expect
         .poll(() => incognito.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("1");
-      await expect
-        .poll(() => draft.evaluate((element) => getComputedStyle(element).opacity))
-        .toBe("0");
-      await footer.hover();
-      await expect
-        .poll(() => draft.evaluate((element) => getComputedStyle(element).opacity))
-        .toBe("1");
-      await page.mouse.move(0, 0);
-      await expect
-        .poll(() => draft.evaluate((element) => getComputedStyle(element).opacity))
-        .toBe("0");
-      await message.focus();
       await expect
         .poll(() => draft.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("1");
@@ -172,15 +174,35 @@ suite.define(() => {
       expect(attachBox).not.toBeNull();
       expect(draftBox).not.toBeNull();
       expect(modelBox).not.toBeNull();
-      expect((attachBox?.x ?? 0) + (attachBox?.width ?? 0)).toBeLessThanOrEqual(draftBox?.x ?? 0);
-      for (const control of [attachBox, draftBox, modelBox]) {
+      // The row reads as the settings for the next turn, in the order the
+      // operator decides them: attachments, draft visibility, then the model and
+      // its reasoning. This viewport is narrow enough that
+      // the row wraps, so the comparison is reading order — which line a control
+      // is on first, then where it sits on that line.
+      const followsInReadingOrder = (
+        previous: { x: number; y: number; height: number } | null,
+        next: { x: number; y: number; height: number } | null,
+      ) => {
+        if (!previous || !next) {
+          return false;
+        }
+        const previousCenter = previous.y + previous.height / 2;
+        const nextCenter = next.y + next.height / 2;
+        const sameLine = Math.abs(nextCenter - previousCenter) <= previous.height / 2;
+        return sameLine ? next.x > previous.x : nextCenter > previousCenter;
+      };
+      const sequence = [attachBox, modelBox];
+      for (let index = 1; index < sequence.length; index += 1) {
+        expect(followsInReadingOrder(sequence[index - 1] ?? null, sequence[index] ?? null)).toBe(
+          true,
+        );
+      }
+      for (const control of [attachBox, modelBox]) {
         expect(control?.x ?? 0).toBeGreaterThanOrEqual(footerBox?.x ?? 0);
         expect((control?.x ?? 0) + (control?.width ?? 0)).toBeLessThanOrEqual(
           (footerBox?.x ?? 0) + (footerBox?.width ?? 0),
         );
       }
-      // The new-session footer keeps flex (not the shared chat mobile grid), so
-      // its transient mode switches can wrap before the model picker overflows.
       const controlsOverflow = await footer.evaluate(
         (element) => element.scrollWidth - element.clientWidth,
       );
@@ -188,13 +210,23 @@ suite.define(() => {
 
       await attach.click();
       await expect.poll(() => takePhoto.isVisible()).toBe(true);
+      // The plus becomes a close mark while its menu is up: one glyph rotating,
+      // so the button that opened the menu visibly is the one that dismisses it.
+      // A CSS rotation matrix is [cos, sin, -sin, cos], so the sine term carries
+      // the direction: negative is counter-clockwise, turning back against the
+      // upward travel of the menu rather than with it.
+      const attachGlyphSine = () =>
+        attach.evaluate((element) => {
+          const { transform } = getComputedStyle(element.querySelector("svg") as SVGElement);
+          return transform === "none"
+            ? 0
+            : Number(transform.slice(transform.indexOf("(") + 1).split(",")[1]);
+        });
+      await expect.poll(attachGlyphSine).toBeCloseTo(-Math.SQRT1_2, 3);
       await page.keyboard.press("Escape");
+      await expect.poll(attachGlyphSine).toBe(0);
       await incognito.click();
-      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-      await page.mouse.move(0, 0);
-      await expect
-        .poll(() => incognito.evaluate((element) => getComputedStyle(element).opacity))
-        .toBe("1");
+      await expect.poll(() => incognito.getAttribute("aria-checked")).toBe("true");
     });
   });
 
@@ -236,7 +268,7 @@ suite.define(() => {
       await expect.poll(pickerOpen).toBe(false);
       await expect
         .poll(() => modelSelect.evaluate((element) => element === document.activeElement))
-        .toBe(true);
+        .toBe(false);
       await modelSelect.click();
       await expect.poll(pickerOpen).toBe(true);
       await page.mouse.click(8, 8);
@@ -252,7 +284,7 @@ suite.define(() => {
     });
   });
 
-  it("separates model shortcuts from numeric search input by focus", async () => {
+  it("separates model shortcuts, search input, and composer typing by focus", async () => {
     await withNewSessionPage(DESKTOP_CONTEXT, async (page) => {
       await installMockGateway(page, { models: MODELS });
       await page.goto(`${suite.server.baseUrl}new`);
@@ -270,9 +302,9 @@ suite.define(() => {
         .toBe(true);
       const secondShortcut = secondModel.locator('[data-chat-model-shortcut-number="2"]');
       await expect.poll(() => secondShortcut.count()).toBe(1);
-      // wa-popup updates its anchored position asynchronously. Gate the atomic
-      // baseline on that settlement. After focus, poll the same exact geometry so
-      // transient frames settle before enforcing the opacity-only no-reflow contract.
+      // Finish the picker's opening scale before recording its baseline. The top
+      // transform origin keeps the anchor gap stable while box geometry still grows.
+      await picker.locator('wa-popup [part~="popup"]').evaluate(finishElementAnimations);
       const menuGeometry = () =>
         page.evaluate(() => {
           const anchor = document.querySelector('[data-chat-model-select="true"]');
@@ -332,6 +364,10 @@ suite.define(() => {
       await page.keyboard.press("1");
       await expect.poll(() => picker.getAttribute("open")).toBe(null);
       await expect.poll(() => modelSelect.textContent()).toContain("Claude Sonnet 4.6");
+
+      await modelSelect.focus();
+      await page.keyboard.type("1");
+      await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("1");
     });
   });
 
@@ -441,13 +477,15 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}new`);
-      const placeTrigger = page.locator("#new-session-detail-trigger");
+      const placeTrigger = page.locator("#new-session-checkout-trigger");
       const projectTrigger = page.locator("#new-session-project-trigger");
       await choosePackagesFolder(page);
       await placeTrigger.click();
-      await page.getByRole("button", { name: "Worktree" }).click();
-      await page.getByLabel("Base branch").fill("release/next");
-      await page.getByLabel("Worktree name").fill("remembered-task");
+      await page
+        .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
+        .click();
+      await page.getByLabel("From", { exact: true }).fill("release/next");
+      await page.getByLabel("Name", { exact: true }).fill("remembered-task");
       await page.keyboard.press("Escape");
 
       const modelSelect = page.locator('[data-chat-model-select="true"]');
@@ -469,16 +507,18 @@ suite.define(() => {
       ).toBe("Local");
       await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("true");
       await placeTrigger.click();
-      await expect.poll(() => page.getByLabel("Base branch").inputValue()).toBe("release/next");
       await expect
-        .poll(() => page.getByLabel("Worktree name").inputValue())
+        .poll(() => page.getByLabel("From", { exact: true }).inputValue())
+        .toBe("release/next");
+      await expect
+        .poll(() => page.getByLabel("Name", { exact: true }).inputValue())
         .toBe("remembered-task");
       await page.keyboard.press("Escape");
       await expect
         .poll(() => modelSelect.getAttribute("data-chat-select-value"))
         .toBe("anthropic/claude-sonnet-4-6");
       await expect.poll(() => effortSelect.getAttribute("data-chat-thinking-value")).toBe("high");
-      await captureUiProof(page, "new-session-preferences-restored.png");
+      await captureUiProof(suite, page, "new-session-preferences-restored.png");
 
       const branchRequests = await gateway.getRequests("worktrees.branches");
       expect(branchRequests.at(-1)?.params).toMatchObject({ repoRoot: PICKED });
@@ -510,17 +550,8 @@ suite.define(() => {
 
   it("uses identity-scoped server recents without duplicating registered projects", async () => {
     const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      ...(captureUiProofEnabled
-        ? {
-            recordVideo: {
-              dir: projectProofArtifactDir,
-              size: { height: 900, width: 1280 },
-            },
-            viewport: { height: 900, width: 1280 },
-          }
-        : {}),
+      ...BASE_CONTEXT,
+      ...projectProofRecording(),
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -572,7 +603,10 @@ suite.define(() => {
       const recentFolder = page.locator(`[data-value="recent:${WORKSPACE}/scratch"]`);
       await project.waitFor();
       await recentFolder.waitFor();
-      await captureProjectUiProof(page, "identity-project-recents-after.png");
+      await captureProjectUiProof(suite, page, "identity-project-recents-after.png", {
+        surface: page.locator('.new-session-page__project-popover wa-popup [part="popup"]'),
+        content: [project, recentFolder],
+      });
       await project.click();
       await page.locator(".new-session-page__message").fill("continue registered work");
       await page.getByRole("button", { name: "Start session" }).click();
@@ -590,14 +624,7 @@ suite.define(() => {
     await withNewSessionPage(
       {
         ...DESKTOP_CONTEXT,
-        ...(captureUiProofEnabled
-          ? {
-              recordVideo: {
-                dir: projectProofArtifactDir,
-                size: { height: 900, width: 1280 },
-              },
-            }
-          : {}),
+        ...projectProofRecording(),
       },
       async (page) => {
         const appUrl = new URL(suite.server.baseUrl);
@@ -673,10 +700,10 @@ suite.define(() => {
           },
         });
         const trigger = page.locator("#new-session-project-trigger");
-        const detailTrigger = page.locator("#new-session-detail-trigger");
+        const checkoutTrigger = page.locator("#new-session-checkout-trigger");
         await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("packages");
-        await expect.poll(() => detailTrigger.getAttribute("data-worktree")).toBe("true");
-        await captureProjectUiProof(page, "identity-preferences-migrated.png");
+        await expect.poll(() => checkoutTrigger.getAttribute("data-worktree")).toBe("true");
+        await captureProjectUiProof(suite, page, "identity-preferences-migrated.png");
 
         await navigateInApp(page, "chat");
         await waitForCommittedChatRoute(page);
@@ -753,7 +780,7 @@ suite.define(() => {
     });
   });
 
-  it("blocks an immediate submit until remembered model and worktree choices validate", async () => {
+  it("reuses ready model metadata while a remembered worktree choice validates", async () => {
     await withNewSessionPage(BASE_CONTEXT, async (page) => {
       const models = MODELS;
       const branches = GIT_BRANCHES;
@@ -769,9 +796,11 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}new`);
       await choosePackagesFolder(page);
-      const placeTrigger = page.locator("#new-session-detail-trigger");
+      const placeTrigger = page.locator("#new-session-checkout-trigger");
       await placeTrigger.click();
-      await page.getByRole("button", { name: "Worktree" }).click();
+      await page
+        .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
+        .click();
       await page.keyboard.press("Escape");
       const modelSelect = page.locator('[data-chat-model-select="true"]');
       await modelSelect.click();
@@ -781,30 +810,29 @@ suite.define(() => {
       await waitForCommittedChatRoute(page);
       const metadataRequests = (await gateway.getRequests("chat.metadata")).length;
       const branchRequests = (await gateway.getRequests("worktrees.branches")).length;
-      await gateway.deferNext("chat.metadata");
       await gateway.deferNext("worktrees.branches");
       await navigateInApp(page, "new-session");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
       await expect
         .poll(async () => (await gateway.getRequests("chat.metadata")).length)
-        .toBe(metadataRequests + 1);
+        .toBe(metadataRequests);
       await expect
         .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
         .toBe(branchRequests + 1);
+      await expect
+        .poll(() => modelSelect.getAttribute("data-chat-select-value"))
+        .toBe("anthropic/claude-sonnet-4-6");
 
       await page.locator(".new-session-page__message").fill("keep both remembered choices");
       const start = page.getByRole("button", { name: "Start session" });
       await expect.poll(() => start.isDisabled()).toBe(true);
 
-      await gateway.resolveDeferred("chat.metadata", { models });
-      await expect.poll(() => start.isDisabled()).toBe(true);
       await gateway.rejectDeferred("worktrees.branches", {
         code: "UNAVAILABLE",
         message: "branch lookup unavailable",
       });
-      // A failed lookup disables the worktree toggle, so restoring the stored
-      // choice would strand the draft behind a control the user cannot clear.
-      // The draft drops it and stays submittable; storage keeps the preference.
+      // A failed lookup drops the unvalidated draft choice and keeps the
+      // session submittable; storage retains the preference for the next visit.
       await expect.poll(() => placeTrigger.count()).toBe(0);
       await expect.poll(() => start.isDisabled()).toBe(false);
       await waitForCommittedNewSessionDraft(page, "keep both remembered choices", 0);
@@ -936,7 +964,7 @@ suite.define(() => {
         "openclaw",
       );
       await expect
-        .poll(() => page.locator("#new-session-detail-trigger").getAttribute("data-worktree"))
+        .poll(() => page.locator("#new-session-checkout-trigger").getAttribute("data-worktree"))
         .toBe("false");
       await expect
         .poll(

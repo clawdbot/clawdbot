@@ -97,6 +97,32 @@ agents:
 
 Source: `packages/ai/src/transports/anthropic-payload-policy.ts` (`resolveAnthropicEphemeralCacheControl`, `isLongTtlEligibleEndpoint`).
 
+### Model Studio / DashScope (Qwen)
+
+OpenClaw's direct-provider adapter enables explicit prompt caching by default on
+native or default Model Studio / DashScope OpenAI-compatible routes, using
+`compat.cacheControlFormat: "anthropic"` and the
+existing system, last-tool, and last-conversation cache markers. Explicit model
+compat settings take precedence over detected defaults. Custom proxy endpoints
+receive no automatic format default; set `compat.cacheControlFormat: "anthropic"`
+explicitly only when the proxy supports these markers.
+
+The embedded runner's boundary-aware Chat Completions transport does not yet apply
+these markers; detecting the format alone does not enable explicit caching there.
+
+Explicit `cacheRetention` values reach this transport without enabling
+`compat.supportsPromptCacheKey`; leave that flag unset because this route does not
+need OpenAI's `prompt_cache_key` or `prompt_cache_retention` fields. With no explicit
+retention, the transport keeps its `"short"` default. Model Studio uses a five-minute
+explicit cache window, so `"long"` keeps ephemeral markers without requesting a
+one-hour TTL.
+
+To disable OpenClaw's explicit markers, set `cacheRetention: "none"`. The current
+`compat.cacheControlFormat` schema accepts only `"anthropic"`, not a disable value;
+omitting it uses the detected default. Alibaba's automatic implicit caching is
+separate and cannot be disabled. Supported models, minimum prompt lengths, and
+cache billing are described in [Model Studio context caching](https://www.alibabacloud.com/help/en/model-studio/context-cache).
+
 ### OpenAI (direct API)
 
 - Prompt caching is automatic on supported recent models; OpenClaw does not inject block-level cache markers.
@@ -136,7 +162,7 @@ Source: `src/agents/embedded-agent-runner/google-prompt-cache.ts`.
 
 CLI backends that emit JSONL usage events (`jsonlDialect: "claude-stream-json"` or `"gemini-stream-json"`) go through a shared usage parser that recognizes several field-name variants, including a plain `cached` counter mapped to `cacheRead`. When the CLI's JSON payload omits a direct input-token field, OpenClaw derives it as `input_tokens - cached`. This is usage normalization only - it does not create Anthropic/OpenAI-style prompt-cache markers for these CLI-driven models.
 
-Claude Code has no OpenClaw-controlled `cache_control` breakpoint on `--append-system-prompt-file`, so OpenClaw keeps its complete system prompt in that transport. When the bounded Gateway-startup probe finds Claude Code 2.1.98 or newer, bundled `claude-cli` also passes `--exclude-dynamic-system-prompt-sections`. That Claude Code flag moves only Claude's own per-machine cwd, environment, memory-path, and Git-status sections out of its native system prompt; an older, unknown, or failed probe keeps the established argv. `cacheRetention` still has no effect on this path.
+Claude Code has no OpenClaw-controlled `cache_control` breakpoint on `--append-system-prompt-file`, so OpenClaw keeps its complete system prompt in that transport. When the bounded version probe on first CLI execution finds Claude Code 2.1.98 or newer, bundled `claude-cli` also passes `--exclude-dynamic-system-prompt-sections`. Concurrent executions share that probe, and API catalog discovery does not start it. That Claude Code flag moves only Claude's own per-machine cwd, environment, memory-path, and Git-status sections out of its native system prompt; an older, unknown, or failed probe keeps the established argv. `cacheRetention` still has no effect on this path.
 
 Source: `src/agents/cli-output.ts` (`toCliUsage`).
 
@@ -209,7 +235,7 @@ OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 pnpm test:live:cache
 
 The baseline file stores the most recently observed live numbers plus the provider-specific regression floors the test checks against. Each run uses fresh per-run session IDs and prompt namespaces so previous cache state does not pollute the current sample. Anthropic and OpenAI use different enforcement: an Anthropic floor miss is a hard regression (test fails), while an OpenAI floor miss is watch-only (recorded as a warning, does not fail the run). They do not share a single cross-provider threshold.
 
-Claude CLI prompt reuse has a separate Docker lane because it exercises Claude Code's native session transport rather than the direct Anthropic API. It runs one fresh turn plus two native resumes, logs the normalized usage for both resumes, and requires at least 90% reuse on the second resume:
+Claude CLI prompt reuse has a separate Docker lane because it exercises Claude Code's native session transport rather than the direct Anthropic API. After a fresh turn and tool-bearing warmup resume, it allows a no-tool settlement resume to run hot or cold, dirties the workspace, and requires at least 90% reuse on the following resume without rotating the settled live-session generation. It also verifies that a thinking-level change rotates the generation and that the next steady resume restores at least 90% reuse:
 
 ```sh
 pnpm test:docker:live-cli-backend:claude:cache

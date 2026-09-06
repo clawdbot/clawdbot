@@ -1,0 +1,181 @@
+title: Gateway restart delivers an unclaimed interrupted session
+
+scenario:
+  id: gateway-restart-unclaimed-delivery
+  surface: runtime
+  coverage:
+    primary:
+      - session-memory.recovery-delivery
+    secondary:
+      - session-memory.recovery-restart-recovery
+  objective: Verify restart recovery delivers an unclaimed interrupted turn through its canonical persisted session route.
+  successCriteria:
+    - A real qa-channel inbound turn records the canonical persisted delivery route.
+    - The Gateway restarts with an interrupted session that has no active delivery claim or run-specific delivery context.
+    - Automatic recovery sends exactly one completed reply through the persisted qa-channel route.
+  docsRefs:
+    - docs/channels/qa-channel.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - src/agents/main-session-recovery/main-session-restart-dispatch.ts
+    - src/agents/main-session-recovery/main-session-restart-recovery-marking.ts
+    - src/utils/delivery-context.shared.ts
+  execution:
+    kind: flow
+    timeoutMs: 180000
+    retryCount: 0
+    suiteIsolation: isolated
+    isolationReason: Seeds an unclaimed interrupted session while its Gateway child is stopped.
+    summary: Persist a real channel route, seed an unclaimed interrupted turn during Gateway replacement, and verify exactly one recovered outbound reply.
+    config:
+      requiredProviderMode: mock-openai
+      baselineMarker: UNCLAIMED-RECOVERY-BASELINE-OK
+      recoveredMarker: UNCLAIMED-RECOVERY-DELIVERED-OK
+
+flow:
+  steps:
+    - name: resumes an unclaimed turn through its persisted session route
+      actions:
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: conversationId
+          value:
+            expr: "`unclaimed-recovery-${randomUUID().slice(0, 8)}`"
+        - set: sessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: 'qa-channel', accountId: transport.accountId, peer: { kind: 'direct', id: `dm:${conversationId}` }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
+        - sendInbound:
+            accountId: default
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            senderId:
+              ref: conversationId
+            senderName: QA Restart Operator
+            text:
+              expr: "`Reply with only this exact marker: ${config.baselineMarker}`"
+        - call: waitForOutboundMessage
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.direction === 'outbound' && candidate.conversation.id === conversationId && candidate.text.includes(config.baselineMarker)"
+            - 60000
+        - call: readRawQaSessionStore
+          saveAs: baselineStore
+          args:
+            - ref: env
+        - set: baselineEntry
+          value:
+            expr: baselineStore[sessionKey]
+        - assert:
+            expr: "baselineEntry?.delivery?.kind === 'external' && baselineEntry.delivery.context.channel === 'qa-channel' && baselineEntry.delivery.context.to === `dm:${conversationId}`"
+            message: real qa-channel ingress did not persist its authoritative delivery route
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - call: env.gateway.restartAfterStateMutation
+          args:
+            - lambda:
+                async: true
+                params: [ctx]
+                expr: |-
+                  (async () => {
+                    const sessionStore = await qaImport('openclaw/plugin-sdk/session-store-runtime');
+                    const transcript = await qaImport('openclaw/plugin-sdk/session-transcript-runtime');
+                    const storePath = sessionStore.resolveStorePath(undefined, {
+                      agentId: 'qa',
+                      env: ctx.runtimeEnv,
+                    });
+                    const now = Date.now() - 10_000;
+                    const appended = await transcript.appendSessionTranscriptMessageByIdentity({
+                      agentId: 'qa',
+                      env: ctx.runtimeEnv,
+                      sessionId: baselineEntry.sessionId,
+                      sessionKey,
+                      storePath,
+                      now,
+                      message: {
+                        role: 'user',
+                        timestamp: now,
+                        content: [{ type: 'text', text: `Reply with only this exact marker: ${config.recoveredMarker}` }],
+                      },
+                    });
+                    if (!appended?.appended) {
+                      throw new Error('failed to persist the interrupted user turn');
+                    }
+                    await sessionStore.upsertSessionEntry({
+                      agentId: 'qa',
+                      env: ctx.runtimeEnv,
+                      sessionKey,
+                      storePath,
+                      entry: {
+                        ...baselineEntry,
+                        status: 'running',
+                        abortedLastRun: false,
+                        updatedAt: now,
+                        endedAt: undefined,
+                        restartRecoveryDeliveryRunId: undefined,
+                        restartRecoveryDeliverySourceRunId: undefined,
+                        restartRecoveryDeliveryContext: undefined,
+                        pendingFinalDelivery: undefined,
+                      },
+                    });
+                    const seeded = sessionStore.getSessionEntry({
+                      agentId: 'qa',
+                      env: ctx.runtimeEnv,
+                      sessionKey,
+                      storePath,
+                    });
+                    if (
+                      seeded?.status !== 'running' ||
+                      seeded.abortedLastRun === true ||
+                      seeded.restartRecoveryDeliveryRunId !== undefined ||
+                      seeded.restartRecoveryDeliveryContext !== undefined ||
+                      seeded.delivery?.kind !== 'external' ||
+                      seeded.delivery.context.to !== `dm:${conversationId}`
+                    ) {
+                      throw new Error(`failed to seed an unclaimed canonical session route: ${JSON.stringify(seeded)}`);
+                    }
+                  })()
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: waitForOutboundMessage
+          saveAs: recovered
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.direction === 'outbound' && candidate.conversation.id === conversationId && candidate.text.includes(config.recoveredMarker)"
+            - 60000
+            - sinceIndex:
+                ref: outboundStartIndex
+        - set: outboundCountAfterRecovery
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - waitForNoOutbound:
+            quietMs: 1500
+            sinceIndex:
+              ref: outboundCountAfterRecovery
+        - set: recoveredMessages
+          value:
+            expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound').slice(outboundStartIndex).filter((candidate) => candidate.conversation.id === conversationId && candidate.text.includes(config.recoveredMarker))"
+        - assert:
+            expr: recoveredMessages.length === 1
+            message:
+              expr: "`expected exactly one recovered outbound delivery, got ${recoveredMessages.length}`"
+      detailsExpr: "({ channel: 'qa-channel', recoveredMarker: config.recoveredMarker, delivered: recovered.text, outboundCount: recoveredMessages.length, deliveryClaimBeforeRestart: false })"

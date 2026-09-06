@@ -1,21 +1,31 @@
 // Slack plugin module implements message subtype handlers behavior.
+import { resolveSlackThreadContext } from "../../threading.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMessageChangedEvent, SlackMessageDeletedEvent } from "../types.js";
 
 type SupportedSubtype = "message_changed" | "message_deleted";
 
 type SlackMessageSubtypeHandler = {
-  subtype: SupportedSubtype;
   eventKind: SupportedSubtype;
   describe: (channelLabel: string) => string;
   contextKey: (event: SlackMessageEvent) => string;
   resolveSenderId: (event: SlackMessageEvent) => string | undefined;
-  resolveChannelId: (event: SlackMessageEvent) => string | undefined;
-  resolveChannelType: (event: SlackMessageEvent) => string | null | undefined;
+  resolveThreadTs: (event: SlackMessageEvent) => string | undefined;
 };
 
+function resolveNestedThreadTs(event: SlackMessageEvent): string | undefined {
+  const changed = event as SlackMessageChangedEvent;
+  const message = changed.message?.thread_ts ? changed.message : changed.previous_message;
+  if (!message) {
+    return undefined;
+  }
+  return resolveSlackThreadContext({
+    message: { type: "message", channel: event.channel, ...message },
+    replyToMode: "off",
+  }).replyToId;
+}
+
 const changedHandler: SlackMessageSubtypeHandler = {
-  subtype: "message_changed",
   eventKind: "message_changed",
   describe: (channelLabel) => `Slack message edited in ${channelLabel}.`,
   contextKey: (event) => {
@@ -34,12 +44,10 @@ const changedHandler: SlackMessageSubtypeHandler = {
       changed.previous_message?.bot_id
     );
   },
-  resolveChannelId: (event) => (event as SlackMessageChangedEvent).channel,
-  resolveChannelType: () => undefined,
+  resolveThreadTs: resolveNestedThreadTs,
 };
 
 const deletedHandler: SlackMessageSubtypeHandler = {
-  subtype: "message_deleted",
   eventKind: "message_deleted",
   describe: (channelLabel) => `Slack message deleted in ${channelLabel}.`,
   contextKey: (event) => {
@@ -52,8 +60,7 @@ const deletedHandler: SlackMessageSubtypeHandler = {
     const deleted = event as SlackMessageDeletedEvent;
     return deleted.previous_message?.user ?? deleted.previous_message?.bot_id;
   },
-  resolveChannelId: (event) => (event as SlackMessageDeletedEvent).channel,
-  resolveChannelType: () => undefined,
+  resolveThreadTs: resolveNestedThreadTs,
 };
 
 const SUBTYPE_HANDLER_REGISTRY: Record<SupportedSubtype, SlackMessageSubtypeHandler> = {

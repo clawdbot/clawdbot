@@ -13,12 +13,28 @@ function snapshotWithPresence(presence: Record<string, unknown>) {
 }
 
 describe("SnapshotSchema", () => {
+  it.each(["accepting", "preparing", "draining", "prepared"])(
+    "accepts public suspension phase %s without lease tokens",
+    (phase) => {
+      const snapshot = { ...snapshotWithPresence({ ts: 1 }), suspension: { phase } };
+      expect(Value.Check(SnapshotSchema, snapshot)).toBe(true);
+      expect(
+        Value.Check(SnapshotSchema, {
+          ...snapshot,
+          suspension: { phase, suspensionId: "private-token" },
+        }),
+      ).toBe(false);
+    },
+  );
+
   it("accepts a presence user identity", () => {
     expect(
       Value.Check(
         SnapshotSchema,
         snapshotWithPresence({
           ts: 1,
+          onlineSince: 0,
+          lastActivityAt: 1,
           user: { id: "alice@example.com", email: "alice@example.com" },
         }),
       ),
@@ -27,6 +43,14 @@ describe("SnapshotSchema", () => {
 
   it("keeps presence user identity optional", () => {
     expect(Value.Check(SnapshotSchema, snapshotWithPresence({ ts: 1 }))).toBe(true);
+  });
+
+  it.each(["onlineSince", "lastActivityAt"])("rejects non-millisecond %s values", (field) => {
+    for (const value of [-1, 1.5, "1000", null]) {
+      expect(Value.Check(SnapshotSchema, snapshotWithPresence({ ts: 1, [field]: value }))).toBe(
+        false,
+      );
+    }
   });
 
   it("accepts optional watched session keys", () => {

@@ -12,6 +12,7 @@ import {
   ModelSelectionLockedError,
   resolvePersistedSessionRuntimeId,
 } from "openclaw/plugin-sdk/model-session-runtime";
+import { isValidAgentHarnessSessionStoreEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   isRecord,
   filterStringEntries,
@@ -408,7 +409,13 @@ export async function generateVoiceResponse(
         }
         const sessionId = sessionEntry.sessionId;
         const modelSelectionLocked = sessionEntry.modelSelectionLocked === true;
-        const persistedRuntimeId = resolvePersistedSessionRuntimeId(sessionEntry);
+        // Native delegation requires an explicit pin; the host inherits ordinary runtime requests.
+        const pinnedHarnessId = isValidAgentHarnessSessionStoreEntry(
+          resolvedSessionKey,
+          sessionEntry,
+        )
+          ? resolvePersistedSessionRuntimeId(sessionEntry)
+          : undefined;
 
         // Resolve thinking level
         const thinkLevel = agentRuntime.resolveThinkingDefault({ cfg, provider, model });
@@ -462,12 +469,8 @@ export async function generateVoiceResponse(
           provider,
           model,
           modelSelectionLocked,
-          ...(persistedRuntimeId
-            ? {
-                agentHarnessId: persistedRuntimeId,
-                agentHarnessRuntimeOverride: persistedRuntimeId,
-              }
-            : {}),
+          agentHarnessId: pinnedHarnessId,
+          agentHarnessRuntimeOverride: pinnedHarnessId,
           thinkLevel,
           verboseLevel: "off",
           timeoutMs,

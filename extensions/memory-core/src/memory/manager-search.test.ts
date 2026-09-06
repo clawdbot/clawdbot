@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
 import { bm25RankToScore, buildFtsQuery } from "./hybrid.js";
+import { runVectorKnnQuery } from "./manager-search-knn.js";
 import { searchKeyword, searchPathKeyword, searchVector } from "./manager-search.js";
 import { runMemorySearchWithDeadline } from "./search-deadline.js";
 import { vectorToBlob } from "./vector-blob.js";
@@ -106,6 +107,7 @@ function searchVectorFixture(db: DatabaseSync, options: Partial<VectorSearchOpti
     limit: 5,
     snippetMaxChars: 200,
     ensureVectorReady: async () => false,
+    runVectorKnn: async (request) => runVectorKnnQuery(db, request),
     sourceFilterVec: { sql: "", params: [] },
     sourceFilterChunks: { sql: "", params: [] },
     ...options,
@@ -128,37 +130,6 @@ function createMemorySearchDb(options: { ftsTokenizer?: "unicode61" | "trigram" 
     throw error;
   }
 }
-
-describe("memory search provenance", () => {
-  it("returns SQLite-owned provenance with keyword hits", async () => {
-    const { db } = createMemorySearchDb();
-    try {
-      insertKeywordFixture(db, {
-        id: "provenance-hit",
-        path: "memory/2026-07-01.md",
-        model: "fts-only",
-        text: "green tea preference",
-        endLine: 1,
-      });
-      db.prepare(
-        `INSERT INTO memory_index_chunk_provenance (
-           chunk_id, origin_class, session_kind, observed_at, supersedes_key
-         ) VALUES (?, ?, ?, ?, ?)`,
-      ).run("provenance-hit", "owner", "interactive", 1234, "tea-preference");
-
-      const results = await searchKeywordFixture(db, "green tea", { limit: 3 });
-
-      expect(results[0]?.provenance).toEqual({
-        originClass: "owner",
-        sessionKind: "interactive",
-        observedAt: 1234,
-        supersedesKey: "tea-preference",
-      });
-    } finally {
-      db.close();
-    }
-  });
-});
 
 describe("searchKeyword trigram fallback", () => {
   function supportsTrigramFts(): boolean {
@@ -211,7 +182,10 @@ describe("searchKeyword trigram fallback", () => {
       query: "成语",
     });
     expect(results.map((row) => row.id)).toContain("1");
-    expect(results[0]?.textScore).toBe(1);
+    // LIKE substring fallback carries no BM25 ranking signal, so textScore is 0
+    // (recall only); the hybrid merge must not treat it as a perfect match.
+    expect(results[0]?.textScore).toBe(0);
+    expect(results[0]?.hasBodyMatch).toBe(true);
   });
 
   itWithTrigramFts("finds short Japanese and Korean queries with substring fallback", async () => {
@@ -353,8 +327,10 @@ describe("searchKeyword FTS MATCH fallback", () => {
       // LIKE fallback should find "Agent" in the first row
       expect(results.length).toBeGreaterThan(0);
       expect(results[0]?.id).toBe("1");
-      // Fallback results have textScore=1 (no BM25 ranking)
-      expect(results[0]?.textScore).toBe(1);
+      // LIKE fallback has no BM25 ranking, so textScore is 0 (recall only) and
+      // cannot inflate the hybrid merge into a spurious finalScore = 1.0.
+      expect(results[0]?.textScore).toBe(0);
+      expect(results[0]?.hasBodyMatch).toBe(true);
     } finally {
       db.close();
     }
@@ -1003,68 +979,6 @@ describe("searchKeyword cross-model FTS visibility (issue #48300)", () => {
 
 describe("searchVector sqlite-vec KNN", () => {
   const { DatabaseSync } = requireNodeSqlite();
-
-  it("batches fallback chunk scoring without materializing all candidates", async () => {
-    type ChunkRow = {
-      rowid: number;
-      id: string;
-      path: string;
-      start_line: number;
-      end_line: number;
-      text: string;
-      embedding: string;
-      source: string;
-    };
-
-    const chunkRows: ChunkRow[] = Array.from({ length: 513 }, (_, index) => {
-      const vector: [number, number] = index === 511 ? [1, 0] : index === 512 ? [0.9, 0.1] : [0, 1];
-      return {
-        rowid: index + 1,
-        id: `target-${index}`,
-        path: `memory/target-${index}.md`,
-        start_line: 1,
-        end_line: 1,
-        text: `chunk target-${index}`,
-        embedding: JSON.stringify(vector),
-        source: "memory",
-      };
-    });
-    const batchSizes: number[] = [];
-    let provenanceReads = 0;
-    const prepare = vi.fn((sql: string) => {
-      // Provenance is enriched only for the retained top-N after streaming, so a
-      // handful of per-result provenance reads is expected; the batch scan itself
-      // must still stream one query per batch.
-      if (sql.includes("memory_index_chunk_provenance")) {
-        return {
-          get: () => {
-            provenanceReads += 1;
-            return undefined;
-          },
-        };
-      }
-      expect(sql).toContain("SELECT rowid, id, path");
-      expect(sql).toContain("ORDER BY rowid ASC");
-      expect(sql).toContain("LIMIT ?");
-      return {
-        all: (_model: string, lastRowid: number, limit: number) => {
-          const batch = chunkRows.filter((row) => row.rowid > lastRowid).slice(0, limit);
-          batchSizes.push(batch.length);
-          return batch;
-        },
-      };
-    });
-
-    const results = await searchVectorFixture(
-      { prepare } as unknown as Parameters<typeof searchVector>[0]["db"],
-      { limit: 2 },
-    );
-
-    expect(results.map((row) => row.id)).toEqual(["target-511", "target-512"]);
-    expect(batchSizes).toEqual([256, 256, 1]);
-    // Provenance reads must scale with the returned limit (2), not the 513 scanned candidates.
-    expect(provenanceReads).toBe(2);
-  });
 
   it("yields to the event loop during large fallback scans (issue #81172)", async () => {
     // Real Nextcloud-scale corpus where the vec0 fast path is unavailable

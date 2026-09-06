@@ -47,9 +47,8 @@ export function buildUpdateDoctorEnv(params: {
     [UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART_ENV]: "1",
     [UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR_ENV]: params.allowGatewayServiceRepair ? "1" : "0",
     [UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV]: params.allowGatewayActivation ? "1" : "0",
-    ...(params.serviceRepairPolicy
-      ? { [UPDATE_DOCTOR_SERVICE_REPAIR_POLICY_ENV]: params.serviceRepairPolicy }
-      : {}),
+    // An absent phase policy must clear the inherited value at the spawn boundary.
+    [UPDATE_DOCTOR_SERVICE_REPAIR_POLICY_ENV]: params.serviceRepairPolicy,
     ...(params.compatibilityHostVersion
       ? { OPENCLAW_COMPATIBILITY_HOST_VERSION: params.compatibilityHostVersion }
       : {}),

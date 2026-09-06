@@ -4,7 +4,7 @@ import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 
 const mocks = vi.hoisted(() => ({
-  persistRunSessionUsage: vi.fn(async (_params: unknown) => undefined),
+  persistSessionUsageUpdate: vi.fn(async (_params: unknown) => undefined),
   refreshQueuedFollowupSession: vi.fn(),
   resolveContextTokensForModel: vi.fn<() => number | undefined>(() => 200_000),
 }));
@@ -48,7 +48,8 @@ vi.mock("../fallback-state.js", () => ({
   }),
 }));
 
-vi.mock("./agent-runner-core.js", () => ({
+vi.mock("./agent-runner-core.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-runner-core.js")>()),
   resolveFallbackOriginModel: () => ({
     provider: "anthropic",
     model: "claude",
@@ -64,9 +65,12 @@ vi.mock("./reply-usage-state.js", () => ({
   recordReplyUsageState: vi.fn(),
 }));
 
-vi.mock("./session-run-accounting.js", () => ({
-  incrementRunCompactionCount: vi.fn(async () => undefined),
-  persistRunSessionUsage: (params: unknown) => mocks.persistRunSessionUsage(params),
+vi.mock("./session-updates.js", () => ({
+  incrementCompactionCount: vi.fn(async () => undefined),
+}));
+
+vi.mock("./session-usage.js", () => ({
+  persistSessionUsageUpdate: (params: unknown) => mocks.persistSessionUsageUpdate(params),
 }));
 
 import { accountFollowupTurn } from "./agent-runner-result-accounting.js";
@@ -186,7 +190,7 @@ describe("accountFollowupTurn", () => {
 
     await accountFollowupTurn(params);
 
-    expect(mocks.persistRunSessionUsage).toHaveBeenCalledWith(
+    expect(mocks.persistSessionUsageUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         agentHarnessId: "codex",
         contextTokensUsed: 1_000_000,
@@ -211,7 +215,7 @@ describe("accountFollowupTurn", () => {
 
     await accountFollowupTurn(params);
 
-    expect(mocks.persistRunSessionUsage).toHaveBeenCalledWith(
+    expect(mocks.persistSessionUsageUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         agentHarnessId: "legacy-runtime",
         contextTokensUsed: 512_000,
@@ -225,7 +229,7 @@ describe("accountFollowupTurn", () => {
 
     await accountFollowupTurn(params);
 
-    expect(mocks.persistRunSessionUsage).toHaveBeenCalledWith(
+    expect(mocks.persistSessionUsageUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         contextTokensUsed: 200_000,
         contextTokensSource: "resolved-v1",
@@ -261,7 +265,7 @@ describe("accountFollowupTurn", () => {
 
     await accountFollowupTurn(params);
 
-    expect(mocks.persistRunSessionUsage).toHaveBeenCalledWith(
+    expect(mocks.persistSessionUsageUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         providerUsed: "openai",
         modelUsed: "gpt-4o",

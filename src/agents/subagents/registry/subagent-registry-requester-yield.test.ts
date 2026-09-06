@@ -86,6 +86,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       status: "delivered",
       requesterVisibleFinal: { requesterTurnRunId: REQUESTER_TURN, batchRunIds: [entry.runId] },
     };
+    entry.requesterSettleWake = { status: "pending", attemptCount: 0 };
     const schedule = vi.fn();
 
     expect(
@@ -337,7 +338,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         expect(schedule).toHaveBeenCalledExactlyOnceWith(completion.runId, completion);
       } else {
         expect(completion.requesterSettleWake).toBeUndefined();
-        expect(schedule).not.toHaveBeenCalled();
+        expect(schedule).toHaveBeenCalledExactlyOnceWith(completion.runId, completion);
       }
       expect(inline.requesterTurnRunId).toBe(REQUESTER_TURN);
       expect(inline.requesterTurnYielded).toBeUndefined();

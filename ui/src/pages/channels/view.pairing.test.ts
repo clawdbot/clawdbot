@@ -6,6 +6,7 @@ import {
   renderChannelPairingPrompt,
   renderChannelPairingQueue,
 } from "./view.pairing.ts";
+import { createChannelsViewProps } from "./view.test-support.ts";
 import type { ChannelsProps } from "./view.types.ts";
 
 const request = {
@@ -24,14 +25,9 @@ const request = {
 } as const;
 
 function createProps(overrides: Partial<ChannelsProps> = {}): ChannelsProps {
-  return {
-    connected: true,
-    loading: false,
-    snapshot: null,
-    lastError: null,
-    lastSuccessAt: null,
-    pairingLoading: false,
-    pairingSnapshot: {
+  return createChannelsViewProps(
+    null,
+    {
       accounts: [
         {
           channel: "whatsapp",
@@ -45,66 +41,8 @@ function createProps(overrides: Partial<ChannelsProps> = {}): ChannelsProps {
       commandOwnerConfigured: false,
       limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
     },
-    pairingError: null,
-    pairingLastSuccessAt: null,
-    pairingBusyRequestId: null,
-    pairingChannelFilter: null,
-    pairingAccountFilter: null,
-    pairingPrompt: null,
-    pairingNotice: null,
-    canManagePairing: true,
-    canAdmin: true,
-    whatsappMessage: null,
-    whatsappQrDataUrl: null,
-    whatsappConnected: null,
-    whatsappBusy: false,
-    configSchema: null,
-    configSchemaLoading: false,
-    configForm: null,
-    configUiHints: {},
-    configSaving: false,
-    configFormDirty: false,
-    showAdvancedSettings: false,
-    nostrProfileFormState: null,
-    nostrProfileAccountId: null,
-    selectedChannel: null,
-    wizard: { phase: "idle" },
-    wizardMultiselect: [],
-    wizardTextValue: "",
-    wizardSecretVisible: false,
-    setupBlockedByDirtyConfig: false,
-    onShowDetail: () => undefined,
-    onCloseDetail: () => undefined,
-    onStartSetup: () => undefined,
-    onWizardAnswer: () => undefined,
-    onWizardToggleMultiselect: () => undefined,
-    onWizardTextInput: () => undefined,
-    onWizardToggleSecretVisibility: () => undefined,
-    onWizardClose: () => undefined,
-    onRefresh: () => undefined,
-    onPairingRefresh: () => undefined,
-    onPairingFilterChange: () => undefined,
-    onPairingReviewAccount: () => undefined,
-    onPairingApprove: () => undefined,
-    onPairingDismiss: () => undefined,
-    onPairingPromptChange: () => undefined,
-    onPairingPromptCancel: () => undefined,
-    onPairingPromptConfirm: () => undefined,
-    onWhatsAppStart: () => undefined,
-    onWhatsAppWait: () => undefined,
-    onWhatsAppLogout: () => undefined,
-    onShowAdvancedSettings: () => undefined,
-    onConfigPatch: () => undefined,
-    onConfigSave: () => undefined,
-    onConfigReload: () => undefined,
-    onNostrProfileEdit: () => undefined,
-    onNostrProfileCancel: () => undefined,
-    onNostrProfileFieldChange: () => undefined,
-    onNostrProfileSave: () => undefined,
-    onNostrProfileImport: () => undefined,
-    onNostrProfileToggleAdvanced: () => undefined,
-    ...overrides,
-  };
+    overrides,
+  );
 }
 
 // Rendered prompts mount <openclaw-modal-dialog> into document.body; leaked

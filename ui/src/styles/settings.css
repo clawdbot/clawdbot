@@ -3,7 +3,7 @@
  * One structural pattern for every settings surface:
  *   .settings-page > .settings-section > .settings-group > .settings-row
  *
- * Rules (see ui/docs/settings-design.md):
+ * Rules (see ui/docs/design-system/settings-design.md):
  * - Sections are typography (heading outside any surface), not chrome.
  * - Exactly one level of elevation: the group. Never nest a card in a group.
  * - Status is a dot + plain text, never a colored pill.
@@ -48,12 +48,15 @@
 /* The page headline adopts the column of the page below it; without this the
    shell caps headers at 1120px while narrow pages use a 760px column, leaving
    the title floating left of the content. */
-.shell--settings .content:has(.settings-page) .content-header {
+.shell--settings .content:has(.settings-page) .content-header,
+.content:has(.settings-page) .content-header--settings {
   max-width: 760px;
+  margin-inline: auto;
   padding-inline: var(--space-4);
 }
 
-.shell--settings .content:has(.settings-page--wide) .content-header {
+.shell--settings .content:has(.settings-page--wide) .content-header,
+.content:has(.settings-page--wide) .content-header--settings {
   max-width: 1120px;
 }
 
@@ -103,6 +106,29 @@
   color: var(--muted);
 }
 
+.settings-typography-preview {
+  width: 100%;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.settings-typography-preview__caption {
+  color: var(--muted);
+  font: 600 var(--control-ui-text-sm) / 1.5 var(--font-body);
+}
+
+.settings-typography-preview__prose {
+  margin: var(--space-3) 0;
+  /* Chat transcript line-height, so the sample reads like real messages. */
+  font: 400 var(--chat-text-size) / 1.65 var(--font-chat);
+}
+
+.settings-typography-preview__code {
+  color: var(--muted);
+  font: 400 var(--control-ui-text-sm) / 1.5 var(--mono);
+}
+
 /* ── Section ── */
 
 .settings-section {
@@ -112,14 +138,42 @@
   min-width: 0;
 }
 
-/* Header and description indent to var(--space-4) so the eyebrow label lines
-   up with the row content inside the group surface below it. */
+/* Section copy aligns to the group surface, while rows own their internal
+   content inset. */
 .settings-section__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  padding: 0 var(--space-4);
+  padding: 0;
+}
+
+/* Keep heading copy independent from taller header actions. Without this
+   grouping, a button row pushes the description away from its heading. */
+.settings-section__copy {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.settings-section__header:has(.settings-section__copy) {
+  align-items: flex-start;
+}
+
+/* Compact icon-only actions align with a one-line heading instead of the
+   full-size controls that require top alignment. */
+@media not all and (max-width: 640px) {
+  .settings-section__header:not(:has(.settings-section__desc)):has(
+      .settings-section__actions .btn--xs.btn--icon
+    ) {
+    align-items: center;
+  }
+}
+
+.settings-section__header:has(.settings-section__copy):has(.settings-section__actions) {
+  column-gap: var(--space-5);
 }
 
 .settings-section__heading {
@@ -133,10 +187,14 @@
 
 .settings-section__desc {
   margin: calc(-1 * var(--space-2)) 0 0;
-  padding: 0 var(--space-4);
+  padding: 0;
   font-size: var(--control-ui-text-sm);
   line-height: 1.5;
   color: var(--muted);
+}
+
+.settings-section__copy > .settings-section__desc {
+  margin: 0;
 }
 
 /* Control-height header actions overhang the one-line heading; keep the
@@ -159,28 +217,31 @@
 
 .settings-section__help-button {
   display: inline-grid;
-  width: 22px;
-  height: 22px;
+  width: 16px;
+  height: 16px;
   padding: 0;
   place-items: center;
-  border: 1px solid color-mix(in srgb, var(--muted) 35%, transparent);
-  border-radius: 50%;
+  border: 0;
   background: transparent;
   color: var(--muted);
-  font: 600 var(--control-ui-text-xs) / 1 var(--font-body);
   cursor: var(--cursor-action);
 }
 
 .settings-section__help-button > span {
-  /* SF's ascent+descent exceed 1em, so a centered line box parks the glyph
-     below the circle's midline; trim to cap bounds for true centering. */
   display: block;
-  text-box: trim-both cap alphabetic;
+  width: 100%;
+  height: 100%;
+}
+
+.settings-section__help-button svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  stroke-width: 1.75;
 }
 
 .settings-section__help-button:hover,
 .settings-section__help-button:focus-visible {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
   color: var(--accent);
 }
 
@@ -231,65 +292,20 @@
   min-width: 0;
 }
 
-.config-advanced-divider {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
+.config-advanced-disclosure {
   margin-top: var(--space-5);
-  padding: 0 var(--space-4) var(--space-2);
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 550;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
-.config-advanced-divider__toggle {
-  border: 0;
-  background: none;
-  padding: 0;
-  color: var(--accent);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+.config-tier-groups > .config-advanced-disclosure:first-child {
+  margin-top: 0;
+}
+
+.config-advanced-disclosure__summary {
   cursor: var(--cursor-action);
 }
 
-.config-advanced-divider__toggle:hover {
-  text-decoration: underline;
-}
-
-.config-advanced-ghost {
-  width: 100%;
-  min-height: 48px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
-  padding: var(--space-3) var(--space-4);
-  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
-  border-radius: var(--radius-lg);
-  background: var(--secondary);
-  text-align: left;
-  transition: background var(--duration-fast) ease;
-}
-
-.config-advanced-ghost:hover {
-  background: var(--bg-hover);
-}
-
-.config-advanced-ghost__count {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
-.config-advanced-ghost__action {
-  color: var(--accent);
-  font-size: var(--control-ui-text-sm);
-  font-weight: 600;
-  flex: 0 0 auto;
+.config-advanced-disclosure > .settings-group {
+  margin-top: var(--space-3);
 }
 
 /* ── Row ── */
@@ -312,9 +328,9 @@
 .settings-row__text {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 0;
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 1 1 0;
 }
 
 .settings-row__title {
@@ -365,15 +381,35 @@
 
 /* Stacked variant: title/description above a full-width control
    (textareas, wide inputs, segmented controls that would wrap). */
-.settings-row--stacked {
+.settings-row--stacked,
+.settings-row--stacked-on-narrow {
   flex-direction: column;
   align-items: stretch;
   gap: var(--space-2);
 }
 
-.settings-row--stacked .settings-row__control {
+.settings-row--stacked .settings-row__control,
+.settings-row--stacked-on-narrow .settings-row__control {
   max-width: none;
   justify-content: flex-start;
+}
+
+@media (min-width: 769px) {
+  .settings-row--stacked-on-narrow,
+  .settings-row--stacked-on-narrow .settings-row__control {
+    width: auto;
+  }
+
+  .settings-row--stacked-on-narrow {
+    flex-direction: row;
+    align-items: center;
+    gap: var(--space-4);
+  }
+
+  .settings-row--stacked-on-narrow .settings-row__control {
+    max-width: 60%;
+    justify-content: flex-end;
+  }
 }
 
 /* Trailing action rows hold only a button cluster: give it the full row
@@ -465,6 +501,17 @@
   padding-inline: 0;
 }
 
+.settings-section__actions .btn--xs.btn--icon {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+}
+
+.settings-section__actions .btn--xs.btn--icon svg {
+  width: 16px;
+  height: 16px;
+}
+
 .settings-toggle {
   display: inline-flex;
   align-items: center;
@@ -473,9 +520,6 @@
 }
 
 wa-switch.settings-toggle {
-  /* Web Awesome defaults to brand blue; settings controls follow the active scene. */
-  --wa-form-control-activated-color: var(--accent);
-  --wa-color-focus: var(--ring);
   flex: none;
 }
 
@@ -531,6 +575,14 @@ wa-switch.settings-toggle {
   > input[type="number"].settings-input {
   width: 110px;
   text-align: center;
+}
+
+/* Time inputs hold HH:MM; the shared 340px text width would stretch the paired
+   quiet-hours window into two bars. */
+.settings-row:not(.settings-row--stacked)
+  .settings-row__control
+  > input[type="time"].settings-input {
+  width: auto;
 }
 
 /* ── Secret input (inset reveal toggle; no trailing button) ── */
@@ -608,6 +660,12 @@ textarea.settings-input {
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-3);
+  min-width: 0;
+
+  .settings-status {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
 }
 
 .updates-attempt-details {
@@ -667,6 +725,45 @@ textarea.settings-input {
   font-size: var(--control-ui-text-sm);
   color: var(--muted);
   text-align: center;
+}
+
+.settings-loading-skeleton,
+.settings-loading-skeleton__rows {
+  width: 100%;
+}
+
+.settings-loading-skeleton__title,
+.settings-loading-skeleton__description,
+.settings-loading-skeleton__control {
+  display: block;
+}
+
+.settings-loading-skeleton__title {
+  width: min(42%, 220px);
+  height: 14px;
+}
+
+.settings-loading-skeleton__description {
+  width: min(72%, 420px);
+  height: 11px;
+}
+
+.settings-loading-skeleton__row:nth-child(3n + 2) .settings-loading-skeleton__title {
+  width: min(34%, 180px);
+}
+
+.settings-loading-skeleton__row:nth-child(3n) .settings-loading-skeleton__description {
+  width: min(58%, 340px);
+}
+
+.settings-loading-skeleton__control {
+  width: 72px;
+  height: 30px;
+  flex: 0 0 auto;
+}
+
+.settings-loading-skeleton__control--wide {
+  width: 104px;
 }
 
 /* ── Key/value facts (About build info, agent facts) ── */
@@ -733,6 +830,7 @@ textarea.settings-input {
   font-size: var(--control-ui-text-lg);
   font-weight: 700;
   letter-spacing: 0.08em;
+  user-select: all;
 }
 
 /* ── Mobile ── */
@@ -740,6 +838,33 @@ textarea.settings-input {
 @media (max-width: 640px) {
   .settings-page {
     padding-inline: var(--space-3);
+  }
+
+  .shell--settings .content:not(.content--custodian),
+  .content:has(.plugins-hub-header) {
+    --content-inline-padding: var(--space-3);
+    --settings-header-inline-padding: 0;
+    padding: var(--space-3) var(--space-3) var(--space-4);
+  }
+
+  .shell--settings .content:has(.settings-workspace) .content-header,
+  .content:has(.plugins-hub-header) .content-header,
+  .shell--settings .settings-page,
+  .content:has(.plugins-hub-header) .settings-page,
+  .shell--settings .config-content,
+  .shell--settings .config-lead,
+  .shell--settings .config-content-callout {
+    padding-inline: 0;
+  }
+
+  .settings-section__header:has(.settings-section__copy) {
+    align-items: stretch;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .settings-section__header:has(.settings-section__copy) .settings-section__actions {
+    align-self: flex-end;
   }
 
   .settings-row {

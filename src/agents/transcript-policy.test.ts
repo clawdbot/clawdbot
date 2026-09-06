@@ -5,6 +5,8 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
+import { validateAnthropicTurns } from "./embedded-agent-helpers/turns.js";
+import type { AgentMessage } from "./runtime/index.js";
 
 vi.mock("../plugins/provider-hook-runtime.js", async () => {
   const replayHelpers = await vi.importActual<
@@ -61,18 +63,7 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
               };
             case "amazon-bedrock":
             case "anthropic":
-              return {
-                sanitizeMode: "full",
-                sanitizeToolCallIds: true,
-                toolCallIdMode: "strict",
-                preserveSignatures: true,
-                repairToolUseResultPairing: true,
-                validateAnthropicTurns: true,
-                allowSyntheticToolResults: true,
-                ...(replayHelpers.shouldDropClaudeThinkingBlocks(modelId)
-                  ? { dropThinkingBlocks: true }
-                  : {}),
-              };
+              return replayHelpers.buildAnthropicReplayPolicyForModel(modelId);
             case "minimax":
             case "minimax-portal":
               return context?.modelApi === "openai-completions"
@@ -123,11 +114,16 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
                 allowSyntheticToolResults: true,
               };
             case "github-copilot":
-              return modelId.includes("claude")
+              return context?.modelApi === "anthropic-messages"
                 ? {
+                    sanitizeMode: "full",
+                    preserveSignatures: true,
+                    repairToolUseResultPairing: true,
+                    validateAnthropicTurns: true,
+                    allowSyntheticToolResults: true,
                     dropThinkingBlocks: true,
                   }
-                : {};
+                : undefined;
             case "mistral":
               return {
                 sanitizeToolCallIds: true,
@@ -205,10 +201,14 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
 
 let resolveTranscriptPolicy: typeof import("./transcript-policy.js").resolveTranscriptPolicy;
 let shouldAllowProviderOwnedThinkingReplay: typeof import("./transcript-policy.js").shouldAllowProviderOwnedThinkingReplay;
+let shouldMergeConsecutiveUserTurns: typeof import("./transcript-policy.js").shouldMergeConsecutiveUserTurns;
 describe("resolveTranscriptPolicy", () => {
   beforeAll(async () => {
-    ({ resolveTranscriptPolicy, shouldAllowProviderOwnedThinkingReplay } =
-      await import("./transcript-policy.js"));
+    ({
+      resolveTranscriptPolicy,
+      shouldAllowProviderOwnedThinkingReplay,
+      shouldMergeConsecutiveUserTurns,
+    } = await import("./transcript-policy.js"));
   });
 
   beforeEach(() => {
@@ -649,6 +649,7 @@ describe("resolveTranscriptPolicy", () => {
       modelId: "claude-opus-4-6",
       modelApi: "anthropic-messages" as const,
       preserveSignatures: true,
+      appendOnlyRuntimeContext: false,
     },
     {
       title: "Bedrock Anthropic",
@@ -656,6 +657,31 @@ describe("resolveTranscriptPolicy", () => {
       modelId: "us.anthropic.claude-opus-4-6-v1",
       modelApi: "bedrock-converse-stream" as const,
       preserveSignatures: true,
+      appendOnlyRuntimeContext: false,
+    },
+    {
+      title: "unowned Anthropic transport",
+      provider: "custom-anthropic-proxy",
+      modelId: "claude-sonnet-4-6",
+      modelApi: "anthropic-messages" as const,
+      preserveSignatures: true,
+      appendOnlyRuntimeContext: false,
+    },
+    {
+      title: "unowned Bedrock transport",
+      provider: "custom-bedrock-proxy",
+      modelId: "us.anthropic.claude-opus-4-6-v1",
+      modelApi: "bedrock-converse-stream" as const,
+      preserveSignatures: true,
+      appendOnlyRuntimeContext: false,
+    },
+    {
+      title: "Foundry Anthropic transport",
+      provider: "anthropic-foundry",
+      modelId: "claude-sonnet-4-6",
+      modelApi: "anthropic-messages" as const,
+      preserveSignatures: true,
+      appendOnlyRuntimeContext: false,
     },
     {
       title: "Google provider",
@@ -663,19 +689,30 @@ describe("resolveTranscriptPolicy", () => {
       modelId: "gemini-2.0-flash",
       modelApi: "google-generative-ai" as const,
       preserveSignatures: false,
+      appendOnlyRuntimeContext: false,
     },
     {
       title: "OpenAI provider",
       provider: "openai",
-      modelId: "gpt-4o",
-      modelApi: "openai" as const,
+      modelId: "gpt-5.6-luna",
+      modelApi: "openai-responses" as const,
       preserveSignatures: false,
+      appendOnlyRuntimeContext: false,
     },
     {
       title: "Mistral provider",
       provider: "mistral",
       modelId: "mistral-large-latest",
       preserveSignatures: false,
+      appendOnlyRuntimeContext: false,
+    },
+    {
+      title: "Ollama provider",
+      provider: "ollama",
+      modelId: "llama3.2",
+      modelApi: "ollama" as const,
+      preserveSignatures: false,
+      appendOnlyRuntimeContext: false,
     },
     {
       title: "Kimi provider",
@@ -683,6 +720,7 @@ describe("resolveTranscriptPolicy", () => {
       modelId: "kimi-code",
       modelApi: "anthropic-messages" as const,
       preserveSignatures: false,
+      appendOnlyRuntimeContext: false,
     },
     {
       title: "kimi-code alias",
@@ -690,11 +728,69 @@ describe("resolveTranscriptPolicy", () => {
       modelId: "kimi-code",
       modelApi: "anthropic-messages" as const,
       preserveSignatures: false,
+      appendOnlyRuntimeContext: false,
     },
-  ])("sets preserveSignatures for $title (#32526, #39798)", ({ preserveSignatures, ...input }) => {
-    const policy = resolveTranscriptPolicy(input);
-    expect(policy.preserveSignatures).toBe(preserveSignatures);
+  ])(
+    "sets signed-thinking and runtime-context replay for $title",
+    ({ preserveSignatures, appendOnlyRuntimeContext, ...input }) => {
+      const policy = resolveTranscriptPolicy(input);
+      expect(policy.preserveSignatures).toBe(preserveSignatures);
+      expect(policy.appendOnlyRuntimeContext).toBe(appendOnlyRuntimeContext);
+    },
+  );
+
+  it.each([
+    ["claude-fable-5-1", true],
+    ["claude-mythos-5-1", false],
+    ["claude-fable-5", false],
+    ["claude-mythos-5", false],
+    ["claude-opus-5", false],
+    ["claude-sonnet-5", false],
+    ["claude-opus-4-8", false],
+    ["claude-sonnet-4-6", false],
+    ["claude-haiku-4-5", false],
+  ])("scopes persisted context and user-turn merging for %s", (modelId, appendOnly) => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "First request", timestamp: 1 },
+      { role: "user", content: "Second request", timestamp: 2 },
+    ];
+    for (const modelApi of ["anthropic-messages", "bedrock-converse-stream"]) {
+      for (const provider of ["anthropic", "amazon-bedrock", "custom-proxy"]) {
+        const policy = resolveTranscriptPolicy({ provider, modelId, modelApi });
+        expect(policy.appendOnlyRuntimeContext).toBe(appendOnly);
+        const replay = validateAnthropicTurns(messages, {
+          mergeConsecutiveUserTurns: shouldMergeConsecutiveUserTurns(policy, modelApi),
+        });
+        expect(replay).toEqual(
+          appendOnly && modelApi === "anthropic-messages"
+            ? messages
+            : [
+                {
+                  role: "user",
+                  content: [
+                    { type: "text", text: "First request" },
+                    { type: "text", text: "Second request" },
+                  ],
+                  timestamp: 2,
+                },
+              ],
+        );
+      }
+    }
   });
+
+  it.each(["claude-fable-5-1", "claude-mythos-5-1", "claude-opus-5"])(
+    "uses canonical deployment identity for unowned %s replay",
+    (canonicalModelId) => {
+      const policy = resolveTranscriptPolicy({
+        provider: "microsoft-foundry",
+        modelApi: "anthropic-messages",
+        modelId: "deployment",
+        model: makeOpenAiCompatibleReasoningModel({ params: { canonicalModelId } }),
+      });
+      expect(policy.appendOnlyRuntimeContext).toBe(canonicalModelId === "claude-fable-5-1");
+    },
+  );
 
   it("allows immutable provider-owned thinking replay for anthropic-compatible native replay policies", () => {
     const policy = resolveTranscriptPolicy({

@@ -86,72 +86,175 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 </Steps>
 
 <Note>
-`diagnostics.enabled` defaults to `true`; set it to `false` only in tightly constrained environments. If it is `false`, the plugin still registers the HTTP route, but no diagnostic events flow into the exporter, so the response is empty.
+`diagnostics.enabled` defaults to `true`; set it to `false` only in tightly constrained environments. When it is `false` at exporter startup, the plugin still registers the HTTP route, but no diagnostic events or runtime identity are recorded, so the response is empty.
 </Note>
 
 ## Metrics exported
 
-| Metric                                           | Type      | Labels                                                                                    |
-| ------------------------------------------------ | --------- | ----------------------------------------------------------------------------------------- |
-| `openclaw_run_completed_total`                   | counter   | `channel`, `model`, `outcome`, `provider`, `trigger`                                      |
-| `openclaw_run_duration_seconds`                  | histogram | `channel`, `model`, `outcome`, `provider`, `trigger`                                      |
-| `openclaw_model_call_total`                      | counter   | `api`, `error_category`, `model`, `observation_unit`, `outcome`, `provider`, `transport`  |
-| `openclaw_model_call_duration_seconds`           | histogram | `api`, `error_category`, `model`, `observation_unit`, `outcome`, `provider`, `transport`  |
-| `openclaw_model_failover_total`                  | counter   | `from_model`, `from_provider`, `lane`, `reason`, `suspended`, `to_model`, `to_provider`   |
-| `openclaw_model_tokens_total`                    | counter   | `agent`, `channel`, `model`, `provider`, `token_type`                                     |
-| `openclaw_gen_ai_client_token_usage`             | histogram | `model`, `provider`, `token_type`                                                         |
-| `openclaw_model_cost_usd_total`                  | counter   | `agent`, `channel`, `model`, `provider`                                                   |
-| `openclaw_model_usage_duration_seconds`          | histogram | `agent`, `channel`, `model`, `provider`                                                   |
-| `openclaw_skill_used_total`                      | counter   | `activation`, `agent`, `skill`, `source`                                                  |
-| `openclaw_tool_execution_total`                  | counter   | `error_category`, `outcome`, `params_kind`, `tool`, `tool_owner`, `tool_source`           |
-| `openclaw_tool_execution_duration_seconds`       | histogram | `error_category`, `outcome`, `params_kind`, `tool`, `tool_owner`, `tool_source`           |
-| `openclaw_tool_execution_blocked_total`          | counter   | `denied_reason`, `params_kind`, `tool`, `tool_owner`, `tool_source`                       |
-| `openclaw_harness_run_total`                     | counter   | `channel`, `error_category`, `harness`, `model`, `outcome`, `phase`, `plugin`, `provider` |
-| `openclaw_harness_run_duration_seconds`          | histogram | `channel`, `error_category`, `harness`, `model`, `outcome`, `phase`, `plugin`, `provider` |
-| `openclaw_webhook_received_total`                | counter   | `channel`, `webhook`                                                                      |
-| `openclaw_webhook_error_total`                   | counter   | `channel`, `webhook`                                                                      |
-| `openclaw_webhook_duration_seconds`              | histogram | `channel`, `webhook`                                                                      |
-| `openclaw_message_received_total`                | counter   | `channel`, `source`                                                                       |
-| `openclaw_message_dispatch_started_total`        | counter   | `channel`, `source`                                                                       |
-| `openclaw_message_dispatch_completed_total`      | counter   | `channel`, `outcome`, `reason`, `source`                                                  |
-| `openclaw_message_dispatch_duration_seconds`     | histogram | `channel`, `outcome`, `reason`, `source`                                                  |
-| `openclaw_message_processed_total`               | counter   | `channel`, `outcome`, `reason`                                                            |
-| `openclaw_message_processed_duration_seconds`    | histogram | `channel`, `outcome`, `reason`                                                            |
-| `openclaw_message_delivery_started_total`        | counter   | `channel`, `delivery_kind`                                                                |
-| `openclaw_message_delivery_total`                | counter   | `channel`, `delivery_kind`, `error_category`, `outcome`                                   |
-| `openclaw_message_delivery_duration_seconds`     | histogram | `channel`, `delivery_kind`, `error_category`, `outcome`                                   |
-| `openclaw_talk_event_total`                      | counter   | `brain`, `event_type`, `mode`, `provider`, `transport`                                    |
-| `openclaw_talk_event_duration_seconds`           | histogram | `brain`, `event_type`, `mode`, `provider`, `transport`                                    |
-| `openclaw_talk_audio_bytes`                      | histogram | `brain`, `event_type`, `mode`, `provider`, `transport`                                    |
-| `openclaw_queue_lane_size`                       | gauge     | `lane`                                                                                    |
-| `openclaw_queue_lane_wait_seconds`               | histogram | `lane`                                                                                    |
-| `openclaw_session_state_total`                   | counter   | `reason`, `state`                                                                         |
-| `openclaw_session_queue_depth`                   | gauge     | `state`                                                                                   |
-| `openclaw_session_turn_created_total`            | counter   | `agent`, `channel`, `trigger`                                                             |
-| `openclaw_session_stuck_total`                   | counter   | `reason`, `state`                                                                         |
-| `openclaw_session_stuck_age_seconds`             | histogram | `reason`, `state`                                                                         |
-| `openclaw_session_recovery_total`                | counter   | `action`, `active_work_kind`, `state`, `status`                                           |
-| `openclaw_session_recovery_age_seconds`          | histogram | `action`, `active_work_kind`, `state`, `status`                                           |
-| `openclaw_liveness_warning_total`                | counter   | `reason`                                                                                  |
-| `openclaw_liveness_sessions`                     | gauge     | `state`                                                                                   |
-| `openclaw_liveness_event_loop_delay_p99_seconds` | histogram | `reason`                                                                                  |
-| `openclaw_liveness_event_loop_delay_max_seconds` | histogram | `reason`                                                                                  |
-| `openclaw_liveness_event_loop_utilization_ratio` | histogram | `reason`                                                                                  |
-| `openclaw_liveness_cpu_core_ratio`               | histogram | `reason`                                                                                  |
-| `openclaw_payload_large_total`                   | counter   | `action`, `channel`, `plugin`, `reason`, `surface`                                        |
-| `openclaw_payload_large_bytes`                   | histogram | `action`, `channel`, `plugin`, `reason`, `surface`                                        |
-| `openclaw_memory_bytes`                          | gauge     | `kind`                                                                                    |
-| `openclaw_memory_rss_bytes`                      | histogram | none                                                                                      |
-| `openclaw_memory_pressure_total`                 | counter   | `level`, `reason`                                                                         |
-| `openclaw_telemetry_exporter_total`              | counter   | `exporter`, `reason`, `signal`, `status`                                                  |
-| `openclaw_prometheus_series_dropped_total`       | counter   | none                                                                                      |
-| `openclaw_diagnostic_async_queue_dropped_total`  | counter   | `drop_class`                                                                              |
-| `openclaw_diagnostic_async_queue_length`         | gauge     | none                                                                                      |
+| Metric                                               | Type      | Labels                                                                                    |
+| ---------------------------------------------------- | --------- | ----------------------------------------------------------------------------------------- |
+| `openclaw_gateway_build_info`                        | gauge     | `process_instance_id`, optional `build_id`                                                |
+| `openclaw_gc_duration_seconds`                       | histogram | none                                                                                      |
+| `openclaw_gateway_rpc_requests_total`                | counter   | `method`                                                                                  |
+| `openclaw_gateway_rpc_first_response_seconds`        | histogram | `method`                                                                                  |
+| `openclaw_gateway_rpc_handler_seconds`               | histogram | `method`                                                                                  |
+| `openclaw_gateway_rpc_admission_seconds`             | histogram | `method`                                                                                  |
+| `openclaw_gateway_rpc_queue_wait_seconds`            | histogram | `method`                                                                                  |
+| `openclaw_gateway_rpc_outcomes_total`                | counter   | `phase`, `outcome`                                                                        |
+| `openclaw_run_completed_total`                       | counter   | `channel`, `model`, `outcome`, `provider`, `trigger`                                      |
+| `openclaw_run_duration_seconds`                      | histogram | `channel`, `model`, `outcome`, `provider`, `trigger`                                      |
+| `openclaw_model_call_total`                          | counter   | `api`, `error_category`, `model`, `observation_unit`, `outcome`, `provider`, `transport`  |
+| `openclaw_model_call_duration_seconds`               | histogram | `api`, `error_category`, `model`, `observation_unit`, `outcome`, `provider`, `transport`  |
+| `openclaw_model_failover_total`                      | counter   | `from_model`, `from_provider`, `lane`, `reason`, `suspended`, `to_model`, `to_provider`   |
+| `openclaw_model_tokens_total`                        | counter   | `agent`, `channel`, `model`, `provider`, `token_type`                                     |
+| `openclaw_gen_ai_client_token_usage`                 | histogram | `model`, `provider`, `token_type`                                                         |
+| `openclaw_model_cost_usd_total`                      | counter   | `agent`, `channel`, `model`, `provider`                                                   |
+| `openclaw_model_usage_duration_seconds`              | histogram | `agent`, `channel`, `model`, `provider`                                                   |
+| `openclaw_skill_used_total`                          | counter   | `activation`, `agent`, `skill`, `source`                                                  |
+| `openclaw_tool_execution_total`                      | counter   | `error_category`, `outcome`, `params_kind`, `tool`, `tool_owner`, `tool_source`           |
+| `openclaw_tool_execution_duration_seconds`           | histogram | `error_category`, `outcome`, `params_kind`, `tool`, `tool_owner`, `tool_source`           |
+| `openclaw_tool_execution_blocked_total`              | counter   | `denied_reason`, `params_kind`, `tool`, `tool_owner`, `tool_source`                       |
+| `openclaw_harness_run_total`                         | counter   | `channel`, `error_category`, `harness`, `model`, `outcome`, `phase`, `plugin`, `provider` |
+| `openclaw_harness_run_duration_seconds`              | histogram | `channel`, `error_category`, `harness`, `model`, `outcome`, `phase`, `plugin`, `provider` |
+| `openclaw_webhook_received_total`                    | counter   | `channel`, `webhook`                                                                      |
+| `openclaw_webhook_error_total`                       | counter   | `channel`, `webhook`                                                                      |
+| `openclaw_webhook_duration_seconds`                  | histogram | `channel`, `webhook`                                                                      |
+| `openclaw_message_received_total`                    | counter   | `channel`, `source`                                                                       |
+| `openclaw_message_dispatch_started_total`            | counter   | `channel`, `source`                                                                       |
+| `openclaw_message_dispatch_completed_total`          | counter   | `channel`, `outcome`, `reason`, `source`                                                  |
+| `openclaw_message_dispatch_duration_seconds`         | histogram | `channel`, `outcome`, `reason`, `source`                                                  |
+| `openclaw_message_processed_total`                   | counter   | `channel`, `outcome`, `reason`                                                            |
+| `openclaw_message_processed_duration_seconds`        | histogram | `channel`, `outcome`, `reason`                                                            |
+| `openclaw_message_delivery_started_total`            | counter   | `channel`, `delivery_kind`                                                                |
+| `openclaw_message_delivery_total`                    | counter   | `channel`, `delivery_kind`, `error_category`, `outcome`                                   |
+| `openclaw_message_delivery_duration_seconds`         | histogram | `channel`, `delivery_kind`, `error_category`, `outcome`                                   |
+| `openclaw_talk_event_total`                          | counter   | `brain`, `event_type`, `mode`, `provider`, `transport`                                    |
+| `openclaw_talk_event_duration_seconds`               | histogram | `brain`, `event_type`, `mode`, `provider`, `transport`                                    |
+| `openclaw_talk_audio_bytes`                          | histogram | `brain`, `event_type`, `mode`, `provider`, `transport`                                    |
+| `openclaw_queue_lane_size`                           | gauge     | `lane`                                                                                    |
+| `openclaw_queue_lane_wait_seconds`                   | histogram | `lane`                                                                                    |
+| `openclaw_session_state_total`                       | counter   | `reason`, `state`                                                                         |
+| `openclaw_session_queue_depth`                       | gauge     | `state`                                                                                   |
+| `openclaw_session_turn_created_total`                | counter   | `agent`, `channel`, `trigger`                                                             |
+| `openclaw_session_stuck_total`                       | counter   | `reason`, `state`                                                                         |
+| `openclaw_session_stuck_age_seconds`                 | histogram | `reason`, `state`                                                                         |
+| `openclaw_session_recovery_total`                    | counter   | `action`, `active_work_kind`, `state`, `status`                                           |
+| `openclaw_session_recovery_age_seconds`              | histogram | `action`, `active_work_kind`, `state`, `status`                                           |
+| `openclaw_gateway_event_loop_delay_max_seconds`      | histogram | none                                                                                      |
+| `openclaw_gateway_event_loop_observed_seconds_total` | counter   | none                                                                                      |
+| `openclaw_liveness_warning_total`                    | counter   | `reason`                                                                                  |
+| `openclaw_liveness_sessions`                         | gauge     | `state`                                                                                   |
+| `openclaw_liveness_event_loop_delay_p99_seconds`     | histogram | `reason`                                                                                  |
+| `openclaw_liveness_event_loop_delay_max_seconds`     | histogram | `reason`                                                                                  |
+| `openclaw_liveness_event_loop_utilization_ratio`     | histogram | `reason`                                                                                  |
+| `openclaw_liveness_cpu_core_ratio`                   | histogram | `reason`                                                                                  |
+| `openclaw_payload_large_total`                       | counter   | `action`, `channel`, `plugin`, `reason`, `surface`                                        |
+| `openclaw_payload_large_bytes`                       | histogram | `action`, `channel`, `plugin`, `reason`, `surface`                                        |
+| `openclaw_memory_bytes`                              | gauge     | `kind`                                                                                    |
+| `openclaw_memory_rss_bytes`                          | histogram | none                                                                                      |
+| `openclaw_memory_pressure_total`                     | counter   | `level`, `reason`                                                                         |
+| `openclaw_telemetry_exporter_total`                  | counter   | `exporter`, `reason`, `signal`, `status`                                                  |
+| `openclaw_prometheus_series_dropped_total`           | counter   | none                                                                                      |
+| `openclaw_diagnostic_async_queue_dropped_total`      | counter   | `drop_class`                                                                              |
+| `openclaw_diagnostic_async_queue_length`             | gauge     | none                                                                                      |
 
 For model-call metrics, `observation_unit="request"` measures one observable
 provider request. `observation_unit="turn"` measures a synthetic Claude Code
 or Codex CLI agent turn that can contain multiple hidden provider requests.
 Keep those series separate when comparing latency.
+
+Gateway RPC metrics cover valid authenticated WebSocket requests, including
+subsequent rejections. `first_response` measures receipt through the first frame
+accepted by the sender; unavailable or suppressed sends have no duration sample.
+`handler` measures actual handler invocation through return or throw, and
+`admission` measures receipt through that invocation. `queue_wait` measures only
+operator request start-queue wait, separately from command/session lane metrics.
+They measure elapsed time, not CPU time. Early acknowledgments and responses
+after handler return are distinct from completed agent work. See
+[Gateway RPC timing semantics](/gateway/opentelemetry#gateway-rpc).
+
+RPC method labels contain canonical core method names, `other` for plugin
+methods, or `unknown`. Outcome totals aggregate by phase and outcome without a
+method dimension. Each method with all four timings occupies five aggregate
+samples in the shared 2,048-sample cap. A duration histogram occupies one sample
+but expands into 19 scrape series (buckets, sum, and count). Existing samples keep
+updating when the cap fills; unseen RPC or other operational samples are refused
+and increment `openclaw_prometheus_series_dropped_total`. Monitor that counter:
+coverage of every core method can fill the cap, so a zero value matters when
+interpreting totals or latency percentiles. Async diagnostic queue saturation can
+also drop observations, reported by `openclaw_diagnostic_async_queue_dropped_total`.
+
+### Runtime identity
+
+`openclaw_gateway_build_info` has value `1` and identifies the process serving
+the scrape. Its `process_instance_id` is the same process-owned UUID returned by
+`system.info`; it changes when the process restarts, including when a PID is
+reused. `build_id` matches the loaded build reported by `hello.server.buildId`
+and is omitted when that provenance is unavailable. Updating files on disk does
+not change the running process's identity.
+
+When diagnostics are enabled, the exporter captures these facts at service startup,
+before recording events.
+The metric uses one aggregate sample under the existing cap. Older hosts without
+the optional runtime-identity capability omit it. The UUID is confined to this
+info metric; it is not added to RPC or other metric labels.
+
+Use the info sample from the same scrape to attribute new measurements and split
+counter intervals at process changes. It is not a health signal, a request ID,
+or an exporter epoch: restarting the exporter in the same process resets its
+counters while retaining the process identity. It cannot relabel older samples
+or establish complete diagnostic-loss coverage.
+
+### Event-loop observation windows
+
+`openclaw_liveness_cpu_core_ratio` measures whole-process CPU usage in core
+equivalents, including worker and native threads, and can exceed `1`. Interpret
+it alongside main-thread delay and utilization; see
+[CPU pressure and event-loop delay](/gateway/health#cpu-pressure-and-event-loop-delay).
+
+The event-loop histogram records the maximum delay from each completed Gateway
+health-monitor window. The counter sums the seconds represented by those
+windows. Both are cumulative: a later healthy window does not erase an earlier
+high-delay observation. Readiness, status, and scrape requests consume completed
+observations without advancing or resetting the sampling window.
+
+The monitor samples elapsed event-loop intervals every 20 milliseconds and
+completes a window after at least one second, or sooner for a delay warning.
+It preserves the pending interval across ordinary window resets, so reading
+health before an overdue sample cannot erase that delay. Histogram counts are window counts, not stall
+counts. Histogram quantiles describe window maxima, not the sampled event-loop
+delay distribution or its overall p99. These metrics have no request labels or
+trace attribution and do not identify the JavaScript function that blocked.
+
+Collection uses the plugin enablement above. It starts when an interested
+metrics exporter is running; it does not backfill earlier windows. Intentional
+monitor resets discard the unfinished window. Diagnostic queue drops, the
+exporter's series cap, and process restarts can also lose observations. Watch
+the existing drop counters and the represented-duration counter when assessing
+coverage. Readiness decisions and persistent liveness-warning thresholds are unchanged.
+
+### Garbage collection duration
+
+`openclaw_gc_duration_seconds` records elapsed garbage collection (GC) duration
+reported by Node.js for the hosting JavaScript isolate. Each observation is one
+GC entry, not CPU time, allocated bytes, or a guaranteed stop-the-world pause.
+Compare its bucket counts with event-loop window maxima to investigate GC as a
+possible contributor to stalls; matching scrape intervals do not prove causality.
+
+Collection uses the existing diagnostics enablement and starts when the
+diagnostics heartbeat observes an interested consumer, such as a metrics exporter. A consumer added
+after heartbeat startup may wait until the next 30-second tick, or longer if the
+event loop is stalled. Entries preceding observer activation are not backfilled.
+Demand is checked when entries are delivered, so a brief consumer gap before the
+next heartbeat can still yield delayed observations. Losing the last
+consumer suppresses new exports; the observer disconnects at the next heartbeat.
+Disabling diagnostics or stopping the heartbeat disconnects it immediately.
+
+The histogram is absent until the first observation, so absence does not prove
+zero GC. Queue drops, the series cap, observation gaps and process restarts limit
+coverage. Diagnostics disable/re-enable preserves the exporter's existing
+counters; restarting the exporter resets them as usual. No extra timer, GC
+trigger, trace attribution or application payload is collected.
 
 ## Label policy
 
@@ -181,6 +284,21 @@ Keep those series separate when comparing latency.
 ## PromQL recipes
 
 ```promql
+# Gateway RPC requests per second by method
+sum by (method) (rate(openclaw_gateway_rpc_requests_total[5m]))
+
+# 95th percentile first-response latency by method
+histogram_quantile(
+  0.95,
+  sum by (le, method) (rate(openclaw_gateway_rpc_first_response_seconds_bucket[5m]))
+)
+
+# 95th percentile operator request start-queue wait by method
+histogram_quantile(
+  0.95,
+  sum by (le, method) (rate(openclaw_gateway_rpc_queue_wait_seconds_bucket[5m]))
+)
+
 # Tokens per minute, split by provider
 sum by (provider) (rate(openclaw_model_tokens_total[1m]))
 
@@ -205,6 +323,17 @@ sum by (skill, source) (increase(openclaw_skill_used_total[24h]))
 
 # Dropped Prometheus series (cardinality alarm)
 increase(openclaw_prometheus_series_dropped_total[15m]) > 0
+
+# Completed windows whose maximum delay exceeded one second
+increase(openclaw_gateway_event_loop_delay_max_seconds_count[5m])
+  - increase(openclaw_gateway_event_loop_delay_max_seconds_bucket{le="1"}[5m])
+
+# Seconds represented by exported event-loop windows
+increase(openclaw_gateway_event_loop_observed_seconds_total[5m])
+
+# Observed GC entries whose elapsed duration exceeded one second
+increase(openclaw_gc_duration_seconds_count[5m])
+  - increase(openclaw_gc_duration_seconds_bucket{le="1"}[5m])
 ```
 
 <Tip>

@@ -15,7 +15,7 @@ export type RunPluginInstallCommandParams = {
   raw: string;
   allowInstallPolicyWarningPrompt: boolean;
   opts: InstallSafetyOverrides & {
-    acknowledgeClawHubRisk?: boolean;
+    acceptCapabilities?: boolean;
     acknowledgeInstallPolicyWarning?: boolean;
     expectedIntegrity?: string;
     expectedPluginId?: string;
@@ -27,6 +27,8 @@ export type RunPluginInstallCommandParams = {
   invalidateRuntimeCache?: boolean;
   clawManaged?: boolean;
   runtime?: RuntimeEnv;
+  /** Synchronous authority guard at the final plugin/config mutation. */
+  beforePersistentApply?: () => void;
 };
 
 type ResolvedPluginInstallSourcePlan = Extract<

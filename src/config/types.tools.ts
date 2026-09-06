@@ -182,7 +182,7 @@ export type CodeModeConfig =
   | boolean
   | "auto"
   | {
-      /** Enable generic OpenClaw code mode. Default: "auto", which engages it only for models whose catalog compat flags `codeMode: "preferred"`. */
+      /** OpenClaw Code Mode default, overridden by per-model codeMode. Default: false; "auto" engages catalog-preferred models. */
       enabled?: boolean | "auto";
       /** Guest runtime. Only quickjs-wasi is supported. */
       runtime?: "quickjs-wasi";
@@ -211,7 +211,7 @@ export type CodeModeConfig =
 export type SwarmConfig =
   | boolean
   | {
-      /** Enable collector-mode subagents and agents_wait. Default: false. */
+      /** Enable collector-mode subagents and agents_wait. Default: true. */
       enabled?: boolean;
       /** Maximum concurrently running collector children per swarm group. */
       maxConcurrent?: number;
@@ -306,6 +306,13 @@ export type ExecToolConfig = {
   strictInlineEval?: boolean;
   /** Render parser-derived command highlights in exec approval prompts (default: false). */
   commandHighlighting?: boolean;
+  /**
+   * Default lifetime, in days, stamped onto standing grants minted by
+   * allow-always on automation approvals. Unset means grants live until
+   * revoked or the owning job changes. Terms freeze at mint; changing this
+   * affects only future grants.
+   */
+  grantExpiryDays?: number;
   /** Extra explicit directories trusted for safeBins path checks (never derived from PATH). */
   safeBinTrustedDirs?: string[];
   /** Optional custom safe-bin profiles for entries in tools.exec.safeBins. */
@@ -468,9 +475,9 @@ export type ToolsConfig = {
       provider?: string;
       /** Max characters to return from fetched content. */
       maxChars?: number;
-      /** Hard cap for maxChars (tool or config), defaults to 50000. */
+      /** Hard cap for maxChars (tool or config), defaults to 20000. */
       maxCharsCap?: number;
-      /** Max download size before truncation, defaults to 2000000. */
+      /** Max download size before truncation, defaults to 750000 bytes. */
       maxResponseBytes?: number;
       /** Timeout in seconds for fetch requests. */
       timeoutSeconds?: number;
@@ -499,23 +506,26 @@ export type ToolsConfig = {
   /** Message tool configuration. */
   message?: MessageToolsConfig;
   agentToAgent?: {
-    /** Enable agent-to-agent messaging tools. Default: false. */
+    /** Default: true. False blocks ordinary cross-agent session tool access; requester-owned native subagent and ACP child sessions remain reachable under tree/all visibility. */
     enabled?: boolean;
-    /** Allowlist of agent ids or patterns (implementation-defined). */
+    /**
+     * Agent ids or `*` glob patterns; the requesting and target agent must both match.
+     * Omitted or empty counts as unset: every agent pair is allowed by default; blank entries deny.
+     */
     allow?: string[];
   };
   /**
    * Session tool visibility controls which sessions can be targeted by session tools
-   * (sessions_list, sessions_history, sessions_search, sessions_send).
+   * (sessions_list, sessions_history, sessions_search, sessions_send, session_status).
    *
-   * Default: "tree" (current session + spawned subagent sessions).
+   * Default: "all" (all sessions on the Gateway, with cross-agent access scoped by agentToAgent).
    */
   sessions?: {
     /**
      * - "self": only the current session
-     * - "tree": current session + sessions spawned by this session (default)
+     * - "tree": current session + sessions spawned by this session
      * - "agent": any session belonging to the current agent id (can include other users)
-     * - "all": any session (cross-agent still requires tools.agentToAgent)
+     * - "all": any session (default; cross-agent access is governed by tools.agentToAgent)
      */
     visibility?: SessionsToolsVisibility;
   };
@@ -534,13 +544,13 @@ export type ToolsConfig = {
   loopDetection?: ToolLoopDetectionConfig;
   /** Compact large OpenClaw, MCP, and client tool catalogs behind search/call tools. */
   toolSearch?: ToolSearchConfig;
-  /** Generic code mode: expose exec/wait and hide normal tools behind a QuickJS catalog bridge. */
+  /** Global Code Mode defaults and limits; agent/model settings can override activation. */
   codeMode?: CodeModeConfig;
   /** Collector-mode subagents and wait controls. */
   swarm?: SwarmConfig;
   /** sessions_spawn tool configuration. */
   sessions_spawn?: SessionsSpawnToolsConfig;
-  /** Sub-agent tool policy defaults (deny wins). */
+  /** Sub-agent tool policy defaults (deny wins; progress_card is always denied). */
   subagents?: {
     tools?: ToolAllowDenyPolicyConfig;
   };
@@ -548,7 +558,7 @@ export type ToolsConfig = {
   sandbox?: {
     tools?: ToolAllowDenyPolicyConfig;
   };
-  /** Unified progress_card status tool; enabled by default. Set false to opt out. */
+  /** Unified progress_card status tool for parent sessions; enabled by default. False opts out. */
   updatePlan?: boolean;
 };
 

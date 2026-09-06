@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/windows-spawn";
 import type { CodexAppServerClient, CodexAppServerRuntimeIdentity } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
+import { resolvePackagedCodexNativeCommand } from "./managed-binary.js";
 import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
 const ARTIFACT_ID_PREFIX = "codex-app-server:v1:";
@@ -561,6 +562,8 @@ async function captureFilesystemDescriptor(params: {
   const spawnCwd = path.resolve(params.startOptions.cwd ?? process.cwd());
   const commandPath = await resolveCommandPath(params.startOptions.command, env, spawnCwd);
   const commandRealPath = await fs.realpath(commandPath);
+  let nativeCommand = params.spawnIdentity.nativeCommand;
+  let nativeCandidate = commandRealPath;
   let invocationPaths: string[];
   if (process.platform === "win32") {
     const program = resolveWindowsSpawnProgram({
@@ -570,11 +573,16 @@ async function captureFilesystemDescriptor(params: {
       execPath: process.execPath,
       packageName: "@openai/codex",
     });
-    if (program.resolution === "node-entrypoint" && !params.spawnIdentity.nativeCommand) {
+    const entrypoint = program.leadingArgv[0];
+    if (program.resolution === "node-entrypoint" && entrypoint && !nativeCommand) {
+      nativeCommand = resolvePackagedCodexNativeCommand(await fs.realpath(entrypoint));
+    }
+    if (program.resolution === "node-entrypoint" && !nativeCommand) {
       throw new Error(
         "Codex runtime cannot attest a custom Node launcher without its native target",
       );
     }
+    nativeCandidate = program.command;
     const invocationCandidates = [commandRealPath, program.command, ...program.leadingArgv];
     invocationPaths = [];
     for (const candidate of invocationCandidates) {
@@ -582,22 +590,21 @@ async function captureFilesystemDescriptor(params: {
       invocationPaths.push(await fs.realpath(resolved));
     }
   } else {
+    nativeCommand ??= resolvePackagedCodexNativeCommand(commandRealPath);
     invocationPaths = await resolvePosixInvocationPaths({
       commandRealPath,
       env,
       cwd: spawnCwd,
-      nativeCommand: params.spawnIdentity.nativeCommand,
+      nativeCommand,
     });
   }
   invocationPaths = [...new Set(invocationPaths)].toSorted(compareArtifactNames);
   if (invocationPaths.length > MAX_ARTIFACT_INVOCATION_PATHS) {
     throw new Error("Codex runtime launcher exceeds the bounded invocation file count");
   }
-  const nativeCandidate = params.spawnIdentity.nativeCommand ?? invocationPaths[0];
-  if (!nativeCandidate) {
-    throw new Error("Codex runtime did not resolve a native executable");
-  }
-  const nativePath = await fs.realpath(await resolveCommandPath(nativeCandidate, env, spawnCwd));
+  const nativePath = await fs.realpath(
+    await resolveCommandPath(nativeCommand ?? nativeCandidate, env, spawnCwd),
+  );
   const packageRoot = await resolvePackageRoot(nativePath);
   const configuredCodeModeHost = readEffectiveSpawnEnvironmentValue(
     env,

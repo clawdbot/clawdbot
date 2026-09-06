@@ -10,6 +10,9 @@ import type { UpdateRunResult } from "./update-runner.js";
 // restart so the next gateway can report completion or failure.
 /** Metadata needed to route update restart continuation messages. */
 export type UpdateRestartSentinelMeta = {
+  runId?: string;
+  /** Internal helper fact: when the owning service stop was issued. */
+  serviceStoppedAtMs?: number;
   root?: string;
   sessionKey?: string;
   deliveryContext?: {
@@ -36,6 +39,14 @@ export function normalizeControlPlaneUpdateResult(result: UpdateRunResult): Upda
     : result;
 }
 
+function resolvePersistedRecovery(result: UpdateRunResult): UpdateRunResult["recovery"] {
+  const recovery = result.recovery;
+  // Restored runtimes parse this object strictly, so persist only the pre-update shape.
+  return recovery?.serviceRestartSafe === false
+    ? { serviceRestartSafe: false, reason: recovery.reason }
+    : recovery;
+}
+
 /** Build the restart sentinel payload written after update runs. */
 export function buildUpdateRestartSentinelPayload(params: {
   result: UpdateRunResult;
@@ -43,6 +54,7 @@ export function buildUpdateRestartSentinelPayload(params: {
   nowMs?: number;
 }): RestartSentinelPayload {
   const result = normalizeControlPlaneUpdateResult(params.result);
+  const recovery = resolvePersistedRecovery(result);
   const { meta } = params;
   const continuation =
     result.status === "ok"
@@ -62,9 +74,11 @@ export function buildUpdateRestartSentinelPayload(params: {
     ...(continuation ? { continuation } : {}),
     doctorHint: formatDoctorNonInteractiveHint(),
     stats: {
+      ...(meta.runId || result.runId ? { runId: meta.runId ?? result.runId } : {}),
       mode: result.mode,
       ...(meta.root || result.root ? { root: meta.root ?? result.root } : {}),
       ...(meta.handoffId ? { handoffId: meta.handoffId } : {}),
+      ...(recovery ? { recovery } : {}),
       before: result.before ?? null,
       after: result.after ?? null,
       steps: result.steps.map((step) => ({

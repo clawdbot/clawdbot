@@ -13,7 +13,11 @@ import type { MemoryConfig } from "./config.js";
 const providerMocks = vi.hoisted(() => ({
   getMemoryEmbeddingProvider: vi.fn(),
   authMutationListeners: new Set<
-    (event: { agentDir?: string; affectsInheritedStores: boolean }) => void
+    (event: {
+      agentDir?: string;
+      affectsInheritedStores: boolean;
+      profileSetChanged: boolean;
+    }) => void
   >(),
 }));
 
@@ -68,7 +72,7 @@ function providerResult(
     id?: string;
     model?: string;
     vector?: number[];
-    embedQuery?: MemoryEmbeddingProvider["embedQuery"];
+    embedQuery?: (text: string) => Promise<number[]>;
     close?: NonNullable<MemoryEmbeddingProvider["close"]>;
   } = {},
 ) {
@@ -77,7 +81,10 @@ function providerResult(
     provider: {
       id: params.id ?? "openai",
       model: params.model ?? "text-embedding-3-small",
-      embedQuery: params.embedQuery ?? vi.fn(async () => vector),
+      embed: async (input: Parameters<MemoryEmbeddingProvider["embed"]>[0]) =>
+        await (params.embedQuery ?? vi.fn(async () => vector))(
+          typeof input === "string" ? input : input.text,
+        ),
       embedBatch: vi.fn(async () => [vector]),
       ...(params.close ? { close: params.close } : {}),
     },
@@ -203,6 +210,7 @@ describe("memory-lancedb provider lifecycle", () => {
     listener?.({
       agentDir: "/tmp/agent-private/../agent-private",
       affectsInheritedStores: false,
+      profileSetChanged: false,
     });
 
     await embed(embeddings, "other", "other warm provider");
@@ -519,13 +527,15 @@ describe("memory-lancedb provider lifecycle", () => {
           provider: oldConfig.provider,
           model: oldConfig.model,
           remote: { apiKey: oldConfig.apiKey, baseUrl: oldConfig.baseUrl },
-          outputDimensionality: oldConfig.dimensions,
+          dimensions: oldConfig.dimensions,
+          fallback: "none",
         }),
         expect.objectContaining({
           provider: newConfig.provider,
           model: newConfig.model,
           remote: { apiKey: newConfig.apiKey, baseUrl: newConfig.baseUrl },
-          outputDimensionality: newConfig.dimensions,
+          dimensions: newConfig.dimensions,
+          fallback: "none",
         }),
       ]);
       expect(closeOldProvider).toHaveBeenCalledOnce();

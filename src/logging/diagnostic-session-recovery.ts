@@ -7,7 +7,10 @@ import type {
 type DiagnosticSessionRecoverySkipReason =
   | "active_embedded_run"
   | "active_reply_work"
+  | "human_input_wait"
+  | "runtime_owned_wait"
   | "deferred_maintenance_wait"
+  | "terminal_outcome_committed"
   | "global_lane_wait"
   | "active_lane_task"
   | "already_in_flight"
@@ -81,14 +84,20 @@ export type StuckSessionRecoveryOutcome =
       action: "none";
       reason: "exception";
       error: string;
+    })
+  | (DiagnosticSessionRecoveryBaseOutcome & {
+      status: "failed";
+      action: "fail_worker_turn";
+      reason: "terminal_worker";
+      error: string;
     });
 
 export function recoveryOutcomeClearsQueuedSessionState(
   outcome: StuckSessionRecoveryOutcome,
 ): boolean {
   return (
-    outcome.status === "released" ||
-    (outcome.status === "aborted" && outcome.released > 0 && (outcome.queuedCount ?? 0) === 0)
+    (outcome.status === "released" || (outcome.status === "aborted" && outcome.released > 0)) &&
+    (outcome.queuedCount ?? 0) === 0
   );
 }
 

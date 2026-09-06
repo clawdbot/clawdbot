@@ -7,17 +7,17 @@ import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
 import { isTruthyOptIn, trimToValue } from "../mantis-options.runtime.js";
 import {
+  copyCrabboxArtifacts,
   type CommandRunner,
-  type CrabboxInspect,
   defaultCommandRunner,
   inspectCrabbox,
   resolveCrabboxBin,
   runCommand,
   shellQuote,
-  sshCommand,
   stopCrabbox,
   warmupCrabbox,
 } from "./crabbox-runtime.js";
+import { renderMantisCrabboxReport, type MantisCrabboxReportSummary } from "./report.js";
 
 export type MantisDesktopBrowserSmokeOptions = {
   browserProfileArchiveEnv?: string;
@@ -48,30 +48,10 @@ type MantisDesktopBrowserSmokeResult = {
   videoPath?: string;
 };
 
-type MantisDesktopBrowserSmokeSummary = {
-  artifacts: {
-    reportPath: string;
-    screenshotPath?: string;
-    summaryPath: string;
-    videoPath?: string;
-  };
+type MantisDesktopBrowserSmokeSummary = MantisCrabboxReportSummary & {
   browserUrl: string;
   htmlFile?: string;
-  crabbox: {
-    bin: string;
-    createdLease: boolean;
-    id: string;
-    provider: string;
-    slug?: string;
-    state?: string;
-    vncCommand: string;
-  };
-  error?: string;
-  finishedAt: string;
-  outputDir: string;
   remoteOutputDir: string;
-  startedAt: string;
-  status: "pass" | "fail";
 };
 
 const DEFAULT_BROWSER_URL = "https://openclaw.ai";
@@ -247,64 +227,19 @@ test -s "$out/desktop-browser-smoke.png"
 }
 
 function renderReport(summary: MantisDesktopBrowserSmokeSummary) {
-  const lines = [
-    "# Mantis Desktop Browser Smoke",
-    "",
-    `Status: ${summary.status}`,
-    `Browser URL: ${summary.browserUrl}`,
-    summary.htmlFile ? `HTML file: ${summary.htmlFile}` : undefined,
-    `Output: ${summary.outputDir}`,
-    `Started: ${summary.startedAt}`,
-    `Finished: ${summary.finishedAt}`,
-    "",
-    "## Crabbox",
-    "",
-    `- Provider: ${summary.crabbox.provider}`,
-    `- Lease: ${summary.crabbox.id}${summary.crabbox.slug ? ` (${summary.crabbox.slug})` : ""}`,
-    `- Created by run: ${summary.crabbox.createdLease}`,
-    `- State: ${summary.crabbox.state ?? "unknown"}`,
-    `- VNC: \`${summary.crabbox.vncCommand}\``,
-    "",
-    "## Artifacts",
-    "",
-    summary.artifacts.screenshotPath
-      ? `- Screenshot: \`${path.basename(summary.artifacts.screenshotPath)}\``
-      : "- Screenshot: missing",
-    summary.artifacts.videoPath
-      ? `- Video: \`${path.basename(summary.artifacts.videoPath)}\``
-      : "- Video: missing",
-    "- Remote metadata: `remote-metadata.json`",
-    "- FFmpeg log: `ffmpeg.log`",
-    "- Chrome log: `chrome.log`",
-    summary.error ? `- Error: ${summary.error}` : undefined,
-    "",
-  ].filter((line) => line !== undefined);
-  return `${lines.join("\n")}\n`;
-}
-
-async function copyRemoteArtifacts(params: {
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  inspect: CrabboxInspect;
-  outputDir: string;
-  remoteOutputDir: string;
-  runner: CommandRunner;
-}) {
-  const { host, sshArgs, sshUser } = await sshCommand(params);
-  await runCommand({
-    command: "rsync",
-    args: [
-      "-az",
-      "-e",
-      sshArgs,
-      "--exclude",
-      "chrome-profile/**",
-      `${sshUser}@${host}:${params.remoteOutputDir}/`,
-      `${params.outputDir}/`,
+  return renderMantisCrabboxReport({
+    artifactRows: [
+      "- Remote metadata: `remote-metadata.json`",
+      "- FFmpeg log: `ffmpeg.log`",
+      "- Chrome log: `chrome.log`",
+      summary.error ? `- Error: ${summary.error}` : undefined,
     ],
-    cwd: params.cwd,
-    env: params.env,
-    runner: params.runner,
+    headerRows: [
+      `Browser URL: ${summary.browserUrl}`,
+      summary.htmlFile ? `HTML file: ${summary.htmlFile}` : undefined,
+    ],
+    summary,
+    title: "Mantis Desktop Browser Smoke",
   });
 }
 
@@ -419,9 +354,10 @@ export async function runMantisDesktopBrowserSmoke(
       runner,
       stdio: "inherit",
     });
-    await copyRemoteArtifacts({
+    await copyCrabboxArtifacts({
       cwd: repoRoot,
       env,
+      exclude: ["chrome-profile/**"],
       inspect: inspected,
       outputDir,
       remoteOutputDir,

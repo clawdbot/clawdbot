@@ -3,9 +3,22 @@ import {
   extractErrorHttpStatus,
   extractLeadingHttpStatus,
   extractProviderWrappedHttpStatus,
+  formatProviderRefusalText,
   formatRawAssistantErrorForUi,
   parseApiErrorInfo,
 } from "./assistant-error-format.js";
+
+describe("formatProviderRefusalText", () => {
+  it.each(["bio", "cyber"])("formats a sanitized %s refusal", (category) => {
+    expect(
+      formatProviderRefusalText({
+        diagnostics: [{ type: "provider_refusal", details: { category } }],
+      }),
+    ).toBe(
+      `The provider refused this request (category: ${category}). Revise the request and try again.`,
+    );
+  });
+});
 
 describe("extractLeadingHttpStatus", () => {
   it("accepts status codes in the valid HTTP range 100-599", () => {

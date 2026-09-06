@@ -269,9 +269,7 @@ function gitCommit(ref, required = false) {
 
 function fetchGithubApi(args) {
   try {
-    return JSON.parse(
-      run("ghx", ["api", ...args], { env: { GHX_NO_CACHE: "1" } }).replace(ansiEscapePattern, ""),
-    );
+    return JSON.parse(run("gh", ["api", ...args]).replace(ansiEscapePattern, ""));
   } catch (error) {
     if (typeof error.stdout === "string" && error.stdout.trim() !== "") {
       return JSON.parse(error.stdout.replace(ansiEscapePattern, ""));
@@ -436,12 +434,16 @@ function githubHandleFromNoreply(email) {
 }
 
 function editorialClassification(subject) {
-  const type = subject.match(/^\s*([a-z]+)(?:\([^)]*\))?!?:/i)?.[1]?.toLowerCase();
+  const conventional = subject.match(/^\s*([a-z]+)(?:\(([^)]*)\))?(!)?:/i);
+  const type = conventional?.[1]?.toLowerCase();
   return {
+    // Declared type/scope outrank ambiguous prose such as "doc" or "build".
+    // Breaking changes still need migration notes even for internal scopes.
     editorialEligible:
-      (Boolean(type) || editorialTitlePattern.test(subject)) &&
-      !nonEditorialTypes.has(type) &&
-      !nonEditorialTitlePattern.test(subject),
+      Boolean(conventional?.[3]) ||
+      ((Boolean(type) || editorialTitlePattern.test(subject)) &&
+        !nonEditorialTypes.has(type) &&
+        !nonEditorialTitlePattern.test(conventional ? (conventional[2] ?? "") : subject)),
     type: type ?? "other",
   };
 }
@@ -479,28 +481,28 @@ function sectionFor(changelog, version) {
 }
 
 function referencesIn(text) {
-  const references = [];
-  for (const match of text.matchAll(
-    /(?<![A-Za-z0-9_.&-])(?:(?<owner>[A-Za-z0-9_.-]+)\/(?<name>[A-Za-z0-9_.-]+))?#(?<number>\d+)/g,
-  )) {
-    const qualifiedRepository = match.groups?.owner
-      ? `${match.groups.owner}/${match.groups.name}`.toLowerCase()
-      : undefined;
-    if (!qualifiedRepository || qualifiedRepository === repo) {
-      references.push(Number(match.groups?.number));
-    }
-  }
-  return references;
+  return referenceLabelsIn(text)
+    .filter((reference) => reference.startsWith("#"))
+    .map((reference) => Number(reference.slice(1)));
 }
 
 function referenceLabelsIn(text) {
+  const hexColor = String.raw`#(?:[A-Fa-f0-9]{8}|[A-Fa-f0-9]{6}|[A-Fa-f0-9]{4}|[A-Fa-f0-9]{3})(?![A-Za-z0-9_])`;
+  // Mask only custom-property color values/transitions, never the rest of a line:
+  // a following issue ref must still participate in release attribution.
+  const source = text.replace(
+    new RegExp(
+      String.raw`--[\w-]+(?:[ \t]*:[ \t]*|[ \t]+)${hexColor}(?:[ \t]*(?:->|→)[ \t]*${hexColor})*`,
+      "g",
+    ),
+    " ",
+  );
   const labels = [];
-  for (const match of text.matchAll(
-    /(?<![A-Za-z0-9_.&-])(?:(?<owner>[A-Za-z0-9_.-]+)\/(?<name>[A-Za-z0-9_.-]+))?#(?<number>\d+)/g,
+  // Issue ids are complete positive decimal tokens, not hex prefixes or zero-padded colors.
+  for (const match of source.matchAll(
+    /(?<![A-Za-z0-9_.&-])(?<repository>[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?#(?<number>[1-9]\d*)(?![A-Za-z0-9_])/g,
   )) {
-    const qualifiedRepository = match.groups?.owner
-      ? `${match.groups.owner}/${match.groups.name}`
-      : undefined;
+    const qualifiedRepository = match.groups?.repository;
     labels.push(
       !qualifiedRepository || qualifiedRepository.toLowerCase() === repo
         ? `#${match.groups?.number}`
@@ -1045,7 +1047,8 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
   }
   const output = git([
     "log",
-    "--first-parent",
+    // Merged side branches carry source PRs too; first-parent hides their credit.
+    "--topo-order",
     "--reverse",
     "--format=%H%x1f%s%x1f%an%x1f%ae%x1f%cI%x1f%B%x1e",
     `${mergeBase}..${targetCommit}`,
@@ -2280,23 +2283,22 @@ export function ledgerChecks(section, pullRequests, nodes, directCommits, shippe
     }
   }
   const editorialProse = section.source.slice(0, ledgerStart);
+  const editorialReferences = new Set(referencesIn(editorialProse));
   for (const entry of pullRequests) {
-    if (
-      !entry.editorialEligible &&
-      new RegExp(`(?<![A-Za-z0-9_./-])#${entry.number}\\b`).test(editorialProse)
-    ) {
+    if (!entry.editorialEligible && editorialReferences.has(entry.number)) {
       errors.push(
         `editorial release prose references non-editorial ${entry.type} PR #${entry.number} (${entry.type})`,
       );
     }
   }
   const editorialLines = editorialProse.split("\n");
-  for (const entry of pullRequests) {
-    for (const line of editorialLines) {
-      if (
-        !new RegExp(`(?<![A-Za-z0-9_./-])#${entry.number}\\b`).test(line) ||
-        !line.startsWith("- ")
-      ) {
+  for (const line of editorialLines) {
+    if (!line.startsWith("- ")) {
+      continue;
+    }
+    const lineReferences = new Set(referencesIn(line));
+    for (const entry of pullRequests) {
+      if (!lineReferences.has(entry.number)) {
         continue;
       }
       for (const handle of entry.thanks) {
@@ -2304,11 +2306,6 @@ export function ledgerChecks(section, pullRequests, nodes, directCommits, shippe
           errors.push(`missing editorial Thanks @${handle} for PR #${entry.number}`);
         }
       }
-    }
-  }
-  for (const line of editorialLines) {
-    if (!line.startsWith("- ")) {
-      continue;
     }
     for (const handle of directCommitCreditsForLine(line, directCommits)) {
       if (!line.toLowerCase().includes(`@${handle.toLowerCase()}`)) {

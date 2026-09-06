@@ -2,7 +2,8 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { prepareSource, resolveCodeModeConfig } from "./code-mode-runtime.js";
+import { resolveCodeModeConfig } from "./code-mode-runtime.js";
+import { prepareSource } from "./code-mode-source.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
   resetCodeModeTestState,
@@ -118,6 +119,7 @@ describe("Code Mode guest source validation", () => {
     { code: "NODE_ENV=test\nnpm test" },
     { code: "FOO=bar ./gradlew test" },
     { command: 'GREETING="hello world" npm test' },
+    { code: String.raw`A="\\" ls "file" argument` },
     { command: "whoami" },
     { code: "set -euo pipefail" },
     { command: "exit" },

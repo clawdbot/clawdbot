@@ -22,13 +22,13 @@ describe("AppSidebar session catalog ownership", () => {
         if (!catalog) {
           throw new Error("expected a session catalog");
         }
-        catalog.capabilities.createSession = { model: "anthropic/claude-opus-4-8" };
+        catalog.capabilities.startTerminal = true;
         const expandedPage = catalogPage([{ threadId: "thread-2", name: "Retired page" }]);
         const expandedCatalog = expandedPage.catalogs[0];
         if (!expandedCatalog) {
           throw new Error("expected an expanded session catalog");
         }
-        expandedCatalog.capabilities.createSession = catalog.capabilities.createSession;
+        expandedCatalog.capabilities.startTerminal = catalog.capabilities.startTerminal;
         const request = vi
           .fn()
           .mockResolvedValueOnce(firstPage)

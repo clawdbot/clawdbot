@@ -3,6 +3,7 @@ import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "../../state/opencla
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -26,7 +27,7 @@ describe("SQLite session owner assignment", () => {
       await upsertSessionEntryCore(scope, {
         sessionId: "session-owned",
         updatedAt: 1,
-        createdActor: { type: "human", id: "profile-creator" },
+        createdActor: { type: "human", source: "profile", id: "profile-creator" },
       });
       const initial = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
       for (const { columnName } of FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS) {
@@ -35,8 +36,25 @@ describe("SQLite session owner assignment", () => {
       closeOpenClawAgentDatabasesForTest();
 
       expect(loadSessionEntry(scope)).toMatchObject({
-        createdActor: { type: "human", id: "profile-creator" },
+        createdActor: { type: "human", source: "profile", id: "profile-creator" },
       });
+      expect(loadSessionEntry(scope)?.owner).toBeUndefined();
+
+      expect(() =>
+        runOpenClawAgentWriteTransaction(
+          () => {
+            expect(
+              assignSessionOwner(scope, {
+                owner: { type: "agent", id: "rolled-back-owner" },
+                assignedBy: { type: "human", id: "profile-assigner" },
+                assignedAt: 1233,
+              }),
+            ).not.toBeNull();
+            throw new Error("roll back owner schema");
+          },
+          { agentId: "main", env: state.env },
+        ),
+      ).toThrow("roll back owner schema");
       expect(loadSessionEntry(scope)?.owner).toBeUndefined();
 
       expect(

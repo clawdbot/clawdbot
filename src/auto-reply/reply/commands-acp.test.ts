@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bindTestChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
+import { resolveSessionStorePathForAcp } from "../../acp/runtime/session-meta-store.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
 import { configureChannelAdmissionEvidenceCollection } from "../../channels/message-access/admission-evidence.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -18,6 +19,8 @@ import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 
 const hoisted = vi.hoisted(() => {
   const callGatewayMock = vi.fn();
+  const cleanupFailedAcpSpawnMock = vi.fn();
+  const closeRuntimeOnFailureMock = vi.fn();
   const requireAcpRuntimeBackendMock = vi.fn();
   const getAcpRuntimeBackendMock = vi.fn();
   const listAcpSessionEntriesMock = vi.fn();
@@ -43,6 +46,8 @@ const hoisted = vi.hoisted(() => {
   const doctorMock = vi.fn();
   return {
     callGatewayMock,
+    cleanupFailedAcpSpawnMock,
+    closeRuntimeOnFailureMock,
     requireAcpRuntimeBackendMock,
     getAcpRuntimeBackendMock,
     listAcpSessionEntriesMock,
@@ -77,6 +82,12 @@ function createAcpCommandSessionBindingService() {
   return {
     bind: (input: unknown) => hoisted.sessionBindingBindMock(input),
     getCapabilities: forward((params: unknown) => hoisted.sessionBindingCapabilitiesMock(params)),
+    inspectByConversation: (
+      ref: unknown,
+    ): { status: "available"; binding: SessionBindingRecord | null } => ({
+      status: "available",
+      binding: hoisted.sessionBindingResolveByConversationMock(ref),
+    }),
     listBySession: (targetSessionKey: string) =>
       hoisted.sessionBindingListBySessionMock(targetSessionKey),
     resolveByConversation: (ref: unknown) => hoisted.sessionBindingResolveByConversationMock(ref),
@@ -84,6 +95,10 @@ function createAcpCommandSessionBindingService() {
     unbind: (input: unknown) => hoisted.sessionBindingUnbindMock(input),
   };
 }
+
+vi.mock("../../acp/control-plane/spawn.js", () => ({
+  cleanupFailedAcpSpawn: (args: unknown) => hoisted.cleanupFailedAcpSpawnMock(args),
+}));
 
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (args: unknown) => hoisted.callGatewayMock(args),
@@ -99,31 +114,6 @@ vi.mock("../../acp/runtime/session-meta.js", () => ({
   readAcpSessionEntry: (args: unknown) => hoisted.readAcpSessionEntryMock(args),
   upsertAcpSessionMeta: (args: unknown) => hoisted.upsertAcpSessionMetaMock(args),
   resolveSessionStorePathForAcp: (args: unknown) => hoisted.resolveSessionStorePathForAcpMock(args),
-}));
-
-vi.mock("../../agents/subagents/spawn/acp-spawn.js", () => ({
-  resolveAcpSpawnRuntimePolicyError: (params: { cfg?: OpenClawConfig }) =>
-    params.cfg?.agents?.defaults?.sandbox?.mode === "all"
-      ? 'Sandboxed sessions cannot spawn ACP sessions because runtime="acp" runs on the host. Use runtime="subagent" from sandboxed sessions.'
-      : undefined,
-  resolveRuntimeCwdForAcpSpawn: async (params: { explicitCwd?: string; resolvedCwd?: string }) => {
-    if (params.explicitCwd) {
-      return params.resolvedCwd;
-    }
-    if (!params.resolvedCwd) {
-      return undefined;
-    }
-    try {
-      await fs.access(params.resolvedCwd);
-      return params.resolvedCwd;
-    } catch (error) {
-      const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
-      if (code === "ENOENT" || code === "ENOTDIR") {
-        return undefined;
-      }
-      throw error;
-    }
-  },
 }));
 
 vi.mock("../../config/sessions.js", async () => {
@@ -162,7 +152,6 @@ const { buildCommandTestParams } = await import("./commands-spawn.test-harness.j
 const { AcpSessionManager, testing: acpManagerTesting } =
   await import("../../acp/control-plane/manager.js");
 const { resolveEffectiveResetTargetSessionKey } = await import("./acp-reset-target.js");
-const { testing: acpResetTargetTesting } = await import("./acp-reset-target.test-support.js");
 const { createTaskRecord } = await import("../../tasks/task-registry.js");
 const { resetTaskRegistryForTests } = await import("../../tasks/task-runtime.test-helpers.js");
 const { configureTaskRegistryRuntime } = await import("../../tasks/task-registry.store.js");
@@ -701,10 +690,6 @@ function gatewayRequests(): Array<Record<string, unknown>> {
   return hoisted.callGatewayMock.mock.calls.map((call) => call[0] as Record<string, unknown>);
 }
 
-function expectGatewayMethodCalled(method: string): void {
-  expect(gatewayRequests().some((request) => request.method === method)).toBe(true);
-}
-
 function expectGatewayMethodNotCalled(method: string): void {
   expect(gatewayRequests().some((request) => request.method === method)).toBe(false);
 }
@@ -924,11 +909,10 @@ describe("/acp command", () => {
     acpManagerTesting.resetAcpSessionManagerForTests();
     resetTaskRegistryForTests({ persist: false });
     configureInMemoryTaskRegistryStoreForTests();
-    acpResetTargetTesting.setDepsForTest({
-      getSessionBindingService: () => createAcpCommandSessionBindingService() as never,
-    });
     hoisted.listAcpSessionEntriesMock.mockReset().mockResolvedValue([]);
     hoisted.callGatewayMock.mockReset().mockResolvedValue({ ok: true });
+    hoisted.cleanupFailedAcpSpawnMock.mockReset().mockResolvedValue(undefined);
+    hoisted.closeRuntimeOnFailureMock.mockReset().mockResolvedValue(undefined);
     hoisted.readAcpSessionEntryMock.mockReset().mockReturnValue(null);
     hoisted.upsertAcpSessionMetaMock.mockReset().mockResolvedValue({
       sessionId: "session-1",
@@ -1046,11 +1030,13 @@ describe("/acp command", () => {
               }
             : {}),
         };
-        await hoisted.upsertAcpSessionMetaMock({
+        const sessionEntry = await hoisted.upsertAcpSessionMetaMock({
           sessionKey: input.sessionKey,
           mutate: () => meta,
         });
         return {
+          sessionEntry,
+          closeRuntimeOnFailure: hoisted.closeRuntimeOnFailureMock,
           runtime: backend.runtime,
           handle: {
             backend: meta.backend,
@@ -1184,7 +1170,10 @@ describe("/acp command", () => {
 
     const result = await handleAcpCommand(params, true);
 
-    expect(result).toEqual({ shouldContinue: false });
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: expect.stringContaining("commands.ownerAllowFrom") },
+    });
   });
 
   it("keeps read-only /acp actions available to authorized non-owners", async () => {
@@ -1641,8 +1630,14 @@ describe("/acp command", () => {
     const result = await runDiscordAcpCommand("/acp spawn codex", cfg);
 
     expect(result?.reply?.text).toContain("spawnSessions=true");
-    expect(hoisted.closeMock).toHaveBeenCalledTimes(2);
-    expectGatewayMethodCalled("sessions.delete");
+    expect(hoisted.cleanupFailedAcpSpawnMock).toHaveBeenCalledExactlyOnceWith({
+      cfg,
+      sessionKey: expect.stringContaining("agent:codex:acp:"),
+      agentId: "codex",
+      sessionEntry: expect.objectContaining({ sessionId: "session-1" }),
+      deleteTranscript: false,
+      closeRuntimeOnFailure: hoisted.closeRuntimeOnFailureMock,
+    });
     expectGatewayMethodNotCalled("sessions.patch");
   });
 
@@ -1664,6 +1659,33 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("spawnSessions=true");
     expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
   });
+
+  it.each(["off", "all"] as const)(
+    "uses the global requester sandbox mode %s for ACP commands",
+    async (sandboxMode) => {
+      const cfg = {
+        ...baseCfg,
+        session: { scope: "global" },
+        agents: {
+          ownership: "explicit",
+          entries: { research: { sandbox: { mode: sandboxMode } }, ops: {} },
+        },
+      } satisfies OpenClawConfig;
+      const params = createDiscordParams("/acp spawn codex --thread off", cfg);
+      params.sessionKey = "global";
+      params.agentId = "research";
+
+      const result = await handleAcpCommand(params, true);
+
+      if (sandboxMode === "all") {
+        expect(result?.reply?.text).toContain("Sandboxed sessions cannot spawn ACP sessions");
+        expect(hoisted.ensureSessionMock).not.toHaveBeenCalled();
+      } else {
+        expect(result?.reply?.text).toContain("Spawned ACP session");
+        expect(hoisted.ensureSessionMock).toHaveBeenCalled();
+      }
+    },
+  );
 
   it("forbids /acp spawn from sandboxed requester sessions", async () => {
     const cfg = {
@@ -1692,6 +1714,7 @@ describe("/acp command", () => {
     );
     expect(hoisted.cancelMock).toHaveBeenCalledWith({
       cfg: baseCfg,
+      agentId: "codex",
       reason: "manual-cancel",
       sessionKey: defaultAcpSessionKey,
     });
@@ -1955,6 +1978,7 @@ describe("/acp command", () => {
 
     expect(hoisted.closeMock).toHaveBeenCalledWith({
       cfg: baseCfg,
+      agentId: "codex",
       sessionKey: defaultAcpSessionKey,
       reason: "manual-close",
       allowBackendUnavailable: true,
@@ -2040,12 +2064,14 @@ describe("/acp command", () => {
     const params = createDiscordParams("/acp sessions");
     params.command.senderIsOwner = false;
     params.sessionKey = currentSessionKey;
+    params.agentId = "codex";
 
     const result = await handleAcpCommand(params, true);
 
     expect(result?.reply?.text).toContain(currentSessionKey);
     expect(hoisted.readAcpSessionEntryMock).toHaveBeenCalledWith({
       cfg: baseCfg,
+      agentId: "codex",
       sessionKey: currentSessionKey,
     });
     expect(hoisted.listAcpSessionEntriesMock).not.toHaveBeenCalled();
@@ -2056,9 +2082,11 @@ describe("/acp command", () => {
     hoisted.sessionBindingResolveByConversationMock.mockReturnValue(
       createBoundThreadSession(boundSessionKey),
     );
-    hoisted.readAcpSessionEntryMock.mockReturnValue(
-      createAcpSessionEntry({ sessionKey: boundSessionKey }),
-    );
+    hoisted.readAcpSessionEntryMock.mockImplementation((params) => {
+      const owner = resolveSessionStorePathForAcp(params);
+      expect(owner.agentId).toBe("codex");
+      return { ...createAcpSessionEntry({ sessionKey: boundSessionKey }), ...owner };
+    });
     const params = createDiscordParams("/acp sessions");
     params.command.senderIsOwner = false;
     params.sessionKey = "agent:main:raw-requester";
@@ -2069,6 +2097,7 @@ describe("/acp command", () => {
     expect(result?.reply?.text).not.toContain("agent:main:raw-requester");
     expect(hoisted.readAcpSessionEntryMock).toHaveBeenCalledWith({
       cfg: baseCfg,
+      agentId: "codex",
       sessionKey: boundSessionKey,
     });
     expect(hoisted.listAcpSessionEntriesMock).not.toHaveBeenCalled();
@@ -2088,6 +2117,7 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("(none)");
     expect(hoisted.readAcpSessionEntryMock).toHaveBeenCalledWith({
       cfg: baseCfg,
+      agentId: "main",
       sessionKey: "agent:main:raw-requester",
     });
     expect(hoisted.listAcpSessionEntriesMock).not.toHaveBeenCalled();
