@@ -9,6 +9,7 @@ import {
   createBundleMcpToolRuntime,
   materializeBundleMcpToolsForRun,
 } from "./agent-bundle-mcp-materialize.js";
+import { makeToolRuntime } from "./agent-bundle-mcp-tools.test-support.js";
 import type { McpCatalogTool, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import {
@@ -816,5 +817,75 @@ describe("failed MCP server outages follow the same policy as that server's tool
     };
     expect(admitsMcpServer(diagnostic)).toBe(testCase.visible);
     expect(namesWhenHealthy.length > 0).toBe(testCase.visible);
+  });
+});
+
+describe("a server that still materializes a tool stays out of the outage record (#137398)", () => {
+  it("keeps a recovering server with retained tools out of the outage record", async () => {
+    // A closed transport schedules a catalog retry that keeps the server entry
+    // and its tools; only a server without a catalog entry is unavailable.
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        diagnostics: [
+          {
+            serverName: "bundleProbe",
+            safeServerName: "bundleProbe",
+            launchSummary: "bundleProbe",
+            message: "mcp transport closed",
+          },
+        ],
+      }),
+    });
+
+    expect(runtime.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe"]);
+    expect(runtime.diagnostics).toBeUndefined();
+  });
+
+  it("keeps a requester server whose sign-in tool is materialized out of the outage record", async () => {
+    // `mergeMcpConnectCatalog` gives an authorized per-requester server whose
+    // catalog load failed its `<server>__connect` tool; that recovery action
+    // stays callable, so the run must not name the server as absent.
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: {
+        ...makeToolRuntime({
+          diagnostics: [
+            {
+              serverName: "memos",
+              safeServerName: "memos",
+              launchSummary: "memos",
+              message: "connect ECONNREFUSED",
+            },
+          ],
+        }),
+        requesterConnect: {
+          catalog: {
+            version: 1,
+            generatedAt: 0,
+            servers: {
+              memos: { serverName: "memos", launchSummary: "Requester OAuth", toolCount: 1 },
+            },
+            tools: [
+              {
+                serverName: "memos",
+                safeServerName: "memos",
+                toolName: "connect",
+                description: "Connect your memos account.",
+                inputSchema: { type: "object", properties: {} },
+                fallbackDescription: "Connect your memos account.",
+              },
+            ],
+          },
+          authorizedServerNames: ["memos"],
+          configFingerprint: "requester",
+          createExecute: () => undefined,
+        },
+      },
+    });
+
+    expect(runtime.tools.map((tool) => tool.name)).toEqual([
+      "bundleProbe__bundle_probe",
+      "memos__connect",
+    ]);
+    expect(runtime.diagnostics).toBeUndefined();
   });
 });
