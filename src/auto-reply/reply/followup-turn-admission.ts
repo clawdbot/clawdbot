@@ -143,6 +143,7 @@ export async function admitFollowupTurn(params: {
       storePath: params.defaults.storePath,
     }) ?? source.sessionFile;
   const admission = await admitReplyTurn({
+    agentId: run.agentId,
     resolveGatewayContext: params.defaults.resolveGatewayContext,
     sessionId: params.queued.admissionSessionId ?? run.sessionId,
     sessionKey: replySessionKey ?? "",

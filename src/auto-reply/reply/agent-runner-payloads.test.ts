@@ -14,6 +14,10 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import {
+  resolveHeartbeatScratchProposalFromReplyResult,
+  resolveHeartbeatToolResponseFromReplyResult,
+} from "../heartbeat-tool-response.js";
+import {
   getReplyPayloadMetadata,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
@@ -311,6 +315,57 @@ describe("buildReplyPayloads media filter integration", () => {
       chatType: "direct",
       replyToMode: "first",
     });
+  });
+
+  it.each([
+    { notify: false, scratch: "  PRIVATE_SCRATCH\n\n- keep exact spacing  \n" },
+    { notify: true, scratch: "  PRIVATE_SCRATCH\n\n- keep exact spacing  \n" },
+    { notify: false, scratch: "" },
+    { notify: true, scratch: "" },
+  ])(
+    "preserves private monitor scratch through reply preparation: %j",
+    async ({ notify, scratch }) => {
+      const response = { outcome: "done" as const, notify, summary: "Checklist updated" };
+      const payloads = buildEmbeddedRunPayloads({
+        assistantTexts: [],
+        lastAssistant: undefined,
+        sessionKey: "agent:main:main",
+        isHeartbeatTrigger: true,
+        heartbeatToolResponse: { ...response, scratch },
+      });
+      expect(resolveHeartbeatScratchProposalFromReplyResult(payloads)).toBe(scratch);
+      const { replyPayloads } = await buildTestReplyPayloads({ isHeartbeat: true, payloads });
+      expect(replyPayloads).toHaveLength(1);
+      expect(resolveHeartbeatScratchProposalFromReplyResult(replyPayloads)).toBe(scratch);
+      expect(resolveHeartbeatToolResponseFromReplyResult(replyPayloads)).toEqual(response);
+      expect(JSON.stringify(replyPayloads)).not.toContain("PRIVATE_SCRATCH");
+      expect(JSON.stringify(replyPayloads)).not.toContain('"scratch"');
+    },
+  );
+
+  it("keeps a later scratch-free monitor response authoritative after reply preparation", async () => {
+    const payloads = [
+      {
+        outcome: "progress" as const,
+        notify: false,
+        summary: "Earlier",
+        scratch: "PRIVATE_SCRATCH",
+      },
+      { outcome: "no_change" as const, notify: false, summary: "Corrected" },
+    ].flatMap((heartbeatToolResponse) =>
+      buildEmbeddedRunPayloads({
+        assistantTexts: [],
+        lastAssistant: undefined,
+        sessionKey: "agent:main:main",
+        isHeartbeatTrigger: true,
+        heartbeatToolResponse,
+      }),
+    );
+    const { replyPayloads } = await buildTestReplyPayloads({ isHeartbeat: true, payloads });
+    expect(replyPayloads).toHaveLength(2);
+    expect(resolveHeartbeatScratchProposalFromReplyResult(replyPayloads)).toBeUndefined();
+    expect(resolveHeartbeatToolResponseFromReplyResult(replyPayloads)?.summary).toBe("Corrected");
+    expect(JSON.stringify(replyPayloads)).not.toContain("PRIVATE_SCRATCH");
   });
 
   it("strips legacy bracket tool blocks from heartbeat replies", async () => {

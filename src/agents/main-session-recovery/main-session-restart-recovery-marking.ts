@@ -28,16 +28,17 @@ import {
   normalizeMainSessionRecoveryRunFences,
   transitionMainSessionRecovery,
 } from "./main-session-recovery-state.js";
+import type { MainSessionRecoveryStoreTarget } from "./main-session-recovery-store.js";
 import {
-  discoverRestartRecoveryStorePaths,
+  discoverRestartRecoveryStoreTargets,
   hasCurrentProcessOwner,
   mainSessionRecoveryLog,
   normalizeFiniteTimestamp,
   normalizeStringSet,
-  resolveRestartRecoveryStorePaths,
 } from "./main-session-restart-recovery-shared.js";
 
 async function markRecoveryStore(params: {
+  agentId?: string;
   storePath: string;
   sessionKey?: string;
   assertCommitAllowed?: () => void;
@@ -57,6 +58,7 @@ async function markRecoveryStore(params: {
     | undefined;
 }) {
   return await applySessionEntryReplacements<{ marked: number; skipped: number }>({
+    agentId: params.agentId,
     storePath: params.storePath,
     sessionKeys: params.sessionKey ? [params.sessionKey] : undefined,
     statuses: params.statuses,
@@ -124,13 +126,16 @@ export async function markRestartAbortedMainSessions(params: {
     return result;
   }
 
-  const storePaths = new Set<string>();
+  const storeTargets = new Map<
+    string,
+    Pick<MainSessionRecoveryStoreTarget, "agentId" | "storePath">
+  >();
   const stateDir = params.stateDir ?? resolveStateDir(process.env);
   const configs = [params.cfg, ...(params.additionalCfgs ?? [])].filter(Boolean);
   for (const cfg of configs.length > 0 ? configs : [undefined]) {
     try {
-      for (const storePath of await discoverRestartRecoveryStorePaths({ cfg, stateDir })) {
-        storePaths.add(storePath);
+      for (const target of await discoverRestartRecoveryStoreTargets({ cfg, stateDir })) {
+        storeTargets.set(JSON.stringify([target.agentId, target.storePath]), target);
       }
     } catch (err) {
       if (!cfg) {
@@ -142,13 +147,17 @@ export async function markRestartAbortedMainSessions(params: {
     }
   }
 
+  const configuredPaths = new Set([...storeTargets.values()].map((target) => target.storePath));
   for (const storePath of activeAdmissions.targets.keys()) {
-    storePaths.add(storePath);
+    if (!configuredPaths.has(storePath)) {
+      storeTargets.set(JSON.stringify([undefined, storePath]), { storePath });
+    }
   }
-  for (const storePath of storePaths) {
+  for (const target of storeTargets.values()) {
+    const { storePath } = target;
     // Preselect read-only: ID-only admissions can own multiple persisted keys.
     // The per-key replacement below rereads the row and revalidates its owner.
-    const sessionKeys = listSessionEntriesReadOnly({ storePath, projection: "list", clone: false })
+    const sessionKeys = listSessionEntriesReadOnly({ ...target, projection: "list", clone: false })
       .filter(
         ({ sessionKey, entry }) =>
           activeRuns.some(
@@ -161,7 +170,7 @@ export async function markRestartAbortedMainSessions(params: {
       let isCurrent: (() => boolean) | undefined;
       try {
         const storeResult = await markRecoveryStore({
-          storePath,
+          ...target,
           sessionKey: selectedSessionKey,
           assertCommitAllowed: () => {
             if (isCurrent && !isCurrent()) {
@@ -267,14 +276,17 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
   const resolveActiveSessionKeys = () =>
     providedActiveSessionKeys ?? normalizeStringSet(listActiveEmbeddedRunSessionKeys());
 
-  // Check each store path once at startup so rows added later in that same path remain current.
-  // Add paths only after every marking write succeeds so a failed scan retries safely.
-  const storePaths = (await resolveRestartRecoveryStorePaths(params)).filter(
-    (storePath) => !params.startupCheckedStorePaths?.has(storePath),
+  // A flat locator can name multiple agent stores; checkpoint each owner once.
+  // Publish checkpoints only after every marking write succeeds so failed scans retry safely.
+  const storeTargets = (
+    await discoverRestartRecoveryStoreTargets({ ...params, statuses: ["running"] })
+  ).filter(
+    (target) =>
+      !params.startupCheckedStorePaths?.has(JSON.stringify([target.agentId, target.storePath])),
   );
-  for (const storePath of storePaths) {
+  for (const target of storeTargets) {
     const storeResult = await markRecoveryStore({
-      storePath,
+      ...target,
       statuses: ["running"],
       plan: (entry, sessionKey) => {
         if (entry.status !== "running" || entry.abortedLastRun === true) {
@@ -306,7 +318,9 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
     result.marked += storeResult.marked;
     result.skipped += storeResult.skipped;
   }
-  storePaths.forEach((storePath) => params.startupCheckedStorePaths?.add(storePath));
+  storeTargets.forEach((target) =>
+    params.startupCheckedStorePaths?.add(JSON.stringify([target.agentId, target.storePath])),
+  );
 
   if (result.marked > 0) {
     mainSessionRecoveryLog.warn(

@@ -9,6 +9,7 @@ import {
   createEmbeddedRunHandle,
   testing as embeddedRunTesting,
 } from "../agents/embedded-agent-runner/runs.test-support.js";
+import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { resolveReplyOperationRunState } from "../auto-reply/reply/reply-operation-run-state.js";
 import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunRegistryTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
@@ -509,34 +510,34 @@ describe("heartbeat runner skips when target session lane is busy", () => {
     await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
       const cfg = createHeartbeatTelegramConfig(storePath);
       const sessionKey = await seedHeartbeatTelegramSession(storePath, cfg);
-      const sessionId = "finalizing-heartbeat-session";
       let preempt: ReturnType<typeof vi.fn<() => boolean>> | undefined;
-      replySpy.mockImplementationOnce(async (_ctx, options) => {
-        const operation = createReplyOperation({
-          sessionKey,
-          sessionId,
-          turnKind: "heartbeat",
-          resetTriggered: false,
-        });
-        preempt = vi.fn(() => operation.supersede());
-        const handle = {
-          ...createEmbeddedRunHandle({ isAbortable: false }),
-          preemptByVisibleTurn: preempt,
-        };
-        const runState = resolveReplyOperationRunState(options);
-        if (!runState) {
-          throw new Error("Expected heartbeat reply operation run state");
-        }
-        runState.agentTurn = "ok";
-        runState.agentTurnOwner = operation;
-        operation.freezeAbort();
-        setActiveEmbeddedRun(sessionId, handle, sessionKey);
-        const drained = preemptAndDrainEmbeddedHeartbeatRun(sessionId, 1_000);
-        clearActiveEmbeddedRun(sessionId, handle, sessionKey);
-        await expect(drained).resolves.toBe("drained");
-        operation.complete();
-        return { text: "Background work finished." };
-      });
+      replySpy.mockImplementationOnce(
+        async (_ctx, options: InternalGetReplyOptions | undefined) => {
+          const operation = options?.replyOperation;
+          if (!operation) {
+            throw new Error("Expected admitted heartbeat operation");
+          }
+          const sessionId = operation.sessionId;
+          preempt = vi.fn(() => operation.supersede());
+          const handle = {
+            ...createEmbeddedRunHandle({ isAbortable: false }),
+            preemptByVisibleTurn: preempt,
+          };
+          const runState = resolveReplyOperationRunState(options);
+          if (!runState) {
+            throw new Error("Expected heartbeat reply operation run state");
+          }
+          runState.agentTurn = "ok";
+          runState.agentTurnOwner = operation;
+          operation.freezeAbort();
+          setActiveEmbeddedRun(sessionId, handle, sessionKey);
+          const drained = preemptAndDrainEmbeddedHeartbeatRun(sessionId, 1_000);
+          clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+          await expect(drained).resolves.toBe("drained");
+          operation.complete();
+          return { text: "Background work finished." };
+        },
+      );
       const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "123" });
 
       const result = await runHeartbeat(cfg, replySpy, {}, { telegram: sendTelegram });
@@ -558,6 +559,7 @@ describe("heartbeat runner skips when target session lane is busy", () => {
           throw new Error("expected heartbeat reply operation state");
         }
         runState.admission = { status: "owned" };
+        replyOptions.replyOperation.complete();
         operation = createReplyOperation({
           sessionKey,
           sessionId: "racing-visible-session",

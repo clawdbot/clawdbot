@@ -521,10 +521,12 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
     async () => {
       runWithModelFallbackMock.mockResolvedValueOnce({
         result: {
-          payloads: [],
-          meta: {
-            aborted: true,
-            agentMeta: {},
+          result: {
+            payloads: [],
+            meta: {
+              aborted: true,
+              agentMeta: {},
+            },
           },
         },
         provider: "openai",

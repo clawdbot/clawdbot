@@ -269,7 +269,6 @@ export async function runCronIsolatedAgentTurn(
       timeoutMs: prepared.context.timeoutMs,
       runTimeoutOverrideMs: prepared.context.runTimeoutOverrideMs,
       suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
-      pluginRegistry: prepared.context.pluginRegistry,
       executionIdentity: params.executionIdentity,
     };
     const runExecutionWithAdmission = () =>

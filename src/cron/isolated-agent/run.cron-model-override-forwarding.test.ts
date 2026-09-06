@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { buildPreparedCliRunContext } from "../../agents/cli-runner.test-helpers.js";
 import { buildCliRunResult } from "../../agents/cli-runner/cli-run-settlement.js";
-import { classifyEmbeddedAgentRunResultForModelFallback } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
+import type { classifyEmbeddedAgentRunResultForModelFallback } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import {
   runFallbackModelAttempt,
@@ -13,7 +13,6 @@ import {
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import {
   clearFastTestEnv,
-  classifyEmbeddedAgentRunResultForModelFallbackMock,
   getCliSessionBindingMock,
   ensureAgentWorkspaceMock,
   isCliProviderMock,
@@ -73,12 +72,14 @@ function makeParams(overrides?: Record<string, unknown>) {
 function makeSuccessfulRunResult(provider = "google", model = "gemini-2.0-flash") {
   return {
     result: {
-      payloads: [{ text: "summary done" }],
-      meta: {
-        agentMeta: {
-          model,
-          provider,
-          usage: { input: 100, output: 50 },
+      result: {
+        payloads: [{ text: "summary done" }],
+        meta: {
+          agentMeta: {
+            model,
+            provider,
+            usage: { input: 100, output: 50 },
+          },
         },
       },
     },
@@ -419,9 +420,6 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     resolveAllowedModelRefMock.mockReturnValue({
       ref: { provider: "claude-cli", model: "claude-opus-4-6" },
     });
-    classifyEmbeddedAgentRunResultForModelFallbackMock.mockImplementation(
-      classifyEmbeddedAgentRunResultForModelFallback,
-    );
     mockRunCronFallbackPassthrough();
     const cronSession = makeCronSession({
       sessionEntry: makeCronSessionEntry({
@@ -472,6 +470,8 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
       }
       return candidateResult;
     });
+    let inspectedCandidate: unknown;
+    let inspectedClassification: unknown;
     runWithModelFallbackMock.mockImplementationOnce(
       async (
         params: TestModelFallbackRunnerParams & {
@@ -479,37 +479,15 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
         },
       ) => {
         const first = await runInitialModelFallbackAttempt(params);
-        if (saveFails) {
-          expect(first).toMatchObject({
-            payloads: expect.arrayContaining(candidateResult.payloads ?? []),
-            meta: {
-              replayInvalid: true,
-              agentMeta: { usage: { input: 10, output: 20 } },
-              error: {
-                message: expect.stringContaining("CLI session continuity could not be saved"),
-                fallbackSafe: false,
-              },
-            },
-          });
-          expect(
-            params.classifyResult({
-              result: first,
-              provider: params.provider,
-              model: params.model,
-            }),
-          ).toBeNull();
-          expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-        }
+        inspectedCandidate = first;
+        inspectedClassification = params.classifyResult({
+          result: first,
+          provider: params.provider,
+          model: params.model,
+        });
         if (accepted || saveFails) {
           return { result: first, provider: params.provider, model: params.model, attempts: [] };
         }
-        expect(
-          params.classifyResult({
-            provider: params.provider,
-            model: params.model,
-            result: first,
-          }),
-        ).toMatchObject({ code: "generic_external_run_failure" });
         const result = await runFallbackModelAttempt(
           params,
           "google",
@@ -527,6 +505,25 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     );
 
     expect(result.status).toBe(saveFails ? "error" : "ok");
+    if (saveFails) {
+      expect(inspectedCandidate).toMatchObject({
+        result: {
+          payloads: expect.arrayContaining(candidateResult.payloads ?? []),
+          meta: {
+            replayInvalid: true,
+            agentMeta: { usage: { input: 10, output: 20 } },
+            error: {
+              message: expect.stringContaining("CLI session continuity could not be saved"),
+              fallbackSafe: false,
+            },
+          },
+        },
+      });
+      expect(inspectedClassification).toBeNull();
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    } else if (!accepted) {
+      expect(inspectedClassification).toMatchObject({ code: "generic_external_run_failure" });
+    }
     expect(runCliAgentMock).toHaveBeenCalledOnce();
     expect(cronSession.sessionEntry.sessionId).toBe(localSessionId);
     expect(cronSession.sessionEntry.cliSessionBindings?.["claude-cli"]).toEqual(

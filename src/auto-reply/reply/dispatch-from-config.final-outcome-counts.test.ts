@@ -1,6 +1,9 @@
 // Tests settled dispatcher outcome accounting for dispatch-from-config runs.
 import { describe, expect, it } from "vitest";
-import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
+import {
+  OutboundDeliveryError,
+  PlatformMessageNotDispatchedError,
+} from "../../infra/outbound/deliver-types.js";
 import { createReplyTurnLedger } from "./dispatch-from-config.turn-ledger.js";
 import {
   attachReplyDispatchUndeliveredFallback,
@@ -81,6 +84,62 @@ describe("settled dispatcher final outcomes", () => {
 
     await expect(dispatcher.waitForIdle()).rejects.toBe(error);
   });
+
+  it.each(["caller-first", "recovery-first", "attached-fallback"] as const)(
+    "keeps recovery exclusive across %s attempts without claiming visibility",
+    async (order) => {
+      const noSend = new PlatformMessageNotDispatchedError("not dispatched", {
+        cause: new Error("offline"),
+      });
+      const recovery = new OutboundDeliveryError("retained for recovery", { cause: noSend });
+      recovery.recoveryOwnedRetry = true;
+      const attempts: string[] = [];
+      const dispatcher = createReplyDispatcher({
+        propagateRetryableNoSendFailure: true,
+        deliver: async (payload) => {
+          attempts.push(payload.text ?? "");
+          throw payload.text === "recovery" ? recovery : noSend;
+        },
+      });
+      const ledger = createReplyTurnLedger(dispatcher);
+      const callerPayload = { text: "caller" };
+      const recoveryPayload = { text: "recovery" };
+      const payloads =
+        order === "recovery-first"
+          ? [recoveryPayload, callerPayload]
+          : [callerPayload, recoveryPayload];
+      if (order === "attached-fallback") {
+        attachReplyDispatchUndeliveredFallback(callerPayload, recoveryPayload);
+        payloads.pop();
+      }
+      const outcomes = payloads.map((payload) =>
+        Promise.resolve(ledger.sendQueued("final", payload).outcome),
+      );
+      dispatcher.markComplete();
+      const receipt = await dispatcher.waitForIdle();
+
+      expect(attempts).toEqual(
+        order === "recovery-first" ? ["recovery", "caller"] : ["caller", "recovery"],
+      );
+      expect(await Promise.all(outcomes)).toEqual(
+        order === "attached-fallback"
+          ? ["recovery-owned"]
+          : order === "recovery-first"
+            ? ["recovery-owned", "failed-before-deliver"]
+            : ["failed-before-deliver", "recovery-owned"],
+      );
+      expect(receipt?.counts.final).toEqual({
+        delivered: 0,
+        deliveredNotVisible: 0,
+        cancelled: 0,
+        failedBeforeSend: payloads.length,
+        failedAfterSend: 0,
+      });
+      expect(receipt?.anyVisibleDelivered).toBe(false);
+      expect(ledger.canAttemptFallback()).toBe(false);
+      expect(ledger.hasObservedDelivery()).toBe(false);
+    },
+  );
 
   it("keeps non-visible, pre-send, and post-send outcomes distinct", async () => {
     const dispatcher = createReplyDispatcher({

@@ -10,6 +10,7 @@ export function runReplyDispatchHook(
 ) {
   const { hookRunner, params } = state;
   if (
+    !state.allowInboundHandlers ||
     !runtimeTakeoverHooksAllowed(params.replyOptions?.admittedSessionSettings) ||
     !hookRunner?.hasHooks("reply_dispatch", { dispatchKind: state.dispatchKind })
   ) {

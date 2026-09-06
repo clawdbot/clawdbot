@@ -291,6 +291,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       createGetReplySessionState({
         sessionKey: "agent:main:slack:channel:C123",
         sessionId: "rotated-session",
+        sessionEntry: { lifecycleRevision: "prepared-revision" },
         storePath: "/tmp/custom-sessions.json",
       }),
     );
@@ -309,6 +310,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(onSessionPrepared).toHaveBeenCalledWith({
       sessionKey: "agent:main:slack:channel:C123",
       sessionId: "rotated-session",
+      lifecycleRevision: "prepared-revision",
       storePath: "/tmp/custom-sessions.json",
     });
   });

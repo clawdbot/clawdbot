@@ -48,6 +48,10 @@ import {
 } from "./dispatch-from-config.transcript.js";
 import type { NormalizeReplySkipReason } from "./normalize-reply.js";
 import {
+  resolveRoutedReplyDeliveryOutcome,
+  shouldRetryReplyDispatch,
+} from "./reply-dispatch-outcome.js";
+import {
   attachReplyDispatchUndeliveredFallback,
   prepareReplyPayloadForDispatcher,
   type ReplyDispatchDeliveryOutcome,
@@ -199,70 +203,48 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   };
   const deferFinalTtsText = shouldDeferFinalTtsText(captionedFinalTtsContext);
   const cleanDeferredFinalDirectives = shouldCleanTtsDirectiveText(captionedFinalTtsContext);
-  const deliveredBlockContentKeys = new Set<string>();
   const blockDeliveryOutcomes = new Map<string, Array<Promise<ReplyDispatchDeliveryOutcome>>>();
-  const sendTrackedBlockReply = (payload: ReplyPayload): boolean => {
-    const contentKey = createBlockReplyContentKey(payload);
+  const recordBlockOutcome = (
+    payload: ReplyPayload,
+    outcome: Promise<ReplyDispatchDeliveryOutcome>,
+  ) => {
+    const key = createBlockReplyContentKey(payload);
+    const outcomes = blockDeliveryOutcomes.get(key) ?? [];
+    outcomes.push(outcome);
+    blockDeliveryOutcomes.set(key, outcomes);
+  };
+  const sendTrackedBlockReply = (payload: ReplyPayload) => {
     const delivery = turnLedger.sendQueued("block", payload);
-    if (!delivery.queued) {
-      return false;
+    if (delivery.queued) {
+      recordBlockOutcome(payload, delivery.outcome ?? Promise.resolve("failed-deliver"));
     }
-    const outcome = delivery.outcome ?? Promise.resolve("delivered" as const);
-    const outcomes = blockDeliveryOutcomes.get(contentKey);
-    if (outcomes) {
-      outcomes.push(outcome);
-    } else {
-      blockDeliveryOutcomes.set(contentKey, [outcome]);
-    }
-    return true;
+    return delivery;
   };
   const recordRoutedBlockReplyDelivery = (
     payload: ReplyPayload,
     result: Awaited<ReturnType<typeof sendPayloadAsync>>,
-  ): void => {
-    if (result && isRoutedReplyDelivered(result)) {
-      deliveredBlockContentKeys.add(createBlockReplyContentKey(payload));
+  ): ReplyDispatchDeliveryOutcome | undefined => {
+    if (!result) {
+      return undefined;
     }
+    const outcome = resolveRoutedReplyDeliveryOutcome(result);
+    recordBlockOutcome(payload, Promise.resolve(outcome));
+    return outcome;
   };
-  const wasReplyDeliveredAsBlock = async (
+  const getBlockReplyOutcome = async (
     payload: ReplyPayload,
     abortSignal?: AbortSignal,
-  ): Promise<boolean> => {
-    const contentKey = createBlockReplyContentKey(payload);
-    if (deliveredBlockContentKeys.has(contentKey)) {
-      return true;
+  ): Promise<ReplyDispatchDeliveryOutcome | undefined> => {
+    const outcomes = blockDeliveryOutcomes.get(createBlockReplyContentKey(payload));
+    if (!outcomes || abortSignal?.aborted) {
+      return undefined;
     }
-    const outcomes = blockDeliveryOutcomes.get(contentKey);
-    if (!outcomes) {
-      return false;
-    }
-    blockDeliveryOutcomes.delete(contentKey);
-    const settlement = Promise.all(outcomes).then((settledOutcomes) => ({
-      kind: "settled" as const,
-      outcomes: settledOutcomes,
-    }));
-    if (abortSignal?.aborted) {
-      return false;
-    }
-    let removeAbortListener: (() => void) | undefined;
-    const result = abortSignal
-      ? await Promise.race([
-          settlement,
-          new Promise<{ kind: "aborted" }>((resolve) => {
-            const onAbort = () => resolve({ kind: "aborted" });
-            abortSignal.addEventListener("abort", onAbort, { once: true });
-            removeAbortListener = () => abortSignal.removeEventListener("abort", onAbort);
-          }),
-        ]).finally(() => removeAbortListener?.())
-      : await settlement;
-    if (result.kind === "aborted") {
-      return false;
-    }
-    const delivered = result.outcomes.some((outcome) => outcome === "delivered");
-    if (delivered) {
-      deliveredBlockContentKeys.add(contentKey);
-    }
-    return delivered;
+    const settled = await runWithDispatchAbortSignal(abortSignal, () => Promise.all(outcomes));
+    return (
+      settled.find((outcome) => outcome === "delivered") ??
+      settled.find((outcome) => !shouldRetryReplyDispatch(outcome)) ??
+      settled[0]
+    );
   };
   const sendFinalPayload = async (
     inputPayload: ReplyPayload,
@@ -273,12 +255,13 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       skipTts?: boolean;
     } = {},
   ): Promise<{
-    dedupedAgainstBlock?: boolean;
+    blockDeliveryOutcome?: ReplyDispatchDeliveryOutcome;
     queuedFinal: boolean;
     routedFinalCount: number;
     suppressionReason?: NormalizeReplySkipReason;
     sessionWriterDeliveryRevoked?: true;
     dispatcherOutcome?: Promise<ReplyDispatchDeliveryOutcome>;
+    routedOutcome?: ReplyDispatchDeliveryOutcome;
   }> => {
     const abortSignal =
       options.abortSignal === false
@@ -295,7 +278,9 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     throwIfFinalDeliveryAborted();
     const preparation = prepareReplyPayloadForDispatcher(dispatcher, "final", inputPayload);
     if (preparation.kind === "suppress") {
-      await suppressPendingFinalDelivery(inputPayload);
+      await suppressPendingFinalDelivery(inputPayload, {
+        preserveActivity: state.replyOperationRunState.heartbeat !== undefined,
+      });
       return {
         queuedFinal: false,
         routedFinalCount: 0,
@@ -380,11 +365,14 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       normalizedPayload = buildCaptionedFinalTextFallback(ttsPayload);
     }
     throwIfFinalDeliveryAborted();
-    const deliveredAsBlock = await wasReplyDeliveredAsBlock(payload, abortSignal);
+    const blockDeliveryOutcome = await getBlockReplyOutcome(payload, abortSignal);
     throwIfFinalDeliveryAborted();
-    if (deliveredAsBlock) {
-      if (createBlockReplyContentKey(normalizedPayload) === createBlockReplyContentKey(payload)) {
-        return { dedupedAgainstBlock: true, queuedFinal: false, routedFinalCount: 0 };
+    if (blockDeliveryOutcome && !shouldRetryReplyDispatch(blockDeliveryOutcome)) {
+      if (
+        blockDeliveryOutcome !== "delivered" ||
+        createBlockReplyContentKey(normalizedPayload) === createBlockReplyContentKey(payload)
+      ) {
+        return { blockDeliveryOutcome, queuedFinal: false, routedFinalCount: 0 };
       }
       // Final-only transforms such as TTS still need delivery, but the block already
       // made the text visible. Preserve only the newly added media/rich payload.
@@ -393,22 +381,42 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
         text: undefined,
       });
       if (!hasOutboundReplyContent(normalizedPayload, { trimText: true })) {
-        return { dedupedAgainstBlock: true, queuedFinal: false, routedFinalCount: 0 };
+        return { blockDeliveryOutcome, queuedFinal: false, routedFinalCount: 0 };
       }
     }
     if (!isSessionWriterDeliveryAuthorized(normalizedPayload)) {
       return { queuedFinal: false, routedFinalCount: 0, sessionWriterDeliveryRevoked: true };
     }
-    const result = await state.routeReplyToOriginating(normalizedPayload, {
+    let result = await state.routeReplyToOriginating(normalizedPayload, {
       abortSignal,
       kind: "final",
       ...(hasTranscriptOwner ? { mirror: false } : {}),
     });
     if (result) {
+      let routedOutcome = resolveRoutedReplyDeliveryOutcome(result);
       if (!result.ok) {
         logVerbose(
           `dispatch-from-config: route-reply (final) failed: ${result.error ?? "unknown error"}`,
         );
+      }
+      const fallbackText =
+        deferFinalTtsText && normalizedPayload.mediaUrl
+          ? normalizeOptionalString(normalizedPayload.text)
+          : undefined;
+      if (fallbackText && shouldRetryReplyDispatch(routedOutcome)) {
+        if (!isSessionWriterDeliveryAuthorized(normalizedPayload)) {
+          return { queuedFinal: false, routedFinalCount: 0, sessionWriterDeliveryRevoked: true };
+        }
+        result =
+          (await state.routeReplyToOriginating(
+            copyReplyPayloadMetadata(normalizedPayload, { text: fallbackText }),
+            {
+              abortSignal,
+              kind: "final",
+              ...(hasTranscriptOwner ? { mirror: false } : {}),
+            },
+          )) ?? result;
+        routedOutcome = resolveRoutedReplyDeliveryOutcome(result);
       }
       if (isRoutedReplyDelivered(result)) {
         await mirrorDeliveredReplyToTranscript({
@@ -416,33 +424,13 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
           cfg,
         });
       }
-      const fallbackText =
-        deferFinalTtsText && normalizedPayload.mediaUrl
-          ? normalizeOptionalString(normalizedPayload.text)
-          : undefined;
-      if (fallbackText && !isRoutedReplyDelivered(result)) {
-        if (!isSessionWriterDeliveryAuthorized(normalizedPayload)) {
-          return { queuedFinal: false, routedFinalCount: 0, sessionWriterDeliveryRevoked: true };
-        }
-        const fallbackResult = await state.routeReplyToOriginating(
-          copyReplyPayloadMetadata(normalizedPayload, { text: fallbackText }),
-          {
-            abortSignal,
-            kind: "final",
-            ...(hasTranscriptOwner ? { mirror: false } : {}),
-          },
-        );
-        if (fallbackResult && isRoutedReplyDelivered(fallbackResult)) {
-          await mirrorDeliveredReplyToTranscript({
-            metadata: sourceReplyTranscriptMirror,
-            cfg,
-          });
-          return { queuedFinal: true, routedFinalCount: 1 };
-        }
-      }
       return {
         queuedFinal: result.ok,
         routedFinalCount: isRoutedReplyDelivered(result) ? 1 : 0,
+        routedOutcome,
+        ...(result.reason === "channel_transform"
+          ? { suppressionReason: "channel_transform" as const }
+          : {}),
       };
     }
     throwIfFinalDeliveryAborted();
@@ -528,6 +516,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
 
   // Run before_dispatch hook — let plugins inspect or handle before model dispatch.
   if (
+    state.allowInboundHandlers &&
     runtimeTakeoverHooksAllowed(params.replyOptions?.admittedSessionSettings) &&
     hookRunner?.hasHooks("before_dispatch")
   ) {
@@ -655,7 +644,6 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     shouldSuppressMessageToolOnlyTextErrorProgress,
     sendTrackedBlockReply,
     recordRoutedBlockReplyDelivery,
-    wasReplyDeliveredAsBlock,
     sendFinalPayload,
     isSessionWriterDeliveryAuthorized,
     deferFinalTtsText,

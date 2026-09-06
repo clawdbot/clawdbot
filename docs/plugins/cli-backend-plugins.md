@@ -271,7 +271,9 @@ prompt, session, and tool availability; it yields the backend's existing structu
 stream records. Preserve the prepared command, `argv0`, and interpreter or script
 prefix in `args` when constructing the CLI invocation. `argv0` preserves
 the invocation name of a PATH shim. Optional `promptContext.prependContext` and `promptContext.appendContext`
-are private prompt-build additions, separate from the ordinary `prompt`. Transport
+are private prompt-build additions and bounded saved session notes, separate from
+the ordinary `prompt`. Saved notes are quoted reference data and may repeat on
+resumed turns; they do not assert that a native turn previously consumed them. Transport
 them through the native runtime's private context mechanism; never record them as
 operator-authored input. OpenClaw's policy and observation hooks still receive the
 complete logical prompt. Native tool actions must use the provided, run-bound

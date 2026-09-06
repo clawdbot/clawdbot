@@ -14,6 +14,7 @@ import {
 } from "./attempt-context.js";
 import {
   fitCodexProjectedContextForTurnStart,
+  isCodexDurableCustomMessage,
   projectContextEngineAssemblyForCodex,
   type CodexProjectedContextRange,
 } from "./context-engine-projection.js";
@@ -340,7 +341,11 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   ) => {
     const cutoff = Date.parse(binding.historyCoveredThrough ?? "");
     return historyState.messages.filter((message) => {
-      if (message.role !== "user" && message.role !== "assistant") {
+      if (
+        message.role !== "user" &&
+        message.role !== "assistant" &&
+        !isCodexDurableCustomMessage(message)
+      ) {
         return false;
       }
       const mirrorIdentity = readMirrorIdentity(message);
@@ -402,10 +407,11 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     binding?: NonNullable<typeof mutable.startupBinding>,
   ) => {
     // A fresh thread can inherit summaries after all prior user messages were compacted away.
-    // Resumed bindings keep their separate incremental user/assistant handoff contract.
+    // Resumed bindings hand off only newer local conversation and durable notes.
     const hasContinuity = historyState.messages.some(
       (message) =>
         message.role === "user" ||
+        isCodexDurableCustomMessage(message) ||
         (action === "started" &&
           (message.role === "compactionSummary" || message.role === "branchSummary")),
     );

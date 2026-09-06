@@ -29,7 +29,7 @@ import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./r
 import type { MsgContext } from "./templating.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
-type GetReplyFromConfig = typeof import("./reply.js").getReplyFromConfig;
+type GetReplyFromConfig = typeof import("./reply/get-reply.js").getReplyFromConfig;
 
 const TEST_PRIMARY_PROFILE_ID = "openai:primary@example.test";
 const TEST_SECONDARY_PROFILE_ID = "openai:secondary@example.test";

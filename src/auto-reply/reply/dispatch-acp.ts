@@ -347,12 +347,11 @@ async function finalizeAcpTurnOutput(params: {
   let queuedFinal =
     params.delivery.hasDeliveredVisibleText() && !params.delivery.hasFailedVisibleTextDelivery();
 
-  let finalMediaDelivered = params.delivery.hasDeliveredFinalTtsMedia();
   if (
     ttsMode === "final" &&
     hasAccumulatedBlockText &&
     canAttemptFinalTts &&
-    !finalMediaDelivered
+    params.delivery.shouldAttemptFinalTts()
   ) {
     try {
       const { maybeApplyTtsToPayload } = await loadDispatchAcpTtsRuntime();
@@ -380,7 +379,6 @@ async function finalizeAcpTurnOutput(params: {
         );
         const delivered = await params.delivery.deliver("final", finalTtsPayload);
         queuedFinal = queuedFinal || delivered;
-        finalMediaDelivered = params.delivery.hasDeliveredFinalTtsMedia();
       } else if (shouldDeferVisibleTextForTts && ttsSyntheticReply.text?.trim()) {
         const delivered = await params.delivery.deliver(
           "final",
@@ -406,12 +404,11 @@ async function finalizeAcpTurnOutput(params: {
   const shouldDeliverTextFallback =
     ttsMode !== "all" &&
     accumulatedVisibleBlockText.trim().length > 0 &&
-    !finalMediaDelivered &&
-    (shouldDeferVisibleTextForTts
-      ? !params.delivery.hasDeliveredAnswerFinalToUser()
-      : !params.delivery.hasDeliveredFinalReply() &&
+    params.delivery.shouldRetryFinalReply() &&
+    (shouldDeferVisibleTextForTts ||
+      (!params.delivery.hasDeliveredFinalReply() &&
         (!params.delivery.hasDeliveredVisibleText() ||
-          params.delivery.hasFailedVisibleTextDelivery()));
+          params.delivery.hasFailedVisibleTextDelivery())));
   if (shouldDeliverTextFallback) {
     const delivered = await params.delivery.deliver(
       "final",
@@ -638,7 +635,7 @@ export async function tryDispatchAcpReplyCore(params: {
     return { queuedFinal: queuedNotice, counts };
   }
   const deliverDeferredTextFallback = async (): Promise<boolean> => {
-    if (!shouldDeferVisibleTextForTts || delivery.hasDeliveredAnswerFinalToUser()) {
+    if (!shouldDeferVisibleTextForTts || !delivery.shouldRetryFinalReply()) {
       return false;
     }
     const text = delivery.getAccumulatedVisibleBlockText();

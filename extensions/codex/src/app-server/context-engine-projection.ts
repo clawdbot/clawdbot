@@ -2,7 +2,10 @@
  * Projects OpenClaw context-engine assemblies into Codex prompt text while
  * preserving safety boundaries and redacting tool payloads.
  */
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  isOpenClawRuntimeContextCustomMessage,
+  type AgentMessage,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { redactSensitiveFieldValue, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
@@ -49,6 +52,15 @@ export function neutralizeCodexExplicitMentionSigils(text: string): string {
     .replace(/\[@(?=[A-Za-z0-9_:-]+\]\()/gu, "[＠");
 }
 
+/** Hidden durable notes are context; transient runtime carriers are current-turn only. */
+export function isCodexDurableCustomMessage(message: AgentMessage): boolean {
+  return (
+    message.role === "custom" &&
+    message.excludeFromContext !== true &&
+    !isOpenClawRuntimeContextCustomMessage(message)
+  );
+}
+
 /** Projects assembled OpenClaw context-engine messages into Codex prompt inputs. */
 export function projectContextEngineAssemblyForCodex(params: {
   assembledMessages: AgentMessage[];
@@ -59,7 +71,13 @@ export function projectContextEngineAssemblyForCodex(params: {
   toolPayloadMode?: "elide" | "preserve";
 }): CodexContextProjection {
   const prompt = params.prompt.trim();
-  const contextMessages = dropDuplicateTrailingPrompt(params.assembledMessages, prompt);
+  const contextMessages = dropDuplicateTrailingPrompt(
+    // Reset may explicitly retain otherwise excluded conversation messages.
+    params.assembledMessages.filter(
+      (message) => message.role !== "custom" || isCodexDurableCustomMessage(message),
+    ),
+    prompt,
+  );
   const maxRenderedContextChars = normalizeRenderedContextMaxChars(params.maxRenderedContextChars);
   const boundedContext = renderMessagesForCodexContext(contextMessages, {
     maxTextPartChars: resolveTextPartMaxChars(maxRenderedContextChars),

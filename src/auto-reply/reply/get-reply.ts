@@ -68,10 +68,7 @@ import {
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { maybeResolveNativeSlashCommandFastReply } from "./get-reply-native-slash-fast-path.js";
 import { runPreparedReply } from "./get-reply-run.js";
-import type {
-  InternalGetReplyOptions as BaseInternalGetReplyOptions,
-  ReplySessionBinding,
-} from "./get-reply.types.js";
+import type { InternalGetReplyOptions as BaseInternalGetReplyOptions } from "./get-reply.types.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import {
   hasInboundAudio,
@@ -99,7 +96,6 @@ import { createTypingController } from "./typing.js";
 type ResetCommandAction = "new" | "reset";
 
 type RuntimeInternalGetReplyOptions = BaseInternalGetReplyOptions & {
-  onSessionPrepared?: (binding: ReplySessionBinding) => void;
   extractedFileImages?: ExtractedFileImage[];
 };
 
@@ -749,6 +745,7 @@ export async function getReplyFromConfig(
   internalResolvedOpts?.onSessionPrepared?.({
     sessionKey,
     sessionId,
+    lifecycleRevision: sessionEntry.lifecycleRevision,
     storePath,
   });
 

@@ -29,13 +29,15 @@ type ReplyTurnLedger = {
   /** Enqueue on the dispatcher and record the payload's settled visibility. */
   sendQueued: (kind: ReplyDispatchKind, payload: ReplyPayload) => LedgerQueuedSend;
   /** Record a routed transport result; routed sends settle at their call site. */
-  recordRoutedDelivery: (payload: ReplyPayload, delivered: boolean) => void;
+  recordRoutedDelivery: (payload: ReplyPayload, outcome: ReplyDispatchDeliveryOutcome) => void;
   /** Resolve every admitted payload's outcome so the fallback gate decides after
    * beforeDeliver hooks and transport delivery, not at admission. Only a
    * "settled" result proves the visibility verdict is complete. */
   settleQueued: (abortSignal?: AbortSignal) => Promise<LedgerSettleResult>;
-  /** True once any settled, contentful, non-suppressed delivery exists. */
-  hasVisibleDelivery: () => boolean;
+  /** Includes uncertain sends, which cannot safely be retried. */
+  mayHaveDelivered: () => boolean;
+  hasObservedDelivery: () => boolean;
+  canAttemptFallback: () => boolean;
 };
 
 export async function requireQueuedReplyDelivery(params: {
@@ -64,7 +66,8 @@ export async function requireQueuedReplyDelivery(params: {
 }
 
 export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLedger {
-  let visibleDeliveries = 0;
+  const outcomes = new Set<ReplyDispatchDeliveryOutcome>();
+  const mayHaveDelivered = () => outcomes.has("delivered") || outcomes.has("failed-deliver");
   const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload): boolean => {
     if (kind === "tool") {
       return dispatcher.sendToolResult(payload);
@@ -87,17 +90,23 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
       if (!capture) {
         // Legacy dispatchers expose admission only. Treat an accepted send as
         // potentially visible so the fallback cannot duplicate its delivery.
-        visibleDeliveries += 1;
+        outcomes.add("failed-deliver");
         return { queued: true };
       }
       if (!capture.isTracked()) {
         return { queued: true };
       }
-      return { queued: true, outcome: capture.promise };
+      const outcome = capture.promise.then((settled) => {
+        if (hasOutboundReplyContent(payload, { trimText: true })) {
+          outcomes.add(settled);
+        }
+        return settled;
+      });
+      return { queued: true, outcome };
     },
-    recordRoutedDelivery(payload, delivered) {
-      if (delivered && hasOutboundReplyContent(payload, { trimText: true })) {
-        visibleDeliveries += 1;
+    recordRoutedDelivery(payload, outcome) {
+      if (hasOutboundReplyContent(payload, { trimText: true })) {
+        outcomes.add(outcome);
       }
     },
     async settleQueued(abortSignal) {
@@ -133,8 +142,15 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
         if (timedOut) {
           return "timed-out";
         }
-        if (dispatcher.supportsSettledReceipt === true && receipt?.anyVisibleDelivered === true) {
-          visibleDeliveries += 1;
+        if (dispatcher.supportsSettledReceipt === true && receipt) {
+          for (const counts of Object.values(receipt.counts)) {
+            if (counts.delivered > 0) {
+              outcomes.add("delivered");
+            }
+            if (counts.failedAfterSend > 0) {
+              outcomes.add("failed-deliver");
+            }
+          }
         }
         return "settled";
       } finally {
@@ -144,6 +160,8 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
         removeAbortListener?.();
       }
     },
-    hasVisibleDelivery: () => visibleDeliveries > 0,
+    mayHaveDelivered,
+    hasObservedDelivery: () => outcomes.has("delivered"),
+    canAttemptFallback: () => !mayHaveDelivered() && !outcomes.has("recovery-owned"),
   };
 }

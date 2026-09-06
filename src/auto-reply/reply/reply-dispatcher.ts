@@ -33,6 +33,7 @@ import {
   createReplyDispatchSettledCounts,
   REPLY_DISPATCH_OUTCOME_COUNTS,
   resolveReplyDispatchDeliveryOutcome,
+  resolveReplyDispatchErrorOutcome,
   shouldRetryReplyDispatch,
   type ReplyDispatchDeliveryOutcome,
 } from "./reply-dispatch-outcome.js";
@@ -157,7 +158,7 @@ export type ReplyDispatcherOptions = {
   onHeartbeatStrip?: () => void;
   onIdle?: () => Promise<void> | void;
   onError?: ReplyDispatchErrorHandler;
-  /** Let a durable ingress owner retry when every attempted send proves no recipient visibility. */
+  /** Let durable ingress retry proven no-send only when delivery recovery does not own retry. */
   propagateRetryableNoSendFailure?: boolean;
   // AIDEV-NOTE: onSkip lets channels detect silent/empty drops (e.g. Telegram empty-response fallback).
   onSkip?: ReplyDispatchSkipHandler;
@@ -268,7 +269,8 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     block: createReplyDispatchSettledCounts(),
     final: createReplyDispatchSettledCounts(),
   };
-  let retryableNoSendError: Error | undefined;
+  // Recovery ownership is absorbing across payloads and their attached fallbacks.
+  let retryOwner: Error | "recovery-owned" | undefined;
   let sendChain: Promise<void> = Promise.resolve();
   let settlementChain: Promise<void> = Promise.resolve();
   let pendingFinalizations = 0;
@@ -373,7 +375,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     let deliverPayload: ReplyPayload | null = payload;
     let deliveryStarted = false;
     const custody = getReplyPayloadMetadata(payload)?.pendingFinalDeliveryCompletion;
-    const settleCustody = (state: "delivered" | "unknown") =>
+    const settleCustody = (state: "delivered" | "suppressed" | "unknown") =>
       custody
         ? settlePendingFinalDelivery({ kind: "pending-final", ...custody }, state, ["queued"])
         : undefined;
@@ -423,12 +425,19 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         settlement: (async (): Promise<ReplyDispatchDeliveryOutcome> => {
           try {
             const finalized = finalization ? await finalization : undefined;
-            await settleCustody("delivered");
-            const outcome =
+            const settledResult =
               finalization && isRecord(result) && isRecord(finalized)
                 ? { ...result, ...finalized, finalization: undefined }
                 : result;
-            return resolveReplyDispatchDeliveryOutcome(outcome);
+            const outcome = resolveReplyDispatchDeliveryOutcome(settledResult);
+            await settleCustody(
+              outcome === "failed-deliver"
+                ? "unknown"
+                : outcome === "channel-transform"
+                  ? "suppressed"
+                  : "delivered",
+            );
+            return outcome;
           } catch {
             await settleCustody("unknown");
             return "failed-deliver";
@@ -438,13 +447,15 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         })(),
       };
     } catch (error) {
-      const retryableNoSend = isRetryableDeliveryNotSentError(error);
-      if (retryableNoSend) {
-        retryableNoSendError ??= toErrorObject(error, "reply delivery failed before dispatch");
+      const outcome = deliveryStarted
+        ? resolveReplyDispatchErrorOutcome(error)
+        : "failed-before-deliver";
+      if (outcome === "recovery-owned") {
+        retryOwner = outcome;
+      } else if (outcome === "failed-before-deliver" && isRetryableDeliveryNotSentError(error)) {
+        retryOwner ??= toErrorObject(error, "reply delivery failed before dispatch");
       }
-      const outcome: ReplyDispatchDeliveryOutcome =
-        deliveryStarted && !retryableNoSend ? "failed-deliver" : "failed-before-deliver";
-      if (custody && deliveryStarted) {
+      if (custody && deliveryStarted && outcome !== "recovery-owned") {
         // Proven no-send keeps the marker replayable for restart recovery —
         // including after direct custody escalated queued→unknown pre-I/O,
         // since the error proves the send never crossed the wire. Anything
@@ -602,9 +613,9 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       if (
         options.propagateRetryableNoSendFailure === true &&
         !receipt.anyVisibleDelivered &&
-        retryableNoSendError !== undefined
+        retryOwner instanceof Error
       ) {
-        throw retryableNoSendError;
+        throw retryOwner;
       }
       return receipt;
     },

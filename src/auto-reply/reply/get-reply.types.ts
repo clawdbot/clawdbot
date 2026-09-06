@@ -19,6 +19,7 @@ import type { ReplyOperation } from "./reply-run-registry.js";
 export type ReplySessionBinding = {
   sessionKey?: string;
   sessionId: string;
+  lifecycleRevision?: string;
   storePath?: string;
 };
 

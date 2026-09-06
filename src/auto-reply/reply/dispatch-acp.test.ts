@@ -29,6 +29,7 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import { isImageAttachment } from "../../media-understanding/attachments.normalize.js";
@@ -3761,35 +3762,106 @@ describe("tryDispatchAcpReplyCore", () => {
     }
   });
 
-  it("falls back to Telegram ACP text when a routed captioned voice is suppressed", async () => {
-    setReadyAcpResolution();
-    ttsCapabilityMocks.captionedFinalText = true;
-    queueTtsReplies({
-      text: "Visible ACP fallback.",
-      mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
-      audioAsVoice: true,
-      spokenText: "Visible ACP fallback.",
-      ttsSupplement: { spokenText: "Visible ACP fallback." },
-    } as MockTtsReply);
-    mockRoutedTextTurn("Visible ACP fallback.");
-    routeMocks.routeReply
-      .mockResolvedValueOnce({ ok: true, delivered: false, suppressed: true })
-      .mockResolvedValueOnce({ ok: true, delivered: true, messageId: "fallback" });
+  it.each(
+    (
+      [
+        {
+          name: "confirmed send",
+          result: { ok: true, delivered: true, messageId: "confirmed" },
+          calls: 1,
+        },
+        {
+          name: "no identity",
+          result: { ok: true, delivered: true, ambiguous: true },
+          calls: 1,
+        },
+        {
+          name: "generic suppression",
+          result: { ok: true, delivered: false, suppressed: true },
+          calls: 2,
+        },
+        {
+          name: "channel transform",
+          result: { ok: true, delivered: false, suppressed: true, reason: "channel_transform" },
+          calls: 1,
+        },
+        {
+          name: "typed no-send",
+          result: {
+            ok: false,
+            error: "delivery failed",
+            delivered: false,
+            cause: new PlatformMessageNotDispatchedError("offline", {
+              cause: new Error("offline"),
+            }),
+          },
+          calls: 2,
+        },
+        {
+          name: "unknown send",
+          result: {
+            ok: false,
+            error: "delivery failed",
+            delivered: false,
+            cause: new Error("unknown"),
+          },
+          calls: 1,
+        },
+        {
+          name: "partial send",
+          result: { ok: false, error: "delivery failed", delivered: true },
+          calls: 1,
+        },
+      ] as const
+    ).flatMap((testCase) =>
+      (["final_only", "live"] as const).map((deliveryMode) => ({
+        name: testCase.name,
+        result: testCase.result,
+        calls: testCase.calls,
+        deliveryMode,
+      })),
+    ),
+  )(
+    "uses ACP caption fallback only when a routed $name permits retry in $deliveryMode",
+    async ({ result, calls, deliveryMode }) => {
+      setReadyAcpResolution();
+      ttsCapabilityMocks.captionedFinalText = true;
+      queueTtsReplies({
+        text: "Visible ACP fallback.",
+        mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+        audioAsVoice: true,
+        spokenText: "Visible ACP fallback.",
+        ttsSupplement: { spokenText: "Visible ACP fallback." },
+      } as MockTtsReply);
+      mockRoutedTextTurn("Visible ACP fallback.");
+      routeMocks.routeReply
+        .mockResolvedValueOnce(result)
+        .mockResolvedValueOnce({ ok: true, delivered: true, messageId: "fallback" });
 
-    await runDispatch({
-      bodyForAgent: "reply",
-      shouldRouteToOriginating: true,
-      originatingChannel: "telegram",
-      originatingTo: "telegram:thread-1",
-    });
+      const dispatched = await runDispatch({
+        cfg: createAcpTestConfig({
+          acp: { enabled: true, stream: { deliveryMode } },
+          tts: { auto: "always" },
+        }),
+        bodyForAgent: "reply",
+        shouldRouteToOriginating: true,
+        originatingChannel: "telegram",
+        originatingTo: "telegram:thread-1",
+      });
 
-    expect(routeMocks.routeReply).toHaveBeenCalledTimes(2);
-    expect(routePayload(0)).toMatchObject({
-      text: "Visible ACP fallback.",
-      mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
-    });
-    expect(routePayload(1)).toEqual({ text: "Visible ACP fallback." });
-  });
+      expect(routeMocks.routeReply).toHaveBeenCalledTimes(calls);
+      if ("ambiguous" in result && result.ambiguous) {
+        expect(dispatched?.counts.final).toBe(0);
+      }
+      expect(routePayload(0)).toMatchObject({
+        text: "Visible ACP fallback.",
+        mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+      });
+      if (calls === 2) {
+        expect(routePayload(1)).toEqual({ text: "Visible ACP fallback." });
+      }
+    },
+  );
 
   it("delivers deferred Telegram ACP text when the runtime is cancelled", async () => {
     setReadyAcpResolution();
@@ -3817,6 +3889,64 @@ describe("tryDispatchAcpReplyCore", () => {
       text: "Partial reply before cancellation.",
     });
   });
+
+  it.each(
+    (["direct", "routed"] as const).flatMap((deliveryPath) =>
+      (["ambiguous", "not-dispatched"] as const).map((outcome) => ({ deliveryPath, outcome })),
+    ),
+  )(
+    "settles $outcome ACP live block before final fallback via $deliveryPath delivery",
+    async ({ deliveryPath, outcome }) => {
+      setReadyAcpResolution();
+      ttsCapabilityMocks.captionedFinalText = false;
+      mockRoutedTextTurn("An uncertain live answer");
+      const noSend = new PlatformMessageNotDispatchedError("offline", {
+        cause: new Error("offline"),
+      });
+      routeMocks.routeReply.mockImplementation(async (params: unknown) => {
+        const { replyKind } = params as { replyKind: string };
+        return replyKind === "block"
+          ? outcome === "ambiguous"
+            ? { ok: true, delivered: true, ambiguous: true }
+            : { ok: false, delivered: false, error: "offline", cause: noSend }
+          : { ok: true, delivered: true };
+      });
+      const attempts: string[] = [];
+      const dispatcher = createReplyDispatcher({
+        deliver: async (_payload, info) => {
+          attempts.push(info.kind);
+          if (info.kind === "block") {
+            if (outcome === "not-dispatched") {
+              throw noSend;
+            }
+            return { visibleReplySent: true, ambiguous: true };
+          }
+          return { visibleReplySent: true };
+        },
+      });
+      const result = await runDispatch({
+        bodyForAgent: "reply",
+        cfg: createAcpTestConfig({
+          acp: { enabled: true, stream: { deliveryMode: "live" } },
+          tts: { auto: "off" },
+        }),
+        dispatcher,
+        ctxOverrides: { Provider: "telegram", Surface: "telegram" },
+        shouldRouteToOriginating: deliveryPath === "routed",
+        originatingChannel: "telegram",
+        originatingTo: "target",
+      });
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+      if (deliveryPath === "routed") {
+        expect(routeMocks.routeReply).toHaveBeenCalledTimes(outcome === "ambiguous" ? 1 : 2);
+        expect(result?.counts.block).toBe(0);
+      } else {
+        expect(attempts).toEqual(outcome === "ambiguous" ? ["block"] : ["block", "final"]);
+      }
+      expect(result?.counts.final).toBe(outcome === "ambiguous" ? 0 : 1);
+    },
+  );
 
   it.each(["direct", "routed"] as const)(
     "never leaks a marked private inbound prompt across ACP live text deltas via %s delivery",
@@ -3909,10 +4039,12 @@ describe("tryDispatchAcpReplyCore", () => {
       },
     );
 
-    const { dispatcher } = createDispatcher();
-    (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>)
-      .mockReturnValueOnce(true)
+    const dispatcher = createReplyDispatcher({ deliver: async () => {} });
+    const sendBlockReply = dispatcher.sendBlockReply;
+    vi.spyOn(dispatcher, "sendBlockReply")
+      .mockImplementationOnce(sendBlockReply)
       .mockReturnValueOnce(false);
+    vi.spyOn(dispatcher, "sendFinalReply");
     const result = await runDispatch({
       bodyForAgent: "reply",
       cfg,
@@ -3922,6 +4054,9 @@ describe("tryDispatchAcpReplyCore", () => {
         Surface: "telegram",
       },
     });
+
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
 
     expect(dispatcherCall(dispatcher.sendBlockReply, 0).text).toBe("First chunk. ");
     expect(dispatcherCall(dispatcher.sendBlockReply, 1).text).toBe("Second chunk.");

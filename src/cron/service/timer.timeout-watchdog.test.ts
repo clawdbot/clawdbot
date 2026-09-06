@@ -150,7 +150,7 @@ describe("cron service timer regressions", () => {
         enqueueSystemEvent: vi.fn(),
         requestHeartbeat: vi.fn(),
         resolveHeartbeatTimeoutMs,
-        runHeartbeatOnce: vi.fn(() => {
+        requestHeartbeatAndWait: vi.fn(() => {
           heartbeatStarted.resolve();
           return new Promise<never>(() => {});
         }),

@@ -55,12 +55,14 @@ function makeParams(overrides?: Record<string, unknown>) {
 function makeSuccessfulRunResult(modelUsed = "claude-sonnet-4-6") {
   return {
     result: {
-      payloads: [{ text: "task complete" }],
-      meta: {
-        agentMeta: {
-          model: modelUsed,
-          provider: "anthropic",
-          usage: { input: 100, output: 50 },
+      result: {
+        payloads: [{ text: "task complete" }],
+        meta: {
+          agentMeta: {
+            model: modelUsed,
+            provider: "anthropic",
+            usage: { input: 100, output: 50 },
+          },
         },
       },
     },

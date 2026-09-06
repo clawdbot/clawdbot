@@ -12,7 +12,6 @@ export type {
 export {
   requestSessionEventWake as requestHeartbeat,
   requestSessionEventWakeAndWait as requestHeartbeatAndWait,
-  requestSessionEventWakeRetry as requestHeartbeatRetry,
   areSessionEventWakesEnabled as areHeartbeatsEnabled,
   setSessionEventWakesEnabled as setHeartbeatsEnabled,
   getSessionEventWakeAbortSignal as getHeartbeatWakeAbortSignal,

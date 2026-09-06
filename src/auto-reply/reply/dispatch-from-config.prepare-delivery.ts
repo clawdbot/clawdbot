@@ -17,6 +17,7 @@ import {
   loadReplyMediaPathsRuntime,
   loadRouteReplyRuntime,
 } from "./dispatch-from-config.runtime-loaders.js";
+import { resolveRoutedReplyDeliveryOutcome } from "./reply-dispatch-outcome.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import {
   createReplyDeliveryContext,
@@ -65,7 +66,8 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     !isInternalWebchatTurn &&
     normalizedRouteReplyChannel &&
     replyRoute.to &&
-    normalizedRouteReplyChannel !== normalizedCurrentSurface,
+    normalizedRouteReplyChannel !== normalizedCurrentSurface &&
+    !state.replyOperationRunState.heartbeat,
   );
   const routeReplyRuntime = hasRouteReplyCandidate ? await loadRouteReplyRuntime() : undefined;
   const {
@@ -197,11 +199,12 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     });
     // Routed sends settle here: the transport result is the settlement. This is
     // the single routed choke point, so every routed lane feeds the turn ledger.
-    turnLedger.recordRoutedDelivery(payload, isRoutedReplyDelivered(result));
+    turnLedger.recordRoutedDelivery(payload, resolveRoutedReplyDeliveryOutcome(result));
     return result;
   };
 
-  const isRoutedReplyDelivered = (result: { delivered: boolean }) => result.delivered;
+  const isRoutedReplyDelivered = (result: { delivered: boolean; ambiguous?: boolean }) =>
+    result.delivered && result.ambiguous !== true;
 
   /**
    * Helper to send a payload via route-reply (async).

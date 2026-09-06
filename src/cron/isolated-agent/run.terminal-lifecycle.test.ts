@@ -2,10 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolvePreparedRunAdmission } from "../../agents/admitted-run-context.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
-import {
-  classifyEmbeddedAgentRunResultForModelFallback,
-  mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
-} from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import { prepareEmbeddedAttemptStream } from "../../agents/embedded-agent-runner/run/attempt-stream-prepare.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { clearActiveEmbeddedRun } from "../../agents/embedded-agent-runner/runs.js";
@@ -13,7 +9,6 @@ import { createStubSessionHarness } from "../../agents/embedded-agent-subscribe.
 import { FailoverError } from "../../agents/failover-error.js";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
-import { runWithModelFallback } from "../../agents/model-fallback-runner.js";
 import { AuthStorage } from "../../agents/sessions/auth-storage.js";
 import { ModelRegistry } from "../../agents/sessions/model-registry.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
@@ -36,8 +31,6 @@ import { createDiagnosticEmbeddedRunOwner } from "../../logging/diagnostic-run-a
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import {
-  classifyEmbeddedAgentRunResultForModelFallbackMock,
-  mergeEmbeddedAgentRunResultForModelFallbackExhaustionMock,
   dispatchCronDeliveryMock,
   loadRunCronIsolatedAgentTurn,
   loadSessionEntryMock,
@@ -129,12 +122,12 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
     if (outcome === "finalize-failure") {
       dispatchCronDeliveryMock.mockRejectedValueOnce(new Error("delivery finalization failed"));
     }
-    runWithModelFallbackMock.mockImplementation(runWithModelFallback);
-    classifyEmbeddedAgentRunResultForModelFallbackMock.mockImplementation(
-      classifyEmbeddedAgentRunResultForModelFallback,
-    );
-    mergeEmbeddedAgentRunResultForModelFallbackExhaustionMock.mockImplementation(
-      mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
+    runWithModelFallbackMock.mockImplementation(
+      (
+        await vi.importActual<typeof import("../../agents/model-fallback-runner.js")>(
+          "../../agents/model-fallback-runner.js",
+        )
+      ).runWithModelFallback,
     );
     const firstStarted = createDeferred();
     const releaseFirst = createDeferred();
@@ -448,7 +441,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
         if (outcome === "cli-exhausted-result") {
           await expect(runWithModelFallbackMock.mock.results[0]?.value).resolves.toMatchObject({
             outcome: "exhausted",
-            result: { meta: { error: { kind: "incomplete_turn" } } },
+            result: { result: { meta: { error: { kind: "incomplete_turn" } } } },
           });
         }
         expect({

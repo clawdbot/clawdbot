@@ -3,14 +3,16 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readString } from "@openclaw/normalization-core/string-coerce";
 import { assertCronJobScratchContent } from "../cron/scratch-contract.js";
 import { readTrimmedStringAlias } from "../utils/string-readers.js";
-import type { ReplyPayload } from "./reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+  type ReplyPayload,
+} from "./reply-payload.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
 /** Tool name used by heartbeat runs to report visible or silent progress. */
 export const HEARTBEAT_RESPONSE_TOOL_NAME = "heartbeat_respond";
 const HEARTBEAT_RESPONSE_CHANNEL_DATA_KEY = "openclawHeartbeatResponse";
-const HEARTBEAT_SCRATCH_PROPOSAL = Symbol("openclawHeartbeatScratchProposal");
-type HeartbeatReplyPayload = ReplyPayload & { [HEARTBEAT_SCRATCH_PROPOSAL]?: string };
 
 /** Allowed heartbeat response outcomes. */
 export const HEARTBEAT_TOOL_OUTCOMES = [
@@ -86,23 +88,17 @@ export function getHeartbeatToolNotificationText(response: HeartbeatToolResponse
 }
 
 /** Store public heartbeat response metadata while keeping scratch process-private. */
-export function createHeartbeatToolResponsePayload(
-  response: HeartbeatToolResponse,
-): HeartbeatReplyPayload {
+export function createHeartbeatToolResponsePayload(response: HeartbeatToolResponse): ReplyPayload {
   const { scratch, ...publicResponse } = response;
-  const payload: HeartbeatReplyPayload = {
+  const payload: ReplyPayload = {
     text: response.notify ? getHeartbeatToolNotificationText(response) : HEARTBEAT_TOKEN,
     channelData: {
       [HEARTBEAT_RESPONSE_CHANNEL_DATA_KEY]: publicResponse,
     },
   };
-  if (scratch !== undefined) {
-    Object.defineProperty(payload, HEARTBEAT_SCRATCH_PROPOSAL, {
-      value: scratch,
-      enumerable: false,
-    });
-  }
-  return payload;
+  return scratch === undefined
+    ? payload
+    : setReplyPayloadMetadata(payload, { heartbeatScratchProposal: scratch });
 }
 
 function getHeartbeatToolResponseFromPayload(
@@ -143,10 +139,10 @@ export function resolveHeartbeatScratchProposalFromReplyResult(
     // Anchor to the newest heartbeat-response payload: a later corrected
     // response without scratch must supersede an earlier scratch proposal,
     // so the scan stops at the first response payload either way.
-    if (!getHeartbeatToolResponseFromPayload(payload)) {
+    if (!payload || !getHeartbeatToolResponseFromPayload(payload)) {
       continue;
     }
-    return (payload as HeartbeatReplyPayload | undefined)?.[HEARTBEAT_SCRATCH_PROPOSAL];
+    return getReplyPayloadMetadata(payload)?.heartbeatScratchProposal;
   }
   return undefined;
 }

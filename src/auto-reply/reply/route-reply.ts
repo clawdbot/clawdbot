@@ -146,6 +146,8 @@ type RouteReplyResult = {
   messageId?: string;
   /** Error message if the send failed. */
   error?: string;
+  /** Original failure retains the delivery owner's no-send proof. */
+  cause?: unknown;
 };
 
 function summarizeVisibleRouteReplyDelivery(
@@ -438,6 +440,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       ok: false,
       delivered: false,
       error: `Failed to route reply to ${channel}: ${message}`,
+      cause: err,
     };
   }
 }
