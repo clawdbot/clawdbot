@@ -55,14 +55,12 @@ export async function createOpenAiEmbeddingProvider(
       client,
       errorPrefix: "openai embeddings failed",
       maxInputTokens: OPENAI_MAX_INPUT_TOKENS[normalizeOpenAiModel(client.model)],
-      buildRequestBody: (input, kind) => {
+      buildRequestFields: (kind) => {
         const explicit = kind === "query" ? client.queryInputType : client.documentInputType;
         const value = explicit ?? client.inputType;
         const inputType =
           typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
         return {
-          model: client.model,
-          input,
           ...(typeof client.outputDimensionality === "number"
             ? { dimensions: client.outputDimensionality }
             : {}),

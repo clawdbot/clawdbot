@@ -27,8 +27,8 @@ export function createRemoteEmbeddingProvider(params: {
   maxInputTokens?: number;
   /** Keep query arrays in one request when the provider has no query/document wire distinction. */
   batchQueryInputs?: boolean;
-  /** Provider-owned payload fields; request grouping and transport stay shared. */
-  buildRequestBody?: (input: string[], kind: "query" | "document") => unknown;
+  /** Additional payload fields; model and input remain owned by the shared request path. */
+  buildRequestFields?: (kind: "query" | "document") => Record<string, unknown>;
 }): EmbeddingProvider {
   const { client } = params;
   const url = resolveEmbeddingEndpointUrl(client.baseUrl, "embeddings");
@@ -47,9 +47,11 @@ export function createRemoteEmbeddingProvider(params: {
       ssrfPolicy: client.ssrfPolicy,
       fetchImpl: client.fetchImpl,
       signal,
-      body: params.buildRequestBody
-        ? params.buildRequestBody(input, kind)
-        : { model: client.model, input },
+      body: {
+        ...params.buildRequestFields?.(kind),
+        model: client.model,
+        input,
+      },
       errorPrefix: params.errorPrefix,
     });
   };

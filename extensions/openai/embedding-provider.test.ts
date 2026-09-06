@@ -1,7 +1,10 @@
 // Exercise the provider, shared factory, and guarded HTTP transport together.
 import { once } from "node:events";
 import { createServer, type Server, type ServerResponse } from "node:http";
-import type { MemoryEmbeddingProviderCreateOptions } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import {
+  createRemoteEmbeddingProvider,
+  type MemoryEmbeddingProviderCreateOptions,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOpenAiEmbeddingProvider } from "./embedding-provider.js";
 
@@ -96,6 +99,40 @@ afterEach(async () => {
 });
 
 describe("OpenAI embedding provider HTTP contract", () => {
+  it.each([
+    { name: "omitted", fields: { input_type: "document" } },
+    {
+      name: "overridden",
+      fields: { model: "other-model", input: ["shortened"], input_type: "document" },
+    },
+  ])("rejects short responses when callback fields have $name model/input", async ({ fields }) => {
+    const server = await startEmbeddingServer((request) => {
+      request.response.writeHead(200, { "content-type": "application/json" });
+      request.response.end(JSON.stringify({ data: [{ embedding: [1, 2] }] }));
+    });
+    const provider = createRemoteEmbeddingProvider({
+      id: "fixture",
+      client: {
+        baseUrl: server.baseUrl,
+        headers: {},
+        model: "fixture-model",
+        ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
+      },
+      errorPrefix: "fixture embeddings failed",
+      buildRequestFields: () => fields,
+    });
+
+    await expect(provider.embedBatch(["first", "second"])).rejects.toThrow(
+      "fixture embeddings failed: malformed JSON response",
+    );
+    expect(server.requests).toHaveLength(1);
+    expect(server.requests[0]?.body).toEqual({
+      model: "fixture-model",
+      input: ["first", "second"],
+      input_type: "document",
+    });
+  });
+
   it.each([
     {
       name: "query override",
