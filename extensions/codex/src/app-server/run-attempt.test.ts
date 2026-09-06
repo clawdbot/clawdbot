@@ -8199,6 +8199,43 @@ describe("runCodexAppServerAttempt", () => {
     },
   );
 
+  it("rejects a resumed provider mismatch before inference and preserves the binding", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      model: "gpt-5.4",
+      modelProvider: "openai",
+    });
+    const harness = createStartedThreadHarness(
+      async (method) => {
+        if (method === "thread/resume") {
+          return {
+            ...threadStartResult("thread-existing", { cwd: workspaceDir }),
+            model: "gpt-5.4",
+            modelProvider: "local-provider",
+          };
+        }
+        if (method === "turn/start") {
+          return { turn: { id: "turn-1", status: "completed", items: [] } };
+        }
+        return undefined;
+      },
+      { persistedThreads: ["thread-existing"] },
+    );
+    const params = createParams(sessionFile, workspaceDir);
+    params.provider = "openai";
+    params.modelId = "gpt-5.5";
+    await expect(runCodexAppServerAttempt(params)).rejects.toThrow(
+      "Codex resumed a different model provider",
+    );
+    expect(harness.requests.some(({ method }) => method === "thread/resume")).toBe(true);
+    expect(harness.requests.some(({ method }) => method === "turn/start")).toBe(false);
+    expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
+      threadId: "thread-existing",
+      model: "gpt-5.4",
+      modelProvider: "openai",
+    });
+  });
+
   it("does not inherit a bound local provider for explicit native OpenAI resumed runs", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     await writeExistingBinding(sessionFile, workspaceDir, {
@@ -8238,6 +8275,13 @@ describe("runCodexAppServerAttempt", () => {
     expect(resumeRequestParams?.model).toBe("gpt-5.5");
     expect(resumeRequestParams).not.toHaveProperty("modelProvider");
     expect(resumeRequestParams?.approvalsReviewer).toBe("auto_review");
+    expect(requests.find((request) => request.method === "turn/start")).toMatchObject({
+      params: {
+        model: "gpt-5.5",
+        collaborationMode: { settings: { model: "gpt-5.5" } },
+      },
+    });
+    expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({ model: "gpt-5.5" });
   });
   it("does not apply bound local model providers to provider-qualified resumed models", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();

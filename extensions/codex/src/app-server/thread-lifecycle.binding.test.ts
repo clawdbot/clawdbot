@@ -2560,7 +2560,10 @@ describe("Codex app-server thread lifecycle bindings", () => {
         return { requirements: null };
       }
       if (method === "thread/start" || method === "thread/resume") {
-        return threadStartResult("thread-warm-provider");
+        return {
+          ...threadStartResult("thread-warm-provider"),
+          ...(method === "thread/resume" ? { modelProvider: "custom-provider" } : {}),
+        };
       }
       throw new Error(`unexpected method: ${method}`);
     });
