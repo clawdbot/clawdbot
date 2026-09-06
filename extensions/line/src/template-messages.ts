@@ -94,7 +94,12 @@ function normalizeCarouselColumn(column: CarouselColumn): CarouselColumn {
 
 type CarouselNormalizationOutcome =
   | { kind: "template"; columns: CarouselColumn[] }
-  | { kind: "text"; text: string };
+  | { kind: "text"; text: string }
+  // A carousel that carries neither a column nor alt text. It is a distinct
+  // outcome rather than a throw because a reply can hold one beside ordinary
+  // text: aborting here would take that text down with it, while a builder
+  // that asked for a carousel still has nothing to return.
+  | { kind: "empty" };
 
 function describeCarouselColumn(column: CarouselColumn): string {
   const body = column.title ? `${column.title}: ${column.text}` : column.text;
@@ -128,10 +133,7 @@ function normalizeCarousel(
     ...(altText ? [truncateTemplateText(altText, TEMPLATE_ALT_TEXT_LIMIT)] : []),
     ...normalized.map(describeCarouselColumn).filter((line) => line !== ""),
   ].join("\n");
-  if (!text) {
-    throw new Error("LINE carousel has no deliverable text or action labels.");
-  }
-  return { kind: "text", text };
+  return text ? { kind: "text", text } : { kind: "empty" };
 }
 
 function createCarouselMessage(
@@ -235,8 +237,12 @@ export function createTemplateCarousel(
   },
 ): TemplateMessage {
   const outcome = normalizeCarousel(columns, options?.altText);
-  if (outcome.kind === "text") {
-    throw new Error("LINE carousel columns violate provider consistency requirements.");
+  if (outcome.kind !== "template") {
+    throw new Error(
+      outcome.kind === "empty"
+        ? "LINE carousel has no deliverable text or action labels."
+        : "LINE carousel columns violate provider consistency requirements.",
+    );
   }
   return createCarouselMessage(outcome.columns, options);
 }
@@ -320,6 +326,11 @@ export function buildTemplateMessageFromPayload(
       });
 
       const outcome = normalizeCarousel(columns, payload.altText);
+      if (outcome.kind === "empty") {
+        // Null is this converter's existing "contributes no message" answer, and
+        // the delivery path already skips it, so the reply's own text still sends.
+        return null;
+      }
       return outcome.kind === "text"
         ? { type: "text", text: outcome.text }
         : createCarouselMessage(outcome.columns, { altText: payload.altText });

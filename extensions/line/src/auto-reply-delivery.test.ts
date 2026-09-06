@@ -13,6 +13,7 @@ import {
 } from "./auto-reply-delivery.test-helpers.js";
 import { processLineMessage as processOrderedLineMessage } from "./markdown-to-line.js";
 import { buildLineMediaMessage } from "./outbound-media.js";
+import { buildTemplateMessageFromPayload } from "./template-messages.js";
 import {
   createFlexMessage as createProviderFlexMessage,
   createLocationMessage as createRealLocationMessage,
@@ -53,6 +54,24 @@ describe("deliverLineAutoReply", () => {
       expect(messages.at(-1)).toMatchObject({ quickReply: { items: quickReplies } });
       expect(messages.slice(0, -1).every((message) => !("quickReply" in message))).toBe(true);
     }
+  });
+
+  // A carousel with no column and no alt text carries nothing LINE can render.
+  // The converter runs before the send block, so answering it with a throw took
+  // the reply's own text down with it and the sender saw nothing at all.
+  it("still sends the reply text when a carousel carries nothing to render", async () => {
+    const { deps, replyMessageLine } = createDeps({ buildTemplateMessageFromPayload });
+
+    await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      payload: { text: "After" },
+      lineData: { templateMessage: { type: "carousel", columns: [] } },
+      deps,
+    });
+
+    const messages = expectDefined(replyMessageLine.mock.calls[0]?.[1], "LINE reply messages");
+    expect(messages.map((message) => (message.type === "text" ? message.text : message.type)))
+      .toEqual(["After"]);
   });
 
   it.each([
