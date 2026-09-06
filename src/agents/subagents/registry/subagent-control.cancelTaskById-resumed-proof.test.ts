@@ -34,7 +34,6 @@ import {
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
 } from "./subagent-registry.test-helpers.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type ControlRuntime = typeof import("./subagent-control.runtime.js");
 
@@ -156,7 +155,7 @@ describe("cancelTaskById real-behavior proof: resumed task cancellation (#140354
       generation: 1,
       createdAt: Date.now() - 5_000,
       startedAt: Date.now() - 4_000,
-    } as Partial<SubagentRunRecord>);
+    });
 
     // Resume: replaceSubagentRunAfterSteerCore is the same path sessions_send
     // continuation uses — it produces a generation-2 run with a fresh runId
@@ -251,7 +250,6 @@ describe("cancelTaskById real-behavior proof: resumed task cancellation (#140354
         endedReason: finalRun.endedReason,
       },
     };
-    // eslint-disable-next-line no-console
     console.log("PROOF_OUTPUT_START");
     console.log(JSON.stringify(proof, null, 2));
     console.log("PROOF_OUTPUT_END");
