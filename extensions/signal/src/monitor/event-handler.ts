@@ -45,6 +45,8 @@ import {
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
+  resolveChannelGroups,
+  resolveChannelGroupsConfigPath,
 } from "openclaw/plugin-sdk/channel-policy";
 import {
   isControlCommandMessage,
@@ -193,6 +195,12 @@ async function finalizeSignalStatusReaction(params: {
 
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   const readConfig = createRuntimeConfigReader(deps.cfg);
+  const groupsConfigPath = resolveChannelGroupsConfigPath({
+    cfg: deps.cfg,
+    channel: "signal",
+    accountId: deps.accountId,
+    groups: resolveChannelGroups(deps.cfg, "signal", deps.accountId),
+  });
   const statusReactionTiming = deps.statusReactionTiming ?? DEFAULT_TIMING;
   const activeEnqueueEntries = new WeakSet<SignalInboundEntry>();
 
@@ -1189,10 +1197,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
     if (isGroup && requireMention && canDetectMention && mentionDecision.shouldSkip) {
       logInboundDrop({
-        log: logVerbose,
+        log: deps.runtime.log,
         channel: "signal",
         reason: "no mention",
-        target: senderDisplay,
+        target: groupId,
+        onceKey: JSON.stringify([deps.accountId, groupId]),
+        hint: `Mention patterns can be derived from the agent identity name. Set ${groupsConfigPath}[${JSON.stringify(groupId)}].requireMention=false to process messages without a mention. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`,
       });
       const pendingMedia: ChannelInboundMediaInput[] = (dataMessage.attachments ?? []).map(
         (attachment) => {
