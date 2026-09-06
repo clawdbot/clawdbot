@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import platform
 import re
 import shutil
 import signal
@@ -73,8 +74,16 @@ ABI_LIMITS = {
     "GCC": "12.0.0",
 }
 
-AMD64_ABI_ALLOWED_VARIANTS = {
-    "CXXABI": frozenset(("FLOAT128", "TM_1")),
+ABI_ALLOWED_VARIANTS = {
+    "x86_64": {
+        "CXXABI": frozenset(("FLOAT128", "TM_1")),
+    },
+    "aarch64": {},
+}
+
+ELF_MACHINE_ARCHITECTURES = {
+    "Advanced Micro Devices X86-64": "x86_64",
+    "AArch64": "aarch64",
 }
 
 
@@ -102,7 +111,16 @@ def compare_versions(left, right):
     )
 
 
-def parse_version_needs(text, source):
+def normalize_architecture(machine, source):
+    normalized = machine.strip().lower()
+    if normalized in ("x86_64", "amd64"):
+        return "x86_64"
+    if normalized in ("aarch64", "arm64"):
+        return "aarch64"
+    raise RuntimeError(f"unsupported {source} architecture {machine}")
+
+
+def parse_version_needs(text, source, architecture):
     requirements = {family: set() for family in ABI_LIMITS}
     in_version_needs = False
     for raw_line in text.splitlines():
@@ -130,7 +148,8 @@ def parse_version_needs(text, source):
             continue
         if (
             not is_numeric_version(version)
-            and version not in AMD64_ABI_ALLOWED_VARIANTS.get(family, ())
+            and version
+            not in ABI_ALLOWED_VARIANTS.get(architecture, {}).get(family, ())
         ):
             raise RuntimeError(f"{source} requires unknown {family} version {name}")
         requirements[family].add(version)
@@ -147,9 +166,9 @@ def is_regular_elf(path):
         return source.read(4) == b"\x7fELF"
 
 
-def read_abi_requirements(path, source, readelf):
+def run_readelf(path, source, readelf, *arguments):
     result = subprocess.run(
-        [readelf, "--version-info", "--wide", str(path)],
+        [readelf, *arguments, "--wide", str(path)],
         env={**os.environ, "LC_ALL": "C"},
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
@@ -163,7 +182,29 @@ def read_abi_requirements(path, source, readelf):
         raise RuntimeError(
             f"readelf failed for {source} with exit {result.returncode}{suffix}"
         )
-    return parse_version_needs(result.stdout, source)
+    return result.stdout
+
+
+def read_elf_architecture(path, source, readelf):
+    text = run_readelf(path, source, readelf, "--file-header")
+    match = re.search(r"^\s*Machine:\s*(.+?)\s*$", text, re.MULTILINE)
+    if match is None:
+        raise RuntimeError(f"readelf did not report an ELF machine for {source}")
+    machine = match.group(1)
+    try:
+        return ELF_MACHINE_ARCHITECTURES[machine]
+    except KeyError as error:
+        raise RuntimeError(
+            f"{source} uses unsupported ELF machine {machine}"
+        ) from error
+
+
+def read_abi_requirements(path, source, readelf, architecture):
+    return parse_version_needs(
+        run_readelf(path, source, readelf, "--version-info"),
+        source,
+        architecture,
+    )
 
 
 def collect_abi_report(appimage, appdir, readelf=None):
@@ -172,6 +213,17 @@ def collect_abi_report(appimage, appdir, readelf=None):
         raise RuntimeError("readelf is required for AppImage ABI inspection")
     if not is_regular_elf(appimage):
         raise RuntimeError(f"{appimage.name} is not a regular ELF AppImage runtime")
+    architecture = read_elf_architecture(
+        appimage,
+        "appimage-runtime",
+        readelf,
+    )
+    host_architecture = normalize_architecture(platform.machine(), "host")
+    if architecture != host_architecture:
+        raise RuntimeError(
+            "AppImage architecture mismatch: "
+            f"artifact is {architecture}, host is {host_architecture}"
+        )
 
     candidates = [
         {
@@ -202,6 +254,7 @@ def collect_abi_report(appimage, appdir, readelf=None):
                     candidate["path"],
                     candidate["reportPath"],
                     readelf,
+                    architecture,
                 ),
             }
         )
@@ -218,6 +271,7 @@ def collect_abi_report(appimage, appdir, readelf=None):
             max(versions, key=version_key) if versions else None
         )
     return {
+        "architecture": architecture,
         "files": files,
         "limits": ABI_LIMITS,
         "maximumRequired": maximum_required,
@@ -236,11 +290,6 @@ def enforce_abi_limits(report):
         for family, limit in ABI_LIMITS.items():
             for version in entry["requires"][family]:
                 if not is_numeric_version(version):
-                    if version not in AMD64_ABI_ALLOWED_VARIANTS.get(family, ()):
-                        raise RuntimeError(
-                            f"{entry['path']} requires unknown {family} version "
-                            f"{family}_{version}"
-                        )
                     continue
                 if compare_versions(version, limit):
                     violations.append(

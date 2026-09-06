@@ -3,6 +3,7 @@ from pathlib import Path
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 
 import packaged_runtime_smoke as smoke
 
@@ -50,7 +51,8 @@ class PackagedRuntimeAbiTest(unittest.TestCase):
                 if Path(f"{target}.readelf-error").exists():
                     print(f"readelf: Error: {target}: synthetic failure")
                     raise SystemExit(1)
-                print(Path(f"{target}.readelf").read_text(), end="")
+                suffix = "header" if "--file-header" in sys.argv else "versions"
+                print(Path(f"{target}.readelf-{suffix}").read_text(), end="")
                 """
             )
         )
@@ -59,24 +61,42 @@ class PackagedRuntimeAbiTest(unittest.TestCase):
     def tearDown(self):
         self.temporary_directory.cleanup()
 
-    def write_elf(self, path, output):
+    def write_elf(
+        self,
+        path,
+        output,
+        *,
+        machine="Advanced Micro Devices X86-64",
+    ):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"\x7fELFsynthetic")
-        Path(f"{path}.readelf").write_text(output)
+        Path(f"{path}.readelf-header").write_text(
+            f"ELF Header:\n  Machine:                           {machine}\n"
+        )
+        Path(f"{path}.readelf-versions").write_text(output)
         return path
 
-    def collect(self, appimage_output, appdir_outputs=()):
+    def collect(
+        self,
+        appimage_output,
+        appdir_outputs=(),
+        *,
+        machine="Advanced Micro Devices X86-64",
+        host_machine="x86_64",
+    ):
         appimage = self.write_elf(
             self.root / "OpenClaw.AppImage",
             appimage_output,
+            machine=machine,
         )
         for relative, output in appdir_outputs:
-            self.write_elf(self.appdir / relative, output)
-        return smoke.collect_abi_report(
-            appimage,
-            self.appdir,
-            readelf=str(self.readelf),
-        )
+            self.write_elf(self.appdir / relative, output, machine=machine)
+        with mock.patch.object(smoke.platform, "machine", return_value=host_machine):
+            return smoke.collect_abi_report(
+                appimage,
+                self.appdir,
+                readelf=str(self.readelf),
+            )
 
     def test_exact_limits_pass(self):
         report = self.collect(
@@ -92,6 +112,7 @@ class PackagedRuntimeAbiTest(unittest.TestCase):
 
         smoke.enforce_abi_limits(report)
 
+        self.assertEqual(report["architecture"], "x86_64")
         self.assertEqual(
             report["maximumRequired"],
             {
@@ -117,7 +138,7 @@ class PackagedRuntimeAbiTest(unittest.TestCase):
                 ):
                     smoke.enforce_abi_limits(report)
 
-    def test_allowed_amd64_cxxabi_variants_pass_and_are_reported(self):
+    def test_x86_64_cxxabi_variants_pass_and_are_reported(self):
         report = self.collect(
             version_output(
                 needs=(
@@ -136,6 +157,65 @@ class PackagedRuntimeAbiTest(unittest.TestCase):
         )
         self.assertEqual(report["maximumRequired"]["CXXABI"], "1.3.13")
 
+    def test_x86_64_cxxabi_variants_fail_closed_on_aarch64(self):
+        for required in ("CXXABI_TM_1", "CXXABI_FLOAT128"):
+            with self.subTest(required=required):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    rf"unknown CXXABI version {required}",
+                ):
+                    self.collect(
+                        version_output(needs=(required,)),
+                        machine="AArch64",
+                        host_machine="aarch64",
+                    )
+
+    def test_host_architecture_aliases_match_outer_elf_header(self):
+        for machine, host_machine, expected in (
+            ("Advanced Micro Devices X86-64", "x86_64", "x86_64"),
+            ("Advanced Micro Devices X86-64", "amd64", "x86_64"),
+            ("AArch64", "aarch64", "aarch64"),
+            ("AArch64", "arm64", "aarch64"),
+        ):
+            with self.subTest(machine=machine, host_machine=host_machine):
+                report = self.collect(
+                    version_output(),
+                    machine=machine,
+                    host_machine=host_machine,
+                )
+                self.assertEqual(report["architecture"], expected)
+
+    def test_outer_elf_architecture_must_match_native_host(self):
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "AppImage architecture mismatch: artifact is aarch64, host is x86_64",
+        ):
+            self.collect(
+                version_output(),
+                machine="AArch64",
+                host_machine="amd64",
+            )
+
+    def test_unknown_outer_elf_machine_fails_closed(self):
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "appimage-runtime uses unsupported ELF machine RISC-V",
+        ):
+            self.collect(
+                version_output(),
+                machine="RISC-V",
+            )
+
+    def test_unknown_host_architecture_fails_closed(self):
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "unsupported host architecture ppc64le",
+        ):
+            self.collect(
+                version_output(),
+                host_machine="ppc64le",
+            )
+
     def test_version_definitions_do_not_affect_requirements(self):
         requirements = smoke.parse_version_needs(
             version_output(
@@ -148,6 +228,7 @@ class PackagedRuntimeAbiTest(unittest.TestCase):
                 ),
             ),
             "usr/bin/openclaw-desktop",
+            "x86_64",
         )
 
         self.assertEqual(
@@ -175,11 +256,10 @@ class PackagedRuntimeAbiTest(unittest.TestCase):
         )
         (self.appdir / "usr/bin/not-elf").write_text("plain text")
         (self.appdir / "usr/lib/z-link.so").symlink_to("z.so")
-        report = smoke.collect_abi_report(
-            appimage,
-            self.appdir,
-            readelf=str(self.readelf),
-        )
+        with mock.patch.object(smoke.platform, "machine", return_value="x86_64"):
+            report = smoke.collect_abi_report(
+                appimage, self.appdir, readelf=str(self.readelf)
+            )
 
         self.assertEqual(
             [(entry["path"], entry["source"]) for entry in report["files"]],
@@ -232,6 +312,7 @@ class PackagedRuntimeAbiTest(unittest.TestCase):
                     smoke.parse_version_needs(
                         version_output(needs=(required,)),
                         "usr/lib/libc.so.6",
+                        "x86_64",
                     )
 
     def test_readelf_errors_fail_closed(self):
@@ -243,13 +324,14 @@ class PackagedRuntimeAbiTest(unittest.TestCase):
 
         with self.assertRaisesRegex(
             RuntimeError,
-            "readelf failed for OpenClaw.AppImage with exit 1",
+            "readelf failed for appimage-runtime with exit 1",
         ):
-            smoke.collect_abi_report(
-                appimage,
-                self.appdir,
-                readelf=str(self.readelf),
-            )
+            with mock.patch.object(smoke.platform, "machine", return_value="x86_64"):
+                smoke.collect_abi_report(
+                    appimage,
+                    self.appdir,
+                    readelf=str(self.readelf),
+                )
 
 
 if __name__ == "__main__":
