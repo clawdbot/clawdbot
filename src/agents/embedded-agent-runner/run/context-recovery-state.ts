@@ -16,7 +16,6 @@ export function createEmbeddedRunContextRecoveryState() {
     overflowCompactionAttempts: 0,
     timeoutCompactionAttempts: 0,
     toolResultTruncationAttempted: false,
-    transportDropContinuations: 0,
     observeContextAccounting(event: EmbeddedContextAccountingEvent) {
       // Producer order, not terminal usage copies, determines the current context.
       const tokens = event.kind === "compaction" ? event.tokensAfter : event.contextTokens;

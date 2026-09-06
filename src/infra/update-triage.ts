@@ -19,6 +19,7 @@ import { formatErrorMessage } from "./errors.js";
 import { resolveOsHomeDir } from "./home-dir.js";
 import { installationTargetEnv, resolveInstallationTarget } from "./installation-target-context.js";
 import { tryProcessCwd } from "./safe-cwd.js";
+import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
 
 export type UpdateTriageTarget = {
   root?: string;
@@ -119,6 +120,7 @@ async function runPreparedUpdateFailureTriage(
     ...installationTargetEnv(installationTarget),
   };
   delete env.OPENCLAW_UPDATE_IN_PROGRESS;
+  delete env[UPDATE_RUN_ID_ENV];
   const redaction = { env, stateDir: installationTarget.stateDir };
   const { log, error: logError } = prepared.runtime;
   log("Update failed. Entering triage...");

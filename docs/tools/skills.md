@@ -280,8 +280,9 @@ skill from model-initiated selection.
 [Skill Workshop](/tools/skill-workshop) is a proposal queue between the agent
 and its `<state-dir>/agents/<agentId>/agent/workshop-skills` directory. When the agent spots
 reusable work, it drafts a proposal instead of writing directly to `SKILL.md`.
-Operators edit skills outside that directory through their owning tools or
-files.
+The scheduled weekly collection review is the scoped exception: its normal
+isolated turn may edit `SKILL.md` files directly inside the Workshop directory.
+Operators edit skills outside that directory through their owning tools or files.
 
 ```bash
 openclaw skills workshop list
@@ -763,6 +764,12 @@ note pointing at `openclaw skills check` whenever compact formatting or list
 truncation is required.
 
 Keep descriptions short and descriptive to minimize prompt overhead.
+
+For small context windows, the OpenClaw embedded runtime further shortens the
+descriptions in the already-admitted catalog. It retains every admitted name,
+location, and loading note, even when these exceed the description budget.
+Full skill instructions and saved snapshots are unchanged; Code Mode can still
+read every admitted skill. Native harnesses retain their own prompt policy.
 
 ## Related
 

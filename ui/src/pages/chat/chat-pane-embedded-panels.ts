@@ -5,17 +5,12 @@ import type { ControlUiSessionPullRequest } from "../../../../src/gateway/contro
 import type { ControlUiPanel } from "../../../../src/plugin-sdk/control-ui.js";
 import type { BrowserTabSelection } from "../../components/browser/browser-target.ts";
 import { icons } from "../../components/icons.ts";
-import {
-  renderPanelLoadingSkeleton,
-  type PanelLoadingSkeletonVariant,
-} from "../../components/panel-loading-skeleton.ts";
+import { renderPanelLoadingSkeleton } from "../../components/panel-loading-skeleton.ts";
 import { t } from "../../i18n/index.ts";
-import {
-  formatKeyboardShortcutCombo,
-  KEYBOARD_SHORTCUT_COMBOS,
-} from "../../lib/keyboard-shortcut-catalog.ts";
+import { formatKeyboardShortcutCombo } from "../../lib/keyboard-shortcut-catalog.ts";
 import type { ControlUiRegistration } from "../../plugins/control-ui-capability.ts";
 import { renderPluginContribution } from "../../plugins/control-ui-view.ts";
+import { SIDEBAR_PANEL_SHORTCUTS } from "./chat-pane-panel-shortcuts.ts";
 import { resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
 import type { ChatSessionCompanionThread } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -73,29 +68,23 @@ type SidebarPanelDefinitionParams = {
 };
 
 type SidebarPanelTextKey =
-  | "browser"
-  | "conversation"
-  | "companion"
-  | "dashboard"
-  | "desktop"
-  | "discussion"
-  | "files"
+  | Exclude<SidebarSlotId, `plugin:${string}` | "detail" | "workspace">
   | "review"
-  | "tasks"
-  | "terminal";
+  | "files";
 
-const SIDEBAR_PANEL_LOADING_VARIANTS = {
-  browser: "browser",
-  conversation: "chat",
-  companion: "chat",
-  dashboard: "review",
-  desktop: "desktop",
-  detail: "review",
-  discussion: "discussion",
-  tasks: "tasks",
-  terminal: "terminal",
-  workspace: "files",
-} satisfies Record<Exclude<SidebarSlotId, `plugin:${string}`>, PanelLoadingSkeletonVariant>;
+function panelExternalLink(href: string | null | undefined, label: string) {
+  return href
+    ? html`<a
+        class="rail-header__action"
+        href=${href}
+        target="_blank"
+        rel="noopener"
+        aria-label=${label}
+        title=${label}
+        >${icons.externalLink}</a
+      >`
+    : undefined;
+}
 
 /** One ordered declaration for every chat side-panel slot. */
 export function sidebarPanelDefinitions(
@@ -103,54 +92,61 @@ export function sidebarPanelDefinitions(
 ): SidebarPanelDefinition[] {
   const state = params?.state;
   // Metadata-only definitions have no pane context, so they describe types without offering tabs.
-  const hasPaneContext = params !== undefined;
-  const terminalAvailable = state?.terminalAvailable === true;
-  const browserAvailable = state?.browserPanelAvailable === true;
-  const desktopAvailable = params?.desktopAvailable === true;
+  const panelContext = params && {
+    ...params,
+    dashboardAvailable: () => params.dashboard !== nothing,
+  };
   const definePanel = (
     slot: Exclude<SidebarSlotId, `plugin:${string}`>,
     textKey: SidebarPanelTextKey,
     icon: TemplateResult,
     content: TemplateResult | typeof nothing | null,
-    options?: { available?: boolean; headerAction?: TemplateResult; shortcut?: string },
+    headerAction?: TemplateResult,
   ): SidebarPanelDefinition => ({
     slot,
     label: t(`chat.sidePanel.${textKey}`),
     icon,
-    available: options?.available ?? hasPaneContext,
+    available: Boolean(panelContext && SIDEBAR_PANEL_SHORTCUTS[slot]?.available(panelContext)),
     content,
-    loading: renderPanelLoadingSkeleton(SIDEBAR_PANEL_LOADING_VARIANTS[slot], t("common.loading")),
+    loading: renderPanelLoadingSkeleton(
+      textKey === "conversation" || textKey === "companion"
+        ? "chat"
+        : textKey === "dashboard"
+          ? "review"
+          : textKey,
+      t("common.loading"),
+    ),
     empty: { description: t(`chat.sidePanel.${textKey}Empty`) },
-    ...(options?.headerAction ? { headerAction: options.headerAction } : {}),
-    ...(options?.shortcut ? { shortcut: options.shortcut } : {}),
+    headerAction,
+    shortcut: SIDEBAR_PANEL_SHORTCUTS[slot]
+      ? formatKeyboardShortcutCombo(SIDEBAR_PANEL_SHORTCUTS[slot].combo)
+      : undefined,
   });
-  const terminal =
-    state && terminalAvailable
-      ? html`<openclaw-terminal-panel
-          embedded
-          .client=${state.connected ? state.client : null}
-          .available=${state.terminalAvailable}
-          .agentId=${params?.agentId ?? null}
-          .sessionKey=${state.sessionKey}
-          .themeMode=${params?.themeMode ?? "dark"}
-          .basePath=${state.basePath}
-        ></openclaw-terminal-panel>`
-      : null;
-  const browser =
-    state && browserAvailable
-      ? html`<openclaw-browser-panel
-          embedded
-          data-chat-autotype-exempt
-          .client=${state.connected ? state.client : null}
-          .available=${state.browserPanelAvailable}
-          .presented=${params?.browserPresented ?? false}
-          .refreshOnPresentation=${params?.browserRefreshOnPresentation ?? true}
-          .sessionKey=${state.sessionKey}
-          .preferredTab=${params?.preferredBrowserTab}
-          .resourceBasePath=${state.resourceBasePath}
-          .authToken=${resolveAssistantAttachmentAuthToken(state)}
-        ></openclaw-browser-panel>`
-      : null;
+  const terminal = state?.terminalAvailable
+    ? html`<openclaw-terminal-panel
+        embedded
+        .client=${state.connected ? state.client : null}
+        .available=${state.terminalAvailable}
+        .agentId=${params?.agentId ?? null}
+        .sessionKey=${state.sessionKey}
+        .themeMode=${params?.themeMode ?? "dark"}
+        .basePath=${state.basePath}
+      ></openclaw-terminal-panel>`
+    : null;
+  const browser = state?.browserPanelAvailable
+    ? html`<openclaw-browser-panel
+        embedded
+        data-chat-autotype-exempt
+        .client=${state.connected ? state.client : null}
+        .available=${state.browserPanelAvailable}
+        .presented=${params?.browserPresented ?? false}
+        .refreshOnPresentation=${params?.browserRefreshOnPresentation ?? true}
+        .sessionKey=${state.sessionKey}
+        .preferredTab=${params?.preferredBrowserTab}
+        .resourceBasePath=${state.resourceBasePath}
+        .authToken=${resolveAssistantAttachmentAuthToken(state)}
+      ></openclaw-browser-panel>`
+    : null;
   const companion = params
     ? html`<openclaw-chat-session-rail
         embedded
@@ -169,12 +165,12 @@ export function sidebarPanelDefinitions(
       ></openclaw-chat-session-rail>`
     : null;
   const desktop =
-    state && desktopAvailable
+    state && params?.desktopAvailable
       ? html`<openclaw-desktop-panel
           embedded
           data-chat-autotype-exempt
           .client=${state.connected ? state.client : null}
-          .available=${desktopAvailable}
+          .available=${params.desktopAvailable}
           .presented=${params?.desktopPresented ?? false}
           .refreshOnPresentation=${params?.desktopRefreshOnPresentation ?? true}
           .requestedSource=${params?.desktopSource ?? null}
@@ -215,7 +211,7 @@ export function sidebarPanelDefinitions(
     }
   }
   return [
-    definePanel("conversation", "conversation", icons.messageSquare, nothing, { available: false }),
+    definePanel("conversation", "conversation", icons.messageSquare, nothing),
     definePanel(
       "detail",
       "review",
@@ -226,34 +222,34 @@ export function sidebarPanelDefinitions(
           ? params.renderDetail(detailContent)
           : null,
     ),
-    definePanel("terminal", "terminal", icons.terminal, terminal, {
-      available: terminalAvailable,
-      shortcut: formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.terminalPanel),
-    }),
-    definePanel("browser", "browser", icons.globe, browser, { available: browserAvailable }),
-    definePanel("workspace", "files", icons.fileText, workspaceContent, {
-      shortcut: formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles),
-    }),
-    definePanel("companion", "companion", icons.messageSquarePlus, companion, {
-      shortcut: formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.sideChat),
-      ...(params
-        ? {
-            headerAction: html`<openclaw-tooltip .content=${t("chat.rail.clear")}>
-              <button
-                class="rail-header__action chat-session-rail__clear"
-                type="button"
-                aria-label=${t("chat.rail.clear")}
-                ?disabled=${!params.connected || params.pendingQuestion !== null}
-                @click=${params.onClearCompanion}
-              >
-                ${icons.trash}
-              </button>
-            </openclaw-tooltip>`,
-          }
-        : {}),
-    }),
-    definePanel("tasks", "tasks", icons.listChecks, params?.tasks ?? null, {
-      headerAction: params
+    definePanel("terminal", "terminal", icons.terminal, terminal),
+    definePanel("browser", "browser", icons.globe, browser),
+    definePanel("workspace", "files", icons.fileText, workspaceContent),
+    definePanel(
+      "companion",
+      "companion",
+      icons.messageSquarePlus,
+      companion,
+      params
+        ? html`<openclaw-tooltip .content=${t("chat.rail.clear")}>
+            <button
+              class="rail-header__action chat-session-rail__clear"
+              type="button"
+              aria-label=${t("chat.rail.clear")}
+              ?disabled=${!params.connected || params.pendingQuestion !== null}
+              @click=${params.onClearCompanion}
+            >
+              ${icons.trash}
+            </button>
+          </openclaw-tooltip>`
+        : undefined,
+    ),
+    definePanel(
+      "tasks",
+      "tasks",
+      icons.listChecks,
+      params?.tasks ?? null,
+      params
         ? html`<openclaw-tooltip .content=${t("chat.backgroundTasks.refresh")}>
             <button
               class="rail-header__action chat-tasks-rail__refresh"
@@ -270,42 +266,22 @@ export function sidebarPanelDefinitions(
             </button>
           </openclaw-tooltip>`
         : undefined,
-    }),
-    definePanel("desktop", "desktop", icons.monitor, desktop, {
-      available: desktopAvailable,
-      ...(params?.desktopFocusHref
-        ? {
-            headerAction: html`<a
-              class="rail-header__action"
-              href=${params.desktopFocusHref}
-              target="_blank"
-              rel="noopener"
-              aria-label=${t("desktop.openWindow")}
-              title=${t("desktop.openWindow")}
-              >${icons.externalLink}</a
-            >`,
-          }
-        : {}),
-    }),
-    definePanel("discussion", "discussion", icons.messageSquare, discussion, {
-      available: discussion !== null && params?.discussionAvailable === true,
-      ...(params?.discussionOpenUrl
-        ? {
-            headerAction: html`<a
-              class="rail-header__action"
-              href=${params.discussionOpenUrl}
-              target="_blank"
-              rel="noopener"
-              aria-label=${t("chat.sessionDiscussion.openExternal")}
-              title=${t("chat.sessionDiscussion.openExternal")}
-              >${icons.externalLink}</a
-            >`,
-          }
-        : {}),
-    }),
-    definePanel("dashboard", "dashboard", icons.layoutDashboard, params?.dashboard ?? null, {
-      available: params?.dashboard !== nothing,
-    }),
+    ),
+    definePanel(
+      "desktop",
+      "desktop",
+      icons.monitor,
+      desktop,
+      panelExternalLink(params?.desktopFocusHref, t("desktop.openWindow")),
+    ),
+    definePanel(
+      "discussion",
+      "discussion",
+      icons.messageSquare,
+      discussion,
+      panelExternalLink(params?.discussionOpenUrl, t("chat.sessionDiscussion.openExternal")),
+    ),
+    definePanel("dashboard", "dashboard", icons.layoutDashboard, params?.dashboard ?? null),
     ...[...pluginPanels].map(([slot, entry]): SidebarPanelDefinition => ({
       slot,
       label: entry?.value.label ?? slot.slice("plugin:".length),
@@ -334,22 +310,14 @@ export function availableSidebarSlots(definitions: SidebarPanelDefinition[]): Si
 
 export function sidebarPanelTemplates(
   definitions: SidebarPanelDefinition[],
+  field: "content" | "headerAction" = "content",
 ): SidebarPanelTemplates {
   const templates: SidebarPanelTemplates = {};
   for (const definition of definitions) {
-    if (definition.content !== null) {
-      templates[definition.slot] = definition.content;
+    const template = definition[field];
+    if (template != null) {
+      templates[definition.slot] = template;
     }
   }
   return templates;
-}
-
-export function sidebarPanelActions(definitions: SidebarPanelDefinition[]): SidebarPanelTemplates {
-  const actions: SidebarPanelTemplates = {};
-  for (const definition of definitions) {
-    if (definition.headerAction) {
-      actions[definition.slot] = definition.headerAction;
-    }
-  }
-  return actions;
 }

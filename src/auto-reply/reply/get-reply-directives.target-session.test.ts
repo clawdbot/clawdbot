@@ -267,7 +267,6 @@ vi.mock("./groups.js", () => ({
 }));
 
 vi.mock("./model-selection.js", () => ({
-  createFastTestModelSelectionState: vi.fn(),
   createModelSelectionState: (...args: unknown[]) => mocks.createModelSelectionState(...args),
   resolveContextTokens: vi.fn(() => 4096),
 }));

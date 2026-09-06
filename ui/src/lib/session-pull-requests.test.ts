@@ -401,9 +401,12 @@ describe("session pull request snapshot store", () => {
     await flushSync();
     harness.request.mockClear();
 
-    store.refresh("agent:main:demo");
+    expect(store.refresh("agent:main:unwatched")).toBe(false);
+    expect(store.refresh("agent:main:demo")).toBe(true);
+    expect(store.refresh("agent:main:demo")).toBe(true);
     await flushSync();
 
+    expect(harness.request).toHaveBeenCalledOnce();
     expect(harness.request).toHaveBeenCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
       sessionKeys: ["agent:main:demo", "agent:main:other"],
       refreshSessionKeys: ["agent:main:demo"],

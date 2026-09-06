@@ -278,7 +278,10 @@ describe("worker turn launcher terminal results", () => {
             throw new Error("unexpected workspace sync");
           }),
           reconcileWorkspace: vi.fn(async (request) => {
-            request.journal.commit(MANIFEST_REF);
+            if (request.source.kind !== "local") {
+              throw new Error("expected a local workspace source");
+            }
+            request.source.journal.commit(MANIFEST_REF);
             return {
               manifestRef: MANIFEST_REF,
               changed: false,

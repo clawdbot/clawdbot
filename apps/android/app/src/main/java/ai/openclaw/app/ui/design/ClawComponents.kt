@@ -9,6 +9,7 @@ import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -371,33 +372,6 @@ internal fun <T> ClawSeparatedColumn(
   }
 }
 
-/** Two-line settings/detail row with caller-provided leading and trailing slots. */
-@Composable
-internal fun ClawDetailRow(
-  title: String,
-  subtitle: String,
-  modifier: Modifier = Modifier,
-  leading: @Composable () -> Unit,
-  trailing: @Composable () -> Unit,
-) {
-  Row(
-    modifier =
-      modifier
-        .fillMaxWidth()
-        .heightIn(min = ClawTheme.spacing.row)
-        .padding(vertical = 6.dp),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
-  ) {
-    leading()
-    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-      Text(text = title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-      Text(text = subtitle, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
-    trailing()
-  }
-}
-
 /** Circular text badge used for compact numeric or initials-style row marks. */
 @Composable
 internal fun ClawTextBadge(
@@ -436,7 +410,7 @@ internal fun ClawIconBadge(
   }
 }
 
-/** Reusable one-line list row with optional subtitle, metadata, slots, and click handling. */
+/** Keeps labels together and flows controls below when their intrinsic widths cannot fit. */
 @Composable
 internal fun ClawListItem(
   title: String,
@@ -454,37 +428,37 @@ internal fun ClawListItem(
       modifier.clickable(onClick = onClick)
     }
 
-  Row(
+  FlowRow(
     modifier =
       rowModifier
         .fillMaxWidth()
         .heightIn(min = ClawTheme.spacing.touchTarget)
         .clip(RoundedCornerShape(ClawTheme.radii.row))
         .padding(vertical = 6.dp),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
+    horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs, Alignment.End),
+    verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
+    itemVerticalAlignment = Alignment.CenterVertically,
   ) {
-    leading?.invoke()
-    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-      Text(
-        text = title,
-        style = ClawTheme.type.body,
-        color = ClawTheme.colors.text,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-      )
-      if (subtitle != null) {
+    Row(
+      modifier = Modifier.weight(1f),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
+    ) {
+      leading?.invoke()
+      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(
-          text = subtitle,
-          style = ClawTheme.type.caption,
-          color = ClawTheme.colors.textSubtle,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
+          text = title,
+          style = ClawTheme.type.body,
+          color = ClawTheme.colors.text,
         )
+        listOfNotNull(subtitle, metadata).forEach { detail ->
+          Text(
+            text = detail,
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+          )
+        }
       }
-    }
-    if (metadata != null) {
-      Text(text = metadata, style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 1)
     }
     trailing?.invoke()
   }

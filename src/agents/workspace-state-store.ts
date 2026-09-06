@@ -5,6 +5,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -15,8 +16,10 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveUserPath } from "../utils.js";
+import { retireWorkspaceFileCache } from "./workspace-file-cache.js";
 import {
   createWorkspaceStateIdentity,
+  resolveCanonicalWorkspacePath,
   resolveWorkspaceStateAliases,
   resolveWorkspaceStateIdentity,
   type WorkspaceStateIdentity,
@@ -83,6 +86,7 @@ export type WorkspaceStateSnapshot = {
 };
 
 type WorkspaceStateDeletionPlan = {
+  cacheRoot: string;
   lexicalAlias: WorkspaceStateIdentity;
   currentCanonicalIdentity: WorkspaceStateIdentity;
   pathEntryExisted: boolean;
@@ -519,8 +523,8 @@ export function replaceWorkspaceAttestation(params: {
 }
 
 function deleteWorkspaceRows(
-  database: ReturnType<typeof openOpenClawStateDatabase>,
-  workspaceKey: string,
+  database: WorkspaceStateDatabaseHandle,
+  { workspaceKey, workspacePath }: WorkspaceStateIdentity,
 ): void {
   const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(database.db);
   const receiptRows = executeSqliteQuerySync(
@@ -578,6 +582,9 @@ function deleteWorkspaceRows(
     database.db,
     kysely.deleteFrom("workspace_path_aliases").where("workspace_key", "=", workspaceKey),
   );
+  // Both deletion paths retire the actual stored identity only after the outer
+  // commit; a failed transaction must retain content for the surviving workspace.
+  deferSqlitePostCommitPublication(database.db, () => retireWorkspaceFileCache(workspacePath));
 }
 
 /** The migration owner has verified the same workspace and every relocated byte before this commit. */
@@ -638,7 +645,7 @@ export function clearExpiredWorkspaceStateForVanishedWorkspace(
         return preserveRecentState();
       }
     }
-    deleteWorkspaceRows(database, identity.workspaceKey);
+    deleteWorkspaceRows(database, identity);
     return true;
   });
 }
@@ -647,6 +654,7 @@ export function clearExpiredWorkspaceStateForVanishedWorkspace(
 export function prepareWorkspaceStateDeletion(workspaceDir: string): WorkspaceStateDeletionPlan {
   const aliases = resolveWorkspaceStateAliases(workspaceDir);
   return {
+    cacheRoot: resolveCanonicalWorkspacePath(workspaceDir),
     lexicalAlias: aliases[0]!,
     currentCanonicalIdentity: aliases.at(-1)!,
     pathEntryExisted: workspacePathEntryExists(workspaceDir),
@@ -657,6 +665,7 @@ export function deleteWorkspaceState(plan: WorkspaceStateDeletionPlan): void {
   // Delete-only cleanup must not recreate state after reset/uninstall removed
   // the canonical database successfully or partially.
   if (!existsSync(resolveOpenClawStateSqlitePath())) {
+    retireWorkspaceFileCache(plan.cacheRoot);
     return;
   }
   runOpenClawStateWriteTransaction((database) => {
@@ -695,17 +704,15 @@ export function deleteWorkspaceState(plan: WorkspaceStateDeletionPlan): void {
         workspaceDir: currentCanonicalIdentity.workspacePath,
         database,
       });
-      deleteWorkspaceRows(database, currentResolution.identity.workspaceKey);
-      return;
+      return deleteWorkspaceRows(database, currentResolution.identity);
     }
     if (storedIdentity) {
-      deleteWorkspaceRows(database, storedIdentity.workspaceKey);
-      return;
+      return deleteWorkspaceRows(database, storedIdentity);
     }
     const resolution = resolveWorkspaceIdentityFromDatabase({
       workspaceDir: currentCanonicalIdentity.workspacePath,
       database,
     });
-    deleteWorkspaceRows(database, resolution.identity.workspaceKey);
+    return deleteWorkspaceRows(database, resolution.identity);
   });
 }

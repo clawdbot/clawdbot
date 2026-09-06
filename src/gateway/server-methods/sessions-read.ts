@@ -56,7 +56,6 @@ import {
   loadCombinedSessionStoreForGatewayCore,
   resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTargetWithStore,
-  resolveSessionsListDefaultsAgentId,
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
 } from "../session-utils.js";
@@ -202,9 +201,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     const cfg = context.getRuntimeConfig();
     const configuredAgentsOnly = p.configuredAgentsOnly === true;
     const identityId = gatewayClientSessionCreator(client)?.id;
-    const defaultsAgentId = resolveSessionsListDefaultsAgentId(cfg, p.agentId);
     const modelSelectionTarget = resolveGatewayModelSelectionPolicy({
-      agentId: defaultsAgentId,
       callerScopes: client?.connect?.scopes ?? [],
       cfg,
     }).target;

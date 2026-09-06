@@ -455,12 +455,19 @@ describe("Talk device and voice wake settings", () => {
       openSystemSettings: vi.fn(),
       openPanel: vi.fn(),
       checkForUpdates: vi.fn(),
+      installChromeExtension: vi.fn(),
       refresh: vi.fn(),
       dispose: vi.fn(),
     } satisfies NativeDeviceSettingsCapability;
     const { page, request } = createTalkMutationHarness({ nativeDeviceSettings });
     await vi.waitFor(() => expect(request).toHaveBeenCalled());
     await page.updateComplete;
+    const publishSnapshot = async () => {
+      for (const notify of listeners) {
+        notify();
+      }
+      await page.updateComplete;
+    };
     const rows = [...page.querySelectorAll<HTMLElement>(".settings-row")];
     const row = (title: string) =>
       rows.find(
@@ -485,11 +492,16 @@ describe("Talk device and voice wake settings", () => {
     expect(nativeDeviceSettings.set).toHaveBeenCalledWith("voice.locale.primary", "de-DE");
     row("Test microphone…").querySelector("button")?.click();
     expect(nativeDeviceSettings.openPanel).toHaveBeenCalledWith("microphone-test");
+    snapshot.voice.wakeEnabled = true;
+    await publishSnapshot();
+    expect(row("Voice Wake").querySelector("wa-switch")?.hasAttribute("disabled")).toBe(false);
+    row("Voice Wake").click();
+    expect(nativeDeviceSettings.set).toHaveBeenCalledWith("voice.wakeEnabled", false);
+    snapshot.voice.wakeEnabled = false;
+    await publishSnapshot();
+    expect(row("Voice Wake").querySelector("wa-switch")?.hasAttribute("disabled")).toBe(true);
     snapshot.voice.supported = true;
-    for (const notify of listeners) {
-      notify();
-    }
-    await page.updateComplete;
+    await publishSnapshot();
     expect(row("Voice Wake").querySelector("wa-switch")?.hasAttribute("disabled")).toBe(false);
   });
 
@@ -515,6 +527,7 @@ describe("Talk device and voice wake settings", () => {
       openSystemSettings: vi.fn(),
       openPanel: vi.fn(),
       checkForUpdates: vi.fn(),
+      installChromeExtension: vi.fn(),
       refresh: vi.fn(),
       dispose: vi.fn(),
     } satisfies NativeDeviceSettingsCapability;

@@ -557,7 +557,7 @@ final class DashboardManager {
         controller.showFailure(
             title: "Dashboard unavailable",
             message: message,
-            detail: "Check Settings → Connection or use Debug → Reset Remote Tunnel, then try again.")
+            detail: "Open Connection or use Debug → Reset Remote Tunnel, then try again.")
     }
 
     func close() {
@@ -1389,7 +1389,7 @@ extension DashboardManager {
         switch WebChatManager.promptForGatewayProfile(profiles: available, preferredID: nil) {
         case let .profile(profile): return .profile(profile.id)
         case .manage:
-            AppNavigationActions.openSettings(tab: .gateways)
+            AppNavigationActions.openConnection(tab: .gateways)
             return nil
         case nil:
             self.pendingOpenCommands.removeAll()
@@ -1466,13 +1466,12 @@ extension DashboardManager {
         case let .select(target):
             self.switchTarget(target, in: source)
         case let .openWindow(target):
-            self.retireNavigation(for: target)
-            self.openWindow(for: target)
+            self.openNewDashboardWindow(for: target)
         case let .setPrimary(target):
             guard self.target(for: source) == target else { return }
             self.presentSetPrimaryConfirmation(target, source: source)
         case .openSettings:
-            AppNavigationActions.openSettings(tab: .gateways)
+            AppNavigationActions.openConnection(tab: .gateways)
         }
     }
 
@@ -1492,14 +1491,21 @@ extension DashboardManager {
                 alert.runModal()
             },
             openConnectionSettings: {
-                AppNavigationActions.openSettings(tab: .connection)
+                AppNavigationActions.openConnection()
             })
         coordinator.handle(link)
     }
 
-    func openOrFocusDashboard(for target: DashboardGatewayTarget) {
+    @discardableResult
+    func openOrFocusDashboard(for target: DashboardGatewayTarget) -> Task<Void, Never> {
         self.retireNavigation(for: target)
-        self.openWindow(for: target, reuseExisting: true)
+        return self.openWindow(for: target, reuseExisting: true)
+    }
+
+    @discardableResult
+    func openNewDashboardWindow(for target: DashboardGatewayTarget) -> Task<Void, Never> {
+        self.retireNavigation(for: target)
+        return self.openWindow(for: target)
     }
 
     private func dashboardControllers() -> [(target: DashboardGatewayTarget, controller: DashboardWindowController)] {
@@ -1512,6 +1518,10 @@ extension DashboardManager {
             return (instance.target, instance.controller)
         }
         return result
+    }
+
+    func openWindowCount(for target: DashboardGatewayTarget) -> Int {
+        self.dashboardControllers().count(where: { $0.target == target })
     }
 
     func frontmostDashboard()
@@ -1545,15 +1555,6 @@ extension DashboardManager {
             .compactMap { self.auxiliaryWindows[$0] }
             .first { $0.target == target && $0.controller.isWindowOpen }?
             .controller
-    }
-
-    @discardableResult
-    func performSwitchFrontmostDashboard(to target: DashboardGatewayTarget) -> Task<Void, Never>? {
-        guard let frontmost = frontmostDashboard() else {
-            self.retireNavigation(for: target)
-            return self.openWindow(for: target, reuseExisting: true)
-        }
-        return self.switchTarget(target, in: frontmost.controller, present: true)
     }
 }
 
@@ -1589,10 +1590,6 @@ extension DashboardManager {
 
     func _testSwitchTarget(_ target: DashboardGatewayTarget, in source: DashboardWindowController) async {
         await self.switchTarget(target, in: source)?.value
-    }
-
-    func _testSwitchFrontmostDashboard(to target: DashboardGatewayTarget) async {
-        await self.performSwitchFrontmostDashboard(to: target)?.value
     }
 
     func _testHandleControlChannelStateChange(_ state: ControlChannel.ConnectionState) async {

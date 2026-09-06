@@ -8,10 +8,12 @@ import {
   resolveProviderContext,
   type ProviderStreamOptions,
 } from "../../../../packages/ai/src/provider-types.js";
+import { createPluginMetadataSnapshot } from "../../../config/plugin-auto-enable.test-helpers.js";
 import { bindStreamLlmRuntime } from "../../../llm/model-runtime-binding.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
 import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
 import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
+import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/generation-scope.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/index.js";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
@@ -162,7 +164,14 @@ describe("settleEmbeddedAttemptStream liveness", () => {
       }
       expect(getEmbeddedSessionPromptState(sessionId).toolResults).not.toBe(state);
 
-      await settleEmbeddedAttemptStream(input);
+      // Production supplies this generation before entering the attempt runner.
+      const metadataSnapshot = createPluginMetadataSnapshot({
+        config: input.attempt.config,
+        manifestRegistry: { plugins: [], diagnostics: [] },
+      });
+      await withPluginRuntimeGenerationScope({ metadataSnapshot }, () =>
+        settleEmbeddedAttemptStream(input),
+      );
 
       expect(input.sessionManager.getEntries()).toContainEqual(
         expect.objectContaining({

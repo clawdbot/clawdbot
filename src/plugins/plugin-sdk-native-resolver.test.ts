@@ -372,6 +372,48 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     expect(() => requireFromPlugin.resolve("openclaw/plugin-sdk/stable-extra")).toThrow();
   });
 
+  it("keeps overlapping parent precedence across first demand and reinstallation", () => {
+    const broadHost = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sdk-broad-host-"));
+    const narrowHost = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sdk-narrow-host-"));
+    const broad = writeFakeOpenClawPackage(broadHost);
+    const narrow = writeFakeOpenClawPackage(narrowHost);
+    const broadEntry = writeExternalPluginEntry(path.join(broadHost, "external-plugin"));
+    const narrowEntry = writeExternalPluginEntry(path.join(broadHost, "external-plugin", "nested"));
+    const narrowOptions = {
+      modulePath: narrow.loaderModulePath,
+      pluginModulePath: narrowEntry,
+      devSourceRoot: narrowHost,
+    };
+    const broadOptions = {
+      modulePath: broad.loaderModulePath,
+      pluginModulePath: broadEntry,
+      devSourceRoot: broadHost,
+    };
+    installOpenClawPluginSdkNativeResolver(narrowOptions);
+    installOpenClawPluginSdkNativeResolver(broadOptions);
+    const fromBroad = createRequire(broadEntry);
+    const fromNarrow = createRequire(narrowEntry);
+    const expected = (host: string, subpath: string) =>
+      fs.realpathSync(path.join(host, "dist", "plugin-sdk", `${subpath}.js`));
+
+    // A demand outside the nested root gives the broad host precedence even
+    // though it was installed second; the later path was not demanded yet.
+    expect(fs.realpathSync(fromBroad.resolve("openclaw/plugin-sdk/agent-runtime"))).toBe(
+      expected(broadHost, "agent-runtime"),
+    );
+    expect(fs.realpathSync(fromNarrow.resolve("openclaw/plugin-sdk/channel-outbound.js"))).toBe(
+      expected(broadHost, "channel-outbound"),
+    );
+
+    installOpenClawPluginSdkNativeResolver(broadOptions);
+    expect(fs.realpathSync(fromNarrow.resolve("openclaw/plugin-sdk/channel-message"))).toBe(
+      expected(narrowHost, "channel-message"),
+    );
+    expect(fs.realpathSync(fromBroad.resolve("openclaw/plugin-sdk/channel-message"))).toBe(
+      expected(broadHost, "channel-message"),
+    );
+  });
+
   it("keeps native aliases on JS dist artifacts when source files exist", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sdk-native-source-resolver-"));
     const { loaderModulePath } = writeFakeOpenClawPackage(root);
@@ -437,9 +479,10 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
       probePath,
       [
         'import fs from "node:fs";',
+        'import Module from "node:module";',
         'import path from "node:path";',
         'import { pathToFileURL } from "node:url";',
-        `import { installOpenClawPluginSdkNativeResolver } from ${JSON.stringify(resolverModuleUrl)};`,
+        `import { installOpenClawInternalCorePackageNativeResolver, installOpenClawPluginSdkNativeResolver } from ${JSON.stringify(resolverModuleUrl)};`,
         `const root = ${JSON.stringify(root)};`,
         "const writeJson = (targetPath, value) => {",
         "  fs.mkdirSync(path.dirname(targetPath), { recursive: true });",
@@ -451,14 +494,20 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
         '  bin: { openclaw: "./openclaw.mjs" },',
         "  exports: {",
         '    "./plugin-sdk/channel-outbound": "./dist/plugin-sdk/channel-outbound.js",',
+        '    "./plugin-sdk/late-entry": "./dist/plugin-sdk/late-entry.js",',
         "  },",
         "});",
         'fs.writeFileSync(path.join(root, "openclaw.mjs"), "#!/usr/bin/env node\\n", "utf8");',
         'fs.mkdirSync(path.join(root, "dist", "plugin-sdk"), { recursive: true });',
+        'fs.writeFileSync(path.join(root, "dist", "plugin-sdk", "late-entry.js"), "export const late = \\"late-adapter\\";\\n", "utf8");',
         'fs.writeFileSync(path.join(root, "dist", "plugin-sdk", "channel-outbound.js"), "export const defineChannelMessageAdapter = () => \\"adapter\\";\\n", "utf8");',
         'const loaderModulePath = path.join(root, "dist", "plugins", "loader.js");',
         "fs.mkdirSync(path.dirname(loaderModulePath), { recursive: true });",
         'fs.writeFileSync(loaderModulePath, "export default {};\\n", "utf8");',
+        "const originalResolver = Module._resolveFilename;",
+        "installOpenClawInternalCorePackageNativeResolver({ moduleUrl: pathToFileURL(loaderModulePath).href });",
+        "installOpenClawPluginSdkNativeResolver({ modulePath: loaderModulePath });",
+        "const aliasFreeUnchanged = Module._resolveFilename === originalResolver;",
         'const pluginRoot = path.join(root, "external-plugin");',
         'writeJson(path.join(pluginRoot, "package.json"), { name: "external-plugin", type: "module" });',
         'const entryPath = path.join(pluginRoot, "dist", "runtime-api.js");',
@@ -471,7 +520,7 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
         ");",
         "fs.writeFileSync(",
         "  lazyPath,",
-        '  "import { defineChannelMessageAdapter } from \\"openclaw/plugin-sdk/channel-outbound\\"; export const lazy = defineChannelMessageAdapter();\\n",',
+        '  "export { late as lazy } from \\"openclaw/plugin-sdk/late-entry.js\\";\\n",',
         '  "utf8",',
         ");",
         "installOpenClawPluginSdkNativeResolver({",
@@ -481,7 +530,7 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
         "});",
         "const module = await import(pathToFileURL(entryPath).href);",
         "const lazy = await module.loadLazy();",
-        "console.log(`${module.eager}:${lazy.lazy}`);",
+        "console.log(JSON.stringify({ aliasFreeUnchanged, eager: module.eager, lazy: lazy.lazy }));",
         "",
       ].join("\n"),
       "utf8",
@@ -502,7 +551,14 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
   it("keeps SDK aliases available for native ESM lazy imports", () => {
     expect(nativeEsmLazyImportProbe.stderr).toBe("");
     expect(nativeEsmLazyImportProbe.status).toBe(0);
-    expect(nativeEsmLazyImportProbe.stdout.trim()).toBe("adapter:adapter");
+    expect(JSON.parse(nativeEsmLazyImportProbe.stdout)).toMatchObject({
+      eager: "adapter",
+      lazy: "late-adapter",
+    });
+  });
+
+  it("leaves native resolution untouched until aliases are registered", () => {
+    expect(JSON.parse(nativeEsmLazyImportProbe.stdout).aliasFreeUnchanged).toBe(true);
   });
 
   it("does not resolve SDK aliases for parents outside registered plugin roots", () => {

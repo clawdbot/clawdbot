@@ -184,6 +184,24 @@ describe("resolveGatewayRunPreBootstrapOptions", () => {
       resolveGatewayRunPreBootstrapOptions(["node", "openclaw", "gateway", "--token", "--force"]),
     ).toEqual({ force: false, reset: false });
   });
+
+  it.each([
+    { args: ["--", "gateway", "status"], commandPath: ["gateway", "status"] },
+    { args: ["gateway", "--", "status"], commandPath: ["gateway", "status"] },
+    { args: ["--", "gateway", "--force"], commandPath: ["gateway", "--force"] },
+    { args: ["--", "gateway", "run", "--reset"], commandPath: ["gateway", "run"] },
+    { args: ["gateway", "--", "run", "--force"], commandPath: ["gateway", "run"] },
+    { args: ["gateway", "run", "--", "--reset"], commandPath: ["gateway", "run"] },
+  ])(
+    "preserves literal gateway commands without enabling destructive flags: $args",
+    ({ args, commandPath }) => {
+      const argv = ["node", "openclaw", ...args];
+      expect(resolveGatewayCatalogCommandPath(argv)).toEqual(commandPath);
+      const options = resolveGatewayRunPreBootstrapOptions(argv);
+      expect(options?.force).not.toBe(true);
+      expect(options?.reset).not.toBe(true);
+    },
+  );
 });
 
 describe("rewriteUpdateFlagArgv", () => {
@@ -301,6 +319,22 @@ describe("shouldHandleBareRoot", () => {
     expect(shouldHandleBareRoot(["node", "openclaw", "--help"])).toBe(false);
     expect(shouldHandleBareRoot(["node", "openclaw", "-V"])).toBe(false);
     expect(shouldHandleBareRoot(["node", "openclaw", "status"])).toBe(false);
+  });
+
+  it.each([
+    { args: ["--", "config", "get", "gateway.mode"] },
+    { args: ["--profile", "work", "--", "config", "get", "gateway.mode"] },
+    { args: ["--", "--help"] },
+    { args: ["--", "config", "--help"] },
+    { args: ["--", "config", "unknown"] },
+  ])("does not start bare-root flows for literal commands: $args", ({ args }) => {
+    const argv = ["node", "openclaw", ...args];
+    expect(shouldHandleBareRoot(argv)).toBe(false);
+    expect(shouldUseRootHelpFastPath(argv)).toBe(false);
+  });
+
+  it("retains bare-root behavior for an otherwise empty terminator", () => {
+    expect(shouldHandleBareRoot(["node", "openclaw", "--"])).toBe(true);
   });
 });
 

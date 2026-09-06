@@ -170,7 +170,7 @@ export function wrapNoteMessage(
   const columns = options.columns ?? resolveNoteColumns(process.stdout.columns);
   const maxWidth = options.maxWidth ?? Math.max(40, Math.min(88, columns - 10));
   return text
-    .split("\n")
+    .split(/\r\n?|[\n\u2028\u2029]/u)
     .flatMap((line) => wrapLine(line, maxWidth))
     .join("\n");
 }

@@ -1,14 +1,14 @@
 // Integration regressions for cron-owned heartbeat watchdog handoffs.
 import { describe, expect, it, vi } from "vitest";
 import {
+  createCronRegressionState,
   createIsolatedRegressionJob,
-  noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
-import { createCronServiceState, type CronServiceDeps } from "./state.js";
+import type { CronServiceDeps } from "./state.js";
 import { onTimer } from "./timer.test-support.js";
 
 const heartbeatWatchdogFixtures = setupCronRegressionFixtures({
@@ -62,14 +62,10 @@ describe("cron heartbeat watchdog", () => {
           await releaseHeartbeat.promise;
           return { status: "ran" as const, durationMs: 1 };
         };
-        const state = createCronServiceState({
-          cronEnabled: true,
+        const state = createCronRegressionState({
           storePath: store.storePath,
-          log: noopLogger,
           nowMs: () => Date.now(),
           defaultAgentId: "main",
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
           resolveHeartbeatTimeoutMs: vi.fn(() => undefined),
           requestHeartbeatAndWait:
             vi.fn<NonNullable<CronServiceDeps["requestHeartbeatAndWait"]>>(runHeartbeat),
@@ -117,14 +113,10 @@ describe("cron heartbeat watchdog", () => {
       vi.setSystemTime(scheduledAt);
       const triggerStarted = createDeferred();
       const resolveHeartbeatTimeoutMs = vi.fn(() => 15 * 60_000);
-      const state = createCronServiceState({
-        cronEnabled: true,
+      const state = createCronRegressionState({
         storePath: store.storePath,
-        log: noopLogger,
         nowMs: () => Date.now(),
         defaultAgentId: "main",
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runHeartbeatOnce: vi.fn(async () => ({ status: "ran" as const, durationMs: 1 })),
         resolveHeartbeatTimeoutMs,
         evaluateCronTrigger: vi.fn(async () => {

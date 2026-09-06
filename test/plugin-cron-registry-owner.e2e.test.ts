@@ -152,8 +152,9 @@ async function startMockModelServer(rejectModel?: string): Promise<MockModelServ
       const body = await readJsonRequest(req);
       requests.push({ body });
       if (rejectModel && body.model === rejectModel) {
-        res.writeHead(503, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: { message: "Model temporarily unavailable" } }));
+        // Missing models advance fallback; transient outages first recover on the same model.
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { code: "model_not_found", message: "Model not found" } }));
         return;
       }
       writeModelResponse(res, requests.length);

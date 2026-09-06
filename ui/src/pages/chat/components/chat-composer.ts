@@ -89,8 +89,7 @@ export function renderChatComposer(props: ChatComposerProps) {
   const canCompose = props.canSend;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
-  const hasTerminalStatus = hasTerminalRunStatus(props.runStatus);
-  const showAbortableUi = canAbort && !hasTerminalStatus;
+  const showAbortableUi = canAbort && !hasTerminalRunStatus(props.runStatus);
   const submittedProgress = props.queue.find((item) =>
     isCurrentSessionSubmittedProgress(item, props.sessionKey, props.runStatus),
   );
@@ -228,6 +227,7 @@ export function renderChatComposer(props: ChatComposerProps) {
   const gatewayQuestionPrompts =
     props.gatewayQuestionPrompts?.filter(
       (prompt) =>
+        props.disabledBanner?.kind !== "composer-replacement" &&
         prompt.status === "pending" &&
         prompt.sessionKey !== undefined &&
         areUiSessionKeysEquivalent(prompt.sessionKey, props.sessionKey),

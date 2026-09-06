@@ -707,6 +707,14 @@ export function ensureOpenClawAgentDatabaseSchema(
   db: DatabaseSync,
   options: OpenClawAgentDatabaseOptions & { register?: boolean },
 ): void {
+  runSqliteIntegrityOperationSync(ensureOpenClawAgentDatabaseSchemaSteps(db, options));
+}
+
+/** Share one schema sequence between synchronous callers and leased maintenance. */
+export function* ensureOpenClawAgentDatabaseSchemaSteps(
+  db: DatabaseSync,
+  options: OpenClawAgentDatabaseOptions & { register?: boolean },
+): SqliteIntegrityOperation<void> {
   const agentId = normalizeAgentId(options.agentId);
   const databaseOptions = { ...options, agentId };
   const pathname = resolveOpenClawAgentSqlitePath(databaseOptions);
@@ -715,17 +723,15 @@ export function ensureOpenClawAgentDatabaseSchema(
   assertSupportedAgentSchemaVersion(db, pathname);
   assertExistingAgentSchemaOwner(readExistingAgentSchemaMeta(db), agentId, pathname);
   if (readSqliteUserVersion(db) !== AGENT_MEDIA_SCHEMA_VERSION) {
-    runSqliteIntegrityOperationSync(
-      agentDatabaseIntegrityBeforeMutationSteps(db, agentId, pathname),
-    );
+    yield* agentDatabaseIntegrityBeforeMutationSteps(db, agentId, pathname);
   }
   configureSqlitePreSchemaPragmas(db, {
     busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   });
   ensureAgentSchema(db, agentId, pathname);
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
-  if (options.register === true) {
-    registerOpenClawAgentDatabase({ agentId, path: pathname, env: options.env });
+  if (databaseOptions.register === true) {
+    registerOpenClawAgentDatabase({ agentId, path: pathname, env: databaseOptions.env });
   }
 }
 

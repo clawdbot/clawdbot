@@ -434,23 +434,51 @@ describe("Claw status and remove", () => {
     );
   });
 
-  it("does not treat Claw-owned cron jobs as external agent blockers", async () => {
-    const current = await addFixture({ withCron: true });
-    seedAttachedCronJob(current.env, {
-      id: "scheduler-daily",
-      name: "Claw job",
-      schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
-    });
+  it.each([false, true])(
+    "keeps Claw-owned cron removal actions consistent (independent jobs=%s)",
+    async (withIndependentJobs) => {
+      const current = await addFixture({ withCron: true });
+      seedAttachedCronJob(current.env, {
+        id: "scheduler-daily",
+        name: "Claw job",
+        schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+      });
+      if (withIndependentJobs) {
+        for (const id of ["z-operator-job", "a-operator-job"]) {
+          seedAttachedCronJob(current.env, {
+            id,
+            name: "Operator job",
+            schedule: { kind: "every", everyMs: 60_000 },
+          });
+        }
+      }
 
-    const plan = await buildClawRemovePlan("worker", {
-      env: current.env,
-      config: current.getConfig(),
-    });
-
-    expect(plan.blockers).not.toContainEqual(
-      expect.objectContaining({ code: "agent_job_attached" }),
-    );
-  });
+      const plan = await buildClawRemovePlan("worker", {
+        env: current.env,
+        config: current.getConfig(),
+      });
+      const independentIds = withIndependentJobs ? ["a-operator-job", "z-operator-job"] : [];
+      expect(plan.blockers).toEqual(
+        independentIds.map((id) => ({
+          code: "agent_job_attached",
+          message: expect.stringContaining(JSON.stringify(id)),
+        })),
+      );
+      expect(plan.actions.filter((action) => action.kind === "scheduledJob")).toEqual(
+        independentIds.map((id) =>
+          expect.objectContaining({ id, action: "retain", blocked: true }),
+        ),
+      );
+      expect(plan.actions.filter((action) => action.kind === "cronJob")).toEqual([
+        expect.objectContaining({
+          id: "daily-report",
+          target: "scheduler-daily",
+          action: "remove",
+          blocked: false,
+        }),
+      ]);
+    },
+  );
 
   it("removes the agent and unchanged files but only releases package refs", async () => {
     const current = await addFixture({ withFile: true });

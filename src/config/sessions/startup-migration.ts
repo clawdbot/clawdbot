@@ -5,7 +5,7 @@ import { listOpenClawRegisteredAgentDatabases } from "../../state/openclaw-agent
 import {
   closeOpenClawAgentDatabaseByPath,
   isOpenClawAgentDatabaseOpen,
-  openOpenClawAgentDatabase,
+  withOpenClawAgentDatabaseAsync,
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
@@ -96,12 +96,14 @@ export async function runSessionStartupMigration(params: {
     let handedOff = false;
     try {
       try {
+        const mainKey = params.cfg.session?.mainKey;
         if (
           !registeredDatabases.has(`${options.agentId}\0${databasePath}`) ||
-          !isCanonicalSqliteSessionMainKeyCurrent(options, params.cfg.session?.mainKey)
+          !isCanonicalSqliteSessionMainKeyCurrent(options, mainKey)
         ) {
-          const database = openOpenClawAgentDatabase(options);
-          setCanonicalSqliteSessionMainKey(database, params.cfg.session?.mainKey);
+          await withOpenClawAgentDatabaseAsync(options, (database) =>
+            setCanonicalSqliteSessionMainKey(database, mainKey),
+          );
         }
         // Workspace metadata participates in claim matching. Preserve it during a
         // partial move so the next attempt can finish removing the source claim.

@@ -45,12 +45,31 @@ struct DashboardGatewaySnapshot: Codable, Equatable, Sendable {
 }
 
 struct MacGatewayCatalogProfile: Equatable, Sendable {
+    enum AuthKind: Equatable, Sendable {
+        case token
+        case password
+        case browser
+    }
+
     let profile: MacGatewayProfile
     let canPromote: Bool
     var usesBrowserIdentity = false
+    var browserSessionExpiresAt: Date?
+    var authKind: AuthKind?
 }
 
 enum DashboardGatewayCatalog {
+    static func primaryRemoteHostLabel(
+        transport: AppState.RemoteTransport,
+        sshTarget: String?,
+        resolvedHostLabel: String?) -> String?
+    {
+        switch transport {
+        case .ssh: CommandResolver.parseSSHTarget(sshTarget ?? "")?.host ?? resolvedHostLabel
+        case .direct: resolvedHostLabel
+        }
+    }
+
     static func entries(
         mode: AppState.ConnectionMode,
         primaryRemoteURL: URL?,
@@ -95,7 +114,7 @@ enum DashboardGatewayCatalog {
                 canPromote: item.canPromote,
                 health: .unknown)
         }
-        return [primary] + saved
+        return mode == .unconfigured ? saved : [primary] + saved
     }
 
     @MainActor
@@ -124,7 +143,10 @@ enum DashboardGatewayCatalog {
             mode: state.connectionMode,
             primaryRemoteURL: GatewayRemoteConfig.resolveGatewayUrl(root: root),
             resolvedRemoteURL: resolvedRemoteURL,
-            resolvedRemoteHostLabel: connectivity.resolvedHostLabel,
+            resolvedRemoteHostLabel: self.primaryRemoteHostLabel(
+                transport: GatewayRemoteConfig.resolveTransportResolution(root: root).transport,
+                sshTarget: state.remoteTarget,
+                resolvedHostLabel: connectivity.resolvedHostLabel),
             profiles: profiles,
             primaryHealth: self.primaryHealth(for: ControlChannel.shared.state))
     }

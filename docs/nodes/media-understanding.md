@@ -216,7 +216,7 @@ Set `capabilities` on a `models[]` entry to restrict it to specific media types.
 | `groq`, `xai`, `deepgram`, `senseaudio`                                  | audio                 |
 | Any `models.providers.<id>.models[]` catalog with an image-capable model | image                 |
 
-For CLI entries, set `capabilities` explicitly to avoid surprising matches; if omitted, the entry is eligible for every capability list it appears in.
+CLI entries require explicit `capabilities`; entries without valid capability tags are skipped. Provider entries without valid explicit tags use their registered capability metadata.
 
 ## Provider support matrix
 

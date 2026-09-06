@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveDefaultAgentDir, type AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { codexBuildSymbol, defineCodexBuildState } from "../build-state.js";
 import { CodexAppServerStartupError } from "./attempt-timeouts.js";
 import {
   applyCodexAppServerAuthProfile,
@@ -134,21 +135,19 @@ type CodexAppServerSpawnIdentity = Omit<
   "clientId" | "serverVersion" | "userAgent"
 >;
 
-// Symbol.for shares one client table across duplicate module copies (dist +
-// src bundles in one process). Plugin updates restart the gateway, so every
-// copy writing this state runs the same code and the shape never migrates.
-const SHARED_CODEX_APP_SERVER_CLIENT_STATE = Symbol.for("openclaw.codexAppServerClientState");
-const SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER = Symbol.for("openclaw.codexAppServerClientDisposer");
+// Keep disposal preloaded and build-scoped: shutdown must close the old clients
+// even if another module copy has loaded replacement code.
+const SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER = codexBuildSymbol(
+  "openclaw.codexAppServerClientDisposer",
+);
 const createStartupLifetime = (): CodexAppServerStartupLifetime => ({
   controller: new AbortController(),
   pending: new Set(),
 });
 
-function getSharedCodexAppServerClientState(): SharedCodexAppServerClientState {
-  const globalState = globalThis as typeof globalThis & {
-    [SHARED_CODEX_APP_SERVER_CLIENT_STATE]?: SharedCodexAppServerClientState;
-  };
-  globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE] ??= {
+const getSharedCodexAppServerClientState = defineCodexBuildState(
+  "openclaw.codexAppServerClientState",
+  (): SharedCodexAppServerClientState => ({
     clients: new Map(),
     liveClients: new Set(),
     isolatedClients: new Set(),
@@ -156,9 +155,8 @@ function getSharedCodexAppServerClientState(): SharedCodexAppServerClientState {
     desktopGenerationDrainChecks: new Set(),
     startup: createStartupLifetime(),
     startMetadata: new WeakMap(),
-  };
-  return globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE];
-}
+  }),
+);
 
 function ownCodexStartup<T>(
   lifetime: CodexAppServerStartupLifetime,

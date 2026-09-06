@@ -519,13 +519,13 @@ export async function handleDirectiveOnly(
     }
     if (
       modelSelection &&
-      (!modelSelection.isDefault || params.stickyModelSelectionTarget) &&
-      params.canPersistStickyModelSelection === true
+      params.canPersistStickyModelSelection === true &&
+      params.stickyModelSelectionTarget
     ) {
       configuredDefaultUpdate = persistStickyModelSelectionBestEffort({
         agentId: activeAgentId,
         model: `${modelSelection.provider}/${modelSelection.model}`,
-        ...(params.stickyModelSelectionTarget ? { target: params.stickyModelSelectionTarget } : {}),
+        target: params.stickyModelSelectionTarget,
       });
     }
     // List projections must observe committed settings, not only model selections.

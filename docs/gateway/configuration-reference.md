@@ -776,7 +776,7 @@ policy changes apply within the existing pairing approval.
       // dangerouslyAllowHostHeaderOriginFallback: false, // dangerous Host-header origin fallback mode
     },
     cliAgents: {
-      enabled: false, // Labs: show create-capable CLI session targets in the model picker
+      enabled: true, // show create-capable CLI session targets in the model picker
     },
     terminal: {
       enabled: false,
@@ -884,7 +884,7 @@ policy changes apply within the existing pairing approval.
 - Tool activity descriptions appear automatically when supplied by the acting agent; viewing tool calls does not request utility-model completions. The former `controlUi.toolTitles` setting is retired. Run `openclaw doctor --fix` to remove it from existing configs.
 - `controlUi.automaticallyFetchFavicons`: link favicons in Control UI chat. Default: `true`. The authenticated browser asks its same-origin Gateway for each hostname. The Gateway requests only `https://<hostname>/favicon.ico`, rejects IP literals and private/internal destinations, pins public DNS results, revalidates every redirect under the same strict SSRF policy, limits redirects/time/bytes/concurrency, validates the image, and returns a private-cacheable image blob. OpenClaw does not use Google or another favicon service for this flow. This discloses linked hostnames and the Gateway's network address to those destination sites. Set `false` to prevent the browser from requesting favicon routes and the Gateway from contacting link destinations.
 - `controlUi.dangerouslyAllowHostHeaderOriginFallback`: dangerous mode that enables Host-header origin fallback for deployments that intentionally rely on Host-header origin policy.
-- `cliAgents.enabled`: opt in to the experimental **CLI agents** group in the Control UI new-session model picker. Default: `false`. The group appears only when the Gateway advertises `sessions.catalog.list`, and it includes only catalog providers that support creating sessions. Selecting one opens the same catalog-target new-session flow used by the sidebar catalog action.
+- `cliAgents.enabled`: show the experimental **CLI agents** group in the Control UI new-session model picker. Default: `true`; set `false` to disable CLI agents and native CLI session creation. The group appears only when the Gateway advertises `sessions.catalog.list`, and it includes only catalog providers that support creating sessions. Selecting one opens the same catalog-target new-session flow used by the sidebar catalog action.
 
   Catalog providers can also advertise terminal-based session creation. The method is available only when Labs `cliAgents.enabled` is on, the Gateway terminal is available, and the selected provider exposes the capability. Callers supply `cwd`; create a fresh worktree first with `worktrees.create` when needed, because terminal start does not provision one.
 
@@ -1167,7 +1167,7 @@ plugin does enforce it.
 | Endpoint             | Payload and result                                                                                                                                                                                                                                                                                                                                                                                     |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `POST /hooks/wake`   | Required nonempty `text`; optional `mode` (`"now"` default or `"next-heartbeat"`), `agentId`, `sessionKey`. Returns `200 { ok: true, mode, eventOutcome }`; `eventOutcome` is `"queued"` when the queue accepts the wake or `"coalesced"` when the same wake is already the queue's most recent pending event. `now` requests a heartbeat in either case; the result does not prove the heartbeat ran. |
-| `POST /hooks/agent`  | [Agent payload](/gateway/configuration-reference#hook-agent-payload). Returns `200 { ok: true, runId }` after session/global placement admission, not completion.                                                                                                                                                                                                                                      |
+| `POST /hooks/agent`  | [Agent payload](/gateway/configuration-reference#hook-agent-payload). By default returns `200 { ok: true, runId }` after session/global placement admission. With `waitForCompletion: true`, waits for the admitted run and adds bounded terminal execution/delivery facts in `completion`.                                                                                                            |
 | `POST /hooks/<name>` | First matching mapping produces wake/agent actions. No matching mapping returns `404`; no actions returns `204`. Agent fan-out has the [batch response contract](/gateway/configuration-reference#hook-retries-and-fan-out).                                                                                                                                                                           |
 
 The direct `/wake` and `/agent` endpoints take precedence over mappings with
@@ -1195,22 +1195,23 @@ or channel delivery. See [hook verification](/automation/cron-jobs#verify-and-tr
 
 ### Hook agent payload
 
-| Field            | Default                  | Contract                                                                                                                                                                                                                                                     |
-| ---------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `message`        | required                 | Nonempty agent input text; external content is safety-wrapped.                                                                                                                                                                                               |
-| `name`           | `"Hook"`                 | Hook label used in logs/completion events.                                                                                                                                                                                                                   |
-| `agentId`        | resolved owner           | Must name a configured agent when supplied directly. Required when no implicit/retained owner can be resolved.                                                                                                                                               |
-| `sessionKey`     | default/generated key    | Subject to caller-key opt-in and prefix policy.                                                                                                                                                                                                              |
-| `sessionMode`    | `"isolated"`             | `"isolated"` creates a fresh run session; `"persistent"` reuses the resolved session.                                                                                                                                                                        |
-| `idempotencyKey` | unset                    | Optional replay key; headers take precedence. See retries below.                                                                                                                                                                                             |
-| `wakeMode`       | `"now"`                  | `"now"` or `"next-heartbeat"`; controls waking for completion events, not whether the agent is dispatched immediately.                                                                                                                                       |
-| `deliver`        | `true`                   | Only `false` opts out. With no direct destination, successful output can become a main-session completion event. `false` logs successful completion without an announcement and ignores destination fields. Non-ok execution results produce a status event. |
-| `channel`        | none for direct delivery | Registered concrete channel id; must be paired with `to`. Direct `/agent` cannot use `"last"`.                                                                                                                                                               |
-| `to`             | unset                    | Nonempty recipient for direct announce delivery, paired with `channel`.                                                                                                                                                                                      |
-| `accountId`      | channel default          | Selects a configured, enabled account; requires `channel` and `to`. Unknown, disabled, or invalid selections return `400` before dispatch.                                                                                                                   |
-| `model`          | agent/model defaults     | Model id or alias override, subject to model availability and allowlist policy.                                                                                                                                                                              |
-| `thinking`       | agent/model defaults     | Thinking override for the run.                                                                                                                                                                                                                               |
-| `timeoutSeconds` | agent timeout            | Positive numeric turn-timeout override; direct payload values are floored to whole seconds. Invalid/nonpositive values are ignored.                                                                                                                          |
+| Field               | Default                  | Contract                                                                                                                                                                                                                                                     |
+| ------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `message`           | required                 | Nonempty agent input text; external content is safety-wrapped.                                                                                                                                                                                               |
+| `name`              | `"Hook"`                 | Hook label used in logs/completion events.                                                                                                                                                                                                                   |
+| `agentId`           | resolved owner           | Must name a configured agent when supplied directly. Required when no implicit/retained owner can be resolved.                                                                                                                                               |
+| `sessionKey`        | default/generated key    | Subject to caller-key opt-in and prefix policy.                                                                                                                                                                                                              |
+| `sessionMode`       | `"isolated"`             | `"isolated"` creates a fresh run session; `"persistent"` reuses the resolved session.                                                                                                                                                                        |
+| `idempotencyKey`    | unset                    | Optional replay key; headers take precedence. See retries below.                                                                                                                                                                                             |
+| `waitForCompletion` | `false`                  | Direct `/agent` only. When `true`, keep the HTTP response open after admission and return `completion` with `status` plus available delivery facts. Mappings and fan-out remain admission-only.                                                              |
+| `wakeMode`          | `"now"`                  | `"now"` or `"next-heartbeat"`; controls waking for completion events, not whether the agent is dispatched immediately.                                                                                                                                       |
+| `deliver`           | `true`                   | Only `false` opts out. With no direct destination, successful output can become a main-session completion event. `false` logs successful completion without an announcement and ignores destination fields. Non-ok execution results produce a status event. |
+| `channel`           | none for direct delivery | Registered concrete channel id; must be paired with `to`. Direct `/agent` cannot use `"last"`.                                                                                                                                                               |
+| `to`                | unset                    | Nonempty recipient for direct announce delivery, paired with `channel`.                                                                                                                                                                                      |
+| `accountId`         | channel default          | Selects a configured, enabled account; requires `channel` and `to`. Unknown, disabled, or invalid selections return `400` before dispatch.                                                                                                                   |
+| `model`             | agent/model defaults     | Model id or alias override, subject to model availability and allowlist policy.                                                                                                                                                                              |
+| `thinking`          | agent/model defaults     | Thinking override for the run.                                                                                                                                                                                                                               |
+| `timeoutSeconds`    | agent timeout            | Positive numeric turn-timeout override; direct payload values are floored to whole seconds. Invalid/nonpositive values are ignored.                                                                                                                          |
 
 Omitting all destination fields runs without a direct announce destination.
 Supplying only part of a destination fails with `400` while delivery is enabled.
@@ -1298,9 +1299,24 @@ Agent replay keys resolve in this order: `Idempotency-Key`,
 `X-OpenClaw-Idempotency-Key`, then payload `idempotencyKey`. Only trimmed nonempty
 strings of at most 256 characters are used. The same key replays only for the
 same token, path, and resolved dispatch fields; changing the message or routing
-can create a new run. Completed admission replay entries expire after 5 minutes
-and are bounded to 1,000 entries in memory. Restart clears them. Failed admissions
-remain retryable; a replayed `200` is not a fresh execution or a completion check.
+can create a new run. Pending admissions and admitted runs with unresolved
+completion are retained without TTL or size eviction. After terminal completion
+settles, its replay entry expires after 5 minutes and counts toward the 1,000
+terminal-entry memory bound. Restart clears all replay state. Failed admissions
+remain retryable. Direct retries may change `waitForCompletion` without changing
+dispatch identity: admission-only callers replay the `runId`, while waiting
+callers share the same completion promise and replay its terminal result.
+
+When requested, `completion.status` is `ok`, `error`, or `skipped`, and
+`replyDisposition` is `visible`, `silent`, or `empty`. This disposition exposes
+only whether a terminal model reply existed, never its text. The optional
+delivery fields are `delivered`, `deliveryAttempted`, `deliveryError`, and
+`deliverySuppressionReason` (`empty`, `silent`, `heartbeat`, or
+`channel_transform`). Missing delivery fields remain unknown. Post-admission
+failures still return HTTP `200`; only admission failures use the non-2xx
+statuses above. `deliveryError`, when present, is the fixed categorical value
+`"delivery-failed"`. Provider, runtime, model, target, session, diagnostic,
+output, and summary details are never returned.
 
 For `forEach`, templates/transforms see the original payload with the chosen
 array replaced by `[currentItem]`. Missing, empty, or non-array values produce no

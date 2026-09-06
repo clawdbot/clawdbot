@@ -1105,6 +1105,8 @@ struct OnboardingAISetupTests {
         [false, true])
     func `activation consent uses shared wizard`(decision: String, manual: Bool) async throws {
         let recorder = AISetupRequestRecorder()
+        let settlementGate = AISetupConfigReadGate()
+        let gateSettlement = decision == "rejected-unavailable"
         let activationAttempts = AISetupSocketGeneration()
         let cancellationFails = LockIsolated(true)
         let rejectionStatus: String? = if decision == "rejected-replaced" {
@@ -1163,6 +1165,11 @@ struct OnboardingAISetupTests {
                     case "consent":
                         let accepted = try #require(answer?["value"] as? Bool)
                         #expect(accepted == accepts)
+                        if gateSettlement {
+                            // Pass the transport's post-response check, then hold the
+                            // activation owner's final lease validation after the sheet closes.
+                            await settlementGate.armNextRead(afterReads: 1)
+                        }
                         payload = if terminalError {
                             ["done": true, "status": "error", "error": failureDetail]
                         } else if decision == "malformed-success" {
@@ -1238,25 +1245,31 @@ struct OnboardingAISetupTests {
                     methods: ["openclaw.setup.activate", "openclaw.setup.activate.start"],
                     capabilities: ["openclaw-setup-model-ref"]))
             })
-        let gateway = try makeAISetupGateway(url: #require(URL(string: "ws://example.invalid")), session: session)
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let gateway = GatewayConnection(
+            configProvider: {
+                let token = await settlementGate.snapshotToken()
+                return (url: url, token: token, password: nil)
+            },
+            sessionBox: WebSocketSessionBox(session: session))
         let model = makeAISetupModel(gateway: gateway, defaults: defaults)
         var handoffs = 0
         model.onConnected = { handoffs += 1 }
+        var activationSettled = false
         let activation = Task {
             await model.detectConnections()
             if manual {
                 model.manualProviderID = "openai-api-key"
                 model.manualKey = "fixture-key"
-                model.submitManualKey()
+                await model.submitManualKey()?.value
             }
+            activationSettled = true
         }
         defer {
             model.resetForGatewayChange()
             activation.cancel()
         }
-        for _ in 0..<400 where model.authStep == nil {
-            try await Task.sleep(nanoseconds: 5_000_000)
-        }
+        await waitForAISetupState { model.authStep != nil }
         #expect(model.authStep?.title == "Plugin capabilities")
         #expect(model.activeAuthOption?.label == (manual ? "OpenAI API key" : "Codex CLI"))
         #expect(model.activeAuthOption?.brandId == "openai")
@@ -1270,9 +1283,7 @@ struct OnboardingAISetupTests {
         }
         #expect(!model.connected)
         model.continueProviderAuth()
-        for _ in 0..<400 where model.authStep?.id != "consent" {
-            try await Task.sleep(nanoseconds: 5_000_000)
-        }
+        await waitForAISetupState { model.authStep?.id == "consent" }
         #expect(model.authStep.map(wizardStepType) == "confirm")
         #expect(!model.authConfirmation)
         let originalOwner = try #require(storedActivationOwner(defaults))
@@ -1290,9 +1301,7 @@ struct OnboardingAISetupTests {
         }
         if decision == "retry-cancel" {
             model.cancelProviderAuth()
-            for _ in 0..<400 where model.authError == nil {
-                try await Task.sleep(nanoseconds: 5_000_000)
-            }
+            await waitForAISetupState { model.authError != nil }
             #expect(model.authError != nil)
             #expect(model.authBusy)
             let retrySheet = await inspectAISetupSheet(model)
@@ -1307,11 +1316,17 @@ struct OnboardingAISetupTests {
             model.authConfirmation = accepts
             model.continueProviderAuth()
         }
-        for _ in 0..<400 where model.activeAuthOption != nil {
-            try await Task.sleep(nanoseconds: 5_000_000)
+        if gateSettlement {
+            await settlementGate.waitUntilBlocked()
+            #expect(model.activeAuthOption == nil)
+            #expect(!activationSettled)
+            if manual {
+                #expect(model.manualTesting)
+                #expect(model.manualError == nil)
+            }
+            await settlementGate.release()
         }
         await activation.value
-        await settleQueuedAISetupTasks()
         let ambiguous = ownerReplaced || decision == "malformed-success" || decision == "retry-cancel" ||
             (terminalError && rejectionStatus == nil)
         #expect(model.connected == (decision == "accept"))
@@ -1399,13 +1414,11 @@ struct OnboardingAISetupTests {
         try #require(!model.isBusy)
         if manual {
             model.manualKey = "corrected-fixture-key"
-            model.submitManualKey()
+            await model.submitManualKey()?.value
         } else {
             model.userSelect(kind: rejectionStatus == "billing" ? "claude-cli" : "codex-cli")
         }
-        for _ in 0..<400 where !model.connected {
-            try await Task.sleep(nanoseconds: 5_000_000)
-        }
+        await waitForAISetupState { model.connected }
         #expect(model.connected)
         #expect(handoffs == 1)
         #expect(pendingState(defaults) == .completed)
@@ -4790,10 +4803,7 @@ struct OnboardingAISetupTests {
         await model.detectConnections()
         if entry == "manual" {
             model.manualKey = "test-key-placeholder"
-            model.submitManualKey()
-            for _ in 0..<200 where model.manualTesting {
-                try await Task.sleep(for: .milliseconds(5))
-            }
+            await model.submitManualKey()?.value
         } else if entry == "selected" {
             await model.activate(kind: "codex-cli")
         }
@@ -5192,14 +5202,14 @@ struct OnboardingAISetupTests {
         model.manualProviderID = "openai-api-key"
         model.manualKey = "old-route-secret"
 
-        model.submitManualKey()
+        let activation = model.submitManualKey()
         #expect(model.manualTesting)
         #expect(OnboardingController.shared.busyReason == "OpenClaw is testing your AI connection.")
         model.resetForGatewayChange()
         #expect(OnboardingController.shared.busyReason == nil)
         config.setToken("route-b-token")
         routeIdentity.set("remote:id:gateway-b")
-        await settleQueuedAISetupTasks()
+        await activation?.value
 
         let requests = await recorder.snapshot()
         #expect(requests.methods == ["openclaw.setup.detect"])
@@ -5251,11 +5261,7 @@ struct OnboardingAISetupTests {
         model.manualKey = "must-not-send"
         config.switchToken(to: "token-b", afterReads: 2)
 
-        model.submitManualKey()
-        for _ in 0..<200 {
-            guard model.manualTesting else { break }
-            try? await Task.sleep(nanoseconds: 5_000_000)
-        }
+        await model.submitManualKey()?.value
 
         let requests = await recorder.snapshot()
         #expect(requests.methods == ["openclaw.setup.detect"])
@@ -5816,14 +5822,7 @@ struct OnboardingAISetupTests {
             scheduledDeadlines.append((deadline, routeIdentity))
         }
 
-        model.submitManualKey()
-        // The full suite can starve MainActor work; wait for state instead of a one-second budget.
-        for _ in 0..<2000 {
-            if !model.manualTesting, model.waitingForPendingActivationDeadline {
-                break
-            }
-            try? await Task.sleep(nanoseconds: 5_000_000)
-        }
+        await model.submitManualKey()?.value
 
         #expect(await (recorder.snapshot()).methods == [
             "openclaw.setup.detect",

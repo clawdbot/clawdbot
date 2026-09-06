@@ -35,6 +35,7 @@ import {
 } from "../plugins/enable.js";
 import {
   installWithSourceFallback,
+  NpmChannelResolutionError,
   resolvePluginInstallSources,
   isUnavailablePluginSource,
   installWithChannelFallback,
@@ -1106,19 +1107,8 @@ export async function ensureOnboardingPluginInstalled(params: {
         versionBoundToCore: entry.versionBoundToOpenClaw,
       })
     : null;
-  const npmSpecs = npmSpec
-    ? resolveNpmInstallSpecsForUpdateChannel({
-        spec: npmSpec,
-        updateChannel,
-        officialPackageName: entry.trustedSourceLinkedOfficialInstall
-          ? parseRegistryNpmSpec(npmSpec)?.name
-          : undefined,
-        coreVersion: VERSION,
-        versionBoundToCore: entry.versionBoundToOpenClaw,
-      })
-    : null;
+  let npmSpecs: Awaited<ReturnType<typeof resolveNpmInstallSpecsForUpdateChannel>> | undefined;
   const clawhubInstallSpec = clawhubSpecs?.installSpec ?? clawhubSpec;
-  const npmInstallSpec = npmSpecs?.installSpec ?? npmSpec;
   const defaultChoice = resolveInstallDefaultChoice({
     cfg: next,
     entry,
@@ -1138,7 +1128,7 @@ export async function ensureOnboardingPluginInstalled(params: {
           prompter,
           autoConfirmSingleSource: params.autoConfirmSingleSource,
           effectiveClawHubSpec: clawhubInstallSpec,
-          effectiveNpmSpec: npmInstallSpec,
+          effectiveNpmSpec: npmSpec,
         });
 
   if (choice === "skip") {
@@ -1177,6 +1167,30 @@ export async function ensureOnboardingPluginInstalled(params: {
         "failed",
         "No declared remote install source.",
       );
+    }
+    if (npmSpec && sources.some((source) => source.source === "npm")) {
+      try {
+        npmSpecs = await resolveNpmInstallSpecsForUpdateChannel({
+          spec: npmSpec,
+          updateChannel,
+          officialPackageName: entry.trustedSourceLinkedOfficialInstall
+            ? parseRegistryNpmSpec(npmSpec)?.name
+            : undefined,
+          coreVersion: VERSION,
+          versionBoundToCore: entry.versionBoundToOpenClaw,
+        });
+      } catch (error) {
+        if (!(error instanceof NpmChannelResolutionError)) {
+          throw error;
+        }
+        await notePluginInstallFailure(prompter, npmSpec, error.message);
+        return incompletePluginInstall(
+          next,
+          entry.pluginId,
+          "failed",
+          formatInstallErrorDetail(error.message),
+        );
+      }
     }
     const { attempt: installOutcome, source: installedSource } = await installWithSourceFallback({
       sources,

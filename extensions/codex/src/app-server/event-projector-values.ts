@@ -9,7 +9,7 @@ const BIO_POLICY_SAFETY_ACCESS_BLOCK_PREFIX =
   "This content was flagged for possible biological risk.";
 
 export type CodexProviderRefusal = {
-  category: "bio" | "cyber";
+  category: "bio" | "cyber" | "misalignment";
   message: string;
 };
 
@@ -23,6 +23,9 @@ export function readCodexProviderRefusal(
   }
   if (codexErrorInfo === "cyberPolicy") {
     return { category: "cyber", message };
+  }
+  if (codexErrorInfo === "misalignmentPolicyViolation") {
+    return { category: "misalignment", message };
   }
   return message.startsWith(BIO_POLICY_SAFETY_ACCESS_BLOCK_PREFIX)
     ? { category: "bio", message }
