@@ -1496,14 +1496,16 @@ extension DashboardManager {
         coordinator.handle(link)
     }
 
-    func openOrFocusDashboard(for target: DashboardGatewayTarget) {
+    @discardableResult
+    func openOrFocusDashboard(for target: DashboardGatewayTarget) -> Task<Void, Never> {
         self.retireNavigation(for: target)
-        self.openWindow(for: target, reuseExisting: true)
+        return self.openWindow(for: target, reuseExisting: true)
     }
 
-    func openNewDashboardWindow(for target: DashboardGatewayTarget) {
+    @discardableResult
+    func openNewDashboardWindow(for target: DashboardGatewayTarget) -> Task<Void, Never> {
         self.retireNavigation(for: target)
-        self.openWindow(for: target)
+        return self.openWindow(for: target)
     }
 
     private func dashboardControllers() -> [(target: DashboardGatewayTarget, controller: DashboardWindowController)] {
@@ -1516,6 +1518,10 @@ extension DashboardManager {
             return (instance.target, instance.controller)
         }
         return result
+    }
+
+    func openWindowCount(for target: DashboardGatewayTarget) -> Int {
+        self.dashboardControllers().count(where: { $0.target == target })
     }
 
     func frontmostDashboard()

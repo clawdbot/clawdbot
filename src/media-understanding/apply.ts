@@ -236,8 +236,9 @@ async function classifyFileAttachment(params: {
   try {
     const { allowedMimesConfigured: _allowedMimesConfigured, ...baseLimits } = limits;
     extracted = await extractFileContentFromBuffer({
-      // Extractor plugins receive owned mutable bytes, never the attachment cache's buffer.
-      buffer: Buffer.from(bufferResult.buffer),
+      // Text decoding is read-only; PDF extractor plugins still receive owned mutable bytes.
+      buffer:
+        mimeType === "application/pdf" ? Buffer.from(bufferResult.buffer) : bufferResult.buffer,
       filename: bufferResult.fileName,
       limits: { ...baseLimits, allowedMimes },
       config: cfg,

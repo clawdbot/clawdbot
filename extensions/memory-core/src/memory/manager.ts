@@ -128,23 +128,28 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     purpose?: MemoryIndexManagerPurpose;
     inspectSources?: boolean;
     acquireLocalService?: MemoryCoreAcquireLocalService;
+    maintenanceSource?: MemoryIndexManager;
   }): Promise<MemoryIndexManager | null> {
-    const agentId = normalizeAgentId(params.agentId);
+    const source = params.maintenanceSource;
+    const cfg = source?.cfg ?? params.cfg;
+    const agentId = source?.agentId ?? normalizeAgentId(params.agentId);
     const purpose = normalizeMemoryIndexManagerPurpose(params.purpose);
     return await INDEX_MANAGER_REGISTRY.acquire(
       { agentId, purpose },
       {
         prepare: () => {
-          const settings = resolveMemorySearchConfig(params.cfg, agentId);
+          const settings = source?.settings ?? resolveMemorySearchConfig(cfg, agentId);
           if (!settings) {
             return null;
           }
-          const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
-          const providerRequirement = resolveMemoryEmbeddingProviderRequirement({
-            cfg: params.cfg,
-            agentId,
-            settings,
-          });
+          const workspaceDir = source?.workspaceDir ?? resolveAgentWorkspaceDir(cfg, agentId);
+          const providerRequirement =
+            source?.providerRequirement ??
+            resolveMemoryEmbeddingProviderRequirement({
+              cfg,
+              agentId,
+              settings,
+            });
           const key = resolveMemoryIndexManagerCacheKey({
             agentId,
             workspaceDir,
@@ -158,13 +163,14 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
             create: async () => {
               const manager = new MemoryIndexManager({
                 cacheKey: key,
-                cfg: params.cfg,
+                cfg,
                 agentId,
                 workspaceDir,
                 settings,
                 providerRequirement,
                 purpose,
                 acquireLocalService: params.acquireLocalService,
+                maintenanceSource: source,
               });
               if (params.inspectSources) {
                 await manager.inspectDiagnosticSourceState();
@@ -187,9 +193,12 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     providerRequirement: MemoryEmbeddingProviderRequirement;
     purpose: MemoryIndexManagerPurpose;
     acquireLocalService?: MemoryCoreAcquireLocalService;
+    maintenanceSource?: MemoryIndexManager;
   }) {
     super();
-    const effectiveSettings = resolveEffectiveMemorySearchSettings(params.settings);
+    const source = params.maintenanceSource;
+    const effectiveSettings =
+      source?.settings ?? resolveEffectiveMemorySearchSettings(params.settings);
     this.cacheKey = params.cacheKey;
     this.acquireLocalService = params.acquireLocalService;
     this.purpose = params.purpose;
@@ -200,15 +209,22 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     this.providerRequirement = params.providerRequirement;
     this.requestedProvider = effectiveSettings.provider;
     this.providerLifecycle = createPendingMemoryProviderLifecycle(this.requestedProvider);
-    for (const source of effectiveSettings.sources) {
-      this.sources.add(source);
+    for (const memorySource of effectiveSettings.sources) {
+      this.sources.add(memorySource);
     }
     const dbPath = resolveUserPath(effectiveSettings.store.databasePath);
     const vectorEnabled = effectiveSettings.store.vector.enabled;
     const readOnly = this.purpose === "status";
+    if (source && (!source.publishedDatabase.db.isOpen || this.purpose !== "maintenance")) {
+      throw new Error("Memory maintenance source connection is unavailable");
+    }
     const connection = readOnly
       ? openMemoryDatabaseReadOnlyAtPath(dbPath, vectorEnabled, this.agentId)
       : borrowOpenClawAgentDatabase({ agentId: this.agentId, path: dbPath });
+    if (source && connection.db !== source.publishedDatabase.db) {
+      connection.release();
+      throw new Error("Memory maintenance source connection changed");
+    }
     this.publishedDatabase = new MemoryIndexDatabase(connection.db, connection.release, readOnly);
     try {
       this.providerKey = this.computeProviderKey();
@@ -217,7 +233,10 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         maxEntries: effectiveSettings.cache.maxEntries,
       };
       this.fts.enabled = effectiveSettings.query.hybrid.enabled;
-      if (this.purpose === "status") {
+      if (source && (!this.fts.enabled || source.publishedDatabase.fts.available)) {
+        // The creator already initialized this exact connection and effective schema.
+        Object.assign(this.fts, source.publishedDatabase.fts);
+      } else if (this.purpose === "status") {
         this.fts.available =
           this.fts.enabled && memoryDatabaseTableExists(this.db, "main", MEMORY_INDEX_FTS_TABLE);
       } else {
@@ -303,6 +322,9 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   }
 
   protected async syncPublishedIndexInBackground(params: { reason: string }): Promise<void> {
+    if (this.syncing) {
+      return await this.syncing;
+    }
     await this.syncOutcomes.track(
       async () =>
         await runMemorySearchMaintenance({
@@ -315,6 +337,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
               agentId: this.agentId,
               purpose: "maintenance",
               acquireLocalService: this.acquireLocalService,
+              maintenanceSource: this,
             }),
         }),
     );
@@ -518,6 +541,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         this.dirty ||
         this.sessionsDirty ||
         this.indexIdentityDirty ||
+        this.syncing !== null ||
         this.activeBackgroundSearchSyncs.size > 0,
       lastSyncError: this.syncOutcomes.lastError,
       workspaceDir: this.workspaceDir,
