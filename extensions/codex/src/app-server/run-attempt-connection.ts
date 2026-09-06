@@ -130,7 +130,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const assertLocalTargetSupported = (unsupported: boolean) => {
     if (preparedEnvironment?.localProcessEnv && unsupported) {
       throw new Error(
-        "This runtime cannot target the diagnosed local installation. Use the saved prompt with a suggested external or manual handoff on this machine.",
+        "This runtime cannot target the diagnosed local installation. Use an owned local Codex stdio process, or use the saved prompt with a suggested external or manual handoff on this machine.",
       );
     }
   };
@@ -155,9 +155,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     (preparedEnvironment !== undefined &&
       Object.keys(preparedEnvironment.credentialScrubEnv).length > 0);
   const withPreparedProcessEnv = <T extends CodexAppServerRuntimeOptions>(appServer: T) => {
-    // Loopback WebSockets can forward to another host; their URL does not attest peer locality.
+    // Peer locality is not process ownership: disconnected socket turns can outlive recovery.
     assertLocalTargetSupported(
-      appServer.start.transport === "websocket" || Boolean(appServer.remoteWorkspaceRoot),
+      appServer.start.transport !== "stdio" || Boolean(appServer.remoteWorkspaceRoot),
     );
     return shellEnvironment
       ? {

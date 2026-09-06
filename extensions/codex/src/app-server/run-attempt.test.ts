@@ -1018,7 +1018,7 @@ function installCleanupTrackingClient(turnStartError?: Error) {
   const events: string[] = [];
   const closeAndWait = vi.fn(async () => {
     events.push("closeAndWait");
-    return true;
+    return { exited: true, cleanup: "closed" };
   });
   const state: {
     client?: unknown;
@@ -3190,7 +3190,7 @@ describe("runCodexAppServerAttempt", () => {
       sharedClientModule,
       "clearSharedCodexAppServerClientIfCurrentAndUnclaimed",
     );
-    const closeAndWait = vi.fn(async () => true);
+    const closeAndWait = vi.fn(async () => ({ exited: true, cleanup: "closed" }));
     let notify: ((notification: CodexServerNotification) => Promise<void>) | undefined;
     const request = vi.fn(async (method: string) => {
       if (method === "configRequirements/read") {

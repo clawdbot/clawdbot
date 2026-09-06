@@ -6,7 +6,11 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../../../infra/clawhub-spec.js";
 import { parseRegistryNpmSpec } from "../../../infra/npm-registry-spec.js";
-import { expectedIntegrityForUpdate } from "../../../infra/package-update-utils.js";
+import {
+  comparePackageUpdateVersions,
+  expectedIntegrityForUpdate,
+  readInstalledPackageVersion,
+} from "../../../infra/package-update-utils.js";
 import type { UpdateChannel } from "../../../infra/update-channels.js";
 import {
   capturePluginCapabilityConsentHandlerErrors,
@@ -18,6 +22,7 @@ import { buildClawHubPluginInstallRecordFields } from "../../../plugins/clawhub-
 import { installPluginFromClawHub } from "../../../plugins/clawhub.js";
 import {
   installWithSourceFallback,
+  NpmChannelResolutionError,
   resolvePluginInstallSources,
   installWithChannelFallback,
   resolveClawHubInstallSpecsForUpdateChannel,
@@ -97,7 +102,10 @@ export async function installCandidate(params: {
     return result;
   } catch (error) {
     consent.rethrowCallbackError();
-    if (!(error instanceof ManagedPluginLifecycleError)) {
+    if (
+      !(error instanceof ManagedPluginLifecycleError) &&
+      !(error instanceof NpmChannelResolutionError)
+    ) {
       throw error;
     }
     return {
@@ -106,7 +114,11 @@ export async function installCandidate(params: {
       notices: [],
       warnings: [sanitizeTerminalText(error.message)],
       failedPluginId: params.candidate.pluginId,
-      ...(error.capabilityConsent ? { code: PLUGIN_CAPABILITY_CONSENT_REQUIRED } : {}),
+      ...(error instanceof NpmChannelResolutionError
+        ? { code: error.code }
+        : error.capabilityConsent
+          ? { code: PLUGIN_CAPABILITY_CONSENT_REQUIRED }
+          : {}),
     };
   }
 }
@@ -171,7 +183,7 @@ async function installCandidatePackage(
       })
     : null;
   const npmSpecs = candidate.npmSpec
-    ? resolveNpmInstallSpecsForUpdateChannel({
+    ? await resolveNpmInstallSpecsForUpdateChannel({
         spec: candidate.npmSpec,
         updateChannel: params.updateChannel,
         officialPackageName: candidate.trustedSourceLinkedOfficialInstall
@@ -204,6 +216,32 @@ async function installCandidatePackage(
   const existingNpmPackagePath = npmInstallSpec
     ? resolveExistingCandidateNpmPackagePath({ candidate, npmDir })
     : null;
+  if (staleRuntimeRepair && npmSpecs?.npmResolution?.version) {
+    const installPath = resolveRecordInstallPath(record, params.env) ?? existingNpmPackagePath;
+    const installedVersion = installPath
+      ? await readInstalledPackageVersion(installPath)
+      : undefined;
+    const selectedVersion = npmSpecs.npmResolution.version;
+    if (npmSpecs.channelReason) {
+      channelNotices.push(
+        `Plugin "${candidate.pluginId}" refresh: tag-behind-latest; beta follows latest ${selectedVersion}.`,
+      );
+    }
+    if (installedVersion && comparePackageUpdateVersions(selectedVersion, installedVersion) <= 0) {
+      return {
+        records: params.records,
+        changes: [],
+        notices: [
+          ...channelNotices,
+          `Plugin "${candidate.pluginId}" refresh: already-current (${installedVersion}).`,
+        ],
+        warnings: [],
+      };
+    }
+    channelNotices.push(
+      `Plugin "${candidate.pluginId}" refresh: newer-available (${installedVersion ?? "unknown"} -> ${selectedVersion}).`,
+    );
+  }
   const sources = resolvePluginInstallSources(candidate, recordedSource);
   if (sources.length === 0) {
     return {
@@ -298,6 +336,7 @@ async function installCandidatePackage(
   }
   const pluginId = installResult.pluginId;
   const recordSpec =
+    (record?.source === installedSource.source ? record.spec : undefined) ??
     (installedSource.source === "npm" ? npmSpecs : clawhubSpecs)?.recordSpec ??
     installedSource.spec;
   const installedRecord: PluginInstallRecord =
@@ -378,50 +417,6 @@ function resolveExistingCandidateClawHubPackagePath(params: {
   } catch {
     return null;
   }
-}
-
-export function resolveCandidateInstallSpec(params: {
-  candidate: DownloadableInstallCandidate;
-  updateChannel: UpdateChannel;
-  coreVersion: string;
-}): string | undefined {
-  if (
-    resolvePluginInstallSources(params.candidate)[0]?.source === "clawhub" &&
-    params.candidate.clawhubSpec
-  ) {
-    return resolveClawHubInstallSpecsForUpdateChannel({
-      spec: params.candidate.clawhubSpec,
-      updateChannel: params.updateChannel,
-      officialPackageName: params.candidate.trustedSourceLinkedOfficialInstall
-        ? parseClawHubPluginSpec(params.candidate.clawhubSpec)?.name
-        : undefined,
-      coreVersion: params.coreVersion,
-      versionBoundToCore: params.candidate.versionBoundToOpenClaw,
-    }).installSpec;
-  }
-  if (params.candidate.npmSpec) {
-    return resolveNpmInstallSpecsForUpdateChannel({
-      spec: params.candidate.npmSpec,
-      updateChannel: params.updateChannel,
-      officialPackageName: params.candidate.trustedSourceLinkedOfficialInstall
-        ? parseRegistryNpmSpec(params.candidate.npmSpec)?.name
-        : undefined,
-      coreVersion: params.coreVersion,
-      versionBoundToCore: params.candidate.versionBoundToOpenClaw,
-    }).installSpec;
-  }
-  if (params.candidate.clawhubSpec) {
-    return resolveClawHubInstallSpecsForUpdateChannel({
-      spec: params.candidate.clawhubSpec,
-      updateChannel: params.updateChannel,
-      officialPackageName: params.candidate.trustedSourceLinkedOfficialInstall
-        ? parseClawHubPluginSpec(params.candidate.clawhubSpec)?.name
-        : undefined,
-      coreVersion: params.coreVersion,
-      versionBoundToCore: params.candidate.versionBoundToOpenClaw,
-    }).installSpec;
-  }
-  return undefined;
 }
 
 export function resolveRecordInstallPath(
