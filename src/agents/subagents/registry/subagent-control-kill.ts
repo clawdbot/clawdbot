@@ -497,10 +497,12 @@ export async function killSubagentRunAdmin(
   // A resumed task keeps a stable taskRunId while its backing subagent run
   // advances to a new execution generation with a fresh runId. Accept either
   // identity so cancellation of a resumed task resolves to its current run.
-  // When the latest run is still active (e.g. a replacement that inherited the
-  // stable taskRunId), the kill itself returns killed:false, so the
-  // provisional cancellation is not promoted — verified by the soft
-  // assertions in the recovery test.
+  // The caller fences canonical cancellation to the generation selected
+  // before awaiting the control runtime (cancelTaskById captures the backing
+  // generation before the lazy-runtime await), so a replacement admitted
+  // during that await — which inherits the stable taskRunId but advances the
+  // generation — is rejected by the expectedGeneration guard below rather
+  // than matched here and potentially killed once its admission drains.
   if (
     params.expectedRunId?.trim() &&
     entry.runId !== params.expectedRunId.trim() &&

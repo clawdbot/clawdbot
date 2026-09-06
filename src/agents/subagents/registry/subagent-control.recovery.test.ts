@@ -144,11 +144,13 @@ it("does not promote a provisional task when replacement wins before admin admis
       });
     });
     const result = await pending;
-    // After #140354: the admin finds the replacement by its inherited stable
-    // taskRunId (found: true), but the still-active replacement resists the
-    // kill (killed: false). The provisional kill is not promoted — verified
-    // by the soft assertions below (cancelled: false, task stays running).
-    expect(await admin.mock.results[0]!.value).toMatchObject({ found: true, killed: false });
+    // After #140354: the generation fence (captured by cancelTaskById before
+    // the loadTaskRegistryControlRuntime await) rejects the replacement by
+    // generation mismatch — found: false, killed: false. The provisional kill
+    // is not promoted; the replacement survives and runs to completion.
+    // This holds regardless of admission state (no reliance on a busy
+    // admission timeout), satisfying the replacement-survival fence.
+    expect(await admin.mock.results[0]!.value).toMatchObject({ found: false, killed: false });
     expect.soft(result.cancelled).toBe(false);
     expect.soft(getTaskById(task.taskId)?.status).toBe("running");
     expect.soft(getTaskById(task.taskId)?.error).toBeUndefined();

@@ -7,6 +7,7 @@ import { isHarnessOwnedSubagentTask } from "./harness-owned-subagent-task.js";
 import {
   getManagedTaskBackingInstance,
   hasAuthoritativeTaskBacking,
+  readTaskBackingInstance,
 } from "./task-backing-authority.js";
 import { isProvisionalSubagentKillTask } from "./task-cancellation-state.js";
 import { isTerminalTaskStatus } from "./task-executor-policy.js";
@@ -114,6 +115,18 @@ export async function cancelTaskById(params: {
       return notCancelled("Task backing ownership could not be verified.");
     }
     const managedBacking = getManagedTaskBackingInstance(task);
+    // #140354: For canonical subagent tasks (non-managed projections), capture
+    // the backing generation before awaiting the control runtime. A
+    // replacement admitted during the lazy-runtime await inherits the stable
+    // taskRunId; without a generation fence, the broadened identity check in
+    // killSubagentRunAdmin would match the replacement and, once its admission
+    // drains, kill it. The captured generation fences cancellation to the run
+    // selected before the await, so the expectedGeneration guard rejects the
+    // replacement by generation mismatch.
+    const canonicalSubagentGeneration =
+      !managedBacking && task.runtime === "subagent"
+        ? readTaskBackingInstance(task.detail)?.generation
+        : undefined;
     ensureTaskCancellationReady(task);
     // A direct kill is only a provisional terminal projection. Re-read the
     // owning subagent run before promotion so its canonical completion can win.
@@ -240,7 +253,9 @@ export async function cancelTaskById(params: {
           expectedRunId: task.runId,
           ...(managedBacking?.runtime === "subagent"
             ? { expectedGeneration: managedBacking.generation, expectedOwnerKey: task.ownerKey }
-            : {}),
+            : canonicalSubagentGeneration !== undefined
+              ? { expectedGeneration: canonicalSubagentGeneration, expectedOwnerKey: task.ownerKey }
+              : {}),
           onResult: (result) => {
             cancellation = reconcile(result);
           },
