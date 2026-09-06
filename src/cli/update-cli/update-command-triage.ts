@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   sanitizeTriageUpdateFailure,
   writeTriageUpdateFailure,
@@ -13,6 +14,7 @@ import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { isTerminalInteractive } from "../terminal-interactivity.js";
 import { resolveNodeRunner, resolveUpdateRoot, type UpdateCommandOptions } from "./shared.js";
+import { runInteractiveUpdateFailureAction } from "./update-command-report.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 
 export type UpdateTriageTarget = TriageTarget & { failureResult?: UpdateRunResult };
@@ -22,6 +24,9 @@ export async function withUpdateFailureTriage(
   target: UpdateTriageTarget,
   run: () => Promise<void>,
 ): Promise<void> {
+  // One wrapper call owns one actual update execution. A later CLI invocation
+  // is a new attempt; persisted managed failures use their handoff identity.
+  const updateAttemptId = randomUUID();
   const mode = opts.json
     ? "json"
     : !opts.yes && isTerminalInteractive()
@@ -77,14 +82,33 @@ export async function withUpdateFailureTriage(
           );
         }
       } else {
-        await runTriage({
-          failure,
-          target:
-            mode === "interactive"
-              ? target
-              : { ...target, nodeRunner: target.nodeRunner ?? resolveNodeRunner() },
-          resolveRoot: resolveUpdateRoot,
-        });
+        let nextAction: "triage" | "handled" = "triage";
+        if (mode === "interactive") {
+          try {
+            nextAction = await runInteractiveUpdateFailureAction({
+              attemptId: updateAttemptId,
+              env: target.env,
+              ...(failure.error ? { error: failure.error } : {}),
+              ...(failure.result ? { result: failure.result } : {}),
+              runtime: defaultRuntime,
+            });
+          } catch (reportError) {
+            defaultRuntime.error(
+              `Update failure report could not be prepared: ${formatErrorMessage(reportError)}`,
+            );
+            nextAction = "handled";
+          }
+        }
+        if (nextAction === "triage") {
+          await runTriage({
+            failure,
+            target:
+              mode === "interactive"
+                ? target
+                : { ...target, nodeRunner: target.nodeRunner ?? resolveNodeRunner() },
+            resolveRoot: resolveUpdateRoot,
+          });
+        }
       }
     }
     if (reportedFailure) {

@@ -2,7 +2,13 @@ import type { UpdateRunRecord } from "../../../src/infra/update-run-record.js";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import type { DevicePairSetupAccess, DevicePairSetupLifecycle } from "../lib/device-pair-setup.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "./exec-approval.ts";
+import type { SubmittedUpdateReport } from "./update-failure-report.ts";
 import type { ApplicationStatusBanner, RecordedUpdateAttempt } from "./update-overlay-helpers.ts";
+
+export type UpdateFailureReportNotice = {
+  attemptId: string;
+  result: SubmittedUpdateReport | { message: string; status: "error" };
+};
 
 export type ApplicationUpdateOverlaySnapshot = {
   updateAvailable: UpdateAvailable | null;
@@ -14,6 +20,9 @@ export type ApplicationUpdateOverlaySnapshot = {
   updateReconciliationPending: boolean;
   updateStatusBanner: ApplicationStatusBanner | null;
   recordedUpdateAttempt: RecordedUpdateAttempt | null;
+  reportableUpdateFailureId: string | null;
+  updateFailureReportBusy: boolean;
+  updateFailureReportNotice: UpdateFailureReportNotice | null;
   updateRun: UpdateRunRecord | null;
   updateRunAcknowledged: boolean;
   controlUiRefreshRequired: boolean;
@@ -36,6 +45,7 @@ export type ApplicationOverlays = {
   acknowledgeUpdateRun: () => void;
   runUpdate: (options?: { sessionKey?: string }) => Promise<void>;
   holdUpdate: () => Promise<boolean>;
+  reportUpdateFailure: (attemptId: string) => Promise<void>;
   decideApproval: (
     decision: ExecApprovalDecision,
     approvalId?: string,

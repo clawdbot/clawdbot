@@ -50,6 +50,15 @@ export type RunGithubCli = (
   options: { input: string },
 ) => Promise<GithubCliResult>;
 
+export type GithubIssueReconcileHooks = {
+  beforeIssueLookup?: () => Promise<void> | void;
+};
+
+export type GithubIssueSubmitHooks = GithubIssueReconcileHooks & {
+  afterAuthPreflight?: () => Promise<void> | void;
+  beforeIssueCreate?: () => Promise<void> | void;
+};
+
 const GITHUB_REPOSITORY = "github.com/openclaw/openclaw";
 const GITHUB_REPOSITORY_ISSUES_API = "repos/openclaw/openclaw/issues";
 const GITHUB_ISSUE_CREATE_TIMEOUT_MS = 30_000;
@@ -201,10 +210,12 @@ function browserFallbackReason(
 export async function reconcileGithubIssue(
   issue: PreparedGithubIssue,
   runGh: RunGithubCli = runGithubCli,
+  hooks: GithubIssueReconcileHooks = {},
 ): Promise<GithubIssueReconcileResult> {
   if (!GITHUB_MARKER_RE.test(issue.marker)) {
     return { status: "unavailable" };
   }
+  await hooks.beforeIssueLookup?.();
   const lookup = await runGh(issueLookupArgs(issue.marker), { input: "" });
   if (lookup.errorCode || lookup.status !== 0) {
     return { status: "unavailable" };
@@ -241,11 +252,14 @@ export async function reconcileGithubIssue(
 async function submitGithubIssueOnce(
   issue: PreparedGithubIssue,
   runGh: RunGithubCli,
+  hooks: GithubIssueSubmitHooks,
 ): Promise<GithubIssueSubmitResult> {
   const auth = await runGh(GITHUB_AUTH_ARGS, { input: "" });
+  await hooks.afterAuthPreflight?.();
   if (auth.errorCode || auth.status !== 0) {
     return browserFallbackResult(issue, browserFallbackReason(auth));
   }
+  await hooks.beforeIssueCreate?.();
   const created = await runGh(issueCreateArgs(), {
     input: JSON.stringify({ body: issue.body, title: issue.title }),
   });
@@ -272,22 +286,30 @@ async function submitGithubIssueOnce(
   }
   // Once creation starts, a lost response can still hide a created issue. Only exact marker
   // reconciliation may resolve that ambiguity; a browser fallback could duplicate the report.
-  const reconciled = await reconcileGithubIssue(issue, runGh);
+  const reconciled = await reconcileGithubIssue(issue, runGh, hooks).catch(() => ({
+    status: "unavailable" as const,
+  }));
   return reconciled.status === "created"
     ? reconciled
     : { reason: "creation-outcome-unknown", status: "outcome-unknown" };
 }
 
-/** Submits once per marker in this process and reconciles uncertain create outcomes. */
+/** Coalesces unguarded callers; guarded callers own a durable pre-create reservation. */
 export function submitGithubIssue(
   issue: PreparedGithubIssue,
   runGh: RunGithubCli = runGithubCli,
+  hooks: GithubIssueSubmitHooks = {},
 ): Promise<GithubIssueSubmitResult> {
+  // A successor reservation must execute its own guard, never inherit an expired
+  // owner's in-flight promise. The caller's pre-create CAS owns deduplication.
+  if (hooks.beforeIssueCreate) {
+    return submitGithubIssueOnce(issue, runGh, hooks);
+  }
   const current = inflightSubmissions.get(issue.marker);
   if (current) {
     return current;
   }
-  const submission = submitGithubIssueOnce(issue, runGh).finally(() => {
+  const submission = submitGithubIssueOnce(issue, runGh, hooks).finally(() => {
     if (inflightSubmissions.get(issue.marker) === submission) {
       inflightSubmissions.delete(issue.marker);
     }
