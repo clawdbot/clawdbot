@@ -11,6 +11,7 @@ import { clearAllCliSessions, getCliSessionBinding } from "../../agents/cli-sess
 import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { copyChannelParticipantAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
 import { resolveSessionParentSessionKey } from "../../channels/plugins/session-conversation.js";
 import { conversationRouteContextFromMsgContext } from "../../config/sessions/conversation-route-context.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
@@ -1238,6 +1239,7 @@ async function initSessionStateAttemptLocked(
     SessionId: sessionId,
     IsNewSession: isFirstSessionTurn ? "true" : "false",
   };
+  copyChannelParticipantAdmissionEvidence(sessionCtxForState, sessionCtx);
 
   // Run session plugin hooks (fire-and-forget)
   const hookRunner = getGlobalHookRunner();

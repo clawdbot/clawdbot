@@ -5,6 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { copyChannelParticipantAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
 import { resolveSessionParentSessionKey } from "../../channels/plugins/session-conversation.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
@@ -301,6 +302,7 @@ export function initFastReplySessionState(params: {
     BodyStripped: bodyStripped,
     ...(normalizedChatType ? { ChatType: normalizedChatType } : {}),
   };
+  copyChannelParticipantAdmissionEvidence(ctx, sessionCtx);
   return {
     sessionCtx,
     sessionEntry,
