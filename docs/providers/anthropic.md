@@ -116,6 +116,9 @@ OpenClaw release:
         through OpenClaw's direct CLI transport. OpenClaw uses a non-secret route
         marker and never reads, persists, refreshes, selects, or forwards the
         native login tokens. Claude owns the login and token refresh lifecycle.
+        Gateway startup shares the native login availability check across agent
+        workspaces using the same config and environment. Explicit catalog/auth
+        captures recheck availability for their own generation.
         Explicitly selected API-key or token credentials still use protected
         file-descriptor forwarding. Native-tool approvals remain under OpenClaw
         control. Schema-valid native calls pass through OpenClaw's canonical

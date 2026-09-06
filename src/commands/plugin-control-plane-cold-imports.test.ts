@@ -104,7 +104,6 @@ describe("command control-plane plugin discovery", () => {
     const env = createColdPluginHermeticEnv(workspaceDir);
 
     const authChoice = buildAuthChoiceGroups({
-      store: {} as never,
       includeSkip: false,
       config: cfg,
       workspaceDir,

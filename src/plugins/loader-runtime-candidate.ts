@@ -3,16 +3,11 @@ import { describeRootFileOpenFailure, openRootFileSync } from "../infra/boundary
 import { isBundleCapabilitySupported } from "./bundle-capability-support.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import { capabilityCatalogFamilies, resolvePluginCapabilityCatalog } from "./capability-catalog.js";
-import {
-  resolveEffectiveEnableState,
-  resolveEffectivePluginActivationState,
-  resolveMemorySlotDecision,
-} from "./config-state.js";
+import { resolveMemorySlotDecision } from "./config-state.js";
 import {
   PluginDashboardDeclarationError,
   registerPluginDashboardCapabilities,
 } from "./dashboard-capabilities.js";
-import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import type { PluginCandidate } from "./discovery.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { loadSetupRuntimeChannelCandidate } from "./loader-channel-runtime.js";
@@ -24,7 +19,6 @@ import {
   runPluginRegisterSyncInRegistry,
 } from "./loader-module-runtime.js";
 import {
-  formatAutoEnabledActivationReason,
   formatMissingPluginRegisterError,
   markPluginActivationDisabled,
   recordPluginConfiguredUnavailable,
@@ -33,12 +27,9 @@ import {
 import { resolvePluginRegistrationPlan } from "./loader-registration-plan.js";
 import {
   applyManifestSnapshotMetadata,
-  applyPluginManifestRecordDetails,
   type AuthorizedDreamingSidecar,
-  createManifestPluginRecord,
   detailPluginStartupTrace,
-  isAuthorizedDreamingSidecarPlugin,
-  matchesScopedPluginOrDreamingSidecar,
+  preparePluginLoadRecord,
   safeRealpathOrResolve,
   validatePluginConfig,
 } from "./loader-shared.js";
@@ -51,7 +42,6 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import { resolveExternalPluginRuntimeDependencyRepairHint } from "./official-external-plugin-repair-hints.js";
 import { withProfile } from "./plugin-load-profile.js";
 import { preparePluginModule } from "./plugin-module-loader-cache.js";
-import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import {
   resolveCanonicalDistRuntimeSource,
   resolvePluginRuntimeArtifact,
@@ -91,75 +81,20 @@ export function loadRuntimePluginCandidate(params: {
 }): void {
   const { candidate, manifestRecord, context, state } = params;
   const { registry } = params.registryBuilder;
-  const pluginId = manifestRecord.id;
-  const policyId = normalizePluginPolicyId(pluginId);
-  // Manifest filtering scopes diagnostics; this final guard also blocks imports
-  // and registration outside the requested snapshot.
-  if (
-    !matchesScopedPluginOrDreamingSidecar({
-      onlyPluginIdSet: params.onlyPluginIdSet,
-      pluginId,
-      sidecar: params.dreamingSidecar,
-    })
-  ) {
-    return;
-  }
-  const isDreamingSidecar = isAuthorizedDreamingSidecarPlugin({
-    sidecar: params.dreamingSidecar,
-    pluginId,
-  });
-  const activationState = isDreamingSidecar
-    ? {
-        enabled: true,
-        activated: true,
-        explicitlyEnabled: false,
-        source: "auto" as const,
-        reason: `dreaming sidecar for selected memory slot "${params.dreamingSidecar?.selectedMemoryPluginId ?? ""}"`,
-      }
-    : resolveEffectivePluginActivationState({
-        id: pluginId,
-        origin: candidate.origin,
-        config: context.normalized,
-        rootConfig: context.cfg,
-        enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
-        channelIds: manifestRecord.channels,
-        activationSource: context.activationSource,
-        autoEnabledReason: formatAutoEnabledActivationReason(context.autoEnabledReasons[pluginId]),
-      });
-  const existingOrigin = state.seenIds.get(pluginId);
-  if (existingOrigin) {
-    const duplicate = createManifestPluginRecord({
-      candidate,
-      manifestRecord,
-      enabled: false,
-      activationState,
-    });
-    duplicate.status = "disabled";
-    duplicate.error = `overridden by ${existingOrigin} plugin`;
-    markPluginActivationDisabled(duplicate, duplicate.error);
-    registry.plugins.push(duplicate);
-    return;
-  }
-
-  const enableState = isDreamingSidecar
-    ? { enabled: true }
-    : resolveEffectiveEnableState({
-        id: pluginId,
-        origin: candidate.origin,
-        config: context.normalized,
-        rootConfig: context.cfg,
-        enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
-        channelIds: manifestRecord.channels,
-        activationSource: context.activationSource,
-      });
-  const entry = context.normalized.entries[policyId];
-  const record = createManifestPluginRecord({
+  const prepared = preparePluginLoadRecord({
     candidate,
     manifestRecord,
-    enabled: enableState.enabled,
-    activationState,
+    context,
+    onlyPluginIdSet: params.onlyPluginIdSet,
+    dreamingSidecar: params.dreamingSidecar,
+    registry,
+    seenIds: state.seenIds,
   });
-  applyPluginManifestRecordDetails(record, manifestRecord);
+  if (!prepared) {
+    return;
+  }
+  const { pluginId, policyId, isDreamingSidecar, activationState, enableState, entry, record } =
+    prepared;
   const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
   const degradedPluginForId = findActiveDegradedPlugin(pluginId);
   const degradedPlugin =
@@ -260,13 +195,9 @@ export function loadRuntimePluginCandidate(params: {
     (!enableState.enabled || context.forceSetupOnlyChannelPlugins);
   const canLoadScopedSetupOnlyChannelPlugin =
     scopedSetupOnlyChannelPluginRequested &&
-    (candidate.origin !== "workspace" || enableState.enabled) &&
-    (!context.requireSetupEntryForSetupOnlyChannelPlugins || Boolean(manifestRecord.setupSource));
+    (candidate.origin !== "workspace" || enableState.enabled);
   const registrationPlan = resolvePluginRegistrationPlan({
     canLoadScopedSetupOnlyChannelPlugin,
-    scopedSetupOnlyChannelPluginRequested,
-    requireSetupEntryForSetupOnlyChannelPlugins:
-      context.requireSetupEntryForSetupOnlyChannelPlugins,
     enableStateEnabled: enableState.enabled,
     shouldLoadModules: context.shouldLoadModules,
     validateOnly: params.validateOnly,

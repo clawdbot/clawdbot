@@ -44,6 +44,8 @@ export { readSessionTranscriptVisibleMessageDeltaCore } from "../config/sessions
 export type { SessionTranscriptReadScope };
 
 export type ReadRecentSessionMessagesResult = {
+  olderOffset?: number;
+  omittedOversized?: boolean;
   activeLeafEntryId?: string | null;
   deltaCursor?: string;
   displaySource?: string;
@@ -369,7 +371,12 @@ export async function readRecentSessionMessagesWithStatsAsync(
 /** Reads one offset page with total-count metadata through the reader seam. */
 export async function readSessionMessagesPageWithStatsAsync(
   scope: SessionTranscriptReadScope,
-  opts: { offset: number; maxMessages: number; allowResetArchiveFallback?: boolean },
+  opts: {
+    offset: number;
+    maxMessages: number;
+    maxBytes?: number;
+    allowResetArchiveFallback?: boolean;
+  },
 ): Promise<ReadRecentSessionMessagesResult> {
   const target = resolveTranscriptReadTarget(scope);
   const page = readSessionTranscriptHistoryEventPage(toTranscriptReadScope(target), opts);
@@ -380,6 +387,8 @@ export async function readSessionMessagesPageWithStatsAsync(
     ...(Object.hasOwn(page, "activeLeafEntryId")
       ? { activeLeafEntryId: page.activeLeafEntryId }
       : {}),
+    ...(page.olderOffset !== undefined ? { olderOffset: page.olderOffset } : {}),
+    ...(page.omittedOversized ? { omittedOversized: true } : {}),
     messages: projectSqliteHistoryEvents(page.events),
     transcriptEvents: page.events.map((entry) => entry.event),
     displaySource: page.displaySource,

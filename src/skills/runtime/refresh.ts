@@ -7,6 +7,7 @@ import chokidar, { type FSWatcher } from "chokidar";
 import { isDefaultStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveRealpathOrAbsolute } from "../../infra/boundary-path.js";
+import { getFileWatchCapacityCode } from "../../infra/fs-watch-errors.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -71,6 +72,7 @@ const SKILLS_WATCH_DEBOUNCE_MS = 250;
 // opening its own, so open file descriptors scale with distinct directories
 // rather than with agent count.
 const pathWatchers = new Map<string, SkillsPathWatchState>();
+let nativeWatchCapacityFailed = false;
 // Watch targets each workspace is currently subscribed to, used to reconcile
 // subscriptions and to detect watch-target changes across calls.
 const workspaceWatchTargets = new Map<string, WatchTarget[]>();
@@ -472,13 +474,7 @@ function resolveSkillsWatcherUsePolling(): boolean {
     return platform === "os400";
   }
   const normalized = envPolling.toLowerCase();
-  if (normalized === "false" || normalized === "0") {
-    return false;
-  }
-  if (normalized === "true" || normalized === "1") {
-    return true;
-  }
-  return Boolean(normalized);
+  return Boolean(normalized) && normalized !== "false" && normalized !== "0";
 }
 
 // Requires resolveWatchTargets to produce a stable-order result (it returns a
@@ -533,9 +529,7 @@ function createSkillsPathWatcher(target: WatchTarget): SkillsPathWatchState {
       return;
     }
     state.pendingPath = changedPath ?? state.pendingPath;
-    if (state.timer) {
-      clearTimeout(state.timer);
-    }
+    clearTimeout(state.timer);
     state.timer = setTimeout(() => {
       const pendingPath = state.pendingPath;
       state.pendingPath = undefined;
@@ -587,6 +581,22 @@ function createSkillsPathWatcher(target: WatchTarget): SkillsPathWatchState {
     }
   });
   watcher.on("error", (err) => {
+    if (watcher.closed) {
+      return;
+    }
+    const capacityCode = usePolling ? undefined : getFileWatchCapacityCode(err);
+    if (capacityCode) {
+      if (!nativeWatchCapacityFailed) {
+        nativeWatchCapacityFailed = true;
+        log.warn(
+          `skills native watcher capacity exhausted (${capacityCode}); refreshing skills during agent preparation`,
+        );
+        for (const active of pathWatchers.values()) {
+          void teardownSkillsPathWatcher(active);
+        }
+      }
+      return;
+    }
     log.warn(`skills watcher error (${target.path}): ${String(err)}`);
   });
 
@@ -594,11 +604,16 @@ function createSkillsPathWatcher(target: WatchTarget): SkillsPathWatchState {
 }
 
 async function teardownSkillsPathWatcher(state: SkillsPathWatchState): Promise<void> {
-  if (state.timer) {
-    clearTimeout(state.timer);
-  }
+  clearTimeout(state.timer);
   try {
-    await state.watcher.close();
+    const wasClosed = state.watcher.closed;
+    const closing = state.watcher.close();
+    if (!wasClosed) {
+      // Chokidar removes listeners before pending scans settle. Their late errors
+      // belong to the retired watcher and must not become unhandled events.
+      state.watcher.on("error", () => {});
+    }
+    await closing;
   } catch {
     // Closing watchers is best effort, including during replacement and shutdown.
   }
@@ -699,6 +714,14 @@ export function ensureSkillsWatcher(params: {
   }
 
   workspaceWatchLastEnsuredAt.set(watcherKey, now);
+  if (nativeWatchCapacityFailed) {
+    // Both skill caches use this version. Rebuild at the existing preparation
+    // boundary while native observation is unavailable, without reopening watches.
+    workspaceWatchTargetCache.delete(watcherKey);
+    bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
+    evictIdleWorkspaceWatchStates(now);
+    return;
+  }
   const watchTargets = resolveWatchTargets(
     workspaceDir,
     params.config,
@@ -743,6 +766,7 @@ export async function closeSkillsWatchers(resetState = false): Promise<void> {
     resetSkillsRefreshStateForTest();
   }
   const active = Array.from(pathWatchers.values());
+  nativeWatchCapacityFailed = false;
   pathWatchers.clear();
   workspaceWatchTargets.clear();
   workspaceWatchOwnerDirs.clear();

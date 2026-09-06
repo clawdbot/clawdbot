@@ -9,10 +9,8 @@ struct GatewayAuthenticationReturnDecision: Equatable {
 }
 
 extension OnboardingView {
-    /// Structured AI setup: detect what's already available on the Gateway, test the
-    /// best option live, fall through automatically, offer an API-key form
-    /// when nothing works. OpenClaw becomes available only after inference
-    /// has completed a live round-trip.
+    /// Detect available AI access, then wait for the user to select a connection.
+    /// OpenClaw becomes available after that choice completes a live round-trip.
     func aiSetupPage(contentHeight: CGFloat) -> some View {
         VStack(spacing: 12) {
             Group {

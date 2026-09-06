@@ -43,8 +43,6 @@ export async function runEmbeddedFallbackCandidate(
     getLifecycleGeneration: () => string;
     onLifecycleGeneration: (generation: string) => void;
     allowTransientCooldownProbe?: boolean;
-    suppressAssistantErrorPersistenceForCandidate: boolean;
-    onAssistantErrorMessagePersisted: () => void;
     notifyUserAboutCompaction: boolean;
     messageToolDeliveryState: MessageToolDeliveryState;
     githubPublicationAvailable: boolean;
@@ -206,8 +204,7 @@ export async function runEmbeddedFallbackCandidate(
         onUserMessagePersisted: params.notifyUserMessagePersisted,
         suppressTranscriptOnlyAssistantPersistence:
           turn.followupRun.run.suppressTranscriptOnlyAssistantPersistence,
-        suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistenceForCandidate,
-        onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
+        assistantErrorTranscript: params.assistantErrorTranscript,
         prepareAssistantTranscriptMessage: turn.opts?.prepareAssistantTranscriptMessage,
         onAutoCompactionSucceeded: (count) => {
           attemptCompactionCount = Math.max(attemptCompactionCount, count);

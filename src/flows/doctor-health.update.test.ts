@@ -131,10 +131,9 @@ describe("runDoctorHealthFlow update outcomes", () => {
         typeof import("../commands/doctor-update.js")
       >("../commands/doctor-update.js");
       mocks.offerUpdate.mockImplementation(maybeOfferUpdateBeforeDoctor);
-      const serviceMaintenance =
-        await import("../cli/update-cli/update-command-service-maintenance.js");
+      const serviceRecovery = await import("../cli/update-cli/update-command-service-recovery.js");
       const recoverService = vi.spyOn(
-        serviceMaintenance,
+        serviceRecovery,
         "maybeRestartServiceAfterFailedMutableUpdate",
       );
       const serviceCommands = await import("../cli/update-cli/update-command-service-command.js");
@@ -167,7 +166,7 @@ describe("runDoctorHealthFlow update outcomes", () => {
           const restart = vi.fn();
           restartUpdatedInstall.mockImplementation(async () => {
             running = true;
-            return true;
+            return "accepted";
           });
           mocks.service.mockReturnValue({
             readCommand: async () => ({

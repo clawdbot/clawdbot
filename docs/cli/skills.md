@@ -7,7 +7,7 @@ read_when:
   - You need to remove an installed ClawHub skill
   - You want to verify a ClawHub skill with ClawHub
   - You want to debug missing binaries/env/config for skills
-title: "Skills"
+title: "Skills CLI"
 ---
 
 # `openclaw skills`

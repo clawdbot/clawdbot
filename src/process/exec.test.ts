@@ -654,6 +654,8 @@ describe("runCommandBuffered", () => {
           expect(settled).toBe(false);
 
           await vi.advanceTimersByTimeAsync(execSpawn.COMMAND_PROCESS_TREE_KILL_GRACE_MS);
+          // Force delivery now has a separate bounded exit-observation phase.
+          await vi.advanceTimersByTimeAsync(execSpawn.COMMAND_PROCESS_TREE_KILL_GRACE_MS);
           expect(await command).toMatchObject({ code: null, termination: "timeout" });
           vi.useRealTimers();
           expect(await waitForPidToExit(descendantPid)).toBe(true);

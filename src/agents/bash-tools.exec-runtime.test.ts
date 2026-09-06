@@ -16,6 +16,7 @@ import {
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
+import { createAgentToolExecutionBudget } from "./agent-tool-source-execution-guard.js";
 import {
   getFinishedSession,
   acknowledgeNotifyOnExit,
@@ -81,18 +82,35 @@ afterEach(() => {
   resetProcessRegistryForTests();
 });
 
+function createRunExit(overrides: Partial<RunExit> = {}): RunExit {
+  return {
+    reason: "exit",
+    exitCode: 0,
+    exitSignal: null,
+    durationMs: 1,
+    stdout: "",
+    stderr: "",
+    timedOut: false,
+    noOutputTimedOut: false,
+    ...overrides,
+  };
+}
+
 async function runExecWithExit(params: {
   exit: RunExit;
-  stdout?: string;
+  stdout?: string | string[];
   timeoutSec?: number | null;
   usePty?: boolean;
 }) {
   supervisorMock.spawn.mockImplementationOnce(
     async (input: { onStdout?: (chunk: string) => void }) => {
       if (params.stdout) {
-        input.onStdout?.(params.stdout);
+        for (const chunk of typeof params.stdout === "string" ? [params.stdout] : params.stdout) {
+          input.onStdout?.(chunk);
+        }
       }
       return {
+        activity: { resultSettled: true, lastOutputAtMs: Date.now() },
         runId: "run-exit",
         startedAtMs: Date.now(),
         pid: 123,
@@ -120,21 +138,13 @@ function runtimeManagedRun(input: SpawnInput, stdout = ""): ManagedRun {
     input.onStdout?.(stdout);
   }
   return {
+    activity: { resultSettled: true, lastOutputAtMs: Date.now() },
     runId: input.runId ?? "test-run",
     pid: 1234,
     startedAtMs: Date.now(),
     stdin: { write: vi.fn(), end: vi.fn(), destroy: vi.fn() },
     cancel: vi.fn(),
-    wait: vi.fn(async () => ({
-      reason: "exit" as const,
-      exitCode: 0,
-      exitSignal: null,
-      durationMs: 1,
-      stdout: "",
-      stderr: "",
-      timedOut: false,
-      noOutputTimedOut: false,
-    })),
+    wait: vi.fn(async () => createRunExit()),
   };
 }
 
@@ -176,6 +186,9 @@ function requireSystemEventCall(): [string, Record<string, unknown>] {
 describe("runExecProcess cursor tracking", () => {
   it.each([
     { raw: "hello world", expected: "unknown" },
+    { raw: ["\x1b[?1l\x1b", "[?1", "h"], expected: "application" },
+    { raw: ["\x1b[?1h\x1b[?", "1", "l"], expected: "normal" },
+    { raw: ["\x1b]0;\x1b[?1h", "\x07"], expected: "unknown" },
     { raw: "\x1b[?1h", expected: "application" },
     { raw: "\x1b[?1h\x1b[?1l", expected: "normal" },
     { raw: "\x1b[?1l\x1b[?1h", expected: "application" },
@@ -183,16 +196,7 @@ describe("runExecProcess cursor tracking", () => {
     const { run } = await runExecWithExit({
       stdout: raw,
       usePty: true,
-      exit: {
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 1,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      },
+      exit: createRunExit(),
     });
 
     expect(run.session.cursorKeyMode).toBe(expected);
@@ -200,6 +204,51 @@ describe("runExecProcess cursor tracking", () => {
 });
 
 describe("sandbox exec preparation failures", () => {
+  it.each(["preparation", "supervisor"] as const)(
+    "rechecks the admitting repair authority after deferred %s work",
+    async (boundary) => {
+      let current = true;
+      const controller = new AbortController();
+      const budget = createAgentToolExecutionBudget({
+        signal: controller.signal,
+        abort: (error) => controller.abort(error),
+        isCurrent: () => current,
+      });
+      const childEffect = vi.fn();
+      supervisorMock.spawn.mockImplementation(async (input: SpawnInput) => {
+        await Promise.resolve();
+        current = false;
+        input.assertCurrent?.();
+        childEffect();
+        return runtimeManagedRun(input);
+      });
+      await expect(
+        budget.run(() =>
+          runExecProcess({
+            command: "echo forbidden",
+            workdir: "/tmp",
+            env: {},
+            usePty: false,
+            warnings: [],
+            maxOutput: 1000,
+            pendingMaxOutput: 1000,
+            notifyOnExit: false,
+            timeoutSec: null,
+            beforeSpawn: async () => {
+              await Promise.resolve();
+              if (boundary === "preparation") {
+                current = false;
+              }
+              return undefined;
+            },
+          }),
+        ),
+      ).rejects.toThrow("execution scope is no longer active");
+      expect(childEffect).not.toHaveBeenCalled();
+      expect(supervisorMock.spawn).toHaveBeenCalledTimes(boundary === "preparation" ? 0 : 1);
+    },
+  );
+
   it.each([
     { mode: "child", usePty: false, cancelCheck: 1, expectedSpawns: 0 },
     { mode: "PTY", usePty: true, cancelCheck: 1, expectedSpawns: 0 },
@@ -353,16 +402,7 @@ describe("sandbox exec preparation failures", () => {
     );
     run.disableUpdates();
     stdout?.("background output\n");
-    exit.resolve({
-      reason: "exit",
-      exitCode: 0,
-      exitSignal: null,
-      durationMs: 1,
-      stdout: "",
-      stderr: "",
-      timedOut: false,
-      noOutputTimedOut: false,
-    });
+    exit.resolve(createRunExit());
     const outcome = await run.promise;
 
     expect(beforeSpawn).toHaveBeenCalledOnce();
@@ -545,11 +585,19 @@ describe("sandbox exec finalization suspension", () => {
       supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => {
         producer = input;
         input.onStdout?.("sandbox output\n");
+        const activity = { resultSettled: false, lastOutputAtMs: Date.now() };
         return {
+          activity,
           runId: "sandbox-run",
           startedAtMs: Date.now(),
           pid: 123,
-          wait: async () => await exit.promise,
+          wait: async () => {
+            try {
+              return await exit.promise;
+            } finally {
+              activity.resultSettled = true;
+            }
+          },
           cancel: vi.fn(),
         };
       });
@@ -581,16 +629,14 @@ describe("sandbox exec finalization suspension", () => {
       markBackgrounded(run.session);
       expect(getActiveBackgroundExecSessionCount()).toBe(1);
 
-      exit.resolve({
-        reason: processTimesOut ? "overall-timeout" : "exit",
-        exitCode: processTimesOut ? null : 0,
-        exitSignal: processTimesOut ? "SIGKILL" : null,
-        durationMs: 1,
-        stdout: "",
-        stderr: "",
-        timedOut: processTimesOut,
-        noOutputTimedOut: false,
-      });
+      exit.resolve(
+        createRunExit({
+          reason: processTimesOut ? "overall-timeout" : "exit",
+          exitCode: processTimesOut ? null : 0,
+          exitSignal: processTimesOut ? "SIGKILL" : null,
+          timedOut: processTimesOut,
+        }),
+      );
       await vi.waitFor(() => expect(finalizeExec).toHaveBeenCalledOnce());
       expect(run.session.finalizing).toBe(true);
       producer?.onStderr?.("during cleanup\n");
@@ -712,16 +758,7 @@ describe("terminal execution-context release", () => {
       if (path === "observed") {
         acknowledgeNotifyOnExit(run.session);
       }
-      exit.resolve({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 1,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      exit.resolve(createRunExit());
       const outcome = await run.promise;
       expect(observed).toEqual(trace);
       expect(outcome.status).toBe(path.endsWith("failure") ? "failed" : "completed");
@@ -806,16 +843,7 @@ describe("exec settlement recovery", () => {
     const joined = waitForExecScope(scopeKey).then(() => {
       observed.push("scope-released");
     });
-    exit.resolve({
-      reason: "exit",
-      exitCode: 0,
-      exitSignal: null,
-      durationMs: 1,
-      stdout: "",
-      stderr: "",
-      timedOut: false,
-      noOutputTimedOut: false,
-    });
+    exit.resolve(createRunExit());
 
     const outcome = await run.promise;
     await joined;
@@ -829,16 +857,7 @@ describe("runExecProcess exit outcomes", () => {
   it("keeps non-zero normal exits in the completed path", async () => {
     const { outcome } = await runExecWithExit({
       stdout: "done",
-      exit: {
-        reason: "exit",
-        exitCode: 1,
-        exitSignal: null,
-        durationMs: 123,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      },
+      exit: createRunExit({ exitCode: 1, durationMs: 123 }),
       timeoutSec: 30,
     });
     expect(outcome.status).toBe("completed");
@@ -851,16 +870,13 @@ describe("runExecProcess exit outcomes", () => {
 
   it("classifies timed out exits with registered-background guidance", async () => {
     const { outcome } = await runExecWithExit({
-      exit: {
+      exit: createRunExit({
         reason: "overall-timeout",
         exitCode: null,
         exitSignal: "SIGKILL",
         durationMs: 123,
-        stdout: "",
-        stderr: "",
         timedOut: true,
-        noOutputTimedOut: false,
-      },
+      }),
       timeoutSec: 30,
     });
     expect(outcome.status).toBe("failed");
@@ -881,16 +897,7 @@ describe("runExecProcess exit outcomes", () => {
 
   it("classifies missing shell commands without timeout guidance", async () => {
     const { outcome } = await runExecWithExit({
-      exit: {
-        reason: "exit",
-        exitCode: 127,
-        exitSignal: null,
-        durationMs: 123,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      },
+      exit: createRunExit({ exitCode: 127, durationMs: 123 }),
       timeoutSec: 30,
     });
 

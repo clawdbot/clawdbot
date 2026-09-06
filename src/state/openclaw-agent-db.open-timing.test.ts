@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { isMainThread, threadId } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import * as sqlite from "../infra/node-sqlite.js";
@@ -107,6 +108,9 @@ describe("agent database open timings", () => {
       agentId: options.agentId,
       elapsedMs: 1_000,
       path: pathname,
+      pid: process.pid,
+      threadId,
+      isMainThread,
       thresholdMs: 1_000,
       phaseDurationsMs: {
         open: 60,
@@ -138,6 +142,9 @@ describe("agent database open timings", () => {
       agentId: options.agentId,
       elapsedMs: 1_150,
       path: pathname,
+      pid: process.pid,
+      threadId,
+      isMainThread,
       thresholdMs: 1_000,
       phaseDurationsMs: {
         open: 60,
@@ -195,6 +202,9 @@ describe("agent database open timings", () => {
         agentId: options.agentId,
         elapsedMs: 1_310,
         path: pathname,
+        pid: process.pid,
+        threadId,
+        isMainThread,
         thresholdMs: 1_000,
         phaseDurationsMs: {
           open: 60,

@@ -7,7 +7,8 @@ import os from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WebSocket, WebSocketServer } from "ws";
+import { WebSocket } from "ws";
+import { WebSocketServer } from "../../packages/gateway-client/src/websocket.test-support.js";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runVitestShutdownCommand } from "../../test/helpers/vitest-shutdown-command.js";
@@ -21,6 +22,7 @@ import {
 
 afterEach(() => {
   vi.doUnmock("ws");
+  vi.doUnmock("../../packages/gateway-client/src/websocket.js");
   vi.doUnmock("./server.js");
   vi.doUnmock("../test-utils/ports.js");
   vi.doUnmock("../infra/device-pairing.js");
@@ -46,6 +48,7 @@ type AcquisitionPeer = {
   errors: Error[];
   unownedErrors: Error[];
   requests: ReturnType<typeof parseMinimalGatewayRequestFrame>[];
+  receivedUpgrade: () => boolean;
   isListening: () => boolean;
   failTransport: () => Promise<Error>;
   close: () => Promise<void>;
@@ -63,8 +66,10 @@ async function withAcquisitionPeer(
   const rejectAuth = behavior === "reject auth" || behavior === "reject auth without close";
   // Observe the real dependency; keep otherwise-unhandled errors local to this case.
   // Counting the remaining listeners makes a removed owner handler observable.
-  vi.doMock("ws", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("ws")>();
+  const observeWebSocket = async () => {
+    const actual = await vi.importActual<
+      typeof import("../../packages/gateway-client/src/websocket.js")
+    >("../../packages/gateway-client/src/websocket.js");
     class ObservedWebSocket extends actual.WebSocket {
       constructor(...args: ConstructorParameters<typeof WebSocket>) {
         super(...args);
@@ -79,10 +84,18 @@ async function withAcquisitionPeer(
         });
       }
     }
-    return { ...actual, default: ObservedWebSocket, WebSocket: ObservedWebSocket };
-  });
+    return {
+      ...actual,
+      default: ObservedWebSocket,
+      WebSocket: ObservedWebSocket,
+      WebSocketServer,
+    };
+  };
+  vi.doMock("ws", observeWebSocket);
+  vi.doMock("../../packages/gateway-client/src/websocket.js", observeWebSocket);
   const sockets = new Set<Socket>();
   const requests: ReturnType<typeof parseMinimalGatewayRequestFrame>[] = [];
+  let receivedUpgrade = false;
   const server = createServer();
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
   server.on("connection", (socket) => {
@@ -90,6 +103,7 @@ async function withAcquisitionPeer(
     socket.once("close", () => sockets.delete(socket));
   });
   server.on("upgrade", (request, socket, head) => {
+    receivedUpgrade = true;
     if (behavior === "hold upgrade") {
       return;
     }
@@ -178,6 +192,7 @@ async function withAcquisitionPeer(
       errors,
       unownedErrors,
       requests,
+      receivedUpgrade: () => receivedUpgrade,
       isListening: () => server.listening,
       failTransport: () => {
         for (const socket of sockets) {
@@ -486,7 +501,12 @@ describe("raw Gateway helper acquisition ownership", () => {
             : helper === "webchat"
               ? connectWebchatClient({ port: peer.port })
               : helper === "shared auth"
-                ? openAuthenticatedGatewayWs(peer.port, "synthetic-token")
+                ? openAuthenticatedGatewayWs(
+                    peer.port,
+                    "synthetic-token",
+                    // Webchat retains the default opening deadline; this helper also accepts a budget.
+                    behavior === "hold upgrade" ? 1_000 : undefined,
+                  )
                 : connectDeviceAuthReq({
                     url: `ws://127.0.0.1:${peer.port}`,
                     token: "synthetic-token",
@@ -508,6 +528,9 @@ describe("raw Gateway helper acquisition ownership", () => {
         expect(peer.unownedErrors).toEqual([]);
         expect(failure).toBeInstanceOf(Error);
         expect(failure).toMatchObject({ message: expect.stringContaining(error) });
+        if (behavior === "hold upgrade") {
+          expect(peer.receivedUpgrade(), "the peer must receive the withheld upgrade").toBe(true);
+        }
         if (behavior === "no response") {
           expect(failure).toMatchObject({ message: "timeout" });
         }

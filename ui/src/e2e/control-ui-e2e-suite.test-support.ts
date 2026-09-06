@@ -1,6 +1,13 @@
 import { writeSync } from "node:fs";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
+import {
+  chromium,
+  type Browser,
+  type BrowserContext,
+  type BrowserContextOptions,
+  type Locator,
+  type Page,
+} from "playwright";
 import {
   afterAll,
   afterEach,
@@ -134,6 +141,14 @@ async function settleControlUiCleanup(promises: Promise<unknown>[]): Promise<voi
   throwControlUiCleanupErrors(
     results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
   );
+}
+
+export function createControlUiE2eContextOptions(): BrowserContextOptions {
+  return {
+    locale: "en-US",
+    serviceWorkers: "block",
+    viewport: { height: 900, width: 1280 },
+  };
 }
 
 export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): ControlUiE2eSuite {

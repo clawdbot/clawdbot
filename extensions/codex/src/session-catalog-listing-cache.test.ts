@@ -57,7 +57,14 @@ describe("Codex supervision catalog", () => {
       refreshSettled = true;
       return value;
     });
-    commandRpcMocks.codexControlRequest.mockReturnValueOnce(refresh);
+    let markRefreshStarted!: () => void;
+    const refreshStarted = new Promise<void>((resolve) => {
+      markRefreshStarted = resolve;
+    });
+    commandRpcMocks.codexControlRequest.mockImplementationOnce(() => {
+      markRefreshStarted();
+      return refresh;
+    });
     const firstExpiredPoll = control.listPage({ limit: 25 });
     const overlappingExpiredPoll = control.listPage({ limit: 25 });
 
@@ -70,6 +77,8 @@ describe("Codex supervision catalog", () => {
       }),
     ]);
     expect(refreshSettled).toBe(false);
+    // Stale delivery does not wait for the deferred RPC module to start its request.
+    await refreshStarted;
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
 
     resolveRefresh({ data: [idleThread({ id: "thread-refreshed", source: "cli" })] });
@@ -98,8 +107,16 @@ describe("Codex supervision catalog", () => {
     const first = await control.listPage({ limit: 25 });
 
     now += 32_001;
-    commandRpcMocks.codexControlRequest.mockRejectedValueOnce(new Error("app-server unavailable"));
+    let markRefreshStarted!: () => void;
+    const refreshStarted = new Promise<void>((resolve) => {
+      markRefreshStarted = resolve;
+    });
+    commandRpcMocks.codexControlRequest.mockImplementationOnce(async () => {
+      markRefreshStarted();
+      throw new Error("app-server unavailable");
+    });
     await expect(control.listPage({ limit: 25 })).resolves.toEqual(first);
+    await refreshStarted;
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
 
     commandRpcMocks.codexControlRequest.mockResolvedValue({

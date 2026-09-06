@@ -262,7 +262,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
           toDatabaseOptions(resolved),
           { operationLabel: "session.entry-replacements" },
         );
-        emitCommittedSessionIdentityDiff(previous, current);
+        emitCommittedSessionIdentityDiff(resolved.agentId, previous, current);
         return { maintenancePlans, result: operation.result };
       },
     };

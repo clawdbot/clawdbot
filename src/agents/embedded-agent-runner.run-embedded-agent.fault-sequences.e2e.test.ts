@@ -63,8 +63,8 @@ let runEmbeddedAgentWithPreparedAdmission: ProductionRunEmbeddedAgent;
 let runWithModelFallback: typeof import("./model-fallback-runner.js").runWithModelFallback;
 let captureRoutingDecisionWork: typeof import("./test-helpers/model-routing-decision-e2e-fixtures.js").captureRoutingDecisionWork;
 let createModelRoutingTestAdmission: typeof import("./test-helpers/model-routing-decision-e2e-fixtures.js").createModelRoutingTestAdmission;
-let ensureAuthProfileStore: typeof import("./auth-profiles/store.js").ensureAuthProfileStore;
-let saveAuthProfileStore: typeof import("./auth-profiles/store.js").saveAuthProfileStore;
+let ensureAuthProfileStore: typeof import("./auth-profiles/store-runtime.js").ensureAuthProfileStore;
+let saveAuthProfileStore: typeof import("./auth-profiles/store-runtime.js").saveAuthProfileStore;
 
 beforeAll(async () => {
   vi.resetModules();
@@ -86,7 +86,8 @@ beforeAll(async () => {
   ({ runWithModelFallback } = await import("./model-fallback-runner.js"));
   ({ captureRoutingDecisionWork, createModelRoutingTestAdmission } =
     await import("./test-helpers/model-routing-decision-e2e-fixtures.js"));
-  ({ ensureAuthProfileStore, saveAuthProfileStore } = await import("./auth-profiles/store.js"));
+  ({ ensureAuthProfileStore, saveAuthProfileStore } =
+    await import("./auth-profiles/store-runtime.js"));
 });
 
 beforeEach(() => {

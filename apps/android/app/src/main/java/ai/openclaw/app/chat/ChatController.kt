@@ -435,9 +435,14 @@ class ChatController internal constructor(
     val optimisticMessage: ChatMessage,
   )
 
-  private data class RunDiagnosticOwner(
+  private data class ChatRunOwner(
     val owner: ChatComposerOwner,
     val runId: String,
+  )
+
+  private data class OwnedPendingToolCall(
+    val owner: ChatRunOwner?,
+    val call: ChatPendingToolCall,
   )
 
   private enum class HistoryRefreshPurpose {
@@ -509,8 +514,9 @@ class ChatController internal constructor(
 
   private val _streamingAssistantText = MutableStateFlow<String?>(null)
   val streamingAssistantText: StateFlow<String?> = _streamingAssistantText.asStateFlow()
+  private var streamingAssistantOwner: ChatRunOwner? = null
 
-  private val pendingToolCallsById = ConcurrentHashMap<String, ChatPendingToolCall>()
+  private val pendingToolCallsById = ConcurrentHashMap<String, OwnedPendingToolCall>()
   private val _pendingToolCalls = MutableStateFlow<List<ChatPendingToolCall>>(emptyList())
   val pendingToolCalls: StateFlow<List<ChatPendingToolCall>> = _pendingToolCalls.asStateFlow()
 
@@ -779,7 +785,7 @@ class ChatController internal constructor(
 
   // Lifecycle telemetry can retire a run before its canonical chat terminal arrives.
   // Its diagnostic remains owned until that terminal, a newer run, or an owner reset.
-  @Volatile private var runDiagnosticOwner: RunDiagnosticOwner? = null
+  @Volatile private var runDiagnosticOwner: ChatRunOwner? = null
   private var historyLoadErrorGeneration: Long? = null
 
   private var lastHealthPollAtMs: Long? = null
@@ -3424,7 +3430,8 @@ class ChatController internal constructor(
 
     fun settleProjectedRun(settledRunId: String) {
       retireRunTelemetry(settledRunId)
-      clearPendingRun(settledRunId)
+      // A terminal may already have retired the projection while this dispatch was suspended.
+      clearPendingRun(settledRunId, owner = capturedOwner)
       removeOptimisticMessage(settledRunId)
       unresolvedRepliesByRunId.remove(settledRunId)
       if (runDiagnosticOwner?.runId == settledRunId) runDiagnosticOwner = null
@@ -3474,7 +3481,6 @@ class ChatController internal constructor(
             settleProjectedRun(actualRunId)
             if (ack.isTerminalSuccess) {
               if (isCapturedOwnerCurrent()) {
-                clearLiveRunUi()
                 refreshCurrentHistoryBestEffort(runIdsToReconcile = setOf(actualRunId))
               }
               true
@@ -3482,7 +3488,6 @@ class ChatController internal constructor(
               // Terminal timeout/error means the gateway did not accept a runnable turn.
               // Surface failed acceptance instead of letting a cleared composer look successful.
               if (isCapturedOwnerCurrent()) {
-                clearLiveRunUi()
                 updateLocalizedErrorText(nativeText("Chat failed before the run started; try again."))
               }
               // The parked row owns the input; restoring the draft would duplicate it.
@@ -3743,16 +3748,15 @@ class ChatController internal constructor(
     }
     armPendingRunTimeout(runId)
     synchronized(pendingRuns) { pendingRuns.add(runId) }
-    runDiagnosticOwner = RunDiagnosticOwner(projection.owner, runId)
+    runDiagnosticOwner = ChatRunOwner(projection.owner, runId)
     updateErrorText(null)
-    _streamingAssistantText.value = null
-    pendingToolCallsById.clear()
-    publishPendingToolCalls()
     publishRunPresentation()
   }
 
   /** Hides another owner's live run without discarding the ownership needed to restore it. */
   private fun unprojectPendingRun(runId: String) {
+    val owner = pendingRunProjectionsByRunId[runId]?.owner
+    clearLiveRunUi(runId, owner)
     if (runDiagnosticOwner?.runId == runId) runDiagnosticOwner = null
     pendingRunTimeoutJobs.remove(runId)?.cancel()
     removeOptimisticMessage(runId)
@@ -3762,7 +3766,7 @@ class ChatController internal constructor(
       pendingRuns.remove(runId)
     }
     clearUnownedNonterminalTelemetry(runId)
-    clearTransientRunUiIfIdle()
+    clearTransientRunUiIfIdle(owner)
     if (pendingRunProjectionsByRunId.containsKey(runId)) armPendingRunProjectionDeadline(runId)
     publishRunPresentation()
   }
@@ -4792,7 +4796,13 @@ class ChatController internal constructor(
                 adoptInFlightRun(history, runIdsOwnedAfterRequest)
               }
               publishRunPresentation()
-              enqueueTranscriptCacheWrite(requestCacheScope, requestAgentId, sessionKey, history.messages)
+              enqueueTranscriptCacheWrite(
+                requestCacheScope,
+                requestAgentId,
+                sessionKey,
+                history.messages,
+                appliedHistoryEntry.takeIf { appliedPurpose == HistoryRefreshPurpose.RestoreSession && history.sessionInfo != null },
+              )
               HistoryRefreshResult.Applied(historyBranchState, appliedPurpose)
             }
           }
@@ -4950,6 +4960,7 @@ class ChatController internal constructor(
     agentId: String,
     sessionKey: String,
     messages: List<ChatMessage>,
+    sessionInfo: ChatSessionEntry?,
   ) {
     val cache = transcriptCache ?: return
     val capturedScope = requestCacheScope ?: return
@@ -4958,7 +4969,7 @@ class ChatController internal constructor(
     scope.launch(start = CoroutineStart.UNDISPATCHED) {
       cacheMutationMutex.withLock {
         if (capturedScope != currentCacheScope()) return@withLock
-        runCatching { cache.saveTranscript(capturedScope.gatewayId, agentId, sessionKey, messages) }
+        runCatching { cache.saveTranscript(capturedScope.gatewayId, agentId, sessionKey, messages, sessionInfo) }
       }
     }
   }
@@ -6382,7 +6393,7 @@ class ChatController internal constructor(
         if (!isPending) return
         val text = parseAssistantDeltaText(payload)
         if (!text.isNullOrEmpty()) {
-          _streamingAssistantText.value = text
+          updateStreamingAssistantText(runId, text)
         }
       }
 
@@ -6439,6 +6450,7 @@ class ChatController internal constructor(
           updateLocalizedErrorText(payload["errorMessage"].asStringOrNull()?.let(::verbatimText) ?: nativeText("Chat failed"))
         }
         if (runId != null && !isPending) {
+          clearLiveRunUi(runId)
           if (resolvesWithoutReply) terminalWithoutReplyRunIds.add(runId)
           publishRunPresentation()
           refreshCurrentHistoryBestEffort(
@@ -6459,7 +6471,7 @@ class ChatController internal constructor(
           terminalRunIds.forEach(::retireRunTelemetry)
           clearPendingRuns(clearOptimisticMessages = false, clearRunTelemetry = false)
         }
-        clearLiveRunUi()
+        if (runId == null) clearLiveRunUi()
         refreshCurrentHistoryBestEffort(
           runIdsToReconcile = terminalRunIds,
           purpose = HistoryRefreshPurpose.RestoreSession,
@@ -6622,6 +6634,13 @@ class ChatController internal constructor(
       return
     }
     val phase = payload["phase"].asStringOrNull()
+    val reason = payload["reason"].asStringOrNull()
+    if (reason == "compact") {
+      // Compaction events omit cleared fields. Read the full owner snapshot rather
+      // than treating those omissions as a patch or inferring usage from the transcript.
+      if (eventKey == _sessionKey.value) refreshHistoryForRecovery() else refreshSessionsForCurrentWindow()
+      return
+    }
     // Durable transcript invalidations need no session snapshot or chat terminal event.
     if (eventKey == _sessionKey.value && (payload["message"] is JsonObject || phase == "message")) {
       refreshCurrentHistoryBestEffort(purpose = HistoryRefreshPurpose.Transcript)
@@ -6698,7 +6717,6 @@ class ChatController internal constructor(
     if (!entry.hasActiveRunMetadata) retireRunTelemetry(settledRunId)
     if (terminalWasLocal) {
       clearPendingRun(settledRunId)
-      clearTransientRunUiIfIdle()
     } else {
       publishRunPresentation()
     }
@@ -6785,7 +6803,6 @@ class ChatController internal constructor(
           if (!accepted) return
           if (isLocallyOwnedRun(lifecycleRunId)) {
             clearPendingRun(lifecycleRunId)
-            clearTransientRunUiIfIdle()
           } else {
             publishRunPresentation()
           }
@@ -6799,7 +6816,7 @@ class ChatController internal constructor(
       "assistant" -> {
         val text = data?.get("text")?.asStringOrNull()
         if (!text.isNullOrEmpty()) {
-          _streamingAssistantText.value = text
+          updateStreamingAssistantText(runId, text)
         }
       }
 
@@ -6810,38 +6827,49 @@ class ChatController internal constructor(
         if (phase.isNullOrEmpty() || name.isNullOrEmpty() || toolCallId.isNullOrEmpty()) return
 
         val ts = payload["ts"].asLongOrNull() ?: System.currentTimeMillis()
-        when (phase) {
-          "start" -> {
-            val existing = pendingToolCallsById[toolCallId]
-            pendingToolCallsById[toolCallId] =
-              ChatPendingToolCall(
-                toolCallId = toolCallId,
-                name = name,
-                args = data.get("args").asObjectOrNull(),
-                startedAtMs = existing?.startedAtMs ?: ts,
-                isError = null,
-                liveDiff = existing?.liveDiff,
-              )
-            publishPendingToolCalls()
-          }
-
-          "input_delta" -> {
-            val diff = parseChatDiffStat(data["diff"], includeFiles = false) ?: return
-            val existing = pendingToolCallsById[toolCallId]
-            pendingToolCallsById[toolCallId] =
-              existing?.copy(name = name, liveDiff = diff)
-                ?: ChatPendingToolCall(
-                  toolCallId = toolCallId,
-                  name = name,
-                  startedAtMs = ts,
-                  liveDiff = diff,
+        synchronized(gatewayScopeApplyLock) {
+          val owner = liveRunOwner(runId)
+          when (phase) {
+            "start" -> {
+              val existing = pendingToolCallsById[toolCallId]?.takeIf { it.owner == owner }?.call
+              pendingToolCallsById[toolCallId] =
+                OwnedPendingToolCall(
+                  owner,
+                  ChatPendingToolCall(
+                    toolCallId = toolCallId,
+                    name = name,
+                    args = data.get("args").asObjectOrNull(),
+                    startedAtMs = existing?.startedAtMs ?: ts,
+                    isError = null,
+                    liveDiff = existing?.liveDiff,
+                  ),
                 )
-            publishPendingToolCalls()
-          }
+              publishPendingToolCalls()
+            }
 
-          "result" -> {
-            pendingToolCallsById.remove(toolCallId)
-            publishPendingToolCalls()
+            "input_delta" -> {
+              val diff = parseChatDiffStat(data["diff"], includeFiles = false) ?: return
+              val existing = pendingToolCallsById[toolCallId]?.takeIf { it.owner == owner }?.call
+              pendingToolCallsById[toolCallId] =
+                OwnedPendingToolCall(
+                  owner,
+                  existing?.copy(name = name, liveDiff = diff)
+                    ?: ChatPendingToolCall(
+                      toolCallId = toolCallId,
+                      name = name,
+                      startedAtMs = ts,
+                      liveDiff = diff,
+                    ),
+                )
+              publishPendingToolCalls()
+            }
+
+            "result" -> {
+              pendingToolCallsById[toolCallId]?.takeIf { it.owner == owner }?.let {
+                pendingToolCallsById.remove(toolCallId, it)
+              }
+              publishPendingToolCalls()
+            }
           }
         }
       }
@@ -6872,13 +6900,10 @@ class ChatController internal constructor(
         updateLocalizedErrorText(nativeText("Event stream interrupted; try refreshing."))
         if (runId == null) {
           clearPendingRuns()
+          clearLiveRunUi()
         } else {
           clearPendingRun(runId)
-          clearTransientRunUiIfIdle()
         }
-        pendingToolCallsById.clear()
-        publishPendingToolCalls()
-        _streamingAssistantText.value = null
       }
     }
   }
@@ -6898,7 +6923,7 @@ class ChatController internal constructor(
         owner = owner,
       )
     }
-    normalizedRunId?.let(::clearPendingRun)
+    normalizedRunId?.let { clearPendingRun(it, owner = owner) }
   }
 
   private fun resolveChatEventRoutingOwner(
@@ -6956,8 +6981,9 @@ class ChatController internal constructor(
   }
 
   private fun publishPendingToolCalls() {
-    _pendingToolCalls.value =
-      pendingToolCallsById.values.sortedBy { it.startedAtMs }
+    synchronized(gatewayScopeApplyLock) {
+      _pendingToolCalls.value = pendingToolCallsById.values.map { it.call }.sortedBy { it.startedAtMs }
+    }
   }
 
   private fun handleTaskEvent(payloadJson: String) {
@@ -7054,10 +7080,41 @@ class ChatController internal constructor(
     }
   }
 
-  private fun clearLiveRunUi() {
-    pendingToolCallsById.clear()
-    publishPendingToolCalls()
-    _streamingAssistantText.value = null
+  private fun liveRunOwner(runId: String?): ChatRunOwner? {
+    // Older events may omit a run id. A sole pending run is attributable; a
+    // multi-run event remains unowned until the existing whole-scope/idle reset.
+    val id = runId ?: synchronized(pendingRuns) { pendingRuns.singleOrNull() } ?: return null
+    return currentChatComposerRoutingOwner()?.let { ChatRunOwner(it, id) }
+  }
+
+  private fun updateStreamingAssistantText(
+    runId: String?,
+    text: String,
+  ) {
+    synchronized(gatewayScopeApplyLock) {
+      streamingAssistantOwner = liveRunOwner(runId)
+      _streamingAssistantText.value = text
+    }
+  }
+
+  private fun clearLiveRunUi(
+    runId: String? = null,
+    owner: ChatComposerOwner? = currentChatComposerRoutingOwner(),
+  ) {
+    synchronized(gatewayScopeApplyLock) {
+      val retiringOwner = if (runId != null && owner != null) ChatRunOwner(owner, runId) else null
+      if (runId != null && retiringOwner == null) return
+      if (runId == null || streamingAssistantOwner == retiringOwner) {
+        streamingAssistantOwner = null
+        _streamingAssistantText.value = null
+      }
+      if (runId == null) {
+        pendingToolCallsById.clear()
+      } else {
+        pendingToolCallsById.entries.removeAll { it.value.owner == retiringOwner }
+      }
+      publishPendingToolCalls()
+    }
   }
 
   private fun clearProgressCard(clearScopeKey: Boolean = true) {
@@ -7171,10 +7228,10 @@ class ChatController internal constructor(
       if (pendingRuns.isEmpty() && unresolvedRepliesByRunId.isNotEmpty() && !unresolvedRepliesByRunId.containsKey(runId)) return
       pendingRuns.add(runId)
     }
-    runDiagnosticOwner = currentChatComposerRoutingOwner()?.let { RunDiagnosticOwner(it, runId) }
+    runDiagnosticOwner = currentChatComposerRoutingOwner()?.let { ChatRunOwner(it, runId) }
     armPendingRunTimeout(runId)
     if (run.text.isNotEmpty()) {
-      _streamingAssistantText.value = run.text
+      updateStreamingAssistantText(runId, run.text)
     }
   }
 
@@ -7229,7 +7286,6 @@ class ChatController internal constructor(
           updateLocalizedErrorText(nativeText("Timed out waiting for a reply; try again or refresh."))
         }
         clearPendingRun(runId)
-        clearTransientRunUiIfIdle()
       }
   }
 
@@ -7253,6 +7309,7 @@ class ChatController internal constructor(
   private fun clearPendingRun(
     runId: String,
     publishRunState: Boolean = true,
+    owner: ChatComposerOwner? = pendingRunProjectionsByRunId[runId]?.owner ?: currentChatComposerRoutingOwner(),
   ) {
     pendingRunProjectionsByRunId.remove(runId)
     pendingRunTimeoutJobs.remove(runId)?.cancel()
@@ -7261,11 +7318,16 @@ class ChatController internal constructor(
       disconnectedPendingRunIds.remove(runId)
       pendingRuns.remove(runId)
     }
+    clearLiveRunUi(runId, owner)
+    clearTransientRunUiIfIdle(owner)
     clearUnownedNonterminalTelemetry(runId)
     if (publishRunState) publishRunPresentation()
   }
 
-  private fun clearTransientRunUiIfIdle() {
+  private fun clearTransientRunUiIfIdle(owner: ChatComposerOwner? = currentChatComposerRoutingOwner()) {
+    // An inactive run becoming idle cannot retire the new session's unattributed
+    // legacy output after navigation or a delayed acknowledgement.
+    if (owner == null || owner != currentChatComposerRoutingOwner()) return
     if (synchronized(pendingRuns) { pendingRuns.isNotEmpty() }) return
     clearLiveRunUi()
   }
@@ -7320,6 +7382,16 @@ class ChatController internal constructor(
     if (oldRunId == newRunId) return
     runDiagnosticOwner?.takeIf { it.runId == oldRunId }?.let { runDiagnosticOwner = it.copy(runId = newRunId) }
     val pendingProjection = pendingRunProjectionsByRunId.remove(oldRunId)
+    val previousOwner = (pendingProjection?.owner ?: currentChatComposerRoutingOwner())?.let { ChatRunOwner(it, oldRunId) }
+    if (previousOwner != null) {
+      synchronized(gatewayScopeApplyLock) {
+        val nextOwner = previousOwner.copy(runId = newRunId)
+        if (streamingAssistantOwner == previousOwner) streamingAssistantOwner = nextOwner
+        pendingToolCallsById.replaceAll { _, tool ->
+          if (tool.owner == previousOwner) tool.copy(owner = nextOwner) else tool
+        }
+      }
+    }
     val optimistic = optimisticMessagesByRunId.remove(oldRunId)
     val unresolved = unresolvedRepliesByRunId.remove(oldRunId)
     val wasPending = synchronized(pendingRuns) { oldRunId in pendingRuns }
@@ -7553,7 +7625,18 @@ class ChatController internal constructor(
       provenance = parseChatMessageProvenance(obj["provenance"]),
       transcriptMarker = parseChatTranscriptMarker(obj["__openclaw"]),
       senderLabel = obj["senderLabel"].asJsonStringOrNull()?.trim()?.takeIf { role == "user" && it.isNotEmpty() },
+      provider = obj["provider"].asJsonStringOrNull()?.trim()?.takeIf(String::isNotEmpty),
+      model = obj["model"].asJsonStringOrNull()?.trim()?.takeIf(String::isNotEmpty),
+      deliveryMirror = parseChatDeliveryMirror(obj["openclawDeliveryMirror"]),
+      usage = parseChatMessageUsage(obj),
+      cost = parseChatMessageCost(obj),
     )
+  }
+
+  private fun parseChatDeliveryMirror(element: JsonElement?): ChatDeliveryMirror? {
+    val obj = element.asObjectOrNull() ?: return null
+    val kind = obj["kind"].asJsonStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    return ChatDeliveryMirror(kind = kind)
   }
 
   private fun parseChatMessageProvenance(element: JsonElement?): ChatMessageProvenance? {
@@ -7949,8 +8032,10 @@ class ChatController internal constructor(
     preserveSessionSettings: Boolean = false,
   ): ChatSessionEntry? {
     val thinkingLevel = history.thinkingLevel?.trim()?.takeIf(String::isNotEmpty)
+    // Full sessionInfo is authoritative even when usage is absent after compaction.
+    // Thinking-only refreshes and partial events must retain their existing usage.
     val info =
-      history.sessionInfo.takeIf { includeSessionInfo }
+      history.sessionInfo.takeIf { includeSessionInfo }?.copy(hasSessionUsageMetadata = true)
         ?: thinkingLevel?.let { ChatSessionEntry(key = history.sessionKey, updatedAtMs = null, thinkingLevel = it) }
         ?: return null
     return upsertSessionEntry(
@@ -8359,6 +8444,43 @@ internal fun parseChatMessageContents(obj: JsonObject): List<ChatMessageContent>
     transcriptAudio.filterNot { audio ->
       content.any { it.mimeType == audio.mimeType && it.fileName == audio.fileName }
     }
+}
+
+internal fun parseChatMessageUsage(obj: JsonObject): ChatMessageUsage? {
+  val usage = obj["usage"].asObjectOrNull() ?: return null
+
+  fun read(vararg keys: String): Long? = keys.firstNotNullOfOrNull { key -> usage[key].asLongOrNull()?.takeIf { it >= 0L } }
+
+  val parsed =
+    ChatMessageUsage(
+      // Only canonical input is non-cached; provider prompt aliases can include cache
+      // whose split is absent from the display projection. Keep that input unknown.
+      input = read("input"),
+      output = read("output", "outputTokens", "output_tokens", "completionTokens", "completion_tokens"),
+      cacheRead = read("cacheRead", "cache_read_input_tokens"),
+    )
+  return parsed.takeIf { listOf(it.input, it.output, it.cacheRead).any { value -> value != null } }
+}
+
+internal fun parseChatMessageCost(obj: JsonObject): ChatMessageCost? {
+  val direct = obj["cost"].asObjectOrNull()
+  val nested = obj["usage"].asObjectOrNull()?.get("cost").asObjectOrNull()
+
+  fun parse(cost: JsonObject?): ChatMessageCost? {
+    fun read(key: String): Double? = cost?.get(key).asJsonNumberOrNull()?.takeIf { it.isFinite() && it >= 0.0 }
+
+    val parsed =
+      ChatMessageCost(
+        input = read("input"),
+        output = read("output"),
+        cacheRead = read("cacheRead"),
+        cacheWrite = read("cacheWrite"),
+        total = read("total"),
+      )
+    return parsed.takeIf { listOf(it.input, it.output, it.cacheRead, it.cacheWrite, it.total).any { value -> value != null } }
+  }
+
+  return parse(direct) ?: parse(nested)
 }
 
 private fun parseTranscriptAudioContents(obj: JsonObject): List<ChatMessageContent> {

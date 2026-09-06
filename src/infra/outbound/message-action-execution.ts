@@ -202,7 +202,7 @@ export function projectGatewayQueuedDeliveryResult(error: unknown) {
   return {
     status: "delivery_queued",
     delivered: false as const,
-    message: `Message not delivered: ${error.message}. The gateway queued it and will retry automatically. Do not resend it.`,
+    message: `Delivery is pending: ${error.message}. The gateway owns retry or reconciliation; delivery is not yet confirmed. Do not resend it.`,
   };
 }
 

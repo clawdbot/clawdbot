@@ -322,7 +322,6 @@ describe("scripts/ui windows spawn behavior", () => {
           "scripts/lib/build-identity.mts",
           "scripts/lib/output-root-guard.mjs",
           "scripts/lib/record-shared.mjs",
-          "scripts/lib/windows-cmd-helpers-runtime.mts",
           "ui/package.json",
           "ui/src/build-info-normalizers.ts",
           "packages/normalization-core/src/record-coerce.ts",

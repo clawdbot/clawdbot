@@ -9,7 +9,8 @@ import { coerceErrorMessage, toStringifiedError } from "openclaw/plugin-sdk/erro
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parse as parseSemver } from "semver";
-import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
+import type { CodexAppServerStartOptions } from "./config-contracts.js";
+import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
 import { resolveDynamicToolServerRequestTimeoutMs } from "./dynamic-tool-execution.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
 import { readCodexDynamicToolCallParams } from "./protocol-validators.js";
@@ -691,10 +692,16 @@ export class CodexAppServerClient {
       try {
         // Config-fence waits and overload retries can outlive the caller's
         // ownership. Revalidate before each physical write, without an await.
+        // The guard can narrow params, so serialize only after it returns.
         options.assertCurrent?.();
-        mayHaveWritten = true;
-        onWriteStateChange?.(true);
-        this.writeMessage(message, (error) => rejectPending(error));
+        this.writeMessage(
+          message,
+          (error) => rejectPending(error),
+          () => {
+            mayHaveWritten = true;
+            onWriteStateChange?.(true);
+          },
+        );
       } catch (error) {
         rejectPending(toStringifiedError(error));
       }
@@ -785,24 +792,34 @@ export class CodexAppServerClient {
     }
   }
 
-  private writeMessage(message: RpcRequest | RpcResponse, onError?: (error: Error) => void): void {
+  private writeMessage(
+    message: RpcRequest | RpcResponse,
+    onError?: (error: Error) => void,
+    beforeWrite?: () => void,
+  ): void {
     if (this.closed) {
       return;
     }
     const id = "id" in message ? message.id : undefined;
     const method = "method" in message ? message.method : undefined;
+    const frame = stringifyCodexAppServerMessage(message);
+    // Reject locally before declaring a possible write. Images count toward the
+    // transport frame limit even though Codex's text-input limit excludes them.
+    if (this.child.maxFrameBytes && Buffer.byteLength(frame) > this.child.maxFrameBytes) {
+      throw new Error(
+        "Codex request exceeds the transport frame limit; reduce attached images or context.",
+      );
+    }
+    beforeWrite?.();
     if (method === "command/exec") {
       this.nativeExecutionObserved = true;
     }
-    this.child.stdin.write(
-      `${stringifyCodexAppServerMessage(message)}\n`,
-      (error?: Error | null) => {
-        if (error) {
-          embeddedAgentLog.warn("codex app-server write failed", { error, id, method });
-          onError?.(error);
-        }
-      },
-    );
+    this.child.stdin.write(`${frame}\n`, (error?: Error | null) => {
+      if (error) {
+        embeddedAgentLog.warn("codex app-server write failed", { error, id, method });
+        onError?.(error);
+      }
+    });
   }
 
   private handleLine(line: string): void {

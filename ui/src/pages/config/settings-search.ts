@@ -48,6 +48,17 @@ const CURATED_ROUTE_VISIBLE_KEYS: Partial<Record<string, () => readonly string[]
   updates: () => ["channel", "checkOnStart", "auto"],
 };
 
+const preparedSectionsBySchema = new WeakMap<
+  JsonSchema,
+  {
+    hints: ConfigUiHints;
+    sections: Map<
+      string,
+      { schema: JsonSchema; tiers: ReturnType<typeof splitConfigSchemaByTier> }
+    >;
+  }
+>();
+
 function visibleSectionSchema(routeId: string, sectionSchema: JsonSchema): JsonSchema {
   const visibleKeys = CURATED_ROUTE_VISIBLE_KEYS[routeId];
   const properties = sectionSchema.properties;
@@ -98,6 +109,13 @@ export function findSettingsSearchBlocks(params: {
   if (!schema || schemaType(schema) !== "object" || !schema.properties) {
     return matches;
   }
+  let prepared = preparedSectionsBySchema.get(schema);
+  // Schema responses replace both objects. Keep only the current hint revision;
+  // draft values, query text, locale, and route visibility are evaluated below.
+  if (!prepared || prepared.hints !== params.uiHints) {
+    prepared = { hints: params.uiHints, sections: new Map() };
+    preparedSectionsBySchema.set(schema, prepared);
+  }
   const value = params.value ?? {};
   for (const [key, rawSectionSchema] of Object.entries(schema.properties)) {
     const routeId = configPageForSection(key);
@@ -110,16 +128,24 @@ export function findSettingsSearchBlocks(params: {
     ) {
       continue;
     }
-    const sectionSchema =
-      key === "wizard"
-        ? setupVisibleSchema(rawSectionSchema)
-        : visibleSectionSchema(routeId, rawSectionSchema);
+    let section = prepared.sections.get(key);
+    if (!section) {
+      const sectionSchema =
+        key === "wizard"
+          ? setupVisibleSchema(rawSectionSchema)
+          : visibleSectionSchema(routeId, rawSectionSchema);
+      section = {
+        schema: sectionSchema,
+        tiers: splitConfigSchemaByTier({
+          schema: sectionSchema,
+          path: [key],
+          hints: params.uiHints,
+        }),
+      };
+      prepared.sections.set(key, section);
+    }
+    const { schema: sectionSchema, tiers: tierSplit } = section;
     const meta = SECTION_META[key];
-    const tierSplit = splitConfigSchemaByTier({
-      schema: sectionSchema,
-      path: [key],
-      hints: params.uiHints,
-    });
     const matchesTier = (tierSchema: JsonSchema | null) =>
       Boolean(
         tierSchema &&

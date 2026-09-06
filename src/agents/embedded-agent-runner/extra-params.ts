@@ -79,17 +79,17 @@ export function resolveExtraParams(params: {
   modelId: string;
   agentId?: string;
 }): Record<string, unknown> | undefined {
-  const { defaultParams, modelParams, agentParams } = resolveModelExtraParamSources({
-    config: params.cfg,
-    provider: params.provider,
-    modelId: params.modelId,
-    agentId: params.agentId,
-  });
-  const globalParams = modelParams ? { ...modelParams } : undefined;
-
-  const merged = Object.assign({}, defaultParams, globalParams, agentParams);
+  const { defaultParams, modelParams, agentModelParams, agentParams } =
+    resolveModelExtraParamSources({
+      config: params.cfg,
+      provider: params.provider,
+      modelId: params.modelId,
+      agentId: params.agentId,
+    });
+  const sources = [defaultParams, modelParams, agentModelParams, agentParams];
+  const merged = Object.assign({}, ...sources);
   const resolvedParallelToolCalls = resolveAliasedParamValue(
-    [defaultParams, globalParams, agentParams],
+    sources,
     "parallel_tool_calls",
     "parallelToolCalls",
   );
@@ -99,7 +99,7 @@ export function resolveExtraParams(params: {
   }
 
   const resolvedTextVerbosity = resolveAliasedParamValue(
-    [globalParams, agentParams],
+    [modelParams, agentModelParams, agentParams],
     "text_verbosity",
     "textVerbosity",
   );
@@ -109,7 +109,7 @@ export function resolveExtraParams(params: {
   }
 
   const resolvedResponseFormat = resolveAliasedParamValue(
-    [defaultParams, globalParams, agentParams],
+    sources,
     "response_format",
     "responseFormat",
   );
@@ -119,11 +119,11 @@ export function resolveExtraParams(params: {
   }
   canonicalizeMaxTokensParam({
     merged,
-    sources: [defaultParams, globalParams, agentParams],
+    sources,
   });
 
   const resolvedCachedContent = resolveAliasedParamValue(
-    [defaultParams, globalParams, agentParams],
+    sources,
     "cached_content",
     "cachedContent",
   );
@@ -132,7 +132,7 @@ export function resolveExtraParams(params: {
     delete merged.cached_content;
   }
   if (params.provider === "openrouter") {
-    canonicalizeOpenRouterResponseCacheParams(merged, [defaultParams, globalParams, agentParams]);
+    canonicalizeOpenRouterResponseCacheParams(merged, sources);
   }
 
   applyDefaultOpenAIGptRuntimeParams(params, merged);

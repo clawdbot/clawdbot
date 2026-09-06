@@ -6,7 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { expect } from "vitest";
 import { resolveAgentDir } from "../agents/agent-scope.js";
-import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import { loadCliSessionHistoryMessages } from "../agents/cli-runner/session-history.js";
 import { computeCacheHitRate } from "../agents/live-cache-test-support.js";
 import { listSubagentRunsForRequester } from "../agents/subagents/registry/subagent-registry.test-helpers.js";

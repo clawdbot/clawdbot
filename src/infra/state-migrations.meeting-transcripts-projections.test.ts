@@ -6,6 +6,11 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import {
+  exportTranscriptLibrary,
+  getTranscriptLibrary,
+  listTranscriptLibrary,
+} from "../transcripts/library.js";
 import { safeTranscriptPathSegment } from "../transcripts/store-artifacts.js";
 import { TranscriptsStore } from "../transcripts/store.js";
 import { summarizeTranscripts } from "../transcripts/summary.js";
@@ -144,6 +149,44 @@ describe("meeting transcript Doctor oversized projections", () => {
       expect(harness.detect()).toMatchObject({ hasLegacy: true, pendingImportCount: 0 });
       expect(harness.snapshot()).toEqual(before);
 
+      const readListedCapture = async (expectedSelector: string) => {
+        closeOpenClawStateDatabaseForTest();
+        const reopened = new TranscriptsStore(harness.root, { env: harness.env });
+        const listed = listTranscriptLibrary(reopened, {}).sessions.find(
+          (entry) => entry.sessionId === sessionId,
+        );
+        expect(listed?.selector).toBe(expectedSelector);
+        const selector = listed!.selector;
+        const detail = await getTranscriptLibrary(reopened, { selector, includeUtterances: true });
+        expect(detail.session).toMatchObject({
+          sessionId,
+          selector,
+          utteranceCount: 1,
+          hasSummary: true,
+        });
+        expect(detail.utterances).toEqual([
+          { sequence: 0, text: "Preserve this note.", final: true },
+        ]);
+        for (const format of ["markdown", "jsonl"] as const) {
+          const exported = await exportTranscriptLibrary(reopened, { selector, format });
+          const body = Buffer.from(exported.data, "base64").toString("utf8");
+          expect(exported.selector).toBe(selector);
+          expect(Buffer.byteLength(exported.filename)).toBeLessThanOrEqual(255);
+          expect(body).toContain("Preserve this note.");
+          if (format === "jsonl") {
+            expect(
+              body
+                .trim()
+                .split("\n")
+                .map((line) => JSON.parse(line)),
+            ).toEqual(detail.utterances);
+          }
+        }
+        expect(await reopened.readSession(sessionId)).toEqual(seeded.session);
+      };
+      await readListedCapture(`2026-07-01/${historicalSlug}`);
+      expect(harness.snapshot()).toEqual(before);
+
       const result = await harness.migrate();
       expect(result.warnings).toEqual([]);
       expect(result.changes).toEqual([expect.stringMatching(/1.*oversized/i)]);
@@ -159,9 +202,13 @@ describe("meeting transcript Doctor oversized projections", () => {
         },
       );
       expect(harness.snapshot()).toEqual(expected);
+      await readListedCapture(`2026-07-01/${slug}`);
+      expect(harness.snapshot()).toEqual(expected);
       await expect(fs.stat(harness.root)).rejects.toMatchObject({ code: "ENOENT" });
       expect(harness.detect().hasLegacy).toBe(false);
       await expect(harness.migrate()).resolves.toEqual({ changes: [], warnings: [] });
+      await readListedCapture(`2026-07-01/${slug}`);
+      expect(harness.snapshot()).toEqual(expected);
       const entry = await harness.store.readSessionEntry(`2026-07-01/${slug}`);
       expect(entry?.session).toEqual(seeded.session);
       expect(await harness.store.readSummary(seeded.session)).toEqual({

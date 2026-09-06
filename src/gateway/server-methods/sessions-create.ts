@@ -55,6 +55,8 @@ import {
 } from "./session-create-initial-turn.js";
 import {
   normalizeSessionProjectGitUrl,
+  prepareSessionRepositoryWorkspace,
+  resolveSessionRepositoryCreation,
   validateSessionProjectPreparation,
 } from "./session-create-project.js";
 import { prepareSessionCreateFilesystemRoot } from "./session-create-root.js";
@@ -186,6 +188,12 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       hasInitialTurn,
       message: initialMessage,
     } = initialTurn;
+    const repositoryCreation = resolveSessionRepositoryCreation(p, hasInitialTurn);
+    if (!repositoryCreation.ok) {
+      respond(false, undefined, repositoryCreation.error);
+      return;
+    }
+    const repository = repositoryCreation.value;
     let sessionKey = explicitlyRequestedKey;
     const initialRunId = randomUUID();
     if (p.mentions?.length) {
@@ -314,11 +322,21 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const explicitSessionLabel = normalizeOptionalString(p.label);
     const preparedDisplayName = normalizeOptionalString(p.displayName);
     const titleAgentId = explicitlyRequestedAgent.agentId;
-    const existingWorktreeTarget =
-      p.worktree === true && explicitlyRequestedKey
-        ? loadGatewaySessionEntryReadOnly(explicitlyRequestedKey, { agentId: titleAgentId }).entry
-        : undefined;
-    const deferWorktree = p.worktree === true && hasInitialTurn && !existingWorktreeTarget;
+    const existingTargetEntry = explicitlyRequestedKey
+      ? loadGatewaySessionEntryReadOnly(explicitlyRequestedKey, { agentId: titleAgentId }).entry
+      : undefined;
+    if (existingTargetEntry?.repositoryWorkspaceId && !repository) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "Repository sessions require their original repository source; dispatch the existing session to continue.",
+        ),
+      );
+      return;
+    }
+    const deferWorktree = p.worktree === true && hasInitialTurn && !existingTargetEntry;
     let projectRoot: string | undefined;
     if (requestedProjectId) {
       const project = resolveProjectRegistry(cfg, requestedProjectId);
@@ -352,28 +370,39 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       }
     }
     let sessionAgentId = catalogAgentId ?? explicitlyRequestedAgent.agentId;
+    if (repository) {
+      sessionKey ??= buildDashboardSessionKey(sessionAgentId);
+    }
     let preparedWorktree: PreparedGatewaySessionLifecycle | undefined;
     let pendingWorktree: InternalSessionEntry["pendingWorktree"];
     const sessionExecCwd = requestedExecNode ? requestedCwd : undefined;
     let sessionCwd = requestedExecNode ? undefined : (projectRoot ?? requestedCwd);
     let prepareLifecycle: Parameters<typeof createGatewaySession>[0]["prepareLifecycle"];
-    const preparedRoot = prepareSessionCreateFilesystemRoot({
-      cfg,
-      enforceSandboxContainment: Boolean(
-        sessionCwd && !requestedExecNode && (requestedProjectId || p.worktree !== true),
-      ),
-      requestedExecNode,
-      requestedProjectId,
-      sessionCwd,
-      sessionKey,
-      targetAgentId: sessionAgentId,
-    });
-    if (!preparedRoot.ok) {
+    const preparedRoot = repository
+      ? undefined
+      : prepareSessionCreateFilesystemRoot({
+          cfg,
+          enforceSandboxContainment: Boolean(
+            sessionCwd && !requestedExecNode && (requestedProjectId || p.worktree !== true),
+          ),
+          requestedExecNode,
+          requestedProjectId,
+          sessionCwd,
+          sessionKey,
+          targetAgentId: sessionAgentId,
+        });
+    if (preparedRoot && !preparedRoot.ok) {
       respond(false, undefined, preparedRoot.error);
       return;
     }
-    sessionCwd = preparedRoot.value.sessionCwd;
-    const sessionRoot = preparedRoot.value.sessionRoot;
+    sessionCwd = preparedRoot?.value.sessionCwd;
+    const sessionRoot = preparedRoot?.value.sessionRoot;
+    if (repository) {
+      prepareLifecycle = prepareSessionRepositoryWorkspace(repository, {
+        runSetupScript: clientScopes.includes(ADMIN_SCOPE),
+        assertCurrent: commitGuard,
+      });
+    }
     if (p.worktree === true) {
       // Workspace-contained cwd and registry-authorized projects stay at operator.write;
       // arbitrary host paths still require operator.admin before reaching this block.
@@ -578,41 +607,39 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       commandSource: "webchat",
       creation: sessionCreation,
       authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
-      armSessionDiffBaselineCapture: true,
+      armSessionDiffBaselineCapture: !repository,
       loadGatewayModelCatalog: () =>
         context.loadGatewayModelCatalog({ agentId: modelCatalogAgentId }),
       commitGuard,
       afterCreate: async ({ key, agentId }) => {
-        if (!authority.hasActive()) {
+        if (!authority.hasActive() || !hasInitialTurn) {
           return;
         }
-        if (hasInitialTurn) {
-          await expectDefined(
-            chatHandlers["chat.send"],
-            "chat.send handler",
-          )({
-            req,
-            params: {
-              sessionKey: key,
-              agentId,
-              message: initialMessage ?? "",
-              idempotencyKey: initialRunId,
-              ...(p.mentions ? { mentions: p.mentions } : {}),
-              ...(initialAttachments ? { attachments: initialAttachments } : {}),
-            },
-            respond: (ok, payload, error, meta) => {
-              if (ok && payload && typeof payload === "object") {
-                runPayload = payload as Record<string, unknown>;
-              } else {
-                runError = error;
-              }
-              runMeta = meta;
-            },
-            context,
-            client,
-            isWebchatConnect,
-          });
-        }
+        await expectDefined(
+          chatHandlers["chat.send"],
+          "chat.send handler",
+        )({
+          req,
+          params: {
+            sessionKey: key,
+            agentId,
+            message: initialMessage ?? "",
+            idempotencyKey: initialRunId,
+            ...(p.mentions ? { mentions: p.mentions } : {}),
+            ...(initialAttachments ? { attachments: initialAttachments } : {}),
+          },
+          respond: (ok, payload, error, meta) => {
+            if (ok && payload && typeof payload === "object") {
+              runPayload = payload as Record<string, unknown>;
+            } else {
+              runError = error;
+            }
+            runMeta = meta;
+          },
+          context,
+          client,
+          isWebchatConnect,
+        });
       },
     }).catch((error: unknown) => {
       if (error instanceof ModelAccountConnectAuthorityError) {

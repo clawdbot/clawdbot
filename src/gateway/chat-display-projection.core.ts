@@ -1,3 +1,4 @@
+import { GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT } from "@openclaw/gateway-protocol/gateway-error-details";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty as normalizeErrorSignal } from "@openclaw/normalization-core/string-coerce";
 import { renderAssistantRequestFailureCopy } from "../agents/failover/assistant-request-failure-copy.js";
@@ -17,7 +18,9 @@ import {
   extractAssistantTextForSilentCheck,
   hasAssistantDisplayableNonTextContent,
   hasAssistantNonTextContent,
+  hasTranscriptMediaFacts,
   isAssistantTextContentType,
+  isAssistantInternalReasoningContentType,
 } from "./chat-display-projection.helpers.js";
 import {
   filterVisibleProjectedHistoryMessages,
@@ -115,7 +118,6 @@ type ChatDisplayProjectionResult = {
   assistantErrorRecoveryObserved: boolean;
 };
 
-const GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT = "The agent run failed before producing a reply.";
 const GATEWAY_ASSISTANT_CONTEXT_OVERFLOW_FALLBACK_TEXT =
   "Context overflow: this conversation is too large for the model. Try /compact, use /new to start a fresh session, or retry the command with a tighter output limit.";
 
@@ -165,11 +167,7 @@ function sanitizeAssistantErrorDisplayMessage(
         return [sanitized];
       }
       const entry = sanitized as { type?: unknown; text?: unknown };
-      if (
-        entry.type === "thinking" ||
-        entry.type === "reasoning" ||
-        entry.type === "redacted_thinking"
-      ) {
+      if (isAssistantInternalReasoningContentType(entry.type)) {
         return [];
       }
       if (!firstTextBlock || !isAssistantTextContentType(entry.type)) {
@@ -207,7 +205,8 @@ function isPureStreamErrorFallbackAssistantMessage(message: Record<string, unkno
   return (
     text !== undefined &&
     text.trim() === STREAM_ERROR_FALLBACK_TEXT &&
-    !hasAssistantNonTextContent(message)
+    !hasAssistantNonTextContent(message) &&
+    !hasTranscriptMediaFacts(message)
   );
 }
 
@@ -226,7 +225,7 @@ function hasVisibleAssistantDisplayContent(message: Record<string, unknown>): bo
   if (shouldDropAssistantHistoryMessage(sanitized)) {
     return false;
   }
-  if (hasAssistantDisplayableNonTextContent(sanitized)) {
+  if (hasAssistantDisplayableNonTextContent(sanitized) || hasTranscriptMediaFacts(sanitized)) {
     return true;
   }
   return hasVisibleAssistantReplyText(sanitized);
@@ -335,7 +334,8 @@ function projectEmptyAssistantErrorMessages(
     if (message.role !== "assistant" || message.stopReason !== "error") {
       return message;
     }
-    const hasDisplayableStructuredContent = hasAssistantDisplayableNonTextContent(message);
+    const hasDisplayableStructuredContent =
+      hasAssistantDisplayableNonTextContent(message) || hasTranscriptMediaFacts(message);
     if (hasDisplayableStructuredContent) {
       changed = true;
       return sanitizeAssistantErrorDisplayMessage(message);

@@ -13,8 +13,8 @@ import {
   MINIMAX_OAUTH_MARKER,
   buildOauthProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { buildOpenAICompatibleLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   buildProviderReplayFamilyHooks,
@@ -163,8 +163,10 @@ async function resolvePortalCatalog(ctx: ProviderCatalogContext) {
   }
   const usesPortalBearerAuth =
     apiKeyAuth.apiKey === "MINIMAX_OAUTH_TOKEN" ||
-    (profileAuth.mode === "token" && profileAuth.apiKey === apiKey) ||
-    (!apiKeyAuth.apiKey && !explicitApiKey && profileAuth.mode === "oauth");
+    (apiKeyAuth.apiKey && apiKeyAuth.mode
+      ? apiKeyAuth.mode === "token" || apiKeyAuth.mode === "oauth"
+      : (profileAuth.mode === "token" && profileAuth.apiKey === apiKey) ||
+        (!apiKeyAuth.apiKey && !explicitApiKey && profileAuth.mode === "oauth"));
 
   const explicitBaseUrl = normalizeOptionalString(explicitProvider?.baseUrl);
 
