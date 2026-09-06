@@ -71,9 +71,11 @@ describe("createRecoveryDestinationVerifier", () => {
     // Establish baseline.
     verify([{ target }]);
 
-    // Simulate a read-only query touching WAL/SHM state by advancing their
-    // mtime/ctime well past the baseline.
-    const sidecarPaths = resolveSqliteDatabaseFilePaths(sqlitePath).slice(1);
+    // Simulate a read-only query touching SHM/journal state by advancing their
+    // mtime/ctime well past the baseline.  Only SHM/journal sidecars (index >= 2) are
+    // exempt from ctime/mtime fencing; the WAL file is still fully fenced because
+    // read-only transactions do not write to the WAL. (#140467)
+    const sidecarPaths = resolveSqliteDatabaseFilePaths(sqlitePath).slice(2);
     const future = new Date((Date.now() / 1000) * 1000 + 60_000);
     for (const sidecar of sidecarPaths) {
       if (fs.existsSync(sidecar)) {
@@ -81,7 +83,7 @@ describe("createRecoveryDestinationVerifier", () => {
       }
     }
 
-    // Should NOT throw — sidecar dev/ino are unchanged, only ctime/mtime churned.
+    // Should NOT throw — SHM/journal dev/ino/size are unchanged, only ctime/mtime churned.
     expect(() => verify([{ target }])).not.toThrow();
   });
 
@@ -137,7 +139,31 @@ describe("createRecoveryDestinationVerifier", () => {
     const initial = fs.existsSync(walPath) ? fs.readFileSync(walPath) : Buffer.alloc(0);
     fs.writeFileSync(walPath, Buffer.alloc(initial.length + 4096));
 
-    // SHOULD throw — sidecar size changed (substantive write is still fenced).
+    // SHOULD throw — WAL size changed (substantive write is still fenced).
+    expect(() => verify([{ target }])).toThrow(
+      "Recovery destination database changed; preview cleanup again.",
+    );
+  });
+
+  it("throws when the WAL file's content changes at the same size (same-size WAL commit)", () => {
+    const verify = createRecoveryDestinationVerifier(stateDir);
+    const target = makeMinimalTargetManifest(sqlitePath, agentId);
+
+    // Ensure a WAL sidecar exists with a known payload before baseline.
+    const walPath = `${sqlitePath}-wal`;
+    const payload = Buffer.alloc(256, 0xab);
+    fs.writeFileSync(walPath, payload);
+
+    // Establish baseline.
+    verify([{ target }]);
+
+    // Overwrite the WAL content WITHOUT changing its size (simulates a same-size WAL
+    // commit where SQLite recycles the existing WAL space). (#140467)
+    const sameSize = Buffer.alloc(256, 0xcd);
+    fs.writeFileSync(walPath, sameSize);
+
+    // SHOULD throw — the WAL file (index 1) is fully fenced, so the ctime/mtime change
+    // from the in-place content rewrite is detected even though size is unchanged.
     expect(() => verify([{ target }])).toThrow(
       "Recovery destination database changed; preview cleanup again.",
     );
