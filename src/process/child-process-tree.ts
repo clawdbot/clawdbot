@@ -1,5 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { signalProcessTree } from "./kill-tree.js";
+import { reapOwnedChildZombiesAfterTreeKill } from "./scoped-child-reaper.js";
 
 export function shouldDetachChildForProcessTree(): boolean {
   return process.platform !== "win32";
@@ -23,8 +24,15 @@ export function signalChildProcessTree(
   signal: "SIGTERM" | "SIGKILL",
 ): void {
   if (typeof child.pid === "number" && child.pid > 0) {
+    const usedProcessGroup = shouldDetachChildForProcessTree();
     signalProcessTree(child.pid, signal, {
-      detached: shouldDetachChildForProcessTree(),
+      detached: usedProcessGroup,
+    });
+    // Tree kills can leave already-exited descendants reparented to us as
+    // untracked zombies (#97616). Reap only this root/pgid scope — never -1.
+    reapOwnedChildZombiesAfterTreeKill({
+      rootPid: child.pid,
+      usedProcessGroup,
     });
     return;
   }

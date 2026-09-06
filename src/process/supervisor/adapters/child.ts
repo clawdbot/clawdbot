@@ -8,6 +8,7 @@ import {
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { onDecodedOutput } from "../../decoded-output.js";
 import { signalProcessTree } from "../../kill-tree.js";
+import { reapOwnedChildZombiesAfterTreeKill } from "../../scoped-child-reaper.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import { prepareSecretInputStdio, type SpawnStdioEntry } from "../../spawn-secret-input.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
@@ -406,10 +407,23 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
   const childIsDetached = useDetached && !spawned.usedFallback;
   const signalProcessTreeForChild = (pid: number, signal: "SIGTERM" | "SIGKILL") => {
     signalProcessTree(pid, signal, { detached: childIsDetached });
+    reapOwnedChildZombiesAfterTreeKill({
+      rootPid: pid,
+      usedProcessGroup: childIsDetached,
+    });
   };
   const signalProcessTreeForChildAndWait = (pid: number, signal: "SIGTERM" | "SIGKILL") =>
     new Promise<void>((resolve) => {
-      signalProcessTree(pid, signal, { detached: childIsDetached, onComplete: resolve });
+      signalProcessTree(pid, signal, {
+        detached: childIsDetached,
+        onComplete: () => {
+          reapOwnedChildZombiesAfterTreeKill({
+            rootPid: pid,
+            usedProcessGroup: childIsDetached,
+          });
+          resolve();
+        },
+      });
     });
   const kill = (signal?: NodeJS.Signals) => {
     // A delayed private-input failure must not signal a PID whose child has closed.
