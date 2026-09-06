@@ -62,7 +62,7 @@ const mocks = vi.hoisted(() => ({
     profiles: {},
   })),
   refreshActiveProviderAuthRuntimeSnapshot: vi.fn(async () => false),
-  refreshPreparedModelRuntimeSnapshots: vi.fn(async () => {}),
+  prepareModelRuntimeSnapshot: vi.fn(async () => {}),
   clearCurrentProviderAuthState: vi.fn(),
   warmCurrentProviderAuthStateOffMainThread: vi.fn(async (_cfg: unknown) => {}),
   loadDeferredCatalog: vi.fn(),
@@ -130,7 +130,7 @@ vi.mock("../../secrets/runtime.js", () => ({
 }));
 
 vi.mock("../../agents/prepared-model-runtime.js", () => ({
-  refreshPreparedModelRuntimeSnapshots: mocks.refreshPreparedModelRuntimeSnapshots,
+  prepareModelRuntimeSnapshot: mocks.prepareModelRuntimeSnapshot,
 }));
 
 vi.mock("../../agents/model-provider-auth.js", () => ({
@@ -353,7 +353,7 @@ function resetAuthStatusMocks(): void {
   });
   mocks.loadProviderUsageSummary.mockResolvedValue(emptyUsageSummary());
   mocks.refreshActiveProviderAuthRuntimeSnapshot.mockResolvedValue(false);
-  mocks.refreshPreparedModelRuntimeSnapshots.mockResolvedValue();
+  mocks.prepareModelRuntimeSnapshot.mockResolvedValue();
   mocks.warmCurrentProviderAuthStateOffMainThread.mockResolvedValue();
 }
 
@@ -2315,7 +2315,7 @@ describe("models.authOrderSet", () => {
 
   it("publishes the durable order before acknowledging it", async () => {
     let finishPublication: (() => void) | undefined;
-    mocks.refreshPreparedModelRuntimeSnapshots.mockImplementationOnce(
+    mocks.prepareModelRuntimeSnapshot.mockImplementationOnce(
       () =>
         new Promise<void>((resolve) => {
           finishPublication = resolve;
@@ -2327,7 +2327,7 @@ describe("models.authOrderSet", () => {
     });
 
     const pending = orderHandler(opts);
-    await vi.waitFor(() => expect(mocks.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalled());
+    await vi.waitFor(() => expect(mocks.prepareModelRuntimeSnapshot).toHaveBeenCalled());
 
     expect(mocks.setAuthProfileOrder).toHaveBeenCalledWith({
       agentDir: "/tmp/agent",
@@ -2335,14 +2335,12 @@ describe("models.authOrderSet", () => {
       order: ["openai:two", "openai:one"],
     });
     expect(opts.respond).not.toHaveBeenCalled();
-    expect(mocks.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(
-      {},
-      expect.objectContaining({
-        catalogMode: "static",
-        allowGatewaySubagentBinding: true,
-        agentIds: new Set(["main"]),
-      }),
-    );
+    expect(mocks.prepareModelRuntimeSnapshot).toHaveBeenCalledWith({
+      agentId: "main",
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+      config: {},
+    });
 
     finishPublication?.();
     await pending;
@@ -2350,6 +2348,32 @@ describe("models.authOrderSet", () => {
       true,
       { provider: "openai", profileIds: ["openai:two", "openai:one"] },
     ]);
+  });
+
+  it.each([
+    { name: "reorder", profileIds: ["openai:two", "openai:one"] },
+    { name: "Reset", profileIds: null },
+  ])("preserves the committed $name when runtime publication fails", async ({ profileIds }) => {
+    mocks.prepareModelRuntimeSnapshot.mockRejectedValueOnce(new Error("publication failed"));
+    const opts = createOrderOptions({
+      provider: "openai",
+      ...(profileIds ? { profileIds } : {}),
+    });
+
+    await orderHandler(opts);
+
+    expect(mocks.setAuthProfileOrder).toHaveBeenCalledWith({
+      agentDir: "/tmp/agent",
+      provider: "openai",
+      order: profileIds,
+    });
+    expect(firstRespondCall(opts)?.[0]).toBe(true);
+    expect(firstRespondCall(opts)?.[1]).toMatchObject({
+      provider: "openai",
+      profileIds,
+      warning: expect.stringContaining("Profile priority saved"),
+    });
+    expect(firstRespondCall(opts)?.[2]).toBeUndefined();
   });
 
   it.each([

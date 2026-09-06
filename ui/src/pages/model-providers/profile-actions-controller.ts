@@ -1,3 +1,4 @@
+import type { ModelAuthOrderSetResult } from "../../../../src/gateway/server-methods/models-auth-status.types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelProviderLogoutTarget } from "./data.ts";
 import type { ModelProvidersData } from "./load.ts";
@@ -128,7 +129,7 @@ export class ModelProviderProfileActionsController {
         const agentEpoch = this.options.getAgentEpoch();
         const agentId = this.options.getAgentId();
         try {
-          await client.request("models.authOrderSet", {
+          const result = await client.request<ModelAuthOrderSetResult>("models.authOrderSet", {
             provider,
             ...(pending.profileIds ? { profileIds: pending.profileIds } : {}),
             agentId,
@@ -136,7 +137,7 @@ export class ModelProviderProfileActionsController {
           if (!this.isCurrentScope(client, clientEpoch, agentEpoch, agentId)) {
             return;
           }
-          if (pending.profileIds) {
+          if (pending.profileIds && !result.warning) {
             this.options.cancelRefresh();
             this.applyOrder(provider, pending.profileIds);
             void this.options.refresh();
@@ -146,7 +147,9 @@ export class ModelProviderProfileActionsController {
               return;
             }
           }
-          this.clearOptimisticOrder(provider, pending.optimisticOrder);
+          if (this.clearOptimisticOrder(provider, pending.optimisticOrder) && result.warning) {
+            this.options.setError(pending.cardId, result.warning);
+          }
         } catch (error) {
           if (!this.isCurrentScope(client, clientEpoch, agentEpoch, agentId)) {
             return;

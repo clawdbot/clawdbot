@@ -90,4 +90,6 @@ export type ModelAuthLogoutResult = {
 export type ModelAuthOrderSetResult = {
   provider: string;
   profileIds: string[] | null;
+  /** The order was saved, but its runtime publication could not complete. */
+  warning?: string;
 };

@@ -22,6 +22,74 @@ afterEach(() => {
 });
 
 describe("ModelProvidersPage profile actions", () => {
+  it.each([
+    { name: "reorder", profileIds: ["openai:two", "openai:one"] },
+    { name: "Reset", profileIds: null },
+  ])("refreshes uncertain status after a committed $name", async ({ profileIds }) => {
+    const shell = document.createElement("div");
+    shell.className = "shell";
+    document.body.append(shell);
+    const toast = shell.appendChild(document.createElement("openclaw-toast-host"));
+    const { context, request, snapshot } = createHarness("main");
+    snapshot.hello = {
+      type: "hello-ok",
+      protocol: 3,
+      auth: { role: "operator", scopes: ["operator.admin"] },
+    };
+    const originalRequest = request.getMockImplementation()!;
+    const warning = "Profile priority saved, but live authentication status could not refresh.";
+    let committed = false;
+    request.mockImplementation(async (method: string) => {
+      if (method === "models.authOrderSet") {
+        committed = true;
+        return { provider: "openai", profileIds, warning };
+      }
+      if (method === "models.authStatus") {
+        return committed
+          ? {
+              ts: 2,
+              providers: [],
+              unavailable: {
+                code: "PREPARED_MODEL_AUTH_UNAVAILABLE",
+                message: "Account status unavailable",
+              },
+            }
+          : {
+              ts: 1,
+              providers: [
+                {
+                  provider: "openai",
+                  displayName: "OpenAI",
+                  status: "ok",
+                  profiles: ["openai:one", "openai:two"].map((profileId) => ({
+                    profileId,
+                    type: "oauth",
+                    status: "ok",
+                  })),
+                  profileOrder: ["openai:one", "openai:two"],
+                  profileOrderStored: true,
+                },
+              ],
+            };
+      }
+      return originalRequest(method);
+    });
+    const page = appendPage(context);
+    await waitForFast(() =>
+      expect(page.querySelectorAll(".model-providers__profile")).toHaveLength(2),
+    );
+
+    page.profileActions.setOrder("openai", "openai", profileIds);
+
+    await waitForFast(() =>
+      expect(page.data?.authStatus?.unavailable?.code).toBe("PREPARED_MODEL_AUTH_UNAVAILABLE"),
+    );
+    await waitForFast(() => expect(toast.textContent).toContain(warning));
+    expect(page.profileOrders.openai).toBeUndefined();
+    expect(page.data?.authStatus?.providers).toEqual([]);
+    expect(page.querySelector(".model-providers__profile")).toBeNull();
+  });
+
   it("keeps the latest queued order through paused and resumed configuration work", async () => {
     const { context, notifyRuntimeConfig, request, runtimeConfig } = createHarness("main");
     const page = appendPage(context);
