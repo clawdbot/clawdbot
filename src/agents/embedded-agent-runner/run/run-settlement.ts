@@ -102,17 +102,7 @@ export async function settleEmbeddedRun(input: {
   forgetPromptBuildDrainCacheForRun(params.runId);
   clearProviderPromptState(params.runId);
   runtime.stopRuntimeAuthRefreshTimer();
-  if (ownedContextEngineLease) {
-    await runAgentCleanupStep({
-      runId: params.runId,
-      sessionId: params.sessionId,
-      step: "context-engine-dispose",
-      log,
-      cleanup: async () => {
-        await ownedContextEngineLease.dispose();
-      },
-    });
-  }
+  await ownedContextEngineLease?.dispose();
   if (params.cleanupBundleMcpOnRunEnd === true) {
     await runAgentCleanupStep({
       runId: params.runId,

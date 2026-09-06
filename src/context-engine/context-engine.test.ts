@@ -5,6 +5,7 @@ import {
   createContextEngineLogicalTurnLease,
   selectContextEngineForTranscriptHost,
 } from "../agents/harness/context-engine-logical-turn.js";
+import { createAgentCleanupScope } from "../agents/run-cleanup-timeout.js";
 import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -738,7 +739,11 @@ describe("Default engine selection", () => {
     },
   ])("keeps $label configured without a warning", async ({ config, admission }) => {
     const warn = vi.fn();
-    const lease = await createContextEngineLogicalTurnLease({ config, warn });
+    const lease = await createContextEngineLogicalTurnLease({
+      identity: { runId: "test-run", sessionId: "test-session" },
+      config,
+      warn,
+    });
 
     const selected = selectContextEngineForTranscriptHost({
       lease,
@@ -757,7 +762,10 @@ describe("Default engine selection", () => {
 
   it("keeps repeated baseline host selection stable after the turn starts", async () => {
     const warn = vi.fn();
-    const lease = await createContextEngineLogicalTurnLease({ warn });
+    const lease = await createContextEngineLogicalTurnLease({
+      identity: { runId: "test-run", sessionId: "test-session" },
+      warn,
+    });
     const selection = {
       host: { id: "agent-harness:test", label: "test harness", capabilities: [] },
       operation: "agent-run" as const,
@@ -777,7 +785,10 @@ describe("Default engine selection", () => {
 
   it("keeps repeated baseline transcript-host selection stable after the turn starts", async () => {
     const warn = vi.fn();
-    const lease = await createContextEngineLogicalTurnLease({ warn });
+    const lease = await createContextEngineLogicalTurnLease({
+      identity: { runId: "test-run", sessionId: "test-session" },
+      warn,
+    });
     const selection = {
       lease,
       host: { id: "agent-harness:test", label: "test harness", capabilities: [] },
@@ -797,7 +808,9 @@ describe("Default engine selection", () => {
   });
 
   it("rejects baseline transcript-host selection after disposal", async () => {
-    const lease = await createContextEngineLogicalTurnLease({});
+    const lease = await createContextEngineLogicalTurnLease({
+      identity: { runId: "test-run", sessionId: "test-session" },
+    });
     await lease.dispose();
 
     expect(() =>
@@ -809,6 +822,100 @@ describe("Default engine selection", () => {
       }),
     ).toThrow("context-engine logical turn selection is already pinned");
   });
+
+  it.each(["resolve", "reject"] as const)(
+    "disposes once after retained turn work settles with %s",
+    async (settlement) => {
+      const engineId = uniqueEngineId("logical-turn-retained-work");
+      const hold = Promise.withResolvers<void>();
+      const disposed = Promise.withResolvers<void>();
+      const engine = new MockContextEngine();
+      const dispose = vi.spyOn(engine, "dispose").mockImplementation(async () => {
+        disposed.resolve();
+      });
+      registerTestContextEngine(engineId, () => engine);
+      const lease = await createContextEngineLogicalTurnLease({
+        identity: { runId: "retained-run", sessionId: "retained-session" },
+        config: configWithSlot(engineId),
+      });
+      lease.deferDisposalUntil(hold.promise);
+
+      await lease.dispose();
+      await lease.dispose();
+      expect(dispose).not.toHaveBeenCalled();
+      expect(() => lease.begin()).toThrow("already disposed");
+
+      if (settlement === "reject") {
+        hold.reject(new Error("pending turn work failed"));
+      } else {
+        hold.resolve();
+      }
+      await disposed.promise;
+      await lease.dispose();
+      expect(dispose).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([false, true])(
+    "bounds configured and fallback disposal in parallel (fast failure=%s)",
+    async (fastFailure) => {
+      const registry = await import("./registry.js");
+      const configured = new MockContextEngine();
+      const fallback = new MockContextEngine();
+      const configuredGate = Promise.withResolvers<void>();
+      const fallbackGate = Promise.withResolvers<void>();
+      const configuredDispose = vi.spyOn(configured, "dispose").mockImplementation(async () => {
+        if (fastFailure) {
+          throw new Error("configured engine disposal failed");
+        }
+        await configuredGate.promise;
+      });
+      const fallbackDispose = vi
+        .spyOn(fallback, "dispose")
+        .mockImplementation(() => fallbackGate.promise);
+      const resolve = vi.spyOn(registry, "resolveLogicalTurnContextEngines").mockResolvedValue({
+        configured: { engine: configured, registeredId: "configured" },
+        configuredId: "configured",
+        fallback: { engine: fallback, registeredId: "legacy" },
+      });
+      vi.useFakeTimers();
+      vi.stubEnv("OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS", "25");
+      const scope = createAgentCleanupScope();
+      const lease = await createContextEngineLogicalTurnLease({
+        identity: { runId: "parallel-run", sessionId: "parallel-session" },
+        warn: vi.fn(),
+      });
+      let settled = false;
+      const cleanup = scope
+        .run(() => lease.dispose())
+        .then(() => {
+          settled = true;
+        });
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(configuredDispose).toHaveBeenCalledOnce();
+        expect(fallbackDispose).toHaveBeenCalledOnce();
+        if (fastFailure) {
+          expect(scope.outcome).toBe("uncertain");
+        }
+        await vi.advanceTimersByTimeAsync(24);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(settled).toBe(true);
+        expect(scope.outcome).toBe("uncertain");
+        await lease.dispose();
+        expect(configuredDispose).toHaveBeenCalledOnce();
+        expect(fallbackDispose).toHaveBeenCalledOnce();
+      } finally {
+        configuredGate.resolve();
+        fallbackGate.resolve();
+        await cleanup;
+        vi.useRealTimers();
+        vi.unstubAllEnvs();
+        resolve.mockRestore();
+      }
+    },
+  );
 
   it("still rejects an attempted custom-engine transition after the turn starts", async () => {
     const engineId = uniqueEngineId("logical-turn-late-transition");
@@ -835,6 +942,7 @@ describe("Default engine selection", () => {
       },
     }));
     const lease = await createContextEngineLogicalTurnLease({
+      identity: { runId: "test-run", sessionId: "test-session" },
       config: configWithSlot(engineId),
     });
     lease.begin();
@@ -850,6 +958,7 @@ describe("Default engine selection", () => {
     const warn = vi.fn();
 
     const lease = await createContextEngineLogicalTurnLease({
+      identity: { runId: "test-run", sessionId: "test-session" },
       config: configWithSlot(engineId),
       warn,
     });
@@ -871,6 +980,7 @@ describe("Default engine selection", () => {
     const warn = vi.fn();
 
     const lease = await createContextEngineLogicalTurnLease({
+      identity: { runId: "test-run", sessionId: "test-session" },
       config: configWithSlot(engineId),
       warn,
     });
@@ -891,6 +1001,7 @@ describe("Default engine selection", () => {
     const warn = vi.fn();
 
     const lease = await createContextEngineLogicalTurnLease({
+      identity: { runId: "test-run", sessionId: "test-session" },
       config: configWithSlot(engineId),
       warn,
     });
@@ -917,6 +1028,7 @@ describe("Default engine selection", () => {
     }));
     const warn = vi.fn();
     const lease = await createContextEngineLogicalTurnLease({
+      identity: { runId: "test-run", sessionId: "test-session" },
       config: configWithSlot(engineId),
       warn,
     });
@@ -954,6 +1066,7 @@ describe("Default engine selection", () => {
     }));
     const warn = vi.fn();
     const first = await createContextEngineLogicalTurnLease({
+      identity: { runId: "test-run", sessionId: "test-session" },
       config: configWithSlot(engineId),
       warn,
     });
@@ -970,6 +1083,7 @@ describe("Default engine selection", () => {
     await first.dispose();
 
     const second = await createContextEngineLogicalTurnLease({
+      identity: { runId: "test-run", sessionId: "test-session" },
       config: configWithSlot(engineId),
       warn,
     });
@@ -1010,6 +1124,7 @@ describe("Default engine selection", () => {
       },
     }));
     const lease = await createContextEngineLogicalTurnLease({
+      identity: { runId: "test-run", sessionId: "test-session" },
       config: configWithSlot(engineId),
     });
 
@@ -1091,6 +1206,7 @@ describe("Default engine selection", () => {
     }));
     const warn = vi.fn();
     const lease = await createContextEngineLogicalTurnLease({
+      identity: { runId: "test-run", sessionId: "test-session" },
       config: configWithSlot(engineId),
       warn,
     });

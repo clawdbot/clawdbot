@@ -80,7 +80,11 @@ it("keeps the configured context engine active in a prepared agent registry", as
 
   expect(preparedRegistry).not.toBe(activeRegistry);
   await withPluginRuntimeRegistryScope(preparedRegistry, async () => {
-    const lease = await createContextEngineLogicalTurnLease({ config, workspaceDir: plugin.dir });
+    const lease = await createContextEngineLogicalTurnLease({
+      identity: { runId: "test-run", sessionId: "test-session" },
+      config,
+      workspaceDir: plugin.dir,
+    });
     expect(lease.degraded).toBe(false);
     expect(lease.effectiveEngineId).toBe(engineId);
     expect(lease.effectiveEnginePluginId).toBe(engineId);
@@ -196,7 +200,12 @@ it("selects a full-mode-only context engine on caller-owned handles without full
   };
   // Cron prepare loads this handle, then run-executor selects the engine inside the scoped registry.
   const lease = await withPluginRuntimeRegistryScope(handle, () =>
-    createContextEngineLogicalTurnLease({ config, warn, workspaceDir }),
+    createContextEngineLogicalTurnLease({
+      identity: { runId: "test-run", sessionId: "test-session" },
+      config,
+      warn,
+      workspaceDir,
+    }),
   );
   try {
     expect(lease.effectiveEngineId).toBe("ce-probe");

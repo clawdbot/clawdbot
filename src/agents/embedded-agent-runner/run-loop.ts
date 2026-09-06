@@ -272,6 +272,7 @@ export async function runPreparedEmbeddedLoop(
       "context-engine",
       () =>
         createContextEngineLogicalTurnLease({
+          identity: params,
           config: params.config,
           agentDir,
           workspaceDir: resolvedWorkspace,

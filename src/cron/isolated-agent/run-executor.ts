@@ -425,13 +425,14 @@ function createCronPromptExecutor(
             errorContext: "cron user turn transcript",
           });
     pendingUserTurn = { promptText, recorder: userTurnTranscriptRecorder };
+    const runId = params.cronSession.sessionEntry.sessionId;
     const contextEngineLogicalTurnLease = await createContextEngineLogicalTurnLease({
+      identity: { runId, sessionId: runId },
       config: params.cfgWithAgentDefaults,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
     });
     let acceptedContextEngineTurnCandidate: ContextEngineTurnAttemptFacts | undefined;
-    const runId = params.cronSession.sessionEntry.sessionId;
     const basePreparedRunAdmission = prepareAgentRunAdmission({
       operationalRunInstance: createOperationalRunInstanceRef(runId),
       cfg: params.cfgWithAgentDefaults,
