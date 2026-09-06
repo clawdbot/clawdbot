@@ -29,7 +29,12 @@ export function reduceSessionProjectionRunEventImpl(
   const messageStopReason = isRecord(message) ? readNonemptyString(message.stopReason) : null;
   const stopReason = readNonemptyString(event.stopReason) ?? messageStopReason;
   const errorKind = readNonemptyString(event.errorKind);
-  const base = { runId, ...(message === undefined ? {} : { message }), scope };
+  const base = {
+    runId,
+    seq: typeof event.seq === "number" ? event.seq : undefined,
+    ...(message === undefined ? {} : { message }),
+    scope,
+  };
   const action: SessionProjectionEvent =
     event.state === "delta"
       ? { type: "runDelta", ...base }

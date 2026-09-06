@@ -53,7 +53,8 @@ export function resolveTransientRetryDelayMs(params: {
     params.elapsedMs === undefined
       ? Infinity
       : MAX_TRANSIENT_RETRY_TIME_MS - Math.max(0, params.elapsedMs);
-  if (remainingMs <= 0) {
+  // The header parser uses Infinity for a floor too large to represent safely.
+  if (remainingMs <= 0 || params.retryAfterMs === Infinity) {
     return undefined;
   }
   const exponentialMs = Math.min(

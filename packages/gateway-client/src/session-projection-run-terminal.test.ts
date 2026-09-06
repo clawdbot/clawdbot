@@ -60,11 +60,13 @@ describe("session run terminal bookkeeping", () => {
         type: "runTerminal",
         runId: "run-1",
         status: "error",
+        seq: 10,
         errorMessage: "provider rate limit",
         message: { role, content, stopReason: "error" },
       });
       const resumed = reduceSessionProjection(failed, {
         type: "runDelta",
+        seq: 11,
         runId: "run-1",
         message: createMessage("assistant", "I"),
       });

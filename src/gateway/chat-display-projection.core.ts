@@ -3,10 +3,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty as normalizeErrorSignal } from "@openclaw/normalization-core/string-coerce";
 import { renderAssistantRequestFailureCopy } from "../agents/failover/assistant-request-failure-copy.js";
 import { isContextOverflowError } from "../agents/failover/classify.js";
-import {
-  isStreamErrorFallbackContent,
-  STREAM_ERROR_FALLBACK_TEXT,
-} from "../agents/stream-message-shared.js";
+import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
 import {
@@ -20,6 +17,7 @@ import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   extractAssistantTextForSilentCheck,
   hasAssistantDisplayableNonTextContent,
+  hasAssistantNonTextContent,
   hasTranscriptMediaFacts,
   isAssistantTextContentType,
   isAssistantInternalReasoningContentType,
@@ -200,18 +198,15 @@ function sanitizeAssistantErrorDisplayMessage(
 }
 
 function isPureStreamErrorFallbackAssistantMessage(message: Record<string, unknown>): boolean {
+  if (message.role !== "assistant" || message.stopReason !== "error") {
+    return false;
+  }
+  const text = extractAssistantTextForSilentCheck(message);
   return (
-    message.role === "assistant" &&
-    message.stopReason === "error" &&
-    !hasTranscriptMediaFacts(message) &&
-    isStreamErrorFallbackContent(
-      Array.isArray(message.content)
-        ? message.content.filter(
-            (block) => !isAssistantInternalReasoningContentType(asOptionalRecord(block)?.type),
-          )
-        : message.content,
-    ) &&
-    isStreamErrorFallbackContent(message.text)
+    text !== undefined &&
+    text.trim() === STREAM_ERROR_FALLBACK_TEXT &&
+    !hasAssistantNonTextContent(message) &&
+    !hasTranscriptMediaFacts(message)
   );
 }
 

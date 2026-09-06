@@ -1534,11 +1534,15 @@ export function createAgentEventHandler({
         ...(evt.data.phase === "retrying"
           ? {
               phase: "starting_model",
-              retry: {
-                attempt: evt.data.attempt,
-                maxAttempts: evt.data.maxAttempts,
-                reason: evt.data.reason,
-              },
+              ...(evt.data.reason === "rate_limit"
+                ? {
+                    retry: {
+                      attempt: evt.data.attempt,
+                      maxAttempts: evt.data.maxAttempts,
+                      reason: evt.data.reason,
+                    },
+                  }
+                : {}),
             }
           : { phase: evt.data.phase }),
       };

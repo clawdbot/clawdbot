@@ -49,6 +49,7 @@ export type SessionProjectionRunStatus =
 
 export type SessionProjectionRun = {
   runId: string;
+  seq?: number;
   status: SessionProjectionRunStatus;
   message?: unknown;
   acceptedFinalMessageIdentities?: readonly string[];
@@ -60,6 +61,7 @@ export type SessionProjectionRun = {
 export type SessionProjectionGatewayRunEvent = {
   state?: unknown;
   yielded?: unknown;
+  seq?: unknown;
 } & Partial<Record<"runId" | "message" | "stopReason" | "errorKind" | "errorMessage", unknown>>;
 
 export type SessionProjectionRunTransition = {
@@ -118,7 +120,7 @@ export type SessionProjectionEvent = ScopedSessionProjectionEvent &
         previousRunId?: string;
       }
     | { type: "sendFailed"; runId: string }
-    | { type: "runDelta"; runId: string; message?: unknown }
+    | { type: "runDelta"; runId: string; seq?: number; message?: unknown }
     | (Omit<SessionProjectionRun, "acceptedFinalMessageIdentities"> & {
         type: "runTerminal";
         status: Exclude<SessionProjectionRunStatus, "streaming">;
@@ -538,17 +540,24 @@ function updateRun(
   incoming: SessionProjectionRun,
 ): SessionProjectionState {
   const incomingErrorMessage = readNonemptyString(incoming.errorMessage);
-  const normalizedIncoming = { ...incoming };
+  const incomingSeq =
+    typeof incoming.seq === "number" && Number.isSafeInteger(incoming.seq) && incoming.seq >= 0
+      ? incoming.seq
+      : undefined;
+  const normalizedIncoming = { ...incoming, seq: incomingSeq };
   if (incomingErrorMessage) {
     normalizedIncoming.errorMessage = incomingErrorMessage;
   } else {
     delete normalizedIncoming.errorMessage;
   }
   const current = state.runs[incoming.runId];
-  // A later delta proves a diagnostic-only failed attempt was not the end of this run.
+  // Only newer run-event order can distinguish resumed output from buffered stale deltas.
   const resumesErrorProjection =
     current?.status === "error" &&
     incoming.status === "streaming" &&
+    current.seq !== undefined &&
+    incomingSeq !== undefined &&
+    incomingSeq > current.seq &&
     isSessionProjectionErrorMessage(current.message, current.errorMessage);
   if (current && current.status !== "streaming" && !resumesErrorProjection) {
     const incomingFinalIdentity = readSessionProjectionFinalMessageIdentity(incoming.message);
@@ -565,7 +574,12 @@ function updateRun(
     const recoverMessage = acceptFinal && !hasDisplayableSessionMessage(current.message);
     const recoverError =
       readNonemptyString(current.errorMessage) === null && incomingErrorMessage !== null;
-    if (!acceptFinal && !recoverError) {
+    const updateTerminalSequence =
+      incoming.status !== "streaming" &&
+      (incomingSeq === undefined
+        ? current.seq !== undefined
+        : current.seq === undefined || incomingSeq > current.seq);
+    if (!acceptFinal && !recoverError && !updateTerminalSequence) {
       return state;
     }
     const firstFinalIdentity = readSessionProjectionFinalMessageIdentity(current.message);
@@ -577,6 +591,7 @@ function updateRun(
         ...state.runs,
         [incoming.runId]: {
           ...current,
+          ...(updateTerminalSequence ? { seq: incomingSeq } : {}),
           ...(recoverMessage ? { message: incoming.message } : {}),
           ...(acceptFinal && incomingFinalIdentity
             ? {
@@ -722,12 +737,14 @@ export function reduceSessionProjection(
     case "runDelta":
       return updateRun(state, {
         runId: event.runId,
+        seq: event.seq,
         status: "streaming",
         ...(event.message === undefined ? {} : { message: event.message }),
       });
     case "runTerminal":
       return updateRun(state, {
         runId: event.runId,
+        seq: event.seq,
         status: event.status,
         ...(event.message === undefined ? {} : { message: event.message }),
         ...(event.stopReason === undefined ? {} : { stopReason: event.stopReason }),

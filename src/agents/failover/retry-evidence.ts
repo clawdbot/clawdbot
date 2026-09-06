@@ -30,8 +30,8 @@ const SHORT_RATE_LIMIT_UNIT_RE =
 const SHORT_WINDOW_RATE_LIMIT_RE =
   /\b(?:requests per minute|tokens per minute|per-minute|rpm|tpm|model_cooldown)\b|请求过于频繁|调用频率|频率限制/i;
 const RETRY_AFTER_VALUE_RE =
-  /\b(?:retry[- ]after\b\s*:?\s*(?:in\s*)?|(?:please\s+)?try again in\s+)([^\r\n;]+)/i;
-const RETRY_AFTER_NUMBER_RE = /^(\d+(?:\.\d+)?)\s*([a-z]+)?\b/i;
+  /\b(?:retry[- ]after\b\s*:?\s*(?:in\b\s*)?|(?:please\s+)?try again in\s+)([^\r\n;]+)/i;
+const RETRY_AFTER_NUMBER_RE = /^(\d+(?:\.\d+)?|Infinity)\s*([a-z]+)?\b/i;
 const MAX_SHORT_WINDOW_RETRY_AFTER_SECONDS = 60;
 
 /** Extract guarded HTTP status evidence for retry and diagnostic consumers. */
@@ -76,8 +76,8 @@ function hasRateLimitRetryContext(signal: Pick<FailoverSignal, "message" | "stat
 function parseRetryAfterSeconds(valueText: string, nowMs: number): number | undefined {
   const secondsMatch = RETRY_AFTER_NUMBER_RE.exec(valueText);
   if (secondsMatch?.[1]) {
-    const value = Number(secondsMatch[1]);
-    if (!Number.isFinite(value) || value < 0) {
+    const value = /^infinity$/i.test(secondsMatch[1]) ? Infinity : Number(secondsMatch[1]);
+    if (Number.isNaN(value) || value < 0) {
       return undefined;
     }
     const unit = secondsMatch[2]?.toLowerCase();

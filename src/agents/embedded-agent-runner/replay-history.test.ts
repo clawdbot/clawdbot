@@ -9,9 +9,9 @@ import {
   INTERNAL_RUNTIME_CONTEXT_END,
   OPENCLAW_RUNTIME_CONTEXT_NOTICE,
 } from "../internal-runtime-context.js";
-import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import type { StreamFn } from "../runtime/index.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { normalizeAssistantReplayContent, validateReplayTurns } from "./replay-history.js";
 import { wrapStreamFnSanitizeMalformedToolCalls } from "./run/attempt-tool-call-replay-sanitization.js";
 

@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { projectProviderError } from "../../../../packages/ai/src/utils/provider-error.js";
 import { FailoverError } from "../../failover-error.js";
+import { resolveRetryAfterMs } from "../../failover/retry-evidence.js";
 
 const mocks = vi.hoisted(() => ({
   sleepWithAbort: vi.fn(async (_ms: number, _abortSignal?: AbortSignal): Promise<void> => {}),
@@ -139,6 +141,24 @@ describe("createEmbeddedRunFailoverRetryController", () => {
     ).resolves.toBe(true);
     expect(mocks.sleepWithAbort).toHaveBeenCalledWith(120000, undefined);
   });
+
+  it.each([false, true])(
+    "declines an unrepresentable provider floor (projected=%s)",
+    async (projected) => {
+      const controller = createController(vi.fn(async () => false));
+      const onRetry = vi.fn();
+      const error = { headers: { "retry-after": "9".repeat(400) } };
+      const retryAfterMs = projected
+        ? resolveRetryAfterMs(projectProviderError(error).errorMessage)
+        : resolveRetryAfterMs(undefined, Date.now(), error);
+      await expect(
+        controller.maybeRetryTransient({ reason: "rate_limit", retryAfterMs, onRetry }),
+      ).resolves.toBe(false);
+      expect(mocks.sleepWithAbort).not.toHaveBeenCalled();
+      expect(onRetry).not.toHaveBeenCalled();
+      expect(controller.transientRetryCount).toBe(0);
+    },
+  );
 
   it.each([false, true])(
     "honors a floor beyond the native timer limit (abort=%s)",

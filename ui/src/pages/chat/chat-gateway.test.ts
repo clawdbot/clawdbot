@@ -2444,14 +2444,30 @@ describe("handleChatGatewayEvent", () => {
         handleChatGatewayEvent(state, {
           ...envelope,
           state: "error",
+          seq: attempt + 1,
           errorMessage: "provider rate limit",
           message: { role, content, stopReason: "error" },
         });
       }
+      const terminalMessages = [...state.chatMessages];
+      expect(
+        handleChatGatewayEvent(state, {
+          ...envelope,
+          state: "delta",
+          seq: 3,
+          deltaText: "stale output",
+        }),
+      ).toBeNull();
+      expect(state.chatRunId).toBeNull();
+      expect(state.chatStream).toBeNull();
+      expect(state.chatMessages).toEqual(terminalMessages);
+      expect(state.chatRunError).not.toBeNull();
+      let seq = 5;
       for (const text of ["I", "I agree", "I agree with that product direction."]) {
         handleChatGatewayEvent(state, {
           ...envelope,
           state: "delta",
+          seq: seq++,
           ...(text === "I"
             ? { deltaText: text }
             : { message: createTextChatMessage("assistant", text) }),
@@ -2464,6 +2480,7 @@ describe("handleChatGatewayEvent", () => {
       handleChatGatewayEvent(state, {
         ...envelope,
         state: "final",
+        seq,
         message: createTextChatMessage("assistant", "I agree with that product direction."),
       });
       expect(state.chatMessages).toHaveLength(1);
@@ -2500,6 +2517,7 @@ describe("handleChatGatewayEvent", () => {
       sessionKey: "main",
       runId: "run-retry",
       state: "error",
+      seq: 1,
       errorMessage: "provider rate limit",
       message: placeholder,
     });
@@ -2507,6 +2525,7 @@ describe("handleChatGatewayEvent", () => {
       sessionKey: "main",
       runId: "run-retry",
       state: "delta",
+      seq: 2,
       message: createTextChatMessage("assistant", "Recovered reply."),
     });
     expect(state.chatStream).toBe("Recovered reply.");

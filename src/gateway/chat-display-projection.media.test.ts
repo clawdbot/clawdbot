@@ -18,6 +18,7 @@ describe("assistant media directive display projection", () => {
       const user = { role: "user", content: "hello" };
       const reply = {
         role: "assistant",
+        stopReason: "stop",
         content: [{ type: "text", text: "I agree with that product direction." }],
         __openclaw: { runId: "run-retry" },
       };
@@ -30,12 +31,7 @@ describe("assistant media directive display projection", () => {
           media: [{ path: "media://inbound/synthetic-image", contentType: "image/png" }],
         },
       };
-      const rawMessages = [
-        user,
-        { role: "assistant", content: [], stopReason: "error" },
-        mediaReply,
-        ...(recovered ? [reply] : []),
-      ];
+      const rawMessages = [user, mediaReply, ...(recovered ? [reply] : [])];
       const expected = [user, { ...mediaReply, content: [] }, ...(recovered ? [reply] : [])];
       expect(projectChatDisplayMessages(rawMessages)).toEqual(expected);
       expect(buildSessionHistorySnapshot({ rawMessages }).history.messages).toEqual(expected);

@@ -248,7 +248,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
         // requests are slow, so record the truncation: a configured maxRetries that
         // never runs must be diagnosable. Failover is the better recovery past here.
         log.warn(
-          `transient retry window elapsed for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${transientRetryCount}/${retryBudget} retries; failing over`,
+          `transient retry ${retry.retryAfterMs === Infinity ? "floor exceeds representable time" : "window elapsed"} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${transientRetryCount}/${retryBudget} retries; failing over`,
         );
         return false;
       }

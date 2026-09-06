@@ -130,7 +130,7 @@ export function projectProviderError(
     }
     const projection = buildProjection(snapshot, signal);
     const retryAfterSeconds = parseRetryAfterErrorSeconds(localSnapshot);
-    if (retryAfterSeconds !== undefined && Number.isFinite(retryAfterSeconds)) {
+    if (retryAfterSeconds !== undefined) {
       const suffix = `; Retry-After: ${retryAfterSeconds} seconds`;
       projection.errorMessage = `${truncateUtf16Safe(projection.errorMessage, 4096 - suffix.length)}${suffix}`;
     }
