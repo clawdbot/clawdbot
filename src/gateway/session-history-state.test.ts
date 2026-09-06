@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, test, vi } from "vitest";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
+import { projectChatDisplayMessagesWithState } from "./chat-display-projection.js";
 import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";
 import * as sessionTranscriptReaders from "./session-transcript-readers.js";
 
@@ -382,6 +383,26 @@ describe("SessionHistorySseState", () => {
     expect(oldest.messages).toEqual([userTextMessage("send both here", 1)]);
     expect(oldest.hasMore).toBe(false);
     expect(oldest.nextCursor).toBeUndefined();
+  });
+
+  test("closes interleaved pages across unsequenced rows without admitting older duplicate groups", () => {
+    const messages = [1, 2, 2, 3, undefined, 4, 3, 4].map((seq, index) => ({
+      role: "assistant" as const,
+      content: textContent(`Projected row ${index}`),
+      __openclaw: seq === undefined ? undefined : { seq },
+    }));
+    const { history } = buildSessionHistorySnapshot({
+      rawMessages: [],
+      projection: {
+        ...projectChatDisplayMessagesWithState([]),
+        messages,
+      },
+      limit: 1,
+    });
+
+    expect(history.messages).toEqual(messages.slice(3));
+    expect(history.nextCursor).toBe("3");
+    expect(history.hasMore).toBe(true);
   });
 
   test("keeps commentary fallback rows reachable across cursor pages and SSE state", () => {
