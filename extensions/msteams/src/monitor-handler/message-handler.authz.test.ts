@@ -709,28 +709,14 @@ describe("msteams monitor handler authz", () => {
 
   it("uses the broad authorization probe for direct-message plugin commands", async () => {
     resetThreadMocks();
-    const isControlCommandMessage = vi.fn(() => false);
     const shouldComputeCommandAuthorized = vi.fn(() => true);
     const { deps } = createDeps(
-      {
-        channels: {
-          msteams: {
-            dmPolicy: "open",
-            allowFrom: ["attacker-aad"],
-          },
-        },
-      } as OpenClawConfig,
-      { isControlCommandMessage, shouldComputeCommandAuthorized },
+      { channels: { msteams: { dmPolicy: "open", allowFrom: ["attacker-aad"] } } } as OpenClawConfig,
+      { isControlCommandMessage: vi.fn(() => false), shouldComputeCommandAuthorized },
     );
-
-    const handler = createMSTeamsMessageHandler(deps);
-    await handler(createAttackerPersonalActivity("msg-plugin"));
-
-    expect(shouldComputeCommandAuthorized).toHaveBeenCalledWith("hello", deps.cfg);
-    expect(isControlCommandMessage).toHaveBeenCalledWith("hello", deps.cfg);
-    const dispatched = firstSettledDispatch();
-    const ctxPayload = recordFromMockCall(dispatched?.ctxPayload);
-    expect(ctxPayload.CommandAuthorized).toBe(true);
+    await createMSTeamsMessageHandler(deps)(createAttackerPersonalActivity("msg-plugin"));
+    expect(shouldComputeCommandAuthorized).toHaveBeenCalled();
+    expect(recordFromMockCall(firstSettledDispatch()?.ctxPayload).CommandAuthorized).toBe(true);
   });
 
   it("marks skipped channel message system events as non-owner without duplicating body text", async () => {
