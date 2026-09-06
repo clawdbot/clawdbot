@@ -436,6 +436,11 @@ describe("handleCommands /mcp", () => {
             messaging: { transformReplyPayload },
           },
         },
+        {
+          pluginId: "signal",
+          source: "test",
+          plugin: createChannelTestPluginBase({ id: "signal", label: "Signal" }),
+        },
       ]),
     );
     deliverOutboundPayloads.mockResolvedValueOnce([
