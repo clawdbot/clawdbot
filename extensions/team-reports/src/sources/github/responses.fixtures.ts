@@ -1,4 +1,4 @@
-import type { GithubSourceConfig, Person, Roster, SourceRuntime } from "../../../types.js";
+import type { GithubSourceConfig, Person, Roster, SourceRuntime } from "../../types.js";
 
 export const config: GithubSourceConfig = {
   token: "synthetic-test-credential",
