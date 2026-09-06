@@ -34,7 +34,6 @@ export const uiIsolatedTestFiles = [
   "ui/src/pages/config/config-page.custom-theme.test.ts",
   "ui/src/pages/config/memory-mutation-owner.test.ts",
   "ui/src/pages/config/memory-page.test.ts",
-  "ui/src/pages/model-setup/model-setup-server-consent.test.ts",
   "ui/src/pages/new-session/draft-persistence.test.ts",
   "ui/src/pages/sessions/sessions-page.archived.test.ts",
 ];

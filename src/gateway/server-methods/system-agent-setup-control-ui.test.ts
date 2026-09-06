@@ -1,25 +1,26 @@
 /* @vitest-environment jsdom */
+import "../../../ui/src/test-helpers/lit-warnings.setup.ts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { applyWizardMetadata } from "../../../../src/commands/onboard-helpers.js";
-import { createConfigFileSnapshot } from "../../../../src/config/io.snapshot-shared.js";
-import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
-import { systemAgentHandlers } from "../../../../src/gateway/server-methods/system-agent.js";
-import { initializeNativeSessionCatalogPreferences } from "../../../../src/plugins/native-session-catalog-config.js";
-import { createPluginMetadataSnapshotFixture } from "../../../../src/plugins/plugin-metadata.test-support.js";
-import { i18n } from "../../i18n/index.ts";
-import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
-import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { createFirstRunContext } from "./model-setup-first-run.test-support.ts";
-import { ModelSetupPage } from "./model-setup-page.ts";
+import { i18n } from "../../../ui/src/i18n/index.ts";
+import { createFirstRunContext } from "../../../ui/src/pages/model-setup/model-setup-first-run.test-support.ts";
+import { ModelSetupPage } from "../../../ui/src/pages/model-setup/model-setup-page.ts";
+import { createApplicationContextProvider } from "../../../ui/src/test-helpers/application-context.ts";
+import { createStorageMock } from "../../../ui/src/test-helpers/storage.ts";
+import { waitForFast } from "../../../ui/src/test-helpers/wait-for.ts";
+import { applyWizardMetadata } from "../../commands/onboard-helpers.js";
+import { createConfigFileSnapshot } from "../../config/io.snapshot-shared.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { initializeNativeSessionCatalogPreferences } from "../../plugins/native-session-catalog-config.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { systemAgentHandlers } from "./system-agent.js";
 
 const fixture = vi.hoisted(() => ({
   config: {} as OpenClawConfig,
   exists: false,
   additionalCatalog: false,
 }));
-vi.mock("../../../../src/config/config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../../src/config/config.js")>()),
+vi.mock("../../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/config.js")>()),
   readConfigFileSnapshotWithPluginMetadata: async () => ({
     snapshot: createConfigFileSnapshot({
       path: "/tmp/synthetic-onboarding/openclaw.json",
@@ -47,16 +48,15 @@ vi.mock("../../../../src/config/config.js", async (importOriginal) => ({
     }),
   }),
 }));
-vi.mock("../../../../src/plugins/provider-install-catalog.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../../src/plugins/provider-install-catalog.js")>()),
+vi.mock("../../plugins/provider-install-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/provider-install-catalog.js")>()),
   resolveProviderInstallCatalogEntries: () => [],
 }));
-vi.mock("../../../../src/system-agent/setup-inference-detection.js", () => ({
+vi.mock("../../system-agent/setup-inference-detection.js", () => ({
   // Replace worker/process discovery only. Actual handler parameters, authored
   // config interpretation, consent decision, RPC client and UI all compose here.
   detectSetupInferenceIsolated: async (params: { agentId?: string }) => {
-    const { detectSetupInference } =
-      await import("../../../../src/system-agent/setup-inference-detect.js");
+    const { detectSetupInference } = await import("../../system-agent/setup-inference-detect.js");
     return detectSetupInference(
       {
         resolveManifestProviderAuthChoices: () => [],
@@ -73,8 +73,9 @@ describe("selected-agent Gateway detection and Model Setup consent", () => {
     vi.stubGlobal("localStorage", createStorageMock());
     await i18n.setLocale("en");
   });
-  afterEach(() => {
+  afterEach(async () => {
     document.body.replaceChildren();
+    await vi.dynamicImportSettled();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });

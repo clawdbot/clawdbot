@@ -1036,7 +1036,10 @@ mod navigation_tests {
     fn only_active_onboarding_preserves_the_dashboard_during_reconnect() {
         for (url, preserve) in [
             ("http://127.0.0.1/settings/model-setup?firstRun=1", true),
-            ("http://127.0.0.1/settings/model-setup?firstRun=explicit", true),
+            (
+                "http://127.0.0.1/settings/model-setup?firstRun=explicit",
+                true,
+            ),
             (
                 "http://127.0.0.1/openclaw/settings/model-setup/?tab=ai&firstRun=1#token=redacted",
                 true,
