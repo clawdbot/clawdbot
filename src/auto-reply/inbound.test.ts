@@ -3,18 +3,13 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GroupKeyResolution } from "../config/sessions.js";
-import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createInboundDebouncer, type InboundDebounceCreateParams } from "./inbound-debounce.js";
 import { resolveGroupRequireMention } from "./reply/groups.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
-import {
-  claimInboundDedupe,
-  commitInboundDedupe,
-  resetInboundDedupe,
-} from "./reply/inbound-dedupe.js";
+import { claimInboundDedupe, resetInboundDedupe } from "./reply/inbound-dedupe.js";
 import { normalizeInboundTextNewlines } from "./reply/inbound-text.js";
 import {
   buildMentionRegexes,
@@ -34,14 +29,13 @@ type TestChannelGroupContext = {
   accountId?: string | null;
 };
 
-function commitInboundForTest(ctx: MsgContext): string {
+function commitInboundForTest(ctx: MsgContext): void {
   const claim = claimInboundDedupe(ctx);
   expect(claim.status).toBe("claimed");
   if (claim.status !== "claimed") {
     throw new Error(`expected inbound dedupe claim, got ${claim.status}`);
   }
-  commitInboundDedupe(claim.key);
-  return claim.key;
+  claim.commit();
 }
 
 function normalizeTestSlug(raw?: string | null): string {
@@ -352,26 +346,6 @@ describe("finalizeInboundContext", () => {
 });
 
 describe("inbound dedupe", () => {
-  it("builds a stable key when MessageSid is present", () => {
-    const ctx: MsgContext = {
-      Provider: "telegram",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:123",
-      MessageSid: "42",
-    };
-    expect(claimInboundDedupe(ctx, { inFlight: new Set() })).toEqual({
-      status: "claimed",
-      key: JSON.stringify([
-        "",
-        channelRouteDedupeKey({
-          channel: "telegram",
-          to: "telegram:123",
-        }),
-        "42",
-      ]),
-    });
-  });
-
   it("skips duplicates with the same key", () => {
     resetInboundDedupe();
     const ctx: MsgContext = {
@@ -380,8 +354,8 @@ describe("inbound dedupe", () => {
       OriginatingTo: "whatsapp:+1555",
       MessageSid: "msg-1",
     };
-    const key = commitInboundForTest(ctx);
-    expect(claimInboundDedupe(ctx)).toEqual({ status: "duplicate", key });
+    commitInboundForTest(ctx);
+    expect(claimInboundDedupe(ctx)).toEqual({ status: "duplicate" });
   });
 
   it("does not dedupe when the peer changes", () => {
@@ -403,13 +377,12 @@ describe("inbound dedupe", () => {
       OriginatingTo: "whatsapp:+1555",
       MessageSid: "msg-1",
     };
-    const alphaKey = commitInboundForTest({ ...base, SessionKey: "agent:alpha:main" });
+    commitInboundForTest({ ...base, SessionKey: "agent:alpha:main" });
     expect(
       claimInboundDedupe({ ...base, SessionKey: "agent:bravo:whatsapp:direct:+1555" }).status,
     ).toBe("claimed");
     expect(claimInboundDedupe({ ...base, SessionKey: "agent:alpha:main" })).toEqual({
       status: "duplicate",
-      key: alphaKey,
     });
   });
 
@@ -421,10 +394,10 @@ describe("inbound dedupe", () => {
       OriginatingTo: "telegram:7463849194",
       MessageSid: "msg-1",
     };
-    const key = commitInboundForTest({ ...base, SessionKey: "agent:main:main" });
+    commitInboundForTest({ ...base, SessionKey: "agent:main:main" });
     expect(
       claimInboundDedupe({ ...base, SessionKey: "agent:main:telegram:direct:7463849194" }),
-    ).toEqual({ status: "duplicate", key });
+    ).toEqual({ status: "duplicate" });
   });
 });
 

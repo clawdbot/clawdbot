@@ -1,4 +1,3 @@
-// Deepinfra API module exposes the plugin public contract.
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
 
 /**

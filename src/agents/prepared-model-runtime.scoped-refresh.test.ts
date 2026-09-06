@@ -19,6 +19,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
+import { loadPreparedModelCatalogSnapshot } from "./prepared-model-catalog.js";
 import {
   getPreparedModelRuntimeAuthStore,
   setPreparedModelFullCatalogAuth,
@@ -777,8 +778,15 @@ describe("prepared model runtime scoped refresh", () => {
       entries: [learned, newlyDiscovered],
       routeVariants: [learned, newlyDiscovered],
     });
-    const explicitRefresh = nextOwner.loadFullModelCatalog!({ refresh: true });
-    const concurrentRefresh = nextOwner.loadFullModelCatalog!({ refresh: true });
+    const refreshParams = {
+      config: nextConfig,
+      agentId: "pro",
+      agentDir: state.agentDir("pro"),
+      readOnly: false,
+      refreshFullCatalog: true,
+    };
+    const explicitRefresh = loadPreparedModelCatalogSnapshot(refreshParams);
+    const concurrentRefresh = loadPreparedModelCatalogSnapshot(refreshParams);
     releaseNative.resolve();
     await ordinaryRead;
     const refreshed = await explicitRefresh;

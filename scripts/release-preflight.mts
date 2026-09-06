@@ -274,7 +274,8 @@ async function runTaskGraph({
   const taskFailures: FailedTask[] = [];
   const skipped: SkippedTask[] = [];
 
-  while (pending.size > 0) {
+  const running = new Map<string, Promise<{ task: RunnableTask; status: number }>>();
+  while (pending.size > 0 || running.size > 0) {
     for (const [taskId, task] of pending) {
       const failedDependency = task.after.find(
         (dependencyId) => selectedIds.has(dependencyId) && failedIds.has(dependencyId),
@@ -287,32 +288,38 @@ async function runTaskGraph({
       pending.delete(taskId);
     }
 
-    const ready = [...pending.values()].filter((task) =>
-      task.after.every(
-        (dependencyId) => !selectedIds.has(dependencyId) || completed.has(dependencyId),
-      ),
-    );
-    if (ready.length === 0) {
+    for (const [taskId, task] of pending) {
+      if (running.size >= jobs) {
+        break;
+      }
+      if (
+        !task.after.every(
+          (dependencyId) => !selectedIds.has(dependencyId) || completed.has(dependencyId),
+        )
+      ) {
+        continue;
+      }
+      pending.delete(taskId);
+      running.set(
+        taskId,
+        runCommand(task).then((status) => ({ task, status })),
+      );
+    }
+    if (running.size === 0) {
       if (pending.size === 0) {
         break;
       }
       throw new Error(`release preflight task graph is blocked: ${[...pending.keys()].join(", ")}`);
     }
 
-    for (let index = 0; index < ready.length; index += jobs) {
-      const batch = ready.slice(index, index + jobs);
-      const results = await Promise.all(
-        batch.map(async (task) => ({ task, status: await runCommand(task) })),
-      );
-      for (const { task, status } of results) {
-        pending.delete(task.id);
-        if (status === 0) {
-          completed.add(task.id);
-        } else {
-          failedIds.add(task.id);
-          taskFailures.push({ ...task, status });
-        }
-      }
+    // Refill each freed worker and release dependents without waiting for an unrelated batch.
+    const { task, status } = await Promise.race(running.values());
+    running.delete(task.id);
+    if (status === 0) {
+      completed.add(task.id);
+    } else {
+      failedIds.add(task.id);
+      taskFailures.push({ ...task, status });
     }
   }
 
