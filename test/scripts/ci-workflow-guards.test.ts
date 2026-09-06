@@ -186,6 +186,7 @@ function evaluateWorkflowExpression(
     endsWith: (value: unknown, suffix: unknown) =>
       String(value).toLowerCase().endsWith(String(suffix).toLowerCase()),
     fromJSON: (value: string) => JSON.parse(value) as unknown,
+    toJson: (value: unknown) => JSON.stringify(value ?? null),
     format: (value: string, ...args: unknown[]) =>
       value.replace(/\{(\d+)\}/gu, (_match, index: string) => String(args[Number(index)])),
     hashFiles: (file: string) => context.fileHashes?.[file] ?? "",
@@ -11774,19 +11775,31 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     },
   );
 
-  it("admits slow compact and plugin fallback rows before shorter work", () => {
+  it("admits slow compact and plugin fallback rows without changing child execution", async () => {
+    const nodeTestShards = [30, 240, 240].map((predictedSeconds, index) => ({
+      checkName: `compact-${index}`,
+      shardName: `compact-${index}`,
+      groups: ["infra", "unit-fast"].map((config) => ({
+        configs: [`test/vitest/vitest.${config}.config.ts`],
+        includePatterns: [`src/fixture-${index}-${config}.test.ts`],
+        env: { OPENCLAW_CI_TEST_GROUP: `${index}-${config}` },
+        shard_name: `${index}-${config}`,
+        timing_key: `timing-${index}-${config}`,
+        runner: "ubuntu-24.04",
+        requiresDist: false,
+        pretestBuildMode: "runtime",
+      })),
+      runner: "ubuntu-24.04",
+      requiresDist: false,
+      pretestBuildMode: "runtime",
+      planConcurrency: 1,
+      predictedSeconds,
+    }));
     const result = runCiManifestFixture({
       bundledPlanner: true,
       changedPaths: ["extensions/matrix/src/channel.ts"],
       eventName: "pull_request",
-      nodeTestShards: [30, 240, 240].map((predictedSeconds, index) => ({
-        checkName: `compact-${index}`,
-        shardName: `compact-${index}`,
-        configs: ["test/vitest/vitest.infra.config.ts"],
-        runner: "ubuntu-24.04",
-        requiresDist: false,
-        predictedSeconds,
-      })),
+      nodeTestShards,
     });
     expect(result.status, result.output).toBe(0);
     const rows = JSON.parse(
@@ -11801,6 +11814,71 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(rows.map((row: { predicted_seconds: number }) => row.predicted_seconds)).toEqual([
       240, 240, 120, 30,
     ]);
+    const runStep = readCiWorkflow().jobs["checks-node-core-test-nondist-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Run Node test shard",
+    );
+    for (const row of rows.filter((entry: { check_name: string }) =>
+      entry.check_name.startsWith("compact-"),
+    )) {
+      expect(row).toMatchObject({
+        runner: "ubuntu-24.04",
+        pretest_build_mode: "runtime",
+        plan_concurrency: 1,
+        requires_dist: false,
+      });
+      const groups = expectDefined(
+        nodeTestShards.find((shard) => shard.checkName === row.check_name),
+        "selected shard",
+      ).groups;
+      const env = Object.fromEntries(
+        Object.entries(runStep.env as Record<string, string>).map(([name, value]) => [
+          name,
+          value.startsWith("${{")
+            ? String(
+                evaluateWorkflowExpression(value, {
+                  eventName: "pull_request",
+                  repository: "openclaw/openclaw",
+                  runAttempt: 1,
+                  matrix: row,
+                  preflightOutputs: result.outputs,
+                }) ?? "",
+              )
+            : value,
+        ]),
+      );
+      const calls: unknown[] = [];
+      expect(
+        await runShardPlans(resolveShardPlans(env), {
+          concurrency: Number(env.OPENCLAW_NODE_TEST_PLAN_CONCURRENCY),
+          env,
+          scratchDir: tempDirs.make("openclaw-ci-node-inputs-"),
+          runChild: async (args, childEnv, name, timingKey) => {
+            calls.push({
+              args,
+              name,
+              timingKey,
+              group: childEnv.OPENCLAW_CI_TEST_GROUP,
+              includes: JSON.parse(
+                readFileSync(
+                  expectDefined(childEnv.OPENCLAW_VITEST_INCLUDE_FILE, "includes"),
+                  "utf8",
+                ),
+              ),
+            });
+            return 0;
+          },
+        }),
+      ).toBe(0);
+      expect(calls).toEqual(
+        groups.map((group) => ({
+          args: group.configs,
+          name: group.shard_name,
+          timingKey: group.timing_key,
+          group: group.env.OPENCLAW_CI_TEST_GROUP,
+          includes: group.includePatterns,
+        })),
+      );
+    }
   });
 
   it("uses target-owned CI plans and capabilities for older release checkouts", () => {

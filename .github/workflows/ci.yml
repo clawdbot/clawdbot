@@ -1596,10 +1596,10 @@ jobs:
             .toSorted((a, b) => (b.predictedSeconds ?? 0) - (a.predictedSeconds ?? 0))
             .map((shard) => ({
                 check_name: shard.checkName,
-                runtime: "node",
-                task: "test-shard",
                 shard_name: shard.shardName,
-                groups: shard.groups,
+                groups: shard.groups?.map(({ configs, env, includePatterns, shard_name, timing_key }) => ({
+                  configs, env, includePatterns, shard_name, timing_key,
+                })),
                 configs: shard.configs,
                 env: shard.env,
                 includePatterns: shard.includePatterns,
