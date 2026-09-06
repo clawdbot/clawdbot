@@ -663,6 +663,7 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       expect(
         resolveStrandedReplyRecovery({
           base: createMockFollowupRun(),
+          payloads,
           finalText: result.prepared.finalAssistantVisibleText ?? "",
           sourceReplyDeliveryMode: "message_tool_only",
           sendPolicyDenied: false,

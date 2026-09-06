@@ -25,6 +25,7 @@ describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
 
     const recovery = resolveStrandedReplyRecovery({
       base: parent,
+      payloads: [],
       finalText:
         "A substantive stranded final must be re-delivered via message(action=send). It includes enough user-facing detail to require the one-shot recovery path.",
       sourceReplyDeliveryMode: "message_tool_only",
@@ -73,6 +74,7 @@ describe("resolveStrandedReplyRecovery", () => {
 
     const recovery = resolveStrandedReplyRecovery({
       base,
+      payloads: [],
       finalText: substantiveFinal,
       sourceReplyDeliveryMode: "message_tool_only",
       sendPolicyDenied: false,
@@ -106,6 +108,7 @@ describe("resolveStrandedReplyRecovery", () => {
 
     const recovery = resolveStrandedReplyRecovery({
       base,
+      payloads: [],
       finalText: substantiveCjkFinal,
       sourceReplyDeliveryMode: "message_tool_only",
       sendPolicyDenied: false,
@@ -128,6 +131,7 @@ describe("resolveStrandedReplyRecovery", () => {
 
     const recovery = resolveStrandedReplyRecovery({
       base,
+      payloads: [],
       finalText: "",
       sourceReplyDeliveryMode: "message_tool_only",
       sendPolicyDenied: false,
@@ -149,6 +153,7 @@ describe("resolveStrandedReplyRecovery", () => {
 
     const recovery = resolveStrandedReplyRecovery({
       base,
+      payloads: [],
       finalText: substantiveFinal,
       sourceReplyDeliveryMode: "message_tool_only",
       sendPolicyDenied: false,
