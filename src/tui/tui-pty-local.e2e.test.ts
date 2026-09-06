@@ -1080,7 +1080,7 @@ describe("TUI PTY real backends", () => {
                         ...config.agents?.defaults,
                         models: {
                           ...config.agents?.defaults?.models,
-                          [cliModelRef]: { agentRuntime: { id: "claude-cli" } },
+                          [cliModelRef]: {},
                         },
                       },
                     },
