@@ -157,6 +157,7 @@ interface CopilotToolBridge {
   cleanup?: () => void;
   codeModeEngaged?: boolean;
   promptToolPolicy: {
+    requireExplicitMessageTarget?: boolean;
     apply: (params?: { toolsAllow?: string[]; forceToolNames?: readonly string[] }) => {
       tools: SdkTool[];
       callableToolNames: string[];
@@ -325,6 +326,7 @@ export async function createCopilotToolBridge(
     // as unset and telemetry cannot tell "off" from "harness did not report".
     codeModeEngaged: toolSurfaceRuntime.codeModeControlsEnabled,
     promptToolPolicy: {
+      requireExplicitMessageTarget: toolOptions.requireExplicitMessageTarget,
       apply: (params: { toolsAllow?: string[]; forceToolNames?: readonly string[] } = {}) => {
         const result = compactedTools.promptToolPolicy.apply({
           ...params,

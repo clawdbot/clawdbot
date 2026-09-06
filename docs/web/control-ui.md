@@ -1377,6 +1377,8 @@ Bundled public assets (themes, fonts, icons, and artwork) use `?v=<build-id>` UR
 
 Non-index static assets use `Last-Modified` for conditional `GET` and `HEAD` requests. `If-None-Match` takes precedence over `If-Modified-Since`: `*` matches an existing asset, while other values receive the normal `200` response because static assets do not emit ETags. Date-only revalidation still returns `304` for unchanged assets. If no available content encoding is acceptable, the Gateway returns `406` before evaluating either condition.
 
+All three HTTP-date formats are interpreted as UTC. Invalid or repeated `If-Modified-Since` fields are ignored, so they cannot suppress the current asset bytes. A leap-second validator remains earlier than the following second.
+
 Static asset URLs support percent-encoded filenames. Contained symlinks retain the requested asset's MIME type, and a symlinked `index.html` receives the same base-path and document preparation as other entry routes.
 
 Optional absolute base (fixed asset URLs):

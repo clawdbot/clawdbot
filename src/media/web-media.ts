@@ -51,6 +51,7 @@ import {
   createImageProcessor,
   readImageMetadataFromHeader,
   readImageProbeFromHeader,
+  type ImageMetadata,
 } from "./media-services.js";
 import { extractOriginalFilename, getMediaDir } from "./store.js";
 import { formatMediaSize } from "./store.shared.js";
@@ -724,6 +725,7 @@ function imageMaxBytesForPolicy(policy?: ImageCompressionPolicy): number | undef
 function imageSatisfiesHardDimensionPolicy(
   buffer: Buffer,
   policy?: ImageCompressionPolicy,
+  metadata?: ImageMetadata,
 ): boolean {
   const models = policy?.models ?? [];
   const hardMaxSides = models
@@ -736,7 +738,7 @@ function imageSatisfiesHardDimensionPolicy(
     return true;
   }
 
-  const meta = readImageMetadataFromHeader(buffer);
+  const meta = metadata ?? readImageMetadataFromHeader(buffer);
   if (!meta) {
     return false;
   }
@@ -771,8 +773,9 @@ function resolvePreservableOriginalImageContentType(params: {
     return null;
   }
   const declaredContentType = normalizeMimeType(params.contentType);
-  const actualContentType = detectPreservableImageMime(params.buffer);
-  if (!actualContentType) {
+  const probe = readImageProbeFromHeader(params.buffer);
+  const actualContentType = probe ? `image/${probe.format}` : undefined;
+  if (!probe || !isPreservableImageMime(actualContentType)) {
     return null;
   }
   const declaredPreservableContentType = isPreservableImageMime(declaredContentType)
@@ -788,32 +791,15 @@ function resolvePreservableOriginalImageContentType(params: {
   if (isHeicSource({ contentType: resolvedContentType, fileName: params.fileName })) {
     return null;
   }
-  const meta = readImageMetadataFromHeader(params.buffer);
-  if (!meta) {
-    return null;
-  }
   const preferredSide =
     resolveImageCompressionGrid(params.policy).sides[0] ?? DEFAULT_VISION_MAX_SIDE;
   if (
-    Math.max(meta.width, meta.height) > preferredSide ||
-    !imageSatisfiesHardDimensionPolicy(params.buffer, params.policy)
+    Math.max(probe.width, probe.height) > preferredSide ||
+    !imageSatisfiesHardDimensionPolicy(params.buffer, params.policy, probe)
   ) {
     return null;
   }
   return resolvedContentType;
-}
-
-function detectPreservableImageMime(
-  buffer: Buffer,
-): "image/png" | "image/jpeg" | "image/webp" | null {
-  const format = readImageProbeFromHeader(buffer)?.format;
-  return format === "png"
-    ? "image/png"
-    : format === "jpeg"
-      ? "image/jpeg"
-      : format === "webp"
-        ? "image/webp"
-        : null;
 }
 
 function isPreservableImageMime(

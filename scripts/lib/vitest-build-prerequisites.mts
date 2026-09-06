@@ -72,6 +72,12 @@ const runtimeConsumers = [
     dir: "src/commands",
   })),
   {
+    file: "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts",
+    configs: ["test/vitest/vitest.tooling.config.ts"],
+    mode: "private-qa",
+    dir: "",
+  },
+  {
     file: "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
     configs: ["test/vitest/vitest.tooling.config.ts"],
     mode: "runtime",

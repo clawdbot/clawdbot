@@ -710,6 +710,64 @@ describe("configured transcript source provenance", () => {
     }
   });
 
+  it("rejects a duplicate fixed ID after its first capture ends without changing saved notes", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    // Crossing midnight lets an accidental second capture create a distinct archive row.
+    vi.setSystemTime(new Date("2026-09-05T23:59:58.000Z"));
+    const entry = { ...room, sessionId: "daily" };
+    const delayedId = "delayed-voice";
+    const f = fixture({
+      transcripts: { autoStart: [entry, { ...entry, providerId: delayedId }] },
+    });
+    const start = vi.fn(f.provider.start!);
+    const delayedStart = vi.fn(f.provider.start!);
+    f.provider.start = start;
+    const delayedProvider = { ...f.provider, id: delayedId, start: delayedStart };
+    vi.mocked(providerRegistry.getTranscriptSourceProvider).mockImplementation((id) =>
+      id === room.providerId ? f.provider : undefined,
+    );
+    const service = createTranscriptsAutoStartService(f.ctx);
+    try {
+      service.start();
+      await vi.waitFor(async () =>
+        expect((await f.read()).configuredSources).toMatchObject([
+          { state: "armed" },
+          { startDiagnostic: "retrying" },
+        ]),
+      );
+      const request = start.mock.calls[0]![0];
+      await request.onUtterance({ text: "Saved before the duplicate retry", final: true });
+      await request.onStatus!({ active: false });
+      expect((await f.read()).active).toEqual([]);
+      const session = (await f.store.readSession(entry.sessionId))!;
+      expect(session.stoppedAt).toEqual(expect.any(String));
+      const notes = await f.store.readSummary(session);
+      expect(notes.summary?.transcript).toEqual(["Saved before the duplicate retry"]);
+      const revision = f.store.readSummaryInputRevision(session);
+      vi.mocked(providerRegistry.getTranscriptSourceProvider).mockImplementation((id) =>
+        id === delayedId ? delayedProvider : f.provider,
+      );
+      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.waitFor(async () =>
+        expect((await f.read()).configuredSources[1]?.startDiagnostic).not.toBe("starting"),
+      );
+      expect.soft((await f.read()).configuredSources[1]).toMatchObject({
+        state: "not-active",
+        startDiagnostic: "id-conflict",
+        activeSelectors: [],
+      });
+      await vi.advanceTimersByTimeAsync(65_000);
+      expect(start).toHaveBeenCalledOnce();
+      expect(delayedStart).not.toHaveBeenCalled();
+      expect(await f.store.listSessionEntries()).toHaveLength(1);
+      expect(await f.store.readSession(entry.sessionId)).toEqual(session);
+      expect(await f.store.readSummary(session)).toEqual(notes);
+      expect(f.store.readSummaryInputRevision(session)).toBe(revision);
+    } finally {
+      await service.stop();
+    }
+  });
+
   it("fences late diagnostics and teardown against a replacement service and a manual capture", async () => {
     const f = fixture({ transcripts: { autoStart: [{ ...room, sessionId: "pending" }] } });
     const gate = createDeferred();

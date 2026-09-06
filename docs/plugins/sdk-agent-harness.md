@@ -206,6 +206,13 @@ Harnesses may use the plan for decisions that need to match OpenClaw behavior,
 but treat it as host-owned attempt state: do not mutate it or use it to switch
 providers/models inside a turn.
 
+For model-visible reply policy, `buildHarnessVisibleReplyGuidance` from
+`openclaw/plugin-sdk/agent-harness-runtime` accepts the prepared delivery mode,
+actual message-tool availability, and resolved `requireExplicitMessageTarget`
+fact. Supply these facts for each turn. Harnesses with a separate static prompt
+can use the same seam's `buildUiPresentationPrompt` for stable UI guidance,
+leaving delivery and target instructions in late context.
+
 For auxiliary session control calls, `resolveSessionModelRef` from
 `openclaw/plugin-sdk/model-session-runtime` resolves the current model selection.
 `prepareAgentRuntimeAuth` from `openclaw/plugin-sdk/agent-harness-runtime` selects

@@ -267,6 +267,7 @@ export async function runEmbeddedAttempt(
         setup,
         bootstrap: preparedBootstrap,
         capabilityToolNames: toolSearchRunPlan.capabilityToolNames,
+        requireExplicitMessageTarget: preparedToolBase.requireExplicitMessageTarget,
         effectiveTools,
         isRawModelRun,
         modelToolsEnabled: toolsEnabled,

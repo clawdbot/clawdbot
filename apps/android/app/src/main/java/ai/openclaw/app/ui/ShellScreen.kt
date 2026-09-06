@@ -413,7 +413,7 @@ private fun OverviewScreen(
   val isConnected = gatewayConnectionDisplay.isConnected
   val models by viewModel.providerModelCatalog.collectAsState()
   val providers by viewModel.modelAuthProviders.collectAsState()
-  val execApprovals by viewModel.execApprovals.collectAsState()
+  val approvalInbox by viewModel.execApprovalInbox.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val cronStatus by viewModel.cronStatus.collectAsState()
   val nodesDevicesSummary by viewModel.nodesDevicesSummary.collectAsState()
@@ -424,7 +424,7 @@ private fun OverviewScreen(
   val providerRows = providerRows(providers = providers, models = models)
   val readyProviderCount = providerRows.count { it.ready }
   val unknownProviderCount = providerRows.count { it.availability == ProviderAvailability.Unknown }
-  val pendingApprovalsCount = execApprovals.size + pendingToolCalls.size
+  val pendingApprovalsCount = approvalInbox.approvals.size + pendingToolCalls.size
   val attentionRows =
     homeAttentionRows(
       isConnected = isConnected,
@@ -1469,7 +1469,7 @@ private fun SettingsShellScreen(
   val notificationForwardingEnabled by viewModel.notificationForwardingEnabled.collectAsState()
   val speakerEnabled by viewModel.speakerEnabled.collectAsState()
   val agents by viewModel.gatewayAgents.collectAsState()
-  val execApprovals by viewModel.execApprovals.collectAsState()
+  val approvalInbox by viewModel.execApprovalInbox.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val cronStatus by viewModel.cronStatus.collectAsState()
   val usageState by viewModel.usageState.collectAsState()
@@ -1487,7 +1487,7 @@ private fun SettingsShellScreen(
   val providerRows = providerRows(providers = providers, models = models)
   val readyProviderCount = providerRows.count { it.ready }
   val unknownProviderCount = providerRows.count { it.availability == ProviderAvailability.Unknown }
-  val pendingApprovalsCount = execApprovals.size + pendingToolCalls.size
+  val pendingApprovalsCount = approvalInbox.approvals.size + pendingToolCalls.size
 
   LaunchedEffect(isConnected) {
     if (isConnected) {

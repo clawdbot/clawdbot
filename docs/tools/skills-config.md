@@ -17,8 +17,8 @@ Most skills configuration lives under `skills` in
   skills: {
     allowBundled: ["gemini", "peekaboo"],
     load: {
-      extraDirs: ["~/Projects/agent-scripts/skills"],
-      allowSymlinkTargets: ["~/Projects/manager/skills"],
+      extraDirs: ["~/path/to/agent-scripts/skills"],
+      allowSymlinkTargets: ["~/path/to/skills"],
       watch: true,
     },
     install: {
@@ -62,8 +62,8 @@ Most skills configuration lives under `skills` in
   Trusted real target directories that symlinked skill folders may resolve
   into, even when the symlink lives outside the configured root. Use this for
   intentional sibling-repo layouts such as
-  `<workspace>/skills/manager -> ~/Projects/manager/skills`. Keep this list
-  narrow — do not point at broad roots like `~` or `~/Projects`.
+  `<workspace>/skills/manager -> ~/path/to/skills`. Keep this list
+  narrow — do not point at broad roots like `~` or a whole projects directory.
 </ParamField>
 
 <ParamField path="skills.load.watch" type="boolean" default="true">
@@ -403,14 +403,14 @@ To allow an intentional symlink layout, declare the trusted target:
 {
   skills: {
     load: {
-      extraDirs: ["~/Projects/manager/skills"],
-      allowSymlinkTargets: ["~/Projects/manager/skills"],
+      extraDirs: ["~/path/to/skills"],
+      allowSymlinkTargets: ["~/path/to/skills"],
     },
   },
 }
 ```
 
-With this config, `<workspace>/skills/manager -> ~/Projects/manager/skills`
+With this config, `<workspace>/skills/manager -> ~/path/to/skills`
 is accepted after realpath resolution. `extraDirs` scans the sibling repo
 directly; `allowSymlinkTargets` preserves the symlinked path for existing
 layouts.

@@ -175,9 +175,9 @@ export async function confirmAndStartUpdateRuntime(
                   : nothing
               }
               ${
-                run && current.kind === "run"
+                current.kind === "run"
                   ? html`<openclaw-update-run-view
-                      .run=${run}
+                      .run=${current.run}
                       .connected=${current.connected}
                     ></openclaw-update-run-view>`
                   : nothing

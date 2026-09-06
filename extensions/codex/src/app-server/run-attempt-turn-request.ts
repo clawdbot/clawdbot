@@ -138,6 +138,8 @@ export async function prepareCodexAttemptTurnRequest(
         skillsCollaborationInstructions: context.skillsCollaborationInstructions,
         memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
         preserveNativeTurnSettings: usesSupervisionConnection,
+        messageToolAvailable: toolBridge.availableTools.some((tool) => tool.name === "message"),
+        requireExplicitMessageTarget: attemptTools.requireExplicitMessageTarget,
         sessionStatusAvailable: toolBridge.availableTools.some(
           (tool) => tool.name === "session_status",
         ),

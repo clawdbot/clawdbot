@@ -1292,23 +1292,23 @@ describe("createCopilotToolBridge", () => {
       warn.mockRestore();
     });
 
-    it("requireExplicitMessageTarget defaults to isSubagentSessionKey(sessionKey) when undefined", async () => {
-      const { createOpenClawCodingTools, getOpts } = captureCall();
-
-      await createCopilotToolBridge({
-        // No requireExplicitMessageTarget; sessionKey looks like a
-        // subagent key so the default must be true. Mirrors PI
-        // attempt.ts:1097-1098.
-        attemptParams: { sessionKey: "subagent:envelope:abc" } as never,
-        createOpenClawCodingTools,
-      });
-
-      const opts = getOpts();
-      // We don't assert the exact boolean (subagent detection is owned
-      // by isSubagentSessionKey) — only that the bridge consulted the
-      // helper rather than emitting `undefined`.
-      expect(typeof opts.requireExplicitMessageTarget).toBe("boolean");
-    });
+    it.each([
+      { sessionKey: "agent:main:main", required: undefined, expected: false },
+      { sessionKey: "agent:main:subagent:child", required: undefined, expected: true },
+      { sessionKey: "agent:main:subagent:child", required: false, expected: false },
+      { sessionKey: "agent:main:main", required: true, expected: true },
+    ])(
+      "shares the resolved target requirement for $sessionKey / $required",
+      async ({ sessionKey, required, expected }) => {
+        const { createOpenClawCodingTools, getOpts } = captureCall();
+        const bridge = await createCopilotToolBridge({
+          attemptParams: { sessionKey, requireExplicitMessageTarget: required } as never,
+          createOpenClawCodingTools,
+        });
+        expect(getOpts().requireExplicitMessageTarget).toBe(expected);
+        expect(bridge.promptToolPolicy.requireExplicitMessageTarget).toBe(expected);
+      },
+    );
   });
 
   describe("sandbox forwarding (PR #86155 [P1])", () => {

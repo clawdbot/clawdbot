@@ -298,9 +298,13 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       releaseLeasedSharedCodexAppServerClient(client);
     }
   }
+  let requireExplicitMessageTarget: boolean | undefined;
   const tools = await buildDynamicTools({
     ...commonToolParams,
     registerRunCleanup: (cleanup) => runCleanups.push(cleanup),
+    onMessageToolTargetResolved: (required) => {
+      requireExplicitMessageTarget = required;
+    },
     cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
     cronCreatorToolAllowlistCaptureRef,
     onPersistentWebSearchPolicyResolved: (allowed) => {
@@ -517,6 +521,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       }),
       directToolNames: resolveCodexDynamicToolDirectNames(
         params,
+        registeredWithScopedMcp,
         isHostScopedAgentToolActive("openclaw"),
       ),
       hookContext,
@@ -634,6 +639,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     return {
       tools: toolsWithScopedMcp,
       registeredTools: registeredWithScopedMcp,
+      requireExplicitMessageTarget,
       scopedMcpTools,
       configuredMcp,
       disposeMcpTools,

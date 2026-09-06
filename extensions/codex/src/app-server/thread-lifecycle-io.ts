@@ -180,6 +180,11 @@ export async function resumeExistingCodexThread(
     acceptedConfiguration = configuration;
     assertCodexThreadAcceptsDirectInput(response.thread);
     configuration.assertConfigured();
+    if (requestModelProvider && response.modelProvider !== requestModelProvider) {
+      throw new Error(
+        "Codex resumed a different model provider than the one selected for this turn",
+      );
+    }
     // Current-policy denial must release this subscription and stop, not retry
     // as a fresh thread. A confirmed config change still follows normal rotation.
     const loadedPluginThreadConfig = await context.buildLoadedPluginThreadConfig?.(resumeBinding);
@@ -224,7 +229,8 @@ export async function resumeExistingCodexThread(
       cwd: params.cwd,
       rolloutPath: resolveCodexThreadRolloutPath(response.thread) ?? resumeBinding.rolloutPath,
       authProfileId,
-      model: response.model ?? resumeParams.model ?? params.params.modelId,
+      // Loaded native threads can ignore resume overrides; keep the prepared model for turn/start.
+      model: resumeParams.model ?? response.model ?? params.params.modelId,
       preserveNativeModel: resumeBinding.preserveNativeModel === true ? true : undefined,
       modelProvider: normalizeBindingModelProvider(
         authProfileId,

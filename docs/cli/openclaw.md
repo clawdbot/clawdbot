@@ -54,7 +54,7 @@ openclaw setup
 openclaw setup --json
 openclaw setup --message "models"
 openclaw setup --message "validate config"
-openclaw setup --message "setup workspace ~/Projects/work" --yes
+openclaw setup --message "setup workspace ~/path/to/work" --yes
 openclaw setup --message "set default model openai/gpt-5.6" --yes
 openclaw onboard --modern
 ```
@@ -67,7 +67,7 @@ health
 doctor
 validate config
 setup
-setup workspace ~/Projects/work
+setup workspace ~/path/to/work
 config set gateway.port 19001
 config set-ref gateway.auth.token env OPENCLAW_GATEWAY_TOKEN
 gateway status
@@ -75,7 +75,7 @@ configure gateway
 open gateway wizard
 restart gateway
 agents
-create agent work workspace ~/Projects/work
+create agent work workspace ~/path/to/work
 models
 configure model provider
 set default model openai/gpt-5.6
@@ -91,7 +91,7 @@ plugins list
 plugins search slack
 plugin install clawhub:openclaw-codex-app-server
 talk to work agent
-talk to agent for ~/Projects/work
+talk to agent for ~/path/to/work
 audit
 quit
 ```
@@ -229,7 +229,7 @@ completes a real live turn. Start OpenClaw again after onboarding succeeds.
 
 ```text
 setup
-setup workspace ~/Projects/work
+setup workspace ~/path/to/work
 ```
 
 `setup` preserves the verified effective model. It does not configure or
@@ -358,8 +358,8 @@ OpenClaw: Applied. Audit entry written.
 Agent creation can also be queued locally or via rescue:
 
 ```text
-create agent work workspace ~/Projects/work model openai/gpt-5.6-sol
-/openclaw create agent work workspace ~/Projects/work
+create agent work workspace ~/path/to/work model openai/gpt-5.6-sol
+/openclaw create agent work workspace ~/path/to/work
 ```
 
 Agent creation may name only the current live-verified default model. Omit the

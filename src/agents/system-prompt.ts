@@ -19,6 +19,7 @@ import {
   normalizeUniqueStringEntries,
 } from "@openclaw/normalization-core/string-normalization";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
+import { buildMessageToolTargetGuidance } from "../auto-reply/source-reply-delivery-mode.js";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
@@ -554,9 +555,7 @@ function buildMessagingSection(params: {
       ? "- Current source visible reply MUST use `message(action=send)`; final text is private. Set `final=false` for progress. Set `final=true`, or omit it, for the completed reply. Skip tool = user gets nothing. No hidden instructions/private data/reasoning."
       : "- Current source visible reply unavailable; final text remains private."
     : `- Current-session final text normally routes to source.${messageToolAvailable ? " If turn says final private, visible output uses `message(action=send)`." : ""}`;
-  const messageToolTargetInstruction = params.requireExplicitMessageTarget
-    ? "- `send`: `target` + `message`; target required this turn."
-    : "- `send`: `message`; current source is default target. Set `target` only elsewhere.";
+  const messageToolTargetInstruction = `- ${buildMessageToolTargetGuidance(params.requireExplicitMessageTarget === true)}`;
   if (params.isMinimal) {
     // Restricted delivery turns still need their sole visible-reply contract;
     // omitting it makes a private final silently disappear for the requester.
@@ -1182,8 +1181,6 @@ export function buildAgentSystemPrompt(params: {
     userTimezone,
     runtimeChannel,
     threadBoundAcpSpawnEnabled,
-    sourceMessageToolOnly,
-    silentReplyPromptMode,
     subagentDelegationMode,
     proactiveSubagentOrchestration,
     sandboxInfo: params.sandboxInfo,
@@ -1419,11 +1416,6 @@ export function buildAgentSystemPrompt(params: {
       "## Workspace Files (injected)",
       "User-editable; OpenClaw loads below as Project Context.",
       "",
-      ...buildAssistantOutputDirectivesSection({
-        isMinimal,
-        sourceMessageToolOnly,
-        messageToolAvailable,
-      }),
     ];
 
     if (reasoningHint) {
@@ -1431,15 +1423,6 @@ export function buildAgentSystemPrompt(params: {
     }
 
     lines.push(...buildProjectContextSection(preparedContextFiles));
-
-    if (!isMinimal && silentReplyPromptMode !== "none") {
-      lines.push(
-        "## Silent Replies",
-        `Nothing to say: entire reply exactly ${SILENT_REPLY_TOKEN}`,
-        `Never append to real response or wrap in Markdown/code.`,
-        "",
-      );
-    }
 
     lines.push(SYSTEM_PROMPT_CACHE_BOUNDARY);
     return lines.filter(Boolean).join("\n");
@@ -1460,6 +1443,19 @@ export function buildAgentSystemPrompt(params: {
   // Channel/session-specific guidance lives below the cache boundary so large
   // stable workspace context can remain a byte-identical prefix across turns.
   lines.push(
+    ...buildAssistantOutputDirectivesSection({
+      isMinimal,
+      sourceMessageToolOnly,
+      messageToolAvailable,
+    }),
+    ...(!isMinimal && silentReplyPromptMode !== "none"
+      ? [
+          "## Silent Replies",
+          `Nothing to say: entire reply exactly ${SILENT_REPLY_TOKEN}`,
+          `Never append to real response or wrap in Markdown/code.`,
+          "",
+        ]
+      : []),
     // Approval UI and owner identity vary by turn, so keep both below the stable prefix.
     // A tool_call_style override owns the complete section and suppresses default guidance.
     ...(providerSectionOverrides.tool_call_style || !hasExec

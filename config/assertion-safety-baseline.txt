@@ -2869,7 +2869,6 @@ src/gateway/server-methods/task-suggestions.ts	7
 src/gateway/server-methods/terminal-upload.ts	1
 src/gateway/server-methods/terminal.ts	6
 src/gateway/server-methods/tools-catalog.ts	2
-src/gateway/server-methods/update.ts	1
 src/gateway/server-methods/web.ts	1
 src/gateway/server-methods/wizard.ts	1
 src/gateway/server-methods/workspace-fs.ts	2
@@ -2955,7 +2954,6 @@ src/gateway/worker-environments/workspace-path-exclusions.ts	2
 src/gateway/worker-environments/workspace-result-staging.ts	2
 src/gateway/worker-workspace-conflict-transcript.ts	4
 src/gateway/ws-log.ts	3
-src/hooks/bundled/bootstrap-extra-files/handler.ts	1
 src/hooks/bundled/session-memory/handler.ts	9
 src/hooks/bundled/session-memory/transcript.ts	2
 src/hooks/frontmatter.ts	1
@@ -3894,7 +3892,6 @@ ui/src/pages/chat/chat-page.ts	1
 ui/src/pages/chat/chat-pane-browser-annotation.ts	2
 ui/src/pages/chat/chat-pane-lifecycle.ts	4
 ui/src/pages/chat/chat-pane-render.ts	3
-ui/src/pages/chat/chat-progress.ts	2
 ui/src/pages/chat/chat-queue.ts	1
 ui/src/pages/chat/chat-send-ack.ts	2
 ui/src/pages/chat/chat-send-composer.ts	1

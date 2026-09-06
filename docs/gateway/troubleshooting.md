@@ -144,8 +144,8 @@ If the target is intentional, configure both the direct skill root and the allow
 {
   skills: {
     load: {
-      extraDirs: ["~/Projects/manager/skills"],
-      allowSymlinkTargets: ["~/Projects/manager/skills"],
+      extraDirs: ["~/path/to/skills"],
+      allowSymlinkTargets: ["~/path/to/skills"],
     },
   },
 }
