@@ -155,15 +155,16 @@ describe("PR refresh emission receipts", () => {
 
   it("does not retain or truncate large content identities", () => {
     const { state, refresh } = createHost();
+    const largeText = text + "x".repeat(50_000);
     const large = {
       role: "assistant",
-      content: [{ type: "text", text: text + "x".repeat(50_000) }],
+      content: [{ type: "text", text: largeText }],
     };
     refreshPullRequestsForFinalReply(state, final(large));
     refreshPullRequestsForFinalReply(state, final(large));
     refreshPullRequestsForFinalReply(
       state,
-      final({ ...large, content: [{ type: "text", text: large.content[0].text + "different" }] }),
+      final({ ...large, content: [{ type: "text", text: largeText + "different" }] }),
     );
     expect(refresh).toHaveBeenCalledTimes(3);
   });
