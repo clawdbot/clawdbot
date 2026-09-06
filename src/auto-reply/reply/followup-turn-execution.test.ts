@@ -72,7 +72,10 @@ function createTurn(overrides: Partial<AdmittedFollowupTurn> = {}): AdmittedFoll
         blockReplyBreak: "message_end",
       },
     },
-    operation: { abortSignal: new AbortController().signal } as AdmittedFollowupTurn["operation"],
+    operation: {
+      abortSignal: new AbortController().signal,
+      bindToolAuthoritySnapshot: vi.fn(),
+    } as unknown as AdmittedFollowupTurn["operation"],
     config: {},
     session: {
       kind: "session",
@@ -917,6 +920,7 @@ describe("executeFollowupTurn", () => {
     const turn = createTurn({
       operation: {
         abortSignal: new AbortController().signal,
+        bindToolAuthoritySnapshot: vi.fn(),
         updateSessionId,
       } as unknown as AdmittedFollowupTurn["operation"],
     });
@@ -980,6 +984,7 @@ describe("executeFollowupTurn", () => {
     const fail = vi.fn();
     const operation = {
       abortSignal: new AbortController().signal,
+      bindToolAuthoritySnapshot: vi.fn(),
       fail,
     } as unknown as AdmittedFollowupTurn["operation"];
     const turn = createTurn({ operation });
