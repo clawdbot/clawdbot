@@ -767,7 +767,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
             log.debug("memory source changed while indexing; queued incremental retry", {
               path: entry.path,
             });
-            return;
+            return undefined;
           }
         }
         const now = Date.now();
@@ -905,10 +905,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         this.dirty = true;
         return null;
       }
-      if (options.source === "memory") {
-        // Hash, chunk, and embed one immutable read; publication validates it again.
-        entry = { ...entry, hash: hashText(content) };
-      }
+      // Hash, chunk, and embed one immutable read; publication validates it again.
+      const snapshot = options.source === "memory" ? { ...entry, hash: hashText(content) } : entry;
       const normalizedEntryPath = entry.path.replaceAll("\\", "/");
       const perEntry =
         options.source === "memory" &&
@@ -973,7 +971,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       if (options.source === "sessions" && "lineMap" in entry) {
         remapChunkLines(chunks, entry.lineMap);
       }
-      return { entry, source: options.source, chunks };
+      return { entry: snapshot, source: options.source, chunks };
     });
   }
 

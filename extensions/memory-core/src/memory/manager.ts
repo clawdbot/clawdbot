@@ -209,8 +209,8 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     this.providerRequirement = params.providerRequirement;
     this.requestedProvider = effectiveSettings.provider;
     this.providerLifecycle = createPendingMemoryProviderLifecycle(this.requestedProvider);
-    for (const source of effectiveSettings.sources) {
-      this.sources.add(source);
+    for (const memorySource of effectiveSettings.sources) {
+      this.sources.add(memorySource);
     }
     const dbPath = resolveUserPath(effectiveSettings.store.databasePath);
     const vectorEnabled = effectiveSettings.store.vector.enabled;

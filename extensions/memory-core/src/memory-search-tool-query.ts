@@ -117,12 +117,14 @@ export async function executeMemorySearchToolQuery(params: {
       signal,
       onDebug: (debug) => runtimeDebug.push(debug),
       onPartialResults: params.onPartialResults
-        ? (candidates) => {
+        ? (partialCandidates) => {
             const generation = ++partialGeneration;
             params.onPartialResults?.(null);
             // Session visibility can change while semantic retrieval waits. A deadline
             // cannot reuse earlier session authority, so retain only durable memory files.
-            const memoryCandidates = candidates?.filter((entry) => entry.source === "memory");
+            const memoryCandidates = partialCandidates?.filter(
+              (entry) => entry.source === "memory",
+            );
             if (!memoryCandidates?.length || signal.aborted) {
               return;
             }
