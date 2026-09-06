@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { logMessageQueuedWithBacklogPolicy } from "../../../logging/diagnostic-runtime.js";
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
+import { defaultRuntime } from "../../../runtime.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
@@ -13,6 +14,7 @@ import {
 import {
   clearFollowupDrainCallback,
   createOverflowSummaryRetrySource,
+  dropAbortedFollowups,
   kickFollowupDrainIfIdle,
   rememberFollowupDrainCallback,
   resolveFollowupDeliveryContextKey,
@@ -116,6 +118,28 @@ function appendQueueItem(params: {
   }
   if (params.runFollowup) {
     rememberFollowupDrainCallback(params.key, params.runFollowup);
+  }
+  const signal = params.run.abortSignal;
+  const lifecycle = params.run.turnAdoptionLifecycle;
+  if (signal && lifecycle) {
+    const onAbort = () => {
+      const queue = getExistingFollowupQueue(params.key);
+      if (queue) {
+        // Cancellation must release pending ownership even while normal draining is dormant.
+        void dropAbortedFollowups(queue, params.runFollowup).catch((error: unknown) => {
+          defaultRuntime.error?.(`followup queue cancellation failed: ${String(error)}`);
+        });
+      }
+    };
+    const onSettled = lifecycle.onSettled;
+    lifecycle.onSettled = () => {
+      signal.removeEventListener("abort", onAbort);
+      onSettled?.();
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) {
+      onAbort();
+    }
   }
   if (params.restartIfIdle && !params.queue.draining) {
     kickFollowupDrainIfIdle(params.key);

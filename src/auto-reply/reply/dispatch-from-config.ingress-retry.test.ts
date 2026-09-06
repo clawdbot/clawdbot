@@ -23,12 +23,7 @@ import {
   type DispatchProcessedNote,
 } from "./dispatch-processed-outcome.js";
 import { resetInboundDedupe } from "./inbound-dedupe.js";
-import {
-  clearSessionQueues,
-  enqueueFollowupRun,
-  scheduleFollowupDrain,
-  type FollowupRun,
-} from "./queue.js";
+import { clearSessionQueues, enqueueFollowupRun, type FollowupRun } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import { resetRecentQueuedMessageIdDedupe } from "./queue/enqueue.test-support.js";
 import { getExistingFollowupQueue } from "./queue/state.js";
@@ -93,13 +88,35 @@ describe("dispatch retry after queued ingress abandonment", () => {
           run.turnAdoptionLifecycle = options?.turnAdoptionLifecycle;
           run.abortSignal = options?.turnAdoptionLifecycle?.abortSignal;
           expect(
-            enqueueFollowupRun(key, run, {
-              mode: "followup",
-              debounceMs: 0,
-              cap: 10,
-              dropPolicy: "summarize",
-            }),
+            enqueueFollowupRun(
+              key,
+              run,
+              {
+                mode: "followup",
+                debounceMs: 0,
+                cap: 10,
+                dropPolicy: "summarize",
+              },
+              "message-id",
+              finishAbortedFollowup,
+              false,
+            ),
           ).toBe(true);
+          if (abandonment === "watchdog-after-commit") {
+            expect(
+              enqueueFollowupRun(
+                key,
+                createQueueTestRun({
+                  prompt: "Healthy pending sibling",
+                  messageId: "healthy-sibling",
+                }),
+                { mode: "followup", debounceMs: 0 },
+                "message-id",
+                finishAbortedFollowup,
+                false,
+              ),
+            ).toBe(true);
+          }
           const runState = resolveReplyOperationRunState(options);
           if (!runState) {
             throw new Error("dispatch did not bind its run state");
@@ -141,10 +158,6 @@ describe("dispatch retry after queued ingress abandonment", () => {
             await vi.advanceTimersByTimeAsync(1_000);
             await drain.waitForIdle();
             expect(lifecycles[0]?.abortSignal.aborted).toBe(true);
-            scheduleFollowupDrain(key, finishAbortedFollowup);
-            await vi.advanceTimersByTimeAsync(0);
-            expect(getExistingFollowupQueue(key)?.items ?? []).toEqual([]);
-            expect(finishAbortedFollowup).toHaveBeenCalledOnce();
           }
           expect(await queue.listPending()).toMatchObject([{ id: messageId, attempts: 1 }]);
           clock += 1_000;
@@ -152,6 +165,12 @@ describe("dispatch retry after queued ingress abandonment", () => {
           await drain.waitForIdle();
           // The old bug tombstones this retry as a duplicate without invoking the resolver.
           expect(resolver).toHaveBeenCalledTimes(2);
+          if (abandonment === "watchdog-after-commit") {
+            expect(finishAbortedFollowup).toHaveBeenCalledOnce();
+            expect(getExistingFollowupQueue(key)?.items.map((run) => run.messageId)).toEqual([
+              "healthy-sibling",
+            ]);
+          }
           expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
             text: "Queued message delivered",
           });
