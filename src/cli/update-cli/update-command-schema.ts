@@ -56,7 +56,8 @@ export async function preflightUpdateCommandSchemas(params: {
   const preflightNotes: string[] = [];
   if ((opts.dryRun || updateInstallKind === "package") && updateInstallKind !== "unknown") {
     try {
-      const { inspectUpdateDatabaseContexts } = await import("./update-command-execution.js");
+      const { inspectUpdateDatabaseContexts } =
+        await import("./update-command-database-context.js");
       const { inspectGitDryRunTargetSchemaVersions } = await import("./update-command-git.js");
       const admission = await inspectUpdateDatabaseContexts({
         roots: switchToGit ? [root, resolveGitInstallDir()] : [root],

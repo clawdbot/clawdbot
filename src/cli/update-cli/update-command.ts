@@ -52,7 +52,11 @@ import {
 import { maybeRepairLegacyConfigForUpdateChannel } from "./update-command-config.js";
 import { printUpdateDryRun } from "./update-command-dry-run.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
-import { reportPreMutationUpdateFailure, UpdateCommandFailure } from "./update-command-result.js";
+import {
+  mergeWindowsTaskRecoveryFailure,
+  reportPreMutationUpdateFailure,
+  UpdateCommandFailure,
+} from "./update-command-result.js";
 import {
   admitUpdateCommandRun,
   completeUpdateCommandRun,
@@ -134,28 +138,7 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
                 { cause: error },
               );
             }
-            if (failure?.error instanceof UpdateCommandFailure) {
-              // A rejected restore promise can be observed again during unwinding.
-              // Keep the reported failure and never turn cleanup into safe-exit 80.
-              failure = {
-                error: new UpdateCommandFailure(
-                  { ...failure.error.result, status: "error" },
-                  1,
-                  `${failure.error.message}; Windows autostart recovery: ${formatErrorMessage(error)}`,
-                  { cause: error },
-                ),
-              };
-            } else {
-              failure = {
-                error: failure
-                  ? new AggregateError(
-                      [failure.error, error],
-                      `Update failed (${formatErrorMessage(failure.error)}) and Windows autostart recovery failed (${formatErrorMessage(error)})`,
-                      { cause: failure.error },
-                    )
-                  : error,
-              };
-            }
+            failure = mergeWindowsTaskRecoveryFailure(failure, error);
           }
           if (failure) {
             if (!recoveryState.ledgerHandoffOwned) {
