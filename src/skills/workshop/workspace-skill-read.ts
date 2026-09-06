@@ -8,7 +8,7 @@ import {
 } from "../lifecycle/workspace-skill-write.js";
 import { resolveSkillManifestMetadata } from "../loading/frontmatter.js";
 import type { Skill } from "../loading/skill-contract.js";
-import { loadSkillRootRecords } from "../loading/skill-root-loader.js";
+import { loadSkillRootRecords, warnInvalidSkill } from "../loading/skill-root-loader.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 
 function assertWritableSkillTarget(
@@ -53,6 +53,16 @@ export function listWritableWorkshopSkillSummaries(
     dir: workshopSkillsDir(options),
     source: "openclaw-workshop",
     config: options.config,
+    onDiagnostic: (diagnostic) => {
+      warnInvalidSkill("openclaw-workshop", diagnostic);
+      // A failed read is not an empty collection. Keep intentional loader
+      // exclusions, but never use an unreadable inventory for review or display.
+      if (diagnostic.kind === "read") {
+        throw new Error(
+          "Workshop skills could not be read. Check access to the skill files, then retry.",
+        );
+      }
+    },
   });
   return records
     .map(({ skill, frontmatter }) => ({
