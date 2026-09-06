@@ -169,6 +169,8 @@ export function createClaudeSessionCatalogRuntime(
         agentId: _agentId,
         listNodes,
         onHost,
+        waitUntil,
+        signal,
         sessionEntries: _sessionEntries,
         ...gatewayQuery
       } = query;
@@ -179,6 +181,8 @@ export function createClaudeSessionCatalogRuntime(
         query: gatewayQuery,
         allowProcessHomeFallback,
         listNodes,
+        waitUntil,
+        signal,
         ...(onHost ? { onHost: (host) => onHost(mapHost(host)) } : {}),
       });
       return result.hosts.map(mapHost);

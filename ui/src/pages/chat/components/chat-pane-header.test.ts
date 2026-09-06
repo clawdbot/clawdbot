@@ -264,7 +264,11 @@ describe("chat pane header", () => {
     });
     const actions = container.querySelector(".chat-pane__actions");
 
-    expect(actions?.lastElementChild?.getAttribute("data-action")).toBe("session-menu");
+    expect(
+      Array.from(actions?.querySelectorAll("button") ?? [])
+        .at(-1)
+        ?.getAttribute("data-action"),
+    ).toBe("session-menu");
     expect(actions?.querySelector(".chat-pane__palette-open")).not.toBeNull();
     expect(actions?.querySelector(".chat-pane__close-pane")).not.toBeNull();
   });

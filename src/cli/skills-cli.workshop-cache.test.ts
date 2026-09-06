@@ -39,6 +39,8 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
+const gatewayWorkshopScope = () => ({ config: mocks.config, agentId: "main" });
+
 vi.mock("../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../runtime.js")>()),
   defaultRuntime: mocks.defaultRuntime,
@@ -119,6 +121,7 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
   it("applies through the gateway process that owns the cached session skill index", async () => {
     // This first module graph stands in for the long-running Gateway process.
     const proposal = await gatewayWorkshop.proposeCreateSkill({
+      ...gatewayWorkshopScope(),
       workspaceDir: mocks.workspaceDir,
       name: "Gateway Visible",
       description: "Visible in sessions without restarting the gateway",
@@ -127,6 +130,7 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     const beforeApply = gatewaySnapshots.resolveReusableWorkspaceSkillSnapshot({
       workspaceDir: mocks.workspaceDir,
       config: mocks.config,
+      agentId: "main",
       watch: false,
     }).snapshot;
     expect(beforeApply.skills.map((skill) => skill.name)).not.toContain("gateway-visible");
@@ -137,12 +141,15 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     const beforeVersion = gatewayRefreshState.getSkillsSnapshotVersion(mocks.workspaceDir);
     mocks.gatewayApply = async (request) => {
       if (request.method === "skills.proposals.inspect") {
-        return await gatewayWorkshop.inspectSkillProposal(proposal.record.id);
+        return await gatewayWorkshop.inspectSkillProposal(
+          proposal.record.id,
+          gatewayWorkshopScope(),
+        );
       }
       expect(request.method).toBe("skills.proposals.apply");
       return await gatewayWorkshop.applySkillProposal({
+        ...gatewayWorkshopScope(),
         workspaceDir: mocks.workspaceDir,
-        config: mocks.config,
         proposalId: request.params?.proposalId ?? "",
         expectedRevisionHash: request.params?.expectedRevisionHash,
       });
@@ -174,6 +181,7 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     const newSession = gatewaySnapshots.resolveReusableWorkspaceSkillSnapshot({
       workspaceDir: mocks.workspaceDir,
       config: mocks.config,
+      agentId: "main",
       existingSnapshot: persistedSnapshot,
       watch: false,
     }).snapshot;
@@ -182,6 +190,7 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
 
   it("does not replay a dispatched gateway apply failure in the CLI process", async () => {
     const proposal = await gatewayWorkshop.proposeCreateSkill({
+      ...gatewayWorkshopScope(),
       workspaceDir: mocks.workspaceDir,
       name: "Single Dispatch",
       description: "Apply only in the process that owns snapshot state",
@@ -189,7 +198,10 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     });
     mocks.gatewayApply = async (request) => {
       if (request.method === "skills.proposals.inspect") {
-        return await gatewayWorkshop.inspectSkillProposal(proposal.record.id);
+        return await gatewayWorkshop.inspectSkillProposal(
+          proposal.record.id,
+          gatewayWorkshopScope(),
+        );
       }
       throw new Error("gateway apply failed");
     };
@@ -205,9 +217,9 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
       "skills.proposals.inspect",
       "skills.proposals.apply",
     ]);
-    await expect(gatewayWorkshop.inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
-      record: { status: "pending" },
-    });
+    await expect(
+      gatewayWorkshop.inspectSkillProposal(proposal.record.id, gatewayWorkshopScope()),
+    ).resolves.toMatchObject({ record: { status: "pending" } });
   });
 
   it.each([
@@ -223,6 +235,7 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     { label: "a local transport timeout", error: createGatewayTransportError("timeout") },
   ])("preserves configless offline apply after $label", async ({ error }) => {
     const proposal = await gatewayWorkshop.proposeCreateSkill({
+      ...gatewayWorkshopScope(),
       workspaceDir: mocks.workspaceDir,
       name: "Offline Upgrade",
       description: "Keep shipped configless Workshop apply behavior",
@@ -245,9 +258,9 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
       timeoutMs: 250,
     });
     expect(mocks.releaseGatewayLock).toHaveBeenCalledTimes(1);
-    await expect(gatewayWorkshop.inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
-      record: { status: "applied" },
-    });
+    await expect(
+      gatewayWorkshop.inspectSkillProposal(proposal.record.id, gatewayWorkshopScope()),
+    ).resolves.toMatchObject({ record: { status: "applied" } });
   });
 
   it.each([
@@ -311,6 +324,7 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     },
   ])("does not bypass implicit-local Gateway ownership when $label", async ({ error, outcome }) => {
     const proposal = await gatewayWorkshop.proposeCreateSkill({
+      ...gatewayWorkshopScope(),
       workspaceDir: mocks.workspaceDir,
       name: "Gateway Owned Upgrade",
       description: "Keep snapshot invalidation in the running gateway",
@@ -336,13 +350,14 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     expect(mocks.callGateway).toHaveBeenCalledTimes(1);
     expect(mocks.acquireGatewayLock).not.toHaveBeenCalled();
     expect(mocks.releaseGatewayLock).not.toHaveBeenCalled();
-    await expect(gatewayWorkshop.inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
-      record: { status: "pending" },
-    });
+    await expect(
+      gatewayWorkshop.inspectSkillProposal(proposal.record.id, gatewayWorkshopScope()),
+    ).resolves.toMatchObject({ record: { status: "pending" } });
   });
 
   it("does not bypass Gateway ownership when CLI credentials are missing", async () => {
     const proposal = await gatewayWorkshop.proposeCreateSkill({
+      ...gatewayWorkshopScope(),
       workspaceDir: mocks.workspaceDir,
       name: "Gateway Owned Upgrade",
       description: "Keep snapshot invalidation in the running gateway",
@@ -366,15 +381,16 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     expect(mocks.callGateway).toHaveBeenCalledOnce();
     expect(mocks.acquireGatewayLock).toHaveBeenCalledOnce();
     expect(mocks.releaseGatewayLock).not.toHaveBeenCalled();
-    await expect(gatewayWorkshop.inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
-      record: { status: "pending" },
-    });
+    await expect(
+      gatewayWorkshop.inspectSkillProposal(proposal.record.id, gatewayWorkshopScope()),
+    ).resolves.toMatchObject({ record: { status: "pending" } });
   });
 
   it.each(["configured remote", "environment-selected"] as const)(
     "does not apply locally after a %s gateway inspection fails",
     async (target) => {
       const proposal = await gatewayWorkshop.proposeCreateSkill({
+        ...gatewayWorkshopScope(),
         workspaceDir: mocks.workspaceDir,
         name: "Authoritative Gateway",
         description: "Never mutate the client after an explicitly selected Gateway fails",
@@ -408,11 +424,9 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
       });
 
       expect(mocks.acquireGatewayLock).not.toHaveBeenCalled();
-      await expect(gatewayWorkshop.inspectSkillProposal(proposal.record.id)).resolves.toMatchObject(
-        {
-          record: { status: "pending" },
-        },
-      );
+      await expect(
+        gatewayWorkshop.inspectSkillProposal(proposal.record.id, gatewayWorkshopScope()),
+      ).resolves.toMatchObject({ record: { status: "pending" } });
     },
   );
 

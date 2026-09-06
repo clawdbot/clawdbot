@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvOverride } from "../config/test-helpers.js";
 import { ExpectedCliError } from "./failure-output.js";
 import { registerGatewayCli } from "./gateway-cli.js";
@@ -123,6 +124,8 @@ function firstMockArg(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown
 }
 
 describe("gateway-cli coverage", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
   beforeEach(() => {
     gatewayProgram = createGatewayProgram();
     callGateway.mockReset();
@@ -648,6 +651,38 @@ describe("gateway-cli coverage", () => {
     expect(runtimeErrors).toHaveLength(0);
     expect(callGateway).not.toHaveBeenCalled();
   });
+
+  it.each(["--log-lines", "--log-bytes"])(
+    "rejects an explicitly empty gateway diagnostics export %s",
+    async (flag) => {
+      callGateway.mockClear();
+      const tempDir = tempDirs.make("openclaw-gateway-cli-empty-");
+      const outputPath = path.join(tempDir, "diagnostics.zip");
+      await withEnvOverride(
+        { OPENCLAW_STATE_DIR: tempDir, OPENCLAW_TEST_FILE_LOG: undefined },
+        async () => {
+          await expectGatewayExit([
+            "gateway",
+            "diagnostics",
+            "export",
+            flag,
+            "",
+            "--output",
+            outputPath,
+            "--json",
+          ]);
+        },
+      );
+
+      expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+        ok: false,
+        error: { type: "cli_error", message: `${flag} must be a positive integer.` },
+      });
+      expect(runtimeErrors).toHaveLength(0);
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(fs.existsSync(outputPath)).toBe(false);
+    },
+  );
 
   it("registers gateway discover and prints json output", async () => {
     discoverGatewayBeacons.mockClear();

@@ -1,8 +1,4 @@
-/**
- * Channel inbound debounce policy.
- *
- * Decides when text events can be delayed/merged before agent dispatch.
- */
+// Channel policy for delaying and merging text before agent dispatch.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isControlCommandMessage } from "../auto-reply/command-detection.js";
 import type { CommandNormalizeOptions } from "../auto-reply/commands-registry.js";
@@ -38,7 +34,7 @@ export function shouldDebounceTextInbound(params: {
   return !isControlCommandMessage(text, params.cfg, params.commandOptions);
 }
 
-/** Creates a channel-scoped inbound debouncer using config/default debounce timing. */
+/** Snapshot timing by default; resolveDebounceMs opts into per-entry timing. */
 export function createChannelInboundDebouncer<T>(
   params: Omit<InboundDebounceCreateParams<T>, "debounceMs"> & {
     cfg: OpenClawConfig;

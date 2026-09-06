@@ -767,9 +767,15 @@ export function installSessionToolResultGuard(
     // Replayed boundaries supply their recorded identity; new ones inherit the owning run.
     args[5] = { runId: transcriptRunId, ...args[5] };
     const append = () => originalAppendCompaction(...args);
-    return opts?.withCompactionPersistence
-      ? opts.withCompactionPersistence(append, isExpectedCompactionAppend)
-      : append();
+    if (!opts?.withCompactionPersistence) {
+      return append();
+    }
+    try {
+      return opts.withCompactionPersistence(append, isExpectedCompactionAppend);
+    } catch (error) {
+      sessionManager.reloadPersistedTranscript();
+      throw error;
+    }
   }) as SessionManager["appendCompaction"];
 
   /**

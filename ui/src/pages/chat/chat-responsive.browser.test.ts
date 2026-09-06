@@ -328,9 +328,10 @@ function queueMatrixCellHtml(
   const disconnected = runtime === "disconnected";
   const editing = variant === "editing";
   const steerMode = mode === "steer";
-  const badge = steerMode
-    ? `<span class="chat-queue__badge chat-queue__badge--steered">Steer</span>`
-    : "";
+  const badge =
+    steerMode && runtime === "connected-idle" && !editing
+      ? `<span class="chat-queue__badge chat-queue__badge--steered">Steer</span>`
+      : "";
   const state = disconnected ? '<span class="chat-queue__state">Waiting for reconnect</span>' : "";
   const copy = editing
     ? `<textarea class="chat-queue__edit-input">Edit ${mode} message</textarea>`
@@ -1991,9 +1992,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body style="margin:0;height:100vh;overflow:hidden">
           <div class="shell shell--chat ${label.startsWith("mobile") ? "shell--mobile-nav shell--merged-chat-chrome" : ""}">
             <main class="content content--chat" style="padding:0">
-              <div class="chat-pane-layout">
-                <header class="chat-pane__header">Session</header>
-                <div class="sidebar-region">
+              <div class="sidebar-region">
+                <div class="sidebar-region__header">
+                  <header class="chat-pane__header">Session</header>
+                </div>
                   <div class="sidebar-region__primary" data-region="main">
                     <section class="card chat">
                       <div class="chat-main">
@@ -2012,7 +2014,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                       </div>
                     </section>
                   </div>
-                </div>
               </div>
             </main>
             <openclaw-toast-host data-toast-placement="shell">
@@ -4246,35 +4247,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     },
   );
 
-  it("keeps newly opened sidebar columns transparent while panel owners retain their surface", async () => {
-    const page = await openBrowserPage(1_000, 700);
-    try {
-      await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-          <div class="sidebar-region" style="--panel: rgb(12, 34, 56)">
-            <main class="sidebar-region__primary">Primary chat</main>
-          </div>
-        </body></html>`,
-      );
-
-      const backgrounds = await page.evaluate(() => {
-        const column = document.createElement("section");
-        column.className = "sidebar-column";
-        column.innerHTML = '<div class="sidebar-panel">Owned panel surface</div>';
-        document.querySelector(".sidebar-region")?.append(column);
-        return {
-          column: getComputedStyle(column).backgroundColor,
-          panel: getComputedStyle(column.firstElementChild!).backgroundColor,
-        };
-      });
-
-      expect(backgrounds.column).toBe("rgba(0, 0, 0, 0)");
-      expect(backgrounds.panel).toBe("rgb(12, 34, 56)");
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
-
   it.each([
     { dock: "narrow", width: 620, height: 600 },
     { dock: "bottom", width: 900, height: 300 },
@@ -4288,7 +4260,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
           <div style="width: ${width}px; height: ${height}px; display: flex;">
             <div class="sidebar-region sidebar-region--${dock} sidebar-region--open" style="--side-panel-height: 360px">
-              <header class="rail-header" data-region-header="main">Chat</header>
               <main class="sidebar-region__primary" data-region="main">Primary chat</main>
               <section class="side-panel">
                 <div class="rail-header side-panel__header" data-region-header="side">Details</div>
@@ -4309,7 +4280,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(sidebar.width).toBeGreaterThanOrEqual(width - 2);
         expect(primary.height).toBeGreaterThan(80);
         expect(sidebar.height).toBeGreaterThan(80);
-        expect(sidebar.bottom - primary.top).toBeLessThan(height);
+        expect(sidebar.bottom - primary.top).toBe(height);
         if (dock === "bottom" && height === 1000) {
           expect(sidebar.height).toBe(360);
         }

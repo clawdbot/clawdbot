@@ -1,8 +1,27 @@
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Locator, Page } from "playwright";
+import type { Browser, Locator, Page } from "playwright";
 import { expect } from "vitest";
+import {
+  takeControlUiElementScreenshot,
+  takeControlUiViewportScreenshot,
+  waitForControlUiProofSurface,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
+export function createSessionOwnershipProofContext(
+  owner: { readonly artifactDir: string; readonly browser: Browser },
+  directory: "drafts-ux" | "session-owner-stack",
+) {
+  const viewport = { height: 800, width: 1200 };
+  return owner.browser.newContext({
+    viewport,
+    ...(captureUiProofEnabled
+      ? { recordVideo: { dir: path.join(owner.artifactDir, directory), size: viewport } }
+      : {}),
+  });
+}
 
 type AvatarFixture = {
   id: string;
@@ -42,17 +61,18 @@ export async function avatarLabelCenterDelta(row: Locator) {
 
 export async function captureUiProof(
   owner: { readonly artifactDir: string },
-  page: Page,
+  surface: Locator,
   fileName: string,
+  content: readonly Locator[],
 ) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(owner.artifactDir, "drafts-ux", fileName),
-  });
+  await mkdir(path.join(owner.artifactDir, "drafts-ux"), { recursive: true });
+  await writeFile(
+    path.join(owner.artifactDir, "drafts-ux", fileName),
+    await takeControlUiViewportScreenshot(surface.page(), surface, content),
+  );
 }
 
 export async function captureSessionOwnerProof(
@@ -63,25 +83,29 @@ export async function captureSessionOwnerProof(
   if (!captureUiProofEnabled) {
     return;
   }
-  await page.locator(".sidebar-sessions").screenshot({
-    animations: "disabled",
-    path: path.join(owner.artifactDir, "session-owner-stack", fileName),
-  });
+  await mkdir(path.join(owner.artifactDir, "session-owner-stack"), { recursive: true });
+  await writeFile(
+    path.join(owner.artifactDir, "session-owner-stack", fileName),
+    await takeControlUiElementScreenshot(page, page.locator(".sidebar-sessions"), [
+      page.locator(".sidebar-recent-session").first(),
+    ]),
+  );
 }
 
 export async function captureSessionOwnerPageProof(
   owner: { readonly artifactDir: string },
-  page: Page,
+  surface: Locator,
   fileName: string,
+  content: readonly Locator[],
 ) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(owner.artifactDir, "session-owner-stack", fileName),
-  });
+  await mkdir(path.join(owner.artifactDir, "session-owner-stack"), { recursive: true });
+  await writeFile(
+    path.join(owner.artifactDir, "session-owner-stack", fileName),
+    await takeControlUiViewportScreenshot(surface.page(), surface, content),
+  );
 }
 
 export async function openSidebarSortMenu(page: Page) {
@@ -89,6 +113,8 @@ export async function openSidebarSortMenu(page: Page) {
   await expect.poll(() => filterAndSort.count(), { timeout: 2_000 }).toBe(1);
   await filterAndSort.click();
   const menu = page.locator(".sidebar-session-sort-menu");
-  await menu.waitFor();
+  await waitForControlUiProofSurface(menu.locator('[part="menu"]'), [
+    menu.locator("wa-dropdown-item").first(),
+  ]);
   return menu;
 }

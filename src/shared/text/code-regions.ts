@@ -8,8 +8,11 @@ export interface CodeRegion {
 }
 
 /** Finds CommonMark block-aware fenced, indented, and inline code regions. */
-export function findCodeRegions(text: string): ReturnType<typeof findMarkdownCodeRegions> {
-  return findMarkdownCodeRegions(text);
+export function findCodeRegions(
+  text: string,
+  options?: Parameters<typeof findMarkdownCodeRegions>[1],
+): ReturnType<typeof findMarkdownCodeRegions> {
+  return findMarkdownCodeRegions(text, options);
 }
 
 /** Returns true when a character offset falls inside one of the discovered code regions. */

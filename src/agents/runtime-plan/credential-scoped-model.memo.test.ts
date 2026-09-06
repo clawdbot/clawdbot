@@ -1,8 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  createPreparedRuntimeModelMaterializer,
-  createPreparedRuntimeRouteModelMemo,
-} from "./credential-scoped-model.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { createPreparedRuntimeModelMaterializer } from "./credential-scoped-model.js";
 import type { AgentRuntimeAuthPlan } from "./types.js";
 
 // Fresh object per call, matching prepare-auth minting new plans every turn.
@@ -31,8 +29,10 @@ const routedModel = {
   baseUrl: "https://chatgpt.com/backend-api/codex",
 };
 
+type RouteMemo = Map<string, Promise<typeof routedModel>>;
+
 function buildMaterializer(params: {
-  memo?: ReturnType<typeof createPreparedRuntimeRouteModelMemo>;
+  memo?: RouteMemo;
   providerOwnsDynamicModelRefresh?: boolean;
   resolveModel: () => Promise<{ model?: typeof routedModel | null; error?: string }>;
 }) {
@@ -50,21 +50,19 @@ function buildMaterializer(params: {
 }
 
 describe("generation route-model memo", () => {
-  it("shares one resolution across materializer instances for value-identical plans", async () => {
-    const memo = createPreparedRuntimeRouteModelMemo();
-    const resolveModel = vi.fn(async () => ({ model: routedModel }));
-    // Two materializers = two runs of the same generation; two fresh plan
-    // objects = the per-turn minting that defeats identity-keyed caching.
-    const runA = buildMaterializer({ memo, resolveModel });
-    const runB = buildMaterializer({ memo, resolveModel });
-
-    await expect(runA.materialize(buildPlan())).resolves.toBe(routedModel);
-    await expect(runB.materialize(buildPlan())).resolves.toBe(routedModel);
+  it("coalesces pending resolution across runs with value-identical plans", async () => {
+    const memo: RouteMemo = new Map();
+    const pending = createDeferred<{ model: typeof routedModel }>();
+    const resolveModel = vi.fn(() => pending.promise);
+    const first = buildMaterializer({ memo, resolveModel }).materialize(buildPlan());
+    const second = buildMaterializer({ memo, resolveModel }).materialize(buildPlan());
     expect(resolveModel).toHaveBeenCalledTimes(1);
+    pending.resolve({ model: routedModel });
+    await expect(Promise.all([first, second])).resolves.toEqual([routedModel, routedModel]);
   });
 
   it("keeps distinct auth profiles as distinct memo entries", async () => {
-    const memo = createPreparedRuntimeRouteModelMemo();
+    const memo: RouteMemo = new Map();
     const resolveModel = vi.fn(async () => ({ model: routedModel }));
     const run = buildMaterializer({ memo, resolveModel });
 
@@ -74,7 +72,7 @@ describe("generation route-model memo", () => {
   });
 
   it("keeps delimiter-containing route identities as distinct memo entries", async () => {
-    const memo = createPreparedRuntimeRouteModelMemo();
+    const memo: RouteMemo = new Map();
     const resolveModel = vi.fn(async () => ({ model: routedModel }));
     const run = buildMaterializer({ memo, resolveModel });
 
@@ -94,7 +92,7 @@ describe("generation route-model memo", () => {
   });
 
   it("preserves provider-owned dynamic-model refreshes across turns", async () => {
-    const memo = createPreparedRuntimeRouteModelMemo();
+    const memo: RouteMemo = new Map();
     const resolveModel = vi.fn(async () => ({ model: routedModel }));
     const runA = buildMaterializer({ memo, resolveModel, providerOwnsDynamicModelRefresh: true });
     const runB = buildMaterializer({ memo, resolveModel, providerOwnsDynamicModelRefresh: true });
@@ -105,7 +103,7 @@ describe("generation route-model memo", () => {
   });
 
   it("never pins a rejected resolution for the generation", async () => {
-    const memo = createPreparedRuntimeRouteModelMemo();
+    const memo: RouteMemo = new Map();
     const resolveModel = vi
       .fn()
       .mockResolvedValueOnce({ error: "transient provider failure" })
@@ -114,12 +112,13 @@ describe("generation route-model memo", () => {
     const runB = buildMaterializer({ memo, resolveModel });
 
     await expect(runA.materialize(buildPlan())).rejects.toThrow("transient provider failure");
+    expect(memo.size).toBe(0);
     await expect(runB.materialize(buildPlan())).resolves.toBe(routedModel);
     expect(resolveModel).toHaveBeenCalledTimes(2);
   });
 
   it("covers route-less plans so non-OpenAI providers share resolutions too", async () => {
-    const memo = createPreparedRuntimeRouteModelMemo();
+    const memo: RouteMemo = new Map();
     const resolveModel = vi.fn(async () => ({ model: routedModel }));
     const runA = buildMaterializer({ memo, resolveModel });
     const runB = buildMaterializer({ memo, resolveModel });
@@ -133,32 +132,82 @@ describe("generation route-model memo", () => {
     expect(resolveModel).toHaveBeenCalledTimes(1);
   });
 
-  it("never serves one run's base model to another run", async () => {
-    const memo = createPreparedRuntimeRouteModelMemo();
-    const resolveModel = vi.fn(async () => ({ model: routedModel }));
-    // No forwarded/requested profile and no profile-scoped metadata:
-    // willResolve is false, so materialization may return the per-run base
-    // model — which must never enter the generation memo.
-    const buildBaseReturningMaterializer = (base: typeof routedModel) =>
-      createPreparedRuntimeModelMaterializer({
-        provider: "openai",
-        modelId: "gpt-5.5",
-        getModel: () => base,
-        nativeModelOwned: false,
-        providerUsesProfileScopedModelMetadata: false,
-        generationRouteModelMemo: memo,
-        resolveModel,
-      });
-    const baseA = { ...routedModel };
-    const baseB = { ...routedModel };
-    const runA = buildBaseReturningMaterializer(baseA);
-    const runB = buildBaseReturningMaterializer(baseB);
-    const plainPlan = () =>
-      buildPlan({ forwardedAuthProfileId: undefined, selectedAuthMode: undefined });
+  it.each([false, true])(
+    "keeps each run's base model private (native ownership %s)",
+    async (nativeModelOwned) => {
+      const memo: RouteMemo = new Map();
+      const resolveModel = vi.fn(async () => ({ model: routedModel }));
+      if (nativeModelOwned) {
+        await buildMaterializer({ memo, resolveModel }).materialize(buildPlan());
+      }
+      const buildBaseReturningMaterializer = (base: typeof routedModel) =>
+        createPreparedRuntimeModelMaterializer({
+          provider: "openai",
+          modelId: "gpt-5.5",
+          getModel: () => base,
+          nativeModelOwned,
+          providerUsesProfileScopedModelMetadata: nativeModelOwned,
+          generationRouteModelMemo: memo,
+          resolveModel,
+        });
+      const baseA = { ...routedModel };
+      const baseB = { ...routedModel };
+      const plan = () =>
+        nativeModelOwned
+          ? buildPlan()
+          : buildPlan({ forwardedAuthProfileId: undefined, selectedAuthMode: undefined });
+      await expect(buildBaseReturningMaterializer(baseA).materialize(plan())).resolves.toBe(baseA);
+      await expect(buildBaseReturningMaterializer(baseB).materialize(plan())).resolves.toBe(baseB);
+      expect(resolveModel).toHaveBeenCalledTimes(nativeModelOwned ? 1 : 0);
+      expect(memo.size).toBe(nativeModelOwned ? 1 : 0);
+    },
+  );
 
-    await expect(runA.materialize(plainPlan())).resolves.toBe(baseA);
-    await expect(runB.materialize(plainPlan())).resolves.toBe(baseB);
-    expect(resolveModel).not.toHaveBeenCalled();
+  it("retains 64 keys and evicts the oldest when a new key is resolved", async () => {
+    const memo: RouteMemo = new Map();
+    const resolveModel = vi.fn(async () => ({ model: routedModel }));
+    const turn = (profile: number) =>
+      buildMaterializer({ memo, resolveModel }).materialize(
+        buildPlan({ forwardedAuthProfileId: `openai:profile-${profile}` }),
+      );
+    for (let profile = 0; profile < 64; profile += 1) {
+      await turn(profile);
+    }
+    expect(memo.size).toBe(64);
+    await turn(0);
+    await turn(63);
+    expect(resolveModel).toHaveBeenCalledTimes(64);
+    await turn(64);
+    expect(memo.size).toBe(64);
+    await turn(0);
+    await turn(64);
+    expect(resolveModel).toHaveBeenCalledTimes(66);
+    expect(memo.size).toBe(64);
+  });
+
+  it("does not let an evicted promise's late rejection remove its replacement", async () => {
+    const memo: RouteMemo = new Map();
+    const pending = createDeferred<{ model: typeof routedModel }>();
+    const resolveModel = vi
+      .fn<() => Promise<{ model: typeof routedModel }>>()
+      .mockImplementationOnce(() => pending.promise)
+      .mockResolvedValue({ model: routedModel });
+    const turn = (profile: number) =>
+      buildMaterializer({ memo, resolveModel }).materialize(
+        buildPlan({ forwardedAuthProfileId: `openai:profile-${profile}` }),
+      );
+    const first = expect(turn(0)).rejects.toThrow("retired resolution failed");
+    for (let profile = 1; profile <= 64; profile += 1) {
+      await turn(profile);
+    }
+    const replacement = { ...routedModel };
+    resolveModel.mockResolvedValueOnce({ model: replacement });
+    await expect(turn(0)).resolves.toBe(replacement);
+    pending.reject(new Error("retired resolution failed"));
+    await first;
+    expect(memo.size).toBe(64);
+    await expect(turn(0)).resolves.toBe(replacement);
+    expect(resolveModel).toHaveBeenCalledTimes(66);
   });
 
   it("keeps run-local behavior unchanged when no memo is provided", async () => {

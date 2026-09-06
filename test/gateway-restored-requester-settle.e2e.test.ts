@@ -3,11 +3,17 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeSubagentSessionEntry } from "../src/agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import { saveSubagentRegistryToSqlite } from "../src/agents/subagents/registry/subagent-registry.store.sqlite.js";
+import {
+  loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryToSqlite,
+} from "../src/agents/subagents/registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../src/agents/subagents/registry/subagent-registry.types.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
+import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
+import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import type { Deferred } from "../src/shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
+import { writeOpenAiResponsesSse } from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -21,6 +27,8 @@ const RESTORED_WAKE_MARKER = "Every subagent spawned from this session has now s
 
 type HeldModelServer = {
   active: () => number;
+  closed: (index: number) => boolean;
+  requestAgeMs: (index: number) => number;
   close: () => Promise<void>;
   countRequestsContaining: (marker: string) => number;
   peakRestored: () => number;
@@ -42,6 +50,109 @@ afterEach(async () => {
 });
 
 describe("Gateway restored requester settlement", () => {
+  it.each(["final", "runtime timeout", "stop"] as const)(
+    "keeps restored completion execution under the normal runtime budget: %s",
+    { timeout: TEST_TIMEOUT_MS },
+    async (outcome) => {
+      const announceTimeoutMs = 2_000;
+      const modelServer = await startHeldModelServer();
+      modelServers.push(modelServer);
+      const cfg = createTestConfig(modelServer.url);
+      cfg.agents!.defaults!.timeoutSeconds = 12;
+      cfg.agents!.defaults!.subagents = { announceTimeoutMs };
+      const instance = await createOpenClawTestInstance({
+        name: `gateway-restored-deadline-${outcome.replaceAll(" ", "-")}`,
+        config: cfg,
+        env: { OPENCLAW_SKIP_PROVIDERS: undefined, OPENCLAW_TEST_MINIMAL_GATEWAY: undefined },
+      });
+      instances.push(instance);
+      await seedRestoredRequesters(instance, 1);
+      await instance.startGateway();
+      const client = await connectGatewayClient({
+        url: instance.url,
+        token: instance.gatewayToken,
+      });
+      const sessionKey = "agent:main:gateway-restored-requester-0";
+      const session = async () =>
+        (
+          await client.request<SessionsListResult>("sessions.list", { agentId: "main" })
+        ).sessions.find((row) => row.key === sessionKey);
+      try {
+        await vi.waitFor(() => expect(modelServer.requestCount()).toBe(1), { timeout: 30_000 });
+        const initial = await session();
+        expect(initial).toMatchObject({ status: "running", hasActiveRun: true });
+        // This elapsed wait is the regression itself: the real model socket must
+        // remain open beyond the announcement budget, without a new sender turn.
+        await vi.waitFor(
+          () => expect(modelServer.requestAgeMs(0)).toBeGreaterThan(announceTimeoutMs),
+          { timeout: announceTimeoutMs + 5_000, interval: 20 },
+        );
+        expect(modelServer.closed(0), instance.logs()).toBe(false);
+        expect(modelServer.requestCount()).toBe(1);
+        if (outcome === "final") {
+          modelServer.release(0);
+        } else if (outcome === "stop") {
+          expect(await client.request("chat.abort", { sessionKey })).toMatchObject({
+            aborted: true,
+          });
+        }
+        const expectedStatus =
+          outcome === "final" ? "done" : outcome === "stop" ? "killed" : "timeout";
+        await vi.waitFor(
+          async () =>
+            expect(await session()).toMatchObject({ status: expectedStatus, hasActiveRun: false }),
+          { timeout: 20_000, interval: 50 },
+        );
+        await vi.waitFor(() => expect(modelServer.closed(0)).toBe(true), { timeout: 5_000 });
+        const history = await client.request<{
+          messages: Array<{ role: string; content?: Array<{ type: string; text?: string }> }>;
+        }>("chat.history", { sessionKey });
+        const finals = history.messages.filter(
+          (message) =>
+            message.role === "assistant" &&
+            message.content?.some((part) => part.text === "restored requester response 0"),
+        );
+        expect(finals).toHaveLength(outcome === "final" ? 1 : 0);
+
+        // A terminal wake must release its session lane for ordinary follow-up.
+        const followUp = client.request(
+          "agent",
+          {
+            sessionKey,
+            idempotencyKey: `restored-deadline-followup-${outcome}`,
+            message: PROBE_MARKER,
+            deliver: false,
+          },
+          { expectFinal: true },
+        );
+        void followUp.catch(() => {});
+        try {
+          await vi.waitFor(() => expect(modelServer.requestCount()).toBe(2), { timeout: 10_000 });
+          modelServer.release(1);
+          await expect(followUp).resolves.toMatchObject({ status: "ok" });
+          expect(modelServer.requestCount()).toBe(2);
+        } finally {
+          modelServer.releaseAll();
+          await Promise.allSettled([followUp]);
+        }
+      } finally {
+        await disconnectGatewayClient(client);
+        modelServer.releaseAll();
+        await instance.stopGateway();
+      }
+      try {
+        const retained = loadSubagentRegistryFromSqlite().get("run-gateway-restored-settle-0");
+        expect(retained?.execution.outcome).toEqual({ status: "ok" });
+        expect(retained?.completion?.resultText).toBe("done");
+        if (outcome === "final") {
+          expect(retained?.requesterSettleWake).toBeUndefined();
+        }
+      } finally {
+        closeOpenClawStateDatabaseForTest();
+      }
+    },
+  );
+
   it(
     "runs at most two restored wakes while leaving the third queued",
     { timeout: TEST_TIMEOUT_MS },
@@ -58,57 +169,7 @@ describe("Gateway restored requester settlement", () => {
       });
       instances.push(instance);
 
-      instance.state.applyEnv();
-      try {
-        const endedAt = Date.now();
-        const restoredRuns = Array.from({ length: 3 }, (_, index): SubagentRunRecord => {
-          const runId = `run-gateway-restored-settle-${index}`;
-          return {
-            runId,
-            childSessionKey: `agent:main:subagent:gateway-restored-settle-${index}`,
-            requesterSessionKey: `agent:main:gateway-restored-requester-${index}`,
-            requesterDisplayKey: `gateway-restored-requester-${index}`,
-            task: "resume a durable requester wake through the Gateway CLI",
-            cleanup: "keep",
-            createdAt: endedAt - 1_000,
-            endedReason: "subagent-complete",
-            execution: {
-              status: "terminal",
-              startedAt: endedAt - 500,
-              endedAt,
-              outcome: { status: "ok" },
-            },
-            expectsCompletionMessage: true,
-            completion: { required: true, resultText: "done", capturedAt: endedAt },
-            delivery: { status: "delivered", deliveredAt: endedAt },
-            cleanupHandled: true,
-            cleanupCompletedAt: endedAt,
-            requesterSettleWake: {
-              status: "pending",
-              attemptCount: 0,
-              batchRunIds: [runId],
-              requesterYieldBatch: true,
-              afterRequesterYield: true,
-              rearmGeneration: 1,
-            },
-          };
-        });
-        saveSubagentRegistryToSqlite(
-          new Map(restoredRuns.map((entry) => [entry.runId, entry] as const)),
-        );
-        for (const [index, entry] of restoredRuns.entries()) {
-          await writeSubagentSessionEntry({
-            stateDir: instance.stateDir,
-            agentId: "main",
-            sessionKey: entry.requesterSessionKey,
-            sessionId: `gateway-restored-requester-${index}`,
-            defaultSessionId: `gateway-restored-requester-${index}`,
-          });
-        }
-      } finally {
-        closeOpenClawStateDatabaseForTest();
-        instance.state.restoreEnv();
-      }
+      await seedRestoredRequesters(instance, 3);
 
       await instance.startGateway();
       await vi.waitFor(
@@ -136,6 +197,61 @@ describe("Gateway restored requester settlement", () => {
     },
   );
 });
+
+async function seedRestoredRequesters(instance: OpenClawTestInstance, count: number) {
+  instance.state.applyEnv();
+  try {
+    const endedAt = Date.now();
+    const restoredRuns = Array.from({ length: count }, (_, index): SubagentRunRecord => {
+      const runId = `run-gateway-restored-settle-${index}`;
+      return {
+        runId,
+        childSessionKey: `agent:main:subagent:gateway-restored-settle-${index}`,
+        requesterSessionKey: `agent:main:gateway-restored-requester-${index}`,
+        requesterDisplayKey: `gateway-restored-requester-${index}`,
+        task: "resume a durable requester wake through the Gateway CLI",
+        cleanup: "keep",
+        createdAt: endedAt - 1_000,
+        endedReason: "subagent-complete",
+        execution: {
+          status: "terminal",
+          startedAt: endedAt - 500,
+          endedAt,
+          outcome: { status: "ok" },
+        },
+        expectsCompletionMessage: true,
+        completion: { required: true, resultText: "done", capturedAt: endedAt },
+        delivery: { status: "delivered", deliveredAt: endedAt },
+        cleanupHandled: true,
+        cleanupCompletedAt: endedAt,
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 0,
+          batchRunIds: [runId],
+          requesterYieldBatch: true,
+          afterRequesterYield: true,
+          rearmGeneration: 1,
+        },
+      };
+    });
+    saveSubagentRegistryToSqlite(
+      new Map(restoredRuns.map((entry) => [entry.runId, entry] as const)),
+    );
+    for (const [index, entry] of restoredRuns.entries()) {
+      await writeSubagentSessionEntry({
+        stateDir: instance.stateDir,
+        agentId: "main",
+        sessionKey: entry.requesterSessionKey,
+        sessionId: `gateway-restored-requester-${index}`,
+        defaultSessionId: `gateway-restored-requester-${index}`,
+      });
+    }
+  } finally {
+    // Keep this one state lease through the Gateway run and retained-result reads;
+    // instance.cleanup owns restoration after every process has stopped.
+    closeOpenClawStateDatabaseForTest();
+  }
+}
 
 function createTestConfig(baseUrl: string): OpenClawConfig {
   return {
@@ -180,6 +296,8 @@ function createTestConfig(baseUrl: string): OpenClawConfig {
 async function startHeldModelServer(): Promise<HeldModelServer> {
   const releases: Deferred[] = [];
   const requestBodies: string[] = [];
+  const responses: ServerResponse[] = [];
+  const requestStartedAt: number[] = [];
   let active = 0;
   let activeRestored = 0;
   let peakRestored = 0;
@@ -213,6 +331,8 @@ async function startHeldModelServer(): Promise<HeldModelServer> {
     const index = requestCount;
     requestCount += 1;
     requestBodies[index] = body;
+    responses[index] = response;
+    requestStartedAt[index] = Date.now();
     const release = createDeferred();
     releases[index] = release;
     active += 1;
@@ -223,7 +343,9 @@ async function startHeldModelServer(): Promise<HeldModelServer> {
     }
     try {
       await release.promise;
-      writeModelResponse(response, index);
+      if (!response.destroyed) {
+        writeModelResponse(response, index);
+      }
     } finally {
       active -= 1;
       if (isRestored) {
@@ -244,6 +366,8 @@ async function startHeldModelServer(): Promise<HeldModelServer> {
   };
   return {
     active: () => active,
+    closed: (index) => responses[index]?.destroyed ?? false,
+    requestAgeMs: (index) => Date.now() - (requestStartedAt[index] ?? Date.now()),
     countRequestsContaining: (marker) =>
       requestBodies.filter((body) => body.includes(marker)).length,
     peakRestored: () => peakRestored,
@@ -301,12 +425,5 @@ function writeModelResponse(response: ServerResponse, sequence: number): void {
       },
     },
   ];
-  response.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  response.end(
-    `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
-  );
+  writeOpenAiResponsesSse(response, events);
 }

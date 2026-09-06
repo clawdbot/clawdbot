@@ -41,7 +41,7 @@ import {
   withPluginInstallRecords,
 } from "../plugins/installed-plugin-index-records.js";
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
-import { resolveInstalledPluginLifecycleOwnership } from "../plugins/installed-plugin-package-ownership.js";
+import { createInstalledPluginOwnershipResolver } from "../plugins/installed-plugin-package-ownership.js";
 import { configReferencesNpmInstallPath } from "../plugins/installs.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import {
@@ -208,6 +208,7 @@ async function runPluginUpdateCommandUnlocked(
   params: RunPluginUpdateCommandParams,
   lease?: PluginLifecycleLeaseContext,
 ) {
+  const assertOwned = lease?.assertOwned.bind(lease);
   if (!params.opts.dryRun) {
     assertConfigWriteAllowedInCurrentMode();
   }
@@ -220,7 +221,7 @@ async function runPluginUpdateCommandUnlocked(
         writeOptions: {
           ...writeOptions,
           assertConfigPathForWrite: () => {
-            lease?.assertOwned();
+            assertOwned?.();
             writeOptions.assertConfigPathForWrite?.();
           },
         },
@@ -253,11 +254,12 @@ async function runPluginUpdateCommandUnlocked(
   });
   const installOwnerByPluginId = new Map<string, string>();
   const rejectedPluginIds = new Map<string, string>();
+  const ownershipResolver = createInstalledPluginOwnershipResolver(installedPluginIndex);
   for (const pluginId of new Set([
     ...installedPluginIndex.plugins.map((plugin) => plugin.pluginId),
     ...Object.keys(pluginInstallRecords),
   ])) {
-    const ownership = resolveInstalledPluginLifecycleOwnership(installedPluginIndex, pluginId);
+    const ownership = ownershipResolver.resolveLifecycle(pluginId);
     if (!ownership.ok) {
       rejectedPluginIds.set(pluginId, ownership.error);
       continue;
@@ -298,10 +300,10 @@ async function runPluginUpdateCommandUnlocked(
   }
   const packageUpdateSnapshot = packageUpdateSnapshotResult.value;
   const packagePluginIds = Object.fromEntries(
-    pluginSelection.pluginIds.flatMap((pluginId) => {
-      const ownership = resolveInstalledPluginLifecycleOwnership(installedPluginIndex, pluginId);
-      return ownership.ok ? [[ownership.value.installOwner, ownership.value.pluginIds]] : [];
-    }),
+    [...packageUpdateSnapshot.values()].map((ownership) => [
+      ownership.installOwner,
+      [...ownership.pluginIds],
+    ]),
   );
   const selectedHooks = readHookInstalls();
   const hookSelection = resolveHookPackUpdateSelection({
@@ -461,6 +463,7 @@ async function runPluginUpdateCommandUnlocked(
                 },
               },
               deferredInstallTransactions,
+              assertOwned,
             ),
           )
         : { config: cfgWithPluginInstallRecords, changed: false, outcomes: [] };
@@ -524,6 +527,7 @@ async function runPluginUpdateCommandUnlocked(
                 },
               },
               deferredInstallTransactions,
+              assertOwned,
             ),
           )
         : { config: pluginResult.config, changed: false, outcomes: [] };

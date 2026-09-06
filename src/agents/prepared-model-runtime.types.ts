@@ -1,5 +1,6 @@
 import type { PreparedMessageToolCatalog } from "../channels/plugins/message-action-discovery.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { Model } from "../llm/types.js";
 import type { prepareMediaCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
@@ -11,7 +12,6 @@ import type { AgentHarnessPluginSelection } from "./harness/runtime-plugin-load-
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import type { PublishedModelCatalogOwnerCandidate } from "./prepared-model-catalog.types.js";
 import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.configured.js";
-import type { PreparedRuntimeRouteModelMemo } from "./runtime-plan/credential-scoped-model.js";
 import type { AuthStorage } from "./sessions/auth-storage.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
@@ -70,13 +70,8 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
   /** Inline provider projection prepared once for all resolutions owned by this snapshot. */
   inlineProviderModels: readonly InlineModelEntry[];
   createStores: () => PreparedModelRuntimeStores;
-  /**
-   * Generation-owned memo of materialized route models. Auth plans mint fresh
-   * objects per turn, so without this every run repeats resolveModelAsync for
-   * the same decision inputs (~420ms/turn measured). Per-run snapshot wrappers
-   * spread this reference through; a new generation replaces the memo.
-   */
-  routeModelResolutionMemo?: PreparedRuntimeRouteModelMemo;
+  /** Bounded metadata shared by runs; replacing the model/auth generation drops the memo. */
+  routeModelResolutionMemo?: Map<string, Promise<Model>>;
 }>;
 
 /** Closed Gateway turn facts published atomically for one configured agent. */
@@ -177,6 +172,7 @@ export type PreparedModelRuntimeOwner = {
   pendingPluginGeneration?: PreparedModelRuntimePluginGeneration;
   pending?: Promise<PreparedModelRuntimeSnapshot>;
   buildCompletion?: Promise<void>;
+  admissionCount?: number;
   leaseCount?: number;
 };
 

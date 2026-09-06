@@ -170,22 +170,43 @@ describe("LabsPage", () => {
     expect(codeModeToggle(page).checked).toBe(true);
   });
 
-  it("delegates refresh ownership to the canonical patch flow when disabling", async () => {
-    const { page, runtimeConfig } = await mountPage({
-      tools: { codeMode: { enabled: true } },
-    });
-    const toggle = codeModeToggle(page);
-
-    toggle.checked = false;
-    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-
-    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
-    expect(runtimeConfig.patch).toHaveBeenCalledWith({
-      raw: { tools: { codeMode: { enabled: null } } },
+  it.each([
+    {
+      label: "Code Mode",
+      sourceConfig: { tools: { codeMode: { enabled: true } } },
+      expectedPatch: { tools: { codeMode: { enabled: null } } },
       note: "labs: update codeMode",
-    });
-    expect(runtimeConfig.refresh).not.toHaveBeenCalled();
-  });
+    },
+    {
+      label: "Lean tools for local models",
+      sourceConfig: { agents: { defaults: { experimental: { localModelLean: true } } } },
+      expectedPatch: { agents: { defaults: { experimental: { localModelLean: null } } } },
+      note: "labs: update localModelLean",
+    },
+    {
+      label: "Custom plugin UI",
+      sourceConfig: { gateway: { controlUi: { experimental: { customPlugins: true } } } },
+      expectedPatch: { gateway: { controlUi: { experimental: { customPlugins: null } } } },
+      note: "labs: update customPluginUi",
+    },
+  ])(
+    "restores the default through the canonical patch flow when disabling $label",
+    async (testCase) => {
+      const { page, runtimeConfig } = await mountPage(testCase.sourceConfig);
+      const toggle = labToggle(page, testCase.label);
+      expect(toggle.checked).toBe(true);
+
+      toggle.checked = false;
+      toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+
+      await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+      expect(runtimeConfig.patch).toHaveBeenCalledWith({
+        raw: testCase.expectedPatch,
+        note: testCase.note,
+      });
+      expect(runtimeConfig.refresh).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not publish a retired save failure after a same-client reconnect", async () => {
     const pendingPatch = deferred<boolean>();
@@ -222,7 +243,7 @@ describe("LabsPage", () => {
       // Enabling must pin the mode: resolveToolSearchConfig defaults an unset
       // mode to "code", so a bare `enabled: true` would select the surface with
       // the weakest recall rather than the one this row advertises.
-      label: "Tool Search",
+      label: "Tool Search for all models",
       sourceConfig: { tools: { toolSearch: { enabled: false } } },
       expectedPatch: { tools: { toolSearch: { enabled: true, mode: "directory" } } },
       note: "labs: update toolSearch",
@@ -244,6 +265,12 @@ describe("LabsPage", () => {
       sourceConfig: {},
       expectedPatch: { gateway: { cliAgents: { enabled: true } } },
       note: "labs: update cliAgents",
+    },
+    {
+      label: "Custom plugin UI",
+      sourceConfig: {},
+      expectedPatch: { gateway: { controlUi: { experimental: { customPlugins: true } } } },
+      note: "labs: update customPluginUi",
     },
     {
       // Not a boolean gate: the on state is the conservative `direct` mode, so
@@ -268,6 +295,7 @@ describe("LabsPage", () => {
   ])("writes the on value at the registered config path when enabling $label", async (testCase) => {
     const { page, runtimeConfig } = await mountPage(testCase.sourceConfig);
     const toggle = labToggle(page, testCase.label);
+    expect(toggle.checked).toBe(false);
 
     toggle.checked = true;
     toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
@@ -315,14 +343,18 @@ describe("LabsPage", () => {
     const { page } = await mountPage({});
     const rows = [...page.querySelectorAll(".settings-row")];
 
-    const restartRows = rows.filter((row) => row.textContent?.includes("restart"));
-    expect(restartRows).toHaveLength(3);
+    const restartRows = rows.filter((row) => row.textContent?.toLowerCase().includes("restart"));
+    expect(restartRows).toHaveLength(4);
     expect(restartRows.map((row) => row.textContent)).toEqual(
       expect.arrayContaining([
         expect.stringContaining("Message audit metadata"),
+        expect.stringContaining("Custom plugin UI"),
         expect.stringContaining("Host Desktop"),
         expect.stringContaining("Cloud Worker Desktop"),
       ]),
+    );
+    expect(labRow(page, "Custom plugin UI").textContent).toContain(
+      "Restart the Gateway and reload this browser tab",
     );
   });
 
@@ -340,74 +372,6 @@ describe("LabsPage", () => {
     });
     expect(labRow(overridden.page, "Code Mode").textContent).toContain("Default: Disabled");
     expect(labRow(overridden.page, "Swarm").textContent).toContain("Default: Enabled");
-  });
-
-  it.each([{ model: "ollama/qwen3:8b" }, { model: { primary: "ollama/qwen3:8b", fallbacks: [] } }])(
-    "treats onboarding-owned local model lean as inherited for $model",
-    async ({ model }) => {
-      const { page } = await mountPage({
-        wizard: { localModelLeanAutoModel: "ollama/qwen3:8b" },
-        agents: {
-          defaults: {
-            model,
-            experimental: { localModelLean: true },
-          },
-        },
-      });
-      const row = labRow(page, "Lean tools for local models");
-
-      expect(row.textContent).toContain("Using default: Enabled");
-    },
-  );
-
-  it("releases onboarding ownership when local model lean is disabled", async () => {
-    const { page, runtimeConfig } = await mountPage({
-      wizard: { localModelLeanAutoModel: "ollama/qwen3:8b" },
-      agents: {
-        defaults: {
-          model: "ollama/qwen3:8b",
-          experimental: { localModelLean: true },
-        },
-      },
-    });
-    const toggle = labToggle(page, "Lean tools for local models");
-
-    toggle.checked = false;
-    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-
-    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
-    expect(runtimeConfig.patch).toHaveBeenCalledWith({
-      raw: {
-        agents: { defaults: { experimental: { localModelLean: false } } },
-        wizard: { localModelLeanAutoModel: null },
-      },
-      note: "labs: update localModelLean",
-    });
-  });
-
-  it("clears a stale onboarding marker when restoring local model lean", async () => {
-    const { page, runtimeConfig } = await mountPage({
-      wizard: { localModelLeanAutoModel: "ollama/old-model" },
-      agents: {
-        defaults: {
-          model: "openai/gpt-5",
-          experimental: { localModelLean: true },
-        },
-      },
-    });
-
-    const toggle = labToggle(page, "Lean tools for local models");
-    toggle.checked = false;
-    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-
-    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
-    expect(runtimeConfig.patch).toHaveBeenCalledWith({
-      raw: {
-        agents: { defaults: { experimental: { localModelLean: null } } },
-        wizard: { localModelLeanAutoModel: null },
-      },
-      note: "labs: update localModelLean",
-    });
   });
 });
 
@@ -573,10 +537,15 @@ describe("LabsPage tool search enablement", () => {
     },
     { label: "boolean false", config: { tools: { toolSearch: false } }, expected: false },
     { label: "unset", config: {}, expected: false },
+    {
+      label: "local model without a global override",
+      config: { agents: { defaults: { model: "ollama/qwen3.5:4b" } } },
+      expected: false,
+    },
   ])("reads $label as $expected", async ({ config, expected }) => {
     const { page, provider } = await mountPage(config);
 
-    expect(labToggle(page, "Tool Search").checked).toBe(expected);
+    expect(labToggle(page, "Tool Search for all models").checked).toBe(expected);
     provider.remove();
   });
 
@@ -584,10 +553,10 @@ describe("LabsPage tool search enablement", () => {
     const { page, runtimeConfig } = await mountPage({
       tools: { toolSearch: { mode: "tools" } },
     });
-    const toggle = labToggle(page, "Tool Search");
+    const toggle = labToggle(page, "Tool Search for all models");
 
     expect(toggle.checked).toBe(true);
-    expect(labRow(page, "Tool Search").textContent).toContain("Default: Disabled");
+    expect(labRow(page, "Tool Search for all models").textContent).toContain("Default: Disabled");
     toggle.checked = false;
     toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
 
@@ -602,7 +571,7 @@ describe("LabsPage tool search enablement", () => {
     const { page, runtimeConfig } = await mountPage({
       tools: { toolSearch: { enabled: false, mode: "tools" } },
     });
-    const toggle = labToggle(page, "Tool Search");
+    const toggle = labToggle(page, "Tool Search for all models");
 
     toggle.checked = true;
     toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));

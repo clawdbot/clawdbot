@@ -145,8 +145,15 @@ export function isStandaloneToolMessageForDisplay(message: unknown): boolean {
   return role === "tool" || hasToolMessageEnvelope(m);
 }
 
-function coerceCanvasPreview(preview: Record<string, unknown>): CanvasPreview | null {
-  if (preview.kind !== "canvas" || preview.surface === "tool_card" || preview.render !== "url") {
+export function readCanvasContentPreview(content: unknown): CanvasPreview | null {
+  const item = asOptionalRecord(content);
+  const preview = item?.type === "canvas" ? asOptionalRecord(item.preview) : undefined;
+  if (
+    !preview ||
+    preview.kind !== "canvas" ||
+    preview.surface === "tool_card" ||
+    preview.render !== "url"
+  ) {
     return null;
   }
   const result: CanvasPreview = { kind: "canvas", surface: "assistant_message", render: "url" };
@@ -440,9 +447,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   // History's structured blocks retain sandbox and dashboard metadata that
   // an assistant shortcode cannot carry. Keep that representation when both exist.
   const projectedCanvasPreviews = (contentItems ?? []).flatMap((value) => {
-    const item = asOptionalRecord(value);
-    const rawPreview = item?.type === "canvas" ? asOptionalRecord(item.preview) : undefined;
-    const preview = rawPreview ? coerceCanvasPreview(rawPreview) : null;
+    const preview = readCanvasContentPreview(value);
     return preview ? [preview] : [];
   });
 
@@ -491,9 +496,8 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
       if (type === "attachment" || type === "attachment_error") {
         return normalizeAttachmentContentBlock(item) ?? [];
       }
-      const rawPreview = type === "canvas" ? asOptionalRecord(item.preview) : undefined;
-      if (rawPreview) {
-        const preview = coerceCanvasPreview(rawPreview);
+      if (type === "canvas") {
+        const preview = readCanvasContentPreview(item);
         if (!preview) {
           return [];
         }

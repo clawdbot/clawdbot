@@ -73,6 +73,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   /** Routing for peer sender names in a shared session. */
   personActivity?: PersonActivityRouting;
   sessionKey: string;
+  presented?: boolean;
   gatewayClient?: GatewayBrowserClient | null;
   selectedSession: GatewaySessionRow | undefined;
   boardProvider?: BoardProvider;
@@ -119,7 +120,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   resourceBasePath?: string;
   fullMessageAgentId?: string;
   loadFullAssistantMessage?: SidebarFullMessageLoader | null;
-  localMediaPreviewRoots?: string[];
+  mediaPolicyEpoch?: number;
   connectionEpoch?: number;
   assistantAttachmentAuthToken?: string | null;
   resolveArtifactDownload?: ArtifactDownloadResolver;

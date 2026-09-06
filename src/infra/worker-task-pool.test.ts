@@ -67,6 +67,53 @@ describe("worker task pool", () => {
     }
   });
 
+  it.each(["complete", "abort", "close"] as const)(
+    "keeps tasks without a deadline pending until %s",
+    async (ending) => {
+      const pool = createPool();
+      const counters = new SharedArrayBuffer(8);
+      const view = new Int32Array(counters);
+      const controller = new AbortController();
+      const reason = new Error(`explicit ${ending}`);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const active = pool.run(
+        { label: "active", counters, wait: true },
+        ending === "abort" ? { signal: controller.signal } : {},
+      );
+      const queued = pool.run({ label: "queued" }, {});
+      const settled = Promise.allSettled([active, queued]);
+      try {
+        // Omission must not install the pool's historical 60-second default timer.
+        await vi.advanceTimersByTimeAsync(60_001);
+        if (ending === "abort") {
+          controller.abort(reason);
+        } else if (ending === "close") {
+          await pool.close(reason);
+        } else {
+          Atomics.store(view, 1, 1);
+          Atomics.notify(view, 1);
+        }
+        const outcomes = await settled;
+        expect(outcomes[0]).toEqual(
+          ending === "complete"
+            ? { status: "fulfilled", value: expect.objectContaining({ label: "active" }) }
+            : { status: "rejected", reason },
+        );
+        expect(outcomes[1]).toEqual(
+          ending === "close"
+            ? { status: "rejected", reason }
+            : { status: "fulfilled", value: expect.objectContaining({ label: "queued" }) },
+        );
+      } finally {
+        Atomics.store(view, 1, 1);
+        Atomics.notify(view, 1);
+        await pool.close();
+        await settled;
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("expires queued work and never launches cancelled asynchronous preparation", async () => {
     const pool = createPool();
     const counters = new SharedArrayBuffer(8);
@@ -178,6 +225,23 @@ describe("worker task pool", () => {
     await expect.poll(() => workers[0]?.threadId).toBe(-1);
     const next = await pool.run({ label: "new worker" }, { timeoutMs: 10_000 });
     expect(next.threadId).not.toBe(result.threadId);
+  });
+
+  it("arms idle retirement on the clock the pool was created under", async () => {
+    const pool = createPool({ workerUrl, idleTimeoutMs: 20 });
+    await pool.run({ label: "warm" }, { timeoutMs: 10_000 });
+    // Process-wide pools finish work on worker messages, which can arrive inside an
+    // unrelated test's fake-timer window; that clock must not receive the idle timer.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await pool.run({ label: "under a fake clock" }, {});
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+    const worker = workers.at(-1);
+    assert.ok(worker);
+    await expect.poll(() => worker.threadId).toBe(-1);
   });
 
   it("lets a headless process exit while warm workers are idle", async () => {

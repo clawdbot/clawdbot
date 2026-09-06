@@ -4,6 +4,7 @@ import path from "node:path";
 import { chromium, type Browser, type BrowserContext } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -122,7 +123,12 @@ describeMantisWebUiChat("Mantis Control UI web chat proof", () => {
       await expect
         .poll(() => page.locator(".chat-working-indicator__elapsed").textContent())
         .toBe("2m 57s");
-      await page.screenshot({ fullPage: true, path: path.join(artifactDir, "web-ui-chat.png") });
+      await writeFile(
+        path.join(artifactDir, "web-ui-chat.png"),
+        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+          page.locator(".chat-working-indicator__elapsed"),
+        ]),
+      );
 
       await gateway.emitChatFinal({ runId: params.idempotencyKey ?? "", text: reply });
       await page.locator(".chat-thread-inner").getByText(reply).waitFor({ timeout: 10_000 });

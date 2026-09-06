@@ -307,6 +307,14 @@ describe("LogbookStore", () => {
       draft({ startMs: base, endMs: base + 30 * 60_000, title: "Early" }),
       draft({ startMs: base + 60 * 60_000, endMs: base + 90 * 60_000, title: "Mid" }),
     ]);
+    expect(
+      store.cardsForDay(DAY, { startMs: base + 30 * 60_000, endMs: base + 60 * 60_000 }),
+    ).toEqual([]);
+    expect(
+      store
+        .cardsForDay(DAY, { startMs: base + 50 * 60_000, endMs: base + 2 * 60 * 60_000 })
+        .map((card) => card.title),
+    ).toEqual(["Mid"]);
     // Revise only the window covering "Mid"; "Early" must survive untouched.
     store.replaceCardsInWindow(DAY, base + 50 * 60_000, base + 2 * 60 * 60_000, [
       draft({ startMs: base + 55 * 60_000, endMs: base + 95 * 60_000, title: "Mid revised" }),
@@ -321,16 +329,40 @@ describe("LogbookStore", () => {
       draft({
         distractions: [{ startMs: base + 5 * 60_000, endMs: base + 10 * 60_000, title: "Twitter" }],
       }),
+      draft({ title: "Review", category: "review", appPrimary: undefined, appSecondary: "" }),
     ]);
+    const database = new DatabaseSync(path.join(dir, "logbook.sqlite"));
+    try {
+      database.prepare("UPDATE cards SET distractions = ? WHERE title = ?").run("{", "Review");
+    } finally {
+      database.close();
+    }
     const cards = store.cardsForDay(DAY);
+    expect(cards.map((card) => card.title)).toEqual(["Card", "Review"]);
+    expect(cards[1]).toMatchObject({
+      appPrimary: undefined,
+      appSecondary: "",
+      keyframeId: undefined,
+      distractions: [],
+    });
     expect(expectDefined(cards[0], "stored logbook card").distractions).toEqual([
       { startMs: base + 5 * 60_000, endMs: base + 10 * 60_000, title: "Twitter" },
     ]);
-    const stats = store.dayStats(DAY);
-    expect(stats.trackedMs).toBe(30 * 60_000);
+    const stats = store.timelineForDay(DAY).stats;
+    expect(stats.trackedMs).toBe(60 * 60_000);
     expect(stats.distractionMs).toBe(5 * 60_000);
-    expect(stats.categories[0]).toEqual({ category: "coding", ms: 30 * 60_000 });
+    expect(stats.categories).toEqual([
+      { category: "coding", ms: 30 * 60_000 },
+      { category: "review", ms: 30 * 60_000 },
+    ]);
     expect(expectDefined(stats.apps[0], "logbook app statistic").domain).toBe("github.com");
+    expect(store.countCardsForDay(DAY)).toBe(cards.length);
+    expect(store.countCardsForDay("2026-07-04")).toBe(0);
+    expect(store.timelineForDay("2026-07-04")).toEqual({
+      day: "2026-07-04",
+      cards: [],
+      stats: { trackedMs: 0, distractionMs: 0, categories: [], apps: [] },
+    });
   });
 
   it("prunes old frame rows and files but keeps recent ones", () => {

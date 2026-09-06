@@ -3,6 +3,7 @@ import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-ru
 import { resolveMatrixMonitorAccessState } from "./access-state.js";
 import { resolveMatrixAllowBotsMode } from "./handler-helpers.js";
 import { loadMatrixReactionEvents, loadMatrixSendModule } from "./handler-runtime.js";
+import type { createMatrixHandlerState } from "./handler-state.js";
 import type { MatrixHandlerRuntimeConfig } from "./handler-types.js";
 import type { MatrixLocationPayload } from "./location.js";
 import type { ReservedHistorySlot } from "./room-history.js";
@@ -30,10 +31,9 @@ export async function resolveMatrixIngressAccess(config: {
   isReactionEvent: boolean;
   readStoreAllowFrom: () => Promise<string[]>;
   shouldSendPairingReply: (senderId: string, created: boolean) => boolean;
-  resolveLiveAccountAllowlists: () => Promise<{
-    liveDmAllowFrom: string[];
-    liveGroupAllowFrom: string[];
-  }>;
+  resolveLiveAccountAllowlists: ReturnType<
+    typeof createMatrixHandlerState
+  >["resolveLiveAccountAllowlists"];
   roomHistoryTracker: ReturnType<typeof createRoomHistoryTracker>;
   commitInboundEventIfClaimed: () => Promise<void>;
 }) {
@@ -179,7 +179,7 @@ export async function resolveMatrixIngressAccess(config: {
       ? await readStoreAllowFrom()
       : [];
   const roomUsers = roomConfig?.users ?? [];
-  const { liveDmAllowFrom, liveGroupAllowFrom } = await resolveLiveAccountAllowlists();
+  const { liveCfg, liveDmAllowFrom, liveGroupAllowFrom } = await resolveLiveAccountAllowlists();
   const accessState = await resolveMatrixMonitorAccessState({
     allowFrom: liveDmAllowFrom,
     storeAllowFrom,
@@ -288,6 +288,8 @@ export async function resolveMatrixIngressAccess(config: {
   }
 
   return {
+    cfg: liveCfg,
+    liveDmAllowFrom,
     content,
     messageId,
     audioPreflightMode,

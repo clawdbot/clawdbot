@@ -1,4 +1,5 @@
 // Diagnostic log event tests cover structured events written to diagnostic logs.
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -17,12 +18,6 @@ import { getChildLogger, resetLogger, setLoggerOverride } from "./logger.js";
 const TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
 const SPAN_ID = "00f067aa0ba902b7";
 const PROTO_KEY = "__proto__";
-
-function flushDiagnosticEvents() {
-  return new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-}
 
 beforeEach(() => {
   resetDiagnosticEventsForTest();
@@ -44,7 +39,7 @@ describe("diagnostic log events", () => {
     const structuredCloneSpy = vi.spyOn(globalThis, "structuredClone");
 
     getChildLogger({ subsystem: "diagnostic" }).info("public listener ignores this log");
-    await flushDiagnosticEvents();
+    await yieldToEventLoop();
     unsubscribe();
 
     expect(listener).not.toHaveBeenCalled();
@@ -67,15 +62,11 @@ describe("diagnostic log events", () => {
       trace: { traceId: TRACE_ID, spanId: SPAN_ID },
     });
     logger.info({ runId: "run-1" }, "hello diagnostic logs");
-    await flushDiagnosticEvents();
+    await yieldToEventLoop();
     unsubscribe();
 
     expect(received).toHaveLength(1);
-    const [record] = received;
-    if (!record) {
-      throw new Error("missing diagnostic log event");
-    }
-    const { event, metadata } = record;
+    const { event, metadata } = expectDefined(received[0], "diagnostic log event");
     expect(event.type).toBe("log.record");
     expect(event.level).toBe("INFO");
     expect(event.message).toBe("hello diagnostic logs");
@@ -110,7 +101,7 @@ describe("diagnostic log events", () => {
       const logger = getChildLogger({ subsystem: "diagnostic" });
       logger.info({ runId: "run-1" }, "request-scoped diagnostic log");
     });
-    await flushDiagnosticEvents();
+    await yieldToEventLoop();
     unsubscribe();
 
     expect(received).toHaveLength(1);
@@ -142,7 +133,7 @@ describe("diagnostic log events", () => {
       { raw: secret },
       `secret=${secret} ${"y".repeat(5000)}`,
     );
-    await flushDiagnosticEvents();
+    await yieldToEventLoop();
     unsubscribe();
 
     expect(received).toHaveLength(1);
@@ -167,7 +158,7 @@ describe("diagnostic log events", () => {
     const prefix = "x".repeat(4_095);
 
     getChildLogger({ subsystem: "diagnostic" }).info(`${prefix}😀tail`);
-    await flushDiagnosticEvents();
+    await yieldToEventLoop();
     unsubscribe();
 
     // The post-redaction bound keeps the first dot from the initial truncation marker.
@@ -197,7 +188,7 @@ describe("diagnostic log events", () => {
       trace: { traceId: TRACE_ID, spanId: SPAN_ID },
     });
     logger.info(structured, "bounded attrs");
-    await flushDiagnosticEvents();
+    await yieldToEventLoop();
     unsubscribe();
 
     expect(received).toHaveLength(1);

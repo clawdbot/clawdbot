@@ -20,6 +20,24 @@ describe("plugin manifest model catalog", () => {
     cleanupTrackedTempDirs(tempDirs);
   });
 
+  it.each([true, false])("loads models.dev opt-in only with provider ownership: %s", (owned) => {
+    const dir = makePluginDir();
+    writeManifest(dir, {
+      id: "example-plugin",
+      providers: owned ? [" Example "] : [],
+      modelCatalog: { modelsDev: { " EXAMPLE ": " upstream-id ", other: "other-source" } },
+      configSchema: { type: "object" },
+    });
+
+    const result = loadPluginManifest(dir);
+    if (!result.ok) {
+      throw new Error(result.error);
+    }
+    expect(result.manifest.modelCatalog).toEqual(
+      owned ? { modelsDev: { example: "upstream-id" } } : undefined,
+    );
+  });
+
   it("allows cli backends to own manifest model catalog rows", () => {
     const dir = makePluginDir();
     writeManifest(dir, {

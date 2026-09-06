@@ -66,10 +66,10 @@ function canonicalSkillKey(name: string): string {
   return key;
 }
 
-export type SkillUsageFacts = { lastUsedAtMs: number; useCount: number };
+type SkillUsageFacts = { lastUsedAtMs: number; useCount: number };
 
 /** Single reader for recorded usage; callers pass canonical skill files. */
-export function readSkillUsageByFile(
+function readSkillUsageByFile(
   skillFiles: readonly string[],
   options: OpenClawStateDatabaseOptions = {},
 ): Map<string, SkillUsageFacts> {
@@ -238,24 +238,4 @@ export function registerSkillUsageTracking(options: OpenClawStateDatabaseOptions
     },
     { include: ["skill.used"] },
   );
-}
-
-export function clearSkillUsageForRemovedSkills(
-  skillFiles: readonly string[],
-  options: OpenClawStateDatabaseOptions = {},
-): void {
-  if (skillFiles.length === 0) {
-    return;
-  }
-  runOpenClawStateWriteTransaction(({ db }) => {
-    const kysely = getNodeSqliteKysely<CuratorDatabase>(db);
-    executeSqliteQuerySync(
-      db,
-      kysely.deleteFrom("skill_usage").where(
-        "skill_file",
-        "in",
-        skillFiles.map((skillFile) => canonicalizePath(skillFile)),
-      ),
-    );
-  }, options);
 }

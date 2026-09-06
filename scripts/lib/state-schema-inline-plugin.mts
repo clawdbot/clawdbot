@@ -33,9 +33,9 @@ export function createStateSchemaInlinePlugin(rootDir = process.cwd()) {
   return {
     name: STATE_SCHEMA_INLINE_PLUGIN_NAME,
     configureVitest(context: {
-      experimental_defineCacheKeyGenerator(callback: typeof cacheKeyForSchema): void;
+      defineCacheKeyGenerator(callback: typeof cacheKeyForSchema): void;
     }) {
-      context.experimental_defineCacheKeyGenerator(cacheKeyForSchema);
+      context.defineCacheKeyGenerator(cacheKeyForSchema);
     },
     load(this: { addWatchFile(id: string): void }, id: string) {
       const schema = schemasByModulePath.get(path.resolve(id));

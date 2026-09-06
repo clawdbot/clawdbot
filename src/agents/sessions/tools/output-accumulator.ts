@@ -39,10 +39,6 @@ interface OutputSnapshot {
   fullOutputPath?: string;
 }
 
-function byteLength(text: string): number {
-  return Buffer.byteLength(text, "utf-8");
-}
-
 /**
  * Incrementally tracks streaming output with bounded memory.
  *
@@ -192,27 +188,28 @@ export class OutputAccumulator {
       return;
     }
 
-    const bytes = byteLength(text);
+    const bytes = Buffer.byteLength(text);
     this.totalDecodedBytes += bytes;
     this.tailText += text;
     this.tailBytes += bytes;
     if (this.tailBytes > this.maxRollingBytes * 2) {
       this.tailText = truncateUtf8Suffix(this.tailText, this.maxRollingBytes);
-      this.tailBytes = byteLength(this.tailText);
+      this.tailBytes = Buffer.byteLength(this.tailText);
     }
 
     // A terminator closes the last real line; its size still belongs in the footer.
-    for (let start = 0; start < text.length;) {
-      const newline = text.indexOf("\n", start);
-      const end = newline === -1 ? text.length : newline;
-      this.lastLineBytes =
-        (this.hasOpenLine ? this.lastLineBytes : 0) + byteLength(text.slice(start, end));
-      this.hasOpenLine = newline === -1;
-      if (!this.hasOpenLine) {
-        this.completedLines++;
+    const end = text.endsWith("\n") ? text.length - 1 : text.length;
+    let start = 0;
+    for (let index = text.indexOf("\n"); index !== -1; index = text.indexOf("\n", index + 1)) {
+      this.completedLines++;
+      if (index < end) {
+        start = index + 1;
       }
-      start = end + 1;
     }
+    this.lastLineBytes =
+      (start === 0 && this.hasOpenLine ? this.lastLineBytes : 0) +
+      (start === 0 && end === text.length ? bytes : Buffer.byteLength(text.slice(start, end)));
+    this.hasOpenLine = end === text.length;
     this.totalLines = this.completedLines + (this.hasOpenLine ? 1 : 0);
   }
 

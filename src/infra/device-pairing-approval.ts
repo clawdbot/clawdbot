@@ -243,7 +243,9 @@ type DevicePairingApprovalOptions = {
 type DeviceBootstrapApprovalOptions = Pick<
   DevicePairingApprovalOptions,
   "accessMetadata" | "isApprovalCurrent"
->;
+> & {
+  onTokensReplaced?: (deviceId: string, roles: readonly string[]) => void;
+};
 
 async function withPendingDevicePairingApproval(
   requestId: string,
@@ -499,7 +501,14 @@ export async function approveBootstrapDevicePairing(
         approvedVia: "bootstrap",
         accessMetadata: options?.accessMetadata,
       });
-      return commitApprovedDevicePairing({ state, requestId, device, baseDir });
+      const approved = commitApprovedDevicePairing({ state, requestId, device, baseDir });
+      // A bootstrap may narrow an existing role. Retire its connected grant in
+      // the same commit turn, before the pairing lock releases to another caller.
+      const replacedRoles = grantedRoles.filter((role) => existing?.tokens?.[role]);
+      if (replacedRoles.length > 0) {
+        options?.onTokensReplaced?.(device.deviceId, replacedRoles);
+      }
+      return approved;
     },
   );
 }

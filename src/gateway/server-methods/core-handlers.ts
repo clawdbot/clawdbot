@@ -37,6 +37,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   conversations: () => import("./conversations.js").then((module) => module.conversationHandlers),
   connect: () => import("./connect.js").then((module) => module.connectHandlers),
   "control-ui": () => import("./control-ui.js").then((module) => module.controlUiHandlers),
+  "plugins-control-ui": () =>
+    import("./plugins-control-ui.js").then((module) => module.pluginsControlUiHandlers),
   cron: () => import("./cron.js").then((module) => module.cronHandlers),
   devices: () => import("./devices.js").then((module) => module.deviceHandlers),
   "device-pair-setup": () =>
@@ -69,6 +71,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "plugin-host-hooks": () =>
     import("./plugin-host-hooks.js").then((module) => module.pluginHostHookHandlers),
   plugins: () => import("./plugins.js").then((module) => module.pluginsHandlers),
+  "plugins-mutations": () =>
+    import("./plugins-mutations.js").then((module) => module.pluginMutationHandlers),
   projects: () => import("./projects.js").then((module) => module.projectsHandlers),
   portals: () => import("./portals.js").then((module) => module.portalHandlers),
   "progress-card": () => import("./progress-card.js").then((module) => module.progressCardHandlers),
@@ -143,6 +147,7 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./tools-effective.js").then((module) => module.toolsEffectiveHandlers),
   "tools-invoke": () => import("./tools-invoke.js").then((module) => module.toolsInvokeHandlers),
   "mcp-app": () => import("./mcp-app.js").then((module) => module.mcpAppHandlers),
+  canvas: () => import("./canvas.js").then((module) => module.canvasHandlers),
   tts: () => import("./tts.js").then((module) => module.ttsHandlers),
   update: () => import("./update.js").then((module) => module.updateHandlers),
   usage: () => import("./usage.js").then((module) => module.usageHandlers),

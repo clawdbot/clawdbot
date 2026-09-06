@@ -1,5 +1,6 @@
 // Gateway cron runtime service runs scheduled agent turns, heartbeat wakeups,
 // plugin hooks, notifications, and cron lifecycle cleanup.
+import fs from "node:fs/promises";
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
 import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
@@ -46,7 +47,6 @@ import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/deliver
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
 import { toPublicCronJob } from "../cron/public-job.js";
 import { createCronExecutionId } from "../cron/run-id.js";
-import { resolveCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
 import { cronScriptFailureMetadata } from "../cron/script-failure.js";
 import { CronService, type CronEvent } from "../cron/service.js";
 import {
@@ -58,6 +58,7 @@ import {
   resolveCronDeliverySessionKey,
   resolveCronSessionTargetSessionKey,
 } from "../cron/session-target.js";
+import { skillCollectionReviewMonitorAgentId } from "../cron/skill-collection-review-monitor.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { cronStreamScheduleKey } from "../cron/stream-schedule.js";
 import { createCronScriptRuntime } from "../cron/trigger-script.js";
@@ -104,7 +105,9 @@ import {
 } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
-import { runSkillCollectionReviewForAgent } from "../skills/workshop/collection-review.js";
+import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
+import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
+import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import {
   createCronExitWatchers,
   type CronExitResult,
@@ -598,6 +601,7 @@ export function buildGatewayCronService(params: {
     ? createCronScriptRuntime({
         config: params.cfg,
         loadPluginRegistry: loadPreparedInboundPluginRegistry,
+        resolveGatewayContext: scheduledGatewayContextResolver,
       })
     : undefined;
 
@@ -788,26 +792,7 @@ export function buildGatewayCronService(params: {
     cronEnabled,
     cronConfig: params.cfg.cron,
     listConfiguredChannels: () => listConfiguredMessageChannels(getRuntimeConfig()),
-    ...(scriptRuntime
-      ? {
-          evaluateCronTrigger: ({ job, script, state, streamBatch, abortSignal }) =>
-            scriptRuntime.evaluateTrigger({
-              jobId: job.id,
-              agentId: job.agentId,
-              script,
-              state,
-              streamBatch,
-              toolsAllow: job.payload.toolsAllow,
-              scheduledToolPolicy: resolveCronScheduledToolPolicy({
-                toolsAllow: job.payload.toolsAllow,
-                scheduledToolPolicy: job.scheduledToolPolicy,
-                owner: job.owner,
-              }),
-              execTarget: job.toolsAllowExecTarget,
-              abortSignal,
-            }),
-        }
-      : {}),
+    ...(scriptRuntime ? { evaluateCronTrigger: scriptRuntime.evaluateTrigger } : {}),
     ...(defaultAgentId ? { defaultAgentId } : {}),
     ...(legacyDefaultAgentId ? { legacyDefaultAgentId } : {}),
     resolveDefaultAgentId: () => tryResolveAmbientOwnerAgentId(getRuntimeConfig()),
@@ -905,12 +890,6 @@ export function buildGatewayCronService(params: {
         deps: { ...heartbeatDeps, runtime: defaultRuntime },
       });
     },
-    runSkillCollectionReview: ({ agentId, abortSignal }) =>
-      runSkillCollectionReviewForAgent({
-        config: getRuntimeConfig(),
-        agentId,
-        ...(abortSignal ? { abortSignal } : {}),
-      }),
     runIsolatedAgentJob: async ({
       job,
       message,
@@ -922,20 +901,40 @@ export function buildGatewayCronService(params: {
     }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       const sessionKey = resolveCronSessionTargetSessionKey(job.sessionTarget) ?? `cron:${job.id}`;
-      return await runCronIsolatedAgentTurn({
-        cfg: runtimeConfig,
-        deps: params.deps,
-        job,
-        message,
-        abortSignal,
-        onExecutionStarted,
-        onExecutionPhase,
-        onLaneWait,
-        executionIdentity,
-        agentId,
-        sessionKey,
-        lane: "cron",
-      });
+      const reviewAgentId = skillCollectionReviewMonitorAgentId(job);
+      if (reviewAgentId && resolveSkillWorkshopConfig(runtimeConfig).autonomous.mode !== "auto") {
+        return { status: "skipped", summary: "Skill collection review disabled." };
+      }
+      const executionRoot = reviewAgentId
+        ? resolveWorkshopSkillsDir(runtimeConfig, agentId)
+        : undefined;
+      if (executionRoot) {
+        await fs.mkdir(executionRoot, { recursive: true });
+      }
+      try {
+        return await runCronIsolatedAgentTurn({
+          cfg: runtimeConfig,
+          deps: params.deps,
+          job,
+          message,
+          abortSignal,
+          onExecutionStarted,
+          onExecutionPhase,
+          onLaneWait,
+          executionIdentity,
+          agentId,
+          sessionKey,
+          lane: "cron",
+          executionRoot,
+          skillsSnapshot: executionRoot ? { prompt: "", skills: [] } : undefined,
+        });
+      } finally {
+        // Normal file tools can finish edits before cancellation. Refresh future
+        // sessions without rewriting files or invalidating the running session.
+        if (executionRoot) {
+          bumpSkillsSnapshotVersion({ reason: "workshop" });
+        }
+      }
     },
     runCommandJob: async ({ job, abortSignal }) => {
       const result = await runCronCommandJob({
@@ -983,7 +982,7 @@ export function buildGatewayCronService(params: {
         ssrfPolicy: webhookSsrfPolicy,
       });
     },
-    runScriptJob: async ({ job, streamBatch, abortSignal }) => {
+    runScriptJob: async ({ job, streamBatch, abortSignal, executionIdentity }) => {
       if (!scriptRuntime || job.payload.kind !== "script") {
         return {
           status: "error",
@@ -992,21 +991,10 @@ export function buildGatewayCronService(params: {
         };
       }
       const execution = await scriptRuntime.executePayload({
-        jobId: job.id,
-        agentId: job.agentId,
-        script: job.payload.script,
-        state: job.state.triggerState,
+        job,
         streamBatch,
-        toolsAllow: job.payload.toolsAllow,
-        scheduledToolPolicy: resolveCronScheduledToolPolicy({
-          toolsAllow: job.payload.toolsAllow,
-          scheduledToolPolicy: job.scheduledToolPolicy,
-          owner: job.owner,
-        }),
-        execTarget: job.toolsAllowExecTarget,
-        timeoutSeconds: job.payload.timeoutSeconds,
-        toolBudget: job.payload.toolBudget,
         abortSignal,
+        executionIdentity,
       });
       if (execution.kind === "error") {
         return {

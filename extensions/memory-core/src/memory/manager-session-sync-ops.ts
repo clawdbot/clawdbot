@@ -196,7 +196,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     const existingRows = loadMemorySourceFileState({
       db: this.db,
       source: "sessions",
-    }).rows;
+    });
     const readOnly = this.database.readOnly;
     const sqliteCorpusEntries = readOnly
       ? corpusEntries.filter((entry) => entry.transcriptSource === "sqlite")

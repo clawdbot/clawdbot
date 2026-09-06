@@ -405,10 +405,11 @@ export function buildLiveShardPnpmArgs(files: string[], passthroughArgs: string[
  */
 export function resolveLiveShardPreparation(files: string[]): LiveShardPreparation | null {
   const gatewayProfiles = files.some(isGatewayProfilesLiveTest);
-  // Source gateways and vision requests load provider and agent runtime plugins.
-  // Compile them before Vitest so cold transforms do not consume live deadlines.
+  // Gateway/worker fixtures and vision requests load compiled runtime plugins.
+  // Build before Vitest; direct CLI launches cannot bootstrap a cold checkout.
   if (
     files.some(isSourceGatewayLiveTest) ||
+    files.some((file) => file.startsWith("test/e2e/qa-lab/runtime/")) ||
     files.includes("src/agents/tools/image-tool.providers.live.test.ts") ||
     files.includes("extensions/openai/openai.live.test.ts")
   ) {

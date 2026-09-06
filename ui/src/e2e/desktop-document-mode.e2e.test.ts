@@ -1,6 +1,7 @@
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import type { DesktopClient } from "../components/desktop/desktop-client.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
@@ -35,27 +36,11 @@ const gatewayEnvironment = {
   desktop: true,
 };
 
-type FakeDesktopConnectOptions = {
-  onConnect?: () => void;
-  scaleViewport?: boolean;
-  target: HTMLElement;
-  viewOnly: boolean;
-};
-
 async function installDesktopClientFake(panel: import("playwright").Locator) {
   await panel.evaluate((element) => {
     (
       element as HTMLElement & {
-        desktopClientFactory: () => {
-          connect(options: FakeDesktopConnectOptions): Promise<{
-            disconnect(): void;
-            disableInput(): void;
-            sendBackspace(): void;
-            sendKeyboardEvent(event: KeyboardEvent): void;
-            sendText(text: string): void;
-            setScaleViewport(enabled: boolean): void;
-          }>;
-        };
+        desktopClientFactory: () => Pick<DesktopClient, "connect">;
       }
     ).desktopClientFactory = () => ({
       async connect(options) {

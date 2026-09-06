@@ -68,6 +68,12 @@ const CORE_TOOL_SECTION_ORDER: Array<{ id: string; label: string }> = [
 
 const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
+    id: "ls",
+    description: "List directory entries",
+    sectionId: "fs",
+    profiles: ["coding"],
+  },
+  {
     id: "read",
     description: "Read file contents",
     sectionId: "fs",

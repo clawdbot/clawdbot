@@ -542,10 +542,12 @@ openclaw doctor --session-sqlite recover --github-issue
 ```
 
 Recovery selects the latest failed migration manifest, restores only the
-manifest's archived artifacts, validates the affected targets, refreshes the
-sanitized `.failure.md` and `.failure.json` reports, and prepares a GitHub issue
-body that avoids transcript contents, raw environment, secrets, and unbounded
-config. When no failed migration manifest exists, recovery inspects selected
+manifest's archived artifacts, validates the affected targets, and prepares
+sanitized `.failure.md` and `.failure.json` reports. The GitHub issue body avoids
+transcript contents, raw environment, secrets, and unbounded config. Once an
+issue or browser handoff may have published a report, doctor preserves that
+private report artifact and its marker receipt. When no failed migration
+manifest exists, recovery inspects selected
 SQLite databases using temporary copies of their complete file sets. SQLite
 can roll back a valid hot journal in that disposable copy
 before `quick_check`, `integrity_check`, and `foreign_key_check` run, while the
@@ -560,8 +562,15 @@ failure rolls already-moved files back before reporting failure, so a
 recoverable file set is not silently split. Stop the Gateway before recovery;
 copying or renaming an actively changing SQLite file set is unsafe and behaves
 differently across operating systems. With `--github-issue --yes`, doctor uses
-the GitHub CLI to create the issue in `openclaw/openclaw`; without confirmation
-it writes the local support report and prints a prefilled issue URL.
+the GitHub CLI to create the issue in `openclaw/openclaw`. If the CLI is
+unavailable or GitHub definitively rejects the request, doctor can open the
+exact sanitized report in a browser when its encoded URL stays within the safe
+request-size bound. Without confirmation, doctor writes the local support
+report and skips issue creation without printing or opening a prefilled URL.
+Ambiguous submissions fail closed. A later doctor run reconciles the preserved
+marker without sending another create request, so it cannot publish a duplicate
+issue. Machine-readable output includes the resulting support-issue status but
+not the private receipt or prefilled URL.
 
 `restore` remains the lower-level undo operation. It uses manifest
 `sourcePath -> archivePath` records, moves archived artifacts back only when the

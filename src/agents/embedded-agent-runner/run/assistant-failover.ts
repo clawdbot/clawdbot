@@ -1,6 +1,3 @@
-/**
- * Handles assistant-stage failover decisions during embedded-agent attempts.
- */
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../../llm/types.js";
@@ -25,6 +22,7 @@ import {
   resolveRunFailoverDecision,
   type AssistantFailoverDecision,
 } from "./failover-policy.js";
+import type { EmbeddedRunTerminalState } from "./terminal-outcome.js";
 
 type AssistantFailoverOutcome =
   | {
@@ -42,13 +40,8 @@ type AssistantFailoverOutcome =
       overloadProfileRotations: number;
       error: FailoverError;
     };
-function resolveShortWindowRateLimitRetry(message: string | undefined): boolean {
-  const window = classifyRateLimitWindow(message);
-  return window.kind === "short";
-}
-
 export function isShortWindowRateLimitMessage(message: string | undefined): boolean {
-  return resolveShortWindowRateLimitRetry(message);
+  return classifyRateLimitWindow(message).kind === "short";
 }
 
 /**
@@ -59,7 +52,7 @@ export function isShortWindowRateLimitMessage(message: string | undefined): bool
 export async function handleAssistantFailover(params: {
   initialDecision: AssistantFailoverDecision;
   terminal: AgentRunAttemptTerminal;
-  signalOwnedInterruption: boolean;
+  terminalState: EmbeddedRunTerminalState;
   fallbackConfigured: boolean;
   failoverFailure: boolean;
   failoverReason: FailoverReason | null;
@@ -112,18 +105,30 @@ export async function handleAssistantFailover(params: {
   }) => Promise<boolean>;
 }): Promise<AssistantFailoverOutcome> {
   const terminal = projectAgentRunAttemptTerminal(params.terminal);
+  const { outcome: terminalOutcome, signalOwnedInterruption } = params.terminalState;
   // Routing reasons group several HTTP failures; retain the provider's status
   // when constructing the error so fallback summaries do not invent a timeout.
   const assistantStatus = params.lastAssistant
     ? buildAssistantFailoverSignal(params.lastAssistant).status
     : undefined;
-  const externalAbort = terminal.externalAbort || params.signalOwnedInterruption;
+  const externalAbort = terminal.externalAbort || signalOwnedInterruption;
   let overloadProfileRotations = params.overloadProfileRotations;
   let decision = params.initialDecision;
-  const sameModelTransientRetry = (): AssistantFailoverOutcome => ({
+  const logDecision = (
+    action: Parameters<typeof params.logAssistantFailoverDecision>[0],
+    extra?: { status?: number },
+  ) =>
+    params.logAssistantFailoverDecision(action, {
+      ...extra,
+      retryCount: params.getTransientRetryCount(),
+      profileRotationCount: overloadProfileRotations,
+    });
+  const retryOutcome = (
+    retryKind: "profile_rotation" | "same_model_transient",
+  ): AssistantFailoverOutcome => ({
     action: "retry",
     overloadProfileRotations,
-    retryKind: "same_model_transient",
+    retryKind,
     lastRetryFailoverReason: mergeRetryFailoverReason({
       previous: params.previousRetryFailoverReason,
       failoverReason: params.failoverReason,
@@ -133,7 +138,7 @@ export async function handleAssistantFailover(params: {
 
   const canRetryRateLimit =
     params.failoverReason !== "rate_limit" ||
-    resolveShortWindowRateLimitRetry(params.lastAssistant?.errorMessage);
+    isShortWindowRateLimitMessage(params.lastAssistant?.errorMessage);
   // A silent idle timeout carries no classifiable provider error, so it
   // arrives with a null reason; consult the retry owner as a timeout so the
   // quiet same-model replay stays budgeted by the single transient owner
@@ -144,24 +149,18 @@ export async function handleAssistantFailover(params: {
     !externalAbort &&
     canRetryRateLimit &&
     transientConsultReason &&
-    (decision.action === "rotate_profile" ||
-      decision.action === "fallback_model" ||
-      decision.action === "surface_error") &&
+    decision.action !== "continue_normal" &&
     (await params.maybeRetryTransient({
       reason: transientConsultReason,
       retryAfterMs: resolveRetryAfterMs(params.lastAssistant?.errorMessage),
     }))
   ) {
-    params.logAssistantFailoverDecision("retry_same_model", {
-      retryCount: params.getTransientRetryCount(),
-      profileRotationCount: overloadProfileRotations,
-    });
-    return sameModelTransientRetry();
+    logDecision("retry_same_model");
+    return retryOutcome("same_model_transient");
   }
 
   if (decision.action === "rotate_profile") {
     const failedProfileId = params.lastProfileId;
-    const timeoutFailure = terminal.timedOut;
     const failureReason = params.assistantProfileFailureReason;
     const markFailedProfile = async () => {
       if (!failureReason) {
@@ -189,11 +188,7 @@ export async function handleAssistantFailover(params: {
           `overload profile rotation cap reached for ${sanitizeForLog(params.provider)}/${sanitizeForLog(params.modelId)} after ${overloadProfileRotations} rotations; escalating to model fallback`,
         );
         await markFailedProfile();
-        params.logAssistantFailoverDecision("fallback_model", {
-          status,
-          retryCount: params.getTransientRetryCount(),
-          profileRotationCount: overloadProfileRotations,
-        });
+        logDecision("fallback_model", { status });
         return {
           action: "throw",
           overloadProfileRotations,
@@ -227,7 +222,7 @@ export async function handleAssistantFailover(params: {
     }
 
     const markFailedProfilePromise = markFailedProfile();
-    if (timeoutFailure && !params.isProbeSession && failedProfileId) {
+    if (terminal.timedOut && !params.isProbeSession && failedProfileId) {
       const timeoutLabel = terminal.idleTimedOut ? "idle timeout (model silent)" : "timed out";
       // Only promise a next account when one was actually selected. Credentials
       // that config does not authorize are not rotation targets, so this can end
@@ -246,28 +241,15 @@ export async function handleAssistantFailover(params: {
     if (rotated) {
       // Marking the failed profile is non-blocking after rotation succeeds; the
       // retry can proceed with the next profile while the failure record settles.
-      void markFailedProfilePromise;
-      params.logAssistantFailoverDecision("rotate_profile", {
-        retryCount: params.getTransientRetryCount(),
-        profileRotationCount: overloadProfileRotations,
-      });
-      return {
-        action: "retry",
-        overloadProfileRotations,
-        retryKind: "profile_rotation",
-        lastRetryFailoverReason: mergeRetryFailoverReason({
-          previous: params.previousRetryFailoverReason,
-          failoverReason: params.failoverReason,
-          timedOut: terminal.timedOut,
-        }),
-      };
+      logDecision("rotate_profile");
+      return retryOutcome("profile_rotation");
     }
     await markFailedProfilePromise;
     decision = resolveRunFailoverDecision({
       stage: "assistant",
       allowFormatRetry: params.cloudCodeAssistFormatError,
       terminal: params.terminal,
-      signalOwnedInterruption: params.signalOwnedInterruption,
+      signalOwnedInterruption,
       fallbackConfigured: params.fallbackConfigured,
       failoverFailure: params.failoverFailure,
       failoverReason: params.failoverReason,
@@ -276,76 +258,52 @@ export async function handleAssistantFailover(params: {
     });
   }
 
-  if (decision.action === "fallback_model") {
+  if (decision.action === "surface_error") {
+    logDecision("surface_error");
+  }
+  // Surface only current provider failures; aborts, timeout payload synthesis,
+  // and stale classified text retain the normal payload path.
+  if (
+    decision.action === "fallback_model" ||
+    (decision.action === "surface_error" &&
+      !externalAbort &&
+      !terminal.timedOut &&
+      params.failoverFailure)
+  ) {
     const message = resolveAssistantFailoverErrorMessage(params);
+    const reason = resolveSurfaceErrorReason(decision.reason, params);
     const status =
       assistantStatus ??
-      resolveFailoverStatus(decision.reason) ??
+      resolveFailoverStatus(reason) ??
       (isTimeoutErrorMessage(message) ? 408 : undefined);
-    params.logAssistantFailoverDecision("fallback_model", {
-      status,
-      retryCount: params.getTransientRetryCount(),
-      profileRotationCount: overloadProfileRotations,
-    });
-    const shouldSuspend =
-      Boolean(params.sessionKey) &&
-      (decision.reason === "rate_limit" || decision.reason === "billing");
-
+    if (decision.action === "fallback_model") {
+      logDecision("fallback_model", { status });
+    }
     return {
       action: "throw",
       overloadProfileRotations,
       error: new FailoverError(message, {
-        reason: decision.reason,
+        reason,
         provider: params.activeErrorContext.provider,
         model: params.activeErrorContext.model,
         profileId: params.lastProfileId,
         authMode: params.authMode,
         status,
         rawError: params.lastAssistant?.errorMessage?.trim(),
-        suspend: shouldSuspend,
+        // Retry reason "timeout" also includes 5xx; only the terminal owner records a deadline.
+        timeout:
+          terminalOutcome.status === "timeout"
+            ? {
+                timeoutPhase: terminalOutcome.timeoutPhase,
+                providerStarted: terminalOutcome.providerStarted,
+              }
+            : undefined,
+        suspend: Boolean(params.sessionKey) && (reason === "rate_limit" || reason === "billing"),
       }),
     };
   }
 
-  if (decision.action === "surface_error") {
-    params.logAssistantFailoverDecision("surface_error", {
-      retryCount: params.getTransientRetryCount(),
-      profileRotationCount: overloadProfileRotations,
-    });
-    // Only current provider failures throw here. External aborts, timeout
-    // payload synthesis, and stale classified text without failoverFailure
-    // keep the normal payload path.
-    if (!externalAbort && !terminal.timedOut && params.failoverFailure) {
-      const message = resolveAssistantFailoverErrorMessage(params);
-      const reason = resolveSurfaceErrorReason(decision.reason, params);
-      const status =
-        assistantStatus ??
-        resolveFailoverStatus(reason) ??
-        (isTimeoutErrorMessage(message) ? 408 : undefined);
-      const shouldSuspend =
-        Boolean(params.sessionKey) && (reason === "rate_limit" || reason === "billing");
-
-      return {
-        action: "throw",
-        overloadProfileRotations,
-        error: new FailoverError(message, {
-          reason,
-          provider: params.activeErrorContext.provider,
-          model: params.activeErrorContext.model,
-          profileId: params.lastProfileId,
-          authMode: params.authMode,
-          status,
-          rawError: params.lastAssistant?.errorMessage?.trim(),
-          suspend: shouldSuspend,
-        }),
-      };
-    }
-  }
-
-  params.logAssistantFailoverDecision("continue_normal", {
-    retryCount: params.getTransientRetryCount(),
-    profileRotationCount: overloadProfileRotations,
-  });
+  logDecision("continue_normal");
   return {
     action: "continue_normal",
     overloadProfileRotations,

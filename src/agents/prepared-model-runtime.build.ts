@@ -4,6 +4,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import pLimit from "p-limit";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { Model } from "../llm/types.js";
 import { runAbortableTimeout } from "../node-host/with-timeout.js";
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
@@ -54,7 +55,6 @@ import type {
   PreparedModelRuntimeSnapshot,
   PreparedModelRuntimeStores,
 } from "./prepared-model-runtime.types.js";
-import { createPreparedRuntimeRouteModelMemo } from "./runtime-plan/credential-scoped-model.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 
 const MAX_CONCURRENT_MODEL_RUNTIME_AGENT_SOURCE_BUILDS = 2;
@@ -329,7 +329,7 @@ function createSnapshot(
     configuredRuntimeModels,
     inlineProviderModels,
     createStores,
-    routeModelResolutionMemo: createPreparedRuntimeRouteModelMemo(),
+    routeModelResolutionMemo: new Map<string, Promise<Model>>(),
   });
   setPreparedModelRuntimeAuthStore(snapshot, agentFacts.authStore);
   setPreparedModelRuntimeAuthLoader(snapshot, catalogAccess.loadAuth);
@@ -601,6 +601,9 @@ export function startSerializedSnapshotBuildBatch(
   const startBuild = (async () => {
     if (previousBuildCompletions.length > 0) {
       await Promise.all(previousBuildCompletions);
+      // Queued publications register while the prior build settles. Recheck them here so a
+      // retired owner cannot start expensive workspace preparation ahead of its replacement.
+      assertPreparedModelRuntimeCandidatesCurrent(candidates);
     }
     return {
       actualBuild: buildSnapshotBatch(

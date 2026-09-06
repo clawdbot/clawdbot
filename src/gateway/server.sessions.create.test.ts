@@ -10,6 +10,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getContextWindowCaches } from "../agents/context-cache.js";
 import {
@@ -31,6 +32,7 @@ import {
   loadTranscriptEvents,
   onSessionIdentityMutation,
   replaceSessionEntrySync,
+  resolveSessionEntryAccessTarget,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -182,6 +184,61 @@ const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
+
+async function withFixedOwnerSessionStore(
+  scope: "global" | "per-sender",
+  run: (fixture: { storePath: string; cfg: ReturnType<typeof getRuntimeConfig> }) => Promise<void>,
+) {
+  const config = await getGatewayConfigModule();
+  const runtime = config.getRuntimeConfigSnapshot();
+  const source = config.getRuntimeConfigSourceSnapshot();
+  const previous = {
+    agentsConfig: testState.agentsConfig,
+    agentConfig: testState.agentConfig,
+    sessionConfig: testState.sessionConfig,
+    sessionStorePath: testState.sessionStorePath,
+  };
+  const configPaths = new Set([config.CONFIG_PATH]);
+  if (process.env.OPENCLAW_CONFIG_PATH) {
+    configPaths.add(process.env.OPENCLAW_CONFIG_PATH);
+  }
+  if (process.env.OPENCLAW_STATE_DIR) {
+    configPaths.add(path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json"));
+  }
+  const files = new Map<string, Buffer | undefined>();
+  for (const configPath of configPaths) {
+    try {
+      files.set(configPath, await fs.readFile(configPath));
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+        throw error;
+      }
+      files.set(configPath, undefined);
+    }
+  }
+  try {
+    const { storePath } = await createSessionStoreDir();
+    testState.agentsConfig = { ownership: "explicit", entries: { main: {}, ops: {} } };
+    testState.agentConfig = { sessionStore: { agentId: "main" } };
+    testState.sessionConfig = { scope };
+    await run({ storePath, cfg: config.getRuntimeConfig() });
+  } finally {
+    Object.assign(testState, previous);
+    // Opening a wire client persists fixture config; restore it before the next case.
+    for (const [configPath, contents] of files) {
+      if (contents === undefined) {
+        await fs.rm(configPath, { force: true });
+      } else {
+        await fs.writeFile(configPath, contents);
+      }
+    }
+    if (runtime) {
+      config.setRuntimeConfigSnapshot(runtime, source ?? undefined);
+    } else {
+      config.clearRuntimeConfigSnapshot();
+    }
+  }
+}
 
 async function waitForCreatedSessionRun(
   context: { chatAbortControllers: Map<string, ChatAbortControllerEntry> },
@@ -1303,6 +1360,40 @@ test("createGatewaySession rejects explicit and key-derived unconfigured creatio
 
   expect(prepareLifecycle).not.toHaveBeenCalled();
 });
+
+test.each(["rpc", "service"] as const)(
+  "creates a fresh selected-agent child outside fixed global ownership through %s",
+  (entrypoint) =>
+    withFixedOwnerSessionStore("global", async ({ storePath, cfg }) => {
+      let connection: Awaited<ReturnType<typeof openClient>> | undefined;
+      try {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: "global", storePath },
+          { sessionId: "fixed-global-owner", updatedAt: 1 },
+        );
+        const { createGatewaySession } = await import("./session-create-service.js");
+        if (entrypoint === "rpc") {
+          connection = await openClient();
+        }
+        const created = connection
+          ? await rpcReq<{ key: string }>(connection.ws, "sessions.create", {
+              agentId: "ops",
+            }).then((result) => ({ ok: result.ok, key: result.payload?.key, error: result.error }))
+          : await createGatewaySession({ cfg, agentId: "ops", commandSource: "test" });
+        expect(created.ok, JSON.stringify(created)).toBe(true);
+        const key = requireNonEmptyString(created.ok ? created.key : undefined, "fresh child key");
+        expect(key).toMatch(/^agent:ops:dashboard:/);
+        expect(loadSessionEntry({ agentId: "ops", sessionKey: key, storePath })).toBeDefined();
+        expect(
+          loadSessionEntry({ agentId: "main", sessionKey: "global", storePath })?.sessionId,
+        ).toBe("fixed-global-owner");
+      } finally {
+        if (connection) {
+          await closeGatewayTestWebSocket(connection.ws);
+        }
+      }
+    }),
+);
 
 test("createGatewaySession rechecks admin scope after incognito inheritance resolves", async () => {
   await createSessionStoreDir();
@@ -3940,9 +4031,9 @@ test.each([undefined, "main"])(
     expect(created.ok, JSON.stringify(created.error)).toBe(true);
     expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
     expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
-    // Auto-parented operator sessions must stay spawn-capable roots: without the
-    // explicit depth, spawn admission derives depth 1 from parentSessionKey and
-    // rejects all sessions_spawn calls at the default maxSpawnDepth of 1.
+    // Auto-parented operator sessions must stay depth-zero roots. This preserves
+    // their operator identity and makes explicit finite spawn-depth caps apply
+    // from the correct origin.
     expect(created.payload?.entry?.spawnDepth).toBe(0);
   },
 );
@@ -6021,6 +6112,59 @@ test("sessions.get reads selected global messages from the requested agent store
   }
 });
 
+test("sessions.create checks selected global initialization in the requested agent store", async () => {
+  const { mainStorePath, workStorePath } = await createSelectedGlobalSessionStore();
+  try {
+    await writeSessionStore({
+      storePath: mainStorePath,
+      entries: {
+        global: sessionStoreEntry("sess-main-initializing", { initializationPending: true }),
+      },
+    });
+
+    const created = await directSessionReq<{ key?: string }>("sessions.create", {
+      key: "global",
+      agentId: "work",
+    });
+
+    expect(created.ok, JSON.stringify(created)).toBe(true);
+    expect(created.payload).toMatchObject({ key: "global" });
+    expect(
+      loadSessionEntry({ agentId: "work", sessionKey: "global", storePath: workStorePath }),
+    ).toBeDefined();
+    expect(
+      loadSessionEntry({ agentId: "main", sessionKey: "global", storePath: mainStorePath }),
+    ).toMatchObject({ sessionId: "sess-main-initializing", initializationPending: true });
+
+    await writeSessionStore({
+      storePath: workStorePath,
+      agentId: "work",
+      entries: {
+        global: sessionStoreEntry("sess-work-initializing", { initializationPending: true }),
+      },
+    });
+    expect(
+      resolveSessionEntryAccessTarget({
+        cfg: getRuntimeConfig(),
+        sessionKey: "global",
+        agentId: "work",
+      }).entry,
+    ).toMatchObject({ sessionId: "sess-work-initializing", initializationPending: true });
+    const blocked = await directSessionReq("sessions.create", { key: "global", agentId: "work" });
+    expect(blocked).toMatchObject({
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        message: "Session global is still initializing; retry creation later.",
+      },
+    });
+  } finally {
+    testState.sessionStorePath = undefined;
+    testState.sessionConfig = undefined;
+    testState.agentsConfig = undefined;
+  }
+});
+
 test("sessions.create sends selected global initial tasks to the requested agent", async () => {
   const { mainStorePath, workStorePath } = await createSelectedGlobalSessionStore();
   const { ws } = await openClient();
@@ -6833,76 +6977,96 @@ test("sessions.create can start the first agent turn from an initial task", asyn
   ws.close();
 });
 
-test("sessions.create commits its selected first-message mentions to the recipient Inbox", async () => {
-  const { storePath } = await createSessionStoreDir();
-  testState.agentsConfig = { list: [{ id: "main", default: true }] };
-  const alice = ensureProfileForEmail("alice@create-mentions.example.test");
-  const bob = ensureProfileForEmail("bob@create-mentions.example.test");
-  const sender = { ...identifiedClient(alice.id, "Alice"), connId: "alice-create" };
-  const recipient = { ...identifiedClient(bob.id, "Bob"), connId: "bob-create" };
-  const inbox = createMentionInbox({
-    gatewayInstanceId: "first-message-mentions",
-    getRuntimeConfig,
-    getClients: () => [sender, recipient],
-    broadcastToConnIds: vi.fn(),
-  });
-  const context = {
-    mentionInbox: inbox,
-    chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
-    getClientConnIds: (filter?: (client: GatewayClient) => boolean) =>
-      new Set(
-        [sender, recipient]
-          .filter((client) => !filter || filter(client))
-          .map(({ connId }) => connId),
-      ),
-  };
-  let key: string | undefined;
-  try {
-    const created = await directSessionReq<{ key: string; sessionId: string; runStarted: boolean }>(
-      "sessions.create",
-      {
-        agentId: "main",
-        message: "@Bob review this",
-        mentions: [{ profileId: bob.id, start: 0, end: 4 }],
-      },
-      { client: sender, context, isWebchatConnect: () => true },
-    );
-    expect(created.ok, JSON.stringify(created.error)).toBe(true);
-    expect(created.payload?.runStarted).toBe(true);
-    key = created.payload?.key;
-    expect(inbox.list(recipient)).toMatchObject({
-      ok: true,
-      value: {
-        items: [{ senderProfileId: alice.id, sessionKey: key, excerpt: "@Bob review this" }],
-      },
-    });
-    expect(inbox.list(sender)).toMatchObject({ ok: true, value: { items: [] } });
-  } finally {
-    await waitForCreatedSessionRun(context, storePath, key);
-    inbox.dispose();
-  }
-});
+const mentionCreationOwners = [
+  ["main", "per-sender"],
+  ["ops", "per-sender"],
+  ["main", "global"],
+  ["ops", "global"],
+] as const;
 
-test("sessions.create rejects stale mention spans before creating a session", async () => {
-  await createSessionStoreDir();
-  testState.agentsConfig = { list: [{ id: "main", default: true }] };
-  const sender = identifiedClient(ensureProfileForEmail("alice@invalid-mentions.example.test").id);
-  const created = await directSessionReq(
-    "sessions.create",
-    {
-      agentId: "main",
-      message: "token was removed",
-      mentions: [{ profileId: "bob", start: 0, end: 4 }],
-    },
-    { client: sender },
-  );
-  expect(created).toMatchObject({
-    ok: false,
-    error: { message: expect.stringContaining("Select the people again") },
-  });
-  const listed = await directSessionReq<{ sessions: unknown[] }>("sessions.list", {});
-  expect(listed.payload?.sessions).toEqual([]);
-});
+test.each(mentionCreationOwners)(
+  "sessions.create commits its selected first-message mentions to the recipient Inbox for %s under %s scope",
+  (agentId, scope) =>
+    withFixedOwnerSessionStore(scope, async ({ storePath }) => {
+      const alice = ensureProfileForEmail("alice@create-mentions.example.test");
+      const bob = ensureProfileForEmail("bob@create-mentions.example.test");
+      const sender = { ...identifiedClient(alice.id, "Alice"), connId: "alice-create" };
+      const recipient = { ...identifiedClient(bob.id, "Bob"), connId: "bob-create" };
+      const inbox = createMentionInbox({
+        gatewayInstanceId: "first-message-mentions",
+        getRuntimeConfig,
+        getClients: () => [sender, recipient],
+        broadcastToConnIds: vi.fn(),
+      });
+      const context = {
+        mentionInbox: inbox,
+        chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
+        getClientConnIds: (filter?: (client: GatewayClient) => boolean) =>
+          new Set(
+            [sender, recipient]
+              .filter((client) => !filter || filter(client))
+              .map(({ connId }) => connId),
+          ),
+      };
+      let key: string | undefined;
+      try {
+        const created = await directSessionReq<{
+          key: string;
+          sessionId: string;
+          runStarted: boolean;
+        }>(
+          "sessions.create",
+          {
+            agentId,
+            message: "@Bob review this",
+            mentions: [{ profileId: bob.id, start: 0, end: 4 }],
+          },
+          { client: sender, context, isWebchatConnect: () => true },
+        );
+        expect(created.ok, JSON.stringify(created.error)).toBe(true);
+        expect(created.payload?.runStarted).toBe(true);
+        key = created.payload?.key;
+        expect(key).toMatch(new RegExp(`^agent:${agentId}:dashboard:`));
+        expect(inbox.list(recipient)).toMatchObject({
+          ok: true,
+          value: {
+            items: [
+              { senderProfileId: alice.id, sessionKey: key, agentId, excerpt: "@Bob review this" },
+            ],
+          },
+        });
+        expect(inbox.list(sender)).toMatchObject({ ok: true, value: { items: [] } });
+      } finally {
+        await waitForCreatedSessionRun(context, storePath, key);
+        inbox.dispose();
+      }
+    }),
+);
+
+test.each(mentionCreationOwners)(
+  "sessions.create rejects stale mention spans before creating a session for %s under %s scope",
+  (agentId, scope) =>
+    withFixedOwnerSessionStore(scope, async () => {
+      const sender = identifiedClient(
+        ensureProfileForEmail("alice@invalid-mentions.example.test").id,
+      );
+      const created = await directSessionReq(
+        "sessions.create",
+        {
+          agentId,
+          message: "token was removed",
+          mentions: [{ profileId: "bob", start: 0, end: 4 }],
+        },
+        { client: sender },
+      );
+      expect(created).toMatchObject({
+        ok: false,
+        error: { message: expect.stringContaining("Select the people again") },
+      });
+      const listed = await directSessionReq<{ sessions: unknown[] }>("sessions.list", {});
+      expect(listed.payload?.sessions).toEqual([]);
+    }),
+);
 
 test("sessions.create forwards an attachment-only first turn", async () => {
   await createSessionStoreDir();

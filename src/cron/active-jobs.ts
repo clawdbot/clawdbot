@@ -6,7 +6,6 @@ import {
 } from "../agents/admitted-run-context.js";
 import type { CommandLaneTaskMarker } from "../process/command-queue.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { CronPayload } from "./types.js";
 
 type CronActiveJobState = {
   activeJobs: Map<string, CronActiveJobMarker>;
@@ -67,7 +66,7 @@ export function bindCronSelfRemovalCommitGuard(
 
 export type CronActiveJobMarker = {
   jobId: string;
-  payloadKind?: CronPayload["kind"];
+  declarationKey?: string;
   generation: number;
   token: number;
   cancellation?:
@@ -76,6 +75,7 @@ export type CronActiveJobMarker = {
   scheduleMutated?: true;
   triggerMutated?: true;
   jobRemoved?: true;
+  selfRemovalAccepted?: true;
   preserveAcrossGenerationAdvance?: boolean;
   onInactive?: Set<() => void>;
   inactiveNotified?: true;
@@ -152,7 +152,7 @@ function notifyCronJobInactive(marker: CronActiveJobMarker) {
 /** Marks a cron job id as currently executing for duplicate-run suppression. */
 export function markCronJobActive(
   jobId: string,
-  opts?: { payloadKind?: CronPayload["kind"]; preserveAcrossGenerationAdvance?: boolean },
+  opts?: { declarationKey?: string; preserveAcrossGenerationAdvance?: boolean },
 ): CronActiveJobMarker | undefined {
   if (!jobId) {
     return undefined;
@@ -162,7 +162,7 @@ export function markCronJobActive(
   state.nextToken += 1;
   const marker: CronActiveJobMarker = {
     jobId,
-    ...(opts?.payloadKind ? { payloadKind: opts.payloadKind } : {}),
+    ...(opts?.declarationKey ? { declarationKey: opts.declarationKey } : {}),
     generation: state.generation,
     token,
     ...(opts?.preserveAcrossGenerationAdvance ? { preserveAcrossGenerationAdvance: true } : {}),
@@ -229,8 +229,19 @@ export function noteActiveCronJobRemoval(
   // marker for duplicate exclusion and deferred session cleanup until completion.
   if (!commitGuard || getCronActiveJobState().selfRemovalOwners.get(commitGuard)?.() !== marker) {
     requestCronActiveJobMarkerCancellation(marker, "Cron job removed by operator.");
+  } else {
+    marker.selfRemovalAccepted = true;
   }
   return marker;
+}
+
+/** Completion retains its live receipt after self-removal; closed tools gain no new authority. */
+export function isCronSelfRemovalCurrent(marker: CronActiveJobMarker | undefined): boolean {
+  return (
+    marker?.selfRemovalAccepted === true &&
+    marker.cancellation?.kind !== "requested" &&
+    getCurrentCronActiveJobMarker(marker.jobId) === marker
+  );
 }
 
 function requestCronActiveJobMarkerCancellation(marker: CronActiveJobMarker, reason: string): void {
@@ -250,15 +261,15 @@ export function requestActiveCronJobCancellation(jobId: string, reason: string):
   }
 }
 
-/** Revokes every active run admitted from one payload family. */
-export function requestActiveCronJobCancellationByPayloadKind(
-  payloadKind: CronPayload["kind"],
+/** Revokes every active run admitted from a declaration-key namespace. */
+export function requestActiveCronJobCancellationByDeclarationKeyPrefix(
+  declarationKeyPrefix: string,
   reason: string,
 ): void {
   const state = getCronActiveJobState();
   for (const marker of state.activeJobs.values()) {
     if (
-      marker.payloadKind !== payloadKind ||
+      !marker.declarationKey?.startsWith(declarationKeyPrefix) ||
       !isMarkerActiveInGeneration(marker, state.generation)
     ) {
       continue;

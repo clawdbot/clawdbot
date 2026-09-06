@@ -224,7 +224,7 @@ backend intentionally needs its own watchdog policy.
 
 Choose the value from the CLI or SDK session contract, not from a provider id
 or broad error class. The bundled Anthropic backend uses `"invalidated-only"`;
-its Agent SDK contract does not treat non-expiration failures as proof that the
+its native session contract does not treat non-expiration failures as proof that the
 conversation can no longer resume.
 
 Prefer the smallest static config that matches the CLI. Add plugin callbacks
@@ -265,17 +265,19 @@ applied through launch environment or staged configuration; the same field is
 available to `resolveExecutionArgs(ctx)` for native CLI flags.
 
 `prepareExecution(ctx)` may also return an optional `execute` transport when a
-backend owns a vendor-supported SDK for the installed CLI. The transport
-receives the exact prepared command, arguments, environment, prompt, session,
-and tool availability; it yields the backend's existing structured stream
-records. Optional `promptContext.prependContext` and `promptContext.appendContext`
+backend owns the installed CLI's protocol or SDK integration. The transport
+receives the exact prepared command, arguments, optional `argv0`, environment,
+prompt, session, and tool availability; it yields the backend's existing structured
+stream records. Preserve the prepared command, `argv0`, and interpreter or script
+prefix in `args` when constructing the CLI invocation. `argv0` preserves
+the invocation name of a PATH shim. Optional `promptContext.prependContext` and `promptContext.appendContext`
 are private prompt-build additions, separate from the ordinary `prompt`. Transport
-them through the native SDK's private context mechanism; never record them as
+them through the native runtime's private context mechanism; never record them as
 operator-authored input. OpenClaw's policy and observation hooks still receive the
 complete logical prompt. Native tool actions must use the provided, run-bound
 `requestToolPermission` callback rather than creating independent approval
 authority. OpenClaw retains cancellation, watchdogs, session policy, and MCP
-grant ownership. Explicit credential forwarding, paired-node execution, and
+grant ownership. Paired-node execution and
 manual compaction continue through the existing host-managed process path.
 
 `runtimeArtifact` is plugin-owned. It is consulted

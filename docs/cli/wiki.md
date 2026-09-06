@@ -173,7 +173,15 @@ Text output includes `Claim:` and `Evidence:` lines when a result matches a stru
 
 ### `wiki get <lookup>`
 
-Read a wiki page by id or relative path.
+Read a wiki page by id or relative path. Compiled claim IDs are resolved first.
+After vault activation, an existing, visible canonical Markdown path reads only
+the requested page. A fresh CLI process still validates the compiled snapshot
+against the vault; missing indexes or snapshots can trigger automatic compilation.
+Missing or invalid candidates, extensionless paths, basenames, and page IDs
+retain their existing lookup fallbacks and may scan the vault.
+
+Wiki-page reads support large files and hard links. Reads refuse paths that
+escape the vault or pass through a symbolic link inside it.
 
 ```bash
 openclaw wiki get entity.alpha

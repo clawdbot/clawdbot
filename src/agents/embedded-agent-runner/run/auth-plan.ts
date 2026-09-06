@@ -210,8 +210,6 @@ export async function prepareEmbeddedRunAuthPlan(params: {
       requestedProfileId: runParams.authProfileId,
       providerUsesProfileScopedModelMetadata,
       providerOwnsDynamicModelRefresh,
-      // Generation-owned: turns one resolveModelAsync per turn (~420ms) into
-      // one per prepared-model-runtime generation.
       generationRouteModelMemo: params.preparedModelRuntime?.routeModelResolutionMemo,
       resolveModel: ({ config, authProfileId, authProfileMode }) =>
         resolveModelAsync(params.provider, params.modelId, params.agentDir, config, {

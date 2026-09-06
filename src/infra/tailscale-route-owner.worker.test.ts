@@ -70,14 +70,16 @@ describe("Tailscale route owner", () => {
     );
   });
 
-  it.runIf(process.platform !== "win32")(
-    "terminates the claim when the Gateway IPC owner disappears",
-    async () => {
+  it.runIf(process.platform !== "win32").each([false, true])(
+    "terminates the claim when the Gateway IPC owner disappears (ready=%s)",
+    async (waitForReady) => {
       const { messages, worker } = spawnRouteOwnerFixture();
       try {
-        await vi.waitFor(() => {
-          expect(messages).toContainEqual({ type: "ready" });
-        });
+        if (waitForReady) {
+          await vi.waitFor(() => {
+            expect(messages).toContainEqual({ type: "ready" });
+          });
+        }
         const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
           (resolve) => {
             worker.once("exit", (code, signal) => resolve({ code, signal }));

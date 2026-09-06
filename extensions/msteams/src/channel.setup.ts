@@ -1,4 +1,3 @@
-// Msteams plugin module implements channel.setup behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
@@ -23,7 +22,7 @@ export const msteamsSetupPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
     media: true,
     reactions: true,
   },
-  reload: { configPrefixes: ["channels.msteams"] },
+  reload: { configPrefixes: ["channels.msteams"], noopPrefixes: ["messages.inbound"] },
   configSchema: MSTeamsChannelConfigSchema,
   config: {
     ...msteamsConfigAdapter,

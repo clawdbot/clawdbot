@@ -216,6 +216,35 @@ describe("gateway plugin HTTP auth boundary", () => {
     await import("./control-ui.js");
   });
 
+  test.each([true, false])(
+    "reserves public preview routes ahead of plugins (UI enabled: %s)",
+    async (controlUiEnabled) => {
+      const plugin = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+        res.end("plugin-owned");
+        return true;
+      });
+      await withGatewayServer({
+        prefix: "openclaw-public-preview-",
+        resolvedAuth: AUTH_TOKEN,
+        overrides: { controlUiEnabled, controlUiBasePath: "/control", handlePluginRequest: plugin },
+        run: async (server) => {
+          const response = await sendRequest(server, {
+            path: "/control/share/dashboard/example/session",
+            host: "gateway.example.test",
+          });
+          expect(response.res.statusCode).toBe(controlUiEnabled ? 200 : 404);
+          expect(response.getBody()).toContain(
+            controlUiEnabled ? 'content="OpenClaw dashboard"' : "Not Found",
+          );
+          for (const route of ["/control/share", "/control/share/api/private"]) {
+            expect((await sendRequest(server, { path: route })).res.statusCode).toBe(404);
+          }
+          expect(plugin).not.toHaveBeenCalled();
+        },
+      });
+    },
+  );
+
   test("serves unauthenticated liveness/readiness probe routes when no other route handles them", async () => {
     await withGatewayServer({
       prefix: "openclaw-plugin-http-probes-test-",

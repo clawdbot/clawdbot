@@ -215,6 +215,10 @@ export function loadPluginManifest(
     channels: normalizeTrimmedStringList(raw.channels),
     providers,
     providerCatalogEntry: normalizeOptionalString(raw.providerCatalogEntry),
+    capabilityCatalogEntry:
+      raw.capabilityCatalogEntry === undefined
+        ? undefined
+        : (normalizeOptionalString(raw.capabilityCatalogEntry) ?? ""),
     modelSupport: modelProviderNormalizers.normalizeManifestModelSupport(raw.modelSupport),
     modelCatalog: normalizeModelCatalog(raw.modelCatalog, {
       ownedProviders: new Set([...providers, ...cliBackends]),
@@ -267,12 +271,21 @@ export function loadPluginManifest(
       manifestPath,
     });
   }
+  const controlUiResult = setupNormalizers.normalizeManifestControlUi(raw.controlUi);
+  if (!controlUiResult.ok) {
+    return cacheResult({
+      ok: false,
+      error: `invalid plugin manifest controlUi: ${controlUiResult.error}`,
+      manifestPath,
+    });
+  }
 
   return cacheResult({
     ok: true,
     manifest: {
       ...manifestBeforeDashboard,
       dashboard: dashboardResult.dashboard,
+      controlUi: controlUiResult.value,
       mcpServers: capabilityNormalizers.normalizeManifestMcpServers(raw.mcpServers),
       skills: normalizeTrimmedStringList(raw.skills),
       name: normalizeOptionalString(raw.name),

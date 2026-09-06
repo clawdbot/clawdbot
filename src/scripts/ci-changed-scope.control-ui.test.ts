@@ -22,10 +22,14 @@ it("runs control-ui localization checks for the canonical locale config", () => 
   );
 });
 
-it("runs Chromium UI tests for browser copilot extension changes", () => {
-  expect(detectChangedScope(["extensions/browser/chrome-extension/sidepanel.ts"]).runUiTests).toBe(
-    true,
-  );
+it.each([
+  "extensions/browser/chrome-extension/sidepanel.ts",
+  "extensions/example/browser/page.ts",
+  "extensions/example/browser/page.test.ts",
+  "extensions/example/browser/page.browser.test.ts",
+  "extensions/example/browser/page.e2e.test.ts",
+])("runs Chromium UI tests for %s", (changedPath) => {
+  expect(detectChangedScope([changedPath]).runUiTests).toBe(true);
 });
 
 it.each([
@@ -72,6 +76,8 @@ it.each([
   "test/vitest/vitest.ui-browser.config.ts",
   "test/vitest/vitest.ui-e2e.config.ts",
   "test/vitest/vitest.ui-e2e.global-setup.ts",
+  "test/vitest/vitest.ui-e2e-prebuilt.config.ts",
+  "test/vitest/vitest.ui-e2e-prebuilt.global-setup.ts",
   "test/vitest/vitest.ui-e2e.bundled.global-setup.ts",
   "test/vitest/vitest.ui-e2e.setup.ts",
   "test/vitest/vitest.ui-e2e.sequencer.ts",
@@ -95,6 +101,9 @@ it.each([
   "scripts/lib/ci-test-timings-schema.mts",
   "config/ci-test-timings.json",
   "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
+  "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
+  "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts",
+  "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
 ])("runs Chromium UI tests when %s changes browser test inputs", (changedPath) => {
   expect(detectChangedScope([changedPath]).runUiTests).toBe(true);
 });

@@ -543,7 +543,7 @@ describe("runEmbeddedAgent provider fault sequences", () => {
     });
   });
 
-  it("persists long-TTL billing cooldown and surfaces billing copy for 402", async () => {
+  it("persists a ten-minute initial billing disable and surfaces billing copy for 402", async () => {
     await withScenarioWorkspace(async ({ agentDir, workspaceDir }) => {
       writeProfiles(agentDir, { openai: 1 });
       const observations: AttemptObservation[] = [];
@@ -568,7 +568,10 @@ describe("runEmbeddedAgent provider fault sequences", () => {
       expect(usageStats["openai:p1"]?.disabledReason).toBe("billing");
       expect(usageStats["openai:p1"]?.failureCounts?.billing).toBe(1);
       expect(usageStats["openai:p1"]?.disabledUntil).toBeGreaterThanOrEqual(
-        startedAt + 5 * 60 * 60 * 1_000,
+        startedAt + 10 * 60 * 1_000,
+      );
+      expect(usageStats["openai:p1"]?.disabledUntil).toBeLessThanOrEqual(
+        Date.now() + 10 * 60 * 1_000,
       );
       expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
     });

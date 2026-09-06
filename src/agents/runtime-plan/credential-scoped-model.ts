@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { shouldPreferProviderRuntimeResolvedModel } from "../../plugins/provider-runtime.js";
+import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import {
   resolveProviderModelMaterializationAuthMode,
   resolveProviderModelRouteAuthRequirement,
@@ -151,48 +152,9 @@ export function hasPreparedAuthAttemptModelMetadata(params: {
   );
 }
 
-/**
- * Generation-owned, value-keyed memo of materialized route models. Lives on
- * the prepared-model-runtime snapshot so every run of a generation shares it
- * (per-run wrappers spread the snapshot, carrying this reference through).
- * Invalidation is generation replacement: OpenClaw-published auth-profile
- * mutations and config publications rebuild the snapshot. Out-of-process
- * credential edits (e.g. an external CLI rewriting its own auth file) do not
- * publish, so only model METADATA can pin until the next publication —
- * credentials themselves are resolved fresh each turn.
- */
-export type PreparedRuntimeRouteModelMemo = {
-  get(key: string): Promise<RuntimeRouteModel> | undefined;
-  set(key: string, value: Promise<RuntimeRouteModel>): void;
-  delete(key: string): void;
-};
-
 const ROUTE_MODEL_MEMO_MAX_ENTRIES = 64;
 
-export function createPreparedRuntimeRouteModelMemo(): PreparedRuntimeRouteModelMemo {
-  const entries = new Map<string, Promise<RuntimeRouteModel>>();
-  return {
-    get: (key) => entries.get(key),
-    set: (key, value) => {
-      if (!entries.has(key) && entries.size >= ROUTE_MODEL_MEMO_MAX_ENTRIES) {
-        const oldest = entries.keys().next().value;
-        if (oldest !== undefined) {
-          entries.delete(oldest);
-        }
-      }
-      entries.set(key, value);
-    },
-    delete: (key) => {
-      entries.delete(key);
-    },
-  };
-}
-
-/**
- * Every decision-relevant input to route-model materialization. Plan objects
- * are minted fresh each turn, so identity keying can never hit across runs;
- * these values are what actually select the resolved model.
- */
+// Plans are fresh objects each turn; only their model-selection facts are reusable.
 function routeModelMemoKey(
   plan: AgentRuntimeAuthPlan,
   params: {
@@ -212,7 +174,7 @@ function routeModelMemoKey(
     route?.baseUrl ?? "",
     route?.authRequirement ?? "",
     params.requestedProfileId?.trim() ?? "",
-    params.providerUsesProfileScopedModelMetadata ? "1" : "0",
+    params.providerUsesProfileScopedModelMetadata,
   ]);
 }
 
@@ -227,7 +189,7 @@ export function createPreparedRuntimeModelMaterializer<Model extends RuntimeRout
   /** Dynamic preparation owns its refresh cadence and must run on every turn. */
   providerOwnsDynamicModelRefresh?: boolean;
   /** Optional generation-owned memo; omit to keep run-local caching only. */
-  generationRouteModelMemo?: PreparedRuntimeRouteModelMemo;
+  generationRouteModelMemo?: Map<string, Promise<Model>>;
   resolveModel(request: {
     config: OpenClawConfig;
     authProfileId?: string;
@@ -266,11 +228,8 @@ export function createPreparedRuntimeModelMaterializer<Model extends RuntimeRout
     );
   };
   const materialize = (plan: AgentRuntimeAuthPlan): Promise<Model> => {
-    // Memoize ONLY guaranteed resolver output: when willResolve is true,
-    // materialize-model either throws or returns resolveModel's result —
-    // never the per-run base model, which must not be shared across runs.
-    // Native-owned sessions always resolve to the per-run base, so they
-    // never touch the memo either.
+    // Only resolver output can cross turns. Native-owned and unchanged base
+    // models belong to their individual run, while dynamic hooks own refresh.
     const willResolve = shouldForceCredentialScopedModelResolve(
       plan,
       params.requestedProfileId,
@@ -289,39 +248,26 @@ export function createPreparedRuntimeModelMaterializer<Model extends RuntimeRout
         return cached;
       }
     }
-    const memoKey = memo ? routeModelMemoKey(plan, params) : undefined;
-    if (memo && memoKey) {
-      const generationHit = memo.get(memoKey);
-      if (generationHit) {
-        // One generation, one config, same decision inputs → same resolver
-        // output. The Model-type cast is sound only because auth-plan is the
-        // sole memo-passing call site; a second caller with a narrower Model
-        // must not share this memo instance.
-        // SAFETY: this memo is owned by the sole materializer call site and stores this Model.
-        const hit = generationHit as Promise<Model>;
-        if (plan.modelRoute) {
-          materializedRouteModels.set(plan, hit);
-        }
-        return hit;
-      }
-    }
-    // Prepared plans are immutable within one run. Carry their exact model
-    // tuple into auth initialization instead of repeating provider discovery.
-    const materialized = materializeUncached(plan);
+    const materialized = memo
+      ? getOrCreatePromise(
+          memo,
+          routeModelMemoKey(plan, params),
+          () => {
+            // FIFO bounds retained metadata for a long-lived generation. The
+            // shared promise helper evicts only its own rejection, even after churn.
+            if (memo.size >= ROUTE_MODEL_MEMO_MAX_ENTRIES) {
+              const oldest = memo.keys().next().value;
+              if (oldest !== undefined) {
+                memo.delete(oldest);
+              }
+            }
+            return materializeUncached(plan);
+          },
+          { cacheRejections: false },
+        )
+      : materializeUncached(plan);
     if (plan.modelRoute) {
       materializedRouteModels.set(plan, materialized);
-    }
-    if (memo && memoKey) {
-      // SAFETY: Model is constrained to RuntimeRouteModel and promises are covariant here.
-      memo.set(memoKey, materialized as Promise<RuntimeRouteModel>);
-      // Resolution failures throw (materialize-model.ts); never pin a
-      // rejection for the generation — but never evict a newer healthy entry.
-      materialized.catch(() => {
-        // SAFETY: same constrained promise identity stored immediately above.
-        if (memo.get(memoKey) === (materialized as Promise<RuntimeRouteModel>)) {
-          memo.delete(memoKey);
-        }
-      });
     }
     return materialized;
   };

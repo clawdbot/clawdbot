@@ -175,19 +175,25 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     return [{ type: "text", text }, ...(images ?? [])];
   }
 
-  private createUserMessage(text: string, images?: ImageContent[]): PersistedUserTurnMessage {
+  private createUserMessage(
+    text: string,
+    images?: ImageContent[],
+    preparedMessage?: PersistedUserTurnMessage,
+  ): PersistedUserTurnMessage {
+    const imageFactIndexes = readRuntimePromptImageFactIndexes(images);
     const message = {
       role: "user",
       content: this.createUserContent(text, images),
       timestamp: Date.now(),
+      ...(imageFactIndexes ? { __openclaw: { mediaImageBlockFactIndexes: imageFactIndexes } } : {}),
     } satisfies PersistedUserTurnMessage;
-    const imageFactIndexes = readRuntimePromptImageFactIndexes(images);
-    return imageFactIndexes
-      ? Object.assign({}, message, {
-          ...message,
-          __openclaw: { mediaImageBlockFactIndexes: imageFactIndexes },
-        })
-      : message;
+    // Admission facts must precede accepted steering input. Keep expanded runtime
+    // content separate from the prepared display text used during persistence.
+    return Object.assign(
+      message,
+      mergePreparedUserTurnMessageForRuntime({ runtimeMessage: message, preparedMessage }),
+      { content: message.content },
+    );
   }
 
   /**
@@ -304,15 +310,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       if (!replayPersistedCarrier && persistedUser?.role === "user") {
         // Transient replay still consumes freshly resolved text/images. Preserve
         // admission facts in place; a recorded carrier pair must keep its signed prefix.
-        const runtimeUser = this.createUserMessage(expandedText, currentImages);
-        Object.assign(
-          runtimeUser,
-          mergePreparedUserTurnMessageForRuntime({
-            runtimeMessage: runtimeUser,
-            preparedMessage: persistedUser,
-          }),
-          { content: runtimeUser.content },
-        );
+        const runtimeUser = this.createUserMessage(expandedText, currentImages, persistedUser);
         this.agent.state.messages = this.agent.state.messages.with(persistedUserIndex, runtimeUser);
       }
 
@@ -520,7 +518,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     imageOrder?: PromptImageOrderEntry[],
     queueIdentity?: string,
   ): Promise<void> {
-    const runtimeMessage = this.createUserMessage(text, images);
+    const runtimeMessage = this.createUserMessage(text, images, transcriptContext?.message);
     const promptMessage = media?.length
       ? attachRuntimePromptMediaFacts(runtimeMessage, media, imageOrder)
       : runtimeMessage;

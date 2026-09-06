@@ -377,7 +377,10 @@ describe("createSessionMessageSubscriberRegistry", () => {
     "removes a first-time subscription when both concurrent replays fail (%s rollback first)",
     (firstRollback) => {
       const subscribers = createSessionMessageSubscriberRegistry();
-      const first = subscribers.subscribe("conn", "agent:main:main", { provisional: true })!;
+      const first = subscribers.subscribe("conn", "agent:main:main", {
+        provisional: true,
+        includeApprovals: true,
+      })!;
       const second = subscribers.subscribe("conn", "agent:main:main", { provisional: true })!;
 
       if (firstRollback === "first") {
@@ -389,51 +392,92 @@ describe("createSessionMessageSubscriberRegistry", () => {
       }
 
       expect([...subscribers.get("agent:main:main")]).toEqual([]);
+      expect([...subscribers.getApprovals("agent:main:main")]).toEqual([]);
     },
   );
 
-  it.each(["first", "second"])(
-    "keeps the successful concurrent replay recency (%s resolution first)",
-    (firstResolution) => {
+  it.each([
+    ["first", false],
+    ["second", false],
+    ["first", true],
+    ["second", true],
+  ] as const)(
+    "keeps the latest successful replay's approval mode (%s settles first, earlier succeeds=%s)",
+    (firstResolution, firstSucceeds) => {
       const subscribers = createSessionMessageSubscriberRegistry();
       subscribers.subscribe("conn", "agent:main:other");
-      const first = subscribers.subscribe("conn", "agent:main:main", { provisional: true })!;
+      const first = subscribers.subscribe("conn", "agent:main:main", {
+        provisional: true,
+        includeApprovals: true,
+      })!;
       const second = subscribers.subscribe("conn", "agent:main:main", { provisional: true })!;
+      const settleFirst = firstSucceeds ? first.commit : first;
 
       if (firstResolution === "first") {
-        first();
+        settleFirst();
         second.commit();
       } else {
         second.commit();
-        first();
+        settleFirst();
       }
 
       expect([...subscribers.get("agent:main:other")]).toEqual(["conn"]);
       expect([...subscribers.get("agent:main:main")]).toEqual(["conn"]);
+      expect([...subscribers.getApprovals("agent:main:main")]).toEqual([]);
     },
   );
 
-  it("retains the committed recency when a re-subscribe replay fails", () => {
-    const subscribers = createSessionMessageSubscriberRegistry();
-    subscribers.subscribe("conn", "agent:main:main");
-    subscribers.subscribe("conn", "agent:main:child");
-    const rollback = subscribers.subscribe("conn", "agent:main:main", { provisional: true })!;
+  it.each([false, true])(
+    "retains committed approval mode %s without audience churn when a re-subscribe replay fails",
+    (includeApprovals) => {
+      const subscribers = createSessionMessageSubscriberRegistry();
+      const onChange = vi.fn();
+      subscribers.onChange(onChange);
+      subscribers.subscribe("conn", "agent:main:main", { includeApprovals });
+      subscribers.subscribe("conn", "agent:main:child");
+      const rollback = subscribers.subscribe("conn", "agent:main:main", {
+        provisional: true,
+        includeApprovals: !includeApprovals,
+      })!;
 
-    rollback();
+      rollback();
 
-    expect([...subscribers.get("agent:main:main")]).toEqual(["conn"]);
-    expect([...subscribers.get("agent:main:child")]).toEqual(["conn"]);
-  });
+      expect([...subscribers.get("agent:main:main")]).toEqual(["conn"]);
+      expect([...subscribers.get("agent:main:child")]).toEqual(["conn"]);
+      expect([...subscribers.getApprovals("agent:main:main")]).toEqual(
+        includeApprovals ? ["conn"] : [],
+      );
+      expect(onChange.mock.calls).toEqual([["agent:main:main"], ["agent:main:child"]]);
+    },
+  );
 
-  it("does not restore a replay invalidated by unsubscribe", () => {
-    const subscribers = createSessionMessageSubscriberRegistry();
-    const subscription = subscribers.subscribe("conn", "agent:main:main", {
-      provisional: true,
-    })!;
+  it.each(["unsubscribe", "disconnect"] as const)(
+    "does not restore a replay invalidated by %s when its connection/session is reused",
+    (invalidation) => {
+      const subscribers = createSessionMessageSubscriberRegistry();
+      const subscription = subscribers.subscribe("conn", "agent:main:main", {
+        provisional: true,
+        includeApprovals: true,
+      })!;
 
-    subscribers.unsubscribe("conn", "agent:main:main");
-    subscription.commit();
+      if (invalidation === "disconnect") {
+        subscribers.unsubscribeAll("conn");
+      } else {
+        subscribers.unsubscribe("conn", "agent:main:main");
+      }
+      expect([...subscribers.get("agent:main:main")]).toEqual([]);
+      expect([...subscribers.getApprovals("agent:main:main")]).toEqual([]);
 
-    expect([...subscribers.get("agent:main:main")]).toEqual([]);
-  });
+      const replacement = subscribers.subscribe("conn", "agent:main:main", {
+        provisional: true,
+      })!;
+      subscription.commit();
+      expect([...subscribers.get("agent:main:main")]).toEqual(["conn"]);
+      expect([...subscribers.getApprovals("agent:main:main")]).toEqual([]);
+
+      replacement();
+      expect([...subscribers.get("agent:main:main")]).toEqual([]);
+      expect([...subscribers.getApprovals("agent:main:main")]).toEqual([]);
+    },
+  );
 });

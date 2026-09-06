@@ -6,6 +6,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { OpenClawPluginNodeInvokePolicyContext } from "../plugins/types.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import type { ExecApprovalManager } from "./exec-approval-manager.js";
 import { applyPluginNodeInvokePolicy } from "./node-invoke-plugin-policy.js";
 import type { NodeInvokeResult, NodeSession } from "./node-registry.js";
@@ -63,6 +64,7 @@ export function createContext(opts?: {
   );
   return {
     context: {
+      trackExecution: trackAsyncWork,
       getRuntimeConfig:
         opts?.getRuntimeConfig ?? (() => nodeCommandsConfig({ allow: [DEMO_COMMAND] })),
       nodeRegistry: {

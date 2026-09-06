@@ -23,6 +23,7 @@ import {
 } from "../../skills/discovery/chat-command-invocation.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
 import { isExplicitCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
+import { normalizeCommandBody } from "../commands-registry-normalize.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
 import { markCommandReplyForDelivery } from "../reply-payload.js";
 import type {
@@ -55,6 +56,7 @@ import {
   createModelSelectionState,
   resolveContextTokens,
 } from "./model-selection.js";
+import type { PreparedReplyConversation } from "./prompt-session-context.js";
 import { formatElevatedUnavailableMessage, resolveElevatedPermissions } from "./reply-elevated.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import type { TypingController } from "./typing.js";
@@ -67,14 +69,6 @@ const commandsRegistryLoader = createLazyImportLoader(
 const skillCommandsLoader = createLazyImportLoader(
   () => import("../../skills/discovery/chat-commands.runtime.js"),
 );
-
-function loadCommandsRegistry() {
-  return commandsRegistryLoader.load();
-}
-
-function loadSkillCommands() {
-  return skillCommandsLoader.load();
-}
 
 function canUseFastExplicitModelDirective(params: {
   directives: InlineDirectives;
@@ -101,6 +95,7 @@ type ReplyDirectiveContinuation = {
   skillCommands?: SkillCommandSpec[];
   directives: InlineDirectives;
   cleanedBody: string;
+  inlineCommand?: string;
   messageProviderKey: string;
   elevatedEnabled: boolean;
   elevatedAllowed: boolean;
@@ -157,7 +152,7 @@ export async function resolveReplyDirectives(params: {
   sessionKey: string;
   storePath?: string;
   sessionScope: Parameters<typeof applyInlineDirectiveOverrides>[0]["sessionScope"];
-  groupResolution: Parameters<typeof resolveGroupRequireMention>[0]["groupResolution"];
+  conversation: PreparedReplyConversation;
   isGroup: boolean;
   triggerBodyNormalized: string;
   resetTriggered: boolean;
@@ -190,7 +185,7 @@ export async function resolveReplyDirectives(params: {
     sessionKey,
     storePath,
     sessionScope,
-    groupResolution,
+    conversation,
     isGroup,
     triggerBodyNormalized,
     resetTriggered,
@@ -242,7 +237,7 @@ export async function resolveReplyDirectives(params: {
     canInterpretTextDirectives && hasSkillReferenceCandidate(command.commandBodyNormalized);
   const reservedCommands = new Set<string>();
   if (hasConfiguredModelAliases) {
-    const { listChatCommands } = await loadCommandsRegistry();
+    const { listChatCommands } = await commandsRegistryLoader.load();
     for (const chatCommand of listChatCommands()) {
       for (const alias of chatCommand.textAliases) {
         reservedCommands.add(normalizeLowercaseStringOrEmpty(alias.replace(/^\//, "")));
@@ -269,7 +264,7 @@ export async function resolveReplyDirectives(params: {
   // This avoids scanning skills for ordinary text, paths, and built-in slash directives.
   const skillCommands =
     canInterpretTextDirectives && (rawAliases.length > 0 || hasSkillReferences)
-      ? (await loadSkillCommands()).listSkillCommandsForWorkspace({
+      ? (await skillCommandsLoader.load()).listSkillCommandsForWorkspace({
           ...skillCommandContext,
           skillFilter,
         })
@@ -278,7 +273,7 @@ export async function resolveReplyDirectives(params: {
 
   const allSkillCommands =
     hasSkillReferences && skillFilter !== undefined
-      ? (await loadSkillCommands()).listSkillCommandsForWorkspace({
+      ? (await skillCommandsLoader.load()).listSkillCommandsForWorkspace({
           ...skillCommandContext,
           includeAllowlistHidden: true,
         })
@@ -308,7 +303,7 @@ export async function resolveReplyDirectives(params: {
     command.isAuthorizedSender &&
     isExplicitCommandTurn(commandTurn) &&
     (commandTurn.kind === "native" ? Boolean(commandTurn.commandName) : canInterpretTextDirectives)
-      ? await loadCommandsRegistry()
+      ? await commandsRegistryLoader.load()
       : undefined;
   const explicitDirectiveCommand = resolveReplyDirectiveCommand(
     commandRegistry
@@ -321,13 +316,15 @@ export async function resolveReplyDirectives(params: {
   );
   const directiveCommandText =
     explicitDirectiveCommand && commandTurn.kind === "text-slash"
-      ? command.commandBodyNormalized
+      ? normalizeCommandBody(commandText, { botUsername: ctx.BotUsername, preserveArguments: true })
       : commandText;
   const routedDirectives = resolveReplyDirectiveRouting({
     commandText: directiveCommandText,
-    agentText: sessionCtx.agentText,
+    agentText: sessionCtx.agentText === commandText ? directiveCommandText : sessionCtx.agentText,
     modelAliases: configuredAliases,
-    nativeCommand: explicitDirectiveCommand,
+    command: explicitDirectiveCommand
+      ? { kind: commandTurn.kind === "native" ? "native" : "text", name: explicitDirectiveCommand }
+      : undefined,
     canInterpretTextDirectives: canInterpretMessageDirectives,
     isAuthorizedSender: command.isAuthorizedSender,
     isGroup,
@@ -386,8 +383,7 @@ export async function resolveReplyDirectives(params: {
 
   const requireMention = await resolveGroupRequireMention({
     cfg,
-    ctx: sessionCtx,
-    groupResolution,
+    group: conversation.group,
   });
   const defaultActivation = defaultGroupActivation(requireMention);
   const sessionThinkLevel = directives.clearThinkLevel
@@ -497,11 +493,10 @@ export async function resolveReplyDirectives(params: {
           preparedModelCatalog: params.preparedModelCatalog,
         });
   } catch (error) {
-    if (error instanceof ModelSelectionLockedError) {
-      typing.cleanup();
-      return { kind: "reply", reply: { text: error.message, isError: true } };
-    }
-    if (!isSessionWorkStartInvalidatedError(error)) {
+    if (
+      !(error instanceof ModelSelectionLockedError) &&
+      !isSessionWorkStartInvalidatedError(error)
+    ) {
       throw error;
     }
     typing.cleanup();
@@ -650,6 +645,7 @@ export async function resolveReplyDirectives(params: {
       skillCommands,
       directives,
       cleanedBody,
+      inlineCommand: routedDirectives.inlineCommand,
       messageProviderKey,
       elevatedEnabled,
       elevatedAllowed,

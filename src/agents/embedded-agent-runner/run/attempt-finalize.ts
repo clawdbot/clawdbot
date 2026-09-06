@@ -25,7 +25,7 @@ import { isSignalTimeoutReason } from "../../failover-error.js";
 import { runAgentEndSideEffects } from "../../harness/agent-end-side-effects.js";
 import { finalizeHarnessContextEngineTurn } from "../../harness/context-engine-lifecycle.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import type { AgentSession, SessionManager } from "../../sessions/index.js";
+import type { AgentSession, SessionManager, SessionMessageEntry } from "../../sessions/index.js";
 import type { NormalizedUsage } from "../../usage.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { log } from "../logger.js";
@@ -207,6 +207,7 @@ type CompleteEmbeddedAttemptAfterTurnInput = {
     messagesSnapshot: AgentMessage[];
     nestedToolActivities?: readonly NestedToolActivity[];
     prePromptMessageCount: number;
+    transcriptLeafId: string | null;
     contextEngineAfterTurnCheckpoint: number | null;
     lastCallUsage?: NormalizedUsage;
     promptCache?: PromptCacheInfo;
@@ -370,7 +371,24 @@ export async function completeEmbeddedAttemptAfterTurn(
       state.promptError && !lifecycleForAgentEnd.aborted
         ? formatErrorMessage(state.promptError)
         : undefined;
+    const sourceTarget = sessionManager.getSessionTarget();
+    let terminalEntry: SessionMessageEntry | undefined;
+    let entry = sessionManager.getLeafEntry();
+    // Suppressed writes can leave the previous turn as the tail. Partial current
+    // turns remain useful, but review must never cross the pre-prompt boundary.
+    while (entry && entry.id !== state.transcriptLeafId) {
+      if (!terminalEntry && entry.type === "message") {
+        terminalEntry = entry;
+      }
+      entry = entry.parentId ? sessionManager.getEntry(entry.parentId) : undefined;
+    }
+    const reachedPromptBoundary =
+      state.transcriptLeafId === null || entry?.id === state.transcriptLeafId;
     runAgentEndSideEffects({
+      skillExperienceReviewSource:
+        sourceTarget && terminalEntry && reachedPromptBoundary
+          ? { ...sourceTarget, entryId: terminalEntry.id }
+          : undefined,
       event: {
         messages: projectNestedToolActivityForHooks(
           state.messagesSnapshot,

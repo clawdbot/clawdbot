@@ -21,15 +21,19 @@ import {
 import { renderLazyViewError } from "../../components/lazy-view-error.ts";
 import { renderLoadingState } from "../../components/loading-state.ts";
 import { t } from "../../i18n/index.ts";
+import { registerLoginEnglish } from "../../i18n/locales/en-login.ts";
 import { resolveEmbedSandbox } from "../../lib/chat/tool-display.ts";
 import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { renderCustomPluginUiDisabled } from "../../plugins/control-ui-disabled.ts";
+import { renderPluginContribution } from "../../plugins/control-ui-view.ts";
 import { pluginTabKey } from "./route.ts";
 
+registerLoginEnglish();
+
 /**
- * Bundled plugin tab views ship with the Control UI and render natively; every
- * other tab either embeds the plugin-served panel (descriptor path) in a
- * sandboxed frame or shows the unavailable card.
+ * Views shipped with the Control UI use this adapter. Native plugin entries
+ * mount through the contribution runtime; descriptor paths use sandboxed frames.
  */
 type BundledPluginTabView = {
   render: (props: {
@@ -97,6 +101,7 @@ const BUNDLED_TAB_VIEWS: Record<string, () => Promise<BundledPluginTabView>> = {
 export class PluginPage extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) pluginId = "";
   @property({ attribute: false }) tabId = "";
+  @property({ attribute: false }) params: Readonly<Record<string, string>> = {};
 
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext<RouteId>;
@@ -128,6 +133,10 @@ export class PluginPage extends OpenClawLightDomContentsElement {
     .watch(
       () => this.context?.sessions,
       (sessions, notify) => sessions.subscribe(notify),
+    )
+    .watch(
+      () => this.context?.plugins,
+      (plugins, notify) => plugins.subscribe(notify),
     );
 
   private readonly handleVisibilityChange = () => {
@@ -580,6 +589,9 @@ export class PluginPage extends OpenClawLightDomContentsElement {
     // Only advertised tabs render: hello omits descriptors whose plugin is
     // inactive or whose required scopes the connection lacks.
     const info = this.tabInfo();
+    if (context.plugins?.registrations("pages").some((entry) => entry.key === this.tabKey())) {
+      return renderPluginContribution("pages", this.tabKey(), this.params);
+    }
     if (info && this.tabKey() in BUNDLED_TAB_VIEWS) {
       const viewState = this.bundledViewState;
       if (viewState.status === "loading") {
@@ -649,10 +661,27 @@ export class PluginPage extends OpenClawLightDomContentsElement {
         </section>
       `;
     }
+    if (
+      context.gateway.snapshot.phase !== "connected" ||
+      context.plugins?.isLoading(this.pluginId)
+    ) {
+      return renderLoadingState();
+    }
+    const disabled = renderCustomPluginUiDisabled(context, this.pluginId);
     return html`
       <section class="card lazy-view-state" role="status">
-        <div class="card-title">${t("pluginTabs.unavailableTitle")}</div>
-        <div class="card-sub">${t("pluginTabs.unavailableSubtitle")}</div>
+        ${
+          disabled ??
+          html`
+            <div class="card-title">${t("pluginTabs.unavailableTitle")}</div>
+            <div class="card-sub">
+              ${
+                context.plugins?.errors.find((entry) => entry.pluginId === this.pluginId)
+                  ?.message ?? t("pluginTabs.unavailableSubtitle")
+              }
+            </div>
+          `
+        }
       </section>
     `;
   }

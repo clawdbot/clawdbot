@@ -896,6 +896,10 @@
     "target": "工具插件"
   },
   {
+    "source": "Feature plugins",
+    "target": "功能插件"
+  },
+  {
     "source": "Plugin SDK subpaths",
     "target": "插件 SDK 子路径"
   },
@@ -1814,6 +1818,14 @@
   {
     "source": "llama-server",
     "target": "llama-server"
+  },
+  {
+    "source": "llmman",
+    "target": "llmman"
+  },
+  {
+    "source": "llmman (local models)",
+    "target": "llmman（本地模型）"
   },
   {
     "source": "llama.cpp (managed or existing server)",

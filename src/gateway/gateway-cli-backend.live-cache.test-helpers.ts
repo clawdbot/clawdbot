@@ -288,6 +288,7 @@ export async function verifyCliBackendAnnounceOrdering({
         `Call sessions_spawn exactly once with taskName=cli_announce_${announceNonce.toLowerCase()} and task=${JSON.stringify(`Reply exactly ${announceChildToken} and nothing else.`)}.`,
         `After sessions_spawn returns status=accepted, call ${CLI_ANNOUNCE_BARRIER_TOOL_NAME} exactly once with no arguments.`,
         `After that tool returns, reply exactly ${announceParentToken}.`,
+        `When the child's completion is delivered in a later turn, include its exact result ${announceChildToken} in your user-facing update.`,
       ].join("\n"),
     },
     { expectFinal: true, timeoutMs: requestTimeoutMs },
@@ -365,13 +366,13 @@ export async function verifyCliBackendAnnounceOrdering({
   const completionReplyIndex = assistantReplies.findIndex((reply) =>
     reply.includes(announceChildToken),
   );
-  expect(parentReplyIndex).toBeGreaterThanOrEqual(0);
-  expect(completionReplyIndex).toBeGreaterThan(parentReplyIndex);
-  logStep("announce-child:delivered-after-parent", {
+  logStep("announce-child:transcript-order", {
     runId: deliveredAnnounceChild.runId,
     parentObservedAt: announceParentObservedAt,
     delivery: deliveredAnnounceChild.delivery,
     parentReplyIndex,
     completionReplyIndex,
   });
+  expect(parentReplyIndex).toBeGreaterThanOrEqual(0);
+  expect(completionReplyIndex).toBeGreaterThan(parentReplyIndex);
 }

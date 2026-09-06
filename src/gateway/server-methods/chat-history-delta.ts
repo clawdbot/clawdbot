@@ -5,6 +5,7 @@ import {
   readTranscriptDisplayDelta,
   type SessionTranscriptDisplayDeltaResult,
 } from "../../config/sessions/session-accessor.sqlite-history-events.js";
+import { jsonUtf8BytesOrInfinity } from "../../infra/json-utf8-bytes.js";
 import { createCurrentUserProfileMessageProjector } from "../chat-display-projection.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import {
@@ -54,13 +55,15 @@ function containsTranscriptDiscontinuity(
 export function readChatHistoryDelta(params: {
   agentId: string;
   cursor: string;
+  maxBytes?: number;
   scope: SessionTranscriptReadScope;
   sessionKey: string;
   sessionSnapshot: Record<string, unknown>;
 }): ChatHistoryDeltaRead {
+  const maxBytes = Math.min(params.maxBytes ?? Infinity, CHAT_HISTORY_DELTA_MAX_BYTES);
   const result = readTranscriptDisplayDelta(params.scope, {
     cursor: params.cursor,
-    maxBytes: CHAT_HISTORY_DELTA_MAX_BYTES,
+    maxBytes,
     maxEvents: CHAT_HISTORY_DELTA_MAX_EVENTS,
   });
   if (result.kind !== "page" || result.hasMore || containsTranscriptDiscontinuity(result)) {
@@ -75,6 +78,8 @@ export function readChatHistoryDelta(params: {
     resolveCurrentUserProfileDisplay,
   );
   const messages: Record<string, unknown>[] = [];
+  // Include array brackets and separators without serializing the whole page.
+  let messagesBytes = 2;
   for (const row of result.events) {
     const event = readMessageEvent(row.event);
     if (!event || row.messageSeq === undefined) {
@@ -93,11 +98,12 @@ export function readChatHistoryDelta(params: {
     });
     projectionState = projected.projectionState;
     if (projected.payload) {
+      messagesBytes += jsonUtf8BytesOrInfinity(projected.payload) + (messages.length > 0 ? 1 : 0);
+      if (messagesBytes > maxBytes) {
+        return { kind: "reset" };
+      }
       messages.push(projected.payload);
     }
-  }
-  if (Buffer.byteLength(JSON.stringify(messages), "utf8") > CHAT_HISTORY_DELTA_MAX_BYTES) {
-    return { kind: "reset" };
   }
   return {
     activeLeafEntryId: result.activeLeafEntryId,

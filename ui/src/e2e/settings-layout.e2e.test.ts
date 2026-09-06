@@ -184,6 +184,82 @@ function createCronLayoutMethodResponses() {
 }
 
 suite.define(() => {
+  it("loads provider-settings copy after New Session and Chat without startup errors", async () => {
+    const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      },
+      async ({ context, page: firstPage }) => {
+        const errors: string[] = [];
+        const failedScripts: string[] = [];
+        const startupScripts: string[] = [];
+        const settingsScripts: string[] = [];
+        const providerCopy = "Model providers with auth, plan, quota, and cost data.";
+        // Keep each cold-boot document alive through the final assertions: replacing
+        // an observed document cancels its idle imports and creates test-owned failures.
+        for (const pathname of ["new", "chat", "settings/model-providers"]) {
+          const page = pathname === "new" ? firstPage : await context.newPage();
+          const isSettings = pathname === "settings/model-providers";
+          const scripts = isSettings ? settingsScripts : startupScripts;
+          page.on("pageerror", (error) => errors.push(error.message));
+          page.on("console", (message) => {
+            if (message.type() === "error") {
+              errors.push(message.text());
+            }
+          });
+          page.on("requestfailed", (request) => {
+            if (request.resourceType() === "script") {
+              failedScripts.push(`${pathname}: ${request.url()} (${request.failure()?.errorText})`);
+            }
+          });
+          await installMockGateway(page);
+          // Capture before delivery so copy assertions include every script that can execute.
+          await page.route("**/*", async (route) => {
+            if (route.request().resourceType() !== "script") {
+              await route.fallback();
+              return;
+            }
+            const response = await route.fetch();
+            if (!response.ok()) {
+              failedScripts.push(`${pathname}: ${response.url()} (HTTP ${response.status()})`);
+            }
+            scripts.push(await response.text());
+            await route.fulfill({ response });
+          });
+
+          await page.goto(`${suite.server.baseUrl}${pathname}`);
+          const ready = isSettings
+            ? page.getByRole("heading", { name: /^Configured providers\b/ })
+            : page.locator(".agent-chat__composer-combobox textarea");
+          await ready.waitFor();
+          if (isSettings) {
+            expect(settingsScripts.join("\n")).toContain(providerCopy);
+            expect(await page.locator(".model-providers__defaults").textContent()).toContain(
+              "Utility Model",
+            );
+          } else {
+            expect(startupScripts.join("\n")).not.toContain(providerCopy);
+          }
+          if (recordVisuals) {
+            await page.screenshot({
+              path: path.join(suite.artifactDir, `${isSettings ? "settings" : pathname}.png`),
+              fullPage: true,
+            });
+          }
+        }
+        expect(startupScripts.join("\n")).not.toContain(providerCopy);
+        expect(errors).toEqual([]);
+        expect(failedScripts).toEqual([]);
+      },
+      async ({ context }) => {
+        await Promise.all(context.pages().map((page) => page.unrouteAll({ behavior: "wait" })));
+      },
+    );
+  });
+
   it("aligns settings-style workspace headers with their content columns", async () => {
     const context = await suite.browser.newContext({
       colorScheme: "dark",

@@ -17,7 +17,7 @@ import type { SessionEntrySummary } from "../../config/sessions/session-accessor
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { resolveHeartbeatSummaryForAgent } from "../../infra/heartbeat-summary.js";
+import { resolveHeartbeatSummariesForAgents } from "../../infra/heartbeat-summary-projection.js";
 import { redactToolPayloadTextWithConfig } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -29,6 +29,7 @@ import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { listPluginServiceHealthFailures } from "../../plugins/service-health.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../../utils/absolute-deadline.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import {
@@ -67,9 +68,6 @@ const debugHealth = (
     healthLog.info(message, meta);
   }
 };
-
-const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
-  resolveHeartbeatSummaryForAgent(cfg, agentId);
 
 export function resolveHealthAgentOrder(cfg: OpenClawConfig) {
   const defaultAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
@@ -144,8 +142,12 @@ export async function buildHealthAgentSummaries(
   cfg: OpenClawConfig,
   { defaultAgentId, ordered }: ReturnType<typeof resolveHealthAgentOrder>,
 ): Promise<AgentHealthSummary[]> {
-  const reader = await createHealthSessionStoreReader(ordered.map((entry) => entry.id));
-  return ordered.map((entry) => {
+  const agentIds = ordered.map((entry) => entry.id);
+  const reader = await createHealthSessionStoreReader(agentIds);
+  // One roster pass for every agent: per-agent resolution re-walks the roster
+  // and froze large fleets for tens of seconds each refresh (#137570).
+  const heartbeats = resolveHeartbeatSummariesForAgents(cfg, agentIds);
+  return ordered.map((entry, index) => {
     const store = reader.read(
       resolveSessionStorePathCore(cfg.session?.store, { agentId: entry.id }),
       entry.id,
@@ -154,7 +156,7 @@ export async function buildHealthAgentSummaries(
       agentId: entry.id,
       name: entry.name,
       isDefault: entry.id === defaultAgentId,
-      heartbeat: resolveHeartbeatSummary(cfg, entry.id),
+      heartbeat: expectDefined(heartbeats[index], "heartbeat summary"),
       sessions: projectHealthSessions(store.path, store),
     };
   });
@@ -505,13 +507,18 @@ async function buildHealthAccountRecord(params: {
 async function runHealthAccountWithinDeadline(
   params: Parameters<typeof buildHealthAccountRecord>[0],
 ): Promise<ChannelAccountHealthSummary> {
-  const release = await acquireHealthOperationPermit(params.deadlineAtMs);
-  if (!release) {
-    return buildHealthTimeoutRecord(params.accountId, params.timeoutMs);
-  }
-
-  const operation = buildHealthAccountRecord(params);
-  void operation.then(release, release);
+  // Own permit admission and release too: neither a deadline nor shutdown may orphan a hook.
+  const operation = trackAsyncWork(async () => {
+    const release = await acquireHealthOperationPermit(params.deadlineAtMs);
+    if (!release) {
+      return buildHealthTimeoutRecord(params.accountId, params.timeoutMs);
+    }
+    try {
+      return await buildHealthAccountRecord(params);
+    } finally {
+      release();
+    }
+  });
   const result = await awaitWithinDeadline(() => operation, params.deadlineAtMs);
   return result === ABSOLUTE_DEADLINE_EXPIRED
     ? buildHealthTimeoutRecord(params.accountId, params.timeoutMs)

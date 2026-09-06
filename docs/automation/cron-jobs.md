@@ -35,7 +35,7 @@ Manage automations with the `openclaw automations` CLI; `openclaw cron` remains 
   </Step>
   <Step title="See run history">
     ```bash
-    openclaw automations runs --id <job-id>
+    openclaw automations runs <job-id>
     ```
   </Step>
 </Steps>
@@ -160,6 +160,8 @@ The script must return `{ fire, message?, state? }`. The previous JSON state is 
 
 `fire: false` persists evaluation state and counters, then reschedules without creating run history. If a fired payload run fails, the returned `state` is **not** persisted — the next evaluation sees the previous state and can fire again, so write scripts as read-only checks and keep actions in the payload. Trigger schedules have a built-in minimum interval of 30 seconds. Each evaluation has a 30-second wall-clock budget and up to 5 tool calls.
 
+Removing or disabling a job during condition evaluation cancels that evaluation before its payload can start. After a main-session payload hands work to heartbeat, that shared heartbeat retains its own lifecycle.
+
 Author watchers around **actionable state**, not only success: a watcher that goes quiet when its check fails or times out looks healthy while broken. Compare the observation with `trigger.state` and return fresh state to deduplicate; do not rely on model or process memory. When firing, make `message` self-contained because it becomes the fired run's complete event context.
 
 <Warning>
@@ -231,7 +233,8 @@ Every job carries exactly one payload kind, chosen by flag:
 | Command       | `--command <shell>` or `--command-argv <json>` | A shell/process on the Gateway host, no model call         |
 | Script        | `--script <file\|->`                           | A headless code-mode script using the owning agent's tools |
 
-System-owned payload kinds are gateway-converged and cannot be created or edited through the CLI or API. The `heartbeat` kind creates one heartbeat monitor job per heartbeat-enabled agent (see [Heartbeat](/gateway/heartbeat)). The `skillCollectionReview` kind creates one Skill Workshop review job per writable workspace. Both appear in `openclaw cron list`; use `--all` to include disabled rows.
+System-owned monitor jobs are gateway-converged and cannot be created or edited through the CLI or API. The `heartbeat` kind creates one heartbeat monitor job per heartbeat-enabled agent (see [Heartbeat](/gateway/heartbeat)). The weekly Skill Workshop review is a normal isolated `agentTurn` job with a reserved declaration key. Both appear in `openclaw cron list`; use `--all` to include disabled rows.
+The `skillCollectionReview` payload kind is gone; existing rows are replaced with the canonical review job during upgrade.
 
 Skill collection review runs every 7 days. It is enabled when `skills.workshop.autonomous.mode` is `auto`; `propose` and `off` keep the system-owned job disabled. The Gateway converges these jobs at startup and after config reload. Scheduled reviews require automations. When `cron.enabled` is `false` or `OPENCLAW_SKIP_CRON=1`, the Gateway logs a startup warning and does not run scheduled reviews. There is no separate weekly Gateway timer.
 
@@ -288,6 +291,8 @@ Model-selection precedence for isolated jobs, highest first:
 4. Agent/default model selection
 
 Fast mode follows the resolved live selection. Isolated automation resolves it in this order: stored session `fastMode`, per-agent `agents.entries.*.fastModeDefault`, global `agents.defaults.fastModeDefault`, then selected-model `params.fastMode`. Auto mode uses the model's `params.fastAutoOnSeconds` cutoff, defaulting to 60 seconds.
+
+When a runtime reports token usage without a cost, automation estimates use the selected agent's local `models.json` prices and the model metadata retained for that run.
 
 If a run hits a live model-switch handoff, the scheduler retries with the switched provider/model and persists that selection (and any new auth profile) for the active run. Retries are bounded: after the initial attempt plus 2 switch retries, the scheduler aborts instead of looping.
 
@@ -590,10 +595,10 @@ openclaw automations run <jobId> --wait --wait-timeout 10m --poll-interval 2s
 openclaw automations run <jobId> --due
 
 # View run history
-openclaw automations runs --id <jobId> --limit 50
+openclaw automations runs <jobId> --limit 50
 
 # View one exact run
-openclaw automations runs --id <jobId> --run-id <runId>
+openclaw automations runs <jobId> --run-id <runId>
 
 # Delete a job
 openclaw automations remove <jobId>
@@ -613,7 +618,7 @@ Intentional silence (`NO_REPLY`), intentionally empty output, heartbeat acknowle
 
 Direct Gateway event sources can use `cron.run` with `mode: "if-enabled"` to run immediately without overriding an operator-disabled or auto-disabled job. Explicit operator run-now commands continue to use `force`.
 
-The agent `automations` tool returns compact job summaries (`id`, `name`, `enabled`, `nextRunAtMs`, `scheduleKind`, `lastRunStatus`) from `automations(action: "list")`; use `automations(action: "get", jobId: "...")` for one full job definition. Direct Gateway callers can pass `compact: true` to `cron.list`; omitting it preserves the full response with delivery previews. `cron.add` includes the same dry-run preview on the created job so create-time output names a resolved route or fail-closed outcome.
+The agent `automations` tool returns compact job summaries (`id`, `name`, `enabled`, `nextRunAt`, `nextRunAtMs`, `scheduleKind`, `lastRunAt`, `lastRunStatus`) from `automations(action: "list")`. Run dates are exact ISO timestamps, or `null` when absent; the millisecond fields remain available for programmatic callers. Time-based jobs also include their exact `schedule` (`at`, `every`, or `cron`), including disabled jobs with no next run. Event-driven schedules, payloads, and delivery definitions remain omitted; use `automations(action: "get", jobId: "...")` for one full job definition. Direct Gateway callers can pass `compact: true` to `cron.list`; omitting it preserves the full response with delivery previews. `cron.add` includes the same dry-run preview on the created job so create-time output names a resolved route or fail-closed outcome.
 
 `openclaw automations create` is an alias for `openclaw automations add`. New jobs can use a positional schedule (`"0 9 * * 1"`, `"every 1h"`, `"20m"`, or an ISO timestamp) followed by a positional agent prompt. Use `--webhook <url>` on `automations add|create` or `automations edit` to POST the finished run payload to an HTTP endpoint; webhook delivery cannot combine with chat delivery flags (`--announce`, `--channel`, `--to`, `--thread-id`, `--account`). On `automations edit`, `--clear-channel`, `--clear-to`, `--clear-thread-id`, and `--clear-account` unset those routing fields individually (each rejected alongside its matching set flag) — distinct from `--no-deliver`, which only disables runner fallback delivery.
 
@@ -699,6 +704,34 @@ This means the run acquired session/global placement admission. It does **not**
 mean the model finished, a tool succeeded, or a message was delivered. A single
 agent request can wait up to 15 seconds for admission; the model runtime may still
 be preparing when the response arrives.
+
+For callers that need the terminal execution and delivery facts in the same
+request, add `"waitForCompletion": true` to the direct `/hooks/agent` payload.
+The response stays open after admission and returns HTTP `200` when the admitted
+run settles:
+
+```json
+{
+  "ok": true,
+  "runId": "<hook-request-run-id>",
+  "completion": {
+    "status": "ok",
+    "replyDisposition": "silent",
+    "delivered": false,
+    "deliveryAttempted": true,
+    "deliverySuppressionReason": "silent"
+  }
+}
+```
+
+`replyDisposition` records whether the model's terminal reply was `visible`,
+`silent`, or `empty`, without exposing its text. Post-admission execution or
+delivery failures are terminal data in `completion`, not retryable HTTP
+failures. `deliveryError`, when present, is the fixed categorical value
+`"delivery-failed"`; provider, runtime, model, target, session, and diagnostic
+details remain private. The response never includes model output or summaries.
+Use an idempotency key so a lost response can replay the same admitted run and
+completion result without dispatching again.
 
 In `openclaw logs --follow`, search for `hook agent run completed` and the exact HTTP
 `runId`. Runs with `status=ok` and no explicit delivery error log at info level;
@@ -1042,7 +1075,7 @@ openclaw status
 openclaw gateway status
 openclaw automations status
 openclaw automations list
-openclaw automations runs --id <jobId> --limit 20
+openclaw automations runs <jobId> --limit 20
 openclaw system heartbeat last
 openclaw logs --follow
 openclaw doctor

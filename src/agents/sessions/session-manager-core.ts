@@ -1,13 +1,13 @@
 import {
   loadTranscriptEventsSync,
-  replaceTranscriptEventsSync,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
 import {
   readSessionTranscriptBoundedActiveContextCore,
   type SessionTranscriptBoundedActiveContext,
 } from "../../config/sessions/session-accessor.sqlite-active-context.js";
-import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
+import { assertCurrentSessionTranscriptHeader } from "../../config/sessions/session-entry-codec.js";
+import { SessionEntryNavigation } from "../../config/sessions/session-entry-navigation.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import {
   isIndexedSessionEntry,
@@ -33,22 +33,13 @@ export type SessionManagerBoundedContext = Pick<
   "activeLeafEntryId" | "opaqueParents" | "firstKeptRanges" | "boundaryCount"
 > & { limits: SessionManagerBoundedContextLimits };
 
-export class SessionManagerCore {
+export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
   migrated = false;
   protected sessionId = "";
   protected cwd: string;
   protected fileEntries: FileEntry[] = [];
   protected opaqueFileEntries: PreservedOpaqueFileEntry[] = [];
-  protected byId: Map<string, SessionEntry> = new Map();
-  protected opaqueParentsById: Map<string, string | null> = new Map();
   private boundedFirstKeptById = new Map<string, string>();
-  protected logicalParentsById: Map<string, string | null> = new Map();
-  protected invalidLeafControlIds: Set<string> = new Set();
-  protected labelsById: Map<string, string> = new Map();
-  protected labelTimestampsById: Map<string, string> = new Map();
-  protected leafId: string | null = null;
-  protected appendParentId: string | null = null;
-  protected appendMode: "side" | undefined;
   protected pendingDeliberateAppend = false;
   protected persistenceTarget: SessionManagerPersistenceTarget | undefined;
   protected persistenceHeaderPending = false;
@@ -62,6 +53,7 @@ export class SessionManagerCore {
     loadedEntries?: FileEntry[],
     boundedContext?: SessionManagerBoundedContext,
   ) {
+    super();
     this.cwd = cwd;
     this.persistenceTarget = persistenceTarget;
     this.boundedContextLimits = boundedContext?.limits;
@@ -120,10 +112,8 @@ export class SessionManagerCore {
       return;
     }
     const header = partitioned.fileEntries.find((entry) => entry.type === "session");
-    if (target && (header?.version ?? 1) < CURRENT_SESSION_VERSION) {
-      throw new Error(
-        "Persisted legacy session transcripts require doctor/import migration before runtime use",
-      );
+    if (target) {
+      assertCurrentSessionTranscriptHeader(header);
     }
     this.persistenceHeaderPending = false;
     this.persistenceTarget = target ? { ...target } : undefined;
@@ -199,188 +189,28 @@ export class SessionManagerCore {
     return this.persistenceTarget ? this.sessionId : undefined;
   }
 
-  protected resolveOpaqueLeafTargetId(targetId: string | null): string | null {
-    if (targetId === null || this.byId.has(targetId)) {
-      return targetId;
-    }
-    return this.resolveCanonicalParentId(targetId);
-  }
-
-  protected resolveOpaqueAppendParentId(parentId: string | null): string | null {
-    if (parentId === null || this.byId.has(parentId) || this.opaqueParentsById.has(parentId)) {
-      return parentId;
-    }
-    return this.resolveCanonicalParentId(parentId);
-  }
-
-  protected resolveOpaqueLeafControl(
-    leafEntry: ReturnType<typeof parseOpaqueLeafEntry>,
-  ): { leafId: string | null; appendParentId: string | null; appendMode?: "side" } | undefined {
-    if (!leafEntry) {
-      return undefined;
-    }
-    const isKnownReference = (id: string | null): boolean =>
-      id === null ||
-      this.byId.has(id) ||
-      (this.opaqueParentsById.has(id) && !this.invalidLeafControlIds.has(id));
-    if (
-      !isKnownReference(leafEntry.targetId) ||
-      (leafEntry.appendParentId !== undefined && !isKnownReference(leafEntry.appendParentId))
-    ) {
-      return undefined;
-    }
-    const leafId = this.resolveOpaqueLeafTargetId(leafEntry.targetId);
-    return {
-      leafId,
-      appendParentId:
-        leafEntry.appendParentId === undefined
-          ? leafId
-          : this.resolveOpaqueAppendParentId(leafEntry.appendParentId),
-      ...(leafEntry.appendMode ? { appendMode: leafEntry.appendMode } : {}),
-    };
-  }
-
   protected buildIndex(): void {
-    this.byId.clear();
-    this.opaqueParentsById.clear();
-    this.logicalParentsById.clear();
-    this.invalidLeafControlIds.clear();
-    this.labelsById.clear();
-    this.labelTimestampsById.clear();
-    this.leafId = null;
-    this.appendParentId = null;
-    this.appendMode = undefined;
+    this.clearNavigation();
     this.pendingDeliberateAppend = false;
     let opaqueIndex = 0;
-    let latestResetId: string | undefined;
-    const resetDescendantIds = new Set<string>();
     for (let index = 0; index <= this.fileEntries.length; index += 1) {
       while (this.opaqueFileEntries[opaqueIndex]?.index === index) {
-        const opaqueRecord = this.opaqueFileEntries[opaqueIndex]?.record;
-        const leafEntry = parseOpaqueLeafEntry(opaqueRecord);
-        if (leafEntry) {
-          const leafState = this.resolveOpaqueLeafControl(leafEntry);
-          if (!leafState) {
-            this.invalidLeafControlIds.add(leafEntry.id);
-            this.opaqueParentsById.set(
-              leafEntry.id,
-              this.resolveOpaqueAppendParentId(leafEntry.parentId),
-            );
-            opaqueIndex += 1;
-            continue;
-          }
-          const crossesResetBoundary =
-            latestResetId !== undefined &&
-            (leafState.leafId === null || !resetDescendantIds.has(leafState.leafId));
-          const effectiveLeafState: typeof leafState = crossesResetBoundary
-            ? { leafId: this.leafId, appendParentId: this.leafId }
-            : leafState;
-          this.opaqueParentsById.set(leafEntry.id, effectiveLeafState.leafId);
-          if (
-            latestResetId !== undefined &&
-            effectiveLeafState.leafId !== null &&
-            resetDescendantIds.has(effectiveLeafState.leafId)
-          ) {
-            resetDescendantIds.add(leafEntry.id);
-          }
-          this.leafId = effectiveLeafState.leafId;
-          this.appendParentId = effectiveLeafState.appendParentId;
-          this.appendMode = effectiveLeafState.appendMode;
-          opaqueIndex += 1;
-          continue;
-        }
-        const link = parseParentLinkedOpaqueEntry(opaqueRecord);
-        if (link) {
-          this.opaqueParentsById.set(link.id, link.parentId);
-          if (
-            latestResetId !== undefined &&
-            link.parentId !== null &&
-            resetDescendantIds.has(link.parentId)
-          ) {
-            resetDescendantIds.add(link.id);
-          }
-          this.appendParentId = link.id;
-        }
+        this.appendOpaqueNavigationRecord(this.opaqueFileEntries[opaqueIndex]?.record);
         opaqueIndex += 1;
       }
       const entry = this.fileEntries[index];
-      if (!isIndexedSessionEntry(entry)) {
+      // Current entries were validated by partition/append. Legacy imports retain readable rows
+      // through migration, so only those need the final shape check before indexing.
+      if (!entry || entry.type === "session" || (this.migrated && !isIndexedSessionEntry(entry))) {
         continue;
       }
-      if (entry.type === "label" && !this.byId.has(entry.targetId)) {
-        this.opaqueParentsById.set(entry.id, this.resolveCanonicalParentId(entry.parentId));
-        continue;
-      }
-      const crossesResetBoundary =
-        latestResetId !== undefined &&
-        !isSessionTranscriptSideAppendEntry(entry) &&
-        (entry.parentId === null || !resetDescendantIds.has(entry.parentId));
-      if (
-        crossesResetBoundary ||
-        !Object.hasOwn(entry, "parentId") ||
-        (!isSessionTranscriptSideAppendEntry(entry) &&
-          entry.parentId === this.appendParentId &&
-          this.leafId !== this.appendParentId)
-      ) {
-        this.logicalParentsById.set(entry.id, this.leafId);
-      }
-      this.byId.set(entry.id, entry);
-      if (entry.type === "reset") {
-        latestResetId = entry.id;
-        resetDescendantIds.clear();
-        resetDescendantIds.add(entry.id);
-      } else {
-        const logicalParentId = this.logicalParentsById.has(entry.id)
-          ? (this.logicalParentsById.get(entry.id) ?? null)
-          : entry.parentId;
-        if (
-          latestResetId !== undefined &&
-          logicalParentId !== null &&
-          resetDescendantIds.has(logicalParentId)
-        ) {
-          resetDescendantIds.add(entry.id);
-        }
-      }
-      this.appendParentId = entry.id;
-      if (isSessionTranscriptSideAppendEntry(entry)) {
-        this.appendMode = "side";
-      } else {
-        this.leafId = entry.id;
-        this.appendMode = undefined;
-      }
-      if (entry.type === "label") {
-        if (entry.label) {
-          this.labelsById.set(entry.targetId, entry.label);
-          this.labelTimestampsById.set(entry.targetId, entry.timestamp);
-        } else {
-          this.labelsById.delete(entry.targetId);
-          this.labelTimestampsById.delete(entry.targetId);
-        }
-      }
+      this.appendCanonicalNavigationEntry(entry);
     }
+    this.finishNavigation();
   }
 
-  protected resolveCanonicalParentId(parentId: string | null): string | null {
-    const seen = new Set<string>();
-    let currentId = parentId;
-    while (currentId && !this.byId.has(currentId)) {
-      if (seen.has(currentId)) {
-        return null;
-      }
-      seen.add(currentId);
-      currentId = this.opaqueParentsById.get(currentId) ?? null;
-    }
-    return currentId;
-  }
-
-  protected normalizeEntryParent(entry: SessionEntry): SessionEntry {
-    const parentId = this.logicalParentsById.has(entry.id)
-      ? (this.logicalParentsById.get(entry.id) ?? null)
-      : this.resolveCanonicalParentId(entry.parentId);
-    let normalized = parentId === entry.parentId ? entry : { ...entry, parentId };
-    if (normalized.parentId === normalized.id) {
-      normalized = { ...normalized, parentId: null };
-    }
+  protected override normalizeEntryParent(entry: SessionEntry): SessionEntry {
+    let normalized = super.normalizeEntryParent(entry);
     const boundedFirstKept = this.boundedFirstKeptById.get(normalized.id);
     if (
       boundedFirstKept !== undefined &&
@@ -402,7 +232,7 @@ export class SessionManagerCore {
           normalized.parentId,
         ) ??
         this.findFirstCanonicalDescendant(normalized.firstKeptEntryId) ??
-        parentId;
+        this.resolveEntryParentId(entry);
       if (firstKeptEntryId && firstKeptEntryId !== normalized.firstKeptEntryId) {
         normalized = { ...normalized, firstKeptEntryId };
       }
@@ -572,22 +402,6 @@ export class SessionManagerCore {
     this.appendParentId = null;
     this.appendMode = undefined;
     this.pendingDeliberateAppend = false;
-  }
-
-  protected replacePersistedTranscript(options?: {
-    leafAppendParentId?: string | null;
-    leafAppendMode?: "side";
-  }): void {
-    if (!this.persistenceTarget) {
-      return;
-    }
-    const leafAppendParentId =
-      options?.leafAppendParentId === undefined ? this.appendParentId : options.leafAppendParentId;
-    replaceTranscriptEventsSync(
-      this.persistenceTarget,
-      this.getPersistedFileEntries(leafAppendParentId, options?.leafAppendMode ?? this.appendMode),
-    );
-    this.persistenceHeaderPending = false;
   }
 
   /** SQLite appends are synchronous; retained for the AgentSession contract. */

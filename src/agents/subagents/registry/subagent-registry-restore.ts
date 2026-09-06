@@ -24,6 +24,7 @@ import {
   updateSubagentArchiveAtMs,
 } from "./subagent-registry-helpers.js";
 import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
+import { isRetiredRunningSubagent } from "./subagent-registry-restart-recovery-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import {
@@ -236,16 +237,19 @@ export function createSubagentRegistryRestorer(config: {
           );
           continue;
         }
+        const groupId = entry.groupId ?? "";
+        const requesterSessionKey = entry.swarmRequesterSessionKey ?? entry.requesterSessionKey;
         const groupRuns = listSwarmRunsForGroup(
-          entry.groupId ?? "",
-          entry.swarmRequesterSessionKey ?? entry.requesterSessionKey,
+          groupId,
+          requesterSessionKey,
           entry.requesterAgentId,
         );
         const currentSwarmConfig = resolveSwarmConfig(cfg, entry.requesterAgentId);
         let launchTerminationConfirmed = false;
         let launchLifecycleGeneration: string | undefined;
         enqueueSwarmRun({
-          groupId: launch.schedulerGroupKey,
+          // Global session keys repeat across agent stores, including restored queues.
+          groupId: JSON.stringify([entry.requesterAgentId, requesterSessionKey, groupId]),
           runId,
           maxConcurrent: currentSwarmConfig.maxConcurrent,
           activeRunIds: groupRuns
@@ -314,13 +318,17 @@ export function createSubagentRegistryRestorer(config: {
         });
         continue;
       }
-      // An aborted persisted session belongs to orphan recovery. Waiting on its
-      // pre-restart run can terminalize it before the replacement turn starts.
+      const sessionEntry = loadSubagentSessionEntry({
+        childSessionKey: entry.childSessionKey,
+        storeCache: restoredSessionCache,
+      });
+      // Orphan recovery owns aborted sessions and exact still-running retired
+      // executions. Completed sessions must resume normal settlement and delivery.
       if (
-        loadSubagentSessionEntry({
-          childSessionKey: entry.childSessionKey,
-          storeCache: restoredSessionCache,
-        })?.abortedLastRun === true
+        sessionEntry?.abortedLastRun === true ||
+        (sessionEntry?.status === "running" &&
+          sessionEntry.lifecycleRunId === entry.runId &&
+          isRetiredRunningSubagent(entry))
       ) {
         continue;
       }

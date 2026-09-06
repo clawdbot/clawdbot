@@ -66,7 +66,10 @@ before the call settles.
   compact input hints, and compact declared output hints when a
   trusted tool provides an output schema. It omits descriptions, full schemas,
   MCP entries, and overflow entries; callable `catalog.search(...)` results are
-  the fallback.
+  the fallback. Input hints retain integer and numeric bounds as comments, such
+  as `offset?: number /* integer, >= 1 */`. Other validation details remain in
+  the full schema available through `describe()`; these hints do not change
+  tool validation or output contracts.
 - Guest code calls globals directly or searches the hidden catalog for callable
   handles. A handle exposes bounded metadata and `describe()`, but never the
   exact internal catalog id. Calls use the same execution path as normal agent
@@ -555,9 +558,9 @@ Rules:
   explicitly requests replay after a gateway restart, and never for `write`,
   `edit`, `exec`, or any mutation. Every catalog call must be explicitly
   replay-safe. OpenClaw rejects unmarked catalog tools and namespace
-  surfaces that are not proven replay-safe, and restart-safe runs do not
-  auto-drain pending calls. A generic exec surface is not replay-safe merely
-  because one command appears read-only; use audited read, grep, or find tools.
+  surfaces that are not proven replay-safe. A generic exec surface is not
+  replay-safe merely because one command appears read-only; use audited read,
+  grep, or find tools.
   Suspended results are marked replay-safe so
   [restart recovery](/gateway/restart-recovery) can reconstruct an interrupted
   turn from its transcript instead of restoring the process-local snapshot.

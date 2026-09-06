@@ -10,6 +10,7 @@ import {
   agentVitestProjectOwners,
   embeddedAgentVitestProjectOwners,
   isAgentsCoreIsolatedTestFile,
+  isAgentsSpawnProductionBoundaryTestFile,
 } from "../test/vitest/vitest.agents-paths.mjs";
 import { isChannelSurfaceTestFile } from "../test/vitest/vitest.channel-paths.mjs";
 import {
@@ -27,39 +28,9 @@ import {
   channelSessionContractPatterns,
   channelSurfaceContractPatterns,
 } from "../test/vitest/vitest.contracts-paths.mjs";
-import { isAcpxExtensionRoot } from "../test/vitest/vitest.extension-acpx-paths.mjs";
-import { isActiveMemoryExtensionRoot } from "../test/vitest/vitest.extension-active-memory-paths.mjs";
-import { isBrowserExtensionRoot } from "../test/vitest/vitest.extension-browser-paths.mjs";
-import { resolveSplitChannelExtensionShard } from "../test/vitest/vitest.extension-channel-split-paths.mjs";
-import {
-  codexExtensionTestRoots,
-  isCodexExtensionRoot,
-} from "../test/vitest/vitest.extension-codex-paths.mjs";
-import { isDiffsExtensionRoot } from "../test/vitest/vitest.extension-diffs-paths.mjs";
-import { isFeishuExtensionRoot } from "../test/vitest/vitest.extension-feishu-paths.mjs";
-import { isIrcExtensionRoot } from "../test/vitest/vitest.extension-irc-paths.mjs";
-import {
-  isMatrixExtensionRoot,
-  matrixExtensionTestRoots,
-} from "../test/vitest/vitest.extension-matrix-paths.mjs";
-import { isMattermostExtensionRoot } from "../test/vitest/vitest.extension-mattermost-paths.mjs";
-import { isMediaExtensionRoot } from "../test/vitest/vitest.extension-media-paths.mjs";
-import { isMemoryExtensionRoot } from "../test/vitest/vitest.extension-memory-paths.mjs";
-import { isMessagingExtensionRoot } from "../test/vitest/vitest.extension-messaging-paths.mjs";
-import { isMiscExtensionRoot } from "../test/vitest/vitest.extension-misc-paths.mjs";
-import { isMsTeamsExtensionRoot } from "../test/vitest/vitest.extension-msteams-paths.mjs";
-import {
-  isProviderExtensionRoot,
-  isProviderOpenAiExtensionRoot,
-} from "../test/vitest/vitest.extension-provider-paths.mjs";
-import { isQaExtensionRoot } from "../test/vitest/vitest.extension-qa-paths.mjs";
-import {
-  isTelegramExtensionRoot,
-  telegramExtensionTestRoots,
-} from "../test/vitest/vitest.extension-telegram-paths.mjs";
-import { isVoiceCallExtensionRoot } from "../test/vitest/vitest.extension-voice-call-paths.mjs";
-import { isWhatsAppExtensionRoot } from "../test/vitest/vitest.extension-whatsapp-paths.mjs";
-import { isZaloExtensionRoot } from "../test/vitest/vitest.extension-zalo-paths.mjs";
+import { codexExtensionTestRoots } from "../test/vitest/vitest.extension-codex-paths.mjs";
+import { matrixExtensionTestRoots } from "../test/vitest/vitest.extension-matrix-paths.mjs";
+import { telegramExtensionTestRoots } from "../test/vitest/vitest.extension-telegram-paths.mjs";
 import { narrowIncludePatternsForCli } from "../test/vitest/vitest.pattern-file.ts";
 import { resolveVitestFsModuleCacheRoot } from "../test/vitest/vitest.performance-config.ts";
 import {
@@ -76,7 +47,11 @@ import {
   isUiIsolatedTestFile,
   uiIsolatedTestFiles,
 } from "../test/vitest/vitest.ui-isolated-paths.mjs";
-import { isUiBrowserTestFile } from "../test/vitest/vitest.ui-paths.mjs";
+import {
+  isControlUiSourcePath,
+  isPluginControlUiPath,
+  isUiBrowserTestFile,
+} from "../test/vitest/vitest.ui-paths.mjs";
 import {
   getUnitFastIsolatedTestFiles,
   getUnitFastTestFiles,
@@ -101,6 +76,7 @@ import {
   GIT_LS_FILES_MAX_BUFFER_BYTES,
   createExtensionTestProcessTargetChunks,
   listTrackedTestPlanFiles,
+  resolveExtensionTestConfig,
   splitExtensionTestProcessTargets,
 } from "./lib/extension-test-plan.mts";
 import {
@@ -183,6 +159,8 @@ type UnmatchedExplicitTestTarget = {
 
 const DEFAULT_VITEST_CONFIG = "test/vitest/vitest.unit.config.ts";
 const AGENTS_EMBEDDED_AGENT_TEST_ROOT = agentVitestProjectOwners.embedded.root;
+const AGENTS_SPAWN_PRODUCTION_BOUNDARY_VITEST_CONFIG =
+  agentVitestProjectOwners.spawnProductionBoundary.config;
 const AGENTS_CORE_ISOLATED_VITEST_CONFIG = agentVitestProjectOwners.coreIsolated.config;
 const AGENTS_CORE_VITEST_CONFIG = agentVitestProjectOwners.core.config;
 const AGENTS_EMBEDDED_AGENT_VITEST_CONFIG = agentVitestProjectOwners.embedded.config;
@@ -461,7 +439,7 @@ const TUI_VITEST_CONFIG = "test/vitest/vitest.tui.config.ts";
 const TUI_PTY_VITEST_CONFIG = "test/vitest/vitest.tui-pty.config.ts";
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
 const UI_BROWSER_VITEST_CONFIG = "test/vitest/vitest.ui-browser.config.ts";
-const UI_E2E_VITEST_CONFIG = "test/vitest/vitest.ui-e2e.config.ts";
+export const UI_E2E_VITEST_CONFIG = "test/vitest/vitest.ui-e2e.config.ts";
 const UI_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.ui-isolated.config.ts";
 const UTILS_VITEST_CONFIG = "test/vitest/vitest.utils.config.ts";
 const WIZARD_VITEST_CONFIG = "test/vitest/vitest.wizard.config.ts";
@@ -522,6 +500,7 @@ const VITEST_CONFIG_BY_KIND: Record<string, string> = {
   agentSupport: AGENTS_SUPPORT_VITEST_CONFIG,
   agentTools: AGENTS_TOOLS_VITEST_CONFIG,
   agent: AGENTS_VITEST_CONFIG,
+  agentsSpawnProductionBoundary: AGENTS_SPAWN_PRODUCTION_BOUNDARY_VITEST_CONFIG,
   agentsCoreIsolated: AGENTS_CORE_ISOLATED_VITEST_CONFIG,
   agentsCore: AGENTS_CORE_VITEST_CONFIG,
   agentsSupport: AGENTS_SUPPORT_VITEST_CONFIG,
@@ -577,14 +556,19 @@ const BROAD_CHANGED_FALLBACK_PATTERNS = [
 ];
 const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
   [
-    "patches/vitest@4.1.11.patch",
+    "patches/vitest@5.0.0.patch",
     [
       "test/scripts/run-vitest-profile.test.ts",
       "test/scripts/run-vitest-state-cleanup.test.ts",
       "test/scripts/vitest-fork-shutdown.test.ts",
+      "test/scripts/vitest-runner-task-updates.test.ts",
     ],
   ],
   ["test/fixtures/vitest-fork-shutdown.mjs", ["test/scripts/vitest-fork-shutdown.test.ts"]],
+  ...["clock", "runner"].map<[string, string[]]>((part) => [
+    `test/fixtures/vitest-runner-task-updates.${part}.mjs`,
+    ["test/scripts/vitest-runner-task-updates.test.ts"],
+  ]),
   ...[
     "src/system-agent/setup-inference-persist.ts",
     "src/agents/embedded-agent-runner/run/attempt-dispatch-preparation.ts",
@@ -1030,7 +1014,10 @@ function listUnitFastFullSuiteTestTargets() {
 }
 
 function listAgentsCoreFullSuiteTestTargets(cwd: string) {
-  const isolatedTests = new Set(agentVitestProjectOwners.coreIsolated.include);
+  const isolatedTests = new Set([
+    ...agentVitestProjectOwners.spawnProductionBoundary.include,
+    ...agentVitestProjectOwners.coreIsolated.include,
+  ]);
   const agentsDir = path.join(cwd, "src/agents");
   if (!fs.existsSync(agentsDir)) {
     return [];
@@ -1318,7 +1305,10 @@ function expandExplicitSourceTestTargets(targetArgs: string[], cwd: string) {
   const forceFullImportGraph = sourceTargetCount > EXPLICIT_SOURCE_FULL_IMPORT_GRAPH_THRESHOLD;
   return targetArgs.flatMap((targetArg) => {
     const relative = toRepoRelativeTarget(targetArg, cwd);
-    if (isPathAtOrUnder(relative, "ui") && isGlobTarget(relative)) {
+    if (
+      (isPathAtOrUnder(relative, "ui") || isPluginControlUiPath(relative)) &&
+      isGlobTarget(relative)
+    ) {
       // Expand mixed browser globs before assigning files to their disjoint runners.
       const targets = listExplicitTestTargetFilesForCwd(cwd).filter(
         (file) => isTestFileTarget(file) && path.matchesGlob(file, relative),
@@ -1954,7 +1944,7 @@ function isControlUiE2eTarget(relative: string) {
     relative === "ui/src/test-helpers/control-ui-e2e.ts" ||
     relative === "ui/src/e2e" ||
     relative.startsWith("ui/src/e2e/") ||
-    (relative.startsWith("ui/src/") && relative.endsWith(".e2e.test.ts"))
+    (isControlUiSourcePath(relative) && relative.endsWith(".e2e.test.ts"))
   );
 }
 
@@ -2730,6 +2720,10 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   [/^scripts\/lib\/swift-toolchain\.sh$/u, ["package-mac-app", "package-mac-dist"]],
   [/^scripts\/stage-cua-driver-macos\.sh$/u, ["package-mac-app"]],
   [
+    /^scripts\/(stage-cloudflared-macos\.sh|lib\/cloudflared-macos\.json)$/u,
+    ["stage-cloudflared-macos", "package-mac-app"],
+  ],
+  [
     /^scripts\/lib\/npm-publish-plan\.mjs$/u,
     [
       "test/npm-publish-plan.test.ts",
@@ -3282,7 +3276,7 @@ function shouldCombineSiblingTestWithImportGraph(changedPath: string) {
 }
 
 function shouldRouteChangedTargetWithoutImportGraph(changedPath: string) {
-  return changedPath.endsWith(".live.test.ts") || changedPath.startsWith("ui/src/");
+  return changedPath.endsWith(".live.test.ts") || isControlUiSourcePath(changedPath);
 }
 
 function resolvePromptSnapshotFixtureTargets(changedPath: string) {
@@ -3338,7 +3332,7 @@ function resolvePreciseChangedTestTargets(
     return [siblingTest];
   }
   if (shouldRouteChangedTargetWithoutImportGraph(changedPath)) {
-    return changedPath.startsWith("ui/src/") ? [changedPath] : null;
+    return isControlUiSourcePath(changedPath) ? [changedPath] : null;
   }
   if (options.skipImportGraph === true) {
     return null;
@@ -3484,6 +3478,9 @@ function classifyTarget(arg: string, cwd: string) {
   if (isAgentsCoreIsolatedTestFile(relative)) {
     return agentVitestProjectOwners.coreIsolated.kind;
   }
+  if (isAgentsSpawnProductionBoundaryTestFile(relative)) {
+    return agentVitestProjectOwners.spawnProductionBoundary.kind;
+  }
   if (isControlUiE2eTarget(relative)) {
     return "uiE2e";
   }
@@ -3496,7 +3493,7 @@ function classifyTarget(arg: string, cwd: string) {
   if (isUiBrowserTestFile(relative)) {
     return "uiBrowser";
   }
-  if (isPathAtOrUnder(relative, "ui")) {
+  if (isPathAtOrUnder(relative, "ui") || isPluginControlUiPath(relative)) {
     return "ui";
   }
   if (relative.startsWith("src/tui/tui-pty-") || tuiPtyTestFiles.includes(relative)) {
@@ -3543,71 +3540,7 @@ function classifyTarget(arg: string, cwd: string) {
   }
   if (getChangedPathFacts(relative).surface === "extension") {
     const extensionRoot = relative.split("/").slice(0, 2).join("/");
-    const splitChannelShard = resolveSplitChannelExtensionShard(extensionRoot);
-    if (splitChannelShard) {
-      return splitChannelShard.kind;
-    }
-    if (isProviderOpenAiExtensionRoot(extensionRoot)) {
-      return "extensionProviderOpenAi";
-    }
-    if (isQaExtensionRoot(extensionRoot)) {
-      return "extensionQa";
-    }
-    if (isAcpxExtensionRoot(extensionRoot)) {
-      return "extensionAcpx";
-    }
-    if (isActiveMemoryExtensionRoot(extensionRoot)) {
-      return "extensionActiveMemory";
-    }
-    if (isCodexExtensionRoot(extensionRoot)) {
-      return "extensionCodex";
-    }
-    if (isDiffsExtensionRoot(extensionRoot)) {
-      return "extensionDiffs";
-    }
-    if (isBrowserExtensionRoot(extensionRoot)) {
-      return "extensionBrowser";
-    }
-    if (isFeishuExtensionRoot(extensionRoot)) {
-      return "extensionFeishu";
-    }
-    if (isIrcExtensionRoot(extensionRoot)) {
-      return "extensionIrc";
-    }
-    if (isMattermostExtensionRoot(extensionRoot)) {
-      return "extensionMattermost";
-    }
-    if (isTelegramExtensionRoot(extensionRoot)) {
-      return "extensionTelegram";
-    }
-    if (isVoiceCallExtensionRoot(extensionRoot)) {
-      return "extensionVoiceCall";
-    }
-    if (isWhatsAppExtensionRoot(extensionRoot)) {
-      return "extensionWhatsApp";
-    }
-    if (isZaloExtensionRoot(extensionRoot)) {
-      return "extensionZalo";
-    }
-    if (isMatrixExtensionRoot(extensionRoot)) {
-      return "extensionMatrix";
-    }
-    if (isMediaExtensionRoot(extensionRoot)) {
-      return "extensionMedia";
-    }
-    if (isMemoryExtensionRoot(extensionRoot)) {
-      return "extensionMemory";
-    }
-    if (isMsTeamsExtensionRoot(extensionRoot)) {
-      return "extensionMsTeams";
-    }
-    if (isMessagingExtensionRoot(extensionRoot)) {
-      return "extensionMessaging";
-    }
-    if (isMiscExtensionRoot(extensionRoot)) {
-      return "extensionMisc";
-    }
-    return isProviderExtensionRoot(extensionRoot) ? "extensionProvider" : "extension";
+    return VITEST_CONFIG_TARGET_KIND_BY_PATH.get(resolveExtensionTestConfig(extensionRoot))!;
   }
   if (isChannelSurfaceTestFile(relative)) {
     return "channel";
@@ -3787,7 +3720,10 @@ function shouldUseWholeConfigTarget(kind: string, targetArg: string, cwd: string
   if (isTestFileTarget(relative) || isExistingDirectoryTarget(targetArg, cwd)) {
     return false;
   }
-  return relative.startsWith("ui/src/");
+  if (isPluginControlUiPath(relative) && !isLikelyFileTarget(relative)) {
+    return false;
+  }
+  return isControlUiSourcePath(relative);
 }
 
 function createVitestArgs(
@@ -3871,9 +3807,13 @@ export function buildVitestRunPlans(
   const requestedTargetArgs = changedTargetArgs ?? targetArgs;
   if (
     watchMode &&
-    requestedTargetArgs.some(
-      (target) => isPathAtOrUnder(toRepoRelativeTarget(target, cwd), "ui") && isGlobTarget(target),
-    )
+    requestedTargetArgs.some((target) => {
+      const relative = toRepoRelativeTarget(target, cwd);
+      return (
+        (isPathAtOrUnder(relative, "ui") || isPluginControlUiPath(relative)) &&
+        isGlobTarget(relative)
+      );
+    })
   ) {
     throw new Error(
       "watch mode with UI glob targets is not supported; use a literal test path, directory, or dedicated UI suite",

@@ -3,6 +3,7 @@ import { guard } from "lit/directives/guard.js";
 import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/index.js";
 import { hasOperatorApprovalsAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { patchSettings } from "../../app/settings.ts";
+import { t } from "../../i18n/index.ts";
 import {
   acquireBoardProviderForSession,
   boardProviderCacheKey,
@@ -16,20 +17,16 @@ import {
   isGatewayCapabilityAdvertised,
   isGatewayMethodAdvertised,
 } from "../../lib/gateway-methods.ts";
-import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import {
   buildAgentMainSessionKey,
+  canonicalUiSessionKeyForPersistence,
   normalizeSessionKeyForUiComparison,
+  parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
   resolveUiConversationIdentity,
 } from "../../lib/sessions/session-key.ts";
-import {
-  ensureBoardViewElement,
-  ensureWorkboardCardChipElement,
-  renderBoardSessionSurface,
-  type WorkboardCardChipProps,
-} from "./board-session-surface.ts";
+import { ensureBoardViewElement, renderBoardSessionSurface } from "./board-session-surface.ts";
 import { ChatPaneHistory } from "./chat-pane-history.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
@@ -153,39 +150,18 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     this.boardProviderLease = undefined;
   }
 
-  protected resolveWorkboardCardChip(
-    board: ResolvedBoardView,
-    layout = this.state?.sidebarLayout,
-  ): WorkboardCardChipProps | null {
-    const gateway = this.context?.gateway.snapshot;
-    const enabled = isWorkboardEnabledInConfigSnapshot(
-      this.context?.runtimeConfig?.state.configSnapshot,
-    );
-    if (!board.hasBoard || !enabled || gateway?.phase !== "connected") {
-      return null;
-    }
-    const client = gateway.client;
-    const state = this.state;
-    if (!client || !state) {
-      return null;
-    }
-    return {
-      active:
-        Boolean(layout && isSidebarSlotVisible(layout, "dashboard")) && this.visuallyPresented,
-      basePath: state.basePath,
-      client,
-      sessionKey: this.resolveBoardSessionKey(board.snapshot.sessionKey),
-    };
-  }
-
   protected syncRetainedBoardSession(board: ResolvedBoardView): void {
     const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
+    const savedLayout = this.state
+      ? this.context.theme.settings.sidebarSessionLayouts?.[
+          canonicalUiSessionKeyForPersistence(this.state, this.state.sessionKey)
+        ]
+      : undefined;
     const routeRequestsDashboard = this.routeFace === "dashboard" || this.dashboardExpanded;
     if (!routeRequestsDashboard) {
       this.dashboardExpandedRouteKey = "";
-    } else if (board.hasBoard && sessionKey && this.dashboardExpandedRouteKey !== sessionKey) {
+    } else if (board.available && sessionKey && this.dashboardExpandedRouteKey !== sessionKey) {
       this.dashboardExpandedRouteKey = sessionKey;
-      const savedLayout = this.context.theme.settings.sidebarSessionLayouts?.[sessionKey];
       if (this.dashboardExpanded || !savedLayout) {
         this.showDashboard(this.dashboardExpanded);
       }
@@ -193,22 +169,12 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     if (sessionKey && board.provider.hasLoadedSnapshot) {
       const previous = this.observedBoardPresence.get(sessionKey);
       this.observedBoardPresence.set(sessionKey, board.hasBoard);
-      if (previous === false && board.hasBoard && board.face === "chat") {
+      if (previous === false && board.hasBoard && board.face === "chat" && !savedLayout) {
         this.showDashboard(false);
       }
     }
-    if (!board.hasBoard || !sessionKey) {
-      this.retainedBoardSessionKey = "";
-    } else if (board.face === "dashboard") {
-      this.retainedBoardSessionKey = sessionKey;
-    } else if (this.retainedBoardSessionKey !== sessionKey) {
-      this.retainedBoardSessionKey = "";
-    }
-    if (this.retainedBoardSessionKey === sessionKey && this.resolveWorkboardCardChip(board)) {
-      void ensureWorkboardCardChipElement().catch(() => undefined);
-    }
     if (
-      board.hasBoard &&
+      board.available &&
       this.state &&
       isSidebarSlotVisible(this.state.sidebarLayout, "dashboard") &&
       !customElements.get("openclaw-board-view")
@@ -290,8 +256,11 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     return {
       provider,
       snapshot,
+      available:
+        Boolean(this.boardProvider) ||
+        isGatewayMethodAdvertised(this.context.gateway.snapshot, "board.get") !== false,
       hasBoard,
-      face: hasBoard ? this.routeFace : "chat",
+      face: this.routeFace,
       activeTabId,
     };
   }
@@ -323,12 +292,25 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
   }
 
   protected renderBoardPanel(board: ResolvedBoardView, layout: SidebarLayout) {
+    const session = this.resolveBoardConversation();
     const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
-    const shouldRender = board.hasBoard && Boolean(sessionKey);
+    if (!board.available || !sessionKey) {
+      return nothing;
+    }
+    if (!board.provider.hasLoadedSnapshot) {
+      const error = board.provider.loadError$.value;
+      return html`<div class="rail-empty" role=${error ? "alert" : "status"}>
+        ${error ? t("dashboardDocument.loadFailed", { error }) : t("common.loading")}
+      </div>`;
+    }
+    // Only the loaded board acknowledgment supplies a missing owner; its display key
+    // must not replace the original session target (notably global versus a literal key).
+    session.agentId ??= parseAgentSessionKey(board.snapshot.sessionKey)?.agentId;
     const boardActive = isSidebarSlotVisible(layout, "dashboard") && this.visuallyPresented;
     const renderSurface = (active: boolean) =>
       renderBoardSessionSurface({
         active,
+        session,
         snapshot: board.snapshot,
         activeTabId: board.activeTabId,
         canMutate: board.provider.canMutate,
@@ -346,13 +328,13 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
             board.provider.refreshWidgetAppView(name, revision),
         } satisfies BoardViewCallbacks,
         widgetFrameUrl: (name, revision) => board.provider.widgetFrameUrl(name, revision),
-        workboardCardChip: this.resolveWorkboardCardChip(board, layout),
       });
     // Keep one template boundary so hiding the panel does not remount app iframes.
-    const boardSurface = !shouldRender
-      ? nothing
-      : html`${boardActive ? renderSurface(true) : guard([sessionKey], () => renderSurface(false))}`;
-    return boardSurface;
+    return html`${
+      boardActive
+        ? renderSurface(true)
+        : guard([sessionKey, session.agentId], () => renderSurface(false))
+    }`;
   }
 
   protected showDashboard(expanded: boolean): void {

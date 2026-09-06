@@ -1,5 +1,10 @@
+import { clearAllCliSessions } from "./cli-session-binding.js";
 import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.js";
-import type { InternalSessionEntry, SessionEntry } from "./types.js";
+import {
+  SESSION_TOTAL_TOKENS_VERSION,
+  type InternalSessionEntry,
+  type SessionEntry,
+} from "./types.js";
 
 type RetiredThinkingSelectionQuarantine = {
   thinkingLevelSelection?: unknown;
@@ -67,4 +72,49 @@ export function projectPublicSessionEntryPatch(
   patch: Partial<InternalSessionEntry>,
 ): Partial<SessionEntry> {
   return stripPrivateSessionEntryFields(patch);
+}
+
+export function projectCompactionAccountingPatch(
+  current: InternalSessionEntry,
+  params: {
+    amount?: number;
+    compactionKind?: "context-engine" | "native-harness" | "server-endpoint";
+    now?: number;
+    tokensAfter?: number;
+    transcriptByteCompactionLatch?: NonNullable<
+      InternalSessionEntry["transcriptByteCompactionLatch"]
+    >;
+  },
+): Partial<InternalSessionEntry> {
+  const incrementBy = Math.max(0, params.amount ?? 1);
+  const tokensAfter =
+    typeof params.tokensAfter === "number" &&
+    Number.isFinite(params.tokensAfter) &&
+    params.tokensAfter >= 0
+      ? Math.floor(params.tokensAfter)
+      : undefined;
+  const patch: Partial<InternalSessionEntry> = {
+    compactionCount: (current.compactionCount ?? 0) + incrementBy,
+    transcriptByteCompactionLatch: params.transcriptByteCompactionLatch,
+    updatedAt: params.now ?? Date.now(),
+    ...(incrementBy > 0 ? { contextBudgetStatus: undefined } : {}),
+  };
+  if (params.compactionKind === "context-engine") {
+    clearAllCliSessions(patch);
+  }
+  if (tokensAfter !== undefined) {
+    Object.assign(patch, {
+      totalTokens: tokensAfter,
+      totalTokensFresh: true,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+      inputTokens: undefined,
+      outputTokens: undefined,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+    });
+  } else if (incrementBy > 0) {
+    patch.totalTokensFresh = false;
+    patch.totalTokensVersion = undefined;
+  }
+  return patch;
 }

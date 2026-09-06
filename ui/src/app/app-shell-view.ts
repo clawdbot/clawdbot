@@ -1,11 +1,8 @@
 import { html, nothing } from "lit";
 import { isSettingsNavigationRoute } from "../app-navigation.ts";
-import { isSessionRouteId, workboardBoardIdFromPath } from "../app-route-paths.ts";
+import "../plugins/control-ui-contributions.ts";
+import { isSessionRouteId } from "../app-route-paths.ts";
 import { isRouteId, type RouteId } from "../app-routes.ts";
-import type {
-  SidebarWorkboardRenderers,
-  SidebarWorkboardSnapshot,
-} from "../components/app-sidebar-workboard.ts";
 import { icons } from "../components/icons.ts";
 import { renderLazyElementModal } from "../components/lazy-view-error.ts";
 import { renderNewSessionLink } from "../components/new-session-link.ts";
@@ -21,10 +18,11 @@ import {
   KEYBOARD_SHORTCUT_COMBOS,
 } from "../lib/keyboard-shortcut-contract.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
-import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import { normalizeAgentId, resolveUiSelectedSessionAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
+import { renderPluginSurface } from "../plugins/control-ui-view.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import { renderCommandPaletteLoading } from "./app-shell-command-palette-loading.ts";
 import type { OutboxStoreRuntime, StoredOutboxScopeHost } from "./app-shell-gateway.ts";
@@ -85,8 +83,6 @@ export interface ShellViewHost {
   readonly settingsSidebarRenderer: SettingsSidebarModule["renderSettingsSidebar"] | null;
   readonly settingsSidebarLoadFailed: boolean;
   readonly settingsSearchQuery: string;
-  readonly sidebarWorkboardRenderers: SidebarWorkboardRenderers | undefined;
-  readonly sidebarWorkboardSnapshot: SidebarWorkboardSnapshot;
   readonly devicePairSetupRenderer: DevicePairSetupModule["renderDevicePairSetup"] | null;
   readonly devicePairSetupLoadFailed: boolean;
   loadDevicePairSetupRenderer(): void;
@@ -302,8 +298,6 @@ export function renderApplicationShell(host: ShellViewHost) {
       activeRouteId: activeRoute,
       activePluginTabId,
       enabledRouteIds: host.enabledRouteIds(),
-      activeWorkboardBoardId:
-        workboardBoardIdFromPath(host.routeState.location?.pathname ?? "", context.basePath) ?? "",
       sessionKey: host.activeSessionKey,
       connected: gatewayConnected,
       offline: gatewaySnapshot.offlineStable,
@@ -318,9 +312,6 @@ export function renderApplicationShell(host: ShellViewHost) {
       canPairDevice: gatewayConnected && (operatorAccess.canAdmin || operatorAccess.canPair),
       preferencesBrowserOnly: gatewayConnected && context.runtimeConfig.canPatch === false,
       sidebarEntries: navigationSnapshot.sidebarEntries,
-      workboardBoards: host.sidebarWorkboardSnapshot.boards,
-      workboardBoardsReady: host.sidebarWorkboardSnapshot.ready,
-      workboardRenderers: host.sidebarWorkboardRenderers,
       sidebarLiveActivity: uiSettings.sidebarLiveActivity !== false,
       pinnedAgentIds: navigationSnapshot.pinnedAgentIds,
       themeMode: context.theme.mode,
@@ -378,15 +369,14 @@ export function renderApplicationShell(host: ShellViewHost) {
           identityAvailable: Boolean(gatewaySnapshot.selfUser),
           basePath: context.basePath,
           canAdmin: operatorAccess.canAdmin,
+          nativeDeviceSettings: context.nativeDeviceSettings,
         },
         onExit: () => host.exitSettings(),
         onRetryConnect: () => context.gateway.connect(),
         onNavigate: (routeId, options) => host.navigate(routeId, options),
         onOpenApprovals: () => host.openApprovals(),
         onPreload: (routeId) => context.preload(routeId),
-        onSearchQueryChange: (nextQuery) => {
-          void host.handleSettingsSearchQueryChange(nextQuery);
-        },
+        onSearchQueryChange: (nextQuery) => void host.handleSettingsSearchQueryChange(nextQuery),
         preloadTimers: host.settingsPreloadTimers,
         saveIndicator: {
           status: runtimeConfig.configAutoSaveStatus,
@@ -399,16 +389,18 @@ export function renderApplicationShell(host: ShellViewHost) {
             runtimeConfig.configSaving ||
             (runtimeConfig.configFormDirty && runtimeConfig.configFormMode === "raw") ||
             updateBusy,
-          onRetry: () => void context.runtimeConfig.save(),
+          onRetry: () => void context.runtimeConfig.retry(),
+          onSave: () => void context.runtimeConfig.save(),
           onReload: () => void context.runtimeConfig.discardDraft(),
           onApply: () => void context.runtimeConfig.apply(),
         },
         canAdmin: operatorAccess.canAdmin,
+        nativeDeviceSettings: context.nativeDeviceSettings,
       })
     : host.navigationSidebar;
   // Optional tags stay mounted before definition. Lit replays their properties on upgrade,
   // and the upgraded panels catch the first toggle instead of dropping the event.
-  return html`
+  const workspace = html`
     ${
       lazyElementState?.status === "loading" &&
       lazyElementState.element === host.commandPaletteElement
@@ -520,14 +512,10 @@ export function renderApplicationShell(host: ShellViewHost) {
                     ${icons.search}
                   </button>
                 </openclaw-tooltip>
-                ${
-                  navCollapsed
-                    ? renderCollapsedAssistantToggles({
-                        homeAvailable: homePanelAvailable,
-                        custodianAvailable: custodianPanelAvailable,
-                      })
-                    : nothing
-                }
+                ${renderCollapsedAssistantToggles({
+                  homeAvailable: homePanelAvailable,
+                  custodianAvailable: custodianPanelAvailable,
+                })}
               </div>
             `
           : nothing
@@ -602,6 +590,11 @@ export function renderApplicationShell(host: ShellViewHost) {
           heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
           updateBusy,
           statusBanner: overlaySnapshot.updateStatusBanner,
+          updateRun: overlaySnapshot.updateRun,
+          updateRunAcknowledged: overlaySnapshot.updateRunAcknowledged,
+          connected: gatewayConnected,
+          onAcknowledge: () => context.overlays.acknowledgeUpdateRun(),
+          onCheckStatus: () => context.overlays.refreshUpdateStatus(),
           watchUpdateProgress,
           canUpdate,
           canHoldUpdate,
@@ -667,6 +660,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         .pageSessionKey=${host.activeSessionKey}
         .pageAgentId=${selectedAgentId}
         .pageRouteId=${activeRoute}
+        .pageRouteFailed=${host.routeState.routeFailed === true}
         .minimizeRequestId=${host.custodianMinimizeRequestId}
       ></openclaw-assistant-panel>
       ${
@@ -713,4 +707,21 @@ export function renderApplicationShell(host: ShellViewHost) {
       <openclaw-toast-host></openclaw-toast-host>
     </div>
   `;
+  return html`${renderPluginSurface(
+      "workspace",
+      {
+        sessionKey: host.activeSessionKey,
+        agentId: resolveUiSelectedSessionAgentId(
+          {
+            assistantAgentId:
+              context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId,
+            agentsList: context.agents.state.agentsList,
+            hello: gatewaySnapshot.hello,
+          },
+          host.activeSessionKey,
+        ),
+        routeId: activeRoute,
+      },
+      workspace,
+    )}<openclaw-plugin-manager></openclaw-plugin-manager>`;
 }

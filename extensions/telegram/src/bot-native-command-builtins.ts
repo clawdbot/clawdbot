@@ -321,6 +321,7 @@ export async function executeTelegramBuiltinCommand(
         command: commandDefinition,
         args: commandArgs,
         cfg: dispatch.runtimeCfg,
+        session: { agentId: dispatch.route.agentId, sessionKey: dispatch.targetSessionKey },
         ...menuModelContext,
         ...(menuModelCatalog?.length ? { catalog: menuModelCatalog } : {}),
       })

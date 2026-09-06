@@ -214,6 +214,7 @@ export function activateCodexAttemptTurn(
     },
   );
   if (isTerminalTurnStatus(turn.turn.status)) {
+    projectorRef.current.settlement.terminalReceipt = turn.turn;
     state.terminalTurnNotificationQueued = true;
     deadlines.beginSettlement(Date.now());
   }
@@ -311,7 +312,7 @@ export function activateCodexAttemptTurn(
     }
   };
   const assertSteeringActive = () => {
-    params.hostCapabilities.assertActive();
+    connection.assertCurrent();
     runAbortController.signal.throwIfAborted();
     if (state.completed || state.terminalTurnNotificationQueued) {
       throw new Error("codex app-server turn is no longer accepting steering");

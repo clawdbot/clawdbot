@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { i18n } from "../i18n/index.ts";
+import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
 import {
   installMissingStylesheetRecovery,
   installStaleChunkReloadListener,
@@ -85,6 +86,76 @@ describe("isStaleChunkImportError", () => {
     expect(isStaleChunkImportError(new Error("request failed"))).toBe(false);
     expect(isStaleChunkImportError("Importing a module script failed.")).toBe(false);
     expect(isStaleChunkImportError(undefined)).toBe(false);
+  });
+});
+
+describe("document reload ownership", () => {
+  it.each(["automatic", "manual"])(
+    "checks live owners before and after the %s document probe",
+    async (mode) => {
+      const response = deferred<Response>();
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockImplementationOnce(() => response.promise)
+        .mockResolvedValue(new Response(null, { status: 200 }));
+      vi.stubGlobal("fetch", fetchMock);
+      const reload = vi.fn();
+      const storage = memoryStorage();
+      let allowed = false;
+      let clock = 1000;
+      const onBlocked = vi.fn();
+      const release = registerControlUiReloadGuard(() => allowed, onBlocked);
+      const attempt = () =>
+        mode === "automatic"
+          ? scheduleStaleChunkReload({ storage, reload, now: () => clock })
+          : retryStaleChunkReloadWhenReachable({ storage, reload, timeoutMs: 0 });
+      try {
+        await expect(attempt()).resolves.toBe(false);
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(onBlocked).toHaveBeenCalledTimes(mode === "manual" ? 1 : 0);
+
+        allowed = true;
+        const pending = attempt();
+        expect(fetchMock).toHaveBeenCalledOnce();
+        allowed = false;
+        response.resolve(new Response(null, { status: 200 }));
+        await expect(pending).resolves.toBe(false);
+        expect(reload).not.toHaveBeenCalled();
+        expect(storage.getItem(GUARD_KEY)).toBeNull();
+        expect(onBlocked).toHaveBeenCalledTimes(mode === "manual" ? 2 : 0);
+
+        release();
+        clock += 6000;
+        await expect(attempt()).resolves.toBe(true);
+        expect(reload).toHaveBeenCalledOnce();
+      } finally {
+        release();
+      }
+    },
+  );
+
+  it("does not release another owner's reload protection", async () => {
+    const firstBlocked = vi.fn();
+    const secondBlocked = vi.fn();
+    const releaseFirst = registerControlUiReloadGuard(() => false, firstBlocked);
+    const releaseSecond = registerControlUiReloadGuard(() => false, secondBlocked);
+    const probe = vi.fn(async () => true);
+    const reload = vi.fn();
+    const retry = () =>
+      retryStaleChunkReloadWhenReachable({ probe, reload, storage: memoryStorage() });
+    try {
+      releaseFirst();
+      await expect(retry()).resolves.toBe(false);
+      expect(probe).not.toHaveBeenCalled();
+      expect(firstBlocked).not.toHaveBeenCalled();
+      expect(secondBlocked).toHaveBeenCalledOnce();
+      releaseSecond();
+      await expect(retry()).resolves.toBe(true);
+      expect(reload).toHaveBeenCalledOnce();
+    } finally {
+      releaseFirst();
+      releaseSecond();
+    }
   });
 });
 
@@ -215,37 +286,73 @@ describe("scheduleStaleChunkReload", () => {
     expect(storage.getItem(GUARD_KEY)).toBe("build-b");
   });
 
-  it("reprobes a newer build after its joined older-build probe fails", async () => {
-    const olderProbe = deferred<Response>();
+  it("does not let an unrelated pending probe bypass a failed build's cooldown", async () => {
+    const pending = deferred<Response>();
     const fetchMock = vi
       .fn<typeof fetch>()
-      .mockImplementationOnce(async () => olderProbe.promise)
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockImplementationOnce(() => pending.promise)
       .mockResolvedValueOnce(new Response(null, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
-    const reload = vi.fn();
     const storage = memoryStorage();
+    const reload = vi.fn();
+    const attempt = (buildId: string) =>
+      scheduleStaleChunkReload({ now: () => 1000, buildId, storage, reload });
+    await expect(attempt("build-a")).resolves.toBe(false);
+    const newer = attempt("build-b");
+    const repeated = attempt("build-a");
 
-    const olderBuild = scheduleStaleChunkReload({
-      now: () => 1000,
-      buildId: "build-a",
-      storage,
-      reload,
-    });
-    const newerBuild = scheduleStaleChunkReload({
-      now: () => 2000,
-      buildId: "build-b",
-      storage,
-      reload,
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-
-    olderProbe.resolve(new Response(null, { status: 503 }));
-    await expect(Promise.all([olderBuild, newerBuild])).resolves.toEqual([false, true]);
-
+    pending.resolve(new Response(null, { status: 503 }));
+    await expect(Promise.all([newer, repeated])).resolves.toEqual([false, false]);
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(reload).toHaveBeenCalledTimes(1);
-    expect(storage.getItem(GUARD_KEY)).toBe("build-b");
+    expect(reload).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "reprobes a newer build after its joined older-build probe fails (replacement: %s)",
+    async (replaceOwner) => {
+      const olderProbe = deferred<Response>();
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockImplementationOnce(async () => olderProbe.promise)
+        .mockResolvedValueOnce(new Response(null, { status: 200 }));
+      vi.stubGlobal("fetch", fetchMock);
+      const reload = vi.fn();
+      const storage = memoryStorage();
+
+      const olderBuild = scheduleStaleChunkReload({
+        now: () => 1000,
+        buildId: "build-a",
+        storage,
+        reload,
+      });
+      let ownsNewerBuild = true;
+      const newerBuild = scheduleStaleChunkReload({
+        now: () => 2000,
+        buildId: "build-b",
+        storage,
+        reload,
+        canReload: () => ownsNewerBuild,
+      });
+      const results = [olderBuild, newerBuild];
+      if (replaceOwner) {
+        ownsNewerBuild = false;
+        results.push(
+          scheduleStaleChunkReload({ now: () => 2000, buildId: "build-b", storage, reload }),
+        );
+      }
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      olderProbe.resolve(new Response(null, { status: 503 }));
+      await expect(Promise.all(results)).resolves.toEqual(
+        replaceOwner ? [false, false, true] : [false, true],
+      );
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(reload).toHaveBeenCalledTimes(1);
+      expect(storage.getItem(GUARD_KEY)).toBe("build-b");
+    },
+  );
 
   it("reloads only the newest build after a shared document probe succeeds", async () => {
     const sharedProbe = deferred<Response>();
