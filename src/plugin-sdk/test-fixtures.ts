@@ -53,6 +53,16 @@ export {
 } from "./test-helpers/bundled-plugin-paths.js";
 export { importFreshModule } from "./test-helpers/import-fresh.js";
 export { runDirectImportSmoke } from "./test-helpers/direct-smoke.js";
+
+export async function findSourceImportBackedges(
+  entry: string,
+  forbidden: readonly string[],
+): Promise<string[]> {
+  // Ordinary fixture imports must not load the compiler or read repository configuration.
+  const inspector = await import("../../test/helpers/source-import-closure.js");
+  return inspector.findSourceImportBackedges(entry, forbidden);
+}
+
 export {
   createGrayscaleAlphaPngBuffer,
   createNoisyPngBuffer,

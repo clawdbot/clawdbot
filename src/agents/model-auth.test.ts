@@ -82,8 +82,10 @@ vi.mock("../plugins/setup-registry.js", () => ({
   resolvePluginSetupProviderCore: () => undefined,
 }));
 
-vi.mock("../plugins/provider-external-auth.js", () => ({
-  resolveExternalAuthProfilesWithPlugins: () => [],
+vi.mock("../plugins/provider-external-auth-core.js", () => ({
+  createProviderExternalAuthResolver: () => ({
+    resolveExternalAuthProfilesWithPlugins: () => [],
+  }),
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => {

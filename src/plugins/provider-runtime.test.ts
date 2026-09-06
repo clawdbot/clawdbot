@@ -304,6 +304,17 @@ describe("provider-runtime", () => {
       isPluginProvidersLoadInFlight: (params: unknown) =>
         isPluginProvidersLoadInFlightMock(params as never),
     }));
+    vi.doMock("./provider-hook-runtime.js", async () => {
+      const { createProviderHookRuntime } = await import("./provider-hook-runtime-core.js");
+      const providers = await import("./providers.runtime.js");
+      return createProviderHookRuntime(providers);
+    });
+    vi.doMock("./provider-external-auth.js", async () => {
+      const { createProviderExternalAuthResolver } =
+        await import("./provider-external-auth-core.js");
+      const hooks = await import("./provider-hook-runtime.js");
+      return createProviderExternalAuthResolver(hooks);
+    });
     vi.doMock("../logging/subsystem.js", () => ({
       createSubsystemLogger: () => ({
         debug: vi.fn(),

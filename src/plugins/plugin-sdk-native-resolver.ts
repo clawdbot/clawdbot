@@ -90,6 +90,7 @@ const INTERNAL_CORE_PACKAGE_ALIASES = [
       ["internal/retry-after", path.join("internal", "retry-after.ts")],
       ["internal/runtime", path.join("internal", "runtime.ts")],
       ["internal/shared", path.join("internal", "shared.ts")],
+      ["internal/tool-schema", path.join("internal", "tool-schema.ts")],
     ],
   },
   {

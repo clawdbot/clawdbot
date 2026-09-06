@@ -18,10 +18,8 @@ import { readProviderJsonResponse } from "../provider-http-errors.js";
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { notifyAuthProfileFailureHook, setAuthProfileFailureHook } from "./failure-hook.js";
 import { logAuthProfileFailureStateChange } from "./state-observation.js";
-import {
-  resolvePersistedAuthProfileOwnerAgentDir,
-  updateAuthProfileStoreWithLock,
-} from "./store.js";
+import { updateAuthProfileStoreWithLock } from "./store-runtime.js";
+import { resolvePersistedAuthProfileOwnerAgentDir } from "./store.js";
 import type {
   AuthProfileBlockedSource,
   AuthProfileCooldownClassification,

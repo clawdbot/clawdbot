@@ -26,7 +26,7 @@ import {
   inspectPersistedAuthProfileStoreRaw,
   resolveAuthProfileDatabasePath,
 } from "../agents/auth-profiles/sqlite.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store.js";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import { isTerminalInteractive } from "../cli/terminal-interactivity.js";

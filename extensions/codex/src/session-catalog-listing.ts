@@ -1,25 +1,19 @@
-import { listAgentIds } from "openclaw/plugin-sdk/agent-runtime";
-import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
+import {
+  listAgentIds,
+  resolveSessionAgentIdsStrict,
+} from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginNodeHostCommand } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import {
-  publishSessionCatalogHost,
-  sessionCatalogAdoptedSourceKey,
-  type SessionCatalogEntrySnapshot,
-  type SessionCatalogProvider,
+import type {
+  SessionCatalogEntrySnapshot,
+  SessionCatalogProvider,
 } from "openclaw/plugin-sdk/session-catalog";
+import { publishSessionCatalogHost } from "openclaw/plugin-sdk/session-catalog-paging";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
-import { listAdoptedSessionEntries } from "./session-catalog-adoption.js";
 import type { CodexCatalogHome } from "./session-catalog-homes.js";
-import { listNodeAdoptedSessionEntries } from "./session-catalog-node-adoption.js";
-import {
-  compareNodeLabels,
-  listPairedNode,
-  nodeLabel,
-  type CatalogNode,
-} from "./session-catalog-node-continue.js";
+import type { CatalogNode } from "./session-catalog-node-continue.js";
 import {
   catalogError,
   CatalogParamsError,
@@ -155,6 +149,9 @@ async function listGatewayHost(params: {
       searchTerm: params.query.search,
       signal: params.signal,
     });
+    params.signal?.throwIfAborted();
+    const { listAdoptedSessionEntries } = await import("./session-catalog-adoption.js");
+    const { sessionCatalogAdoptedSourceKey } = await import("openclaw/plugin-sdk/session-catalog");
     params.signal?.throwIfAborted();
     const adoptedSessions = await listAdoptedSessionEntries({
       agentId: params.agentId,
@@ -296,6 +293,9 @@ export async function listCodexSessionCatalog(params: {
       hosts: [...(await Promise.all(localHosts)), registryHost],
     };
   }
+  params.signal?.throwIfAborted();
+  const { listNodeAdoptedSessionEntries } = await import("./session-catalog-node-adoption.js");
+  const { compareNodeLabels, listPairedNode } = await import("./session-catalog-node-continue.js");
   params.signal?.throwIfAborted();
   const adoptedNodeSessions = listNodeAdoptedSessionEntries({
     agentId,
@@ -554,6 +554,7 @@ export async function readCodexSessionTranscript(params: {
           ),
         { threadId: params.threadId, cursor, limit },
       );
+  const { nodeLabel } = await import("./session-catalog-node-continue.js");
   return {
     hostId: params.hostId,
     label: nodeLabel(node),

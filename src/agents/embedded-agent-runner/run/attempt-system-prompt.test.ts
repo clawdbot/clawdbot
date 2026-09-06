@@ -10,29 +10,33 @@ import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 // Prompt assembly consumes a prepared provider handle; discovery belongs to attempt setup.
-vi.mock("../../../plugins/providers.runtime.js", () => {
+const providerRegistryMocks = vi.hoisted(() => {
   const rejectProviderDiscovery = () => {
     throw new Error("Prompt fixture unexpectedly discovered provider runtime");
   };
   return {
-    isPluginProvidersLoadInFlight: rejectProviderDiscovery,
-    resolvePluginProvidersCore: rejectProviderDiscovery,
+    isPluginProvidersLoadInFlight: vi.fn(rejectProviderDiscovery),
+    resolvePluginProvidersCore: vi.fn(rejectProviderDiscovery),
   };
 });
 
+vi.mock("../../../plugins/providers.runtime-core.js", () => ({
+  createProviderRegistryResolver: () => providerRegistryMocks,
+}));
+
 let buildAttemptSystemPrompt: typeof import("./attempt-system-prompt.js").buildAttemptSystemPrompt;
 let prepareEmbeddedAttemptSystemPrompt: typeof import("./attempt-system-prompt-prepare.js").prepareEmbeddedAttemptSystemPrompt;
-let providerRuntime: typeof import("../../../plugins/providers.runtime.js");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 beforeAll(async () => {
   ({ buildAttemptSystemPrompt } = await import("./attempt-system-prompt.js"));
   ({ prepareEmbeddedAttemptSystemPrompt } = await import("./attempt-system-prompt-prepare.js"));
-  providerRuntime = await import("../../../plugins/providers.runtime.js");
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
+  providerRegistryMocks.isPluginProvidersLoadInFlight.mockClear();
+  providerRegistryMocks.resolvePluginProvidersCore.mockClear();
 });
 
 const baseProviderTransform = {
@@ -142,7 +146,6 @@ describe("buildAttemptSystemPrompt", () => {
   ])(
     "reports the selected sandbox policy for a global attempt ($sandboxSessionKey)",
     async (testCase) => {
-      const providerDiscovery = vi.spyOn(providerRuntime, "resolvePluginProvidersCore");
       const workspaceDir = tempDirs.make("openclaw-global-system-prompt-");
       const config = {
         agents: {
@@ -197,7 +200,7 @@ describe("buildAttemptSystemPrompt", () => {
         mode: testCase.mode,
         sandboxed: testCase.sandboxed,
       });
-      expect(providerDiscovery).not.toHaveBeenCalled();
+      expect(providerRegistryMocks.resolvePluginProvidersCore).not.toHaveBeenCalled();
     },
   );
   it("replaces an intermediate permission prompt after later changes", async () => {

@@ -896,6 +896,21 @@
       ],
       "openclaw/plugin-sdk/provider-thinking-runtime": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/provider-thinking-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/embedding-provider-adapter": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/embedding-provider-adapter.d.ts"
+      ],
+      "openclaw/plugin-sdk/agent-harness-registration": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/agent-harness-registration.d.ts"
+      ],
+      "openclaw/plugin-sdk/session-catalog-paging": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/session-catalog-paging.d.ts"
+      ],
+      "openclaw/plugin-sdk/provider-auth-aliases": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/provider-auth-aliases.d.ts"
+      ],
+      "openclaw/plugin-sdk/provider-model-metadata": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/provider-model-metadata.d.ts"
       ]
     }
   }

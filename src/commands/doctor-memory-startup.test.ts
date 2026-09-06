@@ -2,7 +2,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, assert, beforeEach, describe, expect, it } from "vitest";
 import { resolveApiKeyForProfile } from "../agents/auth-profiles/oauth.js";
-import { loadAuthProfileStoreForSecretsRuntime } from "../agents/auth-profiles/store.js";
+import { loadAuthProfileStoreForSecretsRuntime } from "../agents/auth-profiles/store-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ensureMemoryIndexSchema } from "../plugin-sdk/memory-core-host-engine-storage.js";
 import { createPluginStateKeyedStoreForTests } from "../plugin-sdk/plugin-state-test-runtime.js";

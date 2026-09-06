@@ -61,24 +61,26 @@ export {
 } from "./auth-profiles/portability.js";
 export {
   clearRuntimeAuthProfileStoreSnapshot,
-  ensureAuthProfileStore,
-  ensureAuthProfileStoreWithoutExternalProfiles,
   getPreparedRuntimeAuthProfileStoreSnapshot,
   getRuntimeAuthProfileStoreSnapshot,
   getRuntimeAuthProfileStoreSnapshotRevision,
   hasAuthProfileStoreSourceForProvider,
   hasAnyAuthProfileStoreSource,
   hasLocalAuthProfileStoreSource,
-  loadAuthProfileStoreForSecretsRuntime,
-  loadAuthProfileStoreWithoutExternalProfiles,
-  loadAuthProfileStoreForRuntime,
-  loadAuthProfileStore,
-  saveAuthProfileStore,
   findPersistedAuthProfileCredential,
   resolvePersistedAuthProfileOwnerAgentDir,
   withEnvOnlyAuthProfileStore,
   withAuthProfileStoreAgentDir,
 } from "./auth-profiles/store.js";
+export {
+  ensureAuthProfileStore,
+  ensureAuthProfileStoreWithoutExternalProfiles,
+  loadAuthProfileStoreForSecretsRuntime,
+  loadAuthProfileStoreWithoutExternalProfiles,
+  loadAuthProfileStoreForRuntime,
+  loadAuthProfileStore,
+  saveAuthProfileStore,
+} from "./auth-profiles/store-runtime.js";
 export {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,

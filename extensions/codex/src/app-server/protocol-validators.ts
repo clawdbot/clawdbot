@@ -19,7 +19,6 @@ import {
   type CodexModelListResponse,
   type CodexThread,
   type CodexThreadForkResponse,
-  type CodexThreadForkParams,
   type CodexThreadItem,
   type CodexThreadResumeResponse,
   type CodexThreadStartResponse,
@@ -329,21 +328,6 @@ export function assertCodexThreadStartResponse(value: unknown): CodexThreadStart
 export function assertCodexThreadForkResponse(value: unknown): CodexThreadForkResponse {
   const normalized = normalizeWithDefaults(threadStartResponseSchema, value);
   return assertCodexShape(validateThreadStartResponse, normalized, "thread/fork response");
-}
-
-/** Asserts the experimental beforeTurnId request field before it crosses the app-server boundary. */
-export function assertCodexThreadForkParams(value: unknown): CodexThreadForkParams {
-  if (
-    !isRecord(value) ||
-    typeof value.threadId !== "string" ||
-    !value.threadId.trim() ||
-    (value.beforeTurnId !== undefined &&
-      value.beforeTurnId !== null &&
-      typeof value.beforeTurnId !== "string")
-  ) {
-    throw new Error("Invalid Codex app-server thread/fork params");
-  }
-  return value as CodexThreadForkParams;
 }
 
 /** Asserts and normalizes a Codex thread/resume response. */

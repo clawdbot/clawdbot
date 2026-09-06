@@ -3,7 +3,7 @@ import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import type { AgentRunResultView } from "../agents/agent-run-result.js";
 import { listAgentEntries, resolveAmbientOwnerAgentId } from "../agents/agent-scope.js";
-import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store.js";
+import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
 import { resolveCliBackendConfig } from "../agents/cli-backends.js";
 import type { FailoverReason } from "../agents/failover/signal.js";
 import {

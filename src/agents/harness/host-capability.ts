@@ -57,6 +57,7 @@ import {
 import { bindHarnessContextMedia } from "./context-media.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import {
+  registerAgentHarnessBeforeToolCallRetention,
   registerAgentHarnessScheduledToolProjectionCapability,
   registerAgentHarnessTtsProvenanceTransferCapability,
   resolveAgentQuestionAnswerAuthority,
@@ -71,24 +72,6 @@ type AgentHarnessHostApprovalResult = NonNullable<
 >;
 
 const MAX_NATIVE_OPERATION_CWD_BYTES = 4096;
-
-type RetainedBeforeToolCallRunner = Readonly<{
-  assertActive: () => void;
-  release: () => void;
-  runBeforeToolCall: AgentHarnessHostCapabilities["runBeforeToolCall"];
-}>;
-
-const retainedBeforeToolCallRunners = new WeakMap<
-  AgentHarnessHostCapabilities["runBeforeToolCall"],
-  () => RetainedBeforeToolCallRunner | undefined
->();
-
-/** Internal core-only lease for an already-created host policy callback. */
-export function retainBeforeToolCallForNativeHookRelay(
-  runBeforeToolCall: AgentHarnessHostCapabilities["runBeforeToolCall"],
-): RetainedBeforeToolCallRunner | undefined {
-  return retainedBeforeToolCallRunners.get(runBeforeToolCall)?.();
-}
 
 function normalizeNativeOperationCwd(value: unknown, attemptCwd: string | undefined): string {
   if (typeof value !== "string") {
@@ -415,7 +398,7 @@ export function createAgentHarnessHostCapabilities(params: {
       async () => await runBeforeToolCallWithAssertion(assertActive, request),
       request.signal,
     );
-  retainedBeforeToolCallRunners.set(runBeforeToolCall, () => {
+  registerAgentHarnessBeforeToolCallRetention(runBeforeToolCall, () => {
     const recovery = retainAdmittedRunBeforeToolCallRecovery(attempt.admittedRunContext);
     if (!recovery) {
       return undefined;

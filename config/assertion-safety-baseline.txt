@@ -165,12 +165,11 @@ extensions/codex/src/app-server/attempt-context.ts	1
 extensions/codex/src/app-server/attempt-diagnostics.ts	3
 extensions/codex/src/app-server/attempt-notifications.ts	1
 extensions/codex/src/app-server/attempt-startup.ts	1
-extensions/codex/src/app-server/auth-bridge.ts	2
+extensions/codex/src/app-server/auth-bridge.ts	1
 extensions/codex/src/app-server/client-runtime.ts	1
 extensions/codex/src/app-server/client.ts	4
 extensions/codex/src/app-server/compact.ts	1
 extensions/codex/src/app-server/computer-use-cache.ts	1
-extensions/codex/src/app-server/config-reviewer.ts	2
 extensions/codex/src/app-server/config-utils.ts	1
 extensions/codex/src/app-server/context-engine-projection.ts	3
 extensions/codex/src/app-server/dynamic-tool-build.ts	1
@@ -195,7 +194,7 @@ extensions/codex/src/app-server/plugin-approval-roundtrip.ts	1
 extensions/codex/src/app-server/plugin-inventory.ts	6
 extensions/codex/src/app-server/plugin-metadata-cache.ts	5
 extensions/codex/src/app-server/plugin-thread-app-admission.ts	1
-extensions/codex/src/app-server/protocol-validators.ts	9
+extensions/codex/src/app-server/protocol-validators.ts	8
 extensions/codex/src/app-server/rate-limits.ts	1
 extensions/codex/src/app-server/reasoning-effort.ts	1
 extensions/codex/src/app-server/remote-workspace-media.ts	6
@@ -889,7 +888,7 @@ extensions/openai/native-web-search.ts	1
 extensions/openai/openai-chatgpt-device-code.ts	4
 extensions/openai/openai-chatgpt-oauth-preflight.runtime.ts	1
 extensions/openai/openai-chatgpt-oauth-token.runtime.ts	1
-extensions/openai/openai-chatgpt-provider.ts	7
+extensions/openai/openai-chatgpt-provider.ts	2
 extensions/openai/openai-provider.ts	5
 extensions/openai/provider-policy-api.ts	2
 extensions/openai/realtime-provider-shared.ts	2
@@ -3394,7 +3393,6 @@ src/plugins/loader-load-context.ts	4
 src/plugins/loader-module-runtime.ts	11
 src/plugins/loader-records.ts	1
 src/plugins/loader-runtime-candidate.ts	1
-src/plugins/loader-runtime-load.ts	2
 src/plugins/loader-shared.ts	2
 src/plugins/managed-npm-retention.ts	4
 src/plugins/manifest-capability-normalizers.ts	3
@@ -3426,9 +3424,7 @@ src/plugins/provider-auth-choice-helpers.ts	12
 src/plugins/provider-catalog-result.ts	8
 src/plugins/provider-discovery.runtime.ts	2
 src/plugins/provider-discovery.ts	2
-src/plugins/provider-hook-runtime.ts	3
 src/plugins/provider-model-compat.ts	7
-src/plugins/provider-model-helpers.ts	4
 src/plugins/provider-model-primary.ts	1
 src/plugins/provider-openai-chatgpt-oauth.ts	1
 src/plugins/provider-policy-surface.ts	1

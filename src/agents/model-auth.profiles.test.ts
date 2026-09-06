@@ -15,7 +15,7 @@ import {
   inspectPersistedAuthProfileStoreRaw,
   writePersistedAuthProfileStoreRaw,
 } from "./auth-profiles/sqlite.js";
-import { ensureAuthProfileStore } from "./auth-profiles/store.js";
+import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import type {
   AuthProfileCredential,
   AuthProfileStore,
@@ -253,8 +253,10 @@ const resolveProviderSyntheticAuthMock = vi.hoisted(
     },
 );
 
-vi.mock("../plugins/provider-external-auth.js", () => ({
-  resolveExternalAuthProfilesWithPlugins: () => [],
+vi.mock("../plugins/provider-external-auth-core.js", () => ({
+  createProviderExternalAuthResolver: () => ({
+    resolveExternalAuthProfilesWithPlugins: () => [],
+  }),
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({

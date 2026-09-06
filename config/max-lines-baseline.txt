@@ -60,7 +60,6 @@ extensions/codex/src/app-server/thread-lifecycle.test.ts
 extensions/codex/src/app-server/transcript-mirror.test.ts
 extensions/codex/src/commands.test.ts
 extensions/codex/src/conversation-binding.test.ts
-extensions/codex/src/conversation-binding.ts
 extensions/codex/src/migration/provider.test.ts
 extensions/codex/src/migration/session-binding-sidecars.ts
 extensions/codex/src/supervision-tools.ts
