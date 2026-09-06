@@ -1822,7 +1822,7 @@ src/agents/embedded-agent-runner/transcript-rewrite.ts	2
 src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts	2
 src/agents/embedded-agent-subscribe.handlers.messages.stream.ts	6
 src/agents/embedded-agent-subscribe.handlers.messages.update.ts	5
-src/agents/embedded-agent-subscribe.handlers.tools.completion.ts	3
+src/agents/embedded-agent-subscribe.handlers.tools.completion.ts	1
 src/agents/embedded-agent-subscribe.handlers.tools.results.ts	14
 src/agents/embedded-agent-subscribe.handlers.tools.start.ts	8
 src/agents/embedded-agent-subscribe.tool-text-diagnostics.ts	6
@@ -2882,7 +2882,6 @@ src/gateway/server-methods/task-suggestions.ts	7
 src/gateway/server-methods/terminal-upload.ts	1
 src/gateway/server-methods/terminal.ts	6
 src/gateway/server-methods/tools-catalog.ts	2
-src/gateway/server-methods/ui-command.ts	1
 src/gateway/server-methods/update.ts	2
 src/gateway/server-methods/web.ts	1
 src/gateway/server-methods/wizard.ts	1
@@ -3714,7 +3713,7 @@ src/tui/tui-session-events.ts	1
 src/tui/tui-session-projection.ts	2
 src/tui/tui-session-run-coordinator.ts	1
 src/tui/tui-stream-assembler.ts	2
-src/tui/tui-task-suggestions.ts	7
+src/tui/tui-task-suggestions.ts	6
 src/tui/tui.ts	5
 src/utils.ts	1
 src/utils/delivery-context.shared.ts	2
@@ -4015,7 +4014,6 @@ ui/src/pages/portals/portal-reachability.ts	1
 ui/src/pages/profile/identity-section.ts	2
 ui/src/pages/secrets/view.ts	5
 ui/src/pages/sessions/view.ts	13
-ui/src/pages/skill-workshop/header-controls.ts	1
 ui/src/pages/skill-workshop/route.ts	1
 ui/src/pages/skill-workshop/self-learning.ts	1
 ui/src/pages/skill-workshop/skill-workshop-page.ts	1

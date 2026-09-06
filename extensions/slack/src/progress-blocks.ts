@@ -5,6 +5,7 @@ import {
   type AgentPlanStep,
   type ChannelProgressDraftCompositorSnapshot,
   type ChannelProgressDraftLine,
+  formatChannelProgressDraftDiffStat,
   formatPlanChecklistLines,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { SLACK_MAX_BLOCKS } from "./blocks-input.js";
@@ -240,17 +241,6 @@ function buildProgressAttentionTasks(
   });
 }
 
-function formatDiffStat(diffStat: SlackProgressDiffStat | undefined): string | undefined {
-  if (!diffStat || (diffStat.files === 0 && diffStat.added === 0 && diffStat.removed === 0)) {
-    return undefined;
-  }
-  return [
-    `📝 ${diffStat.files} files`,
-    ...(diffStat.added > 0 ? [`+${diffStat.added}`] : []),
-    ...(diffStat.removed > 0 ? [`−${diffStat.removed}`] : []),
-  ].join(" ");
-}
-
 function formatTaskDiffOutput(diffStat: SlackProgressDiffStat | undefined): string | undefined {
   return diffStat && (diffStat.added > 0 || diffStat.removed > 0)
     ? `+${diffStat.added} −${diffStat.removed}`
@@ -386,7 +376,7 @@ export function buildSlackProgressCardBlocks(params: {
     maxLineChars,
   });
   const narration = params.narration?.replace(/\s+/g, " ").trim();
-  const diffStat = formatDiffStat(params.diffStat);
+  const diffStat = formatChannelProgressDraftDiffStat(params.diffStat);
   const workingFooter = [
     ...(params.toolCalls && params.toolCalls > 0 ? [`🛠️ ${params.toolCalls} tools`] : []),
     ...(diffStat ? [diffStat] : []),

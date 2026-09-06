@@ -233,7 +233,7 @@ async function buildDynamicToolsForTest(
 }
 
 describe("Codex app-server dynamic tool build", () => {
-  it("forwards the explicit yield acknowledgment without exposing private context", async () => {
+  it("forwards private yield context and acknowledgment to the lifecycle owner", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
@@ -256,7 +256,10 @@ describe("Codex app-server dynamic tool build", () => {
       "Research started; results will follow.",
     );
 
-    expect(onYieldDetected).toHaveBeenCalledWith("Research started; results will follow.");
+    expect(onYieldDetected).toHaveBeenCalledWith(
+      "Resume after the fact-checker replies",
+      "Research started; results will follow.",
+    );
   });
 
   it("hands the question tools this run's own way to show a prompt", async () => {

@@ -1,29 +1,14 @@
-// Workshop page header: self-learning toggle, revision-session toggle, and
-// the board/today view switch.
 import { html } from "lit";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { t } from "../../i18n/index.ts";
 import type { SkillWorkshopState } from "./proposals.ts";
 import { renderSelfLearningToggle, type SkillWorkshopSelfLearning } from "./self-learning.ts";
-import { saveSkillWorkshopMode, saveSkillWorkshopUseCurrentChatForRevisions } from "./storage.ts";
+import { saveSkillWorkshopMode } from "./storage.ts";
 
 type SkillWorkshopHeaderProps = {
   selfLearning: SkillWorkshopSelfLearning | null;
   onSelfLearningToggle: (enabled: boolean) => void;
 };
-
-function setSkillWorkshopUseCurrentChatForRevisions(
-  state: SkillWorkshopState,
-  enabled: boolean,
-  requestUpdate: () => void,
-): void {
-  if (state.skillWorkshopUseCurrentChatForRevisions === enabled) {
-    return;
-  }
-  state.skillWorkshopUseCurrentChatForRevisions = enabled;
-  saveSkillWorkshopUseCurrentChatForRevisions(enabled);
-  requestUpdate();
-}
 
 export function setSkillWorkshopMode(
   state: SkillWorkshopState,
@@ -43,28 +28,9 @@ export function renderSkillWorkshopHeaderControls(
   { selfLearning, onSelfLearningToggle }: SkillWorkshopHeaderProps,
   requestUpdate: () => void,
 ) {
-  const useCurrentChatLabel = t("skillWorkshop.header.useCurrentChat");
   return html`
     <div class="sw-header-controls">
       ${renderSelfLearningToggle(selfLearning, onSelfLearningToggle)}
-      <label
-        class="sw-revision-session-toggle"
-        title=${t("skillWorkshop.header.useCurrentChatTooltip")}
-      >
-        <input
-          type="checkbox"
-          aria-label=${t("skillWorkshop.header.useCurrentChatAria")}
-          .checked=${state.skillWorkshopUseCurrentChatForRevisions}
-          @change=${(event: Event) =>
-            setSkillWorkshopUseCurrentChatForRevisions(
-              state,
-              (event.currentTarget as HTMLInputElement).checked,
-              requestUpdate,
-            )}
-        />
-        <span class="sw-revision-session-toggle__track" aria-hidden="true"></span>
-        <span class="sw-revision-session-toggle__label">${useCurrentChatLabel}</span>
-      </label>
       ${renderHubTabs({
         id: "skill-workshop-mode",
         active: state.skillWorkshopMode,
