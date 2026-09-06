@@ -3,6 +3,7 @@ import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-cata
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import chutesPlugin from "../extensions/chutes/index.js";
 import { buildOpenAIProvider } from "../extensions/openai/api.js";
+import xaiPlugin from "../extensions/xai/index.js";
 import {
   createExpiredOauthStore,
   readAuthProfileStoreForTest,
@@ -49,6 +50,7 @@ describe("Provider model discovery auth preparation", () => {
   afterEach(async () => {
     clearLiveCatalogCacheForTests();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     discovery.providers = [];
     await state?.cleanup();
   });
@@ -60,6 +62,7 @@ describe("Provider model discovery auth preparation", () => {
       providerId?: string;
       outcomes?: ProviderCatalogOutcome[];
       timeoutMs?: number;
+      env?: NodeJS.ProcessEnv;
     } = {},
   ) {
     return planOpenClawModelsJson({
@@ -68,7 +71,7 @@ describe("Provider model discovery auth preparation", () => {
         discoveryAuthConfig: config,
         sourceConfigForSecrets: config,
         agentDir,
-        env: {},
+        env: options.env ?? {},
         envFingerprint: {},
         providerDiscoveryProviderIds: [options.providerId ?? "openai"],
         providerDiscoveryTimeoutMs: options.timeoutMs,
@@ -163,85 +166,128 @@ describe("Provider model discovery auth preparation", () => {
     expect(plan.action === "write" ? plan.contents : "").not.toContain(keyA);
   });
 
-  it("continues from failed OAuth to the next configured API-key profile", async () => {
-    const profileA = "openai:oauth-a";
-    const profileB = "openai:api-key-b";
-    const keyB = "selected-profile-b";
-    const config: OpenClawConfig = {
-      auth: {
-        order: {
-          openai: [profileA, profileB],
+  it.each([
+    { providerId: "openai", source: "profile", modelId: "gpt-5.5" },
+    { providerId: "xai", source: "profile", modelId: "grok-4.3" },
+    { providerId: "xai", source: "config", modelId: "grok-4.3" },
+    { providerId: "xai", source: "env", modelId: "grok-4.3" },
+  ])(
+    "continues from failed $providerId OAuth to $source API-key auth without repeating refresh",
+    async ({ providerId, source, modelId }) => {
+      if (providerId === "xai") {
+        xaiPlugin.register(
+          createTestPluginApi({
+            registerProvider: (provider) => {
+              discovery.providers = [provider];
+            },
+          }),
+        );
+      }
+      const profileA = `${providerId}:oauth-a`;
+      const profileB = `${providerId}:api-key-b`;
+      const keyB = "selected-profile-b";
+      const config: OpenClawConfig = {
+        auth: {
+          order: {
+            [providerId]: [profileA, profileB],
+          },
         },
-      },
-    };
-    const store = createExpiredOauthStore({
-      profileId: profileA,
-      provider: "openai",
-      access: "rejected-oauth-a",
-      refresh: "refresh-a",
-    });
-    store.profiles[profileB] = {
-      type: "api_key",
-      provider: "openai",
-      key: keyB,
-    };
-    await state.writeAuthProfiles(store);
-    const events: string[] = [];
-    // Diagnostic copy is independent of refresh selection and loads the full plugin runtime.
-    vi.spyOn(providerRuntime, "buildProviderAuthDoctorHintWithPlugin").mockResolvedValue(undefined);
-    const refresh = vi
-      .spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin")
-      .mockImplementation(async ({ credential }) => {
-        events.push(`refresh:${credential.access}`);
-        throw new Error("synthetic OAuth refresh failure");
+      };
+      const store = createExpiredOauthStore({
+        profileId: profileA,
+        provider: providerId,
+        access: "rejected-oauth-a",
+        refresh: "refresh-a",
       });
-    const { resolveApiKeyForProvider } = providerAuthRuntime;
-    const runtimeAuth = vi
-      .spyOn(providerAuthRuntime, "resolveApiKeyForProvider")
-      .mockImplementation(async (params) => {
-        events.push(`resolve:${params.profileId}`);
-        return resolveApiKeyForProvider(params);
+      if (source === "profile") {
+        store.profiles[profileB] = { type: "api_key", provider: providerId, key: keyB };
+      } else if (source === "config") {
+        config.models = {
+          providers: {
+            [providerId]: {
+              baseUrl: "https://api.x.ai/v1",
+              api: "openai-responses",
+              apiKey: keyB,
+              models: [],
+            },
+          },
+        };
+      } else {
+        vi.stubEnv("XAI_API_KEY", keyB);
+      }
+      await state.writeAuthProfiles(store);
+      const events: string[] = [];
+      // Diagnostic copy is independent of refresh selection and loads the full plugin runtime.
+      vi.spyOn(providerRuntime, "buildProviderAuthDoctorHintWithPlugin").mockResolvedValue(
+        undefined,
+      );
+      const refresh = vi
+        .spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin")
+        .mockImplementation(async ({ credential }) => {
+          events.push(`refresh:${credential.access}`);
+          throw new Error("synthetic OAuth refresh failure");
+        });
+      const { resolveApiKeyForProvider } = providerAuthRuntime;
+      const runtimeAuth = vi
+        .spyOn(providerAuthRuntime, "resolveApiKeyForProvider")
+        .mockImplementation(async (params) => {
+          events.push(`resolve:${params.profileId}`);
+          return resolveApiKeyForProvider(params);
+        });
+      const requests: string[] = [];
+      const outcomes: ProviderCatalogOutcome[] = [];
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+        events.push("catalog");
+        requests.push(new Headers(init?.headers).get("authorization") ?? "");
+        return Response.json({ data: [{ id: modelId, object: "model" }] });
       });
-    const requests: string[] = [];
-    const outcomes: ProviderCatalogOutcome[] = [];
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
-      events.push("catalog");
-      requests.push(new Headers(init?.headers).get("authorization") ?? "");
-      return Response.json({ data: [{ id: "gpt-5.5", object: "model" }] });
-    });
 
-    const plan = await planCatalog(config, store, { outcomes });
+      const plan = await planCatalog(config, store, {
+        providerId,
+        outcomes,
+        ...(source === "env" ? { env: { XAI_API_KEY: keyB } } : {}),
+      });
 
-    expect(refresh).toHaveBeenCalledOnce();
-    expect(refresh).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        refresh: true,
-        credential: expect.objectContaining({
-          type: "oauth",
-          provider: "openai",
-          access: "rejected-oauth-a",
-          refresh: "refresh-a",
+      expect(refresh).toHaveBeenCalledOnce();
+      expect(refresh).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: providerId,
+          refresh: true,
+          credential: expect.objectContaining({
+            type: "oauth",
+            provider: providerId,
+            access: "rejected-oauth-a",
+            refresh: "refresh-a",
+          }),
         }),
-      }),
-    );
-    expect(events).toEqual(["refresh:rejected-oauth-a", `resolve:${profileB}`, "catalog"]);
-    expect({
-      runtimeProfiles: runtimeAuth.mock.calls.map(([params]) => ({
-        profileId: params.profileId,
-        lockedProfile: params.lockedProfile,
-      })),
-      requests,
-      outcomes,
-      action: plan.action,
-    }).toEqual({
-      runtimeProfiles: [{ profileId: profileB, lockedProfile: true }],
-      requests: [`Bearer ${keyB}`],
-      outcomes: [{ provider: "openai", profileId: profileB, status: "ready" }],
-      action: "write",
-    });
-    expect(plan.action === "write" ? plan.contents : "").not.toContain("rejected-oauth-a");
-  });
+      );
+      const resolvedProfile = source === "profile" ? profileB : undefined;
+      expect(events).toEqual(["refresh:rejected-oauth-a", `resolve:${resolvedProfile}`, "catalog"]);
+      expect({
+        runtimeProfiles: runtimeAuth.mock.calls.map(([params]) => ({
+          profileId: params.profileId,
+          lockedProfile: params.lockedProfile,
+        })),
+        requests,
+        outcomes,
+        action: plan.action,
+      }).toEqual({
+        runtimeProfiles: [
+          { profileId: resolvedProfile, lockedProfile: resolvedProfile ? true : undefined },
+        ],
+        requests: [`Bearer ${keyB}`],
+        outcomes: [
+          {
+            provider: providerId,
+            ...(resolvedProfile ? { profileId: resolvedProfile } : {}),
+            status: "ready",
+          },
+        ],
+        action: "write",
+      });
+      expect(plan.action === "write" ? plan.contents : "").not.toContain("rejected-oauth-a");
+    },
+  );
 
   it.each(["oauth", "token"] as const)(
     "uses subscription discovery for configured literal %s credentials without a profile",
@@ -356,14 +402,16 @@ describe("Provider model discovery auth preparation", () => {
   });
 
   it.each([
-    { providerId: "chutes", profileCount: 1 },
-    { providerId: "chutes", profileCount: 2 },
-    { providerId: "openai", profileCount: 1 },
+    { providerId: "chutes", profileCount: 1, plugin: chutesPlugin },
+    { providerId: "chutes", profileCount: 2, plugin: chutesPlugin },
+    { providerId: "openai", profileCount: 1, plugin: null },
+    { providerId: "xai", profileCount: 1, plugin: xaiPlugin },
+    { providerId: "xai", profileCount: 2, plugin: xaiPlugin },
   ])(
     "retains the $providerId catalog when all $profileCount OAuth profiles fail preparation",
-    async ({ providerId, profileCount }) => {
-      if (providerId === "chutes") {
-        chutesPlugin.register(
+    async ({ providerId, profileCount, plugin }) => {
+      if (plugin) {
+        plugin.register(
           createTestPluginApi({
             registerProvider: (provider) => {
               discovery.providers = [provider];
