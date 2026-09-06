@@ -939,6 +939,11 @@ or staged candidate root (`fs.workspaceOnly: true`), preserving safe-bin and too
 allowlists and refusing explicit exec or repair-tool denies with `exec-denied-by-policy`
 and an `openclaw triage` external handoff.
 
+Chat-requested updates recheck the requester's command ownership before repair
+effects and service activation. If configuration or plugin loading fails, the
+update stops and records the load error. Fix that error before retrying; only a
+successful policy check can report that the requester is no longer an owner.
+
 The default limits are three turns, ten minutes total, five minutes per turn,
 and 40 tool calls per turn. The updater supplies a validation check before the
 first turn and after each attempt. Repair stops when validation succeeds, a

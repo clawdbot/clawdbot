@@ -51,12 +51,15 @@ const runtimeConsumers = [
     mode: "runtime" as const,
     dir: "",
   })),
-  {
-    file: "src/infra/update-candidate-canary.integration.test.ts",
+  ...[
+    "src/infra/update-candidate-canary.integration.test.ts",
+    "src/infra/update-managed-service-handoff-lifecycle.test.ts",
+  ].map((file) => ({
+    file,
     configs: ["test/vitest/vitest.infra.config.ts"],
-    mode: "runtime",
+    mode: "runtime" as const,
     dir: "src",
-  },
+  })),
   ...[
     "src/commands/doctor-config-preflight.process.test.ts",
     "src/commands/doctor-config-preflight.refusal.process.test.ts",
