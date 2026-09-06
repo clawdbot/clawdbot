@@ -11,15 +11,10 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
-import type { createManagedServiceManagerBoundary } from "./update-managed-service-handoff-boundary.test-support.js";
-
-export type ManagedRepairBoundary = {
-  phase: "validating" | "verifying";
-  baseUrl: string;
-  revoke: boolean;
-  inferencePending: Promise<void>;
-  releaseInference: () => void;
-};
+import type {
+  ManagedRepairBoundary,
+  ManagedServiceManagerBoundaryRunner,
+} from "./update-managed-service-handoff-boundary-contract.test-support.js";
 
 export function readManagedRepairEffects(root: string) {
   return {
@@ -238,7 +233,7 @@ function writeEffects(response: ServerResponse, second: boolean) {
 }
 
 export async function runManagedRepairAuthorityBoundary(
-  runBoundary: ReturnType<typeof createManagedServiceManagerBoundary>,
+  runBoundary: ManagedServiceManagerBoundaryRunner,
   phase: ManagedRepairBoundary["phase"],
   revoke: boolean,
 ) {

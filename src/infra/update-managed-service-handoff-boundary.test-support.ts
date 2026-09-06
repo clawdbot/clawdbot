@@ -12,6 +12,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { writeRestartSentinel } from "./restart-sentinel.js";
+import type { ManagedServiceBoundaryOptions } from "./update-managed-service-handoff-boundary-contract.test-support.js";
 import {
   awaitEmulatedRecoveryHandoffExit,
   createManagedServiceCommandFixture,
@@ -24,7 +25,6 @@ import {
   createManagedServiceUpdaterFixtureScript,
   createManagedServiceManagerFixtureScript,
   type ManagedServiceCommandTiming,
-  type ManagedServiceManagerBoundaryOptions,
   type ManagedServiceManagerBoundaryResult,
 } from "./update-managed-service-handoff-lifecycle.test-support.js";
 import { createManagedServiceBoundaryCleanup } from "./update-managed-service-handoff-process.test-support.js";
@@ -33,7 +33,6 @@ import {
   prepareManagedRepairSpawnEnv,
   readManagedRepairEffects,
   releaseManagedRepairInference,
-  type ManagedRepairBoundary,
 } from "./update-managed-service-handoff-repair.test-support.js";
 import { prepareManagedServiceRuntimeFixture } from "./update-managed-service-handoff-runtime.test-support.js";
 import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
@@ -75,19 +74,7 @@ export function createManagedServiceManagerBoundary({
 }) {
   return async function runManagedServiceManagerBoundary(
     kind: "systemd" | "launchd",
-    options?: ManagedServiceManagerBoundaryOptions & {
-      controlDisconnect?: "transferred" | "unarmed" | "dead-parent";
-      relativeInput?: boolean;
-      validationResult?: "failed" | "skipped";
-      validationClockAdvanceMs?: number;
-      cancelDuringValidation?: boolean;
-      cancelAtActivation?: "requester" | "inspection";
-      runnerFallback?: boolean;
-      revokeWhileValidating?: boolean;
-      replaceLedgerWriter?: boolean;
-      beforeParkNotice?: "acknowledged" | "stalled" | "rejected";
-      repair?: ManagedRepairBoundary;
-    },
+    options?: ManagedServiceBoundaryOptions,
   ): Promise<ManagedServiceManagerBoundaryResult> {
     const { spawn } =
       await vi.importActual<typeof import("node:child_process")>("node:child_process");

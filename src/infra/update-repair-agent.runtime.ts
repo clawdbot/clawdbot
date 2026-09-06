@@ -6,6 +6,7 @@ import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SystemAgentConfiguredRoute } from "../system-agent/inference-route.js";
+import { sanitizeHostExecEnv } from "./host-env-security.js";
 import {
   installationTargetEnv,
   withInstallationTarget,
@@ -31,16 +32,37 @@ export async function withUpdateRepairEnvironment<T>(
   const previousConfig = io.getRuntimeConfigSnapshot();
   const previousEnv = io.snapshotEnv(process.env);
   if (target.environment) {
+    // Rehearsal may clear live selectors, but only its isolation paths can
+    // override the host environment. Keep executable lookup and credentials host-owned.
+    const environment: NodeJS.ProcessEnv = {};
     for (const key of Object.keys(process.env)) {
-      if (target.environment[key] === undefined) {
+      if (target.environment[key] !== undefined) {
+        environment[key] = process.env[key];
+      }
+    }
+    for (const key of [
+      "HOME",
+      "USERPROFILE",
+      "TMPDIR",
+      "TMP",
+      "TEMP",
+      "XDG_CONFIG_HOME",
+      "XDG_CACHE_HOME",
+      "XDG_DATA_HOME",
+      "XDG_STATE_HOME",
+      "OPENCLAW_HOME",
+      "OPENCLAW_AGENT_DIR",
+      "PI_CODING_AGENT_DIR",
+    ]) {
+      environment[key] = target.environment[key];
+    }
+    const sanitized = sanitizeHostExecEnv({ baseEnv: environment });
+    for (const key of Object.keys(process.env)) {
+      if (sanitized[key] === undefined) {
         delete process.env[key];
       }
     }
-    for (const [key, value] of Object.entries(target.environment)) {
-      if (value !== undefined) {
-        process.env[key] = value;
-      }
-    }
+    Object.assign(process.env, sanitized);
   }
   Object.assign(
     process.env,
@@ -53,6 +75,7 @@ export async function withUpdateRepairEnvironment<T>(
       allowGatewayServiceRepair: false,
       allowGatewayActivation: false,
       serviceRepairPolicy: "external",
+      deferConfiguredPluginInstallRepair: Boolean(target.environment),
     }),
   );
   io.clearRuntimeConfigSnapshot();

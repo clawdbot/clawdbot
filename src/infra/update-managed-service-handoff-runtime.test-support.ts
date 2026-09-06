@@ -2,10 +2,8 @@ import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import {
-  managedRepairConfig,
-  type ManagedRepairBoundary,
-} from "./update-managed-service-handoff-repair.test-support.js";
+import type { ManagedRepairBoundary } from "./update-managed-service-handoff-boundary-contract.test-support.js";
+import { managedRepairConfig } from "./update-managed-service-handoff-repair.test-support.js";
 
 export async function prepareManagedServiceRuntimeFixture(params: {
   recoveryModulePath: string;
