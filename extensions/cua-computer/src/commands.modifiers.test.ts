@@ -196,13 +196,14 @@ describe("cua-computer platform modifiers", () => {
     }
   });
 
-  it("rejects unsupported drag modifiers at the public request boundary", async () => {
-    const native = windowDriver();
-    const computer = await execution(native.session, "darwin");
-    try {
-      const target = await observeWindow(computer);
-      await expect(
-        computer.act(
+  it.each(platforms)(
+    "routes a modifier-held window drag through the raw drag tool on $platform",
+    async ({ platform, command }) => {
+      const native = windowDriver();
+      const computer = await execution(native.session, platform);
+      try {
+        const target = await observeWindow(computer);
+        await computer.act(
           JSON.stringify({
             action: "left_click_drag",
             ...target,
@@ -210,12 +211,84 @@ describe("cua-computer platform modifiers", () => {
             fromY: 15,
             x: 20,
             y: 30,
-            modifiers: "cmd",
+            modifiers: "Command+Shift",
           }),
-        ),
-      ).rejects.toThrow("COMPUTER_INVALID_REQUEST");
-      expect(native.callTool).toHaveBeenCalledTimes(2);
-      expect(native.drag).not.toHaveBeenCalled();
+        );
+        expect(native.callTool).toHaveBeenLastCalledWith(
+          "drag",
+          {
+            pid: 4242,
+            window_id: 99,
+            from_x: 10,
+            from_y: 15,
+            to_x: 20,
+            to_y: 30,
+            modifier: [command, "shift"],
+          },
+          undefined,
+        );
+        expect(native.drag).not.toHaveBeenCalled();
+      } finally {
+        await computer.close("completion");
+      }
+    },
+  );
+
+  it.each(platforms)(
+    "passes a modifier-held desktop drag through to the typed driver on $platform",
+    async ({ platform, command }) => {
+      const native = driver();
+      const computer = await execution(native.session, platform);
+      try {
+        const screen = JSON.parse(await computer.snapshot('{"format":"png","maxWidth":100}')) as {
+          displayFrameId: string;
+          width: number;
+        };
+        await computer.act(
+          JSON.stringify({
+            action: "left_click_drag",
+            displayFrameId: screen.displayFrameId,
+            refWidth: screen.width,
+            fromX: 10,
+            fromY: 15,
+            x: 20,
+            y: 30,
+            modifiers: "Command+Shift",
+          }),
+        );
+        expect(native.drag).toHaveBeenLastCalledWith(
+          { fromX: 10, fromY: 15, toX: 20, toY: 30, modifier: [command, "shift"] },
+          undefined,
+        );
+      } finally {
+        await computer.close("completion");
+      }
+    },
+  );
+
+  it("omits the modifier key from an unmodified desktop drag", async () => {
+    const native = driver();
+    const computer = await execution(native.session, "linux");
+    try {
+      const screen = JSON.parse(await computer.snapshot('{"format":"png","maxWidth":100}')) as {
+        displayFrameId: string;
+        width: number;
+      };
+      await computer.act(
+        JSON.stringify({
+          action: "left_click_drag",
+          displayFrameId: screen.displayFrameId,
+          refWidth: screen.width,
+          fromX: 10,
+          fromY: 15,
+          x: 20,
+          y: 30,
+        }),
+      );
+      expect(native.drag).toHaveBeenLastCalledWith(
+        { fromX: 10, fromY: 15, toX: 20, toY: 30 },
+        undefined,
+      );
     } finally {
       await computer.close("completion");
     }

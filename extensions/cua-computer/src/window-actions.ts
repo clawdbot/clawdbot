@@ -99,6 +99,7 @@ async function handleTargetedAct(
         "drag start",
       );
       const to = windowPointArgs(state, params, windowRef, params, "drag end");
+      const dragModifiers = normalizeModifiers(params.modifiers, platform);
       args = {
         ...base,
         from_x: from.x,
@@ -109,6 +110,7 @@ async function handleTargetedAct(
         ...(params.durationMs === undefined
           ? {}
           : { duration_ms: Math.min(10_000, params.durationMs) }),
+        ...(dragModifiers.length ? { modifier: dragModifiers } : {}),
         ...delivery,
       };
       break;

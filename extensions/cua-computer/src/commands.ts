@@ -370,6 +370,7 @@ async function handleDesktopAct(
         case "left_click_drag": {
           const from = scalePoint(frame, desktopParams.fromX, desktopParams.fromY, "drag start");
           const to = scalePoint(frame, desktopParams.x, desktopParams.y, "drag end");
+          const modifier = normalizeModifiers(desktopParams.modifiers, platform);
           assertToolSuccess(
             await driver.drag(
               {
@@ -377,6 +378,7 @@ async function handleDesktopAct(
                 fromY: from.y,
                 toX: to.x,
                 toY: to.y,
+                ...(modifier.length ? { modifier } : {}),
                 // CUA caps desktop drag duration at 10 seconds; clamp rather than
                 // rejecting a valid computer.act request at the SDK boundary.
                 ...(desktopParams.durationMs === undefined
