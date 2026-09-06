@@ -13,6 +13,7 @@ import type {
   TaskRegistryControlRuntime,
 } from "../../../tasks/task-registry-control.types.js";
 import { resolveSessionAgentId } from "../../agent-scope.js";
+import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import { holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import {
   killSubagentRun,
@@ -28,7 +29,10 @@ import {
   type ResolvedSubagentController,
 } from "./subagent-control-scope.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { listSubagentRunsForController } from "./subagent-registry-read.js";
+import {
+  listSubagentRunsForController,
+  listSubagentRunsForRequester,
+} from "./subagent-registry-read.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 
@@ -53,6 +57,7 @@ type KillSelection = {
   cfg: OpenClawConfig;
   runs: Iterable<SubagentRunRecord>;
   assertCurrent?: () => void;
+  ownsRoot?: (entry: SubagentRunRecord) => boolean;
   controller?: Pick<ResolvedSubagentController, "controllerSessionKey" | "controllerAgentId">;
 };
 
@@ -83,6 +88,7 @@ async function withSubagentKillScope<T>(
     trees: KillTree[],
     owner?: KillSelection["controller"],
     isParentCurrent?: () => boolean,
+    ownsRoot?: (entry: SubagentRunRecord) => boolean,
   ): void => {
     const controller = owner ? { ...owner } : undefined;
     for (const snapshot of runs) {
@@ -103,6 +109,7 @@ async function withSubagentKillScope<T>(
         return (
           isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) &&
           isParentCurrent?.() !== false &&
+          ownsRoot?.(candidate) !== false &&
           (!controller ||
             !ensureSubagentControllerOwnsRun({ cfg: params.cfg, controller, entry: candidate }))
         );
@@ -222,7 +229,7 @@ async function withSubagentKillScope<T>(
   };
   try {
     const trees: KillTree[] = [];
-    select(params.runs, trees, params.controller);
+    select(params.runs, trees, params.controller, undefined, params.ownsRoot);
     const scope: KillScope = {
       refresh: () => {
         trees.forEach(refreshTree);
@@ -448,6 +455,40 @@ export async function killAllControlledSubagentRuns(params: {
       labels: [],
     };
   }
+  return killSelectedSubagentRuns(params);
+}
+
+/** Lifecycle cleanup owns both the completion requester and its separately scoped controller. */
+export async function killSessionSubagentRuns(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  agentId: string;
+  assertCurrent?: () => void;
+}) {
+  const controller = { controllerSessionKey: params.sessionKey, controllerAgentId: params.agentId };
+  return killSelectedSubagentRuns({
+    cfg: params.cfg,
+    assertCurrent: params.assertCurrent,
+    runs: [
+      ...listSubagentRunsForRequester(params.sessionKey, { requesterAgentId: params.agentId }),
+      ...listSubagentRunsForController(params.sessionKey, params.agentId),
+    ],
+    // Ordinary controller mutations retain their narrower authority. Only an admitted
+    // lifecycle boundary can retire work whose completion belongs to this session.
+    ownsRoot: (entry) =>
+      !ensureSubagentControllerOwnsRun({ cfg: params.cfg, controller, entry }) ||
+      (entry.requesterSessionKey === params.sessionKey &&
+        resolveSubagentRequesterAgentId(params.cfg, entry) === params.agentId),
+    suppressTaskDelivery: true,
+  });
+}
+
+async function killSelectedSubagentRuns(
+  params: KillSelection & {
+    suppressTaskDelivery?: boolean;
+    beforeKill?: () => boolean | Promise<boolean>;
+  },
+) {
   const result = await withSubagentKillScope(params, async (scope, trees) => {
     const accepted = params.beforeKill ? await params.beforeKill() : true;
     if (accepted) {

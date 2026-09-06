@@ -1,5 +1,8 @@
 /** Clears reset-related queues and system events for session keys. */
 import { clearEmbeddedSessionPromptStates } from "../../agents/embedded-agent-runner/session-prompt-state.js";
+import { killSessionSubagentRuns } from "../../agents/subagents/registry/subagent-control-kill.js";
+import { loadExactSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { selectAgentSystemEvents } from "../../infra/system-event-ownership.js";
 import {
   consumeSelectedSystemEventEntries,
@@ -7,6 +10,45 @@ import {
 } from "../../infra/system-events.js";
 import { clearSessionQueues, type ClearSessionQueueResult } from "./queue/cleanup.js";
 import { clearReplyRunForResetBySessionId } from "./reply-run-registry.js";
+
+export class SessionResetCleanupError extends Error {}
+
+/** Reset must report unfinished child cleanup before committing a fresh conversation. */
+export async function stopSessionResetSubagents(
+  params: Parameters<typeof killSessionSubagentRuns>[0] & {
+    storePath: string;
+    expectedSession: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined;
+  },
+): Promise<void> {
+  const sessionId = params.expectedSession?.sessionId;
+  const lifecycleRevision = params.expectedSession?.lifecycleRevision;
+  const assertCurrent = () => {
+    params.assertCurrent?.();
+    const current = loadExactSessionEntryReadOnly({
+      storePath: params.storePath,
+      sessionKey: params.sessionKey,
+      clone: false,
+    })?.entry;
+    if (current?.sessionId !== sessionId || current?.lifecycleRevision !== lifecycleRevision) {
+      throw new Error("Session changed before subagent cleanup. Retry reset.");
+    }
+  };
+  try {
+    // Hooks and child finalizers can yield after reset accepted its parent. Fence
+    // that incarnation before selection and at every child cancellation boundary.
+    assertCurrent();
+    const result = await killSessionSubagentRuns({ ...params, assertCurrent });
+    assertCurrent();
+    if (result.status === "error") {
+      throw new Error(result.error);
+    }
+  } catch (cause) {
+    throw new SessionResetCleanupError(
+      "Reset did not complete because some subagent tasks could not be stopped. Inspect the remaining tasks and retry /reset.",
+      { cause },
+    );
+  }
+}
 
 /** Runtime cleanup result for reset-related queues and system events. */
 type ClearSessionResetRuntimeStateResult = ClearSessionQueueResult & {

@@ -18,6 +18,11 @@ import {
 } from "./get-reply.test-fixtures.js";
 import "./get-reply.test-runtime-mocks.js";
 import { bindPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
+import {
+  REPLY_OPERATION_RUN_STATE,
+  type ReplyOperationRunState,
+} from "./reply-operation-run-state.js";
+import { SessionResetCleanupError } from "./session-reset-cleanup.js";
 
 type CaptureSessionDiffBaseline =
   (typeof import("../../sessions/session-diff.js"))["captureSessionDiffBaseline"];
@@ -194,6 +199,17 @@ describe("getReplyFromConfig configOverride", () => {
     expect(sessionEntryHandle.replaceCurrent).toHaveBeenCalledWith(
       expect.objectContaining({ sessionDiffBaseline: expect.objectContaining({ sessionId }) }),
     );
+  });
+
+  it("reports reset cleanup failure without starting the reply", async () => {
+    const message = "Reset did not complete. Inspect remaining tasks and retry /reset.";
+    mocks.initSessionState.mockRejectedValueOnce(new SessionResetCleanupError(message));
+    const runState: ReplyOperationRunState = {};
+    await expect(
+      getReplyFromConfig(buildGetReplyCtx(), { [REPLY_OPERATION_RUN_STATE]: runState }, {}),
+    ).resolves.toEqual({ text: message });
+    expect(runState.preRunRejection).toBe("session-directive-rejected");
+    expect(runPreparedReplyMock).not.toHaveBeenCalled();
   });
 
   it("rethrows baseline work-start invalidation before reply execution", async () => {

@@ -35,12 +35,15 @@ import { clearAllCliSessions } from "../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../agents/harness/registry.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
-import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
 import {
   buildSessionEndHookPayload,
   buildSessionStartHookPayload,
 } from "../auto-reply/reply/session-hooks.js";
-import { clearSessionResetRuntimeState } from "../auto-reply/reply/session-reset-cleanup.js";
+import {
+  clearSessionResetRuntimeState,
+  SessionResetCleanupError,
+  stopSessionResetSubagents,
+} from "../auto-reply/reply/session-reset-cleanup.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
@@ -347,6 +350,7 @@ async function ensureSessionRuntimeCleanup(params: {
   key: string;
   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
   sessionId?: string;
+  sessionLifecycleRevision?: string;
   assertCurrent?: () => void;
 }) {
   // Session lifecycle mutation owns this heavy runtime edge; read-only gateway
@@ -389,11 +393,23 @@ async function ensureSessionRuntimeCleanup(params: {
     activeReplySessionId: params.sessionId,
     agentId: resolveLifecycleAgentId(params.cfg, params.target.agentId),
   });
-  await stopSubagentsForRequester({
-    cfg: params.cfg,
-    requesterSessionKey: params.target.canonicalKey,
-    requesterAgentId: params.target.agentId,
-  });
+  try {
+    await stopSessionResetSubagents({
+      cfg: params.cfg,
+      sessionKey: params.target.canonicalKey,
+      agentId: resolveLifecycleAgentId(params.cfg, params.target.agentId),
+      storePath: params.target.storePath,
+      expectedSession: params.sessionId
+        ? { sessionId: params.sessionId, lifecycleRevision: params.sessionLifecycleRevision }
+        : undefined,
+      assertCurrent: params.assertCurrent,
+    });
+  } catch (error) {
+    if (error instanceof SessionResetCleanupError) {
+      return errorShape(ErrorCodes.UNAVAILABLE, error.message);
+    }
+    throw error;
+  }
   if (!params.sessionId) {
     params.assertCurrent?.();
     clearBootstrapSnapshot(params.target.canonicalKey);
@@ -847,6 +863,7 @@ export async function cleanupSessionBeforeMutation(params: {
     key: params.key,
     target: params.target,
     sessionId: params.entry?.sessionId,
+    sessionLifecycleRevision: params.entry?.lifecycleRevision,
     assertCurrent: params.assertCurrent,
   });
   if (cleanupError) {
@@ -1440,6 +1457,7 @@ export async function performGatewaySessionReset(params: {
         key: params.key,
         target,
         sessionId: entry?.sessionId,
+        sessionLifecycleRevision: resetLifecycleRevision,
       });
       if (runtimeCleanupError) {
         return { ok: false, error: runtimeCleanupError };
