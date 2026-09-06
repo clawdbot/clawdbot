@@ -156,7 +156,7 @@ function resolveSummaryFitPlan(
   params: CompactionSummaryParams,
   baselinePlan: StageSplitPlan,
 ): SummaryFitPlan {
-  if (baselinePlan.mode === "single") {
+  if (params.maxChunkTokensSource !== "adaptive" || baselinePlan.mode === "single") {
     return { mode: "staged" };
   }
   const serializedHistory = serializeCompactionHistory(params.messages);
@@ -167,7 +167,13 @@ function resolveSummaryFitPlan(
     params.customInstructions,
     params.summarizationInstructions,
   );
-  const dynamicRequestText = [serializedHistory, params.previousSummary, effectiveInstructions]
+  // Custom summary templates are caller-owned text, not fixed prompt overhead.
+  const dynamicRequestText = [
+    serializedHistory,
+    params.previousSummary,
+    effectiveInstructions,
+    params.summaryPrompt?.kind === "custom" ? params.summaryPrompt.instructions : undefined,
+  ]
     .filter((text): text is string => Boolean(text))
     .join("\n\n");
   const dynamicInputTokens = estimateMessagesTokens([
@@ -177,7 +183,7 @@ function resolveSummaryFitPlan(
     Math.ceil(dynamicInputTokens * SAFETY_MARGIN) +
     SUMMARIZATION_OVERHEAD_TOKENS +
     Math.max(0, Math.ceil(params.reserveTokens));
-  return requestTokens <= params.contextWindow && params.maxChunkTokensSource === "adaptive"
+  return requestTokens <= params.contextWindow
     ? { mode: "whole-first", serializedHistory }
     : { mode: "staged" };
 }
