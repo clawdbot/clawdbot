@@ -1,7 +1,6 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -27,6 +26,8 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 describe("worker placement dispatch conflict lookup", () => {
   let root: string;
   let database: OpenClawStateDatabase;
@@ -38,14 +39,13 @@ describe("worker placement dispatch conflict lookup", () => {
 
   beforeEach(async () => {
     workerPlacementWarn.mockClear();
-    root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-dispatch-"));
+    root = tempDirs.make("openclaw-dispatch-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     placementStore = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     closeOpenClawStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
   });
 
   it("reclaims an unchanged worker with unknown conflict state without silently clearing its report", async () => {
