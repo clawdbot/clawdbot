@@ -296,7 +296,12 @@ describe("public session sharing", () => {
     const pane = testPane as SharingPane;
     state.sessionKey = row.key;
     pane.syncSelectedSessionSharing(row);
-    await vi.waitFor(() => expect(listCount).toBe(1));
+    await vi.waitFor(() => {
+      expect(listCount).toBe(1);
+      expect(pane.sessionSharingStates.get(pane.sessionSharingCacheKey(row.key))?.loading).toBe(
+        false,
+      );
+    });
 
     confirmPublicShare.mockResolvedValue(true);
     const pending = pane.setSessionPublicShare(row, true);
@@ -355,7 +360,12 @@ describe("public session sharing", () => {
     const pane = testPane as SharingPane;
     state.sessionKey = row.key;
     pane.syncSelectedSessionSharing(row);
-    await vi.waitFor(() => expect(listCount).toBe(1));
+    await vi.waitFor(() => {
+      expect(listCount).toBe(1);
+      expect(pane.sessionSharingStates.get(pane.sessionSharingCacheKey(row.key))?.loading).toBe(
+        false,
+      );
+    });
 
     confirmPublicShare.mockResolvedValue(true);
     const pending = pane.setSessionPublicShare(row, true);
