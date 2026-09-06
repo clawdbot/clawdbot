@@ -217,8 +217,23 @@ export async function createMatrixDraftController(params: {
     return !draftStream.mustDeliverFinalNormally();
   };
 
-  const settleDraftForToolDispatch = async () => {
-    if (!draftStream || !(await settleDraftGeneration())) {
+  /**
+   * Settles the draft on behalf of a tool dispatch, but only if the draft is
+   * still on the exact generation that was active when the tool call was
+   * issued. Matrix delivery of the tool's own payload can be enqueued
+   * without awaiting completion, so a fast-following assistant message can
+   * already have started (and be streaming its own new partial text into
+   * this same draft) by the time this settlement callback finally runs.
+   * Finalizing and resetting in that case would stop and clear a generation
+   * that isn't this tool call's to own, corrupting or losing the newer
+   * text; leave it alone and let that newer generation's own eventual
+   * delivery settle it instead.
+   */
+  const settleDraftForToolDispatch = async (expectedGeneration: number) => {
+    if (!draftStream || currentDraftMessageGeneration !== expectedGeneration) {
+      return;
+    }
+    if (!(await settleDraftGeneration())) {
       return;
     }
     // stop() marks the stream final, which makes every later update() a
@@ -247,6 +262,7 @@ export async function createMatrixDraftController(params: {
     draftStream,
     cancelProgressDraft: () => progressDraft.cancel(),
     buildPreviewToolProgressReplyOptions,
+    currentGeneration: () => currentDraftMessageGeneration,
     queueDraftBlockBoundary,
     advanceDraftBlockBoundary,
     resetDraftBlockOffsets,

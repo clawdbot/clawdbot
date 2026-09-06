@@ -4671,6 +4671,87 @@ describe("matrix monitor handler draft streaming", () => {
     await finish();
   });
 
+  it("preserves cleanup ownership when a pending (not first-create) edit fails during tool settlement", async () => {
+    const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
+    const { deliver, opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: "He" });
+    await waitForMatrixState(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+
+    // The rest of the sentence is still throttled/pending when the tool
+    // call fires, so settlement's own flush must send it as a plain edit --
+    // reject that specific edit (not a first-create), matching the gap
+    // where only finalizeInPlaceBlocked from a preview-limit error, never a
+    // generic edit rejection, used to unblock the redact-or-replace path.
+    opts.onPartialReply?.({ text: "Hej Markus! Full text" });
+    editMessageMatrixMock.mockRejectedValueOnce(new Error("rate limited"));
+    await deliver({ text: "tool result" }, { kind: "tool" });
+
+    // Without propagating that failure into mustDeliverFinalNormally(),
+    // finalizeLive() would still succeed on the stale cached "He" and
+    // settlement would report success, wiping the event id -- exactly the
+    // orphaned-live-draft bug this PR fixes, just via a different trigger.
+    deliverMatrixRepliesMock.mockClear();
+    await deliver({ text: "Final text" }, { kind: "final" });
+
+    expect(redactEventMock).toHaveBeenCalledWith("!room:example.org", "$draft1");
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+    await finish();
+  });
+
+  it("does not finalize a newer draft generation when a delayed tool delivery settles late", async () => {
+    const { dispatch } = createStreamingHarness({ streaming: "partial" });
+    const { deliver, opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: "First" });
+    await waitForMatrixState(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+
+    // Production enqueues a tool's own Matrix delivery without awaiting
+    // completion -- simulate that: the tool's send stays pending while a
+    // fast-following assistant message already starts streaming new text
+    // into the same shared draft.
+    let resolveToolDelivery: (() => void) | undefined;
+    deliverMatrixRepliesMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveToolDelivery = () => resolve(createMockMatrixDeliveryResult());
+        }),
+    );
+    const toolDeliverPromise = deliver({ text: "tool result" }, { kind: "tool" });
+    await waitForMatrixState(() => {
+      expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+    });
+
+    opts.onAssistantMessageStart?.();
+    opts.onPartialReply?.({ text: "Second" });
+    await waitForMatrixState(() => {
+      expect(
+        mockCalls(editMessageMatrixMock, "edit calls").some(
+          ([, eventId, body]) => eventId === "$draft1" && body === "Second",
+        ),
+      ).toBe(true);
+    });
+
+    // Only now does the tool call's own delayed delivery finish.
+    resolveToolDelivery?.();
+    await toolDeliverPromise;
+
+    // The tool call belonged to the first generation ("First"); it must not
+    // finalize (strip the live marker on) the second generation's draft,
+    // which is a different, still-in-flight block it doesn't own.
+    expect(
+      mockCalls(editMessageMatrixMock, "edit calls").some(
+        ([, eventId, , options]) =>
+          eventId === "$draft1" && requireRecord(options, "edit options").live === false,
+      ),
+    ).toBe(false);
+    await finish();
+  });
+
   it("does not reset draft stream after final delivery", async () => {
     vi.useFakeTimers();
     try {

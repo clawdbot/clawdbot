@@ -146,7 +146,13 @@ export function createMatrixDraftStream(params: {
       log?.(`draft-stream: send/edit failed: ${String(err)}`);
       const isPreviewLimitError =
         err instanceof Error && err.message.startsWith("Matrix single-message text exceeds limit");
-      if (isPreviewLimitError) {
+      // A failed edit of an *existing* event (any reason, not just the
+      // preview-limit case) leaves the draft showing stale content that
+      // never got the update it was about to receive -- finalizeLive()'s own
+      // guard doesn't know that, so without this flag it would happily
+      // publish that stale text as "final" and the caller would reset,
+      // losing all reference to the now-permanently-stuck event.
+      if (isPreviewLimitError || currentEventId) {
         finalizeInPlaceBlocked = true;
       }
       if (!currentEventId) {
