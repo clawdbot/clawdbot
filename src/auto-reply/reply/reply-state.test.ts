@@ -450,6 +450,19 @@ describe("shouldRunPreflightCompaction", () => {
     ).toBe(true);
   });
 
+  it("ignores fresh-but-unversioned legacy entries", () => {
+    // Legacy entries marked totalTokensFresh === true but without a version
+    // are not stale — they are simply unversioned. The stale fallback must
+    // not fire for them (agent-runner-memory.test.ts covers this at the
+    // integration level).
+    expect(
+      shouldRunPreflightCompaction({
+        entry: { totalTokens: 478_000, totalTokensFresh: true },
+        threshold: 140_000,
+      }),
+    ).toBe(false);
+  });
+
   it("does not trigger when no persisted total is available", () => {
     expect(
       shouldRunPreflightCompaction({
