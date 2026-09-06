@@ -160,7 +160,10 @@ describe("cache-preserving Responses reasoning changes", () => {
     expect(second.request.reasoning).toMatchObject({ effort: "low" });
     expect(second.request.input).toEqual([user("first"), answer, update("high"), user("second")]);
     second.commit(second.fullRequest, { id: "resp_2", output: [answer] });
-    vi.advanceTimersByTime(5 * 60 * 1000 + 1);
+    // Must track HTTP_CONTINUATION_IDLE_TTL_MS in openai-responses-continuation.ts
+    // (a private module constant, not exported) -- keep this in sync with the
+    // real idle TTL for this "cache expiry" step to actually cross it.
+    vi.advanceTimersByTime(90 * 60 * 1000 + 1);
     const third = claim({ ...next("medium"), input: [...next().input, answer, user("third")] });
     assert(third);
     expect(third.request.previous_response_id).toBeUndefined();
