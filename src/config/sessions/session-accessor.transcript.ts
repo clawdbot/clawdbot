@@ -16,6 +16,7 @@ import {
   loadTranscriptSuffixEventsBoundedSync,
   readTranscriptStatsBatchReadOnlySync,
   readTranscriptStatsSync,
+  validatePreparedAssistantAppendSync,
   readTranscriptEventAtSeqSync,
   readTranscriptIdentityByEventId,
 } from "./session-accessor.sqlite-read.js";
@@ -69,6 +70,7 @@ export {
   readTranscriptRawDelta,
   readTranscriptStatsBatchReadOnlySync,
   readTranscriptStatsSync,
+  validatePreparedAssistantAppendSync,
   replaceTranscriptEvents,
   replaceTranscriptEventsSync,
   replaceSessionWithBranchedTranscript,

@@ -1,6 +1,7 @@
 import {
   inspectTranscriptEventsSync,
   readActiveTranscriptEntryAnchor,
+  validatePreparedAssistantAppendSync,
   type TranscriptEntryAnchor,
 } from "../../config/sessions/session-accessor.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
@@ -26,7 +27,6 @@ import type {
   CompactionEntry,
   CustomEntry,
   CustomMessageEntry,
-  FileEntry,
   LabelEntry,
   ModelChangeEntry,
   ResetEntry,
@@ -73,9 +73,14 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       canonicalEntry.message.role === "assistant";
     let attemptOptions: AppendPersistenceOptions & { expectedMutationAt?: number | null } =
       persistenceOptions;
+    const admittedUserId = this.persistenceTarget
+      ? resolveSessionTranscriptReadFence(this.persistenceTarget)?.entryId
+      : undefined;
     if (preparedAssistant && this.persistenceTarget) {
-      const validatedMutationAt = this.validatePreparedAssistantAgainstPersistedTranscript(
+      const validatedMutationAt = validatePreparedAssistantAppendSync(
+        this.persistenceTarget,
         canonicalEntry.parentId,
+        admittedUserId,
       );
       if (validatedMutationAt === undefined) {
         throw this.createTranscriptMutationConflictError();
@@ -103,22 +108,25 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       // Preserve the prepared parent so storage can distinguish a descendant tail from an
       // unrelated branch. Assistant replies may follow only a descendant tail with no newer
       // user turn; reset boundaries and reentrant assistant writes remain compatible.
-      let retryOptions: AppendPersistenceOptions & { expectedMutationAt?: number | null } =
-        persistenceOptions;
-      if (preparedAssistant) {
-        const validatedMutationAt = this.validatePreparedAssistantAgainstPersistedTranscript(
-          canonicalEntry.parentId,
-        );
-        if (validatedMutationAt === undefined) {
-          throw error;
-        }
-        retryOptions = { ...persistenceOptions, expectedMutationAt: validatedMutationAt };
-      } else {
-        retryOptions = {
-          ...persistenceOptions,
-          expectedMutationAt: this.readPersistedTranscriptMutationAt(),
-        };
-      }
+      const retryOptions: AppendPersistenceOptions & { expectedMutationAt?: number | null } =
+        preparedAssistant
+          ? (() => {
+              const validatedMutationAt = this.persistenceTarget
+                ? validatePreparedAssistantAppendSync(
+                    this.persistenceTarget,
+                    canonicalEntry.parentId,
+                    admittedUserId,
+                  )
+                : undefined;
+              if (validatedMutationAt === undefined) {
+                throw error;
+              }
+              return { ...persistenceOptions, expectedMutationAt: validatedMutationAt };
+            })()
+          : {
+              ...persistenceOptions,
+              expectedMutationAt: this.readPersistedTranscriptMutationAt(),
+            };
       persistenceResult = this.persist(canonicalEntry, retryOptions);
     }
     if (persistenceResult?.adoptedMessageId) {
@@ -176,63 +184,6 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     );
     error.name = "SqliteTranscriptMutationConflictError";
     return error;
-  }
-
-  /** Returns the exact durable fence whose history accepted the prepared assistant retry. */
-  private validatePreparedAssistantAgainstPersistedTranscript(
-    preparedParentId: string | null,
-  ): number | null | undefined {
-    if (!this.persistenceTarget) {
-      return undefined;
-    }
-    const inspected = inspectTranscriptEventsSync(this.persistenceTarget);
-    const persisted = new SessionManagerEntries(
-      this.cwd,
-      undefined,
-      // SAFETY: Maintenance transcript inspection returns the persisted file-entry codec consumed here.
-      inspected.events as FileEntry[],
-      undefined,
-      inspected.snapshot.transcriptUpdatedAt,
-    );
-    const admittedUserId = resolveSessionTranscriptReadFence(this.persistenceTarget)?.entryId;
-    return persisted.canRebasePreparedAssistant(preparedParentId, admittedUserId)
-      ? inspected.snapshot.transcriptUpdatedAt
-      : undefined;
-  }
-
-  private canRebasePreparedAssistant(
-    preparedParentId: string | null,
-    admittedUserId?: string,
-  ): boolean {
-    const entries = this.getEntries();
-    const preparedParentIndex =
-      preparedParentId === null ? -1 : entries.findIndex((entry) => entry.id === preparedParentId);
-    if (preparedParentId !== null && preparedParentIndex === -1) {
-      return false;
-    }
-    for (const entry of entries.slice(preparedParentIndex + 1)) {
-      if (
-        entry.type === "message" &&
-        entry.message.role === "user" &&
-        entry.id !== admittedUserId
-      ) {
-        return false;
-      }
-    }
-    let currentId = this.appendParentId;
-    const seen = new Set<string>();
-    while (currentId !== preparedParentId) {
-      if (!currentId || seen.has(currentId)) {
-        return false;
-      }
-      seen.add(currentId);
-      const current = this.byId.get(currentId);
-      if (!current) {
-        return false;
-      }
-      currentId = current.parentId;
-    }
-    return true;
   }
 
   resolveCurrentTurnEntryId(isInterruptedTail?: (entry: SessionEntry) => boolean): string | null {

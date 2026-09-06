@@ -412,12 +412,23 @@ export function appendTranscriptEventSync(
     ) {
       throw new SqliteTranscriptMutationConflictError(resolved.sessionId);
     }
-    const appended = appendTranscriptEventInTransaction(
+    const resolvedEvent = resolveTranscriptEventAppendParent(
       database,
-      resolved,
-      resolveTranscriptEventAppendParent(database, resolved.sessionId, event, options),
+      resolved.sessionId,
+      event,
+      options,
     );
+    const appended = appendTranscriptEventInTransaction(database, resolved, resolvedEvent);
     if (appended !== false) {
+      if (
+        resolvedEvent &&
+        typeof resolvedEvent === "object" &&
+        !Array.isArray(resolvedEvent) &&
+        "parentId" in resolvedEvent &&
+        (resolvedEvent.parentId === null || typeof resolvedEvent.parentId === "string")
+      ) {
+        options.captureEffectiveParentIdInTransaction?.(resolvedEvent.parentId);
+      }
       options.captureMutationAtInTransaction?.(
         readTranscriptMutationStateInTransaction(database, resolved.sessionId).updatedAt,
       );

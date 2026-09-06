@@ -30,6 +30,8 @@ import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { canRebasePreparedAssistantInTransaction } from "./session-accessor.sqlite-transcript-parent.js";
+import { readTranscriptMutationStateInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { projectResetBoundaryNavigationSql } from "./session-model-context-projection.js";
 import {
   resolveSqliteSessionTranscriptReadFence,
@@ -141,6 +143,32 @@ export function inspectRuntimeTranscriptEventsSync(scope: SessionTranscriptReadS
     {
       databaseLabel: database.path,
       operationLabel: "session transcript runtime inspection",
+    },
+  );
+}
+
+/** Validates a prepared assistant using indexed identities and returns its exact mutation fence. */
+export function validatePreparedAssistantAppendSync(
+  scope: SessionTranscriptReadScope,
+  preparedParentId: string | null,
+  admittedUserId?: string,
+): number | null | undefined {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  return runSqliteDeferredTransactionSync(
+    database.db,
+    () =>
+      canRebasePreparedAssistantInTransaction(
+        database,
+        resolved.sessionId,
+        preparedParentId,
+        admittedUserId,
+      )
+        ? readTranscriptMutationStateInTransaction(database, resolved.sessionId).updatedAt
+        : undefined,
+    {
+      databaseLabel: database.path,
+      operationLabel: "prepared assistant validation",
     },
   );
 }

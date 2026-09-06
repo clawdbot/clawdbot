@@ -429,22 +429,30 @@ export class SessionManagerPersistence extends SessionManagerCore {
     }
     if (entry.type !== "message") {
       let committedMutationAt: number | null | undefined;
+      let effectiveParentId = entry.parentId;
       requireTranscriptEventAppend(
         appendTranscriptEventSync(scope, entry, {
           ...(options?.appendIntent === "active-branch"
             ? { appendIntent: options.appendIntent }
             : {}),
-          ...(this.transcriptMutationAt !== undefined
-            ? { expectedMutationAt: this.transcriptMutationAt }
-            : {}),
+          ...(options?.expectedMutationAt !== undefined
+            ? { expectedMutationAt: options.expectedMutationAt }
+            : this.transcriptMutationAt !== undefined
+              ? { expectedMutationAt: this.transcriptMutationAt }
+              : {}),
           captureMutationAtInTransaction: (mutationAt) => {
             committedMutationAt = mutationAt;
+          },
+          captureEffectiveParentIdInTransaction: (parentId) => {
+            effectiveParentId = parentId;
           },
         }),
         `Session transcript entry was not persisted: ${entry.id}`,
       );
       this.transcriptMutationAt = committedMutationAt;
-      return undefined;
+      return effectiveParentId === entry.parentId
+        ? undefined
+        : { appended: true, effectiveParentId };
     }
     const appendOptions = copyCodeModeSourceAppendOptions(options, {
       cwd: this.cwd,

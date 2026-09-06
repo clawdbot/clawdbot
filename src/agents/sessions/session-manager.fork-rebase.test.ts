@@ -65,6 +65,46 @@ describe("SessionManager stale-parent rebase", () => {
     });
   });
 
+  it("retries a stale control append with the refreshed transcript fence", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-");
+    const target = {
+      agentId: "main",
+      sessionId: "stale-control-fence",
+      sessionKey: "agent:main:stale-control-fence",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const base = await appendTranscriptMessage(target, {
+      eventId: "base",
+      message: { role: "user", content: "base", timestamp: 1 },
+      now: 1,
+    });
+    const manager = SessionManager.open(target, dir);
+    await appendTranscriptMessage(target, {
+      eventId: "out-of-band",
+      message: { role: "assistant", content: [{ type: "text", text: "late" }], timestamp: 2 },
+      now: 2,
+    });
+
+    const modelChangeId = manager.appendModelChange("openai", "gpt-5.6");
+
+    expect(manager.getEntry(modelChangeId)?.parentId).toBe("out-of-band");
+    expect(manager.getBranch().map((entry) => entry.id)).toEqual([
+      base.messageId,
+      "out-of-band",
+      modelChangeId,
+    ]);
+    await expect(loadTranscriptEvents(target)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: modelChangeId,
+          parentId: "out-of-band",
+          type: "model_change",
+        }),
+      ]),
+    );
+  });
+
   it("rejects a stale prepared assistant after a newer user turn", async () => {
     const dir = tempDirs.make("openclaw-session-manager-");
     const target = {

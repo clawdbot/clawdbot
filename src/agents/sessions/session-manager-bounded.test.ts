@@ -108,6 +108,44 @@ it("keeps generated entry ids unique outside a bounded transcript tail", async (
   );
 });
 
+it("appends an assistant without parsing transcript rows outside the bounded context", async () => {
+  const dir = tempDirs.make("openclaw-session-manager-bounded-assistant-");
+  const scope = {
+    agentId: "main",
+    sessionId: "bounded-assistant-append",
+    sessionKey: "agent:main:bounded-assistant-append",
+    storePath: path.join(dir, "sessions.json"),
+  };
+  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  await appendTranscriptMessage(scope, {
+    cwd: dir,
+    eventId: "excluded",
+    message: { role: "user", content: "excluded" },
+  });
+  await appendTranscriptMessage(scope, {
+    cwd: dir,
+    eventId: "retained",
+    parentId: "excluded",
+    message: { role: "user", content: "retained" },
+  });
+  const manager = SessionManager.openBounded(scope, {
+    cwd: dir,
+    maxBytes: 4096,
+    maxEvents: 1,
+  });
+  const database = openOpenClawAgentDatabase({
+    agentId: scope.agentId,
+    env: { OPENCLAW_STATE_DIR: dir },
+  });
+  database.db
+    .prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = 0")
+    .run("{", scope.sessionId);
+
+  const assistantId = manager.appendMessage(buildAssistantMessage("bounded reply"));
+
+  expect(manager.getEntry(assistantId)).toMatchObject({ parentId: "retained" });
+});
+
 it("excludes interleaved display payloads without inventing events or losing fenced append ancestry", async () => {
   const dir = tempDirs.make("openclaw-bounded-display-");
   const scope = {
@@ -172,6 +210,38 @@ it("excludes interleaved display payloads without inventing events or losing fen
     },
   );
   expect(SessionManager.open(scope, dir).getBranch().at(-1)?.id).toBe(appended.entryId);
+});
+
+it("rejects a fenced assistant when a later hidden user has advanced the turn", async () => {
+  const dir = tempDirs.make("openclaw-session-manager-fenced-assistant-");
+  const scope = {
+    agentId: "main",
+    sessionId: "fenced-assistant",
+    sessionKey: "agent:main:fenced-assistant",
+    storePath: path.join(dir, "sessions.json"),
+  };
+  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  const manager = SessionManager.open(scope, dir);
+  manager.appendMessage({ role: "user", content: "previous", timestamp: 1 });
+  const admission = manager.appendMessageWithTranscriptAnchor({
+    role: "user",
+    content: "admitted",
+    timestamp: 2,
+  });
+  manager.appendMessage({ role: "user", content: "newer", timestamp: 3 });
+  if (!admission.anchor) {
+    throw new Error("missing current-turn anchor");
+  }
+
+  runWithSessionTranscriptReadFence(
+    { ...admission.anchor, logicalTurnId: "fenced-assistant", role: "user" },
+    () => {
+      const fenced = SessionManager.openBounded(scope, { cwd: dir, maxBytes: 4096, maxEvents: 8 });
+      expect(() => fenced.appendMessage(buildAssistantMessage("stale reply"))).toThrow(
+        "SQLite transcript changed while preparing rewrite",
+      );
+    },
+  );
 });
 
 it("rejects suffix cleanup when the admission fence hides later transcript rows", async () => {

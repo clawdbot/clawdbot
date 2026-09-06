@@ -1,4 +1,5 @@
 /** Resolves the effective parent for a transcript message append inside the write transaction. */
+import { sql } from "kysely";
 import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
@@ -16,6 +17,111 @@ import {
   isTranscriptEntryOnVisiblePath,
   resolveVisibleTranscriptAppendParentId,
 } from "./transcript-visible-events.js";
+
+const PREPARED_ASSISTANT_MAX_NEWER_MESSAGES = 256;
+const PREPARED_ASSISTANT_MAX_NEWER_BYTES = 1024 * 1024;
+
+/** Validates a prepared assistant from bounded indexed message metadata. */
+export function canRebasePreparedAssistantInTransaction(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  preparedParentId: string | null,
+  admittedUserId?: string,
+): boolean {
+  const tailId = readActiveTranscriptAppendParentId(database, sessionId);
+  if (tailId !== preparedParentId) {
+    if (
+      tailId === null ||
+      !transcriptEntryIsAncestor(database, sessionId, tailId, preparedParentId)
+    ) {
+      return false;
+    }
+  }
+  if (
+    admittedUserId &&
+    tailId !== admittedUserId &&
+    (tailId === null || !transcriptEntryIsAncestor(database, sessionId, tailId, admittedUserId))
+  ) {
+    return false;
+  }
+  const db = getSessionKysely(database.db);
+  const preparedParent =
+    preparedParentId === null
+      ? undefined
+      : executeSqliteQueryTakeFirstSync(
+          database.db,
+          db
+            .selectFrom("transcript_event_identities")
+            .select("seq")
+            .where("session_id", "=", sessionId)
+            .where("event_id", "=", preparedParentId)
+            .limit(1),
+        );
+  if (preparedParentId !== null && !preparedParent) {
+    return false;
+  }
+  const newerMessageMetadata = Array.from(
+    iterateSqliteQuerySync(
+      database.db,
+      db
+        .selectFrom("transcript_event_identities as identity")
+        .innerJoin("transcript_events as event", (join) =>
+          join
+            .onRef("event.session_id", "=", "identity.session_id")
+            .onRef("event.seq", "=", "identity.seq"),
+        )
+        .select([
+          "identity.event_id",
+          "identity.seq",
+          sql<number>`OCTET_LENGTH(event.event_json)`.as("serialized_bytes"),
+        ])
+        .where("identity.session_id", "=", sessionId)
+        .where("identity.event_type", "=", "message")
+        .where("identity.seq", ">", preparedParent?.seq ?? -1)
+        .orderBy("identity.seq", "asc")
+        .limit(PREPARED_ASSISTANT_MAX_NEWER_MESSAGES + 1),
+    ),
+  );
+  if (
+    newerMessageMetadata.length > PREPARED_ASSISTANT_MAX_NEWER_MESSAGES ||
+    newerMessageMetadata.reduce((sum, row) => sum + row.serialized_bytes, 0) >
+      PREPARED_ASSISTANT_MAX_NEWER_BYTES
+  ) {
+    return false;
+  }
+  const admitted = admittedUserId
+    ? newerMessageMetadata.find((row) => row.event_id === admittedUserId)
+    : undefined;
+  if (admittedUserId && !admitted) {
+    return false;
+  }
+  if (newerMessageMetadata.length === 0) {
+    return admittedUserId === undefined;
+  }
+  const newerRoles = Array.from(
+    iterateSqliteQuerySync(
+      database.db,
+      db
+        .selectFrom("transcript_event_identities as identity")
+        .innerJoin("transcript_events as event", (join) =>
+          join
+            .onRef("event.session_id", "=", "identity.session_id")
+            .onRef("event.seq", "=", "identity.seq"),
+        )
+        .select([
+          "identity.event_id",
+          sql<string>`json_extract(event.event_json, '$.message.role')`.as("message_role"),
+        ])
+        .where("identity.session_id", "=", sessionId)
+        .where("identity.seq", ">=", newerMessageMetadata[0]!.seq)
+        .where("identity.seq", "<=", newerMessageMetadata.at(-1)!.seq)
+        .where("identity.event_type", "=", "message")
+        .orderBy("identity.seq", "asc")
+        .limit(PREPARED_ASSISTANT_MAX_NEWER_MESSAGES),
+    ),
+  );
+  return newerRoles.every((row) => row.message_role !== "user" || row.event_id === admittedUserId);
+}
 
 export function resolveTranscriptMessageAppendParent<TMessage>(
   database: OpenClawAgentDatabase,
