@@ -9,7 +9,7 @@ import {
   readAcpSessionMetaForEntry,
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
-import * as modelCatalog from "../agents/model-catalog.js";
+import * as modelCatalogLookup from "../agents/model-catalog-lookup.js";
 import * as thinking from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
@@ -122,7 +122,7 @@ describe("session list resolver cache", () => {
       reasoning: true,
     }));
     const rowContext = buildSessionListRowMetadataContext({ now });
-    const catalogSpy = vi.spyOn(modelCatalog, "findModelCatalogEntry");
+    const catalogSpy = vi.spyOn(modelCatalogLookup, "findModelCatalogEntry");
     const thinkingSpy = vi
       .spyOn(thinking, "resolveThinkingProfile")
       .mockReturnValue({ levels: [{ id: "off", label: "Off", rank: 0 }], defaultLevel: "off" });
