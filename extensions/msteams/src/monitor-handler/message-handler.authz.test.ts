@@ -707,18 +707,37 @@ describe("msteams monitor handler authz", () => {
     expect(ctxPayload.CommandAuthorized).toBe(false);
   });
 
-  it("uses the broad authorization probe for direct-message plugin commands", async () => {
+  it("uses the narrow control-command predicate for direct-message plugin commands", async () => {
     resetThreadMocks();
+    const isControlCommandMessage = vi.fn(() => false);
     const shouldComputeCommandAuthorized = vi.fn(() => true);
     const { deps } = createDeps(
       {
         channels: { msteams: { dmPolicy: "open", allowFrom: ["attacker-aad"] } },
       } as OpenClawConfig,
-      { isControlCommandMessage: vi.fn(() => false), shouldComputeCommandAuthorized },
+      { isControlCommandMessage, shouldComputeCommandAuthorized },
     );
-    await createMSTeamsMessageHandler(deps)(createAttackerPersonalActivity("msg-plugin"));
-    expect(shouldComputeCommandAuthorized).toHaveBeenCalled();
-    expect(recordFromMockCall(firstSettledDispatch()?.ctxPayload).CommandAuthorized).toBe(true);
+    await createMSTeamsMessageHandler(deps)(createAttackerPersonalActivity("hello /status"));
+    // The narrow predicate gates the hard-drop: ordinary text like "hello /status"
+    // is NOT a control command, so it must not be hard-dropped even if the sender
+    // lacks command authorization. The broad probe must NOT be used for the
+    // hasControlCommand gate.
+    expect(shouldComputeCommandAuthorized).not.toHaveBeenCalled();
+  });
+
+  it("blocks unauthorized direct-message control commands via the narrow predicate", async () => {
+    resetThreadMocks();
+    const isControlCommandMessage = vi.fn(() => true);
+    const { deps } = createDeps(
+      {
+        channels: { msteams: { dmPolicy: "open", allowFrom: [] } },
+      } as OpenClawConfig,
+      { isControlCommandMessage },
+    );
+    await createMSTeamsMessageHandler(deps)(createAttackerPersonalActivity("/status"));
+    // A real control command from a sender lacking command authorization is blocked.
+    const dispatch = firstSettledDispatch();
+    expect(dispatch).toBeUndefined();
   });
 
   it("marks skipped channel message system events as non-owner without duplicating body text", async () => {
