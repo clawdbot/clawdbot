@@ -1161,6 +1161,10 @@ describe("task-executor", () => {
         cfg: {} as never,
         sessionKey: "agent:codex:subagent:child",
         expectedRunId: "run-subagent-cancel",
+        // #140354: canonical subagent tasks now carry a generation fence
+        // captured before the control-runtime await.
+        expectedGeneration: 1,
+        expectedOwnerKey: "agent:main:main",
         onResult: expect.any(Function),
       });
     });
