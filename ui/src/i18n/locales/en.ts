@@ -3526,10 +3526,6 @@ export const en: TranslationMap & {
   skillWorkshop: {
     title: "Skill Workshop",
     header: {
-      useCurrentChat: "Use current chat",
-      useCurrentChatAria: "Use current chat for revision requests",
-      useCurrentChatTooltip:
-        "Send revision requests to the current chat session instead of the proposal's workshop session.",
       selfLearning: "Self-learning",
       selfLearningAria: "Toggle autonomous self-learning",
       selfLearningTooltip:
@@ -3698,7 +3694,6 @@ export const en: TranslationMap & {
     today: {
       emptyTitle: "Nothing waiting today",
       emptyBody: "Your agent hasn't drafted anything new. Switch to Board to browse history.",
-      new: "NEW",
       waiting: "WAITING",
       reviewed: "REVIEWED",
       agent: "agent",
@@ -3720,10 +3715,9 @@ export const en: TranslationMap & {
       notForMe: "Not for me",
       upNext: "Up next · {count} more waiting",
       seeAll: "See all proposals →",
-      collection: "Your collection · {count} in use",
-      manage: "Manage →",
-      workflowHeading: "How the agent will use it",
-      applicabilityHeading: "When the agent should use it",
+      recentlyApplied: "Recently applied",
+      manage: "View history →",
+      readSkill: "Read full skill",
     },
   },
   // Chat swarm summaries render before the lazy Activity catalog loads.
