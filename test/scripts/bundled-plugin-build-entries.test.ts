@@ -3,9 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  collectBundledPluginBuildEntries,
   collectRootPackageExcludedExtensionDirs,
   listBundledPluginBuildEntries,
   listBundledPluginPackArtifacts,
+  NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
 } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 
@@ -19,6 +21,13 @@ function expectSomePrefixMatch(values: string[], prefix: string) {
 
 function pickEntries(entries: Record<string, string>, keys: readonly string[]) {
   return Object.fromEntries(keys.map((key) => [key, entries[key]]));
+}
+
+function listRootBundledPluginIds(env: NodeJS.ProcessEnv): string[] {
+  const shouldBuildPrivateQaEntries = env.OPENCLAW_BUILD_PRIVATE_QA === "1";
+  return collectBundledPluginBuildEntries({ env })
+    .filter(({ id }) => shouldBuildPrivateQaEntries || !NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(id))
+    .map(({ id }) => id);
 }
 
 describe("bundled plugin build entries", () => {
@@ -155,6 +164,23 @@ describe("bundled plugin build entries", () => {
     expectNoPrefixMatches(artifacts, "dist/extensions/qa-channel/");
     expectNoPrefixMatches(artifacts, "dist/extensions/qa-lab/");
     expectNoPrefixMatches(artifacts, "dist/extensions/qa-matrix/");
+  });
+
+  it("builds private QA plugins only when private QA is explicitly enabled", () => {
+    const privateQaPluginIds = ["qa-channel", "qa-lab", "qa-matrix"];
+    const defaultPluginIds = listRootBundledPluginIds({
+      ...process.env,
+      OPENCLAW_BUILD_PRIVATE_QA: undefined,
+    });
+    const privateQaPluginIdsEnabled = listRootBundledPluginIds({
+      ...process.env,
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+    });
+
+    for (const pluginId of privateQaPluginIds) {
+      expect(defaultPluginIds).not.toContain(pluginId);
+      expect(privateQaPluginIdsEnabled).toContain(pluginId);
+    }
   });
 
   it("keeps explicitly downloadable plugins out of bundled package artifacts", () => {
