@@ -28,6 +28,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -619,6 +620,8 @@ class GatewayBootstrapAuthTest {
       val endpoint = tlsGatewayEndpoint()
       val oldFingerprint = "aa".repeat(32)
       val newFingerprint = "bb".repeat(32)
+      neutralizeColdStartAutoConnect(runtime)
+      prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
       prefs.saveGatewayTlsFingerprint(endpoint.stableId, oldFingerprint)
 
       runtime.connect(
@@ -631,23 +634,36 @@ class GatewayBootstrapAuthTest {
       assertEquals(newFingerprint, prompt.fingerprintSha256)
       assertTrue(prompt.systemTrustAvailable)
       assertEquals(oldFingerprint, prefs.loadGatewayTlsFingerprint(endpoint.stableId))
+      val selection = runtime.switchToGateway(endpoint.stableId) as GatewayTargetSelection.Selected
+      assertTrue(selection.isCurrent())
 
       runtime.declineGatewayTrustPrompt()
       withTimeout(500) { runtime.pendingGatewayTrust.first { it == null } }
 
+      assertFalse("Decline must retire the selection awaiting this trust decision", selection.isCurrent())
+      assertNull(runtime.pendingGatewayTrust.value)
+      assertNull(desiredConnection(runtime, "nodeSession"))
+      assertNull(desiredConnection(runtime, "operatorSession"))
       assertEquals(oldFingerprint, prefs.loadGatewayTlsFingerprint(endpoint.stableId))
+      assertEquals(0, gatewayServer.requestCount)
 
       runtime.connect(
         endpoint,
         auth(token = "shared-token"),
       )
       waitForGatewayTrustPrompt(runtime)
+      val freshSelection = runtime.switchToGateway(endpoint.stableId) as GatewayTargetSelection.Selected
+      assertTrue("A fresh explicit connection must be admitted after Decline", freshSelection.isCurrent())
+      assertFalse(selection.isCurrent())
       runtime.acceptGatewayTrustPrompt()
 
       val desired = waitForDesiredConnection(runtime, "nodeSession")
       val tls = readField<GatewayTlsParams>(desired, "tls")
       assertEquals(newFingerprint, tls.expectedFingerprint)
+      assertEquals(endpoint.stableId, readField<GatewayEndpoint>(desired, "endpoint").stableId)
+      assertEquals("shared-token", readField<String?>(desired, "token"))
       assertEquals(newFingerprint, prefs.loadGatewayTlsFingerprint(endpoint.stableId))
+      assertTrue("Pin approval must preserve the selection waiting on this attempt", freshSelection.isCurrent())
     }
 
   @Test
@@ -679,6 +695,8 @@ class GatewayBootstrapAuthTest {
     val (_, prefs, runtime) =
       gatewayFixture { _, _ -> GatewayTlsProbeResult(fingerprintSha256 = newFingerprint, systemTrusted = true) }
     val endpoint = tlsGatewayEndpoint()
+    neutralizeColdStartAutoConnect(runtime)
+    prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
     prefs.saveGatewayTlsFingerprint(endpoint.stableId, oldFingerprint)
 
     runtime.connect(
@@ -689,6 +707,8 @@ class GatewayBootstrapAuthTest {
     val prompt = waitForGatewayTrustPrompt(runtime)
     assertTrue(prompt.systemTrustAvailable)
     assertEquals(oldFingerprint, prefs.loadGatewayTlsFingerprint(endpoint.stableId))
+    val selection = runBlocking { runtime.switchToGateway(endpoint.stableId) } as GatewayTargetSelection.Selected
+    assertTrue(selection.isCurrent())
 
     runtime.useSystemGatewayTrustPrompt()
 
@@ -696,6 +716,7 @@ class GatewayBootstrapAuthTest {
     val tls = readField<GatewayTlsParams>(desired, "tls")
     assertNull(tls.expectedFingerprint)
     assertNull(prefs.loadGatewayTlsFingerprint(endpoint.stableId))
+    assertTrue("System trust approval must preserve the selection waiting on this attempt", selection.isCurrent())
   }
 
   @Test
@@ -710,59 +731,125 @@ class GatewayBootstrapAuthTest {
           probeResult.await()
         }
       val endpoint = tlsGatewayEndpoint()
+      neutralizeColdStartAutoConnect(runtime)
       prefs.saveGatewayTlsFingerprint(endpoint.stableId, fingerprint)
 
-      runtime.connect(
-        endpoint,
-        auth(token = "shared-token"),
-      )
-      val tlsProbeJob = probeJob.await()
+      try {
+        runtime.connect(
+          endpoint,
+          auth(token = "shared-token"),
+        )
+        val tlsProbeJob = withTimeout(5_000) { probeJob.await() }
 
-      runtime.disconnect()
-      probeResult.complete(GatewayTlsProbeResult(fingerprintSha256 = fingerprint))
-      // Join the owning coroutine so assertions run after its stale-attempt guard.
-      tlsProbeJob.join()
+        runtime.disconnect()
+        // Drain this Stop's tails before the stale producer gets another chance to connect.
+        val disconnectTails =
+          listOf("operatorSession", "nodeSession").mapNotNull { field ->
+            readField<Job?>(readField<GatewaySession>(runtime, field), "disconnectTail")
+          }
+        withTimeout(5_000) { disconnectTails.joinAll() }
+        probeResult.complete(GatewayTlsProbeResult(fingerprintSha256 = fingerprint))
+        withTimeout(5_000) { tlsProbeJob.join() }
 
-      assertNull(runtime.pendingGatewayTrust.value)
-      assertNull(desiredBootstrapToken(runtime, "nodeSession"))
-      assertEquals(fingerprint, prefs.loadGatewayTlsFingerprint(endpoint.stableId))
+        assertNull(runtime.pendingGatewayTrust.value)
+        assertNull(desiredConnection(runtime, "nodeSession"))
+        assertNull(desiredConnection(runtime, "operatorSession"))
+        assertEquals(fingerprint, prefs.loadGatewayTlsFingerprint(endpoint.stableId))
+        assertEquals(0, gatewayServer.requestCount)
+      } finally {
+        probeResult.complete(GatewayTlsProbeResult(fingerprintSha256 = fingerprint))
+      }
     }
 
   @Test
-  fun forgetGatewayCancelsInFlightTlsProbeBeforePurgingAuth() =
+  fun connect_replacementPreservesNewGatewayWhenOldTlsProbeCompletes() =
     runBlocking {
-      val probeStarted = CompletableDeferred<Unit>()
+      val oldProbeJob = CompletableDeferred<Job>()
+      val oldProbeResult = CompletableDeferred<GatewayTlsProbeResult>()
+      val fingerprint = "bb".repeat(32)
+      val (_, prefs, runtime) =
+        gatewayFixture { host, _ ->
+          if (host == "gateway.test") {
+            oldProbeJob.complete(currentCoroutineContext().job)
+            oldProbeResult.await()
+          } else {
+            GatewayTlsProbeResult(fingerprintSha256 = fingerprint)
+          }
+        }
+      val oldEndpoint = tlsGatewayEndpoint()
+      val nextEndpoint = GatewayEndpoint.manual("127.0.0.1", gatewayServer.port, tlsEnabled = true)
+      neutralizeColdStartAutoConnect(runtime)
+      for (endpoint in listOf(oldEndpoint, nextEndpoint)) {
+        prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
+        prefs.saveGatewayCredentials(endpoint.stableId, token = "shared-token")
+      }
+
+      try {
+        val oldSelection =
+          withTimeout(5_000) { runtime.switchToGateway(oldEndpoint.stableId) } as GatewayTargetSelection.Selected
+        val producer = withTimeout(5_000) { oldProbeJob.await() }
+        assertTrue(oldSelection.isCurrent())
+
+        runtime.connect(nextEndpoint, auth(token = "shared-token"))
+        val nextPrompt = waitForGatewayTrustPrompt(runtime)
+        // Same-target selection waits for B's prompt publisher without starting another attempt.
+        val nextSelection =
+          withTimeout(5_000) { runtime.switchToGateway(nextEndpoint.stableId) } as GatewayTargetSelection.Selected
+        assertEquals(nextEndpoint.stableId, nextPrompt.endpoint.stableId)
+        assertTrue(nextSelection.isCurrent())
+        assertFalse(oldSelection.isCurrent())
+
+        oldProbeResult.complete(GatewayTlsProbeResult(fingerprintSha256 = "aa".repeat(32)))
+        withTimeout(5_000) { producer.join() }
+
+        assertSame("A retired probe must not replace the newer trust prompt", nextPrompt, runtime.pendingGatewayTrust.value)
+        assertEquals(fingerprint, nextPrompt.fingerprintSha256)
+        assertEquals(nextEndpoint.stableId, prefs.gatewayRegistry.activeStableId.value)
+        assertTrue(nextSelection.isCurrent())
+        assertFalse(oldSelection.isCurrent())
+        assertNull(desiredConnection(runtime, "nodeSession"))
+        assertNull(desiredConnection(runtime, "operatorSession"))
+        assertEquals(0, gatewayServer.requestCount)
+      } finally {
+        oldProbeResult.complete(GatewayTlsProbeResult(fingerprintSha256 = "aa".repeat(32)))
+      }
+    }
+
+  @Test
+  fun forgetGatewayRetiresInFlightTlsProbeBeforePurgingAuth() =
+    runBlocking {
+      val probeJob = CompletableDeferred<Job>()
       val probeResult = CompletableDeferred<GatewayTlsProbeResult>()
       val (_, prefs, runtime) =
         gatewayFixture { _, _ ->
-          probeStarted.complete(Unit)
+          probeJob.complete(currentCoroutineContext().job)
           probeResult.await()
         }
       val endpoint = tlsGatewayEndpoint()
-      prefs.gatewayRegistry.upsert(
-        GatewayRegistryEntry(
-          stableId = endpoint.stableId,
-          kind = GatewayRegistryEntryKind.MANUAL,
-          name = endpoint.name,
-          host = endpoint.host,
-          port = endpoint.port,
-        ),
-      )
+      neutralizeColdStartAutoConnect(runtime)
+      prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
       prefs.saveGatewayCredentials(endpoint.stableId, token = "shared-token")
 
-      runtime.connect(endpoint)
-      probeStarted.await()
-      assertTrue(runtime.forgetGateway(endpoint.stableId))
-      probeResult.complete(GatewayTlsProbeResult(fingerprintSha256 = "aa".repeat(32)))
-      yield()
+      try {
+        runtime.connect(endpoint)
+        val producer = withTimeout(5_000) { probeJob.await() }
+        assertTrue(runtime.forgetGateway(endpoint.stableId))
+        probeResult.complete(GatewayTlsProbeResult(fingerprintSha256 = "aa".repeat(32)))
+        withTimeout(5_000) { producer.join() }
 
-      assertNull(
-        prefs.gatewayRegistry.entries.value
-          .firstOrNull { it.stableId == endpoint.stableId },
-      )
-      assertEquals(GatewayCredentials(), prefs.loadGatewayCredentials(endpoint.stableId))
-      assertNull(runtime.pendingGatewayTrust.value)
-      assertNull(desiredConnection(runtime, "nodeSession"))
+        assertNull(
+          prefs.gatewayRegistry.entries.value
+            .firstOrNull { it.stableId == endpoint.stableId },
+        )
+        assertNull(prefs.gatewayRegistry.activeStableId.value)
+        assertEquals(GatewayCredentials(), prefs.loadGatewayCredentials(endpoint.stableId))
+        assertNull(runtime.pendingGatewayTrust.value)
+        assertNull(desiredConnection(runtime, "nodeSession"))
+        assertNull(desiredConnection(runtime, "operatorSession"))
+        assertEquals(0, gatewayServer.requestCount)
+      } finally {
+        probeResult.complete(GatewayTlsProbeResult(fingerprintSha256 = "aa".repeat(32)))
+      }
     }
 
   @Test
@@ -975,13 +1062,167 @@ class GatewayBootstrapAuthTest {
     )
     prefs.gatewayRegistry.setActive(current.stableId)
     writeField(runtime, "connectedEndpoint", current)
+    val currentStatus = runtime.statusText.value
 
-    assertFalse(runBlocking { runtime.switchToGateway(missingStableId) })
+    assertEquals(GatewayTargetSelection.Unavailable, runBlocking { runtime.switchToGateway(missingStableId) })
 
     assertEquals(current, readField<GatewayEndpoint?>(runtime, "connectedEndpoint"))
     assertEquals(current.stableId, prefs.gatewayRegistry.activeStableId.value)
-    assertEquals("Gateway not currently discoverable", runtime.statusText.value)
+    assertEquals(currentStatus, runtime.statusText.value)
   }
+
+  @Test
+  fun independentUnavailableTargetDoesNotRetireSwitchAfterDisconnect() = assertSelectionDuringDisconnect(QueuedGatewayTarget.Missing)
+
+  @Test
+  fun independentUndiscoveredTargetDoesNotRetireSwitchAfterDisconnect() = assertSelectionDuringDisconnect(QueuedGatewayTarget.Undiscovered)
+
+  @Test
+  fun validSwitchCompletesAfterOldSessionTailDrains() = assertSelectionDuringDisconnect(QueuedGatewayTarget.None)
+
+  @Test
+  fun independentAvailableTargetSupersedesSwitchAfterDisconnect() = assertSelectionDuringDisconnect(QueuedGatewayTarget.Available)
+
+  @Test
+  fun discoveredTargetLostBeforeSwitchMutexIsRefused() = assertSelectionDuringDisconnect(QueuedGatewayTarget.Disappears)
+
+  private enum class QueuedGatewayTarget {
+    None,
+    Missing,
+    Undiscovered,
+    Available,
+    Disappears,
+  }
+
+  private fun assertSelectionDuringDisconnect(queuedTarget: QueuedGatewayTarget) =
+    runBlocking {
+      val (_, prefs, runtime) = gatewayFixture()
+      neutralizeColdStartAutoConnect(runtime)
+      val current = GatewayEndpoint.manual("127.0.0.1", 18788)
+      val next = gatewayEndpoint()
+      for (endpoint in listOf(current, next)) {
+        prefs.gatewayRegistry.upsert(
+          GatewayRegistryEntry(
+            stableId = endpoint.stableId,
+            kind = GatewayRegistryEntryKind.MANUAL,
+            name = endpoint.name,
+            host = endpoint.host,
+            port = endpoint.port,
+            tls = false,
+          ),
+        )
+      }
+      val replyTarget = next.copy(stableId = "bonjour-notification-target")
+      if (queuedTarget != QueuedGatewayTarget.None && queuedTarget != QueuedGatewayTarget.Missing) {
+        prefs.gatewayRegistry.upsert(
+          GatewayRegistryEntry(
+            stableId = replyTarget.stableId,
+            kind = GatewayRegistryEntryKind.DISCOVERED,
+            name = "Notification target",
+          ),
+        )
+      }
+      val discovered = discoveredGateways(runtime)
+      if (queuedTarget == QueuedGatewayTarget.Available || queuedTarget == QueuedGatewayTarget.Disappears) {
+        discovered.value = listOf(replyTarget)
+      }
+      prefs.gatewayRegistry.setActive(current.stableId)
+      writeField(runtime, "connectedEndpoint", current)
+      val oldTail = CompletableDeferred<Unit>()
+      writeField(readField<GatewaySession>(runtime, "operatorSession"), "disconnectTail", oldTail)
+      val uiCurrent = { true }
+      val replyCurrent = { true }
+      val switch =
+        async(start = CoroutineStart.UNDISPATCHED) {
+          runtime.connectSwitchingGateway(next, auth(token = "synthetic-switch-token"), uiCurrent)
+        }
+      try {
+        // The real owner has cleared A, but cannot start B until its old session tail joins.
+        assertNull(readField<GatewayEndpoint?>(runtime, "connectedEndpoint"))
+        assertFalse(switch.isCompleted)
+        val reply =
+          if (queuedTarget == QueuedGatewayTarget.None) {
+            null
+          } else {
+            async(start = CoroutineStart.UNDISPATCHED) { runtime.switchToGateway(replyTarget.stableId, replyCurrent) }
+          }
+        // C was available at admission, but its current advertisement can disappear while queued.
+        if (queuedTarget == QueuedGatewayTarget.Disappears) discovered.value = emptyList()
+        oldTail.complete(Unit)
+        val switched = withTimeout(5_000) { switch.await() }
+        val selection = reply?.let { withTimeout(5_000) { it.await() } }
+        if (queuedTarget == QueuedGatewayTarget.Available) {
+          assertTrue(selection is GatewayTargetSelection.Selected)
+          assertTrue((selection as GatewayTargetSelection.Selected).isCurrent())
+        } else if (reply != null) {
+          assertEquals(GatewayTargetSelection.Unavailable, selection)
+        }
+        val selectedEndpoint =
+          when (queuedTarget) {
+            QueuedGatewayTarget.None, QueuedGatewayTarget.Missing, QueuedGatewayTarget.Undiscovered -> {
+              assertTrue("An independent unavailable Reply must not retire the valid switch after disconnect", switched)
+              next
+            }
+
+            QueuedGatewayTarget.Available -> {
+              assertFalse("A valid later independent selection must retire the earlier switch", switched)
+              replyTarget
+            }
+
+            QueuedGatewayTarget.Disappears -> {
+              assertFalse("C was valid when admitted and retired B before its advertisement disappeared", switched)
+              null
+            }
+          }
+        if (selectedEndpoint != null) {
+          assertEquals(selectedEndpoint.stableId, prefs.gatewayRegistry.activeStableId.value)
+          assertEquals(selectedEndpoint, readField<GatewayEndpoint>(requireNotNull(desiredConnection(runtime, "nodeSession")), "endpoint"))
+        } else {
+          assertNull(desiredConnection(runtime, "nodeSession"))
+          assertNull(readField<GatewayEndpoint?>(runtime, "connectedEndpoint"))
+        }
+      } finally {
+        oldTail.complete(Unit)
+      }
+    }
+
+  @Test
+  fun acceptedConnectingDiscoveredTargetSurvivesDiscoveryLoss() = assertAcceptedDiscoveredTargetSurvivesDiscoveryLoss(tlsPending = true)
+
+  @Test
+  fun acceptedConnectedDiscoveredTargetSurvivesDiscoveryLoss() = assertAcceptedDiscoveredTargetSurvivesDiscoveryLoss(tlsPending = false)
+
+  private fun assertAcceptedDiscoveredTargetSurvivesDiscoveryLoss(tlsPending: Boolean) =
+    runBlocking {
+      val probe = CompletableDeferred<GatewayTlsProbeResult>()
+      val (_, prefs, runtime) = gatewayFixture(tlsFingerprintProbe = { _, _ -> probe.await() })
+      neutralizeColdStartAutoConnect(runtime)
+      val endpoint = gatewayEndpoint().copy(stableId = "bonjour-accepted-target", tlsEnabled = tlsPending)
+      prefs.gatewayRegistry.upsert(
+        GatewayRegistryEntry(
+          stableId = endpoint.stableId,
+          kind = GatewayRegistryEntryKind.DISCOVERED,
+          name = endpoint.name,
+        ),
+      )
+      val discovered = discoveredGateways(runtime)
+      discovered.value = listOf(endpoint)
+      try {
+        val first = withTimeout(5_000) { runtime.switchToGateway(endpoint.stableId) }
+        assertTrue(first is GatewayTargetSelection.Selected)
+        assertEquals(endpoint, readField<GatewayEndpoint?>(runtime, if (tlsPending) "connectingEndpoint" else "connectedEndpoint"))
+        discovered.value = emptyList()
+        val repeated = withTimeout(5_000) { runtime.switchToGateway(endpoint.stableId) }
+        assertTrue(repeated is GatewayTargetSelection.Selected)
+        assertTrue((first as GatewayTargetSelection.Selected).isCurrent())
+        assertTrue((repeated as GatewayTargetSelection.Selected).isCurrent())
+        assertEquals(endpoint.stableId, prefs.gatewayRegistry.activeStableId.value)
+      } finally {
+        probe.cancel()
+      }
+    }
+
+  private fun discoveredGateways(runtime: NodeRuntime): MutableStateFlow<List<GatewayEndpoint>> = readField(readField<Any>(runtime, "discovery"), "_gateways")
 
   @Test
   fun gatewayConnectDoesNotHoldAuthMonitorWhileWaitingForSessionLifecycle() =

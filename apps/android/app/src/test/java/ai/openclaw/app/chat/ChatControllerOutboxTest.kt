@@ -1,5 +1,7 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.NodeApp
+import ai.openclaw.app.NodeForegroundService
 import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
@@ -7,6 +9,7 @@ import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
@@ -32,6 +35,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import java.util.UUID
 
 private data class DeliveredSend(
@@ -2250,6 +2254,188 @@ class ChatControllerOutboxTest {
       assertTrue(chat.messages.value.any { message -> message.content.any { it.text == "same owner turn" } })
       assertEquals(1, chat.pendingRunCount.value)
     }
+
+  @Test
+  fun resumeRetiredWhileWaitingForSessionSettingsDoesNotAdmit() {
+    for (retireResume in listOf(true, false)) {
+      outboxTest {
+        val app = RuntimeEnvironment.getApplication() as NodeApp
+        val gatewayId = "gateway-test"
+        val owner = ChatComposerOwner(gatewayId, "main", "agent:main:main")
+        val chat = controller()
+        gateway.online = true
+        gateway.sendResponse = { key -> """{"runId":"$key","status":"ok"}""" }
+        chat.load(owner.sessionKey)
+        advanceUntilIdle()
+        assertTrue(chat.healthOk.value)
+        assertTrue(chat.isCurrentComposerOwner(owner))
+        assertNull(app.peekRuntime())
+
+        val canAdmit = NodeForegroundService.resume(app, startNow = false)
+        val settingsStarted = CompletableDeferred<Unit>()
+        val releaseSettings = CompletableDeferred<Unit>()
+        val releaseEnqueue = CompletableDeferred<Unit>()
+        val releaseSend = CompletableDeferred<Unit>()
+        gateway.settingsPatchStarted = settingsStarted
+        gateway.settingsPatchGate = releaseSettings
+        gateway.sendGate = releaseSend
+        outbox.enqueueGate = releaseEnqueue
+        val commandId = "settings-held-reply"
+        val attachment = OutgoingAttachment(type = "image", mimeType = "image/png", fileName = "reply.png", base64 = "AQIDBA==")
+        val send =
+          async(start = CoroutineStart.LAZY) {
+            chat.sendMessageForOwnerAwaitAcceptance(
+              message = "reply after settings",
+              thinkingLevel = "off",
+              attachments = listOf(attachment),
+              expectedOwner = owner,
+              idempotencyKey = commandId,
+              canAdmit = canAdmit,
+            )
+          }
+        try {
+          chat.setSessionModel(owner.sessionKey, "openai/gpt-5.6-sol")
+          settingsStarted.await()
+          send.start()
+          runCurrent()
+          assertFalse(send.isCompleted)
+
+          if (retireResume) NodeForegroundService.stop(app)
+          NodeForegroundService.resume(app, startNow = false)
+          releaseSettings.complete(Unit)
+          runCurrent()
+
+          if (retireResume) {
+            // Enqueue stays closed: false must come from admission, not journal-then-delete.
+            assertTrue("The retired Resume must reject after settings settle", send.isCompleted)
+            assertFalse(send.await())
+            assertTrue(outbox.load(gatewayId).isEmpty())
+            assertFalse(chat.wasOutboxCommandAdmitted(commandId))
+            assertTrue(outbox.attachments().isEmpty())
+            assertTrue(gateway.sentIdempotencyKeys.isEmpty())
+          } else {
+            assertFalse(send.isCompleted)
+            releaseEnqueue.complete(Unit)
+            runCurrent()
+            val row = outbox.load(gatewayId).single()
+            assertEquals(commandId, row.id)
+            assertEquals(ChatOutboxStatus.Sending, row.status)
+            assertTrue(chat.wasOutboxCommandAdmitted(commandId))
+            assertTrue(byteArrayOf(1, 2, 3, 4).contentEquals(outbox.loadAttachments(commandId).single().bytes))
+            assertEquals(listOf(commandId), gateway.sentIdempotencyKeys)
+            assertEquals(listOf("reply after settings"), gateway.sentMessages)
+            assertEquals(listOf(owner.sessionKey), gateway.sentSessionKeys)
+            assertEquals(listOf(owner.agentId), gateway.sentAgentIds)
+            assertEquals(listOf(listOf(attachment.fileName)), gateway.sentAttachmentFileNames)
+            releaseSend.complete(Unit)
+            assertTrue(send.await())
+          }
+          assertTrue(chat.isCurrentComposerOwner(owner))
+          assertNull(app.peekRuntime())
+        } finally {
+          send.cancel()
+          releaseSettings.complete(Unit)
+          releaseEnqueue.complete(Unit)
+          releaseSend.complete(Unit)
+          NodeForegroundService.resume(app, startNow = false)
+          runCurrent()
+        }
+      }
+    }
+  }
+
+  @Test
+  fun resumeRetiredWhileWaitingForHistoryPublicationDoesNotAdmit() {
+    for (retireResume in listOf(true, false)) {
+      outboxTest {
+        val app = RuntimeEnvironment.getApplication() as NodeApp
+        val gatewayId = "gateway-test"
+        val owner = ChatComposerOwner(gatewayId, "main", "agent:main:main")
+        val chat = controller()
+        gateway.online = true
+        gateway.sendResponse = { key -> """{"runId":"$key","status":"ok"}""" }
+        chat.load(owner.sessionKey)
+        advanceUntilIdle()
+        assertTrue(chat.healthOk.value)
+        assertTrue(chat.isCurrentComposerOwner(owner))
+        assertNull(app.peekRuntime())
+        val branch = requireNotNull(outbox.branchState(gatewayId, ChatOutboxScope(owner.sessionKey, owner.agentId)))
+        assertNull(branch.lastActiveLeafEntryId)
+        assertNull(branch.switchPendingSinceMs)
+
+        val canAdmit = NodeForegroundService.resume(app, startNow = false)
+        val historyEntered = CompletableDeferred<Unit>()
+        val releaseHistory = CompletableDeferred<Unit>()
+        val releaseEnqueue = CompletableDeferred<Unit>()
+        val releaseSend = CompletableDeferred<Unit>()
+        outbox.loadGate = LoadGate(remainingLoads = 0, entered = historyEntered, release = releaseHistory)
+        outbox.enqueueGate = releaseEnqueue
+        gateway.sendGate = releaseSend
+        val commandId = "history-held-reply"
+        val attachment = OutgoingAttachment(type = "image", mimeType = "image/png", fileName = "reply.png", base64 = "AQIDBA==")
+        val send =
+          async(start = CoroutineStart.LAZY) {
+            chat.sendMessageForOwnerAwaitAcceptance(
+              message = "reply after history",
+              thinkingLevel = "off",
+              attachments = listOf(attachment),
+              expectedOwner = owner,
+              idempotencyKey = commandId,
+              canAdmit = canAdmit,
+            )
+          }
+        try {
+          // Empty-root history loads outbox evidence while holding the publication mutex.
+          // Initial work settled above; an ordinary outbox publication would not own this lock.
+          chat.refresh()
+          historyEntered.await()
+          send.start()
+          runCurrent()
+          assertFalse(send.isCompleted)
+
+          if (retireResume) NodeForegroundService.stop(app)
+          NodeForegroundService.resume(app, startNow = false)
+          releaseHistory.complete(Unit)
+          runCurrent()
+
+          if (retireResume) {
+            // The closed enqueue gate excludes both journaling and post-journal rollback.
+            assertTrue("The retired Resume must reject after history releases admission", send.isCompleted)
+            assertFalse(send.await())
+            assertTrue(outbox.load(gatewayId).isEmpty())
+            assertFalse(chat.wasOutboxCommandAdmitted(commandId))
+            assertTrue(outbox.attachments().isEmpty())
+            assertTrue(gateway.sentIdempotencyKeys.isEmpty())
+          } else {
+            assertFalse(send.isCompleted)
+            releaseEnqueue.complete(Unit)
+            runCurrent()
+            val row = outbox.load(gatewayId).single()
+            assertEquals(commandId, row.id)
+            assertEquals(ChatOutboxStatus.Sending, row.status)
+            assertTrue(chat.wasOutboxCommandAdmitted(commandId))
+            assertTrue(byteArrayOf(1, 2, 3, 4).contentEquals(outbox.loadAttachments(commandId).single().bytes))
+            assertEquals(listOf(commandId), gateway.sentIdempotencyKeys)
+            assertEquals(listOf("reply after history"), gateway.sentMessages)
+            assertEquals(listOf(owner.sessionKey), gateway.sentSessionKeys)
+            assertEquals(listOf(owner.agentId), gateway.sentAgentIds)
+            assertEquals(listOf(listOf(attachment.fileName)), gateway.sentAttachmentFileNames)
+            releaseSend.complete(Unit)
+            assertTrue(send.await())
+          }
+          assertTrue(chat.isCurrentComposerOwner(owner))
+          assertNull(app.peekRuntime())
+        } finally {
+          send.cancel()
+          releaseHistory.complete(Unit)
+          releaseEnqueue.complete(Unit)
+          releaseSend.complete(Unit)
+          NodeForegroundService.resume(app, startNow = false)
+          runCurrent()
+        }
+      }
+    }
+  }
 
   @Test
   fun defaultAgentRoundTripDuringAdmissionRejectsBeforeDispatch() =

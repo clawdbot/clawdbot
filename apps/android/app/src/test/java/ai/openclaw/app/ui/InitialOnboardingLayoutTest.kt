@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeRuntime
@@ -7,6 +8,7 @@ import ai.openclaw.app.NodeRuntimeMode
 import ai.openclaw.app.R
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.closeNodeRuntimeTestFixture
+import ai.openclaw.app.drainWithMainLooper
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.ui.design.ClawDesignTheme
@@ -50,16 +52,20 @@ import androidx.compose.ui.unit.DpRect
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.viewModelScope
 import androidx.test.core.app.ApplicationProvider
-import com.google.mlkit.common.internal.MlKitInitProvider
+import com.google.mlkit.common.sdkinternal.MlKitContext
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.job
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.util.ReflectionHelpers
@@ -74,8 +80,9 @@ class InitialOnboardingLayoutTest {
   val composeRule = createComposeRule()
 
   @Before
-  fun disableMascotAnimations() {
+  fun setUp() {
     val context = ApplicationProvider.getApplicationContext<Context>()
+    MlKitContext.initializeIfNeeded(context)
     Settings.Global.putFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
   }
 
@@ -86,7 +93,6 @@ class InitialOnboardingLayoutTest {
     val runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
     val models = ViewModelStore()
     try {
-      Robolectric.buildContentProvider(MlKitInitProvider::class.java).create()
       val viewModel = MainViewModel(app, prefs, SavedStateHandle())
       models.put("onboarding", viewModel)
       ReflectionHelpers.getField<MutableStateFlow<NodeRuntime?>>(viewModel, "runtimeRef").value = runtime
@@ -109,6 +115,85 @@ class InitialOnboardingLayoutTest {
       } finally {
         closeNodeRuntimeTestFixture(runtime)
       }
+    }
+  }
+
+  @Test
+  fun dismissedNodeApprovalDialogStaysClosedAcrossBackgroundRefreshes() {
+    val app = ApplicationProvider.getApplicationContext<NodeApp>()
+    val prefs = SecurePrefs(app, app.getSharedPreferences("onboarding-approval-${UUID.randomUUID()}", Context.MODE_PRIVATE))
+    val onboardingCompleted = prefs.onboardingCompleted.value
+    prefs.setOnboardingCompleted(false)
+    try {
+      val runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
+      try {
+        val models = ViewModelStore()
+        try {
+          val viewModel = MainViewModel(app, prefs, SavedStateHandle())
+          models.put("onboarding", viewModel)
+          val viewModelJob = viewModel.viewModelScope.coroutineContext.job
+          val connectionGate = ReflectionHelpers.getField<Mutex>(viewModel, "gatewayConfigOperationMutex")
+          val connectionGateOwner = Any()
+          // Render the real callbacks without letting queued configuration/connect work reach sockets.
+          check(connectionGate.tryLock(connectionGateOwner))
+          try {
+            val approval = ReflectionHelpers.getField<MutableStateFlow<GatewayNodeCapabilityApproval>>(runtime, "_nodeCapabilityApproval")
+            val refreshing = ReflectionHelpers.getField<MutableStateFlow<Boolean>>(runtime, "_nodesDevicesRefreshing")
+            approval.value = GatewayNodeCapabilityApproval.Unapproved
+            ReflectionHelpers.getField<MutableStateFlow<NodeRuntime?>>(viewModel, "runtimeRef").value = runtime
+            setContent(fontScale = 1f, viewportHeight = 720.dp) { OnboardingFlow(viewModel) }
+
+            composeRule.onNodeWithText("Continue").performClick()
+            composeRule.onNodeWithText("Set up manually").performClick()
+            composeRule.onNode(hasSetTextAction() and hasText("Host")).performScrollTo().performTextReplacement("127.0.0.1")
+            composeRule.onNodeWithText("Test connection").performClick()
+            composeRule.onNodeWithText("Continue").performClick()
+
+            fun checkUnapprovedNode() {
+              composeRule
+                .onNodeWithText("I have approved")
+                .assertIsEnabled()
+                .performSemanticsAction(SemanticsActions.OnClick) { click ->
+                  assertTrue(click())
+                  // Deliver the refresh start with the click, before the unobserved-refresh timeout.
+                  refreshing.value = true
+                }
+              composeRule.onNodeWithText("Checking approval…").assertIsDisplayed()
+              composeRule.runOnIdle { refreshing.value = false }
+              composeRule.onNodeWithText("Still waiting for approval").assertIsDisplayed()
+            }
+
+            checkUnapprovedNode()
+            composeRule.onNodeWithText("OK").performClick()
+            composeRule.onNodeWithText("Still waiting for approval").assertDoesNotExist()
+
+            repeat(2) {
+              composeRule.runOnIdle { refreshing.value = true }
+              composeRule.onNodeWithText("Checking approval…").assertIsDisplayed()
+              composeRule.runOnIdle { refreshing.value = false }
+              composeRule.onNodeWithText("Still waiting for approval").assertDoesNotExist()
+              composeRule.onNodeWithText("I have approved").assertIsDisplayed().assertIsEnabled()
+            }
+
+            // A new user check can report waiting again; dismissal does not suppress later feedback.
+            checkUnapprovedNode()
+            composeRule.onNodeWithText("OK").performClick()
+            composeRule.onNodeWithText("Still waiting for approval").assertDoesNotExist()
+          } finally {
+            // Keep the gate held unless blocked connection work has finished cancellation.
+            drainWithMainLooper {
+              withTimeout(10_000) { viewModelJob.cancelAndJoin() }
+            }
+            connectionGate.unlock(connectionGateOwner)
+          }
+        } finally {
+          models.clear()
+        }
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    } finally {
+      prefs.setOnboardingCompleted(onboardingCompleted)
     }
   }
 

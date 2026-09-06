@@ -5,6 +5,7 @@ import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.NodeRuntimeMode
 import ai.openclaw.app.SecurePrefs
+import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import android.Manifest
@@ -18,6 +19,7 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModelStore
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -41,6 +43,7 @@ class NotificationSettingsScreenTest {
   @get:Rule
   val composeRule = createComposeRule()
 
+  private val viewModels = ViewModelStore()
   private lateinit var app: NodeApp
   private lateinit var prefs: SecurePrefs
   private lateinit var runtime: NodeRuntime
@@ -50,6 +53,7 @@ class NotificationSettingsScreenTest {
   @Before
   fun setUp() {
     app = RuntimeEnvironment.getApplication() as NodeApp
+    originalRuntime = app.peekRuntime()
     clearPlainPreferences()
     prefs =
       SecurePrefs(
@@ -57,7 +61,6 @@ class NotificationSettingsScreenTest {
         app.getSharedPreferences("notification-settings-${UUID.randomUUID()}", Context.MODE_PRIVATE),
       )
     runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
-    originalRuntime = app.peekRuntime()
     setApplicationRuntime(runtime)
     shadowOf(app).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
     setListenerAccess(granted = false)
@@ -65,9 +68,19 @@ class NotificationSettingsScreenTest {
 
   @After
   fun tearDown() {
-    setApplicationRuntime(originalRuntime)
-    runtime.disconnect()
-    clearPlainPreferences()
+    try {
+      viewModels.clear()
+    } finally {
+      try {
+        if (::runtime.isInitialized) closeNodeRuntimeTestFixture(runtime)
+      } finally {
+        try {
+          setApplicationRuntime(originalRuntime)
+        } finally {
+          clearPlainPreferences()
+        }
+      }
+    }
   }
 
   @Test
@@ -133,7 +146,7 @@ class NotificationSettingsScreenTest {
   }
 
   private fun showNotificationSettings() {
-    val viewModel = MainViewModel(app, prefs, SavedStateHandle())
+    val viewModel = MainViewModel(app, prefs, SavedStateHandle()).also { viewModels.put("notifications", it) }
     composeRule.setContent {
       activity = requireNotNull(LocalActivity.current)
       ClawDesignTheme {

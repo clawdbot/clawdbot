@@ -29,6 +29,7 @@ import ai.openclaw.app.gateway.GatewayMediaKind
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.systemagent.SystemAgentChatState
 import ai.openclaw.app.ui.GatewayConnectPlan
 import ai.openclaw.app.ui.GatewaySavedAuthAction
@@ -47,6 +48,7 @@ import android.Manifest
 import android.app.Application
 import android.content.Intent
 import android.net.Uri
+import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.SavedStateHandle
@@ -1028,8 +1030,10 @@ class MainViewModel private constructor(
 
   internal fun openConversationNotification(target: ConversationNotificationTarget) {
     launchGatewayConnectionOperation { runtime, isCurrent ->
-      if (runtime.openConversationNotificationTarget(target, isCurrent) && isCurrent()) {
-        _requestedHomeDestination.value = HomeDestination.Chat
+      when (val selection = runtime.openConversationNotificationTarget(target, isCurrent)) {
+        is GatewayTargetSelection.Selected -> if (isCurrent() && selection.isCurrent()) _requestedHomeDestination.value = HomeDestination.Chat
+        GatewayTargetSelection.Unavailable -> showUnavailableGateway(isCurrent)
+        GatewayTargetSelection.Retired -> Unit
       }
     }
   }
@@ -1301,8 +1305,20 @@ class MainViewModel private constructor(
   }
 
   fun switchToGateway(stableId: String) {
-    launchGatewayConnectionOperation { runtime, isCurrent -> runtime.switchToGateway(stableId, isCurrent) }
+    launchGatewayConnectionOperation { runtime, isCurrent ->
+      if (runtime.switchToGateway(stableId, isCurrent) == GatewayTargetSelection.Unavailable) {
+        showUnavailableGateway(isCurrent)
+      }
+    }
   }
+
+  private suspend fun showUnavailableGateway(isCurrent: () -> Boolean) =
+    withContext(Dispatchers.Main) {
+      if (!isCurrent()) return@withContext
+      Toast.makeText(nodeApp, nativeString("Gateway unavailable"), Toast.LENGTH_LONG).show()
+      requestedSettingsRouteState.value = SettingsRoute.Gateway
+      _requestedHomeDestination.value = HomeDestination.Settings
+    }
 
   fun setGatewayConnectionEnabled(
     stableId: String,

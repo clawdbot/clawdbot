@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.chat.AndroidClientDatabases
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewayConnectOptions
@@ -7,15 +8,24 @@ import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayTlsParams
+import ai.openclaw.app.gateway.GatewayTlsProbeResult
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.GatewayConnectConfig
 import ai.openclaw.app.ui.GatewayConnectPlan
 import ai.openclaw.app.ui.GatewaySavedAuthAction
+import ai.openclaw.app.ui.SettingsRoute
+import android.Manifest
 import android.app.Notification
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.RemoteInput
 import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.ServiceInfo
+import android.net.Uri
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import androidx.lifecycle.SavedStateHandle
@@ -27,10 +37,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.android.asCoroutineDispatcher
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
@@ -55,6 +67,17 @@ import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
+import org.bouncycastle.asn1.ASN1Integer
+import org.bouncycastle.asn1.DERBitString
+import org.bouncycastle.asn1.DERNull
+import org.bouncycastle.asn1.pkcs.PKCSObjectIdentifiers
+import org.bouncycastle.asn1.x500.X500Name
+import org.bouncycastle.asn1.x509.AlgorithmIdentifier
+import org.bouncycastle.asn1.x509.Certificate
+import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo
+import org.bouncycastle.asn1.x509.Time
+import org.bouncycastle.asn1.x509.V3TBSCertificateGenerator
+import org.bouncycastle.asn1.x509.Validity
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -68,14 +91,23 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows
+import org.robolectric.android.controller.ServiceController
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.Implementation
 import org.robolectric.annotation.Implements
 import org.robolectric.annotation.RealObject
 import org.robolectric.shadow.api.Shadow
 import org.robolectric.shadows.ShadowApplication
+import org.robolectric.shadows.ShadowBroadcastPendingResult
+import org.robolectric.shadows.ShadowBroadcastReceiver
+import org.robolectric.shadows.ShadowToast
 import org.robolectric.util.ReflectionHelpers
 import java.net.InetAddress
+import java.security.KeyPairGenerator
+import java.security.KeyStore
+import java.security.Signature
+import java.security.cert.CertificateFactory
+import java.util.Date
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
@@ -83,6 +115,9 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import javax.net.ssl.KeyManagerFactory
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLSocketFactory
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.CoroutineContext
 
@@ -172,7 +207,10 @@ class NodeForegroundServiceTest {
       assertEquals(Service.START_STICKY, controller.get().onStartCommand(null, 0, 1))
       Shadows.shadowOf(Looper.getMainLooper()).idle()
       assertTrue("Service did not enter runtime construction", gate.entered.await(10, TimeUnit.SECONDS))
+      val processOwner = ReflectionHelpers.getField<CoroutineScope>(app, "runtimeScope").coroutineContext.job
+      val processTasksBeforeStop = processOwner.children.toSet()
       NodeForegroundService.stop(app)
+      val stopTasks = processOwner.children.filterNot(processTasksBeforeStop::contains).toList()
       controller.destroy()
       gate.release.countDown()
       drainWithMainLooper {
@@ -181,6 +219,13 @@ class NodeForegroundServiceTest {
             .getField<CoroutineScope>(controller.get(), "scope")
             .coroutineContext.job
             .join()
+          stopTasks.joinAll()
+          val runtime = requireNotNull(app.peekRuntime())
+          // The runtime owns final Offline callbacks after both startup jobs return.
+          listOf("nodeSession", "operatorSession").forEach { field ->
+            val session = ReflectionHelpers.getField<GatewaySession>(runtime, field)
+            requireNotNull(ReflectionHelpers.getField<Job?>(session, "disconnectTail")).join()
+          }
         }
       }
 
@@ -372,6 +417,861 @@ class NodeForegroundServiceTest {
   @Test
   @Config(shadows = [ServiceRuntimePrefsShadow::class])
   fun forgettingInactiveGatewayPreservesNodeCapabilityRefresh() = assertEstablishedConnectionSurvives(EstablishedConnectionAction.Forget)
+
+  @Test
+  @Config(shadows = [ServiceRuntimePrefsShadow::class])
+  fun notificationReplyReconnectsAfterCompletedDisconnect() = assertNotificationReplyReconnectsAfterCompletedDisconnect(includeGeneration = true)
+
+  @Test
+  @Config(shadows = [ServiceRuntimePrefsShadow::class])
+  fun preUpdateNotificationReplyWithoutGenerationStillReconnectsAndAdmits() = assertNotificationReplyReconnectsAfterCompletedDisconnect(includeGeneration = false)
+
+  private fun assertNotificationReplyReconnectsAfterCompletedDisconnect(includeGeneration: Boolean) {
+    val app = RuntimeEnvironment.getApplication() as NodeApp
+    val appShadow = Shadows.shadowOf(app)
+    appShadow.grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+    app.prefs.setManualTls(false)
+    val runtime = app.ensureBackgroundRuntime()
+    val viewModel = MainViewModel(app, app.prefs, SavedStateHandle())
+    val viewModels = ViewModelStore().apply { put("notification-reply", viewModel) }
+    val controller = Robolectric.buildService(NodeForegroundService::class.java).create()
+    val connections = LinkedBlockingQueue<String>()
+    val sends = LinkedBlockingQueue<JsonObject>()
+    val gateway =
+      lifetimeGateway(
+        onRequest = { frame ->
+          when (frame["method"]?.jsonPrimitive?.content) {
+            "chat.history" -> {
+              """{"sessionId":"notification-proof-session","messages":[]}"""
+            }
+
+            "health" -> {
+              """{"ok":true}"""
+            }
+
+            "chat.send" -> {
+              val params = requireNotNull(frame["params"]).jsonObject
+              sends.add(params)
+              """{"runId":${params["idempotencyKey"]},"status":"started"}"""
+            }
+
+            else -> {
+              "{}"
+            }
+          }
+        },
+      ) { role ->
+        connections.add(role)
+        bootstrapHello(role)
+      }
+    val endpoint = GatewayEndpoint.manual("127.0.0.1", gateway.port)
+    val target = ConversationNotificationTarget(endpoint.stableId, "main", "agent:main:notification-proof", "run-proof")
+    val manager = app.getSystemService(NotificationManager::class.java)
+
+    try {
+      // Await this reconnect fixture's real stores before starting connection deadlines.
+      drainWithMainLooper {
+        ReflectionHelpers.getField<AndroidClientDatabases>(runtime, "clientDatabases").clientStateDatabase()
+      }
+      viewModel.connect(endpoint, null, "synthetic-bootstrap-token", null)
+      drainWithMainLooper {
+        withTimeout(10_000) { runtime.gatewayConnectionDisplay.first { it.isConnected && runtime.nodeConnected.value } }
+      }
+      runtime.switchChatSession(target.sessionKey, target.agentId)
+      drainWithMainLooper { withTimeout(10_000) { runtime.chatHealthOk.first { it } } }
+      assertTrue(ConversationReplyNotifier(app).show(target.toComposerOwner(), target.runId, "Synthetic assistant reply"))
+      val posted = manager.activeNotifications.single { it.tag == target.notificationTag }
+      var notification = posted.notification
+      if (!includeGeneration) {
+        // Reproduce v2026.9.1's Reply envelope, without changing the receiver or its admission path.
+        val originalAction = notification.actions.single()
+        val legacyAction =
+          Notification.Action
+            .Builder(
+              null,
+              originalAction.title,
+              PendingIntent.getBroadcast(
+                app,
+                1,
+                conversationNotificationReplyIntent(app, target)
+                  .setData(Uri.parse("openclaw://conversation-notification/reply/${target.intentIdentityDigest}")),
+                PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_MUTABLE,
+              ),
+            ).addRemoteInput(originalAction.remoteInputs.single())
+            .setAllowGeneratedReplies(true)
+            .setSemanticAction(Notification.Action.SEMANTIC_ACTION_REPLY)
+            .build()
+        notification =
+          Notification.Builder
+            .recoverBuilder(app, notification)
+            .setActions(legacyAction)
+            .build()
+        notification.extras.remove("ai.openclaw.app.extra.CONVERSATION_PUBLICATION_GENERATION")
+        manager.notify(posted.tag, posted.id, notification)
+      }
+      val action = notification.actions.single()
+      val parsedReply = requireNotNull(parseConversationNotificationReplyIntent(Shadows.shadowOf(action.actionIntent).savedIntent))
+      assertEquals(target, parsedReply.target)
+      assertEquals(includeGeneration, parsedReply.generation != null)
+      val newerNotification =
+        if (includeGeneration) {
+          null
+        } else {
+          assertTrue(ConversationReplyNotifier(app).show(target.toComposerOwner(), "newer-run", "Newer assistant reply"))
+          manager.activeNotifications.single { it.tag == target.notificationTag }.notification
+        }
+      val receiver =
+        appShadow.registeredReceivers
+          .map { it.broadcastReceiver }
+          .filterIsInstance<ConversationReplyReceiver>()
+          .single()
+
+      disconnectThroughNotification(controller, app, runtime)
+      assertEquals(endpoint.stableId, app.prefs.gatewayRegistry.activeStableId.value)
+      assertEquals("Offline", runtime.gatewayConnectionDisplay.value.statusText)
+      assertFalse(runtime.gatewayConnectionDisplay.value.isConnected)
+      connections.clear()
+      assertTrue(sends.isEmpty())
+
+      val text = "Synthetic notification reply after Disconnect"
+      val fillIn = Intent()
+      RemoteInput.addResultsToIntent(
+        action.remoteInputs,
+        fillIn,
+        Bundle().apply { putCharSequence(action.remoteInputs.single().resultKey, text) },
+      )
+      if (newerNotification != null) {
+        val newerIntent = Shadows.shadowOf(newerNotification.actions.single().actionIntent).savedIntent
+        val newerReply = requireNotNull(parseConversationNotificationReplyIntent(newerIntent))
+        // An old mutable sender can add extras, but cannot turn its fixed v1 data into the new envelope.
+        fillIn.setData(newerIntent.data).putExtra("ai.openclaw.app.extra.CONVERSATION_PUBLICATION_GENERATION", newerReply.generation)
+      }
+      action.actionIntent.send(app, 0, fillIn)
+      Shadows.shadowOf(Looper.getMainLooper()).idle()
+      val receiverShadow = Shadow.extract<ShadowBroadcastReceiver>(receiver)
+      assertTrue("The actual Reply receiver must own a goAsync result", receiverShadow.wentAsync())
+      val finished = Shadow.extract<ShadowBroadcastPendingResult>(requireNotNull(receiverShadow.originalPendingResult)).future
+      drainWithMainLooper {
+        withTimeout(10_000) {
+          while (!finished.isDone) yield()
+          finished.get()
+        }
+      }
+
+      assertTrue("An explicit Reply after Disconnect must admit a new operator connection to saved A", "operator" in connections)
+      drainWithMainLooper { withTimeout(10_000) { while (sends.isEmpty()) yield() } }
+      val sent = requireNotNull(sends.poll())
+      assertEquals(target.sessionKey, sent["sessionKey"]?.jsonPrimitive?.content)
+      assertEquals(target.agentId, sent["agentId"]?.jsonPrimitive?.content)
+      assertEquals(text, sent["message"]?.jsonPrimitive?.content)
+      val commandId = conversationNotificationReplyIdempotencyKey(target)
+      assertEquals(commandId, sent["idempotencyKey"]?.jsonPrimitive?.content)
+      assertTrue("The observed Reply must have only one chat.send", sends.isEmpty())
+      drainWithMainLooper { assertTrue(runtime.wasChatOutboxCommandAdmitted(commandId)) }
+      if (includeGeneration) {
+        val acknowledged = manager.activeNotifications.singleOrNull { it.tag == target.notificationTag }
+        assertNotNull("Durable admission must retain a current Reply acknowledgment", acknowledged)
+        assertEquals(posted.id, requireNotNull(acknowledged).id)
+        val update = acknowledged.notification
+        assertEquals(notification.contentIntent, update.contentIntent)
+        assertEquals(Notification.VISIBILITY_PRIVATE, update.visibility)
+        assertEquals(Notification.GROUP_ALERT_SUMMARY, update.groupAlertBehavior)
+        assertEquals(
+          "Chat",
+          update.publicVersion.extras
+            .getCharSequence(Notification.EXTRA_TEXT)
+            .toString(),
+        )
+        assertNull(update.publicVersion.extras.getCharSequence(Notification.EXTRA_BIG_TEXT))
+        assertEquals("Reply queued", update.extras.getCharSequence(Notification.EXTRA_TEXT).toString())
+        assertTrue(
+          update.extras
+            .getCharSequence(Notification.EXTRA_BIG_TEXT)
+            .toString()
+            .contains(text),
+        )
+        assertEquals(
+          "Open conversation",
+          update.actions
+            .single()
+            .title
+            .toString(),
+        )
+        assertTrue(
+          update.actions
+            .single()
+            .remoteInputs
+            .isNullOrEmpty(),
+        )
+      } else {
+        val retained = manager.activeNotifications.single { it.tag == target.notificationTag }.notification
+        assertEquals(requireNotNull(newerNotification).contentIntent, retained.contentIntent)
+        assertEquals("Newer assistant reply", retained.extras.getCharSequence(Notification.EXTRA_TEXT).toString())
+      }
+    } finally {
+      runCatching { manager.cancel(target.notificationTag, 1) }
+      closeNotificationViewModelFixture(viewModels, viewModel, controller, app, gateway)
+    }
+  }
+
+  @Test
+  @Config(shadows = [ServiceRuntimePrefsShadow::class])
+  fun notificationReplyContinuesAfterApprovingTlsTrust() {
+    val tlsSocketFactory = lifetimeGatewayTlsSocketFactory()
+    val app = RuntimeEnvironment.getApplication() as NodeApp
+    val appShadow = Shadows.shadowOf(app)
+    appShadow.grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+    app.prefs.setManualTls(true)
+    val runtime = app.ensureBackgroundRuntime()
+    val controller = Robolectric.buildService(NodeForegroundService::class.java).create()
+    val connections = LinkedBlockingQueue<String>()
+    val sends = LinkedBlockingQueue<JsonObject>()
+    val gateway =
+      lifetimeGateway(
+        sslSocketFactory = tlsSocketFactory,
+        onRequest = { frame ->
+          when (frame["method"]?.jsonPrimitive?.content) {
+            "chat.history" -> {
+              """{"sessionId":"notification-tls-session","messages":[]}"""
+            }
+
+            "health" -> {
+              """{"ok":true}"""
+            }
+
+            "chat.send" -> {
+              val params = requireNotNull(frame["params"]).jsonObject
+              sends.add(params)
+              """{"runId":${params["idempotencyKey"]},"status":"started"}"""
+            }
+
+            else -> {
+              "{}"
+            }
+          }
+        },
+      ) { role ->
+        connections.add(role)
+        bootstrapHello(role)
+      }
+    val endpoint = GatewayEndpoint.manual("127.0.0.1", gateway.port, tlsEnabled = true)
+    val target = ConversationNotificationTarget(endpoint.stableId, "main", "agent:main:notification-tls", "tls-reply")
+    val commandId = conversationNotificationReplyIdempotencyKey(target)
+    val manager = app.getSystemService(NotificationManager::class.java)
+
+    try {
+      // A saved assistant-reply notice presupposes initialized app stores.
+      drainWithMainLooper {
+        ReflectionHelpers.getField<AndroidClientDatabases>(runtime, "clientDatabases").clientStateDatabase()
+      }
+      runtime.disconnect()
+      drainWithMainLooper { withTimeout(10_000) { joinRuntimeDisconnectTails(runtime) } }
+      app.prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
+      app.prefs.gatewayRegistry.setActive(endpoint.stableId)
+      app.prefs.saveGatewayCredentials(endpoint.stableId, token = "synthetic-tls-token")
+      assertTrue(ConversationReplyNotifier(app).show(target.toComposerOwner(), target.runId, "Synthetic assistant reply"))
+      val action =
+        manager.activeNotifications
+          .single { it.tag == target.notificationTag }
+          .notification.actions
+          .single()
+      val receiver =
+        appShadow.registeredReceivers
+          .map { it.broadcastReceiver }
+          .filterIsInstance<ConversationReplyReceiver>()
+          .single()
+      val text = "Synthetic reply through TLS approval"
+      val fillIn = Intent()
+      RemoteInput.addResultsToIntent(
+        action.remoteInputs,
+        fillIn,
+        Bundle().apply { putCharSequence(action.remoteInputs.single().resultKey, text) },
+      )
+      action.actionIntent.send(app, 0, fillIn)
+      Shadows.shadowOf(Looper.getMainLooper()).idle()
+      val receiverShadow = Shadow.extract<ShadowBroadcastReceiver>(receiver)
+      assertTrue(receiverShadow.wentAsync())
+      val finished = Shadow.extract<ShadowBroadcastPendingResult>(requireNotNull(receiverShadow.originalPendingResult)).future
+      drainWithMainLooper {
+        val prompt = requireNotNull(withTimeout(10_000) { runtime.pendingGatewayTrust.first { it != null } })
+        assertEquals(endpoint.stableId, prompt.endpoint.stableId)
+        assertNotNull(prompt.fingerprintSha256)
+        assertFalse("Reply must still be waiting for its TLS decision", finished.isDone)
+        assertTrue("Unapproved TLS must not authenticate a gateway session", connections.isEmpty())
+        assertTrue(sends.isEmpty())
+
+        runtime.acceptGatewayTrustPrompt()
+        withTimeout(10_000) {
+          while (!finished.isDone) yield()
+          finished.get()
+          runtime.gatewayConnectionDisplay.first { it.isConnected && runtime.nodeConnected.value }
+        }
+        assertTrue("Approved TLS must leave the gateway ready", runtime.gatewayConnectionDisplay.value.isConnected)
+        assertTrue("TLS approval must preserve the waiting Reply's outbox admission", runtime.wasChatOutboxCommandAdmitted(commandId))
+        assertEquals(prompt.fingerprintSha256, app.prefs.loadGatewayTlsFingerprint(endpoint.stableId))
+      }
+
+      drainWithMainLooper { withTimeout(10_000) { while (sends.isEmpty()) yield() } }
+      val sent = requireNotNull(sends.poll())
+      assertEquals(target.sessionKey, sent["sessionKey"]?.jsonPrimitive?.content)
+      assertEquals(target.agentId, sent["agentId"]?.jsonPrimitive?.content)
+      assertEquals(text, sent["message"]?.jsonPrimitive?.content)
+      assertEquals(commandId, sent["idempotencyKey"]?.jsonPrimitive?.content)
+      assertTrue("The approved Reply must produce exactly one chat.send", sends.isEmpty())
+      val update = manager.activeNotifications.single { it.tag == target.notificationTag }.notification
+      assertEquals("Reply queued", update.extras.getCharSequence(Notification.EXTRA_TEXT).toString())
+      assertTrue(
+        update.extras
+          .getCharSequence(Notification.EXTRA_BIG_TEXT)
+          .toString()
+          .contains(text),
+      )
+    } finally {
+      runCatching { manager.cancel(target.notificationTag, 1) }
+      try {
+        closeNodeServiceTestFixture(controller, app)
+      } finally {
+        gateway.shutdown()
+      }
+    }
+  }
+
+  @Test
+  @Config(shadows = [ServiceRuntimePrefsShadow::class])
+  fun sameViewModelNotificationAndForegroundReentryPreserveHeldTlsTrustPrompt() {
+    val app = RuntimeEnvironment.getApplication() as NodeApp
+    val probeJob = CompletableDeferred<Job>()
+    val probeResult = CompletableDeferred<GatewayTlsProbeResult>()
+    val probeCount = AtomicInteger()
+    assertNull(app.peekRuntime())
+    val runtime =
+      NodeRuntime(app, app.prefs, tlsFingerprintProbe = { _, _ ->
+        probeCount.incrementAndGet()
+        probeJob.complete(currentCoroutineContext().job)
+        probeResult.await()
+      })
+    ReflectionHelpers.setField(app, "runtimeInstance", runtime)
+    val gateway = lifetimeGateway()
+    val endpoint = GatewayEndpoint.manual("127.0.0.1", gateway.port, tlsEnabled = true)
+    val viewModel = MainViewModel(app, app.prefs, SavedStateHandle())
+    val viewModels = ViewModelStore().apply { put("held-tls", viewModel) }
+    val controller = Robolectric.buildService(NodeForegroundService::class.java).create()
+    val fingerprint = "ab".repeat(32)
+    val target = ConversationNotificationTarget(endpoint.stableId, "main", "agent:main:notification-proof", "run-proof")
+    val notificationManager = app.getSystemService(NotificationManager::class.java)
+
+    try {
+      runtime.setForeground(false)
+      // Begin from the stopped owner before arming saved A, so cold auto-connect cannot own the probe.
+      runtime.disconnect()
+      drainWithMainLooper { withTimeout(10_000) { joinRuntimeDisconnectTails(runtime) } }
+      app.prefs.setManualTls(true)
+      app.prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
+      app.prefs.gatewayRegistry.setActive(endpoint.stableId)
+      viewModel.connect(endpoint, "synthetic-lifetime-token", null, null)
+      drainWithMainLooper { withTimeout(10_000) { probeJob.await() } }
+      assertNull(runtime.pendingGatewayTrust.value)
+      Shadows.shadowOf(app).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+      assertTrue(ConversationReplyNotifier(app).show(target.toComposerOwner(), target.runId, "Synthetic reply"))
+      val posted = notificationManager.activeNotifications.single { it.tag == target.notificationTag }
+      val notification = posted.notification
+      notification.contentIntent.send()
+      val launch = requireNotNull(Shadows.shadowOf(app).nextStartedActivity)
+      val trampoline = Robolectric.buildActivity(ConversationNotificationLaunchActivity::class.java, launch).create()
+      val forwarded =
+        try {
+          requireNotNull(Shadows.shadowOf(trampoline.get()).nextStartedActivity)
+        } finally {
+          trampoline.destroy()
+        }
+      val delivered = requireNotNull(parseConversationNotificationLaunchIntent(forwarded, app.conversationNotificationLaunchStore::take))
+      assertEquals(target, delivered)
+      val existingOperations =
+        viewModel.viewModelScope.coroutineContext.job.children
+          .toSet()
+      viewModel.openConversationNotification(delivered)
+      val notificationOperations =
+        viewModel.viewModelScope.coroutineContext.job.children
+          .filterNot(existingOperations::contains)
+          .toList()
+      drainWithMainLooper { withTimeout(10_000) { notificationOperations.joinAll() } }
+      assertEquals(HomeDestination.Chat, viewModel.requestedHomeDestination.value)
+
+      val runtimeJob = ReflectionHelpers.getField<CoroutineScope>(runtime, "scope").coroutineContext.job
+      val beforeForeground = runtimeJob.children.toSet()
+      // Reenter while the probe is still held, not after its trust dialog is published.
+      runtime.setForeground(true)
+      val foregroundOperations = runtimeJob.children.filterNot(beforeForeground::contains).toList()
+      probeResult.complete(GatewayTlsProbeResult(fingerprintSha256 = fingerprint))
+      drainWithMainLooper {
+        withTimeout(10_000) {
+          foregroundOperations.joinAll()
+          // A queued reconnect can launch a probe before completing; drain that child too.
+          runtimeJob.children
+            .filterNot(beforeForeground::contains)
+            .toList()
+            .joinAll()
+          probeJob.await().join()
+          runtime.pendingGatewayTrust.first { it != null }
+        }
+      }
+
+      val prompt = requireNotNull(runtime.pendingGatewayTrust.value) { "The same-target notification retired the original TLS continuation" }
+      assertEquals(endpoint.stableId, prompt.endpoint.stableId)
+      assertEquals(fingerprint, prompt.fingerprintSha256)
+      assertEquals("Notification and foreground reentry must retain the original probe, not replace it", 1, probeCount.get())
+      assertEquals("Unapproved TLS trust must not open a Gateway socket", 0, gateway.requestCount)
+    } finally {
+      runCatching { notificationManager.cancel(target.notificationTag, 1) }
+      probeResult.complete(GatewayTlsProbeResult(fingerprintSha256 = fingerprint))
+      closeNotificationViewModelFixture(viewModels, viewModel, controller, app, gateway)
+    }
+  }
+
+  @Test
+  @Config(shadows = [ServiceRuntimePrefsShadow::class])
+  fun forgettingInactiveGatewayPreservesSameViewModelHeldTlsAttempt() {
+    val app = RuntimeEnvironment.getApplication() as NodeApp
+    assertNull(app.peekRuntime())
+    val probeJob = CompletableDeferred<Job>()
+    val probeResult = CompletableDeferred<GatewayTlsProbeResult>()
+    val probeCount = AtomicInteger()
+    val runtime =
+      NodeRuntime(app, app.prefs, tlsFingerprintProbe = { _, _ ->
+        probeCount.incrementAndGet()
+        probeJob.complete(currentCoroutineContext().job)
+        probeResult.await()
+      })
+    ReflectionHelpers.setField(app, "runtimeInstance", runtime)
+    val gateway = lifetimeGateway()
+    val active = GatewayEndpoint.manual("127.0.0.1", gateway.port, tlsEnabled = true)
+    val inactive = GatewayEndpoint.manual("localhost", gateway.port)
+    val viewModel = MainViewModel(app, app.prefs, SavedStateHandle())
+    val viewModels = ViewModelStore().apply { put("inactive-forget", viewModel) }
+    val controller = Robolectric.buildService(NodeForegroundService::class.java).create()
+    val fingerprint = "bc".repeat(32)
+
+    try {
+      runtime.setForeground(false)
+      runtime.disconnect()
+      drainWithMainLooper { withTimeout(10_000) { joinRuntimeDisconnectTails(runtime) } }
+      assertFalse(active.stableId == inactive.stableId)
+      app.prefs.gatewayRegistry.upsert(gatewayRegistryEntry(inactive, null))
+      app.prefs.gatewayRegistry.upsert(gatewayRegistryEntry(active, null))
+      app.prefs.gatewayRegistry.setActive(active.stableId)
+      viewModel.connect(active, "synthetic-held-b-token", null, null)
+      drainWithMainLooper { withTimeout(10_000) { probeJob.await() } }
+      val beforeForget =
+        viewModel.viewModelScope.coroutineContext.job.children
+          .toSet()
+
+      viewModel.forgetGateway(inactive.stableId)
+      val forgetOperations =
+        viewModel.viewModelScope.coroutineContext.job.children
+          .filterNot(beforeForget::contains)
+          .toList()
+      drainWithMainLooper { withTimeout(10_000) { forgetOperations.joinAll() } }
+      assertFalse(
+        app.prefs.gatewayRegistry.entries.value
+          .any { it.stableId == inactive.stableId },
+      )
+      assertEquals(active.stableId, app.prefs.gatewayRegistry.activeStableId.value)
+      probeResult.complete(GatewayTlsProbeResult(fingerprintSha256 = fingerprint))
+      drainWithMainLooper {
+        withTimeout(10_000) {
+          probeJob.await().join()
+          runtime.pendingGatewayTrust.first { it != null }
+        }
+      }
+
+      val prompt = requireNotNull(runtime.pendingGatewayTrust.value)
+      assertEquals(active.stableId, prompt.endpoint.stableId)
+      assertEquals(fingerprint, prompt.fingerprintSha256)
+      assertEquals(1, probeCount.get())
+      assertEquals(0, gateway.requestCount)
+    } finally {
+      probeResult.complete(GatewayTlsProbeResult(fingerprintSha256 = fingerprint))
+      closeNotificationViewModelFixture(viewModels, viewModel, controller, app, gateway)
+    }
+  }
+
+  @Test
+  @Config(shadows = [ServiceRuntimePrefsShadow::class])
+  fun forgottenGatewayNotificationShowsSettingsWithoutDisturbingHealthyGateway() {
+    val app = RuntimeEnvironment.getApplication() as NodeApp
+    app.prefs.setManualTls(false)
+    val runtime = app.ensureBackgroundRuntime()
+    val viewModel = MainViewModel(app, app.prefs, SavedStateHandle())
+    val viewModels = ViewModelStore().apply { put("forgotten-notification", viewModel) }
+    val controller = Robolectric.buildService(NodeForegroundService::class.java).create()
+    val connections = LinkedBlockingQueue<String>()
+    val gateway =
+      lifetimeGateway { role ->
+        connections.add(role)
+        bootstrapHello(role)
+      }
+    val active = GatewayEndpoint.manual("127.0.0.1", gateway.port)
+    val forgotten = GatewayEndpoint.manual("localhost", gateway.port)
+    val target = ConversationNotificationTarget(forgotten.stableId, "main", "agent:main:forgotten", "forgotten-reply")
+    val notificationManager = app.getSystemService(NotificationManager::class.java)
+
+    try {
+      viewModel.connect(active, null, "synthetic-bootstrap-token", null)
+      drainWithMainLooper {
+        withTimeout(10_000) { runtime.gatewayConnectionDisplay.first { it.isConnected && runtime.nodeConnected.value } }
+      }
+      runtime.switchChatSession("agent:main:healthy-b", "main")
+      app.prefs.gatewayRegistry.upsert(gatewayRegistryEntry(forgotten, null))
+      Shadows.shadowOf(app).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+      assertTrue(ConversationReplyNotifier(app).show(target.toComposerOwner(), target.runId, "Synthetic stale reply"))
+      val posted = notificationManager.activeNotifications.single { it.tag == target.notificationTag }
+      val notification = posted.notification
+      val draft = ChatDraft("Keep this B draft", ChatDraftPlacement.Replace, ConversationNotificationTarget(active.stableId, "main", "agent:main:healthy-b", "draft").toComposerOwner())
+      viewModel.setChatDraft(draft)
+      val beforeForget =
+        viewModel.viewModelScope.coroutineContext.job.children
+          .toSet()
+      viewModel.forgetGateway(forgotten.stableId)
+      val forgetOperations =
+        viewModel.viewModelScope.coroutineContext.job.children
+          .filterNot(beforeForget::contains)
+          .toList()
+      drainWithMainLooper { withTimeout(10_000) { forgetOperations.joinAll() } }
+      assertFalse(
+        app.prefs.gatewayRegistry.entries.value
+          .any { it.stableId == forgotten.stableId },
+      )
+      val beforeConnection = runtime.gatewayConnectionDisplay.value
+      val beforeCredentials = app.prefs.loadGatewayCredentials(active.stableId)
+      val beforeSession = runtime.chatSessionKey.value
+      connections.clear()
+      ShadowToast.reset()
+
+      notification.contentIntent.send()
+      val launch = requireNotNull(Shadows.shadowOf(app).nextStartedActivity)
+      val trampoline = Robolectric.buildActivity(ConversationNotificationLaunchActivity::class.java, launch).create()
+      val forwarded =
+        try {
+          requireNotNull(Shadows.shadowOf(trampoline.get()).nextStartedActivity)
+        } finally {
+          trampoline.destroy()
+        }
+      val delivered = requireNotNull(parseConversationNotificationLaunchIntent(forwarded, app.conversationNotificationLaunchStore::take))
+      assertEquals(target, delivered)
+      val beforeOpen =
+        viewModel.viewModelScope.coroutineContext.job.children
+          .toSet()
+      viewModel.openConversationNotification(delivered)
+      val openOperations =
+        viewModel.viewModelScope.coroutineContext.job.children
+          .filterNot(beforeOpen::contains)
+          .toList()
+      drainWithMainLooper { withTimeout(10_000) { openOperations.joinAll() } }
+
+      assertEquals(nativeString("Gateway unavailable"), ShadowToast.getTextOfLatestToast())
+      assertEquals(1, ShadowToast.shownToastCount())
+      assertEquals(SettingsRoute.Gateway, viewModel.requestedSettingsRoute.value)
+      assertEquals(HomeDestination.Settings, viewModel.requestedHomeDestination.value)
+      assertEquals(beforeConnection, runtime.gatewayConnectionDisplay.value)
+      assertEquals(active.stableId, app.prefs.gatewayRegistry.activeStableId.value)
+      assertEquals(beforeCredentials, app.prefs.loadGatewayCredentials(active.stableId))
+      assertEquals(beforeSession, runtime.chatSessionKey.value)
+      assertSame(draft, viewModel.chatDraft.value)
+      assertTrue(connections.isEmpty())
+      assertTrue(runtime.nodeConnected.value)
+    } finally {
+      runCatching { notificationManager.cancel(target.notificationTag, 1) }
+      closeNotificationViewModelFixture(viewModels, viewModel, controller, app, gateway)
+    }
+  }
+
+  @Test
+  @Config(shadows = [ServiceRuntimePrefsShadow::class])
+  fun stoppedColdReplyDoesNotBorrowLaterResumeIntent() {
+    val app = RuntimeEnvironment.getApplication() as NodeApp
+    val appShadow = Shadows.shadowOf(app)
+    val appFixture = Shadow.extract<ServiceRuntimePrefsShadow>(app)
+    val prefs = app.prefs
+    appShadow.grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+    prefs.setManualTls(false)
+    val controller = Robolectric.buildService(NodeForegroundService::class.java).create()
+    val construction = RuntimeReturnGate()
+    val connections = LinkedBlockingQueue<String>()
+    val sends = LinkedBlockingQueue<JsonObject>()
+    val gateway =
+      lifetimeGateway(
+        onRequest = { frame ->
+          when (frame["method"]?.jsonPrimitive?.content) {
+            "chat.history" -> {
+              """{"sessionId":"notification-proof-session","messages":[]}"""
+            }
+
+            "chat.send" -> {
+              val params = requireNotNull(frame["params"]).jsonObject
+              sends.add(params)
+              """{"runId":${params["idempotencyKey"]},"status":"started"}"""
+            }
+
+            else -> {
+              "{}"
+            }
+          }
+        },
+      ) { role ->
+        connections.add(role)
+        bootstrapHello(role)
+      }
+    val endpoint = GatewayEndpoint.manual("127.0.0.1", gateway.port)
+    val target = ConversationNotificationTarget(endpoint.stableId, "main", "agent:main:notification-proof", "retired-reply")
+    val notifier = ConversationReplyNotifier(app)
+    val manager = app.getSystemService(NotificationManager::class.java)
+    val receiver =
+      appShadow.registeredReceivers
+        .map { it.broadcastReceiver }
+        .filterIsInstance<ConversationReplyReceiver>()
+        .single()
+
+    fun replyTo(replyTarget: ConversationNotificationTarget) {
+      assertTrue(notifier.show(replyTarget.toComposerOwner(), replyTarget.runId, "Synthetic assistant reply"))
+      val notification = manager.activeNotifications.single { it.tag == replyTarget.notificationTag }.notification
+      val action = notification.actions.single()
+      val fillIn = Intent()
+      RemoteInput.addResultsToIntent(
+        action.remoteInputs,
+        fillIn,
+        Bundle().apply { putCharSequence(action.remoteInputs.single().resultKey, "Synthetic follow-up") },
+      )
+      action.actionIntent.send(app, 0, fillIn)
+      Shadows.shadowOf(Looper.getMainLooper()).idle()
+    }
+
+    fun joinReply() {
+      val receiverShadow = Shadow.extract<ShadowBroadcastReceiver>(receiver)
+      assertTrue(receiverShadow.wentAsync())
+      val finished = Shadow.extract<ShadowBroadcastPendingResult>(requireNotNull(receiverShadow.originalPendingResult)).future
+      drainWithMainLooper {
+        withTimeout(10_000) {
+          while (!finished.isDone) yield()
+          finished.get()
+        }
+      }
+    }
+
+    try {
+      prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
+      prefs.saveGatewayCredentials(endpoint.stableId, token = "synthetic-lifetime-token")
+      assertNull(prefs.gatewayRegistry.activeStableId.value)
+      assertNull(app.peekRuntime())
+      appFixture.prefsReadGate = construction
+      replyTo(target)
+      assertTrue("Reply did not enter cold runtime construction", construction.entered.await(10, TimeUnit.SECONDS))
+
+      NodeForegroundService.stop(app)
+      val resumed = NodeForegroundService.resume(app, startNow = false)
+      assertTrue(resumed())
+      appFixture.prefsReadGate = null
+      construction.release.countDown()
+      joinReply()
+
+      val runtime = requireNotNull(app.peekRuntime())
+      assertTrue(connections.isEmpty())
+      assertTrue(sends.isEmpty())
+      assertNull(prefs.gatewayRegistry.activeStableId.value)
+      drainWithMainLooper { assertFalse(runtime.wasChatOutboxCommandAdmitted(conversationNotificationReplyIdempotencyKey(target))) }
+      val retained = manager.activeNotifications.single { it.tag == target.notificationTag }.notification
+      assertEquals("Synthetic assistant reply", retained.extras.getCharSequence(Notification.EXTRA_TEXT)?.toString())
+
+      val fresh = target.copy(runId = "fresh-reply")
+      replyTo(fresh)
+      joinReply()
+      drainWithMainLooper { withTimeout(10_000) { while (sends.isEmpty()) yield() } }
+      val sent = requireNotNull(sends.poll())
+      assertEquals(fresh.sessionKey, sent["sessionKey"]?.jsonPrimitive?.content)
+      assertEquals(conversationNotificationReplyIdempotencyKey(fresh), sent["idempotencyKey"]?.jsonPrimitive?.content)
+      assertTrue(sends.isEmpty())
+      drainWithMainLooper { assertTrue(runtime.wasChatOutboxCommandAdmitted(conversationNotificationReplyIdempotencyKey(fresh))) }
+    } finally {
+      appFixture.prefsReadGate = null
+      construction.release.countDown()
+      try {
+        closeNodeServiceTestFixture(controller, app)
+      } finally {
+        gateway.shutdown()
+      }
+    }
+  }
+
+  @Test
+  @Config(shadows = [ServiceRuntimePrefsShadow::class])
+  fun notificationReplyRetiresOriginalIntentAfterPendingSettings() = assertNotificationReplyAfterPendingSettings(retireIntent = true)
+
+  @Test
+  @Config(shadows = [ServiceRuntimePrefsShadow::class])
+  fun notificationReplyKeepsCurrentIntentAfterPendingSettings() = assertNotificationReplyAfterPendingSettings(retireIntent = false)
+
+  private fun assertNotificationReplyAfterPendingSettings(retireIntent: Boolean) {
+    val app = RuntimeEnvironment.getApplication() as NodeApp
+    app.prefs.setManualTls(false)
+    val runtime = app.ensureBackgroundRuntime()
+    val viewModel = MainViewModel(app, app.prefs, SavedStateHandle())
+    val viewModels = ViewModelStore().apply { put("settings-reply", viewModel) }
+    val controller = Robolectric.buildService(NodeForegroundService::class.java).create()
+    val settingsStarted = CountDownLatch(1)
+    val settingsRelease = CountDownLatch(1)
+    val connections = LinkedBlockingQueue<String>()
+    val sends = LinkedBlockingQueue<JsonObject>()
+    val gateway =
+      lifetimeGateway(
+        onRequest = { frame ->
+          when (frame["method"]?.jsonPrimitive?.content) {
+            "chat.history" -> {
+              """{"sessionId":"notification-settings-session","messages":[]}"""
+            }
+
+            "sessions.patch" -> {
+              settingsStarted.countDown()
+              check(settingsRelease.await(10, TimeUnit.SECONDS)) { "Settings reply was not released" }
+              "{}"
+            }
+
+            "chat.send" -> {
+              val params = requireNotNull(frame["params"]).jsonObject
+              sends.add(params)
+              """{"runId":${params["idempotencyKey"]},"status":"started"}"""
+            }
+
+            else -> {
+              "{}"
+            }
+          }
+        },
+      ) { role ->
+        connections.add(role)
+        bootstrapHello(role)
+      }
+    val endpoint = GatewayEndpoint.manual("127.0.0.1", gateway.port)
+    val target = ConversationNotificationTarget(endpoint.stableId, "main", "agent:main:notification-settings", "settings-reply")
+    val commandId = conversationNotificationReplyIdempotencyKey(target)
+
+    try {
+      viewModel.connect(endpoint, null, "synthetic-bootstrap-token", null)
+      drainWithMainLooper {
+        withTimeout(10_000) { runtime.gatewayConnectionDisplay.first { it.isConnected && runtime.nodeConnected.value } }
+      }
+      runtime.switchChatSession(target.sessionKey, target.agentId)
+      drainWithMainLooper { withTimeout(10_000) { runtime.chatHealthOk.first { it } } }
+      val originalIntent = NodeForegroundService.resume(app, startNow = false)
+      runtime.setChatThinkingLevel("high")
+      assertTrue("Session settings did not reach the real requester", settingsStarted.await(10, TimeUnit.SECONDS))
+      assertTrue(target.sessionKey in runtime.chatPendingSessionSettingsKeys.value)
+      connections.clear()
+
+      drainWithMainLooper {
+        coroutineScope {
+          val acceptedAttempt = runtime.switchToGateway(endpoint.stableId) as GatewayTargetSelection.Selected
+          val reply =
+            async(start = CoroutineStart.UNDISPATCHED) {
+              runtime.sendConversationNotificationReply(target, "Synthetic settings reply", commandId, originalIntent)
+            }
+          assertFalse(reply.isCompleted)
+          assertTrue(runtime.canSendForOwner(target.toComposerOwner()))
+          if (retireIntent) {
+            // The normal owner callback orders Resume before posted disconnect cleanup.
+            // Keep the accepted connection so only the original action can reject this send.
+            app.updateNodeServiceIntent(allowStart = false) {
+              assertTrue(NodeForegroundService.resume(app, startNow = false)())
+            }
+            assertFalse(originalIntent())
+          } else {
+            assertTrue(originalIntent())
+          }
+          assertTrue(acceptedAttempt.isCurrent())
+          assertTrue(runtime.gatewayConnectionDisplay.value.isConnected)
+          assertEquals(target.sessionKey, runtime.chatSessionKey.value)
+          assertTrue(runtime.canSendForOwner(target.toComposerOwner()))
+          settingsRelease.countDown()
+          assertEquals(!retireIntent, withTimeout(10_000) { reply.await() })
+          assertEquals(!retireIntent, runtime.wasChatOutboxCommandAdmitted(commandId))
+          assertTrue(acceptedAttempt.isCurrent())
+        }
+      }
+      assertTrue(connections.isEmpty())
+      if (retireIntent) {
+        assertTrue(sends.isEmpty())
+      } else {
+        drainWithMainLooper { withTimeout(10_000) { while (sends.isEmpty()) yield() } }
+        val sent = requireNotNull(sends.poll())
+        assertEquals(commandId, sent["idempotencyKey"]?.jsonPrimitive?.content)
+        assertEquals(target.sessionKey, sent["sessionKey"]?.jsonPrimitive?.content)
+        assertTrue(sends.isEmpty())
+      }
+    } finally {
+      settingsRelease.countDown()
+      closeNotificationViewModelFixture(viewModels, viewModel, controller, app, gateway)
+    }
+  }
+
+  private fun closeNotificationViewModelFixture(
+    viewModels: ViewModelStore,
+    viewModel: MainViewModel,
+    controller: ServiceController<NodeForegroundService>,
+    app: NodeApp,
+    gateway: MockWebServer,
+  ) {
+    try {
+      viewModels.clear()
+      drainWithMainLooper {
+        withTimeout(10_000) {
+          viewModel.viewModelScope.coroutineContext.job
+            .join()
+        }
+      }
+    } finally {
+      try {
+        closeNodeServiceTestFixture(controller, app)
+      } finally {
+        gateway.shutdown()
+      }
+    }
+  }
+
+  private fun disconnectThroughNotification(
+    controller: ServiceController<NodeForegroundService>,
+    app: NodeApp,
+    runtime: NodeRuntime,
+  ) {
+    val appShadow = Shadows.shadowOf(app)
+    generateSequence { appShadow.nextStartedService }.forEachIndexed { index, intent ->
+      controller.get().onStartCommand(intent, 0, index + 1)
+    }
+    val processOwner = ReflectionHelpers.getField<CoroutineScope>(app, "runtimeScope").coroutineContext.job
+    val beforeStop = processOwner.children.toSet()
+    buildNotification(controller.get())
+      .actions
+      .single()
+      .actionIntent
+      .send()
+    val stop = requireNotNull(appShadow.nextStartedService)
+    assertEquals(Service.START_NOT_STICKY, controller.get().onStartCommand(stop, 0, 100))
+    drainWithMainLooper {
+      withTimeout(10_000) {
+        processOwner.children
+          .filterNot(beforeStop::contains)
+          .toList()
+          .joinAll()
+        joinRuntimeDisconnectTails(runtime)
+      }
+    }
+  }
+
+  private suspend fun joinRuntimeDisconnectTails(runtime: NodeRuntime) {
+    // Join the tails created by the public Stop; do not issue a second disconnect to obtain a waiter.
+    listOf("operatorSession", "nodeSession")
+      .mapNotNull { field ->
+        val session = ReflectionHelpers.getField<GatewaySession>(runtime, field)
+        ReflectionHelpers.getField<Job?>(session, "disconnectTail")
+      }.joinAll()
+  }
 
   private enum class EstablishedConnectionAction { Onboarding, Notification, Forget }
 
@@ -894,7 +1794,6 @@ class NodeForegroundServiceTest {
         }
       }
       assertEquals(2, helloCount.get())
-      println("GATEWAY_TOKEN_ORDER transition=$transition writes=$completedWrites secondAuth=${wireTokens.peek()}")
       assertEquals(
         "A retired hello must not overwrite the newer connection token",
         "synthetic-new-token",
@@ -1330,13 +2229,51 @@ class NodeForegroundServiceTest {
       """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":[]},"snapshot":{}}"""
     }
 
+  private fun lifetimeGatewayTlsSocketFactory(): SSLSocketFactory {
+    val keyPair = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
+    val algorithm = AlgorithmIdentifier(PKCSObjectIdentifiers.sha256WithRSAEncryption, DERNull.INSTANCE)
+    val subject = X500Name("CN=notification-tls-test")
+    val now = System.currentTimeMillis()
+    val tbs =
+      V3TBSCertificateGenerator()
+        .apply {
+          setSerialNumber(ASN1Integer.ONE)
+          setSignature(algorithm)
+          setIssuer(subject)
+          setSubject(subject)
+          setValidity(Validity(Time(Date(now - 60_000)), Time(Date(now + 86_400_000))))
+          setSubjectPublicKeyInfo(SubjectPublicKeyInfo.getInstance(keyPair.public.encoded))
+        }.generateTBSCertificate()
+    val signature =
+      Signature.getInstance("SHA256withRSA").apply {
+        initSign(keyPair.private)
+        update(tbs.encoded)
+      }
+    val encoded = Certificate(tbs, algorithm, DERBitString(signature.sign())).encoded
+    val certificate = CertificateFactory.getInstance("X.509").generateCertificate(encoded.inputStream())
+    val password = charArrayOf()
+    val keyStore =
+      KeyStore.getInstance("PKCS12").apply {
+        load(null, null)
+        setKeyEntry("server", keyPair.private, password, arrayOf(certificate))
+      }
+    val keyManagers =
+      KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm()).apply {
+        init(keyStore, password)
+      }
+    return SSLContext.getInstance("TLS").apply { init(keyManagers.keyManagers, null, null) }.socketFactory
+  }
+
   private fun lifetimeGateway(
+    onRequest: (JsonObject) -> String = { "{}" },
     onConnect: ((JsonObject) -> Unit)? = null,
+    sslSocketFactory: SSLSocketFactory? = null,
     hello: (String) -> String = {
       """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":[]},"snapshot":{}}"""
     },
   ): MockWebServer =
     MockWebServer().apply {
+      sslSocketFactory?.let { useHttps(it, false) }
       dispatcher =
         object : Dispatcher() {
           override fun dispatch(request: RecordedRequest): MockResponse =
@@ -1367,7 +2304,7 @@ class NodeForegroundServiceTest {
                           .orEmpty(),
                       )
                     } else {
-                      "{}"
+                      onRequest(frame)
                     }
                   webSocket.send("""{"type":"res","id":$id,"ok":true,"payload":$payload}""")
                 }
