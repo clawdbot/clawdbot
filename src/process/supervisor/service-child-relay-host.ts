@@ -255,12 +255,12 @@ export async function createServiceChildRelayAdapter(
   child.stderr?.once("end", settleWait);
   child.stderr?.once("close", settleWait);
 
-  const loseIdentity = (message: string) => {
+  const loseIdentity = (message: string, options?: ErrorOptions) => {
     if (state === "closed" || state === "identity-lost") {
       return;
     }
     state = "identity-lost";
-    waitError = new Error(`service child cleanup identity lost: ${message}`);
+    waitError = new Error(`service child cleanup identity lost: ${message}`, options);
     events.emitError(waitError, "process");
     if (!commandPid) {
       startup.reject(waitError);
@@ -347,12 +347,12 @@ export async function createServiceChildRelayAdapter(
       try {
         // Observation only: signalling a retired numeric PGID could hit a reused group.
         process.kill(-anchorPid, 0);
-      } catch (error) {
+      } catch (cause) {
         // SAFETY: process.kill throws Node system errors; only the exact ESRCH code certifies absence.
-        if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+        if ((cause as NodeJS.ErrnoException).code === "ESRCH") {
           finishAuthorityClose(missingReceiptError);
         } else {
-          loseIdentity("owned process group disappearance could not be confirmed");
+          loseIdentity("owned process group disappearance could not be confirmed", { cause });
         }
         return;
       }

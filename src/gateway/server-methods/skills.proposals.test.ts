@@ -176,6 +176,7 @@ describe("skills proposal gateway handlers", () => {
 
     const list = await callHandler("skills.proposals.list", {});
     expect(list.ok).toBe(true);
+    expect(list.response).toMatchObject({ installedSkills: [] });
     expect((list.response as { proposals: Array<{ id: string }> }).proposals[0]?.id).toBe(
       created.record.id,
     );
@@ -261,6 +262,49 @@ describe("skills proposal gateway handlers", () => {
     expect((update.response as { record: { draftFile: string } }).record.draftFile).toBe(
       "PROPOSAL.md",
     );
+
+    const installed = {
+      name: "weather-planner",
+      skillKey: "weather-planner",
+      description: "Plan with current weather",
+    };
+    const appliedList = await callHandler("skills.proposals.list", {});
+    expect(appliedList.response).toMatchObject({ installedSkills: [installed] });
+    const skillFile = path.join(
+      resolveWorkshopSkillsDir({}, "main", testState.env),
+      "weather-planner",
+      "SKILL.md",
+    );
+    await fs.appendFile(skillFile, "\nCollection review added the latest local procedure.\n");
+    const currentContent = await fs.readFile(skillFile, "utf8");
+    await expect(
+      callHandler("skills.workshop.read", { name: "weather-planner" }),
+    ).resolves.toMatchObject({
+      ok: true,
+      response: { ...installed, content: currentContent },
+    });
+
+    // Removing an installed file must not turn its retained draft back into a skill.
+    await fs.unlink(skillFile);
+    const historyOnly = await callHandler("skills.proposals.list", {});
+    expect(historyOnly.response).toMatchObject({
+      installedSkills: [],
+      proposals: expect.arrayContaining([
+        expect.objectContaining({ id: created.record.id, status: "applied" }),
+      ]),
+    });
+    await expect(
+      callHandler("skills.workshop.read", { name: "weather-planner" }),
+    ).resolves.toMatchObject({ ok: false });
+    await expect(
+      callHandler("skills.proposals.inspect", { proposalId: created.record.id }),
+    ).resolves.toMatchObject({
+      ok: true,
+      response: {
+        record: { status: "applied" },
+        content: expect.stringContaining("Use current weather and alerts."),
+      },
+    });
   });
 
   it("inspects and applies proposals in a configured agent directory", async () => {
@@ -307,6 +351,31 @@ describe("skills proposal gateway handlers", () => {
         "utf8",
       ),
     ).resolves.toContain("Use the configured directory.");
+    await expect(
+      callHandler("skills.proposals.list", { agentId: "main" }, { context }),
+    ).resolves.toMatchObject({
+      ok: true,
+      response: {
+        installedSkills: [expect.objectContaining({ name: "configured-gateway-skill" })],
+      },
+    });
+    await expect(
+      callHandler(
+        "skills.workshop.read",
+        { agentId: "main", name: "configured-gateway-skill" },
+        { context },
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      response: { content: expect.stringContaining("Use the configured directory.") },
+    });
+    await expect(
+      callHandler(
+        "skills.workshop.read",
+        { agentId: "unknown", name: "configured-gateway-skill" },
+        { context },
+      ),
+    ).resolves.toMatchObject({ ok: false });
   });
 
   it("returns the stored review outcomes from curator status", async () => {

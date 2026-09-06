@@ -7,13 +7,11 @@ import {
   checkShellCompletionStatus,
   ensureCompletionCacheExists,
 } from "../../commands/doctor-completion.js";
-import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import {
   recordUpdateRunPhase,
-  recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
@@ -22,18 +20,14 @@ import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { installCompletion } from "../completion-runtime.js";
 import { runDaemonRestart } from "../daemon-cli.js";
-import { resolveGatewayRestartProbeContext } from "../daemon-cli/restart-health-probe.js";
 import {
-  renderRestartDiagnostics,
   terminateStaleGatewayPids,
   waitForGatewayHealthyRestart,
-  waitForGatewayHttpReadiness,
   type GatewayRestartSnapshot,
 } from "../daemon-cli/restart-health.js";
 import { runRestartScript } from "./restart-helper.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
-import { runUpdateInferenceProbe } from "./update-command-inference.js";
 import {
   DEFINITION_DENIAL,
   isPackageManagerUpdateMode,
@@ -49,11 +43,11 @@ import {
   type ManagedGatewayUpdateVerdict,
 } from "./update-command-service-plan.js";
 import {
-  formatPostUpdateGatewayRecoveryInstructions,
   hasLoadedLaunchdKeepAliveSupervisor,
   recoverLaunchAgentAndRecheckGatewayHealth,
   shouldUseLegacyProcessRestartAfterUpdate,
 } from "./update-command-service-recovery.js";
+import { recordUpdateGatewayHealth, verifyUpdatedGateway } from "./update-command-verification.js";
 
 export {
   maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
@@ -254,180 +248,59 @@ export async function maybeRestartService(params: {
       recordUpdateRunPhase(params.opts.run.runId, phase, undefined, { env: params.opts.run.env });
     }
   };
-  const recordHealth = (health: GatewayRestartSnapshot, readyz = false) => {
-    if (!params.opts.run) {
-      return;
-    }
-    recordUpdateRunVerification(
-      params.opts.run.runId,
-      {
-        serviceRunning: health.runtime.status === "running",
-        ...(typeof health.runtime.pid === "number" ? { pid: health.runtime.pid } : {}),
-        port: activation.gatewayPort,
-        ...(health.gatewayVersion ? { runningVersion: health.gatewayVersion } : {}),
-        ...(health.gatewayBuildId ? { runningBuildId: health.gatewayBuildId } : {}),
-        ...(health.expectedVersion
-          ? {
-              versionMatch:
-                health.gatewayVersion === health.expectedVersion && !health.buildIdMismatch,
-            }
-          : {}),
-        pluginErrors: health.activatedPluginErrors?.map((error) => JSON.stringify(error)) ?? [],
-        channelsReady: health.healthy && !health.channelProbeErrors?.length,
-        settled: health.healthy,
-        readyz,
-      },
-      { env: params.opts.run.env },
-    );
-  };
   const verifyRestartedGateway = async (
     expectedGatewayVersion: string | undefined,
     expectedGatewayBuildId: string | undefined,
     opts: { requireRunningService?: boolean; health?: GatewayRestartSnapshot } = {},
   ) => {
     recordPhase("verifying");
-    const service = resolveGatewayService();
-    const waitForHealthy = async () =>
-      await waitForGatewayHealthyRestart({
-        service,
-        port: activation.gatewayPort,
-        expectedVersion: expectedGatewayVersion,
-        ...(expectedGatewayBuildId ? { expectedBuildId: expectedGatewayBuildId } : {}),
-        env: activation.serviceEnv,
-        requireRunningService: opts.requireRunningService,
-        settle: { probes: 12 },
-        supervisorKeepsAlive: await hasLoadedLaunchdKeepAliveSupervisor({
-          service,
-          env: activation.serviceEnv,
-        }),
-      });
-    let health = opts.health ?? (await waitForHealthy());
-    if (!health.healthy && health.staleGatewayPids.length > 0) {
-      if (!activation.opts.json) {
-        defaultRuntime.log(
-          theme.warn(
-            `Found stale gateway process(es) after restart: ${health.staleGatewayPids.join(", ")}. Cleaning up...`,
-          ),
-        );
-      }
-      await terminateStaleGatewayPids(health.staleGatewayPids);
-      if (canRestartUpdatedInstall()) {
-        await runUpdatedInstallGatewayCommand(activation, "restart", preserveDefinition);
-      } else if (shouldUseLegacyProcessRestartAfterUpdate({ updateMode: activation.result.mode })) {
-        await runDaemonRestart();
-      }
-      health = await waitForHealthy();
-    }
-
-    const recoveryVerification = await recoverLaunchAgentAndRecheckGatewayHealth({
-      updateRun: params.opts.run,
-      preserveDefinition,
-      health,
-      service,
-      port: activation.gatewayPort,
+    const verification = await verifyUpdatedGateway({
+      result: activation.result,
+      opts: activation.opts,
+      serviceEnv: activation.serviceEnv,
+      gatewayPort: activation.gatewayPort,
+      nodeRunner: activation.nodeRunner,
       expectedVersion: expectedGatewayVersion,
-      ...(expectedGatewayBuildId ? { expectedBuildId: expectedGatewayBuildId } : {}),
-      env: activation.serviceEnv,
+      expectedBuildId: expectedGatewayBuildId,
+      requireRunningService: opts.requireRunningService,
+      health: opts.health,
+      onVerified: params.onVerified,
+      recoverHealth: async (initialHealth, reinspect) => {
+        let health = initialHealth;
+        if (!health.healthy && health.staleGatewayPids.length > 0) {
+          if (!activation.opts.json) {
+            defaultRuntime.log(
+              theme.warn(
+                `Found stale gateway process(es) after restart: ${health.staleGatewayPids.join(", ")}. Cleaning up...`,
+              ),
+            );
+          }
+          await terminateStaleGatewayPids(health.staleGatewayPids);
+          if (canRestartUpdatedInstall()) {
+            await runUpdatedInstallGatewayCommand(activation, "restart", preserveDefinition);
+          } else if (
+            shouldUseLegacyProcessRestartAfterUpdate({ updateMode: activation.result.mode })
+          ) {
+            await runDaemonRestart();
+          }
+          health = await reinspect();
+        }
+        return await recoverLaunchAgentAndRecheckGatewayHealth({
+          updateRun: params.opts.run,
+          preserveDefinition,
+          health,
+          service: resolveGatewayService(),
+          port: activation.gatewayPort,
+          expectedVersion: expectedGatewayVersion,
+          ...(expectedGatewayBuildId ? { expectedBuildId: expectedGatewayBuildId } : {}),
+          env: activation.serviceEnv,
+        });
+      },
     });
-    health = recoveryVerification.health;
-    const context = await resolveGatewayRestartProbeContext(activation.serviceEnv);
-    const http = await waitForGatewayHttpReadiness({
-      config: context.config,
-      port: activation.gatewayPort,
-      attempts: 3,
-      deadlineAt: Date.now() + 10_000,
-      delayMs: 500,
-    });
-    const readyz = http.readyz === 200;
-    recordHealth(health, readyz);
-    const launchAgentRecovery = recoveryVerification.launchAgentRecovery;
-    if (launchAgentRecovery?.attempted) {
-      defaultRuntime.error(
-        launchAgentRecovery.recovered ? launchAgentRecovery.message : launchAgentRecovery.detail,
-      );
+    if (!verification.ok) {
+      params.onVerificationFailure?.(verification.summary);
     }
-
-    const serviceRuntimeHealthy =
-      !opts.requireRunningService || health.runtime.status === "running";
-    if (health.healthy && serviceRuntimeHealthy && readyz) {
-      params.onVerified?.(Date.now());
-      const inference = await runUpdateInferenceProbe({
-        root: activation.result.root,
-        env: activation.serviceEnv,
-        nodeRunner: activation.nodeRunner,
-      });
-      if (params.opts.run) {
-        recordUpdateRunVerification(
-          params.opts.run.runId,
-          { inferenceProbe: inference ? "passed" : "unavailable" },
-          { env: params.opts.run.env },
-        );
-      }
-      if (!inference && !activation.opts.json) {
-        defaultRuntime.log(
-          theme.warn("Inference: unavailable (advisory; Gateway verification passed)."),
-        );
-      }
-      if (!activation.opts.json) {
-        defaultRuntime.log(theme.success("Gateway: restarted and verified."));
-      }
-      return true;
-    }
-
-    const diagnosticLines = [
-      "Gateway did not become healthy after restart.",
-      ...(!readyz ? ["Gateway /readyz did not return HTTP 200."] : []),
-      ...(health.healthy && opts.requireRunningService
-        ? ["Gateway responded, but the managed service did not report running after restart."]
-        : []),
-      ...renderRestartDiagnostics(health),
-      ...(launchAgentRecovery?.attempted
-        ? [
-            launchAgentRecovery.recovered
-              ? `LaunchAgent recovery: ${launchAgentRecovery.message}`
-              : `LaunchAgent recovery failed: ${launchAgentRecovery.detail}`,
-          ]
-        : []),
-      `Restart log: ${resolveGatewayRestartLogPath(activation.serviceEnv ?? process.env)}`,
-      `Run \`${replaceCliName(formatCliCommand("openclaw gateway status --deep"), CLI_NAME)}\` for details.`,
-      ...formatPostUpdateGatewayRecoveryInstructions(activation.result),
-    ];
-    const reason = health.versionMismatch
-      ? "version-mismatch"
-      : health.buildIdMismatch
-        ? "build-id-mismatch"
-        : health.activatedPluginErrors?.length
-          ? "plugin-errors"
-          : health.channelProbeErrors?.length
-            ? "channel-errors"
-            : !readyz
-              ? "readyz-unhealthy"
-              : !serviceRuntimeHealthy
-                ? "service-not-running"
-                : (health.waitOutcome ?? "restart-unhealthy");
-    params.onVerificationFailure?.(reason);
-    if (params.opts.run) {
-      recordUpdateRunStep(
-        params.opts.run.runId,
-        {
-          step: "gateway verification",
-          status: "failed",
-          endedAtMs: Date.now(),
-          detail: !readyz ? "Gateway /readyz did not return HTTP 200." : reason,
-        },
-        { env: params.opts.run.env },
-      );
-    }
-    if (activation.opts.json) {
-      defaultRuntime.error(diagnosticLines.join("\n"));
-    } else {
-      defaultRuntime.log(theme.warn(diagnosticLines[0] ?? "Gateway did not become healthy."));
-      for (const line of diagnosticLines.slice(1)) {
-        defaultRuntime.log(theme.muted(line));
-      }
-    }
-
-    return false;
+    return verification.ok;
   };
 
   if (activation.shouldRestart) {
@@ -477,7 +350,7 @@ export async function maybeRestartService(params: {
               }),
             });
             refreshedGatewayHealth = health.healthy ? health : undefined;
-            recordHealth(health);
+            recordUpdateGatewayHealth(params.opts.run, health, activation.gatewayPort);
           }
         } catch (err) {
           defaultRuntime.error(

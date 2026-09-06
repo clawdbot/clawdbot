@@ -517,6 +517,8 @@ export {
   SkillsDetailResultSchema,
   SkillsProposalsListParamsSchema,
   SkillsProposalsListResultSchema,
+  SkillsWorkshopReadParamsSchema,
+  SkillsWorkshopReadResultSchema,
   SkillsProposalInspectParamsSchema,
   SkillsProposalInspectResultSchema,
   SkillsProposalCreateParamsSchema,

@@ -1,3 +1,6 @@
+import type { SkillsProposalsListResultSchema } from "@openclaw/gateway-protocol";
+import type { Static } from "typebox";
+
 export type SkillWorkshopProposalStatus =
   | "pending"
   | "applied"
@@ -82,8 +85,29 @@ export type SkillWorkshopProposal = {
 
 export type SkillWorkshopStatusFilter = "all" | SkillWorkshopProposalStatus;
 export type SkillWorkshopAction = "apply" | "evaluate" | "revise" | "reject";
-export type SkillWorkshopMode = "board" | "today";
+export type SkillWorkshopMode = "skills" | "suggestions" | "history";
 export type SkillWorkshopAppliedDiffMode = "changes" | "full";
+
+export type SkillWorkshopInstalledSkill = Static<
+  typeof SkillsProposalsListResultSchema
+>["installedSkills"][number];
+
+export type SkillWorkshopInstalledSelection =
+  | { status: "idle" }
+  | { status: "loading"; name: string }
+  | { status: "ready"; name: string; content: string }
+  | { status: "error"; name: string; error: string };
+
+export function filterWorkshopSection(
+  proposals: SkillWorkshopProposal[],
+  mode: SkillWorkshopMode,
+): SkillWorkshopProposal[] {
+  return mode === "skills"
+    ? []
+    : proposals.filter((proposal) =>
+        mode === "suggestions" ? proposal.status === "pending" : proposal.status !== "pending",
+      );
+}
 
 export type SkillWorkshopActionBusy = {
   key: string;

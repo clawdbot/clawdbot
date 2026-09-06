@@ -579,17 +579,14 @@ export const updateHandlers: GatewayRequestHandlers = {
       },
     );
     for (const step of result.steps) {
+      const completed =
+        step.exitCode === 0 ||
+        step.advisory ||
+        (step.exitCode === null && result.status !== "error");
       recordUpdateRunStep(runId, {
         step: step.name,
-        status:
-          step.exitCode === 0 ||
-          step.advisory ||
-          (step.exitCode === null && result.status !== "error")
-            ? "completed"
-            : "failed",
-        ...(step.exitCode !== 0
-          ? { detail: step.advisory?.message ?? summarizeUpdateStepFailure(step) }
-          : {}),
+        status: completed ? "completed" : "failed",
+        ...(!completed ? { detail: summarizeUpdateStepFailure(step) } : {}),
       });
     }
     // A managed orchestrator or the replacement Gateway owns terminal success;

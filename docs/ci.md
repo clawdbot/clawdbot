@@ -127,6 +127,8 @@ Use `pnpm ci:timings`, `pnpm ci:timings:recent`, or `node scripts/ci-run-timings
 
 Run the timing helper locally; there is no in-workflow timing-summary job (a permanently disabled one was removed once the local helper became the tool everyone actually used). For build timing, check the `build-artifacts` job's `Build dist` step: `pnpm build:ci-artifacts` prints `[build-all] phase timings:` and includes `ui:build`; the job also uploads the `startup-memory` artifact.
 
+The `Run Node test shard` step prints Bash `time -p` totals: elapsed (`real`), user CPU (`user`), and system CPU (`sys`) seconds, including waited-for child processes. Compare CPU totals with elapsed time across equivalent runs to distinguish extra CPU work from slower execution with similar CPU work. These totals alone do not establish runner contention.
+
 Node test shards that need a built CLI run `pnpm build qaRuntime` before starting
 Vitest. This profile builds runtime JavaScript, plugin assets, and freshness and
 provenance metadata. Private QA shards select their private runtime entries. The
