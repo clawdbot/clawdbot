@@ -1534,6 +1534,33 @@ describe("loadGatewayPlugins", () => {
     expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("google-meet");
   });
 
+  test("names the refused plugin when it is not bundled or trusted official", async () => {
+    loadOpenClawPlugins.mockReturnValue(
+      addLoadedPlugin(createRegistry([]), { id: "community-plugin", origin: "external" }),
+    );
+    loadGatewayStartupPluginsForTest();
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("plugin-gateway-refused"));
+    const runtime = createRuntimeFromLastGatewayLoad();
+
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginScope(
+        { pluginId: "community-plugin", pluginOrigin: "external" },
+        () => runtime.gateway.request("voicecall.start", { to: "+15550001234" }),
+      ),
+    ).rejects.toThrow(/community-plugin/);
+  });
+
+  test("reports a missing plugin runtime scope distinctly from an untrusted plugin", async () => {
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+    loadGatewayStartupPluginsForTest();
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("plugin-gateway-unscoped"));
+    const runtime = createRuntimeFromLastGatewayLoad();
+
+    await expect(
+      runtime.gateway.request("voicecall.start", { to: "+15550001234" }),
+    ).rejects.toThrow(/no plugin runtime scope is active/i);
+  });
+
   test("lets trusted official plugins request explicit Gateway scopes", async () => {
     loadOpenClawPlugins.mockReturnValue(addLoadedPlugin(createRegistry([]), { id: "google-meet" }));
     loadGatewayStartupPluginsForTest();

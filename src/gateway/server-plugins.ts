@@ -87,7 +87,15 @@ export async function dispatchTrustedPluginGatewayMethod<T>(
   const scope = getPluginRuntimeGatewayRequestScope();
   const pluginId = scope?.pluginId?.trim();
   if (!canTrustedOfficialPluginRequestScopes(scope ?? {})) {
-    throw new Error("Gateway requests are only available to bundled or trusted official plugins.");
+    // Refusal has two distinct causes. Name which one so an author is not left
+    // guessing whether the plugin is untrusted or the call escaped its scope.
+    throw new Error(
+      `Gateway requests are only available to bundled or trusted official plugins. ${
+        pluginId
+          ? `Plugin "${pluginId}" is neither.`
+          : "No plugin runtime scope is active for this call."
+      } See docs/plugins/sdk-runtime.md (api.runtime.gateway).`,
+    );
   }
   const syntheticScopes = normalizeOperatorScopeList(options?.scopes);
   return await dispatchGatewayMethodInProcess<T>(method, params, {
