@@ -107,6 +107,8 @@ function fallbackSnapshot(plainText: string): TelegramDraftMessageSnapshot {
 
 export type TelegramDraftPreview = {
   text: string;
+  /** A complete progress update can send before a token stream reaches its debounce threshold. */
+  complete?: true;
   parseMode?: "HTML";
   richMessage?: TelegramInputRichMessage;
   markdownSource?: {
@@ -476,7 +478,10 @@ export function createTelegramDraftStream(params: {
     streamVisibleSinceMs = visibleSinceMs;
     return true;
   };
-  const sendOrEditPlannedPage = async (page: PlannedTelegramDraftPage): Promise<boolean> => {
+  const sendOrEditPlannedPage = async (
+    page: PlannedTelegramDraftPage,
+    complete = false,
+  ): Promise<boolean> => {
     const renderedPreviewKey = JSON.stringify([
       page.sourceTextMode,
       page.sourceText,
@@ -487,7 +492,12 @@ export function createTelegramDraftStream(params: {
     }
     const sendGeneration = generation;
 
-    if (typeof streamMessageId !== "number" && minInitialChars != null && !streamState.final) {
+    if (
+      typeof streamMessageId !== "number" &&
+      minInitialChars != null &&
+      !streamState.final &&
+      !complete
+    ) {
       if (page.plainText.length < minInitialChars) {
         return false;
       }
@@ -632,7 +642,7 @@ export function createTelegramDraftStream(params: {
     }
     if (!streamState.final) {
       finalPagePlan = undefined;
-      const sent = await sendOrEditPlannedPage(firstPage);
+      const sent = await sendOrEditPlannedPage(firstPage, fullPreview.complete);
       if (sent) {
         lastDeliveredText = pages.length === 1 ? trimmed : firstPage.plainText.trimEnd();
       }

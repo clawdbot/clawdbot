@@ -5,6 +5,7 @@ const draftStream = vi.hoisted(() => ({
   flush: vi.fn(async () => {}),
   stop: vi.fn(async () => undefined),
   discardPending: vi.fn(async () => {}),
+  deleteCurrentMessage: vi.fn(async () => {}),
   finalizeLive: vi.fn(async () => true),
   reset: vi.fn(),
   eventId: vi.fn<() => string | undefined>(() => undefined),
