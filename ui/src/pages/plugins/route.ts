@@ -9,8 +9,11 @@ import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadPluginCatalog } from "../../lib/plugins/index.ts";
-import type { PluginsRouteData } from "./plugins-page.ts";
-import { canonicalPluginsRouteLocation, pluginsRouteLocation } from "./route-data.ts";
+import {
+  canonicalPluginsRouteLocation,
+  pluginsRouteLocation,
+  type PluginsRouteData,
+} from "./route-data.ts";
 
 async function loadPluginsRouteData(
   context: ApplicationContext,

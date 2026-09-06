@@ -269,8 +269,8 @@ describe("subtitleForRoute", () => {
       tasks: "Background tasks: subagents, automation runs, CLI.",
       agents: "Workspaces, tools, identities.",
       skills: "Manage agent skills and find new ones on ClawHub.",
-      plugins: "Browse installed plugins and open their settings.",
-      "plugin-settings": "Browse installed plugins and open their settings.",
+      plugins: "Extend your Claw with tools",
+      "plugin-settings": "Extend your Claw with tools",
       "skill-workshop": "Review, refine, and apply proposals before they become live skills.",
       devices: "Paired devices, pairing approvals, and exec bindings.",
       "cloud-workers": "Profiles and machine sizes for cloud sessions.",
@@ -352,6 +352,7 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/dreams")).toBeNull();
     expect(routeIdFromPath("/settings/plugins")).toBe("plugin-settings");
     expect(routeIdFromPath("/plugins")).toBe("plugins");
+    expect(routeIdFromPath("/plugins/ch_bWF0cml4")).toBe("plugins");
     expect(routeIdFromPath("/settings/about")).toBe("about");
     expect(routeIdFromPath("/settings/labs")).toBe("labs");
     expect(routeIdFromPath("/labs")).toBeNull();

@@ -22,7 +22,7 @@ import {
   resetPluginsPageTestState,
   type RuntimeConfigTestState,
 } from "./plugins-page.test-support.ts";
-import type { PluginsRouteData } from "./plugins-page.ts";
+import type { PluginsRouteData } from "./route-data.ts";
 
 vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
 
@@ -69,16 +69,34 @@ describe("PluginsPage", () => {
   it("surfaces a route catalog load failure without retrying it", async () => {
     const { client, request } = createClient(async () => createResult());
     const harness = createGateway(client);
-    const { page } = await mountPage(createContext(harness.gateway), {
-      ...createPluginsRouteData(harness.gateway, null),
-      error: "catalog unavailable",
+    const result = createResult();
+    const routeData: PluginsRouteData = createPluginsRouteData(harness.gateway, result);
+
+    const { page } = await mountPage(createContext(harness.gateway), routeData);
+
+    expect(page.result).toBe(result);
+    expect(request).not.toHaveBeenCalled();
+    expect(page.querySelectorAll("h1")).toHaveLength(1);
+    expect(page.querySelector("h1")?.textContent).toBe("Plugins");
+  });
+
+  it("surfaces an initial catalog load failure", async () => {
+    const { client } = createClient(async (method) => {
+      if (method === "plugins.list") {
+        throw new Error("catalog unavailable");
+      }
+      return method === "plugins.catalog.categories" ? { categories: [] } : { items: [] };
     });
+    const harness = createGateway(client);
+    const { page } = await mountPage(
+      createContext(harness.gateway),
+      createPluginsRouteData(harness.gateway, null, createPluginsRouteLocation("/plugins")),
+    );
 
     await waitForFast(() =>
       expect(page.querySelector('[role="alert"]')?.textContent).toContain("catalog unavailable"),
     );
     expect(page.textContent?.match(/catalog unavailable/gu)).toHaveLength(1);
-    expect(request).not.toHaveBeenCalled();
   });
 
   it("refreshes the authoritative catalog after a same-client reconnect", async () => {

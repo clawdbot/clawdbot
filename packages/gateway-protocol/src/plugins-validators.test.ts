@@ -161,6 +161,7 @@ describe("plugin lifecycle protocol validators", () => {
         pageSize: 20,
       }),
     ).toBe(true);
+    expect(validatePluginsCatalogBrowseParams({ intent: "featured", pageSize: 6 })).toBe(true);
     expect(validatePluginsCatalogBrowseParams({ pageSize: 101 })).toBe(false);
     expect(validatePluginsCatalogBrowseParams({ cursor: "x".repeat(4097) })).toBe(false);
     expect(validatePluginsCatalogBrowseParams({ intent: "popular" })).toBe(false);

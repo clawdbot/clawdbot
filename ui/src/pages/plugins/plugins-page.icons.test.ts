@@ -90,9 +90,12 @@ describe("PluginsPage icon routing", () => {
   it("uses bundled art for scoped first-party catalog ids", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 404 }));
     vi.stubGlobal("fetch", fetchMock);
-    const { client } = createClient(async (method) =>
-      method === "plugins.catalog.browse" ? { items: [] } : createResult(),
-    );
+    const { client } = createClient(async (method) => {
+      if (method === "plugins.catalog.categories") {
+        return { categories: [] };
+      }
+      return method === "plugins.catalog.browse" ? { items: [] } : createResult();
+    });
     const harness = createGateway(client);
     harness.gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
     const installedPlugin = (

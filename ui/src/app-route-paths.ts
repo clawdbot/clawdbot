@@ -257,6 +257,27 @@ export function isLegacyPluginsDiscoveryPath(pathname: string, basePath = ""): b
   return normalizedPath === `${pathForRoute("plugin-settings", basePath)}/discover`;
 }
 
+function isPluginCatalogId(id: string): boolean {
+  return /^[A-Za-z0-9_-]+$/u.test(id);
+}
+
+export function pathForPluginCatalogEntry(id: string, basePath = ""): string {
+  if (!isPluginCatalogId(id)) {
+    throw new Error("Invalid plugin catalog id for a route path.");
+  }
+  return `${pathForRoute("plugins", basePath)}/${id}`;
+}
+
+export function pluginCatalogIdFromPath(pathname: string, basePath = ""): string | null {
+  const normalizedPath = normalizePath(pathname);
+  const prefix = `${pathForRoute("plugins", basePath)}/`;
+  if (!normalizedPath.startsWith(prefix)) {
+    return null;
+  }
+  const id = normalizedPath.slice(prefix.length);
+  return isPluginCatalogId(id) ? id : null;
+}
+
 export function pathForPluginSettings(pluginId: string, basePath = ""): string {
   if (!pluginId || pluginId === "." || pluginId === "..") {
     throw new Error("Invalid plugin id for a route path.");
@@ -363,6 +384,24 @@ export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null
   const routePath = normalizedBasePath
     ? normalizedPath.slice(normalizedBasePath.length) || "/"
     : normalizedPath;
+  if (agentRouteFromPath(normalizedPath, normalizedBasePath)) {
+    return "agents";
+  }
+  if (workboardBoardIdFromPath(normalizedPath, normalizedBasePath)) {
+    return "workboard";
+  }
+  if (memoryTabFromPath(normalizedPath, normalizedBasePath)) {
+    return "memory";
+  }
+  if (isLegacyPluginsDiscoveryPath(normalizedPath, normalizedBasePath)) {
+    return "plugins";
+  }
+  if (pluginCatalogIdFromPath(normalizedPath, normalizedBasePath)) {
+    return "plugins";
+  }
+  if (pluginSettingsIdFromPath(normalizedPath, normalizedBasePath)) {
+    return "plugin-settings";
+  }
   // uirouter matches static paths case-insensitively (pathKey lowercases), so
   // this pre-gate must too — otherwise /Usage is rewritten to /chat before the
   // router, which would have matched it, ever starts.

@@ -344,6 +344,7 @@ const PluginDiscoveryIntentSchema = Type.Union([
   Type.Literal("all"),
   Type.Literal("trending"),
   Type.Literal("official"),
+  Type.Literal("featured"),
 ]);
 
 const PluginDiscoveryIconKeySchema = Type.String({

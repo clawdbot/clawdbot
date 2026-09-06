@@ -10,7 +10,7 @@ import {
   page as modelProvidersPage,
   type ModelProvidersRouteData,
 } from "./model-providers/route.ts";
-import type { PluginsRouteData } from "./plugins/plugins-page.ts";
+import type { PluginsRouteData } from "./plugins/route-data.ts";
 import { pages as pluginPages } from "./plugins/route.ts";
 import { page as skillsPage } from "./skills/route.ts";
 import type { SkillsRouteData } from "./skills/skills-page.ts";

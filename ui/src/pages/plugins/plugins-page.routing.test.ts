@@ -13,7 +13,7 @@ import {
   mountPage,
   resetPluginsPageTestState,
 } from "./plugins-page.test-support.ts";
-import type { PluginsRouteData } from "./plugins-page.ts";
+import type { PluginsRouteData } from "./route-data.ts";
 
 function clickHubTab(page: HTMLElement, tab: "plugins" | "skills") {
   page
@@ -42,9 +42,12 @@ describe("PluginsPage routing", () => {
   afterEach(resetPluginsPageTestState);
 
   it("switches between the Plugins and Skills workspace without reviving catalog tabs", async () => {
-    const { client } = createClient(async (method) =>
-      method === "plugins.catalog.browse" ? { items: [] } : createResult(),
-    );
+    const { client } = createClient(async (method) => {
+      if (method === "plugins.catalog.categories") {
+        return { categories: [] };
+      }
+      return method === "plugins.catalog.browse" ? { items: [] } : createResult();
+    });
     const harness = createGateway(client);
     const context = createContext(harness.gateway);
     const routeData = createPluginsRouteData(

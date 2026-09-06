@@ -7,7 +7,6 @@ import type { PluginsSearchResult } from "../../../../packages/gateway-protocol/
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
 import type {
   PluginCatalogItem,
-  PluginDiscoveryResult,
   PluginListResult,
   PluginMutationResult,
   PluginsInspectResult,
@@ -19,7 +18,14 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../../test-helpers/control-ui-e2e.ts";
-
+import {
+  discoveryCategories,
+  discoveryResult,
+  finalDiscoveryPageItems,
+  featuredResult,
+  matrixDiscoveryPlugin,
+  secondDiscoveryPageItems,
+} from "../../test-helpers/plugins-e2e-fixtures.test-support.ts";
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
@@ -32,35 +38,11 @@ const pluginMethods = [
   "plugins.inspect",
   "plugins.search",
   "plugins.catalog.browse",
+  "plugins.catalog.categories",
   "plugins.install",
   "plugins.setEnabled",
   "plugins.uninstall",
 ];
-
-const discoveryResult = {
-  items: [
-    {
-      id: "ch_bWVtb3J5LXBsdXM",
-      catalog: {
-        name: "Memory Plus",
-        summary: "Long-term memory for people and projects.",
-        family: "code-plugin",
-        author: "alice",
-        official: false,
-        categories: ["memory"],
-        downloads: 1240,
-      },
-      local: {
-        present: false,
-        installed: false,
-        enabled: false,
-        state: "not-installed",
-        action: "install",
-      },
-    },
-  ],
-} satisfies PluginDiscoveryResult;
-
 const workboardDisabled = {
   id: "workboard",
   name: "Workboard",
@@ -128,6 +110,21 @@ const calendarPlugin = {
   removable: true,
 } satisfies PluginCatalogItem;
 
+const telegramPlugin = {
+  id: "telegram",
+  name: "Telegram",
+  packageName: "@openclaw/telegram",
+  description: "Chat with your agent from Telegram groups and direct messages.",
+  version: "1.4.0",
+  kind: ["channel"],
+  origin: "bundled",
+  installed: true,
+  enabled: false,
+  state: "disabled",
+  category: "channel",
+  removable: false,
+} satisfies PluginCatalogItem;
+
 function installedInventoryPlugin(
   id: string,
   overrides: Partial<PluginCatalogItem> = {},
@@ -183,7 +180,12 @@ const installedPluginsItems = [
 
 const installedPluginsInventory = inventory(installedPluginsItems);
 
-const initialInventory = inventory([workboardDisabled, lobsterPlugin, remoteIconPlugin]);
+const initialInventory = inventory([
+  workboardDisabled,
+  telegramPlugin,
+  lobsterPlugin,
+  remoteIconPlugin,
+]);
 const calendarSearchResponse = {
   results: [
     {
@@ -363,7 +365,36 @@ function pluginMethodResponses() {
         },
       ],
     },
-    "plugins.catalog.browse": discoveryResult,
+    "plugins.catalog.browse": {
+      cases: [
+        { match: { intent: "featured", pageSize: 9 }, response: featuredResult },
+        {
+          match: { intent: "all", cursor: "catalog-page-2", pageSize: 25 },
+          response: {
+            items: secondDiscoveryPageItems,
+            nextCursor: "catalog-page-3",
+          },
+        },
+        {
+          match: { intent: "all", cursor: "catalog-page-3", pageSize: 25 },
+          response: { items: finalDiscoveryPageItems },
+        },
+        {
+          match: { intent: "official", pageSize: 25 },
+          response: { items: [matrixDiscoveryPlugin] },
+        },
+        {
+          match: { intent: "all", category: "channels", pageSize: 25 },
+          response: { items: [matrixDiscoveryPlugin] },
+        },
+        {
+          match: { intent: "all", query: "matrix", pageSize: 25 },
+          response: { items: [matrixDiscoveryPlugin] },
+        },
+        { match: { intent: "all", pageSize: 25 }, response: discoveryResult },
+      ],
+    },
+    "plugins.catalog.categories": discoveryCategories,
     "plugins.install": {
       cases: [
         {
@@ -430,25 +461,25 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}plugins`);
       await page.getByRole("heading", { name: "Installed plugins", exact: true }).waitFor();
       await page.getByRole("heading", { name: "Explore plugins", exact: true }).waitFor();
-      const marketplaceRow = page.locator(".plugin-catalog-result", { hasText: "Memory Plus" });
+      const marketplaceRow = page.locator(".plugin-catalog-result", { hasText: "Matrix" });
       await marketplaceRow.waitFor();
-      expect(await marketplaceRow.textContent()).toContain("@alice");
-      expect(await marketplaceRow.textContent()).toContain("1,240 downloads");
+      expect(await marketplaceRow.textContent()).toContain("@openclaw");
+      expect(await marketplaceRow.textContent()).toContain("52.2k");
+      expect(await marketplaceRow.textContent()).not.toContain("downloads");
       const cards = page.locator(".installed-plugins-card");
-      expect(await cards.count()).toBe(12);
+      expect(await cards.count()).toBe(9);
       expect(
         await cards.evaluateAll((elements) =>
           elements.slice(0, 5).map((card) => card.dataset.pluginId),
         ),
-      ).toEqual(["enabled-a", "enabled-b", "needs-setup", "attention-a", "attention-b"]);
-      expect(await page.locator('[data-plugin-id="needs-setup"]').textContent()).toContain(
-        "Setup required",
-      );
+      ).toEqual(["enabled-a", "enabled-b", "attention-a", "attention-b", "disabled-01"]);
       expect(await page.getByRole("searchbox", { name: "Search plugins" }).count()).toBe(0);
       const firstCard = page.locator('[data-plugin-id="attention-a"]');
-      expect(await firstCard.locator(".installed-plugins-card__identity p").textContent()).toBe(
-        "Operator-visible capability for attention-a.",
-      );
+      expect(
+        await firstCard
+          .getByText("Operator-visible capability for attention-a.", { exact: true })
+          .count(),
+      ).toBe(1);
       expect(await firstCard.textContent()).not.toContain("internal-category");
       const geometry = await firstCard.evaluate((card) => {
         const cardRect = card.getBoundingClientRect();
@@ -493,7 +524,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
             requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
           }),
       );
-      await captureScreenshot(page, "12-installed-plugins-desktop.png");
+      await captureScreenshot(page, "9-installed-plugins-desktop.png");
 
       const settingsButton = page.getByRole("button", { name: "Plugin settings", exact: true });
       const searchButton = page.getByRole("button", { name: "Search plugins", exact: true });
@@ -557,7 +588,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       );
       await closeSearch.click();
       expect(await search.count()).toBe(0);
-      expect(await cards.count()).toBe(12);
+      expect(await cards.count()).toBe(9);
       await expect
         .poll(() =>
           page
@@ -604,8 +635,11 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       expect(hoverMoreAppearance.filter).toBe("brightness(1.35)");
       await showAll.click();
       expect(await cards.count()).toBe(16);
+      expect(await page.locator('[data-plugin-id="needs-setup"]').textContent()).toContain(
+        "Setup required",
+      );
       await page.getByRole("button", { name: "Hide", exact: true }).click();
-      expect(await cards.count()).toBe(12);
+      expect(await cards.count()).toBe(9);
 
       expect(await gateway.getRequests("plugins.setEnabled")).toEqual([]);
       expect(await gateway.getRequests("plugins.search")).toEqual([]);
@@ -614,6 +648,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await page.getByRole("button", { name: "Plugin settings", exact: true }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/plugins");
       await page.goto(`${server.baseUrl}plugins`);
+      await page.getByRole("button", { name: "Show all 16", exact: true }).click();
       await page.locator('[data-plugin-id="workboard"]').click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/plugins/workboard");
       expect(new URL(page.url()).search).toBe("?from=plugins");
@@ -634,6 +669,198 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await openAttentionSettings.focus();
       await page.keyboard.press("Enter");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/plugins/attention-a");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("renders the full ClawHub catalog with stable featured cards and discovery controls", async () => {
+    const context = await newContext();
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: pluginMethods,
+      methodResponses: pluginMethodResponses(),
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}plugins`);
+      await page.getByRole("heading", { name: "Featured", exact: true }).waitFor();
+      const featured = page.getByRole("region", { name: "Featured", exact: true });
+      const featuredCards = featured.locator(".plugin-featured-card");
+      await expect.poll(() => featuredCards.count()).toBe(9);
+      expect((await featuredCards.allTextContents()).join(" ")).not.toContain("Already Enabled");
+      const matrixFeatured = featured.locator('[data-plugin-id="ch_bWF0cml4"]');
+      expect(
+        await matrixFeatured.locator(".plugin-featured-card__primary-link").getAttribute("href"),
+      ).toBe("/plugins/ch_bWF0cml4");
+      expect(await matrixFeatured.getByText("@openclaw", { exact: true }).count()).toBe(1);
+      expect(
+        await matrixFeatured
+          .getByRole("link", { name: "@openclaw", exact: true })
+          .getAttribute("href"),
+      ).toBe("https://clawhub.ai/user/openclaw");
+      expect(await matrixFeatured.getByLabel("Official", { exact: true }).count()).toBe(1);
+      expect(await matrixFeatured.getByText("52.2k downloads", { exact: true }).count()).toBe(1);
+      expect(await matrixFeatured.locator(".plugin-download-count svg").count()).toBe(1);
+      expect(await matrixFeatured.textContent()).not.toContain("Available");
+      expect(
+        await matrixFeatured.evaluate((card) =>
+          Number.parseFloat(getComputedStyle(card).paddingTop),
+        ),
+      ).toBeGreaterThanOrEqual(12);
+      expect(
+        await matrixFeatured
+          .locator(".plugin-featured-card__footer")
+          .evaluate((footer) => getComputedStyle(footer).borderTopWidth),
+      ).toBe("0px");
+      const featuredIdentityGap = await matrixFeatured.evaluate((card) => {
+        const title = card.querySelector(".plugin-card-title-row");
+        const author = card.querySelector(".plugin-card-author");
+        if (!(title instanceof HTMLElement) || !(author instanceof HTMLElement)) {
+          return null;
+        }
+        return Math.round(
+          author.getBoundingClientRect().top - title.getBoundingClientRect().bottom,
+        );
+      });
+      expect(featuredIdentityGap).toBeLessThanOrEqual(2);
+
+      const categories = page.getByRole("complementary", { name: "Plugin categories" });
+      const categoryLabels = (await categories.getByRole("button").allTextContents()).map((label) =>
+        label.trim(),
+      );
+      expect(categoryLabels.join(" | ")).toBe(
+        "All categories | Channels | Models | Memory | Context | Voice | Media | Web | Tools | Runtime | Gateway | Security | Other",
+      );
+      expect(await categories.getByRole("link").count()).toBe(0);
+      expect(
+        await categories.getByRole("button", { name: "Memory", exact: true }).getAttribute("title"),
+      ).toBeNull();
+      const telegramInstalled = page.locator('[data-plugin-id="telegram"]');
+      expect(await telegramInstalled.getByText("@openclaw", { exact: true }).count()).toBe(0);
+      expect(await telegramInstalled.getByLabel("Official", { exact: true }).count()).toBe(1);
+      expect(
+        await telegramInstalled
+          .locator(".installed-plugins-card__identity .installed-plugins-card__summary")
+          .count(),
+      ).toBe(1);
+      const telegramCatalog = page.locator('[data-plugin-id="ch_QG9wZW5jbGF3L3RlbGVncmFt"]');
+      expect(await telegramCatalog.count()).toBe(0);
+      expect(await page.locator('[data-plugin-id="ch_bWVtb3J5LXBsdXM"]').count()).toBe(1);
+
+      const matrixCatalog = page.locator('.plugin-catalog-result[data-plugin-id="ch_bWF0cml4"]');
+      await matrixCatalog.waitFor();
+      expect(await matrixCatalog.textContent()).not.toContain("Available");
+      expect(await matrixCatalog.textContent()).not.toContain("channels");
+      expect(await matrixCatalog.getByText("52.2k", { exact: true }).count()).toBe(1);
+      expect(await matrixCatalog.textContent()).not.toContain("downloads");
+      expect(await matrixCatalog.locator(".plugin-download-count svg").count()).toBe(1);
+      expect(
+        await matrixCatalog
+          .getByRole("link", { name: "@openclaw", exact: true })
+          .getAttribute("href"),
+      ).toBe("https://clawhub.ai/user/openclaw");
+      expect(await page.getByText("Plugin", { exact: true }).count()).toBeGreaterThan(0);
+      expect(await page.getByText("Downloads", { exact: true }).count()).toBeGreaterThan(0);
+      expect(
+        await page
+          .locator(".plugin-catalog-layout__results")
+          .evaluate((results) => getComputedStyle(results).borderLeftStyle),
+      ).toBe("solid");
+      const controlsToResultsGap = await page.evaluate(() => {
+        const controls = document.querySelector(".plugin-catalog-controls");
+        const layout = document.querySelector(".plugin-catalog-layout");
+        if (!(controls instanceof HTMLElement) || !(layout instanceof HTMLElement)) {
+          return null;
+        }
+        return Math.round(
+          layout.getBoundingClientRect().top - controls.getBoundingClientRect().bottom,
+        );
+      });
+      expect(controlsToResultsGap).toBeGreaterThanOrEqual(20);
+      expect(
+        await page
+          .locator(".plugin-catalog-results__list")
+          .evaluate((list) => getComputedStyle(list).backgroundColor),
+      ).toBe("rgba(0, 0, 0, 0)");
+
+      let requestCount = (await gateway.getRequests("plugins.catalog.browse")).length;
+      await page.getByRole("tab", { name: "Official", exact: true }).click();
+      const officialRequest = await gateway.waitForRequest("plugins.catalog.browse", {
+        after: requestCount,
+      });
+      expect(officialRequest.params).toMatchObject({ intent: "official", pageSize: 25 });
+      expect(await telegramInstalled.getByLabel("Official", { exact: true }).count()).toBe(1);
+      const explore = page.getByRole("region", { name: "Explore plugins", exact: true });
+      await explore.getByRole("link", { name: /Matrix/u }).waitFor();
+      expect(await featuredCards.count()).toBe(9);
+
+      await page.getByRole("tab", { name: "All", exact: true }).click();
+      const search = page.getByRole("searchbox", { name: "Search ClawHub plugins" });
+      requestCount = (await gateway.getRequests("plugins.catalog.browse")).length;
+      await search.fill("matrix");
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("plugins.catalog.browse"))
+            .slice(requestCount)
+            .some(
+              (request) =>
+                JSON.stringify(request.params) ===
+                JSON.stringify({ intent: "all", query: "matrix", pageSize: 25 }),
+            ),
+        )
+        .toBe(true);
+      await explore.getByRole("link", { name: /Matrix/u }).waitFor();
+      expect(await featuredCards.count()).toBe(9);
+
+      requestCount = (await gateway.getRequests("plugins.catalog.browse")).length;
+      await search.fill("");
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("plugins.catalog.browse"))
+            .slice(requestCount)
+            .some(
+              (request) =>
+                JSON.stringify(request.params) === JSON.stringify({ intent: "all", pageSize: 25 }),
+            ),
+        )
+        .toBe(true);
+      await expect.poll(() => explore.locator(".plugin-catalog-result").count()).toBe(25);
+      expect(await page.getByRole("button", { name: "Back", exact: true }).count()).toBe(0);
+      await page.getByRole("button", { name: "Next", exact: true }).click();
+      await page.locator(".plugin-catalog-result", { hasText: "Slack" }).waitFor();
+      expect(await explore.locator(".plugin-catalog-result").count()).toBe(25);
+      expect(await page.getByText("Page 2", { exact: true }).count()).toBe(1);
+      expect(await explore.getByRole("link", { name: /Matrix/u }).count()).toBe(0);
+      await page.getByRole("button", { name: "Back", exact: true }).click();
+      await explore.getByRole("link", { name: /Matrix/u }).waitFor();
+      expect(await explore.locator(".plugin-catalog-result").count()).toBe(25);
+      expect(await page.getByText("Page 1", { exact: true }).count()).toBe(1);
+      expect(await page.getByRole("button", { name: "Back", exact: true }).count()).toBe(0);
+      expect(await page.locator(".plugin-catalog-result", { hasText: "Slack" }).count()).toBe(0);
+      expect(
+        await page.getByText("You’ve reached the end of the catalog.", { exact: true }).count(),
+      ).toBe(0);
+
+      await matrixFeatured
+        .locator(".plugin-featured-card__primary-link")
+        .click({ position: { x: 10, y: 10 } });
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/plugins/ch_bWF0cml4");
+      await page.goto(`${server.baseUrl}plugins`);
+      await page.getByRole("heading", { name: "Featured", exact: true }).waitFor();
+      requestCount = (await gateway.getRequests("plugins.catalog.browse")).length;
+      await categories.getByRole("button", { name: "Channels", exact: true }).click();
+      const categoryRequest = await gateway.waitForRequest("plugins.catalog.browse", {
+        after: requestCount,
+      });
+      expect(categoryRequest.params).toMatchObject({ category: "channels", pageSize: 25 });
+
+      await page.setViewportSize({ height: 1024, width: 768 });
+      const categorySelect = page.getByRole("combobox", { name: "Plugin categories" });
+      await categorySelect.waitFor();
+      expect(await categories.isVisible()).toBe(false);
+      await categorySelect.selectOption("models");
+      expect(await categorySelect.inputValue()).toBe("models");
     } finally {
       await context.close();
     }
@@ -686,9 +913,9 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       const discoveryError = page.locator('.plugin-catalog-results [role="alert"]');
       await discoveryError.waitFor();
       expect(await discoveryError.textContent()).toContain("Plugin discovery is unavailable");
-      await gateway.setMethodResponse("plugins.catalog.browse", discoveryResult);
+      await gateway.setMethodResponse("plugins.catalog.browse", { items: discoveryResult.items });
       await discoveryError.getByRole("button", { name: "Try again" }).click();
-      await page.locator(".plugin-catalog-result", { hasText: "Memory Plus" }).waitFor();
+      await page.locator('.plugin-catalog-result[data-plugin-id="ch_bWF0cml4"]').waitFor();
       expect(await page.locator('[data-plugin-id="workboard"]').isVisible()).toBe(true);
     } finally {
       await context.close();
@@ -725,9 +952,9 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}plugins`);
-      await page.locator(".plugin-catalog-result", { hasText: "Memory Plus" }).waitFor();
+      await page.locator('.plugin-catalog-result[data-plugin-id="ch_bWF0cml4"]').waitFor();
       const requestsBeforeReconnect = (await gateway.getRequests("plugins.catalog.browse")).length;
-      const discoveryPlugin = discoveryResult.items.at(0);
+      const discoveryPlugin = discoveryResult.items.find((plugin) => !plugin.local.installed);
       if (!discoveryPlugin) {
         throw new Error("Expected the discovery fixture to contain a plugin.");
       }

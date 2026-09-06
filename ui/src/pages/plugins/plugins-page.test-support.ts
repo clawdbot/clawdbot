@@ -20,7 +20,7 @@ import {
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import type { PluginRowMessage } from "./plugin-row-message.ts";
 import type { PluginsConsentController } from "./plugins-consent-controller.ts";
-import type { PluginsRouteData } from "./plugins-page.ts";
+import type { PluginsRouteData } from "./route-data.ts";
 import "./plugins-page.ts";
 
 type RequestHandler = (method: string, params: unknown) => Promise<unknown>;

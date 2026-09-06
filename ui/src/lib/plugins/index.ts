@@ -1,6 +1,8 @@
 // Shared Control UI plugin catalog Gateway contracts.
 import type {
   PluginCatalogEntry,
+  PluginDiscoveryCategory as ProtocolPluginDiscoveryCategory,
+  PluginDiscoveryEntry as ProtocolPluginDiscoveryEntry,
   PluginDeclaredSurface as ProtocolPluginDeclaredSurface,
   PluginHookGrant as ProtocolPluginHookGrant,
   PluginInspectSource as ProtocolPluginInspectSource,
@@ -9,6 +11,7 @@ import type {
   PluginsInstallParams,
   PluginsInstallResult,
   PluginsCatalogBrowseResult as ProtocolPluginsCatalogBrowseResult,
+  PluginsCatalogCategoriesResult as ProtocolPluginsCatalogCategoriesResult,
   PluginsListResult as ProtocolPluginsListResult,
   PluginsSetEnabledParams,
   PluginsSetEnabledResult,
@@ -18,7 +21,10 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { RuntimeConfigCapability } from "../config/runtime-config-capability.ts";
 
 export type PluginCatalogItem = PluginCatalogEntry;
+export type PluginDiscoveryCategory = ProtocolPluginDiscoveryCategory;
+export type PluginDiscoveryEntry = ProtocolPluginDiscoveryEntry;
 export type PluginDiscoveryResult = ProtocolPluginsCatalogBrowseResult;
+export type PluginDiscoveryCategoriesResult = ProtocolPluginsCatalogCategoriesResult;
 export type PluginDeclaredSurface = ProtocolPluginDeclaredSurface;
 export type PluginHookGrant = ProtocolPluginHookGrant;
 export type PluginInspectSource = ProtocolPluginInspectSource;

@@ -78,7 +78,7 @@ describe("renderInstalledPlugins", () => {
     expect(onRefresh).toHaveBeenCalledOnce();
   });
 
-  it("prioritizes actionable plugins while keeping inline search independent from Show all", async () => {
+  it("groups enabled plugins first and alphabetizes both groups", async () => {
     const plugins = [
       createPlugin({ id: "attention-b", name: "Attention B", state: "error", order: 20 }),
       createPlugin({ id: "needs-setup", name: "Needs Setup", state: "needs-setup", order: 5 }),
@@ -131,13 +131,13 @@ describe("renderInstalledPlugins", () => {
     };
     rerender();
 
-    expect(visiblePluginIds(container)).toHaveLength(12);
+    expect(visiblePluginIds(container)).toHaveLength(9);
     expect(visiblePluginIds(container).slice(0, 5)).toEqual([
       "enabled-a",
       "enabled-b",
-      "needs-setup",
       "attention-a",
       "attention-b",
+      "disabled-00",
     ]);
     expect(container.querySelector('input[type="search"]')).toBeNull();
     expect(container.textContent).not.toContain("Not Installed");
@@ -168,7 +168,7 @@ describe("renderInstalledPlugins", () => {
     closeSearch.click();
     await Promise.resolve();
     expect(container.querySelector('input[type="search"]')).toBeNull();
-    expect(visiblePluginIds(container)).toHaveLength(12);
+    expect(visiblePluginIds(container)).toHaveLength(9);
     expect(document.activeElement?.getAttribute("aria-label")).toBe("Search plugins");
 
     const showAll = expectDefined(
@@ -189,7 +189,7 @@ describe("renderInstalledPlugins", () => {
     );
     hide.click();
     expect(container.querySelector('input[type="search"]')).toBeNull();
-    expect(visiblePluginIds(container)).toHaveLength(12);
+    expect(visiblePluginIds(container)).toHaveLength(9);
   });
 
   it("uses the Carapace surface without repeating an inventory subtitle", () => {

@@ -101,6 +101,28 @@ describe("ClawHub plugin catalog client", () => {
     expect(result.items).toHaveLength(1);
   });
 
+  it("uses ClawHub's featured filter without overriding its canonical order", async () => {
+    let requestedUrl = "";
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      requestedUrl = input instanceof Request ? input.url : String(input);
+      return jsonResponse({ items: [remotePlugin] });
+    });
+
+    await fetchClawHubPluginCatalog({
+      baseUrl: "https://example.com",
+      intent: "featured",
+      limit: 6,
+      fetchImpl,
+    });
+
+    const url = new URL(requestedUrl);
+    expect(url.pathname).toBe("/api/v1/plugins");
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      featured: "true",
+      limit: "6",
+    });
+  });
+
   it("validates and restores canonical category ordering", async () => {
     const fetchImpl = vi.fn(async () =>
       jsonResponse({

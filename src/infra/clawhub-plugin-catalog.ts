@@ -143,7 +143,7 @@ function parseCatalogSearch(value: unknown): { items: ClawHubPluginCatalogEntry[
 export async function fetchClawHubPluginCatalog(
   params: ClawHubReadOptions & {
     query?: string;
-    intent?: "all" | "trending" | "official";
+    intent?: "all" | "trending" | "official" | "featured";
     category?: string;
     cursor?: string;
     limit?: number;
@@ -175,8 +175,14 @@ export async function fetchClawHubPluginCatalog(
     search: {
       category: params.category,
       cursor: params.cursor,
+      featured: params.intent === "featured" ? "true" : undefined,
       isOfficial: params.intent === "official" ? "true" : undefined,
-      sort: params.intent === "trending" ? "trending" : "recommended",
+      sort:
+        params.intent === "featured"
+          ? undefined
+          : params.intent === "trending"
+            ? "trending"
+            : "recommended",
       limit: params.limit ? String(params.limit) : undefined,
     },
   });
