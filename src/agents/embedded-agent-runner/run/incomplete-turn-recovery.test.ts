@@ -303,4 +303,36 @@ describe("incomplete-turn recovery policy", () => {
       }),
     ).toBe(false);
   });
+
+  it("settles a heartbeat reasoning-only stop as silence under its declared contract", () => {
+    // Heartbeat runs declare allowEmptyAssistantReplyAsSilent plus an optional
+    // terminal reply (resolveTerminalReplySilenceContract). A reasoning-only
+    // stop then means "nothing to report" — intentional silence, not a
+    // provider failure to retry with a visible-answer continuation.
+    const assistant = emptyAssistant({
+      content: [
+        {
+          type: "thinking",
+          thinking: "internal reasoning",
+          thinkingSignature: JSON.stringify({ id: "heartbeat_rs", type: "reasoning" }),
+        },
+      ],
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+    });
+
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        terminalReplyExpectation: "optional",
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(true);
+  });
 });
