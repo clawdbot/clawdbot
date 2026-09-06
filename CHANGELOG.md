@@ -7,14 +7,14 @@ Docs: https://docs.openclaw.ai
 
 ### Highlights
 
-- **Your agent’s own Skill Workshop:** keep each agent’s learned skills in one persistent collection across workspaces, with a shared review and approval flow; run `openclaw doctor --fix` to relocate older workspace skills when prompted. Related #135291. (#135528, #139248) Thanks @khaisis and @obviyus.
-- **Navigate long chats:** preview earlier messages from a conversation-position rail and jump directly to the part of a chat you need. Related #138587. (#138603) Thanks @brokemac79.
-- **Delegate deeper tasks:** allow sub-agents to delegate recursively by default within configured depth, concurrency, sandbox, and tool-policy limits. (#138059) Thanks @fuller-stack-dev.
-- **Settings stay saved:** preserve successful changes through delayed responses and reconnects, recover failed Appearance saves, and keep ordinary model choices scoped to the current chat. (#139113, #139167, #139232) Thanks @obviyus and @SebTardif.
-- **Reliable scheduled work:** avoid retry storms for empty heartbeats, persist accepted monitor instructions, and retain recovered scheduled-run outcomes and report images. Related #136525, #137492, #139088. (#137517, #139225, #139037, #136589) Thanks @creanet-64, @gaoanze888, @hartmark, @JLahullier, @lakemike, @LiuwqGit, and @obviyus.
-- **Local models keep their tools and history:** preserve local-model capabilities without changing sibling agents, respect small context windows, and prepare managed llama.cpp routing before requests. Related #138753. (#138850, #136363) Thanks @vincentkoc.
-- **Native dashboard reports:** view structured report data directly in chat widgets and dashboards without an iframe. Related #139263. (#139306)
-- **Keep working through rate limits:** continue the existing task after temporary provider failures with bounded, visible retries while preserving completed work. Related #139312. (#139397)
+- **Share selected conversations:** explicitly publish a revocable read-only view of a session’s existing and future conversation text, accessible to anyone with its public link. (#139489)
+- **A searchable meeting library:** browse saved notes, search full transcripts, download complete Markdown or JSONL archives, and manage capture sources from the Control UI. (#139875, #140084)
+- **Cloud sessions from a repository:** start from a repository URL and ref on the selected cloud node without first creating a checkout on the Gateway. (#138900)
+- **Safer update recovery:** validate supported candidates before stopping the Gateway and use bounded repair for failed validation or unrecovered updates while retaining explicit failure and rollback outcomes. Related #136997. (#138839, #139495)
+- **Keep work through interruptions:** preserve active work and queued inputs across Gateway updates, watchdog retries, and temporary provider rate limits without splitting or duplicating replies. Related #139312, #139341. (#139663, #139661, #139397, #139465) Thanks @Jackten, @obviyus, and @ruel225.
+- **Your agent’s own Skill Workshop:** keep learned skills in one persistent agent-owned collection across workspaces, with review and approval controls and Doctor migration for proven legacy skills. Related #135291. (#135528, #139248) Thanks @khaisis and @obviyus.
+- **Reliable model choices:** retain discovered catalogs after provider failures and preserve local-model tools and conversation history without changing sibling agents. Related #138753. (#139357, #138850, #136363) Thanks @obviyus and @vincentkoc.
+- **More native desktop options:** add ARM64 Linux AppImage packaging and open Gateway windows with live connection cards from the macOS Gateways menu. (#139729, #139522, #139688) Thanks @vincentkoc.
 
 ### Changes
 
@@ -28,11 +28,21 @@ Docs: https://docs.openclaw.ai
 - **CLI agents by default:** show supported create-capable CLI agents in the new-session model picker without a separate opt-in; set `gateway.cliAgents.enabled` to `false` to disable CLI agents and native CLI session creation. (#139459)
 - **Device aliases:** rename paired devices directly from the Control UI Devices page. Related #138099. (#138852) Thanks @xialonglee.
 - **Folder navigation:** filter the folder browser immediately as you type a path. (#139417)
+- **Public session transcripts:** session owners and Gateway admins can explicitly publish existing and future conversation text to anyone with a public URL and revoke access later; the read-only view omits tools, reasoning, files, images, and executable widgets. Review the text before enabling access; private-session preview links remain separate. (#139489)
+- **Meeting archives:** browse paginated saved notes, search transcripts, export complete Markdown or JSONL archives, and edit capture sources in Communications settings while retaining existing archive access controls. (#139875, #140084)
+- **Repository-backed cloud sessions:** create sessions from a repository URL and ref with checkout, setup, and recoverable checkpoints owned by the cloud node; materialize a Gateway worktree only when explicitly moving there. (#138900)
+- **Bounded update repair:** supported candidate-validation failures can enter a bounded repair phase using configured inference in disposable rehearsal state; activate only after independent validation, and retain failure or rollback outcomes when repair cannot recover. Changes requiring configuration edits are reported for operator repair. (#139495)
+- **Update failure reports:** submit a report from the failed-update action only after explicit consent, using the recorded update attempt and current owner. (#139704) Thanks @fuller-stack-dev.
+- **Native desktop:** provide ARM64 Linux AppImage packaging and live Gateway cards with direct window opening in the macOS Gateways menu. (#139729, #139522, #139688) Thanks @vincentkoc.
+- **Watch voice setup:** include voice in normal Apple Watch setup. (#139712)
+- **Reference chips:** render GitHub issue and pull-request links as compact reference chips. (#139653)
+- **Diagnostics:** expose garbage-collection duration metrics and identify slow phases while opening agent databases. Related #139547. (#139592, #138125)
 
 ### Fixes
 
+- **Localized controls:** distinguish parent sessions from main sessions and dashboard panels from desktops, and correct selected native translations for pending states, consent, permissions, initial setup, and displayed-versus-total session counts.
 - **Removed credentials:** preserve an explicit same-provider account selection when admitting chat messages, preparing agent commands, and changing models if its credential disappears, using the selected agent’s credential scope; report actionable authentication recovery instead of silently switching accounts or reporting an unknown model. Restore the credential or select another configured profile. Stale automatic selections and incompatible-provider selections still clear.
-- **Upgrade safety:** refuse a shared-database schema migration while an older updater still owns completion, so package rollback cannot leave the old updater writing a newer schema; automatic cross-schema upgrades require direct installation after the updater exits. Stop the Gateway through its deployment owner, create a verified backup, install the target with the package manager and prefix that own the installation, then run `openclaw doctor --fix` from the new install before restarting. See [database migration recovery](https://docs.openclaw.ai/reference/database-schemas#doctor-refuses-a-schema-migration-during-an-update).
+- **Upgrade safety:** refuse a shared-database schema migration while an older updater still owns completion, so package rollback cannot leave the old updater writing a newer schema; that refused migration requires direct installation after the updater exits. Stop the Gateway through its deployment owner, create a verified backup, install the target with the package manager and prefix that own the installation, then run `openclaw doctor --fix` from the new install before restarting. See [database migration recovery](https://docs.openclaw.ai/reference/database-schemas#doctor-refuses-a-schema-migration-during-an-update).
 - **Temporary provider failures:** resume the existing transcript with bounded backoff after transient rate limits, preserving completed work and showing retry status. Related #139312. (#139397)
 - **Selected authentication:** preserve the selected credential profile, workspace, and metadata across plugin scopes. (#139413)
 - **Tool and compaction contracts:** retain Anthropic tool-schema references and constraints and keep compaction bound to the runtime generation that admitted the task. (#139431, #139429)
@@ -51,6 +61,47 @@ Docs: https://docs.openclaw.ai
 - **Android health:** finish health refreshes when history requests overlap. Related #139411. (#139430)
 - **MCP shutdown:** avoid spurious listener errors when shutdown requests overlap. (#139391)
 - **Crabbox scripts:** preserve payload output and requested script options. (#139405)
+- **Configuration and secrets:** preserve authored settings across includes and plugin secret references during Settings saves, retain config when Doctor prefix recovery fails, and reject or repair placeholder Gateway tokens. Related #137712, #139494. (#139949, #139536, #137713, #139844) Thanks @aeoess, @hyspacex, @obviyus, and @robojarvis.
+- **Native state privacy:** tighten native Apple state-file permissions. (#139623) Thanks @vincentkoc.
+- **Database and backup integrity:** prevent writes after a failed nested rollback, preserve state artifacts when reading update history, exclude shared-workspace files from state-only backups, and migrate shared-workspace backups with their recorded owners. Related #139549. (#139700, #138917, #139598, #140117) Thanks @ayaangazali, @fuller-stack-dev, @mbelinky, @obviyus, and @TheCrazyLex.
+- **Update admission:** validate candidates before stopping the Gateway, reject incompatible configured or registered agent stores before changing the installation, and preserve external policy when invoking fresh Doctor. Related #136997, #138620. (#138839, #139722, #138771) Thanks @chac4l, @fuller-stack-dev, and @RileyJJY.
+- **Update continuity and outcomes:** preserve active work and queued inputs across updates, retain restart outcomes and update-history ownership, keep current update availability beside history, and finish npm upgrades from 2026.9.1. (#139663, #139701, #139501, #139660) Thanks @TheCrazyLex.
+- **Plugin upgrades and packaging:** prevent stale beta plugins from looping startup, avoid stale missing-plugin warnings after development switches, explain SDK incompatibilities after core updates, and preserve scoped package installs and runtime entries. Related #139527. (#139709, #121603, #139458, #140016) Thanks @Conan-Scott and @vincentkoc.
+- **Plugin lifecycle:** validate setup entrypoints before loading, remove owned aliases before uninstalling files, honor runtime cache invalidation, and retain the current tool-factory context. Related #140063. (#117370, #140065, #139908, #139828)
+- **Doctor startup:** preserve migration authority and stop refused repairs, avoid browser-profile permission hangs, reduce repeated plugin discovery across large agent rosters, and replace unavailable cleanup advice. (#139683, #139612, #140135, #140074) Thanks @fuller-stack-dev.
+- **Reply recovery:** preserve queued messages across watchdog retries, keep rate-limit retries transient, clear stale failures after model fallback, and avoid split or duplicate replies after queued delivery failures. Related #139341. (#139661, #139465, #139753, #139388) Thanks @Jackten, @obviyus, and @ruel225.
+- **Completed answers and failure notices:** retain settled assistant output, avoid holding completed replies behind stalled context-engine cleanup, record transcript notices for failures before a reply, and restore critical notices after reset. Related #137125, #139440. (#139507, #140023, #139439, #139888) Thanks @shakkernerd.
+- **Model context boundaries:** keep private yield context out of chat output, exclude failed tool turns from context-engine memory, preserve tool errors when summary recovery fails, and retain admitted tool grants and cleanup mode across attempts. (#139801, #140024, #139309, #140110) Thanks @altaywtf, @Colton-Harris, and @obviyus.
+- **Tool results and progress:** preserve empty client-tool completions, retain asynchronous tool results, ground exec approvals in actual tool results, and keep Swarm outcomes visible after completion. Related #139515, #139975. (#139988, #139520, #140043, #139490)
+- **Subagents and SDK subscribers:** settle unsuccessful child-completion wakes durably, preserve replay order for late run subscribers, and report replaced runs as canceled. Related #139121, #139537. (#137344, #139563, #139125) Thanks @fuller-stack-dev and @xydt-juyaohui.
+- **Catalog resilience:** retain discovered models after failed refreshes, preserve Ollama, DeepInfra, and NVIDIA inventories during discovery failures, and report failed Bedrock, Google, Copilot, LM Studio, and external llama.cpp discovery instead of silently hiding errors. (#139357, #139817, #139749, #139750, #139791, #139849, #139846, #139649) Thanks @obviyus.
+- **Catalog identity and scope:** keep case-distinct models separate, preserve exact SDK model matches, use the selected agent’s catalog in TUI and command-palette results, restore missing picker choices after startup, and defer downloaded catalog changes until restart. Related #139498, #139499. (#139991, #139900, #139907, #139880, #139923, #139848, #140086) Thanks @goslingmanagment and @obviyus.
+- **Provider setup and OAuth:** retain models when OAuth preparation fails, stop fallback after catalog discovery times out, use the configured OpenAI auth profile, avoid persisting generated starter-model rows, and accept bundled Google model references in Doctor. Related #137033, #139207. (#139951, #139924, #137120, #140139, #139243) Thanks @LiuwqGit, @NovaUnboundAi, @obviyus, @shakkernerd, and @vincentkoc.
+- **Local models and automations:** preserve configured llama.cpp preset settings and recover automations with retired model overrides. Related #139235. (#139646, #139523)
+- **Memory recall:** preserve keyword recall and exact-file ranking in project sessions, include note content for short queries, recover indexing after embedding row-cap errors, and keep concurrent cleanup or maintenance from blocking searches. Related #137864, #140103. (#140104, #139879, #139777, #138391, #139821, #139698) Thanks @fisherman86-ai, @obviyus, and @teddytennant.
+- **Memory diagnostics:** report relevant extra-path read errors and include trailing transcript growth when deciding memory-flush freshness. (#139402, #138928) Thanks @chelsealong, @obviyus, and @SebTardif.
+- **Skill Workshop:** distinguish installed skills from proposal history, discover entries literally named skills, simplify reviews and previews, and accurately describe weekly reviews using retained conversation context. (#139842, #139827, #139760, #139812, #139656) Thanks @obviyus.
+- **Scheduled delivery:** retain current-session delivery intent, preserve paced checks across restart, send fresh output for manual runs of overdue jobs, keep forced disabled one-shots disabled, and explain skipped on-exit payloads when jobs are busy. Related #139488, #139945, #140080. (#139491, #140083, #139967, #139947, #139987)
+- **Heartbeat and monitor recovery:** ignore transiently missing heartbeat bases and converge monitors after configuration publication. Related #131374. (#131462, #139509) Thanks @andersonjeccel and @gaoanze888.
+- **Channel delivery:** send pairing approvals from the approved account, restore bare-user Mattermost DMs on private servers, preserve Matrix thread reply targets, avoid repeated mention alerts on edits, and avoid duplicating Telegram native choices in message text. (#137268, #139726, #139479, #140091, #140108) Thanks @marmar9615-cloud and @obviyus.
+- **Reply formatting:** preserve Markdown literals around tables, keep Slack emoji shortcodes intact, prevent long details replies from stalling, and use consistent native progress-card rendering. (#139892, #136374, #138829, #139206) Thanks @lzhan011, @obviyus, @teddytennant, and @vincentkoc.
+- **Meeting capture:** keep Discord recording independent of voice conversations and retain transcript capture ownership through failed cleanup. (#139658, #139572)
+- **Attachments and browser media:** retain fetched and node-proxied filenames, percent sequences, MIME parameters, and ffprobe dimensions or duration; restore browser file uploads in existing sessions and preserve code fences in page evaluation results. Related #138382, #139557. (#138411, #139559, #139508, #139621, #137219, #139904, #139906) Thanks @coderdailyone, @igs-rogenlo, @NianJiuZst, @obviyus, and @ruel225.
+- **Media access:** keep Control UI assistant media policy consistent and stop input downloads when HTTP clients disconnect. Related #139774. (#139503, #139793) Thanks @zhangguiping-xydt.
+- **Drafts and navigation:** preserve newer chat drafts after rewind and recover drafts when steer or redirect cannot start, clear Side chat when its parent is deleted, keep board navigation current without losing drafts, and start suggested follow-ups without requiring a worktree. Related #139939, #139971. (#140066, #139940, #139974, #139952, #139731) Thanks @fuller-stack-dev.
+- **Control UI:** keep interactive dashboard authoring through restart, restore native customization access and configured agent avatars, show unavailable exec-node bindings, and expose agent-list failures on Memory pages. Related #127641, #139594. (#139705, #139510, #139873, #133032, #139899) Thanks @RobertOnline69 and @TurboTheTurtle.
+- **Background UI work:** stop hidden Inbox and automation refreshes, avoid duplicate PR refreshes after replay, and skip remote node discovery for local-only catalog pages. (#140094, #140097, #139966, #140090)
+- **Android and native UI:** reconnect secondary Gateways after rapid lifecycle changes, show model status for the selected agent, improve large-text readability and operational-caption contrast, and display the complete macOS automation count. Related #139310. (#139319, #140130, #139789, #139931, #139692) Thanks @obviyus.
+- **Linux and Windows:** keep Linux widget replies connected, explain a missing Linux file opener, accept MSYS Git paths for worktrees and backups, and keep anchored Windows Gateway commands console-free. Related #138706, #139185. (#139664, #139252, #139266, #138751) Thanks @chelsealong, @haoran2025, @keith9681, @ly85206559, @obviyus, and @upple.
+- **Service recovery:** tolerate systemd clock steps, recognize older macOS launchctl boolean output, and avoid killing the caller when restarting inside a marker-less LaunchAgent. Related #139109. (#137253, #139836, #139628) Thanks @coderdailyone, @gaoanze888, and @NovaUnboundAi.
+- **Docker startup:** restore browser-enabled Gateways and stage bundled plugin runtime dependencies in their packaged plugin roots. Related #138777. (#139686, #139117) Thanks @8bitsforge, @gaoanze888, @obviyus, @vincentkoc, and @ylcn91.
+- **Bun transport compatibility:** preserve installed WebSocket behavior, options, backpressure, and realtime transcription limits across Gateway, native worker, voice-call, and provider routes. (#139919, #140071, #140048, #139567, #139717, #139480)
+- **Interactive commands:** prevent stalled PTY prompts and incorrect arrow keys after split output, preserve sent hexadecimal bytes and command output under Bun, and retain log output and errors in Code Mode. (#139742, #139648, #139965, #139725)
+- **Code Mode inputs:** preserve valid MCP declarations and directory or search results, and identify unawaited promise output. (#140051, #139910, #140028)
+- **ACP and MCP cleanup:** preserve ACP arguments, queued output, and session ownership, cancel failed deliveries, retire delegates before cleanup, and prevent MCP servers from starting after session shutdown. Related #127128, #136246, #139680. (#139776, #139685, #127136, #139616) Thanks @eddiedon.
+- **Cloud recovery:** resume provisioning after temporary storage errors, preserve workspace-conflict errors during reclamation, and report failed cloud tools as errors. (#140021, #139582, #139758)
+- **Session responsiveness:** avoid database-lock failures during reclamation and concurrent cleanup, back off transcript-reconciliation retries, and bound session listing to the requested limit. (#139469, #139689, #119126, #127225) Thanks @ampagent and @shad0wca7.
+- **CLI reliability:** reject explicitly blank Gateway ports, complete quoted Bash option values, retain Windows and Unicode note line endings, keep setup-code JSON machine-readable, and prevent multiline exit pastes from closing TUI. Related #138613. (#139613, #140034, #139512, #137209, #139639) Thanks @marmar9615-cloud, @TurboTheTurtle, and @vincentkoc.
 - **Forwarded messages and commands:** preserve Discord forwarded text and Teams thread context while keeping commands tied to the current sender, and retain Slack inline shortcuts after mention rendering. (#137313) Thanks @Marvinthebored and @Peetiegonzalez.
 - **Feishu mentions:** retain mentions correctly in both individual messages and debounced batches. (#96311) Thanks @sliverp.
 - **Chrome relay recovery:** recover tabs after attachment loss, wait for their pages to become available, and preserve per-client detach behavior. (#139275) Thanks @esqandil and @obviyus.
@@ -97,11 +148,15 @@ Docs: https://docs.openclaw.ai
 - **Large conversations:** reduce work when navigating transcripts, preparing branch summaries, restoring code-heavy replies, and selecting compaction boundaries. (#139300, #139301, #139074, #139324, #139115)
 - **Long-running sessions:** bound pending tool-delivery observers and retained tool-result projection data, release cached SQLite statements with their owning database, and avoid discarded waits in queued store writes. (#139325, #139157, #139085, #139327)
 
+### Upcoming deprecations
+
+- **Plugin SDK context aliases:** `sdk-untrusted-context-identifier-aliases` remains deprecated and reaches its `removeAfter` date on **2026-09-08**; migrate to `MsgContext.ChannelPromptContext`, `MsgContext.ChannelStructuredContext`, `ChannelStructuredContextEntry`, `SupplementalContextFacts.channelStructuredContext`, and `buildChannelMetadata`. The aliases are still present in this preparation; see the [plugin compatibility guide](https://docs.openclaw.ai/plugins/compatibility).
+
 ### Complete contribution record
 
-This audited record covers the complete 0229a108fee749327b2cc60c4d228299dfe2f889..9bf78c82b2f8061877f611ad876dfd5c95d34f3b history: 310 in-range PRs + 0 retained seed-only PRs = 310 unique PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
+This audited record covers the complete 0229a108fee749327b2cc60c4d228299dfe2f889..31e8d5012e7748841ff9eee1a73ae126f42f2fde history: 806 in-range PRs + 0 retained seed-only PRs = 806 unique PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
 
-Shipped baseline exclusions: v2026.9.1 (1 PRs: #131767); v2026.9.2 (224 PRs: #113611, #114580, #114625, #116157, #118358, #124633, #127177, #127182, #129561, #129897, #131436, #132552, #133318, #133323, #135808, #136146, #136364, #136661, #136755, #136781, #136900, #137030, #137131, #137342, #137368, #137506, #137527, #137637, #137681, #137738, #137830, #137885, #137923, #138111, #138207, #138223, #138246, #138248, #138249, #138280, #138332, #138360, #138394, #138398, #138440, #138449, #138481, #138492, #138500, #138524, #138556, #138568, #138574, #138624, #138625, #138627, #138635, #138641, #138648, #138655, #138656, #138669, #138674, #138675, #138680, #138687, #138690, #138693, #138694, #138695, #138699, #138701, #138707, #138708, #138709, #138711, #138713, #138715, #138716, #138717, #138718, #138719, #138720, #138725, #138728, #138730, #138731, #138733, #138734, #138737, #138738, #138739, #138740, #138742, #138743, #138744, #138745, #138746, #138747, #138748, #138752, #138754, #138758, #138759, #138764, #138765, #138766, #138767, #138769, #138772, #138776, #138780, #138781, #138782, #138784, #138785, #138792, #138793, #138794, #138796, #138801, #138804, #138805, #138806, #138810, #138813, #138814, #138816, #138818, #138820, #138822, #138824, #138827, #138828, #138830, #138832, #138837, #138838, #138840, #138841, #138845, #138849, #138851, #138854, #138855, #138856, #138857, #138858, #138859, #138860, #138862, #138863, #138865, #138866, #138868, #138872, #138875, #138876, #138877, #138878, #138880, #138884, #138885, #138888, #138889, #138890, #138891, #138894, #138895, #138896, #138898, #138902, #138904, #138907, #138908, #138909, #138910, #138911, #138912, #138914, #138916, #138920, #138921, #138925, #138926, #138927, #138930, #138931, #138932, #138933, #138935, #138937, #138940, #138941, #138942, #138946, #138949, #138957, #138960, #138961, #138962, #138967, #138968, #138969, #138970, #138971, #138973, #138974, #138977, #138978, #138979, #138980, #139018, #139020, #139046, #139056, #139111, #139116, #139126, #139132, #139135, #139136, #139150, #139153).
+Shipped baseline exclusions: v2026.9.1 (6 PRs: #131746, #131767, #135702, #135728, #135903, #136557); v2026.9.2 (225 PRs: #113611, #114580, #114625, #116157, #118358, #124633, #127177, #127182, #129561, #129897, #131436, #132552, #133318, #133323, #135808, #136146, #136364, #136661, #136755, #136781, #136900, #137030, #137131, #137342, #137368, #137506, #137527, #137637, #137681, #137738, #137830, #137885, #137923, #138111, #138207, #138223, #138246, #138248, #138249, #138280, #138332, #138360, #138394, #138398, #138440, #138449, #138481, #138492, #138500, #138524, #138556, #138568, #138574, #138624, #138625, #138627, #138635, #138641, #138648, #138655, #138656, #138669, #138674, #138675, #138678, #138680, #138687, #138690, #138693, #138694, #138695, #138699, #138701, #138707, #138708, #138709, #138711, #138713, #138715, #138716, #138717, #138718, #138719, #138720, #138725, #138728, #138730, #138731, #138733, #138734, #138737, #138738, #138739, #138740, #138742, #138743, #138744, #138745, #138746, #138747, #138748, #138752, #138754, #138758, #138759, #138764, #138765, #138766, #138767, #138769, #138772, #138776, #138780, #138781, #138782, #138784, #138785, #138792, #138793, #138794, #138796, #138801, #138804, #138805, #138806, #138810, #138813, #138814, #138816, #138818, #138820, #138822, #138824, #138827, #138828, #138830, #138832, #138837, #138838, #138840, #138841, #138845, #138849, #138851, #138854, #138855, #138856, #138857, #138858, #138859, #138860, #138862, #138863, #138865, #138866, #138868, #138872, #138875, #138876, #138877, #138878, #138880, #138884, #138885, #138888, #138889, #138890, #138891, #138894, #138895, #138896, #138898, #138902, #138904, #138907, #138908, #138909, #138910, #138911, #138912, #138914, #138916, #138920, #138921, #138925, #138926, #138927, #138930, #138931, #138932, #138933, #138935, #138937, #138940, #138941, #138942, #138946, #138949, #138957, #138960, #138961, #138962, #138967, #138968, #138969, #138970, #138971, #138973, #138974, #138977, #138978, #138979, #138980, #139018, #139020, #139046, #139056, #139111, #139116, #139126, #139132, #139135, #139136, #139150, #139153).
 
 #### Pull requests
 
@@ -415,6 +470,502 @@ Shipped baseline exclusions: v2026.9.1 (1 PRs: #131767); v2026.9.2 (224 PRs: #11
 - **PR #139459**
 - **PR #139519**
 - **PR #139466** Related #139448.
+- **PR #139500**
+- **PR #139502**
+- **PR #139509**
+- **PR #139532**
+- **PR #139533**
+- **PR #139520** Related #139515.
+- **PR #139535**
+- **PR #139483**
+- **PR #139486**
+- **PR #139125** Related #139121.
+- **PR #139529** Related #139526.
+- **PR #139543**
+- **PR #139545**
+- **PR #139552**
+- **PR #139476**
+- **PR #139523** Related #139235.
+- **PR #139517**
+- **PR #139554**
+- **PR #139522**
+- **PR #139528**
+- **PR #139565**
+- **PR #139566**
+- **PR #139525**
+- **PR #139569**
+- **PR #139576**
+- **PR #139579**
+- **PR #139567**
+- **PR #139458**
+- **PR #139506**
+- **PR #139575**
+- **PR #138392**
+- **PR #139571**
+- **PR #139572**
+- **PR #139587**
+- **PR #139560**
+- **PR #139593**
+- **PR #139479**
+- **PR #139556**
+- **PR #139496**
+- **PR #139516**
+- **PR #136374** Thanks @teddytennant.
+- **PR #139481**
+- **PR #139589**
+- **PR #139553**
+- **PR #139469**
+- **PR #139581**
+- **PR #139439**
+- **PR #139357** Thanks @obviyus.
+- **PR #139392** Thanks @jason-allen-oneal.
+- **PR #139607**
+- **PR #139512**
+- **PR #139531**
+- **PR #139612** Thanks @fuller-stack-dev.
+- **PR #139491** Related #139488.
+- **PR #139601** Thanks @vincentkoc.
+- **PR #139590**
+- **PR #139490**
+- **PR #139539** Related #139365. Thanks @TurboTheTurtle and @obviyus and @Colton-Harris.
+- **PR #139592** Related #139547.
+- **PR #139501**
+- **PR #139508**
+- **PR #136699** Thanks @vincentkoc and @RomneyDa.
+- **PR #139617**
+- **PR #139618**
+- **PR #139628**
+- **PR #139319** Related #139310.
+- **PR #139507** Related #139440.
+- **PR #139580**
+- **PR #139559** Related #139557. Thanks @ruel225 and @obviyus.
+- **PR #134274**
+- **PR #139536** Thanks @robojarvis and @obviyus.
+- **PR #139598** Related #139549. Thanks @ayaangazali and @obviyus and @TheCrazyLex.
+- **PR #139645**
+- **PR #139308** Related #139257. Thanks @ylcn91 and @obviyus and @resYuto.
+- **PR #139605**
+- **PR #139611**
+- **PR #139597**
+- **PR #139595**
+- **PR #139117** Related #138777. Thanks @ylcn91 and @vincentkoc and @8bitsforge.
+- **PR #139656** Thanks @obviyus.
+- **PR #139623** Thanks @vincentkoc.
+- **PR #139564**
+- **PR #139570**
+- **PR #139596**
+- **PR #139631**
+- **PR #139616**
+- **PR #139650**
+- **PR #139610** Related #139609.
+- **PR #139630** Thanks @vincentkoc.
+- **PR #139634**
+- **PR #139460**
+- **PR #139626**
+- **PR #135167** Thanks @vincentkoc.
+- **PR #139252** Thanks @upple and @obviyus.
+- **PR #139667**
+- **PR #139638**
+- **PR #139665**
+- **PR #139673**
+- **PR #139563** Related #139537.
+- **PR #138917** Thanks @fuller-stack-dev.
+- **PR #139679**
+- **PR #139643**
+- **PR #139402** Thanks @SebTardif and @obviyus.
+- **PR #139666**
+- **PR #139644** Related #139642.
+- **PR #137219** Thanks @coderdailyone.
+- **PR #139627**
+- **PR #139687**
+- **PR #139652**
+- **PR #139641**
+- **PR #139659**
+- **PR #139689**
+- **PR #139668**
+- **PR #139696**
+- **PR #139636**
+- **PR #139681**
+- **PR #139684**
+- **PR #139678**
+- **PR #139685** Related #139680.
+- **PR #139694**
+- **PR #139660** Thanks @TheCrazyLex.
+- **PR #139651**
+- **PR #139573**
+- **PR #139690**
+- **PR #139702**
+- **PR #139582**
+- **PR #139705**
+- **PR #139697**
+- **PR #137713** Related #137712. Thanks @aeoess.
+- **PR #139691**
+- **PR #139724**
+- **PR #139510**
+- **PR #139649** Thanks @obviyus.
+- **PR #139703**
+- **PR #134213** Related #133898. Thanks @xydt-juyaohui and @gmv3892-creator.
+- **PR #139713**
+- **PR #139688**
+- **PR #139747**
+- **PR #139743**
+- **PR #139726**
+- **PR #139715**
+- **PR #139734**
+- **PR #139753**
+- **PR #139725**
+- **PR #139736**
+- **PR #138829** Thanks @lzhan011 and @obviyus and @vincentkoc.
+- **PR #139729** Thanks @vincentkoc.
+- **PR #139745**
+- **PR #139737**
+- **PR #139653**
+- **PR #139674**
+- **PR #138125**
+- **PR #139719**
+- **PR #139746**
+- **PR #139421**
+- **PR #139759**
+- **PR #139716**
+- **PR #139657**
+- **PR #139646**
+- **PR #139764**
+- **PR #139635**
+- **PR #139480**
+- **PR #139738**
+- **PR #139709** Related #139527. Thanks @Conan-Scott.
+- **PR #139739**
+- **PR #139763**
+- **PR #139720**
+- **PR #139503**
+- **PR #139740**
+- **PR #139698**
+- **PR #139621**
+- **PR #139794**
+- **PR #139695**
+- **PR #139749** Thanks @obviyus.
+- **PR #139791** Thanks @obviyus.
+- **PR #139625**
+- **PR #139801** Thanks @obviyus and @Colton-Harris.
+- **PR #139206** Thanks @obviyus.
+- **PR #139766**
+- **PR #139731** Thanks @fuller-stack-dev.
+- **PR #139750** Thanks @obviyus.
+- **PR #139795**
+- **PR #138199**
+- **PR #117302** Thanks @ayaangazali and @vincentkoc.
+- **PR #139790**
+- **PR #139741**
+- **PR #139760** Thanks @obviyus.
+- **PR #139733**
+- **PR #139784**
+- **PR #139640**
+- **PR #139767**
+- **PR #139785**
+- **PR #139773**
+- **PR #139786**
+- **PR #139686** Thanks @gaoanze888 and @obviyus.
+- **PR #139814**
+- **PR #139757**
+- **PR #139658**
+- **PR #139820**
+- **PR #139755**
+- **PR #139796**
+- **PR #139765**
+- **PR #139798**
+- **PR #139776** Related #136246. Thanks @eddiedon.
+- **PR #139775**
+- **PR #139803**
+- **PR #139632**
+- **PR #138928** Thanks @chelsealong.
+- **PR #139717**
+- **PR #139758**
+- **PR #127225** Thanks @ampagent.
+- **PR #139804**
+- **PR #139807**
+- **PR #139836** Related #139109. Thanks @gaoanze888 and @NovaUnboundAi.
+- **PR #139661** Related #139341. Thanks @ruel225 and @obviyus and @Jackten.
+- **PR #139846** Thanks @obviyus.
+- **PR #139849** Thanks @obviyus.
+- **PR #139639**
+- **PR #139845**
+- **PR #139823**
+- **PR #139771**
+- **PR #139817** Thanks @obviyus.
+- **PR #139821**
+- **PR #139835**
+- **PR #139805**
+- **PR #139815**
+- **PR #137120** Related #137033. Thanks @shakkernerd.
+- **PR #139309** Thanks @altaywtf.
+- **PR #139783**
+- **PR #139848** Related #139498, #139499. Thanks @goslingmanagment.
+- **PR #139806**
+- **PR #139777**
+- **PR #139497**
+- **PR #139655**
+- **PR #139860**
+- **PR #139778**
+- **PR #139787**
+- **PR #139730** Related #139671. Thanks @ly85206559 and @obviyus.
+- **PR #139788**
+- **PR #139779**
+- **PR #139831**
+- **PR #139826**
+- **PR #139851**
+- **PR #138839** Related #136997.
+- **PR #139829**
+- **PR #139800**
+- **PR #139852**
+- **PR #139819**
+- **PR #139793** Related #139774. Thanks @zhangguiping-xydt.
+- **PR #139840**
+- **PR #137209** Thanks @marmar9615-cloud.
+- **PR #139863**
+- **PR #139864**
+- **PR #139683** Thanks @fuller-stack-dev.
+- **PR #139865**
+- **PR #139465**
+- **PR #133032** Related #127641. Thanks @TurboTheTurtle.
+- **PR #139880** Thanks @obviyus.
+- **PR #139816**
+- **PR #139856**
+- **PR #139884** Thanks @obviyus.
+- **PR #139824**
+- **PR #139825**
+- **PR #139243** Related #139207. Thanks @LiuwqGit and @vincentkoc and @NovaUnboundAi.
+- **PR #139744**
+- **PR #139876** Thanks @obviyus.
+- **PR #137344** Thanks @xydt-juyaohui and @fuller-stack-dev.
+- **PR #139890**
+- **PR #139858**
+- **PR #139894**
+- **PR #139769**
+- **PR #139886**
+- **PR #139712**
+- **PR #139897**
+- **PR #139905**
+- **PR #139732**
+- **PR #139885**
+- **PR #139555**
+- **PR #139663**
+- **PR #139895**
+- **PR #139855**
+- **PR #139873** Related #139594. Thanks @RobertOnline69.
+- **PR #139844** Related #139494. Thanks @hyspacex.
+- **PR #139904**
+- **PR #139898**
+- **PR #139866**
+- **PR #139907** Thanks @obviyus.
+- **PR #139881**
+- **PR #139874**
+- **PR #139906**
+- **PR #139828**
+- **PR #139914**
+- **PR #139913**
+- **PR #139920**
+- **PR #139908**
+- **PR #139901**
+- **PR #139927**
+- **PR #139910**
+- **PR #139827**
+- **PR #139928**
+- **PR #139892**
+- **PR #139862** Related #139857.
+- **PR #139893**
+- **PR #139772**
+- **PR #139754**
+- **PR #139888** Related #137125. Thanks @shakkernerd.
+- **PR #139937**
+- **PR #139799**
+- **PR #139936**
+- **PR #139916** Thanks @obviyus.
+- **PR #139931** Thanks @obviyus.
+- **PR #139722** Thanks @fuller-stack-dev.
+- **PR #139915**
+- **PR #138751** Related #138706. Thanks @chelsealong and @keith9681.
+- **PR #139923** Thanks @obviyus.
+- **PR #139940** Related #139939.
+- **PR #139811**
+- **PR #139879**
+- **PR #139932**
+- **PR #139418** Related #139303.
+- **PR #139935**
+- **PR #139388**
+- **PR #139930**
+- **PR #139752**
+- **PR #139919**
+- **PR #139704** Thanks @fuller-stack-dev.
+- **PR #139700**
+- **PR #139912**
+- **PR #139953**
+- **PR #139948**
+- **PR #124476** Thanks @coaiMax.
+- **PR #139942**
+- **PR #139770**
+- **PR #139947** Related #139945.
+- **PR #139832**
+- **PR #139969**
+- **PR #139924** Thanks @shakkernerd.
+- **PR #139957**
+- **PR #139834**
+- **PR #139837**
+- **PR #139861**
+- **PR #139812**
+- **PR #139843**
+- **PR #139664**
+- **PR #139941**
+- **PR #139900**
+- **PR #138768**
+- **PR #139558**
+- **PR #139985**
+- **PR #139648**
+- **PR #139859**
+- **PR #139955**
+- **PR #139968**
+- **PR #139949**
+- **PR #139984**
+- **PR #139988** Related #139975.
+- **PR #139982**
+- **PR #139991** Thanks @obviyus.
+- **PR #139992**
+- **PR #139956** Related #139954.
+- **PR #127113** Related #127095.
+- **PR #131595**
+- **PR #139997**
+- **PR #139918**
+- **PR #139966**
+- **PR #139965**
+- **PR #139899**
+- **PR #139882**
+- **PR #139842** Thanks @obviyus.
+- **PR #140004**
+- **PR #140002**
+- **PR #139993** Thanks @vincentkoc.
+- **PR #139959**
+- **PR #139266** Related #139185. Thanks @ly85206559 and @haoran2025.
+- **PR #127136** Related #127128.
+- **PR #140017**
+- **PR #139841**
+- **PR #139973**
+- **PR #139742**
+- **PR #137268** Thanks @marmar9615-cloud.
+- **PR #140014**
+- **PR #138900**
+- **PR #139808**
+- **PR #139944**
+- **PR #140031**
+- **PR #139967**
+- **PR #140032**
+- **PR #140026**
+- **PR #133400**
+- **PR #140029**
+- **PR #139974** Related #139971.
+- **PR #140015**
+- **PR #127216** Related #127196.
+- **PR #140044**
+- **PR #139875**
+- **PR #140013**
+- **PR #140028**
+- **PR #140038**
+- **PR #139958**
+- **PR #140019**
+- **PR #140043**
+- **PR #140048**
+- **PR #139987**
+- **PR #140049**
+- **PR #140059**
+- **PR #140040**
+- **PR #139495**
+- **PR #139951** Thanks @shakkernerd.
+- **PR #140047**
+- **PR #140058**
+- **PR #140054**
+- **PR #140024**
+- **PR #140046**
+- **PR #140061**
+- **PR #139921**
+- **PR #140057**
+- **PR #140033**
+- **PR #139922**
+- **PR #117370**
+- **PR #140023**
+- **PR #140065** Related #140063.
+- **PR #140069**
+- **PR #140062**
+- **PR #140056**
+- **PR #140041** Thanks @obviyus.
+- **PR #140034**
+- **PR #140071**
+- **PR #139692**
+- **PR #140076**
+- **PR #138411** Related #138382. Thanks @NianJiuZst and @igs-rogenlo.
+- **PR #140066**
+- **PR #139952**
+- **PR #140022**
+- **PR #140016**
+- **PR #140074**
+- **PR #140072**
+- **PR #140018** Thanks @ylcn91 and @vincentkoc.
+- **PR #140021**
+- **PR #140081**
+- **PR #140051**
+- **PR #140078**
+- **PR #137649** Thanks @ly85206559.
+- **PR #140087**
+- **PR #140077**
+- **PR #140089**
+- **PR #139789**
+- **PR #140083** Related #140080.
+- **PR #140068**
+- **PR #131462** Related #131374. Thanks @gaoanze888 and @andersonjeccel.
+- **PR #140093**
+- **PR #140092**
+- **PR #138448**
+- **PR #140088**
+- **PR #140084**
+- **PR #140070**
+- **PR #140091**
+- **PR #140082**
+- **PR #140098**
+- **PR #140090**
+- **PR #140104** Related #140103.
+- **PR #140108** Thanks @obviyus.
+- **PR #140110**
+- **PR #140118**
+- **PR #140095**
+- **PR #135604**
+- **PR #140097**
+- **PR #139701**
+- **PR #140094**
+- **PR #140114**
+- **PR #138771** Related #138620. Thanks @RileyJJY and @chac4l.
+- **PR #140122**
+- **PR #118466** Thanks @zeroaltitude.
+- **PR #140117** Thanks @mbelinky.
+- **PR #138391** Related #137864. Thanks @teddytennant and @obviyus and @fisherman86-ai.
+- **PR #140105** Thanks @obviyus.
+- **PR #140086** Thanks @obviyus.
+- **PR #119126** Thanks @shad0wca7.
+- **PR #139489**
+- **PR #140126**
+- **PR #140130** Thanks @obviyus.
+- **PR #137253** Thanks @coderdailyone.
+- **PR #140139** Thanks @obviyus.
+- **PR #140134**
+- **PR #120248** Thanks @lucascmg-vx.
+- **PR #140138**
+- **PR #139613** Related #138613. Thanks @TurboTheTurtle and @vincentkoc.
+- **PR #140113**
+- **PR #140123**
+- **PR #140124**
+- **PR #140143**
+- **PR #140135**
+- **PR #121603** Thanks @vincentkoc.
+- **PR #140133**
+- **PR #140144**
+- **PR #140112**
+- **PR #140107**
 
 ## 2026.9.2
 
