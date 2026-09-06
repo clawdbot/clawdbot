@@ -506,6 +506,8 @@ export async function createGatewaySession(params: {
     const durableEntryExists = listSessionEntriesReadOnly({
       agentId,
       storePath: durableStorePath,
+      projection: "list",
+      clone: false,
     }).some(({ sessionKey }) => sessionKey === explicitTargetKey);
     if (durableEntryExists || loadGatewaySessionEntryReadOnly(explicitTargetKey).entry) {
       return {
@@ -1005,7 +1007,7 @@ export async function createGatewaySession(params: {
         sessionKey: target.canonicalKey,
         storePath: target.storePath,
       },
-      async ({ existingEntry, sessionEntries }) => {
+      async ({ existingEntry, targetEntry, isLabelInUse }) => {
         // This callback owns generated and explicit keys alike; no existing row
         // is the canonical signal that this request will actually create one.
         if (!existingEntry) {
@@ -1148,11 +1150,8 @@ export async function createGatewaySession(params: {
         }
         const patched = await projectSessionsPatchEntry({
           cfg: params.cfg,
-          existingEntry: sessionEntries[target.canonicalKey],
-          isLabelInUse: (label) =>
-            Object.entries(sessionEntries).some(
-              ([sessionKey, entry]) => sessionKey !== target.canonicalKey && entry.label === label,
-            ),
+          existingEntry: targetEntry,
+          isLabelInUse,
           storeKey: target.canonicalKey,
           agentId: target.agentId,
           preparedSessionRoot: sessionRoot,
@@ -1194,7 +1193,6 @@ export async function createGatewaySession(params: {
             ),
           };
         }
-        sessionEntries[target.canonicalKey] = patched.entry;
         const execNode = normalizeOptionalString(params.execNode);
         const execCwd = normalizeOptionalString(params.execCwd);
         const initialAgentHarnessId = params.initialEntry
@@ -1327,7 +1325,6 @@ export async function createGatewaySession(params: {
             : {}),
           ...(existingEntry === undefined && incognito ? { incognito: true as const } : {}),
         };
-        sessionEntries[target.canonicalKey] = initializedEntry;
         const initialized = { ...patched, entry: initializedEntry };
         const explicitParentSessionKey =
           canonicalParentSessionKey ?? normalizeOptionalString(initializedEntry.parentSessionKey);

@@ -71,6 +71,7 @@ import {
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
 } from "./task-runtime.test-helpers.js";
+import { listTasksForOwnerOrRequesterSessionKeyForStatus } from "./task-status-access.js";
 
 function createTaskRecord(params: Parameters<typeof createTaskRecordOrNull>[0]): TaskRecord {
   const task = createTaskRecordOrNull(params);
@@ -467,6 +468,55 @@ describe("task-registry store runtime", () => {
     }
     returnedDetail.push("caller mutation");
     expect(listTaskRecords()[0]?.detail).toEqual(["active detail"]);
+  });
+
+  it("selects session status tasks before cloning unrelated details", () => {
+    const sessionKey = "agent:main:cron:job:run:run-id";
+    const unrelatedDetail = { history: "unrelated task output" };
+    const base: TaskRecord = {
+      ...createStoredTask(),
+      requesterSessionKey: "other-requester",
+      ownerKey: "other-owner",
+      detail: [["selected detail"]],
+    };
+    const storedTasks: TaskRecord[] = [
+      { ...base, taskId: "older", ownerKey: sessionKey, createdAt: 50 },
+      { ...base, taskId: "owner-only", ownerKey: sessionKey },
+      { ...base, taskId: "unrelated", createdAt: 500, detail: unrelatedDetail },
+      { ...base, taskId: "requester-only", requesterSessionKey: sessionKey },
+      { ...base, taskId: "child-only", childSessionKey: sessionKey, detail: unrelatedDetail },
+      { ...base, taskId: "padded-owner", ownerKey: ` ${sessionKey} `, detail: unrelatedDetail },
+    ];
+    const saveSnapshot = vi.fn();
+    configureTaskRegistryRuntime({
+      store: {
+        loadSnapshot: () => ({
+          tasks: new Map(storedTasks.map((task) => [task.taskId, task])),
+          deliveryStates: new Map(),
+        }),
+        saveSnapshot,
+      },
+    });
+    expect(getTaskById("owner-only")?.taskId).toBe("owner-only");
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    try {
+      const selected = listTasksForOwnerOrRequesterSessionKeyForStatus(sessionKey);
+      expect(selected.map((task) => task.taskId)).toEqual([
+        "requester-only",
+        "owner-only",
+        "older",
+      ]);
+      expect(clone).not.toHaveBeenCalledWith(unrelatedDetail);
+      const detail = selected[0]?.detail;
+      if (!Array.isArray(detail) || !Array.isArray(detail[0])) {
+        throw new Error("expected nested task detail");
+      }
+      detail[0].push("caller mutation");
+      expect(getTaskById("requester-only")?.detail).toEqual([["selected detail"]]);
+      expect(saveSnapshot).not.toHaveBeenCalled();
+    } finally {
+      clone.mockRestore();
+    }
   });
 
   it("rejects invalid persisted task enum values", () => {

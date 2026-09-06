@@ -147,9 +147,12 @@ elif common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolu
         if [ -n "$anchor_wrapper_revision" ] && [ -n "$anchor_git_root" ] &&
           anchor_exec_dir=$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pr-anchor.XXXXXX" 2>/dev/null); then
           anchor_extraction_valid=0
+          # BSD tar can stop at the end marker before Git finishes writing padding,
+          # causing SIGPIPE under pipefail. Require producer completion before reading.
           if git -C "$anchor_git_root" archive "$anchor_commit" -- \
-            "${anchor_components[@]}" 2>/dev/null |
-            tar -x -C "$anchor_exec_dir" 2>/dev/null; then
+            "${anchor_components[@]}" > "$anchor_exec_dir/anchor.tar" 2>/dev/null &&
+            tar -xf "$anchor_exec_dir/anchor.tar" -C "$anchor_exec_dir" 2>/dev/null; then
+            rm "$anchor_exec_dir/anchor.tar"
             anchor_extraction_valid=1
             anchor_verified_entries=0
             # Verify every extracted file byte-matches its anchor blob so an

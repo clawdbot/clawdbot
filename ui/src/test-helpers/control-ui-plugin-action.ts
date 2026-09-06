@@ -7,7 +7,7 @@ export function registerSessionPluginAction(
   action: ControlUiAction,
 ) {
   const lifetime = new AbortController();
-  const open = vi.fn();
+  const open = vi.fn<ControlUiHost["sessions"]["open"]>();
   const host = {
     signal: lifetime.signal,
     sessions: { open },

@@ -1,3 +1,4 @@
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   isCurrentActiveWorkerEnvironment,
   workerDisappearanceError,
@@ -17,6 +18,7 @@ import { boundedWorkerError } from "./worker-error.js";
 import type {
   WorkerWorkspaceRecoveryFailureReport,
   WorkerWorkspaceResultConflict,
+  WorkspaceResultConflictLookup,
 } from "./workspace-conflicts.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
@@ -60,11 +62,39 @@ export type PlacementRecoveryDeps = {
     sessionId: string;
     sessionKey: string;
     agentId: string;
-  }) => Promise<WorkerWorkspaceResultConflict | undefined>;
+  }) => Promise<WorkspaceResultConflictLookup>;
   recoverPlacementMoves?: (environmentId?: string) => Promise<Set<string>>;
   prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
   publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
 };
+
+const log = createSubsystemLogger("gateway/worker-placement");
+
+export async function resolvePriorWorkspaceResultConflict(
+  resolve: PlacementRecoveryDeps["resolveWorkspaceResultConflict"],
+  placement: {
+    sessionId: string;
+    sessionKey: string;
+    agentId: string;
+    workspaceResultConflict?: WorkerWorkspaceResultConflict;
+  },
+): Promise<WorkerWorkspaceResultConflict | undefined> {
+  if (placement.workspaceResultConflict) {
+    return placement.workspaceResultConflict;
+  }
+  const lookup = await resolve(placement);
+  if (lookup.kind === "conflict") {
+    return lookup.conflict;
+  }
+  if (lookup.kind === "unknown") {
+    log.warn(
+      `Cloud workspace conflict state unknown sessionId=${boundedWorkerError(placement.sessionId, 128)} reason=${lookup.reason}; preserving prior conflict state`,
+    );
+    // Undefined means no prior knowledge to finalizeWorkspaceResultConflicts: it cannot
+    // clear the retained report or delete its unseen staged ref. The warning signals this.
+  }
+  return undefined;
+}
 
 type WorkerOwnedPendingPlacement = Extract<
   WorkerDispatchPlacement,
@@ -181,8 +211,10 @@ export async function recoverPendingWorkspaceResults(
         continue;
       }
       const localPath = await deps.resolveWorkspacePath(active);
-      const priorWorkspaceResultConflict =
-        active.workspaceResultConflict ?? (await deps.resolveWorkspaceResultConflict(active));
+      const priorWorkspaceResultConflict = await resolvePriorWorkspaceResultConflict(
+        deps.resolveWorkspaceResultConflict,
+        active,
+      );
       const canonicalStagedResultRef = workerWorkspaceResultRef(turnClaim.claimId);
       let stagedResultRef = pending.stagedResultRef;
       if (

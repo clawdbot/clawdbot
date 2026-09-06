@@ -210,13 +210,15 @@ async function validatePostPluginConfigInFreshProcess(params: {
   }
 }
 
-async function applyFreshPostPluginDoctor(params: {
+async function completePostPluginInFreshProcess(params: {
   root: string;
   pluginUpdate: PostCorePluginUpdateResult;
   yes: boolean;
   json: boolean;
   timeoutMs: number;
   nodeRunner?: string;
+  beforeDoctor?: () => Promise<void>;
+  freshDoctorRequired: boolean;
 }): Promise<{ pluginUpdate: PostCorePluginUpdateResult; configValid: boolean }> {
   let entryPath: string | undefined;
   try {
@@ -238,11 +240,14 @@ async function applyFreshPostPluginDoctor(params: {
   }
   let pluginUpdate = params.pluginUpdate;
   try {
-    await runUpdateFinalizationDoctorInFreshProcess({
-      ...params,
-      entryPath,
-      phase: "post-plugin",
-    });
+    if (params.freshDoctorRequired) {
+      await params.beforeDoctor?.();
+      await runUpdateFinalizationDoctorInFreshProcess({
+        ...params,
+        entryPath,
+        phase: "post-plugin",
+      });
+    }
   } catch (err) {
     pluginUpdate = createPostPluginDoctorExecutionFailure(params.pluginUpdate, String(err));
   }
@@ -267,40 +272,33 @@ export async function completePostCorePluginUpdate(params: {
   json: boolean;
   timeoutMs: number;
   nodeRunner?: string;
+  beforeDoctor?: () => Promise<void>;
 }): Promise<{
   pluginUpdate: PostCorePluginUpdateResult;
   configSnapshot: ConfigFileSnapshot;
 }> {
   let pluginUpdate = params.pluginUpdate;
   let freshConfigValid: boolean | undefined;
-  if (pluginUpdate.status !== "error" && params.freshDoctorRequired) {
+  if (pluginUpdate.status !== "error") {
     // The current process can still hold the pre-update plugin and schema. Reload the updated
     // migration owner before trusting strict validation or restarting the gateway.
-    const freshResult = await applyFreshPostPluginDoctor({
+    const freshResult = await completePostPluginInFreshProcess({
       root: params.root,
       pluginUpdate,
       yes: params.yes,
       json: params.json,
       timeoutMs: params.timeoutMs,
+      beforeDoctor: params.beforeDoctor,
+      freshDoctorRequired: params.freshDoctorRequired,
       ...(params.nodeRunner ? { nodeRunner: params.nodeRunner } : {}),
     });
     pluginUpdate = freshResult.pluginUpdate;
     freshConfigValid = freshResult.configValid;
-  } else if (pluginUpdate.status !== "error") {
-    pluginUpdate = await applyPostPluginUpdateReadiness({
-      root: params.root,
-      pluginUpdate,
-      timeoutMs: params.timeoutMs,
-      ...(params.nodeRunner ? { nodeRunner: params.nodeRunner } : {}),
-    });
   }
 
   const configSnapshot = await withNormalConfigValidation(() => readConfigFileSnapshot());
-  // A plugin migration that did not converge must fail finalization instead of letting legacy
-  // config reach the restarted gateway.
-  // Two reads by design: the fresh child is the only process able to validate under the
-  // UPDATED schema, so its verdict gates the restart; this parent snapshot is best-effort
-  // state under the stale in-memory schema and the restarted gateway re-reads config anyway.
+  // Strict validity belongs to the target runtime even when no plugin changed.
+  // The parent may retain the previous schema; its snapshot is best-effort context.
   pluginUpdate = applyPostPluginConfigValidation(
     pluginUpdate,
     freshConfigValid ?? configSnapshot.valid,

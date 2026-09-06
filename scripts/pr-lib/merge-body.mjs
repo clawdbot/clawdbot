@@ -56,9 +56,11 @@ function trailers(body) {
 }
 
 function isMachineCredit(line) {
-  // Claude Code documents this exact machine address. Names and provider domains
-  // can identify human contributors, so neither is a safe exclusion rule.
-  return /^Co-authored-by:\s*[^<>]+<noreply@anthropic\.com>$/i.test(line);
+  // Match published machine addresses, never names or provider domains that
+  // can also identify human contributors.
+  return /^Co-authored-by:\s*[^<>]+<(?:noreply@anthropic\.com|cursoragent@cursor\.com|amp@ampcode\.com)>$/i.test(
+    line,
+  );
 }
 
 function compose({ preview, source, captured }) {

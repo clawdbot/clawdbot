@@ -111,6 +111,7 @@ describe("subagent activity rows", () => {
       '[data-subagent-task-id="clickable-subagent"]',
     );
     expect(row?.tagName).toBe("BUTTON");
+    expect(row?.querySelector(".chat-subagent-activity__label")?.textContent).toBe("Subagent");
     expect(row?.getAttribute("aria-label")).toBe("Open subagent details for Map codebase");
     row?.click();
     expect(onOpenTaskDetail).toHaveBeenCalledWith(task);

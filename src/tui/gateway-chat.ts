@@ -14,19 +14,16 @@ import {
 import type { ErrorShape } from "../../packages/gateway-protocol/src/frame-guards.js";
 import {
   type HelloOk,
-  GATEWAY_SERVER_CAPS,
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   type CommandEntry,
   type CommandsListParams,
   type CommandsListResult,
-  type EnvironmentsListResult,
   type SessionsListParams,
   type SessionsResolveParams,
   type SessionsPatchResult,
   type SessionsPatchParams,
   type TaskSuggestionsAcceptResult,
-  type TaskSuggestionsAcceptParams,
   type TaskSuggestionsListResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import { isRetryableGatewayStartupUnavailableError } from "../../packages/gateway-protocol/src/startup-unavailable.js";
@@ -65,7 +62,6 @@ import type {
   TuiSessionCreateOptions,
   TuiSessionMutationResult,
   TuiChatSendResult,
-  TuiTaskSuggestionAcceptMode,
 } from "./tui-backend.js";
 
 type GatewayConnectionOptions = {
@@ -478,7 +474,6 @@ export class GatewayChatClient implements TuiBackend {
   getTaskSuggestionActionCapabilities() {
     const auth = this.hello?.auth;
     const methods = this.hello?.features?.methods;
-    const capabilities = this.hello?.features?.capabilities;
     const allows = (method: string, scope: "operator.admin" | "operator.write") =>
       Array.isArray(methods) &&
       methods.includes(method) &&
@@ -492,9 +487,6 @@ export class GatewayChatClient implements TuiBackend {
       );
     return {
       canAccept: allows("taskSuggestions.accept", "operator.admin"),
-      canAcceptModes:
-        Array.isArray(capabilities) &&
-        capabilities.includes(GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES),
       canDismiss: allows("taskSuggestions.dismiss", "operator.write"),
     };
   }
@@ -511,29 +503,11 @@ export class GatewayChatClient implements TuiBackend {
     return result.suggestions;
   }
 
-  async listCloudWorkerProfiles() {
-    if (this.hello?.features?.methods?.includes("environments.list") !== true) {
-      return [];
-    }
-    try {
-      const result = await this.client.request<EnvironmentsListResult>("environments.list", {});
-      return result.profiles?.map((profile) => profile.id) ?? [];
-    } catch {
-      // Cloud placement is optional; older or temporarily failing gateways stay quiet.
-      return [];
-    }
-  }
-
-  async acceptTaskSuggestion(
-    taskId: string,
-    mode?: TuiTaskSuggestionAcceptMode,
-    cloudProfileId?: string,
-  ) {
-    const params: TaskSuggestionsAcceptParams =
-      !mode || mode === "worktree"
-        ? { taskId }
-        : { taskId, mode, ...(cloudProfileId ? { cloudProfileId } : {}) };
-    return await this.client.request<TaskSuggestionsAcceptResult>("taskSuggestions.accept", params);
+  async acceptTaskSuggestion(taskId: string) {
+    return await this.client.request<TaskSuggestionsAcceptResult>("taskSuggestions.accept", {
+      taskId,
+      mode: "local",
+    });
   }
 
   async dismissTaskSuggestion(taskId: string) {

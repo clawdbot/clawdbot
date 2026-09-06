@@ -94,9 +94,11 @@ describe("scripts/test-report-utils collectVitestAssertionDurations", () => {
 });
 
 describe("scripts/test-report-utils runVitestJsonReport", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules();
-    spawnSyncMock.mockReset();
+    const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    // Keep process-cleanup probes native; report-only cases override the implementation below.
+    spawnSyncMock.mockReset().mockImplementation(actual.spawnSync);
   });
 
   it("creates and reuses a native JSON report without a package-manager PATH", async ({

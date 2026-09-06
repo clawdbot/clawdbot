@@ -356,6 +356,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
           requireWorkspaceOnly: params.requireWorkspaceOnly,
           messageProvider: resolvedMessageProvider,
           clientCaps: params.clientCaps,
+          pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
           chatType: params.chatType,
           agentAccountId: params.agentAccountId,
           sessionKey: sandboxSessionKey,

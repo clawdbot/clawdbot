@@ -86,10 +86,9 @@ export function loadSubagentSessionEntry(params: {
   let store = params.storeCache?.get(storePath);
   if (!store) {
     store = Object.fromEntries(
-      listSessionEntriesReadOnly({ storePath, clone: false }).map(({ sessionKey, entry }) => [
-        sessionKey,
-        entry,
-      ]),
+      listSessionEntriesReadOnly({ storePath, clone: false, projection: "list" }).map(
+        ({ sessionKey, entry }) => [sessionKey, entry],
+      ),
     );
     params.storeCache?.set(storePath, store);
   }
@@ -140,6 +139,7 @@ export function resolveSubagentRunOrphanReason(params: {
     if (
       params.includeStaleUnended === true &&
       sessionEntry.abortedLastRun !== true &&
+      params.entry.execution.status !== "interrupted" &&
       isStaleUnendedSubagentRun(params.entry, params.now)
     ) {
       return "stale-unended-run";

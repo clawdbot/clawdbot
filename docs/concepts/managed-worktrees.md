@@ -90,7 +90,9 @@ Group **New session defaults** checks the agent workspace the same way as a cust
 
 The Place picker's **Projects** section can start the same worktree flow from a registered project ID. The Gateway resolves the recorded checkout path, so this path remains available at `operator.write`; selecting an arbitrary host folder still requires `operator.admin`.
 
-Coding agents can also call `suggest_task` when they discover confirmed follow-up work outside the current task. The Control UI shows a suggestion chip without starting anything, while a Gateway-backed TUI shows an interactive prompt with the same actions. Selecting **Start in worktree** creates a fresh session-owned worktree from the suggested project and sends the self-contained prompt as its first turn; dismissing the suggestion leaves the repository untouched. Suggestions and their IDs are ephemeral and do not survive a Gateway restart.
+Agents can also call `suggest_task` when they discover confirmed follow-up work outside the current task. The Control UI and Gateway-backed TUI offer **Start in a new session**. This starts the task directly in the suggested folder without creating a worktree or requiring Git. The new session is instructed to explain the need and ask the user before creating or switching to a worktree later. Dismissing a suggestion starts nothing. Suggestions and their IDs are ephemeral and do not survive a Gateway restart.
+
+Both clients send `taskSuggestions.accept` with `mode: "local"`. Existing RPC clients retain the explicit `worktree`, `local`, `cloud`, and `session` modes. Omitted mode still means `worktree` for callers that used the original worktree action; the current Control UI and TUI never omit it. These compatibility modes are not launch choices in the suggestion UI.
 
 OpenClaw exposes these tools only to operator sessions with an actionable Gateway UI. Channel sessions and local/embedded TUI sessions do not receive them until those surfaces have a portable typed task-action contract.
 

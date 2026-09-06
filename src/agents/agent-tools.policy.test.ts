@@ -359,6 +359,7 @@ describe("resolveSubagentToolPolicyForSession", () => {
         "agents_list",
         "openclaw",
         "session_status",
+        "progress_card",
         "automations",
         "cron",
         "message",
@@ -373,7 +374,7 @@ describe("resolveSubagentToolPolicyForSession", () => {
         tools: {
           subagents: {
             tools: {
-              [allowField]: [...hardDeniedTools, "memory_search"],
+              [allowField]: [...hardDeniedTools, "update_plan", "memory_search"],
             },
           },
         },

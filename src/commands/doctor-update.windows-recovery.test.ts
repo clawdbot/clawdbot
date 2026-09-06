@@ -37,7 +37,7 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
         }
         taskEnabled = true;
       }),
-      complete: vi.fn(() => {
+      complete: vi.fn(async () => {
         recoveryClosed = true;
       }),
     };

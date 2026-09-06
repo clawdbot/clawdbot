@@ -1802,10 +1802,11 @@ describe("maybeCompactCodexAppServerSession", () => {
         fake.request.mockRejectedValueOnce(new Error("thread/compact/start timed out"));
       }
       const closeEntered = createDeferred<void>();
-      const closeGate = createDeferred<boolean>();
+      const closeGate = createDeferred<void>();
       fake.closeAndWait.mockImplementationOnce(async () => {
         closeEntered.resolve();
-        return await closeGate.promise;
+        await closeGate.promise;
+        return { exited: false, cleanup: "uncertain" };
       });
       const retirementOutcome = createDeferred<"retained" | "settled">();
       const errorSpy = vi.spyOn(embeddedAgentLog, "error").mockImplementation((message) => {
@@ -1848,14 +1849,14 @@ describe("maybeCompactCodexAppServerSession", () => {
         });
         queued = withCodexAppServerThreadMutation(binding.threadId, nextMutation);
         await patchSessionEntry({ ...scope, update: () => ({ sessionId: next.sessionId }) });
-        closeGate.resolve(false);
+        closeGate.resolve();
 
         const outcome = await retirementOutcome.promise;
         expect(bindingStore.read(current)).toEqual(binding);
         expect(outcome).toBe("retained");
         expect(nextMutation).not.toHaveBeenCalled();
       } finally {
-        closeGate.resolve(false);
+        closeGate.resolve();
         fake.emit({
           method: "turn/completed",
           params: {
@@ -1915,7 +1916,9 @@ describe("maybeCompactCodexAppServerSession", () => {
       });
       ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
       await retainCodexAppServerLiveThread(harness.client, binding.threadId);
-      const closeAndWait = vi.spyOn(harness.client, "closeAndWait").mockResolvedValue(false);
+      const closeAndWait = vi
+        .spyOn(harness.client, "closeAndWait")
+        .mockResolvedValue({ exited: false, cleanup: "uncertain" });
       const retirementOutcome = createDeferred<"retained" | "settled">();
       const errorSpy = vi.spyOn(embeddedAgentLog, "error").mockImplementation((message) => {
         if (message === "failed to retire unconfirmed codex app-server compaction") {
@@ -2016,7 +2019,7 @@ describe("maybeCompactCodexAppServerSession", () => {
       autoCompleteCompaction: false,
       rejectInterrupt: true,
     });
-    fake.closeAndWait.mockResolvedValueOnce(false);
+    fake.closeAndWait.mockResolvedValueOnce({ exited: false, cleanup: "uncertain" });
     const pluginConfig = {
       supervision: { enabled: true },
       appServer: { transport: "websocket" as const, url: "ws://127.0.0.1:45001" },
@@ -2376,7 +2379,7 @@ describe("maybeCompactCodexAppServerSession", () => {
   it("keeps the lifecycle fence when an unconfirmed stdio process does not stop", async () => {
     const fake = createFakeCodexClient({ retainedThreadId: "thread-stuck-stdio" });
     fake.request.mockRejectedValueOnce(new Error("thread/compact/start timed out"));
-    fake.closeAndWait.mockResolvedValueOnce(false);
+    fake.closeAndWait.mockResolvedValueOnce({ exited: false, cleanup: "uncertain" });
     setCodexAppServerClientFactoryForTest(async () => fake.client);
     const sessionFile = await writeTestBinding({ threadId: "thread-stuck-stdio" });
 
@@ -2395,7 +2398,7 @@ describe("maybeCompactCodexAppServerSession", () => {
   it("detaches a guarded remote start after releasing the binding lock", async () => {
     const fake = createFakeCodexClient();
     fake.request.mockRejectedValueOnce(new Error("thread/compact/start timed out"));
-    fake.closeAndWait.mockResolvedValueOnce(false);
+    fake.closeAndWait.mockResolvedValueOnce({ exited: false, cleanup: "uncertain" });
     const sessionFile = await writeTestBinding();
 
     const result = requireCompactResult(
@@ -2836,7 +2839,7 @@ function createFakeCodexClient(
   });
   const closeAndWait = vi.fn<CodexAppServerClient["closeAndWait"]>(async () => {
     close();
-    return true;
+    return { exited: true, cleanup: "closed" };
   });
   const addNotificationHandler = vi.fn(
     (handler: (notification: CodexServerNotification) => void) => {

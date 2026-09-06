@@ -272,7 +272,7 @@ vi.mock("../agents/auth-profiles.js", async () => {
   };
 });
 
-vi.mock("../agents/tools/transcripts-tool.js", () => ({
+vi.mock("../transcripts/auto-start.js", () => ({
   createTranscriptsAutoStartService: hoisted.createTranscriptsAutoStartService,
 }));
 
@@ -4974,7 +4974,6 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
     deps: {} as never,
     startChannels: vi.fn(async () => {}),
     recoveryRuntime: {
-      abortAgent: vi.fn(),
       dispatchAgent: vi.fn(),
       waitForAgent: vi.fn(),
       sendRecoveryNotice: vi.fn(),

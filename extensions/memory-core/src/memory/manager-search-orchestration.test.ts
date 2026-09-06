@@ -8,10 +8,7 @@ import { recordMemoryEntryOrigins } from "../memory-entry-origins.js";
 import { forgetMemoryEntries } from "../memory-forget.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import { MemoryIndexRevisionConflictError } from "./manager-db.js";
-import {
-  createManagerIndexFixture,
-  type ManagerIndexFixtureConfig,
-} from "./manager-index.test-support.js";
+import { createManagerIndexFixture } from "./manager-index.test-support.js";
 import * as knnSubprocess from "./manager-search-knn-subprocess.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
@@ -51,30 +48,18 @@ describe("memory index", () => {
     }
   }
 
-  it.each([
-    {
-      name: "zero vector weight",
-      config: {
-        hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 },
-      } satisfies ManagerIndexFixtureConfig,
+  it.each([0, 0.35])(
+    "finds keyword matches through default hybrid search at minimum score %s",
+    async (minScore) => {
+      await expectHybridKeywordSearchFindsMemory(createCfg({ minScore }));
     },
-    {
-      name: "minimum score exceeds text weight",
-      config: {
-        minScore: 0.35,
-        hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
-      } satisfies ManagerIndexFixtureConfig,
-    },
-  ])("finds keyword matches via hybrid search when $name", async ({ config }) => {
-    await expectHybridKeywordSearchFindsMemory(createCfg(config));
-  });
+  );
 
   it("keeps one search generation while a concurrent reindex waits to publish", async () => {
     const manager = await getPersistentManager(
       createCfg({
         vectorEnabled: true,
         minScore: 0,
-        hybrid: { enabled: true, vectorWeight: 1, textWeight: 0 },
       }),
     );
     await manager.sync({ reason: "test" });
@@ -152,10 +137,63 @@ describe("memory index", () => {
     }
   });
 
-  it("retries transient query embedding transport failures during search", async () => {
-    const cfg = createCfg({
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+  it("keeps a dirty status manager read-only while searching published results", async () => {
+    const cfg = createCfg({ provider: "none", minScore: 0 });
+    const writer = await getFreshManager(cfg, "cli");
+    await writer.sync({ reason: "baseline", force: true });
+    const manager = await getFreshManager(cfg, "status");
+    await fs.writeFile(
+      path.join(fixture.paths.memory, "pending.md"),
+      "unpublished maintenance marker",
+    );
+    Reflect.set(manager, "dirty", true);
+
+    const results = await manager.search("zebra", { minScore: 0 });
+    expect(results.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
+    expect(manager.status().dirty).toBe(true);
+    expect(await manager.search("unpublished maintenance marker")).toEqual([]);
+  });
+
+  it("invalidates keyword snapshots before changing the fallback provider", async () => {
+    const manager = await getPersistentManager(
+      createCfg({ fallback: "fallback-provider", minScore: 0 }),
+    );
+    await manager.sync({ reason: "test" });
+    const fields = manager as unknown as { provider: EmbeddingProvider };
+    const fallbackGate = createDeferred<void>();
+    const queryEntered = createDeferred<void>();
+    const failQuery = createDeferred<void>();
+    providerFixture.providerInitGate = fallbackGate.promise;
+    const querySpy = vi.spyOn(fields.provider, "embed").mockImplementation(async () => {
+      queryEntered.resolve();
+      await failQuery.promise;
+      throw new Error("embedding provider failed");
     });
+    const snapshots: Array<Awaited<ReturnType<typeof manager.search>> | null> = [];
+    const search = manager.search("zebra", {
+      maxResults: 1,
+      minScore: 0,
+      onPartialResults: (results) => snapshots.push(results),
+    });
+    try {
+      await queryEntered.promise;
+      expect(snapshots).toEqual([[expect.objectContaining({ path: "memory/2026-01-12.md" })]]);
+      failQuery.resolve();
+      await vi.waitFor(() => {
+        expect(providerFixture.providerCalls.at(-1)?.provider).toBe("fallback-provider");
+      });
+      expect(snapshots.at(-1)).toBeNull();
+    } finally {
+      failQuery.resolve();
+      fallbackGate.resolve();
+      await search.catch(() => undefined);
+      querySpy.mockRestore();
+      providerFixture.providerInitGate = null;
+    }
+  });
+
+  it("retries transient query embedding transport failures during search", async () => {
+    const cfg = createCfg({});
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
 
@@ -191,9 +229,7 @@ describe("memory index", () => {
   });
 
   it("fails search after bounded query embedding retries are exhausted", async () => {
-    const cfg = createCfg({
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
-    });
+    const cfg = createCfg({});
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
 
@@ -223,9 +259,7 @@ describe("memory index", () => {
   });
 
   it("keeps a healthy local provider active when the caller cancels search", async () => {
-    const cfg = createCfg({
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
-    });
+    const cfg = createCfg({});
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
 
@@ -272,7 +306,6 @@ describe("memory index", () => {
     const manager = await getPersistentManager(
       createCfg({
         minScore: 0,
-        hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
       }),
     );
     await manager.sync({ reason: "test" });
@@ -368,7 +401,6 @@ describe("memory index", () => {
     const manager = await getPersistentManager(
       createCfg({
         minScore: 0,
-        hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
       }),
     );
     await manager.sync({ reason: "test" });
@@ -387,7 +419,6 @@ describe("memory index", () => {
   it("bounds per-keyword FTS fallback in provider-backed hybrid search", async () => {
     const cfg = createCfg({
       minScore: 0.35,
-      hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
     });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
@@ -430,7 +461,6 @@ describe("memory index", () => {
     const manager = await getPersistentManager(
       createCfg({
         minScore: 0,
-        hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 },
       }),
     );
     await fs.writeFile(
@@ -489,7 +519,6 @@ describe("memory index", () => {
         provider: "none",
         rememberAcrossConversations: true,
         minScore: 0,
-        hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
       });
       const manager = await getFreshManager(cfg);
       trackManager(manager);
@@ -524,9 +553,7 @@ describe("memory index", () => {
   });
 
   it("returns before provider or index bootstrap for a blank query", async () => {
-    const manager = await getPersistentManager(
-      createCfg({ provider: "required-provider", hybrid: { enabled: true } }),
-    );
+    const manager = await getPersistentManager(createCfg({ provider: "required-provider" }));
     providerFixture.providerCalls = [];
 
     await expect(manager.search(" \n\t ")).resolves.toStrictEqual([]);
@@ -535,9 +562,7 @@ describe("memory index", () => {
   });
 
   it("does not block querying on session reconciliation", async () => {
-    const manager = await getPersistentManager(
-      createCfg({ provider: "none", minScore: 0, hybrid: { enabled: true } }),
-    );
+    const manager = await getPersistentManager(createCfg({ provider: "none", minScore: 0 }));
     await manager.sync({ reason: "test" });
 
     let releaseSync = () => {};
@@ -581,7 +606,6 @@ describe("memory index", () => {
         sources: ["memory", "sessions"],
         sessionMemory: true,
         minScore: 0,
-        hybrid: { enabled: true },
       });
       const manager = await getPersistentManager(cfg);
       await manager.sync({ reason: "test", force: true });
@@ -691,7 +715,6 @@ describe("memory index", () => {
       provider: "none",
       sources: ["memory"],
       minScore: 0,
-      hybrid: { enabled: true },
     });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test", force: true });
@@ -781,7 +804,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "none",
       minScore: 0,
-      hybrid: { enabled: true },
     });
     const initialManager = await getFreshManager(cfg, "cli");
     await initialManager.sync({ reason: "test", force: true });
@@ -870,9 +892,7 @@ describe("memory index", () => {
   ])(
     "restores a failed maintenance generation after $name and still closes its transient manager",
     async ({ error: syncError, expectedSyncCalls }) => {
-      const manager = await getPersistentManager(
-        createCfg({ provider: "none", minScore: 0, hybrid: { enabled: true } }),
-      );
+      const manager = await getPersistentManager(createCfg({ provider: "none", minScore: 0 }));
       await manager.sync({ reason: "test" });
       const maintenance = {
         adoptReindexRetryState: vi.fn(),
@@ -926,7 +946,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "none",
       minScore: 0,
-      hybrid: { enabled: true },
     });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "baseline" });
@@ -950,9 +969,7 @@ describe("memory index", () => {
   });
 
   it("does not let a no-op sync hide a later detached failure", async () => {
-    const manager = await getPersistentManager(
-      createCfg({ provider: "none", minScore: 0, hybrid: { enabled: true } }),
-    );
+    const manager = await getPersistentManager(createCfg({ provider: "none", minScore: 0 }));
     await manager.sync({ reason: "baseline" });
     const maintenanceStarted = createDeferred<void>();
     const releaseMaintenance = createDeferred<void>();
@@ -996,7 +1013,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       fallback: "fallback-provider",
       minScore: 0,
-      hybrid: { enabled: true },
     });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test", force: true });
@@ -1046,9 +1062,7 @@ describe("memory index", () => {
   });
 
   it("does not let a rejected maintenance handoff abort manager teardown", async () => {
-    const manager = await getPersistentManager(
-      createCfg({ provider: "none", minScore: 0, hybrid: { enabled: true } }),
-    );
+    const manager = await getPersistentManager(createCfg({ provider: "none", minScore: 0 }));
     await manager.sync({ reason: "test" });
     Reflect.set(manager, "dirty", true);
     const syncSpy = vi

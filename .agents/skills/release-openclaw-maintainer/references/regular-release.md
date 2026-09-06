@@ -72,7 +72,11 @@ For a prepare-only request, stop with the candidate, evidence, limitations, and
 printed next command. Do not create/push the final tag or publish/announce.
 With publication authority and candidate success, create and push the signed
 final tag at Release SHA. Leave GitHub Release creation/finalization to the
-publish workflow.
+publish workflow. At this point start the selected macOS handoff, release-ops
+validation, and notarization preflight through [platform publication](platform-publication.md)
+while npm/plugin publication proceeds. These preparation lanes do not need a
+published GitHub page; asset promotion waits for its required release state.
+Keep their exact run/attempt identities in the handoff's publication rows.
 
 ## Publish and verify
 

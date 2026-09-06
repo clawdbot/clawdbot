@@ -135,58 +135,29 @@ describe("isSystemAgentSensitiveConfigPathEmbedding", () => {
     ).toBe(true);
   });
 
-  it("redacts unknown-owner and sensitive descendant paths", () => {
-    expect(redactSystemAgentConfigPath("channels.missing.opaque.abcDEF123")).toBe(
-      "<redacted path>",
-    );
-    expect(redactSystemAgentConfigPath("plugins.entries.missing.config.opaque.abcDEF123")).toBe(
-      "<redacted path>",
-    );
-    expect(redactSystemAgentConfigPath("plugins.entries.codex.config.opaque=abcDEF123")).toBe(
-      "<redacted path>",
-    );
-    expect(redactSystemAgentConfigPath('channels.synology-chat["webhookUrl=abcDEF123"]')).toBe(
-      "<redacted path>",
-    );
-    expect(redactSystemAgentConfigPath('channels.synology-chat.accounts["prod=us"].enabled')).toBe(
-      'channels.synology-chat.accounts["prod=us"].enabled',
-    );
-    expect(
-      redactSystemAgentConfigPath(
-        'plugins.entries.codex.config.appServer.headers["Authorization=Bearer-abc"]',
-      ),
-    ).toBe("<redacted path>");
-    expect(
-      redactSystemAgentConfigPath(
-        "plugins.entries.codex.config.appServer.headers.AuthorizationabcDEF123",
-      ),
-    ).toBe("plugins.entries.codex.config.appServer.headers.AuthorizationabcDEF123");
-    expect(
-      redactSystemAgentConfigPath('plugins.entries.codex.config.appServer.headers["X-Test"]'),
-    ).toBe('plugins.entries.codex.config.appServer.headers["X-Test"]');
-    expect(
-      redactSystemAgentConfigPath('channels.synology-chat.accounts["token=prod"].enabled'),
-    ).toBe('channels.synology-chat.accounts["token=prod"].enabled');
-    expect(redactSystemAgentConfigPath('broadcast["token=prod"]')).toBe('broadcast["token=prod"]');
-    expect(redactSystemAgentConfigPath('session.identityLinks["token=prod"]')).toBe(
-      'session.identityLinks["token=prod"]',
-    );
-    expect(redactSystemAgentConfigPath('channels.modelByChannel["token=prod"].chat')).toBe(
-      'channels.modelByChannel["token=prod"].chat',
-    );
-    expect(
-      redactSystemAgentConfigPath(
-        'channels.telegram.groups["prod.guild"].topics["token=prod"].groupPolicy',
-      ),
-    ).toBe('channels.telegram.groups["prod.guild"].topics["token=prod"].groupPolicy');
-    expect(redactSystemAgentConfigPath('hooks.mappings["token=abcDEF123"].agentId')).toBe(
-      "<redacted path>",
-    );
-    expect(
-      redactSystemAgentConfigPath(
-        'channels.buzz.groups["gateway.auth.token=ACTUAL_GATEWAY_TOKEN"].enabled',
-      ),
-    ).toBe("<redacted path>");
+  it.each([
+    "channels.missing.opaque.abcDEF123",
+    "plugins.entries.missing.config.opaque.abcDEF123",
+    "plugins.entries.codex.config.opaque=abcDEF123",
+    'channels.synology-chat["webhookUrl=abcDEF123"]',
+    'plugins.entries.codex.config.appServer.headers["Authorization=Bearer-abc"]',
+    'hooks.mappings["token=abcDEF123"].agentId',
+    'channels.buzz.groups["gateway.auth.token=ACTUAL_GATEWAY_TOKEN"].enabled',
+  ])("redacts unknown-owner or secret-bearing path %s", (path) => {
+    expect(redactSystemAgentConfigPath(path)).toBe("<redacted path>");
+  });
+
+  it.each([
+    'channels.synology-chat.accounts["prod=us"].enabled',
+    "plugins.entries.codex.config.appServer.headers.AuthorizationabcDEF123",
+    'plugins.entries.codex.config.appServer.headers["X-Test"]',
+    'channels.synology-chat.accounts["token=prod"].enabled',
+    'broadcast["token=prod"]',
+    'session.identityLinks["token=prod"]',
+    'channels.modelByChannel["token=prod"].chat',
+    'channels.telegram.groups["prod.guild"].topics["token=prod"].groupPolicy',
+  ])("preserves schema-valid path %s", (path) => {
+    expect(redactSystemAgentConfigPath(path)).toBe(path);
   });
 });
 

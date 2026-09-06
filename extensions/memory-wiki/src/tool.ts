@@ -1,4 +1,3 @@
-// Memory Wiki plugin module implements tool behavior.
 import path from "node:path";
 import { optionalFiniteNumberSchema } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
@@ -13,6 +12,7 @@ import {
   type ResolvedMemoryWikiConfig,
 } from "./config.js";
 import { lintMemoryWikiVault } from "./lint.js";
+import { renderWikiMutationSummary, renderWikiSearchResults } from "./presentation.js";
 import { getMemoryWikiPage, searchMemoryWiki, WIKI_SEARCH_MODES } from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { renderMemoryWikiStatus, resolveMemoryWikiStatus } from "./status.js";
@@ -179,16 +179,7 @@ export function createWikiSearchTool(
         ...(params.corpus ? { searchCorpus: params.corpus } : {}),
         ...(params.mode ? { mode: params.mode } : {}),
       });
-      const text =
-        results.length === 0
-          ? "No wiki or memory results."
-          : results
-              .map(
-                (result, index) =>
-                  `${index + 1}. ${result.title} (${result.corpus}/${result.kind})\nPath: ${result.path}${typeof result.startLine === "number" && typeof result.endLine === "number" ? `\nLines: ${result.startLine}-${result.endLine}` : ""}${result.provenanceLabel ? `\nProvenance: ${result.provenanceLabel}` : ""}${result.matchedClaimId ? `\nClaim: ${result.matchedClaimId}` : ""}${result.evidenceKinds && result.evidenceKinds.length > 0 ? `\nEvidence: ${result.evidenceKinds.join(", ")}` : ""}\nSnippet: ${result.snippet}`,
-              )
-              .join("\n\n");
-      return textResult(text, { results });
+      return textResult(renderWikiSearchResults(results), { results });
     },
   };
 }
@@ -252,15 +243,7 @@ export function createWikiApplyTool(
         mutation,
         ...(signal ? { signal } : {}),
       });
-      const action = result.changed ? "Updated" : "No changes for";
-      const compileSummary =
-        result.compile.updatedFiles.length > 0
-          ? `Refreshed ${result.compile.updatedFiles.length} index file${result.compile.updatedFiles.length === 1 ? "" : "s"}.`
-          : "Indexes unchanged.";
-      return textResult(
-        `${action} ${result.pagePath} via ${result.operation}. ${compileSummary}`,
-        result,
-      );
+      return textResult(renderWikiMutationSummary(result), result);
     },
   };
 }

@@ -725,8 +725,34 @@ function parseCommandInvocation(helpText: string, commandArgs: string[]) {
     }
   }
 
+  const fileScript = optionEntries.findLast(({ name }) => name === "script");
+  const stdinScript = optionEntries.findLast(({ name }) => name === "script-stdin");
+  // Go stops at any invalid boolean; loadRunScript rejects two active sources.
+  // Preserve those errors without reading or normalizing either input locally.
+  const invalidStdin = optionEntries.some(
+    ({ name, index, value }) =>
+      name === "script-stdin" &&
+      commandArgs[index]?.includes("=") &&
+      !/^(?:1|t|T|true|TRUE|True|0|f|F|false|FALSE|False)$/u.test(value),
+  );
+  const stdinEnabled = Boolean(
+    stdinScript &&
+    (!commandArgs[stdinScript.index]?.includes("=") ||
+      /^(?:1|t|T|true|TRUE|True)$/u.test(stdinScript.value)),
+  );
+  const scriptRequested = !invalidStdin && Boolean(fileScript?.value || stdinEnabled);
+  const script =
+    invalidStdin || (fileScript?.value && stdinEnabled)
+      ? undefined
+      : fileScript?.value
+        ? fileScript
+        : stdinEnabled
+          ? stdinScript
+          : undefined;
   return {
     args: commandArgs,
+    scriptRequested,
+    script,
     commandArgs: start >= 0 ? commandArgs.slice(start) : [],
     optionEntries,
     options,
@@ -2727,8 +2753,7 @@ function injectRemotePosixHydratedNodeModulesBootstrap(invocation: CommandInvoca
   if (
     invocation.args[0] !== "run" ||
     isWindowsRemoteTarget(invocation.args) ||
-    invocation.options.has("script") ||
-    invocation.options.has("script-stdin") ||
+    invocation.script ||
     invocation.start < 0
   ) {
     return invocation.args;
@@ -3341,24 +3366,30 @@ function injectRemoteAwsMacosSwiftBootstrap(
   );
 }
 
-function replaceRunFlagWithScript(commandArgs: string[], flagName: string, scriptPath: string) {
-  const invocation = parseCommandInvocation(help.text, commandArgs);
-  const normalizedName = commandOptionName(flagName);
-  const normalizedArgs = [...commandArgs];
-  for (const { index, name } of invocation.optionEntries) {
-    if (name === normalizedName) {
-      normalizedArgs.splice(index, 1, "--script", scriptPath);
-      return normalizedArgs;
+function replaceRunScript(invocation: CommandInvocation, scriptPath: string) {
+  const normalizedArgs = invocation.args.slice(0, invocation.optionEnd);
+  // One generated file replaces all valid source flags: a later empty file or
+  // an earlier true stdin flag must not override/conflict with the verifier.
+  for (const { name, index } of invocation.optionEntries.toReversed()) {
+    if (name === "script" || name === "script-stdin") {
+      normalizedArgs.splice(
+        index,
+        name === "script" && !invocation.args[index]?.includes("=") ? 2 : 1,
+      );
     }
   }
-  return normalizedArgs;
+  return [
+    ...normalizedArgs,
+    "--script",
+    scriptPath,
+    ...invocation.args.slice(invocation.optionEnd),
+  ];
 }
 
 function prepareAwsMacosScriptStdinBootstrap(commandArgs: string[], providerName: string) {
-  if (
-    !isAwsMacosRemoteTarget(commandArgs, providerName) ||
-    !parseCommandInvocation(help.text, commandArgs).options.has("script-stdin")
-  ) {
+  const invocation = parseCommandInvocation(help.text, commandArgs);
+  const scriptOption = invocation.script;
+  if (!isAwsMacosRemoteTarget(commandArgs, providerName) || scriptOption?.name !== "script-stdin") {
     return { args: commandArgs, cleanup: () => {}, prepared: false };
   }
 
@@ -3368,7 +3399,7 @@ function prepareAwsMacosScriptStdinBootstrap(commandArgs: string[], providerName
   writeFileSync(scriptPath, createAwsMacosScriptStdinWrapper(script), "utf8");
   chmodSync(scriptPath, 0o700);
   return {
-    args: replaceRunFlagWithScript(commandArgs, "--script-stdin", scriptPath),
+    args: replaceRunScript(invocation, scriptPath),
     cleanup: () => rmSync(scriptRoot, { recursive: true, force: true }),
     prepared: true,
   };
@@ -3743,10 +3774,10 @@ function applyRunTransforms(
   try {
     if (sourceBootstrap && !wsl2ScriptBootstrap.prepared) {
       invocation = parseCommandInvocation(help.text, transformedArgs);
-      if (invocation.options.has("script") || invocation.options.has("script-stdin")) {
-        const scriptOption = invocation.options.get("script");
+      const scriptOption = invocation.script;
+      if (scriptOption) {
         const script = readFileSync(
-          scriptOption ? resolve(repoRoot, scriptOption.value) : 0,
+          scriptOption.name === "script" ? resolve(repoRoot, scriptOption.value) : 0,
           "utf8",
         );
         const scriptRoot = mkdtempSync(resolve(tmpdir(), "openclaw-crabbox-source-script-"));
@@ -3757,16 +3788,7 @@ function applyRunTransforms(
           wrapRemoteScript(script, `${sourceBootstrap} || exit $?\nexport CI=true`),
         );
         chmodSync(scriptPath, 0o700);
-        const entry = invocation.optionEntries.find(
-          ({ name }) => name === "script" || name === "script-stdin",
-        )!;
-        transformedArgs = [...transformedArgs];
-        transformedArgs.splice(
-          entry.index,
-          entry.name === "script" && !transformedArgs[entry.index]?.includes("=") ? 2 : 1,
-          "--script",
-          scriptPath,
-        );
+        transformedArgs = replaceRunScript(invocation, scriptPath);
       } else if (
         invocation.start >= 0 &&
         !isAwsMacosRemoteTarget(transformedArgs, options.provider)
@@ -3923,6 +3945,16 @@ if (
 }
 
 if (canonicalProvider === "blacksmith-testbox") {
+  // The delegated provider rejects uploaded scripts before acquiring a lease.
+  if (
+    normalizedArgs[0] === "run" &&
+    parseCommandInvocation(help.text, normalizedArgs).scriptRequested
+  ) {
+    console.error(
+      "[crabbox] provider=blacksmith-testbox does not support --script or --script-stdin. Run a synced script as trailing argv, use --shell, or choose an SSH provider for uploaded scripts.",
+    );
+    process.exit(2);
+  }
   // Testbox owns sync; reject before lease or checkout side effects.
   if (normalizedArgs[0] === "run" && hasOption(normalizedArgs, "--no-sync")) {
     console.error(
@@ -4031,7 +4063,12 @@ try {
       sourceCapsule = prepareCrabboxSourceCapsule({
         repoRoot,
         syncRoot,
-        binary,
+        syncPlan: spawnInvocation(
+          binary,
+          ["sync-plan", "--json", "--limit", "2147483647"],
+          process.env,
+          process.platform,
+        ),
         base: changedGateBase || changedGateBaseForCommand([]).resolvedBase,
       });
     }

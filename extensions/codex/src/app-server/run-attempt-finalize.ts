@@ -6,6 +6,7 @@ import {
   runAgentHarnessLlmOutputHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { appendSessionYieldContext } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { classifyCodexModelCallFailureKind } from "./attempt-diagnostics.js";
 import {
   buildCodexAppServerPromptTimeoutOutcome,
@@ -411,6 +412,27 @@ export async function finalizeCodexAttempt(
             turnId: activeTurnId,
           });
         }
+      }
+      if (toolState.yieldMessage && projectTerminalOutcome().turnSucceeded) {
+        state.pendingSettlementStage = "transcript/yield-context";
+        await Promise.race([
+          appendSessionYieldContext({
+            ...activeTranscriptTarget.sessionTarget,
+            agentId: activeTranscriptTarget.agentId,
+            sessionId: activeTranscriptTarget.sessionId,
+            sessionKey: activeTranscriptTarget.sessionKey,
+            config: params.config,
+            message: toolState.yieldMessage,
+            assertCurrent: () => {
+              connection.assertCurrent();
+              if (settlementPhase !== "active" || !projectTerminalOutcome().turnSucceeded) {
+                throw new Error("Codex yield settlement is no longer active");
+              }
+            },
+          }),
+          drainGraceElapsed.promise,
+          degradedSettlement,
+        ]);
       }
       if (runAbortController.signal.aborted) {
         await state.abortCleanup;

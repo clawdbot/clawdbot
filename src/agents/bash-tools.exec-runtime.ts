@@ -37,6 +37,7 @@ import {
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
+import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import {
   addSession,
@@ -57,6 +58,7 @@ import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { chunkString, clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 import { buildGitHubExecLaunchArgv } from "./github-exec-launch.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
+import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { createSessionSlug } from "./session-slug.js";
 import { maybeWrapCommandWithShellSnapshot } from "./shell-snapshot.js";
@@ -694,6 +696,8 @@ export async function runExecProcess({
   /** Revalidates authorization after async preparation, immediately before each spawn attempt. */
   beforeSpawn?: () => Promise<AgentToolResult<ExecToolDetails> | undefined>;
 }): Promise<ExecProcessHandle> {
+  let assertSourceActive: (() => void) | undefined =
+    captureAgentToolSourceExecutionGuard(initialStartupSignal);
   const startedAt = Date.now();
   const sessionId = createSessionSlug(isProcessSessionIdTaken);
   const execCommand = opts.execCommand ?? opts.command;
@@ -740,7 +744,6 @@ export async function runExecProcess({
   // Foreground delivery keeps its caller context only until yield, abort, or exit.
   // Clearing the callback also releases the completed turn's captured authority.
   let onUpdate = initialOnUpdate && AsyncLocalStorage.bind(initialOnUpdate);
-  let startupSignal = initialStartupSignal;
   let beforeSpawn = initialBeforeSpawn;
   let onSettledBeforeNotify = initialOnSettledBeforeNotify;
 
@@ -822,6 +825,7 @@ export async function runExecProcess({
         timedOut: outcome.timedOut,
       });
     } catch (error) {
+      recordAgentCleanupFailure();
       if (outcome.status === "completed") {
         finalOutcome = buildExecRuntimeErrorOutcome({
           error,
@@ -945,27 +949,30 @@ export async function runExecProcess({
   };
 
   const assertPreSpawnAuthorized = async () => {
-    startupSignal?.throwIfAborted();
+    assertSourceActive?.();
     const denied = await beforeSpawn?.();
-    startupSignal?.throwIfAborted();
+    assertSourceActive?.();
     if (denied) {
       throw new ExecProcessPreflightError(denied);
     }
   };
   const spawn = (input: SpawnInput) => {
-    // No await between the final cancellation check and supervisor admission.
-    startupSignal?.throwIfAborted();
-    return withoutGatewayToolCallerIdentity(() => supervisor.spawn(input));
+    // No await between source authority validation and supervisor admission.
+    assertSourceActive?.();
+    return withoutGatewayToolCallerIdentity(() =>
+      supervisor.spawn({ ...input, assertCurrent: assertSourceActive }),
+    );
   };
 
   try {
-    startupSignal?.throwIfAborted();
+    assertSourceActive?.();
     const spawnSpec = await prepareSpawnSpec();
     usingPty = spawnSpec.mode === "pty";
     const spawnBase = {
       runId: sessionId,
       sessionId: opts.sessionKey?.trim() || sessionId,
       backendId: opts.sandbox ? "exec-sandbox" : "exec-host",
+      ...(opts.sandbox ? { cleanupOwnership: "external" as const } : {}),
       scopeKey: opts.scopeKey,
       cwd: opts.workdir,
       env: spawnSpec.env,
@@ -983,7 +990,7 @@ export async function runExecProcess({
           argv: spawnSpec.argv,
         });
       } catch (err) {
-        startupSignal?.throwIfAborted();
+        assertSourceActive?.();
         const warning = `Warning: PTY spawn failed (${String(err)}); retrying without PTY for \`${opts.command}\`.`;
         logWarn(
           `exec: PTY spawn failed (${String(err)}); retrying without PTY for "${opts.command}".`,
@@ -1021,8 +1028,8 @@ export async function runExecProcess({
     });
     throw error;
   } finally {
-    startupSignal = undefined;
     beforeSpawn = undefined;
+    assertSourceActive = undefined;
   }
   session.stdin = managedRun.stdin;
   session.pid = managedRun.pid;

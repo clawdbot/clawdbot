@@ -20,7 +20,7 @@ import {
   resolvePluginNpmGenerationProjectDirPrefix,
   resolvePluginNpmProjectDir,
 } from "./install-paths.js";
-import { loadPluginInstallRuntime } from "./install-shared.js";
+import { loadPluginInstallRuntime, resolveEffectiveInstallMode } from "./install-shared.js";
 import type { PluginInstallLogger } from "./install-types.js";
 import { hasRetainedManagedNpmInstallMarker } from "./managed-npm-retention.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
@@ -517,7 +517,7 @@ export async function listManagedNpmRootPackageNames(npmRoot: string): Promise<S
   return packageNames;
 }
 
-export function resolveManagedNpmRootPackageDir(npmRoot: string, packageName: string): string {
+function resolveManagedNpmRootPackageDir(npmRoot: string, packageName: string): string {
   return path.join(npmRoot, "node_modules", ...packageName.split("/"));
 }
 
@@ -534,7 +534,7 @@ function resolveManagedNpmRootGenerationKey(params: {
   ].join("\n");
 }
 
-export function resolveManagedNpmRootForInstall(params: {
+function resolveManagedNpmRootForInstall(params: {
   npmBaseDir: string;
   packageName: string;
   npmResolution: NpmSpecResolution;
@@ -556,7 +556,7 @@ export function resolveManagedNpmRootForInstall(params: {
   });
 }
 
-export function resolveManagedNpmInstallRoot(params: {
+function resolveManagedNpmInstallRoot(params: {
   npmBaseDir: string;
   packageName: string;
   npmResolution: NpmSpecResolution;
@@ -620,7 +620,7 @@ async function listManagedNpmPackageDirsForPackage(params: {
   return packageDirs;
 }
 
-export async function resolveManagedNpmGenerationUseForInstall(params: {
+async function resolveManagedNpmGenerationUseForInstall(params: {
   runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
   npmBaseDir: string;
   packageName: string;
@@ -652,10 +652,44 @@ export async function resolveManagedNpmGenerationUseForInstall(params: {
       return "retained-install";
     }
   }
-  if (params.requestedMode === "update") {
-    return hasNonRetainedPackageDir ? "update" : "none";
-  }
-  return "none";
+  return generationUse;
+}
+
+export async function resolveManagedNpmInstallPlan(params: {
+  runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
+  npmBaseDir: string;
+  packageName: string;
+  requestedMode: "install" | "update";
+  npmResolution: NpmSpecResolution;
+}): Promise<{
+  npmRoot: string;
+  installRoot: string;
+  targetMode: "install" | "update";
+  policyMode: "install" | "update";
+}> {
+  const generationUse = await resolveManagedNpmGenerationUseForInstall(params);
+  const npmRoot = resolveManagedNpmInstallRoot({
+    ...params,
+    useGeneration: generationUse !== "none",
+  });
+  const installRoot = resolveManagedNpmRootPackageDir(npmRoot, params.packageName);
+  const targetMode =
+    generationUse === "retained-install" && hasRetainedManagedNpmInstallMarker(installRoot)
+      ? "update"
+      : await resolveEffectiveInstallMode({
+          runtime: params.runtime,
+          requestedMode: params.requestedMode,
+          targetPath: installRoot,
+        });
+  // A new artifact directory can still update an installed plugin. Conversely,
+  // reactivating a retained tree requires fresh-install policy, even for --update.
+  const policyMode =
+    generationUse === "update"
+      ? "update"
+      : generationUse === "retained-install"
+        ? "install"
+        : targetMode;
+  return { npmRoot, installRoot, targetMode, policyMode };
 }
 
 export function resolveRequiredPlatformPackageNames(

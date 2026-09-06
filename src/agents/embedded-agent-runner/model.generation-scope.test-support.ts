@@ -1,3 +1,4 @@
+import type { ModelCatalogSuppression } from "@openclaw/model-catalog-core/model-catalog-types";
 import { vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -30,7 +31,7 @@ export function createModelGenerationFixture(params: {
   runtimeImagePolicy?: ImagePolicy;
   runtimeAugment?: boolean;
   staticImagePolicy?: ImagePolicy;
-  suppress?: boolean;
+  suppression?: Omit<ModelCatalogSuppression, "provider" | "model">;
   withRegistry?: boolean;
 }) {
   const provider = params.provider ?? `generation-${params.label}`;
@@ -68,7 +69,9 @@ export function createModelGenerationFixture(params: {
           ],
         },
       },
-      ...(params.suppress ? { suppressions: [{ provider, model: modelId }] } : {}),
+      ...(params.suppression
+        ? { suppressions: [{ provider, model: modelId, ...params.suppression }] }
+        : {}),
     },
   } satisfies PluginManifestRecord;
   const metadataSnapshot = createPluginMetadataSnapshot({
