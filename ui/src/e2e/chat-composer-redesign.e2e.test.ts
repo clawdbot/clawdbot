@@ -89,7 +89,9 @@ suite.define(() => {
             await option.click();
             await expect.poll(() => page.url()).toContain("model-setup");
           } else {
-            expect(await option.isDisabled()).toBe(true);
+            // A cooldown is transient, unlike a real auth failure or an
+            // unspecified unavailability, so its row stays selectable.
+            expect(await option.isDisabled()).toBe(reason !== "cooldown");
             expect(await page.locator(".chat-controls__model-menu").textContent()).not.toContain(
               "Authentication failed",
             );

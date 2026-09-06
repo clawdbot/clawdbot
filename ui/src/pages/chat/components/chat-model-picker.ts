@@ -331,7 +331,11 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
   };
   const selectModel = (entry: ChatModelPickerOption, event: MouseEvent) => {
     event.stopPropagation();
-    if (params.disabled || params.modelSelectionLocked || entry.disabled) {
+    // A cooldown is transient — the row stays selectable so retrying is the
+    // recovery path, matching the click-through already allowed in
+    // chat-model-picker-options.ts.
+    const isCooldown = entry.disabled && entry.unavailableReason === "cooldown";
+    if (params.disabled || params.modelSelectionLocked || (entry.disabled && !isCooldown)) {
       event.preventDefault();
       return;
     }
