@@ -38,6 +38,7 @@ type FileCheckpoint = {
   prefixLength: number;
   prefix: string;
   boundary: string;
+  validationBoundary: string;
 };
 
 function listManifestChannels(): ManifestChannel[] {
@@ -145,6 +146,7 @@ async function readFileCheckpoint(
   file: string,
   cursor: number,
   prefixLength?: number,
+  validationCursor = cursor,
 ): Promise<FileCheckpoint | undefined> {
   const handle = await fs.open(file, "r").catch((error) => {
     if (isMissingPathError(error)) {
@@ -163,15 +165,25 @@ async function readFileCheckpoint(
       return buffer.toString("base64", 0, bytesRead);
     };
     const boundedCursor = Math.min(Math.max(0, cursor), stat.size);
+    const boundedValidationCursor = Math.min(Math.max(0, validationCursor), stat.size);
     const boundedPrefixLength = Math.min(64, Math.max(0, prefixLength ?? boundedCursor), stat.size);
     const boundaryStart = Math.max(0, boundedCursor - 64);
+    const validationBoundaryStart = Math.max(0, boundedValidationCursor - 64);
+    const boundary = await readWindow(boundaryStart, boundedCursor - boundaryStart);
     return {
       file,
       identity: `${stat.dev}:${stat.ino}`,
       cursor: boundedCursor,
       prefixLength: boundedPrefixLength,
       prefix: await readWindow(0, boundedPrefixLength),
-      boundary: await readWindow(boundaryStart, boundedCursor - boundaryStart),
+      boundary,
+      validationBoundary:
+        validationBoundaryStart === boundaryStart && boundedValidationCursor === boundedCursor
+          ? boundary
+          : await readWindow(
+              validationBoundaryStart,
+              boundedValidationCursor - validationBoundaryStart,
+            ),
     };
   } finally {
     await handle.close();
@@ -202,6 +214,15 @@ function isSameFileGeneration(
     current.identity === previous.identity &&
     current.prefixLength >= previous.prefixLength &&
     currentPrefix?.subarray(0, previous.prefixLength).equals(previousPrefix) === true
+  );
+}
+
+function isSameFileGenerationAtValidationCursor(
+  previous: FileCheckpoint,
+  current: FileCheckpoint | undefined,
+): boolean {
+  return (
+    isSameFileGeneration(previous, current) && current?.validationBoundary === previous.boundary
   );
 }
 
@@ -271,11 +292,17 @@ async function followChannelLogs(
       const checkpointPrefixLength = reanchored
         ? undefined
         : Math.max(previousCheckpoint?.prefixLength ?? 0, Math.min(64, tail.cursor));
-      let checkpoint = await readFileCheckpoint(tail.file, tail.cursor, checkpointPrefixLength);
+      let checkpoint = await readFileCheckpoint(
+        tail.file,
+        tail.cursor,
+        checkpointPrefixLength,
+        previousCheckpoint?.cursor,
+      );
       if (
         !reanchored &&
         previousGeneration !== undefined &&
-        !isSameFileGeneration(previousGeneration, checkpoint)
+        previousCheckpoint !== undefined &&
+        !isSameFileGenerationAtValidationCursor(previousGeneration, checkpoint)
       ) {
         tail = await readConfiguredParsedLogTail({
           limit: readLimit,

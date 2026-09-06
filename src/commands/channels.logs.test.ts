@@ -536,6 +536,60 @@ describe("channelsLogsCommand", () => {
     }
   });
 
+  it("re-anchors after a same-path rewrite preserves the file prefix during checkpointing", async () => {
+    vi.useFakeTimers();
+    try {
+      const oldMessage = `${"x".repeat(200)}-old`;
+      const newMessage = `${"x".repeat(200)}-new`;
+      await fs.writeFile(
+        logPath,
+        logLine({ module: "gateway/channels/slack/send", message: oldMessage }),
+      );
+
+      const realOpen = fs.open.bind(fs);
+      let armRace = false;
+      let armedOpenCount = 0;
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        if (armRace) {
+          armedOpenCount += 1;
+        }
+        if (armRace && armedOpenCount === 4) {
+          await fs.writeFile(
+            logPath,
+            logLine({ module: "gateway/channels/slack/receive", message: newMessage }),
+          );
+        }
+        return realOpen(...args);
+      });
+
+      const follow = channelsLogsCommand(
+        { channel: "slack", follow: true, interval: 10, json: true },
+        runtime,
+      );
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(2));
+
+      armRace = true;
+      await fs.appendFile(
+        logPath,
+        logLine({ module: "gateway/channels/slack/send", message: "pending" }),
+      );
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => expect(runtime.log.mock.calls.length).toBeGreaterThanOrEqual(4));
+      expect(armedOpenCount).toBeGreaterThanOrEqual(4);
+
+      process.emit("SIGINT");
+      await follow;
+
+      const records = runtime.log.mock.calls.map(([value]) => JSON.parse(String(value)));
+      expect(
+        records.filter((record) => record.type === "log").map((record) => record.message),
+      ).toEqual([oldMessage, newMessage]);
+      expect(records.filter((record) => record.type === "notice")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("continues following when a file disappears during checkpointing", async () => {
     vi.useFakeTimers();
     try {
