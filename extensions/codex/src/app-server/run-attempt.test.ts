@@ -5191,13 +5191,30 @@ describe("runCodexAppServerAttempt", () => {
   });
   it("forwards Codex app-server verbose tool summaries and completed output", async () => {
     const onToolResult = vi.fn();
+    const executeRead = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "file contents" }],
+      details: {},
+    }));
+    testing.setOpenClawCodingToolsFactoryForTests((options) => {
+      const tools = createOpenClawCodingTools(options).filter((tool) => tool.name === "read");
+      for (const tool of tools) {
+        tool.execute = executeRead;
+      }
+      return tools;
+    });
     const { sessionFile, workspaceDir } = createRunPaths();
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
+    setCodexTestModelSupportsTools(params, true);
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.toolsAllow = ["read"];
     params.verboseLevel = "full";
     params.onToolResult = onToolResult;
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
+    const startParams = harness.requests.find((request) => request.method === "thread/start")
+      ?.params as { dynamicTools: CodexDynamicToolSpec[] };
+    expect(specNames(startParams.dynamicTools)).toContain("read");
     await harness.notify(
       itemNotification("item/started", {
         type: "dynamicToolCall",
@@ -5211,6 +5228,24 @@ describe("runCodexAppServerAttempt", () => {
         durationMs: null,
       }),
     );
+    expect(onToolResult).not.toHaveBeenCalled();
+    const response = await harness.handleServerRequest({
+      id: "request-tool-1",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "tool-1",
+        namespace: null,
+        tool: "read",
+        arguments: { path: "README.md" },
+      },
+    });
+    expect(response).toMatchObject({
+      success: true,
+      contentItems: [{ type: "inputText", text: "file contents" }],
+    });
+    expect(executeRead).toHaveBeenCalledOnce();
     await harness.notify(
       itemNotification("item/completed", {
         type: "dynamicToolCall",
@@ -5231,7 +5266,7 @@ describe("runCodexAppServerAttempt", () => {
       text: "📖 Read: `from README.md`",
     });
     expect(onToolResult).toHaveBeenNthCalledWith(2, {
-      text: "📖 Read: `from README.md`\n```txt\nfile contents\n```",
+      text: "📖 Read\n```txt\nfile contents\n```",
     });
   });
 
