@@ -17,11 +17,18 @@ export function buildCodexConversationTurnInput(params: {
   prompt: string;
   event: PluginHookInboundClaimEvent;
 }): CodexUserInput[] {
+  const media = extractInboundMedia(params.event);
+  const imageInputs = media
+    .map(toCodexImageInput)
+    .filter((item): item is CodexUserInput => item !== undefined);
+  const nonImageRefs = media
+    .filter((mediaItem) => !isImageMedia(mediaItem))
+    .map(toCodexNonImageMediaRef)
+    .filter((item): item is CodexUserInput => item !== undefined);
   return [
     { type: "text", text: params.prompt, text_elements: [] },
-    ...extractInboundMedia(params.event)
-      .map(toCodexImageInput)
-      .filter((item): item is CodexUserInput => item !== undefined),
+    ...imageInputs,
+    ...nonImageRefs,
   ];
 }
 
@@ -61,6 +68,28 @@ function toCodexImageInput(media: InboundMedia): CodexUserInput | undefined {
     return normalized ? { type: "localImage", path: normalized } : undefined;
   }
   return media.url ? { type: "image", url: media.url } : undefined;
+}
+
+/**
+ * Non-image media (audio, video, documents) cannot be directly consumed by the
+ * Codex app-server input protocol, which only supports text and image inputs.
+ * Instead of silently dropping these attachments — which loses the file
+ * reference when a voice note or other media reaches the bind path before STT
+ * preprocessing — include a text reference so the model is aware the file
+ * exists and can request it or a transcript.
+ */
+function toCodexNonImageMediaRef(media: InboundMedia): CodexUserInput | undefined {
+  const localPath = media.path ?? readLocalMediaPath(media.url);
+  if (localPath) {
+    const normalized = normalizeFileUrl(localPath);
+    if (normalized) {
+      return { type: "text", text: `[inbound media: ${normalized}]`, text_elements: [] };
+    }
+  }
+  if (media.url) {
+    return { type: "text", text: `[inbound media: ${media.url}]`, text_elements: [] };
+  }
+  return undefined;
 }
 
 function isImageMedia(media: InboundMedia): boolean {
