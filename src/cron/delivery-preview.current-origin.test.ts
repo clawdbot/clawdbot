@@ -3,7 +3,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createDirectOutboundTestAdapter,
+  createTestRegistry,
+} from "../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   normalizeSessionDeliveryState,
@@ -30,7 +34,10 @@ async function withCurrentOrigin(
       createTestRegistry(
         ["telegram", "discord"].slice(0, options.channelCount ?? 1).map((id) => ({
           pluginId: id,
-          plugin: createChannelTestPluginBase({ id }),
+          plugin: {
+            ...createChannelTestPluginBase({ id }),
+            outbound: createDirectOutboundTestAdapter({ channel: id }),
+          },
           source: "test",
         })),
       ),
@@ -79,19 +86,34 @@ describe("current cron delivery origin", () => {
     },
   );
 
-  it.each([{ channel: "telegram" }, { to: "recipient" }, { accountId: "work" }, { threadId: 0 }])(
-    "retains explicit delivery coordinates %j",
-    async (coordinates) => {
+  it.each(
+    [{ channel: "telegram" }, { to: "recipient" }, { accountId: "work" }, { threadId: 0 }].flatMap(
+      (coordinates) =>
+        ("channel" in coordinates ? [1] : [0, 1, 2]).map((channelCount) => ({
+          coordinates,
+          channelCount,
+        })),
+    ),
+  )(
+    "retains explicit delivery coordinates $coordinates with $channelCount channels",
+    async ({ coordinates, channelCount }) => {
       await withCurrentOrigin(
-        { delivery: { mode: "announce", ...coordinates } },
+        { channelCount, delivery: { mode: "announce", ...coordinates } },
         async ({ cfg, job }) => {
           const resolved = await resolveDeliveryTarget(cfg, "main", {
             ...job.delivery,
             sessionKey: job.sessionKey,
             sessionTarget: job.sessionTarget,
           });
-          expect(resolved.channel).toBe("telegram");
-          expect(resolved.ok).toBe("to" in coordinates);
+          expect(resolved.channel).toBe(channelCount === 1 ? "telegram" : undefined);
+          expect(resolved.ok).toBe(channelCount === 1 && "to" in coordinates);
+          if (channelCount !== 1) {
+            const preview = await resolveCronDeliveryPreview({ cfg, job });
+            expect(preview.label).toBe(
+              "to" in coordinates ? "announce -> last:recipient" : "announce -> last",
+            );
+            expect(preview.detail).toContain("will fail-closed");
+          }
         },
       );
     },

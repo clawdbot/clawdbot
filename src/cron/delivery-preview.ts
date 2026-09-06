@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasExplicitCronDeliveryTarget, resolveCronDeliveryPlan } from "./delivery-plan.js";
 import {
   resolveDeliveryTarget,
-  resolvedDeliveryTargetsExternalChannel,
+  requiresExternalCronDelivery,
 } from "./isolated-agent/delivery-target.js";
 import { resolveCronDeliverySessionKey } from "./session-target.js";
 import type { CronDeliveryPreview, CronJob } from "./types.js";
@@ -77,7 +77,7 @@ export async function resolveCronDeliveryPreview(params: {
     if (
       sessionTarget === "current" &&
       plan.mode === "announce" &&
-      !resolvedDeliveryTargetsExternalChannel(resolved)
+      !requiresExternalCronDelivery(plan, resolved)
     ) {
       // Mirrors runtime: a current-target completion with no external channel
       // route commits durably to its own conversation instead of failing.

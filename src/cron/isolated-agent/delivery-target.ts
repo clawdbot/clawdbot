@@ -41,16 +41,16 @@ export type DeliveryTargetResolution =
       error: Error;
     };
 
-/**
- * Returns whether a delivery resolution names an external channel route.
- * Registration is intentionally irrelevant: an unavailable plugin route still
- * owes delivery. Only webchat/Control UI and an absent route are satisfied by
- * the durable session commit alone.
- */
-export function resolvedDeliveryTargetsExternalChannel(
+// Explicit destinations remain owed when channel selection fails; remembered
+// external routes remain owed when their plugin is unavailable.
+export function requiresExternalCronDelivery(
+  plan: CronDeliveryPlan,
   resolution: DeliveryTargetResolution,
 ): boolean {
-  return resolution.channel !== undefined && resolution.channel !== INTERNAL_MESSAGE_CHANNEL;
+  return (
+    hasExplicitCronDeliveryTarget(plan) ||
+    (resolution.channel !== undefined && resolution.channel !== INTERNAL_MESSAGE_CHANNEL)
+  );
 }
 
 const targetsRuntimeLoader = createLazyImportLoader(
