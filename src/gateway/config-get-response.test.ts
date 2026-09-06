@@ -1,6 +1,11 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { REDACTED_SENTINEL, restoreRedactedValues } from "../config/redact-snapshot.js";
+import { makeSnapshot } from "../config/redact-snapshot.test-helpers.js";
+import { buildRuntimeConfigSchemaFromRegistry } from "../config/runtime-schema.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   appliedConfigHash: "applied-1" as string | null,
@@ -45,30 +50,12 @@ function readConfigGetResponse(
 const activeWatcher = () => "active" as const;
 const disabledWatcher = () => "disabled" as const;
 
-function configSnapshot(sourceConfig: OpenClawConfig): ConfigFileSnapshot {
-  return {
-    path: "/tmp/openclaw.json",
-    exists: true,
-    raw: JSON.stringify(sourceConfig),
-    hash: "raw-1",
-    parsed: sourceConfig,
-    sourceConfig,
-    resolved: sourceConfig,
-    valid: true,
-    runtimeConfig: sourceConfig,
-    config: sourceConfig,
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
-  } as ConfigFileSnapshot;
-}
-
 beforeEach(() => {
   invalidateConfigGetResponseCache();
   mocks.appliedConfigHash = "applied-1";
   mocks.pluginRegistryVersion = 1;
   mocks.readConfigFileSnapshot.mockReset();
-  mocks.readConfigFileSnapshot.mockResolvedValue(configSnapshot({ gateway: { port: 19_001 } }));
+  mocks.readConfigFileSnapshot.mockResolvedValue(makeSnapshot({ gateway: { port: 19_001 } }));
 });
 
 afterEach(() => {
@@ -76,6 +63,180 @@ afterEach(() => {
 });
 
 describe("config.get response cache", () => {
+  it("round-trips wildcard plugin SecretRefs through an unrelated form save", async () => {
+    const secretRef = {
+      source: "store" as const,
+      provider: "default",
+      id: `TEST_${randomUUID().replaceAll("-", "").toUpperCase()}`,
+    };
+    const plaintext = randomUUID();
+    const config = {
+      gateway: { port: 19_001 },
+      plugins: {
+        entries: {
+          webhooks: {
+            enabled: true,
+            config: {
+              routes: {
+                publish: { sessionKey: "agent:main", secret: secretRef },
+                deploy: { sessionKey: "agent:main", secret: secretRef },
+                plain: { sessionKey: "agent:main", secret: plaintext },
+              },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const { manifestRegistry } = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "webhooks",
+          origin: "bundled",
+          configContracts: {
+            secretInputs: {
+              paths: [{ path: "routes.*.secret", expected: "string", ownerKind: "route" }],
+            },
+          },
+          configSchema: {
+            type: "object",
+            $defs: {
+              secretRef: {
+                type: "object",
+                properties: {
+                  source: { type: "string" },
+                  provider: { type: "string" },
+                  id: { type: "string" },
+                },
+              },
+              secretInput: {
+                anyOf: [{ type: "string" }, { $ref: "#/$defs/secretRef" }],
+              },
+              route: {
+                type: "object",
+                properties: { secret: { $ref: "#/$defs/secretInput" } },
+              },
+            },
+            properties: {
+              routes: {
+                type: "object",
+                additionalProperties: { $ref: "#/$defs/route" },
+              },
+            },
+          },
+        },
+      ],
+    });
+    const runtimeSchema = buildRuntimeConfigSchemaFromRegistry(manifestRegistry, config);
+    const secretPath = "plugins.entries.webhooks.config.routes.*.secret";
+    expect(runtimeSchema.uiHints[secretPath]?.sensitive).toBe(true);
+
+    mocks.readConfigFileSnapshot.mockResolvedValue(makeSnapshot(config));
+    const response = await readConfigGetResponse({
+      loadUiHints: () => runtimeSchema.uiHints,
+    });
+    const redactedSecret = {
+      source: "store",
+      provider: "default",
+      id: REDACTED_SENTINEL,
+    };
+    expect(response.config.plugins?.entries?.webhooks?.config).toMatchObject({
+      routes: {
+        publish: { secret: redactedSecret },
+        deploy: { secret: redactedSecret },
+        plain: { secret: REDACTED_SENTINEL },
+      },
+    });
+    expect(response.raw).not.toBeNull();
+    expect(response.raw).toContain(REDACTED_SENTINEL);
+    expect(response.raw).not.toContain(secretRef.id);
+    expect(JSON.stringify(response)).not.toContain(plaintext);
+    expect(JSON.stringify(response)).not.toContain(secretRef.id);
+
+    const formValue = structuredClone(response.config);
+    formValue.gateway = { ...formValue.gateway, port: 19_002 };
+    expect(restoreRedactedValues(formValue, config, runtimeSchema.uiHints)).toEqual({
+      ok: true,
+      result: {
+        ...config,
+        gateway: { port: 19_002 },
+      },
+    });
+    for (const identityChange of [{ source: "env" }, { provider: "alternate" }]) {
+      const changedIdentity = {
+        ...formValue,
+        plugins: {
+          entries: {
+            webhooks: {
+              config: {
+                routes: {
+                  publish: { secret: { ...redactedSecret, ...identityChange } },
+                },
+              },
+            },
+          },
+        },
+      };
+      expect(restoreRedactedValues(changedIdentity, config, runtimeSchema.uiHints)).toMatchObject({
+        ok: false,
+      });
+    }
+  });
+
+  it.each(["core", "plus"])(
+    "redacts retained owner credentials from every snapshot projection with %s selected",
+    async (owner) => {
+      const config: OpenClawConfig = {
+        plugins: {
+          entries: { core: { enabled: owner === "core" }, plus: { enabled: owner === "plus" } },
+        },
+        channels: {
+          proofchat: { core: "synthetic-core", plus: "synthetic-plus", visible: "public-setting" },
+        },
+      };
+      const { manifestRegistry } = createPluginMetadataSnapshotFixture({
+        plugins: ["core", "plus"].map((id) => ({
+          id,
+          origin: "config",
+          channels: ["proofchat"],
+          channelConfigs: {
+            proofchat: {
+              schema: {
+                type: "object",
+                properties: { [id]: { type: "string" } },
+              },
+              uiHints: { [id]: { sensitive: true } },
+            },
+          },
+        })),
+      });
+      mocks.readConfigFileSnapshot.mockResolvedValue(makeSnapshot(config));
+      const response = await readConfigGetResponse({
+        loadUiHints: () => buildRuntimeConfigSchemaFromRegistry(manifestRegistry, config).uiHints,
+      });
+      const output = JSON.stringify(response);
+      expect(output).not.toContain("synthetic-core");
+      expect(output).not.toContain("synthetic-plus");
+      for (const field of [
+        "config",
+        "sourceConfig",
+        "runtimeConfig",
+        "parsed",
+        "resolved",
+      ] as const) {
+        expect(response[field]).toMatchObject({
+          channels: {
+            proofchat: {
+              core: "__OPENCLAW_REDACTED__",
+              plus: "__OPENCLAW_REDACTED__",
+              visible: "public-setting",
+            },
+          },
+        });
+      }
+      expect(response.raw).toContain("public-setting");
+    },
+  );
+
   it("serves identical bytes without filesystem work on an active-watcher cache hit", async () => {
     const loadUiHints = vi.fn(() => undefined);
     const first = await readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints });
@@ -123,42 +284,36 @@ describe("config.get response cache", () => {
     expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(2);
   });
 
-  it("rebuilds when the active plugin metadata generation changes", async () => {
+  it.each([
+    {
+      reason: "the active plugin metadata generation changes",
+      invalidate: () => {
+        mocks.pluginRegistryVersion = 2;
+      },
+    },
+    {
+      reason: "the watcher or write path invalidates",
+      invalidate: invalidateConfigGetResponseCache,
+    },
+  ])("rebuilds when $reason", async ({ invalidate }) => {
     const loadUiHints = vi.fn(() => undefined);
     await readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints });
 
-    mocks.pluginRegistryVersion = 2;
+    invalidate();
     await readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints });
 
     expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(2);
     expect(loadUiHints).toHaveBeenCalledTimes(2);
   });
 
-  it("rebuilds immediately after watcher or write-path invalidation", async () => {
-    const loadUiHints = vi.fn(() => undefined);
-    await readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints });
-
-    invalidateConfigGetResponseCache();
-    await readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints });
-
-    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(2);
-  });
-
-  it("bypasses the cache when hot reload is disabled", async () => {
+  it.each([
+    { reason: "hot reload is disabled", getHotReloadStatus: disabledWatcher },
+    { reason: "no watcher status is available", getHotReloadStatus: undefined },
+  ])("bypasses the cache when $reason", async ({ getHotReloadStatus }) => {
     const loadUiHints = vi.fn(() => undefined);
 
-    await readConfigGetResponse({ getHotReloadStatus: disabledWatcher, loadUiHints });
-    await readConfigGetResponse({ getHotReloadStatus: disabledWatcher, loadUiHints });
-
-    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(2);
-    expect(loadUiHints).toHaveBeenCalledTimes(2);
-  });
-
-  it("bypasses the cache when no config watcher status is available", async () => {
-    const loadUiHints = vi.fn(() => undefined);
-
-    await readConfigGetResponse({ loadUiHints });
-    await readConfigGetResponse({ loadUiHints });
+    await readConfigGetResponse({ getHotReloadStatus, loadUiHints });
+    await readConfigGetResponse({ getHotReloadStatus, loadUiHints });
 
     expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(2);
     expect(loadUiHints).toHaveBeenCalledTimes(2);

@@ -15,7 +15,6 @@ import {
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { isTerminalSessionStatus, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { truncateUtf16Safe } from "../utils.js";
 import {
   estimateAggregateUsageCost,
@@ -242,8 +241,6 @@ export function resolveEstimatedSessionCostUsd(params: {
 
 const STALE_STORE_ONLY_CHILD_LINK_MS = 60 * 60 * 1_000;
 
-const SINGLE_ROW_CONTEXT_CACHE_MAX_ENTRIES = 64;
-
 export function isFinitePositiveTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
@@ -266,35 +263,11 @@ export function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): 
   );
 }
 
-type SingleRowChildSessionCandidateCacheEntry = {
-  entriesByKey: Map<string, SessionEntry>;
-  childSessionCandidatesByParentKey: Map<string, string[]>;
-};
-
-const singleRowChildSessionCandidateCache = new Map<
-  string,
-  SingleRowChildSessionCandidateCacheEntry
->();
-
-function rememberSingleRowChildSessionCandidateCacheEntry(
-  storePath: string,
-  entry: SingleRowChildSessionCandidateCacheEntry,
-) {
-  if (singleRowChildSessionCandidateCache.has(storePath)) {
-    singleRowChildSessionCandidateCache.delete(storePath);
-  }
-  singleRowChildSessionCandidateCache.set(storePath, entry);
-  pruneMapToMaxSize(singleRowChildSessionCandidateCache, SINGLE_ROW_CONTEXT_CACHE_MAX_ENTRIES);
-}
-
 function buildStoreChildSessionCandidateIndex(
-  store: Record<string, SessionEntry> | null | undefined,
-  selectedParents?: ReadonlySet<string>,
+  store: Record<string, SessionEntry>,
+  selectedParents: ReadonlySet<string>,
 ): Map<string, string[]> {
   const childSessionsByKey = new Map<string, string[]>();
-  if (!store) {
-    return childSessionsByKey;
-  }
   for (const [key, entry] of Object.entries(store)) {
     if (!entry) {
       continue;
@@ -304,44 +277,12 @@ function buildStoreChildSessionCandidateIndex(
       normalizeOptionalString(entry.parentSessionKey),
     ].filter((value): value is string => Boolean(value) && value !== key);
     for (const parentKey of parentKeys) {
-      if (!selectedParents || selectedParents.has(parentKey)) {
+      if (selectedParents.has(parentKey)) {
         addChildSessionKey(childSessionsByKey, parentKey, key);
       }
     }
   }
   return childSessionsByKey;
-}
-
-function singleRowChildSessionCacheMatches(
-  cached: SingleRowChildSessionCandidateCacheEntry,
-  store: Record<string, SessionEntry>,
-): boolean {
-  const entries = Object.entries(store);
-  return (
-    entries.length === cached.entriesByKey.size &&
-    entries.every(([key, entry]) => cached.entriesByKey.get(key) === entry)
-  );
-}
-
-export function getSingleRowChildSessionCandidates(params: {
-  storePath: string;
-  store: Record<string, SessionEntry> | null | undefined;
-}): Map<string, string[]> {
-  if (!params.store) {
-    return new Map();
-  }
-  const cached = singleRowChildSessionCandidateCache.get(params.storePath);
-  if (cached && singleRowChildSessionCacheMatches(cached, params.store)) {
-    return cached.childSessionCandidatesByParentKey;
-  }
-  const childSessionCandidatesByParentKey = buildStoreChildSessionCandidateIndex(params.store);
-  rememberSingleRowChildSessionCandidateCacheEntry(params.storePath, {
-    // Full-store snapshots can retain entry identities between short-list projections.
-    // Exact reads own fresh JSON and do not use this cache.
-    entriesByKey: new Map(Object.entries(params.store)),
-    childSessionCandidatesByParentKey,
-  });
-  return childSessionCandidatesByParentKey;
 }
 
 export function resolveRuntimeChildSessionKeys(
@@ -415,13 +356,13 @@ export function isCurrentSessionChildOwner(params: {
   );
 }
 
-/** Prepare only selected parents; a supplied candidate map belongs to the full-store caller. */
+// Combined-store reads create fresh entries. Keep only selected parents' links for
+// this projection; an identity cache would miss and retain the previous metadata.
 export function buildStoreChildSessionIndex(params: {
   store: Record<string, SessionEntry>;
   keys: readonly string[];
   now: number;
   subagentRuns?: SessionListRowContext["subagentRuns"];
-  candidates?: ReadonlyMap<string, readonly string[]>;
   excludedChildKeys?: ReadonlySet<string>;
   requireCurrentController?: boolean;
 }): Map<string, string[]> {
@@ -429,8 +370,7 @@ export function buildStoreChildSessionIndex(params: {
   if (params.keys.length === 0) {
     return children;
   }
-  const candidates =
-    params.candidates ?? buildStoreChildSessionCandidateIndex(params.store, new Set(params.keys));
+  const candidates = buildStoreChildSessionCandidateIndex(params.store, new Set(params.keys));
   for (const key of params.keys) {
     const childKeys = resolveStoreChildSessionKeysFromCandidates({ ...params, key, candidates });
     if (childKeys) {

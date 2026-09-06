@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
-import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store.js";
+import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
 
 export function makeModelFallbackConfig(primaryProvider = "openai"): OpenClawConfig {
   const apiKeyField = ["api", "Key"].join("");

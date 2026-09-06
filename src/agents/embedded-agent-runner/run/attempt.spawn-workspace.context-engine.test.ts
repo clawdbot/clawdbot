@@ -293,7 +293,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
   });
 
-  it("keeps Tool Search controls off for lean message-tool-only delivery", async () => {
+  it.each([false, true])("keeps lean replies direct (private: %s)", async (privateReply) => {
     hoisted.createOpenClawCodingToolsMock.mockReturnValueOnce([
       {
         name: "message",
@@ -320,6 +320,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       attemptOverrides: {
         disableTools: false,
         sourceReplyDeliveryMode: "message_tool_only",
+        toolsAllow: privateReply ? ["message"] : undefined,
         config: {
           agents: {
             defaults: {
@@ -338,7 +339,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       0,
       "createOpenClawCodingTools options",
     );
-    expect(options.includeToolSearchControls).toBe(false);
+    expect(options.includeToolSearchControls).toBe(!privateReply);
     const sessionOptions = mockParams(
       hoisted.createAgentSessionMock,
       0,
@@ -1186,6 +1187,10 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       sessionKey,
       tempPaths,
       attemptOverrides: {
+        inputProvenance: {
+          kind: "internal_system",
+          sourceTool: "main_session_restart_recovery",
+        },
         prompt: "visible ask",
         suppressNextUserMessagePersistence: true,
         onUserMessagePersistenceInvalidated,
@@ -1218,11 +1223,11 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(JSON.stringify(seen.modelMessages)).toContain("dynamic hook tail");
     expect(JSON.stringify(seen.messages)).not.toContain("dynamic hook context");
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("dynamic hook tail");
-    expect(hoisted.sessionManager.branch).toHaveBeenCalledWith("parent-leaf");
+    expect(hoisted.sessionManager.branch).not.toHaveBeenCalled();
     expect(
       hoisted.sessionManager.clearNextUserMessagePersistenceSuppression,
-    ).toHaveBeenCalledOnce();
-    expect(onUserMessagePersistenceInvalidated).toHaveBeenCalledOnce();
+    ).not.toHaveBeenCalled();
+    expect(onUserMessagePersistenceInvalidated).not.toHaveBeenCalled();
   });
 
   it("targets the latest active prompt after orphan repair reaches the embedded provider", async () => {
@@ -2814,7 +2819,7 @@ describe("runEmbeddedAttempt context engine mid-turn precheck integration", () =
     expect(loopHookParams.midTurnPrecheck).toBeUndefined();
   });
 
-  it("recovers when the runtime persists the mid-turn precheck as an assistant error", async () => {
+  it("recovers when the runtime emits the mid-turn precheck as an assistant error", async () => {
     hoisted.installToolResultContextGuardMock.mockImplementation((...args: unknown[]) => {
       const params = args[0] as ToolResultGuardInstallParams;
       params.midTurnPrecheck?.onMidTurnPrecheck?.({

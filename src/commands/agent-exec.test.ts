@@ -250,13 +250,18 @@ describe("agent exec command composition", () => {
   it("maps structured thrown timeouts to exit code 2", async () => {
     const { runtime } = createRuntime();
     const timeout = Object.assign(new Error("deadline elapsed"), { name: "TimeoutError" });
-
-    const result = await agentExecCommand("inspect", { json: true }, runtime, {
-      runAgent: vi.fn(async () => {
-        throw timeout;
-      }),
+    const runAgent = vi.fn(async () => {
+      throw timeout;
     });
 
+    const result = await agentExecCommand("inspect", { timeout: "1", json: true }, runtime, {
+      runAgent,
+    });
+
+    expect(runAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ timeout: "1" }),
+      expect.any(Object),
+    );
     expect(result).toMatchObject({
       exitCode: 2,
       envelope: { status: "timeout", error: { kind: "timeout" } },
@@ -639,15 +644,15 @@ describe("agent exec command composition", () => {
     });
   });
 
-  it("threads --cwd to both workspace and tool cwd", async () => {
+  it("threads --cwd and --timeout to the agent", async () => {
     const root = tempDirs.make("openclaw-agent-exec-cwd-");
     const { runtime } = createRuntime();
     const runAgent = vi.fn(async () => successResult());
 
-    await agentExecCommand("inspect", { cwd: root }, runtime, { runAgent });
+    await agentExecCommand("inspect", { cwd: root, timeout: "7" }, runtime, { runAgent });
 
     expect(runAgent).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: root, cwd: root }),
+      expect.objectContaining({ workspaceDir: root, cwd: root, timeout: "7" }),
       expect.any(Object),
     );
   });

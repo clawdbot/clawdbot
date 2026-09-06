@@ -13,12 +13,6 @@ import {
 } from "../tokens.js";
 import type { ReplyDirectiveParseResult } from "./reply-directives.js";
 
-type PendingReplyState = {
-  explicitId?: string;
-  sawCurrent: boolean;
-  hasTag: boolean;
-};
-
 type ConsumeOptions = {
   final?: boolean;
   silentToken?: string;
@@ -77,15 +71,17 @@ export const splitTrailingDirective = (text: string): { text: string; tail: stri
 export function createStreamingDirectiveAccumulator() {
   let pendingTail = "";
   let pendingSeparator = "";
-  let pendingReply: PendingReplyState = { sawCurrent: false, hasTag: false };
-  let activeReply: PendingReplyState = { sawCurrent: false, hasTag: false };
+  let replyToId: string | undefined;
+  let replyToCurrent = false;
+  let replyToTag = false;
   let hasReturnedText = false;
 
   const reset = () => {
     pendingTail = "";
     pendingSeparator = "";
-    pendingReply = { sawCurrent: false, hasTag: false };
-    activeReply = { sawCurrent: false, hasTag: false };
+    replyToId = undefined;
+    replyToCurrent = false;
+    replyToTag = false;
     hasReturnedText = false;
   };
 
@@ -132,41 +128,25 @@ export function createStreamingDirectiveAccumulator() {
     if (options?.final && !hasReturnedText) {
       text = stripInlineDirectiveTagsForDelivery(text).text;
     }
-    const hasTag = activeReply.hasTag || pendingReply.hasTag || parsed?.hasReplyTag === true;
-    const sawCurrent =
-      activeReply.sawCurrent || pendingReply.sawCurrent || parsed?.replyToCurrent === true;
-    const explicitId =
-      parsed?.replyToExplicitId ?? pendingReply.explicitId ?? activeReply.explicitId;
+    // Reply context survives directive-only and visible chunks until the assistant message resets.
+    replyToId = parsed?.replyToExplicitId ?? replyToId;
+    replyToCurrent ||= parsed?.replyToCurrent === true;
+    replyToTag ||= parsed?.hasReplyTag === true;
 
     const combinedResult = {
       text,
-      replyToId: explicitId,
+      replyToId,
       replyToExplicitId: parsed?.replyToExplicitId,
-      replyToCurrent: sawCurrent,
-      replyToTag: hasTag,
+      replyToCurrent,
+      replyToTag,
       audioAsVoice: parsed?.audioAsVoice ?? false,
       isSilent,
     };
 
     if (!hasOutboundReplyContent(combinedResult) && !combinedResult.audioAsVoice) {
-      if (hasTag) {
-        pendingReply = {
-          explicitId,
-          sawCurrent,
-          hasTag,
-        };
-      }
       return null;
     }
 
-    // Keep reply context sticky for the full assistant message so split/newline chunks
-    // stay on the same native reply target until reset() is called for the next message.
-    activeReply = {
-      explicitId,
-      sawCurrent,
-      hasTag,
-    };
-    pendingReply = { sawCurrent: false, hasTag: false };
     hasReturnedText ||= Boolean(combinedResult.text);
     return combinedResult;
   };

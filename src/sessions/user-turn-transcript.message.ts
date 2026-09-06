@@ -158,12 +158,17 @@ export function buildLateResolvedMediaMessage(params: {
     typeof resolvedIdempotencyKey === "string" && resolvedIdempotencyKey.length > 0
       ? `${resolvedIdempotencyKey}:late-media`
       : `late-media:${typeof resolvedTimestamp === "number" ? resolvedTimestamp : Date.now()}`;
+  const metadata: Record<string, unknown> = {
+    ...readOpenClawMessageMeta(params.resolvedMessage),
+    lateMedia: true,
+  };
+  delete metadata.humanMentions;
   // Like #111204, mark late-media scaffolding as wire-only so UIs never render it.
   return {
     ...params.resolvedMessage,
     content,
     idempotencyKey,
-    __openclaw: { ...readOpenClawMessageMeta(params.resolvedMessage), lateMedia: true },
+    __openclaw: metadata,
   };
 }
 

@@ -20,7 +20,7 @@ const updateIdentitySchema = z.object({
   sha: z.string().nullish(),
   version: z.string().nullish(),
 });
-const updateFailureSchema = z
+export const updateFailureSchema = z
   .union([
     z.object({
       result: z.object({
@@ -38,7 +38,10 @@ const updateFailureSchema = z
             stderrTail: z.string().nullish(),
             termination: z.enum(["exit", "timeout", "no-output-timeout", "signal"]).optional(),
             advisory: z
-              .object({ kind: z.literal("package-post-install-doctor"), message: z.string() })
+              .object({
+                kind: z.enum(["package-post-install-doctor", "candidate-runtime-unavailable"]),
+                message: z.string(),
+              })
               .optional(),
           }),
         ),
@@ -46,6 +49,7 @@ const updateFailureSchema = z
           .object({
             serviceRestartSafe: z.boolean(),
             reason: z.string().optional(),
+            packageRollbackVerified: z.boolean().optional(),
             version: z.string().optional(),
             buildId: z.string().optional(),
             service: z.enum(["healthy", "failed"]).optional(),
@@ -271,6 +275,7 @@ export function sanitizeTriageUpdateFailure(
         ? {
             serviceRestartSafe: result.recovery.serviceRestartSafe,
             reason: text(result.recovery.reason, 96),
+            packageRollbackVerified: result.recovery.packageRollbackVerified,
             ...(result.recovery.serviceRestartSafe
               ? {
                   version: text(result.recovery.version, 48),

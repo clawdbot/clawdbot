@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import type {
   BoardSnapshot,
   BoardWidgetDeclared,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { clearGitHubCredentialVerificationCache } from "../../agents/github-oauth-client.js";
 import { resolveManagedGitHubProfileDir } from "../../agents/github-tool-identity.js";
 import { createTestBoardStore } from "../../boards/board-store.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -72,7 +73,7 @@ describe("board authenticated GitHub Actions", () => {
   let state: OpenClawTestState;
   let config: OpenClawConfig;
   let actions: () => Response | Promise<Response>;
-  const http = vi.fn<typeof fetch>();
+  let http: Mock<typeof fetch>;
   const account = vi.fn(async () => json({ id: 100, login: "fixture-user", avatar_url: null }));
   const native = vi.fn<typeof processExec.runCommandBuffered>();
 
@@ -93,6 +94,7 @@ describe("board authenticated GitHub Actions", () => {
 
   beforeEach(async () => {
     resetPluginRuntimeStateForTest();
+    clearGitHubCredentialVerificationCache();
     state = await createOpenClawTestState({
       prefix: "board-github-",
       env: { GH_TOKEN: undefined, GITHUB_TOKEN: undefined },
@@ -109,8 +111,9 @@ describe("board authenticated GitHub Actions", () => {
     account
       .mockReset()
       .mockImplementation(async () => json({ id: 100, login: "fixture-user", avatar_url: null }));
-    http
-      .mockReset()
+    // Each test owns an independent GitHub transport, including its quota state.
+    http = vi
+      .fn<typeof fetch>()
       .mockImplementation(async (url) =>
         toRequestUrl(url).endsWith("/user") ? account() : actions(),
       );
@@ -265,6 +268,9 @@ describe("board authenticated GitHub Actions", () => {
       ]);
       const before = store.getSnapshot(target);
       broadcast.mockClear();
+      // Verified credentials are reused within their TTL; expire the entry so the
+      // next pin must prove the credential again.
+      clearGitHubCredentialVerificationCache();
       account.mockImplementationOnce(async () => new Response(token, { status: 401 }));
       const denied = await invoke("board.widget.put", input);
       expect(denied.mock.calls[0]?.[0]).toBe(false);
@@ -508,7 +514,10 @@ describe("board authenticated GitHub Actions", () => {
     }));
     const raw = { total_count: 30, workflow_runs: runs };
     expect(Buffer.byteLength(JSON.stringify(raw))).toBeGreaterThan(256 * 1024);
-    await expect(readGitHubJsonResponse(json(raw))).rejects.toThrow("Content too large");
+    await expect(readGitHubJsonResponse(json(raw))).rejects.toMatchObject({
+      statusCode: 502,
+      message: expect.stringContaining("size limit"),
+    });
     actions = () => json(raw);
     const { read } = await reader();
     expect((await read({ repository: "owner/repo", perPage: 30 })).mock.calls[0]).toEqual([
@@ -537,13 +546,20 @@ describe("board authenticated GitHub Actions", () => {
 
   it.each([
     { status: 403, headers: undefined, message: "access denied" },
-    { status: 403, headers: { "x-ratelimit-remaining": "0" }, message: "rate limited" },
-    { status: 429, headers: undefined, message: "rate limited" },
+    {
+      status: 403,
+      headers: { "x-ratelimit-remaining": "0" },
+      message: "rate limited",
+      cooldownMs: 60_000,
+    },
+    { status: 429, headers: undefined, message: "rate limited", cooldownMs: 60_000 },
     { status: 401, headers: undefined, message: "reconnect" },
     { status: 500, headers: undefined, message: "request failed" },
   ])(
     "sanitizes HTTP $status without anonymous retry ($message)",
-    async ({ status, headers, message }) => {
+    async ({ status, headers, message, cooldownMs }) => {
+      const now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
       actions = () => new Response(token, { status, headers });
       const { read } = await reader();
       const response = await read();
@@ -552,6 +568,11 @@ describe("board authenticated GitHub Actions", () => {
       expect(JSON.stringify(response.mock.calls)).not.toContain(token);
       expect(actionCalls()).toHaveLength(1);
       actions = () => json(result);
+      if (cooldownMs) {
+        expect((await read()).mock.calls[0]?.[2]?.message).toContain("rate limited");
+        expect(actionCalls()).toHaveLength(1);
+        clock.mockReturnValue(now + cooldownMs);
+      }
       expect((await read()).mock.calls[0]).toEqual([true, result]);
       expect(actionCalls()).toHaveLength(2);
     },
@@ -691,6 +712,7 @@ describe("board authenticated GitHub Actions", () => {
       const survivor = surviving === "leader" ? leader : follower;
       expect((await survivor.read()).mock.calls[0]).toEqual([true, result]);
       expect(actionCalls()).toHaveLength(1);
+      clearGitHubCredentialVerificationCache();
       account.mockImplementationOnce(async () => {
         await survivor.invoke("board.update", {
           sessionKey: "agent:main:runs",

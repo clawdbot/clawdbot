@@ -6,9 +6,11 @@ import JSZip from "jszip";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   describeNpmBundle,
+  describeNpmQualificationProof,
   downloadPreparedNpmBundle,
   NPM_PACKAGE_PRODUCER_WORKFLOW,
   NPM_SOURCE_CHECK_SCHEMA,
+  NPM_QUALIFICATION_PROOF_SCHEMA,
   PREPARED_NPM_BUNDLE_SCHEMA,
   prepareNpmPackageBundle,
   qualifyNpmPackageBundle,
@@ -210,6 +212,156 @@ async function bundleFixture(callerWorkflowPath = workflowPath) {
   return { archive, descriptor, fetchImpl, files, job, manifest, metadata, run, runGh };
 }
 
+type PreparedFixtureDescriptor = Awaited<ReturnType<typeof bundleFixture>>["descriptor"];
+
+async function qualificationFixture<
+  Descriptor extends Pick<PreparedFixtureDescriptor, "source" | "producer">,
+>(descriptor: Descriptor, pluginSdkApi: object = {}) {
+  const source = descriptor.source;
+  const makeProducer = (jobId: string, jobName: string) => ({
+    ...descriptor.producer,
+    jobId,
+    jobName,
+  });
+  const sourceCheck = {
+    schema: NPM_SOURCE_CHECK_SCHEMA,
+    source,
+    producer: makeProducer("46", "Check npm release source"),
+  };
+  const contentsProof = {
+    schema: NPM_QUALIFICATION_PROOF_SCHEMA,
+    kind: "contents",
+    source,
+    releaseTag: "v2026.8.1",
+    npmDistTag: "beta",
+    producer: makeProducer("47", "Check npm package contents"),
+    files: [],
+    preparedBundle: descriptor,
+  };
+  const archives = new Map<string, { archive: Buffer; metadata: object }>();
+  const makeArtifactProof = async (
+    kind: string,
+    id: string,
+    producer: ReturnType<typeof makeProducer>,
+    files: Record<string, object>,
+  ) => {
+    const entries = Object.entries(files).map(
+      ([name, value]) => [name, Buffer.from(`${JSON.stringify(value)}\n`)] as const,
+    );
+    const zip = new JSZip();
+    for (const [name, bytes] of entries) {
+      zip.file(name, bytes);
+    }
+    const archive = await zip.generateAsync({
+      type: "nodebuffer",
+      compression: "STORE",
+      platform: "UNIX",
+    });
+    const artifact = {
+      id,
+      name: `openclaw-npm-${kind}-proof-${producer.runId}-${producer.runAttempt}`,
+      digest: hash(archive),
+      runId: producer.runId,
+      runAttempt: producer.runAttempt,
+    };
+    const metadata = {
+      id: Number(id),
+      name: artifact.name,
+      digest: `sha256:${artifact.digest}`,
+      size_in_bytes: archive.length,
+      expired: false,
+      expires_at: "2026-10-01T00:00:00Z",
+      workflow_run: { id: Number(producer.runId), head_sha: toolingSha },
+    };
+    archives.set(id, { archive, metadata });
+    const { preparedBundle: _preparedBundle, ...identity } = contentsProof;
+    return {
+      ...identity,
+      kind,
+      producer,
+      artifact,
+      files: entries.map(([name, bytes]) => ({ name, sha256: hash(bytes) })),
+    };
+  };
+  const sdkProof = await makeArtifactProof(
+    "sdk",
+    "79",
+    makeProducer("48", "Check npm Plugin SDK"),
+    {
+      "plugin-sdk-api-release-evidence.json": pluginSdkApi,
+      "plugin-sdk-api-release-diff.json": {},
+    },
+  );
+  const dependencyProof = await makeArtifactProof(
+    "dependencies",
+    "80",
+    makeProducer("49", "Check npm dependencies"),
+    {
+      "dependency-evidence-manifest.json": { releaseSha: source.sha },
+    },
+  );
+  const jobs = [sourceCheck, contentsProof, sdkProof, dependencyProof].map(({ producer }) => ({
+    id: Number(producer.jobId),
+    run_id: Number(producer.runId),
+    run_attempt: Number(producer.runAttempt),
+    head_sha: toolingSha,
+    name: producer.jobName,
+    status: "completed",
+    conclusion: "success",
+  }));
+  const runGh = (args: string[]) => {
+    const endpoint = args[1] ?? "";
+    if (endpoint.includes("/jobs?")) {
+      return JSON.stringify({ total_count: jobs.length, jobs });
+    }
+    if (endpoint.endsWith("/attempts/2")) {
+      return JSON.stringify({
+        id: 12,
+        run_attempt: 2,
+        head_sha: toolingSha,
+        path: workflowPath,
+        head_branch: "main",
+        event: "workflow_dispatch",
+        repository: { full_name: repository },
+        head_repository: { full_name: repository },
+        status: "in_progress",
+        conclusion: null,
+      });
+    }
+    const artifact = archives.get(endpoint.split("/").at(-1) ?? "");
+    if (artifact) {
+      return JSON.stringify(artifact.metadata);
+    }
+    throw new Error(`Unexpected GitHub request: ${endpoint}`);
+  };
+  const fetchImpl: typeof fetch = async (url) => {
+    const requestUrl = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+    const match = requestUrl.match(/\/artifacts\/(\d+)(\/zip)?$/);
+    const artifact = archives.get(match?.[1] ?? "");
+    if (!artifact) {
+      throw new Error(`Unexpected artifact request: ${requestUrl}`);
+    }
+    return match?.[2]
+      ? new Response(new Uint8Array(artifact.archive))
+      : Response.json(artifact.metadata);
+  };
+  return {
+    sourceCheck,
+    contentsProof,
+    sdkProof,
+    dependencyProof,
+    runGh,
+    fetchImpl,
+    jobs,
+    archives,
+    token: "test-token",
+  };
+}
+
+type QualificationFixture = Awaited<
+  ReturnType<typeof qualificationFixture<PreparedFixtureDescriptor>>
+>;
+
 describe("prepared npm bundle", () => {
   it.each(["failure", "cancelled"])(
     "reuses successful preparation and source jobs after parent %s",
@@ -271,7 +423,7 @@ describe("prepared npm bundle", () => {
     ["2026.8.1", undefined, undefined],
   ] as const)(
     "preserves package %s and requested tag %s through preparation and qualification",
-    (packageVersion, releaseTag, baseTag) => {
+    async (packageVersion, releaseTag, baseTag) => {
       const fixture = packageSourceFixture(packageVersion, baseTag);
       const prepared = prepareNpmPackageBundle({ ...fixture, releaseTag });
       const expectedTag = releaseTag ?? `v${packageVersion}`;
@@ -287,16 +439,45 @@ describe("prepared npm bundle", () => {
           runAttempt: "2",
         },
       });
-      const evidenceDir = tempDirs.make("npm-dependency-evidence-");
-      writeFileSync(join(evidenceDir, "dependency-evidence-manifest.json"), "{}\n");
+      validatePreparedNpmBundleDescriptor({
+        descriptor,
+        repository,
+        sourceSha: fixture.releaseRef,
+        toolingSha,
+      });
+      const proof = await qualificationFixture(descriptor);
+      for (const entry of [proof.sdkProof, proof.dependencyProof, proof.contentsProof]) {
+        const directory = tempDirs.make("npm-qualification-evidence-");
+        const artifact = "artifact" in entry ? entry.artifact : undefined;
+        if (artifact) {
+          const archive = await JSZip.loadAsync(proof.archives.get(artifact.id)!.archive);
+          for (const file of entry.files) {
+            writeFileSync(
+              join(directory, file.name),
+              await archive.file(file.name)!.async("nodebuffer"),
+            );
+          }
+        }
+        Object.assign(
+          entry,
+          describeNpmQualificationProof({
+            ...fixture,
+            kind: entry.kind,
+            releaseTag,
+            directory,
+            producer: entry.producer,
+            artifact,
+            preparedBundle: descriptor,
+          }),
+        );
+      }
       const outputDir = join(tempDirs.make("npm-qualified-output-"), "qualified");
-      const qualified = qualifyNpmPackageBundle({
+      const qualified = await qualifyNpmPackageBundle({
         descriptor,
         inputDir: fixture.outputDir,
         outputDir,
-        producer: { ...fixture.producer, jobId: "46", jobName: "Qualify prepared npm package" },
-        pluginSdkApi: {},
-        dependencyEvidenceDir: evidenceDir,
+        producer: { ...fixture.producer, jobId: "50", jobName: "Qualify prepared npm package" },
+        ...proof,
       });
       expect(qualified.releaseTag).toBe(expectedTag);
       expect(qualified.packageVersion).toBe(packageVersion);
@@ -374,24 +555,21 @@ describe("prepared npm bundle", () => {
       expect(readFileSync(downloaded.tarballPath)).toEqual(
         fixture.files.get(fixture.manifest.tarballName),
       );
-      const evidenceDir = join(directory, "dependency-evidence");
-      mkdirSync(evidenceDir);
-      writeFileSync(join(evidenceDir, "dependency-evidence-manifest.json"), "{}\n");
-      const manifest = qualifyNpmPackageBundle({
+      const proof = await qualificationFixture(fixture.descriptor, {
+        baseline: "published",
+        // Successful releases can carry multi-megabyte declaration diffs.
+        diff: { exports: [{ before: "export type Previous = unknown;\n".repeat(150_000) }] },
+      });
+      const manifest = await qualifyNpmPackageBundle({
         descriptor: fixture.descriptor,
         inputDir,
         outputDir,
         producer: {
           ...fixture.descriptor.producer,
-          jobId: "46",
+          jobId: "50",
           jobName: "Qualify prepared npm package",
         },
-        pluginSdkApi: {
-          baseline: "published",
-          // Successful releases can carry multi-megabyte declaration diffs.
-          diff: { exports: [{ before: "export type Previous = unknown;\n".repeat(150_000) }] },
-        },
-        dependencyEvidenceDir: evidenceDir,
+        ...proof,
       });
       expect(manifest.version).toBe(3);
       expect(manifest.preparedBundle).toEqual(fixture.descriptor);
@@ -463,16 +641,20 @@ describe("prepared npm bundle", () => {
     }
     writeFileSync(join(inputDir, fixture.manifest.tarballName), "replacement archive");
     const outputDir = join(inputDir, "qualified");
-    expect(() =>
+    const proof = await qualificationFixture(fixture.descriptor);
+    await expect(
       qualifyNpmPackageBundle({
         descriptor: fixture.descriptor,
         inputDir,
         outputDir,
-        producer: fixture.descriptor.producer,
-        pluginSdkApi: {},
-        dependencyEvidenceDir: inputDir,
+        producer: {
+          ...fixture.descriptor.producer,
+          jobId: "50",
+          jobName: "Qualify prepared npm package",
+        },
+        ...proof,
       }),
-    ).toThrow("tarball digest mismatch");
+    ).rejects.toThrow("tarball digest mismatch");
     expect(existsSync(outputDir)).toBe(false);
   });
 
@@ -508,5 +690,82 @@ describe("prepared npm bundle", () => {
     expect(() =>
       verifyNpmSourceCheck({ descriptor, repository, sourceSha, toolingSha, runGh: fixture.runGh }),
     ).toThrow("unique exact completed producer job");
+  });
+
+  it.each([
+    [
+      "source check still running",
+      (proof: QualificationFixture) => {
+        proof.jobs[0]!.status = "in_progress";
+      },
+      "unique exact completed producer job",
+    ],
+    [
+      "dependency check failed",
+      (proof: QualificationFixture) => {
+        proof.jobs[3]!.conclusion = "failure";
+      },
+      "unique exact completed producer job",
+    ],
+    [
+      "SDK proof from another attempt",
+      (proof: QualificationFixture) => {
+        proof.jobs[2]!.run_attempt = 1;
+      },
+      "unique exact completed producer job",
+    ],
+    [
+      "contents checked another tarball",
+      (proof: QualificationFixture) => {
+        proof.contentsProof.preparedBundle = structuredClone(proof.contentsProof.preparedBundle);
+        proof.contentsProof.preparedBundle.package.sha256 = "f".repeat(64);
+      },
+      "Package contents proof input",
+    ],
+    [
+      "dependency proof from another source",
+      (proof: QualificationFixture) => {
+        proof.dependencyProof.source = { sha: "c".repeat(40) };
+      },
+      "dependencies proof source",
+    ],
+    [
+      "SDK archive replaced",
+      (proof: QualificationFixture) => {
+        const artifact = proof.archives.get("79")!;
+        artifact.archive = Buffer.alloc(artifact.archive.length);
+      },
+      "GitHub Actions artifact digest",
+    ],
+    [
+      "SDK proof rebound to another tag",
+      (proof: QualificationFixture) => {
+        proof.sdkProof.releaseTag = "v2026.8.1-2";
+      },
+      "sdk proof release tag",
+    ],
+  ] as const)("does not seal while %s", async (_name, mutate, expectedError) => {
+    const fixture = await bundleFixture();
+    const inputDir = tempDirs.make("npm-proof-input-");
+    for (const [name, bytes] of fixture.files) {
+      writeFileSync(join(inputDir, name), bytes);
+    }
+    const outputDir = join(inputDir, "qualified");
+    const proof = await qualificationFixture(fixture.descriptor);
+    mutate(proof);
+    await expect(
+      qualifyNpmPackageBundle({
+        descriptor: fixture.descriptor,
+        inputDir,
+        outputDir,
+        producer: {
+          ...fixture.descriptor.producer,
+          jobId: "50",
+          jobName: "Qualify prepared npm package",
+        },
+        ...proof,
+      }),
+    ).rejects.toThrow(expectedError);
+    expect(existsSync(outputDir)).toBe(false);
   });
 });

@@ -3,12 +3,14 @@
  * Message, tool, compaction, and liveness handlers all mutate this single
  * state shape while keeping their implementation files decoupled.
  */
+import type { AgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import type { InlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import type { FenceScanState } from "../../packages/markdown-core/src/fences.js";
 import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
+import type { ThinkingContent } from "../llm/types.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { AssistantPhase } from "../shared/chat-message-content.js";
 import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
@@ -24,10 +26,12 @@ import type {
   BlockReplyChunking,
   SubscribeEmbeddedAgentSessionParams,
 } from "./embedded-agent-subscribe.types.js";
-import type { ThinkingTagStreamState } from "./embedded-agent-utils.js";
+import type {
+  createAssistantVisibleStreamText,
+  ThinkingTagStreamState,
+} from "./embedded-agent-utils.js";
 import type { McpConnectAction } from "./mcp-connect-action.js";
 import type { McpAppChannelView } from "./mcp-ui-resource.js";
-import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
 import type { ToolErrorSummary } from "./tool-error-summary.js";
@@ -63,13 +67,6 @@ export type AssistantStreamData = {
   managedMediaUrls?: string[];
   phase?: AssistantPhase;
   itemId?: string;
-};
-
-/** Deferred assistant stream event plus whether it should emit partial replies. */
-type AssistantStreamDelivery = {
-  data: AssistantStreamData;
-  eventData?: AssistantStreamData;
-  emitPartialReply: boolean;
 };
 
 /** Incremental tag and Markdown parsing state, owned by one stream lane. */
@@ -158,14 +155,16 @@ export type EmbeddedAgentSubscribeState = {
   assistantStream?: {
     raw: string;
     text: string;
-    sanitized?: { phase: AssistantPhase | undefined; text: string };
+    projection?: {
+      kind: "raw" | "delivery" | "final";
+      projector: ReturnType<typeof createAssistantVisibleStreamText>;
+    };
   };
   lastStreamedReasoning?: string;
   lastBlockReplyText?: string;
   lastDeliveredBlockReplyText?: string;
   deferBlockReplyDelivery: boolean;
   deferredBlockReplies: BlockReplyPayload[];
-  deferredAssistantEvents: AssistantStreamDelivery[];
   toolExecutionSinceLastBlockReply: boolean;
   reasoningStreamOpen: boolean;
   assistantMessageIndex: number;
@@ -208,6 +207,7 @@ export type EmbeddedAgentSubscribeState = {
   messagingToolSentMediaUrls: string[];
   messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[];
   messageToolOnlySourceReplyDelivered: boolean;
+  sourceReplyDelivered?: true;
   pendingMessagingTexts: Map<string, string>;
   pendingMessagingTargets: Map<string, MessagingToolSend>;
   successfulCronAdds: number;
@@ -222,9 +222,10 @@ export type EmbeddedAgentSubscribeState = {
   pendingToolMediaDeliveryFailed: boolean;
   hasToolMediaBlockReply: boolean;
   visibleBlockReplyCount: number;
+  /** Media selection belongs to message_end; only voice/reply intent waits for a block. */
   pendingAssistantReplyDirectives?: Pick<
     BlockReplyPayload,
-    "mediaUrls" | "audioAsVoice" | "replyToId" | "replyToTag" | "replyToCurrent"
+    "audioAsVoice" | "replyToId" | "replyToTag" | "replyToCurrent"
   >;
   deterministicApprovalPromptPending: boolean;
   deterministicApprovalPromptSent: boolean;
@@ -265,7 +266,7 @@ export type EmbeddedAgentSubscribeContext = {
     final?: boolean;
     finalReply?: ReplyDirectiveParseResult;
   }) => void | Promise<void>;
-  emitReasoningStream: (text: string) => void;
+  emitReasoningStream: (text: string | ThinkingContent, fallback?: string) => void;
   consumePartialReplyDirectives: (
     text: string,
     options?: { final?: boolean },
@@ -300,9 +301,9 @@ export type EmbeddedAgentSubscribeContext = {
     payload: BlockReplyPayload,
     options?: { assistantMessageIndex?: number; consumePendingToolMedia?: boolean },
   ) => void;
-  flushDeferredAssistantEvents: () => void;
+  flushAssistantStream: () => void;
   flushDeferredBlockReplies: () => void;
-  clearDeferredAssistantEvents: () => void;
+  clearAssistantStream: () => void;
   clearDeferredBlockReplies: () => void;
 };
 
@@ -375,6 +376,7 @@ type ToolHandlerState = Pick<
   | "messagingToolSentMediaUrls"
   | "messagingToolSourceReplyPayloads"
   | "messageToolOnlySourceReplyDelivered"
+  | "sourceReplyDelivered"
   | "messagingToolSentTargets"
   | "heartbeatToolResponse"
   | "successfulCronAdds"

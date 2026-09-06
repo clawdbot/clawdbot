@@ -8,12 +8,49 @@ export type FormatErrorMessageOptions = {
 const STRUCTURED_ERROR_OWNED_FIELDS = new Set(["cause", "message", "name", "stack"]);
 const STRUCTURED_ERROR_PROTOTYPE_FIELDS = new Set(["__proto__", "constructor", "prototype"]);
 
-function readProperty(value: object, key: "cause" | "code" | "status"): unknown {
+function isErrorObject(value: unknown): value is Error {
+  try {
+    if (value instanceof Error) {
+      return true;
+    }
+    // VM and worker realms have distinct Error constructors; retain their diagnostic fields.
+    return Object.prototype.toString.call(value) === "[object Error]";
+  } catch {
+    return false;
+  }
+}
+
+function isAggregateErrorObject(error: Error): boolean {
+  try {
+    if (error instanceof AggregateError) {
+      return true;
+    }
+    for (let proto = Object.getPrototypeOf(error); proto; proto = Object.getPrototypeOf(proto)) {
+      const constructor: unknown = Object.getOwnPropertyDescriptor(proto, "constructor")?.value;
+      if (typeof constructor === "function" && constructor.name === "AggregateError") {
+        return true;
+      }
+    }
+  } catch {
+    // An opaque prototype must not promote arbitrary errors-array metadata into causes.
+  }
+  return false;
+}
+
+function readProperty(
+  value: object,
+  key: "cause" | "code" | "status" | "errors" | "message" | "name" | "error" | "suppressed",
+): unknown {
   try {
     return (value as Record<string, unknown>)[key];
   } catch {
     return undefined;
   }
+}
+
+function readErrorText(value: object, key: "message" | "name"): string | undefined {
+  const field = readProperty(value, key);
+  return typeof field === "string" ? field : undefined;
 }
 
 function formatStatusAndCode(value: unknown): string | undefined {
@@ -72,13 +109,11 @@ function stringifyUnknown(value: unknown): string {
   }
 }
 
-/** Formats unknown errors with cause details, structured codes, and secret redaction. */
+/** Formats unknown errors with cause/aggregate details, structured codes, and secret redaction. */
 export function formatErrorMessage(value: unknown, options: FormatErrorMessageOptions): string {
   let formatted: string;
-  if (value instanceof Error) {
-    formatted = value.message || value.name || "Error";
-    let cause = readProperty(value, "cause");
-    const seen = new Set<unknown>([value]);
+  if (isErrorObject(value)) {
+    formatted = readErrorText(value, "message") || readErrorText(value, "name") || "Error";
     const seenMessages = new Set<string>([formatted]);
     const appendCauseMessage = (message: string | undefined): void => {
       if (!message || seenMessages.has(message)) {
@@ -104,24 +139,35 @@ export function formatErrorMessage(value: unknown, options: FormatErrorMessageOp
         appendCauseMessage(String(code));
       }
     }
-    while (cause && !seen.has(cause)) {
-      seen.add(cause);
-      if (cause instanceof Error) {
-        appendCauseErrorMessage(cause.message);
+    const causes = collectErrorGraphCandidates(value, (current) => {
+      if (!isErrorObject(current)) {
+        return [];
+      }
+      const cause = readProperty(current, "cause");
+      const errors = isAggregateErrorObject(current) ? readProperty(current, "errors") : undefined;
+      // Downlevel await-using emits a named Error; both failure fields exist even for nullish throws.
+      const suppressed =
+        readErrorText(current, "name") === "SuppressedError"
+          ? [readProperty(current, "error"), readProperty(current, "suppressed")].map((failure) =>
+              failure == null ? String(failure) : failure,
+            )
+          : [];
+      return [cause || undefined, ...(Array.isArray(errors) ? errors : []), ...suppressed];
+    });
+    for (const cause of causes.slice(1)) {
+      if (isErrorObject(cause)) {
+        appendCauseErrorMessage(readErrorText(cause, "message"));
         const code = readProperty(cause, "code");
         if (typeof code === "string" || typeof code === "number") {
           appendCauseMessage(String(code));
         }
-        cause = readProperty(cause, "cause");
       } else if (typeof cause === "string") {
         appendCauseMessage(cause);
-        break;
       } else {
         // Mirror the top-level branch: an object cause with keys beyond
         // status/code makes formatStatusAndCode return undefined, so fall
         // back to stringifyUnknown rather than dropping the cause entirely.
         appendCauseMessage(formatStatusAndCode(cause) ?? stringifyUnknown(cause));
-        break;
       }
     }
   } else {

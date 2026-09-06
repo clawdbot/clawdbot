@@ -62,13 +62,17 @@ export function getDefaultMediaLocalRoots(): readonly string[] {
 export function getAgentScopedMediaLocalRoots(
   cfg: OpenClawConfig,
   agentId?: string,
+  sessionWorkspaceDir?: string,
 ): readonly string[] {
-  const roots = buildMediaLocalRoots(resolveStateDir(), resolveConfigDir());
+  const stateDir = resolveStateDir();
+  const roots = buildMediaLocalRoots(stateDir, resolveConfigDir()).filter(
+    (root) => !sessionWorkspaceDir || root !== path.join(path.resolve(stateDir), "workspace"),
+  );
   const normalizedAgentId = normalizeOptionalString(agentId);
   if (!normalizedAgentId) {
     return roots;
   }
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, normalizedAgentId);
+  const workspaceDir = sessionWorkspaceDir ?? resolveAgentWorkspaceDir(cfg, normalizedAgentId);
   if (!workspaceDir) {
     return roots;
   }

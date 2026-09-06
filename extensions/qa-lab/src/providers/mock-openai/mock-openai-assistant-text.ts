@@ -39,6 +39,7 @@ import {
   extractLatestToolOutput,
   extractSlackMpimRetainedBotNonce,
   extractAllUserTexts,
+  extractUserTurnTexts,
   extractAllRequestTexts,
   extractCurrentImageRequest,
   parseToolOutputJson,
@@ -173,7 +174,7 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
         .filter((value): value is string => typeof value === "string")
         .join("\n")
     : "";
-  const userTexts = extractAllUserTexts(input);
+  const userTexts = extractUserTurnTexts(input);
   const allInputText = extractAllRequestTexts(input, body);
   const rememberedFact = extractRememberedFact(userTexts);
   const model = typeof body.model === "string" ? body.model : "";

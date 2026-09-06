@@ -39,9 +39,66 @@ describe("tasks page data", () => {
       task({ id: "queued", status: "queued", updatedAt: 999 }),
       ...terminals,
     ]);
-    expect(result.active.map((entry) => entry.id)).toEqual(["running", "queued"]);
+    expect(result.active.map((entry) => entry.id)).toEqual(["queued", "running"]);
     expect(result.recent).toHaveLength(50);
     expect(result.recent[0]?.id).toBe("terminal-54");
+  });
+
+  it("keeps active tasks in creation order while their activity changes", () => {
+    const oldest = task({
+      id: "oldest",
+      status: "running",
+      createdAt: 100,
+      startedAt: 110,
+      updatedAt: 500,
+    });
+    const middle = task({
+      id: "middle",
+      status: "running",
+      createdAt: 200,
+      startedAt: 410,
+      updatedAt: 600,
+    });
+    const newest = task({
+      id: "newest",
+      status: "running",
+      createdAt: 300,
+      startedAt: 310,
+      updatedAt: 700,
+    });
+
+    expect(partitionTasks([middle, newest, oldest]).active.map((entry) => entry.id)).toEqual([
+      "oldest",
+      "middle",
+      "newest",
+    ]);
+    expect(
+      partitionTasks([{ ...oldest, updatedAt: 800 }, middle, newest]).active.map(
+        (entry) => entry.id,
+      ),
+    ).toEqual(["oldest", "middle", "newest"]);
+  });
+
+  it("orders terminal tasks by completion time instead of later activity", () => {
+    const finishedFirst = task({
+      id: "finished-first",
+      status: "completed",
+      createdAt: 100,
+      endedAt: 400,
+      updatedAt: 900,
+    });
+    const finishedLast = task({
+      id: "finished-last",
+      status: "completed",
+      createdAt: 200,
+      endedAt: 500,
+      updatedAt: 600,
+    });
+
+    expect(partitionTasks([finishedFirst, finishedLast]).recent.map((entry) => entry.id)).toEqual([
+      "finished-last",
+      "finished-first",
+    ]);
   });
 
   it("merges task lists by id while preserving newer running snapshots", () => {

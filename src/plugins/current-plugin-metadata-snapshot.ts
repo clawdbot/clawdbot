@@ -22,7 +22,7 @@ import {
   type ResolvePluginControlPlaneContextParams,
 } from "./plugin-control-plane-context.js";
 import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
-import { registerPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot.runtime.js";
+import { registerPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot-readers.js";
 import type {
   PluginMetadataSnapshot,
   PluginMetadataSnapshotPluginIdScope,

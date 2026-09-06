@@ -5,6 +5,7 @@ import {
   resolvePairingSetupAccess,
   type PairingSetupAccess,
 } from "../shared/device-bootstrap-profile.js";
+import { isNodeHostStats } from "../shared/node-host-stats.js";
 import {
   ensureDevicePairSetupBootstrapSchema,
   ensureDevicePairSetupCompletionSchema,
@@ -284,6 +285,10 @@ function fromSetupCompletionDeliveryStateColumn(
 }
 
 function fromPairedRow(row: DevicePairingPaired): PairedDevice {
+  const nodeSurface = fromJsonColumn<PairedDeviceNodeSurface>(row.node_surface_json);
+  if (nodeSurface?.lastHostStats !== undefined && !isNodeHostStats(nodeSurface.lastHostStats)) {
+    delete nodeSurface.lastHostStats;
+  }
   return {
     deviceId: row.device_id,
     publicKey: row.public_key,
@@ -301,10 +306,7 @@ function fromPairedRow(row: DevicePairingPaired): PairedDevice {
     ...optional("remoteIp", row.remote_ip),
     ...optional("tokens", fromJsonColumn<Record<string, DeviceAuthToken>>(row.tokens_json) ?? null),
     ...optional("approvedVia", fromApprovedViaColumn(row.approved_via)),
-    ...optional(
-      "nodeSurface",
-      fromJsonColumn<PairedDeviceNodeSurface>(row.node_surface_json) ?? null,
-    ),
+    ...optional("nodeSurface", nodeSurface ?? null),
     ...optional(
       "pendingNodeSurface",
       fromJsonColumn<PairedDevicePendingNodeSurface>(row.pending_node_surface_json) ?? null,
@@ -370,13 +372,11 @@ export function readDevicePairingStoreStateFromDatabase(db: DatabaseSync): Devic
   ).rows) {
     pendingById[row.request_id] = fromPendingRow(row);
   }
-  const pairedByDeviceId: Record<string, PairedDevice> = {};
-  for (const row of executeSqliteQuerySync(
-    db,
-    kysely.selectFrom("device_pairing_paired").selectAll(),
-  ).rows) {
-    pairedByDeviceId[row.device_id] = fromPairedRow(row);
-  }
+  const pairedByDeviceId = Object.fromEntries(
+    executeSqliteQuerySync(db, kysely.selectFrom("device_pairing_paired").selectAll()).rows.map(
+      (row) => [row.device_id, fromPairedRow(row)],
+    ),
+  );
   return { pendingById, pairedByDeviceId };
 }
 

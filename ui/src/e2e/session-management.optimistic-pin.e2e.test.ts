@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   activateSelfRemovingControl,
   captureUiProof,
@@ -13,6 +14,7 @@ import {
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
+const rosterMatch = { includeGlobal: true };
 
 const candidateKey = "agent:main:candidate";
 const companionKey = "agent:main:companion";
@@ -68,13 +70,13 @@ suite.define(() => {
       // optimistic snapshot write in the mutation owner.
       await expect.poll(() => zoneEntry.count()).toBe(1);
       await expect.poll(() => row.count()).toBe(0);
-      expect(await gateway.getRequests("sessions.list")).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(1);
       await captureUiProof(suite, page, "optimistic-pin-02-pinned-while-in-flight.png");
 
       await gateway.setMethodResponse("sessions.list", pinnedList());
       await gateway.resolveDeferred("sessions.patch", { ok: true, key: candidateKey, path: "" });
 
-      await expect.poll(() => gateway.getRequests("sessions.list")).toHaveLength(2);
+      await expect.poll(() => gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(2);
       await expect.poll(() => zoneEntry.count()).toBe(1);
       await expect.poll(() => row.count()).toBe(0);
       expect(await page.locator("[data-sidebar-session-error]").count()).toBe(0);
@@ -88,11 +90,7 @@ suite.define(() => {
   });
 
   it("rolls a menu unpin back and surfaces the error when the Gateway rejects it", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       methodResponses: { "sessions.list": pinnedList(), "sessions.patch": {} },
@@ -132,11 +130,7 @@ suite.define(() => {
   });
 
   it("keeps the newest pin intent when the older completion refreshes the list first", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       methodResponses: { "sessions.list": unpinnedList(), "sessions.patch": {} },
@@ -167,13 +161,13 @@ suite.define(() => {
       // unpin already replaced locally.
       await gateway.setMethodResponse("sessions.list", pinnedList());
       await gateway.resolveDeferred("sessions.patch", { ok: true, key: candidateKey, path: "" });
-      await expect.poll(() => gateway.getRequests("sessions.list")).toHaveLength(2);
+      await expect.poll(() => gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(2);
       await expect.poll(() => row.count()).toBe(1);
       expect(await zoneEntry.count()).toBe(0);
 
       await gateway.setMethodResponse("sessions.list", unpinnedList());
       await gateway.resolveDeferred("sessions.patch", { ok: true, key: candidateKey, path: "" });
-      await expect.poll(() => gateway.getRequests("sessions.list")).toHaveLength(3);
+      await expect.poll(() => gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(3);
       await expect.poll(() => row.count()).toBe(1);
       expect(await zoneEntry.count()).toBe(0);
       await captureUiProof(suite, page, "optimistic-pin-06-newest-intent-wins.png");

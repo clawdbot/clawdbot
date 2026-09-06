@@ -2,7 +2,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   materializeCodexDynamicToolSnapshot,
   materializeCodexPromptSnapshot,
@@ -17,6 +18,13 @@ import {
   runCodexModelPromptFixtureSync,
 } from "../../scripts/sync-codex-model-prompt-fixture.js";
 import { getPluginModuleLoaderStats } from "../../src/plugins/plugin-module-loader-cache.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../src/state/openclaw-state-db-contract.js";
+import { resolveOpenClawStateSqlitePath } from "../../src/state/openclaw-state-db.paths.js";
+import {
+  restoreStateDirEnv,
+  setStateDirEnv,
+  snapshotStateDirEnv,
+} from "../../src/test-helpers/state-dir-env.js";
 import { createHappyPathPromptSnapshotFiles } from "../helpers/agents/happy-path-prompt-snapshots.js";
 import {
   CODEX_MODEL_PROMPT_FIXTURE_DIR,
@@ -38,9 +46,41 @@ function renderedPromptSection(content: string, heading: string, nextHeading: st
   return content.slice(start, end);
 }
 
+let generated: Awaited<ReturnType<typeof createHappyPathPromptSnapshotFiles>>;
+let pluginLoaderCallsBefore: number;
+let pluginLoaderCallsAfter: number;
+let poisonedStateRoot: string | undefined;
+const stateDirEnv = snapshotStateDirEnv();
+
 describe("happy path prompt snapshots", () => {
+  beforeAll(async () => {
+    poisonedStateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-prompt-snapshot-poison-"));
+    const databasePath = resolveOpenClawStateSqlitePath({
+      ...process.env,
+      OPENCLAW_STATE_DIR: poisonedStateRoot,
+    });
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const database = new DatabaseSync(databasePath);
+    try {
+      database.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
+    } finally {
+      database.close();
+    }
+    setStateDirEnv(poisonedStateRoot);
+
+    pluginLoaderCallsBefore = getPluginModuleLoaderStats().calls;
+    generated = await createHappyPathPromptSnapshotFiles();
+    pluginLoaderCallsAfter = getPluginModuleLoaderStats().calls;
+  }, 300_000);
+
+  afterAll(() => {
+    restoreStateDirEnv(stateDirEnv);
+    if (poisonedStateRoot) {
+      fs.rmSync(poisonedStateRoot, { recursive: true, force: true });
+    }
+  });
+
   it("reconstructs complete Codex tool catalogs from readable full-tool overrides", async () => {
-    const generated = await createHappyPathPromptSnapshotFiles();
     const scenarios = [
       { name: "telegram-direct", replacements: [] },
       { name: "discord-group", replacements: ["sessions_spawn"] },
@@ -129,12 +169,10 @@ describe("happy path prompt snapshots", () => {
     // plugin-loader call here means a scenario channel (or another plugin
     // surface) fell back to source re-transpilation, which re-evaluates the
     // core graph and stalls the lane by minutes.
-    const callsBefore = getPluginModuleLoaderStats().calls;
-    const files = await createHappyPathPromptSnapshotFiles();
-    expect(files.length).toBeGreaterThan(0);
+    expect(generated.length).toBeGreaterThan(0);
     const stats = getPluginModuleLoaderStats();
     expect(
-      stats.calls - callsBefore,
+      pluginLoaderCallsAfter - pluginLoaderCallsBefore,
       `prompt snapshot generation hit the jiti plugin loader; targets: ${stats.topSourceTransformTargets
         .map((entry) => entry.target)
         .join(", ")}`,
@@ -190,6 +228,56 @@ describe("happy path prompt snapshots", () => {
     expect(telegram).not.toContain("<HEARTBEAT.md contents will be here>");
     expect(telegram).toContain("Codex loads AGENTS.md natively");
     expect(telegram).toContain("### Tools: Dynamic Tool Catalog");
+  });
+
+  it("renders every additional-context value with its native role before the current input", () => {
+    const telegram = generated.find(
+      (file) =>
+        path.basename(file.path) ===
+        CODEX_PROMPT_SNAPSHOT_FILES[CODEX_PROMPT_SNAPSHOT_BASE_SCENARIO],
+    )!.content;
+    const turnSection = renderedPromptSection(
+      telegram,
+      "## Turn Start Params",
+      "## Reconstructed Model-Bound Prompt Layers",
+    );
+    const turn = JSON.parse(turnSection.match(/```json\n([\s\S]*?)\n```/u)![1]!) as {
+      additionalContext: Record<string, { kind: "application" | "untrusted"; value: string }>;
+    };
+    expect(Object.keys(turn.additionalContext)).toEqual(
+      expect.arrayContaining(["openclaw_current_sender", "openclaw_temporal_context"]),
+    );
+    let previous = telegram.indexOf("### Developer: Codex Collaboration Mode Instructions");
+    const userInput = telegram.indexOf("### User: Turn Input Text");
+    const contextTexts: string[] = [];
+    // Canonical ASCII keys in Codex's BTreeMap order, independent of the renderer's sorter.
+    const keyOrder = [
+      "openclaw_current_sender",
+      "openclaw_source_delivery",
+      "openclaw_temporal_context",
+    ].filter((key) => Object.hasOwn(turn.additionalContext, key));
+    expect(keyOrder).toHaveLength(Object.keys(turn.additionalContext).length);
+    for (const key of keyOrder) {
+      const entry = turn.additionalContext[key]!;
+      const role = entry.kind === "application" ? "Developer" : "User";
+      const tag = entry.kind === "application" ? key : `external_${key}`;
+      const index = telegram.indexOf(`### ${role}: OpenClaw Additional Context (${key})`);
+      expect(index).toBeGreaterThan(previous);
+      expect(index).toBeLessThan(userInput);
+      const text = `<${tag}>${entry.value}</${tag}>`;
+      expect(telegram.slice(index, userInput)).toContain(text);
+      contextTexts.push(text);
+      previous = index;
+    }
+    const statsSection = renderedPromptSection(
+      telegram,
+      "### Rough Text Token Estimates",
+      "### System: Codex Model Instructions",
+    );
+    const stats = JSON.parse(statsSection.match(/```json\n([\s\S]*?)\n```/u)![1]!) as {
+      additionalContext: { chars: number };
+    };
+    expect(stats.additionalContext.chars).toBe(contextTexts.join("\n\n").length);
   });
 
   it("uses normal Codex collaboration instructions for every scheduled heartbeat", async () => {

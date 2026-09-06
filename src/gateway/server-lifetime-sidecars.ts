@@ -4,7 +4,11 @@ import {
   createGitHubOAuthLifecycle,
   installActiveGitHubOAuthLifecycle,
 } from "./github-oauth-lifecycle.js";
-import type { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
+import { createModelAccountConnectService } from "./model-account-connect.js";
+import {
+  broadcastChatMetadataChanged,
+  type createGatewayChatMetadataLifecycle,
+} from "./server-chat-metadata-lifecycle.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 
@@ -74,6 +78,19 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
   sidecars: GatewayPostReadySidecarHandle[];
 }): Promise<void> {
   await params.chatMetadataLifecycle.attachContext(params.gatewayRequestContext, params.sidecars);
+  const modelAccountConnect = createModelAccountConnectService({
+    getConfig: params.gatewayRequestContext.getRuntimeConfig,
+    onChanged: () => broadcastChatMetadataChanged(params.gatewayRequestContext),
+  });
+  params.gatewayRequestContext.modelAccountConnectService = modelAccountConnect;
+  params.sidecars.push({
+    stop: async () => {
+      await modelAccountConnect.stop();
+      if (params.gatewayRequestContext.modelAccountConnectService === modelAccountConnect) {
+        delete params.gatewayRequestContext.modelAccountConnectService;
+      }
+    },
+  });
   const githubOAuth = createGitHubOAuthLifecycle({
     getConfig: params.gatewayRequestContext.getRuntimeConfig,
     getPersistedConfig: () => getRuntimeConfig({ pin: false }),

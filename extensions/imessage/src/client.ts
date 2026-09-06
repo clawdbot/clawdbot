@@ -5,6 +5,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
+import { recoverIMessageBridge } from "./bridge-recovery.js";
 import { expandIMessageUserPath } from "./cli-path.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 import { invalidateCachedIMessagePrivateApiStatus } from "./private-api-status.js";
@@ -202,9 +203,16 @@ export class IMessageRpcClient {
     // monitor can wait forever on an unusable child. #75438 covered stdin only.
     const failFromProcessError = (err: unknown) => this.failTransport(err, child);
     child.on("error", failFromProcessError);
-    child.stdin.on("error", failFromProcessError);
-    child.stdout.on("error", failFromProcessError);
-    child.stderr.on("error", failFromProcessError);
+    for (const stream of [child.stdin, child.stdout, child.stderr]) {
+      stream.on("error", failFromProcessError);
+      stream.once("close", () => {
+        // Bun can close an errored stdio stream without emitting its error event.
+        const error = stream.errored;
+        if (error) {
+          failFromProcessError(error);
+        }
+      });
+    }
 
     child.on("close", (code, signal) => {
       if (this.child === child) {
@@ -292,6 +300,13 @@ export class IMessageRpcClient {
       // re-probe and report the real state.
       if (isIMessageBridgeStall(err)) {
         invalidateCachedIMessagePrivateApiStatus(this.configuredCliPath);
+        try {
+          await recoverIMessageBridge(this.configuredCliPath);
+        } catch (recoveryError) {
+          this.runtime?.error?.(
+            `imessage: automatic bridge recovery failed: ${formatErrorMessage(recoveryError)}`,
+          );
+        }
         throw describeIMessageBridgeStall(err);
       }
       throw err;

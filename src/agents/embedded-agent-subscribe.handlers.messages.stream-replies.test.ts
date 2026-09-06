@@ -5,7 +5,7 @@ import {
   recordPendingAssistantReplyDirectives,
   resolveManagedStreamMediaUrls,
 } from "./embedded-agent-subscribe.handlers.messages.replies.js";
-import { buildAssistantStreamData } from "./embedded-agent-subscribe.handlers.messages.stream.js";
+import { resolveStreamingReply } from "./embedded-agent-subscribe.handlers.messages.stream.js";
 
 describe("hasAssistantVisibleReply", () => {
   it("treats audio-only payloads as visible", () => {
@@ -19,27 +19,7 @@ describe("hasAssistantVisibleReply", () => {
   });
 });
 
-describe("buildAssistantStreamData", () => {
-  it.each([true, false, undefined])("normalizes media and replacement flag %s", (replace) => {
-    expect(
-      buildAssistantStreamData({
-        text: "hello",
-        delta: "he",
-        replace,
-        mediaUrl: "https://example.com/a.png",
-        managedMediaUrls: ["https://example.com/a.png"],
-        phase: "final_answer",
-      }),
-    ).toEqual({
-      text: "hello",
-      delta: "he",
-      replace: replace || undefined,
-      mediaUrls: ["https://example.com/a.png"],
-      managedMediaUrls: ["https://example.com/a.png"],
-      phase: "final_answer",
-    });
-  });
-
+describe("assistant stream managed media", () => {
   it("keeps generic directive URLs separate from tool-owned managed media", () => {
     const state = {
       pendingToolMediaTrustByUrl: new Map([
@@ -60,7 +40,6 @@ describe("pending assistant reply directives", () => {
 
     recordPendingAssistantReplyDirectives(state, {
       text: "",
-      mediaUrls: ["/tmp/reply.ogg"],
       replyToCurrent: true,
       replyToTag: true,
       audioAsVoice: true,
@@ -73,7 +52,6 @@ describe("pending assistant reply directives", () => {
       }),
     ).toEqual({
       text: "Done.",
-      mediaUrls: ["/tmp/reply.ogg"],
       audioAsVoice: true,
       replyToId: undefined,
       replyToTag: true,
@@ -85,7 +63,7 @@ describe("pending assistant reply directives", () => {
   it("does not consume pending directive metadata on reasoning replies", () => {
     const state = {
       pendingAssistantReplyDirectives: {
-        mediaUrls: ["/tmp/reply.png"],
+        replyToId: "parent-message",
       },
     };
 
@@ -98,6 +76,25 @@ describe("pending assistant reply directives", () => {
       text: "Thinking...",
       isReasoning: true,
     });
-    expect(state.pendingAssistantReplyDirectives?.mediaUrls).toEqual(["/tmp/reply.png"]);
+    expect(state.pendingAssistantReplyDirectives?.replyToId).toBe("parent-message");
+  });
+});
+
+describe("resolveStreamingReply", () => {
+  it("appends visible text across long blank runs without stalling the media scan", () => {
+    const delta = `before${"\n".repeat(60_000)}after`;
+    const started = performance.now();
+    expect(
+      resolveStreamingReply({
+        evtType: "text_delta",
+        next: delta,
+        previousText: "",
+        previousCleaned: "",
+        visibleDelta: delta,
+        appendDelta: delta,
+        parsedStreamDirectives: { text: delta, replyToTag: false, isSilent: false },
+      }),
+    ).toEqual({ text: delta, delta, replace: false, hasText: true });
+    expect(performance.now() - started).toBeLessThan(1_000);
   });
 });

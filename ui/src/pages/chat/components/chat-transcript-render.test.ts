@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../../../api/types.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
+import { getChatSessionProjection, reduceChatSessionProjection } from "../history-merge.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
 import { renderTranscriptSearch, toggleTranscriptSearch } from "./chat-thread-interactions.ts";
@@ -41,6 +42,174 @@ function touchPointerUp(element: Element): void {
 describe("chat transcript rendering", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
+
+  it.each([
+    ["blob:configured-agent", "gutter"],
+    ["🤖", "gutter"],
+    [null, "gutter"],
+    ["blob:configured-agent", "none"],
+    ["blob:configured-agent", "footer"],
+  ] as const)(
+    "keeps configured avatar %s consistent across saved and streaming replies with %s placement",
+    async (avatar, avatarPlacement) => {
+      const props = threadProps("pane-agent-avatar");
+      props.userId = avatarPlacement === "footer" ? null : "synthetic-owner";
+      props.assistantAvatar = avatar;
+      props.assistantAvatarUrl = avatar?.startsWith("blob:") ? avatar : null;
+      props.avatarPlacement = avatarPlacement === "none" ? "none" : undefined;
+      props.stream = "Reply in progress";
+      props.streamStartedAt = 5_000;
+      props.runActive = true;
+      const container = document.body.appendChild(document.createElement("div"));
+      const transcript = createTestTranscript();
+      try {
+        render(renderChatThread(props, transcript), container);
+        transcript.hostConnected();
+        transcript.hostUpdated();
+        await flushDeferredRowPrune();
+        const replies = container.querySelectorAll(".chat-group.assistant");
+        expect(replies).toHaveLength(3);
+        for (const reply of replies) {
+          const image = reply.querySelector(".chat-avatar.assistant");
+          if (avatar === null || avatarPlacement !== "gutter") {
+            expect(image).toBeNull();
+          } else if (avatar.startsWith("blob:")) {
+            expect(image?.getAttribute("src")).toBe(avatar);
+          } else {
+            expect(image?.textContent?.trim()).toBe(avatar);
+          }
+        }
+      } finally {
+        transcript.hostDisconnected();
+        container.remove();
+      }
+    },
+  );
+
+  it("keeps one inline compaction row through completion and history refresh", async () => {
+    const props: ReturnType<typeof threadProps> = {
+      ...threadProps("pane-compaction"),
+      runWorking: true,
+      compactionStatus: {
+        phase: "active",
+        runId: "compact-run",
+        startedAt: 5_000,
+        completedAt: null,
+      },
+    };
+    const container = document.createElement("div");
+    document.body.append(container);
+    const transcript = createTestTranscript();
+    const rerender = () => {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    };
+    try {
+      rerender();
+      transcript.hostConnected();
+      await flushDeferredRowPrune();
+      const marker = requireElement(container, ".chat-compaction");
+      const glyph = requireElement(marker, ".chat-compaction__glyph");
+      expect(marker.textContent).toContain("Compacting context");
+      expect(container.querySelector(".chat-working-indicator")).toBeNull();
+      props.compactionStatus = {
+        phase: "complete",
+        runId: "compact-run",
+        startedAt: 5_000,
+        completedAt: 6_000,
+      };
+      rerender();
+      expect(container.querySelector(".chat-compaction")).toBe(marker);
+      expect(marker.textContent).toContain("Context compacted");
+      const owner = {
+        sessionKey: props.sessionKey,
+        chatMessages: props.messages,
+        compactionStatus: props.compactionStatus,
+      };
+      getChatSessionProjection(owner, {
+        sessionKey: props.sessionKey,
+        activeLeafEntryId: "previous",
+      });
+      const messages = [
+        ...props.messages,
+        {
+          role: "custom",
+          customType: "openclaw.context-compaction",
+          content: "Context compacted",
+          __openclaw: { id: "compacted-item", runId: "compact-run" },
+          timestamp: 6_000,
+        },
+      ];
+      reduceChatSessionProjection(
+        owner,
+        { type: "snapshotLoaded", messages },
+        {
+          scope: { sessionKey: props.sessionKey, activeLeafEntryId: "compacted-item" },
+        },
+      );
+      props.messages = owner.chatMessages;
+      props.compactionStatus = owner.compactionStatus;
+      rerender();
+      expect(container.querySelectorAll(".chat-compaction")).toHaveLength(1);
+      expect(container.querySelector(".chat-compaction")).toBe(marker);
+      expect(marker.querySelector(".chat-compaction__glyph")).toBe(glyph);
+      expect(container.textContent?.match(/Context compacted/g)).toHaveLength(1);
+      props.compactionStatus = null;
+      rerender();
+      expect(container.querySelector(".chat-compaction")).toBe(marker);
+      props.messages = [
+        ...props.messages,
+        { role: "assistant", content: "Next reply", timestamp: 9_000 },
+      ];
+      rerender();
+      expect(container.querySelector(".chat-compaction")).toBe(marker);
+    } finally {
+      transcript.hostDisconnected();
+      container.remove();
+    }
+  });
+
+  it("keeps repeated compactions in one run distinct during history adoption", async () => {
+    const persisted = (itemId: string, timestamp: number) => ({
+      role: "custom",
+      customType: "openclaw.context-compaction",
+      content: "Context compacted",
+      __openclaw: { id: itemId, runId: "same-run", itemId },
+      timestamp,
+    });
+    const props = threadProps("pane-repeated-compaction", "agent:main:main", [
+      persisted("first", 1_000),
+    ]);
+    props.compactionStatus = {
+      phase: "active",
+      runId: "same-run",
+      itemId: "second",
+      startedAt: 2_000,
+      completedAt: null,
+    };
+    const container = document.body.appendChild(document.createElement("div"));
+    const transcript = createTestTranscript();
+    const rerender = () => {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    };
+    try {
+      rerender();
+      transcript.hostConnected();
+      await flushDeferredRowPrune();
+      const active = requireElement(container, ".chat-compaction--active");
+      expect(container.querySelectorAll(".chat-compaction")).toHaveLength(2);
+      props.messages = [...props.messages, persisted("second", 3_000)];
+      rerender();
+      expect(container.querySelectorAll(".chat-compaction")).toHaveLength(2);
+      expect(active.isConnected).toBe(true);
+      expect(active.classList.contains("chat-compaction--complete")).toBe(true);
+      expect(container.querySelector(".chat-compaction--active")).toBeNull();
+    } finally {
+      transcript.hostDisconnected();
+      container.remove();
+    }
+  });
 
   it("keeps exact-run usage visible through final event batching and later corrections", async () => {
     const runId = "watched-run";
@@ -236,6 +405,17 @@ describe("chat transcript rendering", () => {
     rerender();
     expect(requireElement(container, ".chat-notice").textContent).toContain(
       "Archived by profile-bob",
+    );
+
+    sessions.sessions[0] = {
+      ...archivedSession,
+      archivedBy: undefined,
+      archiveReason: "active-session-cap",
+    };
+    props.selectedSession = sessions.sessions[0];
+    rerender();
+    expect(requireElement(container, ".chat-notice").textContent).toContain(
+      "Automatically archived because the active-session limit was reached",
     );
 
     sessions.sessions[0] = { ...archivedSession, archivedBy: undefined };

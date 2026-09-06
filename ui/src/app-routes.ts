@@ -8,7 +8,9 @@ import type {
   RouterHistory,
 } from "@openclaw/uirouter";
 import {
+  activityPersonFromPath,
   agentRouteFromPath,
+  INTERNAL_ACTIVITY_PATH_PARAM,
   INTERNAL_AGENT_PATH_PARAM,
   INTERNAL_MEMORY_PATH_PARAM,
   INTERNAL_PLUGINS_PATH_PARAM,
@@ -38,10 +40,15 @@ import { page as cronPage } from "./pages/cron/route.ts";
 import { page as custodianPage } from "./pages/custodian/route.ts";
 import { page as dashboardsPage } from "./pages/dashboards/route.ts";
 import { page as debugPage } from "./pages/debug/route.ts";
+import {
+  page as devicePage,
+  permissionsPage as devicePermissionsPage,
+} from "./pages/device/route.ts";
 import { page as devicesPage } from "./pages/devices/route.ts";
 import { page as labsPage } from "./pages/labs/route.ts";
 import { page as lobsterdexPage } from "./pages/lobsterdex/route.ts";
 import { page as logsPage } from "./pages/logs/route.ts";
+import { page as meetingsPage } from "./pages/meetings/route.ts";
 import { page as memoryImportPage } from "./pages/memory-import/route.ts";
 import { page as modelProvidersPage } from "./pages/model-providers/route.ts";
 import { page as modelSetupPage } from "./pages/model-setup/route.ts";
@@ -56,11 +63,12 @@ import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
 import { page as skillsPage } from "./pages/skills/route.ts";
 import { page as tasksPage } from "./pages/tasks/route.ts";
 import { page as usagePage } from "./pages/usage/route.ts";
+import { resolveWorkboardRouteLocation } from "./pages/workboard/route-location.ts";
 import { page as workboardPage } from "./pages/workboard/route.ts";
 import { page as worktreesPage } from "./pages/worktrees/route.ts";
 
 type AppRouteModule = {
-  render: (data: unknown) => unknown;
+  render: (data: unknown, loaderPending: boolean) => unknown;
   renderOwnerKey?: (
     match: Pick<RouteMatch, "data" | "location">,
     settled: Pick<RouteMatch, "data" | "location"> | undefined,
@@ -80,6 +88,7 @@ const APP_ROUTE_TREE = [
   custodianPage,
   newSessionPage,
   activityPage,
+  meetingsPage,
   dashboardsPage,
   appsPage,
   portalsPage,
@@ -108,20 +117,53 @@ const APP_ROUTE_TREE = [
   pluginsPage,
   cronPage,
   tasksPage,
+  devicePage,
+  devicePermissionsPage,
   devicesPage,
   pluginPage,
 ] as const;
 
 const appRoutes = APP_ROUTE_TREE as readonly AppRoute[];
 
+/** Starts route chunk downloads without running the route's loader. */
+export function warmApplicationRouteModule(
+  router: ApplicationRouter,
+  location: RouteLocation,
+  basePath: string,
+): void {
+  const routeId = routeIdFromPath(location.pathname, basePath);
+  const route = routeId ? router.getRoute(routeId) : null;
+  if (route) {
+    // Navigation owns chunk errors; its import reuses the browser's module cache.
+    void Promise.resolve(route.component()).catch(() => undefined);
+  }
+}
+
+function canonicalRouteLocation(
+  routeId: RouteId | null,
+  location: RouteLocation,
+  basePath: string,
+): RouteLocation {
+  return routeId === "workboard"
+    ? (resolveWorkboardRouteLocation(location, basePath).canonicalLocation ?? location)
+    : location;
+}
+
 export function createApplicationRouter(): ApplicationRouter {
   const router = createRouter<RouteId, ApplicationContext<RouteId>, AppRouteModule>({
     routes: appRoutes,
   });
-  // The shared router intentionally matches exact paths only. Workboard ids,
-  // hub tabs, and session refs are runtime data, so the app owns those paths.
+  // The shared router intentionally matches exact paths only. People, Workboard
+  // ids, hub tabs, and session refs are runtime data, so the app owns those paths.
   return {
     ...router,
+    navigate: (routeId, context, options, location) =>
+      router.navigate(
+        routeId,
+        context,
+        options,
+        location ? canonicalRouteLocation(routeId, location, context.basePath) : undefined,
+      ),
     routeIdFromPath,
   };
 }
@@ -129,6 +171,9 @@ export function createApplicationRouter(): ApplicationRouter {
 type DynamicRoute = readonly [routeId: RouteId, searchKey: string, searchValue: string];
 
 function dynamicRouteFromPath(pathname: string, basePath: string): DynamicRoute | null {
+  if (activityPersonFromPath(pathname, basePath)) {
+    return ["activity", INTERNAL_ACTIVITY_PATH_PARAM, pathname];
+  }
   const agentRoute = agentRouteFromPath(pathname, basePath);
   if (agentRoute) {
     return ["agents", INTERNAL_AGENT_PATH_PARAM, pathname];
@@ -194,6 +239,16 @@ export async function startApplicationRouter(
   context: ApplicationContext<RouteId>,
 ): Promise<void> {
   let location = history.location();
+  const canonicalLocation = canonicalRouteLocation(
+    routeIdFromPath(location.pathname, basePath),
+    location,
+    basePath,
+  );
+  // Normalize the requested URL before loaders or preload caches can outlive it.
+  if (!sameRouteLocation(location, canonicalLocation)) {
+    history.replace(canonicalLocation);
+    location = history.location();
+  }
   const initialAgentRoute = agentRouteFromPath(location.pathname, basePath);
   if (initialAgentRoute?.invalidPanel) {
     history.replace({
@@ -218,16 +273,24 @@ export async function startApplicationRouter(
     replace: (next) => history.replace(next),
     listen: (listener) =>
       history.listen((next) => {
-        const dynamicRoute = dynamicRouteFromPath(next.pathname, basePath);
+        const canonical = canonicalRouteLocation(
+          routeIdFromPath(next.pathname, basePath),
+          next,
+          basePath,
+        );
+        if (!sameRouteLocation(next, canonical)) {
+          history.replace(canonical);
+        }
+        const dynamicRoute = dynamicRouteFromPath(canonical.pathname, basePath);
         if (dynamicRoute) {
           void router
-            .navigate(dynamicRoute[0], context, { history: "none" }, next)
+            .navigate(dynamicRoute[0], context, { history: "none" }, canonical)
             .catch((error: unknown) => {
               console.error("[openclaw] Dynamic route navigation failed", error);
             });
           return;
         }
-        listener(next);
+        listener(canonical);
       }),
   };
   await tolerateRouteNotFound(router.start(applicationHistory, basePath, context));

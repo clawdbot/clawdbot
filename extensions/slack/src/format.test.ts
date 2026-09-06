@@ -56,6 +56,17 @@ describe("chunkSlackMrkdwnText", () => {
 });
 
 describe("normalizeSlackOutboundText", () => {
+  it("escapes all angle tokens on request while preserving blockquotes and formatting", () => {
+    expect(
+      normalizeSlackOutboundText(
+        "> **Check** <@U123> <#C123> <!channel> <!date^0^{date}|today> <https://example.com> & `<@U456>`",
+        { mentions: "escape" },
+      ),
+    ).toBe(
+      "> *Check* &lt;@U123&gt; &lt;#C123&gt; &lt;!channel&gt; &lt;!date^0^{date}|today&gt; &lt;https://example.com&gt; &amp; `&lt;@U456&gt;`",
+    );
+  });
+
   it("leaves table parsing off for callers without an authored-text table mode", () => {
     const table = "| Name | Value |\n| --- | --- |\n| Beta | 2 |";
     expect(normalizeSlackOutboundText(table)).toBe(table);
@@ -237,8 +248,8 @@ describe("escapeSlackMrkdwn", () => {
     expect(escapeSlackMrkdwn("heartbeat status ok")).toBe("heartbeat status ok");
   });
 
-  it("escapes slack and mrkdwn control characters", () => {
-    expect(escapeSlackMrkdwn("mode_*`~<&>\\")).toBe("mode\\_\\*\\`\\~&lt;&amp;&gt;\\\\");
+  it("escapes only Slack entities while preserving formatting markers and backslashes", () => {
+    expect(escapeSlackMrkdwn("mode_*`~<&>\\")).toBe("mode_*`~&lt;&amp;&gt;\\");
   });
 });
 

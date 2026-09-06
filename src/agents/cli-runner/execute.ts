@@ -28,10 +28,11 @@ import {
 import type { MediaImageLayout } from "../embedded-agent-runner/run/prompt-image-metadata.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
+import { runCliCleanup } from "./cleanup.js";
 import {
   acceptsCliLiveSession,
   buildCliLiveOwnerKey,
-  closeCliLiveSession,
+  restartCliLiveSession,
 } from "./cli-live-session-registry.js";
 import { executeDeps } from "./execute-deps.js";
 import { createCliEventHandlers } from "./execute-events.js";
@@ -44,9 +45,10 @@ import {
   parseCliBackendPreserveEnv,
   resolveNodeClaudeAuthEnv,
 } from "./execute-logging.js";
-import { createCliAbortError, stripGatewayLocalClaudeArgs } from "./execute-node-claude.js";
+import { stripGatewayLocalClaudeArgs } from "./execute-node-claude.js";
 import { executeCliProcess } from "./execute-process.js";
 import { createCliToolTracking } from "./execute-tool-tracking.js";
+import { createCliRunCurrentAssertion } from "./execution-target.js";
 import {
   buildCliArgs,
   enqueueCliRun,
@@ -133,9 +135,8 @@ export async function executePreparedCliRun(
   options?: ExecutePreparedCliRunOptions,
 ): Promise<CliOutput> {
   const params = context.params as PreparedCliRunInternalParams;
-  if (params.abortSignal?.aborted) {
-    throw createCliAbortError();
-  }
+  const assertCurrent = createCliRunCurrentAssertion(params);
+  assertCurrent();
   const backend = context.preparedBackend.backend;
   const executionTarget = context.executionTarget;
   const localProcessEnv = installationTargetEnv(getInstallationTarget());
@@ -341,7 +342,9 @@ export async function executePreparedCliRun(
   };
   const cleanupOuterResource = async (cleanup: (() => Promise<void>) | undefined) => {
     try {
-      await cleanup?.();
+      await runCliCleanup(params, "cli-outer-resource", async () => {
+        await cleanup?.();
+      });
     } catch (error) {
       if (completedOutput?.didSendViaMessagingTool) {
         cliBackendLog.warn(
@@ -359,10 +362,9 @@ export async function executePreparedCliRun(
     }
   };
   const executeAttempt = async (): Promise<CliOutput> => {
+    assertCurrent();
     await context.preparedBackend.beforeExecution?.();
-    if (params.abortSignal?.aborted) {
-      throw createCliAbortError();
-    }
+    assertCurrent();
     const cliTurnStartedAt = Date.now();
     const restoreSkillEnv =
       params.skillsSnapshot && !params.controlOperation
@@ -562,6 +564,7 @@ export async function executePreparedCliRun(
       }
       runOutput = await executeCliProcess({
         context,
+        assertCurrent,
         backend,
         deps: executeDeps,
         events,
@@ -601,12 +604,16 @@ export async function executePreparedCliRun(
       });
       toolTracking.finalizeCapture(events.finalizeParsedTools);
       try {
-        await cleanupMcpCaptureAttempt?.();
+        await runCliCleanup(params, "cli-mcp-capture", async () => {
+          await cleanupMcpCaptureAttempt?.();
+        });
       } catch (error) {
         recordRunError(error);
       }
       try {
-        restoreSkillEnv?.();
+        await runCliCleanup(params, "cli-skill-env", async () => {
+          restoreSkillEnv?.();
+        });
       } catch (error) {
         recordRunError(error);
       }
@@ -624,9 +631,7 @@ export async function executePreparedCliRun(
   };
   try {
     completedOutput = await enqueueCliRun(queueKey, async () => {
-      if (params.abortSignal?.aborted) {
-        throw createCliAbortError();
-      }
+      assertCurrent();
       if (params.lifecycleGeneration) {
         assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       }
@@ -641,7 +646,7 @@ export async function executePreparedCliRun(
         }
         // The fork argument only applies at process startup; a cached warm child
         // would run inside the source session. Force a fresh spawn.
-        await closeCliLiveSession(context, "restart");
+        await restartCliLiveSession(context);
       }
       return await executeAttempt();
     });
@@ -664,6 +669,7 @@ export async function executePreparedCliRun(
       failure = new AggregateError(
         [error, persistenceError],
         "CLI turn failed and its fork successor could not be persisted",
+        { cause: error },
       );
     }
     if (forkResumeClaimed && !forkSuccessorObserved) {

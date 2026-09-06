@@ -3359,10 +3359,21 @@ describe("memory plugin e2e", () => {
     expect(decoded[1]).toBeCloseTo(-2.5);
   });
 
-  test("normalizeEmbeddingVector rejects malformed embedding payloads", () => {
-    expect(() => normalizeEmbeddingVector([0.1, Number.NaN])).toThrow(
+  test.each(
+    [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY].flatMap((coordinate) => [
+      { encoding: "float array", coordinate },
+      { encoding: "base64", coordinate },
+    ]),
+  )("rejects nonfinite $coordinate in $encoding embeddings", ({ encoding, coordinate }) => {
+    const bytes = Buffer.alloc(Float32Array.BYTES_PER_ELEMENT);
+    bytes.writeFloatLE(coordinate);
+    const vector = encoding === "base64" ? bytes.toString("base64") : [coordinate];
+    expect(() => normalizeEmbeddingVector(vector)).toThrow(
       "Embedding response contains non-numeric values",
     );
+  });
+
+  test("normalizeEmbeddingVector rejects malformed embedding payloads", () => {
     expect(() => normalizeEmbeddingVector("abc")).toThrow(
       "Base64 embedding response has invalid byte length",
     );

@@ -6,6 +6,7 @@ import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   archiveStaleDashboardEntries,
   capEntryCount,
+  countUnarchivedSessionEntries,
   getActiveSessionMaintenanceWarning,
   pruneStaleModelRunEntries,
   pruneStaleEntries,
@@ -23,6 +24,7 @@ export type SessionMaintenanceApplyReport = {
   beforeCount: number;
   afterCount: number;
   archived: number;
+  capArchived: number;
   modelRunPruned: number;
   pruned: number;
   capped: number;
@@ -122,12 +124,14 @@ async function applyWarnOnlyMaintenance(params: {
       preserveRecentMs: params.maintenance.preserveRecentMs,
     });
     if (warning) {
+      const outcome = warning.wouldPrune || warning.capOutcome === "remove" ? "remove" : "archive";
       params.operation.log.warn(
-        "session maintenance would evict active session; skipping enforcement",
+        `session maintenance would ${outcome} active session; skipping enforcement`,
         {
           activeSessionKey: warning.activeSessionKey,
           wouldPrune: warning.wouldPrune,
           wouldCap: warning.wouldCap,
+          capOutcome: warning.capOutcome,
           pruneAfterMs: warning.pruneAfterMs,
           maxEntries: warning.maxEntries,
         },
@@ -148,6 +152,7 @@ async function applyWarnOnlyMaintenance(params: {
     beforeCount: params.beforeCount,
     afterCount: Object.keys(params.operation.store).length,
     archived: 0,
+    capArchived: 0,
     modelRunPruned: 0,
     pruned: 0,
     capped: 0,
@@ -215,7 +220,7 @@ async function applyEnforcedMaintenance(params: {
   const removedSessionFiles = new Map<string, string | undefined>();
   const modelRunPruned = shouldRunModelRunPrune({
     maintenance: params.maintenance,
-    entryCount: Object.keys(params.operation.store).length,
+    entryCount: countUnarchivedSessionEntries(params.operation.store),
     force: params.forceMaintenance,
   })
     ? pruneStaleModelRunEntries(params.operation.store, params.maintenance.modelRunPruneAfterMs, {
@@ -226,7 +231,7 @@ async function applyEnforcedMaintenance(params: {
         preserveRecentMs: params.maintenance.preserveRecentMs,
       })
     : 0;
-  const archived = archiveStaleDashboardEntries(
+  let archived = archiveStaleDashboardEntries(
     params.operation.store,
     params.maintenance.archiveDashboardAfterMs,
     { preserveKeys: params.preserveSessionKeys },
@@ -238,16 +243,21 @@ async function applyEnforcedMaintenance(params: {
     preserveKeys: params.preserveSessionKeys,
     preserveRecentMs: params.maintenance.preserveRecentMs,
   });
-  const countAfterPrune = Object.keys(params.operation.store).length;
+  const countAfterPrune = countUnarchivedSessionEntries(params.operation.store);
   const shouldRunCapMaintenance =
     params.forceMaintenance ||
     shouldRunSessionEntryMaintenance({
       entryCount: countAfterPrune,
       maxEntries: params.maintenance.maxEntries,
     });
+  let capArchived = 0;
   const capped = shouldRunCapMaintenance
     ? capEntryCount(params.operation.store, params.maintenance.maxEntries, {
-        onCapped: ({ entry }) => {
+        onArchived: () => {
+          archived += 1;
+          capArchived += 1;
+        },
+        onRemoved: ({ entry }) => {
           rememberRemovedSessionFile(removedSessionFiles, entry);
         },
         preserveKeys: params.preserveSessionKeys,
@@ -280,6 +290,7 @@ async function applyEnforcedMaintenance(params: {
     beforeCount: params.beforeCount,
     afterCount: Object.keys(params.operation.store).length,
     archived,
+    capArchived,
     modelRunPruned,
     pruned,
     capped,
@@ -306,6 +317,7 @@ export async function applyFileBackedSessionStoreMaintenance(
 ): Promise<FileBackedSessionStoreMaintenanceResult> {
   const maintenance = resolveMaintenanceForOperation(params);
   const beforeCount = Object.keys(params.store).length;
+  const beforeUnarchivedCount = countUnarchivedSessionEntries(params.store);
   const forceMaintenance = params.maintenanceOverride !== undefined;
   const preserveSessionKeys = collectSessionMaintenancePreserveKeysForStore({
     storePath: params.storePath,
@@ -313,7 +325,7 @@ export async function applyFileBackedSessionStoreMaintenance(
     baseKeys: [params.activeSessionKey],
   });
   const shouldRunEntryMaintenance = shouldRunSessionEntryMaintenance({
-    entryCount: beforeCount,
+    entryCount: beforeUnarchivedCount,
     maxEntries: maintenance.maxEntries,
     force: forceMaintenance,
   });

@@ -1,17 +1,25 @@
-// Node version mismatch tests protect local node identity/version checks so the
-// gateway accepts matching node hosts and rejects incompatible local runtimes.
+// Real signed node connects protect same-install classification and version admission.
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
+import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { ErrorCodes, PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
+import {
+  loadOrCreateDeviceIdentity,
+  publicKeyRawBase64UrlFromPem,
+  type DeviceIdentity,
+} from "../infra/device-identity.js";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import {
   approveNodePairing,
   listNodePairing,
   requestNodePairing,
 } from "../infra/device-pairing-node.js";
+import { requestDevicePairing } from "../infra/device-pairing.js";
 import { configureNodeHost } from "../node-host/config.js";
+import type { NodeListNode } from "../shared/node-list-types.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
-import { pairDeviceIdentity } from "./device-authz.test-helpers.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 import { installGatewayTestHooks, startServer } from "./test-helpers.js";
 
@@ -19,19 +27,62 @@ installGatewayTestHooks({ scope: "suite" });
 
 const gatewayVersion = resolveRuntimeServiceVersion(process.env);
 
-const TEST_LOCAL_NODE_ID = "test-local-node-version-mismatch";
-
 describe("node host version mismatch guard", () => {
   let port: number;
   let server: Awaited<ReturnType<typeof startServer>>["server"];
+  let localIdentity: DeviceIdentity;
+  let instanceId: string;
+
+  async function pairNode(identity: DeviceIdentity) {
+    const request = await requestDevicePairing({
+      deviceId: identity.deviceId,
+      publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+      role: "node",
+      scopes: [],
+      clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
+      clientMode: GATEWAY_CLIENT_MODES.NODE,
+      platform: "macos",
+      deviceFamily: "Mac",
+    });
+    const approved = await approveDevicePairing(request.request.requestId, { callerScopes: [] });
+    expect(approved?.status).toBe("approved");
+    const surface = await requestNodePairing({
+      nodeId: identity.deviceId,
+      platform: "macos",
+      deviceFamily: "Mac",
+      commands: [],
+    });
+    const node = await approveNodePairing(surface.request.requestId, {
+      callerScopes: ["operator.pairing", "operator.write"],
+    });
+    expect(node && "node" in node).toBe(true);
+  }
+
+  function connectNode(overrides: Partial<Parameters<typeof connectGatewayClient>[0]> = {}) {
+    return connectGatewayClient({
+      url: `ws://127.0.0.1:${port}`,
+      token: "secret",
+      role: "node",
+      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+      clientDisplayName: "test-node",
+      clientVersion: gatewayVersion,
+      instanceId,
+      platform: "macos",
+      deviceFamily: "Mac",
+      mode: GATEWAY_CLIENT_MODES.NODE,
+      scopes: [],
+      commands: [],
+      deviceIdentity: localIdentity,
+      ...overrides,
+    });
+  }
 
   beforeAll(async () => {
-    await configureNodeHost({
-      nodeId: TEST_LOCAL_NODE_ID,
-      displayName: "test-local-node",
-      fallbackDisplayName: "test-local-node",
-      gateway: {},
-    });
+    const config = await configureNodeHost({ fallbackDisplayName: "test-node", gateway: {} });
+    instanceId = config.nodeId;
+    localIdentity = loadOrCreateDeviceIdentity();
+    expect(instanceId).not.toBe(localIdentity.deviceId);
+    await pairNode(localIdentity);
     const started = await startServer("secret");
     port = started.port;
     server = started.server;
@@ -41,59 +92,137 @@ describe("node host version mismatch guard", () => {
     await server?.close();
   });
 
-  test("local node with matching released version connects successfully", async () => {
-    // Use the actual gateway version so versions match
-    let helloProtocol: number | undefined;
-    const client = await connectGatewayClient({
-      url: `ws://127.0.0.1:${port}`,
-      token: "secret",
-      role: "node",
-      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-      clientDisplayName: "test-node-match",
-      clientVersion: gatewayVersion,
-      instanceId: TEST_LOCAL_NODE_ID,
-      mode: GATEWAY_CLIENT_MODES.NODE,
-      scopes: [],
-      commands: [],
-      onHelloOk: (hello) => {
-        helloProtocol = hello.protocol;
-      },
-    });
-    expect(client).toBeDefined();
-    expect(helloProtocol).toBe(PROTOCOL_VERSION);
-    await client.stopAndWait({ timeoutMs: 2_000 });
-  });
+  test.each([gatewayVersion, "dev", "1.0.0"])(
+    "same-install node with accepted version %s connects",
+    async (clientVersion) => {
+      let helloProtocol: number | undefined;
+      const client = await connectNode({
+        clientVersion,
+        onHelloOk: (hello) => {
+          helloProtocol = hello.protocol;
+        },
+      });
+      try {
+        expect(helloProtocol).toBe(PROTOCOL_VERSION);
+      } finally {
+        await client.stopAndWait({ timeoutMs: 2_000 });
+      }
+    },
+  );
 
-  test("local node with mismatched released version is rejected", async () => {
-    const staleVersion = "2020.1.1";
-    await expect(
-      connectGatewayClient({
+  test.each(["default", "different", "omitted"])(
+    "same-install stale node is rejected with %s instanceId",
+    async (instance) => {
+      const onHelloOk = vi.fn();
+      await expect(
+        connectNode({
+          clientVersion: "2020.1.1",
+          instanceId:
+            instance === "default"
+              ? instanceId
+              : instance === "different"
+                ? "different-instance"
+                : undefined,
+          onHelloOk,
+          timeoutMs: 5_000,
+          timeoutMessage: "expected version mismatch rejection",
+        }).then(async (client) => {
+          await client.stopAndWait({ timeoutMs: 2_000 });
+          return "connected";
+        }),
+      ).rejects.toMatchObject({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "client version mismatch",
+        details: {
+          code: ConnectErrorDetailCodes.CLIENT_VERSION_MISMATCH,
+          clientVersion: "2020.1.1",
+          gatewayVersion,
+        },
+      });
+      expect(onHelloOk).not.toHaveBeenCalled();
+    },
+  );
+
+  test("list and describe mark only the same-install device despite copied instance metadata", async () => {
+    const independent = await createOpenClawTestState({
+      label: "node-independent",
+      applyEnv: false,
+    });
+    const clients: Awaited<ReturnType<typeof connectGatewayClient>>[] = [];
+    try {
+      const identity = loadOrCreateDeviceIdentity({ env: independent.env });
+      expect(identity.deviceId).not.toBe(localIdentity.deviceId);
+      await pairNode(identity);
+      clients.push(await connectNode());
+      clients.push(await connectNode({ deviceIdentity: identity }));
+      const operator = await connectGatewayClient({
         url: `ws://127.0.0.1:${port}`,
         token: "secret",
-        role: "node",
-        clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-        clientDisplayName: "test-node-stale",
-        clientVersion: staleVersion,
-        instanceId: TEST_LOCAL_NODE_ID,
-        mode: GATEWAY_CLIENT_MODES.NODE,
-        scopes: [],
-        commands: [],
-        timeoutMs: 5_000,
-        timeoutMessage: "expected version mismatch rejection",
-      }),
-    ).rejects.toThrow(/client version mismatch|version mismatch/i);
+        scopes: ["operator.read"],
+      });
+      clients.push(operator);
+      const list = await operator.request<{ nodes: NodeListNode[] }>("node.list", {});
+      expect(list.nodes.filter((node) => node.gatewayLocal)).toEqual([
+        expect.objectContaining({
+          nodeId: localIdentity.deviceId,
+          gatewayLocal: true,
+          paired: true,
+          connected: true,
+        }),
+      ]);
+      const remote = list.nodes.find((node) => node.nodeId === identity.deviceId);
+      expect(remote).toMatchObject({ paired: true, connected: true, displayName: "test-node" });
+      expect(remote).not.toHaveProperty("gatewayLocal");
+      await expect(
+        operator.request("node.describe", { nodeId: localIdentity.deviceId }),
+      ).resolves.toMatchObject({
+        nodeId: localIdentity.deviceId,
+        gatewayLocal: true,
+        paired: true,
+        connected: true,
+      });
+      const described = await operator.request("node.describe", { nodeId: identity.deviceId });
+      expect(described).toMatchObject({ nodeId: identity.deviceId, paired: true, connected: true });
+      expect(described).not.toHaveProperty("gatewayLocal");
+    } finally {
+      try {
+        await Promise.all(clients.map((client) => client.stopAndWait({ timeoutMs: 2_000 })));
+      } finally {
+        await independent.cleanup();
+      }
+    }
+  });
+
+  test("independently paired stale node connects with the same-install instanceId", async () => {
+    const independent = await createOpenClawTestState({
+      label: "node-independent-stale",
+      applyEnv: false,
+    });
+    let client: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+    try {
+      const identity = loadOrCreateDeviceIdentity({ env: independent.env });
+      await pairNode(identity);
+      const onHelloOk = vi.fn();
+      client = await connectNode({
+        deviceIdentity: identity,
+        clientVersion: "2020.1.1",
+        onHelloOk,
+      });
+      expect(onHelloOk).toHaveBeenCalledWith(
+        expect.objectContaining({ protocol: PROTOCOL_VERSION }),
+      );
+    } finally {
+      try {
+        await client?.stopAndWait({ timeoutMs: 2_000 });
+      } finally {
+        await independent.cleanup();
+      }
+    }
   });
 
   test("rejected local reconnects preserve the active node pending reapproval", async () => {
-    const pairedNode = await pairDeviceIdentity({
-      name: "node-version-mismatch-pending-reapproval",
-      role: "node",
-      scopes: [],
-      clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
-      clientMode: GATEWAY_CLIENT_MODES.NODE,
-    });
     const initial = await requestNodePairing({
-      nodeId: pairedNode.identity.deviceId,
+      nodeId: localIdentity.deviceId,
       platform: "macos",
       deviceFamily: "Mac",
       commands: ["screen.snapshot"],
@@ -102,42 +231,22 @@ describe("node host version mismatch guard", () => {
       callerScopes: ["operator.pairing", "operator.write"],
     });
 
-    const upgraded = await connectGatewayClient({
-      url: `ws://127.0.0.1:${port}`,
-      token: "secret",
-      role: "node",
-      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-      clientDisplayName: "test-node-upgraded",
-      clientVersion: gatewayVersion,
-      instanceId: TEST_LOCAL_NODE_ID,
-      platform: "macos",
-      deviceFamily: "Mac",
-      mode: GATEWAY_CLIENT_MODES.NODE,
-      scopes: [],
-      commands: ["screen.snapshot", "system.run"],
-      deviceIdentity: pairedNode.identity,
-    });
+    const upgraded = await connectNode({ commands: ["screen.snapshot", "system.run"] });
     try {
       const connectReverted = async (clientVersion: string, clientDisplayName: string) =>
-        await connectGatewayClient({
-          url: `ws://127.0.0.1:${port}`,
-          token: "secret",
-          role: "node",
-          clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+        await connectNode({
           clientDisplayName,
           clientVersion,
-          instanceId: TEST_LOCAL_NODE_ID,
-          platform: "macos",
-          deviceFamily: "Mac",
-          mode: GATEWAY_CLIENT_MODES.NODE,
-          scopes: [],
+          instanceId: "reconnect-instance-override",
           commands: ["screen.snapshot"],
-          deviceIdentity: pairedNode.identity,
           timeoutMs: 5_000,
           timeoutMessage: "expected rejected reconnect",
+        }).then(async (client) => {
+          await client.stopAndWait({ timeoutMs: 2_000 });
+          return "connected";
         });
       const pendingBefore = (await listNodePairing()).pending.find(
-        (entry) => entry.nodeId === pairedNode.identity.deviceId,
+        (entry) => entry.nodeId === localIdentity.deviceId,
       );
       expect(pendingBefore?.commands).toEqual(["screen.snapshot", "system.run"]);
 
@@ -146,7 +255,7 @@ describe("node host version mismatch guard", () => {
       );
 
       const pendingAfterVersionMismatch = (await listNodePairing()).pending.find(
-        (entry) => entry.nodeId === pairedNode.identity.deviceId,
+        (entry) => entry.nodeId === localIdentity.deviceId,
       );
       expect(pendingAfterVersionMismatch?.requestId).toBe(pendingBefore?.requestId);
       expect(pendingAfterVersionMismatch?.commands).toEqual(["screen.snapshot", "system.run"]);
@@ -177,45 +286,12 @@ describe("node host version mismatch guard", () => {
       }
 
       const pendingAfterHelloFailure = (await listNodePairing()).pending.find(
-        (entry) => entry.nodeId === pairedNode.identity.deviceId,
+        (entry) => entry.nodeId === localIdentity.deviceId,
       );
       expect(pendingAfterHelloFailure?.requestId).toBe(pendingBefore?.requestId);
       expect(pendingAfterHelloFailure?.commands).toEqual(["screen.snapshot", "system.run"]);
     } finally {
       await upgraded.stopAndWait({ timeoutMs: 2_000 });
     }
-  });
-
-  test("local node with dev/test version is allowed (not a released version)", async () => {
-    // "dev" does not match YYYY.M.PATCH, so the guard skips
-    const client = await connectGatewayClient({
-      url: `ws://127.0.0.1:${port}`,
-      token: "secret",
-      role: "node",
-      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-      clientDisplayName: "test-node-dev",
-      clientVersion: "dev",
-      mode: GATEWAY_CLIENT_MODES.NODE,
-      scopes: [],
-      commands: [],
-    });
-    expect(client).toBeDefined();
-    await client.stopAndWait({ timeoutMs: 2_000 });
-  });
-
-  test("local node with non-date version '1.0.0' is allowed", async () => {
-    const client = await connectGatewayClient({
-      url: `ws://127.0.0.1:${port}`,
-      token: "secret",
-      role: "node",
-      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-      clientDisplayName: "test-node-semver",
-      clientVersion: "1.0.0",
-      mode: GATEWAY_CLIENT_MODES.NODE,
-      scopes: [],
-      commands: [],
-    });
-    expect(client).toBeDefined();
-    await client.stopAndWait({ timeoutMs: 2_000 });
   });
 });

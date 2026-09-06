@@ -16,7 +16,6 @@ import {
   resolveManagedStreamMediaUrls,
 } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import {
-  buildAssistantStreamData,
   emitAssistantCommentaryStreamData,
   emitAssistantMessageStart,
   emitReasoningEnd,
@@ -87,7 +86,7 @@ export function handleMessageEnd(
       rawText: coerceChatContentText(extractEmbeddedAssistantText(assistantMessage)),
       rawThinking: extractAssistantThinking(assistantMessage),
     }));
-    emitAssistantCommentaryStreamData(ctx, assistantMessage);
+    emitAssistantCommentaryStreamData(ctx, assistantMessage, true);
     // Commentary-tagged tool turns can still carry durable reasoning under /reasoning on.
     const suppressedTrimmedReasoning = ctx.state.includeReasoning
       ? extractAssistantThinking(assistantMessage).trim()
@@ -142,9 +141,9 @@ export function handleMessageEnd(
   ctx.resetPartialReplyDirectives();
   const parsedText = parseReplyDirectives(trimmedText);
   // Final media is emitted after the buffered text drains, never on its first chunk.
-  recordPendingAssistantReplyDirectives(ctx.state, { ...parsedText, mediaUrls: undefined });
+  recordPendingAssistantReplyDirectives(ctx.state, parsedText);
   const cleanedText = parsedText.text;
-  const { mediaUrls } = resolveSendableOutboundReplyParts(parsedText);
+  const { mediaUrls } = resolveSendableOutboundReplyParts(parsedText, { text: "" });
   const managedMediaUrls = resolveManagedStreamMediaUrls(ctx.state, mediaUrls);
 
   const sourceMessage = { ...assistantMessage, content: sourceContent };
@@ -248,13 +247,16 @@ export function handleMessageEnd(
     !suppressDeterministicApprovalOutput &&
     !suppressMessageToolOnlySourceReplyOutput
   ) {
-    const data = buildAssistantStreamData({
-      text: cleanedText,
-      mediaUrls,
-      managedMediaUrls,
-      phase: assistantPhase,
-    });
-    ctx.emitAssistantStreamData(data, { finalMessage: true });
+    ctx.emitAssistantStreamData(
+      {
+        text: cleanedText,
+        delta: "",
+        mediaUrls: mediaUrls.length ? mediaUrls : undefined,
+        managedMediaUrls: managedMediaUrls.length ? managedMediaUrls : undefined,
+        phase: assistantPhase,
+      },
+      { finalMessage: true },
+    );
   }
 
   const silentExpectedWithoutSentinel =

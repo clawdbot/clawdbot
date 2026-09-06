@@ -1,7 +1,9 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -65,6 +67,7 @@ const methodResponses = {
   "skills.proposals.list": {
     proposals: [],
     schema: "openclaw.skill-workshop.proposals-manifest.v1",
+    installedSkills: [],
     updatedAt: "2026-08-17T12:00:00.000Z",
   },
   "skills.status": {
@@ -187,11 +190,12 @@ async function captureScreenshot(page: Page, name: string) {
   if (!captureUiProof) {
     return;
   }
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(proofDir, name),
-  });
+  await writeFile(
+    path.join(proofDir, name),
+    await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+      page.locator(".plugins-hub-tabs"),
+    ]),
+  );
 }
 
 async function selectHubTab(
@@ -199,11 +203,12 @@ async function selectHubTab(
   name: "Installed" | "Discover" | "Skills" | "Workshop",
   target: { pathname: string; routeId: string },
 ) {
-  await page.getByRole("tab", { name: new RegExp(`^${name}`, "u") }).click();
+  const tab = page
+    .locator(".plugins-hub-tabs")
+    .getByRole("tab", { name: new RegExp(`^${name}`, "u") });
+  await tab.click();
   await waitForControlUiRoute(page, target);
-  await expect
-    .poll(() => page.getByRole("tab", { name: new RegExp(`^${name}`, "u") }).getAttribute("active"))
-    .not.toBeNull();
+  await expect.poll(() => tab.getAttribute("active")).not.toBeNull();
 }
 
 suite.define(() => {
@@ -292,7 +297,7 @@ suite.define(() => {
           pathname: "/skills/workshop",
           routeId: "skill-workshop",
         });
-        await captureScreenshot(page, `${label}-04-workshop-today.png`);
+        await captureScreenshot(page, `${label}-04-workshop-skills.png`);
         expectStableGeometry(await hubGeometry(page), installed);
         const workshopShellBottom = await page
           .locator(".plugins-hub-header")
@@ -302,30 +307,36 @@ suite.define(() => {
           .evaluate((element) => element.getBoundingClientRect().top);
         expect(workshopControlsTop).toBeGreaterThanOrEqual(workshopShellBottom);
 
-        await page.locator("#skill-workshop-mode-tab-board").click();
+        await page.locator("#skill-workshop-mode-tab-suggestions").click();
         await expect
-          .poll(() => page.locator("#skill-workshop-mode-tab-board").getAttribute("active"))
+          .poll(() => page.locator("#skill-workshop-mode-tab-suggestions").getAttribute("active"))
           .not.toBeNull();
         expectStableGeometry(await hubGeometry(page), installed);
-        const boardLayout = await page.locator(".content--skill-workshop").evaluate((element) => {
-          const style = getComputedStyle(element);
-          return { display: style.display, overflow: style.overflow };
-        });
-        expect(boardLayout).toEqual({ display: "flex", overflow: "hidden" });
-        await captureScreenshot(page, `${label}-05-workshop-board.png`);
-
-        await page.locator("#skill-workshop-mode-tab-today").click();
-        await expect
-          .poll(() => page.locator("#skill-workshop-mode-tab-today").getAttribute("active"))
-          .not.toBeNull();
-        expectStableGeometry(await hubGeometry(page), installed);
-        const todayLayout = await page
-          .locator(".content--skill-workshop-today")
+        const suggestionsLayout = await page
+          .locator(".content--skill-workshop")
           .evaluate((element) => {
             const style = getComputedStyle(element);
             return { display: style.display, overflowY: style.overflowY };
           });
-        expect(todayLayout).toEqual({ display: "block", overflowY: "auto" });
+        expect(suggestionsLayout).toEqual({
+          display: "flex",
+          overflowY: viewport.width <= 768 ? "auto" : "hidden",
+        });
+        await captureScreenshot(page, `${label}-05-workshop-suggestions.png`);
+
+        await page.locator("#skill-workshop-mode-tab-skills").click();
+        await expect
+          .poll(() => page.locator("#skill-workshop-mode-tab-skills").getAttribute("active"))
+          .not.toBeNull();
+        expectStableGeometry(await hubGeometry(page), installed);
+        const skillsLayout = await page.locator(".content--skill-workshop").evaluate((element) => {
+          const style = getComputedStyle(element);
+          return { display: style.display, overflowY: style.overflowY };
+        });
+        expect(skillsLayout).toEqual({
+          display: "flex",
+          overflowY: viewport.width <= 768 ? "auto" : "hidden",
+        });
 
         await selectHubTab(page, "Skills", { pathname: "/skills", routeId: "skills" });
         expectStableGeometry(await hubGeometry(page), installed);

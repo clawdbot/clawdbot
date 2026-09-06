@@ -147,6 +147,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         memoryTranscript?.sessionManager ?? SessionManager.open(sessionTarget),
         {
           agentId: sessionAgentId,
+          runId: params.runId,
           sessionKey: params.sessionKey,
           config: params.config,
           contextWindowTokens: contextTokenBudget,
@@ -158,6 +159,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               ? "aborted"
               : undefined,
           allowedToolNames,
+          withCompactionPersistence: params.transcriptByteCompactionPersistence,
         },
       );
       checkpointSnapshot = memoryTranscript
@@ -168,11 +170,11 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             sessionTarget,
           });
       compactionSessionManager = sessionManager;
-      const recordUsage = accountingRecorder
+      const recordUsage = accountingRecorder?.recordUsage
         ? (usage: UsageLike) => {
             const normalized = normalizeUsage(usage);
             if (normalized) {
-              accountingRecorder.recordUsage(normalized);
+              accountingRecorder.recordUsage?.(normalized);
             }
           }
         : undefined;
@@ -211,11 +213,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         extensionFactories,
       });
       await resourceLoader.reload();
-      // DefaultResourceLoader.reload() rehydrates settings from disk and can drop OpenClaw
-      // compaction overrides applied in createPreparedEmbeddedAgentSettingsManager — same
-      // rehydration also restores OpenClaw runtime's auto-compaction (openclaw#75799), so re-apply
-      // both guards. effectiveModel.baseUrl matches the surrounding scope so
-      // auth-profile-injected baseUrls reach the endpoint-class detector.
+      // Reloading settings discards prepared compaction overrides and restores
+      // runtime auto-compaction, so reapply both guards after reload.
       applyAgentCompactionSettingsFromConfig({
         settingsManager,
         cfg: params.config,
@@ -260,10 +259,9 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       while (true) {
         // A thinking retry starts a new attempt; setup/endpoint failures must not reuse its predecessor's cause.
         setCompactionSafeguardCancellation(sessionManager, undefined);
-        // Rebuild the compaction session on retry so provider wrappers, payload
-        // shaping, and the embedded system prompt all reflect the fallback level.
+        // Rebuild on retry so provider wrappers and payload shaping use the fallback effort.
         attemptedThinking.add(thinkLevel);
-        const systemPromptText = buildSystemPromptText(thinkLevel);
+        const systemPromptText = buildSystemPromptText();
         let session: AgentSession | undefined;
         let diagnosticOwner: DiagnosticEmbeddedRunOwner | undefined;
         let resetCompactionTimeout: (() => void) | undefined;
@@ -455,7 +453,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           const preMetrics = diagEnabled
             ? summarizeCompactionMessages(session.messages)
             : undefined;
-          if (diagEnabled && preMetrics) {
+          if (preMetrics) {
             log.debug(
               `[compaction-diag] start runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
                 `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
@@ -497,61 +495,70 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                 enabled: compactionReplayEnabled,
               },
             });
-            accountingRecorder?.recordCompaction(serverTokensAfter);
+            accountingRecorder?.recordCompaction?.(serverTokensAfter);
           };
-          const serverResult = await attemptServerEndpointCompaction({
-            trigger,
-            streamFn: session.agent.streamFn,
-            model: effectiveModel,
-            context: { systemPrompt: systemPromptText, messages: session.messages },
-            sessionManager,
-            extraParams: effectiveExtraParams,
-            customInstructions: params.customInstructions,
-            config: params.config,
-            onUsage: recordUsage,
-            onCompactionCommitted: recordServerCompaction,
-            assertActive,
-            requestOptions: {
-              apiKey: transportApiKey,
-              sessionId: params.sessionId,
-              authProfileId: runtimePlan.auth.forwardedAuthProfileId,
-              timeoutMs: compactionTimeoutMs,
-              signal: params.abortSignal,
-            },
-          });
+          const serverResult = params.transcriptBytePreflightAuthority
+            ? undefined
+            : await attemptServerEndpointCompaction({
+                trigger,
+                streamFn: session.agent.streamFn,
+                model: effectiveModel,
+                context: { systemPrompt: systemPromptText, messages: session.messages },
+                sessionManager,
+                extraParams: effectiveExtraParams,
+                customInstructions: params.customInstructions,
+                config: params.config,
+                onUsage: recordUsage,
+                onCompactionCommitted: recordServerCompaction,
+                assertActive,
+                requestOptions: {
+                  apiKey: transportApiKey,
+                  sessionId: params.sessionId,
+                  authProfileId: runtimePlan.auth.forwardedAuthProfileId,
+                  timeoutMs: compactionTimeoutMs,
+                  signal: params.abortSignal,
+                },
+              });
           const activeSession = session;
           let clientResult: Awaited<ReturnType<typeof activeSession.compact>> | undefined;
           if (!serverResult) {
             try {
               // The client watchdog starts here; refresh the delegated host watchdog with it.
               params.compactionTimeoutReset?.();
-              clientResult = await compactWithSafetyTimeout(
-                (_signal, resetTimeout) => {
+              const outcome = await compactWithSafetyTimeout(
+                async (_signal, resetTimeout) => {
                   resetCompactionTimeout = resetTimeout;
                   setCompactionSafeguardCancellation(compactionSessionManager, undefined);
                   const requestState = trigger === "overflow" ? ("unresolved" as const) : undefined;
                   if (trigger === "manual") {
-                    return activeSession.compact(params.customInstructions);
+                    return {
+                      status: "completed" as const,
+                      result: await activeSession.compact(params.customInstructions),
+                    };
                   }
-                  return resolveEffectiveCompactionMode(params.config) === "default"
-                    ? activeSession[agentSessionAutomaticCompaction](
-                        params.customInstructions,
-                        requestState,
-                      )
-                    : activeSession[agentSessionAutomaticCompaction](
-                        params.customInstructions,
-                        requestState,
-                        "none",
-                      );
+                  return activeSession[agentSessionAutomaticCompaction](
+                    params.customInstructions,
+                    requestState,
+                    resolveEffectiveCompactionMode(params.config) === "default"
+                      ? undefined
+                      : "none",
+                    {
+                      requestBudget: accountingRecorder?.requestBudget,
+                      pendingUserEntryId: accountingRecorder?.pendingUserEntryId,
+                    },
+                  );
                 },
                 compactionTimeoutMs,
                 {
                   abortSignal: params.abortSignal,
-                  onCancel: () => {
-                    activeSession.abortCompaction();
-                  },
+                  onCancel: () => activeSession.abortCompaction(),
                 },
               );
+              if (outcome.status === "skipped") {
+                assertActive();
+                return { ok: true, compacted: false, reason: outcome.reason };
+              }
+              clientResult = outcome.result;
             } finally {
               resetCompactionTimeout = undefined;
             }
@@ -567,6 +574,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                 observedTokenCount,
                 fullSessionTokensBefore: limitedTranscriptTokensBefore ?? 0,
                 estimateTokensFn: estimateTokens,
+                requestBudget: accountingRecorder?.requestBudget,
               });
           const messageCountAfter = session.messages.length;
           const compactedCount = Math.max(0, messageCountOriginal - messageCountAfter);
@@ -605,7 +613,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           const postMetrics = diagEnabled
             ? summarizeCompactionMessages(session.messages)
             : undefined;
-          if (diagEnabled && preMetrics && postMetrics) {
+          if (preMetrics && postMetrics) {
             log.debug(
               `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
                 `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
@@ -682,9 +690,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             attempted: attemptedThinking,
           });
           if (fallbackThinking) {
-            // Near-term provider fix: when compaction hits a reasoning-mandatory
-            // endpoint with `off`, retry once with `minimal` instead of surfacing
-            // a user-visible failure.
             log.warn(
               `[compaction] request rejected for ${provider}/${modelId}; retrying with ${fallbackThinking}`,
             );

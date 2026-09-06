@@ -10,6 +10,7 @@ import {
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { openSessionMenuSubmenu } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI continue in terminal mocked Gateway E2E",
@@ -121,7 +122,7 @@ suite.define(() => {
         for (const label of sharedManagementActions) {
           await dropdown.getByText(label, { exact: true }).waitFor({ state: "visible" });
         }
-        await dropdown.getByRole("menuitem", { name: "Open in", exact: true }).hover();
+        await openSessionMenuSubmenu(page, "Open in");
         const action = dropdown.getByText("Continue in terminal…", { exact: true });
         await action.waitFor({ state: "visible" });
         await page.screenshot({ path: path.join(artifactDir, "01-menu.png"), fullPage: true });
@@ -145,7 +146,7 @@ suite.define(() => {
 
         await dialog.getByRole("button", { name: "Close" }).click();
         await menuTrigger.press("Enter");
-        await dropdown.getByRole("menuitem", { name: "Open in", exact: true }).hover();
+        await openSessionMenuSubmenu(page, "Open in");
         await action.click();
         await dialog.waitFor({ state: "visible" });
         const socketCount = await gateway.getSocketCount();

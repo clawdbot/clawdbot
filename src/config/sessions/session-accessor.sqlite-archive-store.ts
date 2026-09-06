@@ -11,6 +11,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { ensureSessionTranscriptArchiveSchema } from "../../state/openclaw-agent-session-transcript-archive-schema.js";
 import {
+  resolveRegisteredSqliteTranscriptArchiveName,
   runSqliteTranscriptArchivePublishWorker,
   type MaterializedSessionStateDeletePlan,
 } from "./session-accessor.sqlite-archive.js";
@@ -145,16 +146,48 @@ export async function publishSessionStateArchives(
         database.db,
         db
           .selectFrom("session_transcript_archives")
-          .select(["generation", "session_id"])
+          .select(["archive_name", "created_at", "encoding", "generation", "reason", "session_id"])
           .where("published_at", "is", null)
           .orderBy("created_at", "asc")
           .orderBy("session_id", "asc")
           .orderBy("generation", "asc")
           .limit(PENDING_ARCHIVE_PUBLISH_BATCH_SIZE),
-      ).rows.map((row) => ({ generation: row.generation, sessionId: row.session_id }));
+      ).rows;
+      for (const archive of pendingArchives) {
+        if (
+          (archive.encoding !== "identity" && archive.encoding !== "zstd") ||
+          (archive.reason !== "deleted" && archive.reason !== "reset")
+        ) {
+          throw new Error(`Invalid pending SQLite transcript archive for ${archive.session_id}`);
+        }
+        // Stable builds could commit an oversized raw name before file publication.
+        // Only pending rows can change names without orphaning a published file.
+        const archiveName = resolveRegisteredSqliteTranscriptArchiveName({
+          createdAt: archive.created_at,
+          encoding: archive.encoding,
+          generation: archive.generation,
+          reason: archive.reason,
+          sessionId: archive.session_id,
+        });
+        if (archiveName === archive.archive_name) {
+          continue;
+        }
+        executeSqliteQuerySync(
+          database.db,
+          db
+            .updateTable("session_transcript_archives")
+            .set({ archive_name: archiveName })
+            .where("session_id", "=", archive.session_id)
+            .where("generation", "=", archive.generation)
+            .where("published_at", "is", null),
+        );
+      }
       const archives = uniqueTranscriptArchives([
         ...(includeRequested ? requestedArchives : []),
-        ...pendingArchives,
+        ...pendingArchives.map((archive) => ({
+          generation: archive.generation,
+          sessionId: archive.session_id,
+        })),
       ]);
       const archiveDirectory = resolveSqliteTranscriptArchiveDirectory(scope);
       return archives.map((archive) => ({

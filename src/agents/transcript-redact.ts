@@ -5,6 +5,7 @@ import { OPENAI_RESPONSES_APIS } from "@openclaw/ai/internal/openai-responses-pa
  * Applies logging redaction rules to persisted messages while preserving unchanged object identity.
  */
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readLoggingConfig } from "../logging/config.js";
 import { redactSourceInputTextWithConfig } from "../logging/redact-source.js";
@@ -713,12 +714,22 @@ function redactTranscriptStructuredValue(
   }
   // Redacted source facts no longer identify the producer's sender. Keep display
   // redaction, but never qualify the replacement bytes as a person or remote actor.
-  if (
-    fieldKey === "__openclaw" &&
-    next &&
-    (next.senderIdentity !== source.senderIdentity || next.senderId !== source.senderId)
-  ) {
-    delete next.senderIdentity;
+  if (fieldKey === "__openclaw" && next) {
+    if (next.senderIdentity !== source.senderIdentity || next.senderId !== source.senderId) {
+      delete next.senderIdentity;
+    }
+    if (next.humanMentions !== source.humanMentions) {
+      delete next.humanMentions;
+    }
+  }
+  if (location === "root" && source.role === "user" && next && next.content !== source.content) {
+    const metadata = asOptionalRecord(next["__openclaw"]);
+    if (metadata?.humanMentions !== undefined) {
+      // UTF-16 selections cannot retain their binding after storage redacts the content.
+      const retained = { ...metadata };
+      delete retained.humanMentions;
+      next["__openclaw"] = retained;
+    }
   }
   seen.delete(value);
   return next ?? value;

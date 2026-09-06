@@ -512,24 +512,32 @@ func TestTranslateDocBodyChunkedFallsBackToSmallerChunks(t *testing.T) {
 func TestStripAndReapplyCommonIndent(t *testing.T) {
 	t.Parallel()
 
-	source := strings.Join([]string{
-		"    <Step title=\"Example\">",
-		"      - item one",
-		"      - item two",
-		"    </Step>",
-		"",
-	}, "\n")
-
-	normalized, indent := stripCommonIndent(source)
-	if indent != "    " {
-		t.Fatalf("expected common indent of four spaces, got %q", indent)
-	}
-	if strings.HasPrefix(normalized, "    ") {
-		t.Fatalf("expected normalized text without common indent:\n%s", normalized)
-	}
-	roundTrip := reapplyCommonIndent(normalized, indent)
-	if roundTrip != source {
-		t.Fatalf("expected indent round-trip to preserve source\nwant:\n%s\ngot:\n%s", source, roundTrip)
+	for _, tc := range []struct {
+		name   string
+		source string
+		indent string
+	}{
+		{
+			name:   "indented component with nested list",
+			source: "    <Step title=\"Example\">\n      - item one\n      - item two\n    </Step>\n",
+			indent: "    ",
+		},
+		{name: "unindented start with spaced tail", source: "Plain paragraph.\n\n  indented tail\n"},
+		{name: "unindented start with tabbed tail", source: "\r\nPlain paragraph.\r\n\tindented tail\r\n"},
+		{name: "unindented middle", source: "  indented start\nPlain paragraph.\n  indented tail\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			normalized, indent := stripCommonIndent(tc.source)
+			if indent != tc.indent {
+				t.Fatalf("expected common indent %q, got %q", tc.indent, indent)
+			}
+			if indent != "" && strings.HasPrefix(normalized, indent) {
+				t.Fatalf("expected normalized text without common indent:\n%s", normalized)
+			}
+			if roundTrip := reapplyCommonIndent(normalized, indent); roundTrip != tc.source {
+				t.Fatalf("expected indent round-trip to preserve source\nwant:\n%s\ngot:\n%s", tc.source, roundTrip)
+			}
+		})
 	}
 }
 
@@ -2243,6 +2251,19 @@ func TestTranslateDocBodyChunkedPreservesListStructureAcrossSanitizedChunkBounda
 	}
 }
 
+func TestTranslateDocBodyChunkedPreservesHeadingBetweenListsWithIndentedTail(t *testing.T) {
+	body := "- First item\n- Second item\n\n## Code sample\n\n- Third item\n  continuation\n"
+
+	translated, err := translateDocBodyChunked(context.Background(), docChunkTranslator{}, "example.md", body, "en", "zh-CN")
+	if err != nil {
+		t.Fatalf("expected separate lists to survive translation, got %v", err)
+	}
+	want := strings.ReplaceAll(body, "Code sample", "代码示例")
+	if translated != want {
+		t.Fatalf("expected heading and list indentation to be preserved\nwant:\n%s\ngot:\n%s", want, translated)
+	}
+}
+
 func TestSanitizeDocChunkProtocolWrappersKeepsBodyOnlyWrapperWhenSourceMentionsBodyTag(t *testing.T) {
 	t.Parallel()
 
@@ -2857,7 +2878,6 @@ func TestContextualProtectedProductLinksRecognizeCanonicalDestinations(t *testin
 		{"fal", "/providers/fal"},
 		{"Fal", "/providers/fal"},
 		{"Fireworks", "/providers/fireworks"},
-		{"Inferrs", "/providers/inferrs"},
 		{"Meta", "/providers/meta"},
 		{"Runway", "/providers/runway"},
 		{"Synthetic", "/providers/synthetic"},

@@ -9,6 +9,7 @@ import {
   deferred,
   focusDocument,
   requestCount,
+  type ModelProvidersPageTestElement,
 } from "./model-providers-page.test-support.ts";
 
 afterEach(() => {
@@ -18,6 +19,34 @@ afterEach(() => {
 });
 
 describe("ModelProvidersPage usage convergence", () => {
+  it("waits for the route loader before starting provider requests, including after reconnect", async () => {
+    const harness = createHarness("main");
+    const page = document.createElement(
+      "openclaw-model-providers-page",
+    ) as ModelProvidersPageTestElement;
+    page.context = harness.context;
+    document.body.append(page);
+    await page.updateComplete;
+    expect(harness.request).not.toHaveBeenCalled();
+
+    harness.publishPhase("offline");
+    harness.publishPhase("connected");
+    await page.updateComplete;
+    expect(harness.request).not.toHaveBeenCalled();
+
+    page.routeData = {
+      gateway: harness.context.gateway,
+      gatewaySnapshot: harness.context.gateway.snapshot,
+      client: harness.context.gateway.snapshot.client,
+      agentId: "main",
+      data: { ...EMPTY_MODEL_PROVIDERS_DATA, config: {}, updatedAt: Date.now() },
+    };
+    await vi.waitFor(() => expect(page.data?.costByProvider).toEqual([]));
+    expect(requestCount(harness.request, "models.authStatus")).toBe(0);
+    expect(requestCount(harness.request, "usage.status")).toBe(1);
+    expect(requestCount(harness.request, "sessions.usage")).toBe(1);
+  });
+
   it("restarts an exhausted retry cycle on same-client reconnect", async () => {
     vi.useFakeTimers();
     focusDocument();

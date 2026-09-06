@@ -2,9 +2,10 @@
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { TestHomeSelection } from "../../test/test-home-policy.mts";
-import { resolveVitestCliEntry, resolveVitestNodeArgs } from "../run-vitest.mts";
 import { installVitestProcessGroupCleanup } from "../vitest-process-group.mts";
+import { resolveVitestCliEntry } from "./vitest-build-prerequisites.mts";
 import { resolveVitestHomeSelection } from "./vitest-home-selection.mts";
+import { resolveVitestNodeArgs } from "./vitest-process-env.mts";
 import { spawnOwnedVitestProcess } from "./vitest-process.mts";
 import type { VitestReportOutcome } from "./vitest-report-owner.mts";
 
@@ -27,7 +28,6 @@ const repoRoot = path.resolve(scriptDir, "../..");
  */
 export async function runVitestBatch(params: VitestBatchRunParams): Promise<number> {
   return await new Promise<number>((resolve, reject) => {
-    let forwardedSignal: NodeJS.Signals | undefined;
     // Match project runs: installed tooling must not rediscover pnpm in an isolated HOME.
     const { child, completion } = spawnOwnedVitestProcess({
       homeMode:
@@ -48,16 +48,14 @@ export async function runVitestBatch(params: VitestBatchRunParams): Promise<numb
       ],
       options: { cwd: repoRoot, env: params.env, stdio: "inherit" },
     });
-    const teardownChildCleanup = installVitestProcessGroupCleanup({
+    const cleanup = installVitestProcessGroupCleanup({
       child,
       forceSignal: "SIGKILL",
       forceSignalDelayMs: 100,
-      onSignal(signal: NodeJS.Signals) {
-        forwardedSignal ??= signal;
-      },
     });
-    completion.finally(teardownChildCleanup).then((result) => {
+    completion.finally(cleanup.teardown).then((result) => {
       const { code, signal } = result;
+      const forwardedSignal = cleanup.getForwardedSignal();
       if (params.onComplete) {
         const outcome = { code: code ?? 1, signal: forwardedSignal ?? signal };
         params.onComplete(outcome);

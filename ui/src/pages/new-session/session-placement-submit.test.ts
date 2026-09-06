@@ -24,6 +24,7 @@ function advanceSessionPlacementDraft(params: AdvanceParams) {
     key,
     messageId,
     message,
+    mentions,
     attachments,
     target,
     agentId,
@@ -39,6 +40,7 @@ function advanceSessionPlacementDraft(params: AdvanceParams) {
       sessionKey: key,
       messageId,
       message,
+      mentions,
       attachments,
       target,
       agentId,
@@ -116,14 +118,34 @@ describe("session placement draft advancement", () => {
     expect(clearRecovery).not.toHaveBeenCalled();
   });
 
-  it("sends an older startup in memory without replacing a newer durable session", async () => {
+  it("normalizes recovered mentions without replacing a newer durable session", async () => {
     const gatewayUrl = "ws://gateway.example";
     const recoveryScope = "principal-a";
     const sessionKey = "agent:cloud:older";
+    const storedMention = { profileId: "profile-alex", start: 0, end: 5, displayName: "Alex" };
+    sessionStorage.setItem(
+      recoveryStorageKey(sessionKey),
+      JSON.stringify({
+        sessionKey,
+        messageId: "message-older",
+        message: "@Alex older task",
+        mentions: [storedMention],
+        target: { kind: "profile", profileId: "aws" },
+        agentId: "cloud",
+        gatewayUrl,
+        recoveryScope,
+        phase: "dispatching",
+      }),
+    );
+    const recovered = readSessionPlacementRecovery(gatewayUrl, recoveryScope, sessionKey);
+    if (!recovered) {
+      throw new Error("Expected the older startup to remain recoverable");
+    }
     const newerRecovery: SessionPlacementRecovery = {
       sessionKey: "agent:cloud:newer",
       messageId: "message-newer",
-      message: "newer task",
+      message: "@Alex newer task",
+      mentions: [storedMention],
       target: { kind: "profile", profileId: "aws" },
       agentId: "cloud",
       gatewayUrl,
@@ -151,7 +173,8 @@ describe("session placement draft advancement", () => {
         key: sessionKey,
         agentId: "cloud",
         target: { kind: "profile", profileId: "aws" },
-        message: "older task",
+        message: recovered.message,
+        mentions: recovered.mentions,
         messageId: "message-older",
         gatewayUrl,
         recoveryScope,
@@ -166,8 +189,23 @@ describe("session placement draft advancement", () => {
     expect(setRecoveryPhase).toHaveBeenCalledWith("sending", true);
     expect(
       readSessionPlacementRecovery(gatewayUrl, recoveryScope, newerRecovery.sessionKey),
-    ).toEqual(newerRecovery);
+    ).toEqual({
+      ...newerRecovery,
+      mentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
+    });
+    expect(
+      JSON.parse(sessionStorage.getItem(recoveryStorageKey(newerRecovery.sessionKey)) ?? "null")
+        .mentions,
+    ).toEqual([{ profileId: "profile-alex", start: 0, end: 5 }]);
     expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(1);
+    expect(request).toHaveBeenCalledWith("sessions.send", {
+      key: sessionKey,
+      agentId: "cloud",
+      message: "@Alex older task",
+      mentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
+      attachments: undefined,
+      idempotencyKey: "message-older",
+    });
     expect(request.mock.calls.filter(([method]) => method === "sessions.delete")).toHaveLength(0);
     expect(clearRecovery).toHaveBeenCalledWith("resolved");
   });

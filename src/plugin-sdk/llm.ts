@@ -13,6 +13,7 @@ export type {
 export {
   calculateCost,
   clampThinkingLevel,
+  createToolArgumentPreviewSchedule,
   getApiProvider,
   getApiProviders,
   getEnvApiKey,

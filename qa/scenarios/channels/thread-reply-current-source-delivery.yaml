@@ -38,6 +38,7 @@ scenario:
     - src/infra/outbound/message-action-runner.ts
   execution:
     kind: flow
+    retryCount: 0
     channel: qa-channel
     config:
       requiredProviderMode: mock-openai

@@ -53,6 +53,8 @@ export type AppServerApprovalOutcome =
   | "unavailable"
   | "cancelled";
 
+export type PluginApprovalOutcome = AppServerApprovalOutcome | "timed-out";
+
 type ApprovalRequestResult = {
   id?: string;
   decision?: ExecApprovalDecision | null;
@@ -159,6 +161,51 @@ export function mapExecDecisionToOutcome(
       return "denied";
     default:
       return "unavailable";
+  }
+}
+
+/** Runs one complete host approval request and maps transport failures to a closed outcome. */
+export async function requestPluginApprovalOutcome(params: {
+  hostCapabilities: AgentHarnessHostCapabilities;
+  signal?: AbortSignal;
+  title: string;
+  description: string;
+  allowedDecisions?: ExecApprovalDecision[];
+  toolName: string;
+  toolCallId?: string;
+  mcpTool?: { server: string; tool: string };
+  isMcpToolApprovalActive?: () => boolean;
+}): Promise<PluginApprovalOutcome> {
+  try {
+    const requestResult = await requestPluginApproval({
+      ...params,
+      severity: "warning",
+    });
+    const approvalId = requestResult?.id;
+    if (!approvalId) {
+      return "unavailable";
+    }
+    const approvalResult = approvalRequestExplicitlyUnavailable(requestResult)
+      ? undefined
+      : await waitForPluginApprovalDecision({
+          hostCapabilities: params.hostCapabilities,
+          approvalId,
+          signal: params.signal,
+        });
+    if (params.signal?.aborted) {
+      return "cancelled";
+    }
+    if (approvalResult?.terminalReason === "timeout") {
+      return "timed-out";
+    }
+    const decision = approvalResult?.decision;
+    return mapExecDecisionToOutcome(
+      decision === "allow-always" && params.allowedDecisions?.includes("allow-always") === false
+        ? "allow-once"
+        : decision,
+    );
+  } catch {
+    return params.signal?.aborted ? "cancelled" : "denied";
   }
 }
 

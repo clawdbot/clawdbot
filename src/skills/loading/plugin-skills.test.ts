@@ -300,6 +300,50 @@ describe("resolvePluginSkillRoots", () => {
   );
 
   it.each([
+    { channelEnabled: false, expectsSkills: false },
+    { channelEnabled: true, expectsSkills: true },
+  ])(
+    "honors channels.<id>.enabled=$channelEnabled through the manifest channel id when it differs from the plugin id",
+    async ({ channelEnabled, expectsSkills }) => {
+      const workspaceDir = await tempDirs.make("openclaw-");
+      const pluginRoot = await tempDirs.make("openclaw-demo-plugin-");
+      await fs.mkdir(path.join(pluginRoot, "skills"), { recursive: true });
+      // QQ Bot style: plugin `openclaw-demo` owns `channels.demo`; the plugin id alone
+      // cannot resolve that channel key.
+      hoisted.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+        diagnostics: [],
+        plugins: [
+          {
+            id: "openclaw-demo",
+            name: "Demo",
+            channels: ["demo"],
+            providers: [],
+            cliBackends: [],
+            skills: ["./skills"],
+            hooks: [],
+            origin: "bundled",
+            rootDir: pluginRoot,
+            source: pluginRoot,
+            manifestPath: path.join(pluginRoot, "openclaw.plugin.json"),
+          },
+        ],
+      });
+
+      const roots = resolvePluginSkillRoots({
+        workspaceDir,
+        config: {
+          channels: { demo: { enabled: channelEnabled } },
+          plugins: { entries: { "openclaw-demo": { enabled: true } } },
+        } as OpenClawConfig,
+      });
+
+      expect(roots.map((root) => root.dir)).toEqual(
+        expectsSkills ? [path.resolve(pluginRoot, "skills")] : [],
+      );
+    },
+  );
+
+  it.each([
     {
       name: "keeps acpx plugin skills when ACP runtime is available",
       acpEnabled: true,

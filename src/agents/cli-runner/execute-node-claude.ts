@@ -8,6 +8,7 @@ import type {
   registerExecApprovalRequestForHostOrThrow,
   resolveRegisteredExecApprovalDecision,
 } from "../bash-tools.exec-approval-request.js";
+import { createCliRunCurrentAssertion } from "./execution-target.js";
 import type { NodeClaudePlacement, PreparedCliRunContext } from "./types.js";
 
 const NODE_CLI_MAX_TIMEOUT_MS = 24 * 60 * 60 * 1000;
@@ -175,6 +176,7 @@ export async function executeNodeClaudeRun(params: {
   const hardDeadlineAt = startedAt + hardTimeoutMs;
   const nodeAbortController = new AbortController();
   const nodeRunAbortSignal = nodeAbortController.signal;
+  const assertCurrent = createCliRunCurrentAssertion(contextParams, nodeRunAbortSignal);
   let hardDeadlineReached = false;
   const hardDeadlineTimer = setTimeout(() => {
     hardDeadlineReached = true;
@@ -199,6 +201,7 @@ export async function executeNodeClaudeRun(params: {
   let nodeResult: Awaited<ReturnType<typeof invokeNodeClaudeCliRun>>;
   let skillRuntime: Awaited<ReturnType<typeof prepareNodeClaudeSkillRuntime>>;
   try {
+    assertCurrent();
     skillRuntime = await prepareNodeClaudeSkillRuntime(params.context, nodeRunAbortSignal);
     const invokeNode = async (approval?: {
       decision: "allow-once" | "allow-always";
@@ -216,7 +219,9 @@ export async function executeNodeClaudeRun(params: {
           },
         };
       }
+      assertCurrent();
       return await params.deps.invokeNodeClaudeCliRun({
+        assertCurrent,
         nodeId: params.nodePlacement.nodeId,
         argv: params.executionArgs,
         stdin: params.stdinPayload,

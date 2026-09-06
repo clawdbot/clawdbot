@@ -1523,6 +1523,255 @@ afterEach(() => {
 });
 
 describe("openclaw state database", () => {
+  it("migrates v15 Skill Workshop ownership columns to v16 without losing rows", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    const record = {
+      schema: "openclaw.skill-workshop.proposal.v1",
+      id: "workshop-v16-migration",
+      kind: "create",
+      status: "applied",
+      title: "Create migration fixture",
+      description: "Keep this row",
+      createdAt: "2026-08-01T00:00:00.000Z",
+      updatedAt: "2026-08-01T00:00:00.000Z",
+      createdBy: "skill-workshop",
+      proposedVersion: "v1",
+      draftFile: "PROPOSAL.md",
+      draftHash: "a".repeat(64),
+      target: {
+        skillName: "migration-fixture",
+        skillKey: "migration-fixture",
+        skillDir: "/tmp/workspace/skills/migration-fixture",
+        skillFile: "/tmp/workspace/skills/migration-fixture/SKILL.md",
+      },
+      scan: {
+        state: "clean",
+        scannedAt: "2026-08-01T00:00:00.000Z",
+        critical: 0,
+        warn: 0,
+        info: 0,
+        findings: [],
+      },
+    };
+    legacy.exec(`
+      DROP TABLE skill_workshop_collection_reviews;
+      CREATE TABLE IF NOT EXISTS skill_workshop_proposals (
+        proposal_id TEXT NOT NULL PRIMARY KEY,
+        record_json TEXT NOT NULL,
+        owner_agent_id TEXT,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        draft_hash TEXT NOT NULL,
+        origin_agent_id TEXT,
+        origin_session_key TEXT,
+        origin_run_id TEXT,
+        origin_message_id TEXT,
+        applied_at TEXT,
+        rejected_at TEXT,
+        quarantined_at TEXT,
+        stale_at TEXT,
+        status_reason TEXT
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS skill_workshop_collection_reviews (
+        review_id TEXT NOT NULL PRIMARY KEY,
+        backup_id TEXT NOT NULL,
+        create_time INTEGER NOT NULL,
+        kept_names_json TEXT NOT NULL,
+        written_names_json TEXT NOT NULL,
+        dropped_json TEXT NOT NULL
+      ) STRICT;
+      ALTER TABLE skill_workshop_proposals ADD COLUMN workspace_dir TEXT NOT NULL DEFAULT '';
+      ALTER TABLE skill_workshop_proposals ADD COLUMN claim_released_time INTEGER;
+      ALTER TABLE skill_workshop_collection_reviews ADD COLUMN workspace_dir TEXT NOT NULL DEFAULT '';
+      CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time
+        ON skill_workshop_collection_reviews(workspace_dir, create_time DESC, review_id DESC);
+    `);
+    const releasedRecord = {
+      ...record,
+      id: "workshop-v16-released",
+      target: {
+        skillName: "released-fixture",
+        skillKey: "released-fixture",
+        skillDir: "/tmp/workspace/skills/released-fixture",
+        skillFile: "/tmp/workspace/skills/released-fixture/SKILL.md",
+      },
+    };
+    const insertProposal = legacy.prepare(
+      `INSERT INTO skill_workshop_proposals (
+        proposal_id, record_json, owner_agent_id, workspace_dir, kind, status,
+        created_at, updated_at, draft_hash, applied_at, claim_released_time
+      ) VALUES (?, ?, 'main', '/tmp/workspace', 'create', 'applied', ?, ?, ?, ?, ?)`,
+    );
+    for (const [row, claimReleasedTime] of [
+      [record, null],
+      [releasedRecord, 1_756_684_800_000],
+    ] as const) {
+      insertProposal.run(
+        row.id,
+        JSON.stringify(row),
+        row.createdAt,
+        row.updatedAt,
+        row.draftHash,
+        row.updatedAt,
+        claimReleasedTime,
+      );
+    }
+    legacy
+      .prepare(
+        `INSERT INTO skill_workshop_collection_reviews (
+          review_id, workspace_dir, backup_id, create_time,
+          kept_names_json, written_names_json, dropped_json
+        ) VALUES ('review-v15', '/tmp/workspace', 'backup-v15', 1, '[]', '[]', '[]')`,
+      )
+      .run();
+    legacy.exec(`
+      PRAGMA user_version = 15;
+      UPDATE schema_meta SET schema_version = 15 WHERE meta_key = 'primary';
+    `);
+    legacy.close();
+
+    const migrated = openOpenClawStateDatabase(options);
+    expect(migrated.db.prepare("PRAGMA table_info(skill_workshop_proposals)").all()).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "workspace_dir" }),
+        expect.objectContaining({ name: "claim_released_time" }),
+      ]),
+    );
+    expect(
+      migrated.db.prepare("PRAGMA table_info(skill_workshop_collection_reviews)").all(),
+    ).not.toEqual(expect.arrayContaining([expect.objectContaining({ name: "workspace_dir" })]));
+    expect(
+      migrated.db
+        .prepare(
+          "SELECT name FROM sqlite_schema WHERE type = 'index' AND name = 'idx_skill_workshop_collection_reviews_workspace_time'",
+        )
+        .get(),
+    ).toBeUndefined();
+    expect(
+      migrated.db
+        .prepare(
+          "SELECT owner_agent_id FROM skill_workshop_collection_reviews WHERE review_id = 'review-v15'",
+        )
+        .get(),
+    ).toEqual({ owner_agent_id: "main" });
+    const proposals = migrated.db
+      .prepare(
+        "SELECT proposal_id, status, status_reason, record_json FROM skill_workshop_proposals ORDER BY proposal_id",
+      )
+      .all() as Array<{
+      proposal_id: string;
+      status: string;
+      status_reason: string | null;
+      record_json: string;
+    }>;
+    expect(proposals[0]).toEqual({
+      proposal_id: record.id,
+      status: "applied",
+      status_reason: null,
+      record_json: JSON.stringify(record),
+    });
+    // A released claim loses its column, so the row becomes stale instead of an
+    // applied create that Doctor would relocate out of the user's directory.
+    expect(proposals[1]).toMatchObject({
+      proposal_id: releasedRecord.id,
+      status: "stale",
+      status_reason: expect.stringContaining("stays user-owned"),
+    });
+    expect(JSON.parse(proposals[1]?.record_json ?? "{}")).toMatchObject({
+      status: "stale",
+      staleAt: expect.any(String),
+      statusReason: proposals[1]?.status_reason,
+      target: releasedRecord.target,
+    });
+    expect(
+      migrated.db
+        .prepare("SELECT review_id, backup_id FROM skill_workshop_collection_reviews")
+        .get(),
+    ).toEqual({ review_id: "review-v15", backup_id: "backup-v15" });
+  });
+
+  it("upgrades a v15 store without Workshop tables before creating their v16 schema", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(`
+      PRAGMA foreign_keys = OFF;
+      DROP TABLE skill_workshop_proposal_events;
+      DROP TABLE skill_workshop_proposal_rollbacks;
+      DROP TABLE skill_workshop_collection_reviews;
+      DROP TABLE skill_workshop_proposals;
+      PRAGMA foreign_keys = ON;
+      PRAGMA user_version = 15;
+      UPDATE schema_meta SET schema_version = 15 WHERE meta_key = 'primary';
+    `);
+    legacy.close();
+
+    const migrated = openOpenClawStateDatabase(options);
+    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(16);
+    for (const tableName of ["skill_workshop_proposals", "skill_workshop_collection_reviews"]) {
+      expect(
+        migrated.db
+          .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+          .get(tableName),
+      ).toEqual({ name: tableName });
+    }
+    expect(migrated.db.prepare("PRAGMA table_info(skill_workshop_proposals)").all()).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "workspace_dir" }),
+        expect.objectContaining({ name: "claim_released_time" }),
+      ]),
+    );
+    expect(
+      migrated.db.prepare("PRAGMA table_info(skill_workshop_collection_reviews)").all(),
+    ).not.toEqual(expect.arrayContaining([expect.objectContaining({ name: "workspace_dir" })]));
+  });
+
+  it("rejects a v15 store missing a stable table through runtime open and Doctor repair", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const damaged = new DatabaseSync(databasePath);
+    damaged.exec(`
+      DROP TABLE apns_registration_tombstones;
+      PRAGMA user_version = 15;
+      UPDATE schema_meta SET schema_version = 15 WHERE meta_key = 'primary';
+    `);
+    damaged.close();
+
+    expect(() => openOpenClawStateDatabase(options)).toThrow(
+      "missing table apns_registration_tombstones",
+    );
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: [],
+      warnings: [expect.stringContaining("missing table apns_registration_tombstones")],
+    });
+
+    const after = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        after
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'apns_registration_tombstones'",
+          )
+          .get(),
+      ).toBeUndefined();
+      expect(readSqliteNumberPragma(after, "user_version")).toBe(15);
+    } finally {
+      after.close();
+    }
+  });
+
   it("resolves under the shared state database directory", () => {
     const stateDir = createTempStateDir();
 
@@ -1817,6 +2066,10 @@ describe("openclaw state database", () => {
       legacy.exec(STATE_SCHEMA_12_TO_11_DOWNGRADE_SQL);
       legacy.exec(STATE_SCHEMA_11_TO_10_TABLES_SQL);
       legacy.exec(`
+        ALTER TABLE skill_workshop_proposals
+          ADD COLUMN workspace_dir TEXT NOT NULL DEFAULT '';
+        ALTER TABLE skill_workshop_proposals
+          ADD COLUMN claim_released_time INTEGER;
         INSERT INTO skill_workshop_proposals (
           proposal_id, record_json, workspace_dir, kind, status, created_at, updated_at, draft_hash
         ) VALUES (
@@ -1860,6 +2113,7 @@ describe("openclaw state database", () => {
             "Retired legacy skill curator lifecycle and proposal origin-run tables",
             "Folded singleton state tables into config_machine_state (v12)",
             "Qualified historical cron creator attribution as unknown (v14)",
+            "Moved Skill Workshop ownership to per-agent directories (v16)",
           ],
           warnings: [],
         });

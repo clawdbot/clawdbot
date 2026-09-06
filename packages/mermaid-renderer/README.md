@@ -11,7 +11,7 @@ From the repository root:
 
 ```bash
 pnpm install
-pnpm --filter @openclaw/mermaid-renderer build
+pnpm --dir packages/mermaid-renderer build
 ```
 
 The build writes the offline document and scripts to

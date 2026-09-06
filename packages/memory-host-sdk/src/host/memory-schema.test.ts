@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { readMemoryRecallMetadata } from "./memory-recall-metadata.js";
 import { ensureMemoryRecallMetadataSchema } from "./memory-schema-recall.js";
 import { ensureMemoryIndexSchema } from "./memory-schema.js";
 
@@ -52,7 +51,14 @@ describe("memory index schema", () => {
         text: "body",
         updated_at: 7,
       });
-      expect(readMemoryRecallMetadata(db, ["legacy"]).get("legacy")).toEqual({
+      expect(
+        db
+          .prepare(
+            `SELECT chunk_id AS id, importance, triggers, project_key
+             FROM memory_index_chunk_recall_metadata WHERE chunk_id = 'legacy'`,
+          )
+          .get(),
+      ).toEqual({
         id: "legacy",
         importance: 8,
         triggers: "legacy trigger",

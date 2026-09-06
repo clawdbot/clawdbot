@@ -29,6 +29,19 @@ describe("resolveApplicationStartupSettings", () => {
     vi.unstubAllGlobals();
   });
 
+  it("clears a cached shared token when the native dashboard selects browser identity", () => {
+    const gatewayUrl = "wss://gateway.example";
+    window["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = { gatewayUrl, token: null };
+    const startup = resolveApplicationStartupSettings(
+      makeUiSettings(gatewayUrl, { token: "shared-owner-token" }),
+      { pathname: "/chat", search: "", hash: "" },
+    );
+
+    expect(startup.settings.gatewayUrl).toBe(gatewayUrl);
+    expect(startup.settings.token).toBe("");
+    expect(startup.password).toBeNull();
+  });
+
   it("strips fragment bootstrap tokens without persisting them", () => {
     const startup = resolveApplicationStartupSettings(makeUiSettings("wss://gateway.example"), {
       pathname: "/",
@@ -73,6 +86,37 @@ describe("resolveApplicationStartupSettings", () => {
 
     expect(startup.settings.token).toBe("");
     expect(startup.password).toBe("next-password");
+  });
+
+  it("carries a bounded native client identity into gateway startup", () => {
+    Object.assign(window, {
+      __OPENCLAW_NATIVE_CONTROL_AUTH__: {
+        gatewayUrl: "wss://gateway.example",
+        client: {
+          id: "openclaw-ios",
+          mode: "ui",
+          platform: "iOS 27.0.0",
+          deviceFamily: "iPhone",
+          instanceId: "ios-installation",
+          scopes: ["operator.read", "operator.write"],
+        },
+      },
+    });
+
+    const startup = resolveApplicationStartupSettings(makeUiSettings("wss://gateway.example"), {
+      pathname: "/chat",
+      search: "",
+      hash: "",
+    });
+
+    expect(startup.nativeClient).toEqual({
+      clientName: "openclaw-ios",
+      mode: "ui",
+      platform: "iOS 27.0.0",
+      deviceFamily: "iPhone",
+      instanceId: "ios-installation",
+      scopes: ["operator.read", "operator.write"],
+    });
   });
 });
 

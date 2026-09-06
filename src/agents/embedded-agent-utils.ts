@@ -11,8 +11,15 @@ import {
   parseAssistantTextSignature,
   type AssistantPhase,
 } from "../shared/chat-message-content.js";
-import { sanitizeAssistantVisibleTextWithProfile } from "../shared/text/assistant-visible-text.js";
-import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
+import {
+  assistantVisibleTextFilters,
+  sanitizeAssistantVisibleTextWithProfile,
+} from "../shared/text/assistant-visible-text.js";
+import { createTextProjection, trimTextFilter } from "../shared/text/text-projection.js";
+import {
+  sanitizeUserFacingText,
+  userFacingTextFilters,
+} from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import { renderUserFacingText } from "./embedded-agent-helpers/user-facing-text.js";
 import type { AgentMessage } from "./runtime/index.js";
 
@@ -37,6 +44,17 @@ function isAssistantTextContentBlockType(value: unknown): boolean {
 
 export function sanitizeAssistantVisibleStreamText(text: string, phase?: AssistantPhase): string {
   return sanitizeUserFacingText(sanitizeAssistantText(text, phase, true), { errorContext: false });
+}
+
+export function createAssistantVisibleStreamText(phase?: AssistantPhase) {
+  return createTextProjection([
+    ...assistantVisibleTextFilters(
+      phase === "final_answer" ? "final-answer-delivery" : "delivery",
+      phase === "final_answer",
+    ),
+    ...userFacingTextFilters(),
+    trimTextFilter("both"),
+  ]);
 }
 
 function finalizeAssistantExtraction(msg: AssistantMessage, extracted: string): string {

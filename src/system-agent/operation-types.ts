@@ -35,6 +35,7 @@ export type SystemAgentOperation =
   | { kind: "plugin-list" }
   | { kind: "plugin-search"; query: string }
   | { kind: "plugin-install"; spec: string }
+  | { kind: "plugin-activate-artifact"; path: string; sha256: string }
   | { kind: "plugin-uninstall"; pluginId: string }
   | { kind: "audit" }
   | {
@@ -49,6 +50,7 @@ export type SystemAgentOperation =
 /** Interactive actions owned by the host chat, never by delegated model turns. */
 export type SystemAgentNavigationOperation =
   | { kind: "model-setup"; workspace?: string }
+  | { kind: "model-accounts" }
   | { kind: "channel-setup"; channel: string }
   | { kind: "skills-setup" }
   | { kind: "search-setup" }
@@ -71,6 +73,7 @@ export function isSystemAgentNavigationOperation(
     case "gateway-config-setup":
     case "memory-import":
     case "model-setup":
+    case "model-accounts":
     case "open-setup":
     case "open-tui":
       return true;

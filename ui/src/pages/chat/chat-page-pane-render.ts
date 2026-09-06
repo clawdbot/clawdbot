@@ -57,9 +57,9 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
   const sessions = options.context?.sessions?.state.result?.sessions ?? [];
   return html`
     <div
-      class="chat-split-view__cell ${options.splitMode && options.active
-        ? "chat-split-view__cell--active"
-        : ""} ${options.narrow && !options.active ? "chat-split-view__cell--narrow-hidden" : ""}"
+      class="chat-split-view__cell ${
+        options.splitMode && options.active ? "chat-split-view__cell--active" : ""
+      } ${options.narrow && !options.active ? "chat-split-view__cell--narrow-hidden" : ""}"
       aria-current=${options.splitMode && options.active ? "true" : nothing}
       style="flex: ${options.weight} 1 0"
       @pointerdown=${() => options.onFocusPane(options.pane.id)}
@@ -86,11 +86,11 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
               sessions.find((row) => areUiSessionKeysEquivalent(row.key, resolvedKey)),
             );
             return html`<openclaw-chat-pane
-              class="chat-pane-cache__pane ${visible
-                ? "chat-pane-cache__pane--visible"
-                : ""} ${active ? "chat-pane-cache__pane--active" : ""} ${options.splitMode
-                ? "chat-split-view__pane"
-                : ""}"
+              class="chat-pane-cache__pane ${
+                visible ? "chat-pane-cache__pane--visible" : ""
+              } ${active ? "chat-pane-cache__pane--active" : ""} ${
+                options.splitMode ? "chat-split-view__pane" : ""
+              }"
               data-mcp-app-owner-key=${JSON.stringify([options.ownerKey, sessionKey])}
               aria-hidden=${presented ? "false" : "true"}
               ?inert=${!presented}
@@ -109,6 +109,7 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
                 sessionKey,
                 options.data,
               )}
+              .dashboardExpanded=${options.data?.dashboardExpanded === true}
               .routeFace=${options.data?.face ?? "chat"}
               .paneTitle=${title}
               .narrow=${options.narrow}

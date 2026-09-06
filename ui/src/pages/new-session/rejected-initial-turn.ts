@@ -1,6 +1,6 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
-import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { admitStoredChatComposerQueueItem } from "../chat/composer-persistence.ts";
@@ -13,12 +13,14 @@ export function retainRejectedInitialTurn(options: {
   context: ApplicationContext;
   error: string;
   message: string;
+  mentions?: readonly HumanMention[];
   sessionKey: string;
 }): boolean {
   const gateway = options.context.gateway.snapshot;
   const rejectedItem = {
     id: generateUUID(),
     text: options.message,
+    ...(options.mentions?.length ? { mentions: options.mentions } : {}),
     attachments: options.attachments,
     createdAt: Date.now(),
     kind: "queued" as const,

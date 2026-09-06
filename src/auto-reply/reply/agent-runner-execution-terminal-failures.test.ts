@@ -1,10 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
+import { createCliTimeoutError } from "../../agents/cli-runner/no-output-timeout-policy.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import {
   formatBillingErrorMessage,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+  renderHeartbeatRunFailureCopy,
 } from "../../agents/failover/user-copy.js";
-import { AgentHarnessSessionSupersededError } from "../../agents/harness/errors.js";
+import {
+  AgentHarnessPreflightError,
+  AgentHarnessSessionSupersededError,
+} from "../../agents/harness/errors.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
@@ -27,7 +32,7 @@ import {
 import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: terminal failures", () => {
   it("surfaces billing guidance for mixed-cause fallback exhaustion", async () => {
@@ -563,27 +568,42 @@ describe("executeAgentTurn: terminal failures", () => {
           (event as { runId?: unknown }).runId === "run-provider-failure" &&
           (event as { stream?: unknown }).stream === "lifecycle" &&
           data?.phase === "error" &&
-          data.fallbackExhaustedFailure === true
+          data.executionSettled === true
         );
       });
     expect(terminalFailureEvent).toBeDefined();
   });
 
-  it("surfaces CLI max-turn recovery context at normal verbosity", async () => {
-    const recoveryText =
-      "Claude CLI stopped after reaching the maximum number of turns (limit: 1). " +
-      "OpenClaw run: run-max-turns. OpenClaw session: session-1. Claude session: claude-session-1. " +
-      "Tool actions may already have run; verify their effects before retrying. " +
-      "Retry with a higher --max-turns value or a narrower task.";
-    const maxTurns = new FailoverError(recoveryText, {
-      reason: "unknown",
+  it.each([
+    {
+      name: "max-turn",
       code: "cli_max_turns",
+      recoveryText:
+        "Claude CLI stopped after reaching the maximum number of turns (limit: 1). " +
+        "OpenClaw run: run-max-turns. OpenClaw session: session-1. Claude session: claude-session-1. " +
+        "Tool actions may already have run; verify their effects before retrying. " +
+        "Retry with a higher --max-turns value or a narrower task.",
+    },
+    {
+      name: "hook-stopped",
+      code: "cli_turn_stopped",
+      recoveryText:
+        "Claude CLI ended the turn without a reply (terminal_reason: hook_stopped, stop_reason: tool_use). " +
+        "OpenClaw run: run-hook-stopped. OpenClaw session: session-1. Claude session: claude-session-1. " +
+        "Tool actions may already have run; verify their effects before retrying. " +
+        "A Claude Code hook stopped this turn; user-scope hooks (including plugin hooks) " +
+        "apply to headless runs — move or disable that hook.",
+    },
+  ])("surfaces CLI $name recovery context at normal verbosity", async ({ code, recoveryText }) => {
+    const terminalStop = new FailoverError(recoveryText, {
+      reason: "unknown",
+      code,
       provider: "claude-cli",
       model: "sonnet",
     });
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new AggregateError(
-        [maxTurns, new Error("fork successor persistence failed")],
+        [terminalStop, new Error("fork successor persistence failed")],
         "CLI turn failed and its fork successor could not be persisted",
       ),
     );
@@ -616,6 +636,26 @@ describe("executeAgentTurn: terminal failures", () => {
     }
     expect(result.payload.text).toBe(HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT);
     expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
+    expect(result.payload.text).not.toContain("/new");
+  });
+
+  it("includes heartbeat preflight reasons in terminal failure replies", async () => {
+    const message =
+      "Codex session became active in another runner; wait for it to finish before continuing";
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(new AgentHarnessPreflightError(message));
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
+      ...createMinimalRunAgentTurnParams(),
+      isHeartbeat: true,
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind !== "final") {
+      throw new Error("expected final reply");
+    }
+    expect(result.payload.text).toBe(renderHeartbeatRunFailureCopy(message));
+    expect(result.payload.isError).toBe(true);
     expect(result.payload.text).not.toContain("/new");
   });
 
@@ -681,18 +721,17 @@ describe("executeAgentTurn: terminal failures", () => {
 
   it("explains that CLI background tasks share the timed-out parent process", () => {
     const payload = buildKnownAgentRunFailureReplyPayload({
-      err: new FailoverError("CLI exceeded timeout (600s) and was terminated.", {
-        reason: "timeout",
-        provider: "claude-cli",
-        code: "cli_overall_timeout",
-        cliTimeout: {
+      err: createCliTimeoutError(
+        { provider: "claude-cli" },
+        {
           mode: "overall",
           timeoutSeconds: 600,
           observedActivity: true,
           activeToolCount: 1,
           backgroundTaskCount: 1,
         },
-      }),
+        "cli_overall_timeout",
+      ),
       sessionCtx: createMinimalRunAgentTurnParams().sessionCtx,
       resolvedVerboseLevel: "off",
     });

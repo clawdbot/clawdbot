@@ -20,7 +20,7 @@ describe("embedded agent transcript repair runtime contract", () => {
 
     expect(result).toEqual({
       merged: true,
-      removeLeaf: true,
+      removeLeaf: false,
       prompt: `${QUEUED_USER_MESSAGE_MARKER}\nolder active-turn message\n\nnewest inbound message`,
     });
   });
@@ -34,7 +34,7 @@ describe("embedded agent transcript repair runtime contract", () => {
 
     expect(result).toEqual({
       merged: false,
-      removeLeaf: true,
+      removeLeaf: false,
       prompt: "summary\nolder active-turn message\nnewest inbound message",
     });
   });
@@ -48,7 +48,7 @@ describe("embedded agent transcript repair runtime contract", () => {
 
     expect(result).toEqual({
       merged: true,
-      removeLeaf: true,
+      removeLeaf: false,
       prompt:
         `${QUEUED_USER_MESSAGE_MARKER}\n` +
         "please inspect this\n" +
@@ -68,7 +68,7 @@ describe("embedded agent transcript repair runtime contract", () => {
     });
 
     expect(result.merged).toBe(true);
-    expect(result.removeLeaf).toBe(true);
+    expect(result.removeLeaf).toBe(false);
     expect(result.prompt).toContain("please inspect this inline image");
     expect(result.prompt).toContain("[image_url] inline data URI (image/png, 4118 chars)");
     expect(result.prompt).not.toContain("data:");
@@ -87,7 +87,7 @@ describe("embedded agent transcript repair runtime contract", () => {
     expect(strategy.id).toBe("orphan-trailing-user-prompt");
     expect(result).toEqual({
       merged: true,
-      removeLeaf: true,
+      removeLeaf: false,
       prompt: `${QUEUED_USER_MESSAGE_MARKER}\nqueued via strategy\n\nnewest inbound message`,
     });
   });

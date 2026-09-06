@@ -66,10 +66,10 @@ function canonicalSkillKey(name: string): string {
   return key;
 }
 
-export type SkillUsageFacts = { lastUsedAtMs: number; useCount: number };
+type SkillUsageFacts = { lastUsedAtMs: number; useCount: number };
 
 /** Single reader for recorded usage; callers pass canonical skill files. */
-export function readSkillUsageByFile(
+function readSkillUsageByFile(
   skillFiles: readonly string[],
   options: OpenClawStateDatabaseOptions = {},
 ): Map<string, SkillUsageFacts> {
@@ -225,34 +225,17 @@ function recordSkillUsage(
 
 /** Listener failures must never propagate into the tool execution that emitted usage. */
 export function registerSkillUsageTracking(options: OpenClawStateDatabaseOptions = {}): () => void {
-  return onTrustedInternalDiagnosticEvent((event, metadata, privateData) => {
-    if (!metadata.trusted || event.type !== "skill.used") {
-      return;
-    }
-    try {
-      recordSkillUsage({ ...event, skillFile: privateData.skillUsage?.skillFile }, options);
-    } catch (error) {
-      log.warn(`failed to record skill usage: ${String(error)}`);
-    }
-  });
-}
-
-export function clearSkillUsageForRemovedSkills(
-  skillFiles: readonly string[],
-  options: OpenClawStateDatabaseOptions = {},
-): void {
-  if (skillFiles.length === 0) {
-    return;
-  }
-  runOpenClawStateWriteTransaction(({ db }) => {
-    const kysely = getNodeSqliteKysely<CuratorDatabase>(db);
-    executeSqliteQuerySync(
-      db,
-      kysely.deleteFrom("skill_usage").where(
-        "skill_file",
-        "in",
-        skillFiles.map((skillFile) => canonicalizePath(skillFile)),
-      ),
-    );
-  }, options);
+  return onTrustedInternalDiagnosticEvent(
+    (event, metadata, privateData) => {
+      if (!metadata.trusted || event.type !== "skill.used") {
+        return;
+      }
+      try {
+        recordSkillUsage({ ...event, skillFile: privateData.skillUsage?.skillFile }, options);
+      } catch (error) {
+        log.warn(`failed to record skill usage: ${String(error)}`);
+      }
+    },
+    { include: ["skill.used"] },
+  );
 }

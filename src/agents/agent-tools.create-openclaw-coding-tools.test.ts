@@ -27,7 +27,7 @@ import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
-import { isPluginToolAllowed } from "../plugins/tool-grant-allowlist.js";
+import { createPluginToolAllowlist } from "../plugins/tool-grant-allowlist.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { filterToolsByMessageProvider } from "./agent-tools.message-provider-policy.js";
@@ -606,7 +606,7 @@ describe("createOpenClawCodingTools", () => {
     expect(
       buildEmptyExplicitToolAllowlistError({
         sources: [{ label: "runtime toolsAllow", entries: ["automations"] }],
-        callableToolNames: allowed.map((tool) => tool.name),
+        hasCallableTools: allowed.length > 0,
         toolsEnabled: true,
       }),
     ).toBeNull();
@@ -1671,8 +1671,7 @@ describe("createOpenClawCodingTools", () => {
       "workboard_heartbeat",
     );
     expect(
-      isPluginToolAllowed(
-        new Set(latestCreateOpenClawToolsOptions().pluginToolAllowlist),
+      createPluginToolAllowlist(latestCreateOpenClawToolsOptions().pluginToolAllowlist).allowsTool(
         "workboard",
         "workboard_heartbeat",
       ),
@@ -2053,16 +2052,16 @@ describe("createOpenClawCodingTools", () => {
     expect(latestCreateOpenClawToolsOptions().agentChannel).toBe("discord");
   });
 
-  it("filters session tools for sub-agent sessions by default", () => {
+  it("gives sub-agent sessions orchestration tools by default", () => {
     const tools = createOpenClawCodingTools({
       sessionKey: "agent:main:subagent:test",
     });
     const names = new Set(tools.map((tool) => tool.name));
-    expect(names.has("sessions_list")).toBe(false);
-    expect(names.has("sessions_history")).toBe(false);
+    expect(names.has("sessions_list")).toBe(true);
+    expect(names.has("sessions_history")).toBe(true);
     expect(names.has("sessions_send")).toBe(false);
-    expect(names.has("sessions_spawn")).toBe(false);
-    expect(names.has("subagents")).toBe(false);
+    expect(names.has("sessions_spawn")).toBe(true);
+    expect(names.has("subagents")).toBe(true);
 
     expect(names.has("read")).toBe(true);
     expect(names.has("exec")).toBe(true);

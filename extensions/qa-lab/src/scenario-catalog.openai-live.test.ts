@@ -167,7 +167,7 @@ describe("qa scenario catalog", () => {
       "plugin must declare contracts.tools for: kitchen-sink-tool",
     );
     expect(config?.requiredAdversarialDiagnostics).toContain(
-      'channel "kitchen-sink-channel-probe" registration missing required config helpers',
+      'channel "kitchen-sink-channel-probe" registration missing or invalid required capabilities.chatTypes',
     );
     expect(config?.requiredAdversarialDiagnostics).toContain(
       'agent harness "kitchen-sink-agent-harness" registration missing required runtime methods',

@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { fileTypeFromBuffer } from "file-type";
 import { matchesHttpIfNoneMatch } from "./http-conditional.js";
 
@@ -12,12 +13,13 @@ export const HTTP_SVG_MAX_BYTES = 64 * 1024;
 const SVG_MIME_TYPE = "image/svg+xml";
 const ICO_MIME_TYPE = "image/x-icon";
 
-/** Sniffable raster types the Control UI can render inside an <img> element. */
+/** Image types accepted by the authenticated Control UI image routes. */
 const ALLOWED_HTTP_IMAGE_MIME_TYPES = new Set([
   "image/avif",
   "image/gif",
   "image/jpeg",
   "image/png",
+  SVG_MIME_TYPE,
   "image/webp",
   ICO_MIME_TYPE,
 ]);
@@ -27,6 +29,75 @@ export type HttpImageRepresentation = {
   contentType: string;
   etag: string;
 };
+
+export function resolveHttpImageMimeType(value: string | undefined): string | undefined {
+  const normalized = normalizeMimeType(value);
+  const contentType = normalized === "image/vnd.microsoft.icon" ? ICO_MIME_TYPE : normalized;
+  return contentType && ALLOWED_HTTP_IMAGE_MIME_TYPES.has(contentType) ? contentType : undefined;
+}
+
+/** Hash final, validated response bytes once when their cached representation is created. */
+export function createHttpImageRepresentation(
+  body: Buffer,
+  contentType: string,
+): HttpImageRepresentation {
+  return {
+    body,
+    contentType,
+    etag: `"${createHash("sha256").update(body).digest("base64url")}"`,
+  };
+}
+
+// Sticky `\s*` keeps whitespace skipping identical to the character class used by
+// the pattern this scanner replaced, without rescanning the string.
+const SVG_PROLOGUE_WHITESPACE_RE = /\s*/y;
+
+function skipSvgPrologueWhitespace(text: string, index: number): number {
+  SVG_PROLOGUE_WHITESPACE_RE.lastIndex = index;
+  SVG_PROLOGUE_WHITESPACE_RE.exec(text);
+  return SVG_PROLOGUE_WHITESPACE_RE.lastIndex;
+}
+
+function startsWithToken(text: string, index: number, token: string): boolean {
+  return text.slice(index, index + token.length).toLowerCase() === token;
+}
+
+/**
+ * Recognizes an SVG root element after an optional XML declaration and comments.
+ *
+ * An index scan rather than a regex on purpose: the equivalent
+ * `(?:<!--[\s\S]*?-->\s*)*<svg` backtracks exponentially on comment-like bytes that
+ * never reach a root element, and these bytes arrive from remote icon and
+ * link-favicon responses on the Gateway's single event loop, so one crafted
+ * response would stall every session. A comment ends at its first `-->`, so text
+ * between a closed comment and the root element is rejected, not absorbed.
+ */
+export function startsWithSvgRootElement(text: string): boolean {
+  let index = skipSvgPrologueWhitespace(text, 0);
+  if (startsWithToken(text, index, "<?xml")) {
+    const declarationEnd = text.indexOf(">", index);
+    if (declarationEnd < 0) {
+      return false;
+    }
+    index = skipSvgPrologueWhitespace(text, declarationEnd + 1);
+  }
+  while (startsWithToken(text, index, "<!--")) {
+    const commentEnd = text.indexOf("-->", index + "<!--".length);
+    if (commentEnd < 0) {
+      return false;
+    }
+    index = skipSvgPrologueWhitespace(text, commentEnd + "-->".length);
+  }
+  if (!startsWithToken(text, index, "<svg")) {
+    return false;
+  }
+  const delimiter = text[index + "<svg".length];
+  return (
+    delimiter === ">" ||
+    (delimiter === "/" && text[index + "<svg/".length] === ">") ||
+    (delimiter !== undefined && /\s/u.test(delimiter))
+  );
+}
 
 /**
  * SVG images stay self-contained: no script, document expansion, embedded
@@ -42,7 +113,7 @@ function isRenderableHttpSvg(body: Buffer): boolean {
     !/<!doctype|<!entity/iu.test(text) &&
     !/<\s*(?:script|foreignObject|image|use|iframe)\b/iu.test(text) &&
     !/\b(?:href|xlink:href|src)\s*=/iu.test(text) &&
-    /^\s*(?:<\?xml[^>]*>\s*)?(?:<!--[\s\S]*?-->\s*)*<svg(?:\s|>)/iu.test(text)
+    startsWithSvgRootElement(text)
   );
 }
 
@@ -58,19 +129,20 @@ export async function resolveHttpImageRepresentation(
   if (path.extname(sourceName).toLowerCase() === ".svg") {
     contentType = isRenderableHttpSvg(body) ? SVG_MIME_TYPE : undefined;
   } else {
-    const sniffed = (await fileTypeFromBuffer(body))?.mime;
-    const normalized = sniffed === "image/vnd.microsoft.icon" ? ICO_MIME_TYPE : sniffed;
-    contentType =
-      normalized && ALLOWED_HTTP_IMAGE_MIME_TYPES.has(normalized) ? normalized : undefined;
+    contentType = resolveHttpImageMimeType((await fileTypeFromBuffer(body))?.mime);
   }
   if (!contentType) {
     return undefined;
   }
-  return {
-    body,
-    contentType,
-    etag: `"${createHash("sha256").update(body).digest("base64url")}"`,
-  };
+  return createHttpImageRepresentation(body, contentType);
+}
+
+/** Prevent image documents from executing scripts or making cross-origin requests. */
+export function applyHttpImageContentSecurityPolicy(res: ServerResponse): void {
+  res.setHeader(
+    "content-security-policy",
+    "default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; sandbox",
+  );
 }
 
 /** Writes the shared private-cache and document-sandbox policy for image bytes. */
@@ -86,10 +158,7 @@ export function sendHttpImageResponse(params: {
   res.setHeader("cache-control", params.cacheControl ?? "private, max-age=3600");
   res.setHeader("cross-origin-resource-policy", "same-origin");
   res.setHeader("x-content-type-options", "nosniff");
-  res.setHeader(
-    "content-security-policy",
-    "default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; sandbox",
-  );
+  applyHttpImageContentSecurityPolicy(res);
   res.setHeader("content-disposition", `attachment; filename="${params.filename}"`);
   if (matchesHttpIfNoneMatch(req.headers["if-none-match"], image.etag)) {
     res.statusCode = 304;

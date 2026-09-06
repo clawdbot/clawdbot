@@ -1,19 +1,13 @@
 // Builds base config schema metadata shared across generated config surfaces.
-import { isSensitiveUrlConfigPath } from "@openclaw/net-policy/redact-sensitive-url";
 import { VERSION } from "../version.js";
 import { FIELD_HELP } from "./schema.help.js";
-import type { ConfigUiHints } from "./schema.hints.js";
-import {
-  applySensitiveUrlHints,
-  buildBaseHints,
-  collectMatchingSchemaPaths,
-  mapSensitivePaths,
-} from "./schema.hints.js";
+import { buildBaseHints, mapSensitivePaths } from "./schema.hints.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 import {
   asSchemaObject,
   cloneSchema,
   type ConfigJsonSchemaObject as JsonSchemaObject,
+  type ConfigSchemaResponse,
 } from "./schema.shared.js";
 import { applyDerivedTags } from "./schema.tags.js";
 import { applyResolvedConfigTierHints } from "./schema.tiers.js";
@@ -94,14 +88,7 @@ function applyNodeDocumentation(node: JsonSchemaObject, pathCandidates: readonly
   }
 }
 
-type BaseConfigSchemaResponse = {
-  schema: ConfigSchema;
-  uiHints: ConfigUiHints;
-  version: string;
-  generatedAt: string;
-};
-
-type BaseConfigSchemaStablePayload = Omit<BaseConfigSchemaResponse, "generatedAt">;
+type BaseConfigSchemaStablePayload = Omit<ConfigSchemaResponse, "generatedAt">;
 
 function preparePublicSchema(schema: ConfigSchema): ConfigSchema {
   // Zod returns an independent JSON tree; prepare it before publishing the cache.
@@ -140,19 +127,11 @@ function computeBaseConfigSchemaStablePayload(): BaseConfigSchemaStablePayload {
     applyFieldDocumentation(schemaRoot);
   }
   const baseHints = mapSensitivePaths(OpenClawSchema, "", buildBaseHints());
-  const sensitiveUrlPaths = collectMatchingSchemaPaths(
-    OpenClawSchema,
-    "",
-    isSensitiveUrlConfigPath,
-  );
   const publicSchema = preparePublicSchema(schema);
   const stablePayload = {
     schema: publicSchema,
     uiHints: applyDerivedTags(
-      applyResolvedConfigTierHints(
-        publicSchema,
-        applyDerivedTags(applySensitiveUrlHints(baseHints, sensitiveUrlPaths)),
-      ),
+      applyResolvedConfigTierHints(publicSchema, applyDerivedTags(baseHints)),
     ),
     version: VERSION,
   } satisfies BaseConfigSchemaStablePayload;
@@ -162,7 +141,7 @@ function computeBaseConfigSchemaStablePayload(): BaseConfigSchemaStablePayload {
 
 export function computeBaseConfigSchemaResponse(params?: {
   generatedAt?: string;
-}): BaseConfigSchemaResponse {
+}): ConfigSchemaResponse {
   const stablePayload = computeBaseConfigSchemaStablePayload();
   return {
     schema: cloneSchema(stablePayload.schema),

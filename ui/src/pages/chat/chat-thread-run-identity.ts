@@ -5,13 +5,12 @@ import {
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChatItem } from "../../lib/chat/chat-types.ts";
-import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import {
   userTurnRunId,
   type ChatProjection,
   type TurnInsertionBounds,
 } from "./chat-thread-items.ts";
-import { chatItemStartsUserTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
+import { chatItemStartsUserTurn } from "./chat-turn-boundary.ts";
 import { readLiveTerminalRunId } from "./terminal-message-identity.ts";
 import { buildToolStreamIdentity, extractToolMessageRefs } from "./tool-stream-identity.ts";
 
@@ -68,11 +67,7 @@ export function createToolCallLookup<Value>() {
 }
 
 function isUserChatItem(item: ChatItem): item is Extract<ChatItem, { kind: "message" }> {
-  if (item.kind !== "message") {
-    return false;
-  }
-  const normalized = safeNormalizeMessage(item.message);
-  return normalized ? normalizeRoleForGrouping(normalized.role).toLowerCase() === "user" : false;
+  return item.kind === "message" && chatItemStartsUserTurn(item);
 }
 
 export function findCurrentTurnBounds(items: ChatItem[]): TurnInsertionBounds | null {

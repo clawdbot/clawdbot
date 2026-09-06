@@ -164,6 +164,9 @@ async function generateDashboardSessionTitle(params: {
   userMessage: string;
   attachments?: readonly ChatAttachment[];
   timeoutMs?: number;
+  utilityOnly?: boolean;
+  abortSignal?: AbortSignal;
+  assertCurrent?: () => void;
 }): Promise<string | null> {
   const sourceText = buildDashboardSessionTitleSource({
     message: params.userMessage,
@@ -204,9 +207,31 @@ async function generateDashboardSessionTitle(params: {
     ...(preferredProfile ? { preferredProfile } : {}),
     normalizeLabel: normalizeDashboardSessionTitle,
     maxLength: DASHBOARD_SESSION_TITLE_MAX_CHARS,
+    abortSignal: params.abortSignal,
+    assertCurrent: params.assertCurrent,
     ...(params.timeoutMs ? { timeoutMs: params.timeoutMs } : {}),
+    ...(params.utilityOnly ? { utilityOnly: true } : {}),
   });
   return generated ? normalizeDashboardSessionTitle(generated) : null;
+}
+
+/** Prepares a creation draft's title without creating or updating a session. */
+export async function prepareDashboardSessionTitle(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  entry?: DashboardSessionTitleModelEntry;
+  userMessage: string;
+  abortSignal?: AbortSignal;
+  assertCurrent?: () => void;
+}): Promise<string | null> {
+  try {
+    return await generateDashboardSessionTitle({ ...params, utilityOnly: true });
+  } catch {
+    params.assertCurrent?.();
+    params.abortSignal?.throwIfAborted();
+    // Speculation is optional; provider diagnostics and draft contents stay private.
+    return null;
+  }
 }
 
 /** Worktree callers bound their own wait without cancelling another naming owner's request. */
