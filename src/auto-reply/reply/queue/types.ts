@@ -44,7 +44,6 @@ import type {
   VerboseLevel,
 } from "../directives.js";
 import type { ReplyOperationRunState } from "../reply-operation-run-state.js";
-import { releaseRecentQueueMessageId } from "./recent-message-ids.js";
 
 export type QueueDropPolicy = "old" | "new" | "summarize";
 
@@ -361,10 +360,6 @@ export function completeFollowupRunLifecycle(
     // non-rejecting promise. onSettled must still run after a synchronous throw.
     try {
       if (disposition !== "consumed" && !admittedTurnAdoptionLifecycles.has(lifecycle)) {
-        // The queue is relinquishing an un-admitted message: free its dedupe
-        // identity so the abandonment-triggered ingress retry can re-enqueue
-        // instead of being rejected as a recent duplicate and falsely completed.
-        releaseRecentQueueMessageId(run);
         lifecycle.onAbandoned?.();
       }
     } finally {
