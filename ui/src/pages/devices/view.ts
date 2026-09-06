@@ -1,5 +1,12 @@
 // Devices page renders its screen content.
 import { html, nothing } from "lit";
+import { live } from "lit/directives/live.js";
+import { repeat } from "lit/directives/repeat.js";
+import { parseNodeList } from "../../../../src/shared/node-list-parse.js";
+import {
+  resolveNodeIdFromCandidates,
+  type NodeMatchCandidate,
+} from "../../../../src/shared/node-match.js";
 import {
   renderSettingsPage,
   renderSettingsRow,
@@ -55,6 +62,7 @@ type BindingState = {
   defaultBinding?: string | null;
   agents: BindingAgent[];
   nodes: BindingNode[];
+  inventory: NodeMatchCandidate[];
   onBindDefault: (nodeId: string | null) => void;
   onBindAgent: (agentId: string, nodeId: string | null) => void;
   onSave: () => void;
@@ -78,6 +86,7 @@ function resolveBindingsState(props: DevicesProps): BindingState {
     defaultBinding,
     agents,
     nodes,
+    inventory: parseNodeList({ nodes: props.nodes }),
     onBindDefault: props.onBindDefault,
     onBindAgent: props.onBindAgent,
     onSave: props.onSaveBindings,
@@ -160,6 +169,28 @@ function renderBindingSelect(agent: BindingAgent | null, state: BindingState) {
   const isDefault = agent === null;
   const sentinel = isDefault ? "" : "__default__";
   const selected = isDefault ? (state.defaultBinding ?? "") : (agent.binding ?? "__default__");
+  let resolvedId: string | undefined;
+  if (selected !== sentinel) {
+    try {
+      // Match the full inventory before capability filtering, as exec does;
+      // an incapable node must not hide ambiguity or redirect an exact ID.
+      resolvedId = resolveNodeIdFromCandidates(state.inventory, selected);
+    } catch {
+      // Unknown and ambiguous references remain visible without changing config.
+    }
+  }
+  const options = state.nodes.map((node) => ({
+    ...node,
+    id: node.id === resolvedId ? selected : node.id,
+    disabled: false,
+  }));
+  if (selected !== sentinel && !options.some((node) => node.id === selected)) {
+    options.push({
+      id: selected,
+      label: `${selected} (${t("devices.binding.unavailable")})`,
+      disabled: true,
+    });
+  }
   const onChange = (event: Event) => {
     const value = (event.target as HTMLSelectElement).value.trim();
     if (agent === null) {
@@ -172,15 +203,24 @@ function renderBindingSelect(agent: BindingAgent | null, state: BindingState) {
     <select
       class="settings-select"
       aria-label=${t(isDefault ? "devices.binding.node" : "devices.binding.binding")}
+      .value=${live(selected)}
       ?disabled=${state.disabled || state.nodes.length === 0}
       @change=${onChange}
     >
       <option value=${sentinel} ?selected=${selected === sentinel}>
         ${t(isDefault ? "devices.binding.anyNode" : "devices.binding.useDefault")}
       </option>
-      ${state.nodes.map(
+      ${repeat(
+        options,
+        (node) => node.id,
         (node) =>
-          html`<option value=${node.id} ?selected=${selected === node.id}>${node.label}</option>`,
+          html`<option
+            value=${node.id}
+            ?selected=${selected === node.id}
+            ?disabled=${node.disabled}
+          >
+            ${node.label}
+          </option>`,
       )}
     </select>
   `;
