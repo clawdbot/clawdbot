@@ -567,9 +567,20 @@ The earlier `hot` and `restart` modes are retired; [`openclaw doctor --fix`](/cl
 
 ### What hot-applies vs what needs a restart
 
-Most fields hot-apply without downtime; some hot-applied sections restart just that
-subsystem (channel, cron, heartbeat) rather than the whole Gateway. In
-`hybrid` mode, Gateway-restart-required changes are handled automatically.
+Reload planning classifies each changed path as one of three outcomes:
+
+- **Gateway restart (`restart`)**: restart the Gateway process.
+- **Hot reload (`hot`)**: apply the change while keeping the Gateway process
+  running. This can include restarting the owning subsystem, such as a channel,
+  cron, or heartbeat.
+- **No reload action (`none`)**: update the runtime config snapshot without
+  scheduling a reload action for that path. Consumers that read the current
+  config can observe the new value on a later read.
+
+In `hybrid` mode, Gateway restarts happen automatically when required. The longest
+matching config prefix determines the outcome. Rules supplied by a plugin apply
+only while that plugin is loaded; a path that matches no rule defaults to a
+Gateway restart.
 
 By default, changing `agents.defaults.mediaMaxMb` restarts channel runtimes so their inherited
 attachment limits take effect together. Automatic reloads preserve manually
@@ -582,7 +593,7 @@ back to OpenClaw.
 
 | Category                  | Fields                                                                                                                                                                                                                                                             | Gateway restart needed?                |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------- |
-| Channels                  | `channels.*`, `web` (WhatsApp) - all built-in and plugin channels                                                                                                                                                                                                  | No (restarts that channel)             |
+| Channels                  | `channels.*`, `web` (WhatsApp)                                                                                                                                                                                                                                     | Depends on setting and loaded plugin   |
 | Agent & models            | `agents`, `models`, `auth.order`, `auth.profiles`, `broadcast`, `worktreeRoot`, `cloudWorkers.projectProfiles`                                                                                                                                                     | No                                     |
 | Automation                | `hooks`, `cron`, `agents.defaults.heartbeat`                                                                                                                                                                                                                       | No (reloads the owning subsystem)      |
 | Sessions & messages       | `session`, `messages`                                                                                                                                                                                                                                              | No                                     |
@@ -604,6 +615,12 @@ back to OpenClaw.
 | Browser defaults          | `browser.profiles`, `browser.defaultProfile`, `browser.headless`, `browser.executablePath`, `browser.attachOnly`, `browser.cdpUrl`, `browser.noSandbox`, `browser.extraArgs`, `browser.snapshotDefaults`, `browser.tabCleanup`, `browser.allowSystemProfileImport` | No                                     |
 | Gateway server            | Other `gateway.*` settings (port, bind, auth mode, roles, tailscale, TLS)                                                                                                                                                                                          | **Yes**                                |
 | Infrastructure            | Other `discovery` and `browser` settings, MCP Apps listener settings, `secrets.egressProxy`, `plugins.load`, `plugins.installs`                                                                                                                                    | **Yes**                                |
+
+Channel plugins declare which settings restart their channel
+(`reload.configPrefixes`) and which need no reload action (`reload.noopPrefixes`).
+For example, with WhatsApp loaded, `channels.whatsapp.enabled` restarts the
+WhatsApp channel, while `channels.whatsapp.replyToMode` matches its broader
+no-action prefix.
 
 Changes to `channels.defaults`, `channels.modelByChannel`, `commands`,
 `accessGroups`, `tts`, `surfaces`, `acp.stream`, and `diagnostics.flags` refresh
@@ -697,7 +714,6 @@ eligible for hot reload. Auth-mode changes still restart the Gateway.
 
 <Note>
 Changing `gateway.reload` or `gateway.remote` also does **not** trigger a restart.
-Individual plugins can declare their own restart-triggering config prefixes.
 </Note>
 
 Canvas enablement uses plugin hot reload. Current-protocol nodes whose hosted

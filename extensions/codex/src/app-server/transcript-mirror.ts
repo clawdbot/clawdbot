@@ -63,13 +63,10 @@ type CodexAppServerTranscriptMirrorResult = {
 };
 
 function readMirroredAssistantText(message: MirroredAgentMessage | undefined): string | undefined {
-  if (message?.role !== "assistant") {
-    return undefined;
-  }
-  const text = message.content
-    .flatMap((part) => (part.type === "text" ? [part.text] : []))
-    .join("\n");
-  return text || undefined;
+  return message?.role === "assistant"
+    ? message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n") ||
+        undefined
+    : undefined;
 }
 
 /** Imports a bounded, user-visible Codex history tail into a new OpenClaw transcript. */
@@ -151,11 +148,16 @@ async function mirrorBestEffort(params: {
       idempotencyScope: `codex-app-server:${params.threadId}`,
       runId: params.params.runId,
       runMirrorIdentityPrefix: `${params.turnId}:`,
-      terminalAssistantOwner: {
-        mirrorIdentity: `${params.turnId}:assistant`,
-        runId: params.params.runId,
-        settlementWarning: params.settlementWarning,
-      },
+      // The outer run may continue a failed attempt. Only its eventual answer
+      // may own the final projection, otherwise the client sees two terminal rows.
+      terminalAssistantOwner:
+        params.params.deferTerminalLifecycle && params.result.terminal.kind === "failed"
+          ? undefined
+          : {
+              mirrorIdentity: `${params.turnId}:assistant`,
+              runId: params.params.runId,
+              settlementWarning: params.settlementWarning,
+            },
       prepareAssistantTranscriptMessage: params.params.prepareAssistantTranscriptMessage,
       config: params.params.config,
     });

@@ -224,6 +224,9 @@ openclaw update repair --accept-capabilities
 install records, syncs tracked plugins for the active update channel, updates
 managed npm plugin installs, repairs missing configured plugin payloads,
 refreshes the plugin registry, and writes converged install-record metadata.
+Configured runtime plugins whose versions follow OpenClaw are checked against
+the newly installed core during post-update repair, even when the updater process
+started on the previous version.
 It does not install a new core package and does not restart the Gateway.
 Human output ends with a finalization result that distinguishes completion,
 completion with warnings, and failure.

@@ -5,7 +5,10 @@ import type { DatabaseSync } from "node:sqlite";
 import { resolveStateDir } from "../config/paths.js";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import {
+  openNodeSqliteDatabase,
+  supportsNodeSqliteExtensionLoading,
+} from "../infra/node-sqlite.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import { assertSqliteIntegrityInWorker } from "../infra/sqlite-integrity-worker.js";
@@ -342,6 +345,7 @@ function* openOpenClawAgentDatabaseSteps(
     revokePendingAgentDatabaseOpen(pathname);
   }
   const cached = cache.databases.get(pathname);
+  const allowExtension = !process.permission && supportsNodeSqliteExtensionLoading();
   if (incognito) {
     // The sentinel has no reachable durable owner, so doctor cannot safely migrate a collision.
     // Refuse operator-created state instead of silently shadowing it with volatile writes.
@@ -355,7 +359,7 @@ function* openOpenClawAgentDatabaseSteps(
     }
     // After the collision probe, this sentinel is only a cache key: SQLite opens :memory:,
     // and no directory, lease, registry row, WAL sidecar, or file write may be created.
-    const db = openNodeSqliteDatabase(":memory:", { allowExtension: !process.permission });
+    const db = openNodeSqliteDatabase(":memory:", { allowExtension });
     db.enableLoadExtension(false);
     configureSqlitePreSchemaPragmas(db, {
       busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -434,9 +438,9 @@ function* openOpenClawAgentDatabaseSteps(
     // Free a slot before constructing the new handle: under real descriptor
     // pressure the 65th open would otherwise fail before eviction could run.
     evictLruAgentDatabaseHandles();
-    // Node's permission model forbids extension-capable constructors. Otherwise,
-    // trusted borrowers load native extensions only in synchronous sections.
-    const db = openNodeSqliteDatabase(pathname, { allowExtension: !process.permission });
+    // Ordinary agent state also works with SQLite builds that omit extensions.
+    // Trusted borrowers may enable them only when both the runtime and permissions allow it.
+    const db = openNodeSqliteDatabase(pathname, { allowExtension });
     db.enableLoadExtension(false);
     enableNodeSqliteKyselyStatementCache(db);
     openedDb = db;

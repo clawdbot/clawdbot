@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import type { AuthProfileStore } from "../auth-profiles.js";
 import { resolveAgentHarnessPreparedAuthSupport } from "../harness/support.js";
 import { getApiKeyForModelCore } from "../model-auth.js";
@@ -131,15 +132,15 @@ describe("prepareAgentRuntimeAuthPlan", () => {
       modelId: "model",
       env: {},
       authProfileStore: authStore({}),
-      metadataSnapshot: {
+      metadataSnapshot: createPluginMetadataSnapshotFixture({
         plugins: [
           {
             id: "alias-owner",
             origin: "bundled",
             providerAuthAliases: { "legacy-provider": "canonical-provider" },
-          } as never,
+          },
         ],
-      },
+      }),
     });
 
     expect(plan.providerForAuth).toBe("canonical-provider");
