@@ -22,7 +22,11 @@ import {
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { formatConnectError } from "./connect-error.ts";
-import { reduceChatSessionProjection, setChatRunOwner } from "./history-merge.ts";
+import {
+  getChatSessionProjection,
+  reduceChatSessionProjection,
+  setChatRunOwner,
+} from "./history-merge.ts";
 import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./input-history.ts";
 import type {
   CompactionStatus,
@@ -166,10 +170,11 @@ export function adoptStartedChatRun(
   if (host.chatRunStatus?.runId === runId || host.lastLocalTerminalReconcile?.runId === runId) {
     return;
   }
-  const projection = reduceChatSessionProjection(host, { type: "runDelta", runId });
-  if (projection.runs[runId]?.status !== "streaming") {
+  const currentRun = getChatSessionProjection(host).runs[runId];
+  if (currentRun && currentRun.status !== "streaming") {
     return;
   }
+  reduceChatSessionProjection(host, { type: "runDelta", runId });
   const adopted = host.chatRunId === runId;
   const adoptedStream = adopted && typeof host.chatStream === "string";
   if (!adopted) {

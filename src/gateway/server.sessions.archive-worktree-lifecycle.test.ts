@@ -305,7 +305,7 @@ test.each(["identity", "label-owner", "participants", "removed"] as const)(
         });
         await expect(fs.access(worktree.path)).rejects.toThrow();
       } else {
-        await expect(fs.access(worktree.path)).resolves.toBeUndefined();
+        await fs.access(worktree.path);
       }
     } finally {
       restore.mockRestore();
@@ -440,7 +440,7 @@ test.each(["accepted", "revoked", "replacement"] as const)(
       expect(successorApply).not.toHaveBeenCalled();
       expect(successorAbort).not.toHaveBeenCalled();
       expect(isSessionPermissionChangePending(earlier.sessionId)).toBe(false);
-      await expect(fs.access(worktree.path)).resolves.toBeUndefined();
+      await fs.access(worktree.path);
     } finally {
       release.resolve();
       await Promise.allSettled([pending]);
@@ -789,7 +789,7 @@ test.each(["unarchived", "rearchived"] as const)(
       expect(archivedBeforeCleanup).toEqual(expect.any(Number));
       expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBe(successorArchive);
       expect(getRegistryWorktree(process.env, worktree.id)?.removedAt).toBeUndefined();
-      await expect(fs.access(worktree.path)).resolves.toBeUndefined();
+      await fs.access(worktree.path);
       await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(
         transcript,
       );

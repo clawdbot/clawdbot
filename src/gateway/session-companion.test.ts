@@ -4,6 +4,7 @@ import {
   resolveSessionToolAccess,
 } from "../agents/tools/sessions-access.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { SessionCompanionAskError } from "./session-companion-ask.js";
 import type { SessionCompanionContextReader } from "./session-companion-context.js";
 import {
@@ -380,6 +381,30 @@ describe("session companion asks", () => {
     );
     harness.service.dispose();
   });
+
+  it.each(["global", "agent:work:selected"])(
+    "deletion preserves qualified ownership while scoping bare keys (%s)",
+    async (sessionKey) => {
+      vi.useFakeTimers();
+      const harness = createHarness();
+      const selected = { agentId: "work", sessionKey };
+      const other = { agentId: "main", sessionKey: "global" };
+      await harness.service.ask({ ...selected, question: "Work?", connId: "conn-work" });
+      await harness.service.ask({ ...other, question: "Main?", connId: "conn-main" });
+
+      emitSessionIdentityMutation({
+        agentId: sessionKey === "global" ? "work" : "main",
+        kind: "delete",
+        previous: { sessionId: "session-1", sessionKeys: [sessionKey] },
+      });
+
+      expect(harness.service.state(selected)).toEqual({ exchanges: [] });
+      expect(harness.service.state(other).exchanges).toEqual([
+        expect.objectContaining({ question: "Main?" }),
+      ]);
+      harness.service.dispose();
+    },
+  );
 
   it("enforces the per-connection rate window", async () => {
     vi.useFakeTimers();

@@ -6,6 +6,7 @@ import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
 } from "../../../infra/agent-events.js";
+import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { reloadTaskRuntimeStateFromStore } from "../../../tasks/runtime-internal.js";
 import { getTaskFlowById } from "../../../tasks/task-flow-registry.js";
@@ -137,11 +138,13 @@ async function setupAcceptedRecovery(persistedPhase: "attempted" | "consumed" = 
     waitForAgent: async () => {
       throw new Error("Recovery settlement must not wait through Gateway");
     },
-    abortAgent: async () => {
-      throw new Error("Recovery settlement must not abort its accepted turn");
-    },
     sendRecoveryNotice: async () => ({ suppressed: false }),
   };
+  const gatewayContext = {
+    recoveryRuntime: gatewayRuntime,
+    resolveGatewayContext: () => gatewayContext as never,
+  };
+  bindGatewayContextResolver(gatewayRuntime, gatewayContext.resolveGatewayContext);
   const replace = (
     overrides: Partial<Parameters<typeof manager.replaceSubagentRunAfterSteer>[0]> = {},
     owner = manager,

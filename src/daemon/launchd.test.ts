@@ -108,6 +108,11 @@ const cleanStaleGatewayProcessesSync = vi.hoisted(() =>
   vi.fn<(port?: number, options?: CleanStaleGatewayProcessesOptions) => number[]>(() => []),
 );
 const getSelfAndAncestorPidsSync = vi.hoisted(() => vi.fn<() => Set<number>>());
+const launchdCallerPids = vi.hoisted(() => {
+  // Keep the synthetic caller graph separate from host PIDs and both service fixture PIDs.
+  const caller = Math.max(process.pid, process.ppid, 4242, 4343) + 1;
+  return [caller, caller + 1];
+});
 const launchctlSpawnSync = vi.hoisted(() => vi.fn());
 const inspectPortUsage = vi.hoisted(() =>
   vi.fn<typeof import("../infra/ports-inspect.js").inspectPortUsage>(async () => ({
@@ -702,7 +707,7 @@ beforeEach(() => {
   });
   cleanStaleGatewayProcessesSync.mockReset();
   getSelfAndAncestorPidsSync.mockReset();
-  getSelfAndAncestorPidsSync.mockReturnValue(new Set([process.pid, process.ppid]));
+  getSelfAndAncestorPidsSync.mockReturnValue(new Set(launchdCallerPids));
   cleanStaleGatewayProcessesSync.mockImplementation((_port, options) => {
     state.cleanupProtectedPids.push(options?.resolveProtectedPid?.() ?? options?.protectedPid);
     return [];
@@ -736,60 +741,63 @@ beforeEach(() => {
 });
 
 describe("launchd process ancestry guards", () => {
-  it.each([true, false])(
-    "restarts without env markers with a Gateway ancestor: %s",
-    async (inside) => {
-      const env = createDefaultLaunchdEnv();
-      const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-      const serviceId = `${domain}/ai.openclaw.gateway`;
-      if (inside) {
-        getSelfAndAncestorPidsSync.mockReturnValue(new Set([process.pid, process.ppid, 4242]));
-      }
+  it.each([
+    { name: "a Gateway ancestor", inside: true, servicePid: 4242 },
+    { name: "an external caller", inside: false, servicePid: 4242 },
+    { name: "a service PID matching the host PID", inside: false, servicePid: process.pid },
+    { name: "a service PID matching the host parent PID", inside: false, servicePid: process.ppid },
+  ])("restarts without env markers with $name", async ({ inside, servicePid }) => {
+    const env = createDefaultLaunchdEnv();
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const serviceId = `${domain}/ai.openclaw.gateway`;
+    state.printOutput = ["state = running", `pid = ${servicePid}`].join("\n");
+    if (inside) {
+      getSelfAndAncestorPidsSync.mockReturnValue(new Set([...launchdCallerPids, 4242]));
+    }
 
-      const result = await withEnvAsync(
+    const result = await withEnvAsync(
+      {
+        LAUNCH_JOB_LABEL: undefined,
+        LAUNCH_JOB_NAME: undefined,
+        XPC_SERVICE_NAME: undefined,
+        OPENCLAW_SERVICE_MARKER: undefined,
+        OPENCLAW_SERVICE_KIND: undefined,
+        OPENCLAW_LAUNCHD_LABEL: undefined,
+      },
+      async () => restartLaunchAgent(launchAgentControlFixture(env)),
+    );
+
+    expect(getSelfAndAncestorPidsSync).toHaveBeenCalledOnce();
+    if (inside) {
+      expect(result).toEqual({ outcome: "scheduled" });
+      expect(launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff).toHaveBeenCalledWith(
         {
-          LAUNCH_JOB_LABEL: undefined,
-          LAUNCH_JOB_NAME: undefined,
-          XPC_SERVICE_NAME: undefined,
-          OPENCLAW_SERVICE_MARKER: undefined,
-          OPENCLAW_SERVICE_KIND: undefined,
-          OPENCLAW_LAUNCHD_LABEL: undefined,
-        },
-        async () => restartLaunchAgent(launchAgentControlFixture(env)),
-      );
-
-      expect(getSelfAndAncestorPidsSync).toHaveBeenCalledOnce();
-      if (inside) {
-        expect(result).toEqual({ outcome: "scheduled" });
-        expect(
-          launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff,
-        ).toHaveBeenCalledWith({
           env,
           mode: "kickstart",
           waitForPid: process.pid,
-        });
-        expect(state.launchctlCalls).toStrictEqual([["print", serviceId]]);
-        expect(cleanStaleGatewayProcessesSync).not.toHaveBeenCalled();
-      } else {
-        expect(result).toEqual({ outcome: "completed" });
-        expect(
-          launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff,
-        ).not.toHaveBeenCalled();
-        expect(state.launchctlCalls).toStrictEqual([
-          ["print", serviceId],
-          ["enable", serviceId],
-          ["kickstart", "-k", serviceId],
-        ]);
-      }
-    },
-  );
+        },
+      );
+      expect(state.launchctlCalls).toStrictEqual([["print", serviceId]]);
+      expect(cleanStaleGatewayProcessesSync).not.toHaveBeenCalled();
+    } else {
+      expect(result).toEqual({ outcome: "completed" });
+      expect(
+        launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff,
+      ).not.toHaveBeenCalled();
+      expect(state.launchctlCalls).toStrictEqual([
+        ["print", serviceId],
+        ["enable", serviceId],
+        ["kickstart", "-k", serviceId],
+      ]);
+    }
+  });
 
   it.each([false, true])(
     "refuses stop without env markers with a Gateway ancestor (disable: %s)",
     async (disable) => {
       const env = createDefaultLaunchdEnv();
       const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-      getSelfAndAncestorPidsSync.mockReturnValue(new Set([process.pid, process.ppid, 4242]));
+      getSelfAndAncestorPidsSync.mockReturnValue(new Set([...launchdCallerPids, 4242]));
 
       await withEnvAsync(
         {
@@ -817,7 +825,7 @@ describe("launchd process ancestry guards", () => {
     const env = createDefaultLaunchdEnv();
     const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
     const serviceId = `${domain}/ai.openclaw.gateway`;
-    getSelfAndAncestorPidsSync.mockReturnValue(new Set([process.pid, process.ppid, 4242]));
+    getSelfAndAncestorPidsSync.mockReturnValue(new Set([...launchdCallerPids, 4242]));
 
     await withEnvAsync(
       {
@@ -850,7 +858,7 @@ describe("launchd process ancestry guards", () => {
       const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
       const serviceId = `${domain}/ai.openclaw.gateway`;
       state.serviceStates.set(serviceId, "running");
-      getSelfAndAncestorPidsSync.mockReturnValue(new Set([process.pid, process.ppid, 4242]));
+      getSelfAndAncestorPidsSync.mockReturnValue(new Set([...launchdCallerPids, 4242]));
 
       await withEnvAsync(
         {
@@ -884,7 +892,7 @@ describe("launchd process ancestry guards", () => {
     const legacyServiceId = `${domain}/ai.openclaw.legacy-gateway`;
     state.serviceStates.set(serviceId, "not-loaded");
     state.serviceStates.set(legacyServiceId, "running");
-    getSelfAndAncestorPidsSync.mockReturnValue(new Set([process.pid, process.ppid, 4242]));
+    getSelfAndAncestorPidsSync.mockReturnValue(new Set([...launchdCallerPids, 4242]));
 
     await withEnvAsync(
       {
@@ -915,6 +923,8 @@ describe("launchd runtime parsing", () => {
   it.each([
     ['disabled services = {\n\t"ai.openclaw.gateway" => enabled\n}', true],
     ['disabled services = {\n\t"ai.openclaw.gateway" => disabled\n}', false],
+    ['disabled services = {\n\t"ai.openclaw.gateway" => false\n}', true],
+    ['disabled services = {\n\t"ai.openclaw.gateway" => true\n}', false],
     ['disabled services = {\n\t"other.service" => disabled\n}', true],
   ])("parses the LaunchAgent enabled override", (output, expected) => {
     expect(parseLaunchAgentEnabled(output, "ai.openclaw.gateway")).toBe(expected);

@@ -626,8 +626,7 @@ export function createMarkdownParser(): MarkdownItParser {
     return rendered;
   };
 
-  // Message rendering allows inline data images and explicit open-only placeholders
-  // for remote URLs. Document previews preserve authored URLs for direct rendering.
+  // Remote images can stay click-to-open without truncating a document preview.
   installAssistantTranscriptRoleImageRenderer(markdownParser, {
     escapeHtml: escapeMarkdownHtml,
     isInlineDataImage: (src) => INLINE_DATA_IMAGE_RE.test(src),
@@ -650,7 +649,7 @@ export function createMarkdownParser(): MarkdownItParser {
     interactiveImages: (env) =>
       (env as Partial<MarkdownRenderEnv> | undefined)?.interactiveImages === true,
     allowRemoteImages: (env) =>
-      (env as Partial<MarkdownRenderEnv> | undefined)?.mode === "document",
+      (env as Partial<MarkdownRenderEnv> | undefined)?.remoteImages === true,
   });
 
   // Fenced and indented blocks share one interaction and overflow surface.

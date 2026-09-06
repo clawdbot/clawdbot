@@ -19,6 +19,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
+import { loadPreparedModelCatalogSnapshot } from "./prepared-model-catalog.js";
 import {
   getPreparedModelRuntimeAuthStore,
   setPreparedModelFullCatalogAuth,
@@ -69,6 +70,7 @@ describe("prepared model runtime scoped refresh", () => {
       };
       const config: OpenClawConfig = { agents: { entries: { pro: {} } } };
       const learned = { provider: "provider-a", id: "learned", name: "Learned" };
+      const caseDistinct = { provider: "provider-a", id: "Learned", name: "Case distinct" };
       const variant = { ...learned, baseUrl: "https://catalog.example.test/v1" };
       const fallback = { provider: "provider-a", id: "advisory", name: "Advisory" };
       const sibling = { provider: "provider-b", id: "new", name: "New" };
@@ -86,8 +88,8 @@ describe("prepared model runtime scoped refresh", () => {
           providerOutcomes: [{ provider: "provider-a", profileId, status: "unavailable" }],
         },
         {
-          entries: [native],
-          routeVariants: [variant, native],
+          entries: [caseDistinct, native],
+          routeVariants: [variant, caseDistinct, native],
           providerOutcomes: [
             { provider: "provider-a", profileId: "provider-a:default", status: "ready" },
           ],
@@ -127,15 +129,15 @@ describe("prepared model runtime scoped refresh", () => {
       });
       await owner.loadFullModelCatalog!({ refresh: true });
       const failed = await owner.loadFullModelCatalog!({ refresh: true });
-      expect(failed.entries).toMatchObject([learned, sibling]);
-      expect(failed.routeVariants).toMatchObject([variant, sibling]);
+      expect(failed.entries).toMatchObject([learned, caseDistinct, sibling]);
+      expect(failed.routeVariants).toMatchObject([variant, caseDistinct, sibling]);
       expect(failed.authoritative).toBe(false);
       expect(failed.providerOutcomes).toEqual([
         { provider: "provider-a", profileId, status: "unavailable" },
         { provider: "provider-b", status: "ready" },
       ]);
       const failedAgain = await owner.loadFullModelCatalog!({ refresh: true });
-      expect(failedAgain.entries).toMatchObject([learned, sibling]);
+      expect(failedAgain.entries).toMatchObject([learned, caseDistinct, sibling]);
       const recovered = await owner.loadFullModelCatalog!({ refresh: true });
       expect(recovered.entries).toMatchObject([sibling]);
       expect(recovered.routeVariants).toMatchObject([sibling]);
@@ -777,8 +779,15 @@ describe("prepared model runtime scoped refresh", () => {
       entries: [learned, newlyDiscovered],
       routeVariants: [learned, newlyDiscovered],
     });
-    const explicitRefresh = nextOwner.loadFullModelCatalog!({ refresh: true });
-    const concurrentRefresh = nextOwner.loadFullModelCatalog!({ refresh: true });
+    const refreshParams = {
+      config: nextConfig,
+      agentId: "pro",
+      agentDir: state.agentDir("pro"),
+      readOnly: false,
+      refreshFullCatalog: true,
+    };
+    const explicitRefresh = loadPreparedModelCatalogSnapshot(refreshParams);
+    const concurrentRefresh = loadPreparedModelCatalogSnapshot(refreshParams);
     releaseNative.resolve();
     await ordinaryRead;
     const refreshed = await explicitRefresh;

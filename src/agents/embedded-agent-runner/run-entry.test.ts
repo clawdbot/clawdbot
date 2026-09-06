@@ -1,36 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { FailoverReason } from "../failover/signal.js";
 import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
-import type { ModelFallbackRunOptions } from "../model-fallback-attempt.js";
-import type { runWithModelFallback } from "../model-fallback-runner.js";
+import {
+  initialAttemptOptions,
+  fallbackAttemptOptions,
+  type FallbackRunnerParams,
+} from "./run-entry.test-support.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
-
-type FallbackRunnerParams = Parameters<typeof runWithModelFallback<EmbeddedAgentRunResult>>[0];
-
-function initialAttemptOptions(params: FallbackRunnerParams): ModelFallbackRunOptions {
-  return {
-    modelRoutingProvenance: {
-      requestedProvider: params.provider,
-      requestedModel: params.model,
-      stage: "initial",
-    },
-  };
-}
-
-function fallbackAttemptOptions(
-  params: FallbackRunnerParams,
-  fallbackReason: FailoverReason,
-): ModelFallbackRunOptions {
-  return {
-    modelRoutingProvenance: {
-      requestedProvider: params.provider,
-      requestedModel: params.model,
-      stage: "fallback",
-      fallbackReason,
-    },
-  };
-}
 
 const state = vi.hoisted(() => ({
   runWithModelFallback: vi.fn(),
@@ -217,6 +193,45 @@ describe("runEmbeddedAgentEntry", () => {
           ],
         };
       });
+  });
+
+  it("does not persist a previous candidate error after fallback setup fails", async () => {
+    const { runEmbeddedAgentEntry } = await import("./run-entry.js");
+    const transcript = await import("../../config/sessions/transcript.js");
+    const { makeAssistantMessageFixture } =
+      await import("../test-helpers/assistant-message-fixtures.js");
+    const append = vi
+      .spyOn(transcript, "appendExactAssistantMessageToSessionTranscript")
+      .mockRejectedValue(new Error("stale error committed"));
+    try {
+      await expect(
+        runEmbeddedAgentEntry({
+          selection: { cfg: {}, provider: "primary-provider", model: "primary-model" },
+          identity: { runId: "run-stale-error", agentId: "main", sessionId: "session-1" },
+          harness: createDirectHarness(),
+          behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
+          sessionOverride: { kind: "preserve" },
+          runCandidate: async (provider, model, options) => {
+            if (options.isFallbackRetry) {
+              throw new Error("fallback setup failed");
+            }
+            options.assistantErrorTranscript.record(
+              makeAssistantMessageFixture({ provider, model }),
+              {
+                agentId: "main",
+                sessionId: "session-1",
+                sessionKey: "agent:main:session-1",
+                storePath: "/tmp/unused-stale-error.sqlite",
+              },
+            );
+            return makeResult({ provider, model, classification: "empty" });
+          },
+        }),
+      ).rejects.toThrow("fallback setup failed");
+      expect(append).not.toHaveBeenCalled();
+    } finally {
+      append.mockRestore();
+    }
   });
 
   it("keeps shared fallback and terminal behavior aligned across entry modes", async () => {

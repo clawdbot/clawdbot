@@ -36,11 +36,7 @@ import {
   writeRestartSentinelIfUnchanged,
   type VerifiedGitUpdateReceipt,
 } from "./restart-sentinel.js";
-import {
-  normalizeGatewayRestartDelayMs,
-  resolveGatewayRestartDeferralTimeoutMs,
-  scheduleGatewaySigusr1Restart,
-} from "./restart.js";
+import { resolveGatewayRestartDeferralTimeoutMs } from "./restart.js";
 import { detectRespawnSupervisor } from "./supervisor-markers.js";
 import { checkTelemetryUpdate } from "./telemetry.js";
 import { gatewayUpdateCampaign, type UpdateCampaignController } from "./update-campaign.js";
@@ -66,6 +62,7 @@ import {
   cancelManagedServiceUpdateHandoff,
   formatManagedServiceUpdateCommand,
   startManagedServiceUpdateHandoff,
+  transferManagedServiceUpdateHandoff,
 } from "./update-managed-service-handoff.js";
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
 import {
@@ -94,7 +91,7 @@ type UpdateCheckState = {
 
 type AutoUpdateRunResult =
   | { status: "handoff"; command?: string; logPath?: string }
-  | { status: "failed"; result: UpdateRunResult; message: string };
+  | { status: "failed" | "skipped"; result: UpdateRunResult; message: string };
 
 type AutoUpdateRunParams = {
   runId: string;
@@ -474,6 +471,13 @@ async function runAutoUpdateCommand(
       );
       params.signal?.throwIfAborted();
       if (result) {
+        if (classifyUpdateOutcome(result) === "noop") {
+          return {
+            status: "skipped",
+            result,
+            message: "Automatic update skipped: the selected version is already current.",
+          };
+        }
         return {
           status: "failed",
           result,
@@ -484,7 +488,6 @@ async function runAutoUpdateCommand(
     if (!params.root?.trim()) {
       throw new Error("managed auto-update install root is unavailable");
     }
-    const restartDelayMs = normalizeGatewayRestartDelayMs(supervisor === "systemd" ? undefined : 0);
     const handoffId = randomUUID();
     const started = await startManagedServiceUpdateHandoff({
       root: params.root,
@@ -494,7 +497,6 @@ async function runAutoUpdateCommand(
         resolveGatewayRestartDeferralTimeoutMs(),
       channel: params.channel,
       ...(params.packageTargetVersion ? { tag: params.packageTargetVersion } : {}),
-      restartDelayMs,
       supervisor,
       handoffId,
       ...(params.devTarget ? { devTarget: params.devTarget } : {}),
@@ -517,15 +519,17 @@ async function runAutoUpdateCommand(
         }
         params.signal.throwIfAborted();
       }
-      // Pair owned helper creation with restart scheduling before persistence;
-      // a joined helper belongs to its original caller, including cancellation.
-      scheduleGatewaySigusr1Restart({
-        delayMs: restartDelayMs,
-        reason: "update.auto",
-        successorOwner,
-        skipCooldown: true,
-        skipDeferral: true,
-      });
+      // Transfer starts validation while this generation remains available. Only
+      // the orchestrator's activation request may park the managed service.
+      try {
+        if (!(await transferManagedServiceUpdateHandoff(successorOwner))) {
+          throw new Error("managed update ownership transfer failed");
+        }
+        params.signal?.throwIfAborted();
+      } catch (error) {
+        await cancelManagedServiceUpdateHandoff(successorOwner);
+        throw error;
+      }
     } else {
       // A joined helper owns another run; it cannot complete this campaign's admission.
       finishUpdateRun(params.runId, {
@@ -774,7 +778,7 @@ async function runCampaignUpdate(params: {
   campaign: UpdateCampaignController;
   onUpdateRunCreated?: () => void;
   signal?: AbortSignal;
-}): Promise<"handoff" | "failed"> {
+}): Promise<"handoff" | "applied" | "failed"> {
   const campaignId = params.campaign.getState()?.id;
   const isCurrent = () =>
     campaignId !== undefined &&
@@ -904,7 +908,8 @@ async function runCampaignUpdate(params: {
         isCurrent,
       });
     }
-    params.log.info("auto-update attempt failed", {
+    const skipped = classifyUpdateOutcome(outcome.result) === "noop";
+    params.log.info(skipped ? "auto-update attempt skipped" : "auto-update attempt failed", {
       channel: params.channel,
       version: params.version,
       tag: params.tag,
@@ -913,6 +918,14 @@ async function runCampaignUpdate(params: {
       message: outcome.message,
       ...(triageHint ? { triage: triageHint } : {}),
     });
+    if (skipped) {
+      if (terminal) {
+        finishUpdateRun(runId, terminal);
+      }
+      terminal = undefined;
+      params.campaign.clear();
+      return "applied";
+    }
     return "failed";
   } finally {
     if (terminal) {

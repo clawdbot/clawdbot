@@ -17,6 +17,7 @@ import {
   bindGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import {
   closeAdmittedRunDelegatedAuthority,
   createOperationalRunInstanceRef,
@@ -29,6 +30,7 @@ import {
   rewrapToolWithBeforeToolCallHook,
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
+import { createAgentRunRestartAbortError } from "../run-termination.js";
 import {
   attachInternalToolExecutionPreparer,
   getInternalToolExecutionPreparer,
@@ -156,6 +158,43 @@ afterEach(() => {
 });
 
 describe("agent harness host capability", () => {
+  it.each(["restart", "unrelated scope", "user abort", "timeout"] as const)(
+    "preserves the original cancellation when a startup capability closes: %s",
+    async (reason) => {
+      const work = new AsyncWorkScope();
+      const otherWork = new AsyncWorkScope();
+      const controller = new AbortController();
+      const { attempt } = await admittedAttempt("run-startup-close", {
+        abortSignal: controller.signal,
+      });
+      const context = {} as GatewayRequestContext;
+      let current: GatewayRequestContext | undefined = context;
+      bindGatewayContextResolver(attempt.admittedRunContext, () => current);
+      const host = await work.track(() =>
+        createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" }),
+      );
+      const restart = createAgentRunRestartAbortError();
+      try {
+        expect(host.capabilities.preparedEnvironment?.()).toBeDefined();
+        if (reason === "user abort") {
+          controller.abort();
+        } else if (reason === "timeout") {
+          controller.abort(new DOMException("deadline elapsed", "TimeoutError"));
+        }
+        current = undefined;
+        (reason === "unrelated scope" ? otherWork : work).beginClose(restart);
+        await otherWork.track(() => {
+          expect(() => host.capabilities.preparedEnvironment?.()).toThrow(
+            reason === "restart" ? restart : "host capability is no longer active",
+          );
+        });
+      } finally {
+        host.close();
+        await Promise.all([work.drain(), otherWork.drain()]);
+      }
+    },
+  );
+
   beforeEach(() => {
     mockRewrap.mockClear();
     mockRunBefore.mockClear();

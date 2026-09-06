@@ -329,7 +329,7 @@ private fun CronJobsSettingsScreen(
     Text(
       text = nativeString("Open an automation to inspect its configuration and run history. Admin-scoped connections can also run, edit, enable, disable, or delete it."),
       style = ClawTheme.type.caption,
-      color = ClawTheme.colors.textSubtle,
+      color = ClawTheme.colors.textMuted,
     )
     cronErrorText?.let { errorText ->
       ClawPanel {
@@ -371,7 +371,7 @@ private fun CronSummaryStrip(rows: List<SettingsMetric>) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xs)) {
       rows.forEach { row ->
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-          Text(text = row.title, style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 1)
+          Text(text = row.title, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1)
           Text(text = row.value, style = ClawTheme.type.label, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
       }
@@ -2642,7 +2642,7 @@ private fun ExecApprovalCard(
       approval.warningText?.let { warningText ->
         Text(text = warningText, style = ClawTheme.type.body, color = ClawTheme.colors.warning)
       }
-      Text(text = execApprovalMetadata(approval), style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 2, overflow = TextOverflow.Ellipsis)
+      Text(text = execApprovalMetadata(approval), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
       approval.errorText?.let { errorText ->
         Text(text = gatewayExecApprovalTextForDisplay(errorText), style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
       }
@@ -2721,7 +2721,7 @@ private fun ExecApprovalNotice(
         Text(
           text = nativeString("Approval \${notice.approvalId}", notice.approvalId),
           style = ClawTheme.type.caption,
-          color = ClawTheme.colors.textSubtle,
+          color = ClawTheme.colors.textMuted,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )

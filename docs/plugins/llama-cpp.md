@@ -197,6 +197,12 @@ OpenClaw reads `/health`, `/models` (falling back to `/v1/models`), and
 wakes, unloads, downloads, or reloads models. Explicit configured model rows
 remain authoritative over discovered rows with the same ID.
 
+Refreshing a configured external server reports authentication rejection or
+unavailability when discovery fails. Previously discovered models remain visible
+only while their endpoint and credentials are unchanged. A successful empty list
+removes discovered rows; explicit configured models remain. Restore the server or
+correct its credentials, then refresh again to recover the live inventory.
+
 ### Authentication and endpoint replacement
 
 Existing endpoints support no auth, API keys, SecretRefs, auth profiles, and

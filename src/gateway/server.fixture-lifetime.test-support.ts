@@ -252,8 +252,9 @@ test("observes startup cleanup ownership through fixture teardown", async () => 
     });
     restorers.push(() => kernelSpy.mockRestore());
     const listen = listenModule.listenGatewayHttpServer;
-    const listenSpy = vi.spyOn(listenModule, "listenGatewayHttpServer").mockImplementation((...args) => {
-      const listening = own(listen(...args));
+    const listenSpy = vi.spyOn(listenModule, "listenGatewayHttpServer").mockImplementation((params) => {
+      // The owned blocker cannot leave; retry policy has its own listener tests.
+      const listening = own(listen({ ...params, retryEaddrinuse: false }));
       nativeListens.push(listening);
       return listening;
     });

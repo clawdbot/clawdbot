@@ -235,7 +235,7 @@ it.each(["linux", "win32"] as const)(
     mocks.spawn.mockReturnValue(stub.child);
     const supervisor = createProcessSupervisor();
     const scopeKey = "scope:rejected-construction";
-    const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, { requireProcessTree: true });
+    const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, { processTree: "required-all" });
     const pending = supervisor.spawn({
       runId: "rejected-construction",
       mode: "anchored-shell",
@@ -466,11 +466,15 @@ it.each(["EPERM", "EIO", "still present"])(
   "keeps graceful cleanup uncertain when the kernel group is %s",
   async (failure) => {
     const { adapter, completeRoot, emit, close, groupProbe } = await createRelay("linux");
+    const cause =
+      failure === "still present"
+        ? undefined
+        : Object.assign(new Error(`synthetic ${failure}`), { code: failure });
     groupProbe.mockImplementation(() => {
-      if (failure === "still present") {
-        return true;
+      if (cause) {
+        throw cause;
       }
-      throw Object.assign(new Error(`synthetic ${failure}`), { code: failure });
+      return true;
     });
     completeRoot();
     await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
@@ -480,6 +484,9 @@ it.each(["EPERM", "EIO", "still present"])(
     vi.spyOn(Date, "now").mockReturnValueOnce(10_000).mockReturnValue(15_000);
     close();
     await expect(adapter.waitForExtinction()).rejects.toThrow("owned process group");
+    await expect(adapter.waitForExtinction()).rejects.toSatisfy(
+      (error: unknown) => error instanceof Error && error.cause === cause,
+    );
     await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
     expect(groupProbe).toHaveBeenCalledWith(-1235, 0);
     expect(groupProbe.mock.calls.every(([, signal]) => signal === 0)).toBe(true);

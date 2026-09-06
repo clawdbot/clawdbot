@@ -8,6 +8,11 @@
     "../../src/agents/*.test.tsx"
   ],
   "exclude": [
+    "../../node_modules",
+    "../../dist",
+    "../../**/dist/**",
+    "../../src/agents/bash-tools.exec-runtime*.test.ts",
+    "../../src/agents/bash-tools.exec-runtime*.test.tsx",
     "../../src/agents/prepared-model-runtime*.test.ts",
     "../../src/agents/prepared-model-runtime*.test.tsx"
   ]

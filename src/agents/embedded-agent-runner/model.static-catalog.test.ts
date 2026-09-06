@@ -1,6 +1,10 @@
+import fs from "node:fs";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import { createManifestRecord } from "./model.static-catalog.test-helpers.js";
+
+const repoRoot = path.resolve(import.meta.dirname, "../../..");
 
 const manifestMocks = vi.hoisted(() => ({
   getCurrentPluginMetadataSnapshot: vi.fn(),
@@ -298,6 +302,47 @@ describe("resolveBundledStaticCatalogModel", () => {
     });
 
     expect(model?.maxTokens).toBe(8192);
+  });
+
+  it("keeps the native Gemini transport when Google manifest rows back static fallback", () => {
+    // The bundled google plugin mirrors its runtime static catalog into
+    // modelCatalog.providers.google so Doctor recognizes the ids offline.
+    // Those same rows win over the runtime static provider in bundled
+    // fallback resolution, so the mirror must preserve the provider-level
+    // api/baseUrl or rows normalize to openai-responses with an empty
+    // endpoint (breaking Google completion/compaction fallbacks).
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(repoRoot, "extensions/google/openclaw.plugin.json"), "utf8"),
+    ) as {
+      id: string;
+      providers: string[];
+      modelCatalog?: {
+        providers?: Record<string, { api?: string; baseUrl?: string }>;
+      };
+    };
+    setManifestPlugins([{ origin: "bundled", ...manifest }]);
+
+    const resolved = resolveBundledStaticCatalogModel({
+      provider: "google",
+      modelId: "gemini-2.5-flash",
+      cfg: {},
+      includeRuntimeDiscovery: true,
+    });
+
+    expect(resolved?.provider).toBe("google");
+    expect(resolved?.api).toBe("google-generative-ai");
+    expect(resolved?.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
+
+    // Runtime-discovery rows stay out of the plain bundled fallback path;
+    // only callers that opt in via includeRuntimeDiscovery reach the mirror,
+    // so the manifest addition does not widen default fallback visibility.
+    expect(
+      resolveBundledStaticCatalogModel({
+        provider: "google",
+        modelId: "gemini-2.5-flash",
+        cfg: {},
+      }),
+    ).toBeUndefined();
   });
 
   it("requires an exact provider and model match", () => {

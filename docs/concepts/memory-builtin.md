@@ -133,6 +133,10 @@ If a memory file changes or disappears during indexing, only that file's
 unfinished work is retried incrementally. Other files finish indexing, and
 the changed file's obsolete chunks are not published.
 
+Incremental indexing, stale-source cleanup, and cache pruning wait asynchronously when
+another SQLite writer is active. Cache pruning removes the oldest entries in
+bounded batches, yielding between batches while preserving the existing cache cap.
+
 Full reindexes build a replacement in a temporary database and publish the
 memory tables atomically. Concurrent searches and status reads keep using the
 published index; a failed rebuild leaves that index intact. The embedding cache

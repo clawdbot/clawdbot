@@ -5,7 +5,6 @@ import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.
 import { recoverPendingSessionDeliveries } from "../../../infra/session-delivery-queue-recovery.js";
 import {
   moveSessionDeliveryToFailed,
-  prepareClaimedSessionDelivery,
   releaseSessionDeliveryClaim,
   SessionDeliveryDeadLetteredError,
   SessionDeliveryDeferredError,
@@ -22,7 +21,6 @@ import { publishTaskRecordAfterAtomicStore } from "../../../tasks/task-registry.
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
 import { resetTaskRegistryForTests } from "../../../tasks/task-runtime.test-helpers.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
-import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { suspendPendingFinalDelivery } from "../registry/subagent-registry-lifecycle-cleanup.js";
 import { SubagentLifecycleController } from "../registry/subagent-registry-lifecycle.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
@@ -33,6 +31,12 @@ import {
   blockSubagentCompletionDelivery,
   settleSubagentCompletionDelivery,
 } from "./subagent-completion-admission.store.js";
+import {
+  armRequesterWake,
+  failedRecords,
+  records,
+  requesterWakeDriver,
+} from "./subagent-completion-admission.test-helpers.js";
 import {
   admitCorrelatedSubagentSessionDelivery,
   dismissSubagentCompletionDelivery,
@@ -63,71 +67,6 @@ describe("atomic subagent completion admission store", () => {
     closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
   });
-
-  function records() {
-    const now = Date.now();
-    const task: TaskRecord = {
-      taskId: "task-completion",
-      runtime: "subagent",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      childSessionKey: "agent:main:subagent:child",
-      runId: "task-run",
-      requesterAgentId: "main",
-      task: "finish the work",
-      status: "succeeded",
-      deliveryStatus: "session_queued",
-      terminalOutcome: "succeeded",
-      notifyPolicy: "done_only",
-      createdAt: now - 2_000,
-      endedAt: now - 1_000,
-      lastEventAt: now,
-    };
-    const subagent = createSubagentRunRecord({
-      runId: "completion-run",
-      taskRunId: task.runId,
-      childSessionKey: task.childSessionKey,
-      requesterSessionKey: task.requesterSessionKey,
-      requesterDisplayKey: task.requesterSessionKey,
-      requesterAgentId: "main",
-      requesterOrigin: { channel: "discord", to: "channel:requester", accountId: "primary" },
-      task: task.task,
-      createdAt: task.createdAt,
-      endedAt: task.endedAt,
-      outcome: { status: "ok" },
-      expectsCompletionMessage: true,
-      completion: { required: true, resultText: "canonical result", capturedAt: now },
-      delivery: {
-        status: "in_progress",
-        disposition: "session_queued",
-        generation: 1,
-        queueId: "placeholder",
-        windowStartedAt: now,
-        deadlineAt: now + 30 * 60_000,
-      },
-    });
-    const queueEntry = prepareClaimedSessionDelivery(
-      {
-        kind: "agentTurn",
-        sessionKey: task.requesterSessionKey,
-        message: "canonical result is loaded at delivery time",
-        messageId: "completion:1",
-        idempotencyKey: "completion:1",
-        owner: {
-          kind: "subagent_completion",
-          runId: subagent.runId,
-          taskId: task.taskId,
-          generation: 1,
-          deadlineAt: subagent.delivery?.deadlineAt ?? 0,
-        },
-      },
-      125_000,
-      now,
-    );
-    subagent.delivery!.queueId = queueEntry.id;
-    return { queueEntry, subagent, task };
-  }
 
   function rowCount(table: "delivery_queue_entries" | "subagent_runs" | "task_runs"): number {
     const row = database.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as {
@@ -178,6 +117,223 @@ describe("atomic subagent completion admission store", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
     database = openOpenClawStateDatabase();
   }
+
+  function reopenOwners() {
+    closeOpenClawStateDatabaseForTest();
+    subagentRuns.clear();
+    resetTaskRegistryForTests({ persist: false });
+    database = openOpenClawStateDatabase();
+    for (const [runId, entry] of loadSubagentRegistryFromSqlite()) {
+      subagentRuns.set(runId, entry);
+    }
+    ensureTaskRegistryReady();
+  }
+
+  it.each([
+    { name: "cancelled/error", status: "cancelled", outcome: { status: "error" } },
+    { name: "failed/error", status: "failed", outcome: { status: "error" } },
+    { name: "timed_out/timeout", status: "timed_out", outcome: { status: "timeout" } },
+    { name: "cancelled/ok kill race", status: "cancelled", outcome: { status: "ok" } },
+    { name: "failed/unknown", status: "failed", outcome: { status: "unknown" } },
+  ] as const)(
+    "durably settles a rejected $name wake without rewriting the child outcome",
+    async ({ status, outcome }) => {
+      useDefaultDatabase();
+      const input = persistOwner(failedRecords(status, outcome));
+      const originalTask = structuredClone(input.task);
+      const originalExecution = structuredClone(input.subagent.execution);
+      const driver = requesterWakeDriver([input]);
+      try {
+        await driver.run();
+        expect(driver.warn).not.toHaveBeenCalledWith(
+          "failed to persist requester settle wake rejection",
+          expect.any(Object),
+        );
+        expect(input.subagent).toMatchObject({
+          delivery: { status: "failed", lastError: "requester unavailable" },
+          suppressCompletionDelivery: true,
+        });
+        expect(input.subagent.requesterSettleWake).toBeUndefined();
+        expect(systemEvents()).toEqual([]);
+
+        reopenOwners();
+        const restored = subagentRuns.get(input.subagent.runId)!;
+        expect(restored.requesterSettleWake).toBeUndefined();
+        expect(restored.delivery).toMatchObject({
+          status: "failed",
+          lastError: "requester unavailable",
+        });
+        expect(restored.delivery?.queueId).toBeUndefined();
+        expect(restored.delivery?.nextAttemptAt).toBeUndefined();
+        expect(restored.execution).toEqual(originalExecution);
+        expect(getTaskById(input.task.taskId)).toMatchObject({
+          status: originalTask.status,
+          deliveryStatus: "failed",
+          error: originalTask.error,
+          terminalSummary: originalTask.terminalSummary,
+          cleanupAfter: originalTask.cleanupAfter,
+          endedAt: originalTask.endedAt,
+        });
+        expect(getTaskById(input.task.taskId)?.terminalOutcome).toBeUndefined();
+
+        const deliver = vi.fn(async () => {});
+        await expect(
+          recoverPendingSessionDeliveries({
+            deliver,
+            log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+          }),
+        ).resolves.toMatchObject({ recovered: 0, failed: 0 });
+        expect(deliver).not.toHaveBeenCalled();
+        expect(driver.wake).toHaveBeenCalledOnce();
+      } finally {
+        driver.controller.clearScheduledResumeTimers();
+      }
+    },
+  );
+
+  it.each(["successful generation", "successful task run", "cancelled delivered"] as const)(
+    "rejects a stale %s requester-settle owner without changing durable records",
+    async (change) => {
+      useDefaultDatabase();
+      const input = persistOwner(
+        change === "cancelled delivered"
+          ? failedRecords("cancelled", { status: "error" })
+          : armRequesterWake(records()),
+      );
+      const durable = structuredClone(input);
+      if (change === "successful generation") {
+        durable.subagent.delivery!.generation = 2;
+      } else if (change === "successful task run") {
+        durable.task.runId = "replacement-task-run";
+      } else {
+        durable.subagent.delivery!.status = "delivered";
+        durable.subagent.delivery!.deliveredAt = Date.now();
+        durable.task.deliveryStatus = "delivered";
+      }
+      // Leave the controller's in-memory row stale while the canonical owner advances.
+      settleSubagentCompletionDelivery({
+        subagent: durable.subagent,
+        task: durable.task,
+        databaseOptions: { database },
+      });
+      const driver = requesterWakeDriver([input]);
+      try {
+        await driver.run();
+        expect(driver.warn).toHaveBeenCalledWith(
+          "failed to persist requester settle wake rejection",
+          expect.objectContaining({
+            error: expect.objectContaining({
+              message: expect.stringContaining(
+                "subagent completion owner changed before settlement",
+              ),
+            }),
+          }),
+        );
+        expect(systemEvents()).toEqual([]);
+        reopenOwners();
+        expect(subagentRuns.get(input.subagent.runId)).toEqual(durable.subagent);
+        expect(getTaskById(input.task.taskId)).toMatchObject({
+          runId: durable.task.runId,
+          status: durable.task.status,
+          deliveryStatus: durable.task.deliveryStatus,
+        });
+        expect(getTaskById(input.task.taskId)?.terminalOutcome).toBe(durable.task.terminalOutcome);
+      } finally {
+        driver.controller.clearScheduledResumeTimers();
+      }
+    },
+  );
+
+  it("rolls a non-success wake settlement back when its task write fails", async () => {
+    useDefaultDatabase();
+    const input = persistOwner(failedRecords("cancelled", { status: "error" }));
+    const before = structuredClone(input);
+    database.db.exec(
+      "CREATE TEMP TRIGGER reject_nonsuccess_task AFTER UPDATE ON task_runs " +
+        "BEGIN SELECT RAISE(ABORT, 'cut:nonsuccess-task'); END",
+    );
+    const driver = requesterWakeDriver([input]);
+    try {
+      await driver.run();
+      expect(driver.warn).toHaveBeenCalledWith(
+        "failed to persist requester settle wake rejection",
+        expect.objectContaining({
+          error: expect.objectContaining({
+            message: expect.stringContaining("cut:nonsuccess-task"),
+          }),
+        }),
+      );
+      expect(input.subagent).toEqual(before.subagent);
+      expect(getTaskById(input.task.taskId)).toMatchObject(before.task);
+      expect(systemEvents()).toEqual([]);
+      database.db.exec("DROP TRIGGER reject_nonsuccess_task");
+      reopenOwners();
+      expect(subagentRuns.get(input.subagent.runId)).toEqual(before.subagent);
+      expect(getTaskById(input.task.taskId)).toMatchObject(before.task);
+    } finally {
+      driver.controller.clearScheduledResumeTimers();
+    }
+  });
+
+  it("does not suspend a cancelled completion as a blocked success", () => {
+    useDefaultDatabase();
+    const input = persistOwner(failedRecords("cancelled", { status: "error" }));
+    expect(
+      blockSubagentCompletionDelivery({
+        subagent: input.subagent,
+        taskId: input.task.taskId,
+        reason: "requester unavailable",
+        suspendedReason: "permanent_failure",
+        databaseOptions: { database },
+      }),
+    ).toBe(false);
+    expect(systemEvents()).toEqual([]);
+    reopenOwners();
+    expect(subagentRuns.get(input.subagent.runId)).toEqual(input.subagent);
+    expect(getTaskById(input.task.taskId)).toMatchObject(input.task);
+  });
+
+  it.each([false, true])("settles a mixed batch with success first: %s", async (successFirst) => {
+    useDefaultDatabase();
+    const cancelled = failedRecords("cancelled", { status: "error" });
+    const success = records();
+    success.task.taskId = "task-success";
+    success.task.runId = "successful-task-run";
+    success.subagent.runId = "successful-completion";
+    success.subagent.taskRunId = success.task.runId;
+    const inputs = successFirst ? [success, cancelled] : [cancelled, success];
+    const batchRunIds = inputs.map((input) => input.subagent.runId);
+    for (const input of inputs) {
+      armRequesterWake(input, batchRunIds);
+      persistOwner(input);
+    }
+    const driver = requesterWakeDriver(inputs);
+    try {
+      await driver.run();
+      expect(driver.warn).not.toHaveBeenCalledWith(
+        "failed to persist requester settle wake rejection",
+        expect.any(Object),
+      );
+      expect(systemEvents()).toHaveLength(1);
+      reopenOwners();
+      for (const input of inputs) {
+        expect(subagentRuns.get(input.subagent.runId)?.requesterSettleWake).toBeUndefined();
+        expect(subagentRuns.get(input.subagent.runId)?.delivery?.status).toBe("failed");
+      }
+      expect(getTaskById(cancelled.task.taskId)).toMatchObject({
+        status: "cancelled",
+        deliveryStatus: "failed",
+        error: cancelled.task.error,
+      });
+      expect(getTaskById(success.task.taskId)).toMatchObject({
+        status: "succeeded",
+        deliveryStatus: "failed",
+        terminalOutcome: "blocked",
+      });
+    } finally {
+      driver.controller.clearScheduledResumeTimers();
+    }
+  });
 
   it.each(["queue", "subagent", "task"] as const)(
     "rolls every owner row back when the %s cut fails",
