@@ -8,6 +8,7 @@ import {
   CHAT_CHANNEL_ORDER,
   normalizeChatChannelId as normalizeBundledChannelId,
 } from "../../channels/registry.js";
+import { isMissingPathError } from "../../infra/errno.js";
 import { readFileWindowFully } from "../../infra/file-read.js";
 import { readConfiguredParsedLogTail } from "../../logging/log-tail.js";
 import type { ParsedLogLine } from "../../logging/parse-log-line.js";
@@ -24,6 +25,8 @@ export type ChannelsLogsOptions = {
 
 const DEFAULT_LIMIT = 200;
 const DEFAULT_INTERVAL = 1000;
+// Node clamps setTimeout delays outside the signed 32-bit range to 1 ms.
+const MAX_TIMER_DELAY = 2_147_483_647;
 const MAX_BYTES = 1_000_000;
 
 type ChannelLogFilter = { channel: string; pluginIds: ReadonlySet<string> };
@@ -32,6 +35,7 @@ type FileCheckpoint = {
   file: string;
   identity: string;
   cursor: number;
+  prefixLength: number;
   prefix: string;
   boundary: string;
 };
@@ -111,6 +115,9 @@ function parseIntervalOption(value: unknown): number {
   if (parsed === undefined) {
     throw new Error("--interval must be a positive integer.");
   }
+  if (parsed > MAX_TIMER_DELAY) {
+    throw new Error(`--interval must be no greater than ${MAX_TIMER_DELAY} milliseconds.`);
+  }
   return parsed;
 }
 
@@ -137,25 +144,33 @@ function installFollowSignalHandlers(controller: AbortController): () => void {
 async function readFileCheckpoint(
   file: string,
   cursor: number,
+  prefixLength?: number,
 ): Promise<FileCheckpoint | undefined> {
-  const stat = await fs.stat(file).catch(() => undefined);
-  if (!stat) {
+  const handle = await fs.open(file, "r").catch((error) => {
+    if (isMissingPathError(error)) {
+      return undefined;
+    }
+    throw error;
+  });
+  if (!handle) {
     return undefined;
   }
-  const handle = await fs.open(file, "r");
   try {
+    const stat = await handle.stat();
     const readWindow = async (start: number, length: number) => {
       const buffer = Buffer.alloc(Math.max(0, Math.min(length, stat.size - start)));
       const bytesRead = await readFileWindowFully(handle, buffer, start);
       return buffer.toString("base64", 0, bytesRead);
     };
     const boundedCursor = Math.min(Math.max(0, cursor), stat.size);
+    const boundedPrefixLength = Math.min(64, Math.max(0, prefixLength ?? boundedCursor), stat.size);
     const boundaryStart = Math.max(0, boundedCursor - 64);
     return {
       file,
       identity: `${stat.dev}:${stat.ino}`,
       cursor: boundedCursor,
-      prefix: await readWindow(0, 64),
+      prefixLength: boundedPrefixLength,
+      prefix: await readWindow(0, boundedPrefixLength),
       boundary: await readWindow(boundaryStart, boundedCursor - boundaryStart),
     };
   } finally {
@@ -170,8 +185,21 @@ function isSameFileCheckpoint(
   return (
     current?.file === previous.file &&
     current.identity === previous.identity &&
+    current.prefixLength === previous.prefixLength &&
     current.prefix === previous.prefix &&
     current.boundary === previous.boundary
+  );
+}
+
+function isSameFileGeneration(
+  previous: FileCheckpoint,
+  current: FileCheckpoint | undefined,
+): boolean {
+  return (
+    current?.file === previous.file &&
+    current.identity === previous.identity &&
+    current.prefixLength === previous.prefixLength &&
+    current.prefix === previous.prefix
   );
 }
 
@@ -193,13 +221,23 @@ async function followChannelLogs(
   try {
     while (!controller.signal.aborted) {
       const readLimit = firstRead ? limit : "all";
+      const previousGeneration = previousCheckpoint
+        ? await readFileCheckpoint(
+            previousCheckpoint.file,
+            previousCheckpoint.cursor,
+            previousCheckpoint.prefixLength,
+          )
+        : undefined;
+      let reanchored =
+        previousCheckpoint !== undefined &&
+        !isSameFileCheckpoint(previousCheckpoint, previousGeneration);
+      const readCursor = reanchored ? undefined : cursor;
       let tail = await readConfiguredParsedLogTail({
-        cursor,
+        cursor: readCursor,
         limit: readLimit,
         maxBytes: MAX_BYTES,
         filter: (line) => matchesChannel(line, filter),
       });
-      let reanchored = false;
 
       // A rolling file can change between polls. Re-anchor to the new file so a
       // coincidentally valid byte offset cannot skip its initial records.
@@ -210,12 +248,17 @@ async function followChannelLogs(
           filter: (line) => matchesChannel(line, filter),
         });
         reanchored = true;
-      } else if (
-        previousCheckpoint !== undefined &&
-        !isSameFileCheckpoint(
-          previousCheckpoint,
-          await readFileCheckpoint(tail.file, previousCheckpoint.cursor),
-        )
+      }
+
+      let checkpoint = await readFileCheckpoint(
+        tail.file,
+        tail.cursor,
+        reanchored ? undefined : previousCheckpoint?.prefixLength,
+      );
+      if (
+        !reanchored &&
+        previousGeneration !== undefined &&
+        !isSameFileGeneration(previousGeneration, checkpoint)
       ) {
         tail = await readConfiguredParsedLogTail({
           limit: readLimit,
@@ -223,6 +266,7 @@ async function followChannelLogs(
           filter: (line) => matchesChannel(line, filter),
         });
         reanchored = true;
+        checkpoint = await readFileCheckpoint(tail.file, tail.cursor);
       }
 
       const fileChanged = previousFile !== undefined && tail.file !== previousFile;
@@ -262,9 +306,9 @@ async function followChannelLogs(
       for (const line of tail.lines) {
         writeChannelLogLine(runtime, line, json);
       }
-      cursor = tail.cursor;
-      previousFile = tail.file;
-      previousCheckpoint = await readFileCheckpoint(tail.file, tail.cursor);
+      cursor = checkpoint ? tail.cursor : undefined;
+      previousFile = checkpoint ? tail.file : undefined;
+      previousCheckpoint = checkpoint;
       firstRead = false;
 
       try {

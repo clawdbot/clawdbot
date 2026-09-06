@@ -381,6 +381,33 @@ describe("channelsLogsCommand", () => {
     }
   });
 
+  it("does not replay a short file when an append grows its prefix", async () => {
+    vi.useFakeTimers();
+    try {
+      await fs.writeFile(logPath, '{"0":"first"}\n');
+      const follow = channelsLogsCommand(
+        { lines: 1, follow: true, interval: 10, json: true },
+        runtime,
+      );
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(2));
+
+      await fs.appendFile(logPath, '{"0":"second"}\n');
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(3));
+
+      process.emit("SIGINT");
+      await follow;
+
+      const records = runtime.log.mock.calls.map(([value]) => JSON.parse(String(value)));
+      expect(
+        records.filter((record) => record.type === "log").map((record) => record.message),
+      ).toEqual(["first", "second"]);
+      expect(records.some((record) => record.type === "notice")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("re-anchors after a same-path replacement without replaying the old cursor", async () => {
     vi.useFakeTimers();
     try {
@@ -417,9 +444,101 @@ describe("channelsLogsCommand", () => {
     }
   });
 
+  it("re-anchors when a file changes between reading and checkpointing", async () => {
+    vi.useFakeTimers();
+    try {
+      const replacementPath = path.join(tempDir, "replacement.log");
+      const oldPath = path.join(tempDir, "old.log");
+      await fs.writeFile(
+        logPath,
+        logLine({ module: "gateway/channels/slack/send", message: "before" }),
+      );
+      await fs.writeFile(
+        replacementPath,
+        [
+          logLine({ module: "gateway/channels/slack/send", message: "new-first" }),
+          logLine({ module: "gateway/channels/slack/send", message: "new-second" }),
+        ].join(""),
+      );
+
+      const realOpen = fs.open.bind(fs);
+      let armRace = false;
+      let armedOpenCount = 0;
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        if (armRace) {
+          armedOpenCount += 1;
+        }
+        if (armRace && armedOpenCount === 3) {
+          await fs.rename(logPath, oldPath);
+          await fs.rename(replacementPath, logPath);
+        }
+        return realOpen(...args);
+      });
+
+      const follow = channelsLogsCommand(
+        { channel: "slack", follow: true, interval: 10, json: true },
+        runtime,
+      );
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(2));
+
+      armRace = true;
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(5));
+
+      process.emit("SIGINT");
+      await follow;
+
+      const records = runtime.log.mock.calls.map(([value]) => JSON.parse(String(value)));
+      expect(
+        records.filter((record) => record.type === "log").map((record) => record.message),
+      ).toEqual(["before", "new-first", "new-second"]);
+      expect(records.filter((record) => record.type === "notice")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("continues following when a file disappears during checkpointing", async () => {
+    vi.useFakeTimers();
+    try {
+      await fs.writeFile(
+        logPath,
+        logLine({ module: "gateway/channels/slack/send", message: "before" }),
+      );
+      const realOpen = fs.open.bind(fs);
+      let openCount = 0;
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        openCount += 1;
+        if (openCount === 2) {
+          throw Object.assign(new Error("rotated away"), { code: "ENOENT" });
+        }
+        return realOpen(...args);
+      });
+
+      const follow = channelsLogsCommand(
+        { channel: "slack", follow: true, interval: 10, json: true },
+        runtime,
+      );
+      await vi.waitFor(() => expect(runtime.log.mock.calls.length).toBeGreaterThanOrEqual(2));
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => expect(openCount).toBeGreaterThanOrEqual(4));
+
+      process.emit("SIGINT");
+      await expect(follow).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects invalid follow intervals", async () => {
     await expect(
       channelsLogsCommand({ follow: true, interval: "0", json: true }, runtime),
     ).rejects.toThrow("--interval must be a positive integer.");
+  });
+
+  it("rejects follow intervals beyond the timer limit", async () => {
+    await expect(
+      channelsLogsCommand({ follow: true, interval: "2147483648", json: true }, runtime),
+    ).rejects.toThrow("--interval must be no greater than 2147483647 milliseconds.");
   });
 });
