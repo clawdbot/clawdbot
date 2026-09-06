@@ -27,13 +27,25 @@ import type { FeishuChatType, FeishuMessageInfo, FeishuSendResult } from "./type
 
 export { resolveFeishuCardTemplate };
 
-const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003]);
+// Feishu reply API error codes for "target is gone" — message withdrawn, deleted, or never existed.
+// Keep the set in sync with the Feishu Open Platform's reply/recall semantics.
+const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003, 99992354]);
 function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }): boolean {
   if (response.code !== undefined && WITHDRAWN_REPLY_ERROR_CODES.has(response.code)) {
     return true;
   }
   const msg = normalizeLowercaseStringOrEmpty(response.msg);
-  return msg.includes("withdrawn") || msg.includes("not found");
+  // Feishu's reply API returns different phrasings for "target is unavailable":
+  //   - "message has been withdrawn" (withdrawn)
+  //   - "message not found" (not found)
+  //   - "open_message_id ... or not exists" (not exists)
+  //   - "invalid message id" (invalid)
+  return (
+    msg.includes("withdrawn") ||
+    msg.includes("not found") ||
+    msg.includes("not exists") ||
+    msg.includes("invalid message id")
+  );
 }
 
 /** Check whether a thrown error indicates a withdrawn/not-found reply target. */
