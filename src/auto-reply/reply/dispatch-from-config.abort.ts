@@ -41,8 +41,11 @@ export function createAbortAwareDispatcher(params: {
     (send: (payload: ReplyPayload) => boolean) =>
     (payload: ReplyPayload): boolean =>
       params.isAborted() ? false : send(payload);
-  const getCancelledCounts = params.dispatcher.getCancelledCounts;
+  const { getCancelledCounts, prepareReplyPayload } = params.dispatcher;
   const dispatcher: ReplyDispatcher = {
+    ...(prepareReplyPayload
+      ? { prepareReplyPayload: prepareReplyPayload.bind(params.dispatcher) }
+      : {}),
     sendToolResult: sendIfActive(params.dispatcher.sendToolResult),
     sendBlockReply: sendIfActive(params.dispatcher.sendBlockReply),
     sendFinalReply: sendIfActive(params.dispatcher.sendFinalReply),

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import type { AcpElicitationHandler } from "@openclaw/acp-core/runtime/types";
 import { detectMime } from "@openclaw/media-core/mime";
 // Tests ACP dispatch wiring, command bypass, and runtime event handling.
@@ -8,6 +9,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
 import type { MediaUnderstandingSkipError } from "../../../packages/media-understanding-common/src/errors.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AcpSessionResolution } from "../../acp/control-plane/manager.types.js";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { AcpSessionStoreEntry } from "../../acp/runtime/session-meta.js";
@@ -29,6 +31,10 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import {
+  OutboundDeliveryError,
+  PlatformMessageNotDispatchedError,
+} from "../../infra/outbound/deliver-types.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import { isImageAttachment } from "../../media-understanding/attachments.normalize.js";
@@ -3614,32 +3620,332 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(result?.queuedFinal).toBe(true);
   });
 
-  it("delivers Telegram ACP final-mode TTS as one captioned voice reply", async () => {
-    setReadyAcpResolution();
-    ttsCapabilityMocks.captionedFinalText = true;
-    queueTtsReplies({
-      text: "Captioned ACP reply.",
-      mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
-      audioAsVoice: true,
-      spokenText: "Captioned ACP reply.",
-      ttsSupplement: { spokenText: "Captioned ACP reply." },
-    } as MockTtsReply);
-    mockVisibleTextTurn("Captioned ACP reply.");
-    const { dispatcher } = createDispatcher();
+  it.each(["channel_transform", "no_visible_result", "cancelled", "unsent"] as const)(
+    "preserves direct ACP block settlement policy (%s)",
+    async (outcome) => {
+      setReadyAcpResolution();
+      managerMocks.runTurn.mockImplementation(
+        async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+          await onEvent({ type: "text_delta", text: "First chunk. ", tag: "agent_message_chunk" });
+          await onEvent({ type: "text_delta", text: "Second chunk. ", tag: "agent_message_chunk" });
+          await onEvent({ type: "done" });
+        },
+      );
+      const visible: Array<{ kind: string; text: string | undefined }> = [];
+      const dispatcher = createReplyDispatcher({
+        beforeDeliver: (payload, info) =>
+          outcome === "cancelled" &&
+          info.kind === "block" &&
+          payload.text?.trim() === "Second chunk."
+            ? null
+            : payload,
+        deliver: async (payload, info) => {
+          if (info.kind === "block" && payload.text?.trim() === "Second chunk.") {
+            if (outcome === "unsent") {
+              throw new PlatformMessageNotDispatchedError("offline", { cause: undefined });
+            }
+            return { visibleReplySent: false, suppression: { reason: outcome } };
+          }
+          visible.push({ kind: info.kind, text: payload.text?.trim() });
+          return { visibleReplySent: true };
+        },
+      });
 
-    await runDispatch({
-      bodyForAgent: "reply",
-      dispatcher,
-      ctxOverrides: { Provider: "telegram", Surface: "telegram" },
-    });
+      await runDispatch({
+        bodyForAgent: "reply",
+        dispatcher,
+        cfg: createAcpTestConfig({ acp: { enabled: true, stream: { deliveryMode: "live" } } }),
+        ctxOverrides: { Provider: "discord", Surface: "discord" },
+      });
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
 
-    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
-    expect(dispatcherCall(dispatcher.sendFinalReply)).toMatchObject({
-      text: "Captioned ACP reply.",
-      mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
-      audioAsVoice: true,
-    });
-  });
+      expect(visible).toEqual([
+        { kind: "block", text: "First chunk." },
+        ...(outcome === "channel_transform" ? [] : [{ kind: "final", text: "Second chunk." }]),
+      ]);
+      expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledWith(
+        expect.objectContaining({ finalText: "First chunk.\nSecond chunk." }),
+      );
+    },
+  );
+
+  it.each([
+    { captioned: false, stage: "preparation" },
+    { captioned: true, stage: "preparation" },
+    { captioned: false, stage: "settlement" },
+    { captioned: true, stage: "settlement" },
+    { captioned: false, stage: "permanent" },
+    { captioned: true, stage: "permanent" },
+    { captioned: false, stage: "retryable" },
+    { captioned: true, stage: "retryable" },
+  ] as const)(
+    "honors direct TTS suppression without losing independent text (captioned=$captioned, stage=$stage)",
+    async ({ captioned, stage }) => {
+      setReadyAcpResolution();
+      ttsCapabilityMocks.captionedFinalText = captioned;
+      mockVisibleTextTurn("Spoken answer.");
+      const mediaUrl = "/tmp/openclaw-media/acp-tts.ogg";
+      queueTtsReplies({ mediaUrl, audioAsVoice: true } as MockTtsReply);
+      const attempted: Array<{ kind: string; text?: string; mediaUrl?: string }> = [];
+      const dispatcher = createReplyDispatcher({
+        transformReplyPayload:
+          stage === "preparation" ? (payload) => (payload.mediaUrl ? null : payload) : undefined,
+        deliver: async (payload, info) => {
+          attempted.push({ kind: info.kind, text: payload.text, mediaUrl: payload.mediaUrl });
+          if (payload.mediaUrl && (stage === "permanent" || stage === "retryable")) {
+            throw new PlatformMessageNotDispatchedError("media rejected", {
+              cause: undefined,
+              retryable: stage === "retryable",
+            });
+          }
+          return payload.mediaUrl
+            ? { visibleReplySent: false, suppression: { reason: "channel_transform" } }
+            : { visibleReplySent: info.kind === "final" };
+        },
+      });
+
+      await runDispatch({
+        bodyForAgent: "reply",
+        dispatcher,
+        cfg: createAcpTestConfig({
+          acp: { enabled: true, stream: { deliveryMode: "live" } },
+          tts: { auto: "always", mode: "final" },
+        }),
+        ctxOverrides: { Provider: "telegram", Surface: "telegram" },
+      });
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+
+      expect(attempted).toEqual([
+        ...(captioned ? [] : [{ kind: "block", text: "Spoken answer.", mediaUrl: undefined }]),
+        ...(stage === "preparation"
+          ? []
+          : [{ kind: "final", text: captioned ? "Spoken answer." : undefined, mediaUrl }]),
+        ...(!captioned || stage === "retryable"
+          ? [{ kind: "final", text: "Spoken answer.", mediaUrl: undefined }]
+          : []),
+      ]);
+      expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledWith(
+        expect.objectContaining({ finalText: "Spoken answer." }),
+      );
+    },
+  );
+
+  it.each(["cancelled", "tts-error"] as const)(
+    "retains deferred text after media-only block suppression (%s)",
+    async (failure) => {
+      setReadyAcpResolution();
+      ttsCapabilityMocks.captionedFinalText = true;
+      const text = "Deferred answer.";
+      const mediaUrl = "https://example.test/block.png";
+      managerMocks.runTurn.mockImplementation(
+        async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+          await onEvent({ type: "text_delta", text, tag: "agent_message_chunk" });
+          await onEvent({
+            type: "done",
+            status: failure === "cancelled" ? "cancelled" : "completed",
+          });
+        },
+      );
+      if (failure === "tts-error") {
+        ttsMocks.maybeApplyTtsToPayload.mockRejectedValueOnce(new Error("TTS unavailable"));
+      }
+      let attachBlockMedia = true;
+      const attempted: Array<{ kind: string; text?: string; mediaUrl?: string }> = [];
+      const dispatcher = createReplyDispatcher({
+        transformReplyPayload: (payload) => {
+          if (!attachBlockMedia) {
+            return payload;
+          }
+          attachBlockMedia = false;
+          return { ...payload, mediaUrl };
+        },
+        deliver: async (payload, info) => {
+          attempted.push({ kind: info.kind, text: payload.text, mediaUrl: payload.mediaUrl });
+          return payload.mediaUrl
+            ? { visibleReplySent: false, suppression: { reason: "channel_transform" } }
+            : { visibleReplySent: true };
+        },
+      });
+
+      await runDispatch({
+        bodyForAgent: "reply",
+        dispatcher,
+        cfg: createAcpTestConfig({
+          acp: { enabled: true, stream: { deliveryMode: "live" } },
+          tts: { auto: "always", mode: "final" },
+        }),
+        ctxOverrides: { Provider: "telegram", Surface: "telegram" },
+      });
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+
+      expect(attempted).toEqual([
+        { kind: "block", text: undefined, mediaUrl },
+        { kind: "final", text, mediaUrl: undefined },
+      ]);
+      expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledWith(
+        expect.objectContaining({ finalText: text }),
+      );
+    },
+  );
+
+  it.each([
+    { wrapper: "core", suppress: false },
+    { wrapper: "spread", suppress: false },
+    { wrapper: "abort", suppress: false },
+    { wrapper: "core", suppress: true },
+    { wrapper: "spread", suppress: true },
+    { wrapper: "abort", suppress: true },
+  ] as const)(
+    "prepares channel text before TTS ($wrapper, suppress=$suppress)",
+    async ({ wrapper, suppress }) => {
+      setReadyAcpResolution();
+      mockVisibleTextTurn("Original reply.");
+      ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "all" });
+      const transform = vi.fn((payload: ReplyPayload) =>
+        suppress ? null : { ...payload, text: `${payload.text} [channel]` },
+      );
+      const deliver = vi.fn(async (_payload: ReplyPayload) => {});
+      const core = createReplyDispatcher({ deliver, transformReplyPayload: transform });
+      const spread = { ...core };
+      const dispatcher =
+        wrapper === "core"
+          ? core
+          : wrapper === "spread"
+            ? spread
+            : createAbortAwareDispatcher({ dispatcher: spread, isAborted: () => false });
+      await runDispatch({
+        bodyForAgent: "reply",
+        dispatcher,
+        cfg: createAcpTestConfig({
+          acp: { enabled: true, stream: { deliveryMode: "live" } },
+          tts: { auto: "always", mode: "all" },
+        }),
+      });
+      core.markComplete();
+      await core.waitForIdle();
+      expect(transform).toHaveBeenCalledTimes(1);
+      if (suppress) {
+        expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+        expect(deliver).not.toHaveBeenCalled();
+      } else {
+        expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            payload: expect.objectContaining({ text: "Original reply. [channel]" }),
+          }),
+        );
+        expect(deliver).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ text: "Original reply. [channel]" }),
+          expect.objectContaining({ kind: "block" }),
+        );
+      }
+    },
+  );
+
+  it.each(["final_only", "live"] as const)(
+    "delivers one captioned voice reply in %s mode",
+    async (deliveryMode) => {
+      setReadyAcpResolution();
+      ttsCapabilityMocks.captionedFinalText = true;
+      queueTtsReplies({
+        text: "Captioned ACP reply.",
+        mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+        audioAsVoice: true,
+        spokenText: "Captioned ACP reply.",
+        ttsSupplement: { spokenText: "Captioned ACP reply." },
+      } as MockTtsReply);
+      mockVisibleTextTurn("Captioned ACP reply.");
+      const { dispatcher } = createDispatcher();
+
+      await runDispatch({
+        bodyForAgent: "reply",
+        dispatcher,
+        cfg: createAcpTestConfig({
+          acp: { enabled: true, stream: { deliveryMode } },
+          tts: { auto: "always", mode: "final" },
+        }),
+        ctxOverrides: { Provider: "telegram", Surface: "telegram" },
+      });
+
+      expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+      expect(dispatcherCall(dispatcher.sendFinalReply)).toMatchObject({
+        text: "Captioned ACP reply.",
+        mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+        audioAsVoice: true,
+      });
+    },
+  );
+
+  it.each(["confirmed", "held"] as const)(
+    "records only confirmed text when cancellation interrupts a %s caption receipt",
+    async (outcome) => {
+      setReadyAcpResolution();
+      ttsCapabilityMocks.captionedFinalText = true;
+      const text = "Caption awaiting delivery.";
+      queueTtsReplies({
+        text,
+        mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+        audioAsVoice: true,
+        spokenText: text,
+        ttsSupplement: { spokenText: text },
+      } as MockTtsReply);
+      mockVisibleTextTurn(text);
+      const controller = new AbortController();
+      const started = createDeferred();
+      const receipt = createDeferred<{ visibleReplySent: true }>();
+      const attempted: ReplyPayload[] = [];
+      const coreDispatcher = createReplyDispatcher({
+        deliver: async (payload) => {
+          attempted.push(payload);
+          started.resolve();
+          return { visibleReplySent: false, finalization: receipt.promise };
+        },
+      });
+      const dispatcher = createAbortAwareDispatcher({
+        dispatcher: coreDispatcher,
+        isAborted: () => controller.signal.aborted,
+      });
+      const dispatch = runDispatch({
+        bodyForAgent: "reply",
+        dispatcher,
+        abortSignal: controller.signal,
+        cfg: createAcpTestConfig({
+          acp: { enabled: true, stream: { deliveryMode: "live" } },
+          tts: { auto: "always", mode: "final" },
+        }),
+        ctxOverrides: { Provider: "telegram", Surface: "telegram" },
+      });
+      await started.promise;
+      controller.abort();
+      await nextEventLoopTurn();
+      if (outcome === "confirmed") {
+        receipt.resolve({ visibleReplySent: true });
+      } else {
+        receipt.reject(
+          Object.assign(
+            new OutboundDeliveryError("receipt pending", {
+              cause: new PlatformMessageNotDispatchedError("offline", { cause: undefined }),
+            }),
+            { queueCustody: "held" as const },
+          ),
+        );
+      }
+      await dispatch;
+      coreDispatcher.markComplete();
+      await coreDispatcher.waitForIdle();
+      expect(attempted).toHaveLength(1);
+      expect(coreDispatcher.getQueuedCounts()).toEqual({ tool: 0, block: 0, final: 1 });
+      expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          finalText: outcome === "confirmed" ? text : "",
+          terminalOutcome: expect.objectContaining({ reason: "aborted" }),
+        }),
+      );
+    },
+  );
 
   it("keeps Telegram ACP TTS-only block text out of the voice caption", async () => {
     setReadyAcpResolution();
@@ -3784,6 +4090,96 @@ describe("tryDispatchAcpReplyCore", () => {
       mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
     });
     expect(routePayload(1)).toEqual({ text: "Visible ACP fallback." });
+  });
+
+  describe.each(["held", "identityless"] as const)("with a direct %s ACP block", (pendingKind) => {
+    it.each([
+      { uncoveredFirst: undefined, audio: false },
+      { uncoveredFirst: false, audio: false },
+      { uncoveredFirst: true, audio: false },
+      { uncoveredFirst: undefined, audio: true },
+      { uncoveredFirst: false, audio: true },
+      { uncoveredFirst: true, audio: true },
+    ])(
+      "delivers only uncovered obligations (uncoveredFirst=$uncoveredFirst, audio=$audio)",
+      async ({ uncoveredFirst, audio }) => {
+        setReadyAcpResolution();
+        const owned = "Pending first block.";
+        const uncovered = "Uncovered second block.";
+        const texts =
+          uncoveredFirst === undefined
+            ? [owned]
+            : uncoveredFirst
+              ? [uncovered, owned]
+              : [owned, uncovered];
+        queueTtsReplies(
+          audio
+            ? ({
+                mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+                audioAsVoice: true,
+                spokenText: texts.join("\n"),
+                ttsSupplement: { spokenText: texts.join("\n") },
+              } as MockTtsReply)
+            : {},
+        );
+        managerMocks.runTurn.mockImplementationOnce(
+          async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+            for (const text of texts) {
+              await onEvent({ type: "text_delta", text: `${text} `, tag: "agent_message_chunk" });
+            }
+            await onEvent({ type: "done", status: "completed" });
+          },
+        );
+        const attempted: Array<{ kind: string; text?: string; mediaUrl?: string }> = [];
+        const dispatcher = createReplyDispatcher({
+          deliver: async (payload, info) => {
+            attempted.push({
+              kind: info.kind,
+              text: payload.text,
+              ...(payload.mediaUrl ? { mediaUrl: payload.mediaUrl } : {}),
+            });
+            if (info.kind !== "block") {
+              return { visibleReplySent: true };
+            }
+            if (payload.text === owned && pendingKind === "identityless") {
+              return {
+                visibleReplySent: false,
+                suppression: { reason: "adapter_returned_no_identity" as const },
+              };
+            }
+            throw Object.assign(
+              new OutboundDeliveryError("offline", {
+                cause: new PlatformMessageNotDispatchedError("offline", { cause: undefined }),
+              }),
+              { queueCustody: payload.text === owned ? ("held" as const) : ("released" as const) },
+            );
+          },
+        });
+        await runDispatch({
+          bodyForAgent: "reply",
+          dispatcher,
+          cfg: createAcpTestConfig({
+            acp: { enabled: true, stream: { deliveryMode: "live" } },
+            tts: { auto: "always", mode: "final" },
+          }),
+        });
+        dispatcher.markComplete();
+        await dispatcher.waitForIdle();
+
+        expect(attempted).toEqual([
+          ...texts.map((text) => ({ kind: "block", text })),
+          ...(audio
+            ? [{ kind: "final", text: undefined, mediaUrl: "/tmp/openclaw-media/acp-tts.ogg" }]
+            : []),
+          ...(uncoveredFirst === undefined ? [] : [{ kind: "final", text: uncovered }]),
+        ]);
+        expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledWith(
+          expect.objectContaining({
+            finalText: texts.join("\n"),
+          }),
+        );
+      },
+    );
   });
 
   describe.each([

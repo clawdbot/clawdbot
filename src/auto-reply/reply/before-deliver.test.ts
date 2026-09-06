@@ -8,7 +8,10 @@ import { createChannelPartialDeliveryError } from "../../channels/turn/delivery-
 import { createDirectPendingFinalCustody } from "../../channels/turn/direct-delivery-custody.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
-import { OutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
+import {
+  OutboundDeliveryError,
+  PlatformMessageNotDispatchedError,
+} from "../../infra/outbound/deliver-types.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -132,9 +135,16 @@ describe("beforeDeliver in reply dispatcher", () => {
     expect(skipped).toEqual(["channel_transform"]);
   });
 
-  it.each([undefined, "held", "released"] as const)(
-    "retries a proven pre-transport failure only without held queue custody (%s)",
-    async (queueCustody) => {
+  it.each([
+    { queueCustody: undefined, deferred: false },
+    { queueCustody: "held", deferred: false },
+    { queueCustody: "released", deferred: false },
+    { queueCustody: undefined, deferred: true },
+    { queueCustody: "held", deferred: true },
+    { queueCustody: "released", deferred: true },
+  ] as const)(
+    "retries a proven pre-transport failure only without held queue custody ($queueCustody, deferred=$deferred)",
+    async ({ queueCustody, deferred }) => {
       const delivered: string[] = [];
       const primary: ReplyPayload = { text: "caption", mediaUrl: "/tmp/voice.ogg" };
       attachReplyDispatchUndeliveredFallback(primary, { text: "caption" });
@@ -145,11 +155,16 @@ describe("beforeDeliver in reply dispatcher", () => {
               code: "ECONNREFUSED",
               syscall: "connect",
             });
-            throw Object.assign(new OutboundDeliveryError(cause.message, { cause }), {
+            const error = Object.assign(new OutboundDeliveryError(cause.message, { cause }), {
               queueCustody,
             });
+            if (deferred) {
+              return { finalization: Promise.reject(error) };
+            }
+            throw error;
           }
           delivered.push(payload.text ?? "");
+          return undefined;
         },
         propagateRetryableNoSendFailure: true,
       });
@@ -169,6 +184,7 @@ describe("beforeDeliver in reply dispatcher", () => {
     const delivered: string[] = [];
     const primary: ReplyPayload = { text: "caption", mediaUrl: "/tmp/voice.ogg" };
     attachReplyDispatchUndeliveredFallback(primary, { text: "caption" });
+    const capture = captureReplyDispatchDeliveryOutcome(primary);
     const dispatcher = createReplyDispatcher({
       deliver: async (payload) => {
         delivered.push(payload.text ?? "");
@@ -182,6 +198,27 @@ describe("beforeDeliver in reply dispatcher", () => {
 
     expect(delivered).toEqual(["caption"]);
     expect(receipt?.counts.final.failedAfterSend).toBe(1);
+    expect(receipt?.hasPendingDelivery).toBe(true);
+    expect(capture.hasPendingDelivery()).toBe(true);
+  });
+
+  it("does not call a proven permanent rejection pending", async () => {
+    const payload: ReplyPayload = { text: "rejected", mediaUrl: "/tmp/voice.ogg" };
+    attachReplyDispatchUndeliveredFallback(payload, { text: "rejected" });
+    const capture = captureReplyDispatchDeliveryOutcome(payload);
+    const deliver = vi.fn(async () => {
+      throw new PlatformMessageNotDispatchedError("rejected before dispatch", {
+        cause: undefined,
+        retryable: false,
+      });
+    });
+    const dispatcher = createReplyDispatcher({ deliver });
+    dispatcher.sendFinalReply(payload);
+    dispatcher.markComplete();
+    const receipt = await dispatcher.waitForIdle();
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(receipt?.hasPendingDelivery).toBeUndefined();
+    expect(capture.hasPendingDelivery()).toBe(false);
   });
 
   it("cancels delivery before queueing when transformReplyPayload returns null", async () => {
@@ -415,60 +452,68 @@ describe("beforeDeliver in reply dispatcher", () => {
     }
   });
 
-  it.each([
-    {
-      label: "proven pre-send failure",
-      error: () =>
-        Object.assign(new Error("connect failed"), { code: "ECONNREFUSED", syscall: "connect" }),
-      expected: "prepared",
-      failedBeforeSend: true,
-    },
-    {
-      label: "ambiguous provider failure",
-      error: () => new Error("send outcome unknown"),
-      expected: "unknown",
-      failedBeforeSend: false,
-    },
-    {
-      label: "queue-owned pre-send failure",
-      error: () =>
-        Object.assign(
-          new OutboundDeliveryError("connect failed", {
-            cause: Object.assign(new Error("connect failed"), {
-              code: "ECONNREFUSED",
-              syscall: "connect",
-            }),
-          }),
-          { queueCustody: "held" },
-        ),
-      expected: "queued",
-      failedBeforeSend: true,
-    },
-    {
-      label: "queue-owned wrapped partial send",
-      error: () =>
-        createChannelPartialDeliveryError(
+  it.each(
+    [
+      {
+        label: "proven pre-send failure",
+        error: () =>
+          Object.assign(new Error("connect failed"), { code: "ECONNREFUSED", syscall: "connect" }),
+        expected: "prepared",
+        failedBeforeSend: true,
+      },
+      {
+        label: "ambiguous provider failure",
+        error: () => new Error("send outcome unknown"),
+        expected: "unknown",
+        failedBeforeSend: false,
+      },
+      {
+        label: "queue-owned pre-send failure",
+        error: () =>
           Object.assign(
-            new OutboundDeliveryError("remaining send failed", {
-              cause: new Error("remaining send failed"),
-              results: [{ channel: "matrix", messageId: "accepted-prefix" }],
+            new OutboundDeliveryError("connect failed", {
+              cause: Object.assign(new Error("connect failed"), {
+                code: "ECONNREFUSED",
+                syscall: "connect",
+              }),
             }),
             { queueCustody: "held" },
           ),
-          { visibleReplySent: true, messageIds: ["accepted-prefix"] },
-        ),
-      expected: "queued",
-      failedBeforeSend: false,
-    },
-  ] as const)(
-    "records $label before reporting the error",
-    async ({ error, expected, failedBeforeSend }) => {
+        expected: "queued",
+        failedBeforeSend: true,
+      },
+      {
+        label: "queue-owned wrapped partial send",
+        error: () =>
+          createChannelPartialDeliveryError(
+            Object.assign(
+              new OutboundDeliveryError("remaining send failed", {
+                cause: new Error("remaining send failed"),
+                results: [{ channel: "matrix", messageId: "accepted-prefix" }],
+              }),
+              { queueCustody: "held" },
+            ),
+            { visibleReplySent: true, messageIds: ["accepted-prefix"] },
+          ),
+        expected: "queued",
+        failedBeforeSend: false,
+      },
+    ].flatMap((entry) => [
+      { ...entry, deferred: false },
+      { ...entry, deferred: true },
+    ]),
+  )(
+    "records $label before reporting the error (deferred=$deferred)",
+    async ({ error, expected, failedBeforeSend, deferred }) => {
       const fixture = await makePendingFinalFixture();
       const failure = error();
       const onError = vi.fn();
       try {
         const dispatcher = createReplyDispatcher({
           deliver: async () => {
+            if (deferred) {
+              return { finalization: Promise.reject(failure) };
+            }
             throw failure;
           },
           onError,
@@ -478,7 +523,11 @@ describe("beforeDeliver in reply dispatcher", () => {
         dispatcher.markComplete();
         const receipt = await dispatcher.waitForIdle();
 
-        expect(onError.mock.calls[0]?.[0]).toBe(failure);
+        if (deferred) {
+          expect(onError).not.toHaveBeenCalled();
+        } else {
+          expect(onError.mock.calls[0]?.[0]).toBe(failure);
+        }
         expect(receipt?.counts.final).toMatchObject({
           failedBeforeSend: failedBeforeSend ? 1 : 0,
           failedAfterSend: failedBeforeSend ? 0 : 1,

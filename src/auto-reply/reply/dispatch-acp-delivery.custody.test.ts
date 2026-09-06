@@ -1,8 +1,16 @@
+import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  OutboundDeliveryError,
+  PlatformMessageNotDispatchedError,
+} from "../../infra/outbound/deliver-types.js";
 import { markReplyPayloadAsTtsSupplement } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
+import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { buildTestCtx } from "./test-ctx.js";
 import {
@@ -32,6 +40,8 @@ vi.mock("../../channels/plugins/index.js", () => ({
 function createVisibleChatAcpCoordinator(
   cfg: OpenClawConfig,
   dispatcher: ReplyDispatcher = createDispatcher(),
+  routed = true,
+  abortSignal?: AbortSignal,
 ) {
   return createAcpDispatchDeliveryCoordinator({
     cfg,
@@ -42,9 +52,10 @@ function createVisibleChatAcpCoordinator(
     }),
     dispatcher,
     inboundAudio: false,
-    shouldRouteToOriginating: true,
+    shouldRouteToOriginating: routed,
     originatingChannel: "visiblechat",
     originatingTo: "channel:thread-1",
+    abortSignal,
   });
 }
 
@@ -56,6 +67,109 @@ describe("ACP routed delivery custody", () => {
       delivered: true,
       messageId: "mock-message",
     });
+  });
+
+  it.each([false, true])(
+    "keeps generated and confirmed block order through a selective fallback (routed=%s)",
+    async (routed) => {
+      const controller = new AbortController();
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload, info) => {
+          if (info.kind === "block" && payload.text === "B") {
+            throw new PlatformMessageNotDispatchedError("offline", { cause: undefined });
+          }
+          return { visibleReplySent: true };
+        },
+      });
+      if (routed) {
+        deliveryMocks.routeReply
+          .mockResolvedValueOnce({ ok: true, delivered: true })
+          .mockResolvedValueOnce({ ok: false, delivered: false, queueCustody: "released" })
+          .mockResolvedValueOnce({ ok: true, delivered: true });
+      }
+      const coordinator = createVisibleChatAcpCoordinator(
+        createAcpTestConfig(),
+        dispatcher,
+        routed,
+        controller.signal,
+      );
+      await coordinator.deliver("block", { text: "A" }, { skipTts: true });
+      await coordinator.deliver("block", { text: "B" }, { skipTts: true });
+      await coordinator.settleVisibleText();
+      expect(coordinator.getBlockTextForFallback()).toBe("B");
+      await coordinator.deliver(
+        "final",
+        { text: "B" },
+        { skipTts: true, transcriptSource: { kind: "fallback" } },
+      );
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+
+      expect(coordinator.getAccumulatedTranscriptText()).toBe("A\nB");
+      controller.abort();
+      await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("A\nB");
+    },
+  );
+
+  it.each([
+    { routed: false, audio: false },
+    { routed: true, audio: false },
+    { routed: false, audio: true },
+    { routed: true, audio: true },
+  ])(
+    "retains directive-only block provenance for TTS (routed=$routed, audio=$audio)",
+    async ({ routed, audio }) => {
+      const dispatcher = createReplyDispatcher({
+        deliver: async () => ({ visibleReplySent: true }),
+      });
+      const coordinator = createVisibleChatAcpCoordinator(
+        createAcpTestConfig({ tts: { auto: "always" } }),
+        dispatcher,
+        routed,
+      );
+      const generated = "[[tts:text]]Spoken.[[/tts:text]]";
+      await expect(
+        coordinator.deliver("block", { text: generated }, { skipTts: true }),
+      ).resolves.toBe(false);
+      expect(coordinator.getBlockTextForFallback()).toBe("");
+      const fallback = audio
+        ? markReplyPayloadAsTtsSupplement(
+            { mediaUrl: "https://example.test/spoken.ogg" },
+            "Spoken.",
+          )
+        : { text: "Spoken." };
+      await coordinator.deliver("final", fallback, {
+        skipTts: true,
+        transcriptSource: { kind: "blocks" },
+      });
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+
+      expect(coordinator.getAccumulatedTranscriptText()).toBe(generated);
+      await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe(
+        generated,
+      );
+    },
+  );
+
+  it("keeps an explicit runtime final canonical when its caption is retried", async () => {
+    const coordinator = createVisibleChatAcpCoordinator(createAcpTestConfig());
+    await coordinator.deliver("block", { text: "Earlier block." }, { skipTts: true });
+    deliveryMocks.routeReply
+      .mockResolvedValueOnce({ ok: false, delivered: false, queueCustody: "released" })
+      .mockResolvedValueOnce({ ok: true, delivered: true });
+    await coordinator.deliver(
+      "final",
+      markReplyPayloadAsTtsSupplement({
+        text: "Explicit final.",
+        mediaUrl: "https://example.test/final.ogg",
+      }),
+      { skipTts: true },
+    );
+    expect(coordinator.getAccumulatedTranscriptText()).toBe("Explicit final.");
+    await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe(
+      "Explicit final.",
+    );
   });
 
   it.each(["held", "released"] as const)(
@@ -184,5 +298,218 @@ describe("ACP routed delivery custody", () => {
       );
       expect(coordinator.hasDeliveredAnswerFinalToUser()).toBe(true);
     },
+  );
+});
+
+describe.each(["held", "identityless"] as const)("ACP direct %s delivery", (pendingKind) => {
+  const pendingResult = () => {
+    if (pendingKind === "held") {
+      throw Object.assign(
+        new OutboundDeliveryError("queued", {
+          cause: new PlatformMessageNotDispatchedError("offline", { cause: undefined }),
+        }),
+        { queueCustody: "held" as const },
+      );
+    }
+    return {
+      visibleReplySent: false,
+      suppression: { reason: "adapter_returned_no_identity" as const },
+    };
+  };
+
+  it.each([false, true])(
+    "retains only the uncovered block for fallback (uncoveredFirst=%s)",
+    async (uncoveredFirst) => {
+      const texts = uncoveredFirst ? ["uncovered", "pending"] : ["pending", "uncovered"];
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload) => {
+          if (payload.text === "pending") {
+            return pendingResult();
+          }
+          throw new PlatformMessageNotDispatchedError("rejected before dispatch", {
+            cause: undefined,
+          });
+        },
+      });
+      const coordinator = createVisibleChatAcpCoordinator(createAcpTestConfig(), dispatcher, false);
+      for (const text of texts) {
+        await coordinator.deliver("block", { text }, { skipTts: true });
+      }
+      dispatcher.markComplete();
+      await coordinator.settleVisibleText();
+
+      expect(coordinator.getBlockTextForFallback()).toBe("uncovered");
+      expect(coordinator.hasPendingAnswerDelivery()).toBe(true);
+      expect(coordinator.hasDeliveredVisibleText()).toBe(false);
+      await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("");
+    },
+  );
+
+  it.each([
+    { name: "text", text: "answer", audio: false },
+    { name: "audio", text: undefined, audio: true },
+    { name: "caption", text: "answer", audio: true },
+  ])(
+    "keeps pending final $name ownership separate from confirmed delivery",
+    async ({ text, audio }) => {
+      const dispatcher = createReplyDispatcher({ deliver: async () => pendingResult() });
+      const coordinator = createVisibleChatAcpCoordinator(createAcpTestConfig(), dispatcher, false);
+      const payload = audio
+        ? markReplyPayloadAsTtsSupplement(
+            { text, mediaUrl: "https://example.test/answer.ogg" },
+            "answer",
+          )
+        : { text };
+      await coordinator.deliver("final", payload, { skipTts: true });
+      dispatcher.markComplete();
+      await coordinator.settleVisibleText();
+      await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("");
+
+      expect(coordinator.hasPendingAnswerDelivery()).toBe(Boolean(text));
+      expect(coordinator.hasPendingFinalTtsMedia()).toBe(audio);
+      expect(coordinator.hasDeliveredFinalReply()).toBe(false);
+      expect(coordinator.hasDeliveredAnswerFinalToUser()).toBe(false);
+      expect(coordinator.hasDeliveredFinalTtsMedia()).toBe(false);
+    },
+  );
+
+  it.each([{ isCommentary: true }, { isReasoning: true }, { isStatusNotice: true }] as const)(
+    "does not let pending non-answer output own an answer (%j)",
+    async (classification) => {
+      const dispatcher = createReplyDispatcher({ deliver: async () => pendingResult() });
+      const coordinator = createVisibleChatAcpCoordinator(createAcpTestConfig(), dispatcher, false);
+      await coordinator.deliver(
+        "block",
+        { text: "Working.", ...classification },
+        { skipTts: true },
+      );
+      dispatcher.markComplete();
+      await coordinator.settleVisibleText();
+      expect(coordinator.hasPendingAnswerDelivery()).toBe(false);
+      expect(coordinator.hasPendingFinalTtsMedia()).toBe(false);
+      expect(coordinator.getBlockTextForFallback()).toBe("");
+      await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("");
+    },
+  );
+});
+
+describe.each([undefined, "released"] as const)(
+  "ACP partial direct delivery with %s custody",
+  (queueCustody) => {
+    it.each(["block", "caption"] as const)(
+      "preserves pending %s coverage without retrying possibly delivered text",
+      async (kind) => {
+        const failure = new OutboundDeliveryError("audio failed after caption acceptance", {
+          cause: new Error("transport result unavailable"),
+          results: [{ channel: "visiblechat", messageId: "accepted-caption" }],
+        });
+        if (queueCustody) {
+          failure.queueCustody = queueCustody;
+        }
+        const attempted: ReplyPayload[] = [];
+        const dispatcher = createReplyDispatcher({
+          deliver: async (payload) => {
+            attempted.push(payload);
+            throw failure;
+          },
+        });
+        const coordinator = createAcpDispatchDeliveryCoordinator({
+          cfg: createAcpTestConfig(),
+          ctx: buildTestCtx({ Provider: "visiblechat", Surface: "visiblechat" }),
+          dispatcher,
+          inboundAudio: false,
+          shouldRouteToOriginating: false,
+          suppressBlockUserDelivery: kind === "caption",
+        });
+        await coordinator.deliver("block", { text: "answer" }, { skipTts: true });
+        if (kind === "caption") {
+          await coordinator.deliver(
+            "final",
+            markReplyPayloadAsTtsSupplement({
+              text: "answer",
+              mediaUrl: "https://example.test/answer.ogg",
+            }),
+            { skipTts: true },
+          );
+        }
+        dispatcher.markComplete();
+        await coordinator.settleVisibleText();
+        expect(attempted).toHaveLength(1);
+        expect(coordinator.getBlockTextForFallback()).toBe("");
+        expect(coordinator.hasPendingAnswerDelivery()).toBe(true);
+        expect(coordinator.hasPendingFinalTtsMedia()).toBe(kind === "caption");
+        expect(coordinator.hasDeliveredAnswerFinalToUser()).toBe(false);
+        await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("");
+      },
+    );
+  },
+);
+
+it("releases outer cancellation while retaining admitted final ownership and transcript drain", async () => {
+  const finalStarted = createDeferred();
+  const finalization = createDeferred<never>();
+  const controller = new AbortController();
+  const attempted: string[] = [];
+  const dispatcher = createReplyDispatcher({
+    deliver: async (payload) => {
+      attempted.push(payload.text ?? "");
+      if (payload.text === "visible prefix") {
+        return { visibleReplySent: true };
+      }
+      finalStarted.resolve();
+      return { visibleReplySent: false, finalization: finalization.promise };
+    },
+  });
+  const coordinator = createVisibleChatAcpCoordinator(
+    createAcpTestConfig(),
+    dispatcher,
+    false,
+    controller.signal,
+  );
+  await coordinator.deliver("block", { text: "visible prefix" }, { skipTts: true });
+  await coordinator.settleVisibleText();
+  let finalSettled = false;
+  const finalDelivery = coordinator
+    .deliver("final", { text: "pending final" }, { skipTts: true })
+    .then((result) => {
+      finalSettled = true;
+      return result;
+    });
+  const cancellation = expect(
+    runWithDispatchAbortSignal(controller.signal, () => finalDelivery),
+  ).rejects.toMatchObject({ name: "AbortError" });
+  await finalStarted.promise;
+  controller.abort();
+  let transcriptSettled = false;
+  const transcript = coordinator.resolveAccumulatedDeliveredTranscriptText().then((text) => {
+    transcriptSettled = true;
+    return text;
+  });
+  try {
+    await cancellation;
+    await coordinator.settleVisibleText();
+    await nextEventLoopTurn();
+    expect(finalSettled).toBe(false);
+    expect(transcriptSettled).toBe(false);
+    expect(coordinator.hasDeliveredFinalReply()).toBe(false);
+    expect(coordinator.hasDeliveredAnswerFinalToUser()).toBe(false);
+  } finally {
+    finalization.reject(
+      Object.assign(
+        new OutboundDeliveryError("queued final", {
+          cause: new PlatformMessageNotDispatchedError("offline", { cause: undefined }),
+        }),
+        { queueCustody: "held" as const },
+      ),
+    );
+    await finalDelivery;
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+  }
+  expect(attempted).toEqual(["visible prefix", "pending final"]);
+  expect(coordinator.hasPendingAnswerDelivery()).toBe(true);
+  await expect(transcript).resolves.toBe("visible prefix");
+  await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe(
+    "visible prefix",
   );
 });

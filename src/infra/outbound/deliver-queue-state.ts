@@ -1,8 +1,11 @@
 // Persists queue state around the irreversible platform-send boundary.
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { formatErrorMessage } from "../errors.js";
-import type { OutboundDeliveryQueuePolicy, PlatformSendRoute } from "./deliver-contracts.js";
-import { OutboundDeliveryError } from "./deliver-types.js";
+import {
+  OutboundDeliveryError,
+  type OutboundDeliveryQueuePolicy,
+  type PlatformSendRoute,
+} from "./deliver-types.js";
 import { retireUnsentDelivery } from "./delivery-queue-ack.js";
 import { releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
 import {

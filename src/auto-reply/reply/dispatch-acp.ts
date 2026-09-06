@@ -380,20 +380,22 @@ async function finalizeAcpTurnOutput(params: {
           accumulatedBlockTtsText,
           shouldDeferVisibleTextForTts ? undefined : { visibleTextAlreadyDelivered: true },
         );
-        const delivered = await params.delivery.deliver("final", finalTtsPayload);
+        const delivered = await params.delivery.deliver("final", finalTtsPayload, {
+          transcriptSource: { kind: "blocks" },
+        });
         queuedFinal = queuedFinal || delivered;
       } else if (shouldDeferVisibleTextForTts && ttsSyntheticReply.text?.trim()) {
         const delivered = await params.delivery.deliver(
           "final",
           { text: ttsSyntheticReply.text },
-          { skipTts: true },
+          { skipTts: true, transcriptSource: { kind: "blocks" } },
         );
         queuedFinal = queuedFinal || delivered;
       } else if (needsTtsFallback(true, accumulatedVisibleBlockText, ttsSyntheticReply.text)) {
         const delivered = await params.delivery.deliver(
           "final",
           { text: ttsSyntheticReply.text },
-          { skipTts: true },
+          { skipTts: true, transcriptSource: { kind: "blocks" } },
         );
         queuedFinal = queuedFinal || delivered;
       }
@@ -409,7 +411,7 @@ async function finalizeAcpTurnOutput(params: {
     const delivered = await params.delivery.deliver(
       "final",
       { text: textFallback },
-      { skipTts: true },
+      { skipTts: true, transcriptSource: { kind: "fallback" } },
     );
     queuedFinal = queuedFinal || delivered;
   }
@@ -430,6 +432,7 @@ async function finalizeAcpTurnOutput(params: {
       if (resolvedDetails.length > 0) {
         const delivered = await params.delivery.deliver("final", {
           text: prefixSystemMessage(["Session ids resolved.", ...resolvedDetails].join("\n")),
+          isStatusNotice: true,
         });
         queuedFinal = queuedFinal || delivered;
       }
@@ -635,7 +638,16 @@ export async function tryDispatchAcpReplyCore(params: {
       return false;
     }
     const text = delivery.getBlockTextForFallback();
-    return text.trim() ? await delivery.deliver("final", { text }, { skipTts: true }) : false;
+    return text.trim()
+      ? await delivery.deliver(
+          "final",
+          { text },
+          {
+            skipTts: true,
+            transcriptSource: { kind: "fallback" },
+          },
+        )
+      : false;
   };
   const projector = createAcpReplyProjector({
     cfg: params.cfg,
@@ -1006,6 +1018,23 @@ export async function tryDispatchAcpReplyCore(params: {
     });
 
     await projector.flush(true);
+    if (!runtimeTurnWasCancelled && !params.abortSignal?.aborted) {
+      queuedFinal =
+        (await finalizeAcpTurnOutput({
+          cfg: params.cfg,
+          sessionKey: canonicalSessionKey,
+          agentId: acpAgentId,
+          delivery,
+          inboundAudio: params.inboundAudio,
+          sessionTtsAuto: params.sessionTtsAuto,
+          ttsChannel: params.ttsChannel,
+          ttsAccountId: effectiveDispatchAccountId,
+          shouldDeferVisibleTextForTts,
+          shouldEmitResolvedIdentityNotice,
+        })) || queuedFinal;
+    }
+    // Recheck cancellation after final delivery settles so a late abort keeps
+    // only confirmed output in the cancelled turn's transcript.
     if (runtimeTurnWasCancelled || params.abortSignal?.aborted) {
       queuedFinal = (await deliverDeferredTextFallback()) || queuedFinal;
       await persistTranscript(await delivery.resolveAccumulatedDeliveredTranscriptText());
@@ -1021,22 +1050,7 @@ export async function tryDispatchAcpReplyCore(params: {
       emitAuditEnd();
       return { queuedFinal, counts };
     }
-    queuedFinal =
-      (await finalizeAcpTurnOutput({
-        cfg: params.cfg,
-        sessionKey: canonicalSessionKey,
-        agentId: acpAgentId,
-        delivery,
-        inboundAudio: params.inboundAudio,
-        sessionTtsAuto: params.sessionTtsAuto,
-        ttsChannel: params.ttsChannel,
-        ttsAccountId: effectiveDispatchAccountId,
-        shouldDeferVisibleTextForTts,
-        shouldEmitResolvedIdentityNotice,
-      })) || queuedFinal;
 
-    // Persist once the turn's outcome is settled. Writing before finalization
-    // would leave a finalizer failure recorded as a clean success.
     await persistTranscript(delivery.getAccumulatedTranscriptText());
 
     const result = finishAttempt({

@@ -22,8 +22,15 @@ const EXPORT_TRAJECTORY_EXEC_SCOPE_KEY = "chat:export-trajectory";
 const MAX_TRAJECTORY_EXPORT_ENCODED_REQUEST_CHARS = 8192;
 const EXPORT_TRAJECTORY_PRIVATE_ROUTE_UNAVAILABLE =
   "I couldn't find a private owner approval route for the trajectory export. Run /export-trajectory from an owner DM so the sensitive trajectory bundle is not posted in this chat.";
-const EXPORT_TRAJECTORY_PRIVATE_ROUTE_ACK =
-  "Trajectory exports are sensitive. I sent the export request and approval prompt to the owner privately.";
+const EXPORT_TRAJECTORY_PRIVATE_ROUTE_REPLIES = {
+  delivered:
+    "Trajectory exports are sensitive. I sent the trajectory export details to the owner privately.",
+  pending:
+    "Trajectory exports are sensitive. Private delivery of the export request is pending; I can't confirm receipt yet.",
+  suppressed:
+    "Trajectory exports are sensitive. Private delivery of the export request was suppressed.",
+  failed: EXPORT_TRAJECTORY_PRIVATE_ROUTE_UNAVAILABLE,
+};
 
 type ExportTrajectoryCommandDeps = {
   createExecTool: typeof createExecTool;
@@ -31,17 +38,13 @@ type ExportTrajectoryCommandDeps = {
     params: HandleCommandsParams,
     request: TrajectoryExportExecRequest,
   ) => Promise<PrivateCommandRouteTarget[]>;
-  deliverPrivateTrajectoryReply: (params: {
-    commandParams: HandleCommandsParams;
-    targets: PrivateCommandRouteTarget[];
-    reply: ReplyPayload;
-  }) => Promise<boolean>;
+  deliverPrivateCommandReply: typeof deliverPrivateCommandReply;
 };
 
 const defaultExportTrajectoryCommandDeps: ExportTrajectoryCommandDeps = {
   createExecTool,
   resolvePrivateTrajectoryTargets: resolvePrivateTrajectoryTargetsForCommand,
-  deliverPrivateTrajectoryReply,
+  deliverPrivateCommandReply,
 };
 
 export async function buildExportTrajectoryCommandReply(
@@ -66,26 +69,20 @@ export async function buildExportTrajectoryCommandReply(
     return { text: `❌ Failed to prepare trajectory export request: ${formatErrorMessage(error)}` };
   }
   if (params.isGroup) {
-    const targets = await resolvedDeps.resolvePrivateTrajectoryTargets(params, request);
-    if (targets.length === 0) {
-      return { text: EXPORT_TRAJECTORY_PRIVATE_ROUTE_UNAVAILABLE };
-    }
-    const privateTarget = targets[0];
+    const [privateTarget] = await resolvedDeps.resolvePrivateTrajectoryTargets(params, request);
     if (!privateTarget) {
       return { text: EXPORT_TRAJECTORY_PRIVATE_ROUTE_UNAVAILABLE };
     }
     const privateReply = await buildExportTrajectoryApprovalReply(resolvedDeps, params, request, {
       privateApprovalTarget: privateTarget,
     });
-    const delivered = await resolvedDeps.deliverPrivateTrajectoryReply({
+    const outcome = await resolvedDeps.deliverPrivateCommandReply({
       commandParams: params,
       targets: [privateTarget],
       reply: privateReply,
     });
     return {
-      text: delivered
-        ? EXPORT_TRAJECTORY_PRIVATE_ROUTE_ACK
-        : EXPORT_TRAJECTORY_PRIVATE_ROUTE_UNAVAILABLE,
+      text: EXPORT_TRAJECTORY_PRIVATE_ROUTE_REPLIES[outcome],
     };
   }
   return await buildExportTrajectoryApprovalReply(resolvedDeps, params, request);
@@ -117,14 +114,6 @@ async function resolvePrivateTrajectoryTargetsForCommand(
     commandParams: params,
     request: buildTrajectoryExportApprovalRequest(params, request),
   });
-}
-
-async function deliverPrivateTrajectoryReply(params: {
-  commandParams: HandleCommandsParams;
-  targets: PrivateCommandRouteTarget[];
-  reply: ReplyPayload;
-}): Promise<boolean> {
-  return await deliverPrivateCommandReply(params);
 }
 
 function buildTrajectoryExportApprovalRequest(

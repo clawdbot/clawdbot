@@ -13,7 +13,12 @@ import type { MessagePresentation, ReplyPayloadDeliveryPin } from "../../interac
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { DeliveryQueueCompletionRetention } from "../delivery-queue-sqlite.js";
 import type { QueuedDeliveryOwner } from "./deliver-queue-state.js";
-import type { OutboundDeliveryResult, OutboundPayloadDeliveryOutcome } from "./deliver-types.js";
+import type {
+  OutboundDeliveryQueuePolicy,
+  OutboundDeliveryResult,
+  OutboundPayloadDeliveryOutcome,
+  PlatformSendRoute,
+} from "./deliver-types.js";
 import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import type {
   QueuedReplyPayloadSendingHook,
@@ -34,7 +39,7 @@ type ConversationDeliveryAttemptAuthority = Omit<
   "kind"
 >;
 
-export type OutboundDeliveryQueuePolicy = "required" | "best_effort";
+export type { OutboundDeliveryQueuePolicy, PlatformSendRoute } from "./deliver-types.js";
 
 export type OutboundDeliveryIntent = {
   id: string;
@@ -127,11 +132,6 @@ export type ChannelHandler = {
     mediaUrl: string,
     overrides?: OutboundMessageSendOverrides,
   ) => Promise<OutboundDeliveryResult>;
-};
-
-export type PlatformSendRoute = {
-  replyToId?: string | null;
-  threadId?: string | number | null;
 };
 
 export type ChannelHandlerParams = {
