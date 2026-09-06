@@ -9,6 +9,7 @@ import {
   executeGitCommand as runGit,
   normalizeGitPathForFilesystem,
   requireGitCommand as requireGit,
+  requireGitCommandOutput,
 } from "../infra/git-exec.js";
 import { formatCommandOutput, formatCommandResult } from "../process/command-error.js";
 import { spawnCommand } from "../process/exec-spawn.js";
@@ -515,10 +516,11 @@ export async function readGitBackupLog(params: {
     `--max-count=${params.limit}`,
     "--pretty=format:%H%x09%cI%x09%s",
   ]);
-  if (result.code !== 0) {
-    throw new Error(formatGitBackupCommandResult("git log", result));
-  }
-  return result.stdout
+  return requireGitCommandOutput(
+    "git log",
+    result,
+    (command, failure) => new Error(formatGitBackupCommandResult(command, failure)),
+  )
     .split("\n")
     .filter(Boolean)
     .map((line) => {
