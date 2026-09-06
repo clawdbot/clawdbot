@@ -42,10 +42,7 @@ import {
 } from "../../agents/model-auth-env-vars.js";
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
-import {
-  modelCatalogLogicalKey,
-  resolveConfiguredModelPolicyAllow,
-} from "../../agents/model-selection-shared.js";
+import { resolveConfiguredModelPolicyAllow } from "../../agents/model-selection-shared.js";
 import {
   buildModelAliasIndex,
   isCliProvider,
@@ -55,6 +52,7 @@ import {
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
+import { resolveModelCatalogIdentityKey } from "../../agents/openai-model-routes.js";
 import { OPENAI_PROVIDER_ID } from "../../agents/openai-routing.js";
 import { loadPreparedModelCatalogSnapshot } from "../../agents/prepared-model-catalog.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
@@ -656,7 +654,7 @@ export async function modelsStatusCommand(
       if (entry.api === undefined && entry.baseUrl === undefined) {
         continue;
       }
-      const key = modelCatalogLogicalKey(entry);
+      const key = resolveModelCatalogIdentityKey(entry);
       const sources = routeSourcesByModel.get(key) ?? [];
       sources.push({ api: entry.api, baseUrl: entry.baseUrl });
       routeSourcesByModel.set(key, sources);
@@ -667,7 +665,7 @@ export async function modelsStatusCommand(
       await Promise.all(
         providerUseRefs.map(async (usage) => {
           const observedRoutes = routeSourcesByModel.get(
-            modelCatalogLogicalKey({ provider: usage.provider, id: usage.model }),
+            resolveModelCatalogIdentityKey({ provider: usage.provider, id: usage.model }),
           );
           const ref = {
             modelId: usage.model,
