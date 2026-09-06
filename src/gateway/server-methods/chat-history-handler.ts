@@ -38,16 +38,13 @@ import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { hiddenSessionNotFound } from "../session-sharing-policy.js";
-import {
-  prepareSessionSharing,
-  resolveSessionSharingTarget,
-  resolveSessionVisibility,
-} from "../session-sharing.js";
+import { prepareSessionSharing, resolveSessionVisibility } from "../session-sharing.js";
 import { capArrayByJsonBytes } from "../session-transcript-readers.js";
 import {
   buildGatewaySessionInfo,
   getSessionDefaults,
   loadGatewaySessionEntryReadOnly,
+  resolveCanonicalSessionStoreMatchFromStoreKeys,
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
@@ -196,6 +193,7 @@ async function handleChatHistoryRequest({
     agentId: sessionAgentId,
     storePath,
     store,
+    storeKeys,
     entry,
     canonicalKey,
   } = measureDiagnosticsTimelineSpanSync(
@@ -411,19 +409,43 @@ async function handleChatHistoryRequest({
   const startupMetadata = method === "chat.startup" ? startupProjection?.metadata : undefined;
   const sessionModelCatalog = startupProjection?.sessionModelCatalog;
   const defaultModelCatalog = startupProjection?.defaultModelCatalog;
-  const sharingConfig = context.getRuntimeConfig();
-  const sharingTarget = entry
-    ? resolveSessionSharingTarget({
-        cfg: sharingConfig,
-        sessionKey: canonicalKey,
+  const initialStoreKey = entry
+    ? storeKeys.find((candidate) => store[candidate] === entry)
+    : undefined;
+  const currentSharingState = entry
+    ? loadGatewaySessionEntryReadOnly(sessionKey, {
         agentId: sessionAgentId,
+        clone: false,
+        includeStoreChildEntries: true,
+        projection: "list",
       })
     : null;
+  const currentSharingMatch = currentSharingState
+    ? resolveCanonicalSessionStoreMatchFromStoreKeys(
+        currentSharingState.store,
+        currentSharingState.storeKeys,
+      )
+    : undefined;
+  const sharingTarget =
+    currentSharingState && currentSharingMatch
+      ? {
+          agentId: currentSharingState.agentId,
+          canonicalKey: currentSharingState.canonicalKey,
+          entry: currentSharingMatch.entry,
+          storeKey: currentSharingMatch.key,
+          storeKeys: currentSharingState.storeKeys,
+          storePath: currentSharingState.storePath,
+        }
+      : null;
   // History rows replace roster rows in clients. Publish current caller facts,
   // never roles from the pre-await snapshot or a replacement session instance.
   if (
     entry &&
-    (!sharingTarget ||
+    (!initialStoreKey ||
+      !sharingTarget ||
+      sharingTarget.agentId !== sessionAgentId ||
+      sharingTarget.canonicalKey !== canonicalKey ||
+      sharingTarget.storeKey !== initialStoreKey ||
       sharingTarget.entry.sessionId !== entry.sessionId ||
       sharingTarget.storePath !== storePath)
   ) {
@@ -434,7 +456,7 @@ async function handleChatHistoryRequest({
     );
     return;
   }
-  const sharing = prepareSessionSharing({ client, cfg: sharingConfig });
+  const sharing = prepareSessionSharing({ client, cfg: currentSharingState?.cfg ?? cfg });
   if (
     sharingTarget &&
     sharing.entryFilter?.(sharingTarget.storeKey, sharingTarget.entry) === false
