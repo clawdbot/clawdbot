@@ -1948,122 +1948,46 @@ describe("launchd install", () => {
     expect(state.launchctlCalls).toEqual([]);
   });
 
-  it.each(["/Users/test", "/Volumes/MainDataDrive"])(
-    "restores a legacy-label owner from %s when canonical bootstrap fails",
-    async (home) => {
-      const env = { ...createDefaultLaunchdEnv(), HOME: home };
-      if (home.startsWith("/Volumes/")) {
-        state.externalHome = home;
-      }
-      const legacyLabel = "ai.openclaw.legacy-gateway";
-      const legacyPlistPath = `${env.HOME}/Library/LaunchAgents/${legacyLabel}.plist`;
-      const targetPlistPath = resolveLaunchAgentPlistPath(env);
-      const previousLegacy = createTestLaunchAgentPlist({
-        label: legacyLabel,
-        programArguments: ["/legacy/node", "/legacy/openclaw.mjs", "gateway"],
-      });
-      launchdConstantsState.legacyGatewayLabels.push(legacyLabel);
-      state.files.set(legacyPlistPath, previousLegacy);
-      const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-      state.serviceStates.set(`${domain}/${legacyLabel}`, "running");
-      state.bootstrapError = "Operation not permitted";
-      state.bootstrapTransient = true;
-
-      await expect(
-        installLaunchAgent({
-          env,
-          stdout: new PassThrough(),
-          programArguments: defaultProgramArguments,
-        }),
-      ).rejects.toThrow("launchctl bootstrap failed: Operation not permitted");
-
-      expect(state.files.get(legacyPlistPath)).toBe(previousLegacy);
-      expect(state.files.has(targetPlistPath)).toBe(false);
-      expect(state.serviceLoaded).toBe(true);
-      expect(state.serviceRunning).toBe(true);
-      expect(launchctlCommandNames()).toEqual([
-        "print",
-        "print",
-        "bootout",
-        "unload",
-        "enable",
-        "bootstrap",
-        "print",
-        "enable",
-        "bootstrap",
-      ]);
-    },
-  );
-
-  it("retires a loaded legacy label from an external home after canonical activation", async () => {
-    const externalHome = "/Volumes/MainDataDrive";
-    const env = { ...createDefaultLaunchdEnv(), HOME: externalHome };
-    state.externalHome = externalHome;
+  it("restores an external legacy-label owner when canonical bootstrap fails", async () => {
+    const env = createDefaultLaunchdEnv();
     const legacyLabel = "ai.openclaw.legacy-gateway";
-    const legacyPlist = `${externalHome}/Library/LaunchAgents/${legacyLabel}.plist`;
+    const legacyPlistPath = `${env.HOME}/Library/LaunchAgents/${legacyLabel}.plist`;
+    const targetPlistPath = resolveLaunchAgentPlistPath(env);
+    const previousLegacy = createTestLaunchAgentPlist({
+      label: legacyLabel,
+      programArguments: ["/legacy/node", "/legacy/openclaw.mjs", "gateway"],
+    });
     launchdConstantsState.legacyGatewayLabels.push(legacyLabel);
-    state.files.set(
-      legacyPlist,
-      createTestLaunchAgentPlist({
-        label: legacyLabel,
-        programArguments: ["/legacy/node", "/legacy/openclaw.mjs", "gateway"],
-      }),
-    );
+    state.files.set(legacyPlistPath, previousLegacy);
     const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
     state.serviceStates.set(`${domain}/${legacyLabel}`, "running");
+    state.bootstrapError = "Operation not permitted";
+    state.bootstrapTransient = true;
 
-    await installLaunchAgent(defaultLaunchAgentFixture(env));
+    await expect(
+      installLaunchAgent({
+        env,
+        stdout: new PassThrough(),
+        programArguments: defaultProgramArguments,
+      }),
+    ).rejects.toThrow("launchctl bootstrap failed: Operation not permitted");
 
-    expect(state.files.has(legacyPlist)).toBe(false);
-    expect(state.files.has(resolveLaunchAgentPlistPath(env))).toBe(true);
-    expect(state.launchctlCalls).toContainEqual(["bootout", domain, legacyPlist]);
-    expect(state.launchctlCalls).toContainEqual([
+    expect(state.files.get(legacyPlistPath)).toBe(previousLegacy);
+    expect(state.files.has(targetPlistPath)).toBe(false);
+    expect(state.serviceLoaded).toBe(true);
+    expect(state.serviceRunning).toBe(true);
+    expect(launchctlCommandNames()).toEqual([
+      "print",
+      "print",
+      "bootout",
+      "unload",
+      "enable",
       "bootstrap",
-      domain,
-      resolveLaunchAgentPlistPath(env),
+      "print",
+      "enable",
+      "bootstrap",
     ]);
   });
-
-  it.each([
-    { legacy: true, loaded: false },
-    { legacy: true, loaded: true },
-    { legacy: false, loaded: false },
-    { legacy: false, loaded: true },
-  ])(
-    "handles duplicate definitions with legacy=$legacy loaded=$loaded",
-    async ({ legacy, loaded }) => {
-      const externalHome = "/Volumes/MainDataDrive";
-      const env = { ...createDefaultLaunchdEnv(), HOME: externalHome };
-      state.externalHome = externalHome;
-      const legacyLabel = legacy ? "ai.openclaw.legacy-gateway" : "ai.openclaw.gateway";
-      const externalPlist = `${externalHome}/Library/LaunchAgents/${legacyLabel}.plist`;
-      const bootPlist = `/Users/test/Library/LaunchAgents/${legacyLabel}.plist`;
-      const contents = createTestLaunchAgentPlist({
-        label: legacyLabel,
-        programArguments: ["/legacy/node", "/legacy/openclaw.mjs", "gateway"],
-      });
-      if (legacy) {
-        launchdConstantsState.legacyGatewayLabels.push(legacyLabel);
-      }
-      state.files.set(externalPlist, contents);
-      state.files.set(bootPlist, contents);
-      const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-      state.serviceStates.set(`${domain}/${legacyLabel}`, loaded ? "running" : "not-loaded");
-      if (loaded) {
-        await expect(installLaunchAgent(defaultLaunchAgentFixture(env))).rejects.toThrow(
-          "multiple prior definitions",
-        );
-        expect(state.files.get(externalPlist)).toBe(contents);
-        expect(state.files.get(bootPlist)).toBe(contents);
-        expect(state.fileWrites).toEqual([]);
-        expect(launchctlCommandNames().every((command) => command === "print")).toBe(true);
-      } else {
-        await installLaunchAgent(defaultLaunchAgentFixture(env));
-        expect(state.files.has(externalPlist)).toBe(false);
-        expect(state.files.has(bootPlist)).toBe(!legacy);
-      }
-    },
-  );
 
   it("stages a canonical plist without retiring a legacy LaunchAgent", async () => {
     const env = createDefaultLaunchdEnv();
@@ -4352,5 +4276,117 @@ describe("external APFS LaunchAgent placement", () => {
     expect(state.files.has(bootPlist)).toBe(false);
     expect(state.launchctlCalls).toContainEqual(["bootstrap", domain, externalPlist]);
   });
+  it("restores an external-home legacy-label owner when canonical bootstrap fails", async () => {
+    const externalHome = "/Volumes/MainDataDrive";
+    const env = { ...createDefaultLaunchdEnv(), HOME: externalHome };
+    state.externalHome = externalHome;
+    const legacyLabel = "ai.openclaw.legacy-gateway";
+    const legacyPlistPath = `${env.HOME}/Library/LaunchAgents/${legacyLabel}.plist`;
+    const targetPlistPath = resolveLaunchAgentPlistPath(env);
+    const previousLegacy = createTestLaunchAgentPlist({
+      label: legacyLabel,
+      programArguments: ["/legacy/node", "/legacy/openclaw.mjs", "gateway"],
+    });
+    launchdConstantsState.legacyGatewayLabels.push(legacyLabel);
+    state.files.set(legacyPlistPath, previousLegacy);
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    state.serviceStates.set(`${domain}/${legacyLabel}`, "running");
+    state.bootstrapError = "Operation not permitted";
+    state.bootstrapTransient = true;
+
+    await expect(
+      installLaunchAgent({
+        env,
+        stdout: new PassThrough(),
+        programArguments: defaultProgramArguments,
+      }),
+    ).rejects.toThrow("launchctl bootstrap failed: Operation not permitted");
+
+    expect(state.files.get(legacyPlistPath)).toBe(previousLegacy);
+    expect(state.files.has(targetPlistPath)).toBe(false);
+    expect(state.serviceLoaded).toBe(true);
+    expect(state.serviceRunning).toBe(true);
+    expect(launchctlCommandNames()).toEqual([
+      "print",
+      "print",
+      "bootout",
+      "unload",
+      "enable",
+      "bootstrap",
+      "print",
+      "enable",
+      "bootstrap",
+    ]);
+  });
+
+  it("retires a loaded legacy label from an external home after canonical activation", async () => {
+    const externalHome = "/Volumes/MainDataDrive";
+    const env = { ...createDefaultLaunchdEnv(), HOME: externalHome };
+    state.externalHome = externalHome;
+    const legacyLabel = "ai.openclaw.legacy-gateway";
+    const legacyPlist = `${externalHome}/Library/LaunchAgents/${legacyLabel}.plist`;
+    launchdConstantsState.legacyGatewayLabels.push(legacyLabel);
+    state.files.set(
+      legacyPlist,
+      createTestLaunchAgentPlist({
+        label: legacyLabel,
+        programArguments: ["/legacy/node", "/legacy/openclaw.mjs", "gateway"],
+      }),
+    );
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    state.serviceStates.set(`${domain}/${legacyLabel}`, "running");
+
+    await installLaunchAgent(defaultLaunchAgentFixture(env));
+
+    expect(state.files.has(legacyPlist)).toBe(false);
+    expect(state.files.has(resolveLaunchAgentPlistPath(env))).toBe(true);
+    expect(state.launchctlCalls).toContainEqual(["bootout", domain, legacyPlist]);
+    expect(state.launchctlCalls).toContainEqual([
+      "bootstrap",
+      domain,
+      resolveLaunchAgentPlistPath(env),
+    ]);
+  });
+
+  it.each([
+    { legacy: true, loaded: false },
+    { legacy: true, loaded: true },
+    { legacy: false, loaded: false },
+    { legacy: false, loaded: true },
+  ])(
+    "handles duplicate definitions with legacy=$legacy loaded=$loaded",
+    async ({ legacy, loaded }) => {
+      const externalHome = "/Volumes/MainDataDrive";
+      const env = { ...createDefaultLaunchdEnv(), HOME: externalHome };
+      state.externalHome = externalHome;
+      const legacyLabel = legacy ? "ai.openclaw.legacy-gateway" : "ai.openclaw.gateway";
+      const externalPlist = `${externalHome}/Library/LaunchAgents/${legacyLabel}.plist`;
+      const bootPlist = `/Users/test/Library/LaunchAgents/${legacyLabel}.plist`;
+      const contents = createTestLaunchAgentPlist({
+        label: legacyLabel,
+        programArguments: ["/legacy/node", "/legacy/openclaw.mjs", "gateway"],
+      });
+      if (legacy) {
+        launchdConstantsState.legacyGatewayLabels.push(legacyLabel);
+      }
+      state.files.set(externalPlist, contents);
+      state.files.set(bootPlist, contents);
+      const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+      state.serviceStates.set(`${domain}/${legacyLabel}`, loaded ? "running" : "not-loaded");
+      if (loaded) {
+        await expect(installLaunchAgent(defaultLaunchAgentFixture(env))).rejects.toThrow(
+          "multiple prior definitions",
+        );
+        expect(state.files.get(externalPlist)).toBe(contents);
+        expect(state.files.get(bootPlist)).toBe(contents);
+        expect(state.fileWrites).toEqual([]);
+        expect(launchctlCommandNames().every((command) => command === "print")).toBe(true);
+      } else {
+        await installLaunchAgent(defaultLaunchAgentFixture(env));
+        expect(state.files.has(externalPlist)).toBe(false);
+        expect(state.files.has(bootPlist)).toBe(!legacy);
+      }
+    },
+  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
