@@ -15,7 +15,7 @@ export function buildAssistantFailoverSignal(
   msg: AssistantMessage,
   opts?: { provider?: string },
 ): FailoverSignal {
-  const retryAfterMs = resolveRetryAfterMs(msg.errorMessage);
+  const retryAfterMs = resolveRetryAfterMs(msg.errorMessage, Date.now(), msg.errorBody);
   return {
     status: extractErrorHttpStatus(msg.errorMessage?.trim() ?? "")?.code,
     ...(retryAfterMs === undefined ? {} : { retryAfterMs }),

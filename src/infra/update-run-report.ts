@@ -37,7 +37,7 @@ export function renderUpdateRunNotice(
   const target = run.after.version ?? run.target.version;
   const to = target ? bounded(target, 120) : undefined;
   if (kind === "ack") {
-    return `⬆️ Updating OpenClaw ${from ?? "the current version"} → ${to ?? "the latest release"}. You'll get a message here before the gateway restarts and when verification finishes.`;
+    return `⬆️ Updating OpenClaw ${from ?? "the current version"} → ${to ?? "the latest release"}. The gateway stays available while the update is validated; you'll get a message here when it finishes.`;
   }
   if (kind === "activating") {
     return `⏳ Restarting the gateway now${from && to ? ` (v${from} → v${to})` : ""}…`;
@@ -97,7 +97,7 @@ export function renderUpdateRunReport(
   const after = run.after.sha?.slice(0, 8) ?? run.after.version;
   const reason = bounded(run.reason?.trim() || "unknown reason", 240);
   const running =
-    run.verification.serviceRunning === false ? undefined : run.verification.runningVersion;
+    run.verification.serviceRunning === true ? run.verification.runningVersion : undefined;
   let headline: string;
   switch (run.status) {
     case "succeeded":
@@ -148,6 +148,9 @@ export function renderUpdateRunReport(
   }
   if (facts.channelsReady !== undefined) {
     verification.push(facts.channelsReady ? "channels ready" : "channels not ready");
+  }
+  if (facts.readyz !== undefined) {
+    verification.push(facts.readyz ? "HTTP ready" : "HTTP not ready");
   }
   if (facts.inferenceProbe) {
     verification.push(`inference ${facts.inferenceProbe}`);

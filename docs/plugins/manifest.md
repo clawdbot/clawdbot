@@ -213,6 +213,28 @@ Set `doctorContract.configRepair: true` when the doctor-contract module exports
 non-empty `legacyConfigRules`, a `normalizeCompatibilityConfig` function, or
 both. One declaration covers the complete config-repair artifact.
 
+Bundled plugins declare each state migration in execution order so Doctor can
+plan its owner and receipt without loading plugin code:
+
+```json
+{
+  "doctorContract": {
+    "stateMigrations": [
+      { "id": "legacy-cache-to-state" },
+      { "id": "session-owner-repair", "doctorOnly": true, "phase": "after-session-repair" }
+    ]
+  }
+}
+```
+
+The array must match the migration IDs, order, `doctorOnly` flags, and phases
+exported by the doctor-contract module. The older value `true` still declares
+the dynamic module. Installed external plugin manifests remain outside the
+copied-state and candidate content identity, including when they use the
+descriptor array. Candidate validation must bind those artifacts separately.
+Until then, Doctor records an explicit planning refusal instead of treating an
+installed manifest as write authority.
+
 The Codex plugin sets `doctorHealthChecks: true` when its public API exports
 health-check registration. Doctor checks the selected plugin's trust before
 loading this surface. Older installed versions without the declaration skip

@@ -46,6 +46,7 @@ type AcquisitionPeer = {
   errors: Error[];
   unownedErrors: Error[];
   requests: ReturnType<typeof parseMinimalGatewayRequestFrame>[];
+  receivedUpgrade: () => boolean;
   isListening: () => boolean;
   failTransport: () => Promise<Error>;
   close: () => Promise<void>;
@@ -83,6 +84,7 @@ async function withAcquisitionPeer(
   });
   const sockets = new Set<Socket>();
   const requests: ReturnType<typeof parseMinimalGatewayRequestFrame>[] = [];
+  let receivedUpgrade = false;
   const server = createServer();
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
   server.on("connection", (socket) => {
@@ -90,6 +92,7 @@ async function withAcquisitionPeer(
     socket.once("close", () => sockets.delete(socket));
   });
   server.on("upgrade", (request, socket, head) => {
+    receivedUpgrade = true;
     if (behavior === "hold upgrade") {
       return;
     }
@@ -178,6 +181,7 @@ async function withAcquisitionPeer(
       errors,
       unownedErrors,
       requests,
+      receivedUpgrade: () => receivedUpgrade,
       isListening: () => server.listening,
       failTransport: () => {
         for (const socket of sockets) {
@@ -486,7 +490,12 @@ describe("raw Gateway helper acquisition ownership", () => {
             : helper === "webchat"
               ? connectWebchatClient({ port: peer.port })
               : helper === "shared auth"
-                ? openAuthenticatedGatewayWs(peer.port, "synthetic-token")
+                ? openAuthenticatedGatewayWs(
+                    peer.port,
+                    "synthetic-token",
+                    // Webchat retains the default opening deadline; this helper also accepts a budget.
+                    behavior === "hold upgrade" ? 1_000 : undefined,
+                  )
                 : connectDeviceAuthReq({
                     url: `ws://127.0.0.1:${peer.port}`,
                     token: "synthetic-token",
@@ -508,6 +517,9 @@ describe("raw Gateway helper acquisition ownership", () => {
         expect(peer.unownedErrors).toEqual([]);
         expect(failure).toBeInstanceOf(Error);
         expect(failure).toMatchObject({ message: expect.stringContaining(error) });
+        if (behavior === "hold upgrade") {
+          expect(peer.receivedUpgrade(), "the peer must receive the withheld upgrade").toBe(true);
+        }
         if (behavior === "no response") {
           expect(failure).toMatchObject({ message: "timeout" });
         }

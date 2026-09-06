@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { runGlobalPackageUpdateSteps } from "../../infra/package-update-steps.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
+import { mergeProcessEnv } from "../../infra/process-env.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
 import {
@@ -34,6 +35,12 @@ import {
   UpdatePreMutationError,
   type UpdateCommandOptions,
 } from "./shared.js";
+import {
+  prepareGitPackageExposure,
+  readPackageUpdateIdentity,
+  runPackageUpdateDoctor,
+} from "./update-command-package.js";
+import { gatewayServiceCommandUsesRoot } from "./update-command-service-plan.js";
 import {
   resolvePreparedGatewayUpdatePolicy,
   type PreManagedServiceStop,
@@ -186,6 +193,11 @@ export async function updateGitInstall(params: {
   tag: string;
   devTarget?: DevUpdateTarget;
   beforeGitMutation?: BeforeGitMutation;
+  validateCandidate?: (root: string) => Promise<void>;
+  onTransaction?: (transaction: PackageUpdateTransaction) => void;
+  managedServiceEnv?: NodeJS.ProcessEnv;
+  invocationCwd?: string;
+  nodeRunner?: string;
   allowGatewayServiceRepair: boolean;
   allowGatewayActivation: boolean;
 }): Promise<UpdateRunResult> {
@@ -225,6 +237,10 @@ export async function updateGitInstall(params: {
     };
   }
 
+  const previousPackage = installTarget
+    ? await readPackageUpdateIdentity(installTarget.packageRoot ?? params.root)
+    : undefined;
+
   const checkout = params.switchToGit
     ? await ensureGitCheckout({
         dir: updateRoot,
@@ -250,56 +266,87 @@ export async function updateGitInstall(params: {
     };
   }
 
-  const updateResult = await runGatewayUpdate({
-    cwd: updateRoot,
-    argv1: params.switchToGit ? undefined : process.argv[1],
-    timeoutMs: params.timeoutMs,
-    progress: params.progress,
-    channel: params.channel,
-    tag: params.tag,
-    devTarget: params.devTarget,
-    deferConfiguredPluginInstallRepair: true,
-    allowGatewayServiceRepair: params.allowGatewayServiceRepair,
-    allowGatewayActivation: params.allowGatewayActivation,
-    beforeGitMutation: params.beforeGitMutation,
-  });
-  const steps = [...(cloneStep ? [cloneStep] : []), ...updateResult.steps];
-
-  if (params.switchToGit && updateResult.status === "ok") {
-    if (!installTarget) {
-      throw new Error("global install target missing after package-to-Git preflight");
-    }
-    const packageName =
-      (await readPackageName(installTarget.packageRoot ?? params.root)) ?? DEFAULT_PACKAGE_NAME;
-    const packageUpdate = await runGlobalPackageUpdateSteps({
-      installTarget,
-      installSpec: updateRoot,
-      packageName,
-      packageRoot: installTarget.packageRoot,
-      runCommand: runCommandWithTimeout,
-      runStep: (stepParams) => runUpdateStep({ ...stepParams, progress: params.progress }),
-      timeoutMs: effectiveTimeout,
-      env: installEnv,
-      installCwd: updateRoot,
-      // ensureGitCheckout already resolved the root; only the successful Git
-      // build/doctor flow can authorize exposing that exact checkout globally.
-      expectedGitCheckout: { root: updateRoot, sha: updateResult.after?.sha ?? null },
+  let exposure: Awaited<ReturnType<typeof prepareGitPackageExposure>> | undefined;
+  try {
+    const updateResult = await runGatewayUpdate({
+      cwd: updateRoot,
+      argv1: params.switchToGit ? undefined : process.argv[1],
+      timeoutMs: params.timeoutMs,
+      progress: params.progress,
+      channel: params.channel,
+      tag: params.tag,
+      devTarget: params.devTarget,
+      deferConfiguredPluginInstallRepair: true,
+      allowGatewayServiceRepair: params.allowGatewayServiceRepair,
+      allowGatewayActivation: params.allowGatewayActivation,
+      beforeGitMutation: params.beforeGitMutation,
+      validateCandidate: params.validateCandidate,
+      prepareGitExposure: params.switchToGit
+        ? async (candidateRoot, candidateSha, candidateEnv) => {
+            if (!installTarget) {
+              throw new Error("global install target missing after package-to-Git preflight");
+            }
+            const packageName =
+              (await readPackageName(installTarget.packageRoot ?? params.root)) ??
+              DEFAULT_PACKAGE_NAME;
+            exposure = await prepareGitPackageExposure({
+              installTarget,
+              installSpec: candidateRoot,
+              packageName,
+              packageRoot: installTarget.packageRoot,
+              runCommand: runCommandWithTimeout,
+              runStep: (stepParams) => runUpdateStep({ ...stepParams, progress: params.progress }),
+              timeoutMs: effectiveTimeout,
+              env: mergeProcessEnv([installEnv, candidateEnv]),
+              installCwd: candidateRoot,
+              expectedGitCheckout: { root: candidateRoot, sha: candidateSha },
+              activateGitRoot: updateRoot,
+              // Exact source/runtime verification runs inside package staging; the Git
+              // owner runs the canary after package lifecycle work and before activation.
+              validateCandidate: async () => [],
+              onTransaction: params.onTransaction,
+              postVerifyStep: (root) =>
+                runPackageUpdateDoctor({
+                  ...params,
+                  root,
+                  timeoutMs: effectiveTimeout,
+                }),
+            });
+          }
+        : undefined,
     });
-    steps.push(...packageUpdate.steps);
-
-    return {
-      ...updateResult,
-      status: packageUpdate.failedStep ? "error" : "ok",
-      reason: packageUpdate.failedStep?.name,
-      recovery: packageUpdate.recovery,
-      steps,
-      durationMs: Date.now() - params.startedAt,
-    };
+    const before = previousPackage ?? updateResult.before;
+    const steps = [...(cloneStep ? [cloneStep] : []), ...updateResult.steps];
+    if (exposure && updateResult.status === "ok") {
+      const packageUpdate = await exposure.activate();
+      return {
+        ...updateResult,
+        before,
+        status: packageUpdate.failedStep ? "error" : "ok",
+        reason: packageUpdate.failedStep?.name,
+        recovery: packageUpdate.recovery,
+        steps: [...steps, ...packageUpdate.steps],
+        durationMs: Date.now() - params.startedAt,
+      };
+    }
+    if (exposure) {
+      const cancelled = await exposure.cancel();
+      exposure = undefined;
+      const packageRoot = installTarget?.packageRoot ?? params.root;
+      const [packageOwner, gitOwner, serviceUsesPackage] = await Promise.all([
+        fs.realpath(packageRoot).catch(() => null),
+        fs.realpath(updateRoot).catch(() => null),
+        gatewayServiceCommandUsesRoot({ root: packageRoot, env: params.managedServiceEnv }),
+      ]);
+      // Source publication can fail after stopping an untouched package service.
+      // Recover that exact package; its version alone cannot authorize Git source.
+      if (packageOwner && gitOwner && packageOwner !== gitOwner && serviceUsesPackage === true) {
+        updateResult.recovery = cancelled.recovery;
+      }
+      steps.push(...cancelled.steps);
+    }
+    return { ...updateResult, before, steps, durationMs: Date.now() - params.startedAt };
+  } finally {
+    await exposure?.cancel();
   }
-
-  return {
-    ...updateResult,
-    steps,
-    durationMs: Date.now() - params.startedAt,
-  };
 }

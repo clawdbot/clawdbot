@@ -223,7 +223,6 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     progress_card: {
       emoji: "🗺️",
       title: "Progress Card",
-      detailKeys: ["plan.0.step", "markdown"],
     },
     ask_user: {
       emoji: "❓",
