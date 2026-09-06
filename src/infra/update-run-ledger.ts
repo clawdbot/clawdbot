@@ -191,6 +191,11 @@ if (schemaStart < 0 || schemaEnd < 0) {
 const schema = OPENCLAW_STATE_SCHEMA_SQL.slice(schemaStart, schemaEnd + schemaEndMarker.length);
 const readyDatabases = new WeakSet<DatabaseSync>();
 
+/** Canonical additive history table, also used in private checkpoint copies. */
+export function ensureUpdateRunLedgerSchema(db: DatabaseSync): void {
+  db.exec(schema); // sqlite-allow-raw -- Canonical lazy additive DDL bootstrap only.
+}
+
 function readRun(db: DatabaseSync, runId: string): UpdateRunRecord | undefined {
   const query = getNodeSqliteKysely<LedgerDatabase>(db)
     .selectFrom("update_runs")
@@ -206,7 +211,7 @@ function writeRun<T>(operation: (db: DatabaseSync) => T, options: OpenClawStateD
     ({ db }) => {
       // Feature-local, idempotent DDL shares the write transaction; a failed write also rolls back first use.
       if (!readyDatabases.has(db)) {
-        db.exec(schema); // sqlite-allow-raw -- Canonical lazy additive DDL bootstrap only.
+        ensureUpdateRunLedgerSchema(db);
       }
       committedDatabase = db;
       return operation(db);

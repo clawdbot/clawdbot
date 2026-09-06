@@ -37,6 +37,10 @@ import {
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import { summarizeUpdateStepFailure, type UpdateRunStep } from "../../infra/update-run-record.js";
+import {
+  assertNoPendingUpdateRecovery,
+  loadUpdateRecovery,
+} from "../../infra/update-run-recovery.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
@@ -78,6 +82,10 @@ export async function admitUpdateCommandRun(params: {
       });
     }
   }
+  // A previous invocation may have died with a sealed restoration plan. Detect
+  // it before any writable owner open or history row creation changes that state.
+  // An inherited diagnostic run ID is not a durable continuation claim.
+  assertNoPendingUpdateRecovery({ env });
   await assertOpenClawStateWriteAllowedAtPath({
     databasePath: resolveOpenClawStateSqlitePath(env),
     env,
@@ -104,6 +112,11 @@ export function failUpdateCommandRun(
   run: NonNullable<UpdateCommandOptions["run"]>,
 ): void {
   const options = { env: run.env };
+  // Recovery owns failure/outcome publication; outer unwind must not rewrite a
+  // database whose exact contents may still be needed to reconcile restoration.
+  if (loadUpdateRecovery(run.runId, options)) {
+    return;
+  }
   const active = getUpdateRun(run.runId, options);
   if (active?.status !== "running") {
     return;
@@ -173,6 +186,16 @@ export function completeUpdateCommandRun(
 ): UpdateRunResult {
   if (!run) {
     return result;
+  }
+  // A process-local result cannot complete an operationally pending update or
+  // authorize package retirement. Only the durable finalizer may close it.
+  if (loadUpdateRecovery(run.runId, { env: run.env })) {
+    return {
+      ...result,
+      status: "error",
+      reason: result.reason ?? "update-recovery-pending",
+      runId: run.runId,
+    };
   }
   const normalized = normalizeControlPlaneUpdateResult({ ...result, runId: run.runId });
   const recordOptions = { env: run.env, redactPaths: result.root ? [result.root] : [] };
