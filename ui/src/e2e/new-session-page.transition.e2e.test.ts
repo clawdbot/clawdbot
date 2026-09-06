@@ -9,6 +9,7 @@ import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
 } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   ONE_PIXEL_PNG_B64,
   SESSION_LIST_DEFAULTS,
@@ -150,11 +151,7 @@ suite.define(() => {
   });
 
   it("uses shifted Enter for background start in modifier mode", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const gatewayUrl = controlUiBundledGatewayUrl(suite.server.baseUrl);
     await context.addInitScript(
       ({ key, url }) => {
@@ -189,11 +186,7 @@ suite.define(() => {
   });
 
   it("creates and lists a session with the default mock Gateway", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
     try {
@@ -251,11 +244,7 @@ suite.define(() => {
   });
 
   it("commits the confirmed session URL before Chat loads and animates only the ready composer", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const thinkingLevels = ["off", "low", "medium", "high", "xhigh"].map((id) => ({
       id,

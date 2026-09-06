@@ -6,6 +6,7 @@ import {
   createChatFlowE2eSuite,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -13,11 +14,7 @@ const QUEUED = ["review the migration", "then update the docs", "finally run the
 
 suite.define(() => {
   it("reorders offline queued messages from the keyboard-focused handle", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
 
@@ -63,11 +60,7 @@ suite.define(() => {
         recursive: true,
       });
     }
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       // A real active turn holds the restored queue while we inspect its order.
