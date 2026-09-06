@@ -361,7 +361,9 @@ test("sessions.describe retains full target and child metadata without decoding 
   const parse = JSON.parse;
   let unrelatedDecodes = 0;
   const parsed = vi.spyOn(JSON, "parse").mockImplementation((value, reviver) => {
-    if (typeof value === "string" && value.includes(unrelatedPrompt)) unrelatedDecodes++;
+    if (typeof value === "string" && value.includes(unrelatedPrompt)) {
+      unrelatedDecodes++;
+    }
     return parse(value, reviver);
   });
   const projected = vi.spyOn(pluginHostState, "projectPluginSessionExtensionsSync");
