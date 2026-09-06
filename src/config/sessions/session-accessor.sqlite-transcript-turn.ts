@@ -294,7 +294,7 @@ export async function appendExpectedSessionTranscriptTurn(
         sessionFile: options.sessionFile,
       };
     }, toDatabaseOptions(resolved));
-    emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
+    emitCommittedSessionIdentityDiff(resolved.agentId, previousIdentity, currentIdentity);
     return result;
   });
 }

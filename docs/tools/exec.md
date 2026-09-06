@@ -244,6 +244,19 @@ Send keys (tmux-style):
 {"tool":"process","action":"send-keys","sessionId":"<id>","keys":["Up","Up","Enter"]}
 ```
 
+For text, use `literal`; for exact input bytes, use `hex`. A mixed request sends literal UTF-8 text, hex bytes, then named keys, in that order:
+
+```json
+{
+  "tool": "process",
+  "action": "send-keys",
+  "sessionId": "<id>",
+  "literal": "hello ",
+  "hex": ["c3", "a9"],
+  "keys": ["Enter"]
+}
+```
+
 Submit (send CR only):
 
 ```json

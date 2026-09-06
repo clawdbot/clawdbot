@@ -52,7 +52,7 @@ export type ManagedRun = {
 };
 
 export type ManagedRunStdin = {
-  write: (data: string, cb?: (err?: Error | null) => void) => void;
+  write: (data: string | Buffer, cb?: (err?: Error | null) => void) => void;
   end: () => void;
   destroy?: () => void;
   destroyed?: boolean;

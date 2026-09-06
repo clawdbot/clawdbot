@@ -1,11 +1,16 @@
 /* @vitest-environment jsdom */
-import { render } from "lit";
+import { nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { resetComposerFixture } from "./chat-composer.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
+import { renderChat } from "./chat-view.ts";
 import { renderChatComposer } from "./components/chat-composer.ts";
+import {
+  installTranscriptDomMocks,
+  resetTranscriptTestDom,
+} from "./components/chat-transcript.test-support.ts";
 
 const defaults = { modelProvider: null, model: null, contextTokens: null };
 
@@ -35,6 +40,57 @@ it("blocks model setup without disabled-reason text", () => {
 });
 
 describe("subagent composer", () => {
+  it.each([
+    { name: "subagent key", key: "agent:main:subagent:reply-owner" },
+    {
+      name: "spawn metadata",
+      key: "agent:main:reply-owner",
+      row: { spawnedBy: "agent:main:parent" },
+    },
+    { name: "archive", key: "agent:main:reply-owner", row: { archived: true } },
+    {
+      name: "restart recovery",
+      key: "agent:main:reply-owner",
+      row: { restartRecoveryStatus: "tombstoned" },
+    },
+  ] satisfies { name: string; key: string; row?: Partial<GatewaySessionRow> }[])(
+    "keeps copy but not Reply when $name replaces the composer",
+    ({ key, ...scenario }) => {
+      installTranscriptDomMocks();
+      const { pane, state } = createRefreshChatPane();
+      state.sessionKey = key;
+      state.sessionsResult = {
+        ts: 1,
+        path: "",
+        count: "row" in scenario ? 1 : 0,
+        defaults,
+        sessions: "row" in scenario ? [{ key, kind: "direct", ...scenario.row }] : [],
+      };
+      state.chatLoading = false;
+      state.chatMessages = [
+        {
+          role: "assistant",
+          content: "The workspace review is complete.",
+          timestamp: 1_000,
+          __openclaw: { id: "review-result", seq: 1 },
+        },
+      ];
+      const container = document.body.appendChild(document.createElement("div"));
+      try {
+        pane.render();
+        render(renderChat(pane.chatProps!), container);
+        expect(container.textContent).toContain("The workspace review is complete.");
+        expect(container.querySelector("textarea")).toBeNull();
+        expect(container.querySelector(".chat-reply-btn")).toBeNull();
+        expect(container.querySelector(".chat-copy-btn")).not.toBeNull();
+      } finally {
+        render(nothing, container);
+        pane.chatProps?.transcript.hostDisconnected();
+        resetTranscriptTestDom();
+      }
+    },
+  );
+
   it.each([
     { spawnedBy: "agent:main:parent" },
     { parentSessionKey: "agent:main:parent" },
@@ -104,28 +160,55 @@ describe("subagent composer", () => {
     expect(container.querySelector('[aria-label="Stop generating"]')).toBeNull();
   });
 
-  it("keeps an ordinary nested session editable", () => {
-    const { pane, state } = createRefreshChatPane();
-    state.sessionKey = "agent:main:fork";
-    state.sessionsResult = {
-      ts: 0,
-      path: "",
-      count: 1,
-      defaults,
-      sessions: [
-        {
-          key: state.sessionKey,
-          kind: "direct",
-          updatedAt: 0,
-          parentSessionKey: "agent:main:parent",
-        },
-      ],
-    };
-    pane.render();
-    const container = document.createElement("div");
-    render(renderChatComposer(pane.chatProps!), container);
-    expect(pane.chatProps?.canSend).toBe(true);
-    expect(container.querySelector("textarea")).not.toBeNull();
-    expect(container.querySelector(".agent-chat__disabled-banner")).toBeNull();
-  });
+  it.each([true, false])(
+    "keeps an ordinary nested session reply editable while connected=%s",
+    (connected) => {
+      installTranscriptDomMocks();
+      const { pane, state } = createRefreshChatPane(
+        connected ? createGatewayBrowserClientFixture() : undefined,
+      );
+      state.sessionKey = "agent:main:fork";
+      state.sessionsResult = {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults,
+        sessions: [
+          {
+            key: state.sessionKey,
+            kind: "direct",
+            updatedAt: 0,
+            parentSessionKey: "agent:main:parent",
+          },
+        ],
+      };
+      state.chatLoading = false;
+      state.chatMessage = "Keep this draft";
+      state.chatMessages = [{ role: "assistant", content: "Review complete.", timestamp: 1_000 }];
+      const container = document.body.appendChild(document.createElement("div"));
+      const draw = () => {
+        pane.render();
+        render(renderChat(pane.chatProps!), container);
+      };
+      try {
+        draw();
+        expect(pane.chatProps?.canSend).toBe(true);
+        expect(container.querySelector(".agent-chat__disabled-banner")).toBeNull();
+        const reply = container.querySelector<HTMLButtonElement>(".chat-reply-btn");
+        expect(reply).not.toBeNull();
+        reply!.click();
+        draw();
+        expect(container.querySelector(".chat-reply-preview__text")?.textContent).toBe(
+          "Review complete.",
+        );
+        expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(
+          "Keep this draft",
+        );
+      } finally {
+        render(nothing, container);
+        pane.chatProps?.transcript.hostDisconnected();
+        resetTranscriptTestDom();
+      }
+    },
+  );
 });

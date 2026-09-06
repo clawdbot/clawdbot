@@ -198,7 +198,7 @@ export async function replaceSessionWithBranchedTranscript(
     try {
       onCommitted(nextScope, identities.transcriptMutationAt);
     } finally {
-      emitCommittedSessionIdentityDiff(identities.previous, identities.current);
+      emitCommittedSessionIdentityDiff(resolved.agentId, identities.previous, identities.current);
     }
   });
 }
@@ -360,7 +360,7 @@ export async function trimTranscriptForManualCompact(
       });
       currentIdentity = readSessionIdentitySnapshot(writeDatabase, identityKeys);
     }, toDatabaseOptions(resolved));
-    emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
+    emitCommittedSessionIdentityDiff(resolved.agentId, previousIdentity, currentIdentity);
     return { kept: retainedLines.length, trimmed: true };
   });
 }

@@ -107,13 +107,13 @@ function listChildDirectories(
         ? [entry.name]
         : [];
     } catch (error) {
-      opts.onDiagnostic?.({ path: entry.path, message: String(error) });
+      opts.onDiagnostic?.({ kind: "read", path: entry.path, message: String(error) });
       return [];
     }
   });
   for (const failure of scan.failedDirs) {
     if (!isMissingPathError(failure.error)) {
-      opts.onDiagnostic?.({ path: failure.path, message: String(failure.error) });
+      opts.onDiagnostic?.({ kind: "read", path: failure.path, message: String(failure.error) });
     }
   }
   if (budget) {
@@ -128,13 +128,12 @@ function listChildDirectories(
 }
 
 function resolveRawEntryScanLimit(maxCandidateDirs: number): number {
-  const normalized = Math.max(0, maxCandidateDirs);
-  if (normalized === 0) {
+  if (maxCandidateDirs <= 0) {
     return 0;
   }
   return Math.min(
     DEFAULT_MAX_RAW_ENTRIES_PER_DIRECTORY_SCAN,
-    Math.max(DEFAULT_MIN_RAW_ENTRIES_PER_DIRECTORY_SCAN, normalized * 10),
+    Math.max(DEFAULT_MIN_RAW_ENTRIES_PER_DIRECTORY_SCAN, maxCandidateDirs * 10),
   );
 }
 
@@ -152,8 +151,7 @@ function hasSkillFileCandidate(skillDir: string): boolean {
     fs.lstatSync(path.join(skillDir, "SKILL.md"));
     return true;
   } catch (error) {
-    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
-    return code !== "ENOENT" && code !== "ENOTDIR";
+    return !isMissingPathError(error);
   }
 }
 
@@ -307,6 +305,7 @@ function resolveContainedSkillPath(params: {
   const candidateRealPath = tryRealpath(params.candidatePath);
   if (!candidateRealPath) {
     params.onDiagnostic?.({
+      kind: "read",
       path: params.candidatePath,
       message: "Could not resolve skill path.",
     });
@@ -329,6 +328,7 @@ function resolveContainedSkillPath(params: {
     candidateRealPath,
   });
   params.onDiagnostic?.({
+    kind: "invalid",
     path: params.candidatePath,
     message: "Skill path resolves outside its configured root.",
   });
@@ -433,11 +433,10 @@ function resolveSkillFilePath(params: {
     candidatePath: params.candidatePath,
     onDiagnostic: params.onDiagnostic,
   });
-  if (resolved || tryRealpath(params.candidatePath)) {
-    return resolved;
-  }
   // Let the root-scoped loader diagnose named paths that cannot be resolved.
-  return path.resolve(params.candidatePath);
+  return resolved || tryRealpath(params.candidatePath)
+    ? resolved
+    : path.resolve(params.candidatePath);
 }
 
 export function discoverSkillCandidates(params: {
@@ -453,7 +452,7 @@ export function discoverSkillCandidates(params: {
     rootRealPath = fs.realpathSync(rootDir);
   } catch (error) {
     if (!isMissingPathError(error)) {
-      params.onDiagnostic?.({ path: rootDir, message: String(error) });
+      params.onDiagnostic?.({ kind: "read", path: rootDir, message: String(error) });
     }
     return { candidates: [], rootIsSkill: false };
   }
@@ -652,6 +651,7 @@ export function discoverSkillCandidates(params: {
 
   if (discoveryBudget.truncated) {
     params.onDiagnostic?.({
+      kind: "invalid",
       path: rootDir,
       message:
         "Skill inventory reached its discovery limit; inspect the remaining skills separately.",

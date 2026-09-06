@@ -1,10 +1,10 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
 import { withCiCheckoutFixture } from "./ci-checkout.test-support.js";
+import { fixturePreloadEnv } from "./fixtures/ci-fixture-runtime.cjs";
 
 export function censusPreload(root: string, extra = "", delayed = false) {
   const preload = path.join(root, "census-preload.mjs");
@@ -14,7 +14,7 @@ export function censusPreload(root: string, extra = "", delayed = false) {
 import cp from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { syncBuiltinESMExports } from "node:module";
+import { syncFixtureBuiltinExports } from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
 const root = process.argv[3];
 const delayed = ` +
       JSON.stringify(delayed) +
@@ -35,11 +35,11 @@ cp.spawn = (command, args, options) => {
   }
   return child;
 };
-syncBuiltinESMExports();
+syncFixtureBuiltinExports();
 ` +
       extra,
   );
-  return { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` };
+  return fixturePreloadEnv(preload);
 }
 
 export function expectCensusClosed(root: string, actorPids: number[]) {
@@ -114,7 +114,7 @@ else if (fault !== "retire") console.log(JSON.stringify({ ready: true }));
 import assert from "node:assert/strict";
 import cp from "node:child_process";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
+import { syncFixtureBuiltinExports } from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
 import { tmpdir } from "node:os";
 import path from "node:path";
 const [moduleUrl, fault, sampler] = process.argv.slice(1);
@@ -174,7 +174,7 @@ cp.spawn = (command, args, options) => {
   }
   return child;
 };
-syncBuiltinESMExports();
+syncFixtureBuiltinExports();
 const { createWindowsProcessCensus, requestWindowsProcessCensus } = await import(moduleUrl);
 const failures = [];
 const owner = createWindowsProcessCensus({ root, token: "owned", onFailure: error => failures.push(String(error)) });
@@ -270,7 +270,7 @@ for line in sys.stdin:
   const censusSpawn = cp.spawn;
   cp.spawn = (command, args, options) => censusSpawn(command, command === "python"
     ? ["-I", "-S", "-c", ${JSON.stringify(sampler)}, root, args[2], ${JSON.stringify(fault)}] : args, options);
-  syncBuiltinESMExports();
+  syncFixtureBuiltinExports();
 }`,
           );
         },
@@ -332,7 +332,7 @@ if (mode === "supervise") {
     }
     return child;
   };
-  syncBuiltinESMExports();
+  syncFixtureBuiltinExports();
 }
 `,
         );
@@ -477,7 +477,7 @@ if (mode === "supervise") {
     };
   }
   process.once("exit", code => recordBoundary({ event: "supervisor-exit", code }));
-  syncBuiltinESMExports();
+  syncFixtureBuiltinExports();
 }
 `,
           );

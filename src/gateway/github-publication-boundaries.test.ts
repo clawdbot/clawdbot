@@ -1,5 +1,6 @@
 import os from "node:os";
 import { describe, expect, it, vi } from "vitest";
+import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -17,6 +18,7 @@ import {
   createTestGitHubPublicationRuntime as createGitHubPublicationRuntime,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
+  persistPublicationTestSession,
   root,
   seedLocalPublication,
 } from "./github-publication.test-support.js";
@@ -30,6 +32,52 @@ const mocks = githubPublicationTestMocks();
 
 describe("Gateway GitHub publication boundaries", () => {
   installGitHubPublicationTestHarness();
+
+  it.each(["retained", "missing"] as const)(
+    "does not rebind a %s receipt lifecycle when replaying after the real reset",
+    async (bindingState) => {
+      const session = await persistPublicationTestSession(REQUEST.sessionKey);
+      const placements = createWorkerSessionPlacementStore({
+        database: openOpenClawStateDatabase(),
+      });
+      const requested = placements.startDispatch(REQUEST);
+      placements.fail({
+        sessionId: REQUEST.sessionId,
+        expectedGeneration: requested.generation,
+        recoveryError: "Provisioning stopped before allocation",
+      });
+      const coordinator = createTestGitHubPublicationCoordinator({ placements });
+      const input = {
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+        idempotencyKey: "deferred-before-reset",
+      };
+      const accepted = await coordinator.requestForSession(input);
+      expect(accepted.status).toBe("requested");
+      const binding = { publicationKind: "shared" as const, requestId: accepted.requestId };
+      const originalLifecycle = readGitHubPublicationSessionLifecycle(binding);
+      expect(originalLifecycle).toEqual({ lifecycle_revision: session.read().lifecycleRevision });
+      if (bindingState === "missing") {
+        openOpenClawStateDatabase()
+          .db.prepare(
+            "DELETE FROM github_publication_session_lifecycles WHERE publication_kind = 'shared' AND request_id = ?",
+          )
+          .run(accepted.requestId);
+      }
+      await session.reset(placements);
+      const replay = await coordinator.requestForSession(input);
+      expect(replay).toMatchObject({ status: "failed", code: "session_changed" });
+      expect(readGitHubPublicationSessionLifecycle(binding)).toEqual(
+        bindingState === "retained" ? originalLifecycle : undefined,
+      );
+      await coordinator.resumeSessionRequests();
+      expect(coordinator.read(accepted.requestId)).toMatchObject({
+        status: "failed",
+        code: "session_changed",
+      });
+      expect(commands.some((argv) => argv.includes("push") || argv.includes("POST"))).toBe(false);
+    },
+  );
 
   it.each([
     ["URL rewrite", "url.https://attacker.invalid/.insteadof https://github.com/"],

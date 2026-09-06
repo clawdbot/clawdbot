@@ -11,6 +11,7 @@ import {
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { runGit } from "../agents/worktrees/git.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import type {
   ControlUiSessionBranch,
   ControlUiSessionPullRequest,
@@ -36,6 +37,7 @@ import {
   type SessionPullRequestGitContext,
   type SessionPullRequestLocalGitDeps,
 } from "./control-ui-session-prs-local-git.js";
+import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { resolveGitHubForkParent } from "./github-repository-target.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
@@ -95,10 +97,10 @@ type LoadSessionPullRequestDeps = SessionPullRequestLocalGitDeps & {
   ) => Promise<SessionPullRequestGitContext | null>;
 };
 
-/** Resolves the checkout root without spawning Git. */
-function resolveSessionPullRequestGitRoot(
+/** Resolve the recorded source before considering a Gateway workspace default. */
+function resolveSessionPullRequestSource(
   params: ControlUiSessionPullRequestsParams,
-): string | null {
+): string | SessionPullRequestGitContext | null {
   const { cfg, entry, storePath, canonicalKey } = loadGatewaySessionEntryReadOnly(
     params.sessionKey,
     {
@@ -117,6 +119,14 @@ function resolveSessionPullRequestGitRoot(
       parseAgentSessionKey(params.sessionKey)?.agentId ??
       resolveDefaultAgentId(cfg),
   );
+  if (entry.repositoryWorkspaceId) {
+    const repository = getSessionRepositoryWorkspaceStore().get(entry.repositoryWorkspaceId);
+    if (!repository || repository.agentId !== agentId || repository.sessionKey !== canonicalKey) {
+      return null;
+    }
+    const remote = parseGitHubRemoteUrl(repository.url);
+    return remote ? { ...remote, branch: repository.branch } : null;
+  }
   const root =
     normalizeOptionalString(entry.spawnedCwd) ??
     normalizeOptionalString(entry.spawnedWorkspaceDir) ??
@@ -135,14 +145,14 @@ async function resolveSessionPullRequestGitContext(
   params: ControlUiSessionPullRequestsParams,
   deps: LoadSessionPullRequestDeps,
 ): Promise<SessionPullRequestGitContext | null> {
-  const root = deps.resolveGitRoot
+  const source = deps.resolveGitRoot
     ? await deps.resolveGitRoot(params)
-    : resolveSessionPullRequestGitRoot(params);
-  if (!root) {
+    : resolveSessionPullRequestSource(params);
+  if (typeof source !== "string") {
     releaseSessionPullRequestLocalGitCache(deps.cacheSignal);
-    return null;
+    return source;
   }
-  return resolveCachedGitContext(root, deps, params.refresh === true);
+  return resolveCachedGitContext(source, deps, params.refresh === true);
 }
 
 // git push's own "create a pull request" hint URL; GitHub resolves the base
@@ -279,7 +289,8 @@ async function resolveSessionBranch(
 ): Promise<ControlUiSessionBranch | undefined> {
   const root = context.root;
   if (!root) {
-    // Stubbed test contexts without a root skip the local-git gates.
+    // Repository-only sessions have no local checkout to inspect. Their recorded
+    // source still exposes publication; the broker validates the accepted checkpoint.
     return {
       owner: context.owner,
       repo: context.repo,

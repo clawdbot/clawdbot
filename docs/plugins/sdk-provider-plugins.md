@@ -1241,6 +1241,13 @@ catalog, API-key auth, and dynamic model resolution.
         memory search. The retired memory-specific registrar and manifest
         contract are no longer accepted.
 
+        OpenAI-compatible endpoints can use `createRemoteEmbeddingProvider`
+        from `openclaw/plugin-sdk/memory-core-host-engine-embeddings`. Its optional
+        `buildRequestFields(kind)` callback returns extra JSON fields for
+        `"query"` or `"document"` requests, such as `dimensions` or `input_type`.
+        The shared factory always supplies the client's `model` and the original
+        `input` array after those fields, preserving response-count validation.
+
         Providers that accept model aliases can expose
         `normalizeModel(options): string`. Memory uses this synchronous hook for
         both creation options and cold index identity checks. Keep it configuration-only:

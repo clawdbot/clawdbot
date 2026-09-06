@@ -23,7 +23,10 @@ export const UpdateStateSchemaVersionsSchema = z.array(
 );
 export type UpdateStateSchemaVersion = z.infer<typeof UpdateStateSchemaVersionsSchema>[number];
 type StateInput = { stateDir: string; config: OpenClawConfig; env?: NodeJS.ProcessEnv };
-type Registry = Pick<DB, "agent_databases">;
+type CandidateStateDatabase = Pick<
+  DB,
+  "agent_databases" | "agent_database_leases" | "state_leases"
+>;
 
 export function updateStateSchemaVersionsMatch(
   before: readonly UpdateStateSchemaVersion[],
@@ -52,7 +55,7 @@ function collectRegisteredPaths(db: DatabaseSync, shared: string, files: string[
   const rows = tableExists(db, "agent_databases")
     ? executeSqliteQuerySync(
         db,
-        getNodeSqliteKysely<Registry>(db)
+        getNodeSqliteKysely<CandidateStateDatabase>(db)
           .selectFrom("agent_databases")
           .select("path")
           .orderBy("path"),
@@ -234,10 +237,16 @@ export async function snapshotUpdateCandidateState(
         ...(file === shared
           ? {
               transform: (db: DatabaseSync) => {
+                const queries = getNodeSqliteKysely<CandidateStateDatabase>(db);
+                // Source process leases cannot own the independently opened rehearsal copy.
+                for (const table of ["agent_database_leases", "state_leases"] as const) {
+                  if (tableExists(db, table)) {
+                    executeSqliteQuerySync(db, queries.deleteFrom(table));
+                  }
+                }
                 for (const { stored, source } of collectRegisteredPaths(db, shared, files)) {
                   const rebound = targetPath(source);
                   const reboundStored = path.relative(input.targetStateDir, rebound);
-                  const queries = getNodeSqliteKysely<Registry>(db);
                   if (
                     stored !== reboundStored &&
                     source === resolveOpenClawRegisteredAgentDatabasePath(shared, reboundStored)

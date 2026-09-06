@@ -4,7 +4,6 @@
  */
 import fs from "node:fs/promises";
 import os from "node:os";
-import path from "node:path";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import {
   formatActiveNodeContextLabel,
@@ -18,12 +17,6 @@ import { extractModelCompat } from "../../plugins/provider-model-compat.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { transformProviderSystemPrompt } from "../../plugins/provider-runtime.js";
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
-import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
-import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
-import {
-  applySkillEnvOverrides,
-  applySkillEnvOverridesFromSnapshot,
-} from "../../skills/runtime/env-overrides.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { createBundleLspToolRuntime } from "../agent-bundle-lsp-runtime.js";
@@ -81,12 +74,7 @@ import { resolvePromptModeForSession } from "./run/attempt-prompt-helpers.js";
 import { resolveAttemptSpawnWorkspaceDir } from "./run/attempt-thread-helpers.js";
 import { applyEmbeddedAttemptToolsAllow } from "./run/attempt-tool-construction-plan.js";
 import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "./sandbox-info.js";
-import {
-  createSandboxPromptEntryLoader,
-  mapSandboxSkillEntriesForPrompt,
-  mapSandboxSkillUsagePaths,
-  resolveSandboxSkillRuntimeInputs,
-} from "./sandbox-skills.js";
+import { prepareEmbeddedSkills } from "./skill-runtime.js";
 import { buildEmbeddedSystemPrompt } from "./system-prompt.js";
 import { collectAllowedToolNames } from "./tool-name-allowlist.js";
 import { mapThinkingLevelForProvider } from "./utils.js";
@@ -157,64 +145,19 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
   };
 
   try {
-    const {
-      skillsEligibility,
-      skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
-      skillsSnapshot: skillsSnapshotForRun,
-      skillsWorkspaceDir: effectiveSkillsWorkspace,
-      workspaceOnly: loadSkillsWorkspaceOnly,
-    } = resolveSandboxSkillRuntimeInputs({
-      sandbox,
-      skillsAnchorWorkspace: params.bootstrapWorkspaceDir ?? effectiveWorkspace,
-      skillsSnapshot: params.skillsSnapshot,
-    });
-    const { shouldLoadSkillEntries, skillEntries, loadSkillEntries, preserveEntryOrder } =
-      resolveEmbeddedRunSkillEntries({
-        workspaceDir: effectiveSkillsWorkspace,
+    const preparedSkills = prepareEmbeddedSkills({
+      attempt: {
         config: params.config,
-        agentId: sessionAgentId,
-        eligibility: skillsEligibility,
-        skillsSnapshot: skillsSnapshotForRun,
-        // Sandbox fallbacks stay inside their sandbox skill workspace;
-        // host execution skills are not mounted there.
-        ...(sandbox?.enabled === true
-          ? {}
-          : { executionSkillsDir: path.join(effectiveWorkspace, "skills") }),
-        workspaceOnly: loadSkillsWorkspaceOnly,
-      });
-    restoreSkillEnv = skillsSnapshotForRun
-      ? applySkillEnvOverridesFromSnapshot({
-          snapshot: skillsSnapshotForRun,
-          config: params.config,
-        })
-      : applySkillEnvOverrides({
-          skills: skillEntries ?? [],
-          config: params.config,
-        });
-    const promptSkillEntries = mapSandboxSkillEntriesForPrompt({
-      entries: shouldLoadSkillEntries ? skillEntries : undefined,
-      skillsWorkspaceDir: effectiveSkillsWorkspace,
-      skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
+        bootstrapWorkspaceDir: params.bootstrapWorkspaceDir,
+        skillsSnapshot: params.skillsSnapshot,
+      },
+      effectiveWorkspace,
+      sandbox,
+      sessionAgentId,
+      includeCodeModeSkills: false,
     });
-    const skillUsagePaths = mapSandboxSkillUsagePaths({
-      paths: sandbox?.skillUsagePaths,
-      skillsWorkspaceDir: effectiveSkillsWorkspace,
-      skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
-    });
-    const skillsPrompt = resolveSkillsPrompt({
-      skillsSnapshot: skillsSnapshotForRun,
-      entries: promptSkillEntries,
-      loadEntries: createSandboxPromptEntryLoader({
-        loadEntries: loadSkillEntries,
-        skillsWorkspaceDir: effectiveSkillsWorkspace,
-        skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
-      }),
-      config: params.config,
-      workspaceDir: effectiveSkillsPromptWorkspace,
-      agentId: sessionAgentId,
-      eligibility: skillsEligibility,
-      preserveEntryOrder,
-    });
+    restoreSkillEnv = preparedSkills.restoreSkillEnv;
+    const { skillsSnapshotForRun, skillUsagePaths, skillsPrompt } = preparedSkills;
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const resolvedMessageProvider = params.messageChannel ?? params.messageProvider;
@@ -304,10 +247,10 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
             sandbox,
             resolvedWorkspace,
           });
-    const runtimeCapabilityProfile = resolveConversationCapabilityProfile({
+    // Policy and tool construction share facts, while their distinct agent owners stay explicit.
+    const conversationContext = {
       config: params.config,
       sessionKey: sandboxSessionKey,
-      agentId: sandboxAgentId,
       runSessionKey:
         params.sessionKey && params.sessionKey !== sandboxSessionKey
           ? params.sessionKey
@@ -318,7 +261,6 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       agentAccountId: params.agentAccountId,
       messageProvider: resolvedMessageProvider,
       chatType: params.chatType,
-      conversationToolPolicy: params.conversationToolPolicy,
       groupId: params.groupId,
       groupChannel: params.groupChannel,
       groupSpace: params.groupSpace,
@@ -327,7 +269,6 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       senderName: params.senderName,
       senderUsername: params.senderUsername,
       senderE164: params.senderE164,
-      senderIsOwner: params.senderIsOwner,
       modelProvider: effectiveModel.provider,
       modelId,
       modelApi: effectiveModel.api,
@@ -336,6 +277,12 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       cwd: effectiveCwd,
       spawnWorkspaceDir,
       skillsSnapshot: skillsSnapshotForRun,
+    };
+    const runtimeCapabilityProfile = resolveConversationCapabilityProfile({
+      ...conversationContext,
+      agentId: sandboxAgentId,
+      conversationToolPolicy: params.conversationToolPolicy,
+      senderIsOwner: params.senderIsOwner,
       sandboxToolPolicy: sandbox?.tools,
       inputProvenance: params.inputProvenance,
       trustedInternalHandoff: params.trustedInternalHandoff,
@@ -345,6 +292,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
     const skillInstructionDeliveryCache = createSkillInstructionDeliveryCache();
     const toolsRaw = toolsEnabled
       ? createOpenClawCodingTools({
+          ...conversationContext,
           agentId: sessionAgentId,
           exec: {
             ...execOverrides,
@@ -354,43 +302,15 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
           sandbox,
           sessionPermissionPolicy,
           requireWorkspaceOnly: params.requireWorkspaceOnly,
-          messageProvider: resolvedMessageProvider,
           clientCaps: params.clientCaps,
           pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
-          chatType: params.chatType,
-          agentAccountId: params.agentAccountId,
-          sessionKey: sandboxSessionKey,
-          runSessionKey:
-            params.sessionKey && params.sessionKey !== sandboxSessionKey
-              ? params.sessionKey
-              : undefined,
-          sessionId: params.sessionId,
-          runId: params.runId,
           oneShotCliRun: params.oneShotCliRun,
-          groupId: params.groupId,
-          groupChannel: params.groupChannel,
-          groupSpace: params.groupSpace,
-          spawnedBy: params.spawnedBy,
-          senderId: params.senderId,
-          senderName: params.senderName,
-          senderUsername: params.senderUsername,
-          senderE164: params.senderE164,
           allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
-          agentDir,
-          cwd: effectiveCwd,
-          workspaceDir: effectiveWorkspace,
-          spawnWorkspaceDir,
-          config: params.config,
           webSearchEnabled: params.toolOverrides?.webSearch !== false,
           abortSignal: runAbortController.signal,
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-          modelProvider: effectiveModel.provider,
-          modelId,
           modelHasVision: effectiveModel.input?.includes("image") ?? false,
           modelCompat: extractModelCompat(effectiveModel),
-          modelApi: effectiveModel.api,
-          modelContextWindowTokens: contextTokenBudget,
-          skillsSnapshot: skillsSnapshotForRun,
           skillUsagePaths,
           skillInstructionDeliveryCache,
           conversationCapabilityProfile: runtimeCapabilityProfile,

@@ -67,7 +67,7 @@ export function resolveProjectChip(params: {
           ? folderDisplayName(folder)
           : folderDisplayName(params.workspace) || t("newSession.folderPlaceholder"),
     localProjects,
-    recents: normalizedQuery ? [] : params.recents.filter((recent) => recent.kind === "folder"),
+    recents: normalizedQuery ? [] : params.recents.filter((recent) => recent.kind !== "project"),
     showWorkspace:
       !normalizedQuery ||
       [folderDisplayName(params.workspace), params.workspace]
@@ -124,7 +124,12 @@ export function renderProjectChip(params: {
   const recentSuffixes = disambiguate(recentItems, (recent) => recent.displayName, [
     (recent) => (recent.kind === "folder" ? parentFolderDisplayName(recent.folder) : undefined),
     (recent) => (recent.kind === "folder" ? recent.folder : undefined),
-    (recent) => (recent.kind === "folder" ? recent.folder : recent.projectId),
+    (recent) =>
+      recent.kind === "folder"
+        ? recent.folder
+        : recent.kind === "repository"
+          ? recent.url
+          : recent.projectId,
   ]);
   const browseButton = html`
     <button
@@ -342,19 +347,33 @@ export function renderProjectChip(params: {
                               value:
                                 recent.kind === "project"
                                   ? `recent-project:${recent.projectId}`
-                                  : `recent:${recent.folder}`,
+                                  : recent.kind === "repository"
+                                    ? `repository:${recent.url}`
+                                    : `recent:${recent.folder}`,
                               label: recent.displayName,
-                              icon: recent.kind === "project" ? icons.gitBranch : icons.folder,
+                              icon: recent.kind === "folder" ? icons.folder : icons.gitBranch,
                               sub: recentSuffixes[index],
                               checked:
                                 recent.kind === "project"
                                   ? params.projectId === recent.projectId
-                                  : !params.projectId && folder === recent.folder,
-                              title: recent.kind === "project" ? undefined : recent.folder,
+                                  : recent.kind === "repository"
+                                    ? params.selectedRemoteProject?.cloneUrl === recent.url
+                                    : !params.projectId && folder === recent.folder,
+                              title:
+                                recent.kind === "project"
+                                  ? undefined
+                                  : recent.kind === "repository"
+                                    ? recent.url
+                                    : recent.folder,
                               onSelect: () =>
                                 recent.kind === "project"
                                   ? params.onSelectProject(recent.projectId)
-                                  : params.onApplyFolder(recent.folder),
+                                  : recent.kind === "repository"
+                                    ? params.onSelectRemoteProject({
+                                        identity: recent.displayName,
+                                        cloneUrl: recent.url,
+                                      })
+                                    : params.onApplyFolder(recent.folder),
                             },
                             params.submitting,
                           ),
