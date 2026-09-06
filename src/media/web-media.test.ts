@@ -323,6 +323,19 @@ describe("loadWebMedia", () => {
     });
   }
 
+  async function createXlsmMimeFixture() {
+    const zip = new JSZip();
+    zip.file(
+      "[Content_Types].xml",
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.ms-excel.sheet.macroEnabled.main+xml"/></Types>',
+    );
+    zip.file(
+      "xl/workbook.xml",
+      '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>',
+    );
+    return await zip.generateAsync({ type: "nodebuffer" });
+  }
+
   it.each([
     {
       name: "allows localhost file URLs for local files",
@@ -890,6 +903,51 @@ describe("loadWebMedia", () => {
       }),
       "path-not-allowed",
     );
+  });
+
+  it.each(["report.xlsm", "report.XLSM"])(
+    "allows byte-verified host-read XLSM without changing %s or its bytes",
+    async (fileName) => {
+      const body = await createXlsmMimeFixture();
+      const result = await loadDocumentWithHostRead(fileName, body);
+
+      expect(result.kind).toBe("document");
+      expect(result.contentType).toBe("application/vnd.ms-excel.sheet.macroenabled.12");
+      expect(result.fileName).toBe(fileName);
+      expect(result.buffer).toEqual(body);
+    },
+  );
+
+  it("rejects unverified text named as a host-read XLSM file", async () => {
+    await expectLoadWebMediaErrorCode(
+      loadDocumentWithHostRead("report.xlsm", "not a workbook"),
+      "path-not-allowed",
+    );
+  });
+
+  it("keeps the host-read XLSM root boundary and byte limit", async () => {
+    const body = await createXlsmMimeFixture();
+    const filePath = path.join(fixtureRoot, "bounded.xlsm");
+    await fs.writeFile(filePath, body);
+    const readFile = vi.fn((sourcePath: string) => fs.readFile(sourcePath));
+
+    await expectLoadWebMediaErrorCode(
+      loadWebMedia(filePath, {
+        localRoots: [workspaceDir],
+        readFile,
+        hostReadCapability: true,
+      }),
+      "path-not-allowed",
+    );
+    expect(readFile).not.toHaveBeenCalled();
+    await expect(
+      loadWebMedia(filePath, {
+        maxBytes: body.length - 1,
+        localRoots: [fixtureRoot],
+        readFile,
+        hostReadCapability: true,
+      }),
+    ).rejects.toThrow(/exceeds.*limit/i);
   });
 
   it("allows host-read CSV files", async () => {

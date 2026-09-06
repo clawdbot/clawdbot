@@ -43,8 +43,18 @@ Review the named host, execution backend, model, and download size, then confirm
 the download. Setup verifies pinned model files and the llama.cpp build,
 prepares a loopback endpoint, and checks inference before saving the new
 default. Guided activation also asks the model to read a temporary file through
-an OpenClaw tool and return its contents. A plain text reply alone does not pass
-that check.
+an OpenClaw tool and return its contents. The tool check uses an isolated
+workspace without your agent's bootstrap instructions. A plain text reply alone
+does not pass that check. Each verification check has a 90-second deadline;
+changing `agents.defaults.timeoutSeconds` does not extend setup verification.
+Failures identify whether the response check or tool-use check timed out.
+
+Managed local models automatically use structured [Tool Search](/tools/tool-search)
+unless you have explicitly configured it. Optional capabilities remain available;
+their schemas load as needed, reducing the input the model must process before
+replying. Setup does not enable lean mode. Normal chats still
+include your agent's instructions. On CPU-only hosts, the first reply can take
+several minutes even after setup verification succeeds.
 
 ### Model recommendations
 

@@ -210,6 +210,8 @@ function registerCodexSessionCatalog(params: {
         allowProcessHomeFallback,
         listNodes,
         onHost,
+        waitUntil,
+        signal,
         sessionEntries,
         ...gatewayQuery
       } = query;
@@ -234,6 +236,8 @@ function registerCodexSessionCatalog(params: {
           control: params.control,
           query: gatewayQuery,
           listNodes,
+          waitUntil,
+          signal,
           sessionEntries,
           localHomes,
           ...(onHost ? { onHost: (host) => onHost(mapHost(host)) } : {}),

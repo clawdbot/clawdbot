@@ -737,10 +737,17 @@ Replace model IDs with exact names from `ollama list` or
 
   </Accordion>
 
-  <Accordion title="Lean local model profile">
-    Some local models handle simple prompts but struggle with the full agent
-    tool surface. Limit tools and context before touching global runtime
-    settings:
+  <Accordion title="Small local model profile">
+    Local Ollama models automatically use structured [Tool Search](/tools/tool-search)
+    when `tools.toolSearch` is unset. This keeps optional capabilities available
+    while loading their schemas only when needed. Setup does not enable lean mode.
+    App, interactive CLI, and non-interactive setup use a 32,768-token runtime
+    context, or the model's native window if smaller. The advertised native window
+    is retained separately; known cloud routes keep their hosted context.
+    Large file reads use OpenClaw's context-based paging. The native adapter
+    preserves those text pages and their continuation instructions; structured
+    fallback data is bounded separately.
+    Bound any explicit context override to what the host can support:
 
     ```json5
     {
@@ -748,9 +755,6 @@ Replace model IDs with exact names from `ollama list` or
         entries: {
           local: {
             default: true,
-            experimental: {
-              localModelLean: true,
-            },
             model: { primary: "ollama/gemma4" },
           },
         },
@@ -768,7 +772,6 @@ Replace model IDs with exact names from `ollama list` or
                 input: ["text"],
                 contextTokens: 32768,
                 params: { num_ctx: 32768 },
-                compat: { supportsTools: false },
               },
             ],
           },
@@ -777,14 +780,15 @@ Replace model IDs with exact names from `ollama list` or
     }
     ```
 
+    Explicit `tools.toolSearch` settings take precedence, including `false`.
+    Tool Search does not change Ollama's context or thinking mode. Ollama thinking
+    defaults to off; an explicit thinking setting can change that independently.
+    If you previously enabled `localModelLean`, set it to `false` to restore
+    optional tools while retaining automatic Tool Search.
+
     Use `compat.supportsTools: false` only when the model or server reliably
-    fails on tool schemas — it trades agent capability for stability.
-    `localModelLean` removes heavyweight browser, cron, message, media-generation,
-    voice, and PDF tools from the direct agent surface unless explicitly required,
-    and puts larger catalogs behind Tool Search. It does not change Ollama's
-    runtime context or thinking mode. Pair it with `params.num_ctx` and
-    `params.thinking: false` for small Qwen-style thinking models that loop or
-    spend their budget on hidden reasoning.
+    fails on tool schemas; it disables tool use entirely. For a deliberately
+    narrower agent, prefer `tools.profile` or a per-agent tool policy.
 
   </Accordion>
 </AccordionGroup>
@@ -980,8 +984,13 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
     does Ollama choose its own model, Modelfile, `OLLAMA_CONTEXT_LENGTH`, or
     VRAM-based default; the native adapter does not fall back directly to the
     advertised `contextWindow`. After upgrading an older configuration, run
-    `openclaw doctor --fix`. Use `params.num_ctx` to override the native request
-    context explicitly. The
+    `openclaw doctor --fix`. Doctor preserves current `contextTokens` caps without
+    creating a stronger model or provider `num_ctx` pin; uncapped legacy native
+    entries still migrate their older context budgets. Existing explicit
+    `params.num_ctx` values remain authoritative, including pins an older Doctor
+    already wrote. Review or remove an oversized existing pin to let
+    `contextTokens` drive the request again. Use `params.num_ctx` to override
+    the native request context explicitly. The
     OpenAI-compatible adapter still injects `options.num_ctx` by default from
     `params.num_ctx`, then the matching model entry's `contextTokens` or
     `contextWindow`; disable with
@@ -993,7 +1002,15 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
     `temperature`, `repeat_penalty`, `presence_penalty`, `frequency_penalty`,
     `stop`, `num_batch`, `num_gpu`, `main_gpu`, `use_mmap`, and `num_thread`.
     A few keys (`format`, `keep_alive`, `truncate`, `shift`) are forwarded as
-    top-level request fields instead of nested `options`. OpenClaw only
+    top-level request fields instead of nested `options`. Local native chat
+    requests default to `truncate: false` and `shift: false`, so supporting
+    servers reject overflowing input instead of silently dropping history.
+    OpenClaw then attempts compaction and retries, or reports the failure.
+    Generation that fills the window can still produce a labeled partial reply.
+    This behavior is verified with Ollama 0.33.3; older servers may ignore the
+    fields. Explicit per-model values override these defaults. Hosted models
+    and the OpenAI-compatible endpoint keep their existing behavior.
+    OpenClaw only
     forwards these Ollama request keys, so runtime-only params such as
     `streaming` are never sent to Ollama. Use `params.think` (or
     `params.thinking`) to set top-level `think`; `false` disables API-level
@@ -1030,6 +1047,13 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
   </Accordion>
 
   <Accordion title="Thinking control">
+    Native local Ollama compaction summaries default to thinking off. This keeps
+    summarization from using its default three-minute request window for reasoning;
+    Qwen3.5 treats `low` as thinking enabled rather than a reduced thinking budget.
+    An explicit `agents.defaults.compaction.thinkingLevel` overrides this
+    preference. Existing per-model `params.think`/`params.thinking` settings
+    keep their normal precedence. Hosted routes keep their compaction defaults.
+
     OpenClaw forwards thinking as Ollama expects it: top-level `think`, not
     `options.think`. Auto-discovered models whose `/api/show` reports a
     `thinking` capability expose `/think low`, `/think medium`, `/think high`,

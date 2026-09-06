@@ -170,7 +170,6 @@ describe("handleControlUiHttpRequest", () => {
       assistantAgentId?: string;
       devGitBranch?: string;
       environment?: { label: string; color: string };
-      localMediaPreviewRoots?: string[];
       seamColor?: string;
       terminalEnabled: boolean;
       cliAgentsEnabled: boolean;
@@ -1206,6 +1205,8 @@ describe("handleControlUiHttpRequest", () => {
       available: false,
       code: "outside-allowed-folders",
       reason: "Outside allowed folders",
+      retryable: false,
+      canAllow: true,
     });
   });
 
@@ -1584,57 +1585,59 @@ describe("handleControlUiHttpRequest", () => {
     },
   );
 
-  it("serves bootstrap config JSON", async () => {
-    await withControlUiRoot({
-      fn: async (tmp) => {
-        const { res, end } = makeMockHttpResponse();
-        const handled = await handleControlUiHttpRequest(
-          { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
-          res,
-          {
-            root: { kind: "resolved", path: tmp },
-            config: {
-              agents: {
-                defaults: { workspace: tmp },
-                list: [
-                  {
-                    id: "roboclaw",
-                    default: true,
-                    workspace: tmp,
-                    identity: {
-                      name: "</script><script>alert(1)//",
-                      avatar: "</script>.png",
+  it.each([undefined, true, false])(
+    "serves bootstrap config JSON with cliAgents=%s",
+    async (enabled) => {
+      await withControlUiRoot({
+        fn: async (tmp) => {
+          const { res, end } = makeMockHttpResponse();
+          const handled = await handleControlUiHttpRequest(
+            { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+            res,
+            {
+              root: { kind: "resolved", path: tmp },
+              config: {
+                agents: {
+                  defaults: { workspace: tmp },
+                  list: [
+                    {
+                      id: "roboclaw",
+                      default: true,
+                      workspace: tmp,
+                      identity: {
+                        name: "</script><script>alert(1)//",
+                        avatar: "</script>.png",
+                      },
                     },
-                  },
-                ],
-              },
-              ui: { seamColor: "#1A2b3C" },
-              gateway: {
-                cliAgents: { enabled: true },
-                controlUi: { environment: { label: "edge", color: "amber" } },
+                  ],
+                },
+                ui: { seamColor: "#1A2b3C" },
+                gateway: {
+                  ...(enabled === undefined ? {} : { cliAgents: { enabled } }),
+                  controlUi: { environment: { label: "edge", color: "amber" } },
+                },
               },
             },
-          },
-        );
-        expect(handled).toBe(true);
-        const parsed = parseBootstrapPayload(end);
-        expect(parsed.basePath).toBe("");
-        expect(parsed.assistantName).toBe("</script><script>alert(1)//");
-        expect(parsed.assistantAvatar).toBe("A");
-        expect(parsed.assistantAvatarStatus).toBe("none");
-        expect(parsed.assistantAvatarReason).toBe("missing");
-        expect(parsed.assistantAgentId).toBe("roboclaw");
-        expect(parsed.seamColor).toBe("#1A2b3C");
-        expect(parsed.environment).toEqual({ label: "edge", color: "amber" });
-        expect(parsed.terminalEnabled).toBe(true);
-        expect(parsed.cliAgentsEnabled).toBe(true);
-        expect(parsed.automaticallyFetchFavicons).toBe(true);
-        expect(parsed.communityInvite).toBe(true);
-        expect(parsed.devGitBranch).toBeUndefined();
-        expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
-      },
-    });
-  });
+          );
+          expect(handled).toBe(true);
+          const parsed = parseBootstrapPayload(end);
+          expect(parsed.basePath).toBe("");
+          expect(parsed.assistantName).toBe("</script><script>alert(1)//");
+          expect(parsed.assistantAvatar).toBe("A");
+          expect(parsed.assistantAvatarStatus).toBe("none");
+          expect(parsed.assistantAvatarReason).toBe("missing");
+          expect(parsed.assistantAgentId).toBe("roboclaw");
+          expect(parsed.seamColor).toBe("#1A2b3C");
+          expect(parsed.environment).toEqual({ label: "edge", color: "amber" });
+          expect(parsed.terminalEnabled).toBe(true);
+          expect(parsed.cliAgentsEnabled).toBe(enabled !== false);
+          expect(parsed.automaticallyFetchFavicons).toBe(true);
+          expect(parsed.communityInvite).toBe(true);
+          expect(parsed.devGitBranch).toBeUndefined();
+        },
+      });
+    },
+  );
 
   it.each(["automaticallyFetchFavicons", "communityInvite"] as const)(
     "projects an explicit %s opt-out into bootstrap config",
@@ -1766,7 +1769,9 @@ describe("handleControlUiHttpRequest", () => {
             headers,
           });
           expect(image.res.statusCode).toBe(200);
-          expect(image.end.mock.calls[0]?.[0]).toEqual(avatar);
+          const imageBytes = image.end.mock.calls[0]?.[0];
+          expect(Buffer.isBuffer(imageBytes)).toBe(true);
+          expect(imageBytes?.length).toBeLessThan(4096);
           const unchanged = await runBootstrapConfigRequest(request);
           expect(parseBootstrapPayload(unchanged.end).assistantAvatar).toBe(parsed.assistantAvatar);
           const replacementPath = path.join(tmp, "replacement.png");
@@ -1783,7 +1788,7 @@ describe("handleControlUiHttpRequest", () => {
     },
   );
 
-  it("preserves an exact-cap IDENTITY.md data URL in bootstrap", async () => {
+  it("keeps an exact-cap IDENTITY.md data URL out of bootstrap", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         const dataUrl = `data:image/svg+xml;base64,${Buffer.alloc(AVATAR_MAX_BYTES).toString("base64")}`;
@@ -1801,7 +1806,7 @@ describe("handleControlUiHttpRequest", () => {
 
         expect(handled).toBe(true);
         expect(parseBootstrapPayload(end)).toMatchObject({
-          assistantAvatar: dataUrl,
+          assistantAvatar: expect.stringMatching(/^\/avatar\/main\?v=[a-f0-9]+$/),
           assistantAvatarStatus: "data",
         });
       },
@@ -2559,7 +2564,6 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantAvatarStatus).toBe("none");
         expect(parsed.assistantAvatarReason).toBe("missing");
         expect(parsed.assistantAgentId).toBe("main");
-        expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
       },
     });
   });

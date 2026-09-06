@@ -163,6 +163,30 @@ struct GatewayProcessManagerTests {
         PortGuardian.Descriptor(pid: pid, command: command, executablePath: executablePath)
     }
 
+    private func attachFailureReason(
+        errorProvider: @escaping @Sendable () async throws -> GatewayConnection.Config) async throws -> String
+    {
+        let port = try self.availableGatewayPort()
+        let connection = GatewayConnection(configProvider: errorProvider)
+        let manager = GatewayProcessManager()
+        manager.setTestingConnection(connection)
+        manager.setTestingSkipControlChannelRefresh(true)
+        let listener = self.gatewayDescriptor(pid: 4242)
+        await PortGuardian.shared.setTestingDescriptor(listener, forPort: port)
+
+        let attached = await manager._testAttachExistingGatewayIfAvailable(port: port)
+        manager.setTestingDesiredActive(false)
+        await connection.shutdown()
+        await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+
+        #expect(attached)
+        guard case let .failed(reason) = manager.status else {
+            Issue.record("expected attach failure")
+            return ""
+        }
+        return reason
+    }
+
     private nonisolated func gatewayTask(
         healthSucceedsAfter unavailableResponses: Int?,
         stallsFirstHealthResponse: Bool = false,
@@ -1809,6 +1833,123 @@ struct GatewayProcessManagerTests {
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
                 .allSatisfy { $0.first != "install" })
             await unavailable.shutdown()
+        }
+    }
+
+    @Test func `identity conflict paths cannot select Gateway auth guidance`() async throws {
+        let conflict =
+            "Legacy device identity sources conflict across " +
+            "[/tmp/author-profile/device.json (deviceId: device-a)]; all sources preserved."
+        let reason = try await self.attachFailureReason {
+            throw NSError(
+                domain: "ai.openclaw.device-identity-store",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: conflict])
+        }
+
+        #expect(reason.contains(conflict))
+        #expect(!reason.contains("rejected auth"))
+        #expect(!reason.contains("gateway.auth.token"))
+    }
+
+    @Test(arguments: [
+        GatewayConnectAuthDetailCode.authTokenMissing,
+        .authTokenMismatch,
+        .authTokenNotConfigured,
+    ])
+    func `token auth rejection retains token guidance`(
+        detail: GatewayConnectAuthDetailCode) async throws
+    {
+        let reason = try await self.attachFailureReason {
+            throw GatewayConnectAuthError(
+                message: detail.rawValue,
+                detailCode: detail.rawValue,
+                canRetryWithDeviceToken: false)
+        }
+
+        #expect(reason.contains("rejected auth"))
+        #expect(reason.contains("gateway.auth.token"))
+    }
+
+    @Test func `non-token Gateway rejections preserve their diagnostics`() async throws {
+        let cases: [(GatewayConnectAuthDetailCode?, String)] = [
+            (.pairingRequired, "pairing required"),
+            (.authPasswordMismatch, "password mismatch"),
+            (.deviceIdentityRequired, "device identity required"),
+            (.authTailscaleIdentityMismatch, "Tailscale identity mismatch"),
+            (.authUnauthorized, "unauthorized"),
+            (nil, "unstructured rejection"),
+        ]
+
+        for (detail, message) in cases {
+            let reason = try await self.attachFailureReason {
+                throw GatewayConnectAuthError(
+                    message: message,
+                    detailCode: detail?.rawValue,
+                    canRetryWithDeviceToken: false)
+            }
+
+            #expect(reason.contains(message))
+            #expect(!reason.contains("rejected auth"))
+            #expect(!reason.contains("gateway.auth.token"))
+        }
+    }
+
+    @Test func `legacy transport failures preserve their diagnostics`() async throws {
+        let expectedURLMessage = URLError(.dataNotAllowed).localizedDescription
+        let urlReason = try await self.attachFailureReason {
+            throw URLError(.dataNotAllowed)
+        }
+        let closeReason = try await self.attachFailureReason {
+            throw NSError(
+                domain: "Gateway",
+                code: 1008,
+                userInfo: [NSLocalizedDescriptionKey: "policy violation"])
+        }
+
+        #expect(urlReason.contains(expectedURLMessage))
+        #expect(closeReason.contains("policy violation"))
+        for reason in [urlReason, closeReason] {
+            #expect(!reason.contains("rejected auth"))
+            #expect(!reason.contains("gateway.auth.token"))
+        }
+    }
+
+    @Test func `protocol mismatch retains compatibility guidance`() async throws {
+        let reason = try await self.attachFailureReason {
+            throw GatewayConnectAuthError(
+                message: "protocol mismatch",
+                detailCode: GatewayConnectAuthDetailCode.protocolMismatch.rawValue,
+                canRetryWithDeviceToken: false,
+                expectedProtocol: 999)
+        }
+
+        #expect(reason.localizedCaseInsensitiveContains("protocol"))
+        #expect(!reason.contains("rejected auth"))
+        #expect(!reason.contains("gateway.auth.token"))
+    }
+
+    @Test func `Gateway authorization failures preserve their diagnostics`() async throws {
+        let missingScope = try await self.attachFailureReason {
+            throw GatewayResponseError(
+                method: "health",
+                code: "FORBIDDEN",
+                message: "missing scope: operator.admin",
+                details: nil)
+        }
+        let unauthorizedRole = try await self.attachFailureReason {
+            throw GatewayResponseError(
+                method: "health",
+                code: "INVALID_REQUEST",
+                message: "unauthorized role: operator",
+                details: nil)
+        }
+
+        #expect(missingScope.contains("missing scope: operator.admin"))
+        #expect(unauthorizedRole.contains("unauthorized role: operator"))
+        for reason in [missingScope, unauthorizedRole] {
+            #expect(!reason.contains("rejected auth"))
+            #expect(!reason.contains("gateway.auth.token"))
         }
     }
 

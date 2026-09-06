@@ -1,5 +1,5 @@
 // Control UI E2E covers the real session-dashboard provider and transcript bridge.
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-contract";
 import type { Page } from "playwright";
@@ -8,6 +8,7 @@ import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/inde
 import { SANDBOX_HOST_PATH } from "../../../src/agents/sandbox-host.js";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
+import { takeControlUiElementScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -286,9 +287,10 @@ suite.define(() => {
       await expect
         .poll(() => widgetActions.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("1");
-      await previewBubble.screenshot({
-        path: path.join(suite.artifactDir, "workboard-pin", "01-pin-hover.png"),
-      });
+      await writeFile(
+        path.join(suite.artifactDir, "workboard-pin", "01-pin-hover.png"),
+        await takeControlUiElementScreenshot(page, previewBubble, [preview]),
+      );
     }
     await preview.getByRole("button", { name: "Pin to dashboard" }).click();
     await expect.poll(async () => (await gateway.getRequests("board.widget.put")).length).toBe(1);
@@ -303,9 +305,10 @@ suite.define(() => {
       .poll(() => preview.getByRole("button", { name: "Pinned" }).isDisabled())
       .toBe(true);
     if (recordProof) {
-      await previewBubble.screenshot({
-        path: path.join(suite.artifactDir, "workboard-pin", "02-pinned.png"),
-      });
+      await writeFile(
+        path.join(suite.artifactDir, "workboard-pin", "02-pinned.png"),
+        await takeControlUiElementScreenshot(page, previewBubble, [preview]),
+      );
     }
     await gateway.setMethodResponse("board.get", pinnedBoardSnapshot);
 

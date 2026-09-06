@@ -9,7 +9,7 @@ title: "Anthropic"
 Anthropic builds the **Claude** model family. OpenClaw supports two auth routes:
 
 - **API key** - direct Anthropic API access with usage-based billing (`anthropic/*` models)
-- **Claude CLI** - reuse an existing Claude Code login on the same host through Anthropic's official Agent SDK
+- **Claude CLI** - reuse an existing Claude Code login through the installed executable on the same host
 
 ## Usage and cost tracking
 
@@ -85,8 +85,8 @@ OpenClaw release:
 
     <Steps>
       <Step title="Ensure Claude CLI is installed and logged in">
-        OpenClaw runs the installed Claude Code executable through Anthropic's
-        official Agent SDK. Verify that Claude Code is installed and up to date:
+        OpenClaw communicates directly with the installed Claude Code executable.
+        Verify that Claude Code is installed and up to date:
 
         ```bash
         claude --version
@@ -112,8 +112,8 @@ OpenClaw release:
         # choose: Claude CLI
         ```
 
-        Normal agent turns use the official Agent SDK with the installed,
-        authenticated Claude Code executable. OpenClaw uses a non-secret route
+        Normal agent turns use the installed, authenticated Claude Code executable
+        through OpenClaw's direct CLI transport. OpenClaw uses a non-secret route
         marker and never reads, persists, refreshes, selects, or forwards the
         native login tokens. Claude owns the login and token refresh lifecycle.
         Explicitly selected API-key or token credentials still use protected
@@ -122,8 +122,8 @@ OpenClaw release:
         tool policy before native approval. Isolated side-question completions
         and paired-node execution retain the supervised CLI path.
 
-        Consecutive agent turns reuse the same warm Agent SDK query and Claude
-        Code subprocess when their authenticated session and execution policy
+        Consecutive agent turns reuse the same warm Claude Code subprocess
+        when their authenticated session and execution policy
         match. If that process ends or the gateway restarts, the next turn
         resumes the persisted Claude Code session.
       </Step>

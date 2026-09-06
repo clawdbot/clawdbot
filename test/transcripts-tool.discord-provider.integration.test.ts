@@ -4,12 +4,12 @@ import {
   discordVoiceTranscriptsSourceProvider,
   setDiscordTranscriptsVoiceManager,
 } from "../extensions/discord/test-api.js";
-import { activeSessions } from "../src/agents/tools/transcripts-tool-runtime.js";
 import { createTranscriptsTool } from "../src/agents/tools/transcripts-tool.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../src/plugins/runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
+import { activeSessions } from "../src/transcripts/capture.js";
 import { TranscriptsStore } from "../src/transcripts/store.js";
 import { createTempDirTracker } from "./helpers/temp-dir.js";
 

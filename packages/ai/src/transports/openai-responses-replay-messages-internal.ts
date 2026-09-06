@@ -374,25 +374,28 @@ function convertResponsesMessagesWithStyle(
     ? [replayPlan.compaction, ...transformedMessages]
     : transformedMessages;
   // Responses continuation requires the complete prior input before tool output.
-  // Anchor context after the user or its compaction checkpoint, not each tool round.
-  // Other transports retain their tail placement for cross-turn prompt caching.
+  // Each carrier stays with its preceding user/checkpoint; moving it past an
+  // appended steering user would rewrite the already admitted request prefix.
   const isCarrier = (message: (typeof replayMessages)[number]) =>
     "role" in message && message.role === "user" && message.runtimeContextCarrier === true;
-  const carriers = replayMessages.filter(isCarrier);
-  if (carriers.length > 0) {
-    const stableMessages = replayMessages.filter((message) => !isCarrier(message));
-    const insertionIndex =
-      stableMessages.findLastIndex((message) =>
-        "role" in message ? message.role === "user" : message.type === "compaction",
-      ) + 1;
+  if (replayMessages.some(isCarrier)) {
+    const anchored: typeof replayMessages = [];
     // A canonical window is already emitted above; its checkpoint anchors an otherwise userless tail.
-    if (insertionIndex > 0 || replayPlan.compactedWindow) {
-      replayMessages = [
-        ...stableMessages.slice(0, insertionIndex),
-        ...carriers,
-        ...stableMessages.slice(insertionIndex),
-      ];
+    let insertionIndex = replayPlan.compactedWindow ? 0 : undefined;
+    for (const message of replayMessages) {
+      if (isCarrier(message) && insertionIndex !== undefined) {
+        anchored.splice(insertionIndex++, 0, message);
+        continue;
+      }
+      anchored.push(message);
+      if (
+        !isCarrier(message) &&
+        ("role" in message ? message.role === "user" : message.type === "compaction")
+      ) {
+        insertionIndex = anchored.length;
+      }
     }
+    replayMessages = anchored;
   }
   let msgIndex = 0;
   const appendAssistant = createResponsesInputReplay(model);

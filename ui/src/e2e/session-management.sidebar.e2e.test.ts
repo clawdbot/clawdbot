@@ -792,7 +792,13 @@ suite.define(() => {
       await pinnedCandidate.click({ button: "right" });
       await page.getByRole("menuitem", { name: "Unpin session" }).waitFor();
       expect(await page.getByRole("menuitem", { name: "Reset pinned items" }).count()).toBe(0);
-      await captureUiProof(suite, page, "sidebar-session-dropped-into-pinned.png");
+      await captureUiProof(
+        suite,
+        page,
+        "sidebar-session-dropped-into-pinned.png",
+        page.locator('openclaw-session-menu > wa-dropdown [part="menu"]'),
+        [page.getByRole("menuitem", { name: "Unpin session" })],
+      );
     } finally {
       await context.close();
       if (proofVideo) {

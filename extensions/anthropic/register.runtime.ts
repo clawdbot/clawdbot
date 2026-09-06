@@ -140,6 +140,7 @@ function restoreUnpublishedAnthropicModels(result: ProviderCatalogResult): Provi
   // Discovered rows arrive id-sorted; keep the appended tail sorted too so the
   // catalog stays byte-stable for prompt caching.
   return {
+    ...result,
     provider: {
       ...result.provider,
       models: [...discovered, ...unpublished.toSorted((a, b) => a.id.localeCompare(b.id))],
@@ -814,6 +815,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
       run: async (ctx) =>
         restoreUnpublishedAnthropicModels(
           await buildOpenAICompatibleProviderCatalog({
+            discoveryMode: "strict",
             ctx,
             providerId,
             buildProvider: buildAnthropicCatalogProvider,

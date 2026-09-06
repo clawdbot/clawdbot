@@ -28,7 +28,6 @@ import {
   isScheduledTaskDefinitelyNotRunning,
   isStartupEntryInstalled,
   launchFallbackTaskScript,
-  probeScheduledTaskExists,
   readScheduledTaskRuntime,
   removeStartupEntries,
   resolveFallbackRuntime,
@@ -40,6 +39,7 @@ import {
   terminateInstalledStartupRuntime,
   waitForScheduledTaskRunningEvidence,
 } from "./schtasks-runtime.js";
+import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
 import { ScheduledTaskAutoStartRecoveryError } from "./schtasks-update-recovery.js";
 import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
 import type {

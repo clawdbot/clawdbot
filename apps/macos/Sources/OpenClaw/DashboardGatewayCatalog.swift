@@ -45,11 +45,31 @@ struct DashboardGatewaySnapshot: Codable, Equatable, Sendable {
 }
 
 struct MacGatewayCatalogProfile: Equatable, Sendable {
+    enum AuthKind: Equatable, Sendable {
+        case token
+        case password
+        case browser
+    }
+
     let profile: MacGatewayProfile
     let canPromote: Bool
+    var usesBrowserIdentity = false
+    var browserSessionExpiresAt: Date?
+    var authKind: AuthKind?
 }
 
 enum DashboardGatewayCatalog {
+    static func primaryRemoteHostLabel(
+        transport: AppState.RemoteTransport,
+        sshTarget: String?,
+        resolvedHostLabel: String?) -> String?
+    {
+        switch transport {
+        case .ssh: CommandResolver.parseSSHTarget(sshTarget ?? "")?.host ?? resolvedHostLabel
+        case .direct: resolvedHostLabel
+        }
+    }
+
     static func entries(
         mode: AppState.ConnectionMode,
         primaryRemoteURL: URL?,
@@ -64,7 +84,9 @@ enum DashboardGatewayCatalog {
             }
             : nil
         let duplicate = canonicalPrimaryURL.flatMap { primaryURL in
-            profiles.first { (try? MacGatewayProfileStore.canonicalURL($0.profile.url)) == primaryURL }
+            profiles.first {
+                !$0.usesBrowserIdentity && (try? MacGatewayProfileStore.canonicalURL($0.profile.url)) == primaryURL
+            }
         }
         let primaryName: String = if mode == .local {
             "Local Gateway"
@@ -81,8 +103,8 @@ enum DashboardGatewayCatalog {
             canPromote: false,
             health: primaryHealth)
         let saved = profiles.compactMap { item -> DashboardGatewayEntry? in
-            // A saved identity for the active route is represented by the
-            // primary row so one physical Gateway never appears twice.
+            // A browser sign-in is a separate human authority even when its
+            // address matches the primary machine connection.
             if item.profile.id == duplicate?.profile.id { return nil }
             return DashboardGatewayEntry(
                 id: DashboardGatewayTarget.profile(item.profile.id).bridgeID,
@@ -92,7 +114,7 @@ enum DashboardGatewayCatalog {
                 canPromote: item.canPromote,
                 health: .unknown)
         }
-        return [primary] + saved
+        return mode == .unconfigured ? saved : [primary] + saved
     }
 
     @MainActor
@@ -121,7 +143,10 @@ enum DashboardGatewayCatalog {
             mode: state.connectionMode,
             primaryRemoteURL: GatewayRemoteConfig.resolveGatewayUrl(root: root),
             resolvedRemoteURL: resolvedRemoteURL,
-            resolvedRemoteHostLabel: connectivity.resolvedHostLabel,
+            resolvedRemoteHostLabel: self.primaryRemoteHostLabel(
+                transport: GatewayRemoteConfig.resolveTransportResolution(root: root).transport,
+                sshTarget: state.remoteTarget,
+                resolvedHostLabel: connectivity.resolvedHostLabel),
             profiles: profiles,
             primaryHealth: self.primaryHealth(for: ControlChannel.shared.state))
     }

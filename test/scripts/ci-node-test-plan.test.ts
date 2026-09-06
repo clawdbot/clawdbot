@@ -1645,7 +1645,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "src/commands/doctor-session-exec-policy.test.ts",
       "src/commands/doctor-session-incognito-key-repair.test.ts",
       "src/commands/doctor-session-snapshots.test.ts",
-      "src/commands/doctor-session-sqlite-github-issue.test.ts",
       "src/commands/doctor-session-sqlite-readers.test.ts",
       "src/commands/doctor-session-sqlite.shared-store.test.ts",
       "src/commands/doctor-session-state-providers.test.ts",
@@ -1872,6 +1871,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const runtimeTargets = [
       "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
       ...doctorRuntimeTargets,
+      "src/commands/doctor-plugin-install-config.process.test.ts",
       "src/gateway/gateway-active-memory.test.ts",
       "src/gateway/gateway-concurrent-streams.test.ts",
       "src/gateway/gateway-cron-process-identity.windows.test.ts",
@@ -2406,6 +2406,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         ...(shard.shardName === "agentic-control-plane-startup-health-runtime"
           ? { env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000" } }
           : {}),
+        ...(shard.includePatterns?.includes("src/gateway/server-sidecar-retention.test.ts")
+          ? { pretestBuildMode: "runtime" }
+          : {}),
         includePatterns: shard.includePatterns,
         requiresDist: false,
         runner:
@@ -2480,7 +2483,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         checkName: `checks-node-${shard.shardName}`,
         configs: ["test/vitest/vitest.commands.config.ts"],
         includePatterns: shard.includePatterns,
-        ...(shard.shardName === "agentic-commands-doctor-config-state"
+        ...(shard.shardName === "agentic-commands-doctor-config-state" ||
+        shard.shardName === "agentic-commands-doctor-plugins-tools"
           ? { pretestBuildMode: "runtime" }
           : {}),
         requiresDist: false,
@@ -2590,9 +2594,17 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         shardName: "agentic-agents-core-runtime",
       },
       {
+        checkName: "checks-node-agentic-agents-core-spawn-production-boundary",
+        configs: ["test/vitest/vitest.agents-spawn-production-boundary.config.ts"],
+        includePatterns: agentShards[11]?.includePatterns,
+        requiresDist: false,
+        runner: DEFAULT_NODE_TEST_RUNNER,
+        shardName: "agentic-agents-core-spawn-production-boundary",
+      },
+      {
         checkName: "checks-node-agentic-agents-core-isolated",
         configs: ["test/vitest/vitest.agents-core-isolated.config.ts"],
-        includePatterns: agentShards[11]?.includePatterns,
+        includePatterns: agentShards[12]?.includePatterns,
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
         shardName: "agentic-agents-core-isolated",
@@ -2658,6 +2670,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         configs: gatewayCoreConfigs,
         includePatterns: [
           "src/gateway/gateway-active-memory.test.ts",
+          "src/gateway/gateway-auth-rewarm.test.ts",
           "src/gateway/gateway-concurrent-streams.test.ts",
           "src/gateway/gateway-cron-process-identity.windows.test.ts",
         ],
@@ -2712,6 +2725,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       ...agentVitestProjectOwners.coreIsolated.include.filter((file) =>
         relative("src/agents", file).replaceAll("\\", "/").includes("/"),
       ),
+      ...agentVitestProjectOwners.spawnProductionBoundary.include,
     ].toSorted((a, b) => a.localeCompare(b));
 
     expect(actual).toEqual(expected);

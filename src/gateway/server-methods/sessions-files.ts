@@ -18,7 +18,6 @@ import {
   validateSessionsFilesListParams,
   validateSessionsFilesSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { resolveToCwd as resolveSessionToolPathToCwd } from "../../agents/sessions/tools/path-utils.js";
 import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -35,6 +34,7 @@ import {
   type SessionTranscriptReadScope,
 } from "../session-transcript-readers.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
 import {
   execOpenPath,
   formatOpenPathError,
@@ -527,16 +527,11 @@ function loadSessionFileRoot(params: { sessionKey: string; agentId?: string }) {
       params.agentId ??
       parseAgentSessionKey(params.sessionKey)?.agentId,
   );
-  const spawnedCwd = normalizeOptionalString(loaded.entry.spawnedCwd);
-  const spawnedWorkspaceDir = normalizeOptionalString(loaded.entry.spawnedWorkspaceDir);
-  const configuredWorkspaceDir =
-    spawnedCwd || spawnedWorkspaceDir
-      ? undefined
-      : normalizeOptionalString(resolveAgentWorkspaceDir(loaded.cfg, agentId));
-  // Keep this cwd precedence aligned with sessions.diff so the advertised
-  // checkout state cannot disagree with the panel's fallback result.
-  const diffCwd = spawnedCwd ?? spawnedWorkspaceDir ?? configuredWorkspaceDir;
-  const root = spawnedWorkspaceDir ?? spawnedCwd ?? configuredWorkspaceDir;
+  const { spawnedCwd, root, diffCwd } = resolveSessionWorkspaceRoots(
+    loaded.cfg,
+    agentId,
+    loaded.entry,
+  );
   return {
     ...loaded,
     agentId,
@@ -1088,12 +1083,13 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       });
       return;
     }
+    const command = resolveOpenPathCommand(workspaceRoot);
     try {
-      await execOpenPath(resolveOpenPathCommand(workspaceRoot));
+      await execOpenPath(command);
       respond(true, { ok: true, path: workspaceRoot });
     } catch (error) {
       const errorMessage = formatOpenPathError(error);
-      const detailedError = isHeadlessOpenPathError(errorMessage)
+      const detailedError = isHeadlessOpenPathError(error, command)
         ? `Cannot open path in headless environment. Path: ${workspaceRoot}. This environment appears to lack a graphical or terminal browser handler.`
         : `Failed to reveal session workspace: ${errorMessage}`;
       context.logGateway.warn(

@@ -30,6 +30,7 @@ export function createDiagnosticsEventHandler(params: {
 }) {
   const { logger, recorders, recordLogRecord, recordSecurityEvent } = params;
   const {
+    recordGcDuration,
     recordGatewayEventLoopSample,
     recordGatewayRpc,
     recordModelUsage,
@@ -86,6 +87,9 @@ export function createDiagnosticsEventHandler(params: {
   ) => {
     try {
       switch (evt.type) {
+        case "diagnostic.gc":
+          recordGcDuration(evt, metadata);
+          return;
         case "gateway.event_loop.sample":
           recordGatewayEventLoopSample(evt, metadata);
           return;

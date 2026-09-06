@@ -88,6 +88,8 @@ describe("OutputAccumulator", () => {
       ["xy\n", 2, 2],
       ["\n", 0, 3],
       ["z", 1, 4],
+      ["longer\n界\n🙂\n", 4, 6],
+      ["one\n\n", 0, 8],
     ] as const) {
       accumulator.append(Buffer.from(text), "stdout");
       expect(accumulator.getLastLineBytes()).toBe(lastLineBytes);

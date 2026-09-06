@@ -207,7 +207,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
           flattenCodexDynamicToolFunctions(toolBridge.availableSpecs)
             .map((tool) => tool.name)
             .filter(isNonEmptyString),
-        assertActive: params.hostCapabilities.assertActive,
+        assertActive: connection.assertCurrent,
       },
     });
     return result;
@@ -441,6 +441,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     const previousThreadId = binding.threadId;
     const hadInactiveThreadBootstrapBinding = isInactiveThreadBootstrapBinding(binding);
     const startupBindingResolution = await rotateOversizedCodexAppServerStartupBinding({
+      assertCurrent: connection.assertCurrent,
       binding,
       bindingStore,
       identity: bindingIdentity,

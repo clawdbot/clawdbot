@@ -28,6 +28,7 @@ import {
 import { onAgentEvent } from "../../infra/agent-events.js";
 import { formatErrorMessageForDisplay } from "../../infra/error-diagnostics.js";
 import { isNonTerminalAgentRunStatus } from "../../shared/agent-run-status.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
 import type { DedupeEntry } from "../server-shared.js";
@@ -617,7 +618,8 @@ export async function waitForAgentJob(params: {
   if (cached) {
     return publicSnapshot(cached);
   }
-  if (params.timeoutMs <= 0) {
+  const signal = getAsyncWorkSignal();
+  if (params.timeoutMs <= 0 || signal?.aborted) {
     return null;
   }
 
@@ -630,9 +632,12 @@ export async function waitForAgentJob(params: {
       }
       settled = true;
       clearTimeout(timeoutHandle);
+      signal?.removeEventListener("abort", onClose);
       removeWaiter();
       resolve(snapshot);
     };
+    // Closing this Gateway retires only its observation, never the run or another waiter.
+    const onClose = () => finish(null);
     const onWake = (lifecycleReset = false) => {
       if (lifecycleReset) {
         // The lifecycle interrupted this wait; do not cache it as a terminal run outcome.
@@ -675,7 +680,12 @@ export async function waitForAgentJob(params: {
       finish(null);
     }, params.timeoutMs);
     timeoutHandle.unref?.();
-    onWake();
+    signal?.addEventListener("abort", onClose, { once: true });
+    if (signal?.aborted) {
+      onClose();
+    } else {
+      onWake();
+    }
   });
 }
 

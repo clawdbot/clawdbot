@@ -16,7 +16,10 @@ import {
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import { readSessionEntryStore } from "./session-accessor.sqlite-entry-inventory.js";
-import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import {
+  patchSessionEntryTarget,
+  replaceSessionEntrySync,
+} from "./session-accessor.sqlite-entry.js";
 import { readSessionGenerationIdsForKeys } from "./session-accessor.sqlite-lifecycle-state.js";
 import { projectSqliteSessionParticipantsBatch } from "./session-accessor.sqlite-participant-projection.js";
 import { readSessionEntriesByStatus } from "./session-accessor.sqlite-status.js";
@@ -35,6 +38,64 @@ afterEach(() => {
 });
 
 describe("SQLite session row persistence", () => {
+  it.each(["entry", "target"] as const)(
+    "bounds saved-prompt decoding while publishing %s identity changes",
+    async (kind) => {
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("session-identity-decode-")),
+      };
+      const sessionKey = "agent:main:identity-decode";
+      const scope = { agentId: "main", env, sessionKey };
+      const skillsSnapshot = {
+        prompt: "identity-decode-payload:" + "x".repeat(16_384),
+        skills: [],
+      };
+      await upsertSessionEntryCore(scope, { sessionId: "initial", updatedAt: 1, skillsSnapshot });
+      const database = openOpenClawAgentDatabase({ agentId: "main", env });
+      const identities: string[] = [];
+      const unsubscribe = onSessionIdentityMutation((mutation) => {
+        if (
+          mutation.kind !== "delete" &&
+          mutation.current.sessionKeys.includes(sessionKey) &&
+          mutation.current.sessionId
+        ) {
+          identities.push(mutation.current.sessionId);
+        }
+      });
+      const parse = vi.spyOn(JSON, "parse");
+      const iterations = 10;
+      try {
+        for (let index = 0; index < iterations; index++) {
+          const sessionId = `generation-${Math.floor(index / 2)}`;
+          const update = () => ({ sessionId, updatedAt: index + 2 });
+          const result =
+            kind === "entry"
+              ? await patchSessionEntryCore(scope, update, { skipMaintenance: true })
+              : await patchSessionEntryTarget(
+                  {
+                    agentId: "main",
+                    storePath: database.path,
+                    target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+                  },
+                  update,
+                  { skipMaintenance: true },
+                );
+          expect(result).toMatchObject({ sessionId, skillsSnapshot });
+        }
+        const decodes = parse.mock.calls.filter(([text]) =>
+          text.includes("identity-decode-payload:"),
+        ).length;
+        expect(decodes).toBeLessThanOrEqual(iterations * 3);
+      } finally {
+        parse.mockRestore();
+        unsubscribe();
+      }
+      expect(identities).toEqual(Array.from({ length: 5 }, (_, index) => `generation-${index}`));
+      expect(loadSessionEntry(scope)).toMatchObject({ sessionId: "generation-4", skillsSnapshot });
+    },
+  );
+
   it.each(["entries", "generations", "statuses", "participants"] as const)(
     "reads selected %s beyond the native SQLite parameter limit",
     async (reader) => {
@@ -89,7 +150,7 @@ describe("SQLite session row persistence", () => {
     },
   );
 
-  it.each(["committed", "declined", "revoked"] as const)(
+  it.each(["committed", "declined", "cancelled", "revoked"] as const)(
     "records only committed owner facts before cancellation observers (%s)",
     async (mode) => {
       const env = {
@@ -109,6 +170,7 @@ describe("SQLite session row persistence", () => {
       const controller = new AbortController();
       const cancelled = new Error("cancelled after identity publication");
       const revoked = new Error("writer revoked before commit");
+      let commitAllowed = true;
       const facts: InternalSessionEntry[] = [];
       const observed: Array<{ acceptedId?: string; persistedId?: string }> = [];
       const unsubscribe = onSessionIdentityMutation((mutation) => {
@@ -124,6 +186,7 @@ describe("SQLite session row persistence", () => {
       const clone = vi.spyOn(globalThis, "structuredClone");
       try {
         const options = {
+          shouldCommit: () => commitAllowed,
           onCommitted: (entry: InternalSessionEntry) => {
             facts.push(entry);
           },
@@ -135,13 +198,23 @@ describe("SQLite session row persistence", () => {
         };
         const pending = patchSessionEntryCore(
           scope,
-          () => (mode === "declined" ? null : { sessionId: "successor" }),
+          () => {
+            if (mode === "cancelled") {
+              queueMicrotask(() => {
+                commitAllowed = false;
+              });
+            }
+            return mode === "declined" ? null : { sessionId: "successor" };
+          },
           options,
         );
         if (mode === "revoked") {
           await expect(pending).rejects.toBe(revoked);
         } else {
-          await pending;
+          const result = await pending;
+          if (mode === "cancelled") {
+            expect(result).toBeNull();
+          }
         }
         if (mode === "committed") {
           expect(facts).toHaveLength(1);

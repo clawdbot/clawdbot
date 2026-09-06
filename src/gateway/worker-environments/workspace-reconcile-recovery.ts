@@ -1,8 +1,8 @@
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { FsSafeError, root as openFsSafeRoot } from "../../infra/fs-safe.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import {
   createStagedInputPathMatcher,
   stagedInputDirectoriesFromEntries,
@@ -147,7 +147,9 @@ export async function createWorkspacePatch(params: {
   baseEntries: WorkerWorkspaceManifestEntry[];
   appliedEntries: WorkerWorkspaceManifestEntry[];
 }): Promise<{ patch: Uint8Array; baseTree: string; basePack: Uint8Array }> {
-  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-patch-"));
+  const temporary = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-workspace-patch-"),
+  );
   try {
     // Rollback journals have a fixed SHA-1 object-id contract. Do not inherit
     // user or process defaults that can switch temporary repositories to SHA-256.
@@ -248,7 +250,9 @@ export async function applyWorkspacePatch(params: {
   // Run no-index with discovery disabled so workspace .gitattributes and
   // repository filters cannot reinterpret authenticated bytes. Disable inherited
   // autocrlf too: no-index still runs Git's working-tree newline conversion.
-  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-no-git-"));
+  const temporary = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-no-git-"),
+  );
   try {
     await requireGit(
       params.root,
@@ -280,7 +284,9 @@ function validateJournalSnapshot(journal: WorkerWorkspaceReconciliationJournal):
 }
 
 async function createWorkspaceRecoveryPatch(params: WorkspaceRecoveryContext): Promise<Uint8Array> {
-  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-recovery-"));
+  const temporary = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-workspace-recovery-"),
+  );
   try {
     await requireGit(temporary, ["init", "--quiet", "--object-format=sha1"]);
     await requireGit(temporary, ["index-pack", "--stdin"], params.journal.basePack);

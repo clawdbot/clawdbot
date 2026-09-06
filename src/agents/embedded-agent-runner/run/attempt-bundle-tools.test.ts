@@ -4,11 +4,12 @@ import {
   makeRegistry,
 } from "../../../config/plugin-auto-enable.test-helpers.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
+import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { attachToolAllowlistIntersection } from "../../tool-policy.js";
 
 const mocks = vi.hoisted(() => ({
   createBundleLspToolRuntime: vi.fn(),
-  getOrCreateSessionMcpRuntime: vi.fn(),
+  acquireSessionMcpRuntime: vi.fn(),
   materializeBundleMcpToolsForRun: vi.fn(),
   applyFinalEffectiveToolPolicy: vi.fn(),
   filterRuntimeCompatibleTools: vi.fn(),
@@ -19,12 +20,12 @@ vi.mock("../../agent-bundle-lsp-runtime.js", () => ({
 }));
 
 vi.mock("../../agent-bundle-mcp-tools.js", () => ({
-  getOrCreateSessionMcpRuntime: mocks.getOrCreateSessionMcpRuntime,
+  acquireSessionMcpRuntime: mocks.acquireSessionMcpRuntime,
   materializeBundleMcpToolsForRun: mocks.materializeBundleMcpToolsForRun,
 }));
 
 vi.mock("../../runtime-plan/tools.js", () => ({
-  normalizeAgentRuntimeTools: vi.fn(({ tools }: { tools: unknown[] }) => tools),
+  normalizeAgentRuntimeTools: vi.fn(({ tools }: { tools: unknown[] }) => [...tools]),
 }));
 
 vi.mock("../../local-model-lean.js", () => ({
@@ -40,12 +41,13 @@ vi.mock("../effective-tool-policy.js", () => ({
 }));
 
 import { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
+import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 
 describe("prepareEmbeddedAttemptBundleTools", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.createBundleLspToolRuntime.mockReset().mockResolvedValue(undefined);
-    mocks.getOrCreateSessionMcpRuntime.mockReset().mockResolvedValue(undefined);
+    mocks.acquireSessionMcpRuntime.mockReset().mockResolvedValue(undefined);
     mocks.materializeBundleMcpToolsForRun.mockReset().mockResolvedValue(undefined);
     mocks.applyFinalEffectiveToolPolicy
       .mockReset()
@@ -67,9 +69,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
         runtimePlan: {},
         sessionId: "session",
       },
-      effectiveWorkspace: "/tmp/workspace",
-      getCurrentAttemptPluginMetadataSnapshot: () => undefined,
-      getProviderRuntimeHandle: () => undefined,
+      setup: createAttemptSetupFixture(),
       isRawModelRun: false,
       preparedToolBase: {
         cronCreatorToolAllowlist: [],
@@ -80,7 +80,6 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
         toolsEnabled: true,
         toolsRaw,
       },
-      sessionAgentId: "main",
     } as unknown as Parameters<typeof prepareEmbeddedAttemptBundleTools>[0];
   }
 
@@ -102,14 +101,14 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     };
     input.attempt.toolsAllow = testCase.allow;
     input.preparedToolBase.effectiveToolsAllow = testCase.allow;
-    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
     mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
       tools: [{ name: "chrome__click" }, { name: "other__click" }],
     });
 
     const result = await prepareEmbeddedAttemptBundleTools(input);
 
-    expect(mocks.getOrCreateSessionMcpRuntime).toHaveBeenCalledTimes(
+    expect(mocks.acquireSessionMcpRuntime).toHaveBeenCalledTimes(
       testCase.discover === false ? 0 : 1,
     );
     expect(result.uncompactedEffectiveTools.map((tool) => tool.name)).toEqual(testCase.expected);
@@ -133,7 +132,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
 
     await prepareEmbeddedAttemptBundleTools(input);
 
-    expect(mocks.getOrCreateSessionMcpRuntime).toHaveBeenCalledTimes(testCase.expected ? 1 : 0);
+    expect(mocks.acquireSessionMcpRuntime).toHaveBeenCalledTimes(testCase.expected ? 1 : 0);
   });
 
   it.each([
@@ -152,7 +151,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
 
     await prepareEmbeddedAttemptBundleTools(input);
 
-    expect(mocks.getOrCreateSessionMcpRuntime).toHaveBeenCalledOnce();
+    expect(mocks.acquireSessionMcpRuntime).toHaveBeenCalledOnce();
   });
 
   it.each(["disableTools", "raw", "restart", "model"])(
@@ -168,7 +167,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
 
       await prepareEmbeddedAttemptBundleTools(input);
 
-      expect(mocks.getOrCreateSessionMcpRuntime).not.toHaveBeenCalled();
+      expect(mocks.acquireSessionMcpRuntime).not.toHaveBeenCalled();
     },
   );
 
@@ -191,8 +190,8 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       config: input.attempt.config,
       manifestRegistry: registry,
     });
-    input.getCurrentAttemptPluginMetadataSnapshot = () => snapshot;
-    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
+    input.setup.getCurrentAttemptPluginMetadataSnapshot = () => snapshot;
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
     mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
       tools: [{ name: "chrome-dev__click" }, { name: "chrome-dev-2__click" }],
     });
@@ -276,7 +275,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       type: "function" as const,
       function: { name, parameters: { type: "object" as const } },
     }));
-    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
     mocks.materializeBundleMcpToolsForRun.mockResolvedValue({ tools: [] });
 
     const result = await prepareEmbeddedAttemptBundleTools(input);
@@ -303,14 +302,14 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     const result = await prepareEmbeddedAttemptBundleTools(input);
 
     expect(result.clientTools).toBeUndefined();
-    expect(mocks.getOrCreateSessionMcpRuntime).not.toHaveBeenCalled();
+    expect(mocks.acquireSessionMcpRuntime).not.toHaveBeenCalled();
     expect(mocks.materializeBundleMcpToolsForRun).not.toHaveBeenCalled();
     expect(mocks.createBundleLspToolRuntime).not.toHaveBeenCalled();
   });
 
   it("refreshes spawned-child inheritance after authorized MCP tools materialize", async () => {
     const inheritedToolAllowlist = ["sessions_spawn"];
-    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
     mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
       tools: [{ name: "server__read" }],
     });
@@ -324,7 +323,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
 
   it("never adds policy-denied bundled tools to spawned-child inheritance", async () => {
     const inheritedToolAllowlist = ["sessions_spawn"];
-    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
     mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
       tools: [{ name: "server__read" }, { name: "server__delete" }],
     });
@@ -350,7 +349,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       pluginId: "bundle-mcp",
       optional: false,
     });
-    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
     mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
       tools: [allowedMcpTool, quarantinedMcpTool],
     });
@@ -374,10 +373,56 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     });
   });
 
+  it("refreshes retained tools and capability captures from each schema projection", async () => {
+    const { filterRuntimeCompatibleTools } = await vi.importActual<
+      typeof import("../../tool-schema-projection.js")
+    >("../../tool-schema-projection.js");
+    mocks.filterRuntimeCompatibleTools.mockImplementation(filterRuntimeCompatibleTools);
+    const first = createStubTool("core_first");
+    const bundled = createStubTool("server__read");
+    const bundledSchema = { type: "object" };
+    bundled.parameters = bundledSchema;
+    setPluginToolMeta(bundled, { pluginId: "bundle-mcp", optional: false });
+    const core = [first];
+    const inherited = ["initial"];
+    const input = createInput(inherited, core);
+    const creatorTools = input.preparedToolBase.cronCreatorToolAllowlist;
+    input.preparedToolBase.cronCreatorToolAllowlistCaptureRef = {};
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
+    mocks.materializeBundleMcpToolsForRun.mockResolvedValue({ tools: [bundled] });
+
+    const result = await prepareEmbeddedAttemptBundleTools(input);
+    const retained = result.uncompactedEffectiveTools;
+    expect(retained.map((tool) => tool.name)).toEqual(["core_first", "server__read"]);
+    expect(core).toEqual([first]);
+
+    const second = createStubTool("core_second");
+    core.splice(0, core.length, second);
+    bundledSchema.type = "array";
+    result.refreshTools();
+
+    expect(retained.map((tool) => tool.name)).toEqual(["core_second"]);
+    expect(core).toEqual([second]);
+    expect(inherited).toEqual(["core_second"]);
+    expect(creatorTools).toEqual([{ name: "core_second" }]);
+
+    core.splice(0, core.length, first);
+    bundledSchema.type = "object";
+    result.refreshTools();
+
+    expect(retained.map((tool) => tool.name)).toEqual(["core_first", "server__read"]);
+    expect(core).toEqual([first]);
+    expect(inherited).toEqual(["core_first", "server__read"]);
+    expect(creatorTools).toEqual([
+      { name: "core_first" },
+      { name: "server__read", pluginId: "bundle-mcp" },
+    ]);
+  });
+
   it("disposes prepared bundle runtimes when later policy setup fails", async () => {
     const disposeMcp = vi.fn(async () => {});
     const disposeLsp = vi.fn(async () => {});
-    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
     mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
       tools: [],
       dispose: disposeMcp,
@@ -401,9 +446,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
         runtimePlan: {},
         sessionId: "session",
       },
-      effectiveWorkspace: "/tmp/workspace",
-      getCurrentAttemptPluginMetadataSnapshot: () => undefined,
-      getProviderRuntimeHandle: () => undefined,
+      setup: createAttemptSetupFixture(),
       isRawModelRun: false,
       preparedToolBase: {
         cronCreatorToolAllowlist: [],
@@ -413,7 +456,6 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
         toolsEnabled: true,
         toolsRaw: [],
       },
-      sessionAgentId: "main",
     } as unknown as Parameters<typeof prepareEmbeddedAttemptBundleTools>[0];
 
     await expect(prepareEmbeddedAttemptBundleTools(input)).rejects.toThrow("bundle policy failed");

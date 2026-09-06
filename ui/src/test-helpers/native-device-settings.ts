@@ -6,6 +6,17 @@ export function createNativeDeviceSettingsSnapshot(): NativeDeviceSettingsSnapsh
     device: { platform: "macos", appVersion: "2026.9.3", appBuild: "42", profileName: null },
     app: {
       showDockIcon: true,
+      iconStyle: {
+        selectedId: "paper",
+        available: [
+          { id: "paper", name: "Original" },
+          { id: "heritage", name: "Heritage" },
+          { id: "clawmark", name: "Clawmark" },
+          { id: "origami", name: "Origami" },
+          { id: "pincer", name: "Pincer" },
+          { id: "openC", name: "Open C" },
+        ],
+      },
       iconAnimationsEnabled: true,
       launchAtLogin: false,
       launchAtLoginAvailable: true,

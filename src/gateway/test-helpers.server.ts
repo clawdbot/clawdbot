@@ -57,7 +57,7 @@ import {
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { closeOpenClawAgentDatabases } from "../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
@@ -67,6 +67,7 @@ import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
+import { gatewayFixtureLifetime } from "./gateway-fixture-lifetime.test-support.js";
 import type { GatewayServerOptions } from "./server.js";
 import { invalidateSessionSharingSnapshot } from "./session-sharing.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
@@ -115,7 +116,6 @@ let suiteConfigRootSeq = 0;
 let lastSyncedSessionStorePath: string | undefined;
 let lastSyncedSessionConfigJson: string | undefined;
 let gatewayReplyRuntimePrepared = false;
-let activeSuiteGatewayServerCount = 0;
 let activeSuiteHookScopeCount = 0;
 // Gateway tests exercise RPC/server behavior, not production bind auto-detection by default.
 // Keep suite fixtures loopback-stable inside containers; bind-specific tests opt in explicitly.
@@ -342,6 +342,7 @@ export async function writeSessionStore(params: {
 }
 
 async function setupGatewayTestHome() {
+  gatewayFixtureLifetime.assertReleased();
   gatewayEnvSnapshot = captureEnv([...GATEWAY_TEST_ENV_KEYS]);
   tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-home-"));
   process.env.HOME = tempHome;
@@ -437,6 +438,7 @@ function resetGatewayMutableTestFixtures(): void {
 }
 
 async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
+  gatewayFixtureLifetime.assertReleased();
   // Some tests intentionally use fake timers; ensure they don't leak into gateway suites.
   vi.useRealTimers();
   resetGatewayLifecycleTestState({ preserveRuntimeBindings: false });
@@ -506,14 +508,15 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
 }
 
 async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
+  gatewayFixtureLifetime.assertReleased();
   vi.useRealTimers();
-  resetGatewayLifecycleTestState({ preserveRuntimeBindings: activeSuiteGatewayServerCount > 0 });
+  resetGatewayLifecycleTestState({ preserveRuntimeBindings: false });
   resetLogger();
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
-  if (tempHome && activeSuiteGatewayServerCount === 0) {
-    // Release fixture-owned handles while their lease environment still exists.
-    closeOpenClawAgentDatabases(tempHome);
+  if (tempHome) {
+    // Release leases before deleting their store, and revoke trust in recreated paths.
+    closeOpenClawAgentDatabasesForTest(tempHome);
   }
   if (options.restoreEnv) {
     gatewayEnvSnapshot?.restore();
@@ -536,6 +539,7 @@ async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
 }
 
 async function resetGatewayTestRuntimeOnly() {
+  gatewayFixtureLifetime.assertAdmission();
   vi.useRealTimers();
   resetGatewayLifecycleTestState({ preserveRuntimeBindings: true });
   setLoggerOverride({ level: "silent", consoleLevel: "silent" });
@@ -582,11 +586,15 @@ export function installGatewayTestHooks(
     let fixtureSetup: Promise<void> | undefined;
     let suiteCleanup: Promise<void> | undefined;
     beforeAll(() => {
+      gatewayFixtureLifetime.assertAdmission();
+      const createHome = activeSuiteHookScopeCount === 0;
+      if (createHome) {
+        gatewayFixtureLifetime.assertReleased();
+      }
       fixtureSetup = undefined;
       suiteCleanup = undefined;
       homeSetup = (async () => {
         vi.useRealTimers();
-        const createHome = activeSuiteHookScopeCount === 0;
         activeSuiteHookScopeCount += 1;
         if (createHome) {
           await setupGatewayTestHome();
@@ -596,18 +604,24 @@ export function installGatewayTestHooks(
       return homeSetup;
     });
     if (options.setup) {
-      beforeAll(() => (fixtureSetup = Promise.resolve().then(options.setup)));
+      beforeAll(
+        () =>
+          (fixtureSetup = Promise.resolve().then(() => {
+            gatewayFixtureLifetime.assertAdmission();
+            return options.setup?.();
+          })),
+      );
     }
     beforeEach(async () => {
-      vi.useRealTimers();
-      if (activeSuiteGatewayServerCount > 0) {
+      if (gatewayFixtureLifetime.hasActiveServers()) {
         await resetGatewayTestRuntimeOnly();
         return;
       }
       await resetGatewayTestState({ uniqueConfigRoot: false });
     }, 60_000);
     afterEach(async () => {
-      if (activeSuiteGatewayServerCount > 0) {
+      gatewayFixtureLifetime.assertAdmission();
+      if (gatewayFixtureLifetime.hasActiveServers()) {
         vi.useRealTimers();
         return;
       }
@@ -627,10 +641,12 @@ export function installGatewayTestHooks(
           await options.cleanup?.();
         },
         async () => {
-          activeSuiteHookScopeCount -= 1;
-          if (activeSuiteHookScopeCount === 0) {
+          // Inner scopes may finish around a live shared server; the final scope
+          // keeps its home and selectors until every Gateway owner has closed.
+          if (activeSuiteHookScopeCount === 1) {
             await cleanupGatewayTestHome({ restoreEnv: true });
           }
+          activeSuiteHookScopeCount -= 1;
         },
       ));
     }, 300_000);
@@ -638,6 +654,7 @@ export function installGatewayTestHooks(
   }
 
   beforeEach(async () => {
+    gatewayFixtureLifetime.assertReleased();
     vi.useRealTimers();
     await setupGatewayTestHome();
     await resetGatewayTestState({ uniqueConfigRoot: false });
@@ -702,6 +719,8 @@ export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
   // never arrives.
   timeoutMs = 10_000,
 ): Promise<T> {
+  // Keep the wait's caller in the stack when a timer eventually rejects it.
+  const timeoutError = new Error("timeout");
   return new Promise<T>((resolve, reject) => {
     function cleanup() {
       clearTimeout(timer);
@@ -721,7 +740,7 @@ export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
     }
     const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
       cleanup();
-      reject(new Error("timeout"));
+      reject(timeoutError);
     }, timeoutMs);
     timer.unref?.();
     ws.on("message", handler);
@@ -730,11 +749,13 @@ export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
 }
 
 export async function startTestGatewayServer(port: number, opts?: GatewayServerOptions) {
+  gatewayFixtureLifetime.assertAdmission();
   // Tests mutate testState-backed config before server startup; discard earlier
   // helper reads so startup observes the current fixture state.
   resetConfigRuntimeState();
   clearSessionStoreCacheForTest();
   const mod = await getServerModule();
+  gatewayFixtureLifetime.assertAdmission();
   const resolvedOpts = {
     ...opts,
     controlUiEnabled: opts?.controlUiEnabled ?? false,
@@ -750,21 +771,10 @@ export async function startTestGatewayServer(port: number, opts?: GatewayServerO
       root: tempControlUiRoot,
     };
   }
-  const server = await mod.startGatewayServer(port, resolvedOpts);
-  activeSuiteGatewayServerCount += 1;
-  const originalClose = server.close.bind(server);
-  let closed = false;
-  server.close = (async (...args: Parameters<typeof originalClose>) => {
-    try {
-      return await originalClose(...args);
-    } finally {
-      if (!closed) {
-        closed = true;
-        activeSuiteGatewayServerCount = Math.max(0, activeSuiteGatewayServerCount - 1);
-      }
-    }
-  }) as typeof server.close;
-  return server;
+  return await gatewayFixtureLifetime.ownServer(
+    () => mod.startGatewayServer(port, resolvedOpts),
+    tempHome,
+  );
 }
 
 export async function startGatewayServerWithRetries(params: {
@@ -849,7 +859,9 @@ export async function createGatewaySuiteHarness(opts?: {
 }
 
 export async function startServer(token?: string, opts?: GatewayServerOptions) {
+  gatewayFixtureLifetime.assertAdmission();
   const port = await getGatewayTestPort();
+  gatewayFixtureLifetime.assertAdmission();
   const envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN"]);
   const prev = process.env.OPENCLAW_GATEWAY_TOKEN;
   if (typeof token === "string") {
@@ -876,9 +888,21 @@ export async function startServer(token?: string, opts?: GatewayServerOptions) {
 
   try {
     const started = await startGatewayServerWithRetries({ port, opts: resolvedGatewayOpts });
-    return { ...started, prevToken: prev, envSnapshot };
+    return {
+      ...started,
+      prevToken: prev,
+      envSnapshot: {
+        restore() {
+          if (gatewayFixtureLifetime.canReleaseState(started.server)) {
+            envSnapshot.restore();
+          }
+        },
+      },
+    };
   } catch (error) {
-    envSnapshot.restore();
+    if (gatewayFixtureLifetime.canAdmit()) {
+      envSnapshot.restore();
+    }
     throw error;
   }
 }

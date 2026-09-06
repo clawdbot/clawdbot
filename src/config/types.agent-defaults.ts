@@ -129,7 +129,7 @@ export type AgentDefaultsConfig = {
   params?: Record<string, unknown>;
   /** Primary model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   model?: AgentModelConfig;
-  /** Optional model-selection scope. Omitted preserves each surface's existing behavior. */
+  /** Model-selection scope; defaults to the current session. */
   modelSelectionScope?: ModelSelectionScope;
   /** Optional lower-cost model for short internal tasks such as generated session titles. */
   utilityModel?: string;
@@ -348,7 +348,7 @@ export type AgentDefaultsConfig = {
     allowAgents?: string[];
     /** Max concurrent sub-agent runs (global lane: "subagent"). Default: 8. */
     maxConcurrent?: number;
-    /** Maximum depth allowed for sessions_spawn chains. Default behavior: 1 (no nested spawns). */
+    /** Maximum depth for sessions_spawn chains. Default behavior: 5. */
     maxSpawnDepth?: number;
     /** Maximum active children a single requester session may spawn. Default behavior: 5. */
     maxChildrenPerAgent?: number;

@@ -30,6 +30,9 @@ const repositoryScriptEntries = [
   "scripts/check-control-ui-precompressed-assets.mts!",
   "scripts/check-live-cache.ts!",
   "scripts/check-package-dist-imports.mjs!",
+  "scripts/check-plugin-sdk-exports.mts!",
+  // openclaw-performance.yml invokes the paired benchmark CLI by path.
+  "scripts/vitest-pair-benchmark.mts!",
   // Cloudflare deployment template: wrangler bundles the Worker from this entry.
   "scripts/cloudflare/src/index.ts!",
   // Invoked by the documented macOS Computer Use live-proof shell rig.
@@ -130,7 +133,6 @@ const repositoryScriptEntries = [
   "scripts/run-stylelint.mts!",
   // Path-spawned test roots are development entries; `!` would audit dev tools as production.
   "scripts/run-vitest-child.mts",
-  "scripts/test-projects-child.mts",
   "scripts/secrets/openclaw-bws-resolver.mjs!",
   "scripts/sync-labels.ts!",
   "scripts/test-built-bundled-channel-entry-smoke.mts!",
@@ -192,6 +194,7 @@ const rootEntries = [
   "src/agents/code-mode.worker.ts!",
   // Worker-thread and script entrypoints import contracts that production Knip cannot trace.
   "src/agents/compaction-planning.worker.ts!",
+  "src/config/sessions/disk-budget.worker.ts!",
   "scripts/print-cli-backend-live-metadata.ts!",
   // Workflow/package-script entrypoints are not imported from production modules.
   "scripts/openclaw-cross-os-release-checks.ts!",
@@ -233,6 +236,8 @@ const rootEntries = [
   "src/mcp/plugin-tools-serve.ts!",
   // Dedicated tsdown entry exercised against built plugin singletons.
   "src/plugins/build-smoke-entry.ts!",
+  // Released Gateways still import this stable entry after an on-disk update.
+  "src/gateway/plugin-channel-reload-targets.ts!",
   // Package-script owners invoke these generated-artifact modules directly.
   "src/config/doc-baseline.ts!",
   "src/plugins/runtime-sidecar-paths-baseline.ts!",
@@ -860,6 +865,10 @@ const config = {
       "src/profile-evidence-sharding.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/senseaudio`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/slack`]: bundledPluginWorkspace([
+      // The vendor integrity test executes this verifier by path.
+      "scripts/verify-official-skills.mjs!",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/tavily`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/tencent`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/vllm`]: bundledPluginWorkspace(),

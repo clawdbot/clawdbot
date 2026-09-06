@@ -180,6 +180,9 @@ export function createGatewayInstanceRuntime(
         throw new Error("Gateway instance dispatch unavailable for recovery notice");
       }
       const { sendMessage } = await loadOutboundMessageRuntime();
+      if (payload.isCurrent?.() === false) {
+        throw new Error("Recovery notice owner retired before delivery");
+      }
       const context = options.getContext();
       const result = await sendMessage({
         cfg: context.getRuntimeConfig(),
@@ -195,6 +198,11 @@ export function createGatewayInstanceRuntime(
         deliveryIntentId: payload.idempotencyKey,
         reusePendingDeliveryIntent: true,
         completionRetention: RECOVERY_NOTICE_COMPLETION_RETENTION,
+        onPlatformSendDispatch: async () => {
+          if (closed || !options.isDispatchAvailable() || payload.isCurrent?.() === false) {
+            throw new Error("Recovery notice owner retired before delivery");
+          }
+        },
         abortSignal: AbortSignal.timeout(10_000),
       });
       if (result.deliveryStatus === "failed" || result.deliveryStatus === "partial_failed") {

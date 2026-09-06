@@ -8,7 +8,7 @@ import type { SubsystemLogger } from "../../logging/subsystem.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { ExecApprovalManager } from "../exec-approval-manager.js";
+import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
 import { authorizeOperatorScopesForMethod, CLI_DEFAULT_OPERATOR_SCOPES } from "../method-scopes.js";
 import { isApprovalRecordVisibleToClient } from "../server-methods/approval-shared.js";
@@ -467,8 +467,8 @@ describe("plugin HTTP route runtime scopes", () => {
     },
   );
 
-  it("does not give approval-scoped gateway-auth routes global approval visibility", async () => {
-    const manager = new ExecApprovalManager<{ command: string }>();
+  it("does not give approval-scoped gateway-auth routes global approval visibility", async (testContext) => {
+    const manager = createTestApprovalManager<{ command: string }>(testContext);
     const record = manager.create({ command: "echo ok" }, 60_000, "route-hidden-approval");
     record.requestedByDeviceId = "device-owner";
     record.requestedByConnId = "conn-owner";

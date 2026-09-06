@@ -273,6 +273,33 @@ catalog, API-key auth, and dynamic model resolution.
     | Admission | Optional. Set `acceptUnknownModel: ({ id, record }) => boolean` when your request shaping is model-version specific, so discovery cannot publish a model you cannot yet build a valid request for. It is called only for IDs your static catalog does not already publish; known IDs bypass it and keep their published metadata. Return `false` to drop the row. Providers that omit it keep the previous behavior unchanged. Prefer comparing the vendor's advertised capabilities against your own contract checks over a hand-maintained model list, and fail closed when the row carries no capability data. |
     | Failure | Live discovery is advisory. Auth, network, timeout, pagination, parsing, empty-catalog, and filtering failures return the provider-owned static seed instead of removing the provider. |
 
+    Bundled providers set `discoveryMode: "strict"` in their catalog options.
+    This code option keeps successful empty results empty and reports failed
+    acquisition through `ProviderCatalogResult.outcomes`, rather than returning
+    seed models as a successful refresh. HTTP 401/403 produces a catalog-scoped
+    `auth-rejected` outcome; other acquisition failures produce `unavailable`.
+    Neither a static catalog nor skipped discovery produces a live outcome.
+    Each outcome carries the profile selected for the actual request, when one
+    supplied its credential. Family providers report each sibling independently.
+
+    Public metadata requests declare `authentication: "none"` in discovery
+    options. The prepared request then has no credential or profile identity;
+    its cache key is independent of the configured inference credential.
+    The returned provider configuration still retains its inference credential.
+
+    External calls that omit `discoveryMode` retain the advisory contract above.
+    The public Chutes, Hugging Face, KiloCode, and Vercel AI Gateway discovery
+    functions and builders also retain that default. Their bundled catalog hooks
+    pass `{ discoveryMode: "strict" }` explicitly; Hugging Face discovery accepts
+    this options object after its existing timeout argument. The Chutes public
+    default retains its anonymous retry after HTTP 401; strict calls never retry
+    without the selected credential.
+    The strict and advisory paths share the same guarded transport and cache.
+    Custom live builders can use `runLiveProviderCatalog` at their catalog hook
+    to convert acquisition errors into outcomes. Keep metadata-feed fallback
+    separate from account discovery; do not retry a rejected account request
+    anonymously or substitute seed rows inside a strict builder.
+
     For a non-Bearer or nonstandard list endpoint, pass options instead of
     `true`:
 
@@ -794,6 +821,7 @@ catalog, API-key auth, and dynamic model resolution.
       | `prepareExtraParams` | Default request params |
       | `createStreamFn` | Fully custom StreamFn transport |
       | `wrapStreamFn` | Custom headers/body wrappers on the normal stream path |
+      | `reconcileLocalService` | Cheap, idempotent managed-service repair after health and before every request |
       | `resolveTransportTurnState` | Native per-turn headers/metadata and WebSocket headers/cool-down |
       | `resolveWebSocketSessionPolicy` | Deprecated WebSocket compatibility hook; use `resolveTransportTurnState` |
       | `formatApiKey` | Custom runtime token shape |
@@ -819,13 +847,30 @@ catalog, API-key auth, and dynamic model resolution.
       | `validateReplayTurns` | Strict replay-turn validation before the embedded runner |
       | `onModelSelected` | Post-selection callback (e.g. telemetry) |
 
+      `reconcileLocalService` is called only for a configured local service,
+      including a healthy process reused by a restarted Gateway. Honor its
+      abort signal and reject when reconciliation fails; OpenClaw blocks the
+      provider request and releases the request lease.
+
       Runtime fallback notes:
 
       - Error classification uses the prepared provider owner or already loaded provider hooks. `matchesContextOverflowError` and `classifyFailoverReason` never trigger plugin discovery while handling an error; provider preparation owns loading those hooks.
       - `normalizeConfig` resolves one owning plugin per provider id (bundled providers first, then the matched runtime plugin) and calls only that hook - there is no scan across other providers. Google's own `normalizeConfig` hook is what normalizes `google` / `google-vertex` / `google-antigravity` config entries; it is not a separate core fallback.
       - `resolveConfigApiKey` uses the provider hook when exposed. Amazon Bedrock keeps AWS env-marker resolution in its provider plugin; runtime auth itself still uses the AWS SDK default chain when configured with `auth: "aws-sdk"`.
       - `resolveThinkingProfile(ctx)` receives the selected `provider`, `modelId`, optional merged `reasoning` catalog hint, and optional merged model `compat` facts. Use `compat` only to select the provider's thinking UI/profile.
+      - `normalizeResolvedModel(ctx)` can set `compactionThinkingDefault` on the returned `ProviderRuntimeModel` when the provider has a preferred embedded-summary effort. This is prepared runtime metadata, not an operator setting or catalog field. Explicit `agents.defaults.compaction.thinkingLevel` takes precedence; otherwise the host uses this preference and then `low`. The chosen effort is still clamped to the actual compaction candidate.
       - `resolveSystemPromptContribution` lets a provider inject cache-aware system-prompt guidance for a model family. Prefer it over the legacy plugin-wide `before_prompt_build` hook when the behavior belongs to one provider/model family and should preserve the stable/dynamic cache split.
+
+      Bundled and trusted official plugins can also export
+      `resolveToolSearchMode(ctx)` from their lightweight `provider-policy-api`
+      artifact. The context contains the final `provider`, `modelId`, `api`, and
+      optional `baseUrl`; its type is exported from
+      `openclaw/plugin-sdk/provider-model-types`. Return `"tools"` to prefer
+      structured Tool Search, `false` to veto the managed-local-service default,
+      or `undefined` to leave that decision to the host. The host records the
+      result on the resolved runtime model rather than writing configuration.
+      Explicit `tools.toolSearch` settings take precedence. This hook changes
+      schema exposure, not tool permissions or availability.
 
     </Accordion>
 

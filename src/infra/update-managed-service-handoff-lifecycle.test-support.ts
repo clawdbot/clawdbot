@@ -1,5 +1,6 @@
 import type { TriageUpdateFailure } from "../commands/triage-update.js";
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
+import type { UpdateRunRecord } from "./update-run-record.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
 type ManagedSystemdPostExitState = {
@@ -12,6 +13,7 @@ type ManagedSystemdPostExitState = {
 };
 
 export type ManagedServiceManagerBoundaryOptions = {
+  ledger?: boolean;
   cancelAfterPark?: boolean;
   parentExitTimeoutMs?: number;
   launchdFault?: "wrong-parent" | "missing-restored-pid" | "dead-restored-pid";
@@ -32,6 +34,7 @@ export type ManagedServiceManagerBoundaryOptions = {
   requester?: { channel?: string; accountId?: string; senderId?: string };
   updaterExitCode?: number;
   recoveryExitCode?: number;
+  recoveryChecksServiceIdentity?: true;
   recoveryHang?: boolean;
   recoveryClockAdvanceMs?: number;
   recoverySentinel?: "retained" | "consumed" | "replaced";
@@ -55,6 +58,7 @@ export type ManagedServiceCommandTiming = {
 };
 
 export type ManagedServiceManagerBoundaryResult = {
+  run?: UpdateRunRecord;
   commands: string[];
   parentSignal: NodeJS.Signals | null;
   state: Record<string, unknown>;
@@ -170,6 +174,28 @@ export function registerManagedSystemdHandoffConvergenceTests(
       });
     },
   );
+
+  itUnix("rejects an overdue commit before its delayed deadline callback executes", async () => {
+    const { commands, parentSignal, sentinel, state } = await runManagedServiceManagerBoundary(
+      "systemd",
+      { overdueCommit: true },
+    );
+
+    expect(parentSignal).toBeNull();
+    expect(
+      commands.filter((command) => command.includes("stop openclaw-gateway.service")),
+    ).toHaveLength(0);
+    expect(
+      commands.filter((command) => command.includes("start openclaw-gateway.service")),
+    ).toHaveLength(0);
+    expect(state).toEqual({});
+    expect(sentinel).toMatchObject({
+      payload: {
+        status: "skipped",
+        stats: { reason: "managed-service-handoff-cancelled", steps: [] },
+      },
+    });
+  });
 
   itUnix(
     "fails closed when the exact systemd stop job exhausts the parent-exit deadline",

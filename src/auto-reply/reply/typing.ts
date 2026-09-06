@@ -6,7 +6,6 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createTypingKeepaliveLoop } from "../../channels/typing-lifecycle.js";
-import { createTypingStartGuard } from "../../channels/typing-start-guard.js";
 import { isSilentReplyPrefixText, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 
 const DEFAULT_TYPING_INTERVAL_SECONDS = 6;
@@ -146,22 +145,14 @@ export function createTypingController(params: {
 
   const isActive = () => active && !sealed;
 
-  const startGuard = createTypingStartGuard({
-    isSealed: () => sealed,
-    shouldBlock: () => runComplete,
-    rethrowOnError: true,
-  });
-
   const triggerTyping = async () => {
-    if (triggerInFlight) {
+    if (triggerInFlight || sealed || runComplete) {
       return;
     }
     triggerInFlight = true;
     try {
-      await startGuard.run(async () => {
-        await onReplyStart?.();
-        refreshTypingTtl();
-      });
+      await onReplyStart?.();
+      refreshTypingTtl();
     } catch (err) {
       log?.(`typing start failed: ${String(err)}`);
     } finally {
@@ -180,16 +171,11 @@ export function createTypingController(params: {
   });
 
   const ensureStart = async () => {
-    if (sealed) {
-      return;
-    }
     // Late callbacks after a run completed should never restart typing.
-    if (runComplete) {
+    if (sealed || runComplete) {
       return;
     }
-    if (!active) {
-      active = true;
-    }
+    active = true;
     if (started) {
       return;
     }
@@ -208,10 +194,7 @@ export function createTypingController(params: {
   };
 
   const startTypingLoop = async () => {
-    if (sealed) {
-      return;
-    }
-    if (runComplete) {
+    if (sealed || runComplete) {
       return;
     }
     // Always refresh TTL when called, even if loop already running.
@@ -228,7 +211,11 @@ export function createTypingController(params: {
       return;
     }
     await ensureStart();
-    typingLoop.start();
+    // Cleanup or completion can run while the start callback yields. The loop
+    // must not acquire a timer after its owning controller has closed.
+    if (!sealed && !runComplete) {
+      typingLoop.start();
+    }
   };
 
   const startTypingOnText = async (text?: string) => {

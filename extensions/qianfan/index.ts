@@ -17,6 +17,6 @@ export default defineSingleProviderPluginEntry({
       defaultModel: QIANFAN_DEFAULT_MODEL_REF,
       applyConfig: applyQianfanConfig,
     },
-    catalog: { liveModelDiscovery: true },
+    catalog: { liveModelDiscovery: true, discoveryMode: "strict" },
   },
 });

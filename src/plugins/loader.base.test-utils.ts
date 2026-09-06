@@ -22,7 +22,7 @@ import { getGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global
 import { writePersistedInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import {
   clearPluginInteractiveHandlers,
-  resolvePluginInteractiveNamespaceMatch,
+  resolvePluginInteractiveRegistrationsMatch,
 } from "./interactive-registry.js";
 import { resolvePluginRegistryLoadCacheKey } from "./loader-cache.js";
 import { loadOpenClawPlugins, resolveRuntimePluginRegistry } from "./loader.js";
@@ -59,6 +59,7 @@ import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import {
+  getActivePluginChannelRegistry,
   getActivePluginRegistry,
   getActivePluginRegistryKey,
   listImportedRuntimePluginIds,
@@ -1710,7 +1711,13 @@ describe("loadOpenClawPlugins", () => {
       }),
     ]);
     expect(getPluginCommandSpecs("telegram")).toStrictEqual([]);
-    expect(resolvePluginInteractiveNamespaceMatch("telegram", "pair:device")).toBeNull();
+    expect(
+      resolvePluginInteractiveRegistrationsMatch(
+        getActivePluginChannelRegistry()?.interactiveHandlers ?? [],
+        "telegram",
+        "pair:device",
+      ),
+    ).toBeNull();
 
     const active = loadRegistryFromSinglePlugin({
       plugin,
@@ -1726,7 +1733,13 @@ describe("loadOpenClawPlugins", () => {
         acceptsArgs: true,
       },
     ]);
-    expect(resolvePluginInteractiveNamespaceMatch("telegram", "pair:device")).toMatchObject({
+    expect(
+      resolvePluginInteractiveRegistrationsMatch(
+        getActivePluginChannelRegistry()?.interactiveHandlers ?? [],
+        "telegram",
+        "pair:device",
+      ),
+    ).toMatchObject({
       namespace: "pair",
       payload: "device",
       registration: {

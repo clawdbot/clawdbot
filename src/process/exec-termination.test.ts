@@ -35,13 +35,18 @@ describe("command termination after root exit", () => {
       });
       controller.terminate();
       let settled = false;
-      const completion = controller.settle().then(() => {
+      const completion = controller.settle().then((cleanup) => {
         settled = true;
+        return cleanup;
       });
 
       await vi.advanceTimersByTimeAsync(0);
       expect(settled).toBe(!needsGrace);
-      expect(kill).toHaveBeenCalledWith(-4242, "SIGTERM");
+      if (needsGrace) {
+        expect(kill).toHaveBeenCalledWith(-4242, "SIGTERM");
+      } else {
+        expect(kill).not.toHaveBeenCalledWith(-4242, "SIGTERM");
+      }
       expect(kill).not.toHaveBeenCalledWith(-4242, "SIGKILL");
 
       await vi.advanceTimersByTimeAsync(299);
@@ -49,7 +54,7 @@ describe("command termination after root exit", () => {
       expect(kill).not.toHaveBeenCalledWith(-4242, "SIGKILL");
 
       await vi.advanceTimersByTimeAsync(1);
-      await completion;
+      await expect(completion).resolves.toBe(needsGrace ? "forced" : "normal");
       if (needsGrace) {
         expect(kill).toHaveBeenCalledWith(-4242, "SIGKILL");
       } else {

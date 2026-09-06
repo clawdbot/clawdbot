@@ -5,7 +5,10 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
-import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
+import {
+  createInboundDebouncer,
+  resolveInboundDebounceMs,
+} from "openclaw/plugin-sdk/channel-inbound-debounce";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
@@ -15,6 +18,10 @@ import {
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import type { MattermostPost } from "./client.js";
@@ -276,6 +283,7 @@ function createRuntimeCore(
   },
   overrides: {
     inboundDebounceMs?: number;
+    resolveInboundDebounceMs?: typeof resolveInboundDebounceMs;
     isControlCommandMessage?: (text?: string) => boolean;
     shouldComputeCommandAuthorized?: (text?: string) => boolean;
     shouldHandleTextCommands?: () => boolean;
@@ -427,7 +435,8 @@ function createRuntimeCore(
         shouldHandleTextCommands: overrides.shouldHandleTextCommands ?? (() => false),
       },
       debounce: {
-        resolveInboundDebounceMs: () => overrides.inboundDebounceMs ?? 0,
+        resolveInboundDebounceMs:
+          overrides.resolveInboundDebounceMs ?? (() => overrides.inboundDebounceMs ?? 0),
         createInboundDebouncer:
           overrides.createInboundDebouncer ??
           (<T>(params: {
@@ -595,6 +604,66 @@ describe("mattermost inbound user posts", () => {
     mockState.dispatchInboundMessage.mockImplementation(async () => {
       mockState.abortController?.abort();
     });
+  });
+
+  it("changes Mattermost delay at collector admission without replacing the socket", async () => {
+    const cfg = { ...testConfig, messages: { inbound: { debounceMs: 0 } } };
+    setRuntimeConfigSnapshot(cfg, cfg);
+    mockState.dispatchInboundMessage.mockResolvedValue(undefined);
+    mockState.runtimeCore = createRuntimeCore(cfg, undefined, {
+      createInboundDebouncer,
+      resolveInboundDebounceMs,
+    });
+    const socket = new FakeWebSocket();
+    const abort = new AbortController();
+    const socketFactory = vi.fn(() => socket);
+    const monitor = monitorMattermostProvider({
+      config: cfg,
+      runtime: testRuntime(),
+      abortSignal: abort.signal,
+      webSocketFactory: socketFactory,
+    });
+    await vi.waitFor(() => expect(socket.openListenerCount).toBeGreaterThan(0));
+    socket.emitOpen();
+    const bodies = () =>
+      mockState.dispatchInboundMessage.mock.calls.map(([params]) => params.ctx.BodyForAgent);
+    const publish = (debounceMs: number) => {
+      const current = { ...cfg, messages: { inbound: { byChannel: { mattermost: debounceMs } } } };
+      setRuntimeConfigSnapshot(current, current);
+    };
+    try {
+      await emitMattermostChannelPost(socket, { id: "debounce-1", message: "immediate" });
+      await vi.waitFor(() => expect(bodies()).toEqual(["immediate"]));
+      publish(500);
+      const started = performance.now();
+      await emitMattermostChannelPost(socket, { id: "debounce-2", message: "buffered" });
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+      expect(bodies()).toEqual(["immediate"]);
+      publish(0);
+      await vi.waitFor(() => expect(bodies()).toEqual(["immediate", "buffered"]));
+      const delayedElapsedMs = performance.now() - started;
+      await emitMattermostChannelPost(socket, { id: "debounce-3", message: "after disable" });
+      await vi.waitFor(() => expect(bodies()).toEqual(["immediate", "buffered", "after disable"]));
+      console.log(
+        "MONITOR_DEBOUNCE_PROOF " +
+          JSON.stringify({
+            channel: "mattermost",
+            pid: process.pid,
+            clock: "real",
+            delaysMs: [0, 500, 0],
+            delayedElapsedMs,
+            bodies: bodies(),
+            socketsCreated: socketFactory.mock.calls.length,
+          }),
+      );
+    } finally {
+      abort.abort();
+      socket.emitClose(1000);
+      await monitor;
+      clearRuntimeConfigSnapshot();
+    }
   });
 
   it("preserves abandon retry accounting, backoff, threshold, and restart behavior", async () => {

@@ -15,7 +15,7 @@ export async function cancelUnreadResponseBody(response: Response | undefined): 
 }
 
 type ReadResponsePrefixResult = {
-  buffer: Buffer;
+  materializeBuffer: () => Buffer;
   size: number;
   truncated: boolean;
 };
@@ -77,8 +77,9 @@ async function readResponsePrefixFromReader(
   }
 
   return {
+    // Full-body readers reject overflow before allocating a contiguous copy.
     // MiB limits can yield fractional bytes; retained slices contain only whole bytes.
-    buffer: Buffer.concat(chunks, Math.floor(Math.min(size, maxBytes))),
+    materializeBuffer: () => Buffer.concat(chunks, Math.floor(Math.min(size, maxBytes))),
     size,
     truncated,
   };
@@ -107,14 +108,12 @@ async function readResponsePrefix(
       cancel: async (error) => await body?.cancel(error),
       read: async () => {
         const fallback = Buffer.from(await response.arrayBuffer());
-        if (fallback.length > maxBytes) {
-          return {
-            buffer: fallback.subarray(0, maxBytes),
-            size: fallback.length,
-            truncated: true,
-          };
-        }
-        return { buffer: fallback, size: fallback.length, truncated: false };
+        const truncated = fallback.length > maxBytes;
+        return {
+          materializeBuffer: () => (truncated ? fallback.subarray(0, maxBytes) : fallback),
+          size: fallback.length,
+          truncated,
+        };
       },
     });
   }
@@ -145,7 +144,7 @@ export async function readResponseTextPrefix(
     stopAtLimit: true,
   });
   return {
-    text: decodeTextPrefix(prefix.buffer, { truncated: prefix.truncated }),
+    text: decodeTextPrefix(prefix.materializeBuffer(), { truncated: prefix.truncated }),
     size: prefix.size,
     truncated: prefix.truncated,
   };
@@ -171,7 +170,7 @@ export async function readResponseWithLimit(
       ? onOverflow({ size: prefix.size, maxBytes, res: response })
       : new Error(`Content too large: ${prefix.size} bytes (limit: ${maxBytes} bytes)`);
   }
-  return prefix.buffer;
+  return prefix.materializeBuffer();
 }
 
 /** Reads a small collapsed text prefix from a response body for diagnostics/errors. */

@@ -11,6 +11,7 @@
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import { getSafeSessionStorage } from "../local-storage.ts";
+import { canReloadControlUiDocument } from "./document-reload-guard.ts";
 
 const RELOAD_GUARD_STORAGE_KEY = "openclaw.controlUi.staleChunkReloadBuildId";
 // Bounds document probes across rapid re-renders of the same error state.
@@ -28,6 +29,7 @@ type StaleChunkReloadDeps = {
   buildId?: string;
   storage?: Pick<Storage, "getItem" | "setItem"> | null;
   reload?: () => void;
+  canReload?: () => boolean;
 };
 
 type MissingStylesheetRecoveryDeps = {
@@ -48,8 +50,7 @@ export function isStaleChunkImportError(error: unknown): boolean {
   return error instanceof Error && MODULE_IMPORT_ERROR_PATTERN.test(error.message);
 }
 
-function reloadControlUiDocument(): void {
-  const url = new URL(window.location.href);
+export function reloadControlUiDocument(url = new URL(window.location.href)): void {
   // The pre-app mount recovery strips this one-shot cache buster before bootstrap.
   url.searchParams.set("openclaw_mount_recovery", String(Date.now()));
   window.location.replace(url.href);
@@ -107,6 +108,9 @@ function persistGuardBuildId(
  * app webviews) instead of the recoverable panel error.
  */
 export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}): Promise<boolean> {
+  if (deps.canReload?.() === false || !canReloadControlUiDocument()) {
+    return false;
+  }
   const storage = deps.storage === undefined ? getSafeSessionStorage() : deps.storage;
   const buildId = deps.buildId ?? CONTROL_UI_BUILD_INFO.buildId;
   // One automatic reload per build id: if the reloaded document still fails
@@ -128,7 +132,9 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
       attemptsByBuild.delete(attemptedBuildId);
     }
   }
-  if (attemptsByBuild.has(buildId)) {
+  // A replacement connection can join a pending probe; only starting another
+  // probe is throttled, so retiring the first caller cannot strand its successor.
+  if (attemptsByBuild.has(buildId) && (!inFlightDocumentProbe || recovery[1] !== buildId)) {
     return false;
   }
   attemptsByBuild.set(buildId, now);
@@ -148,7 +154,12 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
   // build would reload forever. When storage is unavailable or rejects the
   // write, leave recovery to the manual Retry path instead of reloading.
   const reload = deps.reload ?? reloadControlUiDocument;
-  if (recovery[1] !== buildId || !persistGuardBuildId(storage, buildId)) {
+  if (
+    !canReloadControlUiDocument() ||
+    deps.canReload?.() === false ||
+    recovery[1] !== buildId ||
+    !persistGuardBuildId(storage, buildId)
+  ) {
     return false;
   }
   recovery[1] = null;
@@ -194,10 +205,9 @@ export async function retryStaleChunkReloadWhenReachable(
     intervalMs?: number;
     probe?: () => Promise<boolean>;
     wait?: (ms: number) => Promise<void>;
-    canReload?: () => boolean;
   } = {},
 ): Promise<boolean> {
-  if (deps.canReload?.() === false) {
+  if (deps.canReload?.() === false || !canReloadControlUiDocument(true)) {
     return false;
   }
   const now = deps.now ?? Date.now;
@@ -222,7 +232,7 @@ export async function retryStaleChunkReloadWhenReachable(
     const reachable = remaining > 0 ? await probeWithinDeadline(probe, remaining) : await probe();
     if (reachable) {
       // The probe may outlive Close, a new request, or a failed replay-state write.
-      if (deps.canReload?.() === false) {
+      if (deps.canReload?.() === false || !canReloadControlUiDocument(true)) {
         return false;
       }
       const storage = deps.storage === undefined ? getSafeSessionStorage() : deps.storage;

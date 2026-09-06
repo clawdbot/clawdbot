@@ -6,9 +6,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { encodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.js";
 import {
   isScheduledTaskDefinitelyNotRunning,
-  probeScheduledTaskExists,
   waitForScheduledTaskRunningEvidence,
 } from "./schtasks-runtime.js";
+import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
 import {
   readScheduledTaskCommand,
   readScheduledTaskRuntime,

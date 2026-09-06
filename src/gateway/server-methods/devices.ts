@@ -481,8 +481,8 @@ export const deviceHandlers: GatewayRequestHandlers = {
         context.invalidateClientsForDevice?.(removed.deviceId, {
           reason: "device-pair-removed",
         });
+        await reconcileRevokedDeviceWorker(context, removed.deviceId);
       }
-      await reconcileRevokedDeviceWorker(context, removed.deviceId);
       context.logGateway.info(`device pairing removed device=${removed.deviceId}`);
       emitDevicePairingLifecycleSecurityEvent({
         action: "device.pairing.removed",
@@ -784,22 +784,22 @@ export const deviceHandlers: GatewayRequestHandlers = {
       controlId: "device.token.revoke",
       role: entry.role,
     });
-    if (entry.role === "node") {
-      // Revoking a node token ends its authority like pairing removal does:
-      // run the same teardown owner so pending actions/work, wake state,
-      // surface caps, and worker placements are not stranded on a dead node.
-      clearRemovedNodeRuntimeState({ nodeId: normalizedDeviceId, context });
-      await reconcileRevokedDeviceWorker(context, normalizedDeviceId);
-    }
-    // Preserve only this committed mutation's reply across its own invalidation;
-    // a caller revoked during the await cannot claim it or skip target teardown.
+    // Claim the reply and fence revoked clients before worker cleanup can yield.
+    // Cleanup and disconnect remain owned even when that claim fails.
     try {
-      holdGatewayPolicyResponse(respond);
+      try {
+        holdGatewayPolicyResponse(respond);
+      } finally {
+        context.invalidateClientsForDevice?.(normalizedDeviceId, {
+          role: entry.role,
+          reason: "device-token-revoked",
+        });
+        if (entry.role === "node") {
+          clearRemovedNodeRuntimeState({ nodeId: normalizedDeviceId, context });
+          await reconcileRevokedDeviceWorker(context, normalizedDeviceId);
+        }
+      }
     } finally {
-      context.invalidateClientsForDevice?.(normalizedDeviceId, {
-        role: entry.role,
-        reason: "device-token-revoked",
-      });
       queueMicrotask(() => {
         context.disconnectClientsForDevice?.(normalizedDeviceId, { role: entry.role });
       });

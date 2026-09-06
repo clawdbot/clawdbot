@@ -624,7 +624,7 @@ export function registerOpenClawAgentDatabase(params: {
   const lastSeenAt = Date.now();
   runOpenClawStateWriteTransaction(
     (database) => {
-      assertAgentDeletionPathFence(database.db, deletionFence);
+      assertAgentDeletionPathFence(database, deletionFence);
       const storedPath = resolveOpenClawAgentDatabaseStoredPath(database.path, params.path);
       const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database.db);
       executeSqliteQuerySync(

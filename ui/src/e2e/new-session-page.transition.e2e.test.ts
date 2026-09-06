@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
   controlUiBundledGatewayUrl,
@@ -49,6 +50,19 @@ async function captureProof(page: import("playwright").Page, fileName: string) {
   }
   const proofDir = transitionProofDir();
   await mkdir(proofDir, { recursive: true });
+  if (page.video()) {
+    await writeFile(
+      path.join(proofDir, fileName),
+      await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+        page
+          .locator(
+            ".new-session-page__message:visible, .agent-chat__composer-combobox textarea:visible",
+          )
+          .first(),
+      ]),
+    );
+    return;
+  }
   await page.screenshot({ fullPage: true, path: path.join(proofDir, fileName) });
 }
 

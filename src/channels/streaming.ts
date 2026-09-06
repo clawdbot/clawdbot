@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { asNullableRecord as asObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   formatToolDetail,
   isCommandBearingToolCall,
@@ -19,6 +20,7 @@ import type {
   TextChunkMode,
 } from "../config/types.base.js";
 import { DEFAULT_PROGRESS_DRAFT_LABELS, selectProgressLabel } from "../shared/progress-labels.js";
+import { compactProgressText } from "../shared/text-truncate.js";
 import { asBoolean } from "../utils/boolean.js";
 import {
   getChannelStreamingConfigObject,
@@ -104,7 +106,8 @@ export function isChannelProgressDraftWorkToolName(name: string | null | undefin
 }
 
 function stripTrailingEllipsis(text: string): string {
-  return text.replace(/(?:\s*(?:\.{3}|\u2026))+$/u, "").trimEnd();
+  // Start at a whitespace-run boundary instead of retrying every blank line.
+  return text.replace(/(?<!\s)(?:\s*(?:\.{3}|\u2026))+$/u, "").trimEnd();
 }
 
 export function isPotentialTruncatedFinal(finalText: string): boolean {
@@ -975,7 +978,7 @@ export function resolveChannelProgressDraftMaxLineChars(
 }
 
 function compactProgressLineDetail(detail: string, maxChars: number): string {
-  const chars = Array.from(detail);
+  const chars = Array.from(sliceUtf16Safe(detail, 0, (maxChars + 1) * 2));
   if (chars.length <= maxChars) {
     return detail;
   }
@@ -987,7 +990,10 @@ function compactProgressLineDetail(detail: string, maxChars: number): string {
   const rawStart = chars.slice(0, keepStart).join("").trimEnd();
   const start =
     rawStart.length > 8 && /\s+\S+$/.test(rawStart) ? rawStart.replace(/\s+\S+$/, "") : rawStart;
-  return `${start}…${chars.slice(-keepEnd).join("").trimStart()}`;
+  const tail = Array.from(sliceUtf16Safe(detail, -keepEnd * 2))
+    .slice(-keepEnd)
+    .join("");
+  return `${start}…${tail.trimStart()}`;
 }
 
 function removeUnbalancedInlineBackticks(value: string): string {
@@ -1015,33 +1021,13 @@ function repairCompactedProgressMarkdown(value: string): string {
   return `${leadingWhitespace}${trimmedStart.slice(1)}`;
 }
 
-function compactChannelProgressDraftNarration(text: string): string {
-  const normalized = text.replace(/\s+/g, " ").trim();
-  const chars = Array.from(normalized);
-  if (chars.length <= PROGRESS_DRAFT_NARRATION_MAX_CHARS) {
-    return normalized;
-  }
-  return compactPlainProgressLine(chars, PROGRESS_DRAFT_NARRATION_MAX_CHARS);
-}
-
-function compactPlainProgressLine(chars: readonly string[], maxChars: number): string {
-  const head = chars
-    .slice(0, maxChars - 1)
-    .join("")
-    .trimEnd();
-  const boundary = head.search(/\s+\S*$/u);
-  if (boundary > Math.floor(maxChars * 0.6)) {
-    return `${head.slice(0, boundary).trimEnd()}…`;
-  }
-  return `${head}…`;
-}
-
 function compactChannelProgressDraftLine(line: string, maxChars: number): string {
   const normalized = line.replace(/\s+/g, " ").trim();
   if (!normalized) {
     return "";
   }
-  const chars = Array.from(normalized);
+  // Two UTF-16 units per code point retain the full budget plus an overflow sentinel.
+  const chars = Array.from(sliceUtf16Safe(normalized, 0, (Math.max(0, maxChars) + 1) * 2));
   if (chars.length <= maxChars) {
     return normalized;
   }
@@ -1050,7 +1036,7 @@ function compactChannelProgressDraftLine(line: string, maxChars: number): string
   }
 
   const compactWithPrefix = (prefix: string, detail: string): string | undefined => {
-    const prefixChars = Array.from(prefix).length;
+    const prefixChars = Array.from(sliceUtf16Safe(prefix, 0, (maxChars + 1) * 2)).length;
     const detailLimit = maxChars - prefixChars;
     if (detailLimit < 8) {
       return undefined;
@@ -1080,7 +1066,7 @@ function compactChannelProgressDraftLine(line: string, maxChars: number): string
     }
   }
 
-  return repairCompactedProgressMarkdown(compactPlainProgressLine(chars, maxChars));
+  return repairCompactedProgressMarkdown(compactProgressText(normalized, maxChars, chars));
 }
 
 export function formatPlanChecklistLines(
@@ -1324,7 +1310,10 @@ export function formatChannelProgressDraftText(params: {
   /** Latest full plan snapshot, rendered independently from rolling tool lines. */
   plan?: readonly AgentPlanStep[];
 }): string {
-  const narration = params.narration ? compactChannelProgressDraftNarration(params.narration) : "";
+  const narration = compactProgressText(
+    params.narration?.replace(/\s+/g, " ").trim() ?? "",
+    PROGRESS_DRAFT_NARRATION_MAX_CHARS,
+  );
   const progress = resolveChannelProgressDraftConfig(params.entry);
   const maxLines = resolveChannelProgressDraftMaxLines(params.entry);
   const maxLineChars = resolveChannelProgressDraftMaxLineChars(params.entry);

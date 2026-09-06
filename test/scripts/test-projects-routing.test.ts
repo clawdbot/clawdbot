@@ -369,6 +369,21 @@ describe("test-projects args", () => {
       config: "test/vitest/vitest.extension-provider-openai.config.ts",
     },
     {
+      title: "routes provider targets to the shared provider owner",
+      target: "extensions/anthropic/forward-compat-generation.test.ts",
+      config: "test/vitest/vitest.extension-providers.config.ts",
+    },
+    {
+      title: "routes QA targets to the QA owner",
+      target: "extensions/qa-lab/index.test.ts",
+      config: "test/vitest/vitest.extension-qa.config.ts",
+    },
+    {
+      title: "routes unclassified plugin targets to the catch-all owner",
+      target: "extensions/workboard/index.test.ts",
+      config: "test/vitest/vitest.extensions.config.ts",
+    },
+    {
       title: "routes misc extension file targets to the misc extensions config",
       target: "extensions/firecrawl/index.test.ts",
       config: "test/vitest/vitest.extension-misc.config.ts",

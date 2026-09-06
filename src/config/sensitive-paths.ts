@@ -16,12 +16,8 @@ const SENSITIVE_KEY_WHITELIST_SUFFIXES = [
   "tokencount",
   "tokenlimit",
   "tokenbudget",
-  "passwordFile",
+  "passwordfile",
 ] as const;
-
-const NORMALIZED_SENSITIVE_KEY_WHITELIST_SUFFIXES = SENSITIVE_KEY_WHITELIST_SUFFIXES.map((suffix) =>
-  normalizeLowercaseStringOrEmpty(suffix),
-);
 
 const SENSITIVE_PATTERNS = [
   /token$/i,
@@ -33,20 +29,6 @@ const SENSITIVE_PATTERNS = [
   /serviceaccount(?:ref)?$/i,
 ];
 
-function isWhitelistedSensitivePath(path: string): boolean {
-  const lowerPath = normalizeLowercaseStringOrEmpty(path);
-  return NORMALIZED_SENSITIVE_KEY_WHITELIST_SUFFIXES.some((suffix) => lowerPath.endsWith(suffix));
-}
-
-function matchesSensitivePattern(path: string): boolean {
-  return SENSITIVE_PATTERNS.some((pattern) => pattern.test(path));
-}
-
-function isLocalServiceEnvValuePath(path: string): boolean {
-  const lowerPath = normalizeLowercaseStringOrEmpty(path);
-  return lowerPath.includes("localservice.env.");
-}
-
 /**
  * Classifies config paths whose values should be redacted from UI/API output.
  *
@@ -54,9 +36,11 @@ function isLocalServiceEnvValuePath(path: string): boolean {
  * fields and raw local-service env vars get the same conservative treatment.
  */
 export function isSensitiveConfigPath(path: string): boolean {
+  const lowerPath = normalizeLowercaseStringOrEmpty(path);
   return (
     // Every local service env value is sensitive, even innocuous-looking names.
-    isLocalServiceEnvValuePath(path) ||
-    (!isWhitelistedSensitivePath(path) && matchesSensitivePattern(path))
+    lowerPath.includes("localservice.env.") ||
+    (!SENSITIVE_KEY_WHITELIST_SUFFIXES.some((suffix) => lowerPath.endsWith(suffix)) &&
+      SENSITIVE_PATTERNS.some((pattern) => pattern.test(path)))
   );
 }

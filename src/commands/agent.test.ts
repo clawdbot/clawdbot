@@ -23,7 +23,10 @@ import { callInProcessGatewayTool } from "../agents/tools/in-process-gateway.js"
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
-import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
+import {
+  readAgentRunTerminalError,
+  readAgentRunTerminalOutcome,
+} from "../channels/turn/agent-run-terminal-outcome.js";
 import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
@@ -743,6 +746,7 @@ describe("agentCommand", () => {
       await withTempHome(async (home) => {
         mockConfig(home, path.join(home, "sessions.json"));
         const controller = new AbortController();
+        const secret = ["sk", "abcdefghijklmnopqrstuv"].join("-");
         const text = meta.error?.message ?? "ok";
         const rawResult = {
           ...createDefaultAgentResult(),
@@ -753,7 +757,10 @@ describe("agentCommand", () => {
           if (fault === "callback") {
             await params.onAgentEvent?.({
               stream: "lifecycle",
-              data: { phase: "finishing", error: "Deferred provider failure" },
+              data: {
+                phase: "finishing",
+                error: `Deferred provider failure. Authorization: Bearer ${secret}`,
+              },
             });
           }
           return rawResult;
@@ -778,7 +785,14 @@ describe("agentCommand", () => {
         expect(result?.payloads).toEqual([{ text, mediaUrl: null }]);
         expect(vi.mocked(runtime.log).mock.calls.at(-1)?.[0]).toBe(JSON.stringify(result, null, 2));
         expect(readAgentRunTerminalOutcome(rawResult)).toBeUndefined();
+        expect(readAgentRunTerminalError(rawResult)).toBeUndefined();
         expect(readAgentRunTerminalOutcome(result)).toBe(outcome);
+        if (fault === "callback") {
+          expect(readAgentRunTerminalError(result)).toContain("Deferred provider failure.");
+          expect(readAgentRunTerminalError(result)).not.toContain(secret);
+        } else if (outcome === "completed") {
+          expect(readAgentRunTerminalError(result)).toBeUndefined();
+        }
       });
     },
   );

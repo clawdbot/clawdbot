@@ -141,7 +141,8 @@ Then start a new session or wait for the skills watcher to refresh. Restart the 
 
 Do not use broad targets such as `~`, `/`, or a whole synced project folder. Keep `allowSymlinkTargets` scoped to the real skill root that contains trusted `SKILL.md` directories.
 
-If Skill Workshop apply should also write through those trusted symlinked workspace skill paths, enable `skills.workshop.allowSymlinkTargetWrites`. Keep it disabled for read-only shared skill roots.
+Skill Workshop does not use these trusted discovery targets. It writes only
+inside the active agent's `<state-dir>/agents/<agentId>/agent/workshop-skills`.
 
 Related:
 
@@ -265,6 +266,21 @@ Related:
 - [Configuration](/gateway/configuration)
 - [Local models](/gateway/local-models)
 - [OpenAI-compatible endpoints](/gateway/configuration-reference#openai-compatible-endpoints)
+
+## Agent run failed with a storage error
+
+An error naming the **Gateway state database** identifies a storage failure observed during the run. The chat banner, recorded assistant error, and `embedded_run_agent_end` log show the same diagnosis. Provider response bodies remain redacted.
+
+| SQLite message                                     | Next step                                                                                                      |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `database is locked` or `database table is locked` | Retry. If it repeats, check Gateway logs and concurrent storage maintenance.                                   |
+| `database or disk is full`                         | Free disk space on the Gateway host, then retry.                                                               |
+| `attempt to write a readonly database`             | Check the Gateway service user's storage permissions and filesystem mount mode.                                |
+| `disk I/O error`                                   | Check storage health and filesystem access before retrying. This message alone does not prove disk exhaustion. |
+
+A transcript writer ownership error means the run lost its session write claim. Retry in the current session and inspect Gateway logs if it recurs. Storage failures do not trigger provider credential rotation or automatic replay of the run.
+
+Use `openclaw logs --follow` to correlate the run with storage activity. SQLite can contend between connections or worker threads in one Gateway process; seeing only one process with the database open does not rule out contention. See [database concurrency notes](/reference/database-schemas#integrity-checks). Avoid full database compaction while runs are active.
 
 ## No replies
 
@@ -766,9 +782,9 @@ Related:
 If cron or heartbeat did not run or did not deliver, verify scheduler state first, then delivery target.
 
 ```bash
-openclaw cron status
-openclaw cron list
-openclaw cron runs --id <jobId> --limit 20
+openclaw automations status
+openclaw automations list
+openclaw automations runs <jobId> --limit 20
 openclaw system heartbeat last
 openclaw logs --follow
 ```

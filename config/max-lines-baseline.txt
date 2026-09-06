@@ -368,7 +368,6 @@ src/agents/model-selection.test.ts
 src/agents/models.profiles.live.test.ts
 src/agents/openai-transport-stream.base.test.ts
 src/agents/openai-transport-stream.replay-and-tools.test.ts
-src/agents/openclaw-tools.media-factory-plan.test.ts
 src/agents/openclaw-tools.session-status.test.ts
 src/agents/openclaw-tools.sessions.test.ts
 src/agents/provider-attribution.test.ts
@@ -589,7 +588,6 @@ src/gateway/config-reload.test.ts
 src/gateway/config-reload.ts
 src/gateway/control-ui.http.test.ts
 src/gateway/control-ui.ts
-src/gateway/exec-approval-manager.ts
 src/gateway/gateway-acp-bind.live.test.ts
 src/gateway/gateway-codex-harness.live.test.ts
 src/gateway/gateway-models.profiles.live.test.ts
@@ -608,7 +606,6 @@ src/gateway/server-channels.ts
 src/gateway/server-chat.agent-events.test.ts
 src/gateway/server-chat.ts
 src/gateway/server-close.test.ts
-src/gateway/server-close.ts
 src/gateway/server-cron.test.ts
 src/gateway/server-cron.ts
 src/gateway/server-methods/agent.abort-integration.test-utils.ts
@@ -627,7 +624,6 @@ src/gateway/server-methods/chat.directive-tags.test.ts
 src/gateway/server-methods/config.ts
 src/gateway/server-methods/cron.ts
 src/gateway/server-methods/cron.validation.test.ts
-src/gateway/server-methods/devices.test.ts
 src/gateway/server-methods/devices.ts
 src/gateway/server-methods/doctor.test.ts
 src/gateway/server-methods/doctor.ts
@@ -673,13 +669,11 @@ src/gateway/watch-node-http.ts
 src/gateway/worker-environments/bootstrap.ts
 src/gateway/worker-environments/inference-runtime.ts
 src/gateway/worker-environments/store.ts
-src/hooks/install.ts
 src/infra/approval-handler-runtime.ts
 src/infra/backup-create.test.ts
 src/infra/command-explainer/extract.ts
 src/infra/device-pairing.test.ts
 src/infra/diagnostic-events.ts
-src/infra/exec-approval-forwarder.ts
 src/infra/exec-approvals-allow-always.test.ts
 src/infra/exec-approvals-allowlist.ts
 src/infra/exec-authorization-plan.ts
@@ -763,7 +757,6 @@ src/plugins/loader.discovery-and-security.test-utils.ts
 src/plugins/loader.hooks-and-runtime.test-utils.ts
 src/plugins/loader.registration.test-utils.ts
 src/plugins/loader.test-harness.ts
-src/plugins/management-service.ts
 src/plugins/manifest-registry.test.ts
 src/plugins/manifest-registry.ts
 src/plugins/marketplace.test.ts

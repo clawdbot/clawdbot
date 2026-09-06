@@ -46,6 +46,7 @@ export type {
   CompactionPreparation,
   CompactionResult,
   CompactionSettings,
+  CompactionSummaryPrompt,
   ContextUsageEstimate,
   FileOperations,
   Result,

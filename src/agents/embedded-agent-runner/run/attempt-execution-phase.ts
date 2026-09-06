@@ -17,7 +17,7 @@ import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.
 import { abortable as abortableWithSignal } from "./abortable.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import { createEmbeddedAttemptRunAbort } from "./attempt-finalize.js";
-import { prepareEmbeddedAttemptHistory } from "./attempt-history.js";
+import { prepareEmbeddedAttemptHistory } from "./attempt-history-prepare.js";
 import { runEmbeddedAttemptSettledPhase } from "./attempt-settle.js";
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
 import { installEmbeddedAttemptStreamGuards } from "./attempt-stream.js";
@@ -29,38 +29,11 @@ export async function runEmbeddedAttemptExecutionPhase(
   input: EmbeddedAttemptExecutionPhaseInput & { attempt: EmbeddedRunAttemptInternalParams },
 ): Promise<EmbeddedRunAttemptResult> {
   const { attempt, state } = input;
-  const { sessionRuntime, systemPrompt, toolBase, toolCatalog } = input.prepared;
+  const { sessionRuntime, systemPrompt, toolBase } = input.prepared;
   const {
-    agentSession: {
-      activeSession,
-      allCustomTools,
-      builtinToolNames,
-      coreBuiltinToolNames,
-      clientToolCallSlots,
-      hasDeliveredSourceReply,
-      hookRunner,
-      markSourceReplyDelivered,
-      replaySafeToolNames,
-      replaySafeTools,
-      codeModeExecToolNames,
-      sideEffectToolOwners,
-      setActiveSessionSystemPrompt,
-      settingsManager,
-    },
-    anthropicPayloadLogger,
-    cacheTrace,
-    isOpenAIResponsesApi,
-    sessionManager,
+    agentSession: { activeSession, replaySafeTools },
     settleTracker: { abortActiveSession, trackPromptSettlePromise },
-    state: sessionRuntimeState,
-    transcriptPolicy,
-    transport: { effectiveAgentTransport, providerTextTransforms },
   } = sessionRuntime;
-  const { orphanRepair } = sessionRuntime.boundary;
-  const { capabilityToolNames, liveAllowedToolNames, replayAllowedToolNames } =
-    toolCatalog.toolSearchRunPlan;
-  const { runtimeChannel } = systemPrompt;
-  const { nestedToolActivities } = toolBase;
   // Preparation can retire admission; never install an unfenced memory compactor.
   const assertActive = resolveAdmittedRunActiveAssertion(
     attempt.admittedRunContext,
@@ -74,7 +47,6 @@ export async function runEmbeddedAttemptExecutionPhase(
     toolBase.skillInstructionDeliveryCache.clear();
     attempt.onContextAccountingEvent?.({ kind: "compaction", tokensAfter });
   }, assertActive);
-  const hookAgentId = input.setup.sessionAgentId;
   let repairedRejectedProviderReplay = false;
   const diagnosticOwner = createDiagnosticEmbeddedRunOwner({
     sessionId: attempt.sessionId,
@@ -86,60 +58,26 @@ export async function runEmbeddedAttemptExecutionPhase(
   };
 
   const idleTimeoutTriggerRef: { current?: (error: Error) => void } = {};
-  const { cacheObservabilityEnabled, promptCacheTools } = installEmbeddedAttemptStreamGuards({
-    attempt,
-    session: activeSession,
-    sessionManager,
-    sessionAgentId: input.setup.sessionAgentId,
-    cacheTrace,
-    allCustomTools,
-    systemPromptText: sessionRuntimeState.systemPromptText,
-    transcriptPolicy,
-    isOpenAIResponsesApi,
-    replayAllowedToolNames,
-    liveAllowedToolNames,
-    anthropicPayloadLogger,
-    codeModeExecToolNames,
-    effectiveAgentTransport,
-    providerTextTransforms,
-    runTrace: input.diagnostics.runTrace,
-    isYieldDetected: () => input.lifecycle.readYieldState().yieldDetected,
-    onRejectedProviderReplayRepaired: () => {
-      repairedRejectedProviderReplay = true;
+  const { cacheObservabilityEnabled, promptCacheTools } = installEmbeddedAttemptStreamGuards(
+    input,
+    {
+      onRejectedProviderReplayRepaired: () => {
+        repairedRejectedProviderReplay = true;
+      },
+      onIdleTimeout: (error) => idleTimeoutTriggerRef.current?.(error),
+      diagnosticOwner,
     },
-    onIdleTimeout: (error) => idleTimeoutTriggerRef.current?.(error),
-    abortSignal: input.runAbortController.signal,
-    diagnosticOwner,
-  });
+  );
   input.setup.prepStages.mark("stream-setup");
   input.setup.emitPrepStageSummary("stream-ready");
 
   let preparedHistory: Awaited<ReturnType<typeof prepareEmbeddedAttemptHistory>>;
   try {
-    preparedHistory = await prepareEmbeddedAttemptHistory({
-      attempt,
-      activeSession,
-      sessionManager,
-      ...(input.activeContextEngine ? { activeContextEngine: input.activeContextEngine } : {}),
-      cacheTrace,
-      capabilityToolNames,
-      compactionReplayEnabled: sessionRuntime.transport.compactionReplayEnabled,
-      effectiveWorkspace: input.setup.effectiveWorkspace,
-      isOpenAIResponsesApi,
-      isRawModelRun: input.isRawModelRun,
-      ...(orphanRepair ? { orphanRepair } : {}),
-      replayAllowedToolNames,
-      sandboxed: input.setup.sandbox?.enabled === true,
-      sessionAgentId: input.setup.sessionAgentId,
-      settingsManager,
-      systemPromptText: sessionRuntimeState.systemPromptText,
-      transcriptPolicy,
-      setActiveSessionSystemPrompt,
-    });
+    preparedHistory = await prepareEmbeddedAttemptHistory(input);
   } catch (error) {
     await flushPendingToolResultsAfterIdle({
       agent: activeSession.agent,
-      sessionManager,
+      sessionManager: sessionRuntime.sessionManager,
       // An already-aborted setup must dispose immediately without orphaning tool calls.
       ...(attempt.abortSignal?.aborted ? { timeoutMs: 0 } : {}),
     });
@@ -157,7 +95,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     isProbeSession,
     log,
     runAbortController: input.runAbortController,
-    state: input.abortState,
+    state: input.state,
   });
   input.externalAbortController.setRunAbort(abortRun);
   idleTimeoutTriggerRef.current = (error) => {
@@ -216,21 +154,21 @@ export async function runEmbeddedAttemptExecutionPhase(
     },
     onBlockReply,
     onBlockReplyFlush,
-    runtimeChannel,
-    hookRunner,
-    hookAgentId,
+    runtimeChannel: systemPrompt.runtimeChannel,
+    hookRunner: sessionRuntime.agentSession.hookRunner,
+    hookAgentId: input.setup.sessionAgentId,
     diagnosticTrace: input.diagnostics.diagnosticTrace,
-    clientToolCallSlots,
-    nestedToolActivities,
+    clientToolCallSlots: sessionRuntime.agentSession.clientToolCallSlots,
+    nestedToolActivities: toolBase.nestedToolActivities,
     isReplaySafeTool: (tool) => replaySafeTools.has(tool as never),
-    hasDeliveredSourceReply,
-    markSourceReplyDelivered,
+    hasDeliveredSourceReply: sessionRuntime.agentSession.hasDeliveredSourceReply,
+    markSourceReplyDelivered: sessionRuntime.agentSession.markSourceReplyDelivered,
     sandboxSessionKey: input.setup.sandboxSessionKey,
-    builtinToolNames,
-    coreBuiltinToolNames,
-    replaySafeToolNames,
-    codeModeExecToolNames,
-    sideEffectToolOwners,
+    builtinToolNames: sessionRuntime.agentSession.builtinToolNames,
+    coreBuiltinToolNames: sessionRuntime.agentSession.coreBuiltinToolNames,
+    replaySafeToolNames: sessionRuntime.agentSession.replaySafeToolNames,
+    codeModeExecToolNames: sessionRuntime.agentSession.codeModeExecToolNames,
+    sideEffectToolOwners: sessionRuntime.agentSession.sideEffectToolOwners,
     diagnosticOwner,
     trajectoryRecorder: sessionRuntime.trajectoryRecorder,
   });

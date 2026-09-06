@@ -5,6 +5,7 @@ import * as hooks from "./hooks.js";
 import * as logsChat from "./logs-chat.js";
 import * as pluginApprovals from "./plugin-approvals.js";
 import * as plugins from "./plugins.js";
+import * as updateRuns from "./update-runs.js";
 
 export const PluginLifecycleProtocolSchemas = {
   CapabilityConsentErrorDetails: plugins.CapabilityConsentErrorDetailsSchema,
@@ -77,6 +78,7 @@ export const PluginLifecycleProtocolSchemas = {
   DevicePairSetupCompletedEvent: devices.DevicePairSetupCompletedEventSchema,
   DevicePairSetupDeliveryUncertainEvent: devices.DevicePairSetupDeliveryUncertainEventSchema,
   ChatHistoryParams: logsChat.ChatHistoryParamsSchema,
+  ChatStartupParams: logsChat.ChatStartupParamsSchema,
   ChatHistoryDeltaResult: logsChat.ChatHistoryDeltaResultSchema,
   ChatHistoryResetResult: logsChat.ChatHistoryResetResultSchema,
   ChatHistoryCursorResult: logsChat.ChatHistoryCursorResultSchema,
@@ -102,6 +104,13 @@ export const PluginLifecycleProtocolSchemas = {
   UpdateHoldParams: config.UpdateHoldParamsSchema,
   UpdateHoldResult: config.UpdateHoldResultSchema,
   UpdateRunParams: config.UpdateRunParamsSchema,
+  UpdateRunRecord: updateRuns.UpdateRunRecordSchema,
+  UpdateRunResult: updateRuns.UpdateRunResultSchema,
+  UpdateRunsGetParams: updateRuns.UpdateRunsGetParamsSchema,
+  UpdateRunsGetResult: updateRuns.UpdateRunsGetResultSchema,
+  UpdateRunsListParams: updateRuns.UpdateRunsListParamsSchema,
+  UpdateRunsListResult: updateRuns.UpdateRunsListResultSchema,
+  UpdateRunChangedEvent: updateRuns.UpdateRunChangedEventSchema,
   TickEvent: frames.TickEventSchema,
   ShutdownEvent: frames.ShutdownEventSchema,
 } as const;

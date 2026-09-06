@@ -12,6 +12,7 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const prompt = "tool search qa check target=openclaw openclaw_fixture=logging-level-info";
 
 function loggingLevel(config: unknown): unknown {
@@ -103,7 +104,9 @@ suite.define(() => {
       await suite.withPage(
         {
           locale: "en-US",
-          recordVideo: { dir: proofDir, size: { width: 1280, height: 900 } },
+          ...(captureUiProof
+            ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 900 } } }
+            : {}),
           serviceWorkers: "block",
           viewport: { width: 1280, height: 900 },
         },
@@ -235,7 +238,9 @@ suite.define(() => {
           expect(pendingPageText).not.toContain("/approve");
           expect(pendingPageText).not.toContain("needsApproval");
           expect(pendingPageText).not.toContain("proposalId");
-          await page.screenshot({ path: path.join(proofDir, "01-native-approval.png") });
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(proofDir, "01-native-approval.png") });
+          }
 
           const approvalFallbackWasObserved = () =>
             page.evaluate(
@@ -407,7 +412,9 @@ suite.define(() => {
         await suite.withPage(
           {
             locale: "en-US",
-            recordVideo: { dir: proofDir, size: { width: 1280, height: 900 } },
+            ...(captureUiProof
+              ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 900 } } }
+              : {}),
             serviceWorkers: "block",
             viewport: { width: 1280, height: 900 },
           },
@@ -453,7 +460,9 @@ suite.define(() => {
             await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
             const composer = page.locator(".agent-chat__composer-combobox textarea");
             await composer.fill(prompt);
-            await page.screenshot({ path: path.join(proofDir, "01-request.png") });
+            if (captureUiProof) {
+              await page.screenshot({ path: path.join(proofDir, "01-request.png") });
+            }
             await page.getByRole("button", { name: "Send message" }).click();
 
             await expect.poll(() => finalEvents, { timeout: 60_000 }).toBeGreaterThan(0);
@@ -479,7 +488,9 @@ suite.define(() => {
             await appliedResult.waitFor();
             await appliedResult.scrollIntoViewIfNeeded();
             expect(await page.locator(".chat-inline-approval [data-approval-id]").count()).toBe(0);
-            await page.screenshot({ path: path.join(proofDir, "02-applied.png") });
+            if (captureUiProof) {
+              await page.screenshot({ path: path.join(proofDir, "02-applied.png") });
+            }
             // Keep public proof independent of runtime tokens, paths, model metadata, and run ids.
             await writeFile(
               path.join(proofDir, "verdict.json"),

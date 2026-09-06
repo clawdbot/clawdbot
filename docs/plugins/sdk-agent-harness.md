@@ -307,6 +307,10 @@ deadline controls, and one prepared `authorization`:
   snapshot restricted to the single profile selected for that call. Core owns
   automatic fallback order and invokes the harness separately for each candidate.
 
+Each new isolated completion uses the configuration and agent/workspace directories
+of its admitted runtime generation. Explicit model, auth-profile, and runtime
+selections remain fixed while that generation is prepared.
+
 Host-authorized calls must use the supplied model and credential without substitution.
 Bundled host-authorized harnesses share one host-prepared completion helper that
 preserves the exact route, deadline, sampling options, and empty tool surface.
@@ -1008,6 +1012,9 @@ Report facts from the execution boundary:
 
 - Pass the protocol call id when one exists, the canonical tool name, and the
   arguments that actually reached the tool after preparation or hook rewrites.
+- Pass the original host tool result or thrown error as `result`. Core reads
+  private effect provenance from that object; serialized fields cannot provide
+  this proof. Preserve internal result state when projecting a host result.
 - Set `executionStarted: false` when validation, approval, or another guard
   stopped the call before the tool implementation began. Once dispatch may
   have happened, report `true` conservatively.

@@ -45,8 +45,7 @@ type SessionRunObservation = { seenAt: number };
 
 type TuiSessionRunCoordinatorContext = {
   state: TuiStateAccess;
-  loadHistory?: () => Promise<TuiHistoryLoadResult>;
-  refreshSessionInfo?: () => Promise<void>;
+  loadHistory: () => Promise<TuiHistoryLoadResult>;
   restoreTerminalError: (message: string) => void;
   requestRender: (force?: boolean) => void;
   finalizeHistoryOwnedRun: (run: HistoryOwnedRun) => void;
@@ -323,9 +322,6 @@ export class TuiSessionRunCoordinator {
   }
 
   private async loadHistoryPreservingTerminalErrors(): Promise<TuiHistoryLoadResult> {
-    if (!this.context.loadHistory) {
-      return { loaded: false };
-    }
     const generation = this.historyReloadGeneration;
     const result = (await this.context.loadHistory()) ?? { loaded: false };
     if (!result.loaded || generation !== this.historyReloadGeneration) {
@@ -346,7 +342,7 @@ export class TuiSessionRunCoordinator {
   }
 
   private async drainHistoryReloadQueue(): Promise<void> {
-    if (!this.historyReloadQueued || !this.context.loadHistory) {
+    if (!this.historyReloadQueued) {
       return;
     }
 
@@ -431,15 +427,6 @@ export class TuiSessionRunCoordinator {
     const displayed = new Set(displayedRunIds);
     const queuedRunIds = runIds ?? [];
 
-    if (!this.context.loadHistory) {
-      for (const runId of queuedRunIds) {
-        if (historyOwned.has(runId)) {
-          this.noteFinalizedRun(runId, { displayedFinal: true });
-        }
-      }
-      return (this.context.refreshSessionInfo?.() ?? Promise.resolve()).then(isCurrent, isCurrent);
-    }
-
     if (runIds === undefined) {
       this.historyReloadQueued = true;
     }
@@ -463,10 +450,6 @@ export class TuiSessionRunCoordinator {
   }
 
   queueGapHistoryReload(runIds: Iterable<string>, displayedRunIds: Iterable<string> = []): void {
-    if (!this.context.loadHistory) {
-      void this.context.refreshSessionInfo?.();
-      return;
-    }
     const trackedRunIds = Array.from(runIds);
     if (trackedRunIds.length === 0) {
       void this.queueHistoryReload();

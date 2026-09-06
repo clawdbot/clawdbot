@@ -163,11 +163,14 @@ suite.define(() => {
       await document.locator("openclaw-board-view").waitFor();
 
       expect(await gateway.getRequests("sessions.resolve")).toHaveLength(1);
-      expect(await gateway.getRequests("sessions.describe")).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.describe")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.list")).toHaveLength(initialSessionListCount);
       expect(await page.locator("openclaw-app-shell").count()).toBe(0);
       expect(await page.locator(".agent-chat").count()).toBe(0);
-      expect((await gateway.getRequests("board.get"))[0]?.params).toEqual({ sessionKey });
+      expect((await gateway.getRequests("board.get"))[0]?.params).toEqual({
+        sessionKey,
+        agentId: "main",
+      });
       await document.getByRole("tab", { name: "Research" }).waitFor();
       const widget = document.locator('[data-widget-name="status"]');
       await widget.waitFor();
@@ -182,6 +185,7 @@ suite.define(() => {
       const grant = await gateway.waitForRequest("board.widget.grant");
       expect(grant.params).toEqual({
         sessionKey,
+        agentId: "main",
         name: "permissions",
         decision: "rejected",
         revision: 1,
@@ -265,7 +269,7 @@ suite.define(() => {
           viewport: { width: 393, height: 852 },
         },
         async ({ context, page }) => {
-          const widgetDocument = buildWidgetDocument(
+          let widgetDocument = buildWidgetDocument(
             "Nightly disk cleanup",
             `<style>
             .local-scroll{height:120px;overflow-y:auto}.local-row{height:40px}
@@ -282,14 +286,43 @@ suite.define(() => {
           ).join("")}</main>`,
           );
           const widgetUrl = `${suite.server.baseUrl}__widget/long-dashboard`;
+          const widgetSnapshot = {
+            ...boardSnapshot,
+            widgets: [
+              {
+                name: "long-dashboard",
+                tabId: "main",
+                title: "Nightly disk cleanup",
+                contentKind: "html",
+                sizeW: 12,
+                sizeH: 6,
+                position: 0,
+                grantState: "none",
+                revision: 1,
+                frameUrl: widgetUrl,
+                instanceId: "long-dashboard-instance",
+                viewTicket: "long-dashboard-ticket",
+                viewTicketTtlMs: 1_200_000,
+                viewGeneration: "long-dashboard-generation",
+                sandboxUrl: SANDBOX_HOST_PATH,
+                sandboxPort,
+                sandboxOrigin: `http://127.0.0.1:${sandboxPort}`,
+              },
+            ],
+          };
+          let releaseDocument!: () => void;
+          const documentGate = new Promise<void>((resolve) => {
+            releaseDocument = resolve;
+          });
           await page.route(widgetUrl, async (route) => {
+            await documentGate;
             await route.fulfill({
               body: widgetDocument,
               contentType: "text/html; charset=utf-8",
               status: 200,
             });
           });
-          await installMockGateway(page, {
+          const gateway = await installMockGateway(page, {
             sessionKey,
             featureMethods: ["board.get"],
             methodResponses: {
@@ -301,30 +334,7 @@ suite.define(() => {
                 boardFace: sessionRow.boardFace,
               },
               "sessions.describe": { session: sessionRow },
-              "board.get": {
-                ...boardSnapshot,
-                widgets: [
-                  {
-                    name: "long-dashboard",
-                    tabId: "main",
-                    title: "Nightly disk cleanup",
-                    contentKind: "html",
-                    sizeW: 12,
-                    sizeH: 6,
-                    position: 0,
-                    grantState: "none",
-                    revision: 1,
-                    frameUrl: widgetUrl,
-                    instanceId: "long-dashboard-instance",
-                    viewTicket: "long-dashboard-ticket",
-                    viewTicketTtlMs: 1_200_000,
-                    viewGeneration: "long-dashboard-generation",
-                    sandboxUrl: SANDBOX_HOST_PATH,
-                    sandboxPort,
-                    sandboxOrigin: `http://127.0.0.1:${sandboxPort}`,
-                  },
-                ],
-              },
+              "board.get": widgetSnapshot,
             },
           });
 
@@ -334,15 +344,31 @@ suite.define(() => {
             '.board-widget[data-widget-name="long-dashboard"] .board-widget__frame',
           );
           await frame.waitFor();
+          try {
+            await expect
+              .poll(() =>
+                page
+                  .frames()
+                  .some((candidate) => candidate.parentFrame()?.url().includes(SANDBOX_HOST_PATH)),
+              )
+              .toBe(true);
+            await page.screenshot({ path: `${suite.artifactDir}/dashboard-loading.png` });
+            expect(await frame.evaluate((element) => getComputedStyle(element).opacity)).toBe("0");
+            expect(await frame.getAttribute("inert")).toBe("");
+            await board.getByRole("status", { name: "Loading…", exact: true }).waitFor();
+          } finally {
+            releaseDocument();
+          }
+          await expect
+            .poll(() => frame.evaluate((element) => getComputedStyle(element).opacity))
+            .toBe("1");
+          expect(await frame.getAttribute("inert")).toBeNull();
+          expect(await board.getByRole("status", { name: "Loading…", exact: true }).count()).toBe(
+            0,
+          );
+          await page.screenshot({ path: `${suite.artifactDir}/dashboard-ready.png` });
           await expect
             .poll(() => board.evaluate((element) => element.scrollHeight > element.clientHeight))
-            .toBe(true);
-          await expect
-            .poll(() =>
-              page
-                .frames()
-                .some((candidate) => candidate.parentFrame()?.url().includes(SANDBOX_HOST_PATH)),
-            )
             .toBe(true);
           const embeddedFrame = page
             .frames()
@@ -443,6 +469,44 @@ suite.define(() => {
           expect(finalRowBox.y + finalRowBox.height).toBeLessThanOrEqual(
             finalBoardBox.y + finalBoardBox.height + 1,
           );
+
+          widgetDocument = buildWidgetDocument(
+            "Cleanup controls",
+            `<button style="position:fixed;top:24px;left:24px"
+              onclick="this.textContent='Cleanup requested'">Run cleanup</button>`,
+          );
+          await gateway.setMethodResponse("board.get", {
+            ...widgetSnapshot,
+            revision: 2,
+            widgets: [{ ...widgetSnapshot.widgets[0], revision: 2 }],
+          });
+          await gateway.emitGatewayEvent("board.changed", { sessionKey, widget: "long-dashboard" });
+          const replacement = page.frameLocator(".board-widget__frame").frameLocator("iframe");
+          const cleanup = replacement.getByRole("button", { name: "Run cleanup", exact: true });
+          await cleanup.waitFor();
+          expect(
+            await replacement.locator("body").evaluate((body) => {
+              if (!(body instanceof HTMLElement)) {
+                throw new Error("Widget body is not an HTML element");
+              }
+              return Math.max(
+                body.scrollHeight,
+                body.offsetHeight,
+                body.getBoundingClientRect().height,
+              );
+            }),
+          ).toBe(0);
+          await expect
+            .poll(() => frame.evaluate((element) => getComputedStyle(element).opacity))
+            .toBe("1");
+          expect(await board.getByRole("status", { name: "Loading…", exact: true }).count()).toBe(
+            0,
+          );
+          await cleanup.click();
+          await replacement
+            .getByRole("button", { name: "Cleanup requested", exact: true })
+            .waitFor();
+          await page.screenshot({ path: `${suite.artifactDir}/dashboard-fixed-controls.png` });
         },
       );
     } finally {

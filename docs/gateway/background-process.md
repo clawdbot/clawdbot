@@ -91,6 +91,12 @@ and Gateway shutdown wait for the cleanup owner separately; when that owner repo
 uncertainty, they report failure instead of treating the timeout as proof that the
 command has stopped.
 
+For owned POSIX process groups, cleanup also waits for the operating system to
+confirm that the group has disappeared after graceful shutdown. A completed
+command or closed output pipe alone does not establish that its descendants have
+stopped. Forced termination without confirmed cleanup remains uncertain. Local
+TUI shell shutdown uses the same cleanup owner for its own commands.
+
 ## process tool
 
 Actions:
@@ -125,6 +131,11 @@ Notes:
 - `process poll` and `process log` distinguish output discarded at the aggregate retention cap from output merely omitted by the pending buffer or retained tail. Discarded output cannot be recovered; paged logs can inspect only the retained portion.
 - `poll`'s `timeout` waits up to that many milliseconds before returning; values above 30000 are clamped to 30000.
 - Polling is for on-demand status, not wait-loop scheduling. If the work should happen later, use cron.
+
+In [Code Mode](/tools/code-mode), `process` returns its structured details directly.
+For `action: "log"`, `output` contains the requested log page, including paging,
+retention, and input-recovery hints. Failed process actions include an `error`
+message alongside `status: "failed"`, so the agent can choose the next action.
 
 ## Examples
 
