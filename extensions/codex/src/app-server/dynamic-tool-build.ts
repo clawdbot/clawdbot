@@ -158,7 +158,7 @@ type DynamicToolBuildParams = {
   ignoreRuntimePlan?: boolean;
   /** Host fact resolver; injectable only for focused plugin contract tests. */
   isHostScopedToolActive?: (toolName: string) => boolean;
-  onYieldDetected: (acknowledgment?: string) => void;
+  onYieldDetected: (message: string, acknowledgment?: string) => void;
   claimYieldCompletion?: OpenClawCodingToolsOptions["claimYieldCompletion"];
   onCodexAppServerEvent?: (event: CodexDynamicToolBuildEvent) => void;
   onPersistentWebSearchPolicyResolved?: (allowed: boolean) => void;
@@ -321,6 +321,7 @@ export async function buildDynamicTools(
     // Capability-gated tools (requiredClientCaps) need the originating client's
     // declared caps in this sibling harness too, not only the embedded runner.
     clientCaps: params.clientCaps,
+    pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
     chatType: params.chatType,
     agentAccountId: params.agentAccountId,
     messageTo: params.messageTo,
@@ -397,6 +398,7 @@ export async function buildDynamicTools(
     hasRepliedRef: params.hasRepliedRef,
     modelHasVision,
     computerContextEpoch: input.computerContextEpoch,
+    oneShotCliRun: params.oneShotCliRun,
     registerRunCleanup: input.registerRunCleanup,
     requireExplicitMessageTarget:
       params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
@@ -409,7 +411,7 @@ export async function buildDynamicTools(
     enableHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
     forceHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
     onYield: (message, acknowledgment) => {
-      input.onYieldDetected(acknowledgment);
+      input.onYieldDetected(message, acknowledgment);
       input.onCodexAppServerEvent?.({
         stream: "codex_app_server.tool",
         data: { name: "sessions_yield", message },

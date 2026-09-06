@@ -26,6 +26,7 @@ import {
 } from "../../local-model-lean.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { supportsModelTools } from "../../model-tool-support.js";
+import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
 import {
   resolveSessionPermissionExecMode,
   type PreparedSessionPermissionPolicy,
@@ -148,10 +149,15 @@ export function prepareEmbeddedAttemptToolBase(params: {
   const runCleanups: Array<(reason: string) => Promise<void>> = [];
   const generationCleanups: Array<(reason: string) => Promise<void>> = [];
   const retiringGenerations = new Set<Promise<void>>();
+  let retiredCleanupFailed = false;
   const retireToolGeneration = (reason: string) => {
     const cleanups = generationCleanups.splice(0);
     const settled = Promise.allSettled(cleanups.map(async (cleanup) => await cleanup(reason))).then(
-      () => {},
+      (results) => {
+        if (results.some((result) => result.status === "rejected")) {
+          retiredCleanupFailed = true;
+        }
+      },
     );
     retiringGenerations.add(settled);
     void settled.then(() => retiringGenerations.delete(settled));
@@ -259,6 +265,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
             ...toolRunContext,
             ...buildConversationContext(),
             clientCaps: attempt.clientCaps,
+            pinnedWidgetAuthoring: attempt.pinnedWidgetAuthoring,
             toolBindings: attempt.toolBindings,
             exec: {
               ...attempt.execOverrides,
@@ -368,6 +375,9 @@ export function prepareEmbeddedAttemptToolBase(params: {
     toolAbortController.abort();
     retireToolGeneration(reason);
     await Promise.all(retiringGenerations);
+    if (retiredCleanupFailed) {
+      recordAgentCleanupFailure();
+    }
   });
 
   return {

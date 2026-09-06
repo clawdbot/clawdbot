@@ -26,7 +26,7 @@ type InlineDirectiveParseOptions = {
 const AUDIO_TAG_RE = /\[\[\s*audio_as_voice\s*\]\]/gi;
 const REPLY_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*([^\]\n]+))\s*\]\]/gi;
 const INLINE_DIRECTIVE_TAG_WITH_PADDING_RE =
-  /(?:\s*(?:\[\[\s*audio_as_voice\s*\]\]|\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\])\s*|^[\t ]*\[\[\s*(?:reply_to_current(?:[\t ]*\](?!\])|(?=[\t ]+\S)|[\t ]*$)|reply_to\s*:\s*(?:[^\]\r\n]*\](?!\])|[\t ]*$))[\t ]*)/giu;
+  /(?:\s*(?:\[\[\s*audio_as_voice\s*\]\]|\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\])\s*|^[\t ]*\[\[\s*(?:reply_to_current(?:[\t ]*\](?!\])|(?=[\t ]+\S)|[\t ]*$)|reply_to\s*:\s*(?:[^\]\r\n]*\](?!\])|[\t ]*$))[\t ]*)/iuy;
 const MAX_REPLY_DIRECTIVE_ID_LENGTH = 256;
 const UNSAFE_REPLY_DIRECTIVE_CHARS_RE = /[\p{Cc}[\]]/gu;
 const NO_INLINE_DIRECTIVES = {
@@ -135,19 +135,43 @@ export function sanitizeReplyDirectiveId(rawReplyToId?: string): string | undefi
 }
 
 export function stripInlineDirectiveTagsForDelivery(text: string): StripInlineDirectiveTagsResult {
-  if (!text) {
+  if (!text.includes("[[")) {
     return { text, changed: false };
   }
   // Only malformed prefixes at the absolute message start are control text; keep
   // the regex non-multiline while code-region scanning preserves literal examples.
-  const stripped = replaceOutsideCodeRegions(text, INLINE_DIRECTIVE_TAG_WITH_PADDING_RE, (match) =>
-    match.includes("]]") ? " " : "",
-  );
-  const changed = stripped !== text;
-  return {
-    text: changed ? stripped.trim() : text,
-    changed,
-  };
+  const codeRegions = findCodeRegions(text);
+  const parts: string[] = [];
+  let cursor = 0;
+  let searchFrom = 0;
+  // A preserved code match still owns its padding; later directives must not consume it.
+  let previousMatchEnd = 0;
+  while (searchFrom < text.length) {
+    const marker = text.indexOf("[[", searchFrom);
+    if (marker < 0) {
+      break;
+    }
+    // Inspect padding only at a marker; retrying from every blank line is quadratic.
+    let start = marker;
+    while (start > previousMatchEnd && /\s/u.test(text.charAt(start - 1))) {
+      start -= 1;
+    }
+    INLINE_DIRECTIVE_TAG_WITH_PADDING_RE.lastIndex = start;
+    const match = INLINE_DIRECTIVE_TAG_WITH_PADDING_RE.exec(text);
+    searchFrom = match ? INLINE_DIRECTIVE_TAG_WITH_PADDING_RE.lastIndex : marker + 1;
+    if (!match) {
+      continue;
+    }
+    previousMatchEnd = searchFrom;
+    if (isInsideCode(marker, codeRegions)) {
+      continue;
+    }
+    parts.push(text.slice(cursor, start), match[0].includes("]]") ? " " : "");
+    cursor = searchFrom;
+  }
+  return cursor === 0
+    ? { text, changed: false }
+    : { text: [...parts, text.slice(cursor)].join("").trim(), changed: true };
 }
 
 export function parseInlineDirectives(

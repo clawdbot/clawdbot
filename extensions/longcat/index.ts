@@ -24,7 +24,7 @@ export default defineSingleProviderPluginEntry({
       noteTitle: "LongCat",
       noteMessage: "Manage API keys at https://longcat.chat/platform/api_keys",
     },
-    catalog: { liveModelDiscovery: true },
+    catalog: { liveModelDiscovery: true, discoveryMode: "strict" },
     ...buildProviderReplayFamilyHooks({
       family: "openai-compatible",
       dropReasoningFromHistory: false,

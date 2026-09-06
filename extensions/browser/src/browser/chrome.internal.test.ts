@@ -289,22 +289,27 @@ function mockLinuxManagedChromeOwnership(params: {
     ...(params.extraArgs ?? []),
   ];
   const readFileSync = fs.readFileSync.bind(fs);
-  vi.spyOn(fs, "readFileSync").mockImplementation(((filePath, options) => {
-    const s = String(filePath);
-    if (s === `/proc/${params.pid}/cmdline`) {
-      return Buffer.from(`${argv.join("\0")}\0`);
-    }
-    if (s === `/proc/${params.pid}/stat`) {
-      return linuxProcStatLine(params.pid, "1234567");
-    }
-    if (s === "/proc/net/tcp") {
-      return ownsPort ? linuxTcpTableForPort(params.port, inode) : linuxTcpTableForPort(1, inode);
-    }
-    if (s === "/proc/net/tcp6") {
-      return "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode";
-    }
-    return readFileSync(filePath, options as never);
-  }) as typeof fs.readFileSync);
+  vi.spyOn(fs, "readFileSync").mockImplementation(
+    (filePath, options?: BufferEncoding | fs.ReadFileSyncOptions | null) => {
+      const s = String(filePath);
+      if (s === `/proc/${params.pid}/cmdline`) {
+        return Buffer.from(`${argv.join("\0")}\0`);
+      }
+      if (s === `/proc/${params.pid}/stat`) {
+        return linuxProcStatLine(params.pid, "1234567");
+      }
+      if (s === "/proc/net/tcp") {
+        return ownsPort ? linuxTcpTableForPort(params.port, inode) : linuxTcpTableForPort(1, inode);
+      }
+      if (s === "/proc/net/tcp6") {
+        return "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode";
+      }
+      return readFileSync(
+        filePath,
+        typeof options === "string" ? { encoding: options } : (options ?? {}),
+      );
+    },
+  );
 
   const readdirSync = fs.readdirSync.bind(fs);
   vi.spyOn(fs, "readdirSync").mockImplementation(((dirPath, options) => {

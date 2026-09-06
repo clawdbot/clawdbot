@@ -41,6 +41,7 @@ type MattermostDraftStream = {
   flush: () => Promise<void>;
   postId: () => string | undefined;
   clear: () => Promise<void>;
+  deleteCurrentMessage: () => Promise<void>;
   discardPending: () => Promise<void>;
   seal: () => Promise<void>;
   stop: () => Promise<void>;
@@ -388,6 +389,21 @@ export function createMattermostDraftStream(params: {
     await clearWithStop(discardPending);
     assertNoAcceptedDeliveryFailure();
   };
+  const deleteCurrentMessage = async () => {
+    assertNoAcceptedDeliveryFailure();
+    await clearWithStop(async () => {
+      // Retraction drains this preview but keeps the turn open for its replacement.
+      loop.resetPending();
+      await loop.waitForInFlight();
+      await currentGeneration.ready;
+      assertNoAcceptedDeliveryFailure();
+      currentGeneration.lastSentText = "";
+      currentGeneration.latestSourceText = "";
+      currentGeneration.latestAssistantText = undefined;
+      loop.resetThrottleWindow();
+    });
+    assertNoAcceptedDeliveryFailure();
+  };
   const seal = async () => {
     assertNoAcceptedDeliveryFailure();
     await sealLifecycle();
@@ -453,6 +469,7 @@ export function createMattermostDraftStream(params: {
     flush,
     postId: () => currentGeneration.postId,
     clear,
+    deleteCurrentMessage,
     discardPending,
     seal,
     stop,

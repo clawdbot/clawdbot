@@ -1130,7 +1130,7 @@ describe("runtime postbuild static assets", () => {
     }
   });
 
-  it.each(["shared-Y6bNiw2w.js", "shared-DTaQo6Hi.js"])(
+  it.each(["shared-Y6bNiw2w.js", "shared-DTaQo6Hi.js", "shared-DFJEouXv.js"])(
     "preserves the old updater node-runner ABI through %s",
     async (chunk) => {
       const rootDir = createTempDir("openclaw-runtime-postbuild-");
