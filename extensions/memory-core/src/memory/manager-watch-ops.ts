@@ -130,13 +130,19 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
     // ERR_FEATURE_UNAVAILABLE_ON_PLATFORM) the directory also falls back to
     // chokidar so freshness is preserved on the degraded path.
     const nativeRecursiveSupported = process.platform === "darwin" || process.platform === "win32";
+    let watchCapacityExhausted = false;
     for (const dir of dirWatchPaths) {
+      if (watchCapacityExhausted) {
+        this.attachMemoryChokidarFallback(dir, markDirty, true);
+        continue;
+      }
       const attached = nativeRecursiveSupported
         ? this.attachNativeMemoryWatchForDir(dir, markDirty)
         : process.platform === "linux"
           ? this.attachLinuxMemoryDirectoryTreeWatchForDir(dir, markDirty)
           : "failed";
       if (attached === "no-capacity") {
+        watchCapacityExhausted = true;
         this.attachMemoryChokidarFallback(dir, markDirty, true);
         continue;
       }
@@ -146,7 +152,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
       }
     }
     if (fileWatchPaths.size > 0) {
-      this.attachMemoryChokidarPaths(Array.from(fileWatchPaths), markDirty);
+      this.attachMemoryChokidarPaths(Array.from(fileWatchPaths), markDirty, watchCapacityExhausted);
     }
     this.scheduleMemoryWatchPressureStartupCheck();
   }

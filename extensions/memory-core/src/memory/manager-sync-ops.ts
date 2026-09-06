@@ -315,16 +315,27 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         const shouldSyncSessions = this.shouldSyncSessions(params, needsFullReindex);
 
         if (this.shouldDeferSourceWideBatch()) {
-          await this.executeSourceWideSync({
-            shouldSyncMemory,
-            shouldSyncSessions,
-            needsFullReindex,
-            needsFullSessionReindex,
-            targetArchiveFiles: targetArchiveFiles ? Array.from(targetArchiveFiles) : undefined,
-            progress: progress ?? undefined,
-          });
+          const memoryFullRetryDirty = this.memoryFullRetryDirty;
           if (shouldSyncMemory) {
+            // Claim this generation before awaiting I/O so watcher events that
+            // arrive during the refresh remain dirty for the next generation.
             this.clearMemoryRetryState();
+          }
+          try {
+            await this.executeSourceWideSync({
+              shouldSyncMemory,
+              shouldSyncSessions,
+              needsFullReindex,
+              needsFullSessionReindex,
+              targetArchiveFiles: targetArchiveFiles ? Array.from(targetArchiveFiles) : undefined,
+              progress: progress ?? undefined,
+            });
+          } catch (err) {
+            if (shouldSyncMemory) {
+              this.dirty = true;
+              this.memoryFullRetryDirty ||= memoryFullRetryDirty;
+            }
+            throw err;
           }
           if (shouldSyncSessions) {
             this.clearSessionRetryState();
@@ -333,8 +344,15 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           }
         } else {
           if (shouldSyncMemory) {
-            await this.syncMemoryFiles({ needsFullReindex, progress: progress ?? undefined });
+            const memoryFullRetryDirty = this.memoryFullRetryDirty;
             this.clearMemoryRetryState();
+            try {
+              await this.syncMemoryFiles({ needsFullReindex, progress: progress ?? undefined });
+            } catch (err) {
+              this.dirty = true;
+              this.memoryFullRetryDirty ||= memoryFullRetryDirty;
+              throw err;
+            }
           }
 
           if (shouldSyncSessions) {
