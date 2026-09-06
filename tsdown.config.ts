@@ -9,6 +9,7 @@ import {
   collectPluginDeclarationSourceEntries,
   collectSourceCheckoutPluginBuildEntries,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
+import { createGatewayRunChunkMetadataPlugin } from "./scripts/lib/gateway-run-chunk-metadata.mts";
 import { createManagedHandoffBuildConfig } from "./scripts/lib/managed-handoff-build-config.mts";
 import {
   buildPluginSdkEntrySources,
@@ -812,7 +813,7 @@ const configs = [
       // and bundled hooks in one graph so runtime singletons are emitted once.
       entry: unifiedDistEntries,
       deps: unifiedDeps,
-      plugins: [createStateSchemaInlinePlugin()],
+      plugins: [createStateSchemaInlinePlugin(), createGatewayRunChunkMetadataPlugin()],
     },
     false,
   ),

@@ -19,6 +19,7 @@ import {
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { createWorkerPlacementRunnerAvailabilityReader } from "./placement-projector.js";
 import { completeReclaimedWorkspaceTeardown } from "./placement-teardown.js";
+import type { WorkerEnvironmentService } from "./service.js";
 import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
 import type { WorkerTunnelHandle } from "./tunnel.js";
 import type { WorkerWorkspaceRecoveryFailureReport } from "./workspace-conflicts.js";
@@ -65,6 +66,7 @@ export function createHarness(
     failMoveAfterBegin?: boolean;
     runMoveBarrier?: Parameters<typeof createWorkerPlacementDispatchService>[0]["runMoveBarrier"];
     recoveryBarrierError?: Error;
+    isShuttingDown?: () => boolean;
     prepareAcceptedWorkspacePublication?: Parameters<
       typeof createWorkerPlacementDispatchService
     >[0]["prepareAcceptedWorkspacePublication"];
@@ -338,7 +340,9 @@ export function createHarness(
     ownerEpoch: 2,
     expiresAtMs: 10_000,
   };
-  const environments: WorkerDispatchEnvironmentService = {
+  const environments: WorkerDispatchEnvironmentService &
+    Pick<WorkerEnvironmentService, "recordError"> = {
+    recordError: vi.fn((record) => record),
     supportsProviderExecutionMode: vi.fn(() => true),
     create: vi.fn(async () => {
       fail("create");
@@ -395,6 +399,7 @@ export function createHarness(
   const service = createWorkerPlacementDispatchService({
     placements,
     environments,
+    isShuttingDown: options.isShuttingDown,
     runReclaimPreparation:
       options.runReclaimPreparation ?? (async ({ run, authorize }) => await run(authorize)),
     runnerAvailability: createWorkerPlacementRunnerAvailabilityReader({
@@ -566,3 +571,27 @@ export function createHarness(
     attached,
   };
 }
+
+export const createRecoveryService = (
+  placements: PlacementStore,
+  environments: WorkerEnvironmentService,
+  isShuttingDown: () => boolean = () => false,
+) =>
+  createWorkerPlacementDispatchService({
+    placements,
+    environments,
+    isShuttingDown,
+    runnerAvailability: { read: () => undefined, version: () => 0 },
+    workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
+    runLocalBarrier: async ({ startDispatch }) => startDispatch(),
+    runRecoveryBarrier: async ({ run }) => await run("/gateway/workspace"),
+    runActivationBarrier: async ({ activate }) => activate(),
+    runMoveBarrier: async ({ begin }) => begin(),
+    resolveMoveDestination: async () => undefined,
+    runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
+    runReclaimBarrier: async ({ begin, reclaim }) => await reclaim("/gateway/workspace", begin()),
+    runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
+    resolveWorkspacePath: async () => "/gateway/workspace",
+    reportWorkspaceResultConflict: async () => {},
+    resolveWorkspaceResultConflict: async () => undefined,
+  });

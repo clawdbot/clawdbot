@@ -16,7 +16,7 @@ import {
   detectSharedAuthStoreMigration,
   migrateSharedAuthStore,
 } from "../infra/state-migrations.shared-auth-store.js";
-import { writeConfigMachineState } from "../state/config-machine-state.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   OPENCLAW_AGENT_SCHEMA_VERSION,

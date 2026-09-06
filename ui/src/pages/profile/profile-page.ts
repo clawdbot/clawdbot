@@ -20,7 +20,6 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { resolveCurrentSelfUser } from "../../app/user-profile.ts";
@@ -36,8 +35,8 @@ import {
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelAccountsEnglish } from "../../i18n/locales/en-model-accounts.ts";
-import { AuthenticatedAvatarRouteLoader } from "../../lib/authenticated-avatar-route.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { IdentityAvatarController } from "../../lib/identity-avatar-loader.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 import "../../styles/profile.css";
@@ -72,9 +71,7 @@ export class ProfilePage extends OpenClawLightDomElement {
   private client: GatewayBrowserClient | null = null;
   private connected = false;
   private canWrite = false;
-  private heroAvatarAuthCandidates: string[] = [];
-  private heroAvatarAuthReady = false;
-  private readonly heroAvatarLoader = new AuthenticatedAvatarRouteLoader(this);
+  private readonly heroAvatarLoader = new IdentityAvatarController(this);
   private identityRequestId = 0;
   private subscriptions: Array<() => void> = [];
 
@@ -94,8 +91,6 @@ export class ProfilePage extends OpenClawLightDomElement {
     }
     this.subscriptions = [];
     this.identityRequestId += 1;
-    this.heroAvatarAuthCandidates = [];
-    this.heroAvatarAuthReady = false;
     this.client = null;
     this.connected = false;
     this.canWrite = false;
@@ -103,23 +98,6 @@ export class ProfilePage extends OpenClawLightDomElement {
   }
 
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
-    // The /api/users avatar route only accepts shared secrets; a single
-    // device-token candidate would 401 forever. Offer the full ordered list.
-    const nextHeroAvatarAuthCandidates = resolveControlUiAuthCandidates({
-      hello: snapshot.hello,
-      settings: { token: this.context.gateway.connection.token },
-      password: this.context.gateway.connection.password,
-    });
-    if (
-      nextHeroAvatarAuthCandidates.join("\u0000") !== this.heroAvatarAuthCandidates.join("\u0000")
-    ) {
-      this.heroAvatarAuthCandidates = nextHeroAvatarAuthCandidates;
-    }
-    this.heroAvatarAuthReady = Boolean(
-      snapshot.hello ||
-      this.context.gateway.connection.token.trim() ||
-      this.context.gateway.connection.password.trim(),
-    );
     const clientChanged = snapshot.client !== this.client;
     const nextConnected = snapshot.phase === "connected";
     const nextCanWrite = nextConnected && hasOperatorWriteAccess(snapshot.hello?.auth ?? null);
@@ -442,13 +420,10 @@ export class ProfilePage extends OpenClawLightDomElement {
     const agentId = list?.defaultId ?? "main";
     const row = list?.agents.find((agent) => agent.id === agentId) ?? { id: agentId };
     return renderProfileHero({
-      agentId,
       row,
+      user: this.selfUser,
       identity: this.context.agentIdentity.get(agentId),
-      resolveImageUrl: (avatarUrl) =>
-        this.heroAvatarAuthReady
-          ? this.heroAvatarLoader.resolve(avatarUrl, this.heroAvatarAuthCandidates)
-          : null,
+      resolveImageUrl: (avatarUrl) => this.heroAvatarLoader.resolve(avatarUrl),
       failedAvatarUrl: this.failedHeroAvatarUrl,
       onAvatarError: (avatarUrl) => {
         this.failedHeroAvatarUrl = avatarUrl;

@@ -29,7 +29,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "none",
       minScore: 0.35,
-      hybrid: { enabled: true },
     });
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     const manager = requireManager(result);
@@ -60,7 +59,6 @@ describe("memory index", () => {
   it.each([
     {
       name: "slug path stem",
-      config: { hybrid: { enabled: true } },
       exactFile: "project-lantern.md",
       bodyText: "Project lantern project lantern project lantern.",
       query: "project-lantern",
@@ -68,7 +66,6 @@ describe("memory index", () => {
     },
     {
       name: "dated path stem",
-      config: {},
       exactFile: "2020-01-01.md",
       bodyText: "2020 01 01 2020 01 01 2020 01 01",
       query: "2020-01-01",
@@ -79,7 +76,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "none",
       minScore: 0.35,
-      ...testCase.config,
     });
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     const manager = requireManager(result);
@@ -107,7 +103,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "none",
       minScore: 0,
-      hybrid: { enabled: true },
     });
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     const manager = requireManager(result);
@@ -135,9 +130,7 @@ describe("memory index", () => {
 
   it("bounds the merged six-term fallback candidate set", async () => {
     providerFixture.forceNoProvider = true;
-    const manager = await getPersistentManager(
-      createCfg({ provider: "none", minScore: 0, hybrid: { enabled: true } }),
-    );
+    const manager = await getPersistentManager(createCfg({ provider: "none", minScore: 0 }));
     const terms = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"];
     for (const term of terms) {
       for (let index = 0; index < 5; index += 1) {
@@ -157,9 +150,7 @@ describe("memory index", () => {
 
   it("counts exact candidate headroom by distinct path instead of chunk", async () => {
     providerFixture.forceNoProvider = true;
-    const manager = await getPersistentManager(
-      createCfg({ provider: "none", minScore: 0, hybrid: { enabled: true } }),
-    );
+    const manager = await getPersistentManager(createCfg({ provider: "none", minScore: 0 }));
     for (let index = 0; index < 200; index += 1) {
       const dir = path.join(fixture.paths.memory, index.toString().padStart(3, "0"));
       await fs.mkdir(dir, { recursive: true });
@@ -179,7 +170,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "none",
       minScore: 0,
-      hybrid: { enabled: true },
     });
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     const manager = requireManager(result);
@@ -350,7 +340,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "none",
       minScore: 0,
-      hybrid: { enabled: true },
     });
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     const manager = requireManager(result);
@@ -393,7 +382,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "none",
       minScore: 0,
-      hybrid: { enabled: true },
     });
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     const manager = requireManager(result);
@@ -474,7 +462,6 @@ describe("memory index", () => {
         provider: "none",
         ftsTokenizer: "trigram",
         minScore: 0,
-        hybrid: { enabled: true },
       }),
     );
     if (!manager.status().fts?.available) {
@@ -496,7 +483,6 @@ describe("memory index", () => {
       createCfg({
         ftsTokenizer: "trigram",
         minScore: 0,
-        hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 },
       }),
     );
     if (!manager.status().fts?.available) {

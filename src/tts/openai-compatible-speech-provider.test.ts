@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
+import { mockFirstObjectArg } from "../test-utils/mock-call-assertions.js";
 import { createOpenAiCompatibleSpeechProvider } from "./openai-compatible-speech-provider.js";
 import { withSpeakerSelectionCompat, withSpeakerSelectionFallbackCompat } from "./speaker.js";
 import { getResolvedSpeechProviderConfig } from "./tts-provider-resolution.js";
@@ -44,18 +45,6 @@ vi.mock("openclaw/plugin-sdk/provider-http", async () => {
     resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
   };
 });
-
-function requireFirstMockArg(mock: ReturnType<typeof vi.fn>): Record<string, unknown> {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error("missing first mock call");
-  }
-  const [arg] = call;
-  if (!arg || typeof arg !== "object") {
-    throw new Error("missing first mock argument");
-  }
-  return arg as Record<string, unknown>;
-}
 
 describe("createOpenAiCompatibleSpeechProvider", () => {
   afterEach(() => {
@@ -281,14 +270,14 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
     });
 
     expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledOnce();
-    const httpConfigRequest = requireFirstMockArg(resolveProviderHttpRequestConfigMock);
+    const httpConfigRequest = mockFirstObjectArg(resolveProviderHttpRequestConfigMock);
     expect(httpConfigRequest.baseUrl).toBe("https://example.test/v1");
     expect(httpConfigRequest.defaultBaseUrl).toBe("https://example.test/v1");
     expect(httpConfigRequest.provider).toBe("demo");
     expect(httpConfigRequest.capability).toBe("audio");
 
     expect(postJsonRequestMock).toHaveBeenCalledOnce();
-    const postRequest = requireFirstMockArg(postJsonRequestMock);
+    const postRequest = mockFirstObjectArg(postJsonRequestMock);
     expect(postRequest.url).toBe("https://example.test/v1/audio/speech");
     expect(postRequest.timeoutMs).toBe(1234);
     expect(postRequest.body).toStrictEqual({

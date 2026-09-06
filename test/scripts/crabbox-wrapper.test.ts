@@ -22,15 +22,15 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { build, buildSync } from "esbuild";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { parse as parseYaml } from "yaml";
-import { buildChangedCheckCrabboxArgs } from "../../scripts/check-changed.mts";
+import { parse } from "yaml";
 import {
   isProviderAdvertised,
   parseProvidersFromHelp,
 } from "../../scripts/crabbox-wrapper-providers.mts";
+import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents.mjs";
+import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
 import { isProcessAlive } from "../helpers/process-wait.js";
 import { makeTempDir, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { createTestboxCommandFixture } from "./testbox-command.test-support.js";
 
 const tempDirs: string[] = [];
 const invocationLogTempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -56,9 +56,6 @@ const azureProviderHelp =
 const fakeRunValueOptionHelp = [
   "artifact-glob value",
   "blacksmith-ref string",
-  "blacksmith-job string",
-  "blacksmith-org string",
-  "blacksmith-workflow string",
   "capture-stderr string",
   "capture-stdout string",
   "download value",
@@ -81,7 +78,7 @@ const defaultGitResponses: Record<string, { status?: number; stdout?: string; st
   [GIT_CONFIG_SPARSE_KEY]: { stdout: "false\n" },
   [GIT_SPARSE_LIST_KEY]: { status: 1 },
 };
-const remoteTestboxBootstrap = "export CI=true; corepack pnpm install --frozen-lockfile >&2";
+const remoteTestboxBootstrap = "export CI=true;";
 
 function makeFakeCrabbox(helpText: string): string {
   const cached = fakeCrabboxBinDirs.get(helpText);
@@ -2232,38 +2229,29 @@ describe("scripts/crabbox-wrapper", () => {
     ]);
   });
 
-  it.skipIf(process.platform === "win32")(
-    "keeps dependency preparation out of other providers and controls",
-    () => {
-      const root = makeTempDir(tempDirs, "openclaw-testbox-control-");
-      const fixture = createTestboxCommandFixture(root);
-      const run = runSuccessfulDefaultWrapper([
-        "run",
-        "--provider",
-        "aws",
-        "--",
-        "printf",
-        "%s",
-        "control",
-      ]);
-      expect(fixture.run(root, run.remoteCommand).stdout).toBe("control");
-      const control = runSuccessfulDefaultWrapper(["warmup", "--provider", "blacksmith-testbox"]);
-      expect(control.output.args).not.toContain("--shell");
-      expect(fixture.readEvents()).toEqual([]);
-    },
-  );
-
   it.skipIf(process.platform === "win32").each([0, 43])(
     "executes the named Testbox job with frozen preparation (install exit %s)",
     (installExit) => {
-      const root = makeTempDir(tempDirs, "openclaw-testbox-job-");
-      const fixture = createTestboxCommandFixture(root);
-      writeFileSync(path.join(root, "owner.txt"), "named job\n");
-      writeFileSync(
-        path.join(root, "package.json"),
-        JSON.stringify({ packageManager: "pnpm@12.1.0" }),
+      const root = invocationLogTempDirs.make("openclaw-testbox-job-");
+      const events = path.join(root, "events");
+      writeShellCommand(
+        path.join(root, "corepack"),
+        `
+case "$*" in
+  'pnpm install --frozen-lockfile')
+    printf 'install\\n' >> ${shellQuote(events)}
+    printf 'install diagnostics\\n'
+    exit ${installExit}
+    ;;
+  'pnpm check:changed')
+    printf 'payload\\n' >> ${shellQuote(events)}
+    printf 'payload\\n'
+    ;;
+  *) exit 64 ;;
+esac
+`,
       );
-      const config = parseYaml(readFileSync(path.join(repoRoot, ".crabbox.yaml"), "utf8")) as {
+      const config = parse(readFileSync(path.join(repoRoot, ".crabbox.yaml"), "utf8")) as {
         jobs: { "testbox-changed": { shell?: boolean; command: string } };
       };
       const job = config.jobs["testbox-changed"];
@@ -2271,18 +2259,16 @@ describe("scripts/crabbox-wrapper", () => {
       const command = job.shell
         ? job.command
         : job.command.trim().split(/\s+/u).map(shellQuote).join(" ");
-      const result = fixture.run(root, command, {
-        TESTBOX_FIXTURE_INSTALL_EXIT: String(installExit),
+      const result = spawnSync("bash", ["-c", command], {
+        cwd: root,
+        encoding: "utf8",
+        timeout: 10_000,
+        env: { ...process.env, PATH: [root, process.env.PATH].join(path.delimiter) },
       });
       expect(result.status, result.stderr).toBe(installExit);
-      expect(result.stdout).toBe(
-        installExit
-          ? ""
-          : `${JSON.stringify({ input: "named job\n", args: ["pnpm", "check:changed"] })}\n`,
-      );
-      expect(fixture.readEvents().map(({ phase }) => phase)).toEqual(
-        installExit ? ["install"] : ["install", "payload"],
-      );
+      expect(result.stdout).toBe(installExit ? "" : "payload\n");
+      expect(result.stderr).toContain("install diagnostics");
+      expect(readFileSync(events, "utf8")).toBe(installExit ? "install\n" : "install\npayload\n");
     },
   );
 
@@ -2382,14 +2368,17 @@ describe("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain("node-v${node_version}-linux-${node_arch}.tar.gz");
     expect(remoteCommand).toContain("sha256sum -c -");
     expect(remoteCommand).toContain("corepack enable --install-directory");
-    expect(remoteCommand).toContain("pnpm install --frozen-lockfile");
+    expect(remoteCommand).toContain("install-dependencies.sh");
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_wsl2_js || exit $?");
     expectChangedGateGitBootstrap(remoteCommand);
     expect(remoteCommand.indexOf("node --version >&2 || return 1")).toBeLessThan(
       remoteCommand.indexOf("node -e"),
     );
+    expect(remoteCommand.indexOf("corepack enable --install-directory")).toBeLessThan(
+      remoteCommand.indexOf("node -e"),
+    );
     expect(remoteCommand.indexOf("node -e")).toBeLessThan(
-      remoteCommand.indexOf("corepack enable --install-directory"),
+      remoteCommand.indexOf("pnpm --version >&2"),
     );
     expect(remoteCommand).toContain(
       `{ openclaw_crabbox_env ${remoteChangedGateEnvPrefix} corepack pnpm check:changed\n}`,
@@ -2696,6 +2685,7 @@ describe("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain("node --version >&2 || return 1");
     expect(remoteCommand).not.toContain("corepack enable");
     expect(remoteCommand).not.toContain("pnpm --version >&2");
+    expect(remoteCommand).not.toContain(".openclaw-crabbox-changed-gate.bundle");
     expectGroupedShellCommand(remoteCommand, "node --version");
   });
 
@@ -3124,16 +3114,46 @@ describe("scripts/crabbox-wrapper", () => {
     expectGroupedShellCommand(remoteCommand, "openclaw_crabbox_env -S 'pnpm --version'");
   });
 
-  it("bootstraps Corepack for AWS macOS node changed-gate commands", () => {
-    const { remoteCommand } = runSuccessfulMacosCommand(["node", "scripts/check-changed.mjs"]);
-    expect(remoteCommand).toContain("node --version >&2");
-    expect(remoteCommand).toContain('corepack enable --install-directory "$PNPM_HOME"');
-    expect(remoteCommand).toContain("pnpm --version >&2");
-    expectGroupedShellCommand(
-      remoteCommand,
-      `openclaw_crabbox_env ${remoteChangedGateEnvPrefix} node scripts/check-changed.mjs`,
-    );
-  });
+  it.each([
+    { provider: "aws", target: "macos", targetArgs: [] },
+    { provider: "azure", target: "windows", targetArgs: ["--windows-mode", "wsl2"] },
+  ])(
+    "prepares the capsule installer before a Node changed gate ($provider/$target)",
+    ({ provider, target, targetArgs }) => {
+      const { output, remoteCommand: renderedCommand } = runSuccessfulWrapper(
+        azureProviderHelp,
+        [
+          "run",
+          "--provider",
+          provider,
+          "--target",
+          target,
+          ...targetArgs,
+          "--",
+          "node",
+          "scripts/check-changed.mjs",
+        ],
+        sparseChangedGateOptions,
+      );
+      const remoteCommand = normalizeShellLineEndings(output.scriptContent || renderedCommand);
+      const node = remoteCommand.indexOf("node --version >&2");
+      const shim = remoteCommand.indexOf('corepack enable --install-directory "$PNPM_HOME"');
+      const receiver = remoteCommand.indexOf("node -e");
+      const manager = remoteCommand.indexOf("pnpm --version >&2");
+      expect(node).toBeGreaterThanOrEqual(0);
+      expect(shim).toBeGreaterThan(node);
+      expect(receiver).toBeGreaterThan(shim);
+      expect(manager).toBeGreaterThan(receiver);
+      expect(remoteCommand).toContain("install-dependencies.sh");
+      const payload =
+        "openclaw_crabbox_env " + remoteChangedGateEnvPrefix + " node scripts/check-changed.mjs";
+      if (provider === "aws") {
+        expectGroupedShellCommand(remoteCommand, payload);
+      } else {
+        expect(remoteCommand).toContain("{ " + payload + "\n}");
+      }
+    },
+  );
 
   it("bootstraps Corepack for AWS macOS node option changed-gate commands", () => {
     const { remoteCommand } = runSuccessfulMacosCommand([
@@ -3939,18 +3959,22 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it.skipIf(process.platform === "win32").each([
-    ["aws", true],
-    ["aws", false],
-    ["blacksmith-testbox", true],
-    ["blacksmith-testbox", false],
+    ["aws", true, "transport"],
+    ["aws", false, "transport"],
+    ["blacksmith-testbox", true, "transport"],
+    ["blacksmith-testbox", false, "transport"],
+    ["blacksmith-testbox", false, "graph"],
+    ["blacksmith-testbox", false, "frozen"],
+    ["blacksmith-testbox", false, "lifecycle"],
+    ["blacksmith-testbox", false, "lifecycle-staged-extra"],
+    ["blacksmith-testbox", false, "lifecycle-base-ref"],
   ] as const)(
-    "reuses the fetched base while transporting the exact dirty tree (provider=%s, shallow=%s)",
-    (provider, shallow) => {
+    "transports verified source and dependencies (provider=%s, shallow=%s, scenario=%s)",
+    (provider, shallow, scenario) => {
       const root = makeTempDir(tempDirs, "openclaw-changed-gate-real-git-");
       const origin = path.join(root, "origin");
       const producer = path.join(root, "producer");
       const capturedBundle = path.join(root, "captured.bundle");
-      const commands = createTestboxCommandFixture(path.join(root, "commands"));
       const deletedOwned = [
         "committed-deleted.ignored",
         "staged-deleted.ignored",
@@ -4010,14 +4034,7 @@ describe("scripts/crabbox-wrapper", () => {
       };
       mkdirSync(path.join(origin, "scripts"), { recursive: true });
       git(origin, ["init", "-q", "-b", "main"]);
-      writeFileSync(
-        path.join(origin, ".gitignore"),
-        ".tmp/\nnode_modules\n*.ignored\n!reincluded.ignored\n",
-      );
-      writeFileSync(
-        path.join(origin, "package.json"),
-        JSON.stringify({ packageManager: "pnpm@12.0.0" }),
-      );
+      writeFileSync(path.join(origin, ".gitignore"), ".tmp/\n*.ignored\n!reincluded.ignored\n");
       writeFileSync(path.join(origin, ".gitattributes"), "* text=auto eol=lf\n");
       writeFileSync(
         path.join(origin, ".crabbox.yaml"),
@@ -4062,13 +4079,9 @@ describe("scripts/crabbox-wrapper", () => {
         path.join(origin, "scripts/check-changed.mjs"),
         'import fs from "node:fs"; if (process.env.TRANSPORT_FIXTURE_ARGV) fs.writeFileSync(process.env.TRANSPORT_FIXTURE_ARGV, JSON.stringify(process.argv.slice(2))); process.stdout.write("transport fixture reached\\n");\n',
       );
-      writeFileSync(
+      copyFileSync(
+        path.join(origin, "scripts/check-changed.mjs"),
         path.join(origin, "scripts/source-fixture.mjs"),
-        `import { spawnSync } from "node:child_process";
-const result = spawnSync(${JSON.stringify(commands.payload)}, process.argv.slice(2), { stdio: ["inherit", "ignore", "inherit"] });
-if (result.status !== 0) process.exit(result.status ?? 1);
-process.stdout.write("transport fixture reached\\n");
-`,
       );
       git(origin, ["add", "-A"]);
       git(origin, ["commit", "-qm", "base"]);
@@ -4167,7 +4180,7 @@ process.stdout.write("transport fixture reached\\n");
         prepareReceiver?: (receiver: string) => void,
       ) => {
         const receiver = path.join(root, name);
-        if (source === origin && nativeSeed && !existsSync(receiver)) {
+        if (source === origin && nativeSeed) {
           git(root, ["clone", "-q", `file://${origin}`, receiver]);
           if (lstatSync(path.join(producer, "source-dir")).isSymbolicLink()) {
             rmSync(path.join(receiver, "source-dir"), { recursive: true });
@@ -4209,13 +4222,13 @@ process.stdout.write("transport fixture reached\\n");
               "stale child\n",
             );
           }
-        } else if (!existsSync(receiver)) {
+        } else {
           mkdirSync(receiver);
         }
         prepareReceiver?.(receiver);
         const transport =
           provider === "blacksmith-testbox" ? path.join(root, `${name}-transport`) : receiver;
-        if (transport !== receiver && !existsSync(transport)) {
+        if (transport !== receiver) {
           mkdirSync(path.join(transport, ".git"), { recursive: true });
           symlinkSync(
             realpathSync(receiver),
@@ -4226,15 +4239,12 @@ process.stdout.write("transport fixture reached\\n");
         if (bundle) {
           writeFileSync(path.join(transport, ".openclaw-crabbox-changed-gate.bundle"), bundle);
         }
-        const eventsBefore = commands.readEvents().length;
         const result = runCommand("bash", ["-c", remoteCommand, "receiver-script", ...remoteArgs], {
           cwd: transport,
           encoding: "utf8",
           timeout: 10_000,
           env: {
             ...env,
-            PATH: [commands.bin, env.PATH].join(path.delimiter),
-            CRABBOX_PNPM_MODULES_DIR: commands.modules,
             GIT_CONFIG_COUNT: "2",
             GIT_CONFIG_KEY_0: `url.file://${source}.insteadOf`,
             GIT_CONFIG_VALUE_0: "https://github.com/openclaw/openclaw.git",
@@ -4249,27 +4259,263 @@ process.stdout.write("transport fixture reached\\n");
             realpathSync(receiver),
           );
           expect(existsSync(path.join(transport, "owner.txt"))).toBe(false);
-          expect(existsSync(path.join(transport, "node_modules"))).toBe(false);
         }
-        return { receiver, result, events: commands.readEvents().slice(eventsBefore) };
+        return { receiver, result };
       };
+      if (scenario !== "transport") {
+        const installOwner = ".github/actions/setup-node-env/install-dependencies.sh";
+        const ownerPath = path.join(repoRoot, installOwner);
+        // Baseline uses the same action-owned recipe before its pure extraction.
+        const action: { runs: { steps: Array<{ name?: string; run?: string }> } } = parse(
+          readFileSync(path.join(repoRoot, ".github/actions/setup-node-env/action.yml"), "utf8"),
+        );
+        const installStep = action.runs.steps.find((step) => step.name === "Install dependencies");
+        if (!installStep?.run) {
+          throw new Error("Missing canonical install recipe");
+        }
+        const installer: string = existsSync(ownerPath)
+          ? readFileSync(ownerPath, "utf8")
+          : "#!/usr/bin/env bash\n" + installStep.run;
+        const { packageManager }: { packageManager: string } = JSON.parse(
+          readFileSync(path.join(repoRoot, "package.json"), "utf8"),
+        );
+        const { environment } = pnpmLockfileDocuments(
+          readFileSync(path.join(repoRoot, "pnpm-lock.yaml"), "utf8"),
+        );
+        const dependencyEnv = {
+          ...env,
+          CI: "true",
+          PATH: [path.dirname(process.execPath), env.PATH].join(path.delimiter),
+          PNPM_CONFIG_STORE_DIR: path.join(root, "dependency-store"),
+          PNPM_CONFIG_CACHE_DIR: path.join(root, "dependency-cache"),
+        };
+        const runPnpm = (directory: string, args: string[]) => {
+          const runner = resolvePnpmRunner({ cwd: directory, env: dependencyEnv });
+          const result = runCommand(runner.command, [...runner.args, ...args], {
+            cwd: directory,
+            env: dependencyEnv,
+            encoding: "utf8",
+          });
+          expect(result.error, failureDetail(result)).toBeUndefined();
+          expect(result.status, failureDetail(result)).toBe(0);
+          return result;
+        };
+        const rootManifest = { name: "capsule-dependency-fixture", private: true, packageManager };
+        const consumerManifest = (graph: "a" | "b") => ({
+          name: "capsule-dependency-consumer",
+          private: true,
+          dependencies: { "capsule-proof-dep": "file:../../fixture-deps/" + graph },
+        });
+        const writeDependencySource = (directory: string, graph: "a" | "b") => {
+          for (const version of ["a", "b"]) {
+            const dependency = path.join(directory, "fixture-deps", version);
+            mkdirSync(dependency, { recursive: true });
+            writeFileSync(
+              path.join(dependency, "package.json"),
+              JSON.stringify({
+                name: "capsule-proof-dep",
+                version: version === "a" ? "1.0.0" : "2.0.0",
+                main: "index.cjs",
+              }),
+            );
+            writeFileSync(
+              path.join(dependency, "index.cjs"),
+              "module.exports = 'graph-" + version + "';\n",
+            );
+          }
+          writeFileSync(path.join(directory, "package.json"), JSON.stringify(rootManifest));
+          mkdirSync(path.join(directory, "packages/consumer"), { recursive: true });
+          writeFileSync(
+            path.join(directory, "packages/consumer/package.json"),
+            JSON.stringify(consumerManifest(graph)),
+          );
+          writeFileSync(path.join(directory, "pnpm-workspace.yaml"), "packages:\n  - packages/*\n");
+          if (environment !== null) {
+            writeFileSync(
+              path.join(directory, "pnpm-lock.yaml"),
+              "---\n" + environment + "\n---\n",
+            );
+          }
+          mkdirSync(path.join(directory, ".capsule-proof"), { recursive: true });
+          writeFileSync(
+            path.join(directory, ".gitignore"),
+            readFileSync(path.join(origin, ".gitignore"), "utf8") +
+              "\nnode_modules/\n.capsule-proof/\n",
+          );
+        };
+        writeDependencySource(producer, "b");
+        const version = runPnpm(producer, ["--version"]);
+        expect("pnpm@" + version.stdout.trim()).toBe(packageManager.split("+")[0]);
+        runPnpm(producer, ["install", "--lockfile-only"]);
+        mkdirSync(path.dirname(path.join(producer, installOwner)), { recursive: true });
+        writeFileSync(path.join(producer, installOwner), installer);
+        writeFileSync(
+          path.join(producer, sourceCommand),
+          [
+            'import fs from "node:fs";',
+            'import { createRequire } from "node:module";',
+            'const actual = createRequire(new URL("../packages/consumer/package.json", import.meta.url))("capsule-proof-dep");',
+            'if (actual !== "graph-b") throw new Error("capsule dependency mismatch: " + actual);',
+            'fs.writeFileSync(".capsule-proof/payload", actual);',
+            'process.stdout.write("capsule graph-b\\n");',
+          ].join("\n") + "\n",
+        );
+        if (scenario === "frozen") {
+          writeFileSync(
+            path.join(producer, "packages/consumer/package.json"),
+            JSON.stringify(consumerManifest("a")),
+          );
+        } else if (scenario.startsWith("lifecycle")) {
+          const mutation =
+            scenario === "lifecycle-staged-extra"
+              ? [
+                  'const fs = require("node:fs");',
+                  'const { execFileSync } = require("node:child_process");',
+                  'fs.writeFileSync("lifecycle-extra.mjs", "export const lifecycleExtra = true;\\n");',
+                  'execFileSync("git", ["add", "--", "lifecycle-extra.mjs"]);',
+                  'fs.writeFileSync(".capsule-proof/lifecycle", "staged-extra");',
+                ]
+              : scenario === "lifecycle-base-ref"
+                ? [
+                    'const fs = require("node:fs");',
+                    'const { execFileSync } = require("node:child_process");',
+                    'const git = (args) => execFileSync("git", args, { encoding: "utf8" });',
+                    'const before = git(["rev-parse", "refs/remotes/origin/main"]).trim();',
+                    'const head = git(["rev-parse", "HEAD"]).trim();',
+                    'const indexBefore = git(["ls-files", "--stage", "-v", "-z"]);',
+                    'execFileSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"]);',
+                    'const after = git(["rev-parse", "refs/remotes/origin/main"]).trim();',
+                    'const indexAfter = git(["ls-files", "--stage", "-v", "-z"]);',
+                    'fs.writeFileSync(".capsule-proof/lifecycle", JSON.stringify({ before, head, after, indexBefore, indexAfter }));',
+                  ]
+                : [
+                    'const fs = require("node:fs");',
+                    'fs.writeFileSync(".capsule-proof/lifecycle", "ran");',
+                    'fs.writeFileSync("owner.txt", "lifecycle source drift\\n");',
+                  ];
+          writeFileSync(
+            path.join(producer, "scripts/capsule-lifecycle.cjs"),
+            mutation.join("\n") + "\n",
+          );
+          writeFileSync(
+            path.join(producer, "package.json"),
+            JSON.stringify({
+              ...rootManifest,
+              scripts: { postinstall: "node scripts/capsule-lifecycle.cjs" },
+            }),
+          );
+        }
+        const selectedOwner = readFileSync(path.join(producer, "owner.txt"), "utf8");
+        const frozen = runSender();
+        let preparedGraph = "";
+        const imported = receive(
+          "dependency-" + scenario,
+          frozen.remoteCommand,
+          frozen.bundle,
+          origin,
+          dependencyEnv,
+          true,
+          [],
+          (receiver) => {
+            writeDependencySource(receiver, "a");
+            runPnpm(receiver, ["install", "--lockfile-only"]);
+            runPnpm(receiver, ["install", "--frozen-lockfile"]);
+            const probe = runCommand(
+              process.execPath,
+              [
+                "-e",
+                'process.stdout.write(require("node:module").createRequire(process.cwd() + "/packages/consumer/package.json")("capsule-proof-dep"))',
+              ],
+              {
+                cwd: receiver,
+                env: dependencyEnv,
+                encoding: "utf8",
+              },
+            );
+            expect(probe.error, failureDetail(probe)).toBeUndefined();
+            expect(probe.status, failureDetail(probe)).toBe(0);
+            preparedGraph = probe.stdout;
+          },
+        );
+        expect(preparedGraph).toBe("graph-a");
+        const payload = path.join(imported.receiver, ".capsule-proof/payload");
+        if (scenario === "graph") {
+          expect(imported.result.status, failureDetail(imported.result)).toBe(0);
+          expect(imported.result.stdout).toBe("capsule graph-b\n");
+          expect(readFileSync(payload, "utf8")).toBe("graph-b");
+          expect(imported.result.stderr).toContain("[crabbox] verified source=");
+        } else {
+          // Prove the metadata mutation occurred before the intended rejection assertion.
+          if (scenario === "lifecycle-staged-extra" || scenario === "lifecycle-base-ref") {
+            expect(readFileSync(path.join(imported.receiver, "owner.txt"), "utf8")).toBe(
+              selectedOwner,
+            );
+            const lifecycle = readFileSync(
+              path.join(imported.receiver, ".capsule-proof/lifecycle"),
+              "utf8",
+            );
+            if (scenario === "lifecycle-staged-extra") {
+              expect(lifecycle).toBe("staged-extra");
+              expect(
+                readFileSync(path.join(imported.receiver, "lifecycle-extra.mjs"), "utf8"),
+              ).toBe("export const lifecycleExtra = true;\n");
+              expect(git(imported.receiver, ["diff", "--cached", "--name-only"])).toBe(
+                "lifecycle-extra.mjs",
+              );
+            } else {
+              const mutation: {
+                before: string;
+                head: string;
+                after: string;
+                indexBefore: string;
+                indexAfter: string;
+              } = JSON.parse(lifecycle);
+              expect(mutation.before).not.toBe(mutation.head);
+              expect(mutation.after).toBe(mutation.head);
+              expect(git(imported.receiver, ["rev-parse", "refs/remotes/origin/main"])).toBe(
+                mutation.head,
+              );
+              expect(mutation.indexAfter).toBe(mutation.indexBefore);
+              expect(git(imported.receiver, ["ls-files", "--others", "--exclude-standard"])).toBe(
+                "",
+              );
+            }
+          }
+          expect(imported.result.status, failureDetail(imported.result)).toBe(2);
+          expect(existsSync(payload)).toBe(false);
+          expect(imported.result.stderr).not.toContain("[crabbox] verified source=");
+          if (scenario === "frozen") {
+            expect(imported.result.stdout + imported.result.stderr).toContain(
+              'Cannot install with "frozen-lockfile"',
+            );
+            expect(imported.result.stdout + imported.result.stderr).toContain(
+              'importers["packages/consumer"]',
+            );
+            expect(imported.result.stderr).toContain(
+              "selected-source frozen install failed; payload was not run",
+            );
+          } else if (scenario === "lifecycle") {
+            expect(
+              readFileSync(path.join(imported.receiver, ".capsule-proof/lifecycle"), "utf8"),
+            ).toBe("ran");
+            expect(readFileSync(path.join(imported.receiver, "owner.txt"), "utf8")).toBe(
+              "lifecycle source drift\n",
+            );
+            expect(imported.result.stderr).toContain("source bytes mismatch: owner.txt");
+          } else {
+            expect(imported.result.stderr).toContain(
+              scenario === "lifecycle-staged-extra"
+                ? "source index mismatch"
+                : "source comparison ref mismatch: refs/remotes/origin/main",
+            );
+          }
+        }
+        return;
+      }
       const empty = runSender();
       expect(empty.bundle.length).toBeGreaterThan(0);
       const unchangedRun = receive("unchanged", empty.remoteCommand, empty.bundle);
       expect(unchangedRun.result.status, failureDetail(unchangedRun.result)).toBe(0);
-      expect(unchangedRun.events.map(({ phase }) => phase)).toEqual(
-        provider === "blacksmith-testbox" ? ["install", "payload"] : [],
-      );
-      for (const event of unchangedRun.events) {
-        expect(event).toMatchObject({
-          input: "base\n",
-          packageManager: "pnpm@12.0.0",
-          ci: "true",
-          clean: true,
-          cwd: realpathSync(unchangedRun.receiver),
-          modulesExposed: true,
-        });
-      }
       expect(git(unchangedRun.receiver, ["rev-parse", "HEAD^{tree}"])).toBe(
         git(origin, ["rev-parse", "HEAD^{tree}"]),
       );
@@ -4417,10 +4663,6 @@ process.stdout.write("transport fixture reached\\n");
       }
       git(producer, ["add", "-u", "staged-deleted.ignored"]);
       writeFileSync(path.join(producer, "owner.txt"), "unstaged\n");
-      writeFileSync(
-        path.join(producer, "package.json"),
-        JSON.stringify({ packageManager: "pnpm@12.1.0" }),
-      );
       writeFileSync(path.join(producer, "untracked.txt"), "untracked\n");
       mkdirSync(path.join(producer, "restored"));
       writeFileSync(path.join(producer, "restored", "old.txt"), restored);
@@ -4573,24 +4815,8 @@ process.stdout.write("transport fixture reached\\n");
       );
       expect(imported.result.status, failureDetail(imported.result)).toBe(0);
       expect(imported.result.stdout).toBe("transport fixture reached\n");
-      expect(imported.events.map(({ phase }) => phase)).toEqual(
-        provider === "blacksmith-testbox" ? ["install", "payload"] : [],
-      );
-      for (const event of imported.events) {
-        expect(event).toMatchObject({
-          input: "unstaged\n",
-          packageManager: "pnpm@12.1.0",
-          ci: "true",
-          modulesExposed: true,
-        });
-      }
-      if (provider === "blacksmith-testbox") {
-        expect(imported.result.stderr).toContain("frozen install preparation");
-      }
       expect(existsSync(path.join(imported.receiver, "injected"))).toBe(false);
       if (provider === "blacksmith-testbox") {
-        expect(imported.events[0]?.args).toEqual(["pnpm", "install", "--frozen-lockfile"]);
-        expect(imported.events[1]?.args).toEqual([special]);
         for (const file of newerFiles) {
           expect(() => lstatSync(path.join(imported.receiver, file))).toThrow();
         }
@@ -4602,11 +4828,6 @@ process.stdout.write("transport fixture reached\\n");
         expect(readFileSync(path.join(imported.receiver, "newer-private.ignored"), "utf8")).toBe(
           "changed private bytes\n",
         );
-        const reused = receive("candidate", candidate.remoteCommand, candidate.bundle);
-        expect(reused.result.status, failureDetail(reused.result)).toBe(0);
-        expect(reused.events.map(({ phase }) => phase)).toEqual(["install", "payload"]);
-        expect(reused.events[1]?.args).toEqual([special]);
-        expect(reused.result.stdout).toBe("transport fixture reached\n");
       }
       expect(git(imported.receiver, ["rev-parse", "HEAD^"])).toBe(base);
       expect(git(imported.receiver, ["rev-list", "--count", "HEAD"])).toBe("3");
@@ -4767,7 +4988,6 @@ process.stdout.write("transport fixture reached\\n");
           expect(accepted.result.status, failureDetail(accepted.result)).toBe(0);
           expect(accepted.result.stdout).toBe("transport fixture reached\n");
           expect(JSON.parse(readFileSync(argvPath, "utf8"))).toEqual(sourceArgs);
-          expect(accepted.events).toEqual([]);
           expect(existsSync(path.join(accepted.receiver, "injected"))).toBe(false);
           expect(
             sourceManifest(accepted.receiver, remotePaths).toSorted((left, right) =>
@@ -4901,107 +5121,23 @@ process.stdout.write("transport fixture reached\\n");
           expect(rejected.result.status, failureDetail(rejected.result)).toBe(2);
           expect(rejected.result.stdout).not.toContain("transport fixture reached");
           expect(existsSync(path.join(rejected.receiver, ".git"))).toBe(false);
-          expect(rejected.events).toEqual([]);
         }
-        for (const mode of ["direct", "shell"] as const) {
-          const script = mode === "direct" ? candidate : runSender(mode);
-          const accepted = receive(`${mode}-candidate`, script.remoteCommand, script.bundle);
-          expect(accepted.result.status, failureDetail(accepted.result)).toBe(0);
-          expect(accepted.result.stdout).toBe("transport fixture reached\n");
-          expect(accepted.result.stderr).toContain("frozen install preparation");
-          expect(accepted.events.map(({ phase }) => phase)).toEqual(["install", "payload"]);
-          expect(accepted.events[1]?.args).toEqual([special]);
-          expect(existsSync(path.join(accepted.receiver, "injected"))).toBe(false);
-          for (const event of accepted.events) {
-            expect(event).toMatchObject({
-              input: "unstaged\n",
-              packageManager: "pnpm@12.1.0",
-              ci: "true",
-              cwd: realpathSync(accepted.receiver),
-              modulesExposed: true,
-            });
-          }
-          const installFailure = receive(
-            `${mode}-install-failed`,
-            script.remoteCommand,
-            script.bundle,
-            origin,
-            { TESTBOX_FIXTURE_INSTALL_EXIT: "43" },
-          );
-          expect(installFailure.result.status, failureDetail(installFailure.result)).toBe(43);
-          expect(installFailure.result.stdout).toBe("");
-          expect(installFailure.events.map(({ phase }) => phase)).toEqual(["install"]);
-          const payloadFailure = receive(
-            `${mode}-payload-failed`,
-            script.remoteCommand,
-            script.bundle,
-            origin,
-            { TESTBOX_FIXTURE_PAYLOAD_EXIT: "47" },
-          );
-          expect(payloadFailure.result.status, failureDetail(payloadFailure.result)).toBe(47);
-          expect(payloadFailure.result.stdout).toBe("");
-          expect(payloadFailure.events.map(({ phase }) => phase)).toEqual(["install", "payload"]);
-          expect(
-            sourceManifest(accepted.receiver, remotePaths).toSorted((left, right) =>
-              left[0].localeCompare(right[0]),
-            ),
-          ).toEqual(expectedManifest);
-          const rejected = receive(
-            `${mode}-missing-capsule`,
-            script.remoteCommand,
-            undefined,
-            origin,
-            {},
-            false,
-          );
-          expect(rejected.result.status, failureDetail(rejected.result)).toBe(2);
-          expect(rejected.result.stdout).not.toContain("transport fixture reached");
-          expect(existsSync(path.join(rejected.receiver, ".git"))).toBe(false);
-          expect(rejected.events).toEqual([]);
-        }
-        const delegate = spawnSync(
-          "bash",
-          [
-            "-c",
-            `source ${shellQuote(path.join(repoRoot, "scripts/pr-lib/gates.sh"))}
-run_quiet_logged() { shift 2; printf '%s\\0' "$@"; }
-run_remote_testbox_full_test_gate tests unused.log fixture`,
-          ],
-          { encoding: "utf8" },
+        const shell = runSender("shell");
+        const acceptedShell = receive("shell-candidate", shell.remoteCommand, shell.bundle);
+        expect(acceptedShell.result.status, failureDetail(acceptedShell.result)).toBe(0);
+        expect(acceptedShell.result.stdout).toBe("transport fixture reached\n");
+        expect(existsSync(path.join(acceptedShell.receiver, "injected"))).toBe(false);
+        const rejectedShell = receive(
+          "shell-missing-capsule",
+          shell.remoteCommand,
+          undefined,
+          origin,
+          {},
+          false,
         );
-        expect(delegate.status, delegate.stderr).toBe(0);
-        for (const [name, args, expectedArgs] of [
-          ["full-suite", delegate.stdout.split("\0").slice(2, -1), ["pnpm", "test"]],
-          [
-            "changed-gate",
-            ["run", "--provider", provider, ...buildChangedCheckCrabboxArgs().slice(2)],
-            ["pnpm", "check:changed"],
-          ],
-        ] as const) {
-          const delegated = runSender("direct", [...args]);
-          const accepted = receive(name, delegated.remoteCommand, delegated.bundle);
-          expect(accepted.result.status, failureDetail(accepted.result)).toBe(0);
-          expect(accepted.events.map(({ phase }) => phase)).toEqual(["install", "payload"]);
-          expect(accepted.events[0]).toMatchObject({
-            input: "unstaged\n",
-            packageManager: "pnpm@12.1.0",
-            ci: "true",
-          });
-          expect(accepted.events[1]?.args).toEqual(expectedArgs);
-          expect(accepted.result.stdout).toBe(
-            `${JSON.stringify({ input: "unstaged\n", args: expectedArgs })}\n`,
-          );
-          const failed = receive(
-            `${name}-install-failed`,
-            delegated.remoteCommand,
-            delegated.bundle,
-            origin,
-            { TESTBOX_FIXTURE_INSTALL_EXIT: "43" },
-          );
-          expect(failed.result.status, failureDetail(failed.result)).toBe(43);
-          expect(failed.result.stdout).toBe("");
-          expect(failed.events.map(({ phase }) => phase)).toEqual(["install"]);
-        }
+        expect(rejectedShell.result.status, failureDetail(rejectedShell.result)).toBe(2);
+        expect(rejectedShell.result.stdout).toBe("");
+        expect(existsSync(path.join(rejectedShell.receiver, ".git"))).toBe(false);
         for (const extraEnv of [
           { OPENCLAW_FAKE_CRABBOX_SELECTION_COUNT_DELTA: "1" },
           { OPENCLAW_FAKE_CRABBOX_SELECTION_UNKNOWN_PATH: "1" },
@@ -5089,7 +5225,7 @@ run_remote_testbox_full_test_gate tests unused.log fixture`,
   it.runIf(process.platform === "win32")(
     "selects a real source capsule through a Crabbox .cmd shim",
     () => {
-      const root = makeTempDir(tempDirs, "openclaw-capsule-cmd-");
+      const root = invocationLogTempDirs.make("openclaw-capsule-cmd-");
       const producer = path.join(root, "producer");
       const capturedBundle = path.join(root, "captured.bundle");
       const invocationLog = path.join(root, "invocations.jsonl");
@@ -5217,8 +5353,11 @@ run_remote_testbox_full_test_gate tests unused.log fixture`,
     expect(remoteCommand.indexOf("node --version >&2 || return 1")).toBeLessThan(
       remoteCommand.indexOf("node -e"),
     );
+    expect(remoteCommand.indexOf("corepack enable --install-directory")).toBeLessThan(
+      remoteCommand.indexOf("node -e"),
+    );
     expect(remoteCommand.indexOf("node -e")).toBeLessThan(
-      remoteCommand.indexOf("corepack enable --install-directory"),
+      remoteCommand.indexOf("pnpm --version >&2"),
     );
     expectMacosJsBootstrap(
       remoteCommand,

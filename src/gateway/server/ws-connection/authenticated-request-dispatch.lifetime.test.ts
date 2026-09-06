@@ -13,7 +13,7 @@ afterEach(() => {
   vi.resetModules();
 });
 
-describe.sequential("authenticated request completion", () => {
+describe("authenticated request completion", { concurrent: false }, () => {
   it.for([
     "lazy import",
     "start scheduler",

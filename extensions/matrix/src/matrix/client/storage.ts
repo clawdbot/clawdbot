@@ -6,7 +6,10 @@ import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { loadJsonFile } from "openclaw/plugin-sdk/json-store";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
-import { resolveMatrixAccountStorageRoot } from "../../storage-paths.js";
+import {
+  isMatrixActiveTokenRootDirectory,
+  resolveMatrixAccountStorageRoot,
+} from "../../storage-paths.js";
 import {
   MATRIX_IDB_SNAPSHOT_FILENAME,
   MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME,
@@ -207,6 +210,11 @@ function resolvePreferredMatrixStorageRoot(params: {
       continue;
     }
     if (entry.name === params.canonicalTokenHash) {
+      continue;
+    }
+    // Sibling reuse is only defined for exact token-hash roots. Filtering here
+    // keeps archived SQLite state out of compatibility checks and scoring.
+    if (!isMatrixActiveTokenRootDirectory(entry.name)) {
       continue;
     }
     const candidateRootDir = path.join(parentDir, entry.name);

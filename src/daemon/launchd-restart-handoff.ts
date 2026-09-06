@@ -32,28 +32,11 @@ const RELOAD_BOOTOUT_WAIT_DELAY_SECONDS = 1;
 const RELOAD_BOOTOUT_WAIT_COUNT = LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS + 15;
 const RELOAD_BOOTSTRAP_RETRY_COUNT = 15;
 
-type LaunchdRestartLogEnv = {
-  HOME?: string;
-  USERPROFILE?: string;
-  OPENCLAW_STATE_DIR?: string;
-  OPENCLAW_PROFILE?: string;
-};
-
 function resolveGuiDomain(): string {
   if (typeof process.getuid !== "function") {
     return "gui/501";
   }
   return `gui/${process.getuid()}`;
-}
-
-function collectRestartLogEnv(env?: Record<string, string | undefined>): LaunchdRestartLogEnv {
-  const source = { ...process.env, ...env };
-  return {
-    HOME: source.HOME,
-    USERPROFILE: source.USERPROFILE,
-    OPENCLAW_STATE_DIR: source.OPENCLAW_STATE_DIR,
-    OPENCLAW_PROFILE: source.OPENCLAW_PROFILE,
-  };
 }
 
 function resolveLaunchdRestartTarget(
@@ -73,7 +56,7 @@ function resolveLaunchdRestartTarget(
 
 function buildLaunchdRestartScript(
   mode: LaunchdHandoffMode,
-  restartLogEnv: LaunchdRestartLogEnv,
+  restartLogEnv: NodeJS.ProcessEnv,
   label: string,
 ): string {
   // The detached shell waits for the caller before touching launchd so the
@@ -249,7 +232,7 @@ function scheduleDetachedLaunchdHandoff(params: {
     typeof params.waitForPid === "number" && Number.isFinite(params.waitForPid)
       ? Math.floor(params.waitForPid)
       : 0;
-  const restartLogEnv = collectRestartLogEnv(params.env);
+  const restartLogEnv = { ...process.env, ...params.env };
   // Keep the caller's executable search path: service overrides must not redirect
   // the detached control shell's launchctl, as with the previous host sanitizer.
   const restartEnv = resolveServiceManagerEnv(

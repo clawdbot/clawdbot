@@ -514,13 +514,13 @@ describe("runMessageAction plugin dispatch", () => {
 
       expect(mocks.callGatewayLeastPrivilege).not.toHaveBeenCalled();
       const executeCall = readMockCallArg(mocks.executeSendAction, "execute send call");
+      const context = readRecordField(executeCall, "ctx", "execute send context");
       expectRecordFields(
-        readRecordField(executeCall, "ctx", "execute send context"),
+        readRecordField(context, "input", "message action input"),
         {
-          forceCoreDelivery: true,
           requireQueuePersistence: true,
         },
-        "execute send context",
+        "message action input",
       );
       expectRecordFields(result, { handledBy: "core" }, "result");
     });

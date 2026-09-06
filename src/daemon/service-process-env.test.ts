@@ -102,11 +102,15 @@ describe("resolveServiceManagerEnv", () => {
         HOME: "/first",
         path: "last",
       };
-      expect(resolveServiceManagerEnv(source)).toEqual({ HOME: "/first" });
+      expect(resolveServiceManagerEnv(source)).toEqual(
+        platform === "win32" ? { HOME: "/first" } : { Path: "later", HOME: "/first" },
+      );
       expect(source.Path).toBe("later");
       expect(
         resolveServiceManagerEnv({ Path: "mixed", path: "last", SystemRoot: "C:\\Windows" }),
-      ).toEqual(platform === "win32" ? { Path: "mixed", SystemRoot: "C:\\Windows" } : {});
+      ).toEqual(
+        platform === "win32" ? { Path: "mixed", SystemRoot: "C:\\Windows" } : { Path: "mixed" },
+      );
     },
   );
 

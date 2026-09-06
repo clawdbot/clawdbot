@@ -13,38 +13,43 @@ import {
 import { makeSnapshot, restoreRedactedValues } from "./redact-snapshot.test-helpers.js";
 
 describe("restoreRedactedValues", () => {
-  it.each<{ name: string; field: string; hints: ConfigUiHints }>([
-    { name: "known URL path", field: "baseUrl", hints: {} },
-    {
-      name: "known URL path marked non-sensitive",
-      field: "baseUrl",
-      hints: { "channels.proofchat.baseUrl": { sensitive: false } },
-    },
-    {
-      name: "URL hint marked non-sensitive",
-      field: "endpoint",
-      hints: { "channels.proofchat.endpoint": { sensitive: false, tags: ["url-secret"] } },
-    },
-    {
-      name: "wildcard URL hint marked non-sensitive",
-      field: "endpoint",
-      hints: { "channels.proofchat.*": { sensitive: false, tags: ["url-secret"] } },
-    },
-  ])("round-trips redacted URLs with $name", ({ field, hints }) => {
-    const original = {
-      channels: { proofchat: { [field]: "https://synthetic:credential@example.test/v1" } },
-    };
-    const redacted = redactConfigSnapshot(makeSnapshot(original), hints);
-    expect(redacted.config).toEqual({ channels: { proofchat: { [field]: REDACTED_SENTINEL } } });
-    expect(restoreRedactedValues_orig(redacted.config, original, hints)).toEqual({
-      ok: true,
-      result: original,
+  describe.each([
+    { encoding: "userinfo", url: "https://synthetic:credential@example.test/v1" },
+    { encoding: "query", url: "https://example.test/v1?token=synthetic-query" },
+  ])("URL round trips with $encoding", ({ url }) => {
+    it.each<{ name: string; field: string; hints: ConfigUiHints }>([
+      { name: "known URL path", field: "baseUrl", hints: {} },
+      {
+        name: "known URL path marked non-sensitive",
+        field: "baseUrl",
+        hints: { "channels.proofchat.baseUrl": { sensitive: false } },
+      },
+      {
+        name: "URL hint marked non-sensitive",
+        field: "endpoint",
+        hints: { "channels.proofchat.endpoint": { sensitive: false, tags: ["url-secret"] } },
+      },
+      {
+        name: "wildcard URL hint marked non-sensitive",
+        field: "endpoint",
+        hints: { "channels.proofchat.*": { sensitive: false, tags: ["url-secret"] } },
+      },
+    ])("round-trips redacted URLs with $name", ({ field, hints }) => {
+      const original = {
+        channels: { proofchat: { [field]: url } },
+      };
+      const redacted = redactConfigSnapshot(makeSnapshot(original), hints);
+      expect(redacted.config).toEqual({ channels: { proofchat: { [field]: REDACTED_SENTINEL } } });
+      expect(restoreRedactedValues_orig(redacted.config, original, hints)).toEqual({
+        ok: true,
+        result: original,
+      });
+      const safe = { channels: { proofchat: { [field]: "https://example.test/v1" } } };
+      expect(redactConfigSnapshot(makeSnapshot(safe), hints).config).toEqual(safe);
+      expect(
+        restoreRedactedValues_orig(redacted.config, { channels: { proofchat: {} } }, hints).ok,
+      ).toBe(false);
     });
-    const safe = { channels: { proofchat: { [field]: "https://example.test/v1" } } };
-    expect(redactConfigSnapshot(makeSnapshot(safe), hints).config).toEqual(safe);
-    expect(
-      restoreRedactedValues_orig(redacted.config, { channels: { proofchat: {} } }, hints).ok,
-    ).toBe(false);
   });
 
   it("restores sentinel values from original config", () => {

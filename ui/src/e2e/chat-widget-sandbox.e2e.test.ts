@@ -20,6 +20,10 @@ import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import {
+  installWidgetPromptDiagnostics,
+  retainWidgetPromptFailure,
+} from "./chat-widget-sandbox.diagnostics.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -204,6 +208,7 @@ suite.define(() => {
       });
       expect(await authenticated.text()).toBe(html);
 
+      let completed = false;
       await suite.withPage(
         {
           viewport: { width: 1600, height: 1000 },
@@ -211,7 +216,8 @@ suite.define(() => {
           permissions: ["local-network-access"],
           recordVideo: { dir: suite.artifactDir, size: { width: 1600, height: 1000 } },
         },
-        async ({ page }) => {
+        async ({ page, context }) => {
+          await installWidgetPromptDiagnostics(context);
           const storageKey = controlUiBundledSettingsStorageKey(proxy.baseUrl);
           await page.addInitScript(
             ({ key, session }) => {
@@ -426,6 +432,12 @@ suite.define(() => {
               2,
             ),
           );
+          completed = true;
+        },
+        async ({ page }) => {
+          if (!completed) {
+            await retainWidgetPromptFailure(page, suite.artifactDir);
+          }
         },
       );
     } finally {

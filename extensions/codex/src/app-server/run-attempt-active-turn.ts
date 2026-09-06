@@ -214,6 +214,7 @@ export function activateCodexAttemptTurn(
     },
   );
   if (isTerminalTurnStatus(turn.turn.status)) {
+    projectorRef.current.settlement.terminalReceipt = turn.turn;
     state.terminalTurnNotificationQueued = true;
     deadlines.beginSettlement(Date.now());
   }

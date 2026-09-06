@@ -6,6 +6,7 @@ import type { Reporter, TestModule, TestProject, TestSpecification, Vitest } fro
 function projectIdentity(project: TestProject) {
   return {
     name: project.name,
+    namePrefix: project.namePrefix,
     root: project.config.root,
     config: project.vite.config.configFile,
     pool: project.config.pool,
@@ -88,7 +89,10 @@ export default class VitestReportCaptureReporter implements Reporter {
     assert(
       projects.every(
         (project, index) =>
-          project.name && project.config && !loadedProjects[index]!.isBrowserEnabled(),
+          project.name &&
+          typeof project.namePrefix === "string" &&
+          project.config &&
+          !loadedProjects[index]!.isBrowserEnabled(),
       ),
       "Multi-invocation JSON requires named file-based Node projects; run inline/browser configurations separately.",
     );

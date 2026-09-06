@@ -1,5 +1,3 @@
-// Verifies channel config metadata collection stays total on untrusted manifest schemas.
-
 import { describe, expect, it } from "vitest";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -86,6 +84,22 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
       );
       expect(channels[0]).toMatchObject({ label: owner, schemaPluginId: owner });
       expect(channels[0]?.configSchema?.properties).toMatchObject(schema.properties);
+      const hints = channels[0]?.configUiHints;
+      for (const path of [
+        "core",
+        "plus",
+        "shared",
+        "accounts.*.core",
+        "accounts.*.plus",
+        "entries[].core",
+        "entries[].plus",
+      ]) {
+        expect(hints?.[path]?.sensitive, path).toBe(true);
+      }
+      expect(hints?.endpoint).toMatchObject({ sensitive: false, label: owner });
+      expect(hints?.endpoint?.tags).toEqual(
+        owner === "core" ? ["url-secret", "inactive-tag"] : ["selected-tag", "url-secret"],
+      );
       const { uiHints } = buildConfigSchemaCore({ channels });
       expect(uiHints["channels.proofchat.endpoint"]?.label).toBe(owner);
       expect(uiHints["channels.proofchat.endpoint"]?.tags).toContain("url-secret");

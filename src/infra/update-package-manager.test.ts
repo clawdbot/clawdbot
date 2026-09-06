@@ -59,13 +59,7 @@ describe("resolveUpdateBuildManager", () => {
         }
         throw new Error(`Unexpected command ${key}`);
       };
-      const result = await resolveUpdateBuildManager(
-        runCommand,
-        root,
-        5000,
-        undefined,
-        "require-preferred",
-      );
+      const result = await resolveUpdateBuildManager(runCommand, root, 5000);
       expect(result.kind).toBe("resolved");
       if (result.kind !== "resolved") {
         throw new Error(result.reason);
@@ -92,13 +86,7 @@ describe("resolveUpdateBuildManager", () => {
       prefix = argv[3] ?? "";
       return { stdout: "", stderr: "", code: failure === "install" ? 1 : 0 };
     };
-    const result = await resolveUpdateBuildManager(
-      runCommand,
-      root,
-      5000,
-      undefined,
-      "require-preferred",
-    );
+    const result = await resolveUpdateBuildManager(runCommand, root, 5000);
     expect(result).toEqual({
       kind: "missing-required",
       preferred: "pnpm",

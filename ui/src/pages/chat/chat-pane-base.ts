@@ -296,11 +296,14 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
         return undefined;
       }
       const identity = resolveUiConversationIdentity(state, state.sessionKey);
-      const session = !identity.agentId ? getAcceptedChatHistorySession(state) : undefined;
+      if (identity.agentId) {
+        return identity;
+      }
+      const session = getAcceptedChatHistorySession(state);
       // Raw retained panes follow their accepted history owner, never the selected assistant.
       return session && parseAgentSessionKey(session.key)
         ? resolveUiConversationIdentity(state, session.key)
-        : identity;
+        : undefined;
     },
   });
   protected readonly questionPromptState = createQuestionPromptState(() => {

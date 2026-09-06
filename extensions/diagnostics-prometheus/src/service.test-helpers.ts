@@ -25,7 +25,12 @@ export function baseEvent(): Pick<DiagnosticEventPayload, "seq" | "ts"> {
   return { seq: 1, ts: 1700000000000 };
 }
 
-export function createMetricsHarness() {
+export function createMetricsHarness(
+  getRuntimeIdentity?: NonNullable<
+    OpenClawPluginServiceContext["internalDiagnostics"]
+  >["getRuntimeIdentity"],
+  config: OpenClawPluginServiceContext["config"] = {},
+) {
   const exporter = createDiagnosticsPrometheusExporter();
   let listener:
     | ((
@@ -35,6 +40,7 @@ export function createMetricsHarness() {
       ) => void)
     | undefined;
   const internalDiagnostics: TrustedExporterInternalDiagnostics = {
+    ...(getRuntimeIdentity ? { getRuntimeIdentity } : {}),
     emit() {},
     onEvent(nextListener) {
       listener = nextListener;
@@ -44,8 +50,8 @@ export function createMetricsHarness() {
     },
     reportExporterHealth() {},
   };
-  exporter.service.start({
-    config: {},
+  const context: OpenClawPluginServiceContext = {
+    config,
     stateDir: "/tmp/openclaw-prometheus-test",
     logger: {
       info() {},
@@ -54,13 +60,16 @@ export function createMetricsHarness() {
       debug() {},
     },
     internalDiagnostics,
-  });
+  };
+  const start = () => exporter.service.start(context);
+  start();
   return {
     handler: exporter.handler,
     record(event: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) {
       expectDefined(listener, "Prometheus diagnostics listener")(event, metadata, {});
     },
     render: exporter.render,
+    start,
     stop: () => exporter.service.stop?.(),
   };
 }

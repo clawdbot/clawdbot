@@ -3735,6 +3735,37 @@ describe("launchd install", () => {
     expect(state.launchctlCalls).toStrictEqual([]);
   });
 
+  it("restarts an unloaded LaunchAgent synchronously for a detached update helper that inherits only the configured label", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.serviceLoaded = false;
+    state.kickstartError = "Could not find service";
+    state.kickstartFailuresRemaining = 1;
+
+    const result = await withProcessEnv(
+      {
+        LAUNCH_JOB_LABEL: undefined,
+        LAUNCH_JOB_NAME: undefined,
+        XPC_SERVICE_NAME: undefined,
+        OPENCLAW_SERVICE_MARKER: undefined,
+        OPENCLAW_SERVICE_KIND: undefined,
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+      },
+      async () => restartLaunchAgent(launchAgentControlFixture(env, { preserveDefinition: true })),
+    );
+
+    expect(result).toEqual({ outcome: "completed" });
+    expect(launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff).not.toHaveBeenCalled();
+    expect(launchctlCommandNames()).toEqual([
+      "enable",
+      "kickstart",
+      "enable",
+      "bootstrap",
+      "kickstart",
+    ]);
+    expect(state.kickstartFailuresRemaining).toBe(0);
+    expect(state.serviceLoaded).toBe(true);
+  });
+
   it("does not hand restart off for unrelated inherited XPC service names", async () => {
     const env = createDefaultLaunchdEnv();
 

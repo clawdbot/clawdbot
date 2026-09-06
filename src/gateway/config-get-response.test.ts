@@ -98,11 +98,7 @@ describe("config.get response cache", () => {
             proofchat: {
               schema: {
                 type: "object",
-                properties: {
-                  core: { type: "string" },
-                  plus: { type: "string" },
-                  visible: { type: "string" },
-                },
+                properties: { [id]: { type: "string" } },
               },
               uiHints: { [id]: { sensitive: true } },
             },

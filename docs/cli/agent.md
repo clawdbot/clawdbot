@@ -69,6 +69,10 @@ The timeout defaults to 600 seconds for `agent exec`; this does not change the e
 
 If cleanup fails after a run error or timeout, the original result and exit code are preserved and the cleanup failure is reported on stderr. A cleanup failure after a successful run exits `1`. If runtime cleanup cannot be confirmed, exec retains temporary state and any retained-state lock. Stop the remaining work before using that state again.
 
+Configured sandboxes retain their [configured lifetime](/gateway/sandboxing). Exec waits for local transports and per-command backend cleanup; completing the turn does not certify that remote descendants have exited.
+
+OpenClaw's `exec` tool requires process-tree cleanup for host commands in these one-shot runs. Its host PTY requests fall back to ordinary pipes with a warning when native PTY cannot provide that guarantee. Use a Gateway-backed agent session for host commands that require a terminal.
+
 Plain output writes only the final assistant text to stdout. Diagnostics use stderr. `--json` reserves stdout for this stable envelope:
 
 ```json

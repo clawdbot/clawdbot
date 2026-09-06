@@ -29,7 +29,7 @@ import { readExecApprovalsSnapshot, saveExecApprovals } from "../infra/exec-appr
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { readAgentProvenance, recordAgentProvenance } from "../state/agent-provenance.js";
-import { writeConfigMachineState } from "../state/config-machine-state.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
   listOpenClawRegisteredAgentDatabases,
   registerOpenClawAgentDatabase,
