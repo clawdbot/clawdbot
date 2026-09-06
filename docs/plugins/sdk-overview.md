@@ -592,6 +592,13 @@ turn runs; the Plugin SDK only constrains the target session, plugin-owned
 naming, and cleanup. Use `api.runtime.tasks.managedFlows` inside the scheduled
 turn when the work itself needs durable multi-step Task Flow state.
 
+Within session extensions, `openclaw/plugin-sdk/agent-sessions` provides the host's
+model-selection helpers. Exact provider/model IDs take precedence over case-insensitive
+matches; ambiguous references need exact provider and model IDs. Pass the provider
+separately when distinct identities share a combined reference. Human-name
+matching, alias/date version selection, and case-insensitive glob scopes remain
+available.
+
 Session extension SDK and supported TypeBox imports share the host's modules.
 
 The contracts intentionally split authority:

@@ -181,7 +181,6 @@ function buildCacheKey(params: {
   onlyPluginIds?: string[];
   includeSetupOnlyChannelPlugins?: boolean;
   forceSetupOnlyChannelPlugins?: boolean;
-  requireSetupEntryForSetupOnlyChannelPlugins?: boolean;
   channelPluginLoadIntent: ChannelPluginLoadIntent;
   artifactPreference: PluginRuntimeArtifactPreference;
   resolveRawConfigEnvVars?: boolean;
@@ -221,10 +220,6 @@ function buildCacheKey(params: {
   const setupOnlyKey = params.includeSetupOnlyChannelPlugins === true ? "setup-only" : "runtime";
   const setupOnlyModeKey =
     params.forceSetupOnlyChannelPlugins === true ? "force-setup" : "normal-setup";
-  const setupOnlyRequirementKey =
-    params.requireSetupEntryForSetupOnlyChannelPlugins === true
-      ? "require-setup-entry"
-      : "allow-full-fallback";
   const rawConfigEnvMode =
     params.resolveRawConfigEnvVars === true ? "resolve-raw-env" : "runtime-config";
   const moduleLoadMode = params.loadModules === false ? "manifest-only" : "load-modules";
@@ -242,7 +237,7 @@ function buildCacheKey(params: {
       capabilityCatalogIdentity: params.capabilityCatalogIdentity,
       allowProcessHomeSessionCatalogs: params.allowProcessHomeSessionCatalogs !== false,
     },
-  )}::${serializePluginIdScope(params.onlyPluginIds)}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${params.channelPluginLoadIntent}::${params.artifactPreference}::${rawConfigEnvMode}::${moduleLoadMode}::${discoveryMode}::${params.runtimeSubagentMode ?? "default"}::${params.runtimeBindingIdentity ?? "{}"}::${params.pluginSdkResolution ?? "auto"}::${JSON.stringify(params.coreGatewayMethodNames ?? [])}::${activationMode}`;
+  )}::${serializePluginIdScope(params.onlyPluginIds)}::${setupOnlyKey}::${setupOnlyModeKey}::${params.channelPluginLoadIntent}::${params.artifactPreference}::${rawConfigEnvMode}::${moduleLoadMode}::${discoveryMode}::${params.runtimeSubagentMode ?? "default"}::${params.runtimeBindingIdentity ?? "{}"}::${params.pluginSdkResolution ?? "auto"}::${JSON.stringify(params.coreGatewayMethodNames ?? [])}::${activationMode}`;
   return createHash("sha256").update(cacheIdentity).digest("hex");
 }
 
@@ -332,8 +327,6 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const onlyPluginIds = normalizePluginIdScope(options.onlyPluginIds);
   const includeSetupOnlyChannelPlugins = options.includeSetupOnlyChannelPlugins === true;
   const forceSetupOnlyChannelPlugins = options.forceSetupOnlyChannelPlugins === true;
-  const requireSetupEntryForSetupOnlyChannelPlugins =
-    options.requireSetupEntryForSetupOnlyChannelPlugins === true;
   const channelPluginLoadIntent = options.channelPluginLoadIntent ?? "full";
   const artifactPreference = resolvePluginRuntimeArtifactPreference(
     options.preferBuiltPluginArtifacts,
@@ -388,7 +381,6 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     onlyPluginIds,
     includeSetupOnlyChannelPlugins,
     forceSetupOnlyChannelPlugins,
-    requireSetupEntryForSetupOnlyChannelPlugins,
     channelPluginLoadIntent,
     artifactPreference,
     resolveRawConfigEnvVars: options.resolveRawConfigEnvVars,
@@ -420,7 +412,6 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     onlyPluginIds,
     includeSetupOnlyChannelPlugins,
     forceSetupOnlyChannelPlugins,
-    requireSetupEntryForSetupOnlyChannelPlugins,
     channelPluginLoadIntent,
     artifactPreference,
     shouldActivate: options.activate !== false,

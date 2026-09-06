@@ -531,3 +531,32 @@ fn ice_credentials_do_not_repeat_with_noncryptographic_rng_state() {
         "ICE credentials must not repeat when noncryptographic RNG state repeats"
     );
 }
+
+#[test]
+fn panic_retires_engine_without_losing_description() {
+    let fixture = Fixture::new(&["198.51.100.20:50000".parse().unwrap()], Scenario::V4);
+    assert_eq!(fixture.answer_result, 0);
+    let description = || {
+        let mut length = 0;
+        let bytes = unsafe { openclaw_rtc_description(fixture.client.0, &mut length) };
+        assert!(!bytes.is_null());
+        unsafe { std::slice::from_raw_parts(bytes, length).to_vec() }
+    };
+    let expected = description();
+    assert!(!expected.is_empty());
+    assert_eq!(
+        unsafe {
+            operate(fixture.client.0, |_, _| {
+                panic!("fixture RTC operation failed")
+            })
+        },
+        -1
+    );
+    assert_eq!(unsafe { openclaw_rtc_timeout(fixture.client.0) }, -1);
+    let mut address = OpenClawRTCAddress::default();
+    assert_eq!(
+        unsafe { openclaw_rtc_remote_address(fixture.client.0, 0, &mut address) },
+        -1
+    );
+    assert_eq!(description(), expected);
+}

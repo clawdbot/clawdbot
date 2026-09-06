@@ -40,7 +40,6 @@ export type PluginLoadOptions = {
   onlyPluginIds?: string[];
   includeSetupOnlyChannelPlugins?: boolean;
   forceSetupOnlyChannelPlugins?: boolean;
-  requireSetupEntryForSetupOnlyChannelPlugins?: boolean;
   /** Select full runtime registration or the lightweight unconfigured-channel setup path. */
   channelPluginLoadIntent?: ChannelPluginLoadIntent;
   /** Built hosts prefer canonical checkout artifacts by default; false retains source execution. */

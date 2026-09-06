@@ -15,6 +15,7 @@ import {
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import {
   resolveEffectiveEnableState,
+  resolveEffectivePluginActivationState,
   type NormalizedPluginsConfig,
   type PluginActivationConfigSource,
   type PluginActivationState,
@@ -27,7 +28,12 @@ import {
   resetGlobalHookRunner,
 } from "./hook-runner-global.js";
 import { collectPluginManifestCompatCodes } from "./installed-plugin-index-record-builder.js";
-import { createPluginRecord } from "./loader-records.js";
+import type { PluginLoadCacheContext } from "./loader-load-context.js";
+import {
+  createPluginRecord,
+  formatAutoEnabledActivationReason,
+  markPluginActivationDisabled,
+} from "./loader-records.js";
 import type { PluginLoadOptions, PluginRuntimeSubagentMode } from "./loader-types.js";
 import {
   isPluginManifestInstallOwnerAmbiguous,
@@ -35,6 +41,7 @@ import {
 } from "./manifest-install-owner.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -135,14 +142,14 @@ export function resolveAuthorizedDreamingSidecar(params: {
   return selectedEnableState.enabled ? { engineId, selectedMemoryPluginId } : null;
 }
 
-export function isAuthorizedDreamingSidecarPlugin(params: {
+function isAuthorizedDreamingSidecarPlugin(params: {
   sidecar: AuthorizedDreamingSidecar | null;
   pluginId: string;
 }): boolean {
   return params.sidecar?.engineId === params.pluginId;
 }
 
-export function matchesScopedPluginOrDreamingSidecar(params: {
+function matchesScopedPluginOrDreamingSidecar(params: {
   onlyPluginIdSet: ReadonlySet<string> | null;
   pluginId: string;
   sidecar: AuthorizedDreamingSidecar | null;
@@ -273,7 +280,7 @@ function isEmptyPluginConfigJsonSchema(schema: Record<string, unknown>): boolean
 }
 
 /** Builds the common manifest-backed record shape used by runtime and CLI loaders. */
-export function createManifestPluginRecord(params: {
+function createManifestPluginRecord(params: {
   candidate: PluginCandidate;
   manifestRecord: PluginManifestRecord;
   enabled: boolean;
@@ -313,15 +320,95 @@ export function createManifestPluginRecord(params: {
   });
 }
 
-export function applyPluginManifestRecordDetails(
-  record: PluginRecord,
-  manifestRecord: PluginManifestRecord,
-): void {
+/** Prepares one candidate; import and registration policy stays with each loader. */
+export function preparePluginLoadRecord(params: {
+  candidate: PluginCandidate;
+  manifestRecord: PluginManifestRecord;
+  context: Pick<
+    PluginLoadCacheContext,
+    "cfg" | "normalized" | "activationSource" | "autoEnabledReasons"
+  >;
+  onlyPluginIdSet: ReadonlySet<string> | null;
+  dreamingSidecar: AuthorizedDreamingSidecar | null;
+  registry: Pick<PluginRegistry, "plugins">;
+  seenIds: ReadonlyMap<string, PluginRecord["origin"]>;
+}) {
+  const { candidate, manifestRecord, context, dreamingSidecar } = params;
+  const pluginId = manifestRecord.id;
+  const policyId = normalizePluginPolicyId(pluginId);
+  // Manifest filtering scopes diagnostics; this final guard also blocks imports
+  // and registration outside the requested snapshot.
+  if (
+    !matchesScopedPluginOrDreamingSidecar({
+      onlyPluginIdSet: params.onlyPluginIdSet,
+      pluginId,
+      sidecar: dreamingSidecar,
+    })
+  ) {
+    return null;
+  }
+  const isDreamingSidecar = isAuthorizedDreamingSidecarPlugin({
+    sidecar: dreamingSidecar,
+    pluginId,
+  });
+  const activationState = isDreamingSidecar
+    ? {
+        enabled: true,
+        activated: true,
+        explicitlyEnabled: false,
+        source: "auto" as const,
+        reason: `dreaming sidecar for selected memory slot "${dreamingSidecar?.selectedMemoryPluginId ?? ""}"`,
+      }
+    : resolveEffectivePluginActivationState({
+        id: pluginId,
+        origin: candidate.origin,
+        config: context.normalized,
+        rootConfig: context.cfg,
+        enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
+        channelIds: manifestRecord.channels,
+        activationSource: context.activationSource,
+        autoEnabledReason: formatAutoEnabledActivationReason(context.autoEnabledReasons[pluginId]),
+      });
+  const existingOrigin = params.seenIds.get(pluginId);
+  if (existingOrigin) {
+    const duplicate = createManifestPluginRecord({
+      candidate,
+      manifestRecord,
+      enabled: false,
+      activationState,
+    });
+    duplicate.status = "disabled";
+    duplicate.error = `overridden by ${existingOrigin} plugin`;
+    markPluginActivationDisabled(duplicate, duplicate.error);
+    params.registry.plugins.push(duplicate);
+    return null;
+  }
+  // Activation carries auto-enable provenance; enablement independently controls loading.
+  // An auto-enabled reason can activate a record without enabling its module load.
+  const enableState = isDreamingSidecar
+    ? { enabled: true }
+    : resolveEffectiveEnableState({
+        id: pluginId,
+        origin: candidate.origin,
+        config: context.normalized,
+        rootConfig: context.cfg,
+        enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
+        channelIds: manifestRecord.channels,
+        activationSource: context.activationSource,
+      });
+  const entry = context.normalized.entries[policyId];
+  const record = createManifestPluginRecord({
+    candidate,
+    manifestRecord,
+    enabled: enableState.enabled,
+    activationState,
+  });
   record.kind = manifestRecord.kind;
   record.configUiHints = manifestRecord.configUiHints;
   record.configJsonSchema = manifestRecord.configSchema;
   // Manifest ownership survives rollback of executable registrations.
   record.commandAliases = manifestRecord.commandAliases;
+  return { pluginId, policyId, isDreamingSidecar, activationState, enableState, entry, record };
 }
 
 export function applyManifestSnapshotMetadata(

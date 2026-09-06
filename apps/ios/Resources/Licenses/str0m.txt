@@ -1,6 +1,6 @@
 str0m and native realtime audio dependency notices
 
-The component index identifies the versions pinned by Cargo.lock. Build-time dependencies are included conservatively. Identical license texts are reproduced once and referenced by their identifiers below. The Rust standard library notices correspond to nightly-2026-08-31.
+The component index identifies the versions pinned by Cargo.lock. Build-time dependencies are included conservatively. Identical license texts are reproduced once and referenced by their identifiers below. The Rust standard library notices correspond to nightly-2026-09-05.
 
 COMPONENT INDEX
 
@@ -1685,6 +1685,24 @@ License text: L119
 URL: https://crates.io/crates/hermit-abi/0.5.2
 
 Authors: Stefan Lankes
+
+License: MIT OR Apache-2.0
+
+Notices:
+
+LICENSE-APACHE
+
+License text: L005
+
+LICENSE-MIT
+
+License text: L039
+
+📦 hermit-abi-0.5.3
+
+URL: https://crates.io/crates/hermit-abi/0.5.3
+
+Authors:
 
 License: MIT OR Apache-2.0
 
