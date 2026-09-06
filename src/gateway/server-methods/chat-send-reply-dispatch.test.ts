@@ -115,9 +115,12 @@ describe("createChatSendReplyDispatch", () => {
 
   it("captures visible replies, promotes tool media, and marks blocked turns", async () => {
     const markBlocked = vi.fn();
+    const onCommandBlock = vi.fn();
     const dispatch = createChatSendReplyDispatch({
       accountId: undefined,
       isAgentRunStarted: () => false,
+      isRunCurrent: () => true,
+      onCommandBlock,
       logGateway: { warn: vi.fn() } as never,
       session: {
         agentId: "main",
@@ -142,9 +145,10 @@ describe("createChatSendReplyDispatch", () => {
       mediaUrl: "https://example.test/audio.mp3",
     });
     dispatcher.sendFinalReply({ text: "done" });
-    dispatcher.markComplete();
     await dispatcher.waitForIdle();
 
+    expect(onCommandBlock).toHaveBeenCalledExactlyOnceWith("blocked");
+    dispatcher.markComplete();
     expect(markBlocked).toHaveBeenCalledOnce();
     expect(dispatch.deliveredReplies).toEqual([
       { payload: blockedPayload, kind: "block" },
@@ -157,6 +161,56 @@ describe("createChatSendReplyDispatch", () => {
       },
       { payload: { text: "done" }, kind: "final" },
     ]);
+  });
+
+  it("publishes ordered command text while pending and suppresses hidden or retired output", async () => {
+    let current = true;
+    let agentRunStarted = false;
+    const onCommandBlock = vi.fn();
+    const dispatch = createChatSendReplyDispatch({
+      accountId: undefined,
+      isAgentRunStarted: () => agentRunStarted,
+      isRunCurrent: () => current,
+      onCommandBlock,
+      logGateway: { warn: vi.fn() } as never,
+      session: {
+        agentId: "main",
+        backingSessionId: undefined,
+        cfg: {},
+        clientRunId: "run-command",
+        sessionKey: "agent:main:main",
+        sessionLoadOptions: undefined,
+      },
+      userTurnRecorder: { markBlocked: vi.fn() },
+    });
+    const dispatcher = createReplyDispatcher(dispatch.dispatcherOptions);
+    dispatcher.sendBlockReply({ text: "[[reply_to_current]] First instruction" });
+    await dispatcher.waitForIdle();
+    expect(onCommandBlock).toHaveBeenLastCalledWith("First instruction");
+    dispatcher.sendBlockReply({ text: "Second instruction" });
+    await dispatcher.waitForIdle();
+    expect(onCommandBlock).toHaveBeenLastCalledWith("First instruction\n\nSecond instruction");
+
+    onCommandBlock.mockClear();
+    dispatcher.sendBlockReply({ text: "hidden reasoning", isReasoning: true });
+    dispatcher.sendBlockReply({ text: "NO_REPLY" });
+    dispatcher.sendBlockReply({ text: "ANNOUNCE_SKIP" });
+    dispatcher.sendBlockReply({ text: "side answer", btw: { question: "side question" } });
+    await dispatcher.waitForIdle();
+    expect(onCommandBlock).not.toHaveBeenCalled();
+
+    current = false;
+    dispatcher.sendBlockReply({ text: "retired command" });
+    await dispatcher.waitForIdle();
+    expect(onCommandBlock).not.toHaveBeenCalled();
+
+    current = true;
+    agentRunStarted = true;
+    dispatcher.sendBlockReply({ text: "native agent stream" });
+    dispatcher.sendFinalReply({ text: "native final" });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+    expect(onCommandBlock).not.toHaveBeenCalled();
   });
 
   it("keeps every capture and media side effect behind beforeDeliver cancellation", async () => {
