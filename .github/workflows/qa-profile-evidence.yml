@@ -635,6 +635,7 @@ jobs:
           OPENCLAW_QA_CREDENTIAL_ROLE: ci
           OPENCLAW_QA_CREDENTIAL_SOURCE: convex
           OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF: "1"
+          OPENCLAW_E2E_USE_PREBUILT_DIST: "1"
         working-directory: selected
         run: |
           set -euo pipefail

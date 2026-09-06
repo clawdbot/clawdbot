@@ -488,8 +488,8 @@ function flowSuitePartitionOutputDir(outputDir: string, partition: string) {
   return path.join(suitePartitionOutputDir(outputDir, "flow"), partition);
 }
 
-function partitionSharedFlowScenarios(
-  scenarios: readonly QaSeedScenarioWithSource[],
+function partitionQaScenarios<Scenario>(
+  scenarios: readonly Scenario[],
   concurrency: number,
   maxPartitions = MAX_SHARED_FLOW_PARTITIONS,
 ) {
@@ -498,7 +498,7 @@ function partitionSharedFlowScenarios(
     Math.max(1, Math.floor(maxPartitions)),
     scenarios.length,
   );
-  const partitions = Array.from({ length: partitionCount }, (): QaSeedScenarioWithSource[] => []);
+  const partitions = Array.from({ length: partitionCount }, (): Scenario[] => []);
   for (const [index, scenario] of scenarios.entries()) {
     const partition = partitions[index % partitionCount];
     if (!partition) {
@@ -861,7 +861,7 @@ async function runUnifiedQaSuite(params: {
       // Single-scenario fail-fast tasks keep retries and failure evidence attributable.
       const sharedFlowPartitions = failFast
         ? sharedFlowScenarios.map((scenario) => [scenario])
-        : partitionSharedFlowScenarios(
+        : partitionQaScenarios(
             sharedFlowScenarios,
             usesContributedChannelDriver && !channelGroup.isolatesAdapterInstances
               ? 1
@@ -1181,19 +1181,26 @@ async function runUnifiedQaSuite(params: {
           createTestFilePartitionTask(new Map([["script", serialScenarios]])),
         );
       }
-      for (const scenario of scriptScenarios) {
-        if (isParallelSafeScript(scenario)) {
-          parallelScriptPartitionTasks.push(
-            createTestFilePartitionTask(new Map([["script", [scenario]]])),
-          );
-        }
+      const parallelScenarios = scriptScenarios.filter(isParallelSafeScript);
+      for (const scenarios of partitionQaScenarios(
+        parallelScenarios,
+        concurrency,
+        MAX_PARALLEL_SCRIPT_CONCURRENCY,
+      )) {
+        parallelScriptPartitionTasks.push(
+          createTestFilePartitionTask(new Map([["script", scenarios]])),
+        );
       }
     }
   }
+  // The profile workflow builds immutable dist output before execution. In that
+  // mode audited producers can share the global budget without extending the tail.
+  const overlapParallelScripts = process.env.OPENCLAW_E2E_USE_PREBUILT_DIST === "1";
   const concurrentPartitionTasks = [
     ...sharedFlowPartitionTasks,
     ...testFilePartitionTasks,
     ...isolatedFlowPartitionTasks,
+    ...(overlapParallelScripts ? parallelScriptPartitionTasks : []),
   ];
   const scenarioDefinitionsById = new Map(
     params.plan.scenarios.map((scenario) => [scenario.id, scenario]),
@@ -1363,8 +1370,8 @@ async function runUnifiedQaSuite(params: {
       progress?.recordResults(scriptPreparationFailure.scenarioResults);
     }
   }
-  // Unmarked scripts may rebuild shared checkout state. Run them exclusively
-  // after every flow and native partition settles, then start only audited peers.
+  // Unmarked scripts may rebuild shared checkout state, so they remain exclusive
+  // after every concurrent partition settles in both execution modes.
   const serialScriptPartitionResults =
     concurrentFailed || scriptPreparationFailure
       ? []
@@ -1372,10 +1379,12 @@ async function runUnifiedQaSuite(params: {
   const parallelScriptPartitionResults =
     scriptPreparationFailure || (failFast && serialScriptPartitionResults.some(partitionFailed))
       ? []
-      : await runPartitionTasks(
-          parallelScriptPartitionTasks,
-          Math.min(concurrency, MAX_PARALLEL_SCRIPT_CONCURRENCY),
-        );
+      : overlapParallelScripts
+        ? []
+        : await runPartitionTasks(
+            parallelScriptPartitionTasks,
+            Math.min(concurrency, MAX_PARALLEL_SCRIPT_CONCURRENCY),
+          );
   const partitionResults = [
     ...concurrentPartitionResults,
     ...(scriptPreparationFailure ? [scriptPreparationFailure] : []),

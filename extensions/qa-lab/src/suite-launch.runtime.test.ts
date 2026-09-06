@@ -2191,19 +2191,92 @@ describe("qa suite runtime launcher", () => {
     expect(parallelScriptIds).toEqual([]);
 
     serial.resolve();
-    await vi.waitFor(() => expect(parallelScriptIds).toHaveLength(3));
+    await vi.waitFor(() => expect(parallelScriptIds).toHaveLength(4));
     expect(maxActiveParallelScripts).toBe(3);
-    expect(parallelScriptIds).not.toContain("diagnostic-events-boundary");
 
     parallel.resolve();
     await runPromise;
     expect(prepareDockerE2eEnvironment).toHaveBeenCalledTimes(1);
     expect(scriptEnvs.every((env) => env === preparedEnv)).toBe(true);
-    expect(parallelScriptIds.slice(0, 3)).toEqual(
-      expect.arrayContaining(["remote-log-tailing", "gateway-smoke", "logging-file-boundary"]),
+    expect(parallelScriptIds).toEqual(
+      expect.arrayContaining([
+        "remote-log-tailing",
+        "gateway-smoke",
+        "logging-file-boundary",
+        "diagnostic-events-boundary",
+      ]),
     );
-    expect(parallelScriptIds[3]).toBe("diagnostic-events-boundary");
     expect(maxActiveParallelScripts).toBe(3);
+  });
+
+  it("overlaps audited scripts with flow and native work when dist is prebuilt", async () => {
+    vi.stubEnv("OPENCLAW_E2E_USE_PREBUILT_DIST", "1");
+    const repoRoot = await makeTempRepo("qa-suite-prebuilt-parallel-scripts-");
+    const defaultFlowImplementation = runQaFlowSuite.getMockImplementation();
+    const defaultTestFileImplementation = runQaTestFileScenarios.getMockImplementation();
+    if (!defaultFlowImplementation || !defaultTestFileImplementation) {
+      throw new Error("expected default QA suite mock implementations");
+    }
+    const flow = createDeferred();
+    const native = createDeferred();
+    const serial = createDeferred();
+    const started: string[] = [];
+    const parallelScriptIds: string[] = [];
+    const parallelScriptEnvs: unknown[] = [];
+    const preparedEnv = Object.freeze({ OPENCLAW_CURRENT_PACKAGE_TGZ: "/tmp/candidate.tgz" });
+    runQaFlowSuite.mockImplementationOnce(async (params) => {
+      started.push("flow");
+      await flow.promise;
+      return await defaultFlowImplementation(params);
+    });
+    prepareDockerE2eEnvironment.mockImplementationOnce(async () => {
+      started.push("prep");
+      return preparedEnv;
+    });
+    runQaTestFileScenarios.mockImplementation(async (params) => {
+      const scenarioIds = params.scenarios.map((scenario: QaTestFileScenario) => scenario.id);
+      const kind = params.scenarios[0]?.execution.kind;
+      if (kind === "playwright") {
+        started.push("native");
+        await native.promise;
+      } else if (scenarioIds.includes("docker-npm-onboard-channel-agent")) {
+        started.push("serial");
+        expect(params.env).toBe(preparedEnv);
+        await serial.promise;
+      } else {
+        started.push("parallel");
+        parallelScriptIds.push(...scenarioIds);
+        parallelScriptEnvs.push(params.env);
+      }
+      return await defaultTestFileImplementation(params);
+    });
+
+    const runPromise = runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/prebuilt-parallel-scripts",
+      concurrency: 8,
+      scenarioIds: [
+        "dm-chat-baseline",
+        "control-ui-chat-flow-playwright",
+        "docker-npm-onboard-channel-agent",
+        "remote-log-tailing",
+        "gateway-smoke",
+        "logging-file-boundary",
+        "diagnostic-events-boundary",
+      ],
+    });
+    await vi.waitFor(() => expect(parallelScriptIds).toHaveLength(4));
+    expect(started).toEqual(expect.arrayContaining(["flow", "native", "parallel"]));
+    expect(started).not.toContain("prep");
+    expect(started).not.toContain("serial");
+    expect(parallelScriptEnvs.every((env) => env === undefined)).toBe(true);
+
+    flow.resolve();
+    native.resolve();
+    await vi.waitFor(() => expect(started).toContain("serial"));
+    expect(started.indexOf("prep")).toBeLessThan(started.indexOf("serial"));
+    serial.resolve();
+    await runPromise;
   });
 
   it("records Docker preparation failure without starting a script partition", async () => {
