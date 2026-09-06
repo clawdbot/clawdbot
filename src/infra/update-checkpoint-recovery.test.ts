@@ -20,6 +20,7 @@ import { captureUpdateCheckpoint, type UpdateCheckpointAccess } from "./update-c
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "./update-run-ledger.js";
 import {
   beginUpdateRecovery,
+  claimUpdateRecovery,
   loadUpdateRecovery,
   prepareUpdateRecoveryCarryForward,
   recordUpdateRecoveryIntent,
@@ -339,12 +340,13 @@ describe("checkpoint publication with the actual recovery owner", () => {
       await Promise.all([inspectCheckpointFile(f.file), inspectCheckpointFile(f.stage)]),
     ).toEqual(family);
     expect((await restoreUpdateCheckpointResource(request)).status).toBe("applied");
-    const observed = recordUpdateRecoveryRestoreProgress(
+    const recorded = recordUpdateRecoveryRestoreProgress(
       sealed,
       { ...sealed.restore!, phase: "observed" },
       fence,
       f.options,
     );
+    const observed = claimUpdateRecovery(recorded, fence, f.options);
     closeOpenClawStateDatabaseForTest();
     expect(
       (await restoreUpdateCheckpointResource({ ...request, recoveryRecord: observed })).status,
@@ -376,6 +378,57 @@ describe("checkpoint publication with the actual recovery owner", () => {
     ).toBe("verified");
     expect(await fs.readFile(f.configPath, "utf8")).toBe("old config");
   });
+
+  it.each(["failure", "claim", "timestamp"])(
+    "rejects a displaced %s rewrite after canonical progress without mutating either family",
+    async (change) => {
+      const f = await fixture();
+      const sealed = await sealUpdateCheckpointRestoreSharedDatabase({
+        ...f.request,
+        recoveryRecord: f.record,
+        fence,
+      });
+      expect(
+        (await restoreUpdateCheckpointResource({ ...f.request, recoveryRecord: sealed })).status,
+      ).toBe("applied");
+      const current = recordUpdateRecoveryRestoreProgress(
+        sealed,
+        { ...sealed.restore!, phase: "observed" },
+        fence,
+        f.options,
+      );
+      closeOpenClawStateDatabaseForTest();
+      const displaced = path.join(f.shared.stageDirectory, "displaced");
+      const rewritten = { ...sealed };
+      if (change === "failure") {
+        rewritten.primaryFailure = { code: "rewritten", effectId: null };
+      } else if (change === "claim") {
+        rewritten.claimId = randomUUID();
+      } else {
+        rewritten.updatedAtMs += 1;
+      }
+      const db = new DatabaseSync(displaced);
+      try {
+        db.prepare(
+          "UPDATE config_machine_state SET value_json = ?, updated_at_ms = ? WHERE state_key = ?",
+        ).run(JSON.stringify(rewritten), rewritten.updatedAtMs, "update.recovery." + current.runId);
+      } finally {
+        db.close();
+      }
+      const request = { ...f.request, recoveryRecord: current };
+      const families = async () =>
+        Promise.all(
+          [f.file, displaced].flatMap((file) =>
+            ["", "-wal", "-shm", "-journal"].map((suffix) => inspectCheckpointFile(file + suffix)),
+          ),
+        );
+      const before = await families();
+      expect((await inspectUpdateCheckpointRestoreResource(request)).observed).toBe("conflict");
+      expect((await restoreUpdateCheckpointResource(request)).status).toBe("conflict");
+      expect(await families()).toEqual(before);
+      expect(await fs.readFile(f.configPath, "utf8")).toBe("candidate config");
+    },
+  );
 
   it.each(["operator data", "history", "stale claim", "same-content inode"])(
     "refuses %s changed after sealing",

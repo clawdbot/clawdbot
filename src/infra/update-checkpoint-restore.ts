@@ -25,12 +25,14 @@ import {
   type UpdateCheckpointReadAccess,
 } from "./update-checkpoint.js";
 import {
+  validateUpdateRecoveryPublicationDatabaseAtPath,
+  type UpdateRecoveryPublicationLocation,
+} from "./update-run-recovery-publication.js";
+import {
   loadUpdateRecovery,
   prepareUpdateRecoveryCarryForward,
   validateUpdateRecoveryDatabaseBinding,
-  validateUpdateRecoveryDatabaseBindingAtPath,
   type UpdateRecoveryRecord,
-  type UpdateRecoveryDatabaseBinding,
   type UpdateRecoveryFence,
 } from "./update-run-recovery.js";
 
@@ -130,21 +132,25 @@ async function observeResource(
   const staged = await inspectCheckpointFile(path.join(resource.stageDirectory, "replacement"));
   let observed: UpdateCheckpointRestoreObservation["observed"] = "conflict";
   if (resource.recovery) {
-    // Only the recovery owner may exclude its one active row from logical
-    // identity. Its validator independently checks the complete exact record.
+    const recovery = resource.recovery;
+    // Only the recovery owner may exclude its active row from the logical
+    // binding. It validates that row against the exact current record or the
+    // publication commitment, according to this plan-validated location.
     const matches = (
       file: string,
       actual: typeof current,
       expectedFile: typeof current,
-      binding: UpdateRecoveryDatabaseBinding,
-      expectedRecord: UpdateRecoveryRecord | undefined,
+      role: UpdateRecoveryPublicationLocation["role"],
     ) => {
-      if (!actual || !expectedRecord || !sameOwnedIdentity(actual, expectedFile)) {
+      if (!actual || !record || !sameOwnedIdentity(actual, expectedFile)) {
         return false;
       }
       try {
-        assertRecordPlan(expectedRecord, ref);
-        validateUpdateRecoveryDatabaseBindingAtPath(expectedRecord, binding, { path: file });
+        assertRecordPlan(record, ref);
+        validateUpdateRecoveryPublicationDatabaseAtPath(
+          { ...recovery, expected: record, role },
+          { path: file },
+        );
         return true;
       } catch {
         return false;
@@ -152,50 +158,19 @@ async function observeResource(
     };
     const displacedPath = path.join(resource.stageDirectory, "displaced");
     const replacementPath = path.join(resource.stageDirectory, "replacement");
-    const beforeCurrent = matches(
-      resource.sourcePath,
-      current,
-      resource.before,
-      resource.recovery.sourceBinding,
-      record,
-    );
-    const beforeDisplaced = matches(
-      displacedPath,
-      displaced,
-      resource.before,
-      resource.recovery.sourceBinding,
-      record,
-    );
-    const afterStaged = matches(
-      replacementPath,
-      staged,
-      resource.after,
-      resource.recovery.stagedBinding,
-      record,
-    );
+    const beforeCurrent = matches(resource.sourcePath, current, resource.before, "live-source");
+    const beforeDisplaced = matches(displacedPath, displaced, resource.before, "displaced");
+    const afterStaged = matches(replacementPath, staged, resource.after, "staged");
     if (afterStaged && ((beforeCurrent && !displaced) || (!current && beforeDisplaced))) {
       observed = "before";
     } else if (
       !staged &&
-      matches(resource.sourcePath, current, resource.after, resource.recovery.stagedBinding, record)
+      beforeDisplaced &&
+      matches(resource.sourcePath, current, resource.after, "live-restored")
     ) {
-      // After publication the displaced copy is forensic only. Recovery advances
-      // only the canonical copy. Validate all displaced non-active data and its
-      // bound publication record, never adopt its claim for an effect.
-      let prior: UpdateRecoveryRecord | undefined;
-      try {
-        prior = loadUpdateRecovery(resource.recovery.sourceBinding.runId, { path: displacedPath });
-      } catch {
-        /* conflict */
-      }
-      if (
-        prior &&
-        record &&
-        prior.revision <= record.revision &&
-        matches(displacedPath, displaced, resource.before, resource.recovery.sourceBinding, prior)
-      ) {
-        observed = "after";
-      }
+      // Live progress may advance beyond the displaced copy, but the displaced
+      // row must still match the publication commitment held by the live record.
+      observed = "after";
     }
     return { observed, current, displaced, staged };
   }
