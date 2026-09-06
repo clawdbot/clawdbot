@@ -2,9 +2,9 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import { getCommandArgsWithRootOptions } from "../infra/cli-root-options.js";
+import { FLAG_TERMINATOR, getCommandArgsWithRootOptions } from "../infra/cli-root-options.js";
 import { defaultRuntime } from "../runtime.js";
-import { getPrimaryCommand } from "./argv.js";
+import { getCommandPathWithRootOptions, normalizeRootLogLevelArgv } from "./argv.js";
 import { CAPABILITY_METADATA, findCapabilityMetadata } from "./capability-cli/metadata.js";
 import { emitJsonOrText, providerSummaryText } from "./capability-cli/output.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
@@ -73,15 +73,20 @@ async function registerCapabilityDomainCommands(
   capability: Command,
   argv: string[],
 ): Promise<void> {
-  const primary = getPrimaryCommand(argv);
-  // Options before a domain can request parent help, which needs the complete command tree.
-  const selectedName =
+  // Root log levels are normalized after registration. Reuse that view for selection,
+  // leaving help and unknown options ahead of a domain on the complete-tree path.
+  const selectionArgv = normalizeRootLogLevelArgv(argv);
+  const commandPath = getCommandPathWithRootOptions(selectionArgv, 2);
+  const primary = commandPath[0];
+  const commandArgs =
     primary === "infer" || primary === "capability"
-      ? getCommandArgsWithRootOptions(argv, {
+      ? getCommandArgsWithRootOptions(selectionArgv, {
           commandPath: [primary],
           mode: "command-path",
-        })?.[0]
+        })
       : undefined;
+  // The raw tail marks both leading and post-parent `--`; only the former retains a domain.
+  const selectedName = commandArgs?.[0] === FLAG_TERMINATOR ? commandPath[1] : commandArgs?.[0];
   if (selectedName === "list" || selectedName === "inspect") {
     return;
   }

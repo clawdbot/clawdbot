@@ -41,7 +41,15 @@ it("keeps metadata and selected-domain help behind the inference import boundary
     expect(loaded.modules).toEqual(new Set());
   }
 
-  await registerCapabilityCli(new Command(), ["node", "openclaw", "infer", "image", "--help"]);
+  await registerCapabilityCli(new Command(), [
+    "node",
+    "openclaw",
+    "infer",
+    "--log-level",
+    "debug",
+    "image",
+    "providers",
+  ]);
 
   expect(loaded.modules).toEqual(new Set(["image"]));
 });
@@ -56,7 +64,16 @@ it.each([
   { args: ["infer", "help", "image"], domains: allDomains },
   { args: ["completion", "--shell", "image"], domains: allDomains },
   { args: ["infer", "--", "image"], domains: allDomains },
+  { args: ["infer", "--", "--log-level", "debug", "image"], domains: allDomains },
+  { args: ["--", "infer", "image", "providers"], domains: ["image"] },
+  { args: ["--", "infer", "--log-level", "debug", "image"], domains: allDomains },
   { args: ["--profile", "image", "infer", "list", "--help"], domains: [] },
+  { args: ["infer", "--log-level", "debug", "list", "--json"], domains: [] },
+  { args: ["infer", "--log-level", "debug", "image", "providers"], domains: ["image"] },
+  { args: ["capability", "--log-level=debug", "image", "--help"], domains: ["image"] },
+  { args: ["infer", "--log-level", "--help", "image"], domains: allDomains },
+  { args: ["infer", "--log-level=", "image", "--help"], domains: allDomains },
+  { args: ["infer", "--log-level", "debug", "--help", "image"], domains: allDomains },
   { args: ["capability", "image", "--help"], domains: ["image"] },
   { args: ["infer", "image", "providers", "--json"], domains: ["image"] },
   { args: ["infer", "model", "run", "--prompt", "--help"], domains: ["model"] },
@@ -75,6 +92,8 @@ it.each([
 it.each([
   ["--help", "image"],
   ["--bad", "image", "--help"],
+  ["--log-level", "--help", "image"],
+  ["--log-level=", "image", "--help"],
 ])("prints complete parent help when options precede the domain: %j", async (...args) => {
   const { registerCapabilityCli } = await import("./capability-cli.js");
   let output = "";
