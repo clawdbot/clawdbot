@@ -630,7 +630,15 @@ vi.mock("./auth-profiles.js", () => ({
 }));
 
 vi.mock("./auth-profiles/store-runtime.js", () => ({
-  ensureAuthProfileStore: () => state.authProfileStoreMock,
+  ensureAuthProfileStore: vi.fn(() => state.authProfileStoreMock),
+}));
+
+vi.mock("./auth-profiles/store.js", async (importOriginal) => ({
+  // Native loader bootstrap still needs the real auth-store factory exports.
+  ...(await importOriginal<typeof import("./auth-profiles/store.js")>()),
+  getRuntimeAuthProfileStoreSnapshot: () => state.authProfileStoreMock,
+  findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
+    state.authProfileStoreMock.profiles[profileId],
 }));
 
 vi.mock("./auth-profiles/session-override.js", () => ({
@@ -4931,7 +4939,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       await runBasicAgentCommand();
 
       expect(state.clearSessionAuthProfileOverrideMock).toHaveBeenCalledTimes(preserve ? 0 : 1);
-      const { ensureAuthProfileStore } = await import("./auth-profiles/store.js");
+      const { ensureAuthProfileStore } = await import("./auth-profiles/store-runtime.js");
       expect(ensureAuthProfileStore).toHaveBeenCalledWith(
         "/tmp/agent",
         expect.objectContaining({ profileId, allowKeychainPrompt: false }),
