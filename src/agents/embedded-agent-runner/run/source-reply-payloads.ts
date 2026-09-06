@@ -38,7 +38,6 @@ export function buildSourceReplyPayloadState(params: {
   replyItems: EmbeddedRunReplyItem[];
   hasSourceReplyPayload: boolean;
   deliveredSourceReplyViaMessageTool: boolean;
-  explicitFinalSourceReply: boolean | undefined;
   completedSourceReplyViaMessageTool: boolean;
 } {
   const sourceReplyPayloads = params.payloads ?? [];
@@ -92,7 +91,6 @@ export function buildSourceReplyPayloadState(params: {
     replyItems,
     hasSourceReplyPayload,
     deliveredSourceReplyViaMessageTool,
-    explicitFinalSourceReply,
     completedSourceReplyViaMessageTool:
       explicitFinalSourceReply ?? (hasSourceReplyPayload || deliveredSourceReplyViaMessageTool),
   };
