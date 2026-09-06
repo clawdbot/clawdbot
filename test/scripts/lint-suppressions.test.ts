@@ -220,6 +220,8 @@ describe("production lint suppressions", () => {
         "src/commands/backup-restore.ts|preserve-caught-error|1",
         // Intl.Collator.compare is a getter returning a bound function.
         "src/cron/service/list-page-sort.ts|typescript/unbound-method|1",
+        // Capture the native method before spying; every invocation binds its actual scope with .call(this).
+        "src/gateway/server-held-work.test-support.ts|typescript/unbound-method|1",
         "src/gateway/test-helpers.server.ts|typescript/no-unnecessary-type-parameters|1",
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/device-pairing-store.ts|typescript/no-unnecessary-type-parameters|1",
