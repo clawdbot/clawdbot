@@ -6,6 +6,11 @@ import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
+import { inspectCheckpointFile } from "./update-checkpoint-files.js";
+import {
+  prepareUpdateCheckpointRestore,
+  reopenUpdateCheckpointRestorePlan,
+} from "./update-checkpoint-restore.js";
 import { captureUpdateCheckpoint, reopenUpdateCheckpoint } from "./update-checkpoint.js";
 import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
 import {
@@ -48,8 +53,11 @@ async function fixture() {
   };
   const capture = async (content: string) => {
     fs.writeFileSync(configPath, content);
+    // The fixture owns this write and retains its output before any later work.
+    const output = { sourcePath: configPath, state: await inspectCheckpointFile(configPath) };
     const ref = await captureUpdateCheckpoint({
       ...access,
+      expectedSources: [output],
       resources: [{ sourcePath: configPath, kind: "config", restore: "replace" }],
       exclusions: [],
     });
@@ -87,7 +95,7 @@ async function fixture() {
     afterUpdate,
     effectIds: record.effects.map((effect) => effect.effectId),
   };
-  return { root, options, run, runtime, record, checkpoint, input, capture, observe };
+  return { root, options, run, runtime, record, checkpoint, input, capture, observe, access };
 }
 
 afterEach(() => {
@@ -132,6 +140,47 @@ describe("durable after-image binding", () => {
     expect(JSON.stringify(getUpdateRun(f.run.runId, f.options))).not.toContain(
       f.input.afterUpdate.ref.manifestPath,
     );
+  });
+
+  it("reopens persisted owner-bound after-images for replay and refuses a missing artifact", async () => {
+    const f = await fixture();
+    bindUpdateRecoveryAfterImage(f.record, f.input, fence, f.options);
+    closeOpenClawStateDatabaseForTest();
+    const current = claimUpdateRecovery(
+      loadUpdateRecovery(f.run.runId, f.options)!,
+      fence,
+      f.options,
+    );
+    const interval = current.afterImages?.[0];
+    if (!interval) {
+      throw new Error("Committed after-image interval missing after reclaim");
+    }
+    closeOpenClawStateDatabaseForTest();
+    const reopened = await reopenUpdateCheckpoint(interval.afterUpdate.ref, f.access);
+    expect(reopened.manifest.resources[0]?.sourceBindingValidated).toBe(true);
+    const prepared = await prepareUpdateCheckpointRestore({
+      ...f.access,
+      checkpointRef: interval.checkpointRef,
+      afterUpdateRef: interval.afterUpdate.ref,
+      prepareSharedDatabase() {
+        throw new Error("File-only fixture must not open a shared database");
+      },
+    });
+    expect(prepared.status).toBe("ready");
+    if (prepared.status !== "ready") {
+      throw new Error("Owner-bound after-image could not prepare restoration");
+    }
+    const plan = await reopenUpdateCheckpointRestorePlan(prepared.planRef, f.access);
+    expect(plan.plan.afterUpdateRef).toEqual(interval.afterUpdate.ref);
+    const configPath = f.access.binding.configPath;
+    expect(fs.readFileSync(configPath, "utf8")).toBe("owner-written-after-image");
+    // A saved plan cannot substitute for retaining its after-image artifact.
+    fs.renameSync(
+      interval.afterUpdate.ref.manifestPath,
+      `${interval.afterUpdate.ref.manifestPath}.held`,
+    );
+    await expect(reopenUpdateCheckpointRestorePlan(prepared.planRef, f.access)).rejects.toThrow();
+    expect(fs.readFileSync(configPath, "utf8")).toBe("owner-written-after-image");
   });
 
   it.each([
