@@ -34,6 +34,19 @@ If you need transcript storage details, see
 
 ---
 
+## Failed attempts and recovery
+
+Text-only assistant errors are buffered until the logical run settles. Recovery
+discards their partial text because the recovered reply supersedes it. Terminal
+failure persists the last attempt's partial text and error.
+
+Tool calls, displayable non-text content, and attachment facts are persisted
+immediately, before dependent tool results or the recovered reply. These fact
+rows omit the error and use a replayable stop reason so provider replay retains
+the calls. For mixed text/fact messages, partial text and the error remain
+buffered separately; terminal settlement does not duplicate facts or usage.
+This uses existing assistant-row shapes and requires no database migration.
+
 ## Global rule: runtime context is not user transcript
 
 Runtime/system context can be added to the model prompt for a turn, but it is

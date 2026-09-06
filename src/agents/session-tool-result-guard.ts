@@ -958,7 +958,7 @@ export function installSessionToolResultGuard(
       }
       return undefined;
     }
-    const finalMessage = finalWrite.message;
+    let finalMessage = finalWrite.message;
     const finalRole = (finalMessage as { role?: unknown }).role;
     if (
       finalRole === "assistant" &&
@@ -974,8 +974,15 @@ export function installSessionToolResultGuard(
     ) {
       const target = sessionManager.getSessionTarget();
       if (target) {
-        assistantErrorTranscript.record(finalMessage as AssistantAgentMessage, target);
-        return undefined;
+        const replayMessage = assistantErrorTranscript.record(
+          finalMessage as AssistantAgentMessage,
+          target,
+        );
+        if (!replayMessage) {
+          return undefined;
+        }
+        copyCodeModeSourceAppend(finalMessage, replayMessage, sourceAppend);
+        finalMessage = replayMessage;
       }
     }
     if (isUserAgentMessage(finalMessage) && suppressNextUserMessagePersistence) {
@@ -994,7 +1001,10 @@ export function installSessionToolResultGuard(
       finalMessage,
       {
         invalidateSerializedPrefixCache:
-          callerInvalidatesCache || transformedMessage !== nextMessage || finalWrite.changed,
+          callerInvalidatesCache ||
+          transformedMessage !== nextMessage ||
+          finalWrite.changed ||
+          finalMessage !== finalWrite.message,
       },
       sourceAppend,
       message,
