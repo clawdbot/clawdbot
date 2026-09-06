@@ -204,6 +204,7 @@ private fun CronActionPanel(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
         ClawPrimaryButton(
+          // Localization: the pending branch is a disabled execution status, not a command.
           text =
             when {
               busy -> nativeString("Working")
