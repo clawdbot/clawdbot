@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createOutboundPayloadPlan } from "openclaw/plugin-sdk/channel-outbound";
 import { createQaBusState } from "./bus-state.js";
 import type { TelegramUserbotUpdate } from "./live-transports/telegram/userbot-driver.runtime.js";
 import { waitForQaTransportCondition } from "./qa-transport.js";
@@ -365,6 +366,13 @@ export async function assertTelegramRichObservationFlow(
           gateway: {
             call: async (method: string, args: { message: string }) => {
               assert.equal(method, "send");
+              // Telegram extracts Markdown images before dispatching to its renderer.
+              const [planned] = createOutboundPayloadPlan([{ text: args.message }], {
+                extractMarkdownImages: true,
+              });
+              assert.ok(planned);
+              assert.deepEqual(planned.parts.mediaUrls, [], "rich fixtures must not fetch media");
+              assert.equal(planned.parts.text, args.message);
               const block = nativeBlocks[sends];
               const id = ++sends;
               if (testCase === "send-error") {

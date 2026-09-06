@@ -93,7 +93,7 @@ flow:
                     }
                   }});
                 }
-                fixtures.push({ id: 'literal-tags', markdown: '[<custom><sup>**marked**</sup></custom>](https://example.com/qa) &lt;b&gt;**literal**&lt;/b&gt; ![<i>alt</i>](https://example.com/image.png) <b[r](https://example.com/qa)>tail <!&#65; <b>declared</b>>', pattern: {
+                fixtures.push({ id: 'literal-tags', markdown: '[<custom><sup>**marked**</sup></custom>](https://example.com/qa) &lt;b&gt;**literal**&lt;/b&gt; ![<i>alt</i>]() <b[r](https://example.com/qa)>tail <!&#65; <b>declared</b>>', pattern: {
                   '@type': 'pageBlockParagraph', text: {
                     '@type': 'richTexts', texts: [url({ '@type': 'richTexts', texts: [plain('<custom><sup>'), wrap('richTextBold', plain('marked')), plain('</sup></custom>')] }), plain(' <b>'), wrap('richTextBold', plain('literal')), plain('</b> <i>alt</i> <b'), url(plain('r')), plain('>tail <!A '), wrap('richTextBold', plain('declared')), plain('>')]
                   }
