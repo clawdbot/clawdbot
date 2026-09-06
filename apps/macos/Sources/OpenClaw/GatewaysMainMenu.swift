@@ -58,20 +58,43 @@ struct GatewayMenuEndpointLabels: Equatable {
 final class GatewaysMainMenu: NSObject, NSMenuDelegate {
     static let shared = GatewaysMainMenu()
 
+    private struct RowSignature: Equatable {
+        let id: String
+        let name: String
+        let shortcutNumber: Int?
+        let isPrimary: Bool
+
+        init(_ gateway: DashboardGatewayMenuItem) {
+            self.id = gateway.id
+            self.name = gateway.name
+            self.shortcutNumber = gateway.shortcutNumber
+            self.isPrimary = gateway.isPrimary
+        }
+    }
+
     private let logger = Logger(subsystem: "ai.openclaw", category: "GatewaysMainMenu")
     private lazy var store = GatewayMenuStatusStore(disconnectProfile: { [weak self] profileID in
         await self?.disconnectIdleProfile(profileID)
     })
     private var windowOpens: [UUID: (target: DashboardGatewayTarget, task: Task<Void, Never>)] = [:]
-    private weak var menu: NSMenu?
+    private let ownedMenu = NSMenu(title: String(localized: "Gateways"))
+    private weak var topLevelItem: NSMenuItem?
     private var installed = false
     private var loggedMissingMenu = false
     private var isMenuOpen = false
     private var refreshTask: Task<Void, Never>?
     private var openingID: UUID?
     private var rows: [(gateway: DashboardGatewayMenuItem, item: NSMenuItem)] = []
+    private var rowSignature: [RowSignature]?
     private var profiles: [String: MacGatewayCatalogProfile] = [:]
     private var primaryLabels = GatewayMenuEndpointLabels()
+
+    override init() {
+        super.init()
+        self.ownedMenu.delegate = self
+        self.ownedMenu.autoenablesItems = false
+        self.ownedMenu.minimumWidth = StatusMenuMetrics.width
+    }
 
     func install() {
         guard !self.installed else { return }
@@ -91,16 +114,16 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
     }
 
     private func attachSubmenu() -> Bool {
-        guard let submenu = NSApp.mainMenu?.items.first(where: {
+        self.topLevelItem = NSApp.mainMenu?.items.first(where: {
             $0.title == String(localized: "Gateways")
-        })?.submenu else { return false }
-        guard self.menu !== submenu || submenu.delegate !== self else { return true }
-        // SwiftUI continues to own the top-level CommandMenu and its position.
-        self.menu = submenu
-        submenu.delegate = self
-        submenu.autoenablesItems = false
-        submenu.minimumWidth = StatusMenuMetrics.width
-        self.menuNeedsUpdate(submenu)
+        })
+        guard let topLevelItem = self.topLevelItem else { return false }
+        // SwiftUI owns the top-level item; AppKit owns the view-based submenu.
+        if topLevelItem.submenu !== self.ownedMenu {
+            topLevelItem.submenu = self.ownedMenu
+            self.logger.debug("Attached AppKit Gateways submenu")
+        }
+        self.rebuildRowsIfNeeded()
         return true
     }
 
@@ -124,21 +147,31 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                if let menu = self.menu {
-                    self.menuNeedsUpdate(menu)
+                if !self.attachSubmenu() {
+                    self.reportMissingMenu()
                 }
+                self.updateCards()
                 self.observeGatewayChanges()
             }
         }
     }
 
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        guard !self.isMenuOpen else {
-            self.updateCards()
+    func menuNeedsUpdate(_: NSMenu) {
+        self.updateCards()
+    }
+
+    private func rebuildRowsIfNeeded() {
+        guard !self.isMenuOpen else { return }
+        let gateways = DashboardGatewayMenuModel.items(from: DashboardManager.shared.gatewayEntries)
+        let signature = gateways.map(RowSignature.init)
+        guard signature != self.rowSignature else {
+            for (index, gateway) in gateways.enumerated() {
+                self.rows[index].gateway = gateway
+            }
             return
         }
-        let gateways = DashboardGatewayMenuModel.items(from: DashboardManager.shared.gatewayEntries)
-        menu.removeAllItems()
+        let now = Date()
+        self.ownedMenu.removeAllItems()
         self.rows.removeAll()
         for gateway in gateways {
             let key = gateway.shortcutNumber.map(String.init) ?? ""
@@ -146,7 +179,8 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
             item.target = self
             item.identifier = NSUserInterfaceItemIdentifier(gateway.id)
             item.keyEquivalentModifierMask = [.command]
-            menu.addItem(item)
+            self.configureCard(item, gateway: gateway, now: now)
+            self.ownedMenu.addItem(item)
             self.rows.append((gateway, item))
 
             let alternate = NSMenuItem(
@@ -157,24 +191,27 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
             alternate.identifier = item.identifier
             alternate.isAlternate = true
             alternate.keyEquivalentModifierMask = [.command, .option]
-            menu.addItem(alternate)
+            self.ownedMenu.addItem(alternate)
             if gateway.isPrimary, gateways.contains(where: { !$0.isPrimary }) {
-                menu.addItem(.separator())
+                self.ownedMenu.addItem(.separator())
             }
         }
         if !gateways.isEmpty {
-            menu.addItem(.separator())
+            self.ownedMenu.addItem(.separator())
         }
         let manage = NSMenuItem(
             title: String(localized: "Manage Gateways…"),
             action: #selector(self.manageGateways(_:)),
             keyEquivalent: "")
         manage.target = self
-        menu.addItem(manage)
-        self.updateCards()
+        self.ownedMenu.addItem(manage)
+        self.rowSignature = signature
     }
 
     func menuWillOpen(_: NSMenu) {
+        if !self.attachSubmenu() {
+            self.reportMissingMenu()
+        }
         guard !self.isMenuOpen else { return }
         self.isMenuOpen = true
         let openingID = UUID()
@@ -198,7 +235,7 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
                 self.profiles = Dictionary(uniqueKeysWithValues: profiles.map { ($0.profile.id, $0) })
             } catch {
                 guard !Task.isCancelled, self.openingID == openingID else { return }
-                self.logger.error("Could not load Gateway menu profile metadata")
+                self.logger.debug("Could not load Gateway menu profile metadata")
             }
             let targets = DashboardGatewayMenuModel.items(from: DashboardManager.shared.gatewayEntries).map(\.target)
             self.store.beginProbing(targets: targets) { [weak self] in
@@ -223,45 +260,49 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
     }
 
     private func updateCards() {
-        let dashboard = DashboardManager.shared
         let now = Date()
         for (gateway, item) in self.rows {
-            let facts = self.store.facts[gateway.target]
-            let profile: MacGatewayCatalogProfile? = if case let .profile(id) = gateway.target {
-                self.profiles[id]
-            } else {
-                nil
-            }
-            let labels = gateway.isPrimary ? self.primaryLabels : profile.map(GatewayMenuEndpointLabels.profile)
-            let model = GatewayMenuCardModel(
-                name: gateway.name,
-                isPrimary: gateway.isPrimary,
-                isFrontmost: dashboard.frontmostDashboardTarget == gateway.target,
-                shortcutNumber: gateway.shortcutNumber,
-                health: facts?.health ?? gateway.health,
-                version: facts?.version,
-                buildId: facts?.buildId,
-                endpointLabel: labels?.endpointLabel,
-                transportLabel: labels?.transportLabel,
-                latencyMs: facts?.latencyMs,
-                windowCount: dashboard.openWindowCount(for: gateway.target),
-                browserSessionExpiresAt: profile?.browserSessionExpiresAt,
-                lastSeen: facts?.lastSeen,
-                isProbing: self.store.isProbing(gateway.target))
-            let card = GatewayMenuCard(model: model, now: now)
-                .contentShape(Rectangle())
-                .onTapGesture { [weak self, weak item] in
-                    guard let self, let item else { return }
-                    item.menu?.cancelTracking()
-                    self.openGateway(item)
-                }
-                .accessibilityAction { [weak self, weak item] in
-                    guard let self, let item else { return }
-                    item.menu?.cancelTracking()
-                    self.openGateway(item)
-                }
-            StatusMenuRenderer.configureHostedView(item, rootView: card, highlights: true)
+            self.configureCard(item, gateway: gateway, now: now)
         }
+    }
+
+    private func configureCard(_ item: NSMenuItem, gateway: DashboardGatewayMenuItem, now: Date) {
+        let dashboard = DashboardManager.shared
+        let facts = self.store.facts[gateway.target]
+        let profile: MacGatewayCatalogProfile? = if case let .profile(id) = gateway.target {
+            self.profiles[id]
+        } else {
+            nil
+        }
+        let labels = gateway.isPrimary ? self.primaryLabels : profile.map(GatewayMenuEndpointLabels.profile)
+        let model = GatewayMenuCardModel(
+            name: gateway.name,
+            isPrimary: gateway.isPrimary,
+            isFrontmost: dashboard.frontmostDashboardTarget == gateway.target,
+            shortcutNumber: gateway.shortcutNumber,
+            health: facts?.health ?? gateway.health,
+            version: facts?.version,
+            buildId: facts?.buildId,
+            endpointLabel: labels?.endpointLabel,
+            transportLabel: labels?.transportLabel,
+            latencyMs: facts?.latencyMs,
+            windowCount: dashboard.openWindowCount(for: gateway.target),
+            browserSessionExpiresAt: profile?.browserSessionExpiresAt,
+            lastSeen: facts?.lastSeen,
+            isProbing: self.store.isProbing(gateway.target))
+        let card = GatewayMenuCard(model: model, now: now)
+            .contentShape(Rectangle())
+            .onTapGesture { [weak self, weak item] in
+                guard let self, let item else { return }
+                item.menu?.cancelTracking()
+                self.openGateway(item)
+            }
+            .accessibilityAction { [weak self, weak item] in
+                guard let self, let item else { return }
+                item.menu?.cancelTracking()
+                self.openGateway(item)
+            }
+        StatusMenuRenderer.configureHostedView(item, rootView: card, highlights: true)
     }
 
     @objc private func openGateway(_ sender: NSMenuItem) {
