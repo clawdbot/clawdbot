@@ -15,9 +15,20 @@ import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { readAgentRuntimeExecutionLineage } from "../agent-runtime-execution-lineage.js";
+import { createDesktopSessionRegistry } from "../desktop/session-registry.js";
+import {
+  createGatewayWorkerEnvironmentRuntime,
+  loadGatewayWorkerEnvironmentStartupState,
+} from "../server-worker-environment-startup.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { createHarness } from "./placement-dispatch-test-harness.js";
 import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
+import {
+  deriveEnvironmentIntent,
+  type WorkerPlacementDispatchRequest,
+} from "./service-contract.js";
 import * as environmentServiceModule from "./service.js";
+import { retireSessionWorkerPlacementBeforeMutation } from "./session-placement-lifecycle.js";
 const {
   workerSessionToolTestMocks,
   SOURCE,
@@ -139,6 +150,86 @@ describe("worker session tool topology", () => {
     expect(gatewayRequest).not.toHaveBeenCalled();
   });
 
+  it("preserves a reset child's replacement allocation when its earlier spawn outcome is unknown", async () => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: getFixture().root }, async () => {
+      setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+      const harness = createHarness(placements);
+      vi.mocked(harness.environments.get).mockReturnValue(undefined);
+      vi.mocked(harness.environments.createFromProfileSnapshot).mockRejectedValue(
+        new Error("Inherited profile is unavailable before environment creation"),
+      );
+      dispatchChild.mockImplementation(
+        (request: WorkerPlacementDispatchRequest, observer, authorize) =>
+          harness.service.dispatch(request, observer, authorize),
+      );
+
+      const failedSpawn = await spawn("spawn-before-reset");
+      expect(failedSpawn.resultJson).toContain("outcome is unknown");
+      const interrupted = placements.get(CHILD.sessionId);
+      if (interrupted?.state !== "failed" || !interrupted.environmentId) {
+        throw new Error("Spawn did not retain its failed allocation intent");
+      }
+      const initial = await loadGatewayWorkerEnvironmentStartupState();
+      expect(initial.store.get(interrupted.environmentId)).toBeUndefined();
+      expect(
+        retireSessionWorkerPlacementBeforeMutation({
+          action: "reset",
+          key: interrupted.sessionKey,
+          sessionId: interrupted.sessionId,
+          context: {
+            workerSessionPlacementService: placements,
+            workerEnvironmentService: harness.environments,
+          },
+        }),
+      ).toBeUndefined();
+      // Reset keeps the session ID while retiring placement state. Normal redispatch
+      // starts again at generation one, independently of the failed spawn operation.
+      const requested = placements.startDispatch({
+        sessionId: interrupted.sessionId,
+        sessionKey: interrupted.sessionKey,
+        agentId: interrupted.agentId,
+        executionMode: "worker-turn",
+      });
+      const replacement = deriveEnvironmentIntent(
+        `session-dispatch:${requested.sessionId}:${requested.generation}`,
+      );
+      placements.transition({
+        sessionId: requested.sessionId,
+        from: "requested",
+        to: "provisioning",
+        expectedGeneration: requested.generation,
+        patch: { environmentId: replacement.environmentId },
+      });
+      initial.store.createIntent({
+        ...replacement,
+        providerId: "fake",
+        profileId: "cloud-profile",
+        profileSnapshot: { settings: {}, executionMode: "worker-turn" },
+      });
+      const startup = await loadGatewayWorkerEnvironmentStartupState();
+      const runtime = await createGatewayWorkerEnvironmentRuntime({
+        getPluginRegistry: () => createEmptyPluginRegistry(),
+        getPortalRuntime: () => undefined,
+        resolveGatewayContext,
+        desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
+        startup,
+        log: { child: () => ({ warn: () => {} }) },
+      });
+      try {
+        expect(startup.store.get(replacement.environmentId)).toMatchObject({
+          state: "requested",
+          destroyRequestedAtMs: null,
+        });
+        expect((await spawn("spawn-before-reset")).resultJson).toContain(
+          "prior operation outcome is unknown",
+        );
+        expect(dispatchChild).toHaveBeenCalledOnce();
+      } finally {
+        await runtime.workerEnvironmentService?.stop();
+      }
+    });
+  });
+
   it.each([false, true])(
     "creates and replays a cloud child with inherited required isolation (%s)",
     async (required) => {
@@ -180,6 +271,7 @@ describe("worker session tool topology", () => {
           sessionKey: spawnState.childSessionKey,
           agentId: CHILD.agentId,
           executionMode: "worker-turn",
+          idempotencyKey: expect.any(String),
           profileId: "cloud-profile",
           inheritedProfile: {
             providerId: "fake",
@@ -569,9 +661,6 @@ describe("worker spawn startup composition", () => {
     async (closed) => {
       const { root, placements, identity, setEntry, activate, closeSourceRun } = getFixture();
       setEntry(SOURCE.sessionKey, SOURCE.sessionId);
-      const { createDesktopSessionRegistry } = await import("../desktop/session-registry.js");
-      const { createGatewayWorkerEnvironmentRuntime, loadGatewayWorkerEnvironmentStartupState } =
-        await import("../server-worker-environment-startup.js");
       const factory = vi.spyOn(environmentServiceModule, "createWorkerEnvironmentService");
       try {
         await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {

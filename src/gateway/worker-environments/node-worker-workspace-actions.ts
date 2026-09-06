@@ -60,7 +60,7 @@ type NodeWorkerWorkspaceActions = Pick<
   | "quiesceWorkspace"
   | "reconcileWorkspace"
   | "stageAttachments"
-> & { validateRestoredWorkspace: () => Promise<void> };
+> & { validateRestoredWorkspace: (authorize?: () => void) => Promise<void> };
 
 export function createNodeWorkerWorkspaceActions(params: {
   environmentId: string;
@@ -88,7 +88,7 @@ export function createNodeWorkerWorkspaceActions(params: {
     sharedHost: true,
     runWorkspaceCommand: exec,
   });
-  const validateRestoredWorkspace = async (): Promise<void> => {
+  const validateRestoredWorkspace = async (authorize?: () => void): Promise<void> => {
     if (!restoredWorkspace) {
       return;
     }
@@ -117,6 +117,7 @@ export function createNodeWorkerWorkspaceActions(params: {
       // This closure fences the exact in-memory tunnel instance without duplicating that read.
       isAuthorized: params.isOwnerCurrent,
       signal: params.ownerSignal,
+      authorize,
     });
     params.workspaceTransfer.revoke(params.environmentId, prepared.token);
   };
@@ -593,8 +594,9 @@ if (stat?.isFile() && (stat.mode & 0o111)) {
           generation: params.ownerEpoch,
           localPath: localRequest.localPath,
           // Durable owner state is revalidated by the transfer service after every awaited I/O.
-          isAuthorized: () => { request.authorize?.(); return params.isOwnerCurrent(); },
+          isAuthorized: params.isOwnerCurrent,
           signal: params.ownerSignal,
+          authorize: request.authorize,
         });
         try {
           if (!localRequest.projectKey) {

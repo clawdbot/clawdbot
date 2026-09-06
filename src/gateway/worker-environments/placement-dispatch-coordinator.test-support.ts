@@ -1,5 +1,5 @@
 import type { WorkerDispatchPlacement } from "./placement-dispatch-failure.js";
-import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
+import type { WorkerPlacementDispatchService } from "./placement-dispatch-service.types.js";
 import type {
   WorkerPlacementDispatchRequest,
   WorkerPlacementMoveRequest,

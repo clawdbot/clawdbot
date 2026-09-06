@@ -327,6 +327,9 @@ export function createWorkerSessionToolExecutor(params: {
                 agentId: targetAgentId,
                 profileId: sourceEnvironment.profileId,
                 executionMode: "worker-turn",
+                // Reset preserves the session ID but restarts placement generations.
+                // Bind allocation to this spawn so its recovery cannot target a replacement.
+                idempotencyKey: operationKey(operation.operationSeed, "child-placement"),
                 inheritedProfile: {
                   providerId: sourceEnvironment.providerId,
                   profileSnapshot: sourceEnvironment.profileSnapshot,

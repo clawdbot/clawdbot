@@ -50,13 +50,15 @@ describe("prepareAgentRunUserTurn", () => {
     mocks.persistedMessages.length = 0;
     mocks.beforeTranscriptCommit = undefined;
     mocks.stageSessionPendingInput.mockReset().mockImplementation(async (_scope, options) => {
-      mocks.beforeTranscriptCommit?.();
+      options.assertCurrent();
       const message = options.prepareMessageAfterIdempotencyCheck
         ? options.prepareMessageAfterIdempotencyCheck(options.message)
         : options.message;
       if (!message) {
         return undefined;
       }
+      mocks.beforeTranscriptCommit?.();
+      options.assertCurrent();
       mocks.persistedMessages.push(message);
       return {
         inputId: "pending-user-turn",
