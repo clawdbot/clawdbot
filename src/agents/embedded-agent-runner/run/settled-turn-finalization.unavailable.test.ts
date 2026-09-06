@@ -140,8 +140,13 @@ describe("unavailable finalization through the real core backend", () => {
       ).toMatchObject({
         assistantTranscriptOwned: true,
         assistantTranscriptIdempotencyKey: "run-settled:settled-finalization-fallback",
-        deliverDespiteSourceReplySuppression: true,
       });
+      expect(
+        getReplyPayloadMetadata(result.prepared.payloadsWithToolMedia?.[0] ?? {})
+          ?.deliverDespiteSourceReplySuppression,
+      ).not.toBe(true);
+      expect(result.prepared.finalAssistantVisibleText).toBe("");
+      expect(result.prepared.finalAssistantRawText).toBe("");
       expect(result.attempt.currentAttemptAssistant).toMatchObject({
         provider: assistant.provider,
         model: assistant.model,

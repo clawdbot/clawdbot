@@ -171,7 +171,6 @@ export function buildEmbeddedRunPayloads(params: {
     replyItems,
     hasSourceReplyPayload,
     deliveredSourceReplyViaMessageTool,
-    explicitFinalSourceReply,
     completedSourceReplyViaMessageTool,
   } = buildSourceReplyPayloadState({
     payloads: params.messagingToolSourceReplyPayloads,
@@ -431,7 +430,7 @@ export function buildEmbeddedRunPayloads(params: {
       if (
         item.isError === true &&
         params.sourceReplyDeliveryMode === "message_tool_only" &&
-        explicitFinalSourceReply === false
+        !suppressFailureArtifacts
       ) {
         markReplyPayloadForSourceSuppressionDelivery(payload);
       }

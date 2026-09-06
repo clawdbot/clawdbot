@@ -1,6 +1,9 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
+import { shouldDeliverDespiteSourceReplySuppression } from "../../../auto-reply/reply/dispatch-from-config.payloads.js";
+import { resolveStrandedReplyRecovery } from "../../../auto-reply/reply/stranded-reply-recovery.js";
+import { createMockFollowupRun } from "../../../auto-reply/reply/test-helpers.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../../config/sessions/transcript-write-context.js";
 import {
@@ -637,7 +640,6 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       {
         assistantTranscriptIdempotencyKey: "run-settled:settled-finalization-fallback",
         assistantTranscriptOwned: true,
-        deliverDespiteSourceReplySuppression: true,
         sessionWriterDeliveryAuthority: {
           agentId: "main",
           expectedLifecycleRevision: "revision-a",
@@ -691,6 +693,62 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       expect.objectContaining({ text: SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT }),
     ]);
   });
+
+  it.each(["empty", "failed"])(
+    "keeps a %s finalizer's synthetic fallback private without retrying source delivery",
+    async (outcome) => {
+      const input = finalizationInput(settledSuccessfulAttempt());
+      input.terminalBase.runParams.trigger = "user";
+      if (outcome === "failed") {
+        backendMocks.runSettledFinalization.mockRejectedValue(new Error("finalizer failed"));
+      } else {
+        backendMocks.runSettledFinalization.mockResolvedValue({
+          outcome: "empty",
+          result: { assistant: buildEmbeddedRunnerAssistant({ content: [] }) },
+        });
+      }
+
+      const result = await prepareTerminalWithSettledTurnFinalization(input);
+      const payloads = result.prepared.payloadsWithToolMedia ?? [];
+      expect(payloads).toEqual([
+        expect.objectContaining({ text: SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT }),
+      ]);
+      expect(
+        payloads.some((payload) =>
+          shouldDeliverDespiteSourceReplySuppression(payload, {
+            ctx: { InboundEventKind: "user_request" },
+            explicitCommandTurnCtx: false,
+            suppressAutomaticSourceDelivery: true,
+            sendPolicyDenied: false,
+          }),
+        ),
+      ).toBe(false);
+      expect(result.prepared.finalAssistantVisibleText).toBe("");
+      expect(result.prepared.finalAssistantRawText).toBe("");
+      expect(
+        resolveStrandedReplyRecovery({
+          base: createMockFollowupRun(),
+          payloads,
+          finalText: result.prepared.finalAssistantVisibleText ?? "",
+          sourceReplyDeliveryMode: "message_tool_only",
+          sendPolicyDenied: false,
+          successfulSourceReplyDelivery: false,
+          isHeartbeat: false,
+          isRoomEvent: false,
+        }),
+      ).toEqual({ kind: "none" });
+
+      input.terminalBase.runParams.sourceReplyDeliveryMode = "automatic";
+      const automatic = await prepareTerminalWithSettledTurnFinalization(input);
+      expect(automatic.prepared.payloadsWithToolMedia).toEqual(payloads);
+      expect(automatic.prepared.finalAssistantVisibleText).toBe(
+        SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT,
+      );
+      expect(automatic.prepared.finalAssistantRawText).toBe(
+        SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT,
+      );
+    },
+  );
 
   it("closes failed finalizer controls while retaining the original failure", async () => {
     vi.useFakeTimers();

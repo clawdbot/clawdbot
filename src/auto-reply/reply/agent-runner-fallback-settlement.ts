@@ -1,3 +1,4 @@
+import { classifyAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { isContextOverflowError } from "../../agents/embedded-agent-helpers.js";
 import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import {
@@ -168,7 +169,12 @@ export async function settleAgentFallbackCycle(params: {
     emitSettledLifecycleError(exhaustionError, terminalMetadata);
     turn.replyOperation?.retainFailureUntilComplete();
     turn.replyOperation?.fail("run_failed", exhaustionError);
-  } else if (deferredLifecycleError || embeddedError || terminalOutcome.status === "timeout") {
+  } else if (
+    deferredLifecycleError ||
+    embeddedError ||
+    terminalOutcome.status === "timeout" ||
+    classifyAgentRunTerminalOutcome(terminalOutcome) === "failure"
+  ) {
     const terminalError = new Error(terminalErrorMessage ?? "Agent run failed");
     terminalRunFailed = true;
     cycle.modelPatch.captureFailure(embeddedError ?? terminalError);

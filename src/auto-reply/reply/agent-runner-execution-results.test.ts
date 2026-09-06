@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
@@ -24,6 +25,35 @@ import type {
 const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: result and tool delivery", () => {
+  it.each([
+    { stopReason: "error", failureReply: true },
+    { stopReason: "aborted", failureReply: false },
+    { stopReason: "superseded", failureReply: false },
+  ])("preserves canonical $stopReason after private partial output", async (testCase) => {
+    const followupRun = createFollowupRun();
+    followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Private partial output before the run ended." }],
+      meta: { stopReason: testCase.stopReason },
+    });
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
+
+    expect(result.kind).toBe("success");
+    if (result.kind === "success") {
+      expect(Boolean(result.terminalFailurePayload)).toBe(testCase.failureReply);
+      if (testCase.failureReply) {
+        assert(result.terminalFailurePayload);
+        expect(result.terminalFailurePayload.isError).toBe(true);
+        expect(
+          getReplyPayloadMetadata(result.terminalFailurePayload)
+            ?.deliverDespiteSourceReplySuppression,
+        ).toBe(true);
+      }
+    }
+  });
+
   it("forwards media-only tool results without typing text", async () => {
     const onToolResult = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {

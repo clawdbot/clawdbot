@@ -321,6 +321,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
     }
     turn.queuedFinal ||= hasFinalInboundReplyDispatch(turnResult.dispatchResult);
     turn.agentRunFailed = readAgentRunTerminalOutcome(turnResult.dispatchResult) === "failed";
+    turn.sendPolicyDenied = turnResult.dispatchResult.sendPolicyDenied === true;
     turn.noVisibleReplyFallbackEligible =
       turnResult.dispatchResult.noVisibleReplyFallbackEligible === true;
     turn.suppressSilentReplyFallback =
