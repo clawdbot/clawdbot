@@ -20,7 +20,9 @@ async function waitForChildEnvironment(filePath: string): Promise<ChildEnvironme
         throw error;
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
   }
 }
 
