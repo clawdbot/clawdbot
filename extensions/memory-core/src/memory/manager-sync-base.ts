@@ -132,6 +132,9 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   >();
   protected providerKey: string | null = null;
   protected watcher: FSWatcher | null = null;
+  protected pollingWatchers: FSWatcher[] = [];
+  protected closingWatcherPromises = new Set<Promise<void>>();
+  protected regularWatchPaths = new Set<string>();
   protected watchTimer: NodeJS.Timeout | null = null;
   protected sessionWatchTimer: NodeJS.Timeout | null = null;
   protected sessionUnsubscribe: (() => void) | null = null;

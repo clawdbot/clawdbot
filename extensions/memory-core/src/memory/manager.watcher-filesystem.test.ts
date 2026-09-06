@@ -19,6 +19,161 @@ function activeFilesystemWatchers() {
 }
 
 describe("memory watchers on the real filesystem", () => {
+  it.each(["EMFILE", "ENFILE", "ENOSPC"] as const)(
+    "keeps search fresh through Chokidar polling after native watch reports %s",
+    async (code) => {
+      const state = await createOpenClawTestState({ label: "memory-watch-capacity" });
+      const memoryDir = path.join(state.workspaceDir, "memory");
+      await fs.mkdir(memoryDir);
+      await fs.writeFile(path.join(memoryDir, "before.md"), "Quartz sentinel.");
+      const originalWatch = nativeFs.watch;
+      const watchObserver = vi.spyOn(nativeFs, "watch").mockImplementation((...args) => {
+        if (path.resolve(String(args[0])) === memoryDir) {
+          throw Object.assign(new Error(`${code}: native watcher capacity exhausted`), { code });
+        }
+        return originalWatch(...args);
+      });
+      syncBuiltinESMExports();
+      let manager: MemoryIndexManager | null = null;
+      let index: DatabaseSync | undefined;
+      try {
+        await configureMemoryCoreDreamingStateForTests(state.env);
+        const cfg: OpenClawConfig = {
+          plugins: { enabled: false },
+          agents: { defaults: { workspace: state.workspaceDir }, list: [{ id: "main" }] },
+          memory: {
+            search: {
+              provider: "none",
+              sources: ["memory"],
+              store: { vector: { enabled: false } },
+              query: { minScore: 0 },
+            },
+          },
+        };
+        manager = await MemoryIndexManager.get({ cfg, agentId: "main" });
+        if (!manager) {
+          throw new Error("memory manager unavailable");
+        }
+        await manager.sync({ reason: "test-initial-index" });
+        const indexPath = manager.status().dbPath;
+        if (!indexPath) {
+          throw new Error("memory index path unavailable");
+        }
+        index = new DatabaseSync(indexPath, { readOnly: true });
+        const indexedRows = index.prepare(
+          `SELECT path, text FROM ${MEMORY_INDEX_CHUNKS_TABLE} ORDER BY path, start_line`,
+        );
+        expect(indexedRows.all()).toEqual([{ path: "memory/before.md", text: "Quartz sentinel." }]);
+
+        await fs.writeFile(path.join(memoryDir, "after.md"), "Topaz sentinel.");
+
+        await expect
+          .poll(() => indexedRows.all(), { timeout: 15_000 })
+          .toEqual([
+            { path: "memory/after.md", text: "Topaz sentinel." },
+            { path: "memory/before.md", text: "Quartz sentinel." },
+          ]);
+      } finally {
+        index?.close();
+        await manager?.close();
+        watchObserver.mockRestore();
+        syncBuiltinESMExports();
+        resetMemoryCoreDreamingStateForTests();
+        await state.cleanup();
+      }
+    },
+    60_000,
+  );
+
+  it("keeps search fresh when an active native watcher exhausts capacity", async () => {
+    const state = await createOpenClawTestState({ label: "memory-watch-runtime-capacity" });
+    const memoryDir = path.join(state.workspaceDir, "memory");
+    await fs.mkdir(memoryDir);
+    await fs.writeFile(path.join(memoryDir, "before.md"), "Quartz sentinel.");
+    const originalWatch = nativeFs.watch;
+    let memoryWatcher: nativeFs.FSWatcher | undefined;
+    const watchObserver = vi.spyOn(nativeFs, "watch").mockImplementation((...args) => {
+      const watcher = originalWatch(...args);
+      if (path.resolve(String(args[0])) === memoryDir) {
+        memoryWatcher = watcher;
+      }
+      return watcher;
+    });
+    syncBuiltinESMExports();
+    let manager: MemoryIndexManager | null = null;
+    let restoreSyncSpy: (() => void) | undefined;
+    let index: DatabaseSync | undefined;
+    try {
+      await configureMemoryCoreDreamingStateForTests(state.env);
+      const cfg: OpenClawConfig = {
+        plugins: { enabled: false },
+        agents: { defaults: { workspace: state.workspaceDir }, list: [{ id: "main" }] },
+        memory: {
+          search: {
+            provider: "none",
+            sources: ["memory"],
+            store: { vector: { enabled: false } },
+            query: { minScore: 0 },
+          },
+        },
+      };
+      manager = await MemoryIndexManager.get({ cfg, agentId: "main" });
+      if (!manager || !memoryWatcher) {
+        throw new Error("memory manager native watcher unavailable");
+      }
+      await manager.sync({ reason: "test-initial-index" });
+      const indexPath = manager.status().dbPath;
+      if (!indexPath) {
+        throw new Error("memory index path unavailable");
+      }
+      index = new DatabaseSync(indexPath, { readOnly: true });
+      const indexedRows = index.prepare(
+        `SELECT path, text FROM ${MEMORY_INDEX_CHUNKS_TABLE} ORDER BY path, start_line`,
+      );
+      expect(indexedRows.all()).toEqual([{ path: "memory/before.md", text: "Quartz sentinel." }]);
+
+      const originalSync = manager.sync.bind(manager);
+      let watchSyncCount = 0;
+      let resolveRecoverySync = () => {};
+      const recoverySyncCompleted = new Promise<void>((resolve) => {
+        resolveRecoverySync = resolve;
+      });
+      const syncMethodSpy = vi.spyOn(manager, "sync").mockImplementation(async (params) => {
+        await originalSync(params);
+        if (params?.reason === "watch" && ++watchSyncCount === 1) {
+          resolveRecoverySync();
+        }
+      });
+      restoreSyncSpy = () => syncMethodSpy.mockRestore();
+
+      memoryWatcher.emit(
+        "error",
+        Object.assign(new Error("ENOSPC: native watcher capacity exhausted"), {
+          code: "ENOSPC",
+        }),
+      );
+      await recoverySyncCompleted;
+      expect(indexedRows.all()).toEqual([{ path: "memory/before.md", text: "Quartz sentinel." }]);
+
+      await fs.writeFile(path.join(memoryDir, "after.md"), "Topaz sentinel.");
+
+      await expect
+        .poll(() => indexedRows.all(), { timeout: 15_000 })
+        .toEqual([
+          { path: "memory/after.md", text: "Topaz sentinel." },
+          { path: "memory/before.md", text: "Quartz sentinel." },
+        ]);
+    } finally {
+      restoreSyncSpy?.();
+      index?.close();
+      await manager?.close();
+      watchObserver.mockRestore();
+      syncBuiltinESMExports();
+      resetMemoryCoreDreamingStateForTests();
+      await state.cleanup();
+    }
+  }, 60_000);
+
   it.each(["replacement", "removal"] as const)(
     "keeps search fresh after root %s and releases watchers on close",
     async (operation) => {

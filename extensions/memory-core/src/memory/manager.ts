@@ -647,6 +647,10 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       await this.watcher.close();
       this.watcher = null;
     }
+    const pollingWatchers = this.pollingWatchers.splice(0);
+    await Promise.all(pollingWatchers.map(async (watcher) => await watcher.close()));
+    await Promise.all(Array.from(this.closingWatcherPromises));
+    this.regularWatchPaths.clear();
     this.closeNativeMemoryWatchPairs();
     if (this.sessionUnsubscribe) {
       this.sessionUnsubscribe();
