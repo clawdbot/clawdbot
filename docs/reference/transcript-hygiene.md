@@ -27,12 +27,25 @@ Scope includes:
 - Blank text-block cleanup before provider replay
 - Incomplete reasoning-only length-turn cleanup before provider replay
 - User-input provenance tagging (for inter-session routed prompts)
-- Empty assistant error-turn repair for Bedrock Converse replay
+- Empty assistant error-turn removal for provider replay
 
 If you need transcript storage details, see
 [Session management deep dive](/reference/session-management-compaction).
 
 ---
+
+## Failed attempts and recovery
+
+Text-only assistant errors are buffered until the logical run settles. Recovery
+discards their partial text because the recovered reply supersedes it. Terminal
+failure persists the last attempt's partial text and error.
+
+Tool calls, displayable non-text content, and attachment facts are persisted
+immediately, before dependent tool results or the recovered reply. These fact
+rows omit the error and use a replayable stop reason so provider replay retains
+the calls. For mixed text/fact messages, partial text and the error remain
+buffered separately; terminal settlement does not duplicate facts or usage.
+This uses existing assistant-row shapes and requires no database migration.
 
 ## Global rule: runtime context is not user transcript
 
@@ -236,12 +249,11 @@ inter-session user turns that only have provenance metadata.
 
 **Amazon Bedrock (Converse API)**
 
-- Empty assistant stream-error turns are repaired to a non-empty fallback
-  text block before replay. Bedrock Converse rejects assistant messages
-  with `content: []`, so persisted assistant turns with `stopReason:
-"error"` and empty content are also repaired on disk before load.
-- Assistant stream-error turns with only blank text blocks are dropped from
-  the in-memory replay copy instead of replaying an invalid blank block.
+- Empty assistant stream-error turns and legacy fallback placeholders are dropped
+  from the in-memory replay copy. This avoids invalid empty ContentBlocks and
+  synthetic assistant prefill without rewriting the stored transcript.
+- Zero-usage empty stop turns are dropped too; billed silent replies and errors
+  with real assistant content retain their existing replay handling.
 - Pre-compaction assistant thinking signatures are stripped before Converse
   replay when a session has been compacted, for the same reason as
   Anthropic above.

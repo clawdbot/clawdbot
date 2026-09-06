@@ -1748,7 +1748,7 @@ src/agents/embedded-agent-runner/model.ts	5
 src/agents/embedded-agent-runner/openrouter-model-capabilities.ts	2
 src/agents/embedded-agent-runner/prepared-compaction-runtime.ts	1
 src/agents/embedded-agent-runner/prompt-cache-observability.ts	2
-src/agents/embedded-agent-runner/replay-history.ts	59
+src/agents/embedded-agent-runner/replay-history.ts	53
 src/agents/embedded-agent-runner/result-fallback-classifier.ts	2
 src/agents/embedded-agent-runner/run-entry.ts	3
 src/agents/embedded-agent-runner/run-orchestrator.ts	1
@@ -1931,7 +1931,7 @@ src/agents/session-model-auto-revert.ts	1
 src/agents/session-placement-admission.ts	1
 src/agents/session-raw-append-message.ts	2
 src/agents/session-suspension.ts	1
-src/agents/session-tool-result-guard.ts	24
+src/agents/session-tool-result-guard.ts	23
 src/agents/session-transcript-repair.ts	14
 src/agents/sessions/agent-session-base.ts	3
 src/agents/sessions/agent-session-extensions.ts	1
@@ -2640,8 +2640,6 @@ src/config/sessions/session-transcript-reconcile.worker.ts	1
 src/config/sessions/session-transcript-search.ts	1
 src/config/sessions/skill-prompt-blobs.ts	5
 src/config/sessions/store-entry-shape.ts	2
-src/config/sessions/targets-path-validation.ts	1
-src/config/sessions/targets.ts	2
 src/config/sessions/transcript-assistant-message.ts	2
 src/config/sessions/transcript-recent-window.ts	1
 src/config/sessions/transcript-replay.ts	1
@@ -2725,7 +2723,7 @@ src/flows/channel-setup.ts	7
 src/flows/doctor-core-checks.runtime.ts	5
 src/flows/doctor-core-checks.ts	4
 src/flows/doctor-health-contributions-final.ts	1
-src/flows/doctor-health-contributions.ts	2
+src/flows/doctor-health-contributions.ts	1
 src/flows/doctor-removed-workspaces-state-check.ts	2
 src/flows/health-check-adapter.ts	1
 src/flows/search-setup.ts	6
@@ -3867,7 +3865,7 @@ ui/src/lib/chat/tool-cards.ts	2
 ui/src/lib/chat/tool-display.ts	1
 ui/src/lib/config-form-utils.ts	7
 ui/src/lib/config/config-draft-model.ts	5
-ui/src/lib/cron/index.ts	13
+ui/src/lib/cron/index.ts	11
 ui/src/lib/gateway-diagnostics.ts	3
 ui/src/lib/gateway-errors.ts	1
 ui/src/lib/keyboard-shortcuts.ts	1
@@ -3903,7 +3901,7 @@ ui/src/pages/chat/attachment-api.ts	1
 ui/src/pages/chat/chat-avatar.ts	4
 ui/src/pages/chat/chat-command-executor.ts	1
 ui/src/pages/chat/chat-composer-capability-host.ts	4
-ui/src/pages/chat/chat-gateway.ts	2
+ui/src/pages/chat/chat-gateway.ts	1
 ui/src/pages/chat/chat-history-retry.ts	1
 ui/src/pages/chat/chat-page-retained-sessions.ts	1
 ui/src/pages/chat/chat-page.ts	1

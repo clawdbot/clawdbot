@@ -1,10 +1,14 @@
 /* @vitest-environment jsdom */
+import { expectDefined } from "@openclaw/normalization-core";
+import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDevicesViewProps } from "../../test-helpers/devices-fixtures.ts";
 import {
   renderDevicesContainer,
   getDevicesSection as getSection,
   getDeviceSettingsRow as getSettingsRow,
 } from "../../test-helpers/devices-view.ts";
+import { renderDevices } from "./view.ts";
 
 afterEach(() => document.body.replaceChildren());
 
@@ -207,5 +211,111 @@ describe("devices agent bindings", () => {
       ["MAIN", "worker-node"],
       ["MAIN", null],
     ]);
+  });
+
+  it.each([
+    { name: "IDs", refs: ["default-node", "agent-node"] },
+    {
+      name: "ineligible exact IDs ahead of names",
+      refs: ["default-node", "agent-node"],
+      ineligibleExact: true,
+      unavailable: true,
+    },
+    { name: "names", refs: ["Default worker", "Research worker"] },
+    { name: "normalized names", refs: ["default_worker", "RESEARCH-WORKER"] },
+    { name: "addresses", refs: ["192.0.2.10", "192.0.2.20"] },
+    { name: "ID prefixes", refs: ["default", "agent-"] },
+    {
+      name: "ambiguous names across the full inventory",
+      refs: ["Default worker", "Research worker"],
+      competitors: true,
+      unavailable: true,
+    },
+    {
+      name: "connected-name preference",
+      refs: ["Default worker", "Research worker"],
+      competitors: true,
+      connected: true,
+    },
+    {
+      name: "current-client preference",
+      refs: ["Default worker", "Research worker"],
+      competitors: true,
+      clientId: "openclaw-node",
+    },
+  ])("preserves $name across node loss and recovery", (scenario) => {
+    const [defaultRef, agentRef] = scenario.refs;
+    const onBindDefault = vi.fn();
+    const onBindAgent = vi.fn();
+    const configForm = {
+      tools: { exec: { node: defaultRef } },
+      agents: {
+        entries: {
+          main: { default: true },
+          research: { name: "Research", tools: { exec: { node: agentRef } } },
+        },
+      },
+    };
+    const savedConfig = structuredClone(configForm);
+    const nodes = [
+      { nodeId: "default-node", displayName: "Default worker", remoteIp: "192.0.2.10" },
+      { nodeId: "agent-node", displayName: "Research worker", remoteIp: "192.0.2.20" },
+    ].map((node) =>
+      Object.assign(node, {
+        commands: ["system.run"],
+        connected: scenario.connected,
+        clientId: scenario.clientId,
+      }),
+    );
+    const container = document.createElement("div");
+    document.body.append(container);
+    const renderBindings = (inventory: Array<Record<string, unknown>>, unavailable: boolean) => {
+      render(
+        renderDevices(
+          createDevicesViewProps({ nodes: inventory, configForm, onBindDefault, onBindAgent }),
+        ),
+        container,
+      );
+      const section = getSection(container, "Exec node binding");
+      ["Default binding", "Research (research)"].forEach((title, index) => {
+        const select = expectDefined(
+          getSettingsRow(section, title).querySelector<HTMLSelectElement>("select"),
+          "node binding",
+        );
+        const option = expectDefined(select.selectedOptions[0], "selected node binding option");
+        const ref = scenario.refs[index];
+        const node = expectDefined(nodes[index], "bound node");
+        expect(select.value).toBe(ref);
+        expect(option.disabled).toBe(unavailable);
+        expect(option.textContent?.replace(/\s+/gu, " ").trim()).toBe(
+          unavailable ? `${ref} (Unavailable)` : `${node.displayName} · ${node.nodeId}`,
+        );
+      });
+      expect(configForm).toEqual(savedConfig);
+      expect(onBindDefault).not.toHaveBeenCalled();
+      expect(onBindAgent).not.toHaveBeenCalled();
+    };
+    const competitors = scenario.competitors
+      ? nodes.map((node) => ({
+          ...node,
+          nodeId: `${node.nodeId}-competitor`,
+          commands: [],
+          connected: false,
+          clientId: scenario.clientId ? "clawdbot-node" : undefined,
+        }))
+      : [];
+    const initialNodes = scenario.ineligibleExact
+      ? [
+          ...nodes.map((node) => ({ ...node, commands: [] })),
+          ...nodes.map((node) => ({
+            ...node,
+            nodeId: `${node.nodeId}-other`,
+            displayName: node.nodeId,
+          })),
+        ]
+      : [...nodes, ...competitors];
+    renderBindings(initialNodes, scenario.unavailable ?? false);
+    renderBindings([{ ...nodes[0], commands: [] }], true);
+    renderBindings(nodes, false);
   });
 });
