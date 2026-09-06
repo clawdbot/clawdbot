@@ -402,6 +402,7 @@ export function readPreviousIndexedTranscriptEventSync(
   );
   return row
     ? {
+        // SAFETY: Indexed transcript rows contain the persisted transcript event union.
         event: JSON.parse(row.event_json) as TranscriptEvent,
         seq: sqliteNumber(row.seq),
       }
