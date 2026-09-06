@@ -1096,7 +1096,7 @@ value into `plugins.entries.openai.config.personality` when that key is unset.
     | Silence duration                       | `...openai.silenceDurationMs`                                           | `500`                |
     | Prefix padding                         | `...openai.prefixPaddingMs`                                             | `300`                |
     | Reasoning effort                       | `...openai.reasoningEffort`                                             | (unset)              |
-    | Auth                                   | `openai` auth profile, `...openai.apiKey`, or `OPENAI_API_KEY` | Platform API key; ChatGPT OAuth for GA browser Talk |
+    | Auth                                   | `openai` auth profile, `...openai.apiKey`, or `OPENAI_API_KEY` | OAuth-first with Platform fallback for the released browser/Gateway-owned WebRTC route; Platform API key otherwise |
 
     Available built-in Realtime voices for `gpt-realtime-2.1`: `alloy`, `ash`,
     `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`, `marin`, `cedar`.
@@ -1128,60 +1128,57 @@ value into `plugins.entries.openai.config.personality` when that key is unset.
     adapter's 30-minute active-session lease is not a remote-lifetime guarantee
     or a fallback after failed hangup.
 
-    #### GA Realtime browser Talk over ChatGPT OAuth
+    #### Released browser/Gateway-owned WebRTC authentication
 
-    Browser Talk can use `gpt-realtime-2.1`, `gpt-realtime-2.1-mini`, or
-    `gpt-realtime-2` with either Platform API-key auth or an OpenClaw ChatGPT
-    OAuth subscription profile. Platform auth keeps precedence in this order:
-    the configured realtime key, an `openai` API-key profile, then
-    `OPENAI_API_KEY`. When none is configured, the Gateway falls back to the
-    ChatGPT OAuth profile created by
-    `openclaw models auth login --provider openai`.
+    The released browser/Gateway-owned WebRTC route tries the OpenClaw ChatGPT
+    OAuth subscription profile first. When OAuth is unavailable, the Gateway
+    falls back to Platform API-key auth in this order: the configured realtime
+    key, an `openai` API-key profile, then `OPENAI_API_KEY`. Create the OAuth
+    profile with `openclaw models auth login --provider openai`.
 
     The enabled OpenAI plugin starts its browser session broker automatically,
     including when you sign in after the Gateway has started. No separate Talk
     provider configuration or Platform API key is required for this browser
-    path. The broker opens a provider session only when you start Talk; signing
-    in does not open the microphone or start a voice session. Returning to the
-    browser after sign-in refreshes the chat microphone's readiness.
+    path when an eligible OAuth profile is available. The broker opens a
+    provider session only when you start Talk; signing in does not open the
+    microphone or start a voice session. Returning to the browser after sign-in
+    refreshes the chat microphone's readiness.
 
     The two browser paths expose the same Talk session contract but keep
-    credentials on different sides of the trust boundary. Platform auth mints
-    an ephemeral client secret and the browser exchanges SDP directly with
-    OpenAI. OAuth auth stays in the Gateway: the existing single-use offer
-    broker sends multipart `sdp` plus the canonical browser `session` policy
-    to `/v1/realtime/calls` and returns only the answer SDP. The OAuth token
-    never reaches the browser. A configured Platform credential
-    that cannot be resolved still fails closed; repair or remove that source
-    before OAuth fallback can apply.
+    credentials on different sides of the trust boundary. OAuth auth stays in
+    the Gateway, where the single-use offer broker exchanges the browser's SDP
+    and returns only the answer SDP. The OAuth token never reaches the browser.
+    Platform fallback mints an ephemeral client secret for a direct browser SDP
+    exchange.
 
-    This GA OAuth fallback is browser-only. iOS client-owned WebRTC, Voice
-    Call, Gateway relay, provider WebSocket transports, Discord realtime voice,
-    and other backend GA Realtime bridges remain Platform-key-only.
+    This OAuth-first compatibility is limited to the released
+    browser/Gateway-owned WebRTC route. iOS client-owned WebRTC, Voice Call,
+    Gateway relay, direct backend sockets, Discord realtime voice, and unlisted
+    or private realtime routes remain Platform-key-only.
 
-    #### GPT-Live transport paths
+    #### Unlisted and private realtime transport paths
 
-    GPT-Live browser Talk uses Platform-key client WebRTC with Gateway-owned
-    control. Gateway-owned `gateway-relay` Talk and other backend consumers use
-    the direct Platform-key bidirectional transport.
-    Credentials and provider control remain on the Gateway.
+    Unlisted or private browser Talk uses Platform-key client WebRTC with
+    Gateway-owned control. Gateway relay and other direct backend consumers use
+    the Platform-key bidirectional transport. Credentials and provider control
+    remain on the Gateway.
 
-    Use the account-issued `gpt-live-*` model value. Opaque model values are
+    Use the account-issued realtime model value. Unlisted model values are
     accepted as free-form Talk config but are not published through catalogs
-    or diagnostics. Opt in explicitly with `talk.realtime.model`;
-    `gpt-realtime-2.1` remains the GA default.
+    or diagnostics. Opt in explicitly with `talk.realtime.model`; the released
+    model remains the default.
 
     Current Platform-key sessions accept `marin` and `cedar`. OpenClaw defaults
     to `marin` and maps unsupported configured voices back to it.
 
-    Browser WebRTC prerequisites, in order:
+    Unlisted or private browser WebRTC prerequisites, in order:
 
     1. A Platform API key configured through `talk.realtime.providers.openai.apiKey`,
        an `openai` API-key profile, or `OPENAI_API_KEY`.
-    2. `talk.realtime.model` set to a `gpt-live-*` value — via **Settings →
+    2. `talk.realtime.model` set to the account-issued value — via **Settings →
        Talk** in the Control UI or the config below.
     3. The bundled `openai` plugin registered in full mode. A restrictive
-       `plugins.allow` list fails with "OpenAI GPT-Live browser session broker
+       `plugins.allow` list fails with "OpenAI realtime browser session broker
        is unavailable".
 
     ```json5
@@ -1189,7 +1186,7 @@ value into `plugins.entries.openai.config.personality` when that key is unset.
       talk: {
         realtime: {
           provider: "openai",
-          model: "<account-issued-gpt-live-model>",
+          model: "<account-issued-realtime-model>",
           transport: "webrtc",
         },
       },
@@ -1203,7 +1200,7 @@ value into `plugins.entries.openai.config.personality` when that key is unset.
       talk: {
         realtime: {
           provider: "openai",
-          model: "<account-issued-gpt-live-model>",
+          model: "<account-issued-realtime-model>",
           transport: "gateway-relay",
         },
       },
@@ -1212,25 +1209,25 @@ value into `plugins.entries.openai.config.personality` when that key is unset.
 
     Browser Talk uses `transport: "webrtc"`.
 
-    | Consumer | GPT-Live status |
+    | Consumer | Unlisted/private route status |
     | --- | --- |
     | Browser Talk | Supported with Platform-key client WebRTC and Gateway-owned sideband |
     | Gateway-relay Talk | Supported with direct Platform-key transport |
     | Discord bidirectional voice | Supported with the Platform-key backend WebSocket |
     | Voice Call and telephony | Supported with the Platform-key backend WebSocket |
-    | iOS client-owned Talk | Implemented; GPT-Live device live verification pending |
+    | iOS client-owned Talk | Implemented; device live verification pending |
     | Android realtime Talk | Pending an Android device live-proof flip; Android stays on native Talk |
 
     These rows describe implemented transports, not account entitlement or
     complete model capability parity. See the [Discord voice policy limits](/channels/discord#voice-channels)
     and [Voice Call tool limits](/plugins/voice-call#realtime-voice-conversations) before
-    selecting GPT-Live for those consumers.
+    selecting an unlisted or private route for those consumers.
 
     <Warning>
-    This route requires a Platform API key with access to the configured
-    account-issued model. ChatGPT OAuth is not a fallback for it. If session
-    creation is rejected, verify that the key and configured model belong to
-    the same Platform project.
+    Unlisted or private routes require a Platform API key with access to the
+    configured account-issued model. OAuth is not a fallback for them. If
+    session creation is rejected, verify that the key and configured model
+    belong to the same Platform project.
     </Warning>
 
     A `403 Voice session access denied` response is overloaded and does not by
@@ -1239,23 +1236,23 @@ value into `plugins.entries.openai.config.personality` when that key is unset.
     above, then verify the Platform key and configured model against the same
     project.
 
-    The Gateway-owned WebRTC route routes sideband delegations through the
-    configured OpenClaw agent and keeps OAuth or Platform credentials away from
-    relay clients. The direct WebSocket bridge enables Discord voice and Voice
-    Call/telephony with Platform auth; OpenClaw converts G.711 u-law telephony
-    audio to and from GPT-Live's 24 kHz PCM stream. Android's client-side gate
-    stays closed until the Gateway relay path has live proof from an Android
-    device.
+    The released Gateway-owned WebRTC route uses OAuth first with Platform
+    fallback, routes sideband delegations through the configured OpenClaw
+    agent, and keeps credentials away from relay clients. Unlisted or private
+    browser WebRTC and the direct backend socket remain Platform-only. The
+    direct socket enables Discord voice and Voice Call/telephony; OpenClaw
+    converts G.711 u-law telephony audio to and from the provider's 24 kHz PCM
+    stream. Android's client-side gate stays closed until the Gateway relay
+    path has live proof from an Android device.
 
-    The WebRTC path creates a call on `api.openai.com/v1/live` and joins its
-    sideband there. The backend path opens `/v1/live?model=...`, sends a
-    Frameless `session.update`, then carries PCM audio, transcripts,
-    delegations, and delegation results over that one socket. The legacy
-    `chatgpt.com` backend route returns `403` and is not used.
+    The WebRTC path creates a provider call and joins its sideband. The direct
+    backend path opens one bidirectional session, sends a Frameless
+    `session.update`, then carries PCM audio, transcripts, delegations, and
+    delegation results over that socket.
 
     Maintainers can exercise the Platform direct path and the separate GA
-    browser OAuth path with the opt-in live tests. The private realtime model
-    is read from `talk.realtime.model`; missing credentials or model config
+    browser OAuth path with the opt-in live tests. The account-issued realtime
+    model is read from `talk.realtime.model`; missing credentials or model config
     produce sanitized skips, and the tests never print either value:
 
     ```bash
@@ -1280,16 +1277,12 @@ value into `plugins.entries.openai.config.personality` when that key is unset.
     </Note>
 
     <Note>
-    Control UI Talk uses OpenAI browser WebRTC sessions. GA
-    `gpt-realtime-*` models use a Gateway-minted ephemeral client secret and a
-    direct browser SDP exchange when Platform credentials are available.
-    Configured realtime keys, API-key profiles, and `OPENAI_API_KEY` use that
-    path in that order. With no Platform credential, GA browser Talk uses the
-    Gateway offer broker so ChatGPT OAuth remains server-side.
-    GPT-Live browser Talk requires Platform API-key access.
-    GA Gateway relay and Voice Call backend realtime WebSocket bridges require
-    Platform credentials. GPT-Live Gateway relay and Voice Call use the
-    Platform-key backend WebSocket.
+    Control UI Talk uses browser WebRTC sessions. The released
+    browser/Gateway-owned route tries ChatGPT OAuth first through the Gateway
+    offer broker, keeping OAuth server-side. When OAuth is unavailable, it
+    falls back to Platform credentials in this order: configured realtime key,
+    API-key profile, then `OPENAI_API_KEY`. Direct backend sockets and unlisted
+    or private realtime routes require Platform credentials.
     Maintainer live verification is available with
     `OPENAI_API_KEY=... GEMINI_API_KEY=... node --import tsx scripts/dev/realtime-talk-live-smoke.ts`;
     the OpenAI legs verify the backend WebSocket bridge, a synthesized PCM24
