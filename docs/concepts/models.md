@@ -93,7 +93,8 @@ including a successful empty account list. Metadata alone cannot refill that lis
 explicitly configured models and independent native runtime catalogs remain.
 When a provider reports failed discovery, the Gateway retains its last compatible
 inventory and reports the failed outcome while healthy providers update. Without
-compatible inventory, the provider's own advisory fallback rows remain visible.
+compatible inventory, the Gateway publishes the provider's prepared starter rows
+with the failed outcome, even when strict discovery returns no rows.
 They cannot widen a retained successful list, including an empty list. Changes to
 provider, plugin, auth, environment, or workspace identity invalidate incompatible inventory.
 

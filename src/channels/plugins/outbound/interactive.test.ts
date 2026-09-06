@@ -994,54 +994,62 @@ describe("presentation capability limits", () => {
     ]);
   });
 
-  it("reserves action row capacity for select blocks", () => {
-    const presentation = adaptMessagePresentationForChannel({
-      presentation: {
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              { label: "One", value: "one" },
-              { label: "Two", value: "two" },
-              { label: "Three", value: "three" },
-            ],
-          },
-          {
-            type: "select",
-            placeholder: "Extra",
-            options: [{ label: "Four", value: "four" }],
-          },
-        ],
-      },
-      capabilities: {
-        limits: {
-          actions: {
-            maxActionsPerRow: 2,
-            maxRows: 2,
-          },
-          selects: {
-            maxOptions: 25,
+  it.each([false, true])(
+    "reserves a select row with rejected leading options: %s",
+    (hasRejected) => {
+      const presentation = adaptMessagePresentationForChannel({
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                { label: "One", value: "one" },
+                { label: "Two", value: "two" },
+                { label: "Three", value: "three" },
+              ],
+            },
+            {
+              type: "select",
+              placeholder: "Extra",
+              options: [
+                ...(hasRejected ? [{ label: "Rejected", value: "too-long" }] : []),
+                { label: "Four", value: "four" },
+              ],
+            },
+          ],
+        },
+        capabilities: {
+          limits: {
+            actions: {
+              maxActionsPerRow: 2,
+              maxRows: 2,
+            },
+            selects: {
+              maxOptions: 1,
+              maxValueBytes: 4,
+            },
           },
         },
-      },
-    });
+      });
 
-    expect(presentation.blocks).toEqual([
-      {
-        type: "buttons",
-        buttons: [
-          { label: "One", value: "one" },
-          { label: "Two", value: "two" },
-        ],
-      },
-      { type: "context", text: "Actions:\n- Three" },
-      {
-        type: "select",
-        placeholder: "Extra",
-        options: [{ label: "Four", value: "four" }],
-      },
-    ]);
-  });
+      expect(presentation.blocks).toEqual([
+        {
+          type: "buttons",
+          buttons: [
+            { label: "One", value: "one" },
+            { label: "Two", value: "two" },
+          ],
+        },
+        { type: "context", text: "Actions:\n- Three" },
+        {
+          type: "select",
+          placeholder: "Extra",
+          options: [{ label: "Four", value: "four" }],
+        },
+        ...(hasRejected ? [{ type: "context", text: "Extra:\n- Rejected" }] : []),
+      ]);
+    },
+  );
 
   it("preserves authored button precedence when only action rows are bounded", () => {
     const presentation = adaptMessagePresentationForChannel({

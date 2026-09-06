@@ -478,6 +478,22 @@ describe("McpLoopbackToolCache", () => {
     expect(resolveGatewayScopedTools.mock.calls[1]?.[0]).toMatchObject({ replyToMode: "off" });
   });
 
+  it("keeps pinned widget authoring out of capless cached tool lists", async () => {
+    const cache = new McpLoopbackToolCache();
+    const params = scopeParams();
+    resolveGatewayScopedTools.mockImplementation(({ pinnedWidgetAuthoring }) =>
+      scopedToolFixture(pinnedWidgetAuthoring ? ["dashboard", "show_widget"] : ["dashboard"]),
+    );
+
+    for (const pinnedWidgetAuthoring of [true, undefined, true, false]) {
+      const result = await cache.resolve({ ...params, pinnedWidgetAuthoring });
+      expect(result.tools.map((tool) => tool.name)).toEqual(
+        pinnedWidgetAuthoring ? ["dashboard", "show_widget"] : ["dashboard"],
+      );
+    }
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+  });
+
   it("evicts only the revoked grant's cached tool closures", async () => {
     const cache = new McpLoopbackToolCache();
     const cfg = {} as OpenClawConfig;

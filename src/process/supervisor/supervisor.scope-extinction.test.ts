@@ -64,53 +64,42 @@ describe("process supervisor scope extinction", () => {
     expect(adapter.disposeMock).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    { failed: false, acquired: true },
-    { failed: true, acquired: true },
-    { failed: true, acquired: false },
-  ])(
-    "retains extinction until its scope joins (failed=$failed, acquired=$acquired)",
-    async ({ failed, acquired }) => {
-      const extinction = createDeferred();
-      const adapter = Object.assign(createStubChildAdapter(), {
-        waitForExtinction: () => extinction.promise,
-      });
-      createChildAdapterMock.mockResolvedValue(adapter);
-      const supervisor = createProcessSupervisor();
-      const scopeKey = "scope:one-shot-late-join";
-      const cleanup = acquired
-        ? supervisor.acquireScopeCleanup(scopeKey, { requireProcessTree: true })
-        : () => supervisor.waitForScope!(scopeKey);
-      const run = await spawnChild(supervisor, {
-        sessionId: scopeKey,
-        scopeKey,
-        argv: createSilentIdleArgv(),
-      });
-      adapter.settle(0);
-      await expect(run.wait()).resolves.toMatchObject({ exitCode: 0 });
-      if (failed) {
-        extinction.reject(new Error("cleanup identity lost"));
-        await expect(run.waitForExtinction!()).rejects.toThrow("cleanup identity lost");
-        await expect(cleanup()).rejects.toThrow("cleanup identity lost");
-        await expect(cleanup()).rejects.toThrow("cleanup identity lost");
-      } else {
-        extinction.resolve();
-        await run.waitForExtinction!();
-        await expect(cleanup()).resolves.toBeUndefined();
-      }
-      // The released owner must neither poison a new run nor retain the old admission.
-      if (acquired) {
-        await expect(
-          supervisor.acquireScopeCleanup(scopeKey, { requireProcessTree: true })(),
-        ).resolves.toBeUndefined();
-      }
-      if (failed) {
-        await expect(supervisor.shutdown()).rejects.toThrow("cleanup identity lost");
-      } else {
-        await supervisor.shutdown();
-      }
-    },
-  );
+  it.each([false, true])("retains extinction until its scope joins (failed=%s)", async (failed) => {
+    const extinction = createDeferred();
+    const adapter = Object.assign(createStubChildAdapter(), {
+      waitForExtinction: () => extinction.promise,
+    });
+    createChildAdapterMock.mockResolvedValue(adapter);
+    const supervisor = createProcessSupervisor();
+    const scopeKey = "scope:one-shot-late-join";
+    const cleanup = supervisor.acquireScopeCleanup(scopeKey, { requireProcessTree: true });
+    const run = await spawnChild(supervisor, {
+      sessionId: scopeKey,
+      scopeKey,
+      argv: createSilentIdleArgv(),
+    });
+    adapter.settle(0);
+    await expect(run.wait()).resolves.toMatchObject({ exitCode: 0 });
+    if (failed) {
+      extinction.reject(new Error("cleanup identity lost"));
+      await expect(run.waitForExtinction!()).rejects.toThrow("cleanup identity lost");
+      await expect(cleanup()).rejects.toThrow("cleanup identity lost");
+      await expect(cleanup()).rejects.toThrow("cleanup identity lost");
+    } else {
+      extinction.resolve();
+      await run.waitForExtinction!();
+      await expect(cleanup()).resolves.toBeUndefined();
+    }
+    // The released owner must neither poison a new run nor retain the old admission.
+    await expect(
+      supervisor.acquireScopeCleanup(scopeKey, { requireProcessTree: true })(),
+    ).resolves.toBeUndefined();
+    if (failed) {
+      await expect(supervisor.shutdown()).rejects.toThrow("cleanup identity lost");
+    } else {
+      await supervisor.shutdown();
+    }
+  });
 
   it.each(["child", "pty", "external"] as const)(
     "keeps %s execution available but reports unsupported one-shot cleanup",

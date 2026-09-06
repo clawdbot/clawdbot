@@ -347,6 +347,9 @@ it("keeps an empty scoped handle load from replacing the root registry", () => {
 
 it("keeps version and injected instance surfaces independent of the broad runtime module", () => {
   const gateway = {} as PluginRuntime["gateway"];
+  const hooks = {
+    dispatchHookAgentTurn: vi.fn<PluginRuntime["hooks"]["dispatchHookAgentTurn"]>(),
+  };
   const nodes = {} as PluginRuntime["nodes"];
   const subagent = {} as PluginRuntime["subagent"];
   const loadPluginModule = vi.fn((_modulePath: string): unknown => {
@@ -354,7 +357,7 @@ it("keeps version and injected instance surfaces independent of the broad runtim
   });
   const runtime = createLazyPluginRuntime({
     loadPluginModule,
-    runtimeOptions: { gateway, nodes, subagent },
+    runtimeOptions: { gateway, hooks, nodes, subagent },
   });
 
   expect(runtime.version).toBe(VERSION);
@@ -393,6 +396,7 @@ it("keeps version and injected instance surfaces independent of the broad runtim
   }
   for (const [key, instance] of [
     ["gateway", gateway],
+    ["hooks", hooks],
     ["nodes", nodes],
     ["subagent", subagent],
   ] as const) {
