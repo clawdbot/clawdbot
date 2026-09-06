@@ -106,7 +106,10 @@ function findDependencyPackageDir(params: {
   if (boundaryRoot) {
     current = safeRealpathSync(current) ?? current;
   }
-  while (!boundaryRoot || isPathInside(boundaryRoot, current)) {
+  while (true) {
+    if (boundaryRoot && !isPathInside(boundaryRoot, current)) {
+      return undefined;
+    }
     const candidate = path.join(current, "node_modules", ...segments);
     if (fs.existsSync(path.join(candidate, "package.json"))) {
       if (boundaryRoot) {
@@ -123,7 +126,6 @@ function findDependencyPackageDir(params: {
     }
     current = parent;
   }
-  return undefined;
 }
 
 function buildDependencyEntries(params: {
