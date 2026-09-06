@@ -45,13 +45,17 @@ import { getRuntimeConfig, registerConfigWriteListener } from "../config/config.
 import type { SessionEntry } from "../config/sessions.js";
 import { applySessionPatchProjection } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  mergeAssistantText,
+  resolveAssistantTextInput,
+  type AssistantTextSnapshot,
+} from "../gateway/agent-event-assistant-text.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { resolveEffectiveChatHistoryMaxChars } from "../gateway/chat-display-projection.js";
 import {
+  capLiveAssistantText,
   normalizeLiveAssistantBufferedText,
   projectLiveAssistantBufferedText,
-  resolveAssistantLiveChatInput,
-  resolveMergedAssistantText,
   shouldSuppressAssistantEventForLiveChat,
 } from "../gateway/live-chat-projector.js";
 import { getMaxChatHistoryMessagesBytes } from "../gateway/server-constants.js";
@@ -127,6 +131,7 @@ type LocalRunState = {
   agentId: string;
   controller: AbortController;
   buffer: string;
+  assistantScope?: AssistantTextSnapshot["scope"];
   managedMediaUrls: Set<string>;
   lastBroadcastText?: string;
   isBtw: boolean;
@@ -1325,7 +1330,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
 
     const assistantLiveChatInput =
-      evt.stream === "assistant" ? resolveAssistantLiveChatInput(evt.data) : undefined;
+      evt.stream === "assistant" ? resolveAssistantTextInput(evt.data) : undefined;
     if (
       assistantLiveChatInput &&
       !run.isBtw &&
@@ -1334,11 +1339,13 @@ export class EmbeddedTuiBackend implements TuiBackend {
       for (const url of assistantLiveChatInput.managedMediaUrls ?? []) {
         run.managedMediaUrls.add(url);
       }
-      run.buffer = resolveMergedAssistantText({
-        previousText: run.buffer,
-        nextText: assistantLiveChatInput.text,
-        nextDelta: assistantLiveChatInput.delta,
-      });
+      const snapshot = mergeAssistantText(
+        { text: run.buffer, scope: run.assistantScope },
+        assistantLiveChatInput,
+        "live",
+      );
+      run.assistantScope = snapshot.scope;
+      run.buffer = capLiveAssistantText(snapshot);
       this.emitChatDelta(evt.runId, run);
       return;
     }
@@ -1361,6 +1368,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     run.finishing = false;
     if (phase === "error") {
       run.buffer = "";
+      delete run.assistantScope;
     }
     if (this.projectTerminalOutcome(evt.runId, run, evt.data)) {
       return;
