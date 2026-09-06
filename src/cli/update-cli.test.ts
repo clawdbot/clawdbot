@@ -6767,10 +6767,19 @@ describe("update-cli", () => {
       mockRunningManagedGateway([process.execPath, entryPath, "gateway", "run"]);
       const events: string[] = [];
       spawn.mockImplementationOnce((_node, _argv, options: { env: NodeJS.ProcessEnv }) => {
+        const resultPath = options.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH;
+        if (!resultPath) {
+          throw new Error("post-core result path missing");
+        }
+        const childResultPath = `${resultPath}.child`;
         const child = new EventEmitter();
         queueMicrotask(() => {
           void withEnvAsync(
-            { OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined, ...options.env },
+            {
+              OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
+              ...options.env,
+              OPENCLAW_UPDATE_POST_CORE_RESULT_PATH: childResultPath,
+            },
             async () => {
               const { resumePostCoreUpdate } =
                 await import("./update-cli/update-command-resume.js");
@@ -6781,10 +6790,14 @@ describe("update-cli", () => {
                 timeoutMs: 30_000,
               });
             },
-          ).then(
-            () => child.emit("exit", 0, null),
-            (error: unknown) => child.emit("error", error),
-          );
+          )
+            .then(async () => {
+              // Real child environments cannot overlap the parent. Restore this
+              // emulated child before its result lets the parent resume.
+              await fs.rename(childResultPath, resultPath);
+              child.emit("exit", 0, null);
+            })
+            .catch((error: unknown) => child.emit("error", error));
         });
         return child;
       });
