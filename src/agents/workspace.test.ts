@@ -748,7 +748,7 @@ describe("ensureAgentWorkspace", () => {
     const identityPath = path.join(tempDir, DEFAULT_IDENTITY_FILENAME);
     const originalReadFile = fs.readFile.bind(fs);
     let identityReads = 0;
-    const readSpy = vi.spyOn(fs, "readFile").mockImplementation((async (filePath, options) => {
+    const readSpy = vi.spyOn(fs, "readFile").mockImplementation(async (filePath, options) => {
       if (filePath === identityPath) {
         identityReads += 1;
         if (identityReads === 1) {
@@ -758,8 +758,8 @@ describe("ensureAgentWorkspace", () => {
           );
         }
       }
-      return await originalReadFile(filePath, options as never);
-    }) as typeof fs.readFile);
+      return await originalReadFile(filePath, options);
+    });
 
     try {
       await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
@@ -775,15 +775,15 @@ describe("ensureAgentWorkspace", () => {
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
     const identityPath = path.join(tempDir, DEFAULT_IDENTITY_FILENAME);
     const originalReadFile = fs.readFile.bind(fs);
-    const readSpy = vi.spyOn(fs, "readFile").mockImplementation((async (filePath, options) => {
+    const readSpy = vi.spyOn(fs, "readFile").mockImplementation(async (filePath, options) => {
       if (filePath === identityPath) {
         throw Object.assign(new Error("Unknown system error -11, read"), {
           code: "EAGAIN",
           errno: -11,
         });
       }
-      return await originalReadFile(filePath, options as never);
-    }) as typeof fs.readFile);
+      return await originalReadFile(filePath, options);
+    });
 
     try {
       await expect(

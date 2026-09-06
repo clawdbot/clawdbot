@@ -37,6 +37,8 @@ export type IrcAccountConfig = {
   replyToMode?: ReplyToMode;
   /** Allow channel-initiated config writes (default: true). */
   configWrites?: boolean;
+  /** Per-channel health-monitor override; disables monitor restarts when false. */
+  healthMonitor?: { enabled?: boolean };
   /**
    * Break-glass override: allow nick-only allowlist matching.
    * Default behavior requires host/user-qualified identities.

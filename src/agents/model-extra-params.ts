@@ -7,6 +7,7 @@ import { resolveAgentConfig } from "./agent-scope-config.js";
 type ModelExtraParamSources = {
   defaultParams?: Record<string, unknown>;
   modelParams?: Record<string, unknown>;
+  agentModelParams?: Record<string, unknown>;
   agentParams?: Record<string, unknown>;
 };
 
@@ -60,11 +61,13 @@ export function resolveModelExtraParamSources(params: {
     ? (configuredModels?.[canonicalKey]?.params ??
       (legacyKey ? configuredModels?.[legacyKey]?.params : undefined))
     : undefined;
-  const agentParams =
-    params.agentId && params.config
-      ? resolveAgentConfig(params.config, params.agentId)?.params
-      : undefined;
-  return { defaultParams, modelParams, agentParams };
+  const agent =
+    params.agentId && params.config ? resolveAgentConfig(params.config, params.agentId) : undefined;
+  const agentModelParams = canonicalKey
+    ? (agent?.models?.[canonicalKey]?.params ??
+      (legacyKey ? agent?.models?.[legacyKey]?.params : undefined))
+    : undefined;
+  return { defaultParams, modelParams, agentModelParams, agentParams: agent?.params };
 }
 
 /** Returns whether embedded OpenClaw would apply authored provider request parameters. */
@@ -79,7 +82,7 @@ export function hasAuthoredProviderRequestParams(
   ) {
     return true;
   }
-  return Object.entries(sources.modelParams ?? {}).some(
-    ([key, value]) => !isAgentRuntimeModelParam(key, value),
+  return [sources.modelParams, sources.agentModelParams].some((modelParams) =>
+    Object.entries(modelParams ?? {}).some(([key, value]) => !isAgentRuntimeModelParam(key, value)),
   );
 }

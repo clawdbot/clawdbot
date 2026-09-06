@@ -16,6 +16,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import * as pluginHostState from "../../plugins/host-hook-state.js";
 import { recordAgentProvenance } from "../../state/agent-provenance.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -324,6 +325,72 @@ test("sessions.resolve preserves presentation facts on unique and ambiguous wire
       ],
     },
   });
+});
+
+test("sessions.describe retains full target and child metadata without decoding unrelated prompts", async () => {
+  const agentId = "main";
+  const sessionKey = "agent:main:describe-target";
+  const storePath = resolveStorePath(undefined, { agentId });
+  const updatedAt = Date.now();
+  const skillsSnapshot = { prompt: "complete target prompt", skills: [] };
+  await upsertSessionEntryCore(
+    { agentId, sessionKey, storePath },
+    { sessionId: "describe-target", updatedAt, label: "Target", skillsSnapshot },
+  );
+  for (const [name, relation] of [
+    ["child-b", "spawnedBy"],
+    ["child-a", "parentSessionKey"],
+  ] as const) {
+    await upsertSessionEntryCore(
+      { agentId, sessionKey: `agent:main:${name}`, storePath },
+      { sessionId: name, updatedAt, status: "running", [relation]: sessionKey },
+    );
+  }
+  const unrelatedPrompt = "unrelated describe prompt".repeat(512);
+  for (let index = 0; index < 4; index++) {
+    await upsertSessionEntryCore(
+      { agentId, sessionKey: `agent:main:unrelated-${index}`, storePath },
+      {
+        sessionId: `unrelated-${index}`,
+        updatedAt,
+        skillsSnapshot: { prompt: unrelatedPrompt, skills: [] },
+      },
+    );
+  }
+  await directSessionReq("sessions.describe", { key: sessionKey });
+  const parse = JSON.parse;
+  let unrelatedDecodes = 0;
+  const parsed = vi.spyOn(JSON, "parse").mockImplementation((value, reviver) => {
+    if (typeof value === "string" && value.includes(unrelatedPrompt)) {
+      unrelatedDecodes++;
+    }
+    return parse(value, reviver);
+  });
+  const projected = vi.spyOn(pluginHostState, "projectPluginSessionExtensionsSync");
+  try {
+    const described = await directSessionReq("sessions.describe", { key: sessionKey });
+    expect(described).toMatchObject({
+      ok: true,
+      payload: {
+        session: {
+          key: sessionKey,
+          sessionId: "describe-target",
+          label: "Target",
+          childSessions: ["agent:main:child-a", "agent:main:child-b"],
+        },
+      },
+    });
+    expect(projected).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        entry: expect.objectContaining({ skillsSnapshot }),
+      }),
+    );
+    expect(unrelatedDecodes).toBe(0);
+  } finally {
+    projected.mockRestore();
+    parsed.mockRestore();
+  }
 });
 
 test("unknown-agent session reads return missing results without provisioning an agent", async () => {

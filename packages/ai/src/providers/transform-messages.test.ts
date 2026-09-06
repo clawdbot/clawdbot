@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { transformProviderMessages } from "../provider-transcript-transform.js";
 import type { ProviderMessage, ProviderModel } from "../provider-types.js";
 import type { Message, Model, ToolResultMessage } from "../types.js";
+import { createZeroUsage } from "../usage.test-support.js";
 import { transformMessages } from "./transform-messages.js";
 
 const model: Model<"openai-completions"> = {
@@ -27,14 +28,7 @@ describe("transformMessages", () => {
         api: model.api,
         provider: model.provider,
         model: model.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsage(),
         stopReason: "stop",
         timestamp: 2,
       },
@@ -155,14 +149,7 @@ describe("transformMessages", () => {
         api: model.api,
         provider: model.provider,
         model: async ? "source-model" : model.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsage(),
         stopReason: "toolUse",
         timestamp: 1,
       };
