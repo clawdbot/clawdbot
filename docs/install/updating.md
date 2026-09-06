@@ -38,9 +38,8 @@ openclaw update --dry-run   # preview without applying
 `--dry-run` to preview planned actions, `--json` for structured results, or
 `openclaw update status --json` to inspect channel and availability state.
 
-`--channel beta` prefers the beta npm dist-tag, but falls back to stable/latest
-when the beta tag is missing or its version is older than the latest stable
-release. Use `--tag beta` for a one-off package update pinned to the raw npm
+`--channel beta` selects the newest version by semantic version order from the
+beta and latest npm dist-tags. Use `--tag beta` for a one-off package update pinned to the raw npm
 beta dist-tag instead.
 
 A saved `update.channel` remains the channel for future updates, automatic
@@ -79,11 +78,11 @@ not a self-contained package artifact. Use `openclaw update --channel dev` to
 switch to the supported checkout and build flow. Other explicit package specs
 keep their package-manager behavior.
 
-After a beta core update, eligible official npm plugins follow the exact installed
-beta version, including one-off `--tag` updates from a stable installation.
-For managed plugins, a missing beta release is a warning, not a failure: the
-core update can still succeed while a plugin falls back to its recorded
-default/latest release.
+Managed npm plugins on the beta channel use the same newest-of-beta/latest
+selection, including official plugins such as `@openclaw/codex`. An older beta
+tag cannot hold a plugin behind the current stable release. Startup repair
+leaves already-current packages in place so a no-op refresh does not require
+another restart.
 
 See [Release channels](/install/development-channels) for channel semantics.
 

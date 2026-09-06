@@ -49,6 +49,8 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
     progress?: MemorySyncProgressState;
     deferIndex?: boolean;
   }): Promise<MemorySourceSyncPlan> {
+    // Consume this pass's dirtiness before awaits so later edits remain queued.
+    this.clearMemoryRetryState();
     const deleteFileByPathAndSource = this.db.prepare(
       `DELETE FROM memory_index_sources WHERE path = ? AND source = ?`,
     );

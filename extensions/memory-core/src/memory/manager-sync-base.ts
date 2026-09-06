@@ -210,7 +210,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     };
   }
 
-  protected takeReindexRetryStateForMaintenance(): MemoryReindexRetryState {
+  takeReindexRetryStateForMaintenance(): MemoryReindexRetryState {
     const snapshot = this.snapshotReindexRetryState();
     // The detached generation owns only the state observed here. New watcher or
     // session events remain dirty on this manager and trigger a later generation.

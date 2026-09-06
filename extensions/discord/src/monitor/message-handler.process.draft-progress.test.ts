@@ -153,6 +153,7 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     expect(draftStream.update).toHaveBeenLastCalledWith(
       "💬 Checking the current weather source before summarizing clearly.\n💬 Checking route impacts.",
+      { complete: true },
     );
     const updates = draftStream.update.mock.calls.map((call) => call[0]).join("\n");
     expect(updates).not.toContain("Exec");
@@ -366,7 +367,7 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenLastCalledWith("🛠️ Exec");
+    expect(draftStream.update).toHaveBeenLastCalledWith("🛠️ Exec", { complete: true });
     expect(draftStream.update.mock.calls.flat().join("\n")).not.toContain("Temporary note.");
     // Cleanup still removes the unfinished tool-progress draft at run end.
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
@@ -461,7 +462,9 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n🛠️ Exec\n• exec done");
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n🛠️ Exec\n• exec done", {
+      complete: true,
+    });
     expectFinalAnswerText("done");
   });
 
@@ -493,7 +496,9 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n🛠️ Exec\n• exec done");
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n🛠️ Exec\n• exec done", {
+      complete: true,
+    });
     // The delivered final consumed the draft; the later tool warning must not
     // resurrect it or produce a second visible reply.
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
@@ -693,6 +698,7 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     expect(draftStream.update).toHaveBeenCalledWith(
       "Shelling\n\n🛠️ run tests, `pnpm test -- --watch=false`\n• done",
+      { complete: true },
     );
   });
 
@@ -727,7 +733,9 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n🛠️ Exec\n• done");
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n🛠️ Exec\n• done", {
+      complete: true,
+    });
   });
 
   it("preserves command output text when raw Discord progress is configured", async () => {
@@ -790,6 +798,8 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenCalledWith("Clawing...\n\n🧩 First\n🧩 Second\n🧩 Third");
+    expect(draftStream.update).toHaveBeenCalledWith("Clawing...\n\n🧩 First\n🧩 Second\n🧩 Third", {
+      complete: true,
+    });
   });
 });

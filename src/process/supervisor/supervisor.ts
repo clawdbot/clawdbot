@@ -454,11 +454,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         (error: unknown) => {
           recordScopeCleanupFailure(owner, error);
           cleanupFailure ??= { error };
-          // Legacy late scope joins still read this owner; acquired scopes retain
-          // the failure separately and can release the adapter's runtime graph.
-          if (owner.cleanupOwners.length > 0) {
-            ownedRuns.delete(owner);
-          }
+          ownedRuns.delete(owner);
           cleanup.reject(error);
         },
       );
@@ -716,7 +712,6 @@ export function createProcessSupervisor(): ProcessSupervisor & {
     spawn,
     cancel,
     cancelScope,
-    waitForScope: (scopeKey: string) => waitForRuns(scopeKey),
     shutdown,
     getRecord: (runId: string) => registry.get(runId),
   };
