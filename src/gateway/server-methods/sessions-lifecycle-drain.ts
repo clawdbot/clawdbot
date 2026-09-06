@@ -14,6 +14,7 @@ import {
   replyRunRegistry,
   waitForReplyRunEndBySessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
+import { acpObservation, acpObservedError } from "../../diagnostics-acp-observation.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { getCommandLaneSnapshot } from "../../process/command-queue.js";
 import {
@@ -129,10 +130,12 @@ export async function prepareSessionLifecycleDrain(
     }
   };
   try {
+    acpObservation("drain.mutation.wait", { sessionKey: params.sessionKey });
     const prepared = await runExclusiveSessionLifecycleMutation({
       scope: params.storePath,
       identities: params.lifecycleIdentities,
       run: async () => {
+        acpObservation("drain.mutation.enter", { sessionKey: params.sessionKey });
         // Settle preceding mutations before selecting owners, but never await their
         // cancellation completion here: it may need placement and lifecycle recovery.
         params.authorize?.();
@@ -194,7 +197,9 @@ export async function prepareSessionLifecycleDrain(
         return { reclaim, cancellation, controllerDrain };
       },
     });
+    acpObservation("drain.cancellation.start", { sessionKey: params.sessionKey });
     const abortResult = await prepared.cancellation;
+    acpObservation("drain.cancellation.end", { sessionKey: params.sessionKey });
     if (abortResult.unauthorized) {
       throw new Error("Session cancellation lost ownership");
     }
@@ -233,6 +238,12 @@ export async function prepareSessionLifecycleDrain(
           () => true,
         )
       : Promise.resolve(true);
+    acpObservation("drain.work.start", {
+      sessionKey: params.sessionKey,
+      workerDrain: Boolean(workerDrain),
+      terminalDrain: Boolean(terminalDrain),
+      turnClaim: Boolean(placement?.turnClaim),
+    });
     const drains = await Promise.all([
       prepared.controllerDrain,
       replyWork,
@@ -241,14 +252,19 @@ export async function prepareSessionLifecycleDrain(
       workerWork,
       terminalWork,
     ]);
+    acpObservation("drain.work.end", { sessionKey: params.sessionKey, drains });
     if (!drains.every(Boolean)) {
       throw new Error("Session work is still active after the lifecycle drain");
     }
     // Safe reclaim must finish before the archive or delete can commit.
+    acpObservation("drain.reclaim.start", { sessionKey: params.sessionKey });
     await prepared.reclaim();
+    acpObservation("drain.reclaim.end", { sessionKey: params.sessionKey });
     // Provider settlement keeps its placement custody and deadline. Only after reclaim
     // finishes does the ordinary admission bound apply, including for local sessions.
+    acpObservation("drain.admitted-work.start", { sessionKey: params.sessionKey });
     await withTimeout(admittedWork, timeoutMs, "session work admission lifecycle drain");
+    acpObservation("drain.admitted-work.end", { sessionKey: params.sessionKey });
     const assertPlacementCurrent = prepareSessionWorkerPlacementMutationCheck({
       context: params.context,
       sessionId: params.sessionId,
@@ -267,6 +283,10 @@ export async function prepareSessionLifecycleDrain(
       },
     };
   } catch (error) {
+    acpObservation("drain.error", {
+      sessionKey: params.sessionKey,
+      error: acpObservedError(error),
+    });
     release();
     throw error;
   }

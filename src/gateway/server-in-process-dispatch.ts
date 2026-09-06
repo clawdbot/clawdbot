@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { retainGatewayResponsePayload } from "../../packages/gateway-client/src/protocol-request.js";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import type { ErrorShape } from "../../packages/gateway-protocol/src/schema/frames.js";
+import { acpObservation, acpObservedError } from "../diagnostics-acp-observation.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import type { GatewayMethodRegistry } from "./methods/registry.js";
@@ -107,6 +108,7 @@ async function waitForDispatch<T>(
     });
     return await Promise.race([promise, cancellation]);
   } catch (error) {
+    acpObservation("dispatch.wait.error", { method, error: acpObservedError(error) });
     if (signal?.aborted && onSignalAbort) {
       await Promise.resolve()
         .then(onSignalAbort)
@@ -167,22 +169,37 @@ export async function dispatchGatewayRequestInProcessRaw(
     method,
     params,
   };
+  const observation = {
+    method,
+    requestId: req.id,
+    sessionKey: params && typeof params === "object" && "key" in params ? params.key : undefined,
+  };
+  acpObservation("dispatch.start", { ...observation, deadlineMs, timeoutMs: options.timeoutMs });
   const entry = options.context.requestEntryLifetime?.enter({
     req,
     client: options.client,
     context: options.context,
   });
   try {
+    acpObservation("dispatch.router-import.start", observation);
     const { handleGatewayRequest } = await import("./server-methods.js");
+    acpObservation("dispatch.router-import.end", observation);
     entry?.assertOpen();
     void options.context
-      .trackExecution(() =>
-        handleGatewayRequest({
+      .trackExecution(() => {
+        acpObservation("handler.start", observation);
+        return handleGatewayRequest({
           req,
           requestEntry: entry,
           client: options.client,
           isWebchatConnect: options.isWebchatConnect ?? (() => false),
           respond: (ok, payload, error, meta) => {
+            acpObservation("handler.response", {
+              ...observation,
+              ok,
+              error,
+              payload: method === "sessions.delete" ? payload : undefined,
+            });
             const response = { ok, payload, error, ...(meta ? { meta } : {}) };
             if (!firstResponse) {
               firstResponse = response;
@@ -200,15 +217,20 @@ export async function dispatchGatewayRequestInProcessRaw(
           ...(options.signal ? { signal: options.signal } : {}),
         })
           .then(() => {
+            acpObservation("handler.completed", observation);
             if (!firstResponse) {
               rejectFirstResponse?.(
                 new Error(`Gateway method "${method}" completed without a response.`),
               );
             }
           })
-          .finally(() => entry?.release()),
-      )
+          .finally(() => {
+            entry?.release();
+            acpObservation("handler.released", observation);
+          });
+      })
       .catch((err: unknown) => {
+        acpObservation("handler.error", { ...observation, error: acpObservedError(err) });
         const error = err instanceof Error ? err : new Error(String(err));
         if (!firstResponse) {
           rejectFirstResponse?.(error);
@@ -218,6 +240,10 @@ export async function dispatchGatewayRequestInProcessRaw(
         rejectFinalResponse?.(error);
       });
   } catch (error) {
+    acpObservation("dispatch.preparation.error", {
+      ...observation,
+      error: acpObservedError(error),
+    });
     entry?.release();
     throw error;
   }
@@ -228,7 +254,9 @@ export async function dispatchGatewayRequestInProcessRaw(
     deadlineMs,
     options.signal,
     options.onSignalAbort,
+    () => acpObservation("dispatch.deadline", { ...observation, deadlineMs }),
   );
+  acpObservation("dispatch.response.received", observation);
   const firstPayload = firstResponse.payload as { status?: unknown } | undefined;
   if (!firstResponse.ok || options.expectFinal !== true || firstPayload?.status !== "accepted") {
     return firstResponse;

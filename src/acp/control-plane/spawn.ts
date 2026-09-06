@@ -8,6 +8,7 @@ import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { acpObservation, acpObservedError } from "../../diagnostics-acp-observation.js";
 import { logVerbose } from "../../globals.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
@@ -39,6 +40,7 @@ export async function cleanupFailedAcpSpawn(params: {
       throw new Error(`ACP provisional session ${params.sessionKey} changed before cleanup.`);
     }
   };
+  acpObservation("cleanup.start", { sessionKey: params.sessionKey, sessionId });
   let deletionStarted = false;
   const cancellation = new AbortController();
   try {
@@ -48,6 +50,11 @@ export async function cleanupFailedAcpSpawn(params: {
       if (!context) {
         throw new Error("ACP provisional cleanup Gateway is unavailable.");
       }
+      acpObservation("delete.request.start", {
+        sessionKey: params.sessionKey,
+        sessionId,
+        timeoutMs: 10_000,
+      });
       await callInProcessGatewayTool(
         "sessions.delete",
         {
@@ -66,14 +73,29 @@ export async function cleanupFailedAcpSpawn(params: {
             context.requestEntryLifetime?.signal.throwIfAborted();
             assertCurrent();
             // The router calls this after lazy preparation, before handler entry.
+            const alreadyAdmitted = deletionStarted;
             deletionStarted = true;
+            acpObservation("delete.admission-guard", {
+              sessionKey: params.sessionKey,
+              sessionId,
+              alreadyAdmitted,
+            });
           },
           signal: cancellation.signal,
           timeoutMs: 10_000,
         },
       );
+      acpObservation("delete.request.end", { sessionKey: params.sessionKey, sessionId });
     });
   } catch (error) {
+    acpObservation("cleanup.catch", {
+      sessionKey: params.sessionKey,
+      sessionId,
+      deletionStarted,
+      error: acpObservedError(error),
+      cancellationAborted: cancellation.signal.aborted,
+      cancellationReason: acpObservedError(cancellation.signal.reason),
+    });
     // A retired owner cannot dispatch cleanup. Retain its existing local handle
     // release, but never repeat a close after canonical deletion has started.
     if (!deletionStarted) {
@@ -89,6 +111,11 @@ export async function cleanupFailedAcpSpawn(params: {
           await params.closeRuntimeOnFailure!();
         },
       }).catch((releaseError: unknown) => {
+        acpObservation("cleanup.release.error", {
+          sessionKey: params.sessionKey,
+          sessionId,
+          error: acpObservedError(releaseError),
+        });
         if (isAcpOwnerRepairRequired(releaseError)) {
           throw releaseError;
         }
@@ -96,5 +123,7 @@ export async function cleanupFailedAcpSpawn(params: {
       });
     }
     logVerbose(`acp-spawn: provisional session cleanup failed: ${String(error)}`);
+  } finally {
+    acpObservation("cleanup.end", { sessionKey: params.sessionKey, sessionId, deletionStarted });
   }
 }

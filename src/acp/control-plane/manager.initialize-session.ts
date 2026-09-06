@@ -6,6 +6,7 @@ import {
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { acpObservation, acpObservedError } from "../../diagnostics-acp-observation.js";
 import { logVerbose } from "../../globals.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { AcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
@@ -172,6 +173,10 @@ async function persistInitializedSessionMeta(params: {
       return persisted;
     }
   } catch (error) {
+    acpObservation("initialize.metadata.error", {
+      sessionKey: params.sessionKey,
+      error: acpObservedError(error),
+    });
     await closeRuntimeAfterInitMetaFailure(params);
     throw error;
   }
@@ -186,14 +191,23 @@ async function closeRuntimeAfterInitMetaFailure(params: {
   runtime: AcpRuntime;
   handle: AcpRuntimeHandle;
 }): Promise<void> {
+  acpObservation("initialize.runtime-close.start", {
+    sessionKey: params.sessionKey,
+    reason: "init-meta-failed",
+  });
   await params.runtime
     .close({
       handle: params.handle,
       reason: "init-meta-failed",
     })
     .catch((closeError: unknown) => {
+      acpObservation("initialize.runtime-close.error", {
+        sessionKey: params.sessionKey,
+        error: acpObservedError(closeError),
+      });
       logVerbose(
         `acp-manager: cleanup close failed after metadata write error for ${params.sessionKey}: ${String(closeError)}`,
       );
     });
+  acpObservation("initialize.runtime-close.end", { sessionKey: params.sessionKey });
 }

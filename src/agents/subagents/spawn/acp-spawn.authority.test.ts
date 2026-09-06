@@ -22,6 +22,11 @@ import {
 } from "../../../config/config.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
+import {
+  acpObservation,
+  acpObservedValue,
+  acpObservedError,
+} from "../../../diagnostics-acp-observation.js";
 import * as gatewayCall from "../../../gateway/call.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import { withLocalGatewayRequestScope } from "../../../gateway/local-request-context.js";
@@ -157,6 +162,7 @@ describe("pending ACP spawn authority", () => {
   ] as const)(
     "transfers initialized ACP work only from its live parent: %s / %s",
     async (stage, closure) => {
+      acpObservation("case.enter", { stage, closure });
       const cfg = getRuntimeConfig();
       await writeSubagentSessionEntry({
         stateDir,
@@ -347,8 +353,14 @@ describe("pending ACP spawn authority", () => {
         execute: (...args) => {
           const pending = source.execute!(...args);
           forwarded = pending.then(
-            (result) => result,
-            (error: unknown) => error,
+            (result) => {
+              acpObservation("source.fulfilled", { stage, closure, result });
+              return result;
+            },
+            (error: unknown) => {
+              acpObservation("source.rejected", { stage, closure, error: acpObservedError(error) });
+              return error;
+            },
           );
           return pending;
         },
@@ -418,14 +430,25 @@ describe("pending ACP spawn authority", () => {
           expect(parent.controller.signal.aborted).toBe(false);
         }
         expect(getAdmittedRunDelegatedAuthority(admitted) !== undefined).toBe(closure === "live");
+        acpObservation("case.release", { stage, closure, sessionKey: childSessionKey });
         release.resolve();
         const result = await forwarded;
         const sourceBoundary = {
           entry: loadSessionEntry({ sessionKey: childSessionKey, agentId: "fixture" }),
           closes: closeRuntime.mock.calls.length,
         };
+        acpObservation("case.source-return", {
+          stage,
+          closure,
+          sessionKey: childSessionKey,
+          entry: sourceBoundary.entry,
+          entryPresent: sourceBoundary.entry !== undefined,
+          closes: sourceBoundary.closes,
+        });
         await wrappedOutcome;
+        acpObservation("case.drain.start", { stage, closure, sessionKey: childSessionKey });
         await work.drain();
+        acpObservation("case.drain.end", { stage, closure, sessionKey: childSessionKey });
         expect
           .soft(lateMetadata, "closed parent must not publish ACP metadata after async planning")
           .not.toHaveBeenCalled();
@@ -456,7 +479,13 @@ describe("pending ACP spawn authority", () => {
             .soft(sourceBoundary.closes, "runtime closes before spawn returns")
             .toBe(initializesRuntime ? 1 : 0);
           expect
-            .soft(loadSessionEntry({ sessionKey: childSessionKey, agentId: "fixture" }))
+            .soft(
+              acpObservedValue(
+                "case.after-drain-row",
+                loadSessionEntry({ sessionKey: childSessionKey, agentId: "fixture" }),
+                { stage, closure, sessionKey: childSessionKey },
+              ),
+            )
             .toBeUndefined();
           expect
             .soft(closeRuntime, "cleanup only disposes the runtime this spawn created")

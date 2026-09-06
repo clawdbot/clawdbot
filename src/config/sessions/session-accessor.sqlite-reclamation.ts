@@ -1,3 +1,4 @@
+import { acpObservation } from "../../diagnostics-acp-observation.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
@@ -224,6 +225,9 @@ export function reclaimSqliteSessionInTransaction(
   } = {},
 ): SqliteSessionReclamationResult {
   if (plan.kind === "entry") {
+    acpObservation("sqlite.delete.transaction.start", {
+      sessionKey: plan.deleteParams.target.canonicalKey,
+    });
     const value = runSqliteSessionDeletionTransaction<DeleteSessionEntryLifecycleResult>(
       (transactionDb) => {
         callbacks.beforeMutation?.();
@@ -268,6 +272,11 @@ export function reclaimSqliteSessionInTransaction(
       },
       plan.databaseOptions,
     );
+    acpObservation("sqlite.delete.transaction.committed", {
+      sessionKey: plan.deleteParams.target.canonicalKey,
+      deleted: value.deleted,
+      sessionId: value.deletedSessionId,
+    });
     return { kind: plan.kind, value };
   }
 

@@ -16,6 +16,7 @@ import {
 } from "../../config/sessions.js";
 import { rollbackPluginOwnedSessionEntryLifecycle } from "../../config/sessions/session-accessor.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
+import { acpObservation, acpObservedError } from "../../diagnostics-acp-observation.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   isIncognitoSessionKey,
@@ -63,6 +64,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
+    acpObservation("sessions-delete.enter", { sessionKey: key });
     const cfg = context.getRuntimeConfig();
     const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, p.agentId);
     if (!requestedAgent.ok) {
@@ -152,6 +154,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
       emitGatewaySessionEndPluginHook,
       emitSessionUnboundLifecycleEvent,
     } = await loadSessionsRuntimeModule();
+    acpObservation("sessions-delete.runtime.loaded", { sessionKey: key });
 
     const assertCurrent = () => {
       sessionMutationAuthorization?.assertCurrent();
@@ -184,6 +187,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
       try {
         const current = assertCurrent();
         try {
+          acpObservation("lifecycle-drain.start", { sessionKey: key });
           drain = await prepareSessionLifecycleDrain({
             action: "delete",
             authorize: assertCurrent,
@@ -207,7 +211,12 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
               Boolean(identity),
             ),
           });
+          acpObservation("lifecycle-drain.end", { sessionKey: key });
         } catch (error) {
+          acpObservation("lifecycle-drain.error", {
+            sessionKey: key,
+            error: acpObservedError(error),
+          });
           assertCurrent();
           if (error instanceof SessionDeletionError) {
             throw error;
@@ -220,6 +229,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
             ),
           );
         }
+        acpObservation("mutation.wait", { sessionKey: key });
         // Reclaim may wait for an earlier placement operation that needs this mutex.
         return await runExclusiveSessionLifecycleMutation({
           scope: storePath,
@@ -227,6 +237,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
           prepare: async () => drain?.handoffToMutation(),
           finalize: async () => drain?.release(),
           run: async () => {
+            acpObservation("mutation.enter", { sessionKey: key });
             const { entry, legacyKey, canonicalKey } = assertCurrent();
             const retirement = prepareSessionWorkerPlacementRetirement({
               context,
@@ -244,6 +255,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
               }
             };
             commitGuard();
+            acpObservation("cleanup.before-mutation.start", { sessionKey: key });
             const mutationCleanupError = await cleanupSessionBeforeMutation({
               cfg,
               key,
@@ -254,6 +266,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
               reason: "session-delete",
               assertCurrent: commitGuard,
             });
+            acpObservation("cleanup.before-mutation.end", { sessionKey: key });
             if (mutationCleanupError) {
               throw new SessionDeletionError(mutationCleanupError);
             }
@@ -283,6 +296,10 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
             };
             // Catalog and other plugin-owned sessions keep model selection locked,
             // so deletion must use the exact-row owner-validated lifecycle seam.
+            acpObservation("entry-lifecycle.start", {
+              sessionKey: key,
+              sessionId: initialDeleteEntry?.sessionId,
+            });
             const result =
               postCleanupEntry && pluginOwnerId && isModelSelectionLocked(postCleanupEntry)
                 ? await rollbackPluginOwnedSessionEntryLifecycle({
@@ -295,6 +312,11 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
                     },
                   })
                 : await deleteSessionEntryLifecycle(deletionParams);
+            acpObservation("entry-lifecycle.end", {
+              sessionKey: key,
+              deleted: result.deleted,
+              sessionId: result.deletedSessionId,
+            });
             if (result.expectedEntryMismatch) {
               throw new SessionDeletionError(sessionChangedError());
             }
@@ -311,11 +333,13 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
                 reason: "deleted",
                 archivedTranscripts: result.archivedTranscripts,
               });
+              acpObservation("post-delete.unbind.start", { sessionKey: key });
               await emitSessionUnboundLifecycleEvent({
                 targetSessionKey: target.canonicalKey ?? key,
                 reason: "session-delete",
                 emitHooks: p.emitLifecycleHooks !== false,
               });
+              acpObservation("post-delete.unbind.end", { sessionKey: key });
               // Hooks and unbinding retain their historical post-delete order. The
               // generation-scoped purge and checkout cleanup still finish before
               // this fence opens, so a same-key successor cannot be mistaken for it.
@@ -324,20 +348,24 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
                 deletedSessionKey,
                 requestedAgentId ?? resolveSessionStoreAgentId(cfg, deletedSessionKey),
               );
+              acpObservation("post-delete.worktree.start", { sessionKey: key });
               worktreePreserved = await removeSessionWorktree({
                 id: deletedWorktreeId,
                 sessionKey: deletedSessionKey,
                 reason: "session-delete",
               });
+              acpObservation("post-delete.worktree.end", { sessionKey: key });
             }
             return result;
           },
         });
       } finally {
         drain?.release();
+        acpObservation("mutation-drain.released", { sessionKey: key });
       }
     };
     const deletion = await deleteCurrent().catch((error: unknown) => {
+      acpObservation("delete-current.error", { sessionKey: key, error: acpObservedError(error) });
       if (!(error instanceof SessionDeletionError)) {
         throw error;
       }
@@ -358,6 +386,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
       archived,
       ...(worktreePreserved ? { worktreePreserved } : {}),
     };
+    acpObservation("sessions-delete.respond", { sessionKey: key, deleted });
     respond(true, response, undefined);
     if (deleted) {
       emitSessionsChanged(context, {

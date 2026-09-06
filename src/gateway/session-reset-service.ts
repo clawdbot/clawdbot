@@ -65,6 +65,7 @@ import {
 } from "../config/sessions/session-entry-provenance.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { acpObservation, acpObservedError } from "../diagnostics-acp-observation.js";
 import { logVerbose } from "../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import {
@@ -351,11 +352,13 @@ async function ensureSessionRuntimeCleanup(params: {
 }) {
   // Session lifecycle mutation owns this heavy runtime edge; read-only gateway
   // commands such as status must not load the embedded-agent barrel.
+  acpObservation("runtime.imports.start", { sessionKey: params.key });
   const [embeddedAgent, mcpTools, { clearFinishedSessionsForScopes }] = await Promise.all([
     import("../agents/embedded-agent.js"),
     import("../agents/agent-bundle-mcp-tools.js"),
     import("../agents/bash-process-registry.js"),
   ]);
+  acpObservation("runtime.imports.end", { sessionKey: params.key });
   params.assertCurrent?.();
   const closeTrackedBrowserTabs = async () => {
     params.assertCurrent?.();
@@ -365,11 +368,21 @@ async function ensureSessionRuntimeCleanup(params: {
       ...params.target.storeKeys,
       params.sessionId ?? "",
     ]);
+    acpObservation("runtime.browser.start", { sessionKey: params.key });
     await cleanupBrowserSessionsForLifecycleEnd({
       cfg: params.cfg,
       sessionKeys: [...closeKeys],
-      onWarn: (message) => logVerbose(message),
+      onWarn: (message) => {
+        acpObservation("runtime.browser.warning", { sessionKey: params.key, message });
+        logVerbose(message);
+      },
+      onError: (error: unknown) =>
+        acpObservation("runtime.browser.error", {
+          sessionKey: params.key,
+          error: acpObservedError(error),
+        }),
     });
+    acpObservation("runtime.browser.end", { sessionKey: params.key });
     params.assertCurrent?.();
   };
 
@@ -389,11 +402,13 @@ async function ensureSessionRuntimeCleanup(params: {
     activeReplySessionId: params.sessionId,
     agentId: resolveLifecycleAgentId(params.cfg, params.target.agentId),
   });
+  acpObservation("runtime.subagents.start", { sessionKey: params.key });
   await stopSubagentsForRequester({
     cfg: params.cfg,
     requesterSessionKey: params.target.canonicalKey,
     requesterAgentId: params.target.agentId,
   });
+  acpObservation("runtime.subagents.end", { sessionKey: params.key });
   if (!params.sessionId) {
     params.assertCurrent?.();
     clearBootstrapSnapshot(params.target.canonicalKey);
@@ -478,7 +493,9 @@ async function ensureSessionRuntimeCleanup(params: {
   embeddedAgent.abortEmbeddedAgentRun(sessionId);
   // Mark cleanup before waiting so the timeout path cannot strand MCP children.
   // Active tool/app leases keep in-flight work alive until their final release.
+  acpObservation("runtime.mcp.start", { sessionKey: params.key });
   await retireMcpRuntime(true);
+  acpObservation("runtime.mcp.end", { sessionKey: params.key });
   const ended = await embeddedAgent.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
   params.assertCurrent?.();
   // A stopping run can create or reuse its runtime while we wait. Retire again
@@ -842,6 +859,7 @@ export async function cleanupSessionBeforeMutation(params: {
   onAcpResetMeta?: (params: { sessionKey: string; meta: SessionAcpMeta }) => void;
   assertCurrent?: () => void;
 }) {
+  acpObservation("cleanup.runtime.start", { sessionKey: params.key });
   const cleanupError = await ensureSessionRuntimeCleanup({
     cfg: params.cfg,
     key: params.key,
@@ -849,9 +867,11 @@ export async function cleanupSessionBeforeMutation(params: {
     sessionId: params.entry?.sessionId,
     assertCurrent: params.assertCurrent,
   });
+  acpObservation("cleanup.runtime.end", { sessionKey: params.key, cleanupError });
   if (cleanupError) {
     return cleanupError;
   }
+  acpObservation("cleanup.plugin-host.start", { sessionKey: params.key });
   const pluginCleanup = await runPluginHostCleanup({
     cfg: params.cfg,
     registry: getActivePluginRegistry(),
@@ -864,13 +884,21 @@ export async function cleanupSessionBeforeMutation(params: {
       return true;
     },
   });
+  acpObservation("cleanup.plugin-host.end", { sessionKey: params.key });
   params.assertCurrent?.();
   for (const failure of pluginCleanup.failures) {
+    acpObservation("cleanup.plugin-host.error", {
+      sessionKey: params.key,
+      pluginId: failure.pluginId,
+      hookId: failure.hookId,
+      error: acpObservedError(failure.error),
+    });
     logVerbose(
       `plugin host cleanup failed for ${failure.pluginId}/${failure.hookId}: ${String(failure.error)}`,
     );
   }
   const parentSessionKey = params.target.canonicalKey ?? params.canonicalKey ?? params.key;
+  acpObservation("cleanup.parent-acp.start", { sessionKey: params.key });
   const parentAcpError = await closeAcpRuntimeForSession({
     cfg: params.cfg,
     sessionKey: parentSessionKey,
@@ -880,7 +908,9 @@ export async function cleanupSessionBeforeMutation(params: {
     onResetMeta: params.onAcpResetMeta,
     assertCurrent: params.assertCurrent,
   });
+  acpObservation("cleanup.parent-acp.end", { sessionKey: params.key, parentAcpError });
   params.assertCurrent?.();
+  acpObservation("cleanup.child-acp.start", { sessionKey: params.key });
   await closeChildAcpRuntimesForParent({
     cfg: params.cfg,
     parentKey: params.target.canonicalKey ?? params.canonicalKey ?? params.key,
@@ -888,6 +918,7 @@ export async function cleanupSessionBeforeMutation(params: {
     reason: params.reason,
     assertCurrent: params.assertCurrent,
   });
+  acpObservation("cleanup.child-acp.end", { sessionKey: params.key });
   params.assertCurrent?.();
   if (parentAcpError) {
     return parentAcpError;
@@ -902,7 +933,9 @@ export async function cleanupSessionBeforeMutation(params: {
       sessionFile: params.target.canonicalKey ?? params.key,
       reason: params.reason === "session-reset" ? "reset" : "deleted",
     } satisfies Parameters<typeof resetRegisteredAgentHarnessSessions>[0];
+    acpObservation("cleanup.harness.start", { sessionKey: params.key });
     await resetRegisteredAgentHarnessSessions(resetParams);
+    acpObservation("cleanup.harness.end", { sessionKey: params.key });
     params.assertCurrent?.();
   }
   return undefined;
