@@ -31,6 +31,12 @@ const artifact = {
   tarballPath: "/gateway/bundle.tgz",
 };
 
+const receipt = {
+  bundleHash: artifact.bundleHash,
+  openclawVersion: artifact.openclawVersion,
+  protocolFeatures: artifact.protocolFeatures,
+};
+
 function nodeProof(nodeId: string, bundlePrewarm?: 1): NodeWorkerSupervisorNodeProof {
   return {
     ...node,
@@ -55,7 +61,7 @@ describe("Gateway node worker bundle installer", () => {
       payload: artifact,
     }));
     const listCurrentNodes = vi.fn(() => discovered.promise);
-    const ensure = createGatewayNodeWorkerBundleInstaller({
+    const { ensure } = createGatewayNodeWorkerBundleInstaller({
       gatewayNamespace: "gateway-test",
       getTransport: () => ({
         hasCurrentRunner: () => false,
@@ -110,7 +116,7 @@ describe("Gateway node worker bundle installer", () => {
       isCurrent: (candidate) => candidate === node,
       invoke,
     };
-    const ensure = createGatewayNodeWorkerBundleInstaller({
+    const { ensure } = createGatewayNodeWorkerBundleInstaller({
       gatewayNamespace: "gateway-test",
       getTransport: () => transport,
       transfer,
@@ -152,7 +158,7 @@ describe("Gateway node worker bundle installer", () => {
         }),
       }),
     };
-    const ensure = createGatewayNodeWorkerBundleInstaller({
+    const { ensure } = createGatewayNodeWorkerBundleInstaller({
       gatewayNamespace: "gateway-test",
       getTransport: () => transport,
       transfer,
@@ -179,7 +185,7 @@ describe("Gateway node worker bundle installer", () => {
       isCurrent: () => true,
       invoke,
     };
-    const ensure = createGatewayNodeWorkerBundleInstaller({
+    const { ensure } = createGatewayNodeWorkerBundleInstaller({
       gatewayNamespace: "gateway-test",
       getTransport: () => transport,
       transfer,
@@ -198,5 +204,165 @@ describe("Gateway node worker bundle installer", () => {
 
     expect(invoke.mock.calls[0]?.[0].params).toMatchObject({ bundlePrewarm: 1 });
     expect(invoke.mock.calls[1]?.[0].params).not.toHaveProperty("bundlePrewarm");
+  });
+
+  it("shares a pending host preparation without giving a cancelled Start its custody", async () => {
+    const installed = createDeferredCore<{ ok: boolean; payloadJSON: string }>();
+    const transfer = createNodeWorkerBundleTransferService();
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(() => installed.promise);
+    const transport: NodeWorkerSupervisorTransport = {
+      hasCurrentRunner: () => true,
+      listCurrentNodes: async () => [node],
+      isCurrent: () => true,
+      invoke,
+    };
+    const installer = createGatewayNodeWorkerBundleInstaller({
+      gatewayNamespace: "gateway-test",
+      getTransport: () => transport,
+      transfer,
+    });
+    const prepared = installer.prepare({ node, artifact });
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledOnce());
+    const controller = new AbortController();
+    const cancelled = installer.ensure({
+      deviceId: node.nodeId,
+      artifact,
+      prewarm: true,
+      signal: controller.signal,
+    });
+    const remaining = installer.ensure({ deviceId: node.nodeId, artifact, prewarm: true });
+    const cancelledResult = expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
+    controller.abort();
+    await cancelledResult;
+    expect(invoke.mock.calls[0]?.[0].signal?.aborted).toBe(false);
+    installed.resolve({ ok: true, payloadJSON: JSON.stringify(receipt) });
+    await Promise.all([prepared, remaining]);
+    expect(invoke).toHaveBeenCalledOnce();
+    await installer.ensure({ deviceId: node.nodeId, artifact, prewarm: true });
+    expect(invoke).toHaveBeenCalledTimes(2);
+    await installer.close();
+    transfer.closeAll();
+  });
+
+  it("fences a replaced connection without delaying its successor", async () => {
+    const held = createDeferredCore<{ ok: boolean; payloadJSON: string }>();
+    const replacement = { ...node, connId: "replacement", pairingGeneration: "replacement" };
+    let current = node;
+    const transfer = createNodeWorkerBundleTransferService();
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) =>
+      request.node === node
+        ? await held.promise
+        : { ok: true, payloadJSON: JSON.stringify(receipt) },
+    );
+    const transport: NodeWorkerSupervisorTransport = {
+      hasCurrentRunner: () => true,
+      listCurrentNodes: async () => [current],
+      isCurrent: (proof) => proof === current,
+      invoke,
+    };
+    const installer = createGatewayNodeWorkerBundleInstaller({
+      gatewayNamespace: "gateway-test",
+      getTransport: () => transport,
+      transfer,
+    });
+    const old = installer.prepare({ node, artifact });
+    const rejected = old.catch((error: unknown) => error);
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledOnce());
+    current = replacement;
+    installer.invalidate(node.nodeId);
+    expect(invoke.mock.calls[0]?.[0].signal?.aborted).toBe(true);
+    await installer.prepare({ node: replacement, artifact });
+    expect(invoke).toHaveBeenCalledTimes(2);
+    held.resolve({ ok: true, payloadJSON: JSON.stringify(receipt) });
+    expect(await rejected).toMatchObject({
+      message: "Device worker preparation connection is no longer current",
+    });
+    await installer.close();
+    transfer.closeAll();
+  });
+
+  it("does not retry a failed background generation until an explicit Start", async () => {
+    const transfer = createNodeWorkerBundleTransferService();
+    const invoke = vi
+      .fn<NodeWorkerSupervisorTransport["invoke"]>()
+      .mockResolvedValueOnce({ ok: false, error: { message: "transfer unavailable" } })
+      .mockResolvedValue({ ok: true, payloadJSON: JSON.stringify(receipt) });
+    const transport: NodeWorkerSupervisorTransport = {
+      hasCurrentRunner: () => true,
+      listCurrentNodes: async () => [node],
+      isCurrent: () => true,
+      invoke,
+    };
+    const warn = vi.fn();
+    const installer = createGatewayNodeWorkerBundleInstaller({
+      warn,
+      gatewayNamespace: "gateway-test",
+      getTransport: () => transport,
+      transfer,
+    });
+    await expect(installer.prepare({ node, artifact })).rejects.toThrow("transfer unavailable");
+    await expect(installer.prepare({ node, artifact })).rejects.toThrow("transfer unavailable");
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledOnce();
+    await installer.ensure({ deviceId: node.nodeId, artifact, prewarm: true });
+    expect(invoke).toHaveBeenCalledTimes(2);
+    await installer.close();
+    transfer.closeAll();
+  });
+
+  it("leaves cloud enrollment cancellation with its environment owner", async () => {
+    const controller = new AbortController();
+    const transfer = createNodeWorkerBundleTransferService();
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
+      expect(request.signal).toBe(controller.signal);
+      controller.abort();
+      return { ok: true, payloadJSON: JSON.stringify(receipt) };
+    });
+    const transport: NodeWorkerSupervisorTransport = {
+      hasCurrentRunner: () => true,
+      listCurrentNodes: async () => [node],
+      isCurrent: () => true,
+      invoke,
+    };
+    const installer = createGatewayNodeWorkerBundleInstaller({
+      gatewayNamespace: "gateway-test",
+      getTransport: () => transport,
+      transfer,
+      isEnvironmentOwnedNode: () => true,
+    });
+    await expect(
+      installer.ensure({
+        deviceId: node.nodeId,
+        artifact,
+        prewarm: true,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("no longer current");
+    await installer.close();
+    transfer.closeAll();
+  });
+
+  it("rejects a shared preparation when enrollment claims the node without an inventory event", async () => {
+    let environmentOwned = false;
+    const transfer = createNodeWorkerBundleTransferService();
+    const transport: NodeWorkerSupervisorTransport = {
+      hasCurrentRunner: () => true,
+      listCurrentNodes: async () => [node],
+      isCurrent: () => true,
+      invoke: async (request) => {
+        environmentOwned = true;
+        expect(request.isDispatchAuthorized()).toBe(false);
+        return { ok: true, payloadJSON: JSON.stringify(receipt) };
+      },
+    };
+    const installer = createGatewayNodeWorkerBundleInstaller({
+      gatewayNamespace: "gateway-test",
+      getTransport: () => transport,
+      transfer,
+      isEnvironmentOwnedNode: () => environmentOwned,
+    });
+    await expect(installer.prepare({ node, artifact })).rejects.toThrow("no longer current");
+    await installer.close();
+    transfer.closeAll();
   });
 });

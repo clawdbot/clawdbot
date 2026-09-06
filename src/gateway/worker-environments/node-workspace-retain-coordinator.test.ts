@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { NODE_WORKER_WORKSPACE_RETAIN_COMMAND } from "../../infra/node-commands.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES,
   NODE_WORKER_RETAIN_REQUEST_MAX_BYTES,
@@ -104,6 +105,7 @@ function createHarness(
     }>;
     node?: NodeWorkerSupervisorNodeProof;
     currentBundleStatus?: NodeWorkerBundleStatusObservation;
+    preparation?: Parameters<typeof createNodeWorkspaceRetainCoordinator>[0]["preparation"];
     additionalManifestRefs?: Parameters<
       typeof createNodeWorkspaceRetainCoordinator
     >[0]["additionalManifestRefs"];
@@ -151,6 +153,7 @@ function createHarness(
       list: () => (params.placements ?? [placement()]) as never,
       listPendingWorkspaceResults: () => params.pendingResults ?? [],
     } as Pick<WorkerSessionPlacementStore, "list" | "listPendingWorkspaceResults">,
+    preparation: params.preparation,
     additionalManifestRefs: params.additionalManifestRefs,
     warn,
   });
@@ -685,5 +688,156 @@ describe("node workspace retain coordinator", () => {
     } finally {
       await coordinator.stop();
     }
+  });
+
+  it("retains the prepared current build without keeping unreferenced older builds", async () => {
+    const artifact = {
+      install: "bundle" as const,
+      bundleHash: "c".repeat(64),
+      openclawVersion: "2026.8.10",
+      protocolFeatures: [],
+      tarballBytes: 1,
+      tarballSha256: "d".repeat(64),
+      tarballPath: "/current.tgz",
+    };
+    const input = {
+      environments: [environment()],
+      placements: [placement()],
+      preparation: {
+        currentArtifact: async () => artifact,
+        isEnvironmentOwnedNode: () => false,
+        prepare: vi.fn(async () => {}),
+        invalidate: vi.fn(),
+      },
+      results: [
+        { applied: true, deleted: 0, hasMore: false, bundleGeneration: 1 },
+        { applied: true, deleted: 0, hasMore: false, bundleGeneration: 1 },
+        { applied: true, deleted: 1, hasMore: false, bundleGeneration: 1 },
+      ],
+    };
+    const { coordinator, invoke } = createHarness(input);
+    await coordinator.start();
+    await coordinator.schedule();
+    expect(invoke.mock.calls[1]?.[0].params).toMatchObject({
+      acknowledgedBundleGeneration: 1,
+      bundleHashes: ["b".repeat(64), artifact.bundleHash],
+      bundleStatusHash: artifact.bundleHash,
+    });
+    input.environments = [];
+    input.placements = [];
+    await coordinator.schedule();
+    expect(invoke.mock.calls[2]?.[0].params).toMatchObject({
+      acknowledgedBundleGeneration: 1,
+      bundleHashes: [artifact.bundleHash],
+      retain: [],
+    });
+    await coordinator.stop();
+  });
+
+  it("does not prepare a node owned by cloud enrollment", async () => {
+    const preparation = {
+      currentArtifact: vi.fn(),
+      isEnvironmentOwnedNode: () => true,
+      prepare: vi.fn(),
+      invalidate: vi.fn(),
+    };
+    const { coordinator } = createHarness({
+      environments: [
+        environment({
+          nodeSetupId: "cloud-setup",
+          profileSnapshot: { executionMode: "remote-exec" },
+        }),
+      ],
+      preparation,
+    });
+    await coordinator.start();
+    expect(preparation.currentArtifact).not.toHaveBeenCalled();
+    expect(preparation.prepare).not.toHaveBeenCalled();
+    await coordinator.stop();
+  });
+
+  it("prepares a newly connected node while another node's installation is held", async () => {
+    const held = createDeferredCore();
+    const second = { ...node, nodeId: "node-2", connId: "connection-2" };
+    let nodes: NodeWorkerSupervisorNodeProof[] = [node];
+    const prepare = vi.fn(async ({ node: current }: { node: NodeWorkerSupervisorNodeProof }) => {
+      if (current.nodeId === node.nodeId) {
+        await held.promise;
+      }
+    });
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async () => ({
+      ok: true,
+      payloadJSON: JSON.stringify({ applied: true, deleted: 0, hasMore: false }),
+    }));
+    const transport: NodeWorkerSupervisorTransport = {
+      listCurrentNodes: async () => nodes,
+      hasCurrentRunner: () => true,
+      isCurrent: () => true,
+      invoke,
+    };
+    const coordinator = createNodeWorkspaceRetainCoordinator({
+      gatewayNamespace: "gateway-test",
+      environments: { list: () => [] },
+      placements: { list: () => [], listPendingWorkspaceResults: () => [] },
+      preparation: {
+        isEnvironmentOwnedNode: () => false,
+        currentArtifact: async () => ({
+          install: "bundle",
+          bundleHash: "c".repeat(64),
+          openclawVersion: "2026.8.10",
+          protocolFeatures: [],
+          tarballBytes: 1,
+          tarballSha256: "d".repeat(64),
+          tarballPath: "/current.tgz",
+        }),
+        prepare,
+        invalidate: () => {},
+      },
+      warn: vi.fn(),
+    });
+    coordinator.bindTransport(transport);
+    const first = coordinator.start();
+    await vi.waitFor(() => expect(prepare).toHaveBeenCalledOnce());
+    nodes = [node, second];
+    await coordinator.schedule(second.nodeId);
+    expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ node: second }));
+    expect(invoke).not.toHaveBeenCalledWith(expect.objectContaining({ node }));
+    held.resolve();
+    await first;
+    await coordinator.stop();
+  });
+
+  it("rechecks environment ownership after artifact preparation before installing or retaining it", async () => {
+    const artifact = {
+      install: "bundle" as const,
+      bundleHash: "c".repeat(64),
+      openclawVersion: "2026.8.10",
+      protocolFeatures: [],
+      tarballBytes: 1,
+      tarballSha256: "d".repeat(64),
+      tarballPath: "/current.tgz",
+    };
+    const held = createDeferredCore<typeof artifact>();
+    let environmentOwned = false;
+    const preparation = {
+      isEnvironmentOwnedNode: () => environmentOwned,
+      currentArtifact: vi.fn(() => held.promise),
+      prepare: vi.fn(),
+      invalidate: vi.fn(),
+    };
+    const { coordinator, invoke } = createHarness({
+      environments: [],
+      placements: [],
+      preparation,
+    });
+    const startup = coordinator.start();
+    await vi.waitFor(() => expect(preparation.currentArtifact).toHaveBeenCalledOnce());
+    environmentOwned = true;
+    held.resolve(artifact);
+    await startup;
+    expect(preparation.prepare).not.toHaveBeenCalled();
+    expect(invoke.mock.calls[0]?.[0].params).toMatchObject({ bundleHashes: [] });
+    expect(invoke.mock.calls[0]?.[0].params).not.toHaveProperty("bundleStatusHash");
+    await coordinator.stop();
   });
 });
