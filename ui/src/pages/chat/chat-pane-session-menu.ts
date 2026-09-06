@@ -17,6 +17,7 @@ import { openEditor } from "../../lib/editor-links.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
+import { resolveSessionRenamePatch, resolveSessionRenameValue } from "../../lib/session-rename.ts";
 import { collectKnownSessionGroups } from "../../lib/sessions/grouping.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -72,6 +73,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     if (
       action.kind === "copy-session-id" ||
       action.kind === "copy-session-link" ||
+      action.kind === "copy-session-preview-link" ||
       action.kind === "copy-markdown" ||
       action.kind === "open-new-tab" ||
       action.kind === "open-new-window" ||
@@ -369,16 +371,9 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       this.publishHeaderError(access.reason);
       return;
     }
-    const customLabel = normalizeOptionalString(row.label) ?? null;
-    const generatedTitle = parseAgentSessionKey(row.key)?.rest.startsWith("dashboard:")
-      ? (normalizeOptionalString(row.displayName) ??
-        (row.worktree ? undefined : normalizeOptionalString(row.derivedTitle)))
-      : undefined;
     // The edit belongs to this instance, even if a replacement reuses its key.
     this.headerRenameSession = { key: row.key, sessionId: row.sessionId, label: row.label };
-    // Dashboard titles are generated session text; channel/account decoration
-    // remains display-only and must never become the stored label.
-    this.headerRenameInitialValue = customLabel ?? generatedTitle ?? "";
+    this.headerRenameInitialValue = resolveSessionRenameValue(row);
     this.headerRenameValue = this.headerRenameInitialValue;
     this.headerEditing = true;
     void this.updateComplete.then(() => {
@@ -398,21 +393,20 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       return;
     }
     const session = this.headerRenameSession;
-    const initialLabel = normalizeOptionalString(session?.label) ?? null;
-    const trimmed = this.headerRenameValue.trim();
-    const label = trimmed || null;
-    const unchangedGeneratedTitle =
-      initialLabel === null && trimmed === this.headerRenameInitialValue.trim();
-    const unchangedLabel = label === initialLabel;
+    const patch = resolveSessionRenamePatch(
+      this.headerRenameValue,
+      this.headerRenameInitialValue,
+      session?.label,
+    );
     this.headerEditing = false;
     this.headerRenameSession = null;
     const state = this.state;
-    if (!session || !state || unchangedGeneratedTitle || unchangedLabel) {
+    if (!session || !state || !patch) {
       return;
     }
     const access = readSessionMethodAccess(this.context.gateway.snapshot, {
       method: "sessions.patch",
-      params: { key: session.key, label },
+      params: { key: session.key, ...patch },
     });
     if (!access.allowed) {
       this.publishHeaderError(access.reason);
@@ -420,14 +414,10 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     }
     const owner = this.headerOutcomeOwner;
     void this.context.sessions
-      .patch(
-        session.key,
-        { label },
-        {
-          agentId: resolveChatAgentId(state),
-          expectedSessionId: session.sessionId,
-        },
-      )
+      .patch(session.key, patch, {
+        agentId: resolveChatAgentId(state),
+        expectedSessionId: session.sessionId,
+      })
       .catch((error: unknown) => this.publishHeaderError(error, owner));
   }
 

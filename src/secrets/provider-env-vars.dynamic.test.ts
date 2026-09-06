@@ -866,6 +866,47 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(pluginRegistryMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
+  it("preserves alias-chain expansion order and ownership of lookup results", () => {
+    const evidence = {
+      type: "local-file-with-env" as const,
+      fileEnvVar: "BASE_CREDENTIALS",
+      credentialMarker: "base-local-credentials",
+    };
+    useInstalledPlugins(
+      setupPlugin("base-owner", "global", {
+        id: "base",
+        envVars: ["BASE_API_KEY"],
+        authEvidence: [evidence],
+      }),
+      { id: "first-alias", origin: "global", providerAuthAliases: { z: "base" } },
+      { id: "second-alias", origin: "global", providerAuthAliases: { a: "z" } },
+      { id: "third-alias", origin: "global", providerAuthAliases: { b: "a" } },
+    );
+
+    const first = resolveProviderAuthLookupMaps({ config: {} });
+    expect(Object.keys(first.aliasMap)).toEqual(["z", "a", "b"]);
+    expect(first.aliasMap).toEqual({ z: "base", a: "z", b: "a" });
+    expect(Object.getPrototypeOf(first.aliasMap)).toBeNull();
+    expect(first.envCandidateMap.base).toEqual(["BASE_API_KEY"]);
+    expect(first.envCandidateMap.z).toEqual(["BASE_API_KEY"]);
+    expect(first.envCandidateMap.a).toBeUndefined();
+    expect(first.envCandidateMap.b).toBeUndefined();
+    expect(first.authEvidenceMap).toEqual({ base: [evidence], z: [evidence] });
+    expect(first.authEvidenceMap.z?.[0]).toBe(evidence);
+    expect(first.setupProviderFallbackRefs).toEqual(["a", "b", "base", "z"]);
+
+    const second = resolveProviderAuthLookupMaps({ config: {} });
+    expect(second).toEqual(first);
+    expect(second.aliasMap).not.toBe(first.aliasMap);
+    expect(second.envCandidateMap).not.toBe(first.envCandidateMap);
+    expect(second.envCandidateMap.z).not.toBe(first.envCandidateMap.z);
+    expect(second.authEvidenceMap).not.toBe(first.authEvidenceMap);
+    expect(second.authEvidenceMap.z).not.toBe(first.authEvidenceMap.z);
+    expect(second.authEvidenceMap.z?.[0]).toBe(evidence);
+    expect(second.setupProviderFallbackRefs).not.toBe(first.setupProviderFallbackRefs);
+    expect(second.envCandidateMap.openai).toBe(first.envCandidateMap.openai);
+  });
+
   it("does not reuse a load-path current snapshot for default provider env lookups without parameters", () => {
     const staleSnapshot = metadataSnapshot(LOAD_PATH_PROVIDER_PLUGIN);
     pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockImplementation(

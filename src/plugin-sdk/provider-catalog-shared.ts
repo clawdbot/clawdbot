@@ -25,6 +25,7 @@ export {
   buildSingleProviderApiKeyCatalog,
   findCatalogTemplate,
   readManifestProviderDefaultModelRef,
+  resolveFirstProviderCatalogAuth,
   type ManifestProviderCatalogEntry,
   type ManifestProviderCatalogSurface,
 } from "../plugins/provider-catalog.js";

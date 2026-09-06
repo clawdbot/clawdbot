@@ -1,4 +1,5 @@
 import { markReplyPayloadForSourceSuppressionDelivery } from "../../auto-reply/reply-payload.js";
+import { runWithQuestionChannelDeliveries } from "../../infra/question-channel-runtime.js";
 import type { MessagePresentation } from "../../interactive/payload.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 
@@ -108,16 +109,14 @@ function buildAgentHarnessQuestionPresentation(params: {
     return undefined;
   }
   // The question stays in its own leading text block so reaction/native
-  // adapters can keep it while replacing the tap-only guidance below.
+  // adapters can keep it while replacing the reply guidance below.
   const optionGuidance = [
     ...options.map(
       (option) =>
         `- ${formatText(option.label)}${option.description ? `: ${formatText(option.description)}` : ""}`,
     ),
     "",
-    question.isOther
-      ? "Tap an option, or reply with the option text or your own answer."
-      : "Tap an option, or reply with the option number or text.",
+    questionReplyGuidance(params.questions),
   ].join("\n");
   return {
     blocks: [
@@ -218,10 +217,12 @@ export async function deliverAgentHarnessQuestionPrompt(
   if (params.onBlockReply) {
     // The agent cannot finish until this prompt is answered. Give channel delivery
     // an independent stable intent so it does not wait behind the blocked stream.
-    await params.onBlockReply(payload, {
-      ...(signal ? { abortSignal: signal } : {}),
-      deliveryIntentId: `block-reply:v1:agent-question:${questionId}`,
-    });
+    await runWithQuestionChannelDeliveries([questionId], () =>
+      params.onBlockReply?.(payload, {
+        ...(signal ? { abortSignal: signal } : {}),
+        deliveryIntentId: `block-reply:v1:agent-question:${questionId}`,
+      }),
+    );
     return;
   }
   signal?.throwIfAborted();

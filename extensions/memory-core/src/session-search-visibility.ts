@@ -1,5 +1,4 @@
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
-// Memory Core plugin module implements session search visibility behavior.
 import {
   buildSessionEntry,
   loadArchivedSessions,
@@ -23,14 +22,14 @@ import {
   resolveSandboxSessionToolsVisibility,
 } from "openclaw/plugin-sdk/session-visibility";
 import {
+  normalizeOptionalLowercaseString as normalizeAgentIdForCompare,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
   readSessionArchiveReasonFromHitPath,
   readSessionResetRecallCutoffMetadata,
   type SessionResetRecallCutoff,
 } from "./session-reset-recall-metadata.js";
-
-function normalizeAgentIdForCompare(value: string | undefined): string | undefined {
-  return value?.trim().toLowerCase() || undefined;
-}
 
 function isGlobalSessionKeyForSharedScope(cfg: OpenClawConfig, key: string): boolean {
   return cfg.session?.scope === "global" && key.trim().toLowerCase() === "global";
@@ -41,23 +40,18 @@ type ConversationRecallContext = NonNullable<OpenClawPluginToolContext["conversa
 type SessionStore = ReturnType<typeof loadCombinedSessionStoreForGateway>["store"];
 
 function isSameStoredTranscript(
-  anchor: SessionStore[string] | undefined,
-  candidate: SessionStore[string] | undefined,
+  // Keep the existing file-alias privacy check even though the public store type omits locators.
+  anchor: (SessionStore[string] & { sessionFile?: unknown }) | undefined,
+  candidate: (SessionStore[string] & { sessionFile?: unknown }) | undefined,
 ): boolean {
   if (!anchor || !candidate) {
     return false;
   }
   const anchorSessionId = anchor.sessionId?.trim();
-  if (anchorSessionId && candidate.sessionId?.trim() === anchorSessionId) {
-    return true;
-  }
-  const anchorSessionFile = (anchor as { sessionFile?: unknown }).sessionFile;
-  const candidateSessionFile = (candidate as { sessionFile?: unknown }).sessionFile;
-  return (
-    typeof anchorSessionFile === "string" &&
-    anchorSessionFile.trim().length > 0 &&
-    typeof candidateSessionFile === "string" &&
-    candidateSessionFile.trim() === anchorSessionFile.trim()
+  const anchorSessionFile = normalizeOptionalString(anchor.sessionFile);
+  return Boolean(
+    (anchorSessionId && candidate.sessionId?.trim() === anchorSessionId) ||
+    (anchorSessionFile && normalizeOptionalString(candidate.sessionFile) === anchorSessionFile),
   );
 }
 
@@ -178,6 +172,11 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
   /** Trusted control-plane calls may authorize only hits already scoped to this agent. */
   trustedAgentScope?: boolean;
 }): Promise<MemorySearchResult[]> {
+  // Session visibility owns transcript hits only. Loading the catalog here for
+  // memory-only results decodes every saved session prompt on the Gateway loop.
+  if (!params.hits.some((hit) => hit.source === "sessions")) {
+    return params.conversationRecall?.corpus === "sessions" ? [] : params.hits;
+  }
   const visibility = resolveEffectiveSessionToolsVisibility({
     cfg: params.cfg,
     sandboxed: params.sandboxed,

@@ -3,6 +3,12 @@ import { afterEach, expect, test, vi } from "vitest";
 import { copyInternalToolResultState } from "../../packages/agent-core/src/internal-hooks.js";
 import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import {
+  drainSystemEventEntries,
+  enqueueSystemEventEntry,
+  enqueueSystemEventWithReceipt,
+  peekSystemEventEntries,
+} from "../infra/system-events.js";
+import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
@@ -12,6 +18,7 @@ import {
   addSession,
   appendOutput,
   markExited,
+  recordNotifyOnExitRemoval,
   type ProcessSession,
 } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
@@ -20,8 +27,10 @@ import { createProcessTool } from "./bash-tools.process.js";
 import { createSubscribedCodeModeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
+  createCodeModeHarness,
   resetCodeModeTestState,
   resultDetails,
+  runUntilCompleted,
   waitUntilCompleted,
 } from "./code-mode.test-support.js";
 import type { AgentMessage, AgentToolResult } from "./runtime/index.js";
@@ -68,6 +77,16 @@ async function poll(
   );
 }
 
+async function runProcessInCodeMode(args: Record<string, unknown>) {
+  const harness = createCodeModeHarness();
+  applyCodeModeCatalog({ ...harness.ctx, tools: [...harness.tools, createProcessTool()] });
+  return await runUntilCompleted({
+    execTool: expectDefined(harness.tools[0], "Code Mode exec"),
+    waitTool: expectDefined(harness.tools[1], "Code Mode wait"),
+    code: `return await process(${JSON.stringify(args)});`,
+  });
+}
+
 function resultText(result: AgentToolResult<unknown>): string {
   return result.content.find((part) => part.type === "text")?.text ?? "";
 }
@@ -94,6 +113,84 @@ function persistResult(
 ): void {
   manager.appendMessage(toolResultMessage(toolCallId, result));
 }
+
+test.each(["finished", "waiting"])(
+  "retains a %s poll completion through failed persistence and acknowledges late receipts",
+  async (phase) => {
+    const session = createProcessSessionFixture({
+      id: `persist-notify-${phase}`,
+      backgrounded: true,
+    });
+    const sessionKey = `agent:main:${session.id}`;
+    const eventOptions = { sessionKey, contextKey: `exec:${session.id}` };
+    const unrelated = enqueueSystemEventEntry("unrelated", eventOptions);
+    const recordCompletion = () =>
+      recordNotifyOnExitRemoval(
+        session,
+        expectDefined(
+          enqueueSystemEventWithReceipt("terminal output", eventOptions, { allowDuplicate: true }),
+          "completion receipt",
+        ),
+      );
+    addSession(session);
+    const processTool = createProcessTool();
+    const turn = processTurn("persist-notify", session.id);
+    const finish = () => {
+      appendOutput(session, "stdout", "terminal output");
+      markExited(session, 0, null, "completed");
+      if (phase === "finished") {
+        recordCompletion();
+      }
+    };
+    let result: AgentToolResult<unknown>;
+    if (phase === "waiting") {
+      vi.useFakeTimers();
+      try {
+        const pending = poll(processTool, session.id, turn.toolCall.id, turn, 1_000);
+        finish();
+        await vi.advanceTimersByTimeAsync(250);
+        result = await pending;
+      } finally {
+        vi.useRealTimers();
+      }
+    } else {
+      finish();
+      result = await poll(processTool, session.id, turn.toolCall.id, turn);
+    }
+    const manager = SessionManager.inMemory();
+    const append = manager.appendMessageWithTranscriptAnchor.bind(manager);
+    let rejectAppend = true;
+    const spy = vi
+      .spyOn(manager, "appendMessageWithTranscriptAnchor")
+      .mockImplementation((message, options) => {
+        if (message.role === "toolResult" && rejectAppend) {
+          throw new Error("result persistence failed");
+        }
+        return append(message, options);
+      });
+    try {
+      installSessionToolResultGuard(manager);
+      manager.appendMessage(turn.assistantMessage);
+      expect(() => persistResult(manager, turn.toolCall.id, result)).toThrow(
+        "result persistence failed",
+      );
+      if (phase === "waiting") {
+        recordCompletion();
+      }
+      expect(peekSystemEventEntries(sessionKey)).toHaveLength(2);
+      expect(session.terminalPollObserved).not.toBe(true);
+      rejectAppend = false;
+      persistResult(manager, turn.toolCall.id, result);
+      expect(peekSystemEventEntries(sessionKey)).toEqual([unrelated]);
+      expect(session.terminalPollObserved).toBe(true);
+      recordCompletion();
+      expect(peekSystemEventEntries(sessionKey)).toEqual([unrelated]);
+    } finally {
+      spy.mockRestore();
+      drainSystemEventEntries(sessionKey);
+    }
+  },
+);
 
 test.each(["running", "completed"] as const)(
   "replays $status poll output after transcript repair and consumes it after persistence",
@@ -207,6 +304,83 @@ test.each(["transformed", "blocked", "error"] as const)(
     }
   },
 );
+
+test.each(["running", "completed"] as const)(
+  "Code Mode reads the requested page from a %s process log",
+  async (status) => {
+    const session = createProcessSessionFixture({ id: "paged-log", backgrounded: true });
+    addSession(session);
+    appendOutput(session, "stdout", "before-page\nrequested-page\nafter-page\n");
+    if (status === "completed") {
+      markExited(session, 0, null, "completed");
+    }
+
+    const result = await runProcessInCodeMode({
+      action: "log",
+      sessionId: session.id,
+      offset: 1,
+      limit: 1,
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      value: { status, output: "requested-page", totalLines: 3 },
+    });
+  },
+);
+
+test("Code Mode retains the default log page limit and continuation hint", async () => {
+  const session = createProcessSessionFixture({ id: "tailed-log", backgrounded: true });
+  addSession(session);
+  appendOutput(
+    session,
+    "stdout",
+    Array.from({ length: 205 }, (_, index) => `line-${index}`).join("\n"),
+  );
+
+  const result = await runProcessInCodeMode({ action: "log", sessionId: session.id });
+
+  expect(result).toMatchObject({
+    status: "completed",
+    value: {
+      output: `${Array.from({ length: 200 }, (_, index) => `line-${index + 5}`).join("\n")}\n\n[showing last 200 of 205 lines; pass offset/limit to page]`,
+    },
+  });
+});
+
+test.each([
+  { action: "log", sessionId: "missing-process", error: "No session found for missing-process" },
+  {
+    action: "paste",
+    sessionId: "interactive-process",
+    text: "",
+    bracketed: false,
+    error: "No paste text provided.",
+  },
+  {
+    action: "send-keys",
+    sessionId: "interactive-process",
+    keys: ["up"],
+    error:
+      "Session interactive-process cursor key mode is not known yet. Poll or log until startup output appears, then retry send-keys.",
+  },
+])("Code Mode preserves actionable $action failures", async ({ error, ...args }) => {
+  const session = createProcessSessionFixture({
+    id: "interactive-process",
+    backgrounded: true,
+    cursorKeyMode: "unknown",
+  });
+  const write = vi.fn<NonNullable<ProcessSession["stdin"]>["write"]>((_data, callback) =>
+    callback?.(),
+  );
+  session.stdin = { write, end: vi.fn() };
+  addSession(session);
+
+  const result = await runProcessInCodeMode(args);
+
+  expect(result).toMatchObject({ status: "completed", value: { status: "failed", error } });
+  expect(write).not.toHaveBeenCalled();
+});
 
 test("a retained old snapshot cannot consume a successor poll delivery", async () => {
   const session = createProcessSessionFixture({ id: "retained-poll", backgrounded: true });

@@ -17,6 +17,7 @@ import {
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { waitForDead } from "../helpers/process-wait.js";
+import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 import { createFixture as createDeclarationFixture } from "./tsdown-declaration-fixture.js";
 
 const fixture = createFixtureLifetime();
@@ -61,13 +62,17 @@ function createCheckout() {
 }
 
 function installCompiler(root: string, afterEmit = "") {
+  const launcher = path.join(root, "node_modules/.bin/tsgo");
+  fs.rmSync(launcher, { force: true });
+  const native = materializeNativeCompiler(root);
+  fs.unlinkSync(launcher);
   const compiler = write(
     root,
     "node_modules/.bin/tsgo",
     `#!/usr/bin/env node
     const { spawnSync } = require('node:child_process');
     console.error('[fixture tsgo] starting', ...process.argv.slice(2));
-    const result = spawnSync(process.execPath, [${JSON.stringify(path.join(sourceRoot, "node_modules/@typescript/native-preview/bin/tsgo"))}, ...process.argv.slice(2)], { stdio: 'inherit' });
+    const result = spawnSync(${JSON.stringify(native)}, process.argv.slice(2), { stdio: 'inherit' });
     console.error('[fixture tsgo] finished', result.status, result.signal);
     if (result.status !== 0) process.exit(result.status ?? 1);
     ${afterEmit}
@@ -89,37 +94,29 @@ function installBuildCheckpoint(root: string, checkpoint: string) {
 }
 
 function installScripts(root: string, scripts: string[]) {
-  for (const script of scripts) {
+  // Keep the checkpoint launcher when installCompiler already owns this toolchain.
+  if (!fs.existsSync(path.join(root, "node_modules/typescript/package.json"))) {
+    materializeNativeCompiler(root);
+  }
+  for (const script of ["tsx.mjs", ...scripts]) {
     write(
       root,
       `scripts/${script}`,
       fs.readFileSync(path.join(sourceRoot, "scripts", script), "utf8"),
     );
   }
-  fs.mkdirSync(path.join(root, "scripts/lib"), { recursive: true });
-  for (const entry of fs.readdirSync(path.join(sourceRoot, "scripts/lib"))) {
-    if (entry === "plugin-sdk-entrypoints.json") {
-      continue;
-    }
-    if (entry === "plugin-sdk-entries.mts") {
-      fs.copyFileSync(
-        path.join(sourceRoot, "scripts/lib", entry),
-        path.join(root, "scripts/lib", entry),
-      );
-    } else {
-      fs.symlinkSync(
-        path.join(sourceRoot, "scripts/lib", entry),
-        path.join(root, "scripts/lib", entry),
-      );
-    }
+  for (const file of [
+    "scripts/lib",
+    "scripts/windows-cmd-helpers.mjs",
+    "packages/normalization-core/src",
+    "packages/normalization-core/package.json",
+  ]) {
+    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+    fs.cpSync(path.join(sourceRoot, file), path.join(root, file), { recursive: true });
   }
   write(root, "scripts/lib/plugin-sdk-entrypoints.json", '["qa-channel-protocol"]');
-  fs.symlinkSync(
-    path.join(sourceRoot, "scripts/windows-cmd-helpers.mjs"),
-    path.join(root, "scripts/windows-cmd-helpers.mjs"),
-  );
   fs.mkdirSync(path.join(root, "node_modules"), { recursive: true });
-  for (const name of ["tsx", "typescript", "@typescript", "@openclaw/fs-safe"]) {
+  for (const name of ["tsx", "@openclaw/fs-safe"]) {
     fs.mkdirSync(path.dirname(path.join(root, "node_modules", name)), { recursive: true });
     fs.symlinkSync(
       path.join(sourceRoot, "node_modules", name),
@@ -369,23 +366,17 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         if (!groups) {
           installScripts(root, [script, "run-tsgo.mts", "tsdown-build.mts", "pnpm-runner.mts"]);
           write(root, "tsconfig.json", '{"extends":"./tsconfig.plugin-sdk.dts.json"}');
-          fs.mkdirSync(path.join(root, "packages"), { recursive: true });
-          fs.symlinkSync(
-            path.join(sourceRoot, "packages/normalization-core"),
-            path.join(root, "packages/normalization-core"),
-          );
         }
-        const moduleRoot = groups ? root : sourceRoot;
         const scriptUrl = pathToFileURL(path.join(root, "scripts", script)).href;
         const moduleUrl = (name: string) =>
-          pathToFileURL(path.join(moduleRoot, "scripts/lib", name)).href;
+          pathToFileURL(path.join(root, "scripts/lib", name)).href;
         const failure = `throw new AggregateError([new Error('child failed', { cause: Object.assign(new Error('cleanup unverified'), { processTreeState: 'indeterminate' }) })], 'fixture failure');`;
         const replacements = {
           [scriptUrl]: {
             "./lib/extension-boundary-inputs.mts": `export * from ${JSON.stringify(moduleUrl("extension-boundary-inputs.mts"))}; export class BoundaryInputSnapshot { constructor() { ${failure} } }`,
           },
           [moduleUrl("tsdown-declaration-writer.mts")]: {
-            "../tsdown-build.mts": `export * from ${JSON.stringify(pathToFileURL(path.join(moduleRoot, "scripts/tsdown-build.mts")).href)}; export const prepareTsdownBuildExecution = () => ({});`,
+            "../tsdown-build.mts": `export * from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/tsdown-build.mts")).href)}; export const prepareTsdownBuildExecution = () => ({});`,
             "./declaration-stage.mts": `export async function publishStagedDeclarations() { ${failure} }`,
           },
         };
@@ -705,6 +696,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
     await withProcesses(async ({ checkpoint, waitEvent, start }) => {
       const root = createCheckout();
       installScripts(root, ["run-tsgo-core-test-shards.mts", "run-tsgo.mts"]);
+      fs.unlinkSync(path.join(root, "node_modules/.bin/tsgo"));
       const compiler = write(
         root,
         "node_modules/.bin/tsgo",
@@ -749,10 +741,6 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         "run-tsgo.mts",
         "prepare-extension-package-boundary-artifacts.mts",
       ]);
-      for (const name of ["normalization-core", "acp-core", "ai"]) {
-        fs.mkdirSync(path.join(root, "packages"), { recursive: true });
-        fs.symlinkSync(path.join(sourceRoot, "packages", name), path.join(root, "packages", name));
-      }
       write(root, "tsconfig.json", "{}");
       write(
         root,

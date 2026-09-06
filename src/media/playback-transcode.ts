@@ -437,7 +437,12 @@ function buildPlaybackFfmpegArgs(params: {
   outputPath: string;
   videoStreamIndex?: number;
 }): string[] {
-  const common = [
+  const audioOnly = params.kind === "audio";
+  const primaryStreamIndex = audioOnly ? params.audioStreamIndex : params.videoStreamIndex;
+  if (primaryStreamIndex === undefined) {
+    throw new Error(`Playback ${audioOnly ? "audio" : "video"} stream is missing`);
+  }
+  return [
     "-hide_banner",
     "-loglevel",
     "error",
@@ -460,53 +465,28 @@ function buildPlaybackFfmpegArgs(params: {
     "-1",
     "-map_chapters",
     "-1",
-  ];
-  if (params.kind === "audio") {
-    if (params.audioStreamIndex === undefined) {
-      throw new Error("Playback audio stream is missing");
-    }
-    return [
-      ...common,
-      "-map",
-      `0:${params.audioStreamIndex}`,
-      "-vn",
-      "-sn",
-      "-dn",
-      "-t",
-      String(PLAYBACK_TRANSCODE_MAX_DURATION_SECS),
-      "-c:a",
-      "aac",
-      "-b:a",
-      "128k",
-      "-movflags",
-      "+faststart",
-      "-f",
-      "ipod",
-      "-fs",
-      String(params.maxOutputBytes + 1),
-      params.outputPath,
-    ];
-  }
-  if (params.videoStreamIndex === undefined) {
-    throw new Error("Playback video stream is missing");
-  }
-  return [
-    ...common,
     "-map",
-    `0:${params.videoStreamIndex}`,
-    ...(params.audioStreamIndex === undefined ? [] : ["-map", `0:${params.audioStreamIndex}`]),
+    `0:${primaryStreamIndex}`,
+    ...(!audioOnly && params.audioStreamIndex !== undefined
+      ? ["-map", `0:${params.audioStreamIndex}`]
+      : []),
+    ...(audioOnly ? ["-vn"] : []),
     "-sn",
     "-dn",
     "-t",
     String(PLAYBACK_TRANSCODE_MAX_DURATION_SECS),
-    "-vf",
-    "scale=w='min(1920,iw)':h='min(1080,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
-    "-c:v",
-    "libx264",
-    "-threads",
-    String(PLAYBACK_TRANSCODE_THREADS),
-    "-pix_fmt",
-    "yuv420p",
+    ...(audioOnly
+      ? []
+      : [
+          "-vf",
+          "scale=w='min(1920,iw)':h='min(1080,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
+          "-c:v",
+          "libx264",
+          "-threads",
+          String(PLAYBACK_TRANSCODE_THREADS),
+          "-pix_fmt",
+          "yuv420p",
+        ]),
     "-c:a",
     "aac",
     "-b:a",
@@ -514,7 +494,7 @@ function buildPlaybackFfmpegArgs(params: {
     "-movflags",
     "+faststart",
     "-f",
-    "mp4",
+    audioOnly ? "ipod" : "mp4",
     "-fs",
     String(params.maxOutputBytes + 1),
     params.outputPath,

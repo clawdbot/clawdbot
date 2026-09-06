@@ -1,4 +1,4 @@
-import { html, type TemplateResult } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { isKernelOwnedChannelConfigKey } from "../../../../src/config/channel-config-keys.js";
 import type { ConfigUiHints } from "../../api/types.ts";
 import { hintForPath, humanize, type JsonSchema } from "../../components/config-form.shared.ts";
@@ -49,6 +49,7 @@ const sidebarIcons: Record<string, TemplateResult> = {
   bindings: icons.server,
   broadcast: icons.radio,
   tts: icons.music,
+  transcripts: icons.book,
   session: icons.users,
   cron: icons.clock,
   discovery: icons.search,
@@ -92,7 +93,15 @@ export const SECTION_CATEGORIES: SectionCategoryDefinition[] = [
   { id: "ai", sections: ["agents", "models", "skills", "tools", "memory", "session"] },
   {
     id: "communication",
-    sections: ["channels", "messages", "broadcast", "__notifications__", "talk", "tts"],
+    sections: [
+      "channels",
+      "messages",
+      "broadcast",
+      "__notifications__",
+      "talk",
+      "tts",
+      "transcripts",
+    ],
   },
   { id: "security", sections: ["security", "approvals"] },
   { id: "automation", sections: ["commands", "hooks", "bindings", "cron", "plugins"] },
@@ -161,6 +170,7 @@ export function renderConfigAccordionNav(
                       ? "config-accordion-group__item--active"
                       : ""
                   }"
+                  aria-current=${props.activeSection === section.key ? "true" : nothing}
                   @click=${(event: Event) => {
                     props.onSectionChange(section.key);
                     resetContentScroll(event.currentTarget);

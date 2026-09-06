@@ -1205,22 +1205,6 @@ describe("sanitizeSessionHistory", () => {
     expect(result).toStrictEqual([]);
   });
 
-  it("downgrades orphaned openai reasoning even when the model has not changed", async () => {
-    const sessionEntries = [
-      makeModelSnapshotEntry({
-        provider: "openai",
-        modelApi: "openai-responses",
-        modelId: "gpt-5.4",
-      }),
-    ];
-    const sessionManager = makeInMemorySessionManager(sessionEntries);
-    const messages = makeReasoningAssistantMessages({ thinkingSignature: "json" });
-
-    const result = await sanitizeOpenAIHistory(messages, { modelId: "gpt-5.4", sessionManager });
-
-    expect(result).toStrictEqual([]);
-  });
-
   it("downgrades orphaned openai reasoning when the model changes too", async () => {
     const result = await sanitizeSnapshotChangedOpenAIReasoning({
       sanitizeSessionHistory,

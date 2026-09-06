@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
-  downgradeOpenAIReasoningBlocks,
+  dropStaleOpenAIReasoning,
   isMessagingToolDuplicate,
   normalizeTextForComparison,
 } from "./embedded-agent-helpers.js";
@@ -734,50 +734,34 @@ describe("stripThoughtSignatures", () => {
   });
 });
 
-describe("downgradeOpenAIReasoningBlocks", () => {
-  it("keeps reasoning signatures when followed by content", () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinking: "internal reasoning",
-            thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
-          },
-          { type: "text", text: "answer" },
-        ],
-      },
-    ];
+describe("dropStaleOpenAIReasoning", () => {
+  it.each([undefined, "synthetic-completed-reasoning"])(
+    "drops reasoning at the model switch boundary (encrypted: %s)",
+    (encryptedContent) => {
+      const input = [
+        {
+          role: "assistant",
+          timestamp: 2,
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({
+                id: "rs_123",
+                type: "reasoning",
+                encrypted_content: encryptedContent,
+              }),
+            },
+            { type: "text", text: "answer" },
+          ],
+        },
+      ];
 
-    expect(
-      downgradeOpenAIReasoningBlocks(input as Parameters<typeof downgradeOpenAIReasoningBlocks>[0]),
-    ).toEqual(input);
-  });
-
-  it("drops replayable reasoning at the switch boundary even with following content", () => {
-    const input = [
-      {
-        role: "assistant",
-        timestamp: 2,
-        content: [
-          {
-            type: "thinking",
-            thinking: "internal reasoning",
-            thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
-          },
-          { type: "text", text: "answer" },
-        ],
-      },
-    ];
-
-    expect(
-      downgradeOpenAIReasoningBlocks(
-        input as Parameters<typeof downgradeOpenAIReasoningBlocks>[0],
-        { dropReplayableReasoningBefore: 2 },
-      ),
-    ).toEqual([{ role: "assistant", timestamp: 2, content: [{ type: "text", text: "answer" }] }]);
-  });
+      expect(
+        dropStaleOpenAIReasoning(input as Parameters<typeof dropStaleOpenAIReasoning>[0], 2),
+      ).toEqual([{ role: "assistant", timestamp: 2, content: [{ type: "text", text: "answer" }] }]);
+    },
+  );
 
   it("drops the paired message id when replayable reasoning is dropped", () => {
     const input = [
@@ -799,35 +783,8 @@ describe("downgradeOpenAIReasoningBlocks", () => {
     ];
 
     expect(
-      downgradeOpenAIReasoningBlocks(
-        input as Parameters<typeof downgradeOpenAIReasoningBlocks>[0],
-        { dropReplayableReasoningBefore: 2 },
-      ),
+      dropStaleOpenAIReasoning(input as Parameters<typeof dropStaleOpenAIReasoning>[0], 2),
     ).toEqual([{ role: "assistant", content: [{ type: "text", text: "answer" }] }]);
-  });
-
-  it("keeps the paired message id when reasoning is preserved", () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinking: "internal reasoning",
-            thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
-          },
-          {
-            type: "text",
-            text: "answer",
-            textSignature: JSON.stringify({ v: 1, id: "msg_123" }),
-          },
-        ],
-      },
-    ];
-
-    expect(
-      downgradeOpenAIReasoningBlocks(input as Parameters<typeof downgradeOpenAIReasoningBlocks>[0]),
-    ).toEqual(input);
   });
 
   it("drops paired message ids across every text block when reasoning is dropped", () => {
@@ -855,10 +812,7 @@ describe("downgradeOpenAIReasoningBlocks", () => {
     ];
 
     expect(
-      downgradeOpenAIReasoningBlocks(
-        input as Parameters<typeof downgradeOpenAIReasoningBlocks>[0],
-        { dropReplayableReasoningBefore: 2 },
-      ),
+      dropStaleOpenAIReasoning(input as Parameters<typeof dropStaleOpenAIReasoning>[0], 2),
     ).toEqual([
       {
         role: "assistant",
@@ -879,45 +833,6 @@ describe("downgradeOpenAIReasoningBlocks", () => {
     ]);
   });
 
-  it("drops orphaned reasoning blocks without following content", () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinkingSignature: JSON.stringify({ id: "rs_abc", type: "reasoning" }),
-          },
-        ],
-      },
-      { role: "user", content: "next" },
-    ];
-
-    expect(
-      downgradeOpenAIReasoningBlocks(input as Parameters<typeof downgradeOpenAIReasoningBlocks>[0]),
-    ).toEqual([{ role: "user", content: "next" }]);
-  });
-
-  it("drops object-form orphaned signatures", () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinkingSignature: { id: "rs_obj", type: "reasoning" },
-          },
-        ],
-      },
-    ];
-
-    expect(
-      downgradeOpenAIReasoningBlocks(
-        input as unknown as Parameters<typeof downgradeOpenAIReasoningBlocks>[0],
-      ),
-    ).toStrictEqual([]);
-  });
-
   it("keeps non-reasoning thinking signatures", () => {
     const input = [
       {
@@ -933,31 +848,8 @@ describe("downgradeOpenAIReasoningBlocks", () => {
     ];
 
     expect(
-      downgradeOpenAIReasoningBlocks(input as Parameters<typeof downgradeOpenAIReasoningBlocks>[0]),
+      dropStaleOpenAIReasoning(input as Parameters<typeof dropStaleOpenAIReasoning>[0], 2),
     ).toEqual(input);
-  });
-
-  it("is idempotent for orphaned reasoning cleanup", () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinkingSignature: JSON.stringify({ id: "rs_orphan", type: "reasoning" }),
-          },
-        ],
-      },
-      { role: "user", content: "next" },
-    ];
-
-    const once = downgradeOpenAIReasoningBlocks(
-      input as Parameters<typeof downgradeOpenAIReasoningBlocks>[0],
-    );
-    const twice = downgradeOpenAIReasoningBlocks(
-      once as Parameters<typeof downgradeOpenAIReasoningBlocks>[0],
-    );
-    expect(twice).toEqual(once);
   });
 });
 

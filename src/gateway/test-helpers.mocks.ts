@@ -27,6 +27,8 @@ function createEmbeddedRunMockExports() {
     isEmbeddedAgentRunInProgress: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
     resolveEmbeddedAgentRunProgressState: (sessionId: string) =>
       embeddedRunMock.activeIds.has(sessionId) ? "running" : undefined,
+    resolveEmbeddedAgentSessionProgressState: (sessionId: string) =>
+      embeddedRunMock.activeIds.has(sessionId) ? "running" : undefined,
     abortEmbeddedAgentRun: (sessionId: string) => {
       embeddedRunMock.abortCalls.push(sessionId);
       return embeddedRunMock.activeIds.has(sessionId);

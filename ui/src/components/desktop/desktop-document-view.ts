@@ -1,10 +1,13 @@
 import { html, nothing, svg, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
+import { registerDesktopEnglish } from "../../i18n/locales/en-desktop.ts";
 import { strokeIcon } from "../icons-tools.ts";
 import { icons } from "../icons.ts";
 import { renderPanelLoadingSkeleton } from "../panel-loading-skeleton.ts";
 import type { DesktopPanelState } from "./desktop-panel-state.ts";
 import { renderDesktopPanelContent } from "./desktop-panel-view.ts";
+
+registerDesktopEnglish();
 
 const KEYBOARD_GLYPH = strokeIcon(svg`
   <rect width="20" height="14" x="2" y="5" rx="2" />

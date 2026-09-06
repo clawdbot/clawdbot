@@ -535,6 +535,28 @@ describe("applySessionModelSelection", () => {
     );
   });
 
+  it("resolves SDK effective persistence from the current write draft", async () => {
+    const cfg = { agents: { defaults: { model: "anthropic/claude-opus-4-6" } } };
+    const draft = {
+      agents: {
+        ...cfg.agents,
+        entries: { main: { model: "anthropic/claude-sonnet-4-6" } },
+      },
+    };
+    effects.mutateConfigFileWithRetry.mockImplementationOnce(
+      async ({ mutate }: { mutate: (config: OpenClawConfig) => string }) => ({
+        nextConfig: draft,
+        result: mutate(draft),
+      }),
+    );
+
+    await applySessionModelSelection(createParams({ cfg, canPersistStickyModelSelection: true }));
+
+    await vi.waitFor(() => expect(effects.info).toHaveBeenCalledOnce());
+    expect(draft.agents.defaults.model).toBe("anthropic/claude-opus-4-6");
+    expect(draft.agents.entries.main.model).toBe("openai/gpt-4o");
+  });
+
   it.each([
     {
       name: "clears overrides for an authoritative default",

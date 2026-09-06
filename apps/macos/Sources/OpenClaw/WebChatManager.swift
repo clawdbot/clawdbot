@@ -53,6 +53,7 @@ final class WebChatManager {
 
     private struct ProfileWindowInstance {
         let profileID: String
+        let connection: GatewayConnection
         let controller: WebChatSwiftUIWindowController
     }
 
@@ -61,6 +62,40 @@ final class WebChatManager {
     private var currentChatRoute: WebChatRoute?
     private var cachedPreferredSessionKey: String?
     private var primaryGatewayID: String?
+    private let primaryConnection: GatewayConnection
+    private let selection: MacGatewaySelectionPreferences
+    private var profileChangeObservers: [NSObjectProtocol] = []
+
+    init(primaryConnection: GatewayConnection = .shared, selection: MacGatewaySelectionPreferences = .shared) {
+        self.primaryConnection = primaryConnection
+        self.selection = selection
+        self.profileChangeObservers = [
+            MacGatewayProfileStore.willChangePrincipalNotification,
+            MacGatewayProfileStore.didChangeNotification,
+        ].map { name in
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                guard let id = note.userInfo?[MacGatewayProfileStore.changedProfileIDKey] as? String else { return }
+                let removed = note.userInfo?[MacGatewayProfileStore.removedProfileKey] as? Bool == true
+                MainActor.assumeIsolated {
+                    if name == MacGatewayProfileStore.willChangePrincipalNotification {
+                        self?.closeGatewayWindows(profileID: id)
+                    } else if removed {
+                        self?.selection.forget(profileID: id)
+                        self?.closeGatewayWindows(profileID: id)
+                    } else {
+                        self?.gatewayProfileDidSave(profileID: id)
+                    }
+                }
+            }
+        }
+    }
+
+    isolated deinit {
+        for observer in self.profileChangeObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
     private var primaryGeneration: UInt64 = 0
     private var primaryOpenTask: Task<Void, Never>?
     private var windowGeneration: UInt64 = 0
@@ -73,8 +108,6 @@ final class WebChatManager {
     private var sessionObserverRequests: [ObjectIdentifier: (id: UUID, task: Task<Void, Never>)] = [:]
     private var sessionObserverDeclarations:
         [ObjectIdentifier: (lease: GatewayConnection.ServerLease, visible: Bool)] = [:]
-
-    private static let lastGatewayProfileIDKey = "openclaw.webchat.lastGatewayProfileID"
 
     var onChatWindowVisibilityChanged: ((Bool) -> Void)?
 
@@ -92,9 +125,10 @@ final class WebChatManager {
         }
 
         let generation = self.primaryGeneration
+        let connection = self.primaryConnection
         self.primaryOpenTask = Task { @MainActor [weak self] in
             guard !Task.isCancelled else { return }
-            let sessionKey = await GatewayConnection.shared.mainSessionKey()
+            let sessionKey = await connection.mainSessionKey()
             guard !Task.isCancelled, let self else { return }
             self.preparePrimaryGateway(gatewayID: GatewayDiscoveryPreferences.deviceAuthGatewayID(
                 root: OpenClawConfigFile.loadDict()))
@@ -104,7 +138,39 @@ final class WebChatManager {
         }
     }
 
-    private func presentChat(sessionKey: String, agentID: String?, draft: String?) {
+    func show(
+        sessionKey: String,
+        ifCurrentRouteFrom lease: GatewayConnection.ServerLease,
+        onRejected: @escaping @MainActor () -> Void)
+    {
+        self.primaryOpenTask?.cancel()
+        let root = OpenClawConfigFile.loadDict()
+        guard self.primaryConnection.serverLeaseMatchesCurrentRoute(lease),
+              let owner = lease.route.deviceAuthGatewayID,
+              owner == GatewayDiscoveryPreferences.deviceAuthGatewayID(root: root),
+              let cacheID = MacChatTranscriptCache.gatewayID(root: root)
+        else {
+            onRejected()
+            return
+        }
+        self.preparePrimaryGateway(gatewayID: owner)
+        let generation = self.primaryGeneration
+        let connection = self.primaryConnection
+        // Resolve the complete route before presentation: its storage identity
+        // intentionally omits credential rotations and TLS pin changes.
+        self.primaryOpenTask = Task { @MainActor [weak self] in
+            guard !Task.isCancelled else { return }
+            let current = await connection.isCurrentRoute(lease.route)
+            guard !Task.isCancelled, let self, generation == self.primaryGeneration else { return }
+            guard current, connection.serverLeaseMatchesCurrentRoute(lease) else {
+                onRejected()
+                return
+            }
+            self.presentChat(sessionKey: sessionKey, agentID: nil, draft: nil, gatewayID: cacheID)
+        }
+    }
+
+    private func presentChat(sessionKey: String, agentID: String?, draft: String?, gatewayID: String? = nil) {
         let route = WebChatRoute(sessionKey: sessionKey, agentID: agentID)
         if let controller = windowController {
             // The window shell switches sessions in place (sidebar, /new);
@@ -115,23 +181,28 @@ final class WebChatManager {
                 return
             }
 
-            controller.close()
+            // Detach before closing so the retired controller's callback cannot
+            // cancel this already-admitted successor.
             self.windowController = nil
             self.windowRoute = nil
+            controller.close()
         }
         let controller = WebChatSwiftUIWindowController(
             sessionKey: route.sessionKey,
             agentID: route.agentID,
-            initialDraft: draft)
+            initialDraft: draft,
+            connection: self.primaryConnection,
+            gatewayID: gatewayID)
         controller.onVisibilityChanged = { [weak self, weak controller] visible in
             guard let self, let controller else { return }
-            self.setSessionObserverVisible(visible, owner: controller, connection: .shared)
+            self.setSessionObserverVisible(visible, owner: controller, connection: self.primaryConnection)
             self.onChatWindowVisibilityChanged?(visible)
         }
         controller.onClosed = { [weak self, weak controller] in
             guard let self, let controller else { return }
-            self.setSessionObserverVisible(false, owner: controller, connection: .shared)
+            self.setSessionObserverVisible(false, owner: controller, connection: self.primaryConnection)
             guard self.windowController === controller else { return }
+            self.cancelPrimaryOpen()
             if self.currentChatRoute == self.windowRoute {
                 self.currentChatRoute = nil
             }
@@ -180,17 +251,16 @@ final class WebChatManager {
                 let profiles = try await MacGatewayProfileStore.shared.profiles()
                 guard generation == self.windowGeneration else { return }
                 guard !profiles.isEmpty else {
-                    AppNavigationActions.openSettings(tab: .gateways)
+                    AppNavigationActions.openConnection(tab: .gateways)
                     return
                 }
-                let preferredID = AppDefaults.standard.string(forKey: Self.lastGatewayProfileIDKey)
+                let preferredID = self.selection.profileID
                 switch Self.promptForGatewayProfile(profiles: profiles, preferredID: preferredID) {
                 case let .profile(profile):
                     guard generation == self.windowGeneration else { return }
-                    AppDefaults.standard.set(profile.id, forKey: Self.lastGatewayProfileIDKey)
                     try await self.show(profile: profile)
                 case .manage:
-                    AppNavigationActions.openSettings(tab: .gateways)
+                    AppNavigationActions.openConnection(tab: .gateways)
                 case nil:
                     break
                 }
@@ -206,7 +276,6 @@ final class WebChatManager {
         Task { @MainActor [weak self] in
             guard let self, generation == self.windowGeneration else { return }
             do {
-                AppDefaults.standard.set(profile.id, forKey: Self.lastGatewayProfileIDKey)
                 try await self.show(profile: profile)
             } catch is CancellationError {
             } catch {
@@ -220,7 +289,9 @@ final class WebChatManager {
         // An older close must finish retiring the fleet before this open can acquire its successor.
         await self.fleetShutdownTask?.value
         try self.requireCurrentWindowRequest(generation, profileID: profile.id)
-        let connection = await MacGatewayConnectionFleet.shared.connection(profileID: profile.id)
+        let binding = try await MacGatewayConnectionFleet.shared.binding(profileID: profile.id)
+        let connection = binding.connection
+        let chatStoreID = binding.chatStoreID
         try self.requireCurrentWindowRequest(generation, profileID: profile.id)
         let sessionKey = await connection.mainSessionKey()
         try self.requireCurrentWindowRequest(generation, profileID: profile.id)
@@ -234,7 +305,7 @@ final class WebChatManager {
             sessionKey: route.sessionKey,
             agentID: route.agentID,
             connection: connection,
-            gatewayID: profile.id,
+            gatewayID: chatStoreID,
             windowTitle: "\(profile.name) — OpenClaw",
             windowAutosaveName: "OpenClawChatWindow-\(profile.id)")
         controller.onVisibilityChanged = { [weak self, weak controller] visible in
@@ -250,10 +321,12 @@ final class WebChatManager {
         }
         self.profileWindows[windowID] = ProfileWindowInstance(
             profileID: profile.id,
+            connection: connection,
             controller: controller)
         self.profileWindowOrder.append(windowID)
         controller.cascade(from: previousController)
         controller.show()
+        self.selection.select(.profile(profile.id))
     }
 
     private func requireCurrentWindowRequest(_ generation: UInt64, profileID: String) throws {
@@ -264,19 +337,23 @@ final class WebChatManager {
         }
     }
 
-    func closeGatewayWindows(profileID: String) async {
+    /// Open native chat windows bound to a saved profile's shared fleet connection.
+    func openWindowCount(profileID: String) -> Int {
+        self.profileWindowOrder.count { self.profileWindows[$0]?.profileID == profileID }
+    }
+
+    func closeGatewayWindows(profileID: String) {
         // Removal fences in-flight window creation before awaiting connection
         // shutdown, so an old picker selection cannot resurrect this profile.
         self.unavailableProfileIDs.insert(profileID)
+        self.windowGeneration &+= 1
         let windowIDs = self.profileWindowOrder.filter { self.profileWindows[$0]?.profileID == profileID }
-        let controllers = windowIDs.compactMap { self.profileWindows.removeValue(forKey: $0)?.controller }
+        let instances = windowIDs.compactMap { self.profileWindows.removeValue(forKey: $0) }
         let windowIDSet = Set(windowIDs)
         self.profileWindowOrder.removeAll { windowIDSet.contains($0) }
-        for controller in controllers {
-            controller.close()
-        }
-        if let connection = await MacGatewayConnectionFleet.shared.remove(profileID: profileID) {
-            self.retireSessionObserver(connection: connection)
+        for instance in instances {
+            instance.controller.close()
+            self.retireSessionObserver(connection: instance.connection)
         }
     }
 
@@ -292,15 +369,20 @@ final class WebChatManager {
             ?? WebChatRoute(sessionKey: trimmed, agentID: nil)
     }
 
-    func resetPrimaryConnections() {
+    private func cancelPrimaryOpen() {
         self.primaryGeneration &+= 1
         self.primaryOpenTask?.cancel()
         self.primaryOpenTask = nil
-        self.windowController?.close()
+    }
+
+    func resetPrimaryConnections() {
+        self.cancelPrimaryOpen()
+        let controller = self.windowController
         self.windowController = nil
         self.windowRoute = nil
         self.currentChatRoute = nil
         self.cachedPreferredSessionKey = nil
+        controller?.close()
     }
 
     func preparePrimaryGateway(gatewayID: String?) {
@@ -451,12 +533,12 @@ final class WebChatManager {
         currentRoute == requestedRoute
     }
 
-    private enum GatewayProfileSelection {
+    enum GatewayProfileSelection {
         case profile(MacGatewayProfile)
         case manage
     }
 
-    private static func promptForGatewayProfile(
+    static func promptForGatewayProfile(
         profiles: [MacGatewayProfile],
         preferredID: String?) -> GatewayProfileSelection?
     {

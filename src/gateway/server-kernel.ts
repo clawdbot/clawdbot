@@ -3,6 +3,7 @@ import { isNixMode } from "../config/paths.js";
 import { clearGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
+import { captureRemoteModelCatalogStartupSnapshot } from "../model-catalog/remote-overlay.js";
 import { retainGatewayPluginMetadata } from "../plugins/plugin-metadata-lifecycle.js";
 import { clearSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -12,6 +13,7 @@ import { prepareGatewayLifecycle } from "./server-lifecycle.js";
 import { registerGatewayModelCatalogPrivateAccess } from "./server-model-catalog-auth.js";
 import type { GatewayServerOptions } from "./server-public.js";
 import { prepareGatewayKernelState } from "./server-runtime-state-prepare.js";
+import { rethrowGatewayStartupError } from "./server-shutdown.js";
 import { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.js";
 
 type LoadGatewayModelCatalog = typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
@@ -135,6 +137,8 @@ export async function createGatewayKernel(
     throw new Error("Gateway boot ID must contain 1 to 96 characters");
   }
   const bootId = suppliedBootId ?? randomUUID();
+  // Capture before bootstrap yields or creates workers; concurrent downloads need a restart.
+  captureRemoteModelCatalogStartupSnapshot();
   ensureOpenClawCliOnPath();
   const releasePluginMetadata = retainGatewayPluginMetadata();
   let lifecycleRuntime: Awaited<ReturnType<typeof prepareGatewayLifecycle>> | undefined;
@@ -178,7 +182,6 @@ export async function createGatewayKernel(
         port,
         log,
         logCron,
-        diagnosticsEnabled: bootstrap.diagnosticsEnabled,
         shutdownRuntime,
       }),
     );
@@ -205,20 +208,24 @@ export async function createGatewayKernel(
       await coreRuntime.startEarlyRuntime();
     }
     return await runtime.startupTrace.measure("gateway.request-runtime", () =>
-      prepareGatewayKernelRequestRuntime({ coreRuntime, log, logHealth }),
+      prepareGatewayKernelRequestRuntime({
+        coreRuntime,
+        log,
+        logHealth,
+        hostLifecycle: opts.hostLifecycle,
+      }),
     );
   } catch (error) {
-    try {
+    return await rethrowGatewayStartupError(error, async () => {
       if (lifecycleRuntime) {
+        // The lifecycle releases metadata only after its required joins succeed.
         await lifecycleRuntime.closeOnStartupFailure();
       } else {
         kernelState?.mentionInbox.dispose();
         clearGatewayAgentCliShim();
         clearSecretsRuntimeSnapshotState();
+        releasePluginMetadata();
       }
-    } finally {
-      releasePluginMetadata();
-    }
-    throw error;
+    });
   }
 }

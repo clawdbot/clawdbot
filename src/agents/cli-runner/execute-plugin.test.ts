@@ -8,122 +8,26 @@ import type {
   CliBackendLiveSessionHandle,
   CliBackendToolPermissionResult,
 } from "../../plugins/cli-backend.types.js";
-import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
-import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import {
   closeCliLiveSession,
   createCliLiveSessionCapability,
 } from "./cli-live-session-registry.js";
-import { executePluginOwnedProcess } from "./execute-plugin.js";
-import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
+import {
+  closePluginTestAdmissions,
+  createExecution,
+  requestNativeTool,
+  runPlugin,
+  SUCCESS_RESULT,
+} from "./execute-plugin.test-support.js";
+import type { PreparedCliRunContext } from "./types.js";
 
 vi.mock("../tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
 }));
 
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
-const activeAdmissions: Array<ReturnType<typeof prepareSystemAgentRunAdmission>> = [];
 const activeSessions = new Set<CliBackendLiveSessionHandle>();
-let nextRunId = 0;
-
-const SUCCESS_RESULT = {
-  type: "result",
-  subtype: "success",
-  is_error: false,
-  result: "completed",
-  session_id: "sdk-session",
-};
-
-async function createExecution(
-  options: {
-    config?: OpenClawConfig;
-    sessionEntry?: RunCliAgentParams["sessionEntry"];
-    nativeTools?: string[];
-    abortSignal?: AbortSignal;
-    timeoutMs?: number;
-    runId?: string;
-    resumeArgs?: string[];
-  } = {},
-) {
-  const runId = options.runId ?? `plugin-owner-${++nextRunId}`;
-  const config = options.config ?? { tools: { exec: { security: "full", ask: "off" } } };
-  const admission = prepareSystemAgentRunAdmission(config, runId, "main", "plugin-test");
-  activeAdmissions.push(admission);
-  const context = buildPreparedCliRunContext({
-    provider: "claude-cli",
-    model: "claude-sonnet-4-6",
-    agentId: "main",
-    runId,
-    sessionId: "sdk-session",
-    sessionKey: "agent:main:main",
-    prompt: "hello",
-    config,
-    executionMode: "agent",
-    timeoutMs: options.timeoutMs ?? 5_000,
-    sessionEntry: options.sessionEntry,
-    ...(options.nativeTools
-      ? { cliToolAvailability: { native: options.nativeTools, openClaw: [] } }
-      : {}),
-    systemPrompt: "  Follow host policy.  ",
-    backend: {
-      command: "/bin/sh",
-      args: [],
-      ...(options.resumeArgs ? { resumeArgs: options.resumeArgs } : {}),
-    },
-  });
-  context.params.admittedRunContext = await admission.admit("plugin-harness");
-  if (options.abortSignal) {
-    context.params.abortSignal = options.abortSignal;
-  }
-
-  return { admission, context };
-}
-
-function runPlugin(
-  context: PreparedCliRunContext,
-  execute: CliBackendExecute,
-  options: {
-    noOutputTimeoutMs?: number;
-    consumeStdout?: (chunk: string) => void;
-    sessionId?: string;
-    useResume?: boolean;
-    forceNewSession?: boolean;
-    liveSession?: boolean;
-    requiredGeneration?: string;
-    onNoOutputTimeout?: NonNullable<
-      Parameters<typeof executePluginOwnedProcess>[0]["onNoOutputTimeout"]
-    >;
-    onInterrupted?: (reason: "aborted" | "timeout") => boolean;
-  } = {},
-) {
-  return executePluginOwnedProcess({
-    context,
-    execute,
-    executionCommand: "/bin/sh",
-    executionArgs: ["-p", "--permission-mode", "bypassPermissions"],
-    env: { PATH: "/bin:/usr/bin", OPENCLAW_TEST_MARKER: "host-owned" },
-    prompt: context.params.prompt,
-    promptContext: context.promptContext,
-    useResume: options.useResume ?? Boolean(options.requiredGeneration),
-    sessionId: options.sessionId ?? "sdk-session",
-    ...(options.forceNewSession ? { forceNewSession: true } : {}),
-    ...(options.liveSession || options.requiredGeneration
-      ? {
-          liveSession: {
-            beginCapture: () => {},
-            ...(options.requiredGeneration
-              ? { requiredGeneration: options.requiredGeneration }
-              : {}),
-          },
-        }
-      : {}),
-    ...(options.onNoOutputTimeout ? { onNoOutputTimeout: options.onNoOutputTimeout } : {}),
-    ...(options.onInterrupted ? { onInterrupted: options.onInterrupted } : {}),
-    noOutputTimeoutMs: options.noOutputTimeoutMs ?? 2_000,
-    consumeStdout: options.consumeStdout ?? (() => {}),
-  });
-}
 
 function registerOwnerSession(context: PreparedCliRunContext, generation: string) {
   const capability = createCliLiveSessionCapability({
@@ -163,27 +67,12 @@ function waitUntilAborted(execution: CliBackendExecuteContext): Promise<void> {
   });
 }
 
-function requestNativeTool(
-  execution: CliBackendExecuteContext,
-  toolName = "Bash",
-  toolInput: Record<string, unknown> = { command: "echo approved" },
-) {
-  return execution.requestToolPermission({
-    toolName,
-    toolInput,
-    toolCallId: `native-${toolName}`,
-    ...(execution.abortSignal ? { abortSignal: execution.abortSignal } : {}),
-  });
-}
-
 afterEach(() => {
   for (const session of activeSessions) {
     session.close("restart");
   }
   activeSessions.clear();
-  for (const admission of activeAdmissions.splice(0)) {
-    admission.close();
-  }
+  closePluginTestAdmissions();
   mockCallGatewayTool.mockReset();
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -233,78 +122,158 @@ describe("plugin-owned CLI execution host boundary", () => {
     );
   });
 
-  it("runs plugin user questions through the shared Gateway question flow", async () => {
-    const { context } = await createExecution({
-      runId: "plugin-user-input",
-      nativeTools: ["AskUserQuestion"],
-    });
-    context.params.sessionKey = "main";
-    context.params.runtimePolicySessionKey = "agent:main:telegram:default:direct:canonical-sender";
-    let promptDelivered = createDeferred();
-    const onBlockReply = vi.fn(async () => {
-      promptDelivered.resolve();
-    });
-    context.params.onBlockReply = onBlockReply;
-    const requests = new Map<string, { questions: Array<{ questionId: string }> }>();
-    mockCallGatewayTool.mockImplementation(async (method, _opts, rawParams) => {
-      const params = rawParams as {
-        id: string;
-        questions?: Array<{ questionId: string }>;
-        sessionKey?: string;
-      };
-      if (method === "question.request") {
-        expect(params.sessionKey).toBe(context.params.sessionKey);
-        requests.set(params.id, { questions: params.questions ?? [] });
-        return { id: params.id };
-      }
-      if (method === "question.waitAnswer") {
-        const request = requests.get(params.id);
-        await promptDelivered.promise;
-        promptDelivered = createDeferred();
-        return {
-          status: "answered",
-          answers: {
-            answers: Object.fromEntries(
-              (request?.questions ?? []).map((question) => [
-                question.questionId,
-                [question.questionId],
-              ]),
-            ),
-          },
-        };
-      }
-      if (method === "question.resolve") {
-        return { status: "cancelled" };
-      }
-      throw new Error(`Unexpected Gateway method: ${method}`);
-    });
-    let result: unknown;
-
-    await runPlugin(context, async function* (execution) {
-      result = await execution.requestUserInput({
-        toolName: "AskUserQuestion",
-        toolCallId: "claude-question",
-        questions: [
-          {
-            id: "one",
-            header: "One",
-            question: "First question?",
-            isOther: true,
-            options: [{ label: "A" }, { label: "B" }],
-          },
-        ],
+  it.each([false, true])(
+    "runs plugin user questions with current caller authority (revoked=%s)",
+    async (revoked) => {
+      const { context } = await createExecution({
+        runId: "plugin-user-input",
+        nativeTools: ["AskUserQuestion"],
       });
+      context.params.sessionKey = "main";
+      let callerCurrent = true;
+      context.params.assertCurrent = () => {
+        if (!callerCurrent) {
+          throw new Error("caller revoked");
+        }
+      };
+      context.params.runtimePolicySessionKey =
+        "agent:main:telegram:default:direct:canonical-sender";
+      let promptDelivered = createDeferred();
+      const onBlockReply = vi.fn(async () => {
+        promptDelivered.resolve();
+      });
+      context.params.onBlockReply = onBlockReply;
+      const requests = new Map<string, { questions: Array<{ questionId: string }> }>();
+      mockCallGatewayTool.mockImplementation(async (method, _opts, rawParams) => {
+        const params = rawParams as {
+          id: string;
+          questions?: Array<{ questionId: string }>;
+          sessionKey?: string;
+        };
+        if (method === "question.request") {
+          expect(params.sessionKey).toBe(context.params.sessionKey);
+          requests.set(params.id, { questions: params.questions ?? [] });
+          return { id: params.id };
+        }
+        if (method === "question.waitAnswer") {
+          const request = requests.get(params.id);
+          await promptDelivered.promise;
+          promptDelivered = createDeferred();
+          callerCurrent = !revoked;
+          return {
+            status: "answered",
+            answers: {
+              answers: Object.fromEntries(
+                (request?.questions ?? []).map((question) => [
+                  question.questionId,
+                  [question.questionId],
+                ]),
+              ),
+            },
+          };
+        }
+        if (method === "question.resolve") {
+          return { status: "cancelled" };
+        }
+        throw new Error(`Unexpected Gateway method: ${method}`);
+      });
+      let result: unknown;
+
+      await runPlugin(context, async function* (execution) {
+        result = await execution.requestUserInput({
+          toolName: "AskUserQuestion",
+          toolCallId: "claude-question",
+          questions: [
+            {
+              id: "one",
+              header: "One",
+              question: "First question?",
+              isOther: true,
+              options: [{ label: "A" }, { label: "B" }],
+            },
+          ],
+        });
+        yield SUCCESS_RESULT;
+      });
+
+      expect(result).toEqual(
+        revoked
+          ? expect.objectContaining({ status: "cancelled" })
+          : {
+              status: "answered",
+              answers: {
+                one: ["one"],
+              },
+            },
+      );
+      expect([...requests.keys()]).toEqual(["claude-question:0"]);
+      expect(onBlockReply).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["caller", "admission"] as const)(
+    "rejects %s revocation before restart or plugin execution",
+    async (authority) => {
+      const { context, admission } = await createExecution();
+      const session = registerOwnerSession(context, "dispatch-owner");
+      if (authority === "caller") {
+        context.params.assertCurrent = () => {
+          throw new Error("caller revoked");
+        };
+      } else {
+        admission.close();
+      }
+      const execute = vi.fn(async function* () {
+        yield SUCCESS_RESULT;
+      });
+      await expect(
+        runPlugin(context, execute, { liveSession: true, forceNewSession: true }),
+      ).rejects.toThrow();
+      expect(session.close).not.toHaveBeenCalled();
+      expect(execute).not.toHaveBeenCalled();
+      await expect(runPlugin(context, execute)).rejects.toThrow();
+      expect(execute).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not close a successor or execute after caller revocation during restart cleanup", async () => {
+    const { context } = await createExecution();
+    const successor = await createExecution();
+    const session = registerOwnerSession(successor.context, "successor-during-restart");
+    const entered = createDeferred();
+    const held = createDeferred();
+    let callerCurrent = true;
+    context.params.assertCurrent = () => {
+      if (!callerCurrent) {
+        throw new Error("caller revoked");
+      }
+    };
+    context.preparedBackend.closeLiveSession = async () => {
+      entered.resolve();
+      await held.promise;
+    };
+    const execute = vi.fn(async function* () {
       yield SUCCESS_RESULT;
     });
-
-    expect(result).toEqual({
-      status: "answered",
-      answers: {
-        one: ["one"],
+    const run = runPlugin(context, execute, { liveSession: true, forceNewSession: true });
+    const observed = run.catch((error: unknown) => error);
+    try {
+      await entered.promise;
+      callerCurrent = false;
+    } finally {
+      held.resolve();
+    }
+    expect(await observed).toEqual(new Error("caller revoked"));
+    expect(session.close).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+    await runPlugin(
+      successor.context,
+      async function* (execution) {
+        expect(execution.liveSession?.current()).toBe(session.handle);
+        yield SUCCESS_RESULT;
       },
-    });
-    expect([...requests.keys()]).toEqual(["claude-question:0"]);
-    expect(onBlockReply).toHaveBeenCalledOnce();
+      { liveSession: true },
+    );
   });
 
   it("restarts true fresh sessions while preserving legitimate no-resume warm reuse", async () => {
@@ -600,7 +569,7 @@ describe("plugin-owned CLI execution host boundary", () => {
       nativeTools: ["WebFetch"],
       runId: "plugin-approval-first",
     });
-    const originalHandle = registerOwnerSession(first.context, "original-live-process");
+    registerOwnerSession(first.context, "original-live-process");
 
     const runApprovedTurn = async (context: PreparedCliRunContext, repeat: boolean) => {
       await runPlugin(context, async function* (execution) {
@@ -639,7 +608,7 @@ describe("plugin-owned CLI execution host boundary", () => {
     });
     expect(mockCallGatewayTool).toHaveBeenCalledOnce();
 
-    originalHandle.handle.close("restart");
+    await closeCliLiveSession(first.context, "restart");
     registerOwnerSession(first.context, "replacement-live-process");
     const replacement = await createExecution({
       config,
@@ -651,26 +620,39 @@ describe("plugin-owned CLI execution host boundary", () => {
     expect(mockCallGatewayTool).toHaveBeenCalledTimes(2);
   });
 
-  it("denies approval when its exact admitted authority closes during the awaited decision", async () => {
-    const { admission, context } = await createExecution({
-      config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
-      nativeTools: ["WebFetch"],
-    });
-    mockCallGatewayTool.mockImplementationOnce(async () => {
-      admission.close();
-      return { id: "approval-closed", decision: "allow-once" };
-    });
-    let decision: CliBackendToolPermissionResult | undefined;
+  it.each(["admission", "caller"] as const)(
+    "denies approval when %s authority closes during the awaited decision",
+    async (authority) => {
+      const { admission, context } = await createExecution({
+        config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
+        nativeTools: ["WebFetch"],
+      });
+      let callerCurrent = true;
+      context.params.assertCurrent = () => {
+        if (!callerCurrent) {
+          throw new Error("caller revoked");
+        }
+      };
+      mockCallGatewayTool.mockImplementationOnce(async () => {
+        if (authority === "caller") {
+          callerCurrent = false;
+        } else {
+          admission.close();
+        }
+        return { id: "approval-closed", decision: "allow-once" };
+      });
+      let decision: CliBackendToolPermissionResult | undefined;
 
-    await runPlugin(context, async function* (execution) {
-      decision = await requestNativeTool(execution, "WebFetch", { url: "https://example.com" });
-      yield SUCCESS_RESULT;
-    });
+      await runPlugin(context, async function* (execution) {
+        decision = await requestNativeTool(execution, "WebFetch", { url: "https://example.com" });
+        yield SUCCESS_RESULT;
+      });
 
-    expect(decision).toEqual(
-      expect.objectContaining({ behavior: "deny", message: expect.stringContaining("closed") }),
-    );
-  });
+      expect(decision).toEqual(
+        expect.objectContaining({ behavior: "deny", message: expect.stringContaining("closed") }),
+      );
+    },
+  );
 
   it("cancels an in-flight native approval and never releases its late decision", async () => {
     const controller = new AbortController();
@@ -876,6 +858,7 @@ describe("plugin-owned CLI execution host boundary", () => {
     });
     const approval = createDeferred<{ id: string; decision: "allow-once" }>();
     mockCallGatewayTool.mockReturnValueOnce(approval.promise);
+    const outstandingWork = vi.fn();
     let completed = false;
     const run = runPlugin(
       context,
@@ -886,7 +869,7 @@ describe("plugin-owned CLI execution host boundary", () => {
         expect(decision.behavior).toBe("allow");
         yield SUCCESS_RESULT;
       },
-      { noOutputTimeoutMs: 100 },
+      { noOutputTimeoutMs: 100, onOutstandingWorkChange: outstandingWork },
     ).then((result) => {
       completed = true;
       return result;
@@ -895,9 +878,11 @@ describe("plugin-owned CLI execution host boundary", () => {
 
     await vi.advanceTimersByTimeAsync(150);
     expect(completed).toBe(false);
+    expect(outstandingWork).toHaveBeenLastCalledWith(true);
 
     approval.resolve({ id: "approval-pending", decision: "allow-once" });
     await expect(run).resolves.toMatchObject({ reason: "exit", timedOut: false });
+    expect(outstandingWork).toHaveBeenLastCalledWith(false);
   });
 
   it("keeps the overall deadline authoritative while a native approval is outstanding", async () => {

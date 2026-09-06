@@ -481,6 +481,51 @@ describe("tasks.list Gateway performance", () => {
             },
           });
 
+          const scopedTasks = new Map(
+            [...createTaskSnapshot()].slice(0, 65).map(([taskId, task], index) => {
+              const requesterSessionKey = index === 0 ? OWNED_SESSION_KEY : FOREIGN_SESSION_KEY;
+              return [taskId, { ...task, requesterSessionKey, ownerKey: requesterSessionKey }];
+            }),
+          );
+          let scopedRevision = 0;
+          let scopedChurn: ReturnType<typeof setImmediate> | undefined;
+          const mutateUnrelatedTask = () => {
+            scopedRevision += 1;
+            markTaskTerminalById({
+              taskId: "task-00064",
+              status: "succeeded",
+              endedAt: TASK_COUNT + scopedRevision,
+            });
+            scopedChurn = setImmediate(mutateUnrelatedTask);
+          };
+          resetTaskRegistryForTests({ persist: false });
+          configureTaskRegistryRuntime({
+            store: {
+              loadSnapshot: () => {
+                scopedChurn = setImmediate(mutateUnrelatedTask);
+                return { tasks: scopedTasks, deliveryStates: new Map() };
+              },
+              saveSnapshot: () => {},
+            },
+          });
+          try {
+            const scopedPage = await sendRpc<TasksListResult>(
+              viewer,
+              "tasks-scoped",
+              "tasks.list",
+              {
+                sessionKey: OWNED_SESSION_KEY,
+                agentId: "main",
+                limit: 1,
+              },
+            );
+            expect(scopedPage.ok, JSON.stringify(scopedPage.error)).toBe(true);
+            expect(scopedPage.payload?.tasks.map((task) => task.id)).toEqual(["task-00000"]);
+            expect(scopedPage.payload?.nextCursor).toBeUndefined();
+          } finally {
+            clearImmediate(scopedChurn);
+          }
+
           const accessTasks = new Map([...createTaskSnapshot()].slice(0, 1_000));
           resetTaskRegistryForTests({ persist: false });
           configureTaskRegistryRuntime({

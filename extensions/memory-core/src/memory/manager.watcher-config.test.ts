@@ -336,32 +336,35 @@ describe("memory watcher config", () => {
     },
   );
 
-  it("filters patterned extra path file events while watching the directory root", async () => {
-    await setupWatcherWorkspace({ name: "seed.md", contents: "seed" });
-    await fs.mkdir(path.join(extraDir, "notes"), { recursive: true });
-    await fs.mkdir(path.join(extraDir, "drafts"), { recursive: true });
-    await fs.writeFile(path.join(extraDir, "notes", "keep.md"), "keep");
-    await fs.writeFile(path.join(extraDir, "drafts", "skip.md"), "skip");
-    const cfg = createWatcherConfig({
-      extraPaths: [{ path: extraDir, pattern: "notes/**/*.md" }],
-    });
+  it.each(["notes", "..notes"])(
+    "filters %s file events while watching the directory root",
+    async (directory) => {
+      await setupWatcherWorkspace({ name: "seed.md", contents: "seed" });
+      await fs.mkdir(path.join(extraDir, directory), { recursive: true });
+      await fs.mkdir(path.join(extraDir, "drafts"), { recursive: true });
+      await fs.writeFile(path.join(extraDir, directory, "keep.md"), "keep");
+      await fs.writeFile(path.join(extraDir, "drafts", "skip.md"), "skip");
+      const cfg = createWatcherConfig({
+        extraPaths: [{ path: extraDir, pattern: `${directory}/**/*.md` }],
+      });
 
-    const activeManager = await expectWatcherManager(cfg);
-    const extraWatcher = createdNativeWatchers.find(
-      (watcher) => watcher.dir === extraDir && watcher.recursive,
-    );
-    expect(extraWatcher).toBeDefined();
-    vi.useFakeTimers();
-    const syncSpy = vi.spyOn(activeManager, "sync").mockResolvedValue(undefined);
+      const activeManager = await expectWatcherManager(cfg);
+      const extraWatcher = createdNativeWatchers.find(
+        (watcher) => watcher.dir === extraDir && watcher.recursive,
+      );
+      expect(extraWatcher).toBeDefined();
+      vi.useFakeTimers();
+      const syncSpy = vi.spyOn(activeManager, "sync").mockResolvedValue(undefined);
 
-    extraWatcher?.emit("change", path.join("drafts", "skip.md"));
-    await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
-    expect(syncSpy).not.toHaveBeenCalled();
+      extraWatcher?.emit("change", path.join("drafts", "skip.md"));
+      await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
+      expect(syncSpy).not.toHaveBeenCalled();
 
-    extraWatcher?.emit("change", path.join("notes", "keep.md"));
-    await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
-    expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
-  });
+      extraWatcher?.emit("change", path.join(directory, "keep.md"));
+      await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
+      expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
+    },
+  );
 
   it("does not start watchers for one-shot CLI managers", async () => {
     await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
@@ -720,7 +723,7 @@ describe("memory watcher config", () => {
     }
   });
 
-  it.each(["ENOENT", "EACCES", "ROOT_REPLACED", "CHILD_STAT_MISSING"])(
+  it.each(["ENOENT", "EACCES", "ROOT_REPLACED", "CHILD_STAT_MISSING", "ENOSPC"])(
     "handles Linux subtree scan %s",
     async (code) => {
       Object.defineProperty(process, "platform", { value: "linux", configurable: true });
@@ -741,6 +744,9 @@ describe("memory watcher config", () => {
       readdirSpy.mockImplementation((...args: Parameters<typeof fsSync.readdirSync>) => {
         if (String(args[0]) === nestedDir && code === "CHILD_STAT_MISSING") {
           throw Object.assign(new Error("DT_UNKNOWN child disappeared"), { code: "ENOENT" });
+        }
+        if (String(args[0]) === nestedDir && code === "ENOSPC") {
+          throw Object.assign(new Error("No space left on device"), { code: "ENOSPC" });
         }
         if (String(args[0]) === nestedDir && code === "ROOT_REPLACED") {
           fsSync.renameSync(dir, path.join(workspaceDir, "previous-memory"));

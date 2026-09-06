@@ -76,26 +76,40 @@ export async function writeGatewayTaskSupervisorProbe(params: {
   eventsPath: string;
   probe: GatewayTaskSupervisorProbe;
 }): Promise<void> {
-  const taskSupervisorModuleUrl = pathToFileURL(
-    path.resolve("src/cli/gateway-cli/task-supervisor.ts"),
+  const taskSupervisorModuleUrl = new URL("../cli/gateway-cli/task-supervisor.ts", import.meta.url)
+    .href;
+  const hostedProbeModuleUrl = new URL(
+    "./schtasks.hosted-stop.native-test-support.ts",
+    import.meta.url,
   ).href;
   await fs.writeFile(
     params.probe.probePath,
     [
-      'import { spawn } from "node:child_process";',
       'import fs from "node:fs";',
-      'import net from "node:net";',
-      `import { runWindowsGatewayTaskSupervisor } from ${JSON.stringify(taskSupervisorModuleUrl)};`,
+      // Bound Scheduler's inherited logon environment before importing product
+      // owners. Actions service tokens must not reach the supervisor or Gateway.
+      "const allowedEnv = new Set([",
+      '  "SYSTEMROOT", "WINDIR", "COMSPEC", "PATH", "PATHEXT", "TEMP", "TMP",',
+      '  "USERPROFILE", "HOME", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA",',
+      '  "OPENCLAW_PROFILE", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH",',
+      '  "OPENCLAW_GATEWAY_PORT", "OPENCLAW_SERVICE_KIND", "OPENCLAW_SERVICE_MARKER",',
+      '  "TSX_TSCONFIG_PATH",',
+      "]);",
+      "for (const key of Object.keys(process.env)) if (!allowedEnv.has(key.toUpperCase())) delete process.env[key];",
       "const eventsPath = process.argv[5];",
       "const activePidPath = process.argv[6];",
       "const childPidPath = process.argv[7];",
       "const supervisorPidPath = process.argv[8];",
       "const failedAttemptPidPath = process.argv[9];",
       "const failedSupervisorPidPath = process.argv[10];",
-      "const appendEvent = (phase) => fs.appendFileSync(eventsPath, `${JSON.stringify({ phase, pid: process.pid, ppid: process.ppid })}\\n`);",
+      "const appendEvent = (phase, details = {}) => fs.appendFileSync(phase === 'started' || phase === 'listening' ? eventsPath : eventsPath + '.hosted-stop', `${JSON.stringify({ phase, pid: process.pid, ppid: process.ppid, ...details })}\\n`);",
+      "process.once('exit', (code) => appendEvent('process-exit', { code }));",
+      "appendEvent('bounded-environment', { keys: Object.keys(process.env).map((key) => key.toUpperCase()).sort() });",
       "if (process.argv.includes('--task-supervisor')) {",
       "  fs.writeFileSync(supervisorPidPath, String(process.pid));",
+      `  const { runWindowsGatewayTaskSupervisor } = await import(${JSON.stringify(taskSupervisorModuleUrl)});`,
       "  await runWindowsGatewayTaskSupervisor();",
+      "  appendEvent('supervisor-joined', { code: process.exitCode ?? 0 });",
       "} else if (!fs.existsSync(failedAttemptPidPath)) {",
       // Preserve this run's supervisor before a recovery launch overwrites its live PID file.
       "  fs.copyFileSync(supervisorPidPath, failedSupervisorPidPath);",
@@ -105,18 +119,9 @@ export async function writeGatewayTaskSupervisorProbe(params: {
       'const portIndex = process.argv.indexOf("--port");',
       "const port = Number.parseInt(process.argv[portIndex + 1] ?? '', 10);",
       "if (!Number.isInteger(port) || port < 1) throw new Error('Missing gateway --port');",
-      "const activePidTempPath = `${activePidPath}.${process.pid}.tmp`;",
-      "const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
-      "fs.writeFileSync(childPidPath, String(child.pid));",
-      "const server = net.createServer((socket) => socket.end());",
       'appendEvent("started");',
-      "server.listen({ host: '127.0.0.1', port, exclusive: true }, () => {",
-      "  fs.writeFileSync(activePidTempPath, String(process.pid));",
-      "  fs.renameSync(activePidTempPath, activePidPath);",
-      '  appendEvent("listening");',
-      "});",
-      "server.on('error', (error) => { console.error(error); process.exit(1); });",
-      "setInterval(() => {}, 1000).unref();",
+      `const { runHostedStopNativeProbe } = await import(${JSON.stringify(hostedProbeModuleUrl)});`,
+      "await runHostedStopNativeProbe({ port, activePidPath, childPidPath, appendEvent });",
       "}",
       "",
     ].join("\n"),

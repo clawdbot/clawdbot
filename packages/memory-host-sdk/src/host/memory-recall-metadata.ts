@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { INVALID_PROJECT_ANNOTATION_KEY } from "./internal.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./openclaw-runtime-kysely.js";
-import type { MemoryOriginClass, MemorySessionKind } from "./types.js";
+import type { MemoryEntryProvenance, MemoryOriginClass, MemorySessionKind } from "./types.js";
 
 type MemoryRecallMetadataDatabase = {
   memory_index_chunks: {
@@ -27,24 +27,87 @@ type MemoryRecallMetadataDatabase = {
   };
 };
 
+const MEMORY_ORIGIN_CLASSES: ReadonlySet<string> = new Set([
+  "owner",
+  "agent",
+  "untrusted",
+  "system",
+]);
+const MEMORY_SESSION_KINDS: ReadonlySet<string> = new Set([
+  "interactive",
+  "cron",
+  "heartbeat",
+  "subagent",
+  "unknown",
+]);
+
+function decodeChunkProvenance(row: {
+  origin_class: unknown;
+  session_kind: unknown;
+  observed_at: unknown;
+  supersedes_key: unknown;
+}): MemoryEntryProvenance | undefined {
+  if (
+    typeof row.origin_class !== "string" ||
+    !MEMORY_ORIGIN_CLASSES.has(row.origin_class) ||
+    typeof row.session_kind !== "string" ||
+    !MEMORY_SESSION_KINDS.has(row.session_kind) ||
+    typeof row.observed_at !== "number"
+  ) {
+    return undefined;
+  }
+  return {
+    // SAFETY: Membership in the closed origin-class set is validated above.
+    originClass: row.origin_class as MemoryOriginClass,
+    // SAFETY: Membership in the closed session-kind set is validated above.
+    sessionKind: row.session_kind as MemorySessionKind,
+    observedAt: row.observed_at,
+    ...(typeof row.supersedes_key === "string" && row.supersedes_key.trim()
+      ? { supersedesKey: row.supersedes_key }
+      : {}),
+  };
+}
+
 export function readMemoryRecallMetadata(db: DatabaseSync, ids: readonly string[]) {
   if (ids.length === 0) {
     return new Map<
       string,
-      { importance: number | null; triggers: string | null; project_key: string | null }
+      Omit<MemoryRecallMetadataDatabase["memory_index_chunk_recall_metadata"], "chunk_id"> & {
+        id: string;
+        provenance?: MemoryEntryProvenance;
+      }
     >();
   }
   const query = getNodeSqliteKysely<MemoryRecallMetadataDatabase>(db)
     .selectFrom("memory_index_chunks as chunk")
     .leftJoin("memory_index_chunk_recall_metadata as metadata", "metadata.chunk_id", "chunk.id")
+    .leftJoin("memory_index_chunk_provenance as provenance", "provenance.chunk_id", "chunk.id")
     .select([
       "chunk.id as id",
       "metadata.importance as importance",
       "metadata.triggers as triggers",
       "metadata.project_key as project_key",
+      "provenance.origin_class as origin_class",
+      "provenance.session_kind as session_kind",
+      "provenance.observed_at as observed_at",
+      "provenance.supersedes_key as supersedes_key",
     ])
     .where("chunk.id", "in", [...ids]);
-  return new Map(executeSqliteQuerySync(db, query).rows.map((row) => [row.id, row]));
+  return new Map(
+    executeSqliteQuerySync(db, query).rows.map((row) => {
+      const provenance = decodeChunkProvenance(row);
+      return [
+        row.id,
+        {
+          id: row.id,
+          importance: row.importance,
+          triggers: row.triggers,
+          project_key: row.project_key,
+          ...(provenance ? { provenance } : {}),
+        },
+      ];
+    }),
+  );
 }
 
 export function readCuratedMemoryTriggerCandidates(
