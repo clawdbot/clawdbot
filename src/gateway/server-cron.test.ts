@@ -1,3 +1,4 @@
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -18,6 +19,7 @@ import {
   PlatformMessageNotDispatchedError,
 } from "../infra/outbound/deliver-types.js";
 import { resolveSystemEventOptionsOwnerAgentId } from "../infra/system-event-ownership.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
@@ -1178,6 +1180,93 @@ describe("buildGatewayCronService", () => {
       resetGatewayWorkAdmission();
     }
   });
+
+  it.each(["main", "isolated"] as const)(
+    "records a watched exit rejected behind an active %s run",
+    async (sessionTarget) => {
+      const tempDir = await mkdtemp(path.join(os.tmpdir(), "cron-exit-admission-"));
+      const logFile = path.join(tempDir, "gateway.log");
+      setLoggerOverride({ file: logFile, level: "warn" });
+      const commandExit = createDeferred<RunExit>();
+      const predecessorStarted = createDeferred();
+      const predecessorRelease = createDeferred();
+      const holdPredecessor = async () => {
+        predecessorStarted.resolve();
+        await predecessorRelease.promise;
+      };
+      if (sessionTarget === "main") {
+        runHeartbeatOnceMock.mockImplementationOnce(async () => {
+          await holdPredecessor();
+          return { status: "ran", durationMs: 1 };
+        });
+      } else {
+        runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
+          await holdPredecessor();
+          return { status: "ok", summary: "manual run finished" };
+        });
+      }
+      const spawn = vi.fn(async () => ({
+        runId: "watched-exit-admission",
+        startedAtMs: Date.now(),
+        cancel: vi.fn(),
+        wait: () => commandExit.promise,
+      }));
+      getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
+      const state = loadCronService(createCronConfig(`cron-exit-admission-${sessionTarget}`));
+      let predecessor: ReturnType<typeof state.cron.run> | undefined;
+
+      try {
+        const job = await addCronJob(
+          state,
+          "watch command while manually running",
+          sessionTarget === "main"
+            ? { kind: "systemEvent", text: "manual prompt" }
+            : { kind: "agentTurn", message: "manual prompt" },
+          {
+            schedule: { kind: "on-exit", command: "true" },
+            sessionTarget,
+            wakeMode: "now",
+            deleteAfterRun: false,
+          },
+        );
+        await state.reconcileExitWatchers();
+        predecessor = state.cron.run(job.id, "force");
+        await predecessorStarted.promise;
+        commandExit.resolve(runExit({ reason: "exit", exitCode: 3, stdout: "watched result" }));
+
+        await vi.waitFor(async () => {
+          await flushLogger();
+          expect(await readFile(logFile, "utf8")).toContain("already-running");
+        });
+        expect(state.cron.getJob(job.id)?.enabled).toBe(false);
+        predecessorRelease.resolve();
+        await expect(predecessor).resolves.toEqual({ ok: true, ran: true });
+        await flushLogger();
+        const recorded = await readFile(logFile, "utf8");
+        expect(recorded).toContain(job.id);
+        expect(recorded).toContain("Exit code: 3");
+        expect(recorded).toContain("watched result");
+        expect(runHeartbeatOnceMock).toHaveBeenCalledTimes(sessionTarget === "main" ? 1 : 0);
+        expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(
+          sessionTarget === "isolated" ? 1 : 0,
+        );
+        expect(state.cron.getJob(job.id)?.state).toMatchObject(
+          sessionTarget === "main"
+            ? { lastRunStatus: "ok" }
+            : { lastRunStatus: "error", lastError: "Cron job disabled by operator." },
+        );
+        expect(spawn).toHaveBeenCalledOnce();
+      } finally {
+        predecessorRelease.resolve();
+        commandExit.resolve(runExit());
+        await predecessor;
+        await state.cron.stopAndDrain?.();
+        resetLogger();
+        setLoggerOverride(null);
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.each(["update", "updateWithPrecondition", "add"] as const)(
     "honors an explicit %s disable while terminal persistence is settling",
@@ -4120,7 +4209,7 @@ describe("buildGatewayCronService", () => {
 });
 
 describe("fireOnExitJob (on-exit fire routing)", () => {
-  type ForceRunMock = (jobId: string, payload?: CronJob["payload"]) => Promise<void>;
+  type ForceRunMock = Parameters<typeof fireOnExitJob>[2]["run"];
 
   const job = (payload: unknown, extra: Partial<CronJob> = {}): CronJob =>
     ({ id: "job-x", payload, ...extra }) as unknown as CronJob;
@@ -4134,7 +4223,7 @@ describe("fireOnExitJob (on-exit fire routing)", () => {
   };
 
   it("executes an agentTurn payload via the force-run path", async () => {
-    const run = vi.fn<ForceRunMock>(async () => {});
+    const run = vi.fn<ForceRunMock>(async () => ({ ok: true, ran: true }));
     await fireOnExitJob(job({ kind: "agentTurn", message: "go" }), exit, {
       run,
     });
@@ -4149,7 +4238,7 @@ describe("fireOnExitJob (on-exit fire routing)", () => {
   });
 
   it("executes a command payload via the force-run path", async () => {
-    const run = vi.fn<ForceRunMock>(async () => {});
+    const run = vi.fn<ForceRunMock>(async () => ({ ok: true, ran: true }));
     await fireOnExitJob(job({ kind: "command", argv: ["echo", "hi"] }), exit, {
       run,
     });
@@ -4157,7 +4246,7 @@ describe("fireOnExitJob (on-exit fire routing)", () => {
   });
 
   it("executes a systemEvent payload via the force-run path", async () => {
-    const run = vi.fn<ForceRunMock>(async () => {});
+    const run = vi.fn<ForceRunMock>(async () => ({ ok: true, ran: true }));
     await fireOnExitJob(
       job({ kind: "systemEvent", text: "done" }, { sessionKey: "sk-1", agentId: "agent-1" }),
       exit,
@@ -4172,5 +4261,15 @@ describe("fireOnExitJob (on-exit fire routing)", () => {
     });
     expect(run.mock.calls[0]?.[0]).toBe("job-x");
   });
+
+  it.each(["already-running", "stopped"] as const)(
+    "rejects %s admission so the watcher records the failed handoff",
+    async (reason) => {
+      const run = vi.fn<ForceRunMock>(async () => ({ ok: true, ran: false, reason }));
+      await expect(
+        fireOnExitJob(job({ kind: "systemEvent", text: "done" }), exit, { run }),
+      ).rejects.toThrow(reason);
+    },
+  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
