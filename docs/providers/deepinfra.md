@@ -110,13 +110,20 @@ retention and priority/flex rates are separate contracts and are not included in
 standard estimates. See DeepInfra's [prompt caching](https://docs.deepinfra.com/chat/prompt-caching)
 and [cache retention](https://docs.deepinfra.com/chat/prompt-cache-retention) docs.
 
-Missing, malformed, or unavailable native prices never restore the projection's
-flat prices. Models remain selectable; the required runtime zero-cost placeholder
-means unknown, not verified free billing. If metadata discovery fails, OpenClaw
-keeps bundled model metadata and applies any available native prices. The complete
-bundled fallback, including prices, is used only when both sources fail or live
-discovery is skipped. Onboarding adds the model alias without pinning provider
-prices, and explicitly configured model costs remain authoritative.
+Missing or unsupported individual price schedules use the required runtime
+zero-cost placeholder, which means unknown, not verified free billing. A failed
+metadata or native pricing request marks chat discovery unavailable and retains
+the last successful catalog for the same provider configuration and credentials.
+A successful empty model response clears discovered chat models even when pricing
+is unavailable. Live discovery
+does not append bundled models absent from the response. Without credentials,
+the bundled catalog remains available without fetching. Explicitly configured
+models and costs remain authoritative; onboarding does not pin provider prices.
+
+The plugin's public `buildDeepInfraProvider` API keeps its advisory default:
+it retains bundled choices and uses unknown price estimates when discovery fails.
+OpenClaw's registered catalog hook explicitly selects `discoveryMode: "strict"`
+so failed or empty acquisitions reach the shared publication owner unchanged.
 
 Hosted publication uses the same native parser. It preserves metadata without
 cost for unsupported or absent schedules, retains declared zero prices, and

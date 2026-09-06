@@ -9,6 +9,8 @@ export type SpawnResult = {
   code: number | null;
   signal: NodeJS.Signals | null;
   killed: boolean;
+  /** Completion of this invocation's cleanup; never an escaped-descendant inventory. */
+  cleanup?: "normal" | "cooperative" | "forced" | "uncertain";
   termination: "exit" | "timeout" | "no-output-timeout" | "signal";
   noOutputTimedOut?: boolean;
   outputLimitExceeded?: boolean;

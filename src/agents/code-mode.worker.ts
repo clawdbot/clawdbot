@@ -362,6 +362,9 @@ async function runVmExecution(params: {
     if (params.bridge.admissionFailure) {
       throw params.bridge.admissionFailure;
     }
+    params.vm.global
+      .getProp("__openclawDrainQueuedRequests")
+      .consume((drain) => params.vm.callFunction(drain, params.vm.undefined).dispose());
     output = takeOutput(params.vm);
     const resultHandle = params.vm.global.getProp("__openclawResult");
     try {

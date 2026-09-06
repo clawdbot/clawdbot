@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHostWorkspaceEditTool, createHostWorkspaceWriteTool } from "./agent-tools.read.js";
 import { createApplyPatchTool } from "./apply-patch.js";
+import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 describe("unrestricted host tool writes", () => {
   let tempDir = "";
@@ -24,11 +25,21 @@ describe("unrestricted host tool writes", () => {
     return filePath;
   }
 
-  it.each(["write", "edit", "apply_patch"] as const)(
-    "fences %s after asynchronous file preparation when permissions change",
-    async (kind) => {
+  it.each(
+    (["write", "edit", "apply_patch"] as const).flatMap((kind) =>
+      (["aborted", "revoked", "replaced", "active"] as const).map((authority) => ({
+        kind,
+        authority,
+      })),
+    ),
+  )(
+    "checks $authority authority for $kind after asynchronous file preparation",
+    async ({ kind, authority }) => {
       const filePath = await createFile("original content\n");
       const generation = new AbortController();
+      const originalClaim = {};
+      let currentClaim: object | undefined = originalClaim;
+      let prepared = false;
       const realOpen = fs.open.bind(fs);
       vi.spyOn(fs, "open").mockImplementation(async (target, flags, mode) => {
         const handle = await realOpen(target, flags as never, mode as never);
@@ -36,7 +47,14 @@ describe("unrestricted host tool writes", () => {
           const read = handle.read.bind(handle);
           handle.read = (async (...args: Parameters<typeof read>) => {
             const result = await read(...args);
-            generation.abort(new Error("Permission change"));
+            prepared = true;
+            if (authority === "aborted") {
+              generation.abort(new Error("Permission change"));
+            } else if (authority === "revoked") {
+              currentClaim = undefined;
+            } else if (authority === "replaced") {
+              currentClaim = {};
+            }
             return result;
           }) as typeof handle.read;
         }
@@ -60,8 +78,26 @@ describe("unrestricted host tool writes", () => {
         return tool.execute("permission-write", input);
       };
 
-      await expect(execute()).rejects.toThrow("Permission change");
-      expect(await fs.readFile(filePath, "utf8")).toBe("original content\n");
+      const pending = withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:source-file-authority",
+          receiptAuthority: () => currentClaim === originalClaim,
+        },
+        execute,
+      );
+      if (authority === "active") {
+        await expect(pending).resolves.toBeDefined();
+      } else {
+        await expect(pending).rejects.toThrow(
+          authority === "aborted" ? "Permission change" : "authority is no longer active",
+        );
+      }
+      expect(prepared).toBe(true);
+      expect(generation.signal.aborted).toBe(authority === "aborted");
+      expect(await fs.readFile(filePath, "utf8")).toBe(
+        authority === "active" ? "replacement content\n" : "original content\n",
+      );
     },
   );
 

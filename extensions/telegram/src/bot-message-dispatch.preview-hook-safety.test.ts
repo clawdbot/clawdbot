@@ -81,13 +81,13 @@ describeTelegramDispatch("Telegram provider preview hook safety", () => {
       await dispatchWithContext({ context: createContext(), streamMode: "progress" });
 
       expect(createTelegramDraftStream).not.toHaveBeenCalled();
-      expectDispatchParams({
+      const params = expectDispatchParams({
         replyOptions: expect.objectContaining({
           onPartialReply: undefined,
           disableBlockStreaming: undefined,
-          forceToolResultProgress: false,
         }),
       });
+      expect(params.replyOptions).not.toHaveProperty("forceToolResultProgress");
     },
   );
 

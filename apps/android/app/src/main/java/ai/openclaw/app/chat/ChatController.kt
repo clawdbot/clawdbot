@@ -459,8 +459,6 @@ class ChatController internal constructor(
 
     data object Superseded : HistoryRefreshResult
 
-    data object BranchInvalidated : HistoryRefreshResult
-
     data object OwnerUnavailable : HistoryRefreshResult
 
     data object Failed : HistoryRefreshResult
@@ -4542,21 +4540,14 @@ class ChatController internal constructor(
     try {
       // Cache-first cold open: live history always replaces cached rows wholesale.
       primeFromCache(sessionKey, generation)
-      var historyResult: HistoryRefreshResult
-      do {
-        currentCoroutineContext().ensureActive()
-        if (!isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())) return@async
-        historyResult =
-          fetchAndApplyHistory(
-            sessionKey,
-            generation,
-            purpose = HistoryRefreshPurpose.RestoreSession,
-            runIdsToReconcile = runIdsToReconcile,
-            refreshBranches = true,
-          )
-        // Branch evidence can fence the only recovery request without a successor load.
-        // Keep this owner, but fetch new history rather than adopting the rejected response.
-      } while (historyResult == HistoryRefreshResult.BranchInvalidated)
+      val historyResult =
+        fetchAndApplyHistory(
+          sessionKey,
+          generation,
+          purpose = HistoryRefreshPurpose.RestoreSession,
+          runIdsToReconcile = runIdsToReconcile,
+          refreshBranches = true,
+        )
       if (historyResult !is HistoryRefreshResult.Applied) return@async
       if (isSwarmEnabled()) refreshSwarmSessions()
     } catch (err: CancellationException) {
@@ -4600,7 +4591,7 @@ class ChatController internal constructor(
     refreshBranches: Boolean = false,
     mutationReconciliationState: ChatOutboxBranchState? = null,
   ): HistoryRefreshResult {
-    val requestSequence = historyRequestSequence.incrementAndGet()
+    var requestSequence = historyRequestSequence.incrementAndGet()
     val healthRefresh =
       synchronized(gatewayScopeApplyLock) {
         if (!isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())) return HistoryRefreshResult.Superseded
@@ -4615,208 +4606,220 @@ class ChatController internal constructor(
         }
       }
     try {
-      val runIdsOwnedAtRequest = synchronized(pendingRuns) { pendingRuns.toSet() }
-      val reconciliationRunIds =
-        if (purpose == HistoryRefreshPurpose.Transcript) {
-          runIdsOwnedAtRequest + optimisticMessagesByRunId.keys + unresolvedRepliesByRunId.keys
-        } else {
-          runIdsToReconcile
-        }
-      val requestCacheScope = currentCacheScope()
-      val requestTracksDefaultAgent = activeSessionTracksDefaultAgent(sessionKey)
-      awaitMainSessionReadiness(sessionKey, requestCacheScope)
-      val requestSettingsGeneration = settingsPublicationGeneration.get()
-      val requestDefaultAgentRevision = currentDefaultAgentRevision()
-      val requestAgentId = resolveAgentIdForSessionKey(sessionKey) ?: return HistoryRefreshResult.OwnerUnavailable
+      while (true) {
+        currentCoroutineContext().ensureActive()
+        val runIdsOwnedAtRequest = synchronized(pendingRuns) { pendingRuns.toSet() }
+        val reconciliationRunIds =
+          if (purpose == HistoryRefreshPurpose.Transcript) {
+            runIdsOwnedAtRequest + optimisticMessagesByRunId.keys + unresolvedRepliesByRunId.keys
+          } else {
+            runIdsToReconcile
+          }
+        val requestCacheScope = currentCacheScope()
+        val requestTracksDefaultAgent = activeSessionTracksDefaultAgent(sessionKey)
+        awaitMainSessionReadiness(sessionKey, requestCacheScope)
+        val requestSettingsGeneration = settingsPublicationGeneration.get()
+        val requestDefaultAgentRevision = currentDefaultAgentRevision()
+        val requestAgentId = resolveAgentIdForSessionKey(sessionKey) ?: return HistoryRefreshResult.OwnerUnavailable
 
-      fun requestOwnerIsCurrent(): Boolean =
-        resolveAgentIdForSessionKey(_sessionKey.value) == requestAgentId &&
-          (
-            !requestTracksDefaultAgent ||
-              (currentDefaultAgentRevision() == requestDefaultAgentRevision && effectiveDefaultAgentId() == requestAgentId)
-          )
-
-      fun isCurrent(): Boolean =
-        isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get()) &&
-          requestCacheScope == currentCacheScope() &&
-          requestOwnerIsCurrent() &&
-          requestSequence >= latestAppliedHistoryRequest
-
-      if (!synchronized(gatewayScopeApplyLock) { isCurrent() }) return HistoryRefreshResult.Superseded
-      val branchSnapshot = currentSessionActionSnapshot(sessionKey)
-      // Publishing a transcript establishes enqueue intent, not dispatch readiness. A requested
-      // listing must still settle the active branch before health can release this scope.
-      if (refreshBranches) branchSnapshot?.let { markOutboxBranchUnreconciled(it.gatewayScope, it.outboxScope()) }
-      // Only a locally ambiguous mutation carries an earlier adoption boundary. Ordinary history
-      // (including remote branch events) must settle earlier input before becoming visible.
-      var historyBranchState = mutationReconciliationState ?: branchSnapshot?.let { branchState(it) }
-      val history =
-        try {
-          val historyJson =
-            requestGatewayBound(
-              requestCacheScope?.gatewayId,
-              "chat.history",
-              buildJsonObject {
-                put("sessionKey", JsonPrimitive(sessionKey))
-                put("agentId", JsonPrimitive(requestAgentId))
-              }.toString(),
+        fun requestOwnerIsCurrent(): Boolean =
+          resolveAgentIdForSessionKey(_sessionKey.value) == requestAgentId &&
+            (
+              !requestTracksDefaultAgent ||
+                (currentDefaultAgentRevision() == requestDefaultAgentRevision && effectiveDefaultAgentId() == requestAgentId)
             )
-          parseHistory(historyJson, sessionKey = sessionKey, previousMessages = _messages.value)
-        } catch (err: CancellationException) {
-          throw err
-        } catch (err: Throwable) {
-          if (!synchronized(gatewayScopeApplyLock) { isCurrent() }) return HistoryRefreshResult.Superseded
-          throw err
-        }
-      var appliedHistoryEntry: ChatSessionEntry? = null
-      val applied =
-        historyPublicationMutex.withLock {
-          if (!synchronized(gatewayScopeApplyLock) { isCurrent() }) return@withLock HistoryRefreshResult.Superseded
-          val previousState =
-            historyBranchState?.let { captured ->
-              // Continue only a committed history publication from this load. Never recapture after
-              // enqueue or borrow authority from branch listings or mutation-lease changes.
-              publishedHistoryBranch
-                ?.takeIf {
-                  mutationReconciliationState == null &&
-                    it.snapshot == branchSnapshot &&
-                    it.generation == generation &&
-                    it.state.revision > captured.revision
-                }?.state ?: captured
-            }
-          historyBranchState = previousState
-          if (
-            mutationReconciliationState == null &&
-            branchSnapshot != null &&
-            previousState != null
-          ) {
-            historyBranchState = reconcileOutboxHistory(
-              gatewayId = requestCacheScope?.gatewayId ?: return@withLock HistoryRefreshResult.OwnerUnavailable,
-              branchScope = branchSnapshot.outboxScope(),
-              previousState = previousState,
-              history = history,
-            ) ?: return@withLock HistoryRefreshResult.BranchInvalidated
-          }
-          synchronized(gatewayScopeApplyLock) {
-            if (!isCurrent()) return@synchronized HistoryRefreshResult.Superseded
-            // Transcript events do not own settings or run state. They may finish
-            // a pending load only while that exact load still needs its snapshot.
-            val appliedPurpose =
-              if (
-                purpose == HistoryRefreshPurpose.Transcript &&
-                !hasCurrentHistorySnapshot(sessionKey)
-              ) {
-                HistoryRefreshPurpose.RestoreSession
-              } else {
-                purpose
-              }
-            val reconcileRunState = appliedPurpose != HistoryRefreshPurpose.Transcript
-            val runIdsOwnedAfterRequest =
-              synchronized(pendingRuns) {
-                pendingRuns.filterNotTo(mutableSetOf()) { it in runIdsOwnedAtRequest }
-              }
-            latestAppliedHistoryRequest = requestSequence
-            if (mutationReconciliationState == null && branchSnapshot != null && historyBranchState != previousState) {
-              historyBranchState?.let { publishedHistoryBranch = PublishedHistoryBranch(branchSnapshot, generation, it) }
-            }
-            val snapshotRunId =
-              history.inFlightRun
-                ?.runId
-                ?.trim()
-                ?.takeIf { it.isNotEmpty() }
-            if (reconcileRunState) {
-              // A newer settings observation invalidates only this projection,
-              // not the useful transcript carried by the same history response.
-              appliedHistoryEntry =
-                updateSessionFromHistory(
-                  history,
-                  ownerAgentId = requestAgentId,
-                  publishRunState = false,
-                  includeSessionInfo = appliedPurpose == HistoryRefreshPurpose.RestoreSession,
-                  preserveSessionSettings =
-                    requestSettingsGeneration != settingsPublicationGeneration.get() ||
-                      pendingSettingsMutations.containsKey(sessionSettingsKey(sessionKey)),
-                )
-              transferLostAckOwnershipFromHistory(history)
-              latestAppliedRunSnapshot = HistoryRunSnapshot(requestSequence, snapshotRunId)
-            }
-            resolvePersistedReplies(history.messages)
-            val optimisticRunIds = reconciliationRunIds.filterTo(mutableSetOf()) { optimisticMessagesByRunId.containsKey(it) }
-            prunePersistedOptimisticMessages(history.messages)
-            if (reconcileRunState && snapshotRunId == null) {
-              optimisticRunIds
-                .filterNot { runId ->
-                  unknownOutcomeRunIds.contains(runId) && unresolvedRepliesByRunId.containsKey(runId)
-                }.filterNotTo(mutableSetOf()) { optimisticMessagesByRunId.containsKey(it) }
-                .forEach { clearPendingRun(it, publishRunState = false) }
-            }
-            if (reconcileRunState && snapshotRunId != null) {
-              reconciliationRunIds
-                .filterTo(mutableSetOf()) {
-                  it != snapshotRunId &&
-                    !optimisticMessagesByRunId.containsKey(it) &&
-                    !unresolvedRepliesByRunId.containsKey(it)
-                }.forEach { clearPendingRun(it, publishRunState = false) }
-            }
-            val nextMessages = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
-            _messagesFromCache.value = false
-            _messages.value = nextMessages
-            val previousAnchor = _transcriptAnchor.value?.takeIf { it.sessionKey == sessionKey }
-            val completionSettled =
-              markCompletedTranscript &&
-                runIdsToReconcile.none(unresolvedRepliesByRunId::containsKey) &&
-                history.sessionInfo?.endedAt != null
-            _transcriptAnchor.value =
-              ChatTranscriptAnchorState(
-                sessionKey = sessionKey,
-                newestItemId = nextMessages.lastOrNull()?.id,
-                completedEndedAt =
-                  if (completionSettled) history.sessionInfo.endedAt else previousAnchor?.completedEndedAt,
-                completedNewestItemId =
-                  if (completionSettled) history.messages.lastOrNull()?.id else previousAnchor?.completedNewestItemId,
+
+        fun isCurrent(): Boolean =
+          isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get()) &&
+            requestCacheScope == currentCacheScope() &&
+            requestOwnerIsCurrent() &&
+            requestSequence >= latestAppliedHistoryRequest
+
+        if (!synchronized(gatewayScopeApplyLock) { isCurrent() }) return HistoryRefreshResult.Superseded
+        val branchSnapshot = currentSessionActionSnapshot(sessionKey)
+        // Publishing a transcript establishes enqueue intent, not dispatch readiness. A requested
+        // listing must still settle the active branch before health can release this scope.
+        if (refreshBranches) branchSnapshot?.let { markOutboxBranchUnreconciled(it.gatewayScope, it.outboxScope()) }
+        // Only a locally ambiguous mutation carries an earlier adoption boundary. Ordinary history
+        // (including remote branch events) must settle earlier input before becoming visible.
+        var historyBranchState = mutationReconciliationState ?: branchSnapshot?.let { branchState(it) }
+        val history =
+          try {
+            val historyJson =
+              requestGatewayBound(
+                requestCacheScope?.gatewayId,
+                "chat.history",
+                buildJsonObject {
+                  put("sessionKey", JsonPrimitive(sessionKey))
+                  put("agentId", JsonPrimitive(requestAgentId))
+                }.toString(),
               )
-            _sessionId.value = history.sessionId
-            history.sessionId?.let { sessionId ->
-              lastSelectedChatSessionByOwner[ChatAgentSessionSelectionOwner(requestCacheScope?.gatewayId, requestAgentId)]
-                ?.takeIf { it.key == sessionKey }
-                ?.observedSessionId = sessionId
-            }
-            markLiveHistoryApplied(sessionKey = sessionKey, sessionId = history.sessionId, generation = generation)
-            _historyLoading.value = false
-            if (historyLoadErrorGeneration == generation) {
-              updateErrorText(null)
-            }
-            if (reconcileRunState && history.inFlightRun == null) {
-              // Empty history is terminal proof for acknowledged runs. An unknown-outcome
-              // send stays owned until its reply persists, a terminal arrives, or it expires.
-              reconciliationRunIds
-                .filterNot { runId ->
-                  unknownOutcomeRunIds.contains(runId) && unresolvedRepliesByRunId.containsKey(runId)
-                }.forEach { clearPendingRun(it, publishRunState = false) }
-            }
-            if (reconcileRunState) {
-              clearTransientRunUiIfIdle()
-              adoptInFlightRun(history, runIdsOwnedAfterRequest)
-            }
-            publishRunPresentation()
-            enqueueTranscriptCacheWrite(requestCacheScope, requestAgentId, sessionKey, history.messages)
-            HistoryRefreshResult.Applied(historyBranchState, appliedPurpose)
+            parseHistory(historyJson, sessionKey = sessionKey, previousMessages = _messages.value)
+          } catch (err: CancellationException) {
+            throw err
+          } catch (err: Throwable) {
+            if (!synchronized(gatewayScopeApplyLock) { isCurrent() }) return HistoryRefreshResult.Superseded
+            throw err
           }
+        var appliedHistoryEntry: ChatSessionEntry? = null
+        val applied =
+          historyPublicationMutex.withLock {
+            if (!synchronized(gatewayScopeApplyLock) { isCurrent() }) return@withLock HistoryRefreshResult.Superseded
+            val previousState =
+              historyBranchState?.let { captured ->
+                // Continue only a committed history publication from this load. Never recapture after
+                // enqueue or borrow authority from branch listings or mutation-lease changes.
+                publishedHistoryBranch
+                  ?.takeIf {
+                    mutationReconciliationState == null &&
+                      it.snapshot == branchSnapshot &&
+                      it.generation == generation &&
+                      it.state.revision > captured.revision
+                  }?.state ?: captured
+              }
+            historyBranchState = previousState
+            if (
+              mutationReconciliationState == null &&
+              branchSnapshot != null &&
+              previousState != null
+            ) {
+              historyBranchState = reconcileOutboxHistory(
+                gatewayId = requestCacheScope?.gatewayId ?: return@withLock HistoryRefreshResult.OwnerUnavailable,
+                branchScope = branchSnapshot.outboxScope(),
+                previousState = previousState,
+                history = history,
+              ) ?: return@withLock null
+            }
+            synchronized(gatewayScopeApplyLock) {
+              if (!isCurrent()) return@synchronized HistoryRefreshResult.Superseded
+              // Transcript events do not own settings or run state. They may finish
+              // a pending load only while that exact load still needs its snapshot.
+              val appliedPurpose =
+                if (
+                  purpose == HistoryRefreshPurpose.Transcript &&
+                  !hasCurrentHistorySnapshot(sessionKey)
+                ) {
+                  HistoryRefreshPurpose.RestoreSession
+                } else {
+                  purpose
+                }
+              val reconcileRunState = appliedPurpose != HistoryRefreshPurpose.Transcript
+              val runIdsOwnedAfterRequest =
+                synchronized(pendingRuns) {
+                  pendingRuns.filterNotTo(mutableSetOf()) { it in runIdsOwnedAtRequest }
+                }
+              latestAppliedHistoryRequest = requestSequence
+              if (mutationReconciliationState == null && branchSnapshot != null && historyBranchState != previousState) {
+                historyBranchState?.let { publishedHistoryBranch = PublishedHistoryBranch(branchSnapshot, generation, it) }
+              }
+              val snapshotRunId =
+                history.inFlightRun
+                  ?.runId
+                  ?.trim()
+                  ?.takeIf { it.isNotEmpty() }
+              if (reconcileRunState) {
+                // A newer settings observation invalidates only this projection,
+                // not the useful transcript carried by the same history response.
+                appliedHistoryEntry =
+                  updateSessionFromHistory(
+                    history,
+                    ownerAgentId = requestAgentId,
+                    publishRunState = false,
+                    includeSessionInfo = appliedPurpose == HistoryRefreshPurpose.RestoreSession,
+                    preserveSessionSettings =
+                      requestSettingsGeneration != settingsPublicationGeneration.get() ||
+                        pendingSettingsMutations.containsKey(sessionSettingsKey(sessionKey)),
+                  )
+                transferLostAckOwnershipFromHistory(history)
+                latestAppliedRunSnapshot = HistoryRunSnapshot(requestSequence, snapshotRunId)
+              }
+              resolvePersistedReplies(history.messages)
+              val optimisticRunIds = reconciliationRunIds.filterTo(mutableSetOf()) { optimisticMessagesByRunId.containsKey(it) }
+              prunePersistedOptimisticMessages(history.messages)
+              if (reconcileRunState && snapshotRunId == null) {
+                optimisticRunIds
+                  .filterNot { runId ->
+                    unknownOutcomeRunIds.contains(runId) && unresolvedRepliesByRunId.containsKey(runId)
+                  }.filterNotTo(mutableSetOf()) { optimisticMessagesByRunId.containsKey(it) }
+                  .forEach { clearPendingRun(it, publishRunState = false) }
+              }
+              if (reconcileRunState && snapshotRunId != null) {
+                reconciliationRunIds
+                  .filterTo(mutableSetOf()) {
+                    it != snapshotRunId &&
+                      !optimisticMessagesByRunId.containsKey(it) &&
+                      !unresolvedRepliesByRunId.containsKey(it)
+                  }.forEach { clearPendingRun(it, publishRunState = false) }
+              }
+              val nextMessages = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
+              _messagesFromCache.value = false
+              _messages.value = nextMessages
+              val previousAnchor = _transcriptAnchor.value?.takeIf { it.sessionKey == sessionKey }
+              val completionSettled =
+                markCompletedTranscript &&
+                  runIdsToReconcile.none(unresolvedRepliesByRunId::containsKey) &&
+                  history.sessionInfo?.endedAt != null
+              _transcriptAnchor.value =
+                ChatTranscriptAnchorState(
+                  sessionKey = sessionKey,
+                  newestItemId = nextMessages.lastOrNull()?.id,
+                  completedEndedAt =
+                    if (completionSettled) history.sessionInfo.endedAt else previousAnchor?.completedEndedAt,
+                  completedNewestItemId =
+                    if (completionSettled) history.messages.lastOrNull()?.id else previousAnchor?.completedNewestItemId,
+                )
+              _sessionId.value = history.sessionId
+              history.sessionId?.let { sessionId ->
+                lastSelectedChatSessionByOwner[ChatAgentSessionSelectionOwner(requestCacheScope?.gatewayId, requestAgentId)]
+                  ?.takeIf { it.key == sessionKey }
+                  ?.observedSessionId = sessionId
+              }
+              markLiveHistoryApplied(sessionKey = sessionKey, sessionId = history.sessionId, generation = generation)
+              _historyLoading.value = false
+              if (historyLoadErrorGeneration == generation) {
+                updateErrorText(null)
+              }
+              if (reconcileRunState && history.inFlightRun == null) {
+                // Empty history is terminal proof for acknowledged runs. An unknown-outcome
+                // send stays owned until its reply persists, a terminal arrives, or it expires.
+                reconciliationRunIds
+                  .filterNot { runId ->
+                    unknownOutcomeRunIds.contains(runId) && unresolvedRepliesByRunId.containsKey(runId)
+                  }.forEach { clearPendingRun(it, publishRunState = false) }
+              }
+              if (reconcileRunState) {
+                clearTransientRunUiIfIdle()
+                adoptInFlightRun(history, runIdsOwnedAfterRequest)
+              }
+              publishRunPresentation()
+              enqueueTranscriptCacheWrite(requestCacheScope, requestAgentId, sessionKey, history.messages)
+              HistoryRefreshResult.Applied(historyBranchState, appliedPurpose)
+            }
+          }
+        if (applied == null) {
+          // A branch write can reject current history without replacing its owner.
+          // Keep the health obligation and refetch; never adopt the rejected response.
+          synchronized(gatewayScopeApplyLock) {
+            if (!isCurrent()) return HistoryRefreshResult.Superseded
+            requestSequence = historyRequestSequence.incrementAndGet()
+          }
+          continue
         }
-      if (applied !is HistoryRefreshResult.Applied) return applied
-      // Canonical history retires delivered rows before further RPCs can delay that proof.
-      // Resuming their queued successors still waits for branch reconciliation and health.
-      val outboxChanged =
-        requestCacheScope != null &&
-          reconcileDurableSendsAgainstHistory(requestCacheScope.gatewayId, history, requestAgentId)
-      publishOutbox()
-      appliedHistoryEntry?.let { acknowledgeUnreadIfNeeded(it.key, it, requireActive = true) }
-      if (refreshBranches && branchSnapshot != null) {
-        refreshSessionBranches(branchSnapshot, historyBranchState, BranchRefreshPurpose.Reconcile)
+        if (applied !is HistoryRefreshResult.Applied) return applied
+        // Canonical history retires delivered rows before further RPCs can delay that proof.
+        // Resuming their queued successors still waits for branch reconciliation and health.
+        val outboxChanged =
+          requestCacheScope != null &&
+            reconcileDurableSendsAgainstHistory(requestCacheScope.gatewayId, history, requestAgentId)
+        publishOutbox()
+        appliedHistoryEntry?.let { acknowledgeUnreadIfNeeded(it.key, it, requireActive = true) }
+        if (refreshBranches && branchSnapshot != null) {
+          refreshSessionBranches(branchSnapshot, historyBranchState, BranchRefreshPurpose.Reconcile)
+        }
+        pollHealthIfNeeded(sessionKey, generation)
+        if (outboxChanged) kickFlushForRoutedBacklog()
+        return applied
       }
-      pollHealthIfNeeded(sessionKey, generation)
-      if (outboxChanged) kickFlushForRoutedBacklog()
-      return applied
     } finally {
       finishHistoryHealth(healthRefresh, generation)
     }
@@ -7209,12 +7212,8 @@ class ChatController internal constructor(
           armPendingRunTimeout(runId)
           return@launch
         }
-        if (
-          currentSession &&
-          !freshSnapshotApplied &&
-          (historyResult == HistoryRefreshResult.Superseded || historyResult == HistoryRefreshResult.BranchInvalidated)
-        ) {
-          // A newer load or branch evidence fenced this snapshot. Defer expiry;
+        if (currentSession && !freshSnapshotApplied && historyResult == HistoryRefreshResult.Superseded) {
+          // A newer load or applied history fenced this snapshot. Defer expiry;
           // fresh history or the next watchdog must decide the run.
           armPendingRunTimeout(runId)
           return@launch

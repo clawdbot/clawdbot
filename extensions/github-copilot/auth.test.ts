@@ -103,6 +103,7 @@ describe("resolveFirstGithubToken", () => {
     expect(result).toEqual({
       githubToken: "profile-token",
       hasProfile: true,
+      profileId: "github-copilot:github",
     });
   });
 
@@ -177,7 +178,11 @@ describe("resolveFirstGithubToken", () => {
         },
         env: {},
       }),
-    ).resolves.toEqual({ githubToken: testCase.expectedToken, hasProfile: true });
+    ).resolves.toEqual({
+      githubToken: testCase.expectedToken,
+      hasProfile: true,
+      ...(testCase.expectedToken ? { profileId: "github-copilot:preferred" } : {}),
+    });
   });
 
   it.each([
@@ -188,6 +193,7 @@ describe("resolveFirstGithubToken", () => {
         githubToken: "durable-github-token",
         githubDomain: "github.com",
         hasProfile: true,
+        profileId: "github-copilot:preferred",
       },
     },
     {
@@ -197,6 +203,7 @@ describe("resolveFirstGithubToken", () => {
         githubToken: "durable-github-token",
         githubDomain: "acme.ghe.com",
         hasProfile: true,
+        profileId: "github-copilot:preferred",
       },
     },
     {
@@ -311,6 +318,7 @@ describe("resolveFirstGithubToken", () => {
     await expect(resolveFirstGithubToken({ config: {}, env: {} })).resolves.toEqual({
       githubToken: "first-token",
       hasProfile: true,
+      profileId: "github-copilot:first",
     });
     expect(store.usageStats["github-copilot:first"].cooldownUntil).toBe(expiredCooldown);
   });
@@ -342,7 +350,11 @@ describe("resolveFirstGithubToken", () => {
         env: {},
         profileId: "github-copilot:preferred",
       }),
-    ).resolves.toEqual({ githubToken: "preferred-token", hasProfile: true });
+    ).resolves.toEqual({
+      githubToken: "preferred-token",
+      hasProfile: true,
+      profileId: "github-copilot:preferred",
+    });
   });
 
   it("uses environment direct auth without falling back to config or the first profile", async () => {
@@ -625,6 +637,7 @@ describe("resolveFirstGithubToken", () => {
     expect(result).toEqual({
       githubToken: "resolved-profile-token",
       hasProfile: true,
+      profileId: "github-copilot:github",
     });
     expect(resolveRequiredConfiguredSecretRefInputStringMock).toHaveBeenCalledWith({
       config,

@@ -5,7 +5,6 @@ import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { isActiveTask, sortTasks, taskTimestampMs, taskTitle } from "../../../lib/tasks/data.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
-import { renderDiffStatChips } from "./chat-diff-render.ts";
 
 const SUBAGENT_ACTIVITY_LIMIT = 5;
 const SUBAGENT_ACTIVITY_TERMINAL_RETENTION_MS = 60_000;
@@ -70,7 +69,7 @@ export function deriveSubagentActivity(params: {
 
 function subagentActivityLabel(task: TaskSummary): string {
   if (isActiveTask(task)) {
-    return t("chat.backgroundTasks.subagentActivity.working");
+    return t("chat.backgroundTasks.subagentActivity.running");
   }
   if (task.status === "cancelled") {
     return t("chat.backgroundTasks.subagentActivity.cancelled");
@@ -132,7 +131,6 @@ function renderSubagentActivityRow(
           )
         : nothing
     }
-    ${task.diffStat ? renderDiffStatChips(task.diffStat) : nothing}
   `;
   if (!onOpenTaskDetail) {
     return html`<div

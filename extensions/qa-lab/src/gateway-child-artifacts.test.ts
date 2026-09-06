@@ -51,6 +51,8 @@ describe("cleanupQaGatewayTempRoots", () => {
         USERPROFILE: home,
         OPENCLAW_HOME: home,
         OPENCLAW_STATE_DIR: path.join(home, "state"),
+        // Reserve stderr for errors; slow-open warnings depend on host load.
+        OPENCLAW_LOG_LEVEL: "error",
         XDG_CONFIG_HOME: path.join(home, "config"),
         XDG_CACHE_HOME: path.join(home, "cache"),
         XDG_DATA_HOME: path.join(home, "data"),

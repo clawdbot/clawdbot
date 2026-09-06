@@ -38,9 +38,8 @@ openclaw update --dry-run   # preview without applying
 `--dry-run` to preview planned actions, `--json` for structured results, or
 `openclaw update status --json` to inspect channel and availability state.
 
-`--channel beta` prefers the beta npm dist-tag, but falls back to stable/latest
-when the beta tag is missing or its version is older than the latest stable
-release. Use `--tag beta` for a one-off package update pinned to the raw npm
+`--channel beta` selects the newest version by semantic version order from the
+beta and latest npm dist-tags. Use `--tag beta` for a one-off package update pinned to the raw npm
 beta dist-tag instead.
 
 A saved `update.channel` remains the channel for future updates, automatic
@@ -79,11 +78,11 @@ not a self-contained package artifact. Use `openclaw update --channel dev` to
 switch to the supported checkout and build flow. Other explicit package specs
 keep their package-manager behavior.
 
-After a beta core update, eligible official npm plugins follow the exact installed
-beta version, including one-off `--tag` updates from a stable installation.
-For managed plugins, a missing beta release is a warning, not a failure: the
-core update can still succeed while a plugin falls back to its recorded
-default/latest release.
+Managed npm plugins on the beta channel use the same newest-of-beta/latest
+selection, including official plugins such as `@openclaw/codex`. An older beta
+tag cannot hold a plugin behind the current stable release. Startup repair
+leaves already-current packages in place so a no-op refresh does not require
+another restart.
 
 See [Release channels](/install/development-channels) for channel semantics.
 
@@ -215,6 +214,11 @@ for a source-server update: it fails closed on all tracked local changes,
 including build outputs, fast-forwards `main` (or rebases a local server branch
 onto `origin/main`), installs dependencies with a frozen lockfile, builds clean,
 and restarts the gateway only after the build succeeds.
+
+Like `openclaw update`, the script builds runtime JavaScript, plugin assets, and
+the Control UI without generating TypeScript declarations by default. Set
+`OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0` when invoking the script if this checkout
+also needs fresh declarations for plugin development.
 
 This reference script requires **Corepack** and creates temporary shims without
 global activation before fetching. After fetching, it freezes the target commit

@@ -619,7 +619,7 @@ export async function prepareGatewayLifecycle(params: {
         { name: "gateway lifetime sidecars", run: stopRegisteredGatewayLifetimeSidecars },
         { name: "post-ready sidecars", run: stopRegisteredPostReadySidecars },
         { name: "gateway close prelude", run: runClosePrelude },
-        { name: "late sidecar cleanup", run: sealAndJoinRegisteredSidecarStops },
+        { name: "late sidecar cleanup", run: sealAndJoinRegisteredSidecarStops, required: true },
         {
           name: "gateway close",
           run: close,

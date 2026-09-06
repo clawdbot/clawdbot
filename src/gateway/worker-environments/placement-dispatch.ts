@@ -10,6 +10,10 @@ import {
   type WorkerDispatchPlacement,
   type WorkerDispatchPlacementStore,
 } from "./placement-dispatch-failure.js";
+import {
+  type PlacementRecoveryDeps,
+  resolvePriorWorkspaceResultConflict,
+} from "./placement-dispatch-pending-results.js";
 import { createPlacementRecoveryActions } from "./placement-dispatch-recovery.js";
 import {
   createWorkerPlacementDispatchStartup,
@@ -47,15 +51,10 @@ import { deriveEnvironmentIntent } from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-lifecycle.js";
 import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
-import type {
-  WorkerWorkspaceRecoveryFailureReport,
-  WorkerWorkspaceResultConflict,
-} from "./workspace-conflicts.js";
 import {
   verifyReconciledWorkspaceFinal,
   WorkerWorkspaceFinalFenceError,
 } from "./workspace-finalize.js";
-import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
   finalizeWorkspaceResultConflicts,
@@ -77,86 +76,51 @@ type WorkerLocalDispatchBarrier = (params: {
   startDispatch: () => WorkerDispatchPlacement;
 }) => Promise<WorkerDispatchPlacement>;
 
-type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers & {
-  placements: WorkerDispatchPlacementStore;
-  environments: WorkerDispatchEnvironmentService &
-    Partial<Pick<WorkerEnvironmentService, "requiresNodeEnrollment">>;
-  runnerAvailability: WorkerPlacementRunnerAvailabilityReader;
-  runLocalBarrier: WorkerLocalDispatchBarrier;
-  runRecoveryBarrier: WorkerPlacementRecoveryBarrier;
-  runActivationBarrier: WorkerActivationBarrier;
-  runMoveBarrier: WorkerPlacementMoveBarrier;
-  resolveMoveDestination: (
-    identity: Pick<WorkerPlacementMoveRequest, "sessionId" | "sessionKey" | "agentId">,
-    target: WorkerPlacementMoveRequest["target"],
-  ) => Promise<WorkerPlacementMoveDestination | undefined>;
-  onActivated?: (request: WorkerPlacementDispatchRequest) => void;
-  workspaceOperations: WorkerWorkspaceOperationCoordinator;
-  resolveWorkspacePath: (params: {
-    sessionId: string;
-    sessionKey: string;
-    agentId: string;
-  }) => Promise<string>;
-  reportWorkspaceResultConflict: (
-    params: { sessionId: string; sessionKey: string; agentId: string } & (
-      | { paths: string[]; stagedResultRef: string; totalCount: number }
-      | { cleared: true }
-    ),
-  ) => Promise<void>;
-  reportWorkspaceResultRecoveryFailure?: (
-    recovery: WorkerWorkspaceRecoveryFailureReport,
-  ) => Promise<void>;
-  resolveWorkspaceResultConflict: (params: {
-    sessionId: string;
-    sessionKey: string;
-    agentId: string;
-  }) => Promise<WorkerWorkspaceResultConflict | undefined>;
-  prepareAcceptedWorkspacePublication?: (
-    claim: import("./placement-store.js").WorkerSessionTurnClaim,
-  ) => Promise<void>;
-  publishAcceptedWorkspace?: (
-    claim: import("./placement-store.js").WorkerSessionTurnClaim,
-  ) => Promise<void>;
-  resolveGitAuthor?: (agentId: string) => { name?: string; email?: string } | undefined;
-  resolveDevicePlacementRequirement?: WorkerDevicePlacementRequirementResolver;
-  isCurrentNodePlacement?: WorkerNodePlacementAuthority;
-};
+type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers &
+  Pick<
+    PlacementRecoveryDeps,
+    | "workspaceOperations"
+    | "resolveWorkspacePath"
+    | "reportWorkspaceResultConflict"
+    | "reportWorkspaceResultRecoveryFailure"
+    | "resolveWorkspaceResultConflict"
+    | "prepareAcceptedWorkspacePublication"
+    | "publishAcceptedWorkspace"
+  > & {
+    placements: WorkerDispatchPlacementStore;
+    environments: WorkerDispatchEnvironmentService &
+      Pick<WorkerEnvironmentService, "recordError"> &
+      Partial<Pick<WorkerEnvironmentService, "requiresNodeEnrollment">>;
+    isShuttingDown?: () => boolean;
+    runnerAvailability: WorkerPlacementRunnerAvailabilityReader;
+    runLocalBarrier: WorkerLocalDispatchBarrier;
+    runRecoveryBarrier: WorkerPlacementRecoveryBarrier;
+    runActivationBarrier: WorkerActivationBarrier;
+    runMoveBarrier: WorkerPlacementMoveBarrier;
+    resolveMoveDestination: (
+      identity: Pick<WorkerPlacementMoveRequest, "sessionId" | "sessionKey" | "agentId">,
+      target: WorkerPlacementMoveRequest["target"],
+    ) => Promise<WorkerPlacementMoveDestination | undefined>;
+    onActivated?: (request: WorkerPlacementDispatchRequest) => void;
+    resolveGitAuthor?: (agentId: string) => { name?: string; email?: string } | undefined;
+    resolveDevicePlacementRequirement?: WorkerDevicePlacementRequirementResolver;
+    isCurrentNodePlacement?: WorkerNodePlacementAuthority;
+  };
 
 export function createWorkerPlacementDispatchService(options: WorkerPlacementDispatchOptions) {
   const { environments, placements } = options;
   const failure = createPlacementFailureActions({ environments, placements });
 
   const startup = createWorkerPlacementDispatchStartup({
-    placements,
-    environments,
+    ...options,
     failure,
-    runRecoveryBarrier: options.runRecoveryBarrier,
-    runActivationBarrier: options.runActivationBarrier,
-    onActivated: options.onActivated,
-    resolveGitAuthor: options.resolveGitAuthor,
-    resolveDevicePlacementRequirement: options.resolveDevicePlacementRequirement,
-    isCurrentNodePlacement: options.isCurrentNodePlacement,
     reportTransition: reportPlacementTransition,
   });
 
   const recovery = createPlacementRecoveryActions({
-    environments,
+    ...options,
     failure,
-    placements,
-    resolveWorkspacePath: options.resolveWorkspacePath,
-    reportWorkspaceResultConflict: options.reportWorkspaceResultConflict,
-    ...(options.reportWorkspaceResultRecoveryFailure
-      ? { reportWorkspaceResultRecoveryFailure: options.reportWorkspaceResultRecoveryFailure }
-      : {}),
-    resolveWorkspaceResultConflict: options.resolveWorkspaceResultConflict,
     recoverPlacementMoves: (environmentId) => moveService.recoverAll(environmentId),
-    workspaceOperations: options.workspaceOperations,
-    ...(options.prepareAcceptedWorkspacePublication
-      ? { prepareAcceptedWorkspacePublication: options.prepareAcceptedWorkspacePublication }
-      : {}),
-    ...(options.publishAcceptedWorkspace
-      ? { publishAcceptedWorkspace: options.publishAcceptedWorkspace }
-      : {}),
   });
 
   const dispatch = async (
@@ -260,6 +224,9 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       });
     } catch (error) {
       try {
+        if (placement && startup.retainInterruptedProvisioning(placement, error)) {
+          throw error;
+        }
         const current = placement ? placements.get(request.sessionId) : undefined;
         if (current && current.state !== "local" && current.state !== "reclaimed") {
           if (current.state === "active") {
@@ -477,13 +444,10 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
                 if (conflictPaths.length > 0 && !recordedStagedResultRef) {
                   throw new Error("Cloud worker stop conflict has no staged result reference");
                 }
-                const priorWorkspaceResultConflict =
-                  current.workspaceResultConflict ??
-                  (await options.resolveWorkspaceResultConflict({
-                    sessionId: current.sessionId,
-                    sessionKey: current.sessionKey,
-                    agentId: current.agentId,
-                  }));
+                const priorWorkspaceResultConflict = await resolvePriorWorkspaceResultConflict(
+                  options.resolveWorkspaceResultConflict,
+                  current,
+                );
                 reauthorize?.();
                 const finalized = await finalizeWorkspaceResultConflicts({
                   placements,
