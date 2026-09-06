@@ -633,7 +633,7 @@ export function createApplicationUpdateOverlays(
         updateHoldInFlight = false;
       }
     },
-    reportUpdateFailure: updateFailureReporter.report,
+    reportUpdateFailure: (attemptId: string) => updateFailureReporter.report(attemptId),
     dispose() {
       disposed = true;
       updateFailureReporter.invalidate();
