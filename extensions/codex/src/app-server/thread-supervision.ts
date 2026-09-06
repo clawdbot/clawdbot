@@ -76,6 +76,7 @@ type PendingSupervisionMaterializationParams = {
   hostSystemAgentActive: boolean;
   restrictedToolSurface: boolean;
   restrictedToolSurfaceInheritedMcpServerNames: string[];
+  deniedInheritedMcpServerNames?: readonly string[];
   environmentSelection?: CodexTurnEnvironmentParams[];
   signal?: AbortSignal;
   provisionalAppIds?: readonly string[];
@@ -245,6 +246,7 @@ export async function materializePendingSupervisionBranch(
       hostSystemAgentActive: params.hostSystemAgentActive,
       restrictedToolSurfaceInheritedMcpServerNames:
         params.restrictedToolSurfaceInheritedMcpServerNames,
+      deniedInheritedMcpServerNames: params.deniedInheritedMcpServerNames,
       shellEnvironment: params.shellEnvironment,
       disableLoginShell: params.disableLoginShell,
     });
@@ -480,6 +482,7 @@ function buildPendingSupervisionProbeForkParams(
     hostSystemAgentActive: params.hostSystemAgentActive,
     restrictedToolSurfaceInheritedMcpServerNames:
       params.restrictedToolSurfaceInheritedMcpServerNames,
+    deniedInheritedMcpServerNames: params.deniedInheritedMcpServerNames,
     shellEnvironment: params.shellEnvironment,
     disableLoginShell: params.disableLoginShell,
   });

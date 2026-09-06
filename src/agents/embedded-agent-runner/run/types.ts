@@ -156,6 +156,10 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   pluginHarnessToolPolicyRestricted?: boolean;
   /** Audited exact denies that the plugin harness must enforce against native equivalents. */
   pluginHarnessToolPolicySafeDeniedTools?: readonly string[];
+  /** Configured `mcp.servers` keys denied as `<server>__*`; the harness must omit them natively. */
+  pluginHarnessToolPolicyDeniedMcpServers?: readonly string[];
+  /** Normalized `<prefix><literal>*` denies the plugin harness must enforce against native app tools. */
+  pluginHarnessToolPolicyDeniedAppPatterns?: readonly string[];
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   /** Active file-backed artifact target resolved by the run/session target seam. */
   sessionFile: string;

@@ -3115,6 +3115,33 @@ describe("Codex app-server thread lifecycle bindings", () => {
     }
   });
 
+  it("disables a policy-denied inherited server on an unrestricted resume", () => {
+    const params = createParams(
+      path.join(tempDir, "denied-inherited-session.jsonl"),
+      path.join(tempDir, "denied-inherited-workspace"),
+    );
+    params.pluginHarnessToolPolicyDeniedMcpServers = ["alpha"];
+    const request = buildThreadResumeParams(params, {
+      threadId: "thread-denied-inherited",
+      appServer: createThreadLifecycleAppServerOptions(),
+      dynamicTools: [],
+      config: {
+        "features.apps": true,
+        mcp_servers: { alpha: { command: "native" }, beta: { command: "native" } },
+      },
+      nativeCodeModeEnabled: true,
+      hostSystemAgentActive: false,
+      deniedInheritedMcpServerNames: ["alpha"],
+    });
+
+    expect(request.config).toMatchObject({
+      "features.apps": true,
+      mcp_servers: { alpha: { command: "native", enabled: false }, beta: { command: "native" } },
+    });
+    // Native code mode stays on: the deny did not restrict the surface.
+    expect(request.config?.["features.shell_tool"]).toBe(true);
+  });
+
   it("removes every native capability from an explicitly restricted thread", () => {
     const params = createParams(
       path.join(tempDir, "conversation-policy-session.jsonl"),

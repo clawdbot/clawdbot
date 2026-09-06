@@ -120,6 +120,8 @@ export type CodexThreadRequestContext = {
   ringZeroActive: boolean;
   restrictedToolSurface: boolean;
   restrictedToolSurfaceInheritedMcpServerNames: string[];
+  /** Policy-denied configured servers that the agent's native Codex config also defines. */
+  deniedInheritedMcpServerNames?: string[];
   nativeSkillIsolation?: CodexNativeSkillIsolation;
   lifecycleTiming: CodexThreadLifecycleTimingTracker;
   normalizeBindingModelProvider: (

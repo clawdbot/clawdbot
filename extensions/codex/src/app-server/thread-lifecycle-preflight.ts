@@ -16,6 +16,7 @@ import {
   isMessageOnlyCodexSourceReply,
   isSystemAgentOnlyCodexDynamicToolAllowlist,
 } from "./dynamic-tool-profile.js";
+import { resolveDeniedInheritedMcpServerNames } from "./harness-mcp-server-denies.js";
 import { assertCodexNativeHookRelayAllowed } from "./native-hook-relay.js";
 import { resolveCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
@@ -158,6 +159,26 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
         readCodexInheritedMcpServerNames(params.client, params.cwd, params.signal, effectiveConfig),
       )
     : [];
+  // A certified `<server>__*` deny must also switch off a same-named server the
+  // agent's native Codex config defines; omission from the projection is not enough.
+  const deniedMcpServerNames = params.params.pluginHarnessToolPolicyDeniedMcpServers ?? [];
+  const deniedInheritedMcpServerNames =
+    deniedMcpServerNames.length > 0 && !restrictedToolSurface
+      ? resolveDeniedInheritedMcpServerNames({
+          inheritedServerNames: await lifecycleTiming.measure(
+            "denied-mcp-server-native-policy",
+            () =>
+              readCodexInheritedMcpServerNames(
+                params.client,
+                params.cwd,
+                params.signal,
+                effectiveConfig,
+              ),
+          ),
+          deniedServerNames: deniedMcpServerNames,
+          configuredServerNames: Object.keys(params.params.config?.mcp?.servers ?? {}),
+        })
+      : [];
   if (restrictedToolSurface || imageGenerationDenied || params.nativeCodeModeEnabled !== false) {
     await lifecycleTiming.measure("tool-policy-config-requirements-read", () =>
       assertCodexManagedRequirementsDoNotOverrideToolPolicy(
@@ -224,6 +245,7 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     ringZeroConfigFingerprint,
     restrictedToolSurface,
     restrictedToolSurfaceInheritedMcpServerNames,
+    deniedInheritedMcpServerNames,
     userMcpServersConfigPatch,
     userMcpServersFingerprint,
     webSearchThreadConfigFingerprint,

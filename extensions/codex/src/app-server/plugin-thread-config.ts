@@ -2,8 +2,16 @@
  * Builds Codex thread config patches that expose only policy-approved apps
  * for native Codex turns.
  */
-import crypto from "node:crypto";
 import { defaultCodexAppInventoryCache, CodexAppInventoryCache } from "./app-inventory-cache.js";
+import {
+  buildCodexAppDenyUnenforceableDiagnostic,
+  buildCodexAppDenyUnmanagedDiagnostic,
+  buildCodexAppDenyUnmatchedDiagnostic,
+  createCodexAppDenyGate,
+  normalizeCodexDeniedAppPatterns,
+  readCodexAppModelToolNamesForDenies,
+  type CodexAppDenyDiagnostic,
+} from "./app-policy-deny.js";
 import {
   resolveCodexPluginsPolicy,
   type CodexPluginDestructiveApprovalMode,
@@ -22,6 +30,7 @@ import {
   type CodexPluginRuntimeRequest,
 } from "./plugin-inventory.js";
 import type { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
+import { fingerprintCodexPluginPolicy as fingerprintJson } from "./plugin-policy-fingerprint.js";
 import {
   collectCodexPluginOwnedAppIds,
   collectCodexReservedPluginAppIds,
@@ -75,6 +84,7 @@ export type PluginAppPolicyContext = {
 type CodexPluginThreadConfigDiagnostic =
   | CodexPluginInventoryDiagnostic
   | CodexPluginThreadAppAdmissionDiagnostic
+  | CodexAppDenyDiagnostic
   | {
       code:
         | "account_app_ownership_unavailable"
@@ -108,11 +118,19 @@ type BuildCodexPluginThreadConfigParams = {
   appCacheKey: string;
   metadataCache?: CodexPluginMetadataCache;
   nowMs?: number;
+  /** Host-certified `mcp__codex_apps__<literal>*` denies for this run's tool policy. */
+  deniedAppPatterns?: readonly string[];
 };
 
 // Admission changes must rebuild existing bindings too, or older bindings can
 // bypass updated app approval checks after the gateway has been upgraded.
 const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 6;
+// Runs with app denies fingerprint the deny set under a newer version. Runs
+// without denies keep the version-6 shape byte-for-byte, so an unchanged
+// conversation bound before this field existed stays current after upgrade.
+// Native-owned and supervised bindings cannot be rotated, so a gratuitous
+// fingerprint change would refuse their next turn instead of rebuilding.
+const CODEX_PLUGIN_THREAD_CONFIG_DENY_INPUT_FINGERPRINT_VERSION = 7;
 const CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION = 2;
 
 /** Returns true when plugin config exists and thread config may need app patches. */
@@ -124,12 +142,19 @@ export function shouldBuildCodexPluginThreadConfig(pluginConfig?: unknown): bool
 export function buildCodexPluginThreadConfigInputFingerprint(params: {
   pluginConfig?: unknown;
   appCacheKey?: string;
+  deniedAppPatterns?: readonly string[];
 }): string {
   const policy = resolveCodexPluginsPolicy(params.pluginConfig);
+  const deniedAppPatterns = normalizeCodexDeniedAppPatterns(params.deniedAppPatterns);
+  const denied = deniedAppPatterns.length > 0;
+  // Per-agent app denies change the admitted set, so bound threads must rebuild.
   return fingerprintJson({
-    version: CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION,
+    version: denied
+      ? CODEX_PLUGIN_THREAD_CONFIG_DENY_INPUT_FINGERPRINT_VERSION
+      : CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION,
     policy: policyFingerprint(policy),
     appCacheKey: params.appCacheKey ?? null,
+    ...(denied ? { deniedAppPatterns } : {}),
   });
 }
 
@@ -137,6 +162,7 @@ export function buildCodexPluginThreadConfigInputFingerprint(params: {
 export function buildCodexPluginThreadConfigTimeoutFallback(params: {
   pluginConfig?: unknown;
   appCacheKey: string;
+  deniedAppPatterns?: readonly string[];
   message: string;
 }): CodexPluginThreadConfig {
   const inputFingerprint = buildCodexPluginThreadConfigInputFingerprint(params);
@@ -166,17 +192,22 @@ export async function buildCodexPluginThreadConfig(
         ? { ...requestParams, threadId: params.threadId }
         : requestParams,
     );
-  let inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
-    pluginConfig: params.pluginConfig,
-    appCacheKey: params.appCacheKey,
-  });
+  const deniedAppPatterns = normalizeCodexDeniedAppPatterns(params.deniedAppPatterns);
+  const fingerprintInputs = () =>
+    buildCodexPluginThreadConfigInputFingerprint({ ...params, deniedAppPatterns });
+  let inputFingerprint = fingerprintInputs();
   const policy = resolveCodexPluginsPolicy(params.pluginConfig);
   if (!policy.enabled) {
-    return emptyPluginThreadConfig({
+    const disabled = emptyPluginThreadConfig({
       enabled: false,
       inputFingerprint,
       configPatch: buildDisabledAppsConfigPatch(),
     });
+    // OpenClaw is not managing apps, so a policy deny can only be honored by
+    // keeping every app off the thread.
+    return deniedAppPatterns.length > 0
+      ? { ...disabled, diagnostics: [buildCodexAppDenyUnmanagedDiagnostic(deniedAppPatterns)] }
+      : disabled;
   }
 
   let inventory =
@@ -215,10 +246,7 @@ export async function buildCodexPluginThreadConfig(
       metadataCache: params.metadataCache,
       nowMs: params.nowMs,
     });
-    inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
-      pluginConfig: params.pluginConfig,
-      appCacheKey: params.appCacheKey,
-    });
+    inputFingerprint = fingerprintInputs();
   }
   const activationDiagnostics: CodexPluginThreadConfigDiagnostic[] = [];
   const activationResults: CodexPluginActivationResult[] = [];
@@ -270,10 +298,7 @@ export async function buildCodexPluginThreadConfig(
       metadataCache: params.metadataCache,
       nowMs: params.nowMs,
     });
-    inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
-      pluginConfig: params.pluginConfig,
-      appCacheKey: params.appCacheKey,
-    });
+    inputFingerprint = fingerprintInputs();
   }
   if (shouldForceRefreshCodexNotReadyPluginApps(params, policy, inventory)) {
     await refreshCodexPluginAppInventory(params, appCache, {
@@ -291,16 +316,20 @@ export async function buildCodexPluginThreadConfig(
       metadataCache: params.metadataCache,
       nowMs: params.nowMs,
     });
-    inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
-      pluginConfig: params.pluginConfig,
-      appCacheKey: params.appCacheKey,
-    });
+    inputFingerprint = fingerprintInputs();
   }
 
   const accountAppsResult: Awaited<ReturnType<typeof readCodexThreadAdmissibleAccountApps>> =
     policy.allowAllPlugins
       ? await readCodexThreadAdmissibleAccountApps(params, appCache)
       : { apps: [] };
+  // Denies are matched against the real model-facing tool names per connector;
+  // an unreadable inventory leaves every gated app unenforceable (fail closed).
+  const modelToolNamesByApp = await readCodexAppModelToolNamesForDenies({
+    request: threadRequest,
+    threadId: params.threadId,
+    patterns: deniedAppPatterns,
+  });
   // A deny-all thread needs no native settings; read them only before admitting an app.
   let appAdmissionConfig: Promise<CodexPluginThreadAppAdmissionConfig> | undefined;
   const getAdmissionConfig = () => (appAdmissionConfig ??= readCodexConfigForAppAdmission(params));
@@ -310,6 +339,27 @@ export async function buildCodexPluginThreadConfig(
     ...activationDiagnostics,
     ...(accountAppsResult.diagnostic ? [accountAppsResult.diagnostic] : []),
   ];
+  // Denies that cannot be applied exactly fail closed: every app stays off the
+  // thread rather than exposing tools the policy meant to remove.
+  const appsDisabledByPolicy = (diagnostic: CodexAppDenyDiagnostic): CodexPluginThreadConfig => ({
+    ...emptyPluginThreadConfig({
+      enabled: true,
+      inputFingerprint,
+      configPatch: buildDisabledAppsConfigPatch(),
+    }),
+    diagnostics: [...diagnostics, diagnostic],
+  });
+  // A deny matching no known app tool cannot be proven satisfied (misspelled
+  // namespace, or Codex changed its tool naming).
+  const appDenies = createCodexAppDenyGate<CodexPluginThreadConfig>({
+    modelToolNamesByApp,
+    patterns: deniedAppPatterns,
+    onDenied: (diagnostic) => diagnostics.push(diagnostic),
+    failClosed: (appId) => appsDisabledByPolicy(buildCodexAppDenyUnenforceableDiagnostic(appId)),
+  });
+  if (appDenies.unmatched.length > 0) {
+    return appsDisabledByPolicy(buildCodexAppDenyUnmatchedDiagnostic(appDenies.unmatched));
+  }
   const provisionalAppIds = new Set<string>();
   const { apps } = buildDisabledAppsConfigPatch();
   const policyApps: Record<string, CodexAppPolicyContextEntry> = {};
@@ -379,6 +429,13 @@ export async function buildCodexPluginThreadConfig(
         });
         continue;
       }
+      const denied = appDenies.apply(app.id, record.policy);
+      if (denied === true) {
+        continue;
+      }
+      if (denied) {
+        return denied;
+      }
       provisionalAppIds.add(app.id);
       apps[app.id] = buildEnabledAppConfig(
         record.policy,
@@ -408,6 +465,13 @@ export async function buildCodexPluginThreadConfig(
     const admissionConfig = await getAdmissionConfig();
     if (resolveCodexExplicitAppEnablement(admissionConfig.layers, app.id) === false) {
       continue;
+    }
+    const denied = appDenies.apply(app.id);
+    if (denied === true) {
+      continue;
+    }
+    if (denied) {
+      return denied;
     }
     const accountApp = toCodexPluginOwnedAccountApp(app);
     // Global callability does not prove this thread's workspace/managed policy.
@@ -711,23 +775,4 @@ function mergeJsonObjects(left: JsonObject, right: JsonObject): JsonObject {
     }
   }
   return merged;
-}
-
-function fingerprintJson(value: JsonValue): string {
-  return crypto.createHash("sha256").update(stringifyCodexPluginPolicy(value)).digest("hex");
-}
-
-export function stringifyCodexPluginPolicy(value: unknown): string {
-  // Fingerprints must be process-stable across object insertion order so prompt
-  // cache and thread-binding comparisons do not churn between runs.
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => stringifyCodexPluginPolicy(item)).join(",")}]`;
-  }
-  if (value && typeof value === "object") {
-    return `{${Object.entries(value)
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => `${JSON.stringify(key)}:${stringifyCodexPluginPolicy(item)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
 }
