@@ -1445,9 +1445,7 @@ globalThis.fetch = async (url) => {
   return Response.json({ data: [] });
 };`,
     );
-    const runtimeArgs = process.versions.bun
-      ? ["--tsconfig-override", path.join(process.cwd(), "tsconfig.json")]
-      : ["--import", "tsx"];
+    const runtimeArgs = process.versions.bun ? [] : ["--import", "tsx"];
     const result = spawnSync(
       process.execPath,
       [

@@ -74,7 +74,7 @@ describe("release-check", () => {
       );
       const moduleUrl = pathToFileURL(join(toolingRoot, "scripts/release-check.ts")).href;
       const runtimeArgs = process.versions.bun
-        ? ["--tsconfig-override", join(toolingRoot, "tsconfig.json")]
+        ? []
         : ["--import", join(toolingRoot, "scripts/tsx.mjs")];
       const output = execFileSync(
         process.execPath,
