@@ -12,7 +12,13 @@ import { applyClawAddPlan } from "./add.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawAddPlan, ClawSourceIdentity } from "./types.js";
-import { ClawWorkspaceWriteError, createClawWorkspaceFiles } from "./workspace.js";
+import {
+  CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION,
+  ClawWorkspaceWriteError,
+  createClawWorkspaceFiles,
+  readAllClawWorkspaceFiles,
+  readClawWorkspaceFiles,
+} from "./workspace.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -116,6 +122,40 @@ function readInstallStatus(agentId: string, root: string): string | undefined {
 }
 
 describe("createClawWorkspaceFiles", () => {
+  it.each([
+    { schemaVersion: "future.workspace.v9", status: "complete" },
+    { schemaVersion: CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION, status: "unknown" },
+  ])(
+    "rejects retry with $schemaVersion/$status while preserving inventory",
+    async ({ schemaVersion, status }) => {
+      const { root, workspace, plan } = await makePlan();
+      const env = stateEnv(root);
+      await createClawWorkspaceFiles(plan, { env, nowMs: 10 });
+      const { db } = openOpenClawStateDatabase({ env });
+      db.prepare(
+        "UPDATE claw_workspace_files SET schema_version = ?, status = ? WHERE agent_id = ? AND target_path = ?",
+      ).run(schemaVersion, status, plan.agent.finalId, "AGENTS.md");
+      const selectRows = () =>
+        db.prepare("SELECT * FROM claw_workspace_files ORDER BY target_path").all();
+      const before = selectRows();
+
+      expect(readClawWorkspaceFiles(plan.agent.finalId, { env })[0]).toMatchObject({
+        schemaVersion: CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION,
+        status,
+      });
+      expect(readAllClawWorkspaceFiles({ env })[0]).toMatchObject({ schemaVersion, status });
+      await expect(createClawWorkspaceFiles(plan, { env, nowMs: 20 })).rejects.toMatchObject({
+        diagnostics: [
+          expect.objectContaining({
+            message: expect.stringContaining("unsupported provenance state"),
+          }),
+        ],
+      });
+      expect(selectRows()).toEqual(before);
+      await expect(readFile(join(workspace, "AGENTS.md"), "utf8")).resolves.toBe("# Agent\n");
+    },
+  );
+
   it("materializes the CLAW.md body as managed SOUL.md content", async () => {
     const root = tempDirs.make("openclaw-claw-body-workspace-");
     const workspace = join(root, "workspace-agent");

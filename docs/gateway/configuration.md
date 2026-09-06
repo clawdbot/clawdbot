@@ -107,8 +107,10 @@ The Gateway keeps a trusted last-known-good copy after each successful startup,
 but startup and hot reload do not restore it automatically - only `openclaw doctor --fix`
 does. If `openclaw.json` remains invalid after eligible startup migrations (including
 plugin-local validation), Gateway startup fails. An invalid hot reload is skipped and
-the current runtime keeps the last accepted config. A rejected write is also saved as
-`<path>.rejected.<timestamp>` for inspection.
+the current runtime keeps the last accepted config. When a write is blocked as an
+accidental clobber, OpenClaw attempts to save the rejected payload as
+`<path>.rejected.<timestamp>` for inspection. The warning reports whether that save
+succeeded; if it failed, the active config still stays unchanged.
 The Gateway blocks writes that look like accidental clobbers - dropping the effective
 `gateway.mode` or shrinking the file by more than half - unless the write explicitly
 allows destructive changes. Mode checks resolve `$include` and environment references
@@ -565,9 +567,20 @@ The earlier `hot` and `restart` modes are retired; [`openclaw doctor --fix`](/cl
 
 ### What hot-applies vs what needs a restart
 
-Most fields hot-apply without downtime; some hot-applied sections restart just that
-subsystem (channel, cron, heartbeat) rather than the whole Gateway. In
-`hybrid` mode, Gateway-restart-required changes are handled automatically.
+Reload planning classifies each changed path as one of three outcomes:
+
+- **Gateway restart (`restart`)**: restart the Gateway process.
+- **Hot reload (`hot`)**: apply the change while keeping the Gateway process
+  running. This can include restarting the owning subsystem, such as a channel,
+  cron, or heartbeat.
+- **No reload action (`none`)**: update the runtime config snapshot without
+  scheduling a reload action for that path. Consumers that read the current
+  config can observe the new value on a later read.
+
+In `hybrid` mode, Gateway restarts happen automatically when required. The longest
+matching config prefix determines the outcome. Rules supplied by a plugin apply
+only while that plugin is loaded; a path that matches no rule defaults to a
+Gateway restart.
 
 By default, changing `agents.defaults.mediaMaxMb` restarts channel runtimes so their inherited
 attachment limits take effect together. Automatic reloads preserve manually
@@ -580,7 +593,7 @@ back to OpenClaw.
 
 | Category                  | Fields                                                                                                                                                                                                                                                             | Gateway restart needed?                |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------- |
-| Channels                  | `channels.*`, `web` (WhatsApp) - all built-in and plugin channels                                                                                                                                                                                                  | No (restarts that channel)             |
+| Channels                  | `channels.*`, `web` (WhatsApp)                                                                                                                                                                                                                                     | Depends on setting and loaded plugin   |
 | Agent & models            | `agents`, `models`, `auth.order`, `auth.profiles`, `broadcast`, `worktreeRoot`, `cloudWorkers.projectProfiles`                                                                                                                                                     | No                                     |
 | Automation                | `hooks`, `cron`, `agents.defaults.heartbeat`                                                                                                                                                                                                                       | No (reloads the owning subsystem)      |
 | Sessions & messages       | `session`, `messages`                                                                                                                                                                                                                                              | No                                     |
@@ -603,14 +616,28 @@ back to OpenClaw.
 | Gateway server            | Other `gateway.*` settings (port, bind, auth mode, roles, tailscale, TLS)                                                                                                                                                                                          | **Yes**                                |
 | Infrastructure            | Other `discovery` and `browser` settings, MCP Apps listener settings, `secrets.egressProxy`, `plugins.load`, `plugins.installs`                                                                                                                                    | **Yes**                                |
 
-Changes to `channels.defaults`, `channels.modelByChannel`, `messages.inbound`,
-`commands`, `accessGroups`, `tts`, `surfaces`,
-`acp.stream`, and `diagnostics.flags` restart loaded channel runtimes to refresh shared policy. Manually stopped accounts stay
-stopped, and the Gateway keeps running.
+Channel plugins declare which settings restart their channel
+(`reload.configPrefixes`) and which need no reload action (`reload.noopPrefixes`).
+For example, with WhatsApp loaded, `channels.whatsapp.enabled` restarts the
+WhatsApp channel, while `channels.whatsapp.replyToMode` matches its broader
+no-action prefix.
 
-`messages.ackReactionScope` applies to subsequent channel turns without reconnecting
-channels. Per-channel and per-account overrides still take precedence; turns
-already being processed retain their captured policy.
+Changes to `channels.defaults`, `channels.modelByChannel`, `commands`,
+`accessGroups`, `tts`, `surfaces`, `acp.stream`, and `diagnostics.flags` refresh
+loaded channel runtimes that capture those policies. Manually stopped accounts
+stay stopped, and the Gateway keeps running.
+
+[Inbound debounce settings](/concepts/messages#inbound-debouncing) apply at the
+next inbound admission without reconnecting supported channels.
+`messages.ackReactionScope` applies to subsequent turns without reconnecting
+Discord, Matrix, Signal, Slack, Telegram, or WhatsApp. Other channel plugins
+refresh unless they declare that they read the policy live. Per-channel and
+per-account overrides still take precedence; admitted turns retain their policy.
+
+`diagnostics.enabled` updates diagnostic dispatch and heartbeat ownership live.
+With `diagnostics-otel` loaded, `diagnostics.otel` restarts only its exporter service,
+flushing the old generation before starting the new one. Externally preloaded
+OpenTelemetry providers retain their transport and shutdown ownership.
 
 Operation settings apply at their next use; they do not restart in-flight runs
 or recreate provisioned workers. Approval expiry changes affect newly issued
@@ -628,7 +655,7 @@ load failure keeps the previous handlers; events already running finish with
 their original handlers. Workspace changes reload directory hooks from the
 newly selected workspace. Reload does not replay `gateway:startup`.
 
-Under `gateway.controlUi`, the `enabled`, `environment`, `github`, `toolTitles`,
+Under `gateway.controlUi`, the `enabled`, `environment`, `github`,
 `sessionObserver`, `embedSandbox`, `allowExternalEmbedUrls`, and
 `automaticallyFetchFavicons` settings hot-apply. Reload open Control UI pages to
 pick up the environment label, CLI agent picker, embed preferences, and favicon
@@ -687,7 +714,6 @@ eligible for hot reload. Auth-mode changes still restart the Gateway.
 
 <Note>
 Changing `gateway.reload` or `gateway.remote` also does **not** trigger a restart.
-Individual plugins can declare their own restart-triggering config prefixes.
 </Note>
 
 Canvas enablement uses plugin hot reload. Current-protocol nodes whose hosted
@@ -702,6 +728,12 @@ Install, update, uninstall, and explicit plugin metadata refresh require a
 Gateway restart; `hybrid` schedules that restart, while `off` leaves it to you.
 Changing an agent's workspace also does not discover plugins in the new
 directory until restart. See [Plugin metadata snapshots](/plugins/architecture#plugin-metadata-snapshot-and-lookup-table).
+
+During channel or plugin hot reload, Gateway-hosted channel webhook routes return
+`503` with `Retry-After: 1` until replacement ingress registers. Senders must honor
+retry responses; this does not acknowledge delivery. Disabled or removed accounts,
+manual stops, and cancelled replacement lifetimes release those temporary routes.
+When replacement ingress reports ready, old paths it did not reclaim are removed.
 
 ### Reload planning
 

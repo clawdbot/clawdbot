@@ -58,7 +58,20 @@ Retained channel monitors can bind `createRuntimeConfigReader(cfg)` from
 runtime updates when the supplied config belongs to the active runtime, and
 preserves an explicitly scoped config otherwise, including when no runtime has
 been published yet. Read once per turn and carry that snapshot through admission
-and replies.
+and replies. Process-wide controls such as diagnostics should read at the point
+of emission.
+
+`createChannelInboundDebouncer` keeps its returned numeric `debounceMs` and default
+queue timing as startup snapshots. For live timing, pass its existing
+`resolveDebounceMs(entry)` callback and resolve with the bound config reader.
+If pending-key or shutdown bookkeeping also depends on the delay, capture one
+value on the entry and use it for both bookkeeping and the callback.
+
+A channel's `reload.noopPrefixes` opts only that channel out of shared-policy
+refresh. Declare a prefix only after every retained consumer reads it live or
+does not consume it. Undeclared channels still refresh; one channel's declaration
+cannot suppress a sibling's reload. A narrower `reload.configPrefixes` entry can
+retain restart behavior under a broader no-op prefix.
 
 ## Reusable runtime utilities
 
@@ -67,6 +80,12 @@ Native command probes should use `runCommandWithTimeout` from
 `killProcessTree: true`. Await its result so timeout or cancellation cleanup finishes
 before returning. For commands whose output is always UTF-8, such as JSON status
 probes, use `runUtf8CommandWithTimeout` from the same subpath.
+
+Use `splitCommandArgs(raw)` from the same subpath to group quoted process
+arguments. Backslashes and `#` stay literal; there is no shell expansion.
+Unfinished quotes return `null` unless the caller passes
+`{ allowUnclosedQuotes: true }` to preserve an existing permissive input contract.
+Empty quoted arguments are omitted.
 
 Existing process owners can use `signalProcessTree`. Its `onComplete` callback runs after Unix
 signaling or the bounded Windows `taskkill` attempt, not proof that every process
@@ -345,7 +364,9 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
 
     `readSessionTranscriptVisibleMessageDelta(...)` provides the same bounded bootstrap-and-resume shape over the host-owned active message projection. It returns messages from oldest to newest, so context engines can drain initial history and persist the opaque cursor as their watermark. Store and return the cursor unchanged; it is a continuation hint, not an authorization credential. Linear appends resume after the last returned message. Transcript replacement, a cursor whose anchor left or moved within the active branch, malformed cursors, and cross-session cursors return `reset` with a fresh bootstrap cursor. The count and byte defaults and caps match the raw delta API. While the active projection is rebuilding after a branch change, the result is `unavailable` with reason `projection_rebuilding`; retry later rather than falling back to an active transcript file.
 
-    The legacy whole-store and active transcript file helpers are no longer exported from the plugin SDK. Use the scoped entry helpers for session metadata and the transcript identity helpers for active transcript operations. Archive/support workflows that need file artifacts should use their dedicated archive surfaces instead of active session runtime APIs.
+    `openclaw/plugin-sdk/session-store-runtime` still exports deprecated `loadSessionStore(...)`, `updateSessionStore(...)`, `resolveSessionFilePath(...)`, and `resolveSessionStoreEntry(...)` for official plugins released with v2026.7.1-beta.5. These compatibility exports are separate from `api.runtime.agent.session`. The existing [beta.5 compatibility window](/plugins/compatibility#current-compatibility-areas) runs through 2026-10-12; removal also requires the minimum supported plugin version to exclude that release. The whole-store helpers use SQLite-backed projections, and the legacy transcript-path bridge supports older file-based doctor inspection; SQLite remains canonical.
+
+    For new plugin code, use the scoped entry helpers for session metadata and the transcript identity helpers for active transcript operations. Archive/support workflows that need file artifacts should use their dedicated archive surfaces instead of active session runtime APIs.
 
   </Accordion>
   <Accordion title="api.runtime.agent.defaults">
@@ -590,6 +611,10 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     `plugins.entries.<id>.subagent.allowedModels` can restrict overrides to
     canonical `provider/model` targets. The same policy applies to `complete`;
     request-scoped calls retain their authenticated client's override authority.
+    The check uses the destination agent's model configuration, including exact
+    configured model IDs, and applies to the plugin's initial override. Configured
+    defaults, operator-installed model routing hooks, and automatic model fallbacks
+    retain their own selection policies.
 
     `toolsAlsoAllow` adds exact, uniquely owned tools registered by the calling plugin to the worker's normal tool surface. The runtime rejects core tools and names shared with another plugin. Profiles and operator tool policies still apply, including explicit allowlists and denies.
 
@@ -783,42 +808,54 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
 
   </Accordion>
   <Accordion title="api.runtime.tasks">
-    Bind Task Flow and Task Run state to an existing OpenClaw session key or trusted tool context.
+    Bind Task Flow and Task Run state to a trusted, existing OpenClaw owner session.
 
-    - `api.runtime.tasks.managedFlows` is mutation-capable: create, advance, and cancel Task Flows.
-    - `api.runtime.tasks.flows` and `api.runtime.tasks.runs` are read-only DTO views for listing and status lookups; both expose `bindSession(...)` / `fromToolContext(...)` plus `get`, `list`, `findLatest`, and `resolve`.
+    - `managedFlows` creates and mutates managed flow records. Bind with `fromToolContext(ctx)` or `bindSession({ sessionKey, requesterOrigin })` using host-resolved context, never raw user input.
+    - `flows` and `runs` provide owner-scoped DTO lookups (`get`, `list`, `findLatest`, `resolve`). `flows` also exposes `getTaskSummary`; `runs.cancel` cancels an existing task.
+    - `managedFlows.get(flowId)` returns the record with its revision. The read-only `flows` DTO is not the revision-bearing mutation record.
 
-    Task Flow tracks durable multi-step workflow state. It is not a scheduler:
-    use Cron or `api.session.workflow.scheduleSessionTurn(...)` for future
-    wakeups, then use `managedFlows` from the scheduled turn when that work
-    needs flow state, child tasks, waits, or cancellation.
+    A skill file does not provide `api` or register a plugin. For operator/agent
+    workflows, use [managed Lobster execution](/automation/taskflow#run-a-managed-lobster-workflow).
+    The following contract is for actual plugin/controller code.
 
-    ```typescript
-    const taskFlow = api.runtime.tasks.managedFlows.fromToolContext(ctx);
+    **Launching and linking a child**
 
-    const created = taskFlow.createManaged({
-      controllerId: "my-plugin/review-batch",
-      goal: "Review new pull requests",
-    });
+    `runTask` records a link to existing work; it never launches ACP/subagent
+    execution. The backing task must already exist with the same owner,
+    canonical run/session identities and task runtime. Arbitrary IDs or a
+    `status: "running"` declaration cannot establish that authority.
 
-    const child = taskFlow.runTask({
-      flowId: created.flowId,
-      runtime: "acp",
-      childSessionKey: "agent:main:subagent:reviewer",
-      task: "Review PR #123",
-      status: "running",
-      startedAt: Date.now(),
-    });
+    1. Create a managed flow bound to the real requester session. Handle creation failure before launching work. Binding state access does not grant subagent requester authority.
+    2. Inside an active requester-bound `before_dispatch` hook for an authenticated inbound request, call `api.runtime.subagent.run` with a unique agent-qualified child session key, the task message and `completionDelivery: "current-requester"`. The Gateway captures the requester and delivery route; retain the returned canonical `runId` and `sessionKey`. Missing identities or a rejected launch are failures, not permission to fabricate a task. Ordinary runs without `current-requester` have `not_applicable` completion delivery and lack the mirrored backing needed for this link.
+    3. Immediately before linking, resolve the canonical task with the owner-bound `runs.resolve(runId)`. Verify its owner, run id, child session key and task runtime. Use its actual `sourceId`, queued/running status and available timing facts in `managedFlows.runTask`, alongside the managed flow id and task description. Do not confuse the launch result's harness/provider metadata with the task DTO's `runtime`. Keep this final read/check and `runTask` synchronous, with no intervening `await`, and check `created` before proceeding.
+    4. Observe completion through `subagent.waitForRun` and the canonical task. A bounded wait returning `pending` or an observation timeout is not a terminal child failure and does not cancel the run. Interpret results only after actual completion. On failure, record a failed/blocked flow outcome and report it; never insert a replacement child declaration to hide launch/link refusal.
+    5. Reload the managed record after awaited work. Stop for terminal state or cancellation intent; use the latest revision for the next state transition. Check every `applied` result, including `finish`/`fail`, and check `cancelled` for cancellation. On revision conflict, reread and reconcile rather than blindly retrying side effects.
 
-    const waiting = taskFlow.setWaiting({
-      flowId: created.flowId,
-      expectedRevision: created.revision,
-      currentStep: "await-human-reply",
-      waitJson: { kind: "reply", channel: "telegram" },
-    });
-    ```
+    <Warning>
+    A child can finish before step 3. `runTask` does not replay terminal events
+    that preceded linkage, so never label a completed backing task as queued or
+    running. Handle its completed result directly in the controller instead of
+    creating a stale active projection. The launch/link sequence is not atomic.
+    </Warning>
 
-    Use `bindSession({ sessionKey, requesterOrigin })` when you already have a trusted OpenClaw session key from your own binding layer. Do not bind from raw user input.
+    `completionDelivery: "current-requester"` is available only within the
+    genuine hook invocation. Do not retain that authority after the hook ends
+    or call private requester-context/registry helpers. See `api.runtime.subagent`
+    above for the public launch and wait contract. ACP linkage likewise requires
+    an existing owner-backed ACP launch, not a standalone `runTask` declaration.
+
+    **State without a child**
+
+    For inline work, use `createManaged`, then checked `setWaiting`, `resume`,
+    `finish` or `fail` transitions as appropriate; no `runTask` is needed.
+    Keep `stateJson` and `waitJson` bounded. Waiting metadata records the reason
+    and correlation, but the controller must register the real event listener.
+
+    Records persist in SQLite; arbitrary JavaScript is not replayed after
+    restart. Reload with the same trusted owner binding and explicitly resume
+    from current state. Task Flow is not a scheduler: use Automations or
+    `api.session.workflow.scheduleSessionTurn(...)` for future wakeups. See
+    [Task Flow](/automation/taskflow) for durability and cancellation.
 
   </Accordion>
   <Accordion title="api.runtime.tts">
@@ -1128,7 +1165,7 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     `openChannelIngressDrain(...)` opens the core channel-agnostic worker over that queue (or creates a queue when none is supplied). The drain owns stale-claim recovery, per-lane claim serialization, complete-at-adoption or complete-on-dispatch-return, retry/dead-letter disposition, optional pre-adoption supersede, and claim→adoption stall timeout. Wire claim ownership into reply generation with `turnAdoptionLifecycle` (via `bindIngressLifecycleToReplyOptions` from `plugin-sdk/channel-outbound`). Channel plugins keep accept-side enqueue, lane derivation, non-retryable classification, and any supersede authorization policy.
 
     <Warning>
-    `openBlobStore`, `openKeyedStore`, `openSyncKeyedStore`, `openChannelIngressQueue`, and `openChannelIngressDrain` are available only to bundled plugins and trusted official plugin installations in this release. The rejection names the plugin id and the origin it loaded from; a channel plugin loaded from `plugins.load.paths` or an unofficial install is untrusted, so its ingress monitor fails channel start instead of running without a durable queue.
+    `openBlobStore`, `openKeyedStore`, `openSyncKeyedStore`, `openChannelIngressQueue`, and `openChannelIngressDrain` are available only to bundled plugins and trusted official plugin installations in this release. Refusals include the recorded reason, registry database path, origin, and install source/spec; `plugins inspect` reports the same trust facts. A load path selecting the recorded official installation preserves trust; an untracked local copy does not. See [Trusted plugin state refused](/tools/plugin#trusted-plugin-state-refused) for doctor migrations and cause-specific remedies. An untrusted channel's ingress monitor fails channel start instead of running without a durable queue.
     </Warning>
 
   </Accordion>
@@ -1220,12 +1257,29 @@ already available to Gateway hooks: `list`, `add`, `update`, `remove`, and
 `removeStaleJobFamily`. Non-Gateway service hosts omit this getter.
 
 Use the service's `start()` and `stop()` methods to own recurring reconciliation.
-They run for plugin replacement as well as Gateway startup and shutdown;
+They run for service or plugin replacement as well as Gateway startup and shutdown;
 `gateway_start` and `gateway_stop` do not replay on plugin-only reload.
 Each returned scheduler handle belongs to one service lifetime and one scheduler
 instance. Calls, including queued writes, reject once service shutdown begins or
 that scheduler is replaced. Call `ctx.getCron()` again to obtain the replacement
 scheduler while the service remains active.
+
+A service can declare `reload: { configPrefixes: ["myConfig.service"] }` alongside
+its `id`, `start`, and `stop`. After a matching config change commits, the Gateway
+stops that service and calls `start(ctx)` again with the new `ctx.config`. Only
+loaded services declaring the matching prefix are replaced; overlapping owners
+all refresh. Existing equal or narrower restart or no-op policies still take precedence.
+Each start receives a new capability lease and health reporter. Stop must release
+resources before resolving; failed replacement cleanup or startup triggers
+Gateway recovery. A full plugin replacement subsumes these service restarts.
+
+Trusted official diagnostics exporter services can also receive
+`ctx.internalDiagnostics.getRuntimeIdentity?.()`. It returns the hosting
+process's canonical `processInstanceId` and optional loaded `buildId`, with no
+filesystem lookup or RPC. Capture it during service startup; a retained getter
+throws after the service lease is revoked. Hosts that do not provide this
+optional capability leave runtime identity unavailable. This diagnostic fact
+does not grant authority or identify a service-reload epoch.
 
 Long-lived services registered with `api.registerService(...)` receive a process-local
 `ctx.gatewayEvents` facade when the process runs a Gateway broadcaster; in runtimes without one the

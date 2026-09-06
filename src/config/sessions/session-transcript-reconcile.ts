@@ -11,11 +11,13 @@ import { isPathInside } from "../../infra/path-guards.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   borrowOpenClawAgentDatabase,
   getOpenClawAgentDatabaseIfOpen,
   isIncognitoOpenClawAgentDatabase,
-  openOpenClawAgentDatabase,
+  isIncognitoOpenClawAgentSqlitePath,
+  withOpenClawAgentDatabaseAsync,
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
@@ -54,11 +56,9 @@ import type {
 const log = createSubsystemLogger("sessions/transcript-index");
 const PROJECTION_WRITE_CHUNK_ROWS = 512;
 const PROJECTION_READY_POLL_MS = 10;
-// A dirty session clears the preflight and pays for a worker plus a full transcript
-// reparse on every pass, so one losing every race to concurrent appends livelocks
-// the main thread. Escalate on consecutive retries rather than aggregate progress:
-// sibling sessions can finalize while one contended session keeps spinning. The
-// leading zero preserves one immediate retry; target readers poll readiness separately.
+// Repeated pending passes can keep respawning workers for a contended snapshot.
+// Do not reset on aggregate progress: other sessions may finish while it races.
+// Zero preserves one immediate retry; ready targets poll independently.
 const RECONCILE_RETRY_BACKOFF_MS: readonly number[] = [0, 50, 200, 500, 1_000];
 
 type RunningReconcile = {
@@ -77,6 +77,17 @@ type SessionTranscriptReconcileParams = OpenClawAgentDatabaseOptions & {
   createWorker?: (filename: string | URL, options: WorkerOptions) => Worker;
   preferredSessionId?: string;
 };
+
+type PreparedReconcileParams = SessionTranscriptReconcileParams & { env: NodeJS.ProcessEnv };
+type ReconcileDatabaseOptions = OpenClawAgentDatabaseOptions & {
+  env: NodeJS.ProcessEnv;
+  path: string;
+};
+
+function prepareReconcileParams(params: SessionTranscriptReconcileParams): PreparedReconcileParams {
+  // Deferred work retains the state owner selected before scheduling or admission.
+  return { ...params, env: { ...(params.env ?? process.env) } };
+}
 
 type ActivePreparedProjection = {
   claimId: number;
@@ -136,21 +147,27 @@ function observeWorkerLeaseRelease(worker: Worker) {
 }
 
 async function runProjectionWrite<T>(
-  databaseOptions: OpenClawAgentDatabaseOptions,
+  databaseOptions: ReconcileDatabaseOptions,
   operationLabel: string,
   operation: (database: OpenClawAgentDatabase) => T,
   memorySource?: MemoryTranscriptProjectionSource,
 ): Promise<T> {
   return await runExclusiveSqliteSessionWrite(databaseOptions, async () => {
-    // Disposal revokes a memory source. Check inside the queue before the opener
-    // can materialize a successor database for a late worker result.
-    memorySource?.assertCurrentOwner();
-    return runOpenClawAgentWriteTransaction(operation, databaseOptions, { operationLabel });
+    const write = () => {
+      // Disposal revokes a memory source. Check inside the queue before the opener
+      // can materialize a successor database for a late worker result.
+      memorySource?.assertCurrentOwner();
+      return runOpenClawAgentWriteTransaction(operation, databaseOptions, { operationLabel });
+    };
+    return !isIncognitoOpenClawAgentSqlitePath(databaseOptions.path, databaseOptions) &&
+      !getOpenClawAgentDatabaseIfOpen(databaseOptions)
+      ? withOpenClawAgentDatabaseAsync(databaseOptions, write)
+      : write();
   });
 }
 
 async function claimPreparedSessionTranscriptProjection(
-  databaseOptions: OpenClawAgentDatabaseOptions,
+  databaseOptions: ReconcileDatabaseOptions,
   plan: PreparedSessionTranscriptProjectionMetadata,
   memorySource?: MemoryTranscriptProjectionSource,
 ): Promise<ActivePreparedProjection | undefined> {
@@ -201,7 +218,7 @@ function decodeFtsChunk(chunk: EncodedTranscriptFtsChunk) {
 }
 
 async function appendPreparedProjectionChunk(
-  databaseOptions: OpenClawAgentDatabaseOptions,
+  databaseOptions: ReconcileDatabaseOptions,
   active: ActivePreparedProjection,
   rows:
     | {
@@ -234,7 +251,7 @@ async function appendPreparedProjectionChunk(
 }
 
 async function finalizePreparedProjection(
-  databaseOptions: OpenClawAgentDatabaseOptions,
+  databaseOptions: ReconcileDatabaseOptions,
   active: ActivePreparedProjection,
   memorySource?: MemoryTranscriptProjectionSource,
 ): Promise<boolean> {
@@ -256,10 +273,16 @@ async function finalizePreparedProjection(
 export async function reconcileSessionTranscriptIndexes(
   params: SessionTranscriptReconcileParams,
 ): Promise<SessionTranscriptReconcileResult> {
+  return reconcilePreparedTranscriptIndexes(prepareReconcileParams(params));
+}
+
+async function reconcilePreparedTranscriptIndexes(
+  params: PreparedReconcileParams,
+): Promise<SessionTranscriptReconcileResult> {
   const databasePath = resolveOpenClawAgentSqlitePath(params);
-  const databaseOptions: OpenClawAgentDatabaseOptions = {
+  const databaseOptions: ReconcileDatabaseOptions = {
     agentId: params.agentId,
-    ...(params.env ? { env: params.env } : {}),
+    env: params.env,
     path: databasePath,
   };
   let releaseDatabase: (() => void) | undefined;
@@ -302,8 +325,8 @@ export async function reconcileSessionTranscriptIndexes(
           leaseId: randomUUID(),
           agentId: params.agentId,
           path: databasePath,
-          stateDir: resolveStateDir(params.env ?? process.env),
-          externallySupervised: isGatewayExternallySupervised(params.env ?? process.env),
+          stateDir: resolveStateDir(params.env),
+          externallySupervised: isGatewayExternallySupervised(params.env),
           ...(params.preferredSessionId ? { preferredSessionId: params.preferredSessionId } : {}),
         };
     const createWorker =
@@ -509,8 +532,9 @@ export async function reconcileSessionTranscriptIndexes(
 
 /** Starts one deferred reconcile. No transcript rows are read on the caller's stack. */
 export function startSessionTranscriptIndexReconcile(
-  params: SessionTranscriptReconcileParams,
+  input: SessionTranscriptReconcileParams,
 ): void {
+  const params = prepareReconcileParams(input);
   const key = reconcileKey(params);
   const running = runningReconciles.get(key);
   if (running) {
@@ -538,7 +562,7 @@ export function startSessionTranscriptIndexReconcile(
         state.pending = false;
         const preferredSessionId = state.preferredSessionId;
         delete state.preferredSessionId;
-        const result = await reconcileSessionTranscriptIndexes({
+        const result = await reconcilePreparedTranscriptIndexes({
           ...params,
           ...(preferredSessionId ? { preferredSessionId } : {}),
         });
@@ -616,14 +640,17 @@ export async function waitForSessionTranscriptProjection(
 ): Promise<void> {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const databaseOptions = toDatabaseOptions(resolved);
-  // openclaw-agent-db.ts cache rule: LRU eviction closes idle handles across polling awaits.
-  while (
-    isSessionTranscriptIndexReconcileRunning(databaseOptions) &&
-    sessionTranscriptIndexNeedsReconcile(
-      openOpenClawAgentDatabase(databaseOptions).db,
-      resolved.sessionId,
-    )
-  ) {
+  while (isSessionTranscriptIndexReconcileRunning(databaseOptions)) {
+    // Poll committed metadata without superseding a pending writable admission
+    // or recreating an incognito owner disposed across an earlier polling await.
+    const pending = withOpenClawAgentDatabaseReadOnly(
+      ({ db }) => sessionTranscriptIndexNeedsReconcile(db, resolved.sessionId),
+      databaseOptions,
+      { throwOnMissingTable: true },
+    );
+    if (!pending.found || !pending.value) {
+      break;
+    }
     await delay(
       PROJECTION_READY_POLL_MS,
       undefined,

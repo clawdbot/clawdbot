@@ -20,6 +20,7 @@ import {
   searchPathKeyword,
   type ExactPathSpecificity,
 } from "./manager-search.js";
+import { loadMemorySourceFileState } from "./manager-source-state.js";
 import { applyProjectRanking } from "./project-ranking.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
@@ -200,6 +201,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
       results: decayInputs,
       temporalDecay: params.temporalDecay,
       workspaceDir: this.workspaceDir,
+      sessionSourceMtimes: this.loadSessionSourceMtimes(params.results),
     });
     const ranked = applyProjectRanking(
       this.rankKeywordOnlyResults(applyImportanceMultiplier(decayed), !appliesTemporalDecay),
@@ -207,6 +209,21 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
     );
     return this.toMemorySearchResults(
       this.selectScoredResults(ranked, params.maxResults, params.minScore, 0),
+    );
+  }
+
+  protected loadSessionSourceMtimes(
+    results: ReadonlyArray<Pick<MemorySearchResult, "path" | "source">>,
+  ): ReadonlyMap<string, number | undefined> | undefined {
+    const paths = results.filter((entry) => entry.source === "sessions").map((entry) => entry.path);
+    if (paths.length === 0) {
+      return undefined;
+    }
+    return new Map(
+      loadMemorySourceFileState({ db: this.db, source: "sessions", paths }).map((row) => [
+        row.path,
+        row.mtime,
+      ]),
     );
   }
 

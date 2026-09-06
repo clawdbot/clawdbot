@@ -7,6 +7,7 @@ import { withTestTimeout } from "../../test/helpers/promise.js";
 import { registerNodeSqliteKyselyQueryErrorHandler } from "./kysely-sync-cache-state.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
+  compileSqliteQueryBindings,
   enableNodeSqliteKyselyStatementCache,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -90,11 +91,11 @@ describe("kysely sync helpers", () => {
   it("binds changing values without confusing repeated bindings and literal parameters", () => {
     database = new DatabaseSync(":memory:");
     const db = getNodeSqliteKysely<SyncHelperTestDatabase>(database);
-    const select = prepareSqliteQuerySync<{
+    const { compiled, bind } = compileSqliteQueryBindings<{
       name: string | null;
       bytes: Uint8Array;
       count: bigint;
-    }>(database, (parameter) => {
+    }>((parameter) => {
       const name = parameter((input) => input.name);
       return db.selectNoFrom([
         name.as("name"),
@@ -104,9 +105,10 @@ describe("kysely sync helpers", () => {
         parameter((input) => input.count).as("count"),
       ]);
     });
+    const select = database.prepare(compiled.sql);
     for (const name of ["literal", "'); DROP TABLE items; --", null, "λ🦞"]) {
       const bytes = new Uint8Array([1, 2, 255]);
-      expect(select({ name, bytes, count: 42n }).rows).toEqual([
+      expect(select.all(...bind({ name, bytes, count: 42n }))).toEqual([
         { name, repeated: name, literal: "literal", bytes, count: 42 },
       ]);
     }

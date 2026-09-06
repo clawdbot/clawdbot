@@ -868,6 +868,7 @@ describe("createGatewayCloseHandler", () => {
     });
     const pluginCleanup = createDeferredCore();
     const pluginServices = {
+      reload: vi.fn(async () => {}),
       stop: vi.fn(() => pluginCleanup.promise),
     };
     const stopChannel = vi.fn(async () => undefined);

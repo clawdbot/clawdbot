@@ -3,6 +3,7 @@ import { createInternalAgentTurnFacade } from "../../../gateway/agent-turn/inter
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import { createGatewayMethodRegistry } from "../../../gateway/methods/registry.js";
 import { createChatRunState } from "../../../gateway/server-chat-state.js";
+import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispatch.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
@@ -15,9 +16,13 @@ import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../../process/c
 import { resetCommandQueueStateForTest } from "../../../process/command-queue.test-support.js";
 import { trackAsyncWork } from "../../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { prepareEmbeddedAttemptTimeout } from "../../embedded-agent-runner/run/attempt-timeout-prepare.js";
 import { createEmbeddedRunLaneController } from "../../embedded-agent-runner/run/lane-controller.js";
 import type { RunEmbeddedAgentParams } from "../../embedded-agent-runner/run/params.js";
+import { resolveAgentTimeoutMs } from "../../timeout.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-delivery.runtime.js";
+import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
 
 const startTurn = vi.hoisted(() => vi.fn());
 const deliver = vi.hoisted(() => vi.fn());
@@ -77,7 +82,7 @@ function settledChild(): SubagentRunRecord {
     task: "finish child work",
     cleanup: "keep",
     createdAt: 1_000,
-    execution: { status: "terminal", startedAt: 2_000, endedAt: 3_000 },
+    execution: { status: "terminal", startedAt: 2_000, endedAt: 3_000, outcome: { status: "ok" } },
     expectsCompletionMessage: true,
     completion: { required: true, resultText: "child result", capturedAt: 3_000 },
     delivery: { status: "delivered" },
@@ -126,6 +131,7 @@ describe("requester settle dispatch deadline", () => {
 
   afterEach(() => {
     resetCommandQueueStateForTest();
+    setSubagentAnnounceDeliveryDepsForTest();
     vi.useRealTimers();
   });
 
@@ -284,6 +290,149 @@ describe("requester settle dispatch deadline", () => {
         replacementDone.resolve({ delivered: true, path: "direct" });
         await oldWake;
         await replacementWake;
+      }
+    },
+  );
+
+  it.each(["final", "runtime timeout", "stop"] as const)(
+    "keeps an executing completion under requester lifecycle ownership: %s",
+    async (outcome) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(10_000);
+      const context = createContext();
+      const child = settledChild();
+      registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
+      const cfg = {
+        agents: { defaults: { timeoutSeconds: 1, subagents: { announceTimeoutMs: 20 } } },
+      };
+      const executionStarted = createDeferredCore();
+      const workDone = createDeferredCore();
+      const stop = new AbortController();
+      const timeoutMs = resolveAgentTimeoutMs({ cfg });
+      const timedOut = vi.fn();
+      const completeBatch = vi.fn();
+      const finalReceipts: string[] = [];
+      let acceptedSignal: AbortSignal | undefined;
+      startTurn.mockImplementation(async ({ preflight, io }) => {
+        const request = preflight.request as { idempotencyKey: string; sessionKey: string };
+        const registration = registerChatAbortController({
+          chatAbortControllers: context.chatAbortControllers,
+          runId: request.idempotencyKey,
+          sessionId: "requester-session",
+          sessionKey: request.sessionKey,
+          timeoutMs,
+          kind: "agent",
+        });
+        acceptedSignal = registration.controller.signal;
+        io.emitAcceptance([true, { runId: request.idempotencyKey, status: "accepted" }], {
+          runId: request.idempotencyKey,
+        });
+        try {
+          await enqueueCommandInLane(SESSION_LANE, async () => {
+            io.emitExecutionStarted?.();
+            const timeout = prepareEmbeddedAttemptTimeout({
+              attempt: { runId: request.idempotencyKey, sessionId: "requester-session", timeoutMs },
+              activeSession: { isCompacting: false, isStreaming: true },
+              compactionState: { isCompacting: () => false },
+              compactionTimeoutMs: 100,
+              runAbortSignal: registration.controller.signal,
+              isProbeSession: true,
+              abortRun: () => registration.controller.abort(new Error("requester run timed out")),
+              markTimedOutDuringCompaction: vi.fn(),
+              markTimedOutByRunBudget: timedOut,
+            });
+            executionStarted.resolve();
+            try {
+              await waitForGatewayDispatch(
+                "synthetic requester work",
+                workDone.promise,
+                undefined,
+                registration.controller.signal,
+              );
+              finalReceipts.push("consolidated requester final");
+            } finally {
+              timeout.clearTimers();
+            }
+          });
+          io.emitFinal([
+            true,
+            { status: "ok", result: { payloads: [{ text: finalReceipts[0] }] } },
+          ]);
+        } finally {
+          registration.cleanup();
+        }
+      });
+      setSubagentAnnounceDeliveryDepsForTest({
+        getRuntimeConfig: () => cfg,
+        loadRequesterSessionEntry: () => ({
+          cfg,
+          canonicalKey: REQUESTER_KEY,
+          agentId: "main",
+          entry: { sessionId: "requester-session", updatedAt: 1 },
+        }),
+        getRequesterSessionActivity: () => ({ sessionId: "requester-session", isActive: false }),
+      });
+      deliver.mockImplementation(sendSubagentAnnounceDirectly);
+      const wake = withPluginRuntimeGatewayRequestScope(
+        {
+          context,
+          client: createSyntheticPluginRuntimeClient(),
+          isWebchatConnect: () => false,
+        },
+        () =>
+          maybeWakeRequesterAfterAllChildrenSettled({
+            requesterSessionKey: REQUESTER_KEY,
+            settledEntry: child,
+            signal: stop.signal,
+            transitionBatch: (_batch, state) => {
+              child.requesterSettleWake = state;
+            },
+            completeBatch,
+          }),
+      );
+      try {
+        await executionStarted.promise;
+        await vi.advanceTimersByTimeAsync(21);
+        expect(acceptedSignal?.aborted).toBe(false);
+        expect(finalReceipts).toEqual([]);
+        expect(completeBatch).not.toHaveBeenCalled();
+        if (outcome === "final") {
+          workDone.resolve();
+        } else if (outcome === "runtime timeout") {
+          await vi.advanceTimersByTimeAsync(timeoutMs);
+        } else {
+          stop.abort(new Error("requester stopped"));
+        }
+        await expect(wake).resolves.toBe(outcome === "final");
+        expect(startTurn).toHaveBeenCalledOnce();
+        expect(deliver).toHaveBeenCalledOnce();
+        expect(timedOut).toHaveBeenCalledTimes(outcome === "runtime timeout" ? 1 : 0);
+        expect(finalReceipts).toEqual(outcome === "final" ? ["consolidated requester final"] : []);
+        if (outcome === "final") {
+          expect(completeBatch).toHaveBeenCalledWith(
+            [child],
+            1,
+            expect.objectContaining({ delivered: true, requesterVisibleFinalDelivered: true }),
+          );
+        } else {
+          expect(acceptedSignal?.aborted).toBe(true);
+          expect(completeBatch).not.toHaveBeenCalled();
+          expect(child.requesterSettleWake).toMatchObject({ status: "pending", attemptCount: 1 });
+        }
+        const later = vi.fn();
+        await enqueueCommandInLane(SESSION_LANE, async () => later());
+        expect(later).toHaveBeenCalledOnce();
+        expect(getCommandLaneSnapshot(SESSION_LANE)).toMatchObject({
+          activeCount: 0,
+          queuedCount: 0,
+        });
+        expect(context.chatAbortControllers.size).toBe(0);
+        expect(child.execution.outcome).toEqual({ status: "ok" });
+        expect(child.completion?.resultText).toBe("child result");
+      } finally {
+        workDone.resolve();
+        stop.abort();
+        await wake;
       }
     },
   );

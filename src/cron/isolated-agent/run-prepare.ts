@@ -54,6 +54,7 @@ import {
   loadCronExternalContentRuntime,
   loadSessionAccessorRuntime,
   resolveCronAgentTurnMessage,
+  assertCronExecutionRootRuntime,
   retireRolledCronSessionMcpRuntime,
   type RunCronAgentTurnParams,
   type WithRunSession,
@@ -83,11 +84,11 @@ import {
   resolveAgentDir,
   resolveAgentTimeoutMs,
   resolveAgentWorkspaceDir,
+  resolveEffectiveAgentRuntime,
   resolveCronStyleNow,
   resolveHookExternalContentSource,
   isThinkingLevelSupported,
   resolveSupportedThinkingLevel,
-  resolveEffectiveAgentRuntime,
   resolveSessionRuntimeOverrideForProvider,
   resolveThinkingDefault,
 } from "./run.runtime.js";
@@ -109,6 +110,7 @@ export type PreparedCronRunContext = {
   runSessionKey: string;
   usesDetachedRunSession: boolean;
   workspaceDir: string;
+  executionRoot?: RunCronAgentTurnParams["executionRoot"];
   commandBody: string;
   cronSession: MutableCronSession;
   sessionWorkAdmission: SessionWorkAdmissionLease;
@@ -234,6 +236,7 @@ export async function prepareCronRunContext(params: {
     ).resolveAcpAgentWorkspaceProvisioningForTurn({ cfg: runtimeCfg, agentId }),
   });
   const workspaceDir = workspace.dir;
+  const executionWorkspaceDir = input.executionRoot ?? workspaceDir;
 
   const isGmailHook = hookExternalContentSource === "gmail";
   const now = Date.now();
@@ -366,7 +369,7 @@ export async function prepareCronRunContext(params: {
       isGmailHook,
       agentId,
       agentDir,
-      workspaceDir,
+      workspaceDir: executionWorkspaceDir,
     });
     if (!resolvedModelSelection.ok) {
       sessionWorkAdmission.release();
@@ -437,6 +440,7 @@ export async function prepareCronRunContext(params: {
       sessionKey: agentSessionKey,
       sessionEntry: cronSession.sessionEntry,
     });
+    assertCronExecutionRootRuntime(input.executionRoot, effectiveAgentRuntime);
     let requestedThinkLevel = thinkingSelection.requestedThinkLevel;
     if (!requestedThinkLevel) {
       requestedThinkLevel = resolveThinkingDefault({
@@ -492,7 +496,7 @@ export async function prepareCronRunContext(params: {
       modelApi,
       agentId: modelOwner.agentId,
       agentDir: modelOwner.agentDir,
-      workspaceDir,
+      workspaceDir: executionWorkspaceDir,
       sessionKey: agentSessionKey,
       agentPayload,
       agentRuntime: effectiveAgentRuntime,
@@ -506,7 +510,6 @@ export async function prepareCronRunContext(params: {
       });
 
     const { formattedTime, timeLine } = resolveCronStyleNow(runtimeCfg, now);
-    const originalMessage = resolveCronAgentTurnMessage(input);
     // Current jobs stay detached; a bounded tail preserves context without transcript continuation.
     const currentConversationContext =
       input.job.sessionTarget === "current" && agentPayload && sourceSessionKey && sourceEntry
@@ -518,8 +521,8 @@ export async function prepareCronRunContext(params: {
           })
         : undefined;
     const message = currentConversationContext
-      ? `${currentConversationContext}\n\n${originalMessage}`
-      : originalMessage;
+      ? `${currentConversationContext}\n\n${resolveCronAgentTurnMessage(input)}`
+      : resolveCronAgentTurnMessage(input);
     const base = `[cron:${input.job.id} ${input.job.name}] ${message}`.trim();
     const isExternalHook =
       hookExternalContentSource !== undefined || isExternalHookSession(baseSessionKey);
@@ -556,14 +559,16 @@ export async function prepareCronRunContext(params: {
     }
     commandBody = appendCronUnattendedRunPreamble(commandBody, { externalHook: isExternalHook });
 
-    const skillsSnapshot = await resolveCronSkillsSnapshot({
-      workspaceDir,
-      config: cfgWithAgentDefaults,
-      agentId,
-      existingSnapshot: cronSession.sessionEntry.skillsSnapshot,
-      librarySelections: cronSession.sessionEntry.skillLibrarySelections,
-      isFastTestEnv: params.isFastTestEnv,
-    });
+    const skillsSnapshot =
+      input.skillsSnapshot ??
+      (await resolveCronSkillsSnapshot({
+        workspaceDir: executionWorkspaceDir,
+        config: cfgWithAgentDefaults,
+        agentId,
+        existingSnapshot: cronSession.sessionEntry.skillsSnapshot,
+        librarySelections: cronSession.sessionEntry.skillLibrarySelections,
+        isFastTestEnv: params.isFastTestEnv,
+      }));
     await persistCronSkillsSnapshotIfChanged({
       isFastTestEnv: params.isFastTestEnv,
       cronSession,
@@ -683,6 +688,7 @@ export async function prepareCronRunContext(params: {
         runSessionKey,
         usesDetachedRunSession,
         workspaceDir,
+        executionRoot: input.executionRoot,
         commandBody,
         cronSession,
         sessionWorkAdmission,

@@ -10,7 +10,7 @@ import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ChannelOnboardingPostWriteHook } from "../channels/plugins/setup-wizard-types.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { writeConfigMachineState } from "../state/config-machine-state.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";

@@ -1,6 +1,6 @@
 // Database-bound delivery queue serialization and mutations used by shared transactions.
 import type { DatabaseSync } from "node:sqlite";
-import type { Insertable } from "kysely";
+import type { Insertable, Selectable } from "kysely";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import type { DeliveryQueueEntryState } from "./delivery-queue-sqlite.types.js";
@@ -42,16 +42,10 @@ const deliveryQueueRowColumns = [
   "recovery_state",
 ] as const;
 
-export type DeliveryQueueSqliteRow = {
-  id: string;
-  entry_json: string;
-  enqueued_at: number | bigint;
-  retry_count: number | bigint;
-  last_attempt_at: number | bigint | null;
-  last_error: string | null;
-  platform_send_started_at: number | bigint | null;
-  recovery_state: string | null;
-};
+type DeliveryQueueSqliteRow = Pick<
+  Selectable<DeliveryQueueTable>,
+  (typeof deliveryQueueRowColumns)[number]
+>;
 
 type DeliveryQueueRowMetadata = {
   entryKind?: string;
@@ -315,8 +309,6 @@ export function loadDeliveryQueueEntryInDatabase(
   mode: DeliveryQueueReadMode = "all",
 ): DeliveryQueueEntryState | null {
   const query = deliveryQueueEntriesQuery(database, [queueName], mode).where("id", "=", id);
-  const row = executeSqliteQueryTakeFirstSync(database.db, query) as
-    | DeliveryQueueSqliteRow
-    | undefined;
+  const row = executeSqliteQueryTakeFirstSync(database.db, query);
   return row ? inflateDeliveryQueueRow(row) : null;
 }

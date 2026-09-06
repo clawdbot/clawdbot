@@ -238,6 +238,12 @@ describe("plugin background completions", () => {
       allowed: false,
     },
     {
+      name: "auth profile outside allowlist",
+      subagent: { allowModelOverride: true, allowedModels: ["test-provider/override"] },
+      model: "test-provider/override@other-profile",
+      allowed: false,
+    },
+    {
       name: "invalid allowlist",
       subagent: { allowModelOverride: true, allowedModels: ["not-a-model-ref"] },
       model: "test-provider/override",
@@ -493,7 +499,10 @@ describe("plugin background completions", () => {
       await started.promise;
       const second = complete(runtime);
       await vi.waitFor(() => expect(getBackgroundWorkSnapshot().queuedCount).toBe(1));
-      const rejected = expect(first).rejects.toThrow(/caller cancelled|timeout/u);
+      const rejected =
+        reason === "timeout"
+          ? expect(first).rejects.toMatchObject({ name: "TimeoutError" })
+          : expect(first).rejects.toThrow("caller cancelled");
       if (reason === "caller cancellation") {
         controller.abort(new Error("caller cancelled"));
       }

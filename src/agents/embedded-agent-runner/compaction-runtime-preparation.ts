@@ -15,6 +15,7 @@ import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
 } from "../model-auth.js";
+import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { isOpenAIProvider } from "../openai-routing.js";
 import {
   providerUsesCredentialScopedModelMetadata,
@@ -28,8 +29,31 @@ import {
 import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/types.js";
 import {
   resolveCompactionHarnessRuntime,
+  resolveCompactionTargetRuntime,
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
+
+export function projectCodexHostTranscriptBytePreflightConfig(
+  config: OpenClawConfig | undefined,
+  active: boolean,
+): OpenClawConfig | undefined {
+  const compaction = config?.agents?.defaults?.compaction;
+  if (
+    !active ||
+    !compaction ||
+    (!Object.hasOwn(compaction, "model") && !Object.hasOwn(compaction, "provider"))
+  ) {
+    return config;
+  }
+  const { model: _model, provider: _provider, ...projectedCompaction } = compaction;
+  return {
+    ...config,
+    agents: {
+      ...config.agents,
+      defaults: { ...config.agents?.defaults, compaction: projectedCompaction },
+    },
+  };
+}
 
 /** Resolves the shared policy, target, and harness ownership for either compaction entry point. */
 export function resolveCompactionRuntimeSelection(params: {
@@ -46,6 +70,8 @@ export function resolveCompactionRuntimeSelection(params: {
   preparedRuntimePlan?: AgentRuntimePlan;
   runtimeAuthPlan?: AgentRuntimeAuthPlan;
   selectedHarnessRuntime?: string;
+  allowPluginNormalization?: boolean;
+  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"];
 }) {
   const runtimePolicySessionKey = params.sandboxSessionKey ?? params.sessionKey ?? undefined;
   const runtimePolicyAgentId =
@@ -61,6 +87,8 @@ export function resolveCompactionRuntimeSelection(params: {
     modelSelectionLocked: params.modelSelectionLocked,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
+    allowPluginNormalization: params.allowPluginNormalization,
+    manifestPlugins: params.manifestPlugins,
   });
   const policyProvider = policyTarget.provider ?? DEFAULT_PROVIDER;
   const policyModelId = policyTarget.model ?? DEFAULT_MODEL;
@@ -87,16 +115,10 @@ export function resolveCompactionRuntimeSelection(params: {
       provider: policyProvider,
       modelId: policyModelId,
     });
-  const target = resolveEmbeddedCompactionTarget({
-    config: params.config,
-    provider: params.provider,
-    modelId: params.modelId,
-    authProfileId: params.authProfileId,
-    harnessRuntime: selectedHarnessRuntime,
-    modelSelectionLocked: params.modelSelectionLocked,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
+  const target = {
+    ...policyTarget,
+    ...resolveCompactionTargetRuntime(policyTarget.provider, selectedHarnessRuntime),
+  };
   const provider = target.provider ?? DEFAULT_PROVIDER;
   const modelId = target.model ?? DEFAULT_MODEL;
   const selectedRuntime = normalizeOptionalAgentRuntimeId(selectedHarnessRuntime);

@@ -13,6 +13,8 @@ import {
   type QaGatewayChild,
 } from "../../../../extensions/qa-lab/api.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import { skillCollectionReviewMonitorAgentId } from "../../../../src/cron/skill-collection-review-monitor.js";
+import type { CronJob } from "../../../../src/cron/types.js";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
 import { closeOpenClawStateDatabaseByPath } from "../../../../src/state/openclaw-state-db.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
@@ -26,6 +28,7 @@ import {
 } from "./gateway-config-hot-reload-fixtures.js";
 import { proveHotReloadBrowserLaunch } from "./gateway-config-hot-reload-launch.js";
 import { proveHotReloadNodePolicies } from "./gateway-config-hot-reload-nodes.js";
+import { proveHotReloadOtel } from "./gateway-config-hot-reload-otel.js";
 import { prepareGatewayPairingFixture } from "./gateway-config-hot-reload-pairing.js";
 import { proveHotReloadPluginPolicy } from "./gateway-config-hot-reload-plugin-policy.js";
 import { proveHotReloadPolicyAdmission } from "./gateway-config-hot-reload-policy-admission.js";
@@ -310,6 +313,42 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         appendLog,
       });
       void retention.completion.catch(() => {});
+      await proveGroup("heartbeat and Workshop monitors", async () => {
+        for (const [every, mode] of [
+          ["1h", "auto"],
+          ["0m", "off"],
+          ["2h", "auto"],
+        ] as const) {
+          await patch({
+            agents: { entries: { qa: { heartbeat: { every } } } },
+            skills: { workshop: { autonomous: { mode } } },
+          });
+          await waitForHotReloadFact("accepted system monitor config", async () => {
+            const { jobs } = await rpc<{
+              jobs: CronJob[];
+            }>("cron.list", { includeDisabled: true, includeDeliveryPreviews: false });
+            const heartbeat = jobs.find(
+              (job) => job.agentId === "qa" && job.payload.kind === "heartbeat",
+            );
+            const review = jobs.find((job) => skillCollectionReviewMonitorAgentId(job) === "qa");
+            return heartbeat?.enabled === (every !== "0m") &&
+              heartbeat.schedule.kind === "every" &&
+              review?.enabled === (mode === "auto") &&
+              (every === "0m" ||
+                heartbeat.schedule.everyMs === (every === "1h" ? 3_600_000 : 7_200_000))
+              ? true
+              : undefined;
+          });
+        }
+        await patch({
+          agents: { entries: { qa: { heartbeat: { every: "0m" } } } },
+          skills: { workshop: { autonomous: { mode: "off" } } },
+        });
+        await verifyContinuity(
+          "heartbeat and Workshop monitors",
+          "Real config.patch writes changed persisted monitor cadence and enablement on the same Gateway boot",
+        );
+      });
       await proveHotReloadTerminalStartup(terminalProof);
 
       await proveHotReloadRequests({
@@ -653,6 +692,8 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
       failures.push(...terminalDeferred.failures);
       const servicePolicy = await proveHotReloadServicePolicy({ repoRoot, outputDir, appendLog });
       failures.push(...servicePolicy.failures);
+      const otel = await proveHotReloadOtel({ repoRoot, outputDir, appendLog });
+      failures.push(...otel.failures);
       await pluginPolicy;
       await proveGroup("attachments.ttlHours", () => retention!.completion);
       await checkContinuity();
@@ -661,14 +702,15 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         channels.evidence.length +
         security.evidence.length +
         terminalDeferred.evidence.length +
-        servicePolicy.evidence.length;
+        servicePolicy.evidence.length +
+        otel.evidence.length;
       // Positive control: startup-owned Control UI routing must replace the boot.
       const beforeControl = await rpc<ConfigResult>("config.get");
       const control = await rpc<{ sentinel: { payload: { stats: { requiresRestart: boolean } } } }>(
         "config.patch",
         {
           baseHash: beforeControl.hash,
-          raw: JSON.stringify({ gateway: { controlUi: { enabled: false } } }),
+          raw: JSON.stringify({ gateway: { controlUi: { basePath: "/reload-proof" } } }),
         },
       );
       assert.equal(control.sentinel.payload.stats.requiresRestart, true);
@@ -679,6 +721,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         primary.hellos > 1 && primary.bootId !== bootId ? true : undefined,
       );
       assert.equal((await http("/chat/qa")).status, 404);
+      assert.equal((await http("/reload-proof/chat/qa")).status, 200);
       summary = {
         passed: failures.length === 0,
         failures,
@@ -688,6 +731,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         security,
         terminalDeferred,
         servicePolicy,
+        otel,
         counts: {
           passed: passedChecks,
           failed: failures.length,
@@ -696,9 +740,10 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
           security: security.evidence.length,
           terminalDeferred: terminalDeferred.evidence.length,
           servicePolicy: servicePolicy.evidence.length,
+          otel: otel.evidence.length,
         },
         startupOnlyControl: {
-          prefix: "gateway.controlUi.enabled",
+          prefix: "gateway.controlUi.basePath",
           closedPersistentSocket: true,
           originalBootId: bootId,
           replacementBootId: primary.bootId,
@@ -780,7 +825,7 @@ async function main() {
     await writer.write({
       status: passed ? "pass" : "fail",
       durationMs: Date.now() - started,
-      details: `${passedChecks} operation and config-admission checks passed across the primary, channel, security, deferred-restart, and service-policy Gateway fixtures; startup-only positive controls restarted${passed ? "" : `; failures: ${failures.map(({ prefix }) => prefix).join(", ")}`}`,
+      details: `${passedChecks} operation and config-admission checks passed across the primary, channel, security, deferred-restart, service-policy, and OTel Gateway fixtures; startup-only positive controls restarted${passed ? "" : `; failures: ${failures.map(({ prefix }) => prefix).join(", ")}`}`,
       artifacts: [
         { kind: "summary", filePath: summaryPath },
         ...[
@@ -788,6 +833,7 @@ async function main() {
           "channels",
           "terminal-deferred",
           "service-policy",
+          "otel",
           "policy",
           "policy-admission",
           "plugin-policy",

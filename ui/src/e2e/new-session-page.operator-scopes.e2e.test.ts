@@ -331,14 +331,13 @@ suite.define(() => {
         },
       });
 
-      await expect.poll(async () => (await gateway.getRequests("fs.listDir")).length).toBe(3);
-      expect((await gateway.getRequests("fs.listDir"))[2]?.params).toEqual({});
-      await expect.poll(() => pathInput.inputValue()).toBe(workspace);
       await pollLocatorText(
         page.locator(".new-session-page__browser .new-session-page__error"),
       ).toContain(
         "To browse outside agent workspaces, open Inbox, select Limited access, request admin, then approve in Devices.",
       );
+      expect(await pathInput.inputValue()).toBe("/tmp");
+      expect(await gateway.getRequests("fs.listDir")).toHaveLength(2);
     } finally {
       await context.close();
     }
@@ -391,7 +390,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await page.locator("#new-session-project-trigger").click();
       await page.getByRole("button", { name: "Browse folders" }).click();
-      await page.getByRole("button", { name: "packages" }).click();
+      await page.getByRole("option", { name: "packages" }).click();
       const useFolder = page.getByRole("button", { name: "Use this folder" });
       await expect.poll(() => useFolder.isEnabled()).toBe(true);
       await useFolder.click();

@@ -265,7 +265,7 @@ function resolveCoreGatewayMethodNames(options: PluginLoadOptions): string[] {
 }
 
 function mergePluginTrustList(runtimeList: string[], sourceList: readonly string[]): string[] {
-  if (sourceList.length === 0) {
+  if (runtimeList === sourceList || sourceList.length === 0) {
     return runtimeList;
   }
   const merged = [...runtimeList];
@@ -320,7 +320,11 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
       }) as OpenClawConfig)
     : rawActivationSourceConfig;
   const normalized = normalizePluginsConfig(cfg.plugins);
-  const activationSource = createPluginActivationSource({ config: activationSourceConfig });
+  // Identical plugin inputs may share facts; source channel policy keeps its own root config.
+  const activationSource = createPluginActivationSource({
+    config: activationSourceConfig,
+    plugins: cfg.plugins === activationSourceConfig.plugins ? normalized : undefined,
+  });
   const trustNormalized = mergeTrustPluginConfigFromActivationSource({
     normalized,
     activationSource,

@@ -1,5 +1,4 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { invalidateAssistantIdentityCache } from "../../app/assistant-identity.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
@@ -270,13 +269,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       state.connected &&
       hasOperatorAdminAccess(state.hello?.auth ?? null) &&
       isGatewayMethodAdvertised(this.context.gateway.snapshot, "terminal.open") === true;
-    const rootsChanged =
-      state.localMediaPreviewRoots.length !== config.localMediaPreviewRoots.length ||
-      state.localMediaPreviewRoots.some(
-        (value, index) => value !== config.localMediaPreviewRoots[index],
-      );
     if (
-      !rootsChanged &&
       state.terminalAvailable === previousTerminalAvailable &&
       state.embedSandboxMode === config.embedSandboxMode &&
       state.allowExternalEmbedUrls === config.allowExternalEmbedUrls &&
@@ -284,10 +277,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     ) {
       return;
     }
-    if (rootsChanged) {
-      releaseChatMediaResourceSubscriber(state.requestUpdate);
-    }
-    state.localMediaPreviewRoots = config.localMediaPreviewRoots;
     state.embedSandboxMode = config.embedSandboxMode;
     state.allowExternalEmbedUrls = config.allowExternalEmbedUrls;
     state.automaticallyFetchFavicons = config.automaticallyFetchFavicons;
@@ -336,7 +325,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         }
         state.chatSending = false;
         state.chatSendingScopeKey = null;
-        invalidateAssistantIdentityCache(state.client);
       }
       // A reconnect can retain the browser client. Keep async ownership tied
       // to the logical connection, not only the transport object identity.

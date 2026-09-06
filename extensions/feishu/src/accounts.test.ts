@@ -326,6 +326,41 @@ describe("resolveFeishuCredentials", () => {
 });
 
 describe("resolveFeishuAccount", () => {
+  it.each(["https", "HTTPS", "HtTpS"])(
+    "normalizes only the %s scheme after account inheritance and selection",
+    (scheme) => {
+      const rootDomain = `${scheme}://Root.Example:8443/Root%2FPath/?tenant=Keep#Fragment`;
+      const accountDomain = `${scheme}://fixture-user@Account.Example:9443/Account%2FPath/`;
+      const cfg = createFeishuTestConfig({
+        appId: "root-app",
+        appSecret: "root-secret",
+        domain: rootDomain,
+        defaultAccount: "work",
+        accounts: {
+          inherited: {},
+          work: { appId: "work-app", appSecret: "work-secret", domain: accountDomain },
+        },
+      });
+      for (const resolveAccount of [resolveFeishuAccount, resolveFeishuRuntimeAccount]) {
+        expect(resolveAccount({ cfg, accountId: "inherited" })).toMatchObject({
+          accountId: "inherited",
+          appId: "root-app",
+          domain: "https://Root.Example:8443/Root%2FPath/?tenant=Keep#Fragment",
+        });
+        for (const accountId of [undefined, "work"]) {
+          expect(resolveAccount({ cfg, accountId })).toMatchObject({
+            accountId: "work",
+            appId: "work-app",
+            domain: "https://fixture-user@Account.Example:9443/Account%2FPath/",
+          });
+        }
+      }
+      expect(cfg).toMatchObject({
+        channels: { feishu: { domain: rootDomain, accounts: { work: { domain: accountDomain } } } },
+      });
+    },
+  );
+
   it.each([true, false])(
     "keeps collision credentials separate from enabled=%s filtering",
     (enabled) => {

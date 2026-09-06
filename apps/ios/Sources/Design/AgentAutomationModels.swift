@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import OpenClawKit
 import OpenClawProtocol
 
 enum AgentAutomationScheduleDraft: Equatable {
@@ -224,12 +225,7 @@ enum AgentAutomationValue {
     }
 
     static func int(_ value: AnyCodable?) -> Int? {
-        switch value?.value {
-        case let value as Int: value
-        case let value as Double where value.isFinite: Int(value)
-        case let value as String: Int(value)
-        default: nil
-        }
+        value?.intValue ?? value?.stringValue.flatMap { Int($0) }
     }
 
     static func strings(_ value: AnyCodable?) -> [String]? {

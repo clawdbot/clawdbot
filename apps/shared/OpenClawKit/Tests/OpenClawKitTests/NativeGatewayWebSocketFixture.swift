@@ -56,7 +56,7 @@ final class NativeGatewayWebSocketFixture {
         self.issuedDeviceTokens = issuedDeviceTokens
         self.connectFailures = connectFailures
         self.listener.newConnectionHandler = { [weak self] connection in
-            MainActor.assumeIsolated {
+            Task { @MainActor [weak self] in
                 guard let self else {
                     connection.cancel()
                     return
@@ -66,7 +66,9 @@ final class NativeGatewayWebSocketFixture {
         }
     }
 
-    static func start(
+    /// Listener readiness must progress while other tests occupy MainActor.
+    @concurrent
+    nonisolated static func start(
         issuedDeviceTokens: [String?],
         connectFailures: [Int: ConnectFailure] = [:]) async throws -> NativeGatewayWebSocketFixture
     {
@@ -74,30 +76,36 @@ final class NativeGatewayWebSocketFixture {
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         let listener = try NWListener(using: parameters, on: .any)
         listener.newConnectionHandler = { $0.cancel() }
-        listener.start(queue: .main)
+        listener.start(queue: DispatchQueue(label: "native-gateway-fixture-listener"))
         do {
             let deadline = ContinuousClock.now + .seconds(5)
-            while ContinuousClock.now < deadline {
+            while true {
                 try Task.checkCancellation()
                 switch listener.state {
                 case .ready:
                     guard let port = listener.port, port.rawValue != 0 else {
                         throw URLError(.cannotFindHost)
                     }
-                    return NativeGatewayWebSocketFixture(
+                    let fixture = await NativeGatewayWebSocketFixture(
                         listener: listener,
                         port: port.rawValue,
                         issuedDeviceTokens: issuedDeviceTokens,
                         connectFailures: connectFailures)
+                    try Task.checkCancellation()
+                    return fixture
                 case let .failed(error):
                     throw error
                 case .cancelled:
                     throw CancellationError()
                 default:
+                    guard ContinuousClock.now < deadline else {
+                        throw URLError(.timedOut, userInfo: [
+                            NSLocalizedDescriptionKey: "Native gateway WebSocket fixture listener timed out: \(listener.state)",
+                        ])
+                    }
                     try await Task.sleep(for: .milliseconds(10))
                 }
             }
-            throw URLError(.timedOut)
         } catch {
             listener.cancel()
             throw error

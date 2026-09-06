@@ -123,6 +123,7 @@ const SUSPEND_CONTROL_METHODS = new Set([
   "gateway.suspend.prepare",
   "gateway.suspend.status",
   "gateway.suspend.resume",
+  "gateway.suspend.handoff",
 ]);
 
 function runGatewayPendingWorkContinuation<T>(params: {

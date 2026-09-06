@@ -20,6 +20,52 @@ afterEach(async () => {
   resetGatewayWorkAdmission();
 });
 
+it("retains a failed teardown target when rollback cannot admit its replacement", async () => {
+  const stopAccount = vi
+    .fn()
+    .mockResolvedValue(undefined)
+    .mockRejectedValueOnce(new Error("teardown failed"));
+  const plugin: ChannelPlugin = {
+    ...createChannelTestPluginBase({
+      id: "discord",
+      config: {
+        listAccountIds: () => ["running"],
+        resolveAccount: (_cfg, accountId) => ({ accountId }),
+      },
+    }),
+    gateway: {
+      startAccount: async ({ abortSignal }) =>
+        new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+      stopAccount,
+    },
+  };
+  setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
+  manager = createChannelManager({
+    getRuntimeConfig: () => ({}),
+    getPluginRegistry: requireActivePluginChannelRegistry,
+    channelLogs: {},
+    channelRuntimeEnvs: {},
+  });
+  await manager.startChannel("discord");
+  await expect(manager.stopChannel("discord", undefined, { manual: false })).rejects.toThrow(
+    "teardown failed",
+  );
+
+  const channels = new Set<ChannelKind>(["discord"]);
+  const logChannels = { info: vi.fn(), error: vi.fn() };
+  expect(
+    await rollbackStoppedGatewayChannels(
+      { startChannel: manager.startChannel, logChannels },
+      channels,
+      "failed plugin runtime publication",
+    ),
+  ).toEqual(["discord"]);
+  expect([...channels]).toEqual(["discord"]);
+  expect(logChannels.error).toHaveBeenCalledWith(expect.stringContaining("stop-in-flight"));
+});
+
 it.each(["idle", "stopped", "racing"] as const)(
   "channel rollback preserves %s manual stops while explicit starts resume",
   async (state) => {

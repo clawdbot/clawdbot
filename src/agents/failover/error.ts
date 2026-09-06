@@ -1,5 +1,6 @@
 // Error identity and timeout recognition must not load logging or provider runtime.
 import { readErrorName } from "@openclaw/normalization-core/error-coercion";
+import type { AgentRunTerminalOutcome } from "../agent-run-terminal-outcome.types.js";
 import { isProviderRequestSizeCeilingError, isTimeoutErrorMessage } from "./message-patterns.js";
 import type { FailoverReason } from "./signal.js";
 
@@ -42,6 +43,8 @@ export class FailoverError extends Error {
   readonly lane?: string;
   readonly suspend?: boolean;
   readonly cliTimeout?: CliTimeoutContext;
+  // Actual timeout presence is independent of both its phase and the retry category.
+  readonly timeout?: Pick<AgentRunTerminalOutcome, "timeoutPhase" | "providerStarted">;
   readonly attempts?: readonly FallbackAttemptRecord[];
   readonly soonestCooldownExpiry?: number | null;
 
@@ -62,6 +65,7 @@ export class FailoverError extends Error {
       cause?: unknown;
       suspend?: boolean;
       cliTimeout?: CliTimeoutContext;
+      timeout?: FailoverError["timeout"];
       attempts?: readonly FallbackAttemptRecord[];
       soonestCooldownExpiry?: number | null;
     },
@@ -82,6 +86,7 @@ export class FailoverError extends Error {
     this.lane = params.lane;
     this.suspend = params.suspend;
     this.cliTimeout = params.cliTimeout;
+    this.timeout = params.timeout;
     this.attempts = params.attempts;
     this.soonestCooldownExpiry = params.soonestCooldownExpiry;
   }
@@ -216,5 +221,9 @@ export function isTimeoutError(err: unknown): boolean {
 
 /** Return true when an abort-signal reason is an intentional timeout; plain AbortError is a cancellation, not a timeout. */
 export function isSignalTimeoutReason(reason: unknown): boolean {
-  return readErrorName(reason) === "TimeoutError";
+  try {
+    return readErrorName(reason) === "TimeoutError";
+  } catch {
+    return false;
+  }
 }

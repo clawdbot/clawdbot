@@ -5,6 +5,7 @@ import type {
   OpenClawPluginService,
   OpenClawPluginServiceContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { defineCodexBuildState } from "../build-state.js";
 import { resolveMacOSDesktopCodexAppPathCandidates } from "./desktop-app-paths.js";
 import {
   readMacOSDesktopGenerationFingerprint,
@@ -18,7 +19,6 @@ import {
 const APPLICATIONS_PATH = "/Applications";
 const REARM_INITIAL_DELAY_MS = 100;
 const REARM_MAX_DELAY_MS = 30_000;
-const DESKTOP_GENERATION_STATE = Symbol.for("openclaw.codexDesktopGenerationState");
 
 type GenerationOwner = ReturnType<typeof createCodexDesktopGenerationOwner>;
 type WatchFactory = (
@@ -48,13 +48,10 @@ type DesktopGenerationState = {
   watchPath?: WatchFactory;
 };
 
-function state(): DesktopGenerationState {
-  // SAFETY: this process-global symbol is owned exclusively by this module.
-  const globalState = globalThis as typeof globalThis & {
-    [DESKTOP_GENERATION_STATE]?: DesktopGenerationState;
-  };
-  return (globalState[DESKTOP_GENERATION_STATE] ??= {});
-}
+const state = defineCodexBuildState(
+  "openclaw.codexDesktopGenerationState",
+  (): DesktopGenerationState => ({}),
+);
 
 export function waitForCodexDesktopGeneration(): Promise<CodexDesktopGeneration | undefined> {
   return state().owner?.wait() ?? Promise.resolve(undefined);

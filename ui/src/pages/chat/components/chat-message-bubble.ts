@@ -234,7 +234,7 @@ export function renderGroupedMessage(
     onRequestUpdate?: () => void;
     canvasPluginSurfaceUrl?: string | null;
     resourceBasePath?: string;
-    localMediaPreviewRoots?: readonly string[];
+    mediaPolicyKey?: string;
     connectionEpoch?: number;
     assistantAttachmentAuthToken?: string | null;
     resolveArtifactDownload?: ArtifactDownloadResolver;
@@ -278,9 +278,11 @@ export function renderGroupedMessage(
   schedulePairingQrExpiryRefresh(messageKey, nextPairingQrExpiresAt, opts.onRequestUpdate);
   const hasImages = images.length > 0;
   const imageRenderOptions = {
+    sessionKey: opts.sessionKey,
+    agentId: opts.agentId,
+    policyKey: opts.mediaPolicyKey,
     ...(hasImages ? imageMessageIdentity(message, opts.sessionKey) : {}),
     connectionEpoch: opts.connectionEpoch,
-    localMediaPreviewRoots: opts.localMediaPreviewRoots ?? [],
     resourceBasePath: opts.resourceBasePath,
     authToken: opts.assistantAttachmentAuthToken,
     onRequestUpdate: opts.onRequestUpdate,

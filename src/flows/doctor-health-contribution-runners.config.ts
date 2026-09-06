@@ -75,9 +75,16 @@ export async function runWriteConfigHealth(
       resolveLegacyParentVersionOverride(ctx).lastTouchedVersionOverride;
     const { restoreDoctorConfigEnvRefs } =
       await import("../commands/doctor/shared/config-flow-steps.js");
+    const { assertShippedPluginInstallConfigImportCurrent } =
+      await import("../commands/doctor/shared/plugin-registry-migration.js");
     try {
       await transformConfigFile({
         transform: (_current, { snapshot }, { envSnapshotForRestore }) => {
+          // Revalidate the copied source under the config lock; never import after plugin repair.
+          assertShippedPluginInstallConfigImportCurrent(
+            snapshot,
+            ctx.configResult.pluginInstallConfigImport,
+          );
           const nextConfig = restoreDoctorConfigEnvRefs(ctx.cfg, snapshot, envSnapshotForRestore);
           return { nextConfig };
         },
@@ -184,7 +191,8 @@ export async function runWriteConfigHealth(
     }
   }
   if (
-    ctx.configResult.shouldRepairCronCodexModelRefsAfterConfigWrite !== true ||
+    (!ctx.prompter.shouldRepair &&
+      ctx.configResult.shouldRepairCronCodexModelRefsAfterConfigWrite !== true) ||
     ctx.postConfigWriteRepairsCommitted === true
   ) {
     return;
@@ -195,6 +203,10 @@ export async function runWriteConfigHealth(
     await import("../commands/doctor/cron/legacy-repair.js");
   const result = await repairCronCodexModelRefsAfterConfigWrite({
     cfg: ctx.cfg,
+    ...(ctx.configResult.retiredModelRefConfig
+      ? { retiredModelRefConfig: ctx.configResult.retiredModelRefConfig }
+      : {}),
+    repairRetiredModelRefs: ctx.prompter.shouldRepair,
     ...(ctx.configResult.blockedCodexModelIdentities?.length
       ? { blockedModelIdentities: new Set(ctx.configResult.blockedCodexModelIdentities) }
       : {}),

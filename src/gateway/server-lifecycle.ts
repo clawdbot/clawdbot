@@ -3,6 +3,11 @@ import { fenceSessionSuspensionWritesForGatewayShutdown } from "../agents/sessio
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { listLoadedChannelPluginsForRegistry } from "../channels/plugins/registry-loaded.js";
 import { getRuntimeConfig } from "../config/io.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  isDiagnosticsEnabled,
+  setDiagnosticsEnabledForProcess,
+} from "../infra/diagnostic-events.js";
 import { upsertPresence } from "../infra/system-presence.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
@@ -15,6 +20,7 @@ import {
 } from "../skills/runtime/remote.js";
 import type { RestartRecoveryCandidate } from "./chat-abort.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
+import { retireDeviceTokenClients } from "./device-token-client-lifecycle.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
 import { disposeNodeConnectionNotifications } from "./node-connection-notifications.js";
 import { clearNodeWakeState } from "./node-wake-state.js";
@@ -50,10 +56,9 @@ export async function prepareGatewayLifecycle(params: {
   port: number;
   log: GatewayLogger;
   logCron: GatewayLogger;
-  diagnosticsEnabled: boolean;
   shutdownRuntime: GatewayShutdownRuntime;
 }) {
-  const { runtime, port, log, logCron, diagnosticsEnabled, shutdownRuntime } = params;
+  const { runtime, port, log, logCron, shutdownRuntime } = params;
   const requestEntryLifetime = new GatewayRequestEntryLifetime();
   const {
     minimalTestGateway,
@@ -159,6 +164,13 @@ export async function prepareGatewayLifecycle(params: {
     broadcast,
     rateLimiter: authRateLimiter,
     nodeReapprovalCoordinator,
+    onDeviceTokensReplaced: (deviceId, roles) => {
+      const context = runtime.resolvePluginGatewayContext();
+      if (!context) {
+        throw new Error("Gateway request context is unavailable during device setup");
+      }
+      retireDeviceTokenClients(context, deviceId, roles, "device-token-rotated");
+    },
     onNodeConnected: (session) => {
       upsertPresence(session.nodeId, {
         host: session.displayName ?? session.clientId ?? session.nodeId,
@@ -430,7 +442,7 @@ export async function prepareGatewayLifecycle(params: {
     disposeNodeConnectionNotifications(nodeRegistry);
     watchNodeHttpRuntime.close();
     await shutdownRuntime.runGatewayClosePrelude({
-      ...(diagnosticsEnabled ? { stopDiagnostics: stopDiagnosticHeartbeat } : {}),
+      stopDiagnostics: stopDiagnosticHeartbeat,
       clearSkillsRefreshTimer: () => {
         if (!runtimeState?.skillsRefreshTimer) {
           return;
@@ -617,7 +629,16 @@ export async function prepareGatewayLifecycle(params: {
     });
   };
 
-  if (diagnosticsEnabled) {
+  const configureDiagnostics = (config: OpenClawConfig) => {
+    if (lifecycle.closePreludeStarted) {
+      return;
+    }
+    const enabled = isDiagnosticsEnabled(config);
+    setDiagnosticsEnabledForProcess(enabled);
+    if (!enabled) {
+      stopDiagnosticHeartbeat();
+      return;
+    }
     // Gateway lifecycle owns both this existing heartbeat timer and the monitor
     // it samples, so startup failure and normal close tear them down together.
     startDiagnosticHeartbeat(undefined, {
@@ -639,10 +660,12 @@ export async function prepareGatewayLifecycle(params: {
         };
       },
     });
-  }
+  };
+  configureDiagnostics(cfgAtStart);
 
   return {
     ...runtime,
+    configureDiagnostics,
     requestEntryLifetime,
     subscribeSessionMessageEvents,
     unsubscribeSessionMessageEvents,

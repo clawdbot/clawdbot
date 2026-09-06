@@ -66,7 +66,10 @@ before the call settles.
   compact input hints, and compact declared output hints when a
   trusted tool provides an output schema. It omits descriptions, full schemas,
   MCP entries, and overflow entries; callable `catalog.search(...)` results are
-  the fallback.
+  the fallback. Input hints retain integer and numeric bounds as comments, such
+  as `offset?: number /* integer, >= 1 */`. Other validation details remain in
+  the full schema available through `describe()`; these hints do not change
+  tool validation or output contracts.
 - Guest code calls globals directly or searches the hidden catalog for callable
   handles. A handle exposes bounded metadata and `describe()`, but never the
   exact internal catalog id. Calls use the same execution path as normal agent

@@ -14,10 +14,8 @@ import { CodexAsyncDeliveryProjection } from "./event-projector-async-delivery.j
 import { CodexProjectionDiagnostics } from "./event-projector-diagnostics.js";
 import { CodexEventProjection, emitCodexAgentEvent } from "./event-projector-events.js";
 import {
-  itemStatus,
   matchesCodexSnapshotTurn,
   shouldClearTerminalPresentationForNativeItem,
-  shouldSynthesizeToolProgressForItem,
 } from "./event-projector-items.js";
 import { CodexGeneratedMediaProjection } from "./event-projector-media.js";
 import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool-lifecycle.js";
@@ -27,15 +25,12 @@ import {
   buildCodexAttemptResult,
   type CodexAppServerToolTelemetry,
 } from "./event-projector-result.js";
+import { CodexProjectionSettlement } from "./event-projector-settlement.js";
 import { buildCodexSteeringMessagesSnapshot } from "./event-projector-snapshot.js";
 import { CodexTerminalFailureProjection } from "./event-projector-terminal-failure.js";
 import { CodexToolProgressProjection } from "./event-projector-tool-progress.js";
 import { CodexToolTranscriptProjection } from "./event-projector-tool-transcript.js";
-import {
-  CodexResponseCompletionProjection,
-  normalizeCodexResponseTokenUsage,
-  projectCodexThreadUsageUpdate,
-} from "./event-projector-usage.js";
+import { CodexUsageProjection } from "./event-projector-usage.js";
 import { readCodexErrorNotificationMessage, readItem } from "./event-projector-values.js";
 import type { CodexNativePreToolUseFailure } from "./native-hook-relay.js";
 import {
@@ -60,6 +55,7 @@ export class CodexAppServerEventProjector {
   private readonly asyncDeliveryProjection: CodexAsyncDeliveryProjection;
   private readonly assistantProjection: CodexAssistantProjection;
   private readonly reasoningProjection: CodexReasoningProjection;
+  readonly settlement: CodexProjectionSettlement;
   private readonly activeItemIds = new Set<string>();
   private readonly completedItemIds = new Set<string>();
   private readonly activeCompactionItemIds = new Set<string>();
@@ -70,16 +66,15 @@ export class CodexAppServerEventProjector {
   private readonly toolProgressProjection: CodexToolProgressProjection;
   private readonly toolTranscriptProjection: CodexToolTranscriptProjection;
   private completedTurn: CodexTurn | undefined;
-  private projectionClosed = false;
+  private readonly projectionController = new AbortController();
   /** Structured overloads may continue once the exact settled transcript is captured. */
   settledTurnFailureFinalizationAllowed = false;
   private readonly terminalFailure = new CodexTerminalFailureProjection();
   private synthesizedMissingToolResultError: string | null = null;
   private aborted = false;
-  private tokenUsage: ReturnType<typeof normalizeCodexResponseTokenUsage>;
   private contextTokens: number | undefined;
   private contextTokensSource: "runtime" | "runtime-configured" | "resolved" | undefined;
-  private readonly responseCompletions = new CodexResponseCompletionProjection();
+  private readonly usageProjection = new CodexUsageProjection();
   private completedCompactionCount = 0;
   private pendingSteeringAssistantBoundaryItemId: string | undefined;
 
@@ -89,6 +84,7 @@ export class CodexAppServerEventProjector {
     private readonly turnId: string,
     private readonly options: CodexAppServerEventProjectorOptions = {},
   ) {
+    this.settlement = new CodexProjectionSettlement(params, () => !this.projectionClosed);
     this.transcriptCheckpoint = new CodexTranscriptCheckpoint(params, threadId, turnId);
     this.asyncDeliveryProjection = new CodexAsyncDeliveryProjection(
       params,
@@ -111,7 +107,9 @@ export class CodexAppServerEventProjector {
       remoteWorkspaceRoot: options.remoteWorkspaceRoot,
       readFile: options.readRemoteWorkspaceFile,
       requestTimeoutMs: options.remoteWorkspaceRequestTimeoutMs,
-      signal: options.runAbortSignal,
+      signal: options.runAbortSignal
+        ? AbortSignal.any([options.runAbortSignal, this.projectionController.signal])
+        : this.projectionController.signal,
     });
     this.toolProgressProjection = new CodexToolProgressProjection(params);
     this.toolTranscriptProjection = new CodexToolTranscriptProjection(
@@ -136,14 +134,14 @@ export class CodexAppServerEventProjector {
       options.onNativeToolResultRecorded,
     );
     this.assistantProjection = new CodexAssistantProjection(
-      params,
+      this.settlement.params,
       (event) => this.emitAgentEvent(event),
       (text) => this.toolProgressProjection.matchesEcho(text),
       this.transcriptCheckpoint.nextTimestamp,
       this.transcriptCheckpoint.enqueueCommentary,
     );
     this.reasoningProjection = new CodexReasoningProjection(
-      params,
+      this.settlement.params,
       (event) => this.emitAgentEvent(event),
       options.onNativePlanUpdate,
     );
@@ -151,6 +149,25 @@ export class CodexAppServerEventProjector {
 
   getCompletedTurnStatus(): CodexTurn["status"] | undefined {
     return this.completedTurn?.status;
+  }
+
+  private get projectionClosed(): boolean {
+    return this.projectionController.signal.aborted;
+  }
+
+  /** Native completion owns the answer independently of unfinished host projection. */
+  recoverCompletedAnswer(): boolean {
+    const completed = this.settlement.completedAnswer;
+    if (!completed || this.aborted || this.terminalFailure.promptError) {
+      return false;
+    }
+    // Retire accepted writes before the enriched final enters the same mirror owner.
+    this.projectionController.abort();
+    this.transcriptCheckpoint.abandon();
+    this.completedTurn = completed.turn;
+    this.assistantProjection.recordSnapshotItem(completed.answer);
+    this.assistantProjection.finalizeAnswerCandidate(completed.turn);
+    return true;
   }
 
   getActiveMcpToolCall(serverName: string) {
@@ -189,8 +206,10 @@ export class CodexAppServerEventProjector {
 
   /** Fence delayed projections before the turn's final snapshot leaves its owner. */
   closeProjection(): Promise<void> {
-    this.projectionClosed = true;
-    return this.transcriptCheckpoint.flush(true);
+    this.projectionController.abort();
+    return this.settlement.project("transcript/checkpoint", () =>
+      this.transcriptCheckpoint.flush(true),
+    );
   }
 
   /** Resolves the shared model-order position for a native tool item. */
@@ -267,11 +286,9 @@ export class CodexAppServerEventProjector {
         break;
       case "item/started":
         await this.handleItemStarted(params);
-        await this.transcriptCheckpoint.flush();
         break;
       case "item/completed":
         await this.handleItemCompleted(params);
-        await this.transcriptCheckpoint.flush();
         break;
       case "item/commandExecution/outputDelta":
         this.toolProgressProjection.handleOutputDelta(params, "bash");
@@ -294,51 +311,44 @@ export class CodexAppServerEventProjector {
       case "hook/completed":
         this.eventProjection.handleHook(notification.method, params);
         break;
-      case "thread/tokenUsage/updated":
-        projectCodexThreadUsageUpdate(
-          params,
-          this.tokenUsage,
-          (usage) => (this.tokenUsage = usage),
-          (data) => {
-            if (data.modelContextWindow !== undefined) {
-              this.contextTokens = data.modelContextWindow;
-              // Codex reports the effective thread window. When OpenClaw supplied an
-              // authored cap, retain that fact so removing the cap cannot make the
-              // constrained observation look like uncapped native telemetry.
-              this.contextTokensSource =
-                this.params.authoredContextTokenCap === undefined
-                  ? "runtime"
-                  : "runtime-configured";
-            }
-            this.emitAgentEvent({ stream: "usage", data });
-          },
-        );
+      case "thread/tokenUsage/updated": {
+        const data = this.usageProjection.recordThread(params);
+        if (data.modelContextWindow !== undefined) {
+          this.contextTokens = data.modelContextWindow;
+          // Retain an authored cap so its removal cannot make a constrained
+          // native window look like an uncapped runtime observation.
+          this.contextTokensSource =
+            this.params.authoredContextTokenCap === undefined ? "runtime" : "runtime-configured";
+        }
+        if (Object.keys(data).length > 0) {
+          this.emitAgentEvent({ stream: "usage", data });
+        }
         break;
+      }
       case "turn/completed":
         await this.handleTurnCompleted(params);
         break;
       case "rawResponse/completed":
-        this.responseCompletions.record(params, this.params.hostCapabilities.reportOutputTokens);
+        this.usageProjection.record(params, this.params.hostCapabilities.reportOutputTokens);
         break;
       case "rawResponseItem/completed":
         await this.handleRawResponseItemCompleted(params);
-        await this.transcriptCheckpoint.flush();
         break;
       case "model/rerouted":
         this.eventProjection.handleModelRerouted(params);
         break;
       case "error": {
-        this.responseCompletions.clear();
+        this.usageProjection.invalidateContext();
         if (params.willRetry === true) {
+          this.eventProjection.handleRetry(params);
           break;
         }
         const codexErrorInfo = isJsonObject(params.error) ? params.error.codexErrorInfo : undefined;
-        const message = readCodexErrorNotificationMessage(params);
         const compactionFailure = codexErrorInfo === "other" && this.isCompacting();
         this.settledTurnFailureFinalizationAllowed =
           codexErrorInfo === "serverOverloaded" || compactionFailure;
         this.terminalFailure.record({
-          message,
+          message: readCodexErrorNotificationMessage(params),
           codexErrorInfo,
           rateLimits: this.options.readRecentRateLimits?.(),
           fallbackMessage: "codex app-server error",
@@ -362,6 +372,14 @@ export class CodexAppServerEventProjector {
         this.diagnostics.warnUnknownEvent(notification, params);
         break;
     }
+    if (
+      !this.projectionClosed &&
+      ["item/started", "item/completed", "rawResponseItem/completed"].includes(notification.method)
+    ) {
+      await this.settlement.project("transcript/checkpoint", () =>
+        this.transcriptCheckpoint.flush(),
+      );
+    }
   }
 
   buildResult(
@@ -374,16 +392,15 @@ export class CodexAppServerEventProjector {
       turnId: this.turnId,
       upstreamUserText: this.options.upstreamUserText,
       completedTurn: this.completedTurn,
+      turnTainted: this.settlement.turnTainted,
       promptError: this.terminalFailure.promptError,
       promptErrorSource: this.terminalFailure.promptErrorSource,
       providerRefusal: this.terminalFailure.providerRefusal,
       synthesizedMissingToolResultError: this.synthesizedMissingToolResultError,
       recordSynthesizedMissingToolResultError: (error) => {
         this.synthesizedMissingToolResultError = error;
-        this.terminalFailure.promptErrorSource ??= "prompt";
       },
       aborted: this.aborted,
-      tokenUsage: this.tokenUsage,
       contextTokens: this.contextTokens,
       contextTokensSource: this.contextTokensSource,
       completedCompactionCount: this.completedCompactionCount,
@@ -395,7 +412,7 @@ export class CodexAppServerEventProjector {
       nativeToolLifecycleProjection: this.nativeToolLifecycleProjector,
       assistantProjection: this.assistantProjection,
       reasoningProjection: this.reasoningProjection,
-      responseCompletions: this.responseCompletions,
+      usageProjection: this.usageProjection,
       toolTranscriptProjection: this.toolTranscriptProjection,
       toolProgressProjection: this.toolProgressProjection,
       generatedMediaProjection: this.generatedMediaProjection,
@@ -440,7 +457,7 @@ export class CodexAppServerEventProjector {
 
   markAborted(): void {
     this.aborted = true;
-    this.responseCompletions.clear();
+    this.usageProjection.invalidateContext();
   }
 
   isCompacting(): boolean {
@@ -529,7 +546,9 @@ export class CodexAppServerEventProjector {
       return;
     }
     this.reasoningProjection.recordItem(item);
-    await this.generatedMediaProjection.recordNative(item);
+    await this.settlement.project("media_projection", () =>
+      this.generatedMediaProjection.recordNative(item),
+    );
     if (this.projectionClosed) {
       return;
     }
@@ -608,7 +627,7 @@ export class CodexAppServerEventProjector {
       turn.status === "failed" &&
       (turn.error?.codexErrorInfo === "serverOverloaded" || compactionFailure);
     if (turn.status !== "completed") {
-      this.responseCompletions.clear();
+      this.usageProjection.invalidateContext();
     }
     if (turn.status === "failed") {
       const codexErrorInfo = turn.error?.codexErrorInfo as JsonValue | null | undefined;
@@ -657,13 +676,20 @@ export class CodexAppServerEventProjector {
         return;
       }
       this.reasoningProjection.recordItem(item);
-      await this.generatedMediaProjection.recordNative(item);
+      await this.settlement.project("media_projection", () =>
+        this.generatedMediaProjection.recordNative(item),
+      );
       if (this.projectionClosed) {
         return;
       }
       this.toolProgressProjection.recordToolMeta(item);
       this.toolProgressProjection.rememberCommandAggregateOutputEcho(item);
-      await this.emitSnapshotOnlyNativeToolProgress(item);
+      await this.eventProjection.emitSnapshotOnlyNativeToolProgress({
+        item,
+        activeItemIds: this.activeItemIds,
+        completedItemIds: this.completedItemIds,
+        isActive: () => !this.projectionClosed,
+      });
       if (this.projectionClosed) {
         return;
       }
@@ -692,29 +718,6 @@ export class CodexAppServerEventProjector {
     await this.reasoningProjection.maybeEndReasoning();
   }
 
-  private async emitSnapshotOnlyNativeToolProgress(item: CodexThreadItem): Promise<void> {
-    if (
-      !shouldSynthesizeToolProgressForItem(item) ||
-      !matchesCodexSnapshotTurn(item, this.turnId) ||
-      this.completedItemIds.has(item.id) ||
-      itemStatus(item) === "running"
-    ) {
-      return;
-    }
-    const wasStarted = this.activeItemIds.has(item.id);
-    if (!wasStarted) {
-      this.eventProjection.emitStandardItemEvent({ phase: "start", item });
-      await this.eventProjection.emitNormalizedToolItemEvent({ phase: "start", item });
-    }
-    if (this.projectionClosed) {
-      return;
-    }
-    this.activeItemIds.delete(item.id);
-    this.eventProjection.emitStandardItemEvent({ phase: "end", item });
-    await this.eventProjection.emitNormalizedToolItemEvent({ phase: "result", item });
-    this.completedItemIds.add(item.id);
-  }
-
   private async handleRawResponseItemCompleted(params: JsonObject): Promise<void> {
     const item = isJsonObject(params.item) ? params.item : undefined;
     if (!item) {
@@ -724,7 +727,9 @@ export class CodexAppServerEventProjector {
     // Project protocol state before media persistence yields. Notifications may overlap,
     // so delayed image I/O must not consume assistant-echo state from a newer item.
     this.assistantProjection.handleRawResponseItemCompleted(item, this.activeItemIds);
-    await this.generatedMediaProjection.recordRaw(item);
+    await this.settlement.project("media_projection", () =>
+      this.generatedMediaProjection.recordRaw(item),
+    );
   }
 
   private emitAgentEvent(

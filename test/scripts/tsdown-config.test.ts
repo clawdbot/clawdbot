@@ -54,11 +54,21 @@ const isWorkerBuildConfig = (config: TsdownConfig) =>
 const FS_SAFE_CALLER_PROBE = `
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { createRequire } from "node:module";
+import { createRequire, isBuiltin, registerHooks } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-const [entry, observer, rootDir, mode, outcome] = process.argv.slice(1);
-const { root } = await import(pathToFileURL(entry).href);
+const [entry, observer, rootDir, mode, outcome, sealed] = process.argv.slice(1);
+if (sealed) registerHooks({ resolve(specifier, context, next) {
+  if (!isBuiltin(specifier) && specifier !== pathToFileURL(entry).href)
+    throw new Error("sealed dependency escaped: " + specifier);
+  return next(specifier, context);
+}});
+const { root, parseJsonWithJson5Fallback, resolvePreferredOpenClawTmpDir, resolveRuntimeProcessEntrypointUrl } = await import(pathToFileURL(entry).href);
+if (sealed) {
+  assert.deepEqual(parseJsonWithJson5Fallback("{value:'bundled',}"), {value:"bundled"});
+  assert.equal(resolvePreferredOpenClawTmpDir({preferredDir:rootDir, tmpdir:()=>rootDir, platform:"linux"}), rootDir);
+  assert.equal(resolveRuntimeProcessEntrypointUrl("githubExec").href, new URL("./github-exec-launcher.mjs", pathToFileURL(entry)).href);
+}
 const { configureFsSafeNative, getFsSafeNativeConfig, FsSafeError } = await import(pathToFileURL(observer).href);
 assert.equal(getFsSafeNativeConfig().mode, mode === "configured" ? "off" : mode);
 if (mode === "configured") configureFsSafeNative({ mode: "require" });
@@ -339,7 +349,12 @@ describe("tsdown config", () => {
         observerSource,
         [
           ...(worker
-            ? [`import ${JSON.stringify(path.resolve("src/worker/worker-deploy-runtime.ts"))};`]
+            ? [
+                `import ${JSON.stringify(path.resolve("src/worker/worker-deploy-runtime.ts"))};`,
+                `export { parseJsonWithJson5Fallback } from ${JSON.stringify(path.resolve("src/utils/parse-json-compat.ts"))};`,
+                `export { resolvePreferredOpenClawTmpDir } from ${JSON.stringify(path.resolve("src/infra/tmp-openclaw-dir.ts"))};`,
+                `export { resolveRuntimeProcessEntrypointUrl } from ${JSON.stringify(path.resolve("src/infra/runtime-process-url.ts"))};`,
+              ]
             : []),
           `export { root } from ${JSON.stringify(sdkSource)};`,
           `export { configureFsSafeNative, getFsSafeNativeConfig } from ${JSON.stringify(worker ? require.resolve("@openclaw/fs-safe/config") : "@openclaw/fs-safe/config")};`,
@@ -388,6 +403,7 @@ describe("tsdown config", () => {
                   rootDir,
                   mode,
                   outcome,
+                  worker ? "sealed" : "",
                 ],
                 {
                   cwd: relocatedRoot,
@@ -482,7 +498,6 @@ describe("tsdown config", () => {
       );
       expect(selected).toBeDefined();
       const packages = [
-        ...(declarations ? ["@anthropic-ai/claude-agent-sdk"] : []),
         "@anthropic-ai/vertex-sdk",
         "@slack/bolt",
         "@slack/web-api",
@@ -659,8 +674,9 @@ describe("tsdown config", () => {
         (source) => source.startsWith("src/") && !source.startsWith("src/plugin-sdk/"),
       ),
     ).toEqual(["src/index.ts"]);
-    expect(declarationSources).not.toContain("extensions/anthropic/agent-sdk-user-input.ts");
-    expect(declarationSources).not.toContain("extensions/anthropic/agent-sdk-runtime-helpers.ts");
+    expect(
+      declarationSources.filter((source) => source.startsWith("extensions/anthropic/")).toSorted(),
+    ).toEqual(["extensions/anthropic/api.ts", "extensions/anthropic/contract-api.ts"]);
     expect(declarationSources.every((source) => /\.[cm]?tsx?$/u.test(source))).toBe(true);
     expect(new Set(declarationSources).size).toBe(declarationSources.length);
   });
@@ -703,6 +719,7 @@ describe("tsdown config", () => {
     ).version;
     expect(workerConfig?.define).toEqual({
       WORKER_DEPLOY_BUILD: "true",
+      SEALED_RUNTIME_BUILD: "true",
       WORKER_DEPLOY_VERSION: JSON.stringify(packageVersion),
     });
     expect(workerConfig?.alias).toMatchObject({

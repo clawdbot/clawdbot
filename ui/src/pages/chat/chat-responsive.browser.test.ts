@@ -385,6 +385,9 @@ function activityAlignmentHtml() {
   return `
     <div class="chat-thread" role="log">
       <div class="chat-thread-inner">
+        <div class="chat-group tool">
+          <div class="chat-group-messages" data-tool-column-reference>Inspecting the available tools.</div>
+        </div>
         <div class="chat-group tool chat-group--activity chat-group--with-footer">
           <div class="chat-group-messages">
             <div class="chat-activity-group is-open">
@@ -1579,10 +1582,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const activityGroup = await getRect(page, ".chat-activity-group");
       const activitySummary = await getRect(page, ".chat-activity-group__summary");
       const failedSummary = await getRect(page, "[data-failed-call-row]");
-      const thread = await getRect(page, ".chat-thread-inner");
+      const toolColumn = await getRect(page, "[data-tool-column-reference]");
       expect(activitySummary.width).toBeLessThan(activityGroup.width);
       expect(failedSummary.width).toBeLessThan(activityGroup.width);
-      expect(activityGroup.left - thread.left).toBeCloseTo(51, 0);
+      expect(activityGroup.left).toBeCloseTo(toolColumn.left, 0);
       const styles = await page.evaluate(() => {
         const activity = document.querySelector<HTMLElement>(".chat-activity-group__summary")!;
         const label = activity.querySelector<HTMLElement>(".chat-activity-group__label")!;
@@ -1992,9 +1995,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body style="margin:0;height:100vh;overflow:hidden">
           <div class="shell shell--chat ${label.startsWith("mobile") ? "shell--mobile-nav shell--merged-chat-chrome" : ""}">
             <main class="content content--chat" style="padding:0">
-              <div class="chat-pane-layout">
-                <header class="chat-pane__header">Session</header>
-                <div class="sidebar-region">
+              <div class="sidebar-region">
+                <div class="sidebar-region__header">
+                  <header class="chat-pane__header">Session</header>
+                </div>
                   <div class="sidebar-region__primary" data-region="main">
                     <section class="card chat">
                       <div class="chat-main">
@@ -2013,7 +2017,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                       </div>
                     </section>
                   </div>
-                </div>
               </div>
             </main>
             <openclaw-toast-host data-toast-placement="shell">
@@ -4246,35 +4249,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       }
     },
   );
-
-  it("keeps newly opened sidebar columns transparent while panel owners retain their surface", async () => {
-    const page = await openBrowserPage(1_000, 700);
-    try {
-      await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-          <div class="sidebar-region" style="--panel: rgb(12, 34, 56)">
-            <main class="sidebar-region__primary">Primary chat</main>
-          </div>
-        </body></html>`,
-      );
-
-      const backgrounds = await page.evaluate(() => {
-        const column = document.createElement("section");
-        column.className = "sidebar-column";
-        column.innerHTML = '<div class="sidebar-panel">Owned panel surface</div>';
-        document.querySelector(".sidebar-region")?.append(column);
-        return {
-          column: getComputedStyle(column).backgroundColor,
-          panel: getComputedStyle(column.firstElementChild!).backgroundColor,
-        };
-      });
-
-      expect(backgrounds.column).toBe("rgba(0, 0, 0, 0)");
-      expect(backgrounds.panel).toBe("rgb(12, 34, 56)");
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
 
   it.each([
     { dock: "narrow", width: 620, height: 600 },

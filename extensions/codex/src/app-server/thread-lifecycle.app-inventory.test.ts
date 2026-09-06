@@ -651,6 +651,9 @@ describe("Codex app inventory across physical process restart", () => {
       const release = createDeferred<void>();
       f.process.faults.beforeInventory = () => release.promise;
       f.appServer.requestTimeoutMs = 400;
+      // Real request timers can win before the wall clock reaches the shared
+      // deadline. Keep that ordering deterministic without replacing the timers.
+      vi.spyOn(Date, "now").mockReturnValue(Date.now());
       const boundary = f.calls.length;
       try {
         if (scheduled) {

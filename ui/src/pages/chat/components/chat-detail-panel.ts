@@ -40,9 +40,7 @@ type ChatDetailPanelContent = Exclude<SidebarContent, { kind: "task" }>;
 class ChatDetailPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) content: ChatDetailPanelContent | null = null;
   @property({ attribute: false }) execNode: string | null = null;
-  @property({ attribute: false }) attachmentRuntime: AttachmentSidebarRuntime = {
-    localMediaPreviewRoots: [],
-  };
+  @property({ attribute: false }) attachmentRuntime: AttachmentSidebarRuntime = {};
   @property() basePath = "";
   @property() canvasPluginSurfaceUrl: string | null = null;
   @property() embedSandboxMode: EmbedSandboxMode = "scripts";

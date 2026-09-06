@@ -1,6 +1,6 @@
-// Mattermost plugin module orchestrates monitor setup, ingress, and teardown.
 import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
+import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeOptionalString,
@@ -84,6 +84,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       },
     } satisfies RuntimeEnv);
   const cfg = (opts.config ?? core.config.current()) as OpenClawConfig;
+  const readConfig = createRuntimeConfigReader(cfg);
+  const resolveDebounceMs = () =>
+    core.channel.debounce.resolveInboundDebounceMs({
+      cfg: readConfig(),
+      channel: "mattermost",
+    });
   const account = resolveMattermostAccount({ cfg, accountId: opts.accountId });
   const pairing = createChannelPairingController({
     core,
@@ -245,10 +251,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     payload: MattermostEventPayload;
     turnAdoptionLifecycle: MattermostIngressLifecycle;
   }>({
-    debounceMs: core.channel.debounce.resolveInboundDebounceMs({
-      cfg,
-      channel: "mattermost",
-    }),
+    debounceMs: resolveDebounceMs(),
+    resolveDebounceMs,
     buildKey: (entry) => {
       const channelId =
         entry.post.channel_id ??

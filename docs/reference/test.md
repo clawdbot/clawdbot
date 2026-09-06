@@ -36,8 +36,10 @@ release proof.
 The Testbox workflow registers a separate disposable checkout for native sync.
 The hydrated execution workspace stays at its original absolute path, so native
 Git cleanup and rsync cannot delete dependencies, build output, or ignored runtime
-there. The wrapper verifies and applies the source bundle in that execution
-workspace, then runs the payload there. It never restores runtime from the caller
+there. The wrapper applies and verifies the source bundle in that execution
+workspace, runs its frozen dependency install, and checks the source and Git
+identity again before the payload. Install output goes to stderr; an install or
+verification failure stops the payload. It never restores runtime from the caller
 or changes the selected rsync binary.
 
 Workspace preparation changes require a fresh lease. A missing or overlapping
@@ -175,6 +177,9 @@ lease ID, and reuse it with `run --id <tbx_id>`. Stop the owned lease with
   for release proof. Direct-provider flags such as `--fresh-pr`, `--full-resync`,
   `--script*`, `--env-helper`, capture/download flags, and `--stop-after` are not
   a substitute for the delegated Testbox workflow.
+- For Testbox scripts, run a synced file as trailing command arguments or use
+  `--shell`. Active `--script` and `--script-stdin` uploads are rejected before
+  source preparation or lease work.
 
 When remote sync uses a temporary checkout, the wrapper preserves native
 `.crabbox/runs` and `.crabbox/captures` outputs together beneath a fresh
@@ -182,7 +187,12 @@ When remote sync uses a temporary checkout, the wrapper preserves native
 Repeated runs retain separate evidence even when native filenames match. The
 wrapper prints the old-to-new root mapping; native logs and generated proof may
 still reference the old paths. A preservation error fails the wrapper and retains
-the temporary checkout at the reported path for manual recovery.
+the temporary checkout at the reported path for manual recovery, preserving the
+child's nonzero exit code. The wrapper rejects symlinks in artifact trees
+and destination parents, and copies only regular files and real directories.
+Retained files use mode `0600` and new directories use `0700` on POSIX systems.
+If preservation fails, recover the outputs from the reported checkout before
+removing it; incomplete destination copies are removed.
 
 These are local artifacts, not published or fully sanitized proof. Blacksmith's
 native failure bundle contains captured stdout/stderr and diagnostic metadata;
@@ -257,6 +267,27 @@ reconcile dependencies before the remote wrapper starts.
 
 ## Core commands
 
+Run the test toolchain on Node 22.22.3+, Node 24.15+, or Node 26+. Vitest 5
+excludes Node 25 from its declared engine range; packaged OpenClaw runtime
+support for Node 25.9+ is unchanged.
+
+The test toolchain pins stable Vitest `5.0.0`, including its browser and coverage
+packages. Use `describe(name, { concurrent: false }, callback)` for ordered
+suites. Await asynchronous assertions, keep `vi.mock`/`vi.hoisted` at module
+scope, and perform actions whose mock calls you assert inside the test.
+OpenClaw sets `clearMocks: false`, so setup and `beforeAll` calls are preserved.
+Clear or reset each assertion's owned mock actions explicitly as needed.
+Name patterns spanning suites use `suite > test`; native JSON retains its
+space-joined `fullName`, so evidence readers match `ancestorTitles` plus `title`.
+
+Filesystem transform caching uses `test.fsModuleCache` and
+`test.fsModuleCachePath`; the existing `OPENCLAW_VITEST_FS_MODULE_CACHE` and
+`OPENCLAW_VITEST_FS_MODULE_CACHE_PATH` controls retain their ownership and
+disable behavior. Cache-key plugins use `defineCacheKeyGenerator`.
+Inline projects inherit root configuration in Vitest 5, including concatenated
+setup and include arrays. The four UI E2E resource projects declare
+`extends: false` because each supplies its complete inventory and setup.
+
 Maintained JavaScript tooling wrappers and root package commands load TypeScript
 through `scripts/tsx.mjs`, using tsx's ESM entry. This preserves native loading of
 compiled ESM plugins and their import-only dependencies, including when loaded
@@ -270,6 +301,13 @@ existing temporary directories, Node or Vitest caches, or other global caches. S
 `pnpm ui:build` keeps native startup and applies the same preload to its post-build
 validators; it does not require `TSX_DISABLE_CACHE` in the invoking shell. Raw
 external `tsx` and `node --import tsx` invocations outside these launchers are unchanged.
+
+Parallel project runs on macOS and Linux reuse filesystem transforms within
+exclusive worker slots, with separate directories for each Vitest configuration.
+A slot stays owned through preflight, retries, and verified child/group completion;
+uncertain cleanup retires it. Explicit isolated cache paths, serial and watch runs,
+and Windows retain their existing cache ownership. Concurrent invocations still
+need separate cache roots.
 
 Control UI builds report size budgets without enforcing them. Run
 `pnpm ui:check-performance` after a build to enforce absolute budgets, or
@@ -297,7 +335,11 @@ Existing package build entry paths and Vitest source parents stay unchanged. The
 CLI fork-recovery regression also compiles the real CLI entry and its concurrent
 rebind's session accessor and binding helper together. Both processes use the same
 runtime graph while retaining the durable-write race and process-exit assertions.
-Other Worker-thread entries and arbitrary source CLI fixtures remain outside this declared set.
+Doctor process output tests with bundled plugins disabled reuse that compiled CLI
+inside one lazily created package fixture per test run, keeping real UI checks on
+fixture-owned assets and each scenario’s state separate. Standalone and watch runs
+use live source inside the same fixture. Other
+Worker-thread entries and arbitrary source CLI fixtures remain outside this declared set.
 
 The session-title and child-link retention tests declare their title-reader,
 session-utils, and listing roots in this same generation. Each fresh
@@ -423,6 +465,20 @@ then drives obsolete declaration pruning. Missing or tampered outputs invalidate
 the owner. The content records live under
 `.artifacts/extension-package-boundary`, outside packaged build cleanup. A warm run validates the records without emitting declarations.
 
+Native declaration and package-boundary records accept only checkout-owned input
+realpaths, including compiler libraries, inherited config, dependency links, and
+package manifests. Local pnpm links remain supported when their targets stay
+inside the checkout. The tsgo wrapper does not create or reuse a shared external
+install; invocations from subdirectories still use the containing checkout as
+the ownership boundary. Declared checkout junctions and platform path aliases map
+to the same native root for validation and actual snapshot reads. Native resolution
+itself is not sandboxed: an ancestor install can still enter a successful compiler
+receipt. The owner then fails with `Declaration input escapes checkout`, without
+publishing a success record or pruning obsolete declarations. Warm records use
+the same input check. Use a standalone checkout outside ancestor installs with
+its own `pnpm install` when this occurs; do not remove the ancestor installation
+or weaken input checks.
+
 Packaged SDK declarations belong to one staged owner shared by full, package, and
 `ciArtifacts` builds. It serializes the two canonical tsdown SDK groups on a miss
 and caches their complete staged generation. Each successful compiler supplies its
@@ -439,8 +495,8 @@ that escape through symlinks or bundler resolution fail the build. Each checkout
 needs its own installed declaration inputs, including compiler libraries. Local
 pnpm links are supported when their targets remain inside the checkout; shared
 external installs are not. Actual compiler receipts remain unfiltered, and input
-changes still prevent publication. Runtime module resolution and the separate
-native tsgo typecheck and package-boundary owners retain their existing contracts.
+changes still prevent publication. Runtime module resolution is unchanged;
+native tsgo uses the separate receipt-admission policy above.
 
 Local preparation never overwrites packaged declarations or writes workspace
 forwarding bridges.
@@ -757,6 +813,8 @@ They print a companion `<output>.reports-<unique>` directory. Keep that director
 it contains original reports, per-attempt coverage files when coverage is enabled,
 and an `index.json` with child exit codes, signals, timeouts and unstarted work.
 Only the accepted retry attempt contributes to the aggregate.
+Blob reports are exact-version artifacts. Rerun child reports with the current
+Vitest version before merging artifacts produced by another version.
 
 The aggregate preserves the accepted case inventory, but is not a lossless
 replacement for the originals. Native merging does not restore snapshot summaries

@@ -15,7 +15,6 @@ import {
   hasRetainedSessionTranscriptArchives,
   measureSessionPhysicalDiskUsage,
   type SessionDiskBudgetSweepResult,
-  type SessionPhysicalDiskUsage,
 } from "./disk-budget.js";
 import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
 import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
@@ -504,26 +503,15 @@ async function enforceSessionHistoryMaintenanceSerialized(
   });
   const databaseOptions = toDatabaseOptions(resolved);
   const archiveDirectory = resolveSqliteTranscriptArchiveDirectory(resolved);
-  let usage: SessionPhysicalDiskUsage = await runExclusiveSqliteSessionWrite(resolved, async () => {
-    reclaimSqliteFreePages(databaseOptions);
-    return await measureSessionPhysicalDiskUsage(params.storePath);
-  });
+  let { usage, removedFiles } = await runExclusiveSqliteSessionWrite(resolved, async () =>
+    pruneAllSessionTranscriptArchivesToHighWater({
+      archiveDirectory,
+      databaseOptions,
+      highWaterBytes,
+      storePath: params.storePath,
+    }),
+  );
   let removedEntries = 0;
-  let removedFiles = 0;
-  if (usage.totalBytes > highWaterBytes) {
-    // Archive pruning shares the SQLite writer queue so a concurrent
-    // reset/delete cannot race its archive file against the unlink pass.
-    const archiveSweep = await runExclusiveSqliteSessionWrite(resolved, async () =>
-      pruneAllSessionTranscriptArchivesToHighWater({
-        archiveDirectory,
-        databaseOptions,
-        highWaterBytes,
-        storePath: params.storePath,
-      }),
-    );
-    removedFiles = archiveSweep.removedFiles;
-    usage = archiveSweep.usage;
-  }
   const candidates = readHistoricalSessionIds({
     databaseOptions,
     preserveRecentMs: params.maintenance.preserveRecentMs,
@@ -684,7 +672,7 @@ async function enforceSessionHistoryMaintenanceSerialized(
         removedEntries += 1;
         await runExclusiveSqliteSessionWrite(resolved, async () => {
           try {
-            reclaimSqliteFreePages(databaseOptions);
+            await reclaimSqliteFreePages(databaseOptions);
           } catch {
             // The durable deletion succeeded; a later pass can reclaim pages.
           }

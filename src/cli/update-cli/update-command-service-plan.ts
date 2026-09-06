@@ -3,11 +3,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { createConfigIO } from "../../config/io.js";
+import { resolveGatewayPort } from "../../config/paths.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervision.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
+import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { resolveNodeRunner } from "./shared.js";
 
@@ -262,4 +266,31 @@ export async function gatewayServiceCommandUsesRoot(params: {
     // Without directory identity proof, the override cannot authorize lifecycle actions.
   }
   return false;
+}
+
+export async function resolveUpdatedGatewayRestartPort(params: {
+  config?: OpenClawConfig;
+  processEnv?: NodeJS.ProcessEnv;
+  serviceEnv?: NodeJS.ProcessEnv;
+  serviceCommand?: GatewayServiceCommandConfig | null;
+}): Promise<number> {
+  const env = params.serviceEnv ?? params.processEnv ?? process.env;
+  let config = params.config;
+  if (params.serviceCommand) {
+    // Preserved launchers keep their explicit port and their own config context;
+    // refresh callers omit the old command and use the intended new configuration.
+    const port = parseTcpPortFromArgs(params.serviceCommand.programArguments);
+    if (port !== null) {
+      return port;
+    }
+  }
+  if (params.serviceCommand || !config) {
+    config = await createConfigIO({
+      env,
+      observe: false,
+      pluginValidation: "skip",
+      suppressFutureVersionWarning: true,
+    }).readBestEffortConfig();
+  }
+  return resolveGatewayPort(config, env);
 }

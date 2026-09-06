@@ -83,7 +83,8 @@ it.each(["main", "workspace"])(
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey,
       agentId: "main",
-      limit: 800,
+      limit: 80,
+      maxBytes: 256 * 1024,
     });
   },
 );

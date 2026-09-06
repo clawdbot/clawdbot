@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { NativeDeviceSettingsSnapshot } from "../app/native-device-settings.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -10,7 +11,57 @@ import { installNativeWebChrome } from "./native-nav.test-support.ts";
 type DeviceSettingsTestWindow = Window & {
   __OPENCLAW_NATIVE_DEVICE_SETTINGS__?: NativeDeviceSettingsSnapshot;
   nativeDeviceSettingsMessages?: unknown[];
+  nativeDeviceSettingsReplies?: Array<(snapshot: NativeDeviceSettingsSnapshot) => void>;
 };
+
+async function installDeviceSettingsBridge(page: Page, snapshot: NativeDeviceSettingsSnapshot) {
+  await installNativeWebChrome(page);
+  await page.addInitScript((initial: NativeDeviceSettingsSnapshot) => {
+    const messages: unknown[] = [];
+    const replies: Array<(snapshot: NativeDeviceSettingsSnapshot) => void> = [];
+    const nativeWindow = window as DeviceSettingsTestWindow;
+    Object.assign(nativeWindow, {
+      __OPENCLAW_NATIVE_DEVICE_SETTINGS__: initial,
+      nativeDeviceSettingsMessages: messages,
+      nativeDeviceSettingsReplies: replies,
+    });
+    Object.defineProperty(window, "webkit", {
+      configurable: true,
+      value: {
+        messageHandlers: {
+          openclawDeviceSettings: {
+            postMessage(message: unknown) {
+              messages.push(message);
+              if (
+                typeof message === "object" &&
+                message !== null &&
+                "type" in message &&
+                message.type === "set"
+              ) {
+                return new Promise<NativeDeviceSettingsSnapshot>((resolve) => {
+                  replies.push(resolve);
+                });
+              }
+              return Promise.resolve(nativeWindow["__OPENCLAW_NATIVE_DEVICE_SETTINGS__"]);
+            },
+          },
+        },
+      },
+    });
+  }, snapshot);
+}
+
+async function replyToDeviceSetting(page: Page, snapshot: NativeDeviceSettingsSnapshot) {
+  await page.evaluate((next: NativeDeviceSettingsSnapshot) => {
+    const nativeWindow = window as DeviceSettingsTestWindow;
+    const reply = nativeWindow.nativeDeviceSettingsReplies?.shift();
+    if (!reply) {
+      throw new Error("No native settings request is waiting for a reply");
+    }
+    nativeWindow["__OPENCLAW_NATIVE_DEVICE_SETTINGS__"] = next;
+    reply(next);
+  }, snapshot);
+}
 
 const suite = createControlUiE2eSuite({
   name: "Control UI native device settings E2E",
@@ -31,26 +82,7 @@ suite.define(() => {
       },
       async ({ page }) => {
         const snapshot = createNativeDeviceSettingsSnapshot();
-        await installNativeWebChrome(page);
-        await page.addInitScript((initial: NativeDeviceSettingsSnapshot) => {
-          const messages: unknown[] = [];
-          Object.assign(window, {
-            __OPENCLAW_NATIVE_DEVICE_SETTINGS__: initial,
-            nativeDeviceSettingsMessages: messages,
-          });
-          Object.defineProperty(window, "webkit", {
-            configurable: true,
-            value: {
-              messageHandlers: {
-                openclawDeviceSettings: {
-                  postMessage(message: unknown) {
-                    messages.push(message);
-                  },
-                },
-              },
-            },
-          });
-        }, snapshot);
+        await installDeviceSettingsBridge(page, snapshot);
         await installMockGateway(page, { operatorScopes: ["operator.read"] });
         expect((await page.goto(`${suite.server.baseUrl}settings/device`))?.status()).toBe(200);
 
@@ -68,6 +100,19 @@ suite.define(() => {
           page.evaluate(() => (window as DeviceSettingsTestWindow).nativeDeviceSettingsMessages);
         await expect.poll(messages).toContainEqual({ type: "status" });
 
+        const iconStyle = devicePage.getByRole("combobox", { name: "Dock icon", exact: true });
+        await expect.poll(() => iconStyle.inputValue()).toBe("paper");
+        expect(await iconStyle.locator("option").allTextContents()).toEqual(
+          ["Original", "Heritage", "Clawmark", "Origami", "Pincer", "Open C"].map((name) =>
+            expect.stringContaining(name),
+          ),
+        );
+        await iconStyle.selectOption("origami");
+        await expect
+          .poll(messages)
+          .toContainEqual({ type: "set", key: "app.iconStyle", value: "origami" });
+        snapshot.app.iconStyle!.selectedId = "origami";
+
         await devicePage
           .locator(".settings-row__title")
           .filter({ hasText: /^Show Dock icon$/ })
@@ -77,14 +122,11 @@ suite.define(() => {
           .toContainEqual({ type: "set", key: "app.showDockIcon", value: false });
         snapshot.app.showDockIcon = false;
         snapshot.app.quickChatShortcut = "⌘⇧Space";
-        await page.evaluate((next: NativeDeviceSettingsSnapshot) => {
-          (window as DeviceSettingsTestWindow)["__OPENCLAW_NATIVE_DEVICE_SETTINGS__"] = next;
-          window.dispatchEvent(
-            new CustomEvent("openclaw:native-device-settings-changed", { detail: next }),
-          );
-        }, snapshot);
+        await replyToDeviceSetting(page, snapshot);
+        await replyToDeviceSetting(page, snapshot);
         await devicePage.getByText("⌘⇧Space", { exact: true }).waitFor();
         await expect.poll(() => dockIcon.isChecked()).toBe(false);
+        await expect.poll(() => iconStyle.inputValue()).toBe("origami");
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
@@ -161,6 +203,115 @@ suite.define(() => {
           .filter({ hasText: /^Saved$/ })
           .waitFor();
         expect(await triggers.inputValue()).toBe("second phrase");
+      },
+    );
+  });
+
+  it("settles canceled cookie edits and preserves newer drafts across native replies and navigation", async () => {
+    const artifactDir = createControlUiE2eArtifactDir("native-cookie-consent");
+    const viewport = { width: 1440, height: 1800 };
+    await suite.withPage(
+      {
+        colorScheme: "light",
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport,
+        recordVideo: { dir: artifactDir, size: viewport },
+      },
+      async ({ page }) => {
+        const snapshot = createNativeDeviceSettingsSnapshot();
+        snapshot.browser.cookieSync.enabled = true;
+        snapshot.browser.cookieSync.state = "idle";
+        await installDeviceSettingsBridge(page, snapshot);
+        await installMockGateway(page, { operatorScopes: ["operator.read"] });
+        await page.goto(`${suite.server.baseUrl}settings/device`);
+        const devicePage = page.locator("openclaw-device-page");
+        const sidebar = page.locator(".settings-sidebar");
+        const profile = devicePage.getByRole("textbox", { name: "Target profile", exact: true });
+        const messages = () =>
+          page.evaluate(() => (window as DeviceSettingsTestWindow).nativeDeviceSettingsMessages);
+        const revisit = async () => {
+          await sidebar.locator('a[href="/settings/device/permissions"]').click();
+          await page.locator("openclaw-device-permissions-page").waitFor();
+          await sidebar.locator('a[href="/settings/device"]').click();
+          await profile.waitFor();
+        };
+        const addDomain = async (domain: string) => {
+          await devicePage.getByRole("textbox", { name: "Add hostname", exact: true }).fill(domain);
+          await devicePage.getByRole("button", { name: "Add hostname", exact: true }).click();
+        };
+        const expectProfileRequest = async (value: string) => {
+          await expect
+            .poll(messages)
+            .toContainEqual({ type: "set", key: "browser.cookieSync.targetProfile", value });
+        };
+
+        await addDomain("cancelled.example.com");
+        await expect.poll(messages).toContainEqual({
+          type: "set",
+          key: "browser.cookieSync.domains",
+          value: ["example.com", "cancelled.example.com"],
+        });
+        await revisit();
+        const cancelledDomain = devicePage.getByRole("button", {
+          name: "Remove cancelled.example.com",
+          exact: true,
+        });
+        await cancelledDomain.waitFor();
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(artifactDir, "01-pending-cookie-consent.png"),
+        });
+        // Cancel returns the native owner's unchanged snapshot, without a matching-value ACK.
+        await replyToDeviceSetting(page, snapshot);
+        await expect.poll(() => cancelledDomain.count()).toBe(0);
+
+        await addDomain("approved.example.com");
+        await expect.poll(messages).toContainEqual({
+          type: "set",
+          key: "browser.cookieSync.domains",
+          value: ["example.com", "approved.example.com"],
+        });
+        snapshot.browser.cookieSync.domains.push("approved.example.com");
+        await replyToDeviceSetting(page, snapshot);
+
+        await profile.fill("cancelled-profile");
+        await revisit();
+        await expectProfileRequest("cancelled-profile");
+        await expect.poll(() => profile.inputValue()).toBe("cancelled-profile");
+        await replyToDeviceSetting(page, snapshot);
+        await expect.poll(() => profile.inputValue()).toBe("default");
+        await expect.poll(() => cancelledDomain.count()).toBe(0);
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(artifactDir, "02-cancelled-cookie-consent.png"),
+        });
+
+        await profile.fill("first-profile");
+        await profile.press("Tab");
+        await expectProfileRequest("first-profile");
+        await profile.fill("second-profile");
+        await revisit();
+        await expectProfileRequest("second-profile");
+        await replyToDeviceSetting(page, snapshot);
+        await expect.poll(() => profile.inputValue()).toBe("second-profile");
+        snapshot.browser.cookieSync.targetProfile = "second-profile";
+        await replyToDeviceSetting(page, snapshot);
+        await expect.poll(() => profile.inputValue()).toBe("second-profile");
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(artifactDir, "03-confirmed-newer-draft.png"),
+        });
+
+        // An external update must be visible once the latest request has settled.
+        snapshot.browser.cookieSync.targetProfile = "external-profile";
+        await page.evaluate((next: NativeDeviceSettingsSnapshot) => {
+          (window as DeviceSettingsTestWindow)["__OPENCLAW_NATIVE_DEVICE_SETTINGS__"] = next;
+          window.dispatchEvent(
+            new CustomEvent("openclaw:native-device-settings-changed", { detail: next }),
+          );
+        }, snapshot);
+        await expect.poll(() => profile.inputValue()).toBe("external-profile");
       },
     );
   });

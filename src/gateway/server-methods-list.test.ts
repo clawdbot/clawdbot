@@ -122,9 +122,9 @@ describe("listGatewayMethods", () => {
     expect(coreGatewayHandlers["audit.run.inspect"]).toBeTypeOf("function");
   });
 
-  it("advertises the update campaign hold method", () => {
-    expect(listGatewayMethods()).toContain("update.hold");
-    expect(coreGatewayHandlers["update.hold"]).toBeTypeOf("function");
+  it.each(["update.hold", "update.runs.get", "update.runs.list"])("advertises %s", (method) => {
+    expect(listGatewayMethods()).toContain(method);
+    expect(coreGatewayHandlers[method]).toBeTypeOf("function");
   });
 
   it("keeps deprecated restart preflight compatibility read-only and advertised", () => {

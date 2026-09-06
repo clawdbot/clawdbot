@@ -1,5 +1,5 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { readAcpSessionMetaBatch } from "../acp/runtime/session-meta.js";
 import { readSessionRuntimeOwnership } from "../agents/harness/session-runtime-ownership.js";
 import { normalizeStoredOverrideModel } from "../agents/model-selection.js";
@@ -9,14 +9,12 @@ import {
 } from "../agents/session-model-ref.js";
 import { buildSubagentSessionListReadIndex } from "../agents/subagents/registry/subagent-registry-read.js";
 import { resolveSessionStorePathCore, type SessionEntry } from "../config/sessions.js";
+import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-gateway.js";
 import { resolveConcreteSessionStorePath } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import type { SessionEntryPair } from "./session-list-order.js";
-import {
-  resolveSessionStoreAgentId,
-  resolveStoredSessionKeyForAgentStore,
-} from "./session-store-key.js";
+import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { readRecentSessionUsageFromTranscript as readScopedRecentSessionUsageFromTranscript } from "./session-transcript-readers.js";
 import type {
   SessionActorProfileIdentity,
@@ -216,7 +214,7 @@ export function resolveTranscriptUsageFallback(params: {
 export function populateSessionListAcpMetadata(params: {
   cfg: OpenClawConfig;
   entries: readonly SessionEntryPair[];
-  opts: SessionsListParams;
+  targetsBySessionKey: GatewayStoredSessionTargets;
   rowContext?: SessionListRowContext;
 }): void {
   const metadataByEntry = params.rowContext?.acpSessionMetaByEntry;
@@ -226,10 +224,7 @@ export function populateSessionListAcpMetadata(params: {
   const entries = params.entries
     .filter(([, entry]) => !metadataByEntry.has(entry))
     .map(([key, entry]) => {
-      const parsed = parseAgentSessionKey(key);
-      const agentId = normalizeAgentId(
-        parsed?.agentId ?? params.opts.agentId ?? resolveSessionStoreAgentId(params.cfg, key),
-      );
+      const agentId = expectDefined(params.targetsBySessionKey.get(key), "ACP row owner").agentId;
       return {
         sessionKey: resolveStoredSessionKeyForAgentStore({
           cfg: params.cfg,

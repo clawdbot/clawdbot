@@ -27,11 +27,15 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import { parseControlUiUserAvatarPath, parseControlUiResourcePath } from "./control-ui-contract.js";
 import { respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
 import { controlUiPluginAssetRoot } from "./control-ui-plugin-assets-contract.js";
+import { resolveAssistantMediaRoutePath } from "./control-ui-resource-routes.js";
 import {
+  classifyControlUiRequest,
   isControlUiApprovalDocumentPath,
   isControlUiFocusDocumentPath,
   isControlUiPluginManagerRequest,
 } from "./control-ui-routing.js";
+import { isControlUiSharePath } from "./control-ui-share.js";
+import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import {
   classifyGatewayProbePath,
@@ -355,13 +359,29 @@ export function createGatewayHttpServer(opts: {
         config: configSnapshot,
         ...routeAuth,
       };
+      const loadControlUi = () => {
+        const url = req.url ? new URL(req.url, "http://localhost") : undefined;
+        // Media owns its method/query policy, including explicit-allow POSTs.
+        // Classify the current URL so plugin fallthrough cannot load unrelated UI code.
+        return url &&
+          (url.pathname === resolveAssistantMediaRoutePath(controlUiBasePath) ||
+            classifyControlUiRequest({
+              basePath: normalizeControlUiBasePath(controlUiBasePath),
+              pathname: url.pathname,
+              search: url.search,
+              method: req.method,
+              accept: req.headers.accept,
+            }).kind !== "not-control-ui")
+          ? getControlUiModule()
+          : undefined;
+      };
       const handleControlUiRequest = async () =>
-        (await getControlUiModule()).handleControlUiHttpRequest(req, res, {
+        (await loadControlUi())?.handleControlUiHttpRequest(req, res, {
           ...controlUiRouteOptions,
           terminalEnabled: opts.isTerminalEnabled?.() ?? isTerminalConfigEnabled(configSnapshot),
           agentId: resolveAssistantAgentId(configSnapshot),
           root: controlUiRoot,
-        });
+        }) ?? false;
       const handleStandaloneControlUiRequest = async () => {
         if (!controlUiEnabled) {
           respondNotFound(res);
@@ -537,7 +557,10 @@ export function createGatewayHttpServer(opts: {
         basePath: controlUiBasePath,
         pathname: scopedRequestPath,
       });
-      addRequestStage(approvalDocument, handleStandaloneControlUiRequest);
+      addRequestStage(
+        approvalDocument || isControlUiSharePath(scopedRequestPath, controlUiRouteBasePath),
+        handleStandaloneControlUiRequest,
+      );
       addRequestStage(Boolean(nodeCapability), async () => {
         const { authorizePluginNodeCapabilityRequest } = await getPluginNodeCapabilityAuthModule();
         const ok = await authorizePluginNodeCapabilityRequest({
@@ -674,14 +697,19 @@ export function createGatewayHttpServer(opts: {
           async () => (await loadHandler())(req, res, controlUiRouteOptions),
         );
       }
-      addRequestStage(controlUiEnabled, async () =>
-        (await getControlUiModule()).handleControlUiAssistantMediaRequest(req, res, {
-          ...controlUiRouteOptions,
-          agentId: resolveAssistantAgentId(configSnapshot),
-        }),
+      addRequestStage(
+        controlUiEnabled,
+        async () =>
+          (await loadControlUi())?.handleControlUiAssistantMediaRequest(req, res, {
+            ...controlUiRouteOptions,
+            agentId: resolveAssistantAgentId(configSnapshot),
+          }) ?? false,
       );
-      addRequestStage(controlUiEnabled, async () =>
-        (await getControlUiModule()).handleControlUiAvatarRequest(req, res, controlUiRouteOptions),
+      addRequestStage(
+        controlUiEnabled,
+        async () =>
+          (await loadControlUi())?.handleControlUiAvatarRequest(req, res, controlUiRouteOptions) ??
+          false,
       );
       addRequestStage(controlUiEnabled, handleControlUiRequest);
 

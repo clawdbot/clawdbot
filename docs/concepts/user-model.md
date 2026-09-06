@@ -15,9 +15,9 @@ OpenClaw loads `USER.md` beside `MEMORY.md` at session start. It has a separate 
 
 ## Gateway profile and GitHub credit
 
-Your authenticated Gateway profile is separate from `USER.md`. Open **Settings → Profile → Identity** to set the display name and avatar shown to other people on the Gateway. A custom OpenClaw avatar remains authoritative when a GitHub account is verified.
+Your authenticated Gateway profile is separate from `USER.md`. Open **Settings → Profile → Identity** to set the display name and avatar shown to other people on the Gateway. A custom OpenClaw avatar remains authoritative when a GitHub account is verified. The Profile header follows your live user identity, including names cleared from another browser, even when several agents are configured; unidentified connections retain the default-agent preview.
 
-A single-user Gateway gives unidentified operator connections one durable local owner profile, shared across devices and tabs, including device-token reconnects. The Gateway host account's full name fills an unset display name; a saved name is never overwritten. If no full name is available, the sidebar shows **Owner** until you set a name. Login names are not used. The owner profile has no email and does not change permissions or identity scopes. It cannot be merged with a personal profile or assigned an operator role; sign in with a personal identity for those operations. If an older build merged the owner profile into a person, connections stay unidentified and log a repair hint. Run `openclaw doctor --fix`, then reconnect to restore the owner identity. The person keeps their emails, role, and GitHub identities.
+A single-user Gateway gives unidentified operator connections one durable local owner profile, shared across devices and tabs, including device-token reconnects. The Gateway host account's full name fills an unset display name; a saved name is never overwritten. If no full name is available, the sidebar and Profile header show **Owner** until you set a name. Login names are not used. The owner profile has no email and does not change permissions or identity scopes. It cannot be merged with a personal profile or assigned an operator role; sign in with a personal identity for those operations. If an older build merged the owner profile into a person, connections stay unidentified and log a repair hint. Run `openclaw doctor --fix`, then reconnect to restore the owner identity. The person keeps their emails, role, and GitHub identities.
 
 When `gateway.roles` is configured, unidentified operators receive the owner profile only with token or password authentication. Other connections need a profile-backed sign-in for personal identity. Node, ephemeral, and synthetic connections do not receive an owner profile.
 
@@ -47,7 +47,7 @@ Turning **Git co-author credit** off stops attribution for future runs. It does 
 
 ## GitHub connections
 
-Open **Settings → Profile → GitHub connections** to connect **My GitHub** without changing the shared **System GitHub** account. Both accounts and their connection status remain visible together. Connecting a credential does not change your verified GitHub sign-in identity, display name, avatar, Git co-author credit preference, or OpenClaw permissions.
+Open **Settings → Profile → GitHub connections** to connect **My GitHub** without changing the shared **System GitHub** account. Both accounts and their connection status remain visible together. Viewing these connections does not require selecting an agent or configuring a default agent. Connecting a credential does not change your verified GitHub sign-in identity, display name, avatar, Git co-author credit preference, or OpenClaw permissions.
 
 My GitHub requires an authenticated, durable Gateway profile, including the local owner profile. An identified operator with `operator.read` can manage only their own connection, even without administrative or general write access. Shared-secret devices using the owner profile share that connection; use per-person sign-in for a team. System and per-agent connection changes still require `operator.admin`.
 
@@ -62,6 +62,10 @@ For an idle session with a reconciled local worktree, open the compact account a
 The account arrow appears only while publication is idle and the account selection is unlocked, before a publication request or result. Pending status, retry actions, confirmation details, errors, and publication results remain inline, not inside the popover.
 
 If the Gateway rejects the selected account before accepting the first publication request, choose **Refresh publication**, review the current account, then explicitly publish again. An unknown outcome keeps the original account and request locked: **Retry publication** checks that same request instead of switching accounts or starting another publication.
+
+Publication state survives navigation between chats, including when an inactive chat pane is unloaded. Split panes showing the same chat share its publication progress and retry. The page retains up to 32 publication attempts within the current authenticated Gateway connection. At capacity, existing retries remain available; complete and review an existing publication, then select **Choose a new publication** before starting another. Read-only operators can **Dismiss** an observed completed result without publishing or confirming anything.
+
+Pending session deletion blocks publication actions without discarding the original request; a failed deletion restores its retry. Confirmed deletion retires the attempt. The page clears this memory on reload or connection changes; profile and session access changes also retire affected attempts.
 
 Publication requires `operator.write` and current access to modify the session; connecting your account alone does not grant either permission.
 

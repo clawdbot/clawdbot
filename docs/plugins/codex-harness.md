@@ -103,8 +103,8 @@ channel is the communication surface.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Managed Codex app-server `0.153.0`. The plugin ships and manages
-  `@openai/codex` `0.153.0` by default, so a `codex` command on `PATH` does not
+- Managed Codex app-server `0.153.4`. The plugin ships and manages
+  `@openai/codex` `0.153.4` by default, so a `codex` command on `PATH` does not
   affect normal startup. Explicit custom, remote, and macOS desktop-owned
   app-servers must report a parseable semantic version of `0.149.0` or newer.
   Newer versions continue with a compatibility warning and normal runtime
@@ -1424,6 +1424,19 @@ reads to finish. OpenClaw coordinates its own lifecycle operations for each
 native thread and preserves that thread's identity across ordinary resumes.
 A closed, replaced, or retired client still cannot complete a stale handoff.
 
+After a completed provider failure, you can continue in the same chat with its
+existing configuration. OpenClaw retains the configured native thread, including
+for `/codex resume` of that chat's already-bound thread. Provider policy refusals
+end the current request without automatic retry or model fallback. A later user
+message is a separate turn; it does not supply a native policy override or user
+confirmation.
+
+With Codex app-server `0.153.4`, first-time adoption or changed configuration of a
+loaded failed thread still requires native unloading. OpenClaw preserves the
+thread and reports missing configuration confirmation instead of assuming the
+changes took effect. Existing active-turn and parent-controlled-thread checks
+still apply.
+
 This coordination does not make native configuration replacement atomic against
 Codex-internal controllers. Native subagent reloads or another native controller
 can operate outside OpenClaw's thread queue. Avoid concurrently reconfiguring the
@@ -1434,7 +1447,8 @@ does not reserve it against a subsequent native reload.
 
 - `OPENCLAW_CODEX_APP_SERVER_BIN` bypasses the managed binary when
   `appServer.command` is unset.
-- `OPENCLAW_CODEX_APP_SERVER_ARGS`
+- `OPENCLAW_CODEX_APP_SERVER_ARGS` accepts a quoted argument string; see
+  [argument parsing](/plugins/codex-harness-reference#app-server-transport).
 - `OPENCLAW_CODEX_APP_SERVER_MODE=yolo|guardian`
 - `OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY`
 - `OPENCLAW_CODEX_APP_SERVER_SANDBOX`
