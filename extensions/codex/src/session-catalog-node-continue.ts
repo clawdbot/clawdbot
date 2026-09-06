@@ -1,9 +1,10 @@
-import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   createSessionCatalogAdoptionCoordinator,
+  publishSessionCatalogHost,
   sessionCatalogAdoptedSourceKey,
 } from "openclaw/plugin-sdk/session-catalog";
 import type { CodexThread } from "./app-server/protocol.js";
@@ -93,7 +94,10 @@ export async function listPairedNode(params: {
   node: CatalogNode;
   query: CodexSessionCatalogParams;
   adoptedSessions: ReadonlyMap<string, AdoptedSessionEntry>;
+  terminalCapabilities: Pick<CodexSessionCatalogHost, "canOpenTerminalCodex" | "canStartTerminal">;
   onHost?: (host: CodexSessionCatalogHost) => void;
+  waitUntil?: (completion: Promise<void>) => void;
+  signal?: AbortSignal;
 }): Promise<CodexSessionCatalogHost> {
   const hostId = `node:${params.node.nodeId}`;
   const common = {
@@ -102,6 +106,7 @@ export async function listPairedNode(params: {
     kind: "node" as const,
     nodeId: params.node.nodeId,
     canContinueCodex: canContinueCodexOnNode(params.node),
+    ...params.terminalCapabilities,
   };
   if (params.node.connected !== true) {
     const host = {
@@ -110,6 +115,11 @@ export async function listPairedNode(params: {
       sessions: [],
       error: { code: "NODE_OFFLINE", message: "Paired node is offline" },
     };
+    params.onHost?.(host);
+    return host;
+  }
+  if (!params.node.commands?.includes(CODEX_APP_SERVER_THREADS_LIST_COMMAND)) {
+    const host = { ...common, connected: true, sessions: [] };
     params.onHost?.(host);
     return host;
   }
@@ -126,6 +136,7 @@ export async function listPairedNode(params: {
         },
         timeoutMs: NODE_INVOKE_TIMEOUT_MS,
         scopes: ["operator.write"],
+        signal: params.signal,
       });
       const page = filterCatalogPageByTitle(
         parseCatalogPage(unwrapNodeInvokePayload(raw)),
@@ -149,11 +160,8 @@ export async function listPairedNode(params: {
       sessions: [],
       error: catalogError("NODE_INVOKE_FAILED", error),
     }));
-  if (params.onHost) {
-    // Keep the 8s aggregate response while allowing cold app-server discovery
-    // to replace that fail-soft page as soon as the node invoke really settles.
-    void eventualHost.then(params.onHost).catch(() => undefined);
-  }
+  // Retain publication through cold discovery without extending the fail-soft response.
+  publishSessionCatalogHost(params, eventualHost);
   try {
     return await withTimeout(
       eventualHost,
@@ -267,6 +275,7 @@ async function readNodeCodexHistory(params: {
     id: params.record.threadId,
     createdAt: params.record.createdAt ?? 0,
     modelProvider: params.record.modelProvider ?? "openai",
+    projectId: null,
     turns: page.data.toReversed(),
   };
   return {
@@ -352,9 +361,8 @@ async function continueNodeCodexSessionInner(params: {
       detachHint: "Start a new chat to leave the paired-node Codex session.",
       data: createCodexCliNodeConversationBindingData({
         nodeId,
-        // codex exec resume takes the CLI session id; forked threads share a
-        // session tree where the thread id and session id differ.
-        sessionId: record.sessionId?.trim() || params.threadId,
+        // CLI resume resolves a UUID as its exact thread; family session IDs can select a sibling.
+        sessionId: params.threadId,
         agentId: adopted.agentId,
         cwd: record.cwd,
       }),
@@ -382,10 +390,10 @@ export async function continueNodeCodexSession(params: {
   if (!nodeId || params.hostId !== `node:${nodeId}`) {
     throw new CatalogParamsError("Codex session catalog hostId is invalid");
   }
-  const agentId = resolveSessionAgentIds({
+  const agentId = resolveSessionAgentIdsStrict({
     config: params.config,
     agentId: params.agentId,
-  }).defaultAgentId;
+  }).sessionAgentId;
   const sourceKey = sessionCatalogAdoptedSourceKey(`node:${nodeId}`, params.threadId);
   const operationKey = sessionCatalogAdoptedSourceKey(agentId, sourceKey);
   // Memoization is agent-qualified while the native action lock is source-qualified,

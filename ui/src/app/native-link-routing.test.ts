@@ -5,7 +5,9 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import "../components/github-link-hovercard-registration.ts";
 import type { GitHubLinkHovercardProvider } from "../components/github-link-hovercard.runtime.ts";
 import "../components/modal-dialog.ts";
-import { startNativeLinkRouting } from "./native-link-routing.ts";
+import { postNativeUpdate, startNativeLinkRouting } from "./native-link-routing.ts";
+
+const NATIVE_UPDATE_DECLINED_EVENT = "openclaw:native-update-declined";
 
 type NativeLinkRouting = ReturnType<typeof startNativeLinkRouting>;
 
@@ -50,6 +52,22 @@ function click(anchor: HTMLAnchorElement, init: MouseEventInit = {}) {
   return event;
 }
 
+function clickWithoutNavigation(anchor: HTMLAnchorElement, init: MouseEventInit = {}) {
+  let defaultPrevented: boolean | undefined;
+  const preventNavigation = (event: MouseEvent) => {
+    defaultPrevented = event.defaultPrevented;
+    event.preventDefault();
+  };
+  // Observe after the native router, then suppress jsdom's default navigation.
+  window.addEventListener("click", preventNavigation, { once: true });
+  try {
+    click(anchor, init);
+    return defaultPrevented;
+  } finally {
+    window.removeEventListener("click", preventNavigation);
+  }
+}
+
 function contextMenu(anchor: HTMLAnchorElement) {
   const event = new MouseEvent("contextmenu", {
     bubbles: true,
@@ -74,6 +92,23 @@ function menuItem(label: string): HTMLButtonElement {
 }
 
 describe("native link routing", () => {
+  it("delivers each native update decline once across route changes", () => {
+    const onNativeUpdateDeclined = vi.fn();
+    const postMessage = vi.fn();
+    vi.stubGlobal("webkit", { messageHandlers: { openclawUpdate: { postMessage } } });
+    routing = startNativeLinkRouting({ onNativeUpdateDeclined });
+
+    expect(postNativeUpdate()).toBe(true);
+    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
+    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
+    expect(onNativeUpdateDeclined).toHaveBeenCalledOnce();
+
+    expect(postNativeUpdate()).toBe(true);
+    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
+    expect(onNativeUpdateDeclined).toHaveBeenCalledTimes(2);
+    expect(postMessage).toHaveBeenCalledTimes(2);
+  });
+
   it("does not install native behavior without the WebKit bridge", () => {
     routing = startNativeLinkRouting();
     const anchor = appendLink("https://example.com/report");
@@ -192,7 +227,7 @@ describe("native link routing", () => {
     ]);
   });
 
-  it("preserves modifiers, local/file/download links, and non-web schemes", () => {
+  it("preserves modified, local, file, download, and untrusted app-link clicks", () => {
     const bridge = installBridge();
     routing = startNativeLinkRouting();
     const links = [
@@ -202,15 +237,11 @@ describe("native link routing", () => {
       appendLink("mailto:hello@example.com"),
     ];
     for (const anchor of links) {
-      anchor.addEventListener("click", (event) => event.preventDefault());
-      click(anchor);
+      expect(clickWithoutNavigation(anchor)).toBe(false);
     }
     const modified = appendLink("https://example.com/modified");
-    const bubbleHandler = vi.fn((event: Event) => event.preventDefault());
-    modified.addEventListener("click", bubbleHandler);
-    click(modified, { metaKey: true });
+    expect(clickWithoutNavigation(modified, { metaKey: true })).toBe(false);
 
-    expect(bubbleHandler).toHaveBeenCalledOnce();
     expect(bridge.messages).toEqual([]);
   });
 
@@ -317,9 +348,10 @@ describe("native link routing", () => {
 
     routing.dispose();
     routing = undefined;
-    anchor.addEventListener("click", (event) => event.preventDefault());
-    click(anchor);
 
+    expect(document.querySelector("openclaw-native-link-menu")).toBeNull();
+    expect(clickWithoutNavigation(anchor)).toBe(false);
+    expect(contextMenu(anchor).defaultPrevented).toBe(false);
     expect(document.querySelector("openclaw-native-link-menu")).toBeNull();
     expect(bridge.messages).toEqual([]);
   });

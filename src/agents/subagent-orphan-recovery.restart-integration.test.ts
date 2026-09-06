@@ -74,14 +74,20 @@ async function acceptRecoveryDispatch(payload: Record<string, unknown>) {
 
 const dispatchAgent = vi.fn(acceptRecoveryDispatch);
 const gatewayRuntime: GatewayRecoveryRuntime = {
+  abortAgent: vi.fn(),
   dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
   waitForAgent: vi.fn(async () => ({
     status: "pending",
   })) as GatewayRecoveryRuntime["waitForAgent"],
   sendRecoveryNotice: vi.fn(),
 };
-const activateGatewayRuntime = () =>
-  activateSubagentRegistry(() => ({ recoveryRuntime: gatewayRuntime }) as never);
+const activateGatewayRuntime = () => {
+  const gatewayContext = {
+    recoveryRuntime: gatewayRuntime,
+    resolveGatewayContext: () => gatewayContext as never,
+  };
+  activateSubagentRegistry(gatewayContext.resolveGatewayContext);
+};
 
 vi.mock("../gateway/session-utils.fs.js", () => ({
   readSessionMessagesAsync: vi.fn(async () => []),

@@ -1,11 +1,12 @@
 // Control Ui I18N tests cover control ui i18n script behavior.
 import { spawn, spawnSync } from "node:child_process";
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import type { AssistantMessage } from "@openclaw/ai";
 import * as ts from "typescript";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assertControlUiGeneratedArtifactsIsolated,
   resolveAllowedGeneratedMixBranch,
@@ -24,11 +25,185 @@ import {
   filterPlaceholderCompatibleTranslations,
   parseTranslationBatchReply,
   runProcess,
-  shouldReuseExistingTranslation,
+  translateNativeEntries,
 } from "../../scripts/control-ui-i18n.ts";
 import { collectControlUiRawCopyFromSource } from "../../scripts/lib/control-ui-i18n-raw-copy.ts";
 import { waitForPidFile } from "../helpers/process-wait.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
+
+vi.mock("../../scripts/lib/sleep.mjs", () => ({ sleep: async () => {} }));
+const llm = vi.hoisted(() => ({ completeSimple: vi.fn() }));
+vi.mock("@openclaw/ai", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/ai")>();
+  return {
+    ...actual,
+    createLlmRuntime: () => ({ ...actual.createLlmRuntime(), completeSimple: llm.completeSimple }),
+  };
+});
+
+describe("translation provider privacy and fallback", () => {
+  const primary = "private-primary-fixture";
+  const fallback = "private-fallback-fixture";
+  const entries = Array.from({ length: 21 }, (_, index) => ({
+    id: `label${index}`,
+    source: "Open",
+    sourcePath: "fixture.ts",
+  }));
+  const response = (overrides: Partial<AssistantMessage> = {}): AssistantMessage => ({
+    role: "assistant",
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(Object.fromEntries(entries.map((entry) => [entry.id, "Ouvrir"]))),
+      },
+    ],
+    api: "openai-responses",
+    provider: "openai",
+    model: primary,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: 0,
+    ...overrides,
+  });
+  beforeEach(() => {
+    llm.completeSimple.mockReset();
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    vi.stubEnv("OPENCLAW_CONTROL_UI_I18N_PROVIDER", "openai");
+    vi.stubEnv("OPENCLAW_CONTROL_UI_I18N_MODEL", primary);
+    vi.stubEnv("OPENCLAW_I18N_FALLBACK_MODEL", fallback);
+    vi.spyOn(process.stdout, "write").mockReturnValue(true);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it("reports CLI failures without disclosing configured model or key values", async () => {
+    const result = await runProcess(process.execPath, [
+      "--import",
+      "./scripts/tsx.mjs",
+      "scripts/control-ui-i18n.ts",
+      "sync",
+      "--locale",
+      `${primary.toUpperCase()}/${fallback}/test-key`,
+    ]);
+    expect(result.code).toBe(1);
+    expect(result.stderr.trim()).toBe("unknown locale: [redacted]/[redacted]/[redacted]");
+  });
+
+  it("translates outside the Gateway runtime without state access or model diagnostics", async () => {
+    const temp = createTempDirTracker();
+    const stateDir = path.join(temp.make("openclaw-translation-runtime-"), "state");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    try {
+      const scriptUrl = pathToFileURL(path.resolve("scripts/control-ui-i18n.ts")).href;
+      const code = `
+        import assert from "node:assert/strict";
+        import net from "node:net";
+        import { syncBuiltinESMExports } from "node:module";
+        const rejectNetwork = () => { throw new Error("Unexpected network connection"); };
+        net.connect = net.createConnection = net.Socket.prototype.connect = rejectNetwork;
+        syncBuiltinESMExports();
+        let requests = 0;
+        globalThis.fetch = async () => {
+          requests += 1;
+          const item = { id: "message", type: "message", role: "assistant", content: [] };
+          const text = JSON.stringify({ connect: "Connecter" });
+          const events = [
+            { type: "response.created", response: { id: "response" } },
+            { type: "response.output_item.added", output_index: 0, item },
+            { type: "response.content_part.added", output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } },
+            { type: "response.output_text.delta", output_index: 0, content_index: 0, delta: text },
+            { type: "response.output_item.done", output_index: 0, item: { ...item, content: [{ type: "output_text", text, annotations: [] }] } },
+            { type: "response.completed", response: { id: "response", status: "completed" } },
+          ];
+          return new Response(events.map(event => "data: " + JSON.stringify(event) + "\\n\\n").join(""), { headers: { "Content-Type": "text/event-stream" } });
+        };
+        const { translateNativeEntries } = await import(${JSON.stringify(scriptUrl)});
+        const result = await translateNativeEntries([{ id: "connect", source: "Connect", sourcePath: "fixture" }], "fr");
+        assert.equal(result.get("connect"), "Connecter");
+        assert.equal(requests, 1);
+        console.log("isolated-runtime-ok");
+      `;
+      const result = await runProcess(process.execPath, [
+        "--import",
+        "./scripts/tsx.mjs",
+        "--input-type=module",
+        "-e",
+        code,
+      ]);
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout).toContain("isolated-runtime-ok");
+      expect(result.stdout + result.stderr).not.toContain(primary);
+      expect(result.stdout + result.stderr).not.toContain("[model-fetch]");
+      expect(existsSync(stateDir)).toBe(false);
+    } finally {
+      temp.cleanup();
+    }
+  });
+
+  it("switches only an unavailable model and keeps the fallback for later batches", async () => {
+    const complete = vi
+      .spyOn(llm, "completeSimple")
+      .mockResolvedValueOnce(
+        response({
+          stopReason: "error",
+          errorCode: "model_not_found",
+          errorMessage: `Cannot use ${primary}`,
+        }),
+      )
+      .mockResolvedValue(response());
+    expect((await translateNativeEntries(entries, "fr")).size).toBe(entries.length);
+    expect(complete.mock.calls.map(([model]) => model.id)).toEqual([primary, fallback, fallback]);
+    const log = vi.mocked(process.stdout).write.mock.calls.flat().join("");
+    expect(log).toContain("primary model unavailable");
+    expect(log).not.toContain(primary);
+    expect(log).not.toContain(fallback);
+  });
+
+  it.each(["401", "403", "404", "429", "insufficient_quota", "ECONNRESET"])(
+    "keeps %s failures private without changing models",
+    async (errorCode) => {
+      const complete = vi.spyOn(llm, "completeSimple").mockResolvedValue(
+        response({
+          stopReason: "error",
+          errorCode,
+          errorMessage: `${errorCode}: ${primary} unavailable; try ${fallback}`,
+        }),
+      );
+      await expect(translateNativeEntries(entries.slice(0, 1), "fr")).rejects.toThrow(
+        "translation provider failed",
+      );
+      expect(complete.mock.calls.every(([model]) => model.id === primary)).toBe(true);
+      const log = vi.mocked(process.stdout).write.mock.calls.flat().join("");
+      expect(log).not.toContain(primary);
+      expect(log).not.toContain(fallback);
+    },
+  );
+
+  it("does not expose rejected provider errors or escaped model echoes", async () => {
+    const complete = vi
+      .spyOn(llm, "completeSimple")
+      .mockRejectedValue(new Error(`Transport for ${primary}`));
+    await expect(translateNativeEntries(entries.slice(0, 1), "fr")).rejects.toThrow(
+      "provider_error",
+    );
+    complete.mockResolvedValue(
+      response({ content: [{ type: "text", text: '{"label0":"private-\\u0070rimary-fixture"}' }] }),
+    );
+    await expect(translateNativeEntries(entries.slice(0, 1), "fr")).rejects.toThrow(
+      "provider_error",
+    );
+    expect(vi.mocked(process.stdout).write.mock.calls.flat().join("")).not.toContain(primary);
+  });
+});
 
 describe("control-ui-i18n generated ownership", () => {
   it("keeps generated locale snapshots out of source PRs", () => {
@@ -351,6 +526,30 @@ describe("control-ui-i18n process runner", () => {
     ).toEqual(new Map([["configView.viewPendingChange", "Pending change ({count})"]]));
   });
 
+  it("runs an optional result validator before accepting a batch reply", () => {
+    const items = [
+      {
+        cacheKey: "cache-key",
+        key: "native.apple.progress",
+        text: "Processed %lld of %@",
+        textHash: "text-hash",
+      },
+    ];
+
+    expect(() =>
+      parseTranslationBatchReply(
+        JSON.stringify({ "native.apple.progress": "Bearbetade %@" }),
+        items,
+        "sv",
+        (source, translated, key, locale) => {
+          if (source.includes("%lld") && !translated.includes("%lld")) {
+            throw new Error(`invalid structural tokens for ${locale}:${key}`);
+          }
+        },
+      ),
+    ).toThrow("invalid structural tokens for sv:native.apple.progress");
+  });
+
   it("makes placeholder-incompatible existing copy pending for bot repair", () => {
     const reusable = filterPlaceholderCompatibleTranslations(
       new Map([
@@ -412,29 +611,27 @@ describe("control-ui-i18n process runner", () => {
     ).not.toThrow();
   });
 
-  it("refreshes recorded fallback copy when sync is forced without a provider", () => {
-    expect(
-      shouldReuseExistingTranslation({
-        allowTranslate: false,
-        force: true,
-        isFallback: true,
-      }),
-    ).toBe(false);
-    expect(
-      shouldReuseExistingTranslation({
-        allowTranslate: false,
-        force: false,
-        isFallback: true,
-      }),
-    ).toBe(true);
-  });
-
   it("keeps a bounded process output tail", () => {
     const first = appendBoundedProcessOutput({ text: "", truncatedChars: 0 }, "abcdef", 5);
     const second = appendBoundedProcessOutput(first, "ghij", 5);
 
     expect(first).toEqual({ text: "bcdef", truncatedChars: 1 });
     expect(second).toEqual({ text: "fghij", truncatedChars: 5 });
+  });
+
+  it("does not split a UTF-16 surrogate pair at the tail boundary", () => {
+    // "ab😀cdef" is 8 UTF-16 code units: a, b, <high>, <low>, c, d, e, f.
+    // maxChars = 5 forces a tail slice whose boundary lands inside the surrogate pair.
+    // The raw `slice(-5)` would return "<low>cdef" (leading dangling low surrogate).
+    // sliceUtf16Safe advances past the low surrogate, retaining "cdef" (4 units);
+    // truncatedChars must reflect the 4 actually-dropped units, not maxChars.
+    const result = appendBoundedProcessOutput({ text: "", truncatedChars: 0 }, "ab😀cdef", 5);
+    expect(result.text.length).toBeLessThanOrEqual(5);
+    // No dangling surrogate (high 0xd800-0xdbff or low 0xdc00-0xdfff) at either edge.
+    expect(result.text.charCodeAt(0)).toBeLessThan(0xd800);
+    expect(result.text.charCodeAt(result.text.length - 1)).toBeLessThan(0xd800);
+    expect(result.text).toBe("cdef");
+    expect(result.truncatedChars).toBe(4);
   });
 
   it("bounds failure diagnostics to the newest output", async () => {

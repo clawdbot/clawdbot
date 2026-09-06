@@ -1,6 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import type { GatewayClient } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   discoverAllSessions: vi.fn(),
@@ -59,17 +62,24 @@ function sessionSummary(totalTokens: number) {
 async function runSessionsUsage(
   params: Record<string, unknown>,
   runtimeConfig: OpenClawConfig = config,
+  client?: GatewayClient,
+  method: "sessions.usage" | "usage.cost" = "sessions.usage",
 ) {
   const respond = vi.fn();
   await expectDefined(
-    usageHandlers["sessions.usage"],
-    'usageHandlers["sessions.usage"] test invariant',
+    usageHandlers[method],
+    `usageHandlers["${method}"] test invariant`,
   )({
     respond,
     params,
+    client: client ?? null,
     context: { getRuntimeConfig: () => runtimeConfig },
   } as unknown as Parameters<(typeof usageHandlers)["sessions.usage"]>[0]);
   expect(respond).toHaveBeenCalledTimes(1);
+  if (method === "usage.cost") {
+    expect(respond.mock.calls[0]?.[0]).toBe(false);
+    return expectDefined(respond.mock.calls[0]?.[2], "usage.cost error");
+  }
   expect(respond.mock.calls[0]?.[0]).toBe(true);
   return expectDefined(respond.mock.calls[0]?.[1], "sessions.usage result");
 }
@@ -83,6 +93,8 @@ describe("sessions.usage result cache", () => {
     vi.clearAllMocks();
     testApi.sessionsUsageCache.clear();
     mocks.loadCombinedSessionStoreForGatewayCore.mockReturnValue({
+      targetsBySessionKey: new Map(),
+      durableTargets: [],
       storePath: "(multiple)",
       store: {},
     });
@@ -117,6 +129,58 @@ describe("sessions.usage result cache", () => {
     expect(JSON.stringify(repeated)).toBe(JSON.stringify(first));
     expect(mocks.discoverAllSessions).toHaveBeenCalledTimes(1);
     expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps context availability in lightweight rows without caching away requested details", async () => {
+    const contextWeight = {
+      source: "run",
+      generatedAt: 1,
+      systemPrompt: { chars: 100, projectContextChars: 40, nonProjectContextChars: 60 },
+      injectedWorkspaceFiles: [],
+      skills: { promptChars: 0, entries: [] },
+      tools: { listChars: 0, schemaChars: 0, entries: [] },
+    };
+    mocks.loadCombinedSessionStoreForGatewayCore.mockReturnValue({
+      targetsBySessionKey: new Map([
+        [
+          "agent:main:main",
+          {
+            agentId: "main",
+            storeTarget: {
+              agentId: "main",
+              storePath: "/tmp/agents/main/agent/openclaw-agent.sqlite",
+            },
+          },
+        ],
+      ]),
+      durableTargets: [],
+      storePath: "(multiple)",
+      store: {
+        "agent:main:main": {
+          sessionId: "session-main",
+          updatedAt: 100,
+          systemPromptReport: contextWeight,
+        },
+      },
+    });
+    const lean = await runSessionsUsage({ ...baseParams, agentScope: "all" });
+    expect(lean).toMatchObject({
+      sessions: [
+        { agentId: "main", hasContextWeight: true },
+        { agentId: "opus", hasContextWeight: false },
+      ],
+    });
+    expect(JSON.stringify(lean)).not.toContain('"contextWeight":');
+
+    const detailed = await runSessionsUsage({
+      ...baseParams,
+      agentScope: "all",
+      includeContextWeight: true,
+    });
+    expect(detailed).toMatchObject({
+      sessions: [{ contextWeight }, { contextWeight: null }],
+    });
+    expect(await runSessionsUsage({ ...baseParams, agentScope: "all" })).toEqual(lean);
   });
 
   it("does not share entries across result-shaping query parameters", async () => {
@@ -155,6 +219,142 @@ describe("sessions.usage result cache", () => {
 
     expect(mocks.discoverAllSessions).toHaveBeenCalledTimes(2);
     expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(2);
+  });
+
+  it("partitions usage by role identity and excludes foreign sessions before aggregation", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const firstProfile = ensureProfileForEmail("first@example.com");
+      const secondProfile = ensureProfileForEmail("second@example.com");
+      const roleConfig: OpenClawConfig = {
+        ...config,
+        gateway: {
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                sessions: { others: "none" },
+                agents: "*",
+                scopes: ["operator.read", "operator.write"],
+              },
+            },
+          },
+        },
+      };
+      mocks.loadCombinedSessionStoreForGatewayCore.mockReturnValue({
+        targetsBySessionKey: new Map([
+          [
+            "agent:main:first",
+            {
+              agentId: "main",
+              storeTarget: {
+                agentId: "main",
+                storePath: "/tmp/agents/main/agent/openclaw-agent.sqlite",
+              },
+            },
+          ],
+          [
+            "agent:main:second",
+            {
+              agentId: "main",
+              storeTarget: {
+                agentId: "main",
+                storePath: "/tmp/agents/main/agent/openclaw-agent.sqlite",
+              },
+            },
+          ],
+        ]),
+        durableTargets: [],
+        storePath: "(multiple)",
+        store: {
+          "agent:main:first": {
+            sessionId: "session-first",
+            updatedAt: 200,
+            createdActor: { type: "human", source: "profile", id: firstProfile.id },
+            visibility: "shared",
+          },
+          "agent:main:second": {
+            sessionId: "session-second",
+            updatedAt: 100,
+            createdActor: { type: "human", source: "profile", id: secondProfile.id },
+            visibility: "shared",
+          },
+        },
+      });
+      mocks.discoverAllSessions.mockResolvedValue([
+        { sessionId: "session-first", sessionFile: "/tmp/first.jsonl", mtime: 200 },
+        { sessionId: "session-second", sessionFile: "/tmp/second.jsonl", mtime: 100 },
+      ]);
+      const identifiedClient = (profileId: string): GatewayClient => ({
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 1,
+          client: {
+            id: "openclaw-control-ui",
+            version: "test",
+            platform: "test",
+            mode: "webchat",
+          },
+          role: "operator",
+          scopes: ["operator.read", "operator.write"],
+        },
+        authenticatedUserProfile: {
+          profileId,
+          displayName: null,
+          hasAvatar: false,
+          updatedAt: 1,
+        },
+      });
+
+      // Host-internal dispatch mints system authority; a clientless call with roles
+      // active is an unidentified operator and correctly resolves to the denied role.
+      const systemClient: GatewayClient = {
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 1,
+          client: {
+            id: "gateway-client",
+            version: "test",
+            platform: "test",
+            mode: "backend",
+          },
+          role: "operator",
+          scopes: ["operator.read"],
+        },
+        internal: { operatorRoleActor: { kind: "system" } },
+      };
+      const unrestricted = (await runSessionsUsage(baseParams, roleConfig, systemClient)) as {
+        sessions: Array<{ key: string }>;
+        totals: { totalTokens: number };
+      };
+      const first = (await runSessionsUsage(
+        baseParams,
+        roleConfig,
+        identifiedClient(firstProfile.id),
+      )) as typeof unrestricted;
+      const second = (await runSessionsUsage(
+        baseParams,
+        roleConfig,
+        identifiedClient(secondProfile.id),
+      )) as typeof unrestricted;
+
+      expect(unrestricted.totals.totalTokens).toBe(20);
+      expect(first.sessions.map((session) => session.key)).toEqual(["agent:main:first"]);
+      expect(second.sessions.map((session) => session.key)).toEqual(["agent:main:second"]);
+      expect(first.totals.totalTokens).toBe(10);
+      expect(second.totals.totalTokens).toBe(10);
+      expect(testApi.sessionsUsageCache.size).toBe(3);
+
+      const deniedCost = await runSessionsUsage(
+        baseParams,
+        roleConfig,
+        identifiedClient(firstProfile.id),
+        "usage.cost",
+      );
+      expect(deniedCost).toMatchObject({
+        code: "FORBIDDEN",
+        message: expect.stringContaining("sessions hidden by your operator role"),
+      });
+    });
   });
 
   it("coalesces concurrent cold misses into one transcript aggregation", async () => {

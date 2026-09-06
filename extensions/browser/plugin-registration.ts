@@ -77,6 +77,7 @@ function createLazyBrowserTool(
     sandboxBridgeUrl?: string;
     allowHostControl?: boolean;
     agentSessionKey?: string;
+    agentId?: string;
     agentDir?: string;
     workspaceDir?: string;
     activeModel?: {
@@ -138,6 +139,7 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   activeModel?: {
@@ -159,6 +161,7 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
       ? { allowHostControl: ctx.browser.allowHostControl }
       : {}),
     ...(ctx.sessionKey ? { agentSessionKey: ctx.sessionKey } : {}),
+    ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
     ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
     ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
     ...(ctx.activeModel?.provider || ctx.activeModel?.modelId
@@ -187,7 +190,19 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
 /** Browser plugin reload policy. */
 export const browserPluginReload = {
   restartPrefixes: ["browser"],
-  hotPrefixes: ["browser.profiles"],
+  hotPrefixes: [
+    "browser.profiles",
+    "browser.defaultProfile",
+    "browser.headless",
+    "browser.executablePath",
+    "browser.attachOnly",
+    "browser.cdpUrl",
+    "browser.noSandbox",
+    "browser.extraArgs",
+    "browser.snapshotDefaults",
+    "browser.tabCleanup",
+    "browser.allowSystemProfileImport",
+  ],
 };
 
 /** Node-host command descriptors exposed by the Browser plugin. */

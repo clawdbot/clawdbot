@@ -11,7 +11,7 @@ import type {
   AuditListResult,
   AuditRunInspectParams,
   AuditRunInspectResult,
-  DecisionReceiptV1,
+  DecisionReceiptDisplayV1,
   ExecutionIdentityContextV1,
   PrincipalRefV1,
 } from "../../packages/gateway-protocol/src/index.js";
@@ -270,7 +270,7 @@ function unsupportedRunInspection(
         },
       ],
     },
-    decisions: [],
+    decisionDisplays: [],
     coverage: { state: "unsupported", missingEvidence },
   };
 }
@@ -399,32 +399,37 @@ function unavailableIdentityLines(state: "unknown" | "unsupported"): string[] {
   return IDENTITY_FIELD_LABELS.map((label) => fieldLine(label, state));
 }
 
-function decisionLines(receipt: DecisionReceiptV1): string[] {
+function decisionLines(receipt: DecisionReceiptDisplayV1): string[] {
   const evidence =
-    receipt.action.family === "run" && receipt.action.operation === "admission"
-      ? "admission provenance only; no enforcement decision"
-      : receipt.enforcement.coverageState === "unknown" ||
-          receipt.enforcement.coverageState === "unsupported"
-        ? "evidence unavailable or corrupt; do not infer authorization"
-        : receipt.source.owner === "operator_approvals"
-          ? "authoritative owner-native SQLite record; retained 30 days"
-          : receipt.enforcement.coverageState === "enforced"
-            ? "validated immutable decision fact; retained 30 days"
-            : "attribution record only; no enforcement decision";
+    receipt.provenance.state === "unverified"
+      ? "producer display contract unverified; receipt prose omitted"
+      : receipt.provenance.producer === "run-admission"
+        ? "admission provenance only; no enforcement decision"
+        : receipt.enforcement.coverageState === "unknown" ||
+            receipt.enforcement.coverageState === "unsupported"
+          ? "evidence unavailable or corrupt; do not infer authorization"
+          : receipt.provenance.producer === "operator-approval"
+            ? "authoritative owner-native SQLite record; retained 30 days"
+            : receipt.enforcement.coverageState === "enforced"
+              ? "validated immutable decision fact; retained 30 days"
+              : "attribution record only; no enforcement decision";
+  const producer =
+    receipt.provenance.state === "verified" ? receipt.provenance.producer : "unverified";
   return [
     `  ${safe(receipt.action.family)}.${safe(receipt.action.operation)}: ${safe(receipt.decision.outcome)}`,
     `    Coverage: ${safe(receipt.enforcement.coverageState)}`,
     `    Reason: ${safe(receipt.decision.reasonCode)}`,
-    `    Source: ${safe(receipt.source.owner)} at ${safe(receipt.source.decisionBoundary)}`,
+    `    Display producer: ${safe(producer)}`,
     `    Evidence: ${evidence}`,
-    `    Policy refs: ${receipt.enforcement.policyRefs.length > 0 ? receipt.enforcement.policyRefs.map(safe).join(", ") : "none"}`,
-    `    Grant refs: ${receipt.enforcement.grantRefs.length > 0 ? receipt.enforcement.grantRefs.map(safe).join(", ") : "none"}`,
+    `    Policy refs: ${receipt.enforcement.policyCount}`,
+    `    Grant refs: ${receipt.enforcement.grantCount}`,
     `    Context used: ${receipt.enforcement.contextFieldsUsed.length > 0 ? receipt.enforcement.contextFieldsUsed.map(safe).join(", ") : "none"}`,
     ...(receipt.action.summary ? [`    Summary: ${safe(receipt.action.summary)}`] : []),
   ];
 }
 
 function formatAuditRunInspection(result: AuditRunInspectResult): string[] {
+  const decisionDisplays = result.decisionDisplays;
   const selectorText = result.run.executionId
     ? `Execution ${safe(result.run.executionId)}${result.run.runId ? ` (run ${safe(result.run.runId)})` : ""}`
     : `Run ${safe(result.run.runId)}`;
@@ -473,10 +478,10 @@ function formatAuditRunInspection(result: AuditRunInspectResult): string[] {
     );
   }
   lines.push("", "Decisions");
-  if (result.decisions.length === 0) {
+  if (decisionDisplays.length === 0) {
     lines.push("  none [absent]");
   } else {
-    for (const receipt of result.decisions) {
+    for (const receipt of decisionDisplays) {
       lines.push(...decisionLines(receipt));
     }
   }
@@ -488,7 +493,7 @@ function formatAuditRunInspection(result: AuditRunInspectResult): string[] {
   );
   const remediation = [
     ...(result.identity.state === "present" ? [] : result.identity.remediation),
-    ...result.decisions.flatMap((decision) => decision.remediation),
+    ...decisionDisplays.flatMap((decision) => decision.remediation),
   ];
   lines.push("", "Next steps");
   lines.push(

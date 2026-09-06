@@ -1,4 +1,7 @@
+import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   chatSessionListResponse,
   controlUiSessionPath,
@@ -14,7 +17,10 @@ const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
   it("drains an inactive agent outbox while the selected global agent is active", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("chat-outbox-agent-scope", artifactRoot)
+      : undefined;
     const context = await suite.newBrowserContext({
       locale: "en-US",
       ...(artifactDir
@@ -24,6 +30,7 @@ suite.define(() => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
+    const activePane = page.locator(".chat-pane-cache__pane--active");
     const agentsList = {
       agents: [
         { id: "main", name: "Main" },
@@ -31,13 +38,13 @@ suite.define(() => {
       ],
       defaultId: "main",
       mainKey: "main",
-      scope: "agent",
+      scope: "global",
     };
-    const historyResponse = (active: boolean) => ({
+    const historyResponse = (agentId: "main" | "work", active: boolean) => ({
       messages: [],
-      sessionId: active ? "main-global-session" : "work-global-session",
+      sessionId: `${agentId}-global-session`,
       sessionInfo: {
-        activeRunIds: active ? ["main-active-run"] : [],
+        activeRunIds: active ? [`${agentId}-active-run`] : [],
         hasActiveRun: active,
         key: "global",
         status: active ? "running" : "done",
@@ -57,23 +64,31 @@ suite.define(() => {
         },
       ]);
     const gateway = await installMockGateway(page, {
+      sessionScope: "global",
+      mainSessionKey: "global",
       methodResponses: {
         "agents.list": agentsList,
         "chat.history": {
           cases: [
-            { match: { agentId: "work", sessionKey: "global" }, response: historyResponse(true) },
-            { match: { agentId: "main", sessionKey: "global" }, response: historyResponse(true) },
+            {
+              match: { agentId: "work", sessionKey: "global" },
+              response: historyResponse("work", true),
+            },
+            {
+              match: { agentId: "main", sessionKey: "global" },
+              response: historyResponse("main", true),
+            },
           ],
         },
         "chat.startup": {
           cases: [
             {
               match: { agentId: "work" },
-              response: { ...historyResponse(false), agentsList },
+              response: { ...historyResponse("work", false), agentsList },
             },
             {
               match: { agentId: "main" },
-              response: { ...historyResponse(true), agentsList },
+              response: { ...historyResponse("main", true), agentsList },
             },
           ],
         },
@@ -91,7 +106,11 @@ suite.define(() => {
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor({ state: "visible", timeout: 10_000 });
       await gateway.setOnline(false);
-      await page.locator(".agent-chat__offline-hint").waitFor({ timeout: 10_000 });
+      await page
+        .locator(
+          '.agent-chat__composer-underlaps[data-tone="warn"] .agent-chat__composer-status-band',
+        )
+        .waitFor({ timeout: 10_000 });
 
       const prompt = "deliver the work outbox independently";
       await composer.fill(prompt);
@@ -99,10 +118,10 @@ suite.define(() => {
       const queue = page.locator(".chat-queue");
       await queue.getByText("Waiting for reconnect").waitFor({ timeout: 10_000 });
       if (artifactDir) {
-        await page.screenshot({
-          path: `${artifactDir}/inactive-agent-offline.png`,
-          fullPage: true,
-        });
+        await writeFile(
+          `${artifactDir}/inactive-agent-offline.png`,
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [queue]),
+        );
       }
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await page.evaluate(() => {
@@ -113,7 +132,9 @@ suite.define(() => {
       });
       await gateway.setOnline(true);
       await page
-        .locator(".agent-chat__offline-hint")
+        .locator(
+          '.agent-chat__composer-underlaps[data-tone="warn"] .agent-chat__composer-status-band',
+        )
         .waitFor({ state: "detached", timeout: 10_000 });
       await page.evaluate(async () => {
         const app = document.querySelector("openclaw-app") as HTMLElement & {
@@ -136,8 +157,14 @@ suite.define(() => {
       await gateway.deferNext("chat.send");
       await gateway.setMethodResponse("chat.history", {
         cases: [
-          { match: { agentId: "work", sessionKey: "global" }, response: historyResponse(false) },
-          { match: { agentId: "main", sessionKey: "global" }, response: historyResponse(true) },
+          {
+            match: { agentId: "work", sessionKey: "global" },
+            response: historyResponse("work", false),
+          },
+          {
+            match: { agentId: "main", sessionKey: "global" },
+            response: historyResponse("main", true),
+          },
         ],
       });
       await gateway.emitGatewayEvent("sessions.changed", {
@@ -154,6 +181,17 @@ suite.define(() => {
       expect(params).toMatchObject({ agentId: "work", message: prompt, sessionKey: "global" });
       const runId = requireString(params.idempotencyKey, "inactive-agent outbox run id");
       await expectRequestCountStable(gateway, "chat.send", 1);
+      const recoveryRequests = (await gateway.getRequests("chat.history"))
+        .map((entry) => requireRecord(entry.params))
+        .filter((historyParams) => Array.isArray(historyParams.inputRunIds));
+      expect(recoveryRequests.length).toBeGreaterThan(0);
+      for (const historyParams of recoveryRequests) {
+        expect(historyParams).toMatchObject({
+          agentId: "work",
+          sessionKey: "global",
+          inputRunIds: [runId],
+        });
+      }
       const workPath = controlUiSessionPath("agent:work:main");
       await page.evaluate((pathname) => {
         const app = document.querySelector("openclaw-app") as HTMLElement & {
@@ -194,13 +232,15 @@ suite.define(() => {
         sessionKey: "global",
         status: "running",
       });
-      await page.locator(".chat-group.user").getByText(prompt).waitFor({ timeout: 10_000 });
+      await activePane.locator(".chat-group.user").getByText(prompt).waitFor({ timeout: 10_000 });
       await gateway.resolveDeferred("chat.send", { runId, status: "started" });
       if (artifactDir) {
-        await page.screenshot({
-          path: `${artifactDir}/inactive-agent-dispatched.png`,
-          fullPage: true,
-        });
+        await writeFile(
+          `${artifactDir}/inactive-agent-dispatched.png`,
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            activePane.locator(".chat-group.user").getByText(prompt),
+          ]),
+        );
       }
 
       await gateway.emitGatewayEvent("chat", {
@@ -215,16 +255,29 @@ suite.define(() => {
         state: "final",
       });
       await queue.waitFor({ state: "detached", timeout: 10_000 });
-      await page
+      // Retained panes also receive this conversation's events; assert its rendered owner.
+      const reply = activePane
         .locator(".chat-group.assistant")
-        .getByText("Work outbox delivered.", { exact: true })
-        .waitFor({ timeout: 10_000 });
+        .getByText("Work outbox delivered.", { exact: true });
+      await reply.waitFor({ timeout: 10_000 });
       await expectRequestCountStable(gateway, "chat.send", 1);
+      expect(await activePane.count()).toBe(1);
+      expect(await reply.count()).toBe(1);
+      const messages = await activePane.evaluate(
+        (pane) => (pane as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages,
+      );
+      expect(messages.map(requireRecord).filter((message) => message.role === "assistant")).toEqual(
+        [
+          expect.objectContaining({
+            content: [{ text: "Work outbox delivered.", type: "text" }],
+          }),
+        ],
+      );
       if (artifactDir) {
-        await page.screenshot({
-          path: `${artifactDir}/inactive-agent-delivered.png`,
-          fullPage: true,
-        });
+        await writeFile(
+          `${artifactDir}/inactive-agent-delivered.png`,
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [reply]),
+        );
       }
     } finally {
       await suite.closeBrowserContext(context);

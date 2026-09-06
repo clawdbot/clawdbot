@@ -5,6 +5,7 @@
  */
 import type { AccessGroupConfig } from "../../config/types.access-groups.js";
 import type { InboundEventKind } from "../inbound-event/kind.js";
+import type { IdentifierAuthentication } from "./identifier-authentication.js";
 import type {
   AccessGroupMembershipFact,
   AccessGraphGate,
@@ -21,9 +22,6 @@ import type {
   InternalNormalizedEntry,
   RouteGateFacts,
 } from "./types.js";
-
-/** Redacted subject identity assembled from a stable id plus optional platform aliases. */
-export type ChannelIngressSubject = InternalChannelIngressSubject;
 
 /** Normalized allowlist entry material produced by a channel identity adapter. */
 export type ChannelIngressAdapterEntry = InternalNormalizedEntry;
@@ -43,7 +41,11 @@ export type ChannelIngressIdentityField = {
   normalizeEntry?: (value: string) => string | null | undefined;
   /** Normalizes inbound subject values for this identity field. */
   normalizeSubject?: (value: string) => string | null | undefined;
-  /** Marks identifiers as dangerous in diagnostics, for example mutable display names. */
+  /** Static strength of this identity field. `verified` requires owning-boundary metadata. */
+  authentication?:
+    | IdentifierAuthentication
+    | ((value: string) => IdentifierAuthentication | undefined);
+  /** @deprecated Use `authentication: "mutable"`. Remove in the next Plugin SDK major. */
   dangerous?: boolean | ((value: string) => boolean | undefined);
   /** Redaction hint for diagnostics and access graph consumers. */
   sensitivity?: "normal" | "pii";
@@ -56,6 +58,10 @@ export type ChannelIngressIdentityAlias = ChannelIngressIdentityField & {
 
 /** Identity contract for a channel resolver. Plugins provide platform normalization here. */
 export type ChannelIngressIdentityDescriptor = {
+  /** Product identity: only when the plugin can prove the remote issuer and identifier kind. */
+  resolveParticipant?: (
+    subject: ChannelIngressIdentitySubjectInput,
+  ) => { domain: string; idKind: string; id: string } | undefined;
   /** Primary stable identity field. Prefer immutable sender ids when the platform has one. */
   primary: ChannelIngressIdentityField;
   /** Additional identifiers that can match legacy or platform-specific allowlist entries. */
@@ -64,7 +70,7 @@ export type ChannelIngressIdentityDescriptor = {
   isWildcardEntry?: (value: string) => boolean;
   /** Optional custom match hook for platform-specific identity equivalence. */
   matchEntry?: (params: {
-    subject: ChannelIngressSubject;
+    subject: InternalChannelIngressSubject;
     entry: ChannelIngressAdapterEntry;
     context: "dm" | "group" | "route" | "command";
   }) => boolean | undefined;
@@ -79,7 +85,10 @@ export type ChannelIngressIdentityDescriptor = {
 
 /** Convenience input for defining a stable identity descriptor with optional aliases. */
 export type StableChannelIngressIdentityParams = ChannelIngressIdentityField &
-  Pick<ChannelIngressIdentityDescriptor, "aliases" | "isWildcardEntry" | "matchEntry"> & {
+  Pick<
+    ChannelIngressIdentityDescriptor,
+    "aliases" | "isWildcardEntry" | "matchEntry" | "resolveParticipant"
+  > & {
     /** Prefix used for generated entry ids when `resolveEntryId` is omitted. */
     entryIdPrefix?: string;
     /** Custom entry-id generator used in redacted diagnostics. */
@@ -92,6 +101,8 @@ export type ChannelIngressIdentitySubjectInput = {
   stableId?: string | number | null;
   /** Optional identity aliases keyed by `ChannelIngressIdentityAlias.key`. */
   aliases?: Record<string, string | number | null | undefined>;
+  /** Per-message claims keyed by the exact identity field key. */
+  authentication?: Record<string, IdentifierAuthentication | undefined>;
 };
 
 /** Minimal config subset consumed by the ingress resolver. */
@@ -257,7 +268,9 @@ export type CreateChannelIngressResolverParams = Pick<
   defaultGroupPolicy?: ChannelIngressPolicyInput["groupPolicy"];
   /** Default group allowlist fallback behavior. */
   groupAllowFromFallbackToAllowFrom?: boolean;
-  /** Mutable identifier matching policy for this resolver. */
+  /** Weakest exact-pair identifier claim allowed to authorize. */
+  minIdentifierAuthentication?: ChannelIngressPolicyInput["minIdentifierAuthentication"];
+  /** @deprecated Maps to `minIdentifierAuthentication`; remove in the next Plugin SDK major. */
   mutableIdentifierMatching?: ChannelIngressPolicyInput["mutableIdentifierMatching"];
 };
 

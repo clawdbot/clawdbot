@@ -1,6 +1,5 @@
 import { safeParseJson, stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { UpdateScheduleState } from "../../packages/gateway-protocol/src/index.js";
 
 export const UPDATE_DEV_TARGET_REF_ENV = "OPENCLAW_UPDATE_DEV_TARGET_REF";
 const TRACKED_DEV_TARGET_PREFIX = "openclaw-dev-target:v1:";
@@ -11,7 +10,6 @@ export type DevUpdateTarget =
   | { mode: "tracked"; upstreamRef: string; upstreamSha: string };
 
 export type TrackedDevUpdateTarget = Extract<DevUpdateTarget, { mode: "tracked" }>;
-type GitUpdateCampaignTarget = Extract<NonNullable<UpdateScheduleState["target"]>, { kind: "git" }>;
 
 type DevUpdateTargetEnvParseResult =
   | { status: "absent" }
@@ -66,8 +64,8 @@ export function resolveDevUpdateTargetRevision(target: DevUpdateTarget): string 
   return target.mode === "tracked" ? target.upstreamSha : target.ref;
 }
 
-export function devUpdateTargetFromGitCampaign(
-  target: GitUpdateCampaignTarget,
+export function devUpdateTargetFromGitTarget(
+  target: Pick<TrackedDevUpdateTarget, "upstreamRef" | "upstreamSha">,
 ): TrackedDevUpdateTarget {
   return {
     mode: "tracked",

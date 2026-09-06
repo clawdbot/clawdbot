@@ -1,6 +1,6 @@
 import { noteBackupDoctorHint } from "../commands/backup-health.js";
 import { isLegacyParentWritableUpdateDoctorPass } from "../commands/doctor/shared/update-phase.js";
-import { writeConfigMachineState } from "../state/config-machine-state.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 
 const loadDoctorStateIntegrityModule = async () =>
@@ -110,6 +110,9 @@ export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): 
   const { note } = await import("../../packages/terminal-core/src/note.js");
   const result = await maybeRepairCodexSessionRoutes({
     cfg: ctx.cfg,
+    ...(ctx.configResult.retiredModelRefConfig
+      ? { retiredModelRefConfig: ctx.configResult.retiredModelRefConfig }
+      : {}),
     env: ctx.env ?? process.env,
     shouldRepair: ctx.prompter.shouldRepair,
     ...(ctx.configResult.blockedCodexModelIdentities?.length

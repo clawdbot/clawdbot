@@ -2,7 +2,7 @@ import type { PluginDiagnostic } from "./manifest-types.js";
 import { createModelCatalogRegistrationHandlers } from "./model-catalog-registration.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { bindPluginRegistryRuntime } from "./registry-runtime-binding.js";
-import type { PluginRegistryParams } from "./registry-types.js";
+import type { PluginRecord, PluginRegistryParams } from "./registry-types.js";
 import type { PluginHookName } from "./types.js";
 
 export type PluginTypedHookPolicy = {
@@ -59,16 +59,21 @@ export function resolveTypedHookTimeoutMs(params: {
 export function createPluginRegistryState(registryParams: PluginRegistryParams) {
   const registry = createEmptyPluginRegistry();
   bindPluginRegistryRuntime(registry, registryParams.runtime);
-  const coreGatewayMethodNames = Array.from(
-    new Set([
-      ...(registryParams.coreGatewayMethodNames ?? []),
-      ...Object.keys(registryParams.coreGatewayHandlers ?? {}),
-    ]),
-  ).toSorted();
-  registry.coreGatewayMethodNames = coreGatewayMethodNames;
+  const coreGatewayMethods = new Set(registryParams.coreGatewayMethodNames);
+  for (const name of Object.keys(registryParams.coreGatewayHandlers ?? {})) {
+    coreGatewayMethods.add(name);
+  }
+  // oxlint-disable-next-line unicorn/no-array-sort -- This array is separate from the membership index.
+  registry.coreGatewayMethodNames = Array.from(coreGatewayMethods).sort();
 
   const pushDiagnostic = (diagnostic: PluginDiagnostic) => {
     registry.diagnostics.push(diagnostic);
+  };
+  const reportRegistrationError = (record: PluginRecord, message: string) => {
+    pushDiagnostic({ level: "error", pluginId: record.id, source: record.source, message });
+  };
+  const reportRegistrationWarning = (record: PluginRecord, message: string) => {
+    pushDiagnostic({ level: "warn", pluginId: record.id, source: record.source, message });
   };
   const modelCatalogRegistrars = createModelCatalogRegistrationHandlers({
     registry,
@@ -79,11 +84,13 @@ export function createPluginRegistryState(registryParams: PluginRegistryParams) 
     registry,
     registryParams,
     allowProcessHomeSessionCatalogs: registryParams.allowProcessHomeSessionCatalogs ?? true,
-    coreGatewayMethods: new Set(coreGatewayMethodNames),
+    coreGatewayMethods,
     getHostCronService: () => registryParams.hostServices?.cron,
     pluginsWithChannelRegistrationConflict: new Set<string>(),
     pluginSideEffectGuards: new Map<string, Set<PluginSideEffectGuard>>(),
     pushDiagnostic,
+    reportRegistrationError,
+    reportRegistrationWarning,
     ...modelCatalogRegistrars,
   };
 }

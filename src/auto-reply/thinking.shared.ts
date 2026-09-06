@@ -5,6 +5,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../../packages/normalization-core/src/string-coerce.js";
+import type { ThinkingLevelMap } from "../llm/types.js";
 
 export { normalizeFastMode };
 export type { FastMode };
@@ -30,12 +31,14 @@ export type ThinkingCatalogEntry = {
   provider: string;
   id: string;
   api?: string;
+  baseUrl?: string;
   contextWindow?: number;
   contextTokens?: number;
   reasoning?: boolean;
   configuredReasoning?: boolean;
   /** Concrete runtime owner of thinking policy; internal and never project to clients. */
   thinkingPolicyProvider?: string;
+  thinkingLevelMap?: ThinkingLevelMap;
   input?: readonly ("text" | "image" | "audio" | "video" | "document")[];
   params?: Record<string, unknown>;
   compat?: {

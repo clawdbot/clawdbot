@@ -26,13 +26,17 @@ function readPositiveNumeric(value: unknown): number | undefined {
 
 function readToolFilterList(value: unknown): string[] | undefined {
   if (typeof value === "string") {
-    return value.trim() ? [value.trim()] : undefined;
+    return value.trim() ? [value.trim()] : [];
   }
   if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) {
     return undefined;
   }
-  const normalized = [...new Set(value.map((entry) => entry.trim()).filter(Boolean))];
-  return normalized;
+  return [...new Set(value.map((entry) => entry.trim()).filter(Boolean))];
+}
+
+function hasUnsupportedToolPattern(pattern: string): boolean {
+  // Hermes uses fnmatch; OpenClaw supports only exact names and `*`.
+  return pattern.includes("?") || pattern.includes("[");
 }
 
 function mapHermesToolFilter(value: Record<string, unknown>): Record<string, unknown> | undefined {
@@ -59,15 +63,15 @@ function mapHermesToolFilter(value: Record<string, unknown>): Record<string, unk
   const resourcesEnabled = parseBooleanValue(tools.resources) !== false;
   const promptsEnabled = parseBooleanValue(tools.prompts) !== false;
 
-  // Hermes tests set truthiness here: `include: []` means no whitelist, so native tools remain.
-  if (include && include.length > 0) {
-    return {
-      include: [
-        ...include,
-        ...(resourcesEnabled ? MCP_RESOURCE_UTILITY_TOOLS : []),
-        ...(promptsEnabled ? MCP_PROMPT_UTILITY_TOOLS : []),
-      ],
-    };
+  if (include !== undefined) {
+    const allowed = [
+      ...include.filter((pattern) => !hasUnsupportedToolPattern(pattern)),
+      ...(resourcesEnabled ? MCP_RESOURCE_UTILITY_TOOLS : []),
+      ...(promptsEnabled ? MCP_PROMPT_UTILITY_TOOLS : []),
+    ];
+    // Hermes' explicit empty include disables native tools; OpenClaw's empty
+    // include is unrestricted, so deny everything when no utilities remain.
+    return allowed.length > 0 ? { include: allowed } : { exclude: ["*"] };
   }
   const translatedExclude = [
     ...(exclude ?? []),
@@ -187,8 +191,16 @@ export function mapMcpServer(
   next.auth = normalizeOptionalString(value.auth) === "oauth" ? "oauth" : undefined;
   next.oauth = mapHermesMcpOauth(value);
   Object.assign(next, mapHermesClientCertificate(value));
-  const toolFilter = mapHermesToolFilter(value);
-  next.toolFilter = toolFilter;
+  next.toolFilter = mapHermesToolFilter(value);
+  const tools = isRecord(value.tools) ? value.tools : undefined;
+  if (
+    tools &&
+    readToolFilterList(tools.include) === undefined &&
+    readToolFilterList(tools.exclude)?.some(hasUnsupportedToolPattern)
+  ) {
+    // An untranslated exclusion would expose tools Hermes withheld.
+    next.enabled = false;
+  }
   if (includeSecrets) {
     for (const key of ["env", "headers"]) {
       if (value[key] !== undefined) {
@@ -330,6 +342,17 @@ export function mcpManualItems(params: {
   }
 
   const tools = isRecord(raw.tools) ? raw.tools : undefined;
+  const include = tools ? readToolFilterList(tools.include) : undefined;
+  const activePatterns = include ?? (tools ? readToolFilterList(tools.exclude) : undefined);
+  if (activePatterns?.some(hasUnsupportedToolPattern)) {
+    add(
+      "tool-patterns",
+      include === undefined
+        ? `Hermes MCP server "${name}" was imported disabled because its tool exclusions use unsupported fnmatch patterns.`
+        : `Hermes MCP server "${name}" has tool include patterns that were omitted because OpenClaw supports only exact names and "*".`,
+      "Replace ? and bracket patterns with exact tool names or equivalent * patterns in mcp.servers toolFilter, then enable the server if disabled.",
+    );
+  }
   if (
     tools &&
     (Object.keys(tools).some(

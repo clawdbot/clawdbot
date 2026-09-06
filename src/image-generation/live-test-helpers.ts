@@ -4,12 +4,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   parseLiveCsvFilter,
   parseProviderModelMap,
-  redactLiveApiKey,
   resolveConfiguredLiveProviderModels,
   resolveLiveAuthStore,
 } from "../media-generation/live-test-helpers.js";
 
-export { parseProviderModelMap, redactLiveApiKey };
+export { parseProviderModelMap };
 
 // Default provider/model matrix for image live tests. Provider env filters can
 // override these without changing test source.

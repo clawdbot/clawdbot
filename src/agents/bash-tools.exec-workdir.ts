@@ -6,6 +6,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { safeRealpathSync } from "../infra/boundary-path.js";
 import type { ExecHost } from "../infra/exec-approvals.js";
 import { isPathInside, safeStatSync } from "../infra/path-guards.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -47,7 +48,7 @@ type ExistingHostPathResult =
   | { kind: "invalid" };
 
 function normalizeExplicitWorkdirInput(workdir: string | undefined): NormalizedWorkdirInput {
-  if (workdir === undefined) {
+  if (workdir === undefined || workdir === "") {
     return { kind: "omitted" };
   }
   const value = normalizeOptionalString(workdir);
@@ -60,7 +61,7 @@ function unavailable(requestedCwd: string): ExecWorkdirResolution {
 
 function resolveExistingHostWorkdir(workdir: string): string | null {
   const stats = safeStatSync(workdir);
-  return stats?.isDirectory() ? workdir : null;
+  return stats?.isDirectory() ? (safeRealpathSync(workdir) ?? path.resolve(workdir)) : null;
 }
 
 function safeCurrentCwd(): string | null {

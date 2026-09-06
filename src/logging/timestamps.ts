@@ -1,4 +1,4 @@
-// Timestamp helpers validate time zones and format log timestamps.
+// Timestamp helpers validate time zones and format log and diagnostic timestamps.
 const validTimeZoneCache = new Map<string, boolean>();
 const timestampFormatterCache = new Map<string, Intl.DateTimeFormat>();
 let hostTimeZone: string | undefined;
@@ -37,6 +37,10 @@ function formatOffset(offsetRaw: string): string {
   return offsetRaw === "GMT" ? "+00:00" : offsetRaw.slice(3);
 }
 
+export function formatDiagnosticFilenameTimestamp(date: Date): string {
+  return date.toISOString().replace(/[:.]/g, "-");
+}
+
 function getTimestampParts(date: Date, timeZone?: string) {
   const effectiveTimeZone = resolveEffectiveTimeZone(timeZone);
   let fmt = timestampFormatterCache.get(effectiveTimeZone);
@@ -58,30 +62,26 @@ function getTimestampParts(date: Date, timeZone?: string) {
     timestampFormatterCache.set(effectiveTimeZone, fmt);
   }
 
-  const parts = Object.fromEntries(fmt.formatToParts(date).map((part) => [part.type, part.value]));
-  return {
-    year: parts.year,
-    month: parts.month,
-    day: parts.day,
-    hour: parts.hour,
-    minute: parts.minute,
-    second: parts.second,
-    fractionalSecond: parts.fractionalSecond,
-    offset: formatOffset(parts.timeZoneName ?? "GMT"),
-  };
+  // Native Intl supplies the closed set of part names.
+  const parts: Record<string, string> = {};
+  for (const part of fmt.formatToParts(date)) {
+    parts[part.type] = part.value;
+  }
+  return parts;
 }
 
 export function formatTimestamp(date: Date, options?: FormatTimestampOptions): string {
   const style = options?.style ?? "medium";
   const parts = getTimestampParts(date, options?.timeZone);
+  const offset = formatOffset(parts.timeZoneName ?? "GMT");
 
   switch (style) {
     case "short":
-      return `${parts.hour}:${parts.minute}:${parts.second}${parts.offset}`;
+      return `${parts.hour}:${parts.minute}:${parts.second}${offset}`;
     case "medium":
-      return `${parts.hour}:${parts.minute}:${parts.second}.${parts.fractionalSecond}${parts.offset}`;
+      return `${parts.hour}:${parts.minute}:${parts.second}.${parts.fractionalSecond}${offset}`;
     case "long":
-      return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}.${parts.fractionalSecond}${parts.offset}`;
+      return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}.${parts.fractionalSecond}${offset}`;
   }
   throw new Error("Unsupported timestamp style");
 }

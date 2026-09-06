@@ -3,15 +3,43 @@ import {
   sameRestartRecoveryTerminalRunIds,
 } from "./restart-recovery-state.js";
 import type {
+  SessionLifecycleRevisionExpectation,
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
 } from "./session-transcript-turn-lifecycle.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
+// Metadata timestamps do not fence recovery; writer and lifecycle checks are separate.
+// Keep absent recovery fields explicit so a newly introduced claim fails the commit check.
+export function buildRestartRecoveryExpectedState(
+  entry: SessionEntry,
+  mainRestartRecovery?: { cycleId: string; revision: number },
+): SessionTranscriptTurnExpectedState {
+  const expectedMainRestartRecovery = mainRestartRecovery ?? entry.mainRestartRecovery;
+  return {
+    abortedLastRun: entry.abortedLastRun,
+    mainRestartRecoveryCycleId: expectedMainRestartRecovery?.cycleId,
+    mainRestartRecoveryRevision: expectedMainRestartRecovery?.revision,
+    restartRecoveryBeforeAgentReplyState: entry.restartRecoveryBeforeAgentReplyState,
+    restartRecoveryDeliveryReceiptState: entry.restartRecoveryDeliveryReceiptState,
+    restartRecoveryDeliveryToolCallId: entry.restartRecoveryDeliveryToolCallId,
+    restartRecoveryDeliveryRequestFingerprint: entry.restartRecoveryDeliveryRequestFingerprint,
+    restartRecoveryDeliveryRunId: entry.restartRecoveryDeliveryRunId,
+    restartRecoveryDeliverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
+    restartRecoveryRequesterAccountId: entry.restartRecoveryRequesterAccountId,
+    restartRecoveryRequesterSenderId: entry.restartRecoveryRequesterSenderId,
+    restartRecoverySameChannelThreadRequired: entry.restartRecoverySameChannelThreadRequired,
+    restartRecoverySourceIngress: entry.restartRecoverySourceIngress,
+    restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
+    restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
+    status: entry.status,
+  };
+}
+
 export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionEntry }>(
   selected: T | undefined,
   expected: {
-    expectedLifecycleRevision?: string;
+    expectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
     expectedWriterRunId?: SessionTranscriptTurnExpectedState["expectedWriterRunId"];
     expectedSessionState?: SessionTranscriptTurnExpectedState;
     expectedSessionId: string;
@@ -22,7 +50,7 @@ export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionE
     selected &&
     selected.entry.sessionId === expected.expectedSessionId &&
     (expected.expectedLifecycleRevision === undefined ||
-      selected.entry.lifecycleRevision === expected.expectedLifecycleRevision) &&
+      selected.entry.lifecycleRevision === (expected.expectedLifecycleRevision ?? undefined)) &&
     (expected.expectedWriterRunId === undefined ||
       selected.entry.activeWriterRunId === expected.expectedWriterRunId) &&
     (expectedState === undefined ||

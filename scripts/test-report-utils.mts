@@ -32,18 +32,7 @@ export function readJsonFile(filePath: fs.PathOrFileDescriptor) {
   return parsed;
 }
 
-/**
- * Reads a JSON file or returns the provided fallback on failure.
- */
-export function tryReadJsonFile(filePath: fs.PathOrFileDescriptor, fallback: unknown) {
-  try {
-    return readJsonFile(filePath);
-  } catch {
-    return fallback;
-  }
-}
-
-function validateVitestJsonReport(reportPath: fs.PathLike) {
+export function validateVitestJsonReport(reportPath: fs.PathLike) {
   const displayPath = typeof reportPath === "string" ? reportPath : reportPath.toString();
   if (!fs.existsSync(reportPath)) {
     return `missing Vitest JSON report: ${displayPath}`;
@@ -84,10 +73,9 @@ export function runVitestJsonReport({
 
   if (!(reportPath && fs.existsSync(resolvedReportPath))) {
     const run = spawnSync(
-      "pnpm",
+      process.execPath,
       [
-        "exec",
-        "vitest",
+        path.join(import.meta.dirname, "run-vitest.mjs"),
         "run",
         "--config",
         config,

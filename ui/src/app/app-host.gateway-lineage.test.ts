@@ -1,14 +1,46 @@
-/* @vitest-environment jsdom */
-
+import { parseControlUiFocusLocation } from "@openclaw/session-url-contract";
 import { render } from "lit";
+/* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   GatewayBrowserClient,
   GatewayBrowserClientOptions,
   GatewayHelloOk,
 } from "../api/gateway.ts";
+import type { AgentsListResult } from "../api/types.ts";
+// These direct-render fixtures exercise Gateway lineage without the app lifecycle.
+// Browser tests cover deferred login loading and recovery.
+import "../components/login-gate.ts";
+import { captureChatOutboxAdmission } from "../lib/chat/outbox-store.ts";
+import {
+  createTestSessionCapability,
+  sessionsResult,
+} from "../lib/sessions/session-capability.test-support.ts";
+import {
+  createComposerProps,
+  resetComposerFixture,
+} from "../pages/chat/chat-composer.test-support.ts";
+import { createTestChatPane } from "../pages/chat/chat-pane.test-support.ts";
+import {
+  admitQueuedMessageForSession,
+  subscribeChatOutboxProjection,
+} from "../pages/chat/chat-queue.ts";
+import { handleSendChat } from "../pages/chat/chat-send-submit.ts";
+import { renderChatComposer } from "../pages/chat/components/chat-composer.ts";
+import { listStoredChatOutboxes } from "../pages/chat/composer-persistence.ts";
+import {
+  activeQueuedMessageEdit,
+  beginQueuedMessageEdit,
+  cancelQueuedMessageEdit,
+  updateQueuedMessageEdit,
+} from "../pages/chat/queued-message-edit.ts";
+import {
+  createGatewayRequestMock,
+  type GatewayRequestMock,
+} from "../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import "./app-host.ts";
+import { resolveControlUiDocumentMode } from "./approval-deep-link.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationGateway } from "./context.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
@@ -23,14 +55,39 @@ const HELLO: GatewayHelloOk = {
 function createGatewayHarness() {
   vi.stubGlobal("localStorage", createStorageMock());
   vi.stubGlobal("sessionStorage", createStorageMock());
-  const clients: Array<{ opts: GatewayBrowserClientOptions }> = [];
+  const clients: Array<{
+    opts: GatewayBrowserClientOptions;
+    request: GatewayRequestMock;
+    recoveryScope: string | undefined;
+    recoveryScopeReady: boolean;
+  }> = [];
   const gateway = createApplicationGateway(loadSettings(), "", "", (opts) => {
     const client = {
       opts,
       instanceId: opts.instanceId,
+      gatewayUrl: opts.url,
+      recoveryScope: undefined as string | undefined,
+      recoveryScopeReady: false,
+      addEventListener: () => () => {},
       start: vi.fn(),
-      stop: vi.fn(),
-      request: vi.fn(),
+      stop: vi.fn(() => {
+        client.recoveryScopeReady = false;
+      }),
+      request: createGatewayRequestMock(async (method: string) => {
+        if (method === "sessions.list") {
+          return sessionsResult([], 1);
+        }
+        if (method === "chat.startup" || method === "chat.history") {
+          return { messages: [] };
+        }
+        if (method === "chat.metadata") {
+          return { models: [], commands: [] };
+        }
+        if (method === "sessions.branches.list") {
+          return { branches: [] };
+        }
+        return {};
+      }),
     };
     clients.push(client);
     return client as unknown as GatewayBrowserClient;
@@ -38,15 +95,282 @@ function createGatewayHarness() {
   return { gateway, clients };
 }
 
+function createGatewaySurface(gateway: ApplicationGateway, pathname = "/chat") {
+  const app = document.createElement("openclaw-app") as unknown as {
+    runtime: Pick<
+      ApplicationRuntime,
+      | "context"
+      | "documentMode"
+      | "focusLocation"
+      | "confirmPendingGatewayConnection"
+      | "cancelPendingGatewayConnection"
+    >;
+    pendingGatewayUrl: string | null;
+    render: () => unknown;
+    synchronizeGateway: (gateway: ApplicationGateway) => void;
+  };
+  app.runtime = {
+    documentMode: resolveControlUiDocumentMode(pathname, ""),
+    focusLocation: parseControlUiFocusLocation(pathname, ""),
+    confirmPendingGatewayConnection: vi.fn(),
+    cancelPendingGatewayConnection: vi.fn(),
+    context: {
+      gateway,
+      basePath: "",
+      agentSelection: { state: { selectedId: null } },
+      config: { current: { terminalEnabled: false } },
+      theme: { resolvedMode: "dark" },
+    } as unknown as ApplicationContext,
+  };
+  const container = document.createElement("div");
+  const draw = () => {
+    app.synchronizeGateway(gateway);
+    render(app.render(), container);
+  };
+  return { app, container, draw };
+}
+
 function renderGatewaySurface(
   gateway: ApplicationGateway,
   documentView?: "desktop" | "terminal",
 ): string {
-  const originalUrl = `${location.pathname}${location.search}${location.hash}`;
-  if (documentView) {
-    history.replaceState({}, "", `?view=${documentView}`);
-  }
-  try {
+  const surface = createGatewaySurface(
+    gateway,
+    documentView ? `/focus/${documentView}` : undefined,
+  );
+  surface.draw();
+  return surface.container.innerHTML;
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+describe("Control UI Gateway target lineage", () => {
+  it.each([
+    { pathname: "/focus/terminal", phase: "connecting" },
+    { pathname: "/focus/desktop", phase: "connecting" },
+    { pathname: "/focus/dashboard/main", phase: "connecting" },
+    { pathname: "/settings/connection", phase: "connecting" },
+    { pathname: "/settings/connection", phase: "stopped" },
+    { pathname: "/settings/connection", phase: "connected" },
+    { pathname: "/approve/pending", phase: "connected" },
+    { pathname: "/question/pending", phase: "connected" },
+  ])("keeps Gateway confirmation actionable at $pathname while $phase", ({ pathname, phase }) => {
+    const { gateway, clients } = createGatewayHarness();
+    gateway.start();
+    if (phase === "connected") {
+      clients[0]!.opts.onHello?.(HELLO);
+    } else if (phase === "stopped") {
+      clients[0]!.opts.onClose?.({ code: 1006, reason: "login required", willRetry: false });
+    }
+    const { app, container, draw } = createGatewaySurface(gateway, pathname);
+    try {
+      for (const action of ["onConfirm", "onCancel"] as const) {
+        app.pendingGatewayUrl = "wss://pending-gateway.example";
+        draw();
+        const confirmations = container.querySelectorAll("openclaw-gateway-url-confirmation");
+        expect(confirmations).toHaveLength(1);
+        const confirmation = confirmations[0] as HTMLElement & {
+          props: { pendingGatewayUrl: string; onConfirm(): void; onCancel(): void };
+        };
+        expect(confirmation.closest("openclaw-tooltip-provider")).not.toBeNull();
+        expect(confirmation.props.pendingGatewayUrl).toBe(app.pendingGatewayUrl);
+        if (pathname.startsWith("/approve/")) {
+          expect(container.querySelector("openclaw-approval-page")).toBeNull();
+        }
+        confirmation.props[action]();
+        draw();
+        expect(container.querySelector("openclaw-gateway-url-confirmation")).toBeNull();
+        expect(app.pendingGatewayUrl).toBeNull();
+      }
+      expect(app.runtime.confirmPendingGatewayConnection).toHaveBeenCalledOnce();
+      expect(app.runtime.cancelPendingGatewayConnection).toHaveBeenCalledOnce();
+      if (pathname.startsWith("/approve/")) {
+        expect(container.querySelector("openclaw-approval-page")).not.toBeNull();
+      }
+    } finally {
+      render(null, container);
+      gateway.stop();
+    }
+  });
+
+  it.each(
+    [false, true].flatMap((incognito) =>
+      ["synthetic-recovery-a", "synthetic-recovery-b"].map((nextRecovery) => ({
+        incognito,
+        nextRecovery,
+      })),
+    ),
+  )(
+    "binds retained queue edits across recovery $nextRecovery (Incognito: $incognito)",
+    async ({ incognito, nextRecovery }) => {
+      vi.stubGlobal("requestIdleCallback", vi.fn());
+      vi.stubGlobal("requestAnimationFrame", () => 1);
+      vi.stubGlobal("cancelAnimationFrame", () => undefined);
+      const { gateway, clients } = createGatewayHarness();
+      const sessionKey = "agent:main:main";
+      const agentsList = {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "main" }],
+      } satisfies AgentsListResult;
+      const hello: GatewayHelloOk = {
+        ...HELLO,
+        auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
+        snapshot: {
+          sessionDefaults: { defaultAgentId: "main", mainKey: "main", mainSessionKey: sessionKey },
+        },
+      };
+      gateway.connect({ gatewayUrl: "wss://synthetic-owner.example.test" });
+      clients[0]!.opts.onHello?.(hello);
+      clients[0]!.recoveryScope = "synthetic-recovery-a";
+      clients[0]!.recoveryScopeReady = true;
+      clients[0]!.opts.onRecoveryScopeChange?.();
+      const sessions = createTestSessionCapability(gateway);
+      const { pane, state } = createTestChatPane({ client: gateway.snapshot.client!, sessions });
+      state.sessionKey = sessionKey;
+      state.agentsList = agentsList;
+      state.settings = { ...loadSettings(), gatewayUrl: gateway.connection.gatewayUrl, sessionKey };
+      state.selectedChatSessionIncognito = incognito;
+      state.loadAssistantIdentity = vi.fn(async () => undefined);
+      pane.presented = false;
+      pane.context = {
+        ...pane.context,
+        gateway,
+        agents: { state: { agentsList }, ensureList: async () => agentsList },
+      } as unknown as ApplicationContext;
+      pane.applyGatewaySnapshot(gateway.snapshot);
+      const releasePane = gateway.subscribe(pane.applyGatewaySnapshot.bind(pane));
+      const releaseOutbox = subscribeChatOutboxProjection(state);
+      const app = document.createElement("openclaw-app") as unknown as {
+        runtime: Pick<ApplicationRuntime, "context" | "documentMode">;
+        synchronizeGateway: (gateway: ApplicationGateway) => void;
+        render: () => unknown;
+      };
+      app.runtime = { context: pane.context, documentMode: null };
+      const shellContainer = document.createElement("div");
+      const drawShell = () => {
+        app.synchronizeGateway(gateway);
+        render(app.render(), shellContainer);
+      };
+      drawShell();
+      const originalShell = shellContainer.querySelector("openclaw-app-shell");
+      expect(originalShell).not.toBeNull();
+      const releaseShell = gateway.subscribe(drawShell);
+      const composer = document.createElement("div");
+      try {
+        expect(
+          admitQueuedMessageForSession(state, captureChatOutboxAdmission(state, sessionKey), {
+            id: "owner-row",
+            text: "Original queued message",
+            createdAt: 1000,
+            sessionKey,
+            sendState: "waiting-reconnect",
+          }),
+        ).toBe(true);
+        expect(beginQueuedMessageEdit(state, "owner-row")).toBe("started");
+        const captured = state.chatQueuedEdit!;
+        const initialClient = state.client;
+        const outboxes = listStoredChatOutboxes(state);
+        // Socket loss invalidates readiness but retains this client's authenticated owner.
+        clients[0]!.recoveryScopeReady = false;
+        clients[0]!.opts.onClose?.({ code: 1006, reason: "offline", willRetry: true });
+        expect(state.connected).toBe(false);
+        expect(updateQueuedMessageEdit(state, "Unsaved offline correction")).toBe(true);
+        expect(activeQueuedMessageEdit(state)).toBe(captured);
+        gateway.connect();
+        expect(gateway.snapshot.phase).toBe("reconnecting");
+        expect(shellContainer.querySelector("openclaw-app-shell")).toBe(originalShell);
+        // Hello precedes recovery resolution. Neither a replacement transport nor
+        // pending authentication can act on the old owner's retained correction.
+        clients[1]!.opts.onHello?.(hello);
+        expect.soft(activeQueuedMessageEdit(state)).toBeNull();
+        expect.soft(cancelQueuedMessageEdit(state)).toBe(false);
+        expect(beginQueuedMessageEdit(state, captured.id)).toBe("unavailable");
+        clients[1]!.recoveryScope = nextRecovery;
+        clients[1]!.recoveryScopeReady = true;
+        clients[1]!.opts.onRecoveryScopeChange?.();
+        await vi.waitFor(() => expect(state.chatLoading).toBe(false));
+        const sameOwner = nextRecovery === "synthetic-recovery-a";
+        const active = activeQueuedMessageEdit(state);
+        render(
+          renderChatComposer(
+            createComposerProps({
+              queue: state.chatQueue,
+              sessionKey,
+              queuedEdit: {
+                editingId: active?.id ?? null,
+                editingText: active?.draftText,
+                source: active?.source,
+                onCancel: () => cancelQueuedMessageEdit(state),
+              },
+            }),
+          ),
+          composer,
+        );
+        if (!sameOwner) {
+          await handleSendChat(state, captured.draftText, {
+            resumeQueuedMessageEditId: captured.id,
+            attachmentsOverride: captured.attachments,
+          });
+          expect(clients[1]!.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+        }
+        expect(listStoredChatOutboxes(state)).toEqual(outboxes);
+        expect(shellContainer.querySelector("openclaw-app-shell")).toBe(originalShell);
+        expect(pane.state).toBe(state);
+        expect(state.client).not.toBe(initialClient);
+        expect.soft(Boolean(active)).toBe(sameOwner);
+        expect
+          .soft(
+            composer.querySelector<HTMLTextAreaElement>(".chat-queue__edit-input")?.value ?? null,
+          )
+          .toBe(sameOwner ? captured.draftText : null);
+        if (sameOwner) {
+          const settings = state.settings;
+          state.settings = { ...settings, gatewayUrl: "wss://different-owner.example.test" };
+          expect(activeQueuedMessageEdit(state)).toBeNull();
+          expect(cancelQueuedMessageEdit(state)).toBe(false);
+          expect(state.chatQueuedEdit).toBe(captured);
+          state.settings = settings;
+        }
+        expect.soft(cancelQueuedMessageEdit(state)).toBe(sameOwner);
+        if (!sameOwner) {
+          expect.soft(state.chatQueuedEdit).toBe(captured);
+        }
+      } finally {
+        releaseShell();
+        releasePane();
+        releaseOutbox();
+        render(null, composer);
+        render(null, shellContainer);
+        pane.disconnectedCallback();
+        sessions.dispose();
+        gateway.stop();
+        await resetComposerFixture();
+      }
+    },
+  );
+
+  it("returns to the login gate when a newly selected Gateway's first attempt fails", () => {
+    const { gateway, clients } = createGatewayHarness();
+    gateway.start();
+    clients[0]?.opts.onHello?.(HELLO);
+    gateway.connect({ gatewayUrl: "wss://other-gateway.example.test" });
+    clients[1]?.opts.onClose?.({ code: 1006, reason: "remote refused", willRetry: true });
+
+    const surface = renderGatewaySurface(gateway);
+
+    expect(surface).toContain("<openclaw-login-gate");
+    expect(surface).not.toContain("<openclaw-app-shell");
+  });
+
+  it("re-scopes credentials when the login draft changes Gateway", () => {
+    const { gateway, clients } = createGatewayHarness();
+    gateway.connect({ token: "old-token", password: "old-password" });
+    clients[0]?.opts.onClose?.({ code: 1006, reason: "login required", willRetry: true });
     const app = document.createElement("openclaw-app") as unknown as {
       runtime: Pick<ApplicationRuntime, "context" | "documentMode">;
       render: () => { strings: readonly string[] };
@@ -65,29 +389,18 @@ function renderGatewaySurface(
     app.synchronizeGateway(gateway);
     const container = document.createElement("div");
     render(app.render(), container);
-    return container.innerHTML;
-  } finally {
-    history.replaceState({}, "", originalUrl);
-  }
-}
+    const loginGate = container.querySelector("openclaw-login-gate") as unknown as {
+      props: {
+        onGatewayUrlChange: (value: string) => void;
+        onConnect: () => void;
+      };
+    };
 
-afterEach(() => {
-  vi.unstubAllGlobals();
-  vi.restoreAllMocks();
-});
+    loginGate.props.onGatewayUrlChange("wss://other-gateway.example.test");
+    loginGate.props.onConnect();
 
-describe("Control UI Gateway target lineage", () => {
-  it("returns to the login gate when a newly selected Gateway's first attempt fails", () => {
-    const { gateway, clients } = createGatewayHarness();
-    gateway.start();
-    clients[0]?.opts.onHello?.(HELLO);
-    gateway.connect({ gatewayUrl: "wss://other-gateway.example.test" });
-    clients[1]?.opts.onClose?.({ code: 1006, reason: "remote refused", willRetry: true });
-
-    const surface = renderGatewaySurface(gateway);
-
-    expect(surface).toContain("<openclaw-login-gate");
-    expect(surface).not.toContain("<openclaw-app-shell");
+    expect(clients[1]?.opts.token).toBeUndefined();
+    expect(clients[1]?.opts.password).toBeUndefined();
   });
 
   it("keeps retryable Gateway startup on the initial progress surface", () => {
@@ -109,7 +422,7 @@ describe("Control UI Gateway target lineage", () => {
     const surface = renderGatewaySurface(gateway);
 
     expect(gateway.snapshot.phase).toBe("starting");
-    expect(surface).toContain('class="connect-splash"');
+    expect(surface).toContain('class="connect-splash connect-splash--skeleton"');
     expect(surface).toContain("Gateway starting…");
     expect(surface).not.toContain("<openclaw-login-gate");
   });
@@ -187,7 +500,7 @@ describe("Control UI Gateway target lineage", () => {
 
       const surface = renderGatewaySurface(gateway, documentView);
 
-      expect(surface).toContain('class="connect-splash"');
+      expect(surface).toContain('class="connect-splash connect-splash--skeleton"');
       expect(surface).toContain("Gateway starting…");
     },
   );

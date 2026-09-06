@@ -1,4 +1,4 @@
-// Openai tests cover realtime transcription provider plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 
@@ -9,6 +9,7 @@ const { FakeWebSocket, providerAuthMocks, ssrfMocks } = vi.hoisted(() => {
     static readonly OPEN = 1;
     static readonly CLOSED = 3;
     static instances: MockWebSocket[] = [];
+    static onCreated: ((socket: MockWebSocket) => void) | undefined;
 
     readonly listeners = new Map<string, Listener[]>();
     readonly headers?: Record<string, string>;
@@ -21,6 +22,7 @@ const { FakeWebSocket, providerAuthMocks, ssrfMocks } = vi.hoisted(() => {
       this.url = url;
       this.headers = options?.headers;
       MockWebSocket.instances.push(this);
+      MockWebSocket.onCreated?.(this);
     }
 
     on(event: string, listener: Listener): this {
@@ -88,18 +90,28 @@ function parseSent(socket: FakeWebSocketInstance): SentRealtimeEvent[] {
   return socket.sent.map((payload) => JSON.parse(payload) as SentRealtimeEvent);
 }
 
-async function waitForFakeSocket(index = 0): Promise<FakeWebSocketInstance> {
-  let socket: FakeWebSocketInstance | undefined;
-  await vi.waitFor(() => {
-    socket = FakeWebSocket.instances[index];
-    if (!socket) {
-      throw new Error("expected session to create a websocket");
-    }
-  });
-  if (!socket) {
-    throw new Error("expected session to create a websocket");
+const sessions = new Set<{ close(): void }>();
+
+async function waitForFakeSocket(
+  session: { close(): void },
+  index = 0,
+): Promise<FakeWebSocketInstance> {
+  sessions.add(session);
+  const existing = FakeWebSocket.instances[index];
+  if (existing) {
+    return existing;
   }
-  return socket;
+  const created = createDeferred<FakeWebSocketInstance>();
+  FakeWebSocket.onCreated = (socket) => {
+    if (FakeWebSocket.instances[index] === socket) {
+      created.resolve(socket);
+    }
+  };
+  try {
+    return await vi.waitFor(() => created.promise);
+  } finally {
+    FakeWebSocket.onCreated = undefined;
+  }
 }
 
 function emitJson(socket: FakeWebSocketInstance, event: Record<string, unknown>): void {
@@ -107,11 +119,11 @@ function emitJson(socket: FakeWebSocketInstance, event: Record<string, unknown>)
 }
 
 async function connectFakeSession(
-  session: { connect(): Promise<void> },
+  session: { connect(): Promise<void>; close(): void },
   socketIndex = 0,
 ): Promise<FakeWebSocketInstance> {
   const connecting = session.connect();
-  const socket = await waitForFakeSocket(socketIndex);
+  const socket = await waitForFakeSocket(session, socketIndex);
   socket.readyState = FakeWebSocket.OPEN;
   socket.emit("open");
   emitJson(socket, { type: "session.updated" });
@@ -137,6 +149,14 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
   });
 
   afterEach(() => {
+    // Close session ownership before its fake peers so cleanup cannot start a reconnect.
+    for (const session of sessions) {
+      session.close();
+    }
+    for (const socket of FakeWebSocket.instances) {
+      socket.close();
+    }
+    sessions.clear();
     vi.unstubAllEnvs();
   });
 
@@ -260,7 +280,7 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
     });
 
     const connecting = session.connect();
-    const socket = await waitForFakeSocket();
+    const socket = await waitForFakeSocket(session);
 
     expect(socket.headers?.Authorization).toBe("Bearer ek-test");
     expect(providerAuthMocks.resolveProviderAuthProfileApiKey).toHaveBeenCalledWith({
@@ -361,7 +381,7 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
     });
 
     const connecting = session.connect();
-    const socket = await waitForFakeSocket();
+    const socket = await waitForFakeSocket(session);
 
     expect(socket.headers?.Authorization).toBe("Bearer ek-test");
     const request = mockCallArg(ssrfMocks.fetchWithSsrFGuard);
@@ -391,7 +411,7 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
     });
 
     const connecting = session.connect();
-    const socket = await waitForFakeSocket();
+    const socket = await waitForFakeSocket(session);
 
     socket.readyState = FakeWebSocket.OPEN;
     socket.emit("open");

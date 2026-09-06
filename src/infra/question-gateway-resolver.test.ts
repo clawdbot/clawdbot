@@ -145,4 +145,18 @@ describe("resolveQuestionOverGateway", () => {
     ).rejects.toThrow("one tappable question");
     expect(hoisted.callGateway).toHaveBeenCalledOnce();
   });
+
+  it("validates native custom input without resolving the question", async () => {
+    hoisted.callGateway.mockResolvedValueOnce({
+      question: {
+        ...pendingRecord,
+        questions: [{ ...pendingRecord.questions[0], isOther: true }],
+      },
+    });
+
+    await expect(
+      resolveQuestionOverGateway({ cfg: {} as never, questionId: recordId, customInput: true }),
+    ).resolves.toEqual({ status: "custom-input", questionId: "deploy_target" });
+    expect(hoisted.callGateway).toHaveBeenCalledOnce();
+  });
 });

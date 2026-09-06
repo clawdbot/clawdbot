@@ -10,7 +10,6 @@ import {
 import {
   deleteRegistryWorktree,
   getRegistryWorktreeProvisionedChunk,
-  findRegistryWorktreeByPath,
   findLiveRegistryWorktreeByPath,
   getRegistryWorktree,
   getRegistryWorktreeProvisionedPaths,
@@ -18,6 +17,8 @@ import {
   insertRegistryWorktreeProvisionedChunk,
   insertRegistryWorktree,
   listRegistryWorktrees,
+  listRegistryWorktreesForMigration,
+  hasLegacyRegistryWorktrees,
   updateRegistryWorktree,
 } from "./registry.js";
 import type { ManagedWorktreeRecord } from "./types.js";
@@ -35,6 +36,12 @@ describe("managed worktree registry", () => {
   afterEach(async () => {
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("inspects absent legacy worktrees without creating the state database", async () => {
+    expect(hasLegacyRegistryWorktrees(env)).toBe(false);
+    expect(listRegistryWorktreesForMigration(env)).toEqual([]);
+    await expect(fs.stat(env.OPENCLAW_STATE_DIR!)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("persists, orders, updates, and deletes worktree rows through Kysely", () => {
@@ -61,7 +68,9 @@ describe("managed worktree registry", () => {
       lastActiveAt: 20,
     });
 
+    expect(hasLegacyRegistryWorktrees(env)).toBe(true);
     expect(listRegistryWorktrees(env).map((entry) => entry.id)).toEqual(["second", "first"]);
+    expect(listRegistryWorktreesForMigration(env)).toEqual(listRegistryWorktrees(env));
     expect(findLiveRegistryWorktreeByPath(env, record.path)).toMatchObject({
       id: "first",
       ownerKind: "workboard",
@@ -88,7 +97,6 @@ describe("managed worktree registry", () => {
       snapshotRef: "refs/openclaw/snapshots/first",
     });
     expect(findLiveRegistryWorktreeByPath(env, record.path)).toBeUndefined();
-    expect(findRegistryWorktreeByPath(env, record.path)?.id).toBe("first");
     expect(getRegistryWorktreeProvisionedPaths(env, "first")).toEqual([".env.local"]);
     expect(getRegistryWorktreeProvisionedState(env, "first")).toEqual([
       { path: ".env.local", mode: 0o600, chunks: 1 },

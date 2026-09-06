@@ -62,9 +62,9 @@ describe("session goal formatting", () => {
     expect(formatGoalElapsed(0)).toBe("0s");
     expect(formatGoalElapsed(15_000)).toBe("15s");
     expect(formatGoalElapsed(59_999)).toBe("59s");
-    expect(formatGoalElapsed(60_000)).toBe("1m");
-    expect(formatGoalElapsed(3_540_000)).toBe("59m");
-    expect(formatGoalElapsed(3_600_000)).toBe("1h");
-    expect(formatGoalElapsed(3_900_000)).toBe("1h 5m");
+    expect(formatGoalElapsed(60_000)).toBe("1m 00s");
+    expect(formatGoalElapsed(3_540_000)).toBe("59m 00s");
+    expect(formatGoalElapsed(3_600_000)).toBe("1h 00m 00s");
+    expect(formatGoalElapsed(3_909_000)).toBe("1h 05m 09s");
   });
 });

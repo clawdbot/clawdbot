@@ -9,11 +9,17 @@ import {
   collectUnregisteredConfiguredMemoryEmbeddingProviders,
   listAmbientOnlyConfiguredChannelIds,
 } from "../plugins/channel-plugin-ids.js";
+import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
+import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  completePluginMetadataSnapshot,
+  type PluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginRegistry, PluginRegistryParams } from "../plugins/registry-types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
 import { listGatewayMethods } from "./server-methods-list.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
@@ -53,6 +59,8 @@ export async function runGatewayStartupMaintenance(params: {
   minimalTestGateway: boolean;
   log: GatewayPluginBootstrapLog;
 }): Promise<void> {
+  const { assertConfiguredWorkspaceStateReady } = await import("../agents/workspace-state-dirs.js");
+  assertConfiguredWorkspaceStateReady({ cfg: params.cfgAtStart });
   const startupMaintenanceConfig = resolveGatewayStartupMaintenanceConfig({
     cfgAtStart: params.cfgAtStart,
     startupRuntimeConfig: params.startupRuntimeConfig,
@@ -170,11 +178,37 @@ export async function prepareGatewayPluginBootstrap(params: {
 
   const baseMethods = listGatewayMethods();
   const emptyPluginRegistry = createEmptyPluginRegistry();
-  // Minimal gateway tests reuse an already-active registry when present. Production publishes
-  // an empty pre-bind registry; every startup plugin runtime attaches after the listener binds.
-  const pluginRegistry = params.minimalTestGateway
-    ? (getActivePluginRegistry() ?? emptyPluginRegistry)
-    : emptyPluginRegistry;
+  // Minimal tests may reuse an active registry only while plugins are enabled. Production
+  // publishes an empty pre-bind registry; startup plugin runtimes attach after the listener binds.
+  const pluginRegistry =
+    params.minimalTestGateway && !pluginsGloballyDisabled
+      ? (getActivePluginRegistry() ?? emptyPluginRegistry)
+      : emptyPluginRegistry;
+  const metadataSnapshot =
+    getGatewayPluginMetadataSnapshot() ??
+    completePluginMetadataSnapshot({
+      snapshot: pluginLookUpTable ?? params.pluginMetadataSnapshot,
+      config: activationSourceConfig,
+      env: process.env,
+      workspaceDir: defaultWorkspaceDir,
+    });
+  // Requests can reach this registry before runtime attachment (or without it).
+  // Carry the complete boot generation so cold capabilities never rediscover source plugins.
+  setPluginRuntimeLoadContext(pluginRegistry, {
+    rawConfig: params.cfgAtStart,
+    config: gatewayPluginConfig,
+    activationSourceConfig,
+    autoEnabledReasons: {},
+    workspaceDir: pluginWorkspaceDir,
+    env: process.env,
+    logger: params.log,
+    metadataSnapshot,
+    manifestRegistry: metadataSnapshot?.manifestRegistry,
+    installRecords: metadataSnapshot
+      ? extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index)
+      : undefined,
+    preferBuiltPluginArtifacts: true,
+  });
   setActivePluginRegistry(pluginRegistry);
 
   return {
@@ -183,7 +217,7 @@ export async function prepareGatewayPluginBootstrap(params: {
     pluginWorkspaceDir,
     startupPluginIds,
     pluginManifestRecords,
-    pluginMetadataSnapshot: pluginLookUpTable ?? params.pluginMetadataSnapshot,
+    pluginMetadataSnapshot: metadataSnapshot,
     pluginLookUpTable,
     baseMethods,
     pluginRegistry,

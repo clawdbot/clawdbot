@@ -1,6 +1,6 @@
 // Control UI controller manages form utils gateway state.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ConfigUiHints } from "../api/types.ts";
+import type { ConfigUiHint, ConfigUiHints } from "../api/types.ts";
 
 export type JsonSchema = {
   type?: string | string[];
@@ -9,6 +9,7 @@ export type JsonSchema = {
   tags?: string[];
   "x-tags"?: string[];
   properties?: Record<string, JsonSchema>;
+  propertyNames?: JsonSchema | boolean;
   required?: string[];
   items?: JsonSchema | JsonSchema[];
   additionalItems?: JsonSchema | boolean;
@@ -68,17 +69,24 @@ export function pathKey(path: Array<string | number>): string {
   return path.filter((segment) => typeof segment === "string").join(".");
 }
 
+const wildcardHintCache = new WeakMap<ConfigUiHints, Array<[string[], ConfigUiHint]>>();
+
 export function hintForPath(path: Array<string | number>, hints: ConfigUiHints) {
   const direct = hints[pathKey(path)];
   if (direct) {
     return direct;
   }
   const segments = path.map(String);
-  for (const [hintKey, hint] of Object.entries(hints)) {
-    if (!hintKey.includes("*")) {
-      continue;
-    }
-    const hintSegments = hintKey.split(".");
+  let wildcardHints = wildcardHintCache.get(hints);
+  if (!wildcardHints) {
+    // Schema reloads replace the hints object, so identity safely owns this index.
+    // Reuse it across recursive form and search lookups instead of rescanning the catalog.
+    wildcardHints = Object.entries(hints).flatMap(([hintKey, hint]) =>
+      hintKey.includes("*") ? [[hintKey.split("."), hint]] : [],
+    );
+    wildcardHintCache.set(hints, wildcardHints);
+  }
+  for (const [hintSegments, hint] of wildcardHints) {
     if (
       hintSegments.length === segments.length &&
       hintSegments.every((segment, index) => segment === "*" || segment === segments[index])

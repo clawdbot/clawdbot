@@ -149,21 +149,25 @@ describe("archive utils", () => {
     },
   );
 
-  it("rejects zip path traversal (zip slip)", async () => {
-    await withArchiveCase("zip", async ({ archivePath, extractDir }) => {
-      const zip = new JSZip();
-      zip.file("../b/evil.txt", "pwnd");
-      await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
+  it.each([{ createFolders: true }, { createFolders: false }])(
+    "rejects zip path traversal (zip slip, createFolders=$createFolders)",
+    async ({ createFolders }) => {
+      await withArchiveCase("zip", async ({ archivePath, extractDir }) => {
+        const zip = new JSZip();
+        zip.file("../b/evil.txt", "pwnd", { createFolders });
+        await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
 
-      await expect(
-        extractArchive({
-          archivePath,
-          destDir: extractDir,
-          timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
-        }),
-      ).rejects.toThrow(/(escapes destination|absolute)/i);
-    });
-  });
+        await expect(
+          extractArchive({
+            archivePath,
+            destDir: extractDir,
+            timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
+          }),
+        ).rejects.toThrow(/(escapes destination|absolute)/i);
+        await expectPathMissing(path.join(extractDir, "b", "evil.txt"));
+      });
+    },
+  );
 
   it("rejects zip entries that traverse pre-existing destination symlinks", async () => {
     await withArchiveCase("zip", async ({ workDir, archivePath, extractDir }) => {
@@ -276,10 +280,13 @@ describe("archive utils", () => {
           lstatSpy.mockRestore();
         }
 
-        // The raced alias points at attacker-supplied archive bytes. Cleanup unlinks the owned
-        // destination; truncating the inode would instead mutate a path outside that boundary.
+        // The raced alias points at attacker-supplied archive bytes. The rejected
+        // extraction preserves the published destination rather than unlinking an
+        // entry it can no longer prove it owns; truncating the inode would instead
+        // mutate a path outside that boundary.
         await expect(fs.readFile(outsideAlias, "utf8")).resolves.toBe("owned");
-        await expectPathMissing(extractedPath);
+        await expect(fs.readFile(extractedPath, "utf8")).resolves.toBe("owned");
+        expect((await fs.stat(extractedPath)).nlink).toBe(2);
       });
     },
   );
@@ -376,7 +383,6 @@ describe("archive utils", () => {
       const archiveBytes = createZipCentralDirectoryArchive({
         actualEntryCount: 2,
         declaredEntryCount: 1,
-        declaredCentralDirectorySize: 0,
       });
       await fs.writeFile(archivePath, archiveBytes);
 
@@ -388,6 +394,7 @@ describe("archive utils", () => {
           limits: { maxEntries: 1 },
         }),
       ).rejects.toThrow("archive entry count exceeds limit");
+      expect(await fs.readdir(extractDir)).toEqual([]);
     });
   });
 

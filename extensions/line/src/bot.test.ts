@@ -13,7 +13,10 @@ const { createLineWebhookSpoolMock, handleLineWebhookEventsMock } = vi.hoisted((
   createLineWebhookSpoolMock: vi.fn(),
   // Typed parameters so the recorded call can be read back as the handler context.
   handleLineWebhookEventsMock: vi.fn(
-    async (_events: webhook.Event[], _context: { mediaMaxBytes: number }) => {},
+    async (
+      _events: webhook.Event[],
+      _context: { mediaMaxBytes: number; historyLimit: number },
+    ) => {},
   ),
 }));
 
@@ -103,5 +106,42 @@ describe("createLineBot media cap", () => {
     await expect(
       resolveMediaMaxBytes({ configuredMediaMaxMb: 2, optionMediaMaxMb: 0 }),
     ).resolves.toBe(2 * MB);
+  });
+});
+
+describe("createLineBot pending history cap", () => {
+  it.each([
+    { root: 20, account: 3, expected: 3 },
+    { root: 20, account: undefined, expected: 20 },
+    { root: undefined, account: undefined, expected: 7 },
+    { root: 20, account: 0, expected: 0 },
+  ])("resolves account $account then root $root before the global fallback", async (testCase) => {
+    let deliver: DeliverFn | undefined;
+    createLineWebhookSpoolMock.mockImplementation((options: { deliver: DeliverFn }) => {
+      deliver = options.deliver;
+      return { accept: vi.fn(), start: vi.fn(), stop: vi.fn() };
+    });
+
+    const line = {
+      enabled: true,
+      channelAccessToken: "test-token",
+      channelSecret: "test-secret",
+      ...(testCase.root === undefined ? {} : { historyLimit: testCase.root }),
+      accounts: {
+        work: testCase.account === undefined ? {} : { historyLimit: testCase.account },
+      },
+    };
+    createLineBot({
+      channelAccessToken: "test-token",
+      channelSecret: "test-secret",
+      accountId: "work",
+      config: {
+        messages: { groupChat: { historyLimit: 7 } },
+        channels: { line },
+      } as unknown as OpenClawConfig,
+    });
+
+    await deliver?.({ type: "message" } as webhook.Event, "destination", {});
+    expect(handleLineWebhookEventsMock.mock.calls.at(-1)?.[1].historyLimit).toBe(testCase.expected);
   });
 });

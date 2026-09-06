@@ -1,6 +1,6 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -70,9 +70,11 @@ suite.define(() => {
         await outside.focus();
         await trigger.click();
         expect(await outside.evaluate((element) => document.activeElement === element)).toBe(true);
-        const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        const artifactDir = artifactRoot
+          ? createControlUiE2eArtifactDir("chat-composer-accessory-focus", artifactRoot)
+          : undefined;
         if (artifactDir && triggerSelector.startsWith(".context-usage")) {
-          await fs.mkdir(artifactDir, { recursive: true });
           const composerBox = await composer.boundingBox();
           const popoverBox = await composer.locator(".context-usage__popover").boundingBox();
           if (!composerBox || !popoverBox) {
@@ -128,15 +130,17 @@ suite.define(() => {
       await page.keyboard.press("Escape");
 
       await outside.focus();
-      await composer.locator(".agent-chat__input-btn--attach").click();
+      const attachTrigger = composer.locator(".agent-chat__input-btn--attach");
+      await attachTrigger.click();
       await expect
-        .poll(() =>
-          page
-            .locator(".agent-chat__attach-menu-option")
-            .first()
-            .evaluate((element) => document.activeElement === element),
-        )
+        .poll(() => attachTrigger.evaluate((element) => document.activeElement === element))
         .toBe(true);
+      expect(
+        await page
+          .locator(".agent-chat__attach-menu-option")
+          .first()
+          .evaluate((element) => document.activeElement === element),
+      ).toBe(false);
       await page.keyboard.press("Escape");
     });
   });

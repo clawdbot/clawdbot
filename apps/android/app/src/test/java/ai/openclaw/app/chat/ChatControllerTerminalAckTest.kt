@@ -1,6 +1,5 @@
 package ai.openclaw.app.chat
 
-import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.CompletableDeferred
@@ -16,8 +15,11 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
 class ChatControllerTerminalAckTest {
   private val json = chatControllerTestJson
 
@@ -36,11 +38,12 @@ class ChatControllerTerminalAckTest {
           if (method == "chat.send") {
             """{"runId":"run-notify","status":"started"}"""
           } else {
-            "{}"
+            emptyChatGatewayResponse(method)
           }
         }
       controller.prepareMainSessionKey("agent:main:main")
-      controller.handleGatewayEvent("health", null)
+      controller.load(controller.sessionKey.value)
+      runCurrent()
       assertTrue(controller.sendMessageAwaitAcceptance("status", "off", emptyList()))
       val terminal = chatTerminalPayload("agent:main:main", "run-notify", seq = 2, assistantText = "Done")
 
@@ -82,11 +85,12 @@ class ChatControllerTerminalAckTest {
           if (method == "chat.send") {
             """{"runId":"run-session-a","status":"started"}"""
           } else {
-            "{}"
+            emptyChatGatewayResponse(method)
           }
         }
       controller.prepareMainSessionKey("agent:main:session-a")
-      controller.handleGatewayEvent("health", null)
+      controller.load(controller.sessionKey.value)
+      runCurrent()
       assertTrue(controller.sendMessageAwaitAcceptance("status", "off", emptyList()))
 
       controller.switchSession("agent:other:session-b")
@@ -130,7 +134,7 @@ class ChatControllerTerminalAckTest {
           onAssistantReplyFinalized = { owner, runId, text ->
             finalized += Triple(owner, runId, text)
           },
-        ) { _, _ -> "{}" }
+        ) { method, _ -> emptyChatGatewayResponse(method) }
       controller.prepareMainSessionKey("agent:main:session-b")
       controller.handleGatewayEvent("health", null)
 
@@ -167,11 +171,12 @@ class ChatControllerTerminalAckTest {
           if (method == "chat.send") {
             """{"runId":"run-gateway-a","status":"started"}"""
           } else {
-            "{}"
+            emptyChatGatewayResponse(method)
           }
         }
       controller.prepareMainSessionKey("agent:main:session-a")
-      controller.handleGatewayEvent("health", null)
+      controller.load(controller.sessionKey.value)
+      runCurrent()
       assertTrue(controller.sendMessageAwaitAcceptance("status", "off", emptyList()))
 
       gatewayId = "gateway-b"
@@ -199,11 +204,11 @@ class ChatControllerTerminalAckTest {
           currentDefaultAgentId = { defaultAgentId },
         ) { method, _ ->
           requestedMethods += method
-          """{"runId":"run-started","status":"started"}"""
+          if (method == "chat.send") """{"runId":"run-started","status":"started"}""" else emptyChatGatewayResponse(method)
         }
       controller.handleGatewayEvent("health", null)
       val ambiguousOwner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "main")
-      assertFalse(controller.canSendForOwner(ambiguousOwner))
+      assertFalse(controller.isCurrentComposerOwner(ambiguousOwner))
       assertFalse(
         controller.sendMessageForOwnerAwaitAcceptance(
           message = "unbound main alias",
@@ -213,10 +218,11 @@ class ChatControllerTerminalAckTest {
         ),
       )
       controller.prepareMainSessionKey("agent:main:node-test")
-      controller.handleGatewayEvent("health", null)
+      controller.load(controller.sessionKey.value)
+      runCurrent()
       val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:node-test")
-      assertTrue(controller.canSendForOwner(owner))
-      assertFalse(controller.canSendForOwner(owner.copy(gatewayStableId = "gateway-b")))
+      assertTrue(controller.isCurrentComposerOwner(owner))
+      assertFalse(controller.isCurrentComposerOwner(owner.copy(gatewayStableId = "gateway-b")))
 
       assertFalse(
         controller.sendMessageForOwnerAwaitAcceptance(
@@ -263,11 +269,15 @@ class ChatControllerTerminalAckTest {
               settingsGate.await()
               "{}"
             }
+
             "chat.send" -> {
               sendCount += 1
               """{"runId":"run-started","status":"started"}"""
             }
-            else -> "{}"
+
+            else -> {
+              emptyChatGatewayResponse(method)
+            }
           }
         }
       controller.prepareMainSessionKey("agent:main:node-test")
@@ -298,81 +308,48 @@ class ChatControllerTerminalAckTest {
     }
 
   @Test
-  fun unjournaledNotEnqueuedSendRemainsRejectedAfterOwnerChange() =
+  fun failedDirectSendRetainsDurableInputAndSurfacesError() =
     runTest {
-      val requestGate = CompletableDeferred<Unit>()
-      var defaultAgentId: String? = "main"
-      var defaultAgentRevision = 0L
-      val controller =
-        createChatController(
-          cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },
-          currentDefaultAgentId = { defaultAgentId },
-          currentDefaultAgentRevision = { defaultAgentRevision },
-        ) { method, _ ->
-          if (method == "chat.send") {
-            requestGate.await()
-            throw GatewayRequestNotEnqueued("not enqueued")
-          }
-          "{}"
-        }
-      controller.prepareMainSessionKey("agent:main:node-test")
-      controller.handleGatewayEvent("health", null)
-
-      val accepted =
-        async {
-          controller.sendMessageForOwnerAwaitAcceptance(
-            message = "keep my draft",
-            thinkingLevel = "off",
-            attachments = emptyList(),
-            expectedOwner =
-              ChatComposerOwner(
-                gatewayStableId = "gateway-a",
-                agentId = "main",
-                sessionKey = "agent:main:node-test",
-              ),
-          )
-        }
-      runCurrent()
-      controller.switchSession("agent:other:main")
-      requestGate.complete(Unit)
-
-      assertFalse(accepted.await())
-      assertEquals(0, controller.pendingRunCount.value)
-      assertTrue(controller.messages.value.none { message -> message.content.any { it.text == "keep my draft" } })
-      assertNull(controller.errorText.value)
-    }
-
-  @Test
-  fun terminalTimeoutAckRemovesOptimisticUserEchoAndSurfacesFailedAcceptance() =
-    runTest {
-      var requestedMethod: String? = null
-      val controller =
-        createChatController { method, _ ->
-          requestedMethod = method
-          """{"runId":"run-timeout","status":"timeout"}"""
-        }
-      controller.handleGatewayEvent("health", null)
-
-      val accepted =
-        controller.sendMessageAwaitAcceptance(
-          message = "message that times out before start",
-          thinkingLevel = "off",
-          attachments = emptyList(),
+      val outcomes =
+        listOf<suspend () -> String>(
+          { """{"runId":"run-timeout","status":"timeout"}""" },
+          { """{"runId":"run-error","status":"error"}""" },
+          { throw GatewayRequestRejected(GatewaySession.ErrorShape("INVALID_REQUEST", "message rejected")) },
         )
+      for ((index, outcome) in outcomes.withIndex()) {
+        val controller =
+          createScriptedChatController {
+            respond("chat.history", historyResponse("session-$index", emptyList()))
+            respond("chat.send") { outcome() }
+          }
+        controller.load("main")
+        runCurrent()
 
-      assertFalse(accepted)
-      assertEquals("chat.send", requestedMethod)
-      assertEquals(0, controller.pendingRunCount.value)
-      assertEquals("Chat failed before the run started; try again.", controller.errorText.value)
-      assertFalse(controller.messages.value.hasUserText("message that times out before start"))
+        val accepted = controller.sendMessageAwaitAcceptance("retained input", "off", emptyList())
+
+        assertTrue(accepted)
+        assertEquals(0, controller.pendingRunCount.value)
+        assertEquals(
+          if (index == 2) "INVALID_REQUEST: message rejected" else "Chat failed before the run started; try again.",
+          controller.errorText.value,
+        )
+        assertFalse(controller.messages.value.hasUserText("retained input"))
+        val row = controller.outboxItems.value.single()
+        assertEquals("retained input", row.text)
+        assertEquals(ChatOutboxStatus.Failed, row.status)
+        assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, row.lastError)
+      }
     }
 
   @Test
   fun nonTerminalStartedAckRetainsOptimisticUserEchoAndPendingRun() =
     runTest {
       val controller =
-        createChatController { _, _ -> """{"runId":"run-started","status":"started"}""" }
-      controller.handleGatewayEvent("health", null)
+        createChatController { method, _ ->
+          if (method == "chat.send") """{"runId":"run-started","status":"started"}""" else emptyChatGatewayResponse(method)
+        }
+      controller.load("main")
+      runCurrent()
 
       val accepted =
         controller.sendMessageAwaitAcceptance(
@@ -403,18 +380,27 @@ class ChatControllerTerminalAckTest {
                   ?.content
               """{"runId":"canonical-run","status":"started"}"""
             }
-            "chat.history" ->
+
+            "chat.history" -> {
               historyResponse(
                 "session-1",
-                listOf(
-                  ReplayHistoryMessage("user", "canonical", 1_000, idempotencyKey = "$clientRunId:user"),
-                  ReplayHistoryMessage("assistant", "done", 2_000),
-                ),
+                clientRunId
+                  ?.let { id ->
+                    listOf(
+                      ReplayHistoryMessage("user", "canonical", 1_000, idempotencyKey = "$id:user"),
+                      ReplayHistoryMessage("assistant", "done", 2_000),
+                    )
+                  }.orEmpty(),
               )
-            else -> "{}"
+            }
+
+            else -> {
+              emptyChatGatewayResponse(method)
+            }
           }
         }
-      controller.handleGatewayEvent("health", null)
+      controller.load("main")
+      runCurrent()
 
       assertTrue(controller.sendMessageAwaitAcceptance("canonical", "off", emptyList()))
       controller.handleGatewayEvent(
@@ -442,8 +428,11 @@ class ChatControllerTerminalAckTest {
         createChatController { method, _ ->
           requestedMethods += method
           when (method) {
-            "chat.send" -> """{"runId":"run-ok","status":"ok"}"""
-            "chat.history" ->
+            "chat.send" -> {
+              """{"runId":"run-ok","status":"ok"}"""
+            }
+
+            "chat.history" -> {
               """
               {
                 "sessionId": "session-1",
@@ -452,10 +441,16 @@ class ChatControllerTerminalAckTest {
                 ]
               }
               """.trimIndent()
-            else -> "{}"
+            }
+
+            else -> {
+              emptyChatGatewayResponse(method)
+            }
           }
         }
-      controller.handleGatewayEvent("health", null)
+      controller.load("main")
+      runCurrent()
+      requestedMethods.clear()
 
       val accepted =
         controller.sendMessageAwaitAcceptance(
@@ -466,66 +461,12 @@ class ChatControllerTerminalAckTest {
       advanceUntilIdle()
 
       assertTrue(accepted)
-      assertEquals(
-        listOf("chat.send", "chat.history"),
-        requestedMethods.filter { method -> method == "chat.send" || method == "chat.history" },
-      )
+      assertEquals(1, requestedMethods.count { it == "chat.send" })
+      assertTrue(requestedMethods.indexOf("chat.history") > requestedMethods.indexOf("chat.send"))
       assertEquals(0, controller.pendingRunCount.value)
       assertNull(controller.errorText.value)
       assertFalse(controller.messages.value.hasUserText("message that already completed"))
       assertTrue(controller.messages.value.any { message -> message.role == "assistant" && message.content.any { part -> part.text == "cached success reply" } })
-    }
-
-  @Test
-  fun terminalErrorAckRemovesOptimisticUserEchoAndSurfacesErrorText() =
-    runTest {
-      val controller =
-        createChatController { _, _ -> """{"runId":"run-error","status":"error"}""" }
-      controller.handleGatewayEvent("health", null)
-
-      val accepted =
-        controller.sendMessageAwaitAcceptance(
-          message = "message that errors before start",
-          thinkingLevel = "off",
-          attachments = emptyList(),
-        )
-
-      assertFalse(accepted)
-      assertEquals(0, controller.pendingRunCount.value)
-      assertEquals("Chat failed before the run started; try again.", controller.errorText.value)
-      assertFalse(controller.messages.value.hasUserText("message that errors before start"))
-    }
-
-  @Test
-  fun definitiveRpcRejectionRestoresComposerOwnership() =
-    runTest {
-      val controller =
-        createChatController { _, _ ->
-          throw GatewayRequestRejected(GatewaySession.ErrorShape("INVALID_REQUEST", "message rejected"))
-        }
-      controller.handleGatewayEvent("health", null)
-
-      val accepted = controller.sendMessageAwaitAcceptance("rejected", "off", emptyList())
-
-      assertFalse(accepted)
-      assertEquals(0, controller.pendingRunCount.value)
-      assertEquals("INVALID_REQUEST: message rejected", controller.errorText.value)
-      assertFalse(controller.messages.value.hasUserText("rejected"))
-    }
-
-  @Test
-  fun requestNotEnqueuedRestoresComposerOwnership() =
-    runTest {
-      val controller =
-        createChatController { _, _ -> throw GatewayRequestNotEnqueued("not connected") }
-      controller.handleGatewayEvent("health", null)
-
-      val accepted = controller.sendMessageAwaitAcceptance("never sent", "off", emptyList())
-
-      assertFalse(accepted)
-      assertEquals(0, controller.pendingRunCount.value)
-      assertEquals("not connected", controller.errorText.value)
-      assertFalse(controller.messages.value.hasUserText("never sent"))
     }
 
   private fun List<ChatMessage>.hasUserText(text: String): Boolean =

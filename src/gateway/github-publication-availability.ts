@@ -1,3 +1,4 @@
+import type { GitHubPublicationPublisher } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import {
   matchesPreparedGitHubPublicationIdentity,
   prepareGitHubPublicationIdentity,
@@ -7,6 +8,11 @@ import { managedWorktrees } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { requestCurrentGitHubOAuthRefresh } from "./github-oauth-lifecycle.js";
+import {
+  GitHubPublicationWorkspaceChangedError,
+  rejectGitHubPublicationSelection,
+  type GitHubPublicationPreparation,
+} from "./github-publication-failure.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 function publicationConfigSnapshot() {
@@ -16,6 +22,25 @@ function publicationConfigSnapshot() {
   }
   const config = getRuntimeConfig();
   return { config, sourceConfig: config };
+}
+
+export function assertExpectedSharedGitHubPublisher(
+  expected: GitHubPublicationPublisher | undefined,
+  actual: GitHubPublicationPublisher,
+  preparation?: GitHubPublicationPreparation,
+): void {
+  if (
+    actual.source === "personal" ||
+    (expected &&
+      (expected.source !== actual.source ||
+        expected.accountId !== actual.accountId ||
+        expected.login.toLowerCase() !== actual.login.toLowerCase()))
+  ) {
+    rejectGitHubPublicationSelection(
+      "GitHub publication identity changed; review the current shared account and try again.",
+      preparation,
+    );
+  }
 }
 
 export function currentGitHubPublicationConfig() {
@@ -74,7 +99,9 @@ export function resolveGitHubPublicationWorktreeOwner(params: {
       worktree.repoFingerprint !== params.expected.repositoryFingerprint ||
       worktree.branch !== params.expected.branch)
   ) {
-    throw new Error("GitHub publication workspace authority changed.");
+    throw new GitHubPublicationWorkspaceChangedError(
+      "GitHub publication workspace authority changed.",
+    );
   }
   return { loaded, worktree };
 }

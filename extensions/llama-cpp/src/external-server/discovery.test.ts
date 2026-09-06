@@ -1,3 +1,5 @@
+import { once } from "node:events";
+import { createServer } from "node:http";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { discoverLlamaServer } from "./discovery.js";
@@ -88,21 +90,98 @@ describe("llama-server discovery projection", () => {
     });
   });
 
-  it("bypasses the shared cache for credential-scoped discovery", async () => {
-    discoverRowsMock.mockResolvedValue({
-      kind: "success",
-      health: "ready",
-      fetchedAt: 123,
-      rows: [],
+  it.each([
+    { name: "HTML app shell", body: "<!doctype html><html><body>Local model app</body></html>" },
+    { name: "non-model JSON", body: JSON.stringify({ app: "local-models" }) },
+  ])("discovers an existing server behind a root $name response", async ({ body }) => {
+    const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-setup")>(
+      "openclaw/plugin-sdk/provider-setup",
+    );
+    discoverRowsMock.mockImplementation(actual.discoverOpenAICompatibleLocalModels);
+    const requests: string[] = [];
+    const server = createServer((request, response) => {
+      requests.push(request.url ?? "");
+      if (request.url === "/models") {
+        response.end(body);
+      } else if (request.url === "/v1/models") {
+        response.setHeader("Content-Type", "application/json");
+        response.end(JSON.stringify({ data: [{ id: "local-model", object: "model" }] }));
+      } else {
+        response.end("{}");
+      }
     });
-
-    for (let index = 0; index < 2; index += 1) {
-      await discoverLlamaServer({
-        baseUrl: "http://localhost:8080",
-        headers: { Authorization: "Bearer endpoint-key" },
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected a listening TCP server");
+      }
+      await expect(
+        discoverLlamaServer({ baseUrl: `http://127.0.0.1:${address.port}`, cacheTtlMs: 0 }),
+      ).resolves.toMatchObject({
+        kind: "success",
+        models: [{ config: { id: "local-model" } }],
+      });
+      expect(requests).toEqual(["/health", "/models", "/v1/models", "/props"]);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
       });
     }
+  });
 
-    expect(discoverRowsMock).toHaveBeenCalledTimes(2);
+  it.each([
+    { name: "API key", access: { apiKey: "endpoint-key" } },
+    { name: "authorization header", access: { headers: { Authorization: "Bearer endpoint-key" } } },
+    { name: "explicit refresh", access: { cacheTtlMs: 0 } },
+  ])("fetches $name discovery after an anonymous catalog was cached", async ({ access }) => {
+    const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-setup")>(
+      "openclaw/plugin-sdk/provider-setup",
+    );
+    discoverRowsMock.mockImplementation(actual.discoverOpenAICompatibleLocalModels);
+    let modelId = "anonymous-model";
+    const modelRequests: Array<string | undefined> = [];
+    const server = createServer((request, response) => {
+      response.setHeader("Content-Type", "application/json");
+      if (request.url === "/models") {
+        modelRequests.push(request.headers.authorization);
+        response.end(JSON.stringify({ data: [{ id: modelId, status: { value: "unloaded" } }] }));
+      } else {
+        response.end("{}");
+      }
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected a listening TCP server");
+      }
+      const baseUrl = `http://127.0.0.1:${address.port}`;
+      await expect(discoverLlamaServer({ baseUrl })).resolves.toMatchObject({
+        kind: "success",
+        models: [{ config: { id: "anonymous-model" } }],
+      });
+      modelId = "fresh-model";
+      await expect(discoverLlamaServer({ baseUrl, ...access })).resolves.toMatchObject({
+        kind: "success",
+        models: [{ config: { id: "fresh-model" } }],
+      });
+      await expect(discoverLlamaServer({ baseUrl })).resolves.toMatchObject({
+        kind: "success",
+        models: [{ config: { id: "anonymous-model" } }],
+      });
+      expect(modelRequests).toEqual([
+        undefined,
+        "cacheTtlMs" in access ? undefined : "Bearer endpoint-key",
+      ]);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 });

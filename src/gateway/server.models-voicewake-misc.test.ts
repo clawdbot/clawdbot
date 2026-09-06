@@ -105,6 +105,11 @@ type AgentCatalogFixtureEntry = {
   contextWindow?: number;
 };
 
+const OPENCLAW_DEVICE_PLACEMENT: NonNullable<GatewayAgentRuntime["devicePlacement"]> = {
+  requiredNodeCommands: [],
+  consumesWorkerSlot: true,
+};
+
 const buildAgentCatalogFixture = (): AgentCatalogFixtureEntry[] => [
   { id: "gpt-test-z", provider: "openai", contextWindow: 0 },
   {
@@ -150,6 +155,7 @@ const expectedSortedCatalog = (gptTestZTags?: string[]): ModelCatalogRpcEntry[] 
       id: "openclaw",
       cloudPlacementSupported: true,
       cloudPlacementExecutionMode: "worker-turn",
+      devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
       devicePlacementSupported: true,
       source: "implicit",
     },
@@ -164,6 +170,7 @@ const expectedSortedCatalog = (gptTestZTags?: string[]): ModelCatalogRpcEntry[] 
       id: "openclaw",
       cloudPlacementSupported: true,
       cloudPlacementExecutionMode: "worker-turn",
+      devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
       devicePlacementSupported: true,
       source: "implicit",
     },
@@ -797,6 +804,7 @@ describe("gateway server models + voicewake", () => {
               id: "openclaw",
               cloudPlacementSupported: true,
               cloudPlacementExecutionMode: "worker-turn",
+              devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
               devicePlacementSupported: true,
               source: "implicit",
             },
@@ -855,6 +863,7 @@ describe("gateway server models + voicewake", () => {
             id: "openclaw",
             cloudPlacementSupported: true,
             cloudPlacementExecutionMode: "worker-turn",
+            devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
             devicePlacementSupported: true,
             source: "implicit",
           },
@@ -880,6 +889,7 @@ describe("gateway server models + voicewake", () => {
             id: "openclaw",
             cloudPlacementSupported: true,
             cloudPlacementExecutionMode: "worker-turn",
+            devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
             devicePlacementSupported: true,
             source: "implicit",
           },

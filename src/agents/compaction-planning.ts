@@ -3,6 +3,7 @@
  * token usage, chooses chunking strategy, and preserves active tool-use pairs
  * while splitting history for summaries.
  */
+import { estimateTokens } from "../../packages/agent-core/src/harness/compaction/compaction.js";
 import { createToolCallOccurrenceQueue } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import {
   projectCompactionPlanningMessages,
@@ -11,7 +12,6 @@ import {
 import { stripRuntimeContextCustomMessages } from "./internal-runtime-context.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
-import { estimateTokens } from "./sessions/index.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
 /** Default share of context window targeted for compaction chunks. */
@@ -183,28 +183,6 @@ function chunkCompactionMessageGroups(
   return chunks;
 }
 
-/** Splits messages into roughly equal token-share chunks without separating active tool pairs. */
-function splitMessagesByTokenShare(
-  messages: AgentMessage[],
-  parts = DEFAULT_PARTS,
-): AgentMessage[][] {
-  if (messages.length === 0) {
-    return [];
-  }
-  const normalizedParts = normalizeCompactionParts(parts, messages.length);
-  if (normalizedParts <= 1) {
-    return [messages];
-  }
-  const perMessageTokens = estimatePerMessageTokens(messages);
-  const totalTokens = perMessageTokens.reduce((sum, tokens) => sum + tokens, 0);
-  return chunkCompactionMessageGroups(
-    messages,
-    totalTokens / normalizedParts,
-    perMessageTokens,
-    normalizedParts,
-  );
-}
-
 /**
  * Compute adaptive chunk ratio based on average message size.
  * When messages are large, we use smaller chunks to avoid exceeding model limits.
@@ -289,18 +267,20 @@ export function buildStageSplitPlan(params: {
 }): StageSplitPlan {
   const minMessagesForSplit = Math.max(2, params.minMessagesForSplit ?? 4);
   const parts = normalizeCompactionParts(params.parts ?? DEFAULT_PARTS, params.messages.length);
-  const totalTokens = estimateMessagesTokens(params.messages);
-
-  if (
-    parts <= 1 ||
-    params.messages.length < minMessagesForSplit ||
-    totalTokens <= params.maxChunkTokens
-  ) {
+  if (parts <= 1 || params.messages.length < minMessagesForSplit) {
     return { mode: "single" };
   }
 
-  const chunks = splitMessagesByTokenShare(params.messages, parts).filter(
-    (chunk) => chunk.length > 0,
+  const perMessageTokens = estimatePerMessageTokens(params.messages);
+  const totalTokens = perMessageTokens.reduce((sum, tokens) => sum + tokens, 0);
+  if (totalTokens <= params.maxChunkTokens) {
+    return { mode: "single" };
+  }
+  const chunks = chunkCompactionMessageGroups(
+    params.messages,
+    totalTokens / parts,
+    perMessageTokens,
+    parts,
   );
   return chunks.length > 1 ? { mode: "split", chunks } : { mode: "single" };
 }
@@ -324,33 +304,45 @@ function pruneHistoryForContextShare(params: {
   let keptMessages = params.messages;
   const allDroppedMessages: AgentMessage[] = [];
   let droppedChunks = 0;
-  let droppedMessages = 0;
-  let droppedTokens = 0;
 
   const parts = normalizeCompactionParts(params.parts ?? DEFAULT_PARTS, keptMessages.length);
+  const originalMessageIndexes = new Map(
+    params.messages.map((message, index) => [message, index] as const),
+  );
 
-  while (keptMessages.length > 0 && estimateMessagesTokens(keptMessages) > budgetTokens) {
-    const chunks = splitMessagesByTokenShare(keptMessages, parts);
-    if (chunks.length <= 1) {
+  while (keptMessages.length > 0) {
+    const splitPlan = buildStageSplitPlan({
+      messages: keptMessages,
+      maxChunkTokens: budgetTokens,
+      minMessagesForSplit: 2,
+      parts,
+    });
+    if (splitPlan.mode === "single") {
       break;
     }
-    const dropped = chunks[0]!;
+    const dropped = splitPlan.chunks[0]!;
     // Dropping a call owner also drops orphaned results; providers reject replay without the pair.
-    const repairReport = repairToolUseResultPairing(chunks.slice(1).flat());
+    const retained = splitPlan.chunks.slice(1).flat();
+    const repairReport = repairToolUseResultPairing(retained);
+    const repairedDropped = repairReport.discarded;
 
     droppedChunks += 1;
-    droppedMessages += dropped.length + repairReport.droppedOrphanCount;
-    droppedTokens += estimateMessagesTokens(dropped);
-    allDroppedMessages.push(...dropped);
+    allDroppedMessages.push(...dropped, ...repairedDropped);
     keptMessages = repairReport.messages;
   }
+
+  allDroppedMessages.sort(
+    (left, right) =>
+      (originalMessageIndexes.get(left) ?? params.messages.length) -
+      (originalMessageIndexes.get(right) ?? params.messages.length),
+  );
 
   return {
     messages: keptMessages,
     droppedMessagesList: allDroppedMessages,
     droppedChunks,
-    droppedMessages,
-    droppedTokens,
+    droppedMessages: allDroppedMessages.length,
+    droppedTokens: estimateMessagesTokens(allDroppedMessages),
     keptTokens: estimateMessagesTokens(keptMessages),
     budgetTokens,
   };

@@ -13,7 +13,6 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
-  uiSessionEventMatches,
 } from "../lib/sessions/session-key.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { selectApplicationSession } from "./agent-selection.ts";
@@ -25,7 +24,7 @@ export interface ShellNavigationHost {
   readonly context: ApplicationContext<RouteId> | undefined;
   activeSessionKey: string;
   routeState: ShellRouteState;
-  lastWorkspaceLocation: { routeId: RouteId; pathname: string; search: string } | null;
+  lastWorkspaceLocation: ({ routeId: RouteId } & Required<ApplicationNavigationOptions>) | null;
   custodianMinimizeRequestId: number;
   lastConcreteRouteId: RouteId | undefined;
   didConsiderNativeRouteRestore: boolean;
@@ -97,18 +96,7 @@ export class ShellNavigationOwner {
       return false;
     }
     const face = this.host.routeState.routeId === "dashboard" ? "dashboard" : "chat";
-    const sessionWasDeleted = (context.sessions.state.deletedSessions ?? []).some(
-      ({ key, agentId }) =>
-        uiSessionEventMatches(
-          {
-            agentsList: context.agents.state.agentsList,
-            hello: context.gateway.snapshot.hello,
-            sessionKey,
-          },
-          key,
-          agentId,
-        ),
-    );
+    const sessionWasDeleted = context.sessions.deletionState(sessionKey);
     // Session lists are filtered and windowed. Only a failed route for this
     // active key, or an authoritative deletion, proves it needs replacement.
     const activeSessionRow = findUiSessionRow(context, sessionKey);
@@ -157,24 +145,14 @@ export class ShellNavigationOwner {
     return true;
   }
 
-  recoverDeletedActiveSession(sessionState: ApplicationContext["sessions"]["state"]): void {
+  recoverDeletedActiveSession(_sessionState: ApplicationContext["sessions"]["state"]): void {
     const context = this.host.context;
     const routeId = this.host.routeState.routeId;
     const sessionKey = this.host.activeSessionKey.trim();
     if (!context || !routeId || !isSessionRouteId(routeId) || !sessionKey) {
       return;
     }
-    const selectedSessionDeleted = sessionState.deletedSessions.some(({ key, agentId }) =>
-      uiSessionEventMatches(
-        {
-          agentsList: context.agents.state.agentsList,
-          hello: context.gateway.snapshot.hello,
-          sessionKey,
-        },
-        key,
-        agentId,
-      ),
-    );
+    const selectedSessionDeleted = context.sessions.deletionState(sessionKey);
     if (selectedSessionDeleted) {
       this.replaceChatWithCurrentSession();
     }
@@ -222,17 +200,7 @@ export class ShellNavigationOwner {
         const committedSessionKey = routeState.committedSessionKey;
         const committedSessionDeleted =
           committedSessionKey !== undefined &&
-          (routeContext.sessions?.state.deletedSessions ?? []).some(({ key, agentId }) =>
-            uiSessionEventMatches(
-              {
-                agentsList: routeContext.agents.state.agentsList,
-                hello: routeContext.gateway.snapshot.hello,
-                sessionKey: committedSessionKey,
-              },
-              key,
-              agentId,
-            ),
-          );
+          routeContext.sessions.deletionState(committedSessionKey);
         if (committedSessionDeleted) {
           // An older route can commit after deletion recovery has started.
           // Never let it persist or reselect the session we just retired.
@@ -260,6 +228,7 @@ export class ShellNavigationOwner {
         routeId: routeState.routeId,
         pathname: routeState.location?.pathname ?? "",
         search: routeState.location?.search ?? "",
+        hash: routeState.location?.hash ?? "",
       };
     }
   }
@@ -281,10 +250,8 @@ export class ShellNavigationOwner {
   exitSettings(): void {
     const previous = this.host.lastWorkspaceLocation;
     if (previous) {
-      this.navigate(previous.routeId, {
-        pathname: previous.pathname,
-        ...(previous.search ? { search: previous.search } : {}),
-      });
+      const { routeId, ...location } = previous;
+      this.navigate(routeId, location);
       return;
     }
     this.navigate("chat");

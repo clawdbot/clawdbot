@@ -15,7 +15,6 @@ import {
   isSecretRefObject,
   jsonValue,
   renderFieldRow,
-  renderRestoreDefaultButton,
   renderSchemaDefaultDescription,
   renderSensitiveToggleButton,
   wrapSensitiveControl,
@@ -479,20 +478,14 @@ export function renderTextInput(
     ? html`
         <span class="settings-phone-presentation">
           ${wrappedInput}
-          ${phonePresentation
-            ? html`<span class="settings-phone-presentation__value">${phonePresentation}</span>`
-            : nothing}
+          ${
+            phonePresentation
+              ? html`<span class="settings-phone-presentation__value">${phonePresentation}</span>`
+              : nothing
+          }
         </span>
       `
     : wrappedInput;
-  const control = html`
-    ${presentedInput}
-    ${renderRestoreDefaultButton({
-      ...params,
-      disabled: disabled || effectiveRedacted,
-    })}
-  `;
-
   return renderFieldRow({
     label,
     help,
@@ -500,7 +493,7 @@ export function renderTextInput(
     defaultDescription: effectiveRedacted ? nothing : renderSchemaDefaultDescription(schema, value),
     tags,
     showLabel,
-    control,
+    control: presentedInput,
   });
 }
 
@@ -573,9 +566,11 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
       aria-label=${label}
       aria-describedby=${helpId ?? nothing}
       aria-invalid="false"
-      placeholder=${schema.default !== undefined
-        ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
-        : nothing}
+      placeholder=${
+        schema.default !== undefined
+          ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
+          : nothing
+      }
       min=${constraints.min ?? nothing}
       max=${constraints.max ?? nothing}
       step=${constraints.step}
@@ -623,7 +618,6 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
     >
       +
     </button>
-    ${renderRestoreDefaultButton(params)}
   `;
 
   return renderFieldRow({
@@ -697,17 +691,21 @@ export function renderSelect(
         ?selected=${selectedValue === unset}
         ?disabled=${params.isRequired && schema.default === undefined}
       >
-        ${schema.default !== undefined
-          ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
-          : t("configForm.select")}
+        ${
+          schema.default !== undefined
+            ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
+            : (hintForPath(path, hints)?.placeholder ?? t("configForm.select"))
+        }
       </option>
-      ${canSelectNull
-        ? html`
-            <option value=${nullValue} ?selected=${selectedValue === nullValue}>
-              ${t("configForm.nullValue")}
-            </option>
-          `
-        : nothing}
+      ${
+        canSelectNull
+          ? html`
+              <option value=${nullValue} ?selected=${selectedValue === nullValue}>
+                ${t("configForm.nullValue")}
+              </option>
+            `
+          : nothing
+      }
       ${options.map(
         (option, index) => html`
           <option value=${String(index)} ?selected=${selectedValue === String(index)}>

@@ -60,6 +60,7 @@ export function createLazyAcpRuntimeProxy(
   resolveRuntime: () => Promise<CompleteAcpRuntime>,
 ): CompleteAcpRuntime {
   return {
+    ownerAwareSessions: 1,
     async ensureSession(input) {
       return await (await resolveRuntime()).ensureSession(input);
     },
@@ -79,7 +80,7 @@ export function createLazyAcpRuntimeProxy(
       await (await resolveRuntime()).setMode(input);
     },
     async setConfigOption(input) {
-      await (await resolveRuntime()).setConfigOption(input);
+      return await (await resolveRuntime()).setConfigOption(input);
     },
     async doctor() {
       return await (await resolveRuntime()).doctor();

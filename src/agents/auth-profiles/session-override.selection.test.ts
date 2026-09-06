@@ -11,6 +11,7 @@ import {
 } from "./session-override.test-support.js";
 
 const OAUTH_PROFILE_ID = "openai:subscription";
+const MISMATCHED_PROFILE_ID = "anthropic:other";
 const SESSION_KEY = "agent:main:main";
 
 function configureProfiles(): void {
@@ -33,6 +34,11 @@ function configureProfiles(): void {
         access: "test-access",
         refresh: "test-refresh",
         expires: Date.now() + 60_000,
+      },
+      [MISMATCHED_PROFILE_ID]: {
+        type: "api_key",
+        provider: "anthropic",
+        key: "sk-mismatched",
       },
     },
     order: { openai: [TEST_PRIMARY_PROFILE_ID, TEST_SECONDARY_PROFILE_ID, OAUTH_PROFILE_ID] },
@@ -128,6 +134,21 @@ describe("session auth selection prepared facts", () => {
         source: "user",
         routeRequirement: "subscription",
       });
+    });
+  });
+
+  it("rejects a configured profile that belongs to another provider", async () => {
+    await withAuthState(async (state) => {
+      configureProfiles();
+      const sessionEntry: SessionEntry = { sessionId: "s1", updatedAt: 1 };
+
+      await expect(
+        select({
+          agentDir: state.agentDir(),
+          sessionEntry,
+          configuredProfileId: MISMATCHED_PROFILE_ID,
+        }),
+      ).rejects.toThrow(`Auth profile "${MISMATCHED_PROFILE_ID}" is not configured for openai.`);
     });
   });
 });

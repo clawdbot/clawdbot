@@ -4,18 +4,17 @@ import { isApprovalNotFoundError, isApprovalStaleError } from "./approval-errors
 
 describe("isApprovalNotFoundError", () => {
   it("matches direct approval-not-found gateway codes", () => {
-    const err = new Error("approval not found") as Error & { gatewayCode?: string };
-    err.gatewayCode = "APPROVAL_NOT_FOUND";
+    const err = Object.assign(new Error("approval not found"), {
+      gatewayCode: "APPROVAL_NOT_FOUND",
+    });
     expect(isApprovalNotFoundError(err)).toBe(true);
   });
 
   it("matches structured invalid-request approval-not-found details", () => {
-    const err = new Error("approval not found") as Error & {
-      gatewayCode?: string;
-      details?: { reason?: string };
-    };
-    err.gatewayCode = "INVALID_REQUEST";
-    err.details = { reason: "APPROVAL_NOT_FOUND" };
+    const err = Object.assign(new Error("approval not found"), {
+      gatewayCode: "INVALID_REQUEST",
+      details: { reason: "APPROVAL_NOT_FOUND" },
+    });
     expect(isApprovalNotFoundError(err)).toBe(true);
   });
 
@@ -32,18 +31,17 @@ describe("isApprovalNotFoundError", () => {
 
 describe("isApprovalStaleError", () => {
   it("matches structured already-resolved gateway errors", () => {
-    const err = new Error("approval already resolved") as Error & {
-      gatewayCode?: string;
-      details?: { reason?: string };
-    };
-    err.gatewayCode = "INVALID_REQUEST";
-    err.details = { reason: "APPROVAL_ALREADY_RESOLVED" };
+    const err = Object.assign(new Error("request rejected"), {
+      gatewayCode: "INVALID_REQUEST",
+      details: { reason: "APPROVAL_ALREADY_RESOLVED" },
+    });
     expect(isApprovalStaleError(err)).toBe(true);
   });
 
   it("includes approval-not-found errors", () => {
-    const err = new Error("approval not found") as Error & { gatewayCode?: string };
-    err.gatewayCode = "APPROVAL_NOT_FOUND";
+    const err = Object.assign(new Error("approval not found"), {
+      gatewayCode: "APPROVAL_NOT_FOUND",
+    });
     expect(isApprovalStaleError(err)).toBe(true);
   });
 

@@ -3,7 +3,8 @@
  *
  * Keeps bounded display tails in memory while spilling full output to private temp files when needed.
  */
-import type { WriteStream } from "node:fs";
+import { finished } from "node:stream/promises";
+import { truncateUtf8Suffix } from "../../../utils/utf8-truncate.js";
 import { createPrivateTempWriteStream } from "./private-temp-file.js";
 import {
   DEFAULT_MAX_BYTES,
@@ -38,10 +39,6 @@ interface OutputSnapshot {
   fullOutputPath?: string;
 }
 
-function byteLength(text: string): number {
-  return Buffer.byteLength(text, "utf-8");
-}
-
 /**
  * Incrementally tracks streaming output with bounded memory.
  *
@@ -60,22 +57,24 @@ export class OutputAccumulator {
   private spillChunks: Buffer[] = [];
   private tailText = "";
   private tailBytes = 0;
-  private tailStartsAtLineBoundary = true;
   private totalRawBytes = 0;
   private totalDecodedBytes = 0;
   private completedLines = 0;
   private totalLines = 0;
-  private currentLineBytes = 0;
+  private lastLineBytes = 0;
   private hasOpenLine = false;
   private finished = false;
 
-  private tempFilePath: string | undefined;
-  private tempFileStream: WriteStream | undefined;
+  private tempFile:
+    | (ReturnType<typeof createPrivateTempWriteStream> & { completion: Promise<void> })
+    | undefined;
 
   constructor(options: OutputAccumulatorOptions = {}) {
     this.maxLines = options.maxLines ?? DEFAULT_MAX_LINES;
     this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
-    this.maxRollingBytes = Math.max(this.maxBytes * 2, 1);
+    // UTF-8 trimming can drop three bytes; truncateTail also ignores a final newline.
+    // Keep enough extra bytes that an incomplete leading line cannot fit the display.
+    this.maxRollingBytes = Math.max(this.maxBytes * 2, this.maxBytes + 5);
     this.tempFilePrefix = options.tempFilePrefix ?? "openclaw-output";
     this.createTextTransform = options.createTextTransform;
   }
@@ -108,7 +107,7 @@ export class OutputAccumulator {
 
     // Decoded/transformed output must spill exactly what callers see.
     const spillChunk = lane.spillDecoded ? Buffer.from(text, "utf-8") : data;
-    if (this.tempFileStream || this.shouldUseTempFile()) {
+    if (this.tempFile || this.shouldUseTempFile()) {
       this.ensureTempFile();
     }
     this.appendSpillChunk(spillChunk);
@@ -141,7 +140,7 @@ export class OutputAccumulator {
   }
 
   snapshot(options: { persistIfTruncated?: boolean } = {}): OutputSnapshot {
-    const tailTruncation = truncateTail(this.getSnapshotText(), {
+    const tailTruncation = truncateTail(this.tailText, {
       maxLines: this.maxLines,
       maxBytes: this.maxBytes,
     });
@@ -166,35 +165,22 @@ export class OutputAccumulator {
     return {
       content: truncation.content,
       truncation,
-      fullOutputPath: this.tempFilePath,
+      fullOutputPath: this.tempFile?.path,
     };
   }
 
   async closeTempFile(): Promise<void> {
-    if (!this.tempFileStream) {
+    const tempFile = this.tempFile;
+    if (!tempFile) {
       return;
     }
 
-    const stream = this.tempFileStream;
-    this.tempFileStream = undefined;
-
-    await new Promise<void>((resolve, reject) => {
-      const onError = (error: Error) => {
-        stream.off("finish", onFinish);
-        reject(error);
-      };
-      const onFinish = () => {
-        stream.off("error", onError);
-        resolve();
-      };
-      stream.once("error", onError);
-      stream.once("finish", onFinish);
-      stream.end();
-    });
+    tempFile.stream.end();
+    await tempFile.completion;
   }
 
   getLastLineBytes(): number {
-    return this.currentLineBytes;
+    return this.lastLineBytes;
   }
 
   private appendDecodedText(text: string): void {
@@ -202,61 +188,29 @@ export class OutputAccumulator {
       return;
     }
 
-    const bytes = byteLength(text);
+    const bytes = Buffer.byteLength(text);
     this.totalDecodedBytes += bytes;
     this.tailText += text;
     this.tailBytes += bytes;
     if (this.tailBytes > this.maxRollingBytes * 2) {
-      this.trimTail();
+      this.tailText = truncateUtf8Suffix(this.tailText, this.maxRollingBytes);
+      this.tailBytes = Buffer.byteLength(this.tailText);
     }
 
-    let newlines = 0;
-    let lastNewline = -1;
-    for (let i = text.indexOf("\n"); i !== -1; i = text.indexOf("\n", i + 1)) {
-      newlines++;
-      lastNewline = i;
-    }
-    if (newlines === 0) {
-      this.currentLineBytes += bytes;
-      this.hasOpenLine = true;
-    } else {
-      this.completedLines += newlines;
-      const tail = text.slice(lastNewline + 1);
-      this.currentLineBytes = byteLength(tail);
-      this.hasOpenLine = tail.length > 0;
-    }
-    this.totalLines = this.completedLines + (this.hasOpenLine ? 1 : 0);
-  }
-
-  private trimTail(): void {
-    const buffer = Buffer.from(this.tailText, "utf-8");
-    if (buffer.length <= this.maxRollingBytes) {
-      this.tailBytes = buffer.length;
-      return;
-    }
-
-    let start = buffer.length - this.maxRollingBytes;
-    while (start < buffer.length) {
-      const byte = buffer.at(start);
-      if (byte === undefined || (byte & 0xc0) !== 0x80) {
-        break;
+    // A terminator closes the last real line; its size still belongs in the footer.
+    const end = text.endsWith("\n") ? text.length - 1 : text.length;
+    let start = 0;
+    for (let index = text.indexOf("\n"); index !== -1; index = text.indexOf("\n", index + 1)) {
+      this.completedLines++;
+      if (index < end) {
+        start = index + 1;
       }
-      start++;
     }
-
-    this.tailStartsAtLineBoundary =
-      start === 0 ? this.tailStartsAtLineBoundary : buffer.at(start - 1) === 0x0a;
-    this.tailText = buffer.subarray(start).toString("utf-8");
-    this.tailBytes = byteLength(this.tailText);
-  }
-
-  private getSnapshotText(): string {
-    if (this.tailStartsAtLineBoundary) {
-      return this.tailText;
-    }
-
-    const firstNewline = this.tailText.indexOf("\n");
-    return firstNewline === -1 ? this.tailText : this.tailText.slice(firstNewline + 1);
+    this.lastLineBytes =
+      (start === 0 && this.hasOpenLine ? this.lastLineBytes : 0) +
+      (start === 0 && end === text.length ? bytes : Buffer.byteLength(text.slice(start, end)));
+    this.hasOpenLine = end === text.length;
+    this.totalLines = this.completedLines + (this.hasOpenLine ? 1 : 0);
   }
 
   private shouldUseTempFile(): boolean {
@@ -271,22 +225,25 @@ export class OutputAccumulator {
     if (chunk.length === 0) {
       return;
     }
-    if (this.tempFileStream) {
-      this.tempFileStream.write(chunk);
+    if (this.tempFile) {
+      this.tempFile.stream.write(chunk);
     } else {
       this.spillChunks.push(chunk);
     }
   }
 
   private ensureTempFile(): void {
-    if (this.tempFilePath) {
+    if (this.tempFile) {
       return;
     }
     const tempFile = createPrivateTempWriteStream(this.tempFilePrefix);
-    this.tempFilePath = tempFile.path;
-    this.tempFileStream = tempFile.stream;
+    // Own stream errors before the first write, retaining finished()'s listeners.
+    // Handle early rejection now; closeTempFile still awaits the original promise.
+    const completion = finished(tempFile.stream);
+    void completion.catch(() => undefined);
+    this.tempFile = { ...tempFile, completion };
     for (const chunk of this.spillChunks) {
-      this.tempFileStream.write(chunk);
+      tempFile.stream.write(chunk);
     }
     this.spillChunks = [];
   }

@@ -506,7 +506,7 @@ enum CLIInstaller {
         let executable = self.managedExecutableLocation()
         await statusHandler(repair
             ? String(localized: "Repairing the OpenClaw Gateway update…")
-            : String(localized: "Updating the OpenClaw Gateway to \(targetVersion)…"))
+            : String(format: String(localized: "Updating the OpenClaw Gateway to %@…"), targetVersion))
         let command = self.managedUpdateCommand(
             executable: executable,
             targetVersion: targetVersion,
@@ -551,7 +551,8 @@ enum CLIInstaller {
 
         self.rememberInstallPolicy(.exact(targetVersion))
         NotificationCenter.default.post(name: .openclawCLIInstalled, object: nil)
-        await statusHandler(String(localized: "OpenClaw Gateway \(installedVersion) is installed."))
+        await statusHandler(String(
+            format: String(localized: "OpenClaw Gateway %@ is installed."), installedVersion))
         return .success(
             fromVersion: summary?.before?.version,
             toVersion: installedVersion)

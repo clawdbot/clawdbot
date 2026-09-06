@@ -183,13 +183,6 @@ public struct SkillInstallOption: Codable, Identifiable, Sendable {
     public let kind: String
     public let label: String
     public let bins: [String]
-
-    public init(id: String, kind: String, label: String, bins: [String]) {
-        self.id = id
-        self.kind = kind
-        self.label = label
-        self.bins = bins
-    }
 }
 
 public struct SkillInstallResult: Codable, Sendable {
@@ -201,12 +194,6 @@ public struct SkillInstallResult: Codable, Sendable {
     public let slug: String?
     public let version: String?
     public let warning: String?
-}
-
-public struct SkillUpdateResult: Codable, Sendable {
-    public let ok: Bool
-    public let skillKey: String
-    public let config: [String: OpenClawProtocol.AnyCodable]?
 }
 
 public struct ClawHubInstalledSkillLink: Codable, Sendable {
@@ -286,7 +273,7 @@ public struct ClawHubSkillInstallReview: Identifiable, Hashable, Sendable {
     public let displayName: String
     public let summary: String?
     /// Nil for an install-only source: the Gateway pins those to a commit and rejects a version
-    /// selector, so there is no release for the operator to review or acknowledge.
+    /// selector, so there is no release for the operator to review.
     public let version: String?
     public let author: String
     /// Set for an install-only target. Its canonical slug differs from this reference, so install
@@ -342,8 +329,6 @@ public struct ClawHubSkillInstallReview: Identifiable, Hashable, Sendable {
 public struct ClawHubSkillInstallRejection: Equatable, Sendable {
     public let message: String
     public let warning: String?
-    public let acknowledgeVersion: String?
-    public let requiresAcknowledgement: Bool
 }
 
 public enum SkillManagementContract {
@@ -402,31 +387,11 @@ public enum SkillManagementContract {
         !skill.disabled && !self.ready(skill)
     }
 
-    public static func rejection(
-        from error: GatewayResponseError,
-        attemptedVersion: String?) -> ClawHubSkillInstallRejection
-    {
-        let reviewedVersion = attemptedVersion?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-        let gatewayVersion = self.string(error.details["version"]?.value)
-        let warning = self.string(error.details["warning"]?.value)
-        let acknowledgementRequested = self.string(error.details["clawhubTrustCode"]?.value)
-            == "clawhub_risk_acknowledgement_required"
-        // Bind consent to the exact detail response version. A moving ClawHub release
-        // must be reviewed again instead of inheriting acknowledgement for older bytes.
-        let requiresAcknowledgement = acknowledgementRequested && reviewedVersion != nil
-            && gatewayVersion == reviewedVersion
-        let message = acknowledgementRequested && !requiresAcknowledgement
-            ? "The Gateway evaluated a different ClawHub release. Review the skill again before installing."
-            : error.message
-        return ClawHubSkillInstallRejection(
-            message: message,
-            warning: warning,
-            acknowledgeVersion: requiresAcknowledgement ? reviewedVersion : nil,
-            requiresAcknowledgement: requiresAcknowledgement)
-    }
-
-    private static func string(_ value: Any?) -> String? {
-        (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    public static func rejection(from error: GatewayResponseError) -> ClawHubSkillInstallRejection {
+        ClawHubSkillInstallRejection(
+            message: error.message,
+            warning: (error.details["warning"]?.value as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty)
     }
 
     fileprivate static func clawHubReference(_ rawValue: String) -> (slug: String, ownerHandle: String?)? {

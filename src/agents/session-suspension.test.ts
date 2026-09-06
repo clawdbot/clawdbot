@@ -1,6 +1,8 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 // Verifies quota suspension records recovery state without blocking shared work.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import type { QuotaSuspension } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
@@ -140,34 +142,109 @@ describe("session suspension", () => {
     );
   });
 
-  it("rolls back a write that finishes after gateway shutdown begins", async () => {
-    const { fenceSessionSuspensionWritesForGatewayShutdown } =
-      await import("./session-suspension.js");
-    let releaseWrite: (() => void) | undefined;
-    let storeEntry: { quotaSuspension?: { suspendedAt: number } } = {};
+  it.each([
+    {
+      name: "the previous marker",
+      previousQuotaSuspension: {
+        schemaVersion: 1,
+        suspendedAt: 100,
+        reason: "manual",
+        failedProvider: "previous-provider",
+        failedModel: "previous-model",
+        summary: "previous briefing",
+        snapshotRef: "previous-snapshot",
+        laneId: "previous-lane",
+        expectedResumeBy: 500,
+        state: "resuming",
+      } satisfies QuotaSuspension,
+    },
+    { name: "an absent marker", previousQuotaSuspension: undefined },
+  ])(
+    "restores $name when a committed write finishes after shutdown",
+    async ({ previousQuotaSuspension }) => {
+      const { fenceSessionSuspensionWritesForGatewayShutdown } =
+        await import("./session-suspension.js");
+      const committed = createDeferred();
+      const releaseWrite = createDeferred();
+      let storeEntry: { quotaSuspension?: QuotaSuspension } = {
+        quotaSuspension: previousQuotaSuspension,
+      };
+      let writeCount = 0;
+      sessionAccessorMocks.patchSessionEntryCore.mockImplementation(async (_scope, update) => {
+        writeCount += 1;
+        const patch = update(storeEntry) as typeof storeEntry | null;
+        if (patch && "quotaSuspension" in patch) {
+          storeEntry = patch.quotaSuspension ? { quotaSuspension: patch.quotaSuspension } : {};
+        }
+        if (writeCount === 1) {
+          committed.resolve();
+          await releaseWrite.promise;
+        }
+        return storeEntry;
+      });
+
+      const suspension = recordSuspension();
+      await committed.promise;
+      try {
+        expect(storeEntry.quotaSuspension).toMatchObject({
+          reason: "quota_exhausted",
+          failedProvider: "openai",
+          failedModel: "gpt-5.6-sol",
+          state: "suspended",
+        });
+        fenceSessionSuspensionWritesForGatewayShutdown();
+      } finally {
+        releaseWrite.resolve();
+        await suspension;
+      }
+
+      expect(storeEntry.quotaSuspension).toEqual(previousQuotaSuspension);
+      expect(sessionAccessorMocks.patchSessionEntryCore).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("serializes same-session writes until the previous committed write returns", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const committed = createDeferred();
+    const releaseWrite = createDeferred();
+    let storeEntry: { quotaSuspension?: QuotaSuspension } = {};
     let writeCount = 0;
     sessionAccessorMocks.patchSessionEntryCore.mockImplementation(async (_scope, update) => {
       writeCount += 1;
-      if (writeCount === 1) {
-        await new Promise<void>((resolve) => {
-          releaseWrite = resolve;
-        });
-      }
       const patch = update(storeEntry) as typeof storeEntry | null;
-      if (patch && "quotaSuspension" in patch) {
-        storeEntry = patch.quotaSuspension ? { quotaSuspension: patch.quotaSuspension } : {};
+      if (patch) {
+        storeEntry = { ...storeEntry, ...patch };
+      }
+      if (writeCount === 1) {
+        committed.resolve();
+        await releaseWrite.promise;
       }
       return storeEntry;
     });
 
-    const suspension = recordSuspension();
-    await vi.waitFor(() => expect(releaseWrite).toBeTypeOf("function"));
-    fenceSessionSuspensionWritesForGatewayShutdown();
-    releaseWrite?.();
-    await suspension;
+    const first = recordSuspension();
+    await committed.promise;
+    clock.mockReturnValue(2_000);
+    const second = recordSuspension(200);
+    try {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(sessionAccessorMocks.patchSessionEntryCore).toHaveBeenCalledOnce();
+      expect(storeEntry.quotaSuspension?.suspendedAt).toBe(1_000);
+    } finally {
+      releaseWrite.resolve();
+      await Promise.all([first, second]);
+    }
 
-    expect(storeEntry.quotaSuspension).toBeUndefined();
     expect(sessionAccessorMocks.patchSessionEntryCore).toHaveBeenCalledTimes(2);
+    expect(storeEntry.quotaSuspension).toMatchObject({
+      suspendedAt: 2_000,
+      expectedResumeBy: 2_200,
+      failedProvider: "openai",
+      failedModel: "gpt-5.6-sol",
+      state: "suspended",
+    });
   });
 
   it("blocks new state writes until gateway startup re-enables them", async () => {

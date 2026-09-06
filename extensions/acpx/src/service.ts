@@ -93,9 +93,33 @@ function createLazyDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntime
     if (runtime) {
       return runtime;
     }
-    runtimePromise ??= loadRuntimeModule().then((module) => {
+    runtimePromise ??= loadRuntimeModule().then(async (module) => {
+      // Snapshot filenames once under the service owner. Runtime never migrates or reads legacy payloads.
+      const names = await fs
+        .readdir(path.join(params.pluginConfig.stateDir, "sessions"))
+        .catch((error: unknown) => {
+          if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+            return [];
+          }
+          throw error;
+        });
+      const legacyBareSessionKeys = new Set<string>();
+      for (const name of names) {
+        if (!name.endsWith(".json")) {
+          continue;
+        }
+        const recordId = decodeURIComponent(name.slice(0, -5));
+        if (
+          !recordId.startsWith("agent:") &&
+          !recordId.startsWith(".openclaw-owner-") &&
+          !recordId.includes(":oneshot:")
+        ) {
+          legacyBareSessionKeys.add(recordId.toLowerCase());
+        }
+      }
       runtime = new module.AcpxRuntime({
         cwd: params.pluginConfig.cwd,
+        openclawLegacyBareSessionKeys: legacyBareSessionKeys,
         openclawGatewayInstanceId: params.gatewayInstanceId,
         openclawProcessLeaseStore: params.processLeaseStore,
         openclawWrapperRoot: params.wrapperRoot,

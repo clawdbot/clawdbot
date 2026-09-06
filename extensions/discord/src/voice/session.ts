@@ -1,3 +1,4 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 // Discord plugin module implements session behavior.
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -12,7 +13,6 @@ export const CAPTURE_FINALIZE_GRACE_MS = 2_000;
 export const VOICE_CONNECT_READY_TIMEOUT_MS = 30_000;
 export const VOICE_RECONNECT_GRACE_MS = 15_000;
 export const PLAYBACK_READY_TIMEOUT_MS = 60_000;
-export const SPEAKING_READY_TIMEOUT_MS = 60_000;
 
 export function resolveVoiceTimeoutMs(value: number | undefined, fallbackMs: number): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
@@ -25,6 +25,7 @@ export type VoiceOperationResult = {
   ok: boolean;
   message: string;
   channelId?: string;
+  channelName?: string;
   guildId?: string;
 };
 
@@ -105,12 +106,16 @@ export type VoiceSessionEntry = {
   player: import("@discordjs/voice").AudioPlayer;
   playbackQueue: Promise<void>;
   processingQueue: Promise<void>;
+  audioInputBudget: Awaited<
+    ReturnType<PluginRuntime["mediaUnderstanding"]["resolveAudioInputBudget"]>
+  >;
   ttsStreamFallbackWarned: boolean;
   capture: VoiceCaptureState;
   realtimeLifecycle: VoiceRealtimeLifecycle;
   transcripts?: {
     sessionId: string;
     onUtterance: (utterance: TranscriptUtterance) => void | Promise<void>;
+    onStop?: () => void | Promise<void>;
   };
   receiveRecovery: VoiceReceiveRecoveryState;
   stop: (reason?: string) => void;

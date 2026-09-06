@@ -2,15 +2,13 @@
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  getCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
-} from "../plugins/current-plugin-metadata-snapshot.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
-import type { InstalledPluginIndexRecord } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { finalizePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
@@ -144,28 +142,6 @@ function createComfyPlugin(
   });
 }
 
-function createInstalledPluginRecord(
-  plugin: PluginManifestRecord,
-  enabledPluginIds: string[],
-): InstalledPluginIndexRecord {
-  const enabled = plugin.origin === "bundled" || enabledPluginIds.includes(plugin.id);
-  return {
-    pluginId: plugin.id,
-    manifestPath: plugin.manifestPath,
-    manifestHash: `test-${plugin.id}`,
-    source: plugin.source,
-    rootDir: plugin.rootDir,
-    origin: plugin.origin,
-    enabled,
-    startup: {
-      sidecar: false,
-      memory: false,
-      agentHarnesses: [],
-    },
-    compat: [],
-  };
-}
-
 function legacyModelProviderConfig(provider: Record<string, unknown>): OpenClawConfig {
   return {
     models: {
@@ -179,51 +155,18 @@ function legacyModelProviderConfig(provider: Record<string, unknown>): OpenClawC
 function installSnapshot(
   config: OpenClawConfig,
   plugins: PluginManifestRecord[],
-  enabledPluginIds = plugins
-    .filter((plugin) => plugin.origin !== "bundled")
-    .map((plugin) => plugin.id),
   workspaceDir?: string,
 ) {
-  // Builds the current plugin metadata snapshot used by factory planning.
-  const snapshot = {
-    policyHash: resolveInstalledPluginIndexPolicyHash(config),
+  const prepared = createPluginMetadataSnapshotFixture({ plugins });
+  const policyHash = resolveInstalledPluginIndexPolicyHash(config);
+  const index = { ...prepared.index, policyHash };
+  const snapshot = finalizePluginMetadataSnapshot({
+    ...prepared,
+    policyHash,
     ...(workspaceDir ? { workspaceDir } : {}),
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "test",
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: plugins.map((plugin) => createInstalledPluginRecord(plugin, enabledPluginIds)),
-      diagnostics: [],
-    },
-    registryDiagnostics: [],
-    manifestRegistry: { plugins, diagnostics: [] },
-    plugins,
-    diagnostics: [],
-    byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
-    normalizePluginId: (id: string) => id,
-    owners: {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map(),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-    },
-    metrics: {
-      registrySnapshotMs: 0,
-      manifestRegistryMs: 0,
-      ownerMapsMs: 0,
-      totalMs: 0,
-      indexPluginCount: 0,
-      manifestPluginCount: plugins.length,
-    },
-  } satisfies PluginMetadataSnapshot;
+    index,
+    registryIndex: index,
+  });
   setCurrentPluginMetadataSnapshot(snapshot, { config });
   return snapshot;
 }
@@ -426,7 +369,6 @@ describe("optional media tool factory planning", () => {
           setupProviders: [{ id: "image-owner", envVars: ["IMAGE_OWNER_API_KEY"] }],
         }),
       ],
-      undefined,
       "/workspace/a",
     );
     expect(getCurrentPluginMetadataSnapshot({ config })).toBeUndefined();
@@ -730,7 +672,7 @@ describe("optional media tool factory planning", () => {
       authStore: createAuthStore(["openai"]),
     });
     expect(plan.imageGenerate).toBe(true);
-    installSnapshot(config, plugins, undefined, process.cwd());
+    installSnapshot(config, plugins, process.cwd());
     expect(
       (
         await createOpenClawToolsForTest({
@@ -860,7 +802,7 @@ describe("optional media tool factory planning", () => {
         required: ["promptNodeId", "apiKey"],
       },
     ];
-    installSnapshot(config, [createComfyPlugin(configSignals)], undefined, workspaceDir);
+    installSnapshot(config, [createComfyPlugin(configSignals)], workspaceDir);
 
     expect(
       resolveOptionalMediaToolFactoryPlan({
@@ -946,7 +888,6 @@ describe("optional media tool factory planning", () => {
           setupProviders: [{ id: "media-owner", envVars: ["MEDIA_OWNER_API_KEY"] }],
         }),
       ],
-      undefined,
       workspaceDir,
     );
 
@@ -1104,4 +1045,3 @@ describe("optional media tool factory planning", () => {
     });
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

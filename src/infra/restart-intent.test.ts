@@ -120,7 +120,7 @@ describe("gateway restart intent", () => {
     expect(readIntentRow(env)).toBeUndefined();
   });
 
-  it("round-trips restart reason, force, and wait options", () => {
+  it("round-trips restart options without persisting process-local successor identity", () => {
     const env = createIntentEnv();
 
     expect(
@@ -128,7 +128,15 @@ describe("gateway restart intent", () => {
         env,
         targetPid: process.pid,
         reason: "gateway.restart",
-        intent: { force: true, waitMs: 12_345 },
+        intent: {
+          force: true,
+          waitMs: 12_345,
+          successorOwner: {
+            kind: "managed-update-handoff",
+            handoffId: "private-handoff",
+            installRoot: "/private/install",
+          },
+        },
       }),
     ).toBe(true);
 

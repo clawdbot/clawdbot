@@ -8,13 +8,15 @@ import {
   listMessageReceiptPlatformIds,
   type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
+import { resolveMatrixExtraContent } from "../../outbound.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { MatrixClient } from "../sdk.js";
-import { chunkMatrixText, sendMessageMatrix } from "../send.js";
+import { sendMessageMatrix } from "../send.js";
 import type { MatrixSendResult } from "../send/types.js";
-import type { MarkdownTableMode, OpenClawConfig, ReplyPayload, RuntimeEnv } from "./runtime-api.js";
+import type { OpenClawConfig, ReplyPayload, RuntimeEnv } from "./runtime-api.js";
 
 export type MatrixReplyDeliveryResult = {
   messageIds?: string[];
@@ -113,23 +115,14 @@ export async function deliverMatrixReplies(params: {
   roomId: string;
   client: MatrixClient;
   runtime: RuntimeEnv;
-  textLimit: number;
   replyToMode: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
   threadId?: string;
   replyToId?: string;
   accountId?: string;
   mediaLocalRoots?: readonly string[];
-  tableMode?: MarkdownTableMode;
 }): Promise<MatrixReplyDeliveryResult> {
   const core = getMatrixRuntime();
-  const tableMode =
-    params.tableMode ??
-    core.channel.text.resolveMarkdownTableMode({
-      cfg: params.cfg,
-      channel: "matrix",
-      accountId: params.accountId,
-    });
   const logVerbose = (message: string) => {
     if (core.logging.shouldLogVerbose()) {
       params.runtime.log?.(message);
@@ -140,12 +133,12 @@ export async function deliverMatrixReplies(params: {
   try {
     for (const reply of params.replies) {
       const visibleText = resolveVisibleMatrixReplyText(reply.text);
-      const hasMedia = Boolean(reply?.mediaUrl) || (reply?.mediaUrls?.length ?? 0) > 0;
+      const { hasMedia, hasText, mediaUrls } = resolveSendableOutboundReplyParts(reply);
       if (reply.isReasoning === true || (!hasMedia && reply.text && visibleText === undefined)) {
         logVerbose("matrix reply suppressed as reasoning-only");
         continue;
       }
-      if (!reply?.text && !hasMedia) {
+      if (!hasText && !hasMedia) {
         if (reply?.audioAsVoice) {
           logVerbose("matrix reply has audioAsVoice without media/text; skipping");
           continue;
@@ -153,22 +146,20 @@ export async function deliverMatrixReplies(params: {
         params.runtime.error?.("matrix reply missing text/media");
         continue;
       }
-      const replyToIdRaw = (reply.replyToId ?? params.replyToId)?.trim();
-      const replyToId = params.threadId
-        ? replyToIdRaw
-        : params.replyToMode === "off"
-          ? undefined
-          : replyToIdRaw;
+      const explicitReplyToId =
+        reply.replyToTag || reply.replyToCurrent ? reply.replyToId?.trim() : undefined;
       const rawText = visibleText ?? "";
-      const mediaList = reply.mediaUrls?.length
-        ? reply.mediaUrls
-        : reply.mediaUrl
-          ? [reply.mediaUrl]
-          : [];
 
-      const shouldIncludeReply = (id?: string) =>
-        Boolean(id) && (params.threadId || params.replyToMode === "all" || !hasRepliedRef.value);
-      const replyToIdForReply = shouldIncludeReply(replyToId) ? replyToId : undefined;
+      const replyToIdForReply =
+        explicitReplyToId ||
+        (!params.threadId &&
+        params.replyToMode !== "off" &&
+        (params.replyToMode === "all" || !hasRepliedRef.value)
+          ? (reply.replyToId ?? params.replyToId)?.trim()
+          : undefined);
+      const fallbackReplyToId = params.threadId
+        ? (reply.replyToId ?? params.replyToId)?.trim()
+        : undefined;
       const onDeliveryResult = (result: MatrixSendResult) => {
         // A concrete event consumes the first-reply slot even when a later event fails.
         acceptedResults.push(result);
@@ -177,31 +168,27 @@ export async function deliverMatrixReplies(params: {
         }
       };
 
-      if (mediaList.length === 0) {
-        const { chunks } = chunkMatrixText(rawText, {
+      // The reply's own event fields ride its first event, exactly as the outbound
+      // send path places them; a later chunk would attach them to the wrong event.
+      const extraContent = resolveMatrixExtraContent(reply);
+
+      if (mediaUrls.length === 0) {
+        // The send owner prepares native formatting and reports each accepted chunk.
+        await sendMessageMatrix(params.roomId, rawText, {
+          client: params.client,
           cfg: params.cfg,
+          replyToId: replyToIdForReply,
+          fallbackReplyToId,
+          threadId: params.threadId,
           accountId: params.accountId,
-          tableMode,
-          preserveWhitespace: true,
+          extraContent,
+          onDeliveryResult,
         });
-        for (const chunk of chunks) {
-          if (!chunk.trim()) {
-            continue;
-          }
-          await sendMessageMatrix(params.roomId, chunk, {
-            client: params.client,
-            cfg: params.cfg,
-            replyToId: replyToIdForReply,
-            threadId: params.threadId,
-            accountId: params.accountId,
-            onDeliveryResult,
-          });
-        }
         continue;
       }
 
       let first = true;
-      for (const mediaUrl of mediaList) {
+      for (const mediaUrl of mediaUrls) {
         const caption = first ? rawText : "";
         await sendMessageMatrix(params.roomId, caption, {
           client: params.client,
@@ -209,9 +196,11 @@ export async function deliverMatrixReplies(params: {
           mediaUrl,
           mediaLocalRoots: params.mediaLocalRoots,
           replyToId: replyToIdForReply,
+          fallbackReplyToId,
           threadId: params.threadId,
           audioAsVoice: reply.audioAsVoice,
           accountId: params.accountId,
+          extraContent: first ? extraContent : undefined,
           onDeliveryResult,
         });
         first = false;

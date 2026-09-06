@@ -3,7 +3,6 @@
 
 import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
-import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -16,6 +15,7 @@ import { listAgentEntries } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connection-details.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
+import { isLoopbackGatewayUrl } from "../gateway/net.js";
 import { resolveGatewayProbeTarget } from "../gateway/probe-target.js";
 import type { GatewayProbeResult, probeGateway as probeGatewayFn } from "../gateway/probe.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -157,17 +157,6 @@ type StatusMemorySearchManagerResolver = (params: {
   manager: StatusMemorySearchManager | null;
 }>;
 
-function isLoopbackGatewayUrl(rawUrl: string): boolean {
-  try {
-    const hostname = new URL(rawUrl).hostname.toLowerCase();
-    const unbracketed =
-      hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
-    return unbracketed === "localhost" || isLoopbackIpAddress(unbracketed);
-  } catch {
-    return false;
-  }
-}
-
 function shouldTryLocalStatusRpcFallback(params: {
   gatewayMode: "local" | "remote";
   gatewayUrl: string;
@@ -192,6 +181,7 @@ function shouldTryLocalStatusRpcFallback(params: {
 
 async function applyLocalStatusRpcFallback(params: {
   cfg: OpenClawConfig;
+  configPath: string;
   gatewayMode: "local" | "remote";
   gatewayUrl: string;
   gatewayProbe: GatewayProbeResult | null;
@@ -219,6 +209,7 @@ async function applyLocalStatusRpcFallback(params: {
     .then(({ callGateway }) =>
       callGateway({
         config: params.cfg,
+        configPath: params.configPath,
         method: "status",
         token: params.gatewayProbeAuth.token,
         password: params.gatewayProbeAuth.password,
@@ -278,6 +269,8 @@ export function resolveMemoryPluginStatus(cfg: OpenClawConfig): MemoryPluginStat
 /** Resolves gateway connection details, probe result, auth warnings, and call overrides. */
 export async function resolveGatewayProbeSnapshot(params: {
   cfg: OpenClawConfig;
+  configPath: string;
+  env: NodeJS.ProcessEnv;
   opts: {
     timeoutMs?: number;
     all?: boolean;
@@ -289,7 +282,10 @@ export async function resolveGatewayProbeSnapshot(params: {
     localStatusRpcFallback?: boolean;
   };
 }): Promise<GatewayProbeSnapshot> {
-  const gatewayConnection = buildGatewayConnectionDetailsWithResolvers({ config: params.cfg });
+  const gatewayConnection = buildGatewayConnectionDetailsWithResolvers({
+    config: params.cfg,
+    configPath: params.configPath,
+  });
   const { gatewayMode, remoteUrlMissing } = resolveGatewayProbeTarget(params.cfg);
   const shouldResolveAuth =
     params.opts.skipProbe !== true &&
@@ -299,7 +295,7 @@ export async function resolveGatewayProbeSnapshot(params: {
     (!remoteUrlMissing || params.opts.probeWhenRemoteUrlMissing === true);
   const gatewayProbeAuthResolution = shouldResolveAuth
     ? await loadGatewayProbeModule().then(({ resolveGatewayProbeAuthResolution }) =>
-        resolveGatewayProbeAuthResolution(params.cfg),
+        resolveGatewayProbeAuthResolution(params.cfg, params.env),
       )
     : { auth: {}, warning: undefined };
   let gatewayProbeAuthWarning = gatewayProbeAuthResolution.warning;
@@ -313,6 +309,7 @@ export async function resolveGatewayProbeSnapshot(params: {
             url: gatewayConnection.url,
             config: params.cfg,
             auth: gatewayProbeAuthResolution.auth,
+            env: params.env,
             timeoutMs: probeTimeoutMs,
             detailLevel: params.opts.detailLevel ?? "presence",
           }),
@@ -321,6 +318,7 @@ export async function resolveGatewayProbeSnapshot(params: {
     : null;
   const gatewayProbe = await applyLocalStatusRpcFallback({
     cfg: params.cfg,
+    configPath: params.configPath,
     gatewayMode,
     gatewayUrl: gatewayConnection.url,
     gatewayProbe: initialGatewayProbe,

@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import type {
@@ -24,11 +25,14 @@ import {
   createResult,
   createRuntimeConfigHarness,
   deferred,
+  mountClawHubSearchPage,
   mountPage,
   resetPluginsPageTestState,
   type RuntimeConfigTestState,
 } from "./plugins-page.test-support.ts";
 import type { PluginsRouteData } from "./plugins-page.ts";
+
+vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
 
 function clickHubTab(page: HTMLElement, tab: "installed" | "discover" | "skills" | "workshop") {
   page
@@ -39,30 +43,49 @@ function clickHubTab(page: HTMLElement, tab: "installed" | "discover" | "skills"
 describe("PluginsPage", () => {
   beforeEach(async () => {
     await i18n.setLocale("en");
+    vi.mocked(showConfirmDialog).mockReset().mockResolvedValue(true);
   });
 
   afterEach(resetPluginsPageTestState);
 
-  it("accepts matching route data without issuing a duplicate list request", async () => {
+  it.each([false, true])(
+    "adopts matching route data without duplicate requests (delayed: %s)",
+    async (delayed) => {
+      const { client, request } = createClient(async () => createResult());
+      const harness = createGateway(client);
+      const result = createResult();
+      const routeData: PluginsRouteData = createPluginsRouteData(harness.gateway, result);
+
+      const { page } = await mountPage(
+        createContext(harness.gateway),
+        delayed ? undefined : routeData,
+      );
+
+      if (delayed) {
+        expect(page.querySelector("h1")?.textContent).toBe("Plugins");
+        expect(request).not.toHaveBeenCalled();
+        harness.emit(client, false);
+        harness.emit(client, true);
+        await page.updateComplete;
+        expect(request).not.toHaveBeenCalled();
+        page.routeData = createPluginsRouteData(harness.gateway, result);
+        await page.updateComplete;
+      }
+
+      expect(page.result).toBe(result);
+      expect(request).not.toHaveBeenCalled();
+      expect(page.querySelectorAll("h1")).toHaveLength(1);
+      expect(page.querySelector("h1")?.textContent).toBe("Plugins");
+    },
+  );
+
+  it("surfaces a route catalog load failure without retrying it", async () => {
     const { client, request } = createClient(async () => createResult());
     const harness = createGateway(client);
-    const result = createResult();
-    const routeData: PluginsRouteData = createPluginsRouteData(harness.gateway, result);
-
-    const { page } = await mountPage(createContext(harness.gateway), routeData);
-
-    expect(page.result).toBe(result);
-    expect(request).not.toHaveBeenCalled();
-    expect(page.querySelectorAll("h1")).toHaveLength(1);
-    expect(page.querySelector("h1")?.textContent).toBe("Plugins");
-  });
-
-  it("surfaces an initial catalog load failure", async () => {
-    const { client } = createClient(async () => {
-      throw new Error("catalog unavailable");
+    const { page } = await mountPage(createContext(harness.gateway), {
+      ...createPluginsRouteData(harness.gateway, null),
+      error: "catalog unavailable",
     });
-    const harness = createGateway(client);
-    const { page } = await mountPage(createContext(harness.gateway));
 
     await waitForFast(() =>
       expect(page.querySelector(".plugins-page-error")?.textContent).toContain(
@@ -72,110 +95,7 @@ describe("PluginsPage", () => {
     expect(
       page.querySelector(".plugins-page-error")?.textContent?.match(/catalog unavailable/gu),
     ).toHaveLength(1);
-  });
-
-  it("fetches proxied icons with auth fallback and revokes their blob URLs", async () => {
-    const createObjectURL = vi.fn(() => "blob:firecrawl-icon");
-    const revokeObjectURL = vi.fn();
-    vi.stubGlobal(
-      "URL",
-      class extends URL {
-        static override createObjectURL = createObjectURL;
-        static override revokeObjectURL = revokeObjectURL;
-      },
-    );
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(new Response(null, { status: 401 }))
-      .mockResolvedValueOnce(
-        new Response(
-          new Blob(
-            [
-              new Uint8Array([
-                0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0x49, 0x48, 0x44, 0x52,
-                0, 0, 0, 2, 0, 0, 0, 1,
-              ]),
-            ],
-            { type: "image/png" },
-          ),
-          {
-            status: 200,
-            headers: { "content-type": "image/png" },
-          },
-        ),
-      );
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-    const { client } = createClient(async () => createResult());
-    const harness = createGateway(client);
-    harness.gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
-    harness.gateway.connection.token = "first";
-    harness.gateway.connection.password = "second";
-    const result = createResult(
-      createPlugin({ id: "remote-icon", name: "FireCrawl", hasIcon: true }),
-    );
-    const routeData: PluginsRouteData = createPluginsRouteData(harness.gateway, result);
-
-    const { page } = await mountPage(createContext(harness.gateway), routeData);
-
-    await waitForFast(() => {
-      expect(
-        page.querySelector('[data-plugin-id="remote-icon"] img.plugins-icon')?.getAttribute("src"),
-      ).toBe("blob:firecrawl-icon");
-    });
-    expect(
-      fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers).get("Authorization")),
-    ).toEqual(["Bearer first", "Bearer second"]);
-    page.applyMutationResult({
-      ok: true,
-      plugin: createPlugin({ id: "other-plugin", name: "Other Plugin" }),
-      restartRequired: false,
-    });
-    expect(revokeObjectURL).not.toHaveBeenCalled();
-
-    page.remove();
-    expect(revokeObjectURL).toHaveBeenCalledWith("blob:firecrawl-icon");
-  });
-
-  it("keeps the monogram fallback when a proxied SVG exceeds the safe icon subset", async () => {
-    const createObjectURL = vi.fn();
-    vi.stubGlobal(
-      "URL",
-      class extends URL {
-        static override createObjectURL = createObjectURL;
-        static override revokeObjectURL = vi.fn();
-      },
-    );
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(
-        new Response(
-          new Blob(
-            [
-              `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><filter id="work"><feTurbulence /></filter><path filter="url(#work)" d="M0 0h24v24H0z"/></svg>`,
-            ],
-            { type: "image/svg+xml" },
-          ),
-          { status: 200, headers: { "content-type": "image/svg+xml" } },
-        ),
-      );
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-    const { client } = createClient(async () => createResult());
-    const harness = createGateway(client);
-    harness.gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
-    const result = createResult(
-      createPlugin({ id: "unsafe-icon", name: "Unsafe Icon", hasIcon: true }),
-    );
-
-    const { page } = await mountPage(
-      createContext(harness.gateway),
-      createPluginsRouteData(harness.gateway, result),
-    );
-
-    await waitForFast(() => expect(fetchMock).toHaveBeenCalledOnce());
-    expect(createObjectURL).not.toHaveBeenCalled();
-    expect(
-      page.querySelector('[data-plugin-id="unsafe-icon"] .plugins-tile--fallback')?.textContent,
-    ).toContain("UI");
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("refreshes the authoritative catalog after a same-client reconnect", async () => {
@@ -261,17 +181,17 @@ describe("PluginsPage", () => {
     } satisfies PluginInstallRequest;
     page.messages["plugin:workboard"] = { kind: "success", text: "Unrelated message." };
 
-    await page.install(catalogRequest, installIdentity);
+    await page.consentController.install(catalogRequest, installIdentity);
     expect(page.messages[installIdentity]?.installPolicyWarning?.details.reason).toBe(
       "Review this plugin (1).",
     );
 
-    await page.install(searchRequest, installIdentity);
+    await page.consentController.install(searchRequest, installIdentity);
     expect(page.messages[installIdentity]?.installPolicyWarning?.details.reason).toBe(
       "Review this plugin (2).",
     );
 
-    await page.install(
+    await page.consentController.install(
       { ...searchRequest, acknowledgeInstallPolicyWarning: true },
       installIdentity,
     );
@@ -317,6 +237,52 @@ describe("PluginsPage", () => {
     );
   });
 
+  it.each([0, 1, 3])(
+    "announces %i completed ClawHub search results in the existing status",
+    async (count) => {
+      vi.useFakeTimers();
+      const response = deferred<{ results: PluginSearchResult[] }>();
+      const { client } = createClient(async (method) => {
+        if (method === "plugins.search") {
+          return response.promise;
+        }
+        throw new Error(`Unexpected method ${method}`);
+      });
+      const { page } = await mountClawHubSearchPage(client);
+      const search = page.querySelector<HTMLInputElement>("#plugins-global-search")!;
+      search.value = "calendar";
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(300);
+      const pending = page.querySelector('[role="status"]');
+      expect(pending?.textContent).toContain("Searching ClawHub");
+
+      const results: PluginSearchResult[] = Array.from({ length: count }, (_, index) => ({
+        score: 1,
+        package: {
+          name: `calendar-${index}`,
+          displayName: `Calendar ${index}`,
+          family: "code-plugin",
+          channel: "community",
+          isOfficial: false,
+        },
+      }));
+      response.resolve({ results });
+      await vi.waitFor(() => expect(page.searchResults).toEqual(results));
+      await page.updateComplete;
+
+      const completed = page.querySelector('[role="status"]');
+      expect(completed).toBe(pending);
+      expect(completed?.getAttribute("aria-live")).toBe("polite");
+      expect(completed?.textContent).toContain(
+        count === 0
+          ? "ClawHub has no results for “calendar”."
+          : `${count} result${count === 1 ? "" : "s"}`,
+      );
+      expect(completed?.classList.contains(count === 0 ? "settings-empty" : "sr-only")).toBe(true);
+      expect(page.querySelectorAll("[data-package-name]")).toHaveLength(count);
+    },
+  );
+
   it("commits only the latest ClawHub search result", async () => {
     vi.useFakeTimers();
     const first = deferred<{ results: PluginSearchResult[] }>();
@@ -327,15 +293,7 @@ describe("PluginsPage", () => {
       }
       return (params as { query: string }).query === "first" ? first.promise : second.promise;
     });
-    const harness = createGateway(client);
-    const { page } = await mountPage(
-      createContext(harness.gateway),
-      createPluginsRouteData(
-        harness.gateway,
-        createResult(),
-        createPluginsRouteLocation("/settings/plugins/discover"),
-      ),
-    );
+    const { page } = await mountClawHubSearchPage(client);
     const search = page.querySelector<HTMLInputElement>("#plugins-global-search")!;
     search.value = "first";
     search.dispatchEvent(new Event("input", { bubbles: true }));
@@ -361,6 +319,8 @@ describe("PluginsPage", () => {
     await Promise.resolve();
 
     expect(page.searchResults).toEqual([latest]);
+    await page.updateComplete;
+    expect(page.querySelector('[role="status"]')?.textContent).toContain("1 result");
   });
 
   it("refreshes plugins and runtime config without discarding a pending config draft", async () => {
@@ -497,7 +457,7 @@ describe("PluginsPage", () => {
       runtimeConfig.patchForm(["pending"], true);
 
       if (action === "install") {
-        await page.install(
+        await page.consentController.install(
           {
             source: "clawhub",
             packageName: "example-plugin",
@@ -708,7 +668,7 @@ describe("PluginsPage", () => {
     await waitForFast(() => expect(page.busy["plugin:workboard"]).toBeUndefined());
   });
 
-  it("uninstalls a removable plugin after inline confirmation", async () => {
+  it("waits for uninstall restart confirmation and sends nothing when cancelled", async () => {
     const removable = createPlugin({
       id: "community-thing",
       name: "Community Thing",
@@ -742,12 +702,26 @@ describe("PluginsPage", () => {
       }),
     );
 
+    const confirmation = deferred<boolean>();
+    vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
     await clickRowAction(page, '[data-plugin-id="community-thing"]', "Remove");
-    page
-      .querySelector<HTMLButtonElement>(
-        '[data-plugin-id="community-thing"] .plugins-remove-confirm .btn.danger',
-      )
-      ?.click();
+    await waitForFast(() => expect(showConfirmDialog).toHaveBeenCalledOnce());
+    expect(showConfirmDialog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Remove Community Thing?",
+        message:
+          "Removing this plugin package and all of its entries restarts the Gateway immediately and interrupts active sessions.",
+        confirmLabel: "Remove",
+        danger: true,
+      }),
+    );
+    expect(calls).not.toContainEqual(["plugins.uninstall", { pluginId: "community-thing" }]);
+
+    confirmation.resolve(false);
+    await confirmation.promise;
+    expect(calls).not.toContainEqual(["plugins.uninstall", { pluginId: "community-thing" }]);
+
+    await clickRowAction(page, '[data-plugin-id="community-thing"]', "Remove");
 
     await waitForFast(() =>
       expect(calls).toContainEqual(["plugins.uninstall", { pluginId: "community-thing" }]),
@@ -758,6 +732,57 @@ describe("PluginsPage", () => {
       ),
     );
     expect(calls).toContainEqual(["plugins.list", {}]);
+  });
+
+  it("does not let an older uninstall republish its page notice after a newer row action", async () => {
+    const uninstallResult = deferred<unknown>();
+    const enabledPlugin = createPlugin({ enabled: true, state: "enabled" });
+    const removable = createPlugin({
+      id: "community-thing",
+      name: "Community Thing",
+      origin: "global",
+      removable: true,
+      featured: false,
+    });
+    const { client, request } = createClient(async (method) => {
+      if (method === "plugins.uninstall") {
+        return uninstallResult.promise;
+      }
+      if (method === "plugins.setEnabled") {
+        return { ok: true, plugin: enabledPlugin, restartRequired: false };
+      }
+      if (method === "plugins.list") {
+        return createResult(enabledPlugin);
+      }
+      throw new Error(`Unexpected method ${method}`);
+    });
+    const harness = createGateway(client);
+    const { page } = await mountPage(
+      createContext(harness.gateway),
+      createPluginsRouteData(harness.gateway, {
+        plugins: [createPlugin(), removable],
+        diagnostics: [],
+        mutationAllowed: true,
+      }),
+    );
+
+    const uninstall = page.uninstall("community-thing", "plugin:community-thing");
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("plugins.uninstall", { pluginId: "community-thing" }),
+    );
+    await page.updateEnabled("workboard", true);
+
+    uninstallResult.resolve({
+      ok: true,
+      pluginId: "community-thing",
+      restartRequired: true,
+      removed: ["config entry", "install record", "directory"],
+    });
+    await uninstall;
+    await page.updateComplete;
+
+    expect(page.querySelector(".plugins-page-notice")).toBeNull();
+    expect(page.messages["plugin:workboard"]?.text).toContain("Enabled Workboard");
   });
 
   it("adds an MCP server through the shared config seam", async () => {
@@ -877,6 +902,71 @@ describe("PluginsPage", () => {
     };
     // RFC 7396 merge semantics: deletion must be an explicit null, not omission.
     expect(patchArgs.raw).toEqual({ mcp: { servers: { github: null } } });
+  });
+
+  it("retires pending MCP feedback before a retained page enters a new context", async () => {
+    const pending = deferred<boolean>();
+    const { client } = createClient(async () => createResult());
+    const gatewayHarness = createGateway(client);
+    const refresh = vi.fn(async () => undefined);
+    const configHarness = createRuntimeConfigHarness(refresh, {
+      configFormDirty: false,
+      lastError: null,
+      configSnapshot: {
+        sourceConfig: { mcp: { servers: { docs: { command: "node" } } } },
+        hash: "initial",
+      },
+    });
+    configHarness.runtimeConfig.patch.mockReturnValueOnce(pending.promise);
+    const { page, provider } = await mountPage(
+      createContext(
+        gatewayHarness.gateway,
+        configHarness.runtimeConfig.refresh,
+        configHarness.runtimeConfig.state,
+        configHarness,
+      ),
+      createPluginsRouteData(gatewayHarness.gateway),
+    );
+
+    await clickRowAction(page, '[data-mcp-name="docs"]', "Disable");
+    await waitForFast(() => expect(configHarness.runtimeConfig.patch).toHaveBeenCalledOnce());
+
+    const replacement = createRuntimeConfigHarness(
+      vi.fn(async () => undefined),
+      {
+        configFormDirty: false,
+        lastError: null,
+        configSnapshot: {
+          sourceConfig: { mcp: { servers: { local: { command: "node" } } } },
+          hash: "replacement",
+        },
+      },
+    );
+    page.remove();
+    provider.setContext(
+      createContext(
+        gatewayHarness.gateway,
+        replacement.runtimeConfig.refresh,
+        replacement.runtimeConfig.state,
+        replacement,
+      ),
+    );
+    provider.append(page);
+    await waitForFast(() => expect(page.querySelector('[data-mcp-name="local"]')).not.toBeNull());
+    const currentToggle = expectDefined(
+      [...page.querySelectorAll<HTMLButtonElement>('[data-mcp-name="local"] button')].find(
+        (button) => button.textContent?.includes("Disable"),
+      ),
+      "replacement MCP toggle",
+    );
+    expect(currentToggle.disabled).toBe(false);
+
+    pending.resolve(true);
+    await waitForFast(() => expect(refresh).toHaveBeenCalledOnce());
+    await page.updateComplete;
+
+    expect(page.querySelector(".plugins-group-message")).toBeNull();
+    expect(currentToggle.disabled).toBe(false);
   });
 
   it("shows connector add failures on the connector card", async () => {

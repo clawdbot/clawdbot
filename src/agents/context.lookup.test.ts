@@ -1,6 +1,7 @@
 // Covers context-token lookup caches, catalog warmup, and provider-qualified
 // model resolution.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { replaceDiscoveredContextTokenCache } from "./context-cache.js";
 import { ANTHROPIC_CONTEXT_1M_TOKENS } from "./context-resolution.js";
@@ -110,6 +111,19 @@ function createContextOverrideConfig(
         },
       },
     },
+  };
+}
+
+function createConfiguredModel(id: string, contextTokens: number): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: contextTokens,
+    contextTokens,
+    maxTokens: 4096,
   };
 }
 
@@ -633,6 +647,44 @@ describe("lookupContextTokens", () => {
       model: "gemini-3.1-pro-preview",
     });
     expect(result).toBe(200_000);
+  });
+
+  it.each([
+    {
+      name: "matches a bare configured row for a provider-self-prefixed runtime model",
+      model: "kilocode/kilo-auto/balanced",
+      configuredModels: [createConfiguredModel("kilo-auto/balanced", 900_000)],
+      expected: 900_000,
+    },
+    {
+      name: "prefers the exact qualified row over an earlier bare row",
+      model: "kilocode/kilo-auto/balanced",
+      configuredModels: [
+        createConfiguredModel("kilo-auto/balanced", 111_000),
+        createConfiguredModel("kilocode/kilo-auto/balanced", 900_000),
+      ],
+      expected: 900_000,
+    },
+    {
+      name: "does not strip another provider's prefix",
+      model: "openrouter/anthropic/claude-sonnet-5",
+      configuredModels: [createConfiguredModel("anthropic/claude-sonnet-5", 900_000)],
+      expected: 128_000,
+    },
+  ])("$name", async ({ model, configuredModels, expected }) => {
+    mockDiscoveryDeps([{ provider: "kilocode", id: model, contextWindow: 128_000 }]);
+    const cfg = {
+      models: {
+        providers: {
+          kilocode: { baseUrl: "https://example.invalid", models: configuredModels },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const { lookupContextTokens, resolveContextTokensForModel } = await importContextModule();
+    lookupContextTokens(model);
+    await flushAsyncWarmup();
+
+    expect(resolveContextTokensForModel({ cfg, provider: "kilocode", model })).toBe(expected);
   });
 
   it("bounds a per-model cap by the Anthropic fixed contract", async () => {

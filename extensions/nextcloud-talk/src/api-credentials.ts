@@ -1,6 +1,9 @@
 // Nextcloud Talk plugin module implements api credentials behavior.
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
-import { normalizeResolvedSecretInputString } from "./secret-input.js";
+import {
+  resolveSecretInputString,
+  type SecretInputStringResolutionMode,
+} from "openclaw/plugin-sdk/secret-input";
 
 export type NextcloudTalkCredentialUnavailableDiagnostic = Extract<
   ReturnType<typeof tryReadSecretFileSync>,
@@ -10,7 +13,7 @@ type CredentialResult<T> =
   | { status: "available"; value: T }
   | {
       status: "configured_unavailable";
-      diagnostic: NextcloudTalkCredentialUnavailableDiagnostic;
+      diagnostic?: NextcloudTalkCredentialUnavailableDiagnostic;
     }
   | { status: "missing" };
 
@@ -19,18 +22,23 @@ export function resolveNextcloudTalkApiCredentialsResult(params: {
   apiPassword?: unknown;
   apiPasswordFile?: string;
   configPath?: string;
+  mode?: SecretInputStringResolutionMode;
 }): CredentialResult<{ apiUser: string; apiPassword: string }> {
   const apiUser = params.apiUser?.trim();
   if (!apiUser) {
     return { status: "missing" };
   }
 
-  const inlinePassword = normalizeResolvedSecretInputString({
+  const inlinePassword = resolveSecretInputString({
     value: params.apiPassword,
     path: "channels.nextcloud-talk.apiPassword",
+    mode: params.mode,
   });
-  if (inlinePassword) {
-    return { status: "available", value: { apiUser, apiPassword: inlinePassword } };
+  if (inlinePassword.status === "available") {
+    return { status: "available", value: { apiUser, apiPassword: inlinePassword.value } };
+  }
+  if (inlinePassword.status === "configured_unavailable") {
+    return { status: "configured_unavailable" };
   }
 
   if (!params.apiPasswordFile?.trim()) {

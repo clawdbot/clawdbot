@@ -242,7 +242,7 @@
     },
     "agentId": {
       "label": "Response Agent ID",
-      "help": "Agent workspace used for voice response generation. Defaults to \"main\".",
+      "help": "Agent used for voice responses and session storage. Defaults to the sole configured agent; set explicitly for a multi-agent fleet.",
       "advanced": true
     },
     "sessionScope": {

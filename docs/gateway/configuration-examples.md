@@ -75,7 +75,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     },
   },
 
-  // Auth profile metadata (secrets live in auth-profiles.json)
+  // Auth profile metadata (secrets live in SQLite auth stores)
   auth: {
     profiles: {
       "anthropic:default": { provider: "anthropic", mode: "api_key" },
@@ -384,6 +384,8 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
         action: "agent",
         wakeMode: "now",
         name: "Gmail",
+        // One dispatch per pushed email; templates see the current message.
+        forEach: "messages",
         sessionKey: "hook:gmail:{{messages[0].id}}",
         messageTemplate: "From: {{messages[0].from}}\nSubject: {{messages[0].subject}}",
         textTemplate: "{{messages[0].snippet}}",
@@ -471,8 +473,8 @@ example `~/.agents/skills/manager -> ~/Projects/manager/skills`.
 - `extraDirs` scans the sibling repo as an explicit skill root.
 - `allowSymlinkTargets` lets symlinked skill folders resolve into that trusted
   real target root without allowing arbitrary symlink escapes.
-- To let Skill Workshop apply write through the same trusted symlink target,
-  set `skills.workshop.allowSymlinkTargetWrites: true`.
+- Skill Workshop does not use these configured symlink targets. It writes only
+  inside the active agent's `<state-dir>/agents/<agentId>/agent/workshop-skills`.
 
 ## Common patterns
 

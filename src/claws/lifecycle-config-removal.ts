@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
+import { prepareAgentDeleteDatabases } from "../agents/agent-delete-databases.js";
+import { beginAgentDeletion } from "../agents/agent-lifecycle-registry.js";
 import { listAgentEntries } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -7,7 +9,16 @@ import {
   AgentConfigPreconditionError,
   deleteAgentConfigEntry,
 } from "../gateway/server-methods/agents-config-mutations.js";
+import { withAgentExecApprovalsRemoved } from "../infra/exec-approvals.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import {
+  completeAgentDeletionJournalInDatabase,
+  readAgentDeletionJournal,
+} from "../state/agent-deletion-journal.js";
+import type {
+  OpenClawStateDatabase,
+  OpenClawStateDatabaseOptions,
+} from "../state/openclaw-state-db-contract.js";
 import { digestClawAgentConfig } from "./agent-config-digest.js";
 import {
   deletionEffects,
@@ -16,6 +27,26 @@ import {
 } from "./lifecycle-delete-support.js";
 
 export type ConfigCommit = (transform: (config: OpenClawConfig) => OpenClawConfig) => Promise<void>;
+
+type ClawAgentConfigRemovalParams = {
+  agentId: string;
+  expectedDigest: string;
+  expectedRemovalSurfaceDigest: string;
+  expectedState: "present" | "missing";
+  fallbackWorkspace: string;
+  config?: OpenClawConfig;
+  commitConfig?: ConfigCommit;
+  stateDatabase?: OpenClawStateDatabaseOptions;
+  trashPath?: ClawTrashPath;
+  onModified: () => Error;
+};
+
+type ClawAgentConfigRemovalResult = {
+  agentRemoved: boolean;
+  cleanupTargets?: ClawCleanupTargets;
+  configBeforeDelete: OpenClawConfig;
+  nextConfig: OpenClawConfig;
+};
 
 export { digestClawAgentConfig } from "./agent-config-digest.js";
 
@@ -32,33 +63,18 @@ export function digestClawAgentRemovalSurface(config: OpenClawConfig, agentId: s
   return `sha256:${createHash("sha256").update(stableStringify(surface)).digest("hex")}`;
 }
 
-export async function claimClawAgentConfigRemoval(params: {
-  agentId: string;
-  expectedDigest: string;
-  expectedRemovalSurfaceDigest: string;
-  expectedState: "present" | "missing";
-  fallbackWorkspace: string;
-  config?: OpenClawConfig;
-  commitConfig?: ConfigCommit;
-  trashPath?: ClawTrashPath;
-  onModified: () => Error;
-}): Promise<{
-  agentRemoved: boolean;
-  cleanupTargets?: ClawCleanupTargets;
-  configBeforeDelete: OpenClawConfig;
-  nextConfig: OpenClawConfig;
-}> {
+async function commitClawAgentConfigRemoval(
+  params: ClawAgentConfigRemovalParams,
+): Promise<ClawAgentConfigRemovalResult> {
   if (params.commitConfig) {
-    let result:
-      | {
-          agentRemoved: boolean;
-          cleanupTargets?: ClawCleanupTargets;
-          configBeforeDelete: OpenClawConfig;
-          nextConfig: OpenClawConfig;
-        }
-      | undefined;
+    let result: ClawAgentConfigRemovalResult | undefined;
     await params.commitConfig((config) => {
-      const effects = deletionEffects(config, params.agentId, params.fallbackWorkspace);
+      const effects = deletionEffects(
+        config,
+        params.agentId,
+        params.fallbackWorkspace,
+        params.stateDatabase?.env,
+      );
       const agent = listAgentEntries(config).find((candidate) => candidate.id === params.agentId);
       if (
         (agent && digestClawAgentConfig(agent) !== params.expectedDigest) ||
@@ -117,6 +133,7 @@ export async function claimClawAgentConfigRemoval(params: {
       configBeforeDelete,
       params.agentId,
       params.fallbackWorkspace,
+      params.stateDatabase?.env,
     );
     return {
       agentRemoved: Boolean(committed.result),
@@ -136,7 +153,12 @@ export async function claimClawAgentConfigRemoval(params: {
     if (listAgentEntries(latestConfig).some((agent) => agent.id === params.agentId)) {
       throw params.onModified();
     }
-    const effects = deletionEffects(latestConfig, params.agentId, params.fallbackWorkspace);
+    const effects = deletionEffects(
+      latestConfig,
+      params.agentId,
+      params.fallbackWorkspace,
+      params.stateDatabase?.env,
+    );
     return {
       agentRemoved: false,
       cleanupTargets: {
@@ -147,5 +169,71 @@ export async function claimClawAgentConfigRemoval(params: {
       configBeforeDelete,
       nextConfig: latestConfig,
     };
+  }
+}
+
+type CommittedClawAgentRemoval = ClawAgentConfigRemovalResult & {
+  completeDeletion: (database: OpenClawStateDatabase) => void;
+  runDatabaseCleanup: ReturnType<typeof beginAgentDeletion>["runDatabaseCleanup"];
+};
+
+export async function withClawAgentConfigRemoval<T>(
+  params: ClawAgentConfigRemovalParams,
+  apply: (commitRemoval: () => Promise<CommittedClawAgentRemoval>) => Promise<T>,
+): Promise<T> {
+  const config = params.config ?? getRuntimeConfig();
+  const effects = deletionEffects(
+    config,
+    params.agentId,
+    params.fallbackWorkspace,
+    params.stateDatabase?.env,
+  );
+  // beginAgentDeletion takes over an existing journal row instead of refusing it, so rolling back
+  // a row this call did not open would erase another deletion's record.
+  const existingJournal = readAgentDeletionJournal(params.agentId, params.stateDatabase);
+  const deletion = beginAgentDeletion(
+    {
+      agentId: params.agentId,
+      workspaceDir: effects.workspace,
+      agentDir: effects.agentDir,
+      sessionsDir: effects.sessionsDir,
+      // Claw removal owns selective cleanup and may retain modified or untracked workspace entries,
+      // so the journal must not claim authority to trash them.
+      deleteFiles: existingJournal?.deleteFiles ?? false,
+    },
+    params.stateDatabase,
+  );
+  let committed = false;
+  try {
+    // Fence new claims and drain existing owners before any external or local removal effect.
+    prepareAgentDeleteDatabases(config, params.agentId, effects.agentDir, params.stateDatabase);
+    return await apply(async () => {
+      const result = await withAgentExecApprovalsRemoved(
+        params.agentId,
+        async () => commitClawAgentConfigRemoval({ ...params, config }),
+        params.stateDatabase,
+      );
+      committed = true;
+      return {
+        ...result,
+        runDatabaseCleanup: deletion.runDatabaseCleanup,
+        completeDeletion: (database: OpenClawStateDatabase) => {
+          if (
+            !completeAgentDeletionJournalInDatabase(
+              database,
+              params.agentId,
+              deletion.entry.operationId,
+            )
+          ) {
+            throw new Error(`Failed to complete deletion journal for agent ${params.agentId}.`);
+          }
+        },
+      };
+    });
+  } finally {
+    // Pre-config partial results release only this attempt's fence; committed cleanup retains it.
+    if (!committed && !existingJournal) {
+      deletion.rollback();
+    }
   }
 }

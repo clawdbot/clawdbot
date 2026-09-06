@@ -1,9 +1,11 @@
 import path from "node:path";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import {
   actionOpacity,
@@ -15,82 +17,28 @@ import {
   createSessionManagementE2eSuite,
   installMockGateway,
   requireRecord,
-  sessionRow,
   sessionsListResponse,
   trimmedTextContents,
-  uiProofArtifactDir,
   waitForPatch,
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
+const rosterMatch = { includeGlobal: true };
+
+function sessionActionPresentation(button: Locator) {
+  return button.evaluate((element) => {
+    const icon = element.querySelector("svg");
+    if (!icon) {
+      throw new Error("expected session action icon");
+    }
+    return {
+      color: getComputedStyle(element).color,
+      fill: getComputedStyle(icon).fill,
+    };
+  });
+}
 
 suite.define(() => {
-  it("keeps the browser-local draft pencil visible on active Home beside activity", async () => {
-    const mainKey = "agent:main:main";
-    const secondKey = "agent:main:draft-second";
-    const context = await suite.browser.newContext({
-      colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": sessionsListResponse([
-          sessionRow(mainKey, "Main", 2, {
-            hasActiveRun: true,
-            startedAt: 1,
-            status: "running",
-          }),
-          sessionRow(secondKey, "Draft second", 1),
-        ]),
-      },
-      sessionKey: mainKey,
-    });
-
-    try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, mainKey));
-      const homeRow = page.locator(".nav-item--home");
-      const secondRow = page.locator(`[data-session-key="${secondKey}"]`);
-      const composer = page.locator(
-        'openclaw-chat-pane[aria-hidden="false"] .agent-chat__composer-combobox > textarea',
-      );
-      await homeRow.waitFor({ state: "visible", timeout: 10_000 });
-      await secondRow.waitFor({ state: "visible" });
-      await composer.waitFor({ state: "visible" });
-      await captureUiProof(page, "draft-indicator-before.png");
-
-      await composer.fill("Keep this unsent");
-      const activity = homeRow.getByRole("img", { name: "Active run" });
-      const draft = homeRow.getByRole("img", { name: "Unsent draft" });
-      await activity.waitFor();
-      await draft.waitFor();
-      const activityBox = await activity.boundingBox();
-      const draftBox = await draft.boundingBox();
-      if (!activityBox || !draftBox) {
-        throw new Error("expected activity and draft icon bounds");
-      }
-      expect(draftBox.x).toBeGreaterThanOrEqual(activityBox.x + activityBox.width);
-      await captureUiProof(page, "draft-indicator-active.png");
-
-      await secondRow.getByRole("link").click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(secondKey));
-      await draft.waitFor();
-
-      await homeRow.click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(mainKey));
-      await draft.waitFor();
-
-      await composer.fill("");
-      await secondRow.getByRole("link").click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(secondKey));
-      await expect.poll(() => draft.count()).toBe(0);
-    } finally {
-      await context.close();
-    }
-  });
-
   it("expands and manages child sessions inline before opening a child chat", async () => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const parentKey = "agent:main:release-plan";
@@ -166,7 +114,10 @@ suite.define(() => {
       const parent = page.locator(`[data-session-key="${parentKey}"]`);
       await parent.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => page.locator(".sidebar-recent-session--child").count()).toBe(0);
-      await captureUiProof(page, "child-sessions-collapsed.png");
+      await expect
+        .poll(() => parent.locator(".session-run-spinner").getAttribute("aria-label"))
+        .toBe("Active run");
+      await captureUiProof(suite, page, "child-sessions-collapsed.png");
 
       await parent.getByRole("button", { name: "Show 4 child sessions for Plan release" }).click();
       await page.getByText("Research sources", { exact: true }).waitFor({ state: "visible" });
@@ -202,8 +153,8 @@ suite.define(() => {
         expect(await child.locator("openclaw-elapsed-time").count()).toBe(0);
         expect((await child.locator(".session-row-trail").textContent())?.trim()).toBeTruthy();
       }
-      await captureUiProof(page, "child-sessions-expanded.png");
-      await captureUiProof(page, "child-sessions-run-state-precedence.png");
+      await captureUiProof(suite, page, "child-sessions-expanded.png");
+      await captureUiProof(suite, page, "child-sessions-run-state-precedence.png");
 
       const completedChild = childRows.nth(1);
       const childMenuButton = completedChild.getByRole("button", {
@@ -219,13 +170,13 @@ suite.define(() => {
       await childMenu.waitFor({ state: "visible" });
       await page.getByRole("menuitem", { name: "Mark as unread" }).waitFor();
       await page.getByRole("menuitem", { name: "Rename…" }).waitFor();
-      await page.getByRole("menuitem", { name: "Set icon" }).waitFor();
-      await page.getByRole("menuitem", { name: "Fork" }).waitFor();
+      await page.getByRole("menuitem", { name: "Icon & color" }).waitFor();
+      await page.getByRole("menuitem", { name: "Fork conversation" }).waitFor();
       await page.getByRole("menuitem", { name: "Archive session" }).waitFor();
       await page.getByRole("menuitem", { name: "Delete…" }).waitFor();
       expect(await page.getByRole("menuitem", { name: "Pin session" }).count()).toBe(0);
       expect(await page.getByRole("menuitem", { name: "Move to group" }).count()).toBe(0);
-      await captureUiProof(page, "child-session-menu.png");
+      await captureUiProof(suite, page, "child-session-menu.png");
       await page.keyboard.press("Escape");
       await childMenu.waitFor({ state: "detached" });
 
@@ -272,9 +223,7 @@ suite.define(() => {
       );
       const shell = page.locator(".shell");
       const shellNav = page.locator(".shell-nav");
-      const collapseButton = page
-        .locator(".shell-chrome-controls")
-        .getByRole("button", { name: "Collapse sidebar" });
+      const collapseButton = page.locator(".sidebar-brand__collapse");
       const expandButton = page.locator(".shell-chrome-controls__nav-toggle");
       const drawerToggle = page
         .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
@@ -430,9 +379,7 @@ suite.define(() => {
         name: "Open session menu: Research notes",
         exact: true,
       });
-      await researchRow
-        .getByRole("button", { name: "Pin session: Research notes", exact: true })
-        .waitFor();
+      await researchRow.getByRole("button", { name: "Pin session", exact: true }).waitFor();
       await followUpRow
         .getByRole("button", { name: "Open session menu: Follow-up work", exact: true })
         .waitFor();
@@ -487,7 +434,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps sidebar sessions visible through a same-client Gateway reconnect", async () => {
+  it("keeps sidebar sessions visible through transport and client replacement reconnects", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -499,7 +446,10 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       methodResponses: {
         "sessions.list": sessionsListResponse([
-          sessionRow(sessionKey, "Disconnect proof", Date.parse("2026-07-01T16:00:00.000Z")),
+          sessionRow(sessionKey, "Disconnect proof", Date.parse("2026-07-01T16:00:00.000Z"), {
+            pinned: true,
+            pinnedAt: Date.parse("2026-07-01T16:00:00.000Z"),
+          }),
           sessionRow(otherSessionKeys[0], "Other A", Date.parse("2026-07-01T15:59:00.000Z")),
           sessionRow(otherSessionKeys[1], "Other B", Date.parse("2026-07-01T15:58:00.000Z")),
         ]),
@@ -508,12 +458,14 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const sidebarRow = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
+      const pinnedEntry = page.locator(`[data-sidebar-entry="session:${sessionKey}"]`);
       await sidebarRow.waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => pinnedEntry.count()).toBe(1);
       const sidebarRows = page.locator(".sidebar-recent-session");
       await expect.poll(() => sidebarRows.count()).toBe(3);
-      const initialListCount = (await gateway.getRequests("sessions.list")).length;
+      const initialListCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
 
       const socketsBefore = await gateway.getSocketCount();
       await gateway.setOnline(false);
@@ -525,16 +477,27 @@ suite.define(() => {
           .locator(`.sidebar-recent-session[data-session-key="${otherKey}"]`)
           .waitFor({ state: "visible" });
       }
-      await captureUiProof(page, "sidebar-sessions-during-reconnect.png");
+      await captureUiProof(suite, page, "sidebar-sessions-during-reconnect.png");
 
       await expect
         .poll(() => gateway.getSocketCount(), { timeout: 15_000 })
         .toBe(socketsBefore + 1);
+      await page.locator(".sidebar-identity-card").click();
+      const retryConnection = page.locator(
+        'wa-dropdown.sidebar-identity-menu wa-dropdown-item[value="command:retry-connect"]',
+      );
+      await retryConnection.waitFor({ state: "visible", timeout: 10_000 });
+      await retryConnection.click();
+      await expect.poll(() => pinnedEntry.count()).toBe(1);
+      await captureUiProof(suite, page, "sidebar-sessions-during-client-replacement.png");
+
       await gateway.deferNext("sessions.list", { includeLastMessage: true });
       await gateway.setOnline(true);
       await waitForControlUiGatewayReady(page);
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length, { timeout: 15_000 })
+        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length, {
+          timeout: 15_000,
+        })
         .toBeGreaterThan(initialListCount);
       await sidebarRow.waitFor({ state: "visible" });
       expect(await sidebarRows.count()).toBe(3);
@@ -544,7 +507,8 @@ suite.define(() => {
           .waitFor({ state: "visible" });
       }
 
-      const firstReconnectListCount = (await gateway.getRequests("sessions.list")).length;
+      const firstReconnectListCount = (await gateway.getRequests("sessions.list", rosterMatch))
+        .length;
       const refreshedResponse = sessionsListResponse([
         sessionRow(sessionKey, "Reconnect refreshed", Date.parse("2026-07-01T16:01:00.000Z")),
         sessionRow(otherSessionKeys[0], "Other A", Date.parse("2026-07-01T15:59:00.000Z")),
@@ -553,7 +517,13 @@ suite.define(() => {
       await gateway.resolveDeferred("sessions.list", refreshedResponse);
       await expect.poll(() => sidebarRow.textContent()).toContain("Reconnect refreshed");
       await expect.poll(() => sidebarRows.count()).toBe(3);
-      await expectRequestCountStable(gateway, "sessions.list", firstReconnectListCount);
+      await expectRequestCountStable(
+        gateway,
+        "sessions.list",
+        firstReconnectListCount,
+        500,
+        rosterMatch,
+      );
     } finally {
       await context.close();
     }
@@ -592,7 +562,7 @@ suite.define(() => {
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(selectedKey));
       await expect.poll(() => selectedRow.getAttribute("class")).toContain("--active");
       const initialObserverCount = (await gateway.getRequests("sessions.subscribe")).length;
-      const initialListCount = (await gateway.getRequests("sessions.list")).length;
+      const initialListCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
 
       const socketsBefore = await gateway.getSocketCount();
       await gateway.setOnline(false);
@@ -623,7 +593,7 @@ suite.define(() => {
       await gateway.resolveDeferred("sessions.subscribe", { subscribed: true });
       await expect
         .poll(async () =>
-          (await gateway.getRequests("sessions.list"))
+          (await gateway.getRequests("sessions.list", rosterMatch))
             .slice(initialListCount)
             .some((request) => requireRecord(request.params).includeLastMessage === true),
         )
@@ -646,14 +616,15 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.subscribe")).toHaveLength(
         initialObserverCount + 1,
       );
-      await captureUiProof(page, "sidebar-selected-session-route-reconnect.png");
+      await captureUiProof(suite, page, "sidebar-selected-session-route-reconnect.png");
     } finally {
       await context.close();
     }
   });
 
-  it("does not duplicate the active chat when its only session is pinned", async () => {
+  it("keeps the only pinned chat unique and presents its pin state", async () => {
     const context = await suite.browser.newContext({
+      colorScheme: "dark",
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -672,7 +643,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:pinned"));
 
       const pinnedEntry = page.locator('[data-sidebar-entry="session:agent:main:pinned"]');
       const chatsGroup = page.locator('[data-session-section="ungrouped"]');
@@ -681,6 +652,26 @@ suite.define(() => {
         .toEqual(["Pinned only"]);
       await expect.poll(() => chatsGroup.locator(".sidebar-recent-session").count()).toBe(0);
       await expect.poll(() => page.locator(".sidebar-recent-session--active").count()).toBe(1);
+      const pin = pinnedEntry.getByRole("button", { name: "Unpin session" });
+      const menu = pinnedEntry.getByRole("button", { name: "Open session menu" });
+      await pinnedEntry.hover();
+      await captureUiProof(suite, page, "pinned-session-icon.png");
+      const revealedPin = await sessionActionPresentation(pin);
+      const revealedMenu = await sessionActionPresentation(menu);
+      expect(revealedPin.color).toBe(revealedMenu.color);
+      expect(revealedPin.fill).toBe(revealedPin.color);
+
+      await pin.hover();
+      await expect
+        .poll(async () => (await sessionActionPresentation(pin)).color)
+        .not.toBe(revealedPin.color);
+      await expect
+        .poll(async () => {
+          const hoveredPin = await sessionActionPresentation(pin);
+          return hoveredPin.fill === hoveredPin.color;
+        })
+        .toBe(true);
+
       // The empty Threads section only materializes after dragstart. Move the
       // real pointer first so Playwright does not wait for a hidden target.
       const pinnedRow = pinnedEntry.locator(".sidebar-recent-session");
@@ -723,7 +714,7 @@ suite.define(() => {
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
       recordVideo: captureUiProofEnabled
-        ? { dir: uiProofArtifactDir, size: { height: 900, width: 1280 } }
+        ? { dir: suite.artifactDir, size: { height: 900, width: 1280 } }
         : undefined,
     });
     const page = await context.newPage();
@@ -757,14 +748,14 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:candidate"));
 
       const pinnedEntry = page.locator('[data-sidebar-entry="session:agent:main:pinned"]');
       const researchGroup = page.locator('[data-session-section="category:Research"]');
       await expect
         .poll(() => trimmedTextContents(pinnedEntry.locator(".sidebar-recent-session__name")))
         .toEqual(["Already pinned"]);
-      await captureUiProof(page, "sidebar-session-before-pinned-drop.png");
+      await captureUiProof(suite, page, "sidebar-session-before-pinned-drop.png");
       const pinnedBox = await pinnedEntry.boundingBox();
       if (!pinnedBox) {
         throw new Error("expected the pinned row to be laid out");
@@ -801,11 +792,17 @@ suite.define(() => {
       await pinnedCandidate.click({ button: "right" });
       await page.getByRole("menuitem", { name: "Unpin session" }).waitFor();
       expect(await page.getByRole("menuitem", { name: "Reset pinned items" }).count()).toBe(0);
-      await captureUiProof(page, "sidebar-session-dropped-into-pinned.png");
+      await captureUiProof(
+        suite,
+        page,
+        "sidebar-session-dropped-into-pinned.png",
+        page.locator('openclaw-session-menu > wa-dropdown [part="menu"]'),
+        [page.getByRole("menuitem", { name: "Unpin session" })],
+      );
     } finally {
       await context.close();
       if (proofVideo) {
-        await proofVideo.saveAs(path.join(uiProofArtifactDir, "sidebar-session-pinned-drop.webm"));
+        await proofVideo.saveAs(path.join(suite.artifactDir, "sidebar-session-pinned-drop.webm"));
       }
     }
   });
@@ -843,6 +840,9 @@ suite.define(() => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
+    await page.addInitScript(() => {
+      localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
+    });
     const gateway = await installMockGateway(page, {
       methodResponses: {
         "sessions.list": sessionsListResponse(rows(false)),
@@ -857,14 +857,14 @@ suite.define(() => {
         .toBeGreaterThan(0);
       // Add work metadata only after first layout so the WebKit overlap
       // regression still exercises in-place row growth.
-      const listRequests = (await gateway.getRequests("sessions.list")).length;
-      await gateway.setMethodResponse("sessions.list", sessionsListResponse(rows(true)));
+      const listRequests = (await gateway.getRequests("sessions.list", rosterMatch)).length;
+      await gateway.setSessionsListResponse(sessionsListResponse(rows(true)));
       await gateway.emitGatewayEvent("sessions.changed", {
         reason: "update",
         sessionKey: "agent:main:dashboard:0f9d5c1e-6d0f-4c9a-9d84-1c2f3a4b5c6e",
       });
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBeGreaterThan(listRequests);
       const codingToggle = page.locator(
         '[data-session-section="work"] .sidebar-session-group-toggle',
@@ -957,7 +957,7 @@ suite.define(() => {
       await expect
         .poll(() => page.locator(".sidebar-recent-session").count(), { timeout: 15_000 })
         .toBe(rows.length);
-      await captureUiProof(page, "short-window-session-sections.png");
+      await captureUiProof(suite, page, "short-window-session-sections.png");
 
       // Sections must stack below each other, not paint over the rows above.
       const overlaps = await page.evaluate(() => {

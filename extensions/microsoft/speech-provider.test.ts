@@ -272,87 +272,60 @@ describe("buildMicrosoftSpeechProvider", () => {
     vi.restoreAllMocks();
   });
 
-  it("switches to a Chinese voice for CJK text when no explicit voice override is set", async () => {
-    const provider = buildMicrosoftSpeechProvider();
-    const edgeSpy = vi.spyOn(ttsModule, "edgeTTS").mockImplementation(async ({ outputPath }) => {
-      writeFileSync(outputPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
-    });
-
-    await provider.synthesize({
-      text: "你好，这是一个测试 hello",
-      cfg: TEST_CFG,
-      providerConfig: {
-        enabled: true,
-        voice: "en-US-MichelleNeural",
-        lang: "en-US",
-        outputFormat: "audio-24khz-48kbitrate-mono-mp3",
-        outputFormatConfigured: true,
-        saveSubtitles: false,
-      },
-      providerOverrides: {},
-      timeoutMs: 1000,
-      target: "audio-file",
-    });
-
-    expect(edgeSpy).toHaveBeenCalledOnce();
-    const edgeCall = requireFirstEdgeTtsCall(edgeSpy);
-    expect(edgeCall.text).toBe("你好，这是一个测试 hello");
-    expect(path.basename(edgeCall.outputPath)).toBe("speech.mp3");
-    expect(edgeCall.timeoutMs).toBe(1000);
-    expect(edgeCall.config).toEqual({
-      enabled: true,
-      voice: "zh-CN-XiaoxiaoNeural",
-      lang: "zh-CN",
-      outputFormat: "audio-24khz-48kbitrate-mono-mp3",
-      outputFormatConfigured: true,
-      pitch: undefined,
-      rate: undefined,
-      volume: undefined,
-      saveSubtitles: false,
-      proxy: undefined,
-      timeoutMs: undefined,
-    });
-  });
-
-  it("preserves an explicitly configured English voice for CJK text", async () => {
-    const provider = buildMicrosoftSpeechProvider();
-    const edgeSpy = vi.spyOn(ttsModule, "edgeTTS").mockImplementation(async ({ outputPath }) => {
-      writeFileSync(outputPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
-    });
-
-    await provider.synthesize({
-      text: "你好，这是一个测试 hello",
-      cfg: TEST_CFG,
-      providerConfig: {
-        enabled: true,
-        voice: "en-US-AvaNeural",
-        lang: "en-US",
-        outputFormat: "audio-24khz-48kbitrate-mono-mp3",
-        outputFormatConfigured: true,
-        saveSubtitles: false,
-      },
-      providerOverrides: {},
-      timeoutMs: 1000,
-      target: "audio-file",
-    });
-
-    expect(edgeSpy).toHaveBeenCalledOnce();
-    const edgeCall = requireFirstEdgeTtsCall(edgeSpy);
-    expect(edgeCall.text).toBe("你好，这是一个测试 hello");
-    expect(path.basename(edgeCall.outputPath)).toBe("speech.mp3");
-    expect(edgeCall.timeoutMs).toBe(1000);
-    expect(edgeCall.config).toEqual({
-      enabled: true,
+  for (const { name, voice, expectedVoice, expectedLang } of [
+    {
+      name: "switches to a Chinese voice for CJK text when no explicit voice override is set",
+      voice: "en-US-MichelleNeural",
+      expectedVoice: "zh-CN-XiaoxiaoNeural",
+      expectedLang: "zh-CN",
+    },
+    {
+      name: "preserves an explicitly configured English voice for CJK text",
       voice: "en-US-AvaNeural",
-      lang: "en-US",
-      outputFormat: "audio-24khz-48kbitrate-mono-mp3",
-      outputFormatConfigured: true,
-      pitch: undefined,
-      rate: undefined,
-      volume: undefined,
-      saveSubtitles: false,
-      proxy: undefined,
-      timeoutMs: undefined,
+      expectedVoice: "en-US-AvaNeural",
+      expectedLang: "en-US",
+    },
+  ]) {
+    it(name, async () => {
+      const provider = buildMicrosoftSpeechProvider();
+      const edgeSpy = vi.spyOn(ttsModule, "edgeTTS").mockImplementation(async ({ outputPath }) => {
+        writeFileSync(outputPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+      });
+
+      await provider.synthesize({
+        text: "你好，这是一个测试 hello",
+        cfg: TEST_CFG,
+        providerConfig: {
+          enabled: true,
+          voice,
+          lang: "en-US",
+          outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+          outputFormatConfigured: true,
+          saveSubtitles: false,
+        },
+        providerOverrides: {},
+        timeoutMs: 1000,
+        target: "audio-file",
+      });
+
+      expect(edgeSpy).toHaveBeenCalledOnce();
+      const edgeCall = requireFirstEdgeTtsCall(edgeSpy);
+      expect(edgeCall.text).toBe("你好，这是一个测试 hello");
+      expect(path.basename(edgeCall.outputPath)).toBe("speech.mp3");
+      expect(edgeCall.timeoutMs).toBe(1000);
+      expect(edgeCall.config).toEqual({
+        enabled: true,
+        voice: expectedVoice,
+        lang: expectedLang,
+        outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+        outputFormatConfigured: true,
+        pitch: undefined,
+        rate: undefined,
+        volume: undefined,
+        saveSubtitles: false,
+        proxy: undefined,
+        timeoutMs: undefined,
+      });
     });
-  });
+  }
 });

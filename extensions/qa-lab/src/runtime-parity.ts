@@ -6,7 +6,6 @@ import {
   loadSqliteTrajectoryRuntimeEvents,
   type SqliteTrajectoryRuntimeEventForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-// Qa Lab plugin module implements runtime parity behavior.
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asFiniteNumber as readFiniteNumber,
@@ -18,7 +17,7 @@ import {
   scanGatewayLogSentinels,
   type GatewayLogSentinelFinding,
 } from "./gateway-log-sentinel.js";
-import { discardIgnoredResponseBody } from "./ignored-response-body.js";
+import { readQaJsonResponse } from "./ignored-response-body.js";
 import * as parity from "./parity-shared.js";
 import {
   buildRuntimeParityCacheDiagnostics,
@@ -36,6 +35,15 @@ export type RuntimeId = "openclaw" | "codex";
 type RuntimeParityStatus = "pass" | "fail" | "skip";
 
 const CANONICAL_RUNTIME_IDS = ["openclaw", "codex"] as const satisfies readonly RuntimeId[];
+
+export function normalizeRuntimePair(
+  pair: [RuntimeId, RuntimeId] | null | undefined,
+): [RuntimeId, RuntimeId] {
+  if (pair?.[0] && pair?.[1]) {
+    return pair;
+  }
+  return ["openclaw", "codex"];
+}
 
 export type RuntimeParityToolCall = {
   tool: string;
@@ -224,8 +232,10 @@ const HEARTBEAT_TASK_PROMPT_PREFIX =
 const TOOL_RESULT_MISSING_ERROR_CLASS = "tool-result-missing";
 const RUNTIME_PARITY_SESSION_KEY_DETAIL_PREFIX = "RUNTIME_PARITY_SESSION_KEY=";
 const BOOT_STATE_LINE_RE =
-  /\b(?:FailoverError|No API key found|Codex app-server|auth profile|runtime policy|restart mode:|plugin|doctor)\b/i;
+  /\b(?:FailoverError|No API key found|Codex app-server|agent harness selected|auth profile|runtime policy|restart mode:|plugin|doctor)\b/i;
 const TOOL_RESULT_ERROR_RE = /\b(?:error|failed|failure|timeout|denied|enoent|not found)\b/i;
+const OPENCLAW_FALLBACK_SELECTION_RE =
+  /\bagent harness selected\b.*\brequested=codex\b.*\bselected=openclaw\b.*\breason=plugin_declared_fallback_openclaw\b/iu;
 
 function normalizeTextForParity(text: string) {
   return text.replace(/\s+/gu, " ").trim();
@@ -1154,6 +1164,20 @@ function summarizeSentinelErrorClass(findings: readonly GatewayLogSentinelFindin
     .join(",")}`;
 }
 
+function hasForcedCodexOpenClawResponsesRecord(records: readonly RuntimeParityTranscriptRecord[]) {
+  return records.some((record) => {
+    if (
+      record.role !== "assistant" ||
+      readNonEmptyString(record.message.api)?.toLowerCase() !== "openai-responses"
+    ) {
+      return false;
+    }
+    const openClawMetadata = record.message["__openclaw"];
+    const metadata = isMessageRecord(openClawMetadata) ? openClawMetadata : undefined;
+    return readNonEmptyString(metadata?.mirrorOrigin) !== "codex-app-server";
+  });
+}
+
 function classifyRuntimeParityCells(params: {
   openclaw: RuntimeParityCell;
   codex: RuntimeParityCell;
@@ -1415,28 +1439,19 @@ async function loadRuntimeParityMockToolCalls(
       policy: { allowPrivateNetwork: true },
       auditContext: "qa-lab-runtime-parity-mock-tool-calls",
     });
-    let payload: unknown;
-    try {
-      if (!response.ok) {
-        await discardIgnoredResponseBody(response);
-        return null;
-      }
-      payload = await response.json();
-    } finally {
-      await release();
-    }
+    const payload = await readQaJsonResponse<unknown>(response, release, "QA runtime parity");
     if (!Array.isArray(payload)) {
       return null;
     }
-    const requests = payload.filter(isMessageRecord).map(
-      (entry): RuntimeParityMockRequestSnapshot => ({
+    const requests = payload
+      .filter(isMessageRecord)
+      .map((entry): RuntimeParityMockRequestSnapshot => ({
         prompt: readNonEmptyString(entry.prompt),
         allInputText: readNonEmptyString(entry.allInputText),
         plannedToolName: readNonEmptyString(entry.plannedToolName),
         plannedToolArgs: entry.plannedToolArgs ?? null,
         toolOutput: readNonEmptyString(entry.toolOutput) ?? "",
-      }),
-    );
+      }));
     return resolveToolCallOrderFromMockRequests(
       filterMockRequestsForParentPrompt(requests, parentPrompt, parentPrompts),
     );
@@ -1487,6 +1502,11 @@ export async function captureRuntimeParityCell(
       ? classifyScenarioError(params.scenarioResult.details)
       : undefined;
   const sentinelErrorClass = summarizeSentinelErrorClass(sentinelFindings);
+  const forcedCodexRuntimeLeak =
+    params.runtime === "codex" &&
+    params.mockBaseUrl !== undefined &&
+    (OPENCLAW_FALLBACK_SELECTION_RE.test(gatewayLogs ?? "") ||
+      hasForcedCodexOpenClawResponsesRecord(transcriptRecords));
   const terminalImageResultProven = hasProvenTerminalImageResult(params.scenarioResult);
   return {
     runtime: params.runtime,
@@ -1507,8 +1527,11 @@ export async function captureRuntimeParityCell(
     ...(params.bootstrapWallClockMs === undefined
       ? {}
       : { bootstrapWallClockMs: params.bootstrapWallClockMs }),
-    ...(scenarioErrorClass || sentinelErrorClass
-      ? { runtimeErrorClass: scenarioErrorClass ?? sentinelErrorClass }
+    ...(scenarioErrorClass || sentinelErrorClass || forcedCodexRuntimeLeak
+      ? {
+          runtimeErrorClass:
+            scenarioErrorClass ?? sentinelErrorClass ?? "forced-codex-embedded-runtime",
+        }
       : {}),
     bootStateLines: extractBootStateLines(gatewayLogs),
     ...(sentinelFindings.length > 0 ? { sentinelFindings } : {}),

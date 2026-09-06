@@ -11,9 +11,16 @@ describe("plugin tool hook matchers", () => {
       "apply_patch",
       "exec",
     ]);
+    expect(normalizePluginToolMatcher(["read", "write", "edit"])).toEqual([
+      "edit",
+      "read",
+      "write",
+    ]);
     expect(pluginToolMatcherCoversTool(["exec"], "exec")).toBe(true);
     expect(pluginToolMatcherCoversTool(["exec"], "Bash")).toBe(false);
     expect(pluginToolMatcherCoversTool(["apply_patch"], "Write")).toBe(false);
+    expect(pluginToolMatcherCoversTool(["write"], "write")).toBe(true);
+    expect(pluginToolMatcherCoversTool(["edit"], "edit")).toBe(true);
     expect(pluginToolMatcherCoversTool(["spawn_agent"], "Agent")).toBe(false);
   });
 

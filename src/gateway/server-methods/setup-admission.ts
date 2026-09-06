@@ -1,17 +1,35 @@
+import {
+  ErrorCodes,
+  errorShape,
+  GatewayErrorDetailCodes,
+} from "../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import {
   SetupTargetLockedError,
   withSetupMigrationTargetLock,
 } from "../../wizard/setup.migration-snapshot.js";
+import type { RespondFn } from "./types.js";
 
-export const SETUP_ADMISSION_BUSY_MESSAGE =
+const SETUP_ADMISSION_BUSY_MESSAGE =
   "OpenClaw setup is already in progress; try again when it finishes.";
 
 let wizardSessionInProgress = false;
 const wizardSessionAdmissionSettlements = new WeakMap<object, Promise<unknown>>();
 
 export class SetupAdmissionBusyError extends Error {}
+
+/** Only admission failures may promise that no setup task or session began. */
+export function respondSetupAdmissionBusy(respond: RespondFn): void {
+  respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.UNAVAILABLE, SETUP_ADMISSION_BUSY_MESSAGE, {
+      retryable: true,
+      details: { code: GatewayErrorDetailCodes.SETUP_ADMISSION_BUSY },
+    }),
+  );
+}
 
 export async function runExclusiveSystemAgentSetupActivation<T>(
   task: () => Promise<T>,

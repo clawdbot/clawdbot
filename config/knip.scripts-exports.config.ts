@@ -28,6 +28,7 @@ const repositoryToolEntries = [
   "security/opengrep/check-rule-metadata.mjs!",
   "security/opengrep/compile-rules.mjs!",
   "skills/meme-maker/scripts/meme.mjs!",
+  "scripts/check-openclaw-package-tarball.mts!",
 ] as const;
 
 const config = {
@@ -56,6 +57,8 @@ const config = {
     ],
     // Oxlint consumes this required default export through a JSON config path.
     "scripts/oxlint-boundary-guards.mjs": ["exports"],
+    // Vitest consumes this required default export through the reporter CLI path.
+    "scripts/lib/vitest-resource-reporter.mts": ["exports"],
     // Wrangler consumes the Worker default export and instantiates the Durable
     // Object class by name from wrangler.jsonc; Knip cannot resolve either.
     "scripts/cloudflare/src/index.ts": ["exports"],

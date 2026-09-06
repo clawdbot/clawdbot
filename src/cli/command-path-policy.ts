@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // Resolves CLI command path policy from the declarative command catalog.
-import { resolveCliStartupCommandPath } from "./argv-invocation.js";
 import { getCommandPathWithRootOptions } from "./argv.js";
 import {
   cliCommandCatalog,
@@ -9,9 +8,11 @@ import {
 } from "./command-catalog.js";
 import { matchesCommandPath } from "./command-path-matches.js";
 import { resolveGatewayCatalogCommandPath } from "./gateway-run-argv.js";
+import { resolveCliParentCommandPath } from "./parent-command-path.js";
 
 const DEFAULT_CLI_COMMAND_PATH_POLICY: CliCommandPathPolicy = {
   configGuard: "run",
+  stateStoreGuard: "skip",
   loadPlugins: "never",
   pluginRegistry: { scope: "all" },
   ownsProtocolStdout: false,
@@ -41,13 +42,10 @@ function isCommandPathPrefix(commandPath: string[], pattern: readonly string[]):
 
 function resolveCliCatalogCommandPath(argv: string[]): string[] {
   // Gateway `run openclaw ...` argv needs catalog routing against the embedded command path.
-  const startupPath = resolveCliStartupCommandPath(argv);
-  const gatewayPath = resolveGatewayCatalogCommandPath(argv);
-  if (!gatewayPath && (startupPath[0] === "agent" || startupPath[0] === "models")) {
-    // Parent option values are already separated from child commands here.
-    return startupPath;
-  }
-  const tokens = gatewayPath ?? getCommandPathWithRootOptions(argv, argv.length);
+  const tokens =
+    resolveGatewayCatalogCommandPath(argv) ??
+    resolveCliParentCommandPath(argv) ??
+    getCommandPathWithRootOptions(argv, argv.length);
   if (tokens.length === 0) {
     return [];
   }

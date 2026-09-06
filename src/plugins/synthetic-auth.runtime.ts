@@ -19,7 +19,12 @@ function uniqueProviderRefs(values: readonly string[]): string[] {
   return next;
 }
 
-function resolveManifestSyntheticAuthProviderRefState(
+/** Enumerate one captured manifest generation without reopening ambient discovery policy. */
+export function listManifestSyntheticAuthProviderRefs(index: PluginRegistrySnapshot): string[] {
+  return uniqueProviderRefs(index.plugins.flatMap((plugin) => plugin.syntheticAuthRefs ?? []));
+}
+
+export function resolveManifestSyntheticAuthProviderRefState(
   params: SyntheticAuthProviderRefParams = {},
 ): { refs: string[]; complete: boolean } {
   if (params.index && (params.registryDiagnostics?.length ?? 0) > 0) {
@@ -30,9 +35,7 @@ function resolveManifestSyntheticAuthProviderRefState(
     return { refs: [], complete: false };
   }
   return {
-    refs: uniqueProviderRefs(
-      result.snapshot.plugins.flatMap((plugin) => plugin.syntheticAuthRefs ?? []),
-    ),
+    refs: listManifestSyntheticAuthProviderRefs(result.snapshot),
     complete: true,
   };
 }
@@ -61,8 +64,8 @@ export function resolveRuntimeSyntheticAuthProviderRefState(
         ...(registry.providers ?? [])
           .filter(
             (entry) =>
-              "resolveSyntheticAuth" in entry.provider &&
-              typeof entry.provider.resolveSyntheticAuth === "function",
+              typeof entry.provider.resolveSyntheticAuth === "function" ||
+              typeof entry.provider.prepareSyntheticAuth === "function",
           )
           .map((entry) => entry.provider.id),
         ...registry.cliBackends

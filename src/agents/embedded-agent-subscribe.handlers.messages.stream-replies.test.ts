@@ -2,11 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   consumePendingAssistantReplyDirectivesIntoReply,
   hasAssistantVisibleReply,
-} from "./embedded-agent-subscribe.handlers.messages.replies.js";
-import {
-  buildAssistantStreamData,
   recordPendingAssistantReplyDirectives,
-} from "./embedded-agent-subscribe.handlers.messages.test-support.js";
+  resolveManagedStreamMediaUrls,
+} from "./embedded-agent-subscribe.handlers.messages.replies.js";
 
 describe("hasAssistantVisibleReply", () => {
   it("treats audio-only payloads as visible", () => {
@@ -20,23 +18,18 @@ describe("hasAssistantVisibleReply", () => {
   });
 });
 
-describe("buildAssistantStreamData", () => {
-  it("normalizes media payloads for assistant stream events", () => {
+describe("assistant stream managed media", () => {
+  it("keeps generic directive URLs separate from tool-owned managed media", () => {
+    const state = {
+      pendingToolMediaTrustByUrl: new Map([
+        ["./managed.png", true],
+        ["./ordinary.png", false],
+      ]),
+    };
+
     expect(
-      buildAssistantStreamData({
-        text: "hello",
-        delta: "he",
-        replace: true,
-        mediaUrl: "https://example.com/a.png",
-        phase: "final_answer",
-      }),
-    ).toEqual({
-      text: "hello",
-      delta: "he",
-      replace: true,
-      mediaUrls: ["https://example.com/a.png"],
-      phase: "final_answer",
-    });
+      resolveManagedStreamMediaUrls(state, ["./ordinary.png", "./managed.png", "./unknown.png"]),
+    ).toEqual(["./managed.png"]);
   });
 });
 
@@ -46,7 +39,6 @@ describe("pending assistant reply directives", () => {
 
     recordPendingAssistantReplyDirectives(state, {
       text: "",
-      mediaUrls: ["/tmp/reply.ogg"],
       replyToCurrent: true,
       replyToTag: true,
       audioAsVoice: true,
@@ -59,7 +51,6 @@ describe("pending assistant reply directives", () => {
       }),
     ).toEqual({
       text: "Done.",
-      mediaUrls: ["/tmp/reply.ogg"],
       audioAsVoice: true,
       replyToId: undefined,
       replyToTag: true,
@@ -71,7 +62,7 @@ describe("pending assistant reply directives", () => {
   it("does not consume pending directive metadata on reasoning replies", () => {
     const state = {
       pendingAssistantReplyDirectives: {
-        mediaUrls: ["/tmp/reply.png"],
+        replyToId: "parent-message",
       },
     };
 
@@ -84,6 +75,6 @@ describe("pending assistant reply directives", () => {
       text: "Thinking...",
       isReasoning: true,
     });
-    expect(state.pendingAssistantReplyDirectives?.mediaUrls).toEqual(["/tmp/reply.png"]);
+    expect(state.pendingAssistantReplyDirectives?.replyToId).toBe("parent-message");
   });
 });

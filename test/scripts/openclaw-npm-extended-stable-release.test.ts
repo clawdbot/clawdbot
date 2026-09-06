@@ -5,7 +5,9 @@ import {
   extendedStableSelectorRepairCommand,
   parseExtendedStableGuardBypass,
   parsePriorExtendedStableSelector,
+  resolveNpmPreflightSdkSelectors,
   validateFullReleaseValidationManifest,
+  validateNpmPreflightDistTag,
   validateNpmPublishBoundary,
   validateExtendedStableNpmReleaseRequest,
   validateExtendedStableRunIdentity,
@@ -14,6 +16,66 @@ import {
 
 const sha = "a".repeat(40);
 const branch = "extended-stable/2026.6.33";
+
+describe("npm preflight publication channels", () => {
+  it.each([
+    ["2026.8.1", "beta", ["beta", "latest"]],
+    ["2026.8.1-1", "latest", ["beta", "latest"]],
+    ["2026.8.1", "alpha", ["alpha"]],
+    ["2026.8.1-alpha.1", "alpha", ["alpha"]],
+    ["2026.8.1-beta.1", "beta", ["beta"]],
+    ["2026.6.33", "extended-stable", ["extended-stable"]],
+  ])("qualifies %s on %s against its supported selectors", (version, tag, selectors) => {
+    expect(resolveNpmPreflightSdkSelectors(version, tag)).toEqual(selectors);
+  });
+
+  it("allows only qualified regular releases with both SDK receipts to cross beta/latest", () => {
+    const receipt = { schema: "openclaw.plugin-sdk-api-release-evidence/v1" };
+    const manifest = {
+      version: 3,
+      packageVersion: "2026.8.1",
+      npmDistTag: "beta",
+      pluginSdkApi: {
+        schema: "openclaw.plugin-sdk-api-release-evidence-set/v1",
+        selectors: { beta: receipt, latest: receipt },
+      },
+    };
+    expect(() => validateNpmPreflightDistTag({ manifest, npmDistTag: "latest" })).not.toThrow();
+    for (const changed of [
+      { ...manifest, version: 2 },
+      { ...manifest, version: 1 },
+      { ...manifest, pluginSdkApi: receipt },
+      { ...manifest, packageVersion: "2026.8.1-beta.1" },
+      { ...manifest, packageVersion: "2026.8.1-alpha.1", npmDistTag: "alpha" },
+      { ...manifest, packageVersion: "2026.6.33", npmDistTag: "extended-stable" },
+      { ...manifest, pluginSdkApi: { ...manifest.pluginSdkApi, selectors: { beta: receipt } } },
+    ]) {
+      expect(() =>
+        validateNpmPreflightDistTag({ manifest: changed, npmDistTag: "latest" }),
+      ).toThrow("dist-tag mismatch");
+    }
+    expect(() => validateNpmPreflightDistTag({ manifest, npmDistTag: "alpha" })).toThrow(
+      "dist-tag mismatch",
+    );
+    expect(() =>
+      validateNpmPreflightDistTag({
+        manifest: { version: 1, npmDistTag: "beta" },
+        npmDistTag: "beta",
+      }),
+    ).not.toThrow();
+
+    const command = spawnSync(
+      process.execPath,
+      ["scripts/openclaw-npm-extended-stable-release.mjs", "verify-preflight-channel"],
+      {
+        encoding: "utf8",
+        input: JSON.stringify(manifest),
+        env: { ...process.env, RELEASE_NPM_DIST_TAG: "latest" },
+      },
+    );
+    expect(command.status, command.stderr).toBe(0);
+  });
+});
 
 describe("npm extended-stable publication boundary", () => {
   it("parses only explicit boolean extended-stable guard values", () => {
@@ -301,6 +363,43 @@ describe("extended-stable npm run identity", () => {
     headBranch: branch,
     headSha: sha,
   };
+
+  it("separates exact FRV tooling identity from the extended-stable source identity", () => {
+    const run = {
+      ...validPreflight,
+      workflowName: "Full Release Validation",
+      databaseId: 123,
+      attempt: 2,
+      status: "completed",
+      headBranch: `release-ci/${"b".repeat(12)}-123`,
+      headSha: "b".repeat(40),
+    };
+    const request = {
+      run,
+      kind: "preflight",
+      npmDistTag: "extended-stable",
+      expectedBranch: branch,
+      expectedSha: sha,
+      preflightRunId: "123",
+      preflightRunAttempt: "2",
+      fullReleaseRunId: "123",
+      fullReleaseRunAttempt: "2",
+      workflowPath: ".github/workflows/full-release-validation.yml",
+    };
+    expect(validateExtendedStableRunIdentity(request)).toBe(run);
+    for (const change of [
+      { fullReleaseRunId: "124" },
+      { fullReleaseRunAttempt: "1" },
+      { workflowPath: ".github/workflows/ci.yml" },
+      { run: { ...run, attempt: 1 } },
+      { run: { ...run, status: "in_progress" } },
+      { run: { ...run, conclusion: "failure" } },
+      { kind: "validation" },
+      { kind: "plugin" },
+    ]) {
+      expect(() => validateExtendedStableRunIdentity({ ...request, ...change })).toThrow();
+    }
+  });
 
   it("accepts exact extended-stable preflight and validation runs", () => {
     expect(

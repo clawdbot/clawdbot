@@ -1,5 +1,6 @@
 import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { fnv1aUtf16 } from "../lib/fnv1a.ts";
+import { isSessionRunActive } from "../lib/session-run-state.ts";
 
 export type LobsterPetMode = "idle" | "busy" | "offline";
 
@@ -159,10 +160,10 @@ export function resolveLobsterRunOutcome(
 
 export function resolveLobsterPetMode(
   connected: boolean,
-  sessions: ReadonlyArray<{ hasActiveRun?: boolean | null }> | null | undefined,
+  sessions: ReadonlyArray<{ hasActiveRun?: boolean; status?: SessionRunStatus }> | null | undefined,
 ): LobsterPetMode {
   if (!connected) {
     return "offline";
   }
-  return sessions?.some((row) => row.hasActiveRun === true) ? "busy" : "idle";
+  return sessions?.some(isSessionRunActive) ? "busy" : "idle";
 }

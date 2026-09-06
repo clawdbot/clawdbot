@@ -2,6 +2,7 @@ import Observation
 import SwiftUI
 
 @MainActor
+// periphery:ignore - The macOS chat shell presents this public sheet across the package boundary.
 public struct ChatSessionsSheet: View {
     private enum SessionScope: String, CaseIterable, Identifiable {
         case active
@@ -308,6 +309,12 @@ public struct ChatSessionsSheet: View {
                 }
             }
             .contextMenu {
+                OpenClawSessionColorMenu(color: session.color) { color in
+                    Task {
+                        await self.viewModel.setSessionColor(key: session.key, color: color)
+                        await self.refreshScopedSessionsIfNeeded(debounce: false)
+                    }
+                }
                 Button {
                     self.inspectedSession = session
                 } label: {
@@ -397,6 +404,10 @@ public struct ChatSessionsSheet: View {
                     .foregroundStyle(.secondary)
                     .accessibilityLabel("Pinned")
             }
+        }
+        .overlay(alignment: .leading) {
+            OpenClawSessionColorStripe(color: session.color)
+                .offset(x: -6)
         }
     }
 

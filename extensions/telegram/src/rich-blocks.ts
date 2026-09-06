@@ -1,4 +1,4 @@
-// Markdown → Bot API 10.2 InputRichBlock[] for Telegram rich messages.
+// Markdown → Bot API 10.3 InputRichBlock[] for Telegram rich messages.
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import {
   FormatCapabilityProfile,
@@ -22,13 +22,14 @@ import {
   type RichText,
   type TelegramRichBlocksDegradationReason,
 } from "./rich-block-model.js";
-import { findTelegramHtmlIslands } from "./rich-blocks-html-map.js";
-import { parseInlineHtmlIslands } from "./rich-blocks-html.js";
+import { findTelegramHtmlIslands, renderTelegramHtmlIsland } from "./rich-blocks-html-map.js";
+import { parseHtmlFragment, parseInlineHtmlIslands, type HtmlNode } from "./rich-blocks-html.js";
 import {
   collectMarkdownRichListSources,
   renderMarkdownRichListSource,
   type MarkdownRichListSource,
 } from "./rich-blocks-list.js";
+import { renderTelegramMonospaceGrid } from "./text-width.js";
 
 const TELEGRAM_RICH_TEXT_TABLE_COLUMN_LIMIT = 20;
 
@@ -37,7 +38,7 @@ const TELEGRAM_RICH_FORMAT_PROFILE = FormatCapabilityProfile.define({
   chunk: { limit: 32_768, unit: "chars" },
 });
 
-const INLINE_STYLE_RANK: Record<string, number> = {
+const INLINE_STYLE_RANK: Record<InlineStyleKind, number> = {
   spoiler: 0,
   bold: 1,
   italic: 2,
@@ -50,6 +51,7 @@ const TELEGRAM_RICH_LINK_HREF_RE = /^(?:https?:\/\/|tg:\/\/|mailto:|tel:)/i;
 type InlineStyleKind = "bold" | "italic" | "strikethrough" | "code" | "spoiler";
 
 type StructuralSegment =
+  | { kind: "html"; start: number; end: number; node: Extract<HtmlNode, { kind: "element" }> }
   | { kind: "heading"; start: number; end: number; size: 1 | 2 | 3 | 4 | 5 | 6 }
   | { kind: "code_block"; start: number; end: number; language?: string }
   | { kind: "blockquote"; start: number; end: number }
@@ -155,161 +157,72 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
     return "";
   }
 
-  const dominantAnnotationRanges = (slice.annotations ?? [])
-    .filter((span) => span.type === "assistant_transcript_role")
-    .map((span) => ({ start: span.start, end: span.end }));
-
-  const suppressed = (start: number, end: number) =>
-    dominantAnnotationRanges.some((range) => start < range.end && end > range.start);
-
-  const styleSpans = slice.styles.filter(
-    (span) => isInlineStyle(span.style) && !suppressed(span.start, span.end),
+  type Active = { start: number; end: number } & (
+    | { kind: "style"; style: InlineStyleKind }
+    | { kind: "annotation" }
+    | { kind: "link"; target: { kind: "url"; href: string } | { kind: "anchor"; name: string } }
   );
-  const annotationSpans = (slice.annotations ?? []).filter(
-    (span) => span.type === "assistant_transcript_role",
+  const spans: Active[] = [];
+  for (const span of slice.styles) {
+    if (isInlineStyle(span.style)) {
+      spans.push({ start: span.start, end: span.end, kind: "style", style: span.style });
+    }
+  }
+  for (const span of slice.annotations ?? []) {
+    spans.push({ start: span.start, end: span.end, kind: "annotation" });
+  }
+  for (const link of collectTelegramLinkActions(slice)) {
+    spans.push(
+      link.action.kind === "code"
+        ? { start: link.start, end: link.end, kind: "style", style: "code" }
+        : { start: link.start, end: link.end, kind: "link", target: link.action },
+    );
+  }
+  const rank = (span: Active) =>
+    span.kind === "style" ? INLINE_STYLE_RANK[span.style] : span.kind === "link" ? 50 : 0;
+  spans.sort(
+    (left, right) => left.start - right.start || right.end - left.end || rank(left) - rank(right),
   );
-  const links = collectTelegramLinkActions({
-    text,
-    styles: [],
-    links: slice.links.filter((link) => !suppressed(link.start, link.end)),
-  });
-
-  const boundaries = new Set<number>([0, text.length]);
-  for (const span of styleSpans) {
-    boundaries.add(span.start);
-    boundaries.add(span.end);
-  }
-  for (const span of annotationSpans) {
-    boundaries.add(span.start);
-    boundaries.add(span.end);
-  }
-  for (const link of links) {
-    boundaries.add(link.start);
-    boundaries.add(link.end);
-  }
-  const points = [...boundaries].toSorted((a, b) => a - b);
-
-  type Active =
-    | { kind: "style"; style: InlineStyleKind; end: number }
-    | { kind: "annotation"; end: number }
-    | {
-        kind: "link";
-        target: { kind: "url"; href: string } | { kind: "anchor"; name: string };
-        end: number;
-      };
-
+  const points = [
+    ...new Set([0, text.length, ...spans.flatMap((span) => [span.start, span.end])]),
+  ].toSorted((left, right) => left - right);
   const stack: Active[] = [];
   const root: RichText[] = [];
   const frameStack: RichText[][] = [root];
 
-  const pushNode = (node: RichText) => {
-    frameStack.at(-1)?.push(node);
-  };
-
-  const openStyleNode = (style: InlineStyleKind, end: number) => {
-    const container: RichText[] = [];
-    pushNode({ type: style, text: container });
-    stack.push({ kind: "style", style, end });
-    frameStack.push(container);
-  };
-
-  const openAnnotationNode = (end: number) => {
-    const container: RichText[] = [];
-    pushNode({ type: "code", text: container });
-    stack.push({ kind: "annotation", end });
-    frameStack.push(container);
-  };
-
-  const openLinkNode = (
-    target: { kind: "url"; href: string } | { kind: "anchor"; name: string },
-    end: number,
-  ) => {
-    const container: RichText[] = [];
-    pushNode(
-      target.kind === "url"
-        ? { type: "url", text: container, url: target.href }
-        : { type: "anchor_link", text: container, anchor_name: target.name },
-    );
-    stack.push({ kind: "link", target, end });
-    frameStack.push(container);
-  };
-
   for (let i = 0; i < points.length - 1; i += 1) {
     const start = points[i] ?? 0;
     const end = points[i + 1] ?? start;
-    while (stack.length > 0 && (stack.at(-1)?.end ?? 0) <= start) {
-      stack.pop();
-      frameStack.pop();
+    const covering = spans.filter((span) => span.start <= start && span.end > start);
+    const annotation = covering.find((span) => span.kind === "annotation");
+    // Dominance applies only to the covered range. Surrounding formatting resumes
+    // after a transcript header. Code is already literal in IR; its merged range
+    // may contain independently authored styles and clickable links.
+    const active = annotation ? [annotation] : covering;
+    let shared = 0;
+    while (shared < stack.length && stack[shared] === active[shared]) {
+      shared += 1;
     }
-
-    const opening: Active[] = [];
-    for (const span of annotationSpans) {
-      if (span.start === start) {
-        opening.push({ kind: "annotation", end: span.end });
-      }
+    // Retain unchanged containers; rebuild the suffix when an ancestor expires,
+    // even if its child continues, so crossed ranges cannot leak formatting.
+    stack.length = shared;
+    frameStack.length = shared + 1;
+    for (const item of active.slice(shared)) {
+      const container: RichText[] = [];
+      const node: RichText =
+        item.kind === "link"
+          ? item.target.kind === "url"
+            ? { type: "url", text: container, url: item.target.href }
+            : { type: "anchor_link", text: container, anchor_name: item.target.name }
+          : { type: item.kind === "annotation" ? "code" : item.style, text: container };
+      frameStack.at(-1)?.push(node);
+      stack.push(item);
+      frameStack.push(container);
     }
-    for (const link of links) {
-      if (link.start !== start) {
-        continue;
-      }
-      if (link.action.kind === "url" || link.action.kind === "anchor") {
-        opening.push({ kind: "link", target: link.action, end: link.end });
-      } else {
-        opening.push({ kind: "style", style: "code", end: link.end });
-      }
-    }
-    for (const span of styleSpans) {
-      if (span.start === start && isInlineStyle(span.style)) {
-        opening.push({ kind: "style", style: span.style, end: span.end });
-      }
-    }
-    opening.sort((left, right) => {
-      if (left.end !== right.end) {
-        return right.end - left.end;
-      }
-      const leftRank =
-        left.kind === "style"
-          ? (INLINE_STYLE_RANK[left.style] ?? 99)
-          : left.kind === "link"
-            ? 50
-            : 0;
-      const rightRank =
-        right.kind === "style"
-          ? (INLINE_STYLE_RANK[right.style] ?? 99)
-          : right.kind === "link"
-            ? 50
-            : 0;
-      return leftRank - rightRank;
-    });
-
-    const inCode =
-      stack.some((entry) => entry.kind === "style" && entry.style === "code") ||
-      stack.some((entry) => entry.kind === "annotation");
-
-    for (const item of opening) {
-      if (item.kind === "annotation") {
-        openAnnotationNode(item.end);
-      } else if (item.kind === "link") {
-        if (!inCode && !stack.some((entry) => entry.kind === "link")) {
-          openLinkNode(item.target, item.end);
-        }
-      } else if (!inCode || item.style === "code") {
-        if (!(item.style === "code" && inCode)) {
-          openStyleNode(item.style, item.end);
-        }
-      }
-    }
-
     if (end > start) {
-      // Unlike Bot API html mode, blocks preserve bare `\n` inside paragraph
-      // RichText verbatim (live-verified 2026-07-15 via sendRichMessage echo).
-      pushNode(text.slice(start, end));
+      // Unlike Bot API HTML mode, rich paragraphs preserve bare newlines verbatim.
+      frameStack.at(-1)?.push(text.slice(start, end));
     }
-  }
-
-  while (stack.length > 0) {
-    stack.pop();
-    frameStack.pop();
   }
 
   return normalizeRichText(applyInlineHtmlIslands(root));
@@ -375,54 +288,10 @@ function splitParagraphs(ir: MarkdownIR, start: number, end: number): InputRichB
   return paragraphs;
 }
 
-// Gap emitter: agent-authored block HTML islands (details/lists/media/math/…)
-// become typed blocks; the text around them stays on the paragraph path.
-function emitGapBlocks(ir: MarkdownIR, start: number, end: number): InputRichBlock[] {
-  if (end <= start) {
-    return [];
-  }
-  // Code-formatted ranges keep their tags literal: `<hr/>` inside a code span
-  // is an example, not a divider. Only the island's opening tag position
-  // matters — code content nested inside an island body must not reject it.
-  const codeRanges = ir.styles.filter(
-    (span) =>
-      (span.style === "code" || span.style === "code_block") &&
-      span.end > start &&
-      span.start < end,
-  );
-  const islands = findTelegramHtmlIslands(ir.text.slice(start, end)).filter(
-    (island) =>
-      !codeRanges.some(
-        (range) => start + island.start >= range.start && start + island.start < range.end,
-      ),
-  );
-  if (islands.length === 0) {
-    return splitParagraphs(ir, start, end);
-  }
-  const blocks: InputRichBlock[] = [];
-  let cursor = start;
-  for (const island of islands) {
-    blocks.push(...splitParagraphs(ir, cursor, start + island.start));
-    blocks.push(...island.blocks);
-    cursor = start + island.end;
-  }
-  blocks.push(...splitParagraphs(ir, cursor, end));
-  return blocks;
-}
-
 function renderAsciiTableGrid(table: MarkdownTableMeta): string {
-  const rows = [table.headers, ...table.rows];
-  const columnCount = Math.max(...rows.map((row) => row.length), 0);
-  const widths = Array.from({ length: columnCount }, () => 3);
-  for (const row of rows) {
-    for (let index = 0; index < columnCount; index += 1) {
-      widths[index] = Math.max(widths[index] ?? 3, row[index]?.length ?? 0);
-    }
-  }
-  const renderRow = (row: readonly string[]) =>
-    `| ${widths.map((width, index) => (row[index] ?? "").padEnd(width)).join(" | ")} |`;
-  const divider = `| ${widths.map((width) => "-".repeat(width)).join(" | ")} |`;
-  return [renderRow(table.headers), divider, ...table.rows.map(renderRow)].join("\n");
+  return renderTelegramMonospaceGrid([table.headers, ...table.rows], {
+    headerSeparator: true,
+  });
 }
 
 function cellToRichText(cell: MarkdownTableCell | undefined): RichText | undefined {
@@ -455,8 +324,9 @@ function renderTableBlock(table: MarkdownTableMeta): {
     const text = cellToRichText(cell);
     return {
       is_header: true,
+      align: align ?? "left",
+      valign: "middle",
       ...(text !== undefined ? { text } : {}),
-      ...(align ? { align } : {}),
     };
   });
   const bodyRows: RichBlockTableCell[][] = table.rowCells.map((row) =>
@@ -464,8 +334,9 @@ function renderTableBlock(table: MarkdownTableMeta): {
       const align = table.aligns?.[index];
       const text = cellToRichText(row[index]);
       return {
+        align: align ?? "left",
+        valign: "middle",
         ...(text !== undefined ? { text } : {}),
-        ...(align ? { align } : {}),
       };
     }),
   );
@@ -483,8 +354,10 @@ function renderTableBlock(table: MarkdownTableMeta): {
 function collectStructuralSegments(
   ir: MarkdownIR,
   tables: readonly MarkdownTableMeta[],
+  htmlNodes: readonly HtmlNode[],
 ): StructuralSegment[] {
   const segments: StructuralSegment[] = [];
+  const htmlIslands = findTelegramHtmlIslands(htmlNodes);
   for (const span of ir.styles) {
     if (span.end <= span.start) {
       continue;
@@ -512,18 +385,12 @@ function collectStructuralSegments(
     segments.push({ kind: "table", start: offset, end: offset, table });
   }
   for (const source of collectMarkdownRichListSources(ir)) {
+    if (htmlIslands.some((island) => source.start >= island.start && source.end <= island.end)) {
+      continue;
+    }
     segments.push({ kind: "list", start: source.start, end: source.end, source });
   }
-  // Containers sort before their children (start asc, end desc) so emitSegments
-  // can consume contained segments recursively instead of double-emitting them.
-  const containerRank = (segment: StructuralSegment) =>
-    segment.kind === "blockquote" ? 0 : segment.kind === "list" ? 1 : 2;
-  return segments.toSorted(
-    (left, right) =>
-      left.start - right.start ||
-      right.end - left.end ||
-      containerRank(left) - containerRank(right),
-  );
+  return segments;
 }
 
 function emitSegments(
@@ -532,26 +399,86 @@ function emitSegments(
   rangeStart: number,
   rangeEnd: number,
   degradationReasons: Set<TelegramRichBlocksDegradationReason>,
+  htmlNodes: readonly HtmlNode[] = [],
 ): InputRichBlock[] {
+  const containerRank = (segment: StructuralSegment) =>
+    segment.kind === "blockquote" ? 0 : segment.kind === "list" ? 1 : 2;
+  const orderedSegments = [
+    ...segments,
+    ...findTelegramHtmlIslands(htmlNodes).map((node): StructuralSegment => ({
+      kind: "html",
+      start: node.start,
+      end: node.end,
+      node,
+    })),
+  ].toSorted((left, right) => {
+    if (left.start !== right.start) {
+      return left.start - right.start;
+    }
+    // Tables occupy no IR text. A table before an HTML opener shares its offset,
+    // but Markdown quotes/lists at that offset still own their table children.
+    const ownsTable = (segment: StructuralSegment) =>
+      segment.kind === "blockquote" || segment.kind === "list";
+    if (left.kind === "table" && right.kind !== "table" && !ownsTable(right)) {
+      return -1;
+    }
+    if (right.kind === "table" && left.kind !== "table" && !ownsTable(left)) {
+      return 1;
+    }
+    return right.end - left.end || containerRank(left) - containerRank(right);
+  });
   const blocks: InputRichBlock[] = [];
   let cursor = rangeStart;
   let index = 0;
-  while (index < segments.length) {
-    const segment = segments[index];
+  while (index < orderedSegments.length) {
+    const segment = orderedSegments[index];
     if (!segment) {
       break;
     }
     if (segment.start > cursor) {
-      blocks.push(...emitGapBlocks(ir, cursor, segment.start));
+      blocks.push(...splitParagraphs(ir, cursor, segment.start));
     }
     // Segments nested inside this one (fences/headings/tables in a blockquote)
     // belong to it; consuming them here prevents a second top-level emission.
     let next = index + 1;
-    while (next < segments.length && (segments[next]?.start ?? rangeEnd) < segment.end) {
+    while (
+      next < orderedSegments.length &&
+      (orderedSegments[next]?.start ?? rangeEnd) < segment.end
+    ) {
       next += 1;
     }
-    const children = segments.slice(index + 1, next);
+    const children = orderedSegments.slice(index + 1, next);
     switch (segment.kind) {
+      case "html": {
+        blocks.push(
+          ...renderTelegramHtmlIsland(segment.node, (nodes) => {
+            const content: InputRichBlock[] = [];
+            let first = 0;
+            for (let last = 0; last < nodes.length; last += 1) {
+              if (nodes[last + 1]?.start === nodes[last]!.end) {
+                continue;
+              }
+              const start = nodes[first]!.start;
+              const end = nodes[last]!.end;
+              // Removed summaries, credits, and checkboxes split body ranges.
+              // Render the remaining tree with the same Markdown owner as the root.
+              content.push(
+                ...emitSegments(
+                  ir,
+                  children.filter((child) => child.start >= start && child.end <= end),
+                  start,
+                  end,
+                  degradationReasons,
+                  nodes.slice(first, last + 1),
+                ),
+              );
+              first = last + 1;
+            }
+            return content;
+          }),
+        );
+        break;
+      }
       case "heading": {
         const text = irRangeToRichText(ir, segment.start, segment.end);
         if (text !== "") {
@@ -614,7 +541,7 @@ function emitSegments(
     index = next;
   }
   if (cursor < rangeEnd) {
-    blocks.push(...emitGapBlocks(ir, cursor, rangeEnd));
+    blocks.push(...splitParagraphs(ir, cursor, rangeEnd));
   }
   return blocks;
 }
@@ -641,14 +568,18 @@ export function markdownToTelegramRichBlocks(
   });
 
   let degradationReasons = new Set<TelegramRichBlocksDegradationReason>();
-  const segments = collectStructuralSegments(ir, tables);
+  const htmlNodes = parseHtmlFragment(
+    ir.text,
+    ir.styles.filter((span) => span.style === "code" || span.style === "code_block"),
+  );
+  const segments = collectStructuralSegments(ir, tables, htmlNodes);
   const hasMarkdownLists = segments.some((segment) => segment.kind === "list");
   const flattenedSegments = segments.filter((segment) => segment.kind !== "list");
-  let blocks = emitSegments(ir, segments, 0, ir.text.length, degradationReasons);
+  let blocks = emitSegments(ir, segments, 0, ir.text.length, degradationReasons, htmlNodes);
   if (hasMarkdownLists && maxInputRichBlockNesting(blocks) > 16) {
     degradationReasons = new Set<TelegramRichBlocksDegradationReason>();
     degradationReasons.add("list-limit");
-    blocks = emitSegments(ir, flattenedSegments, 0, ir.text.length, degradationReasons);
+    blocks = emitSegments(ir, flattenedSegments, 0, ir.text.length, degradationReasons, htmlNodes);
   }
 
   if (blocks.length === 0 && ir.text.trim()) {
@@ -657,7 +588,7 @@ export function markdownToTelegramRichBlocks(
 
   // Plain recovery remains byte-compatible with the pre-native-list path.
   const plainBlocks = hasMarkdownLists
-    ? emitSegments(ir, flattenedSegments, 0, ir.text.length, new Set())
+    ? emitSegments(ir, flattenedSegments, 0, ir.text.length, new Set(), htmlNodes)
     : blocks;
 
   return {

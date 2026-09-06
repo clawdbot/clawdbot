@@ -1,7 +1,11 @@
 // Telegram tests cover group access.base access plugin behavior.
+import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
+import { validateTestChannelConfig } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
+import { mergeTelegramAccountConfig } from "./account-config.js";
 import { normalizeAllowFrom, type NormalizedAllowFrom } from "./bot-access.js";
+import { TelegramConfigSchema } from "./config-schema.js";
 import {
   evaluateTelegramGroupBaseAccess,
   evaluateTelegramGroupPolicyAccess,
@@ -122,6 +126,56 @@ function runAccess(overrides: Partial<GroupAccessParams>) {
 }
 
 describe("evaluateTelegramGroupPolicyAccess", () => {
+  it.each([
+    {
+      policy: "allowlist",
+      senderId: "222",
+      expected: {
+        allowed: false,
+        reason: "group-policy-allowlist-unauthorized",
+        groupPolicy: "allowlist",
+      },
+    },
+    {
+      policy: "allowlist",
+      senderId: "111",
+      expected: { allowed: true, groupPolicy: "allowlist" },
+    },
+    {
+      policy: "open",
+      senderId: "222",
+      expected: { allowed: true, groupPolicy: "open" },
+    },
+  ] as const)(
+    "enforces inherited $policy for sender $senderId after named-account validation",
+    async ({ policy, senderId, expected }) => {
+      const channel = TelegramConfigSchema.parse({
+        groupPolicy: policy,
+        groupAllowFrom: ["111"],
+        groups: { "*": { requireMention: false } },
+        accounts: { work: {} },
+      });
+      const cfg = await validateTestChannelConfig("telegram", channel);
+      const telegramCfg = mergeTelegramAccountConfig(cfg, "work");
+
+      expect(
+        runAccess({
+          cfg,
+          telegramCfg,
+          senderId,
+          effectiveGroupAllow: normalizeAllowFrom(telegramCfg.groupAllowFrom),
+          resolveGroupPolicy: (chatId, turnCfg) =>
+            resolveChannelGroupPolicy({
+              cfg: turnCfg,
+              channel: "telegram",
+              accountId: "work",
+              groupId: String(chatId),
+            }),
+        }),
+      ).toEqual(expected);
+    },
+  );
+
   it("allows a group explicitly listed in groups config even when no allowFrom entries exist", () => {
     const result = runAccess({
       resolveGroupPolicy: () => ({

@@ -3,6 +3,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
+  chromeStoreInstallRequests,
+  type ChromeStoreInstallRequest,
+  FOUNDATION_CHROME_WEB_STORE_EXTENSION_ID,
+  FOUNDATION_CHROME_WEB_STORE_URL,
+  requestChromeStoreInstall,
+} from "./extension-install-external.js";
+import {
   assertOwnedPath,
   chromeProductRoots,
   type ChromeProduct,
@@ -25,11 +32,10 @@ const BROWSER_EXTENSION_INSTALL_WAIT_DEFAULT_MS = 30_000;
 const BROWSER_EXTENSION_INSTALL_WAIT_MIN_MS = 1_000;
 const BROWSER_EXTENSION_INSTALL_WAIT_MAX_MS = 120_000;
 const NATIVE_HOST_DESCRIPTION = "OpenClaw browser extension bootstrap";
-// Chrome authorizes native messaging by extension ID. This trust grant intentionally
-// includes user-loaded unpacked builds that preserve the Store ID; those builds must be trusted.
-// The ID is never proof that an arbitrary extension path is OpenClaw-owned.
-const FOUNDATION_CHROME_WEB_STORE_EXTENSION_ID = "kcdjddhmeafeomebliikmbpblkmkfoig";
-export const FOUNDATION_CHROME_WEB_STORE_URL = `https://chromewebstore.google.com/detail/openclaw/${FOUNDATION_CHROME_WEB_STORE_EXTENSION_ID}`;
+export {
+  FOUNDATION_CHROME_WEB_STORE_URL,
+  removeChromeStoreInstallRequests,
+} from "./extension-install-external.js";
 
 type NativeHostRegistrationStatus = {
   product: ChromeProduct;
@@ -48,6 +54,7 @@ type BrowserExtensionStatus = {
   approvedPaths: string[];
   discovered: DiscoveredChromeExtension[];
   storeDiscovered: DiscoveredChromeStoreExtension[];
+  storeInstallRequests: ChromeStoreInstallRequest[];
   registrations: NativeHostRegistrationStatus[];
   manualSetupRequired: boolean;
   issues: string[];
@@ -100,6 +107,8 @@ function launcherPathForManifest(manifestPath: string, deps: ExtensionInstallDep
 }
 
 function expectedExtensionIds(extensionIds: string[]): string[] {
+  // The Store ID also authorizes trusted unpacked builds that preserve it;
+  // it never proves that an arbitrary extension path is OpenClaw-owned.
   return [...new Set([...extensionIds, FOUNDATION_CHROME_WEB_STORE_EXTENSION_ID])].toSorted();
 }
 
@@ -136,16 +145,16 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
-function launcherMatchesOrigins(params: {
+function parseOwnedLauncherTargets(params: {
   content: string;
   manifestPath: string;
   launcherPath: string;
   origins: string[];
-}): boolean {
+}): string[] | undefined {
   const quotedValue = String.raw`'(?:[^'\r\n]|'"'"')*'`;
   const command = [
-    quotedValue,
-    quotedValue,
+    `(${quotedValue})`,
+    `(${quotedValue})`,
     escapeRegExp(shellQuote("--manifest")),
     escapeRegExp(shellQuote(params.manifestPath)),
     escapeRegExp(shellQuote("--launcher")),
@@ -159,7 +168,11 @@ function launcherMatchesOrigins(params: {
     `^#!/bin/sh\\n${escapeRegExp(OWNED_LAUNCHER_MARKER)}\\nexport OPENCLAW_STATE_DIR=${quotedValue}\\n(?:export OPENCLAW_CONFIG_PATH=${quotedValue}\\n)?exec ${command} "\\$@"\\n$`,
     "u",
   );
-  return pattern.test(params.content);
+  // Decode only shellQuote's two target words after the entire ownership grammar matches.
+  return pattern
+    .exec(params.content)
+    ?.slice(1)
+    .map((value) => value.slice(1, -1).replaceAll(`'"'"'`, "'"));
 }
 
 async function assertPrivateNativeHostFile(
@@ -177,6 +190,15 @@ async function assertPrivateNativeHostFile(
   }
 }
 
+async function assertNativeHostTarget(target: string, accessMode: number): Promise<void> {
+  // Registered targets must not depend on Chrome's working directory.
+  if (!path.isAbsolute(target)) {
+    throw new Error("native host target must be an absolute path");
+  }
+  await assertOwnedPath(target, "file", { allowRootOwner: true });
+  await fs.access(target, accessMode);
+}
+
 async function resolveLauncherInstall(params: {
   manifestPath: string;
   pluginRoot: string;
@@ -186,8 +208,8 @@ async function resolveLauncherInstall(params: {
   const launcherPath = launcherPathForManifest(params.manifestPath, params.deps);
   const nodePath = await fs.realpath(params.deps.nodePath ?? process.execPath);
   const nativeHostPath = await resolveNativeHostPath(params.pluginRoot, params.deps.nativeHostPath);
-  await assertOwnedPath(nodePath, "file", { allowRootOwner: true });
-  await assertOwnedPath(nativeHostPath, "file", { allowRootOwner: true });
+  await assertNativeHostTarget(nodePath, fs.constants.X_OK);
+  await assertNativeHostTarget(nativeHostPath, fs.constants.R_OK);
   const command = [
     nodePath,
     nativeHostPath,
@@ -275,14 +297,24 @@ async function inspectRegistration(
       throw new Error("native host manifest does not contain exact allowed origins");
     }
     await assertPrivateNativeHostFile(expectedLauncher, true, deps.platform ?? process.platform);
-    const launcherMatches = launcherMatchesOrigins({
+    const launcherTargets = parseOwnedLauncherTargets({
       content: await fs.readFile(expectedLauncher, "utf8"),
       manifestPath,
       launcherPath: expectedLauncher,
       origins: stringOrigins,
     });
-    if (!launcherMatches) {
+    if (!launcherTargets) {
       throw new Error("native host launcher and manifest origins do not match");
+    }
+    // Removed package versions break readiness, not ownership or managed repair/removal.
+    let issue: string | undefined;
+    try {
+      for (const [index, target] of launcherTargets.entries()) {
+        await assertNativeHostTarget(target, index === 0 ? fs.constants.X_OK : fs.constants.R_OK);
+      }
+    } catch {
+      issue =
+        "registered native host runtime or entry is unavailable or unsafe; run openclaw browser extension install";
     }
     return {
       product: root.product,
@@ -290,6 +322,7 @@ async function inspectRegistration(
       manifestPath,
       extensionIds: ids.toSorted(),
       state: "owned",
+      issue,
     };
   } catch (error) {
     return {
@@ -381,7 +414,10 @@ export function normalizeExtensionInstallWaitMs(value: unknown): number {
   if (value === undefined) {
     return BROWSER_EXTENSION_INSTALL_WAIT_DEFAULT_MS;
   }
-  const parsed = typeof value === "number" ? value : Number(value);
+  const parsed =
+    typeof value === "number" || (typeof value === "string" && /^\d+$/u.test(value))
+      ? Number(value)
+      : Number.NaN;
   if (
     !Number.isInteger(parsed) ||
     parsed < BROWSER_EXTENSION_INSTALL_WAIT_MIN_MS ||
@@ -399,6 +435,7 @@ export async function installChromeExtensionBootstrap(params: {
   bundledDir: string;
   pluginRoot: string;
   waitMs?: number;
+  requestStoreInstall?: boolean;
   deps?: ExtensionInstallDeps;
   onProgress?: (message: string) => void;
 }): Promise<BrowserExtensionStatus> {
@@ -434,6 +471,22 @@ export async function installChromeExtensionBootstrap(params: {
       preRegistrationIssues.push(
         `${root.label}: native host pre-registration refused (${error instanceof Error ? error.message : String(error)})`,
       );
+      continue;
+    }
+    try {
+      const request =
+        params.requestStoreInstall === false
+          ? undefined
+          : await requestChromeStoreInstall(root, deps);
+      if (request) {
+        params.onProgress?.(
+          `Requested the OpenClaw Store extension for ${root.label}. Restart Chrome if needed, then approve OpenClaw in chrome://extensions.`,
+        );
+      }
+    } catch (error) {
+      preRegistrationIssues.push(
+        `${root.label}: Store installation request refused (${error instanceof Error ? error.message : String(error)}). Add OpenClaw directly: ${FOUNDATION_CHROME_WEB_STORE_URL}`,
+      );
     }
   }
   if (preRegisteredRoots > 0) {
@@ -442,7 +495,7 @@ export async function installChromeExtensionBootstrap(params: {
     );
   } else {
     preRegistrationIssues.push(
-      "No existing Chrome-family user-data directory was available for native host pre-registration. Launch Chrome, then run install again before loading the extension.",
+      "No native host was pre-registered. Resolve any pre-registration refusals above; if Chrome has not been launched yet, launch it first. Then run install again before loading the extension.",
     );
   }
   const waitMs = normalizeExtensionInstallWaitMs(params.waitMs);
@@ -513,21 +566,13 @@ export async function browserExtensionStatus(params: {
       : await Promise.all(
           chromeProductRoots(deps).map((root) => inspectRegistration(root, deps, predictedIds)),
         );
-  const missingRegistration = chromeProductRoots(deps).some((root) => {
+  const unavailableRegistration = registrations.some((registration) => {
     const productWasDiscovered =
-      discovery.discovered.some((entry) => entry.product === root.product) ||
-      discovery.storeDiscovered.some((entry) => entry.product === root.product);
-    if (!productWasDiscovered) {
-      return false;
-    }
-    const manifestPath = path.join(root.nativeManifestDir, `${BROWSER_NATIVE_HOST_NAME}.json`);
-    const registration = registrations.find((entry) => entry.manifestPath === manifestPath);
-    return (
-      registration?.state !== "owned" ||
-      JSON.stringify(registration.extensionIds) !==
-        JSON.stringify(expectedExtensionIds(predictedIds))
-    );
+      discovery.discovered.some((entry) => entry.product === registration.product) ||
+      discovery.storeDiscovered.some((entry) => entry.product === registration.product);
+    return productWasDiscovered && (registration.state !== "owned" || Boolean(registration.issue));
   });
+  const storeInstallRequests = await chromeStoreInstallRequests(deps);
   return {
     platform,
     platformSupport: platform === "win32" ? "manual_required" : "automatic",
@@ -536,18 +581,23 @@ export async function browserExtensionStatus(params: {
     approvedPaths,
     discovered: discovery.discovered,
     storeDiscovered: discovery.storeDiscovered,
+    storeInstallRequests,
     registrations,
     manualSetupRequired:
       platform === "win32" ||
       (installedCopy.present && !installedCopy.owned) ||
-      (discovery.discovered.length === 0 && discovery.storeDiscovered.length === 0) ||
+      (discovery.discovered.length === 0 &&
+        !discovery.storeDiscovered.some((entry) => entry.enabled)) ||
       discovery.identityMismatches.length > 0 ||
-      missingRegistration,
+      unavailableRegistration,
     issues: [
       ...(installedCopy.present && !installedCopy.owned
         ? [`Chrome extension copy is not OpenClaw-owned: ${installedPath}`]
         : []),
       ...discovery.issues,
+      ...storeInstallRequests.flatMap((entry) =>
+        entry.issue ? [`${entry.browser}: ${entry.issue}`] : [],
+      ),
       ...registrations.flatMap((entry) =>
         entry.issue ? [`${entry.browser}: ${entry.issue}`] : [],
       ),
@@ -609,79 +659,4 @@ export async function resolveChromeExtensionLoadPath(
   const bundledPath = await fs.realpath(path.resolve(bundledDir));
   await assertOwnedPath(bundledPath, "directory", { allowRootOwner: true });
   return bundledPath;
-}
-
-/** Repair drift only when both the copy and existing registration are already owned. */
-export async function repairOwnedChromeExtensionNativeHosts(params: {
-  bundledDir: string;
-  pluginRoot: string;
-  deps?: ExtensionInstallDeps;
-}): Promise<{ changes: string[]; warnings: string[] }> {
-  const deps = params.deps ?? {};
-  if ((deps.platform ?? process.platform) === "win32") {
-    return { changes: [], warnings: [] };
-  }
-  const before = await browserExtensionStatus({ bundledDir: params.bundledDir, deps });
-  if (
-    !before.installedCopy.owned ||
-    (before.discovered.length === 0 && before.storeDiscovered.length === 0)
-  ) {
-    return { changes: [], warnings: [] };
-  }
-  const changes: string[] = [];
-  const warnings: string[] = [];
-  const predictedIds = before.approvedPaths
-    .map((candidate) =>
-      generateChromeExtensionIdForPath(candidate, deps.platform ?? process.platform),
-    )
-    .toSorted();
-  for (const root of chromeProductRoots(deps)) {
-    const manifestPath = path.join(root.nativeManifestDir, `${BROWSER_NATIVE_HOST_NAME}.json`);
-    const registration = await inspectRegistration(root, deps);
-    const productWasDiscovered =
-      before.discovered.some((entry) => entry.product === root.product) ||
-      before.storeDiscovered.some((entry) => entry.product === root.product);
-    if (!productWasDiscovered) {
-      continue;
-    }
-    if (registration?.state === "foreign" || registration?.state === "invalid") {
-      warnings.push(
-        `${root.label} native host repair refused: ${registration.issue ?? registration.state}`,
-      );
-      continue;
-    }
-    if (registration?.state !== "owned") {
-      continue;
-    }
-    try {
-      const idsAreCurrent =
-        JSON.stringify(registration.extensionIds) ===
-        JSON.stringify(expectedExtensionIds(predictedIds));
-      if (!idsAreCurrent && !isSafeOriginMigration(registration.extensionIds, predictedIds)) {
-        warnings.push(`${root.label} native host repair refused: unexpected allowed origins`);
-        continue;
-      }
-      const launcher = await resolveLauncherInstall({
-        manifestPath,
-        pluginRoot: params.pluginRoot,
-        extensionIds: predictedIds,
-        deps,
-      });
-      await assertOwnedPath(launcher.path, "file");
-      const launcherIsCurrent = (await fs.readFile(launcher.path, "utf8")) === launcher.content;
-      if (idsAreCurrent && launcherIsCurrent) {
-        continue;
-      }
-      await installRegistration({
-        root,
-        extensionIds: predictedIds,
-        pluginRoot: params.pluginRoot,
-        deps,
-      });
-      changes.push(`Repaired ${root.label} OpenClaw native messaging registration.`);
-    } catch (error) {
-      warnings.push(`${root.label} native host repair failed: ${String(error)}`);
-    }
-  }
-  return { changes, warnings };
 }

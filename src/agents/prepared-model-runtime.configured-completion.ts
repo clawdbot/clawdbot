@@ -1,42 +1,69 @@
-import type { ConfiguredModelRef } from "@openclaw/model-catalog-core/configured-model-refs";
-import {
-  buildModelCatalogMergeKey,
-  parseModelCatalogRef,
-} from "@openclaw/model-catalog-core/model-catalog-refs";
-import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
+import { buildModelCatalogMergeKey } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
+import { resolveLoadedProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
 import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.configured.js";
+import type { PreparedModelRuntimePluginGeneration } from "./prepared-model-runtime.types.js";
+import type { ModelRegistry } from "./sessions/model-registry.js";
 
-export function completeConfiguredRuntimeModels(params: {
-  configuredModelRefs: readonly ConfiguredModelRef[];
-  configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
-  resolveDynamicModel: (lookup: {
-    provider: string;
-    modelId: string;
-  }) => ProviderRuntimeModel | undefined;
-}): PreparedConfiguredRuntimeModel[] {
-  const existing = new Map(
-    params.configuredRuntimeModels.map((configured) => [
-      buildModelCatalogMergeKey(configured.provider, configured.modelId),
-      configured,
-    ]),
-  );
-  const completed: PreparedConfiguredRuntimeModel[] = [];
-  const seen = new Set<string>();
-  for (const { value } of params.configuredModelRefs) {
-    const parsed = parseModelCatalogRef(value);
-    if (!parsed) {
-      continue;
-    }
-    const key = buildModelCatalogMergeKey(parsed.provider, parsed.modelId);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    const prepared = existing.get(key);
-    const model = prepared?.model ?? params.resolveDynamicModel(parsed);
-    if (model) {
-      completed.push({ provider: parsed.provider, modelId: parsed.modelId, model });
-    }
+export function completeConfiguredRuntimeModels(
+  agentFacts: PreparedModelRuntimeAgentFacts,
+  pluginGeneration: PreparedModelRuntimePluginGeneration,
+  modelRegistry: ModelRegistry,
+): readonly PreparedConfiguredRuntimeModel[] {
+  if (!pluginGeneration.pluginRegistry) {
+    return agentFacts.configuredRuntimeModels;
   }
-  return completed;
+  const { input, configuredModelRefs, configuredRuntimeModels, env } = agentFacts;
+  const { config, agentDir, workspaceDir } = input;
+  // Both startup and full discovery complete static misses from their captured registry;
+  // borrowing an ambient plugin generation would change configured model ownership.
+  return withPluginRuntimeGenerationScope(
+    {
+      metadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
+      pluginRegistry: pluginGeneration.pluginRegistry,
+    },
+    () => {
+      const existing = new Map(
+        configuredRuntimeModels.map((configured) => [
+          buildModelCatalogMergeKey(configured.provider, configured.modelId),
+          configured,
+        ]),
+      );
+      const completed: PreparedConfiguredRuntimeModel[] = [];
+      const seen = new Set<string>();
+      for (const ref of configuredModelRefs) {
+        const { provider, modelId } = ref;
+        const key = buildModelCatalogMergeKey(provider, modelId);
+        if (seen.has(key)) {
+          continue;
+        }
+        seen.add(key);
+        const model =
+          existing.get(key)?.model ??
+          resolveLoadedProviderRuntimePlugin({
+            provider,
+            modelId,
+            config,
+            workspaceDir,
+            env,
+          })?.resolveDynamicModel?.({
+            config,
+            agentDir,
+            workspaceDir,
+            provider,
+            modelId,
+            modelRegistry,
+            providerConfig:
+              config.models?.providers?.[provider] ??
+              findNormalizedProviderValue(config.models?.providers, provider),
+          });
+        if (model) {
+          completed.push({ ...ref, model });
+        }
+      }
+      return completed;
+    },
+  );
 }

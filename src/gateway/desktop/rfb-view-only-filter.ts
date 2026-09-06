@@ -44,7 +44,9 @@ export function createRfbClientMessageFilter(
       case 4:
         return 8;
       case 5:
-        return 6;
+        // noVNC's extended pointer event sets the marker bit in the button mask
+        // and appends one byte for buttons 8-15.
+        return pending.length < 2 ? 2 : (pending.readUInt8(1) & 0x80) !== 0 ? 7 : 6;
       case 6:
         // noVNC marks extended clipboard payloads with a negative signed length.
         return pending.length < 8 ? 8 : 8 + Math.abs(pending.readInt32BE(4));
@@ -53,6 +55,12 @@ export function createRfbClientMessageFilter(
       case 248:
         // ClientFence's payload length byte follows its 8-byte fixed header.
         return pending.length < 9 ? 9 : 9 + pending.readUInt8(8);
+      case 251:
+        // SetDesktopSize has one fixed 16-byte screen record in noVNC.
+        return 24;
+      case 255:
+        // QEMU extended key event: type, subtype, down flag, keysym, keycode.
+        return 12;
       default:
         return `unsupported RFB client message type ${pending[0]}`;
     }

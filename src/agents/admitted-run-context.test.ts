@@ -14,7 +14,9 @@ import {
   retainAdmittedRunBeforeToolCallRecovery,
   resolveAdmittedRunActiveAssertion,
   resolvePreparedRunAdmission,
+  type PreparedAgentRunAdmission,
 } from "./admitted-run-context.js";
+import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
 
 const enabledConfig = { logging: { audit: { enabled: true, executionIdentity: true } } };
 const facts = {
@@ -32,6 +34,37 @@ afterEach(() => {
 });
 
 describe("prepared run admission", () => {
+  it.each([false, true])(
+    "owns real fixture authority across module resets and runner settlement (reject=%s)",
+    async (reject) => {
+      vi.resetModules();
+      const admissionOwner = await import("./admitted-run-context.js");
+      const failure = new Error("runner failed");
+      let assertActive: (() => void) | undefined;
+      const run = wrapRunWithTestPreparedAdmission(
+        async (params: { runId: string; preparedRunAdmission: PreparedAgentRunAdmission }) => {
+          const admitted = await params.preparedRunAdmission.admit("embedded");
+          expect(await params.preparedRunAdmission.admit("plugin-harness")).toBe(admitted);
+          expect(admitted).not.toHaveProperty("executionIdentityToken");
+          assertActive = admissionOwner.resolveAdmittedRunActiveAssertion(admitted);
+          expect(assertActive).toBeTypeOf("function");
+          assertActive?.();
+          if (reject) {
+            throw failure;
+          }
+          return "done";
+        },
+      );
+      const result = run({ runId: `runner-fixture-${reject}` });
+      if (reject) {
+        await expect(result).rejects.toBe(failure);
+      } else {
+        await expect(result).resolves.toBe("done");
+      }
+      expect(() => assertActive?.()).toThrow("no longer active");
+    },
+  );
+
   it("creates distinct operational instances without identity while disabled", async () => {
     const { runtime, ...admissionFacts } = facts;
     const first = await prepareAgentRunAdmission({

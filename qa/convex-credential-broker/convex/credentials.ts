@@ -2,6 +2,7 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, internalQuery } from "./_generated/server";
 
 const LEASE_EVENT_RETENTION_MS = 2 * 24 * 60 * 60 * 1_000;
@@ -82,14 +83,7 @@ type CredentialPayloadStorage = {
   payload: unknown;
 };
 
-type EventInsertCtx = {
-  db: {
-    insert: (
-      table: "lease_events" | "admin_events",
-      value: Record<string, unknown>,
-    ) => Promise<unknown>;
-  };
-};
+type EventInsertCtx = Pick<MutationCtx, "db">;
 
 function normalizeIntervalMs(params: {
   value: number | undefined;
@@ -147,28 +141,7 @@ function isChunkedCredentialPayloadMarker(
   );
 }
 
-async function readCredentialPayload(
-  ctx: {
-    db: {
-      query: (table: "credential_payload_chunks") => {
-        withIndex: (
-          indexName: "by_credential_index",
-          range: (q: {
-            eq: (
-              field: "credentialId",
-              value: Id<"credential_sets">,
-            ) => {
-              eq: (field: "index", value: number) => unknown;
-            };
-          }) => unknown,
-        ) => {
-          collect: () => Promise<CredentialPayloadChunkRecord[]>;
-        };
-      };
-    };
-  },
-  row: CredentialSetRecord,
-) {
+async function readCredentialPayload(ctx: Pick<QueryCtx, "db">, row: CredentialSetRecord) {
   if (!isChunkedCredentialPayloadMarker(row.payload)) {
     return row.payload;
   }
@@ -322,11 +295,9 @@ function normalizeActorId(value: string | undefined) {
   return normalized && normalized.length > 0 ? normalized : "unknown";
 }
 
-export const acquireLease = internalMutation({
+export const prepareLeaseAcquisition = internalQuery({
   args: {
     kind: v.string(),
-    ownerId: v.string(),
-    actorRole,
     leaseTtlMs: v.optional(v.number()),
     heartbeatIntervalMs: v.optional(v.number()),
   },
@@ -363,27 +334,36 @@ export const acquireLease = internalMutation({
       .collect()) as CredentialSetRecord[];
 
     const availableRows = activeRows.filter((row) => !leaseIsActive(row.lease, nowMs));
-
-    if (availableRows.length === 0) {
-      await insertLeaseEvent({
-        ctx,
-        kind: args.kind,
-        eventType: "acquire_failed",
-        actorRole: args.actorRole,
-        ownerId: args.ownerId,
-        occurredAtMs: nowMs,
-        code: "POOL_EXHAUSTED",
-        message: "No active credential in this kind is currently available.",
-      });
-      return brokerError(
-        "POOL_EXHAUSTED",
-        `No available credential for kind "${args.kind}".`,
-        POOL_EXHAUSTED_RETRY_AFTER_MS,
-      );
-    }
-
     sortByLeastRecentlyLeasedThenId(availableRows);
-    const selected = availableRows[0];
+    return {
+      status: "ok",
+      credentialIds: availableRows.map((row) => row["_id"]),
+      leaseTtlMs,
+      heartbeatIntervalMs,
+    };
+  },
+});
+
+export const tryAcquireLease = internalMutation({
+  args: {
+    kind: v.string(),
+    ownerId: v.string(),
+    actorRole,
+    credentialId: v.id("credential_sets"),
+    leaseTtlMs: v.number(),
+    heartbeatIntervalMs: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const nowMs = Date.now();
+    const selected = (await ctx.db.get(args.credentialId)) as CredentialSetRecord | null;
+    if (
+      !selected ||
+      selected.kind !== args.kind ||
+      selected.status !== "active" ||
+      leaseIsActive(selected.lease, nowMs)
+    ) {
+      return { status: "unavailable" } as const;
+    }
     const leaseToken = crypto.randomUUID();
 
     await ctx.db.patch(selected["_id"], {
@@ -393,7 +373,7 @@ export const acquireLease = internalMutation({
         leaseToken,
         acquiredAtMs: nowMs,
         heartbeatAtMs: nowMs,
-        expiresAtMs: nowMs + leaseTtlMs,
+        expiresAtMs: nowMs + args.leaseTtlMs,
       },
       lastLeasedAtMs: nowMs,
       updatedAtMs: nowMs,
@@ -414,9 +394,35 @@ export const acquireLease = internalMutation({
       credentialId: selected["_id"],
       leaseToken,
       payload: selected.payload,
-      leaseTtlMs,
-      heartbeatIntervalMs,
+      leaseTtlMs: args.leaseTtlMs,
+      heartbeatIntervalMs: args.heartbeatIntervalMs,
     };
+  },
+});
+
+export const recordLeaseAcquisitionFailure = internalMutation({
+  args: {
+    kind: v.string(),
+    ownerId: v.string(),
+    actorRole,
+  },
+  handler: async (ctx, args) => {
+    const nowMs = Date.now();
+    await insertLeaseEvent({
+      ctx,
+      kind: args.kind,
+      eventType: "acquire_failed",
+      actorRole: args.actorRole,
+      ownerId: args.ownerId,
+      occurredAtMs: nowMs,
+      code: "POOL_EXHAUSTED",
+      message: "No active credential in this kind is currently available.",
+    });
+    return brokerError(
+      "POOL_EXHAUSTED",
+      `No available credential for kind "${args.kind}".`,
+      POOL_EXHAUSTED_RETRY_AFTER_MS,
+    );
   },
 });
 

@@ -44,7 +44,7 @@ import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   realtimeVoiceAudioDurationMs,
   resamplePcm,
-} from "openclaw/plugin-sdk/realtime-voice";
+} from "openclaw/plugin-sdk/realtime-voice-provider";
 import { warn } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
@@ -57,7 +57,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { canonicalizeGoogleProviderBase64 } from "./base64.js";
 import { createGoogleGenAI } from "./google-genai-runtime.js";
-import { resolveGoogleGemini3ThinkingLevel } from "./thinking.js";
+import { resolveGoogleGemini3ThinkingLevel } from "./thinking-api.js";
 
 const GOOGLE_REALTIME_DEFAULT_MODEL = "gemini-3.1-flash-live-preview";
 const GOOGLE_REALTIME_DEFAULT_VOICE = "Kore";
@@ -478,6 +478,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private sessionReadyFired = false;
   private consecutiveSilenceMs = 0;
   private audioStreamEnded = false;
+  private responseInterrupted = false;
   private pendingFunctionNames = new Map<string, string>();
   private seenFunctionCallIds = new Set<string>();
   private pendingToolResponses: GooglePendingToolResponse[] = [];
@@ -495,7 +496,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private connectionOwner: GoogleLiveConnectionAttempt | undefined;
   private connectAttempt: GoogleLiveConnectionAttempt | undefined;
   // Google can interleave independent input/output transcripts, so each role
-  // owns its own in-progress byte budget until `finished` or terminal cleanup.
+  // owns its own in-progress byte budget until its protocol boundary or cleanup.
   private readonly pendingTranscripts: Record<RealtimeVoiceRole, GoogleLiveTranscriptAccumulator> =
     {
       user: { text: "", byteCount: 0 },
@@ -549,6 +550,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       this.config.sessionResumption !== false && Boolean(this.resumptionHandle);
     this.resumingSession = resumesExistingSession;
     if (!resumesExistingSession) {
+      this.responseInterrupted = false;
       this.resetToolCallOwnership();
     }
     const ai = createGoogleGenAI({
@@ -871,12 +873,16 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private handleMessage(message: LiveServerMessage): void {
+    const owner = this.connectionOwner;
     this.captureSessionLifecycle(message);
     if (message.setupComplete) {
       this.handleSetupComplete();
     }
     if (message.serverContent) {
       this.handleServerContent(message.serverContent);
+      if (this.connectionOwner !== owner) {
+        return;
+      }
     }
     if (message.toolCall) {
       this.handleToolCall(message.toolCall);
@@ -941,8 +947,13 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private handleServerContent(content: LiveServerContent): void {
+    const owner = this.connectionOwner;
     if (content.interrupted) {
+      this.responseInterrupted = true;
       this.config.onClearAudio("barge-in");
+      if (this.connectionOwner !== owner) {
+        return;
+      }
     }
 
     if (content.inputTranscription) {
@@ -971,14 +982,35 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
         const audio = this.toOutputAudio(pcm, sampleRate);
         if (audio.length > 0) {
           this.config.onAudio(audio);
+          if (this.connectionOwner !== owner) {
+            return;
+          }
           this.config.onMark?.(`audio-${randomUUID()}`);
+          if (this.connectionOwner !== owner) {
+            return;
+          }
         }
         continue;
       }
     }
+    // Output transcription precedes these model boundaries; input transcription
+    // is independently ordered and must not be finalized by an assistant turn.
+    if (content.generationComplete || content.interrupted || content.turnComplete) {
+      this.flushPendingTranscript("assistant");
+    }
+    if (content.turnComplete && this.connectionOwner === owner) {
+      // Google finishes interrupted turns with turnComplete too. generationComplete
+      // can precede playback completion, so only the native turn boundary releases output.
+      const status = this.responseInterrupted ? "cancelled" : "completed";
+      this.responseInterrupted = false;
+      this.config.onResponseDone?.({ status });
+    }
   }
 
   private appendTranscript(role: RealtimeVoiceRole, transcript: GoogleLiveTranscription): boolean {
+    const owner = this.connectionOwner;
+    // Live 3.1 emits complete input utterances without the optional finished flag.
+    const completeInput = role === "user" && isGemini31LiveModel(this.model);
     const text = transcript.text;
     if (text) {
       const pending = this.pendingTranscripts[role];
@@ -990,14 +1022,17 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       }
       pending.text += text;
       pending.byteCount += textBytes;
-      this.emitTranscript(role, text, false);
+      if (!completeInput) {
+        this.emitTranscript(role, text, false);
+        if (this.connectionOwner !== owner) {
+          return false;
+        }
+      }
     }
-    // turnComplete belongs to model generation and is unordered with transcription.
-    // Finalize only on the protocol terminal or when the bridge permanently closes.
-    if (transcript.finished) {
+    if (transcript.finished || completeInput) {
       this.flushPendingTranscript(role);
     }
-    return true;
+    return this.connectionOwner === owner;
   }
 
   private flushPendingTranscript(role: RealtimeVoiceRole): void {
@@ -1030,6 +1065,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private resetPendingTranscripts(): void {
+    this.responseInterrupted = false;
     this.pendingTranscripts.user = { text: "", byteCount: 0 };
     this.pendingTranscripts.assistant = { text: "", byteCount: 0 };
   }
@@ -1070,6 +1106,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       return;
     }
     this.clearPendingAudio();
+    this.responseInterrupted = false;
     this.closeNotified = true;
     this.config.onClose?.(reason);
   }

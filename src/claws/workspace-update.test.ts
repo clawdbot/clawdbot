@@ -79,11 +79,13 @@ describe("applyClawWorkspaceUpdate", () => {
     let config: OpenClawConfig = {};
     await applyClawAddPlan(currentAddPlan, {
       env,
+      nowMs: 10,
       consentPlanIntegrity: currentAddPlan.planIntegrity,
       commitConfig: async (transform) => {
         config = transform(config);
       },
     });
+    const originalFiles = readClawWorkspaceFiles("worker", { env });
     const updatePlan = await buildClawUpdatePlan({
       agentId: "worker",
       targetManifest: targetParsed.manifest,
@@ -119,10 +121,7 @@ describe("applyClawWorkspaceUpdate", () => {
     await expect(readFile(join(workspace, "SOUL.md"), "utf8")).resolves.toBe("current soul\n");
     await expect(readFile(join(workspace, "OLD.md"), "utf8")).resolves.toBe("old\n");
     await expect(access(join(workspace, "NEW.md"))).rejects.toThrow();
-    expect(readClawWorkspaceFiles("worker", { env }).map((record) => record.path)).toEqual([
-      "OLD.md",
-      "SOUL.md",
-    ]);
+    expect(readClawWorkspaceFiles("worker", { env })).toEqual(originalFiles);
 
     await rm(join(workspace, "OLD.md"));
     await expect(

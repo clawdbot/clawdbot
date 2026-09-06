@@ -7,8 +7,6 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { stripInvisibleUnicode } from "../infra/unicode-visibility.js";
 
-export { PROGRESS_CARD_MAX_STEP_UTF8_BYTES, PROGRESS_CARD_MAX_STEPS, PROGRESS_CARD_MAX_UTF8_BYTES };
-
 export class ProgressCardInputError extends Error {}
 
 type NormalizedProgressCardInput = {

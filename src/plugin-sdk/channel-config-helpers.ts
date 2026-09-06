@@ -7,8 +7,11 @@
  */
 import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
 import {
+  clearTopLevelChannelConfigFields,
   deleteAccountFromConfigSection as deleteAccountFromConfigSectionInSection,
   setAccountEnabledInConfigSection as setAccountEnabledInConfigSectionInSection,
+  setTopLevelChannelEnabledInConfigSection,
+  writeChannelSection,
 } from "../channels/plugins/config-helpers.js";
 import {
   resolveChannelConfigWritesShared,
@@ -18,8 +21,11 @@ import {
 } from "../channels/plugins/config-write-policy-shared.js";
 import { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
 import type { ChannelConfigAdapter } from "../channels/plugins/types.adapters.js";
+import type { ChannelSecurityDmPolicy } from "../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
+
+export { clearAccountFieldsFromConfigSection } from "../channels/plugins/config-helpers.js";
 
 export {
   ensureOpenDmPolicyAllowFromWildcard,
@@ -231,46 +237,6 @@ function createNamedAccountConfigBase<
   };
 }
 
-function resolveAccessorAccountWithFallback<
-  AccessorAccount,
-  Config extends OpenClawConfig = OpenClawConfig,
->(
-  resolveAccessorAccount:
-    | ((params: ChannelConfigAccessorParams<Config>) => AccessorAccount)
-    | undefined,
-  fallbackResolveAccessorAccount: (params: ChannelConfigAccessorParams<Config>) => AccessorAccount,
-): (params: ChannelConfigAccessorParams<Config>) => AccessorAccount {
-  // Read-only accessors can use a lighter account projection than runtime setup;
-  // fall back to the runtime resolver only when the channel has no projection hook.
-  return resolveAccessorAccount ?? fallbackResolveAccessorAccount;
-}
-
-function createChannelConfigAdapterWithAccessors<
-  ResolvedAccount,
-  AccessorAccount,
-  Config extends OpenClawConfig = OpenClawConfig,
->(params: {
-  base: ChannelCrudConfigAdapter<ResolvedAccount>;
-  resolveAccessorAccount?: (params: ChannelConfigAccessorParams<Config>) => AccessorAccount;
-  fallbackResolveAccessorAccount: (params: ChannelConfigAccessorParams<Config>) => AccessorAccount;
-  resolveAllowFrom: (account: AccessorAccount) => Array<string | number> | null | undefined;
-  formatAllowFrom: (allowFrom: Array<string | number>) => string[];
-  resolveDefaultTo?: (account: AccessorAccount) => string | number | null | undefined;
-}): ChannelConfigAdapterWithAccessors<ResolvedAccount> {
-  return {
-    ...params.base,
-    ...createScopedAccountConfigAccessors<AccessorAccount, Config>({
-      resolveAccount: resolveAccessorAccountWithFallback(
-        params.resolveAccessorAccount,
-        params.fallbackResolveAccessorAccount,
-      ),
-      resolveAllowFrom: params.resolveAllowFrom,
-      formatAllowFrom: params.formatAllowFrom,
-      resolveDefaultTo: params.resolveDefaultTo,
-    }),
-  };
-}
-
 function createChannelConfigAdapterFromBase<
   ResolvedAccount,
   AccessorAccount,
@@ -283,14 +249,16 @@ function createChannelConfigAdapterFromBase<
   formatAllowFrom: (allowFrom: Array<string | number>) => string[];
   resolveDefaultTo?: (account: AccessorAccount) => string | number | null | undefined;
 }): ChannelConfigAdapterWithAccessors<ResolvedAccount> {
-  return createChannelConfigAdapterWithAccessors<ResolvedAccount, AccessorAccount, Config>({
-    base: params.base,
-    resolveAccessorAccount: params.resolveAccessorAccount,
-    fallbackResolveAccessorAccount: params.resolveAccountForAccessors,
-    resolveAllowFrom: params.resolveAllowFrom,
-    formatAllowFrom: params.formatAllowFrom,
-    resolveDefaultTo: params.resolveDefaultTo,
-  });
+  return {
+    ...params.base,
+    ...createScopedAccountConfigAccessors<AccessorAccount, Config>({
+      // Read-only accessors prefer a lighter projection over runtime account setup.
+      resolveAccount: params.resolveAccessorAccount ?? params.resolveAccountForAccessors,
+      resolveAllowFrom: params.resolveAllowFrom,
+      formatAllowFrom: params.formatAllowFrom,
+      resolveDefaultTo: params.resolveDefaultTo,
+    }),
+  };
 }
 
 /** Build the common CRUD/config helpers for channels that store multiple named accounts. */
@@ -357,61 +325,6 @@ export function createScopedChannelConfigAdapter<
   });
 }
 
-function setTopLevelChannelEnabledInConfigSection<Config extends OpenClawConfig>(params: {
-  cfg: Config;
-  sectionKey: string;
-  enabled: boolean;
-}): Config {
-  const section = params.cfg.channels?.[params.sectionKey] as Record<string, unknown> | undefined;
-  return {
-    ...params.cfg,
-    channels: {
-      ...params.cfg.channels,
-      [params.sectionKey]: {
-        ...section,
-        enabled: params.enabled,
-      },
-    },
-  } as Config;
-}
-
-function removeTopLevelChannelConfigSection<Config extends OpenClawConfig>(params: {
-  cfg: Config;
-  sectionKey: string;
-}): Config {
-  const nextChannels = { ...params.cfg.channels } as Record<string, unknown>;
-  delete nextChannels[params.sectionKey];
-  const nextCfg = { ...params.cfg };
-  if (Object.keys(nextChannels).length > 0) {
-    nextCfg.channels = nextChannels as Config["channels"];
-  } else {
-    delete nextCfg.channels;
-  }
-  return nextCfg;
-}
-
-function clearTopLevelChannelConfigFields<Config extends OpenClawConfig>(params: {
-  cfg: Config;
-  sectionKey: string;
-  clearBaseFields: string[];
-}): Config {
-  const section = params.cfg.channels?.[params.sectionKey] as Record<string, unknown> | undefined;
-  if (!section) {
-    return params.cfg;
-  }
-  const nextSection = { ...section };
-  for (const field of params.clearBaseFields) {
-    delete nextSection[field];
-  }
-  return {
-    ...params.cfg,
-    channels: {
-      ...params.cfg.channels,
-      [params.sectionKey]: nextSection,
-    },
-  } as Config;
-}
-
 /** Build CRUD/config helpers for top-level single-account channels. */
 export function createTopLevelChannelConfigBase<
   ResolvedAccount,
@@ -460,10 +373,7 @@ export function createTopLevelChannelConfigBase<
             sectionKey: params.sectionKey,
             clearBaseFields: params.clearBaseFields ?? [],
           })
-        : removeTopLevelChannelConfigSection({
-            cfg: cfg as Config,
-            sectionKey: params.sectionKey,
-          });
+        : writeChannelSection(cfg, params.sectionKey, undefined);
     },
   };
 }
@@ -536,20 +446,15 @@ export function createHybridChannelConfigBase<
       });
     },
     deleteAccount({ cfg, accountId }) {
-      if (normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID) {
-        if (params.preserveSectionOnDefaultDelete) {
-          // Some hybrid channels keep non-account config at the root, so deleting
-          // default account credentials must clear only account-owned fields.
-          return clearTopLevelChannelConfigFields({
-            cfg,
-            sectionKey: params.sectionKey,
-            clearBaseFields: params.clearBaseFields,
-          });
-        }
-        return deleteAccountFromConfigSectionInSection({
+      if (
+        normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID &&
+        params.preserveSectionOnDefaultDelete
+      ) {
+        // Some hybrid channels keep non-account config at the root, so deleting
+        // default account credentials must clear only account-owned fields.
+        return clearTopLevelChannelConfigFields({
           cfg,
           sectionKey: params.sectionKey,
-          accountId,
           clearBaseFields: params.clearBaseFields,
         });
       }
@@ -615,6 +520,7 @@ export function createScopedDmSecurityResolver<
   approveChannelId?: string;
   approveHint?: string;
   normalizeEntry?: (raw: string) => string;
+  classifyEntryAuthentication?: ChannelSecurityDmPolicy["classifyEntryAuthentication"];
   inheritSharedDefaultsFromDefaultAccount?: boolean;
 }) {
   return ({
@@ -640,6 +546,7 @@ export function createScopedDmSecurityResolver<
       approveChannelId: params.approveChannelId,
       approveHint: params.approveHint,
       normalizeEntry: params.normalizeEntry,
+      classifyEntryAuthentication: params.classifyEntryAuthentication,
       inheritSharedDefaultsFromDefaultAccount: params.inheritSharedDefaultsFromDefaultAccount,
     });
   };

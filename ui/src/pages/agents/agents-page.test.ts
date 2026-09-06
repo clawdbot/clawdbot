@@ -157,6 +157,23 @@ const agentsList: AgentsListResult = {
   agents: [{ id: "main", name: "Main" }],
 };
 
+function agentsRouteData(
+  currentGateway: ApplicationContext["gateway"],
+  roster: AgentsListResult | null = agentsList,
+  requestedAgentId: string | null = "main",
+): AgentsRouteData {
+  const pathname = requestedAgentId ? `/settings/agents/${requestedAgentId}` : "/settings/agents";
+  return {
+    gateway: currentGateway,
+    gatewaySnapshot: currentGateway.snapshot,
+    location: { pathname, search: "", hash: "" },
+    requestedAgentId,
+    panel: "files",
+    agentsList: roster,
+    error: null,
+  };
+}
+
 function agentsCapability(ensureFiles: () => Promise<AgentsFilesListResult>) {
   return {
     state: {
@@ -757,30 +774,15 @@ describe("AgentsPage gateway lifecycle", () => {
   it("preserves matching initial route data, then resets it on provider replacement", () => {
     const client = {} as GatewayBrowserClient;
     const currentGateway = gateway(snapshot(client, false));
-    const preloadedAgents: AgentsListResult = {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "main", name: "Main" }],
-    };
     const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
-    page.routeData = {
-      gateway: currentGateway,
-      gatewaySnapshot: currentGateway.snapshot,
-      location: { pathname: "/settings/agents/main", search: "", hash: "" },
-      requestedAgentId: "main",
-      panel: "files",
-      agentsList: preloadedAgents,
-      selectedAgentId: "main",
-      error: null,
-    };
+    page.routeData = agentsRouteData(currentGateway);
     page.context = { gateway: currentGateway } as unknown as ApplicationContext;
     setPageGateway(page, client, false);
     page.willUpdate(new Map([["routeData", undefined]]));
 
     page.subscriptions.hostConnected();
     expect(page.client).toBe(client);
-    expect(page.agentsList).toBe(preloadedAgents);
+    expect(page.agentsList).toBe(agentsList);
     expect(page.agentsSelectedId).toBe("main");
     // Route-driven selection application resets per-agent panel caches, which
     // bumps the request generation; capture it instead of pinning zero.
@@ -802,16 +804,7 @@ describe("AgentsPage gateway lifecycle", () => {
     const ensureList = vi.fn(async () => null);
     const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
     setPageGateway(page, client);
-    page.routeData = {
-      gateway: preloadedGateway,
-      gatewaySnapshot: preloadedSnapshot,
-      location: { pathname: "/settings/agents/main", search: "", hash: "" },
-      requestedAgentId: "main",
-      panel: "files",
-      agentsList,
-      selectedAgentId: "main",
-      error: null,
-    };
+    page.routeData = agentsRouteData(preloadedGateway);
     page.context = {
       gateway: currentGateway,
       agents: {
@@ -904,6 +897,7 @@ describe("AgentsPage gateway lifecycle", () => {
         files: () => ({ list: null, loading: false, error: null }),
         ensureFiles: vi.fn(async () => fileList),
         refreshFiles: vi.fn(async () => fileList),
+        recordFile: vi.fn(),
       },
     } as unknown as ApplicationContext;
 
@@ -1090,30 +1084,36 @@ describe("AgentsPage gateway lifecycle", () => {
 });
 
 describe("AgentsPage routing", () => {
-  it("derives the panel from route data", () => {
-    const currentGateway = gateway(snapshot(null, false));
-    const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
-    page.context = {
-      basePath: "/ui",
-      gateway: currentGateway,
-    } as unknown as ApplicationContext;
-    page.agentsList = {
-      ...agentsList,
-      agents: [...agentsList.agents, { id: "research", name: "Research" }],
-    };
-    page.agentsSelectedId = "main";
-    page.routeData = {
-      gateway: currentGateway,
-      gatewaySnapshot: currentGateway.snapshot,
-      location: { pathname: "/ui/settings/agents/main/tools", search: "", hash: "" },
-      requestedAgentId: "main",
-      panel: "tools",
-      agentsList: page.agentsList as AgentsListResult,
-      selectedAgentId: "main",
-      error: null,
-    };
+  it.each([
+    { requestedAgentId: "research", expectedAgentId: "research" },
+    { requestedAgentId: "missing", expectedAgentId: "main" },
+    { requestedAgentId: null, expectedAgentId: "main" },
+  ])(
+    "resolves $requestedAgentId against the current roster after stale route data",
+    ({ requestedAgentId, expectedAgentId }) => {
+      const currentGateway = gateway(snapshot(null, false));
+      const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+      page.context = {
+        basePath: "",
+        gateway: currentGateway,
+      } as unknown as ApplicationContext;
+      page.agentsList = {
+        ...agentsList,
+        agents: [...agentsList.agents, { id: "research", name: "Research" }],
+      };
+      page.agentsSelectedId = requestedAgentId === "research" ? "main" : "research";
+      page.agentFileContents = { "AGENTS.md": "Previous agent's file" };
+      page.routeData = {
+        ...agentsRouteData(currentGateway, null, requestedAgentId),
+        gatewaySnapshot: snapshot(null, false),
+        panel: "tools",
+      };
 
-    expect(page.agentsPanel).toBe("tools");
-    expect(page.agentsSelectedId).toBe("main");
-  });
+      page.willUpdate(new Map([["routeData", undefined]]));
+
+      expect(page.agentsPanel).toBe("tools");
+      expect(page.agentsSelectedId).toBe(expectedAgentId);
+      expect(page.agentFileContents).toEqual({});
+    },
+  );
 });

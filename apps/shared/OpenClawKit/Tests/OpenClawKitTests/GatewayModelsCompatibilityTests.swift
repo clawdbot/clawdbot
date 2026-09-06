@@ -3,6 +3,44 @@ import OpenClawProtocol
 import Testing
 
 struct GatewayModelsCompatibilityTests {
+    @Test(arguments: ["allowed", "denied", "expired", "cancelled"])
+    func `terminal approval sources remain generic dictionaries`(_ status: String) throws {
+        let expectedSource = ["agentId": "main", "sessionKey": "agent:main:approval"]
+        var payload: [String: Any] = [
+            "id": "approval-1",
+            "urlPath": "/approve/approval-1",
+            "createdAtMs": 1,
+            "expiresAtMs": 2,
+            "resolvedAtMs": 2,
+            "status": status,
+            "source": expectedSource,
+            "presentation": [
+                "kind": "system-agent",
+                "title": "Apply change",
+                "description": "Synthetic approval",
+                "proposalHash": String(repeating: "0", count: 64),
+                "allowedDecisions": ["allow-once", "deny"],
+            ],
+            "reason": status == "expired" ? "timeout" : status == "cancelled" ? "run-aborted" : "user",
+        ]
+        if status == "allowed" || status == "denied" {
+            payload["decision"] = status == "allowed" ? "allow-once" : "deny"
+        }
+        let snapshot = try JSONDecoder().decode(
+            TerminalApprovalSnapshot.self,
+            from: JSONSerialization.data(withJSONObject: payload))
+        let source: [String: AnyCodable]? = switch snapshot {
+        case let .allowed(value): value.source
+        case let .denied(value): value.source
+        case let .expired(value): value.source
+        case let .cancelled(value): value.source
+        }
+        #expect(source?["sessionKey"]?.value as? String == expectedSource["sessionKey"])
+        let encoded = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(snapshot)) as? [String: Any])
+        #expect(encoded["source"] as? [String: String] == expectedSource)
+    }
+
     @Test
     func `agents workspace encoding remains AnyCodable`() {
         let file = AgentsWorkspaceFile(
@@ -64,6 +102,62 @@ struct GatewayModelsCompatibilityTests {
 
         #expect(list.sectionorder == nil)
         #expect(mutation.sectionorder == nil)
+    }
+
+    @Test
+    func `session sharing decodes present unknown and absent actor evidence`() throws {
+        let presentList = try JSONDecoder().decode(
+            SessionMembersListResult.self,
+            from: Data(
+                #"{"sessionKey":"main","members":[{"identityId":"present","addedBy":"profile-ada","addedAt":1}],"identities":[],"role":"owner","allowedVisibilities":["shared"]}"#
+                    .utf8))
+        let principalLessList = try JSONDecoder().decode(
+            SessionMembersListEvidenceResult.self,
+            from: Data(
+                #"{"sessionKey":"main","members":[{"identityId":"unknown","addedByState":"unknown","addedAt":2},{"identityId":"absent","addedAt":3}],"identities":[],"role":"owner","allowedVisibilities":["shared"]}"#
+                    .utf8))
+
+        #expect(presentList.members[0].addedby == "profile-ada")
+        #expect(principalLessList.members[0].addedby == nil)
+        #expect(principalLessList.members[0].addedbystate == "unknown")
+        #expect(principalLessList.members[1].addedby == nil)
+        #expect(principalLessList.members[1].addedbystate == nil)
+        for member in [
+            #"{"identityId":"unknown","addedByState":"unknown","addedAt":2}"#,
+            #"{"identityId":"absent","addedAt":3}"#,
+        ] {
+            #expect(throws: DecodingError.self) {
+                try JSONDecoder().decode(
+                    SessionMembersListResult.self,
+                    from: Data(
+                        #"{"sessionKey":"main","members":[\#(member)],"identities":[],"role":"owner","allowedVisibilities":["shared"]}"#
+                            .utf8))
+            }
+        }
+
+        let present = try JSONDecoder().decode(
+            SessionSharingEvent.self,
+            from: Data(
+                #"{"action":"visibility","sessionKey":"main","agentId":"main","actor":{"type":"human","id":"profile-ada"},"ts":1}"#
+                    .utf8))
+
+        #expect(present.actor.id == "profile-ada")
+
+        let principalLess = try JSONDecoder().decode(
+            [SessionSharingEvidenceEvent].self,
+            from: Data(
+                #"[{"action":"member-added","sessionKey":"main","agentId":"main","actorState":"unknown","identityId":"member","ts":2},{"action":"member-removed","sessionKey":"main","agentId":"main","identityId":"member","ts":3}]"#
+                    .utf8))
+
+        #expect(principalLess[0].actorstate == "unknown")
+        #expect(principalLess[1].actorstate == nil)
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(
+                SessionSharingEvent.self,
+                from: Data(
+                    #"{"action":"member-added","sessionKey":"main","agentId":"main","actorState":"unknown","identityId":"member","ts":2}"#
+                        .utf8))
+        }
     }
 
     @Test

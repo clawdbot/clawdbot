@@ -51,6 +51,28 @@ function isAllowedWebSocketUrl(url) {
   return url.protocol === "wss:" || (url.protocol === "ws:" && isLoopbackHost(url.hostname));
 }
 
+/** Wake-up carries only a port; match the relay server's 127.0.0.1 bind address. */
+export function directLoopbackRelayPort(raw) {
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  const port = Number(url.port || 80);
+  return url.protocol === "ws:" &&
+    url.hostname === "127.0.0.1" &&
+    url.pathname === "/extension" &&
+    port > 0 &&
+    !url.username &&
+    !url.password &&
+    !url.hash &&
+    normalizeRelayQuery(url) &&
+    url.toString() === raw
+    ? port
+    : null;
+}
+
 function parseGatewayHint(raw) {
   if (typeof raw !== "string") {
     return null;

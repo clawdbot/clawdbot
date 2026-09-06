@@ -1,5 +1,8 @@
 import Foundation
 import SQLite3
+#if canImport(Darwin)
+import Darwin
+#endif
 
 public struct OpenClawNativeStateError: Error, LocalizedError, Sendable {
     public let message: String
@@ -37,7 +40,7 @@ public enum OpenClawNativeStateSQLiteValueType: Equatable, Sendable {
 /// One recursive connection lock serializes transactions and statement access.
 public final class OpenClawNativeStateSQLite: @unchecked Sendable {
     // Keep aligned with OPENCLAW_STATE_SCHEMA_VERSION. Native clients never upgrade this database.
-    private static let maximumSupportedSchemaVersion: Int64 = 9
+    private static let maximumSupportedSchemaVersion: Int64 = 16
     private static let defaultBusyTimeoutMilliseconds: Int32 = 5000
 
     private struct SchemaObject: Hashable {
@@ -504,14 +507,14 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         #if os(iOS) || os(watchOS)
         attributes[.protectionKey] = FileProtectionType.completeUntilFirstUserAuthentication
         #endif
-        try fileManager.setAttributes(attributes, ofItemAtPath: url.path)
+        try self.setPrivateAttributes(attributes, atPath: url.path)
     }
 
     static func secureDatabaseFiles(
         _ databaseURL: URL,
         fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) },
         setAttributes: ([FileAttributeKey: Any], String) throws -> Void = {
-            try FileManager.default.setAttributes($0, ofItemAtPath: $1)
+            try OpenClawNativeStateSQLite.setPrivateAttributes($0, atPath: $1)
         }) throws
     {
         for (url, isTransient) in [
@@ -532,6 +535,71 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
                 continue
             }
         }
+    }
+
+    private static func setPrivateAttributes(_ attributes: [FileAttributeKey: Any], atPath path: String) throws {
+        try FileManager.default.setAttributes(attributes, ofItemAtPath: path)
+        #if canImport(Darwin)
+        guard let security = filesec_init() else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        defer { filesec_free(security) }
+        // Do not open and close another database descriptor: that can release SQLite's POSIX locks.
+        var metadata = stat()
+        guard statx_np(path, &metadata, security) == 0 else {
+            if errno == ENOTSUP || errno == EOPNOTSUPP { return }
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        guard metadata.st_uid == geteuid() else { return }
+        var storedACL: acl_t?
+        guard filesec_get_property(security, FILESEC_ACL, &storedACL) == 0 else {
+            // Unlike a failed stat, a missing ACL property means the existing object has no ACL.
+            if errno == ENOENT || errno == ENOTSUP || errno == EOPNOTSUPP { return }
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        guard let acl = storedACL else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
+        }
+        defer { acl_free(UnsafeMutableRawPointer(acl)) }
+        var flags: acl_flagset_t?
+        guard acl_get_flagset_np(UnsafeMutableRawPointer(acl), &flags) == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        let hasFlags = acl_get_flag_np(flags, acl_flag_t(rawValue: .max))
+        guard hasFlags >= 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        // Empty ACLs can lose their ACL-level inheritance flags when persisted.
+        guard hasFlags == 0 else { return }
+
+        // Mixed ACLs can depend on allow-before-deny ordering, even for the owner.
+        var index: Int32 = 0
+        while true {
+            var entry: acl_entry_t?
+            guard acl_get_entry(acl, index, &entry) == 0 else {
+                guard errno == EINVAL else {
+                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+                }
+                break
+            }
+            var tag = ACL_UNDEFINED_TAG
+            guard acl_get_tag_type(entry, &tag) == 0 else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
+            guard tag == ACL_EXTENDED_ALLOW else { return }
+            index += 1
+        }
+        guard index > 0 else { return }
+        for _ in 0..<index {
+            var entry: acl_entry_t?
+            guard acl_get_entry(acl, 0, &entry) == 0, acl_delete_entry(acl, entry) == 0 else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
+        }
+        if acl_set_file(path, ACL_TYPE_EXTENDED, acl) != 0, errno != ENOTSUP, errno != EOPNOTSUPP {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        #endif
     }
 
     private static func isMissingFileError(_ error: Error) -> Bool {

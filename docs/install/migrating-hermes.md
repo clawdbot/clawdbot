@@ -47,12 +47,15 @@ Imports require a fresh OpenClaw setup. If you already have local OpenClaw state
 
 <AccordionGroup>
   <Accordion title="Model configuration">
-    - Default model selection from Hermes `config.yaml`.
-    - Configured model providers and custom endpoints from `model`, `providers`, and `custom_providers`, including current Hermes Chat Completions, Codex Responses, and Anthropic Messages transports.
+    - Default model selection from Hermes `config.yaml`. With `--agent <id>`, the imported model belongs to that agent; shared defaults and other agents keep their models.
+    - Configured model providers and custom endpoints from `model`, `providers`, and `custom_providers`, including Hermes transport aliases, camelCase provider fields, and model lists with per-model metadata.
 
   </Accordion>
   <Accordion title="MCP servers">
     MCP server definitions from `mcp_servers` or `mcp.servers`, including disabled state, timeouts, parallel-tool support, OAuth scope, compatible TLS fields, and native/resource/prompt tool policy. Literal environment variables and headers require credential-import consent. Hermes-only lifecycle, sampling, elicitation, preflight, keepalive, CA-bundle, password-protected client-key, and pre-registered OAuth-client settings become manual-review items instead of invalid OpenClaw config.
+
+    An empty `tools.include` keeps native tools disabled while preserving the resource and prompt utility settings. OpenClaw tool filters support exact names and `*`; Hermes `?` and bracket patterns need manual review. Unsupported include patterns are omitted, and a server with unsupported exclusion patterns is imported disabled until you replace its filter and enable it.
+
   </Accordion>
   <Accordion title="Workspace files">
     - `SOUL.md` and `AGENTS.md` are copied into the OpenClaw agent workspace.
@@ -64,7 +67,7 @@ Imports require a fresh OpenClaw setup. If you already have local OpenClaw state
     Memory config defaults for OpenClaw file memory. External memory providers such as Honcho are recorded as archive or manual-review items so you can move them deliberately.
   </Accordion>
   <Accordion title="Skills">
-    Skills with a `SKILL.md` file anywhere under `skills/` are discovered recursively, flattened into the OpenClaw workspace skill directory, and copied with their support files. Per-skill config values from `skills.config` are preserved.
+    Skills with a `SKILL.md` file under active directories in `skills/` are discovered recursively, flattened into the OpenClaw workspace skill directory, and copied with their support files. Per-skill config values from `skills.config` and global disabled state from `skills.disabled` are preserved. With `--skill`, only the selected skills' config and disabled state are imported. Only the organization mirror selected by `_org/.active_org` is imported.
   </Accordion>
   <Accordion title="Auth credentials">
     Interactive `openclaw migrate` asks before importing auth credentials, with yes selected by default. Accepted imports include current Hermes OpenAI Codex OAuth entries, OpenCode OpenAI OAuth and GitHub Copilot entries, and the [supported Hermes `.env` keys](/cli/migrate#supported-env-keys). Use `--include-secrets` for non-interactive import, `--no-auth-credentials` to skip credentials, or onboarding's `--import-secrets` flag. After importing Hermes OAuth, do not keep Hermes and OpenClaw using the same refresh grant; reauthenticate one side before running both.
@@ -152,7 +155,7 @@ openclaw migrate hermes --dry-run --json
 openclaw migrate apply hermes --json --yes
 ```
 
-With `--json` and no `--yes`, apply prints the plan and does not mutate state — the safest mode for CI and shared scripts.
+`openclaw migrate hermes --json` without `--yes` prints the plan without applying it. Non-interactive `migrate apply` requires `--yes`. A partial apply failure returns the complete JSON report and exits with code `1`.
 
 ## Troubleshooting
 

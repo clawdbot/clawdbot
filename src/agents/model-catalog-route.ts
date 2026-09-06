@@ -6,6 +6,10 @@ import {
 } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderModelRouteCandidate } from "../plugin-sdk/provider-model-types.js";
+import {
+  PREPARED_THINKING_POLICY,
+  type ThinkingCatalogPolicyCarrier,
+} from "../plugins/provider-thinking-catalog.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 
@@ -36,7 +40,13 @@ export type ModelCatalogRouteProjection =
 type ModelCatalogLogicalOverrides = Partial<
   Pick<
     ModelCatalogEntry,
-    "name" | "contextWindow" | "contextTokens" | "reasoning" | "configuredReasoning" | "input"
+    | "name"
+    | "contextWindow"
+    | "contextTokens"
+    | "reasoning"
+    | "configuredReasoning"
+    | "thinkingLevelMap"
+    | "input"
   >
 >;
 
@@ -69,6 +79,7 @@ export function resolveConfiguredModelCatalogOverrides(params: {
     ...(model?.contextTokens !== undefined ? { contextTokens: model.contextTokens } : {}),
     ...(model?.reasoning !== undefined ? { reasoning: model.reasoning } : {}),
     ...(model?.reasoning !== undefined ? { configuredReasoning: model.reasoning } : {}),
+    ...(model?.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
     ...(model?.input !== undefined ? { input: model.input } : {}),
   };
   return Object.keys(overrides).length > 0 ? overrides : undefined;
@@ -160,18 +171,21 @@ export function projectModelCatalogEntryForRoute(params: {
   }
 
   const { policy, route } = params.projection;
-  const donor = findModelCatalogRouteDonor({
-    entry: params.entry,
-    route,
-    policy,
-    catalog: params.catalog,
-  });
+  const donor: (ModelCatalogEntry & ThinkingCatalogPolicyCarrier) | undefined =
+    findModelCatalogRouteDonor({
+      entry: params.entry,
+      route,
+      policy,
+      catalog: params.catalog,
+    });
   const projected = logicalIdentity(
     params.entry,
     identity.id,
     donor?.name ?? params.entry.name,
     donor ?? params.entry,
   );
+  // Only the selected physical donor can supply its prepared policy owner.
+  const thinkingPolicy = donor?.[PREPARED_THINKING_POLICY];
   return applyLogicalOverrides(
     {
       ...projected,
@@ -180,6 +194,11 @@ export function projectModelCatalogEntryForRoute(params: {
       ...(donor?.contextWindow !== undefined ? { contextWindow: donor.contextWindow } : {}),
       ...(donor?.contextTokens !== undefined ? { contextTokens: donor.contextTokens } : {}),
       ...(donor?.reasoning !== undefined ? { reasoning: donor.reasoning } : {}),
+      ...(donor?.thinkingLevelMap ? { thinkingLevelMap: donor.thinkingLevelMap } : {}),
+      ...(donor?.thinkingPolicyProvider
+        ? { thinkingPolicyProvider: donor.thinkingPolicyProvider }
+        : {}),
+      ...(thinkingPolicy !== undefined ? { [PREPARED_THINKING_POLICY]: thinkingPolicy } : {}),
       ...(donor?.input !== undefined ? { input: donor.input } : {}),
     },
     params.overrides,

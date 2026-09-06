@@ -63,7 +63,7 @@ function buildLoginParams(
     { workspaceDir: "/tmp/openclaw-login-test" },
   );
   params.sessionKey = overrides.sessionKey ?? "agent:main:slack:channel:C123";
-  params.agentId = overrides.agentId;
+  params.agentId = overrides.agentId ?? params.agentId;
   params.command = {
     ...params.command,
     channel: "slack",

@@ -2,15 +2,24 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createTranscriptsTool } from "../agents/tools/transcripts-tool.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { activeSessions } from "../transcripts/capture.js";
 import { TranscriptsStore } from "../transcripts/store.js";
 import { MeetingTranscriptDeliveryError } from "./session-transcript-store.js";
 import type { MeetingSessionRecord } from "./session-types.js";
+import { createMeetingTranscriptSourceProvider } from "./transcripts-bridge.js";
 import { createMeetingDurableTranscriptBridge } from "./transcripts-bridge.runtime.js";
 
 const tempDirs: string[] = [];
 
 afterEach(async () => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
+  activeSessions.clear();
+  closeOpenClawStateDatabaseForTest();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { force: true, recursive: true })));
 });
 
@@ -31,6 +40,91 @@ function session(): MeetingSessionRecord<"chrome", "agent"> {
 }
 
 describe("MeetingDurableTranscriptBridge", () => {
+  it.each([false, true])(
+    "retires simultaneous tool subscribers when meeting capture ends (metadata failure: %s)",
+    async (failMetadata) => {
+      const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-bridge-"));
+      tempDirs.push(stateDir);
+      const current = session();
+      const logger = { warn: vi.fn() };
+      const bridge = createMeetingDurableTranscriptBridge({
+        logger,
+        options: { providerId: "meeting", providerName: "Meeting", stateDir },
+      });
+      const stopSource = vi.fn(bridge.detach.bind(bridge));
+      const provider = createMeetingTranscriptSourceProvider({
+        id: "meeting",
+        name: "Meeting",
+        runtime: async () => ({
+          startTranscriptSource: async (request) => await bridge.attach(current, request),
+          stopTranscriptSource: stopSource,
+        }),
+      });
+      const registry = createEmptyPluginRegistry();
+      registry.transcriptSourceProviders.push({ pluginId: "meeting", source: "test", provider });
+      const tool = createTranscriptsTool({
+        stateDir,
+        agentId: "research",
+        logger,
+        caller: { kind: "operator", source: "local" },
+      });
+      const execute = (params: Record<string, unknown>) =>
+        withPluginRuntimeRegistryScope(registry, () => tool.execute("meeting", params));
+      const attach = (sessionId: string) =>
+        execute({ action: "start", providerId: "meeting", meetingUrl: current.url, sessionId });
+      const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      });
+      await bridge.start(current, async () => {});
+      await bridge.ingest(current, [{ text: "existing note" }]);
+      await attach("first-subscriber");
+      await attach("second-subscriber");
+      await execute({ action: "stop", sessionId: "first-subscriber" });
+      await expect(execute({ action: "status" })).resolves.toMatchObject({
+        details: { active: [{ sessionId: "second-subscriber" }] },
+      });
+      await attach("third-subscriber");
+      const writeSession = store.writeSession.bind(store);
+      const fault = vi
+        .spyOn(TranscriptsStore.prototype, "writeSession")
+        .mockImplementation(async (descriptor) => {
+          if (failMetadata && descriptor.sessionId === current.id && descriptor.stoppedAt) {
+            throw new Error("meeting metadata unavailable");
+          }
+          return await writeSession(descriptor);
+        });
+      const stopping = bridge.stop(current, async () => {
+        await bridge.ingest(current, [{ text: "final note" }]);
+      });
+      if (failMetadata) {
+        await expect(stopping).rejects.toThrow("meeting metadata unavailable");
+      } else {
+        await expect(stopping).resolves.toBe(true);
+      }
+      fault.mockRestore();
+      await vi.waitFor(async () => {
+        for (const sessionId of ["second-subscriber", "third-subscriber"]) {
+          const stored = await store.readSession(sessionId);
+          expect(stored?.stoppedAt).toEqual(expect.any(String));
+          expect(stored?.metadata).toMatchObject({ agentId: "research" });
+          expect(stored?.source).toMatchObject({ providerId: "meeting", agentId: "research" });
+          expect(stored && (await store.readSummary(stored))).toMatchObject({
+            summary: { utteranceCount: 2 },
+          });
+        }
+        await expect(execute({ action: "status" })).resolves.toMatchObject({
+          details: { active: [], pendingFinalization: [] },
+        });
+      });
+      expect(stopSource).toHaveBeenCalledOnce();
+      await execute({ action: "stop", sessionId: "second-subscriber" });
+      expect(stopSource).toHaveBeenCalledOnce();
+      if (failMetadata) {
+        await bridge.stop(current, async () => {});
+      }
+    },
+  );
+
   it("replays stored lines to an attached provider and streams new lines in order", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-bridge-"));
     tempDirs.push(stateDir);

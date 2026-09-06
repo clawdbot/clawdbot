@@ -139,6 +139,7 @@ async function runPersistedDiagnosticCase(params: {
           finished: finished!,
           history: history!,
           lastError: cron.getJob(job.id)?.state.lastError,
+          lastErrorReason: cron.getJob(job.id)?.state.lastErrorReason,
         };
       } finally {
         cron.stop();
@@ -148,7 +149,7 @@ async function runPersistedDiagnosticCase(params: {
   );
 }
 
-describe.sequential("cron execution diagnostics", () => {
+describe("cron execution diagnostics", { concurrent: false }, () => {
   const servers: Server[] = [];
 
   beforeEach(() => {
@@ -227,8 +228,7 @@ describe.sequential("cron execution diagnostics", () => {
   });
 
   it("persists provider failures without internal class names", async () => {
-    const message =
-      "The selected model was not found by the provider. Check the model id or choose a different model.";
+    const message = "Saved selection requires an update.";
     const modelRef = { provider: "openai", model: "not-a-real-model" };
     resolveConfiguredModelRefMock.mockReturnValue(modelRef);
     resolveAllowedModelRefMock.mockReturnValue({ ref: modelRef });
@@ -237,11 +237,10 @@ describe.sequential("cron execution diagnostics", () => {
         reason: "model_not_found",
         provider: modelRef.provider,
         model: modelRef.model,
-        code: "MODEL_NOT_FOUND",
       }),
     );
 
-    const { finished, history, lastError } = await runPersistedDiagnosticCase({
+    const { finished, history, lastError, lastErrorReason } = await runPersistedDiagnosticCase({
       cfg: configFor(modelRef),
       modelRef,
       name: "missing provider model",
@@ -252,12 +251,13 @@ describe.sequential("cron execution diagnostics", () => {
         status: "error",
         provider: modelRef.provider,
         model: modelRef.model,
-        error: `${message} | MODEL_NOT_FOUND`,
+        error: message,
         diagnostics: { summary: message },
       });
       expect(outcome.error).not.toContain("FailoverError");
     }
-    expect(lastError).toBe(`${message} | MODEL_NOT_FOUND`);
+    expect(lastError).toBe(message);
+    expect(lastErrorReason).toBe("model_not_found");
     expect(history.errorReason).toBe("model_not_found");
   });
 

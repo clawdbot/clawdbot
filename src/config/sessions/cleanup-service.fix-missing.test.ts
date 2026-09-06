@@ -6,6 +6,8 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
 import { isRetainedSessionTranscriptArchiveName } from "./artifacts.js";
 import { runSessionsCleanup } from "./cleanup-service.js";
@@ -42,6 +44,34 @@ describe("sessions cleanup --fix-missing", () => {
 
   afterEach(() => {
     closeOpenClawAgentDatabasesForTest();
+  });
+
+  it("inspects unscoped transcript keys in the selected agent's fixed-store partition", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      storePath = state.statePath("shared.json");
+      const cfg: OpenClawConfig = {
+        agents: { ownership: "explicit", entries: { main: {}, beta: {} } },
+        session: { store: storePath },
+      };
+      await state.writeConfig(cfg);
+      const main = { agentId: "main", sessionKey: "global", sessionId: "main-global", storePath };
+      const beta = { agentId: "beta", sessionKey: "global", sessionId: "beta-global", storePath };
+      for (const scope of [main, beta]) {
+        await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
+      }
+      appendTranscriptMessageSync(beta, {
+        eventId: "beta-user-message",
+        message: { role: "user", content: [{ type: "text", text: "Keep this conversation." }] },
+      });
+
+      const result = await runSessionsCleanup({
+        cfg,
+        opts: { agent: "beta", dryRun: true, fixMissing: true },
+      });
+
+      expect(result.previewResults[0]?.summary).toMatchObject({ beforeCount: 1, missing: 0 });
+      expect(loadSessionEntry(beta)).toMatchObject({ sessionId: "beta-global" });
+    });
   });
 
   it("preserves readable session state when a later transcript row is malformed", async () => {

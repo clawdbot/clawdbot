@@ -1,3 +1,11 @@
+export type McpToolGrant = {
+  server: string;
+  tool: string;
+  source: "allow-always";
+  addedAt: number;
+  lastUsedAt?: number;
+};
+
 // Serialized allowlist entries stored with enough command context to explain
 // why an approval can be reused later.
 export type ExecAllowlistEntry = {

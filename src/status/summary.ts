@@ -1,22 +1,22 @@
 // Builds the status summary used by human and JSON status output.
 // It aggregates sessions, tasks, heartbeat, channel summary, and model/runtime metadata.
 
+import { expectDefined } from "@openclaw/normalization-core";
+import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveProjectedSessionContextTokens } from "../config/sessions/context-token-provenance.js";
-import { resolveSystemMainSessionKey } from "../config/sessions/main-session.js";
+import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import {
   hasSessionActiveAutoModelFallback,
-  hasSessionAutoModelFallbackProvenance,
+  hasUserPinnedModelSelection,
 } from "../config/sessions/model-override-provenance.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
-  listSessionEntriesReadOnly,
   loadExactSessionEntryReadOnly,
+  type SessionEntrySummary,
 } from "../config/sessions/session-accessor.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
   resolveFreshSessionTotalTokens,
   resolveSessionTotalTokens,
@@ -25,8 +25,9 @@ import {
 import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { resolveHeartbeatSessionKey } from "../infra/heartbeat-runner-session.js";
-import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
+import { resolveHeartbeatSummariesForAgents } from "../infra/heartbeat-summary-projection.js";
 import { hasResolvableHeartbeatOwnerRoute } from "../infra/outbound/targets.js";
+import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import {
   listActiveDegradedPlugins,
@@ -45,6 +46,7 @@ import {
 } from "../tasks/task-registry.audit.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import { readStatusSessionStores } from "./session-stores.js";
 import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./types.js";
 
 const RECENT_SESSION_LIMIT = 10;
@@ -70,30 +72,10 @@ const staticModelCatalogResolverLoader = createLazyImportLoader(async () => {
   };
 });
 
-function loadChannelSummaryModule() {
-  return channelSummaryModuleLoader.load();
-}
-
-function loadChannelPluginIdsModule() {
-  return channelPluginIdsModuleLoader.load();
-}
-
-function loadLinkChannelModule() {
-  return linkChannelModuleLoader.load();
-}
-
 const loadStatusSummaryRuntimeModule = createLazyRuntimeSurface(
   () => import("./summary.runtime.js"),
   ({ statusSummaryRuntime }) => statusSummaryRuntime,
 );
-
-function loadTaskRegistryMaintenanceModule() {
-  return taskRegistryMaintenanceModuleLoader.load();
-}
-
-function loadStaticModelCatalogResolvers() {
-  return staticModelCatalogResolverLoader.load();
-}
 
 const buildFlags = (entry?: SessionEntry): string[] => {
   if (!entry) {
@@ -148,34 +130,18 @@ function discountRetainedLostTaskFailures(
   };
 }
 
-function hasUserPinnedModelSelection(entry: SessionEntry | undefined): boolean {
-  if (!entry?.modelOverride) {
-    return false;
-  }
-  if (entry.modelOverrideSource === "user") {
-    return true;
-  }
-  if (entry.modelOverrideSource === "auto") {
-    return false;
-  }
-  return !hasSessionAutoModelFallbackProvenance(entry);
-}
-
-type SessionCandidate = {
-  key: string;
-  entry: SessionEntry;
-  updatedAt: number | null;
-};
-
-function compareSessionCandidatesByUpdatedAt(left: SessionCandidate, right: SessionCandidate) {
-  return (right.updatedAt ?? 0) - (left.updatedAt ?? 0);
+function compareSessionCandidatesByUpdatedAt(
+  left: SessionEntrySummary,
+  right: SessionEntrySummary,
+) {
+  return (right.entry.updatedAt ?? 0) - (left.entry.updatedAt ?? 0);
 }
 
 function selectRecentSessionCandidates(
-  candidates: SessionCandidate[],
+  candidates: SessionEntrySummary[],
   limit: number,
-): SessionCandidate[] {
-  const selected: SessionCandidate[] = [];
+): SessionEntrySummary[] {
+  const selected: SessionEntrySummary[] = [];
   for (const candidate of candidates) {
     const insertAt = selected.findIndex(
       (selectedCandidate) => compareSessionCandidatesByUpdatedAt(candidate, selectedCandidate) < 0,
@@ -192,54 +158,7 @@ function selectRecentSessionCandidates(
   return selected;
 }
 
-function listSessionCandidates(storePath: string, agentId?: string) {
-  return (
-    listSessionEntriesReadOnly({
-      ...(agentId ? { agentId } : {}),
-      storePath,
-    })
-      // Compatibility aggregate buckets are not real user sessions.
-      .filter(({ sessionKey }) => sessionKey !== "global" && sessionKey !== "unknown")
-      .map(({ sessionKey, entry }) => ({
-        key: sessionKey,
-        entry,
-        updatedAt: entry?.updatedAt ?? null,
-      }))
-  );
-}
-
-/** Removes session paths and recent session details from a status summary. */
-export function redactSensitiveStatusSummary(summary: StatusSummary): StatusSummary {
-  return {
-    ...summary,
-    sessions: {
-      ...summary.sessions,
-      paths: [],
-      defaults: {
-        model: null,
-        contextTokens: null,
-      },
-      recent: [],
-      byAgent: summary.sessions.byAgent.map((entry) => ({
-        ...entry,
-        path: "[redacted]",
-        recent: [],
-      })),
-    },
-  };
-}
-
-/** Builds the aggregate status summary for agents, sessions, tasks, heartbeat, and channels. */
-export async function getStatusSummary(
-  options: {
-    includeSensitive?: boolean;
-    includeChannelSummary?: boolean;
-    config?: OpenClawConfig;
-    sourceConfig?: OpenClawConfig;
-    hostDesktopStatus?: import("../gateway/desktop/host-source.js").HostDesktopStatus;
-  } = {},
-): Promise<StatusSummary> {
-  const { includeSensitive = true, includeChannelSummary = true } = options;
+async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
   const {
     classifySessionKey,
     resolveConfiguredStatusModelRef,
@@ -251,10 +170,9 @@ export async function getStatusSummary(
     resolveStatusModelLookupRef,
     waitForContextWindowCacheLoad,
   } = await loadStatusSummaryRuntimeModule();
-  const cfg = options.config ?? getRuntimeConfig();
   await waitForContextWindowCacheLoad();
   const { resolveManifestModel, createProviderContextResolver } =
-    await loadStaticModelCatalogResolvers();
+    await staticModelCatalogResolverLoader.load();
   const resolveProviderContext = createProviderContextResolver({ cfg });
   const modelContextCache = new Map<
     string,
@@ -288,85 +206,6 @@ export async function getStatusSummary(
     modelContextCache.set(key, resolved);
     return resolved;
   };
-  const channelScopeConfig =
-    options.sourceConfig === undefined
-      ? { config: cfg }
-      : { config: cfg, activationSourceConfig: options.sourceConfig };
-  const needsChannelPlugins =
-    includeChannelSummary &&
-    (await loadChannelPluginIdsModule().then(({ hasConfiguredChannelsForReadOnlyScope }) =>
-      hasConfiguredChannelsForReadOnlyScope(channelScopeConfig),
-    ));
-  const linkContext = needsChannelPlugins
-    ? await loadLinkChannelModule().then(({ resolveLinkChannelContext }) =>
-        resolveLinkChannelContext(cfg, { sourceConfig: options.sourceConfig }),
-      )
-    : null;
-  const agentList = listGatewayAgentsBasic(cfg);
-  const heartbeatAgents: HeartbeatStatus[] = agentList.agents.map((agent) => {
-    const summary = resolveHeartbeatSummaryForAgent(cfg, agent.id);
-    const heartbeatSession = resolveHeartbeatSessionKey(
-      cfg,
-      agent.id,
-      summary.session === undefined ? undefined : { session: summary.session },
-    );
-    // Status must not create, register, or migrate an absent session database.
-    const entry = loadExactSessionEntryReadOnly({
-      agentId: agent.id,
-      storePath: heartbeatSession.storePath,
-      sessionKey: heartbeatSession.sessionKey,
-    })?.entry;
-    const route = deliveryContextFromSession(entry);
-    const heartbeat = {
-      ...cfg.agents?.defaults?.heartbeat,
-      ...resolveAgentConfig(cfg, agent.id)?.heartbeat,
-    };
-    // Owner status uses the runner's synchronous stage-1 decision.
-    // The shared probe requires positive direct proof before reporting ready.
-    const hasDeliveryRoute =
-      summary.target === "last"
-        ? Boolean(route?.channel && route.to)
-        : summary.target === "owner"
-          ? hasResolvableHeartbeatOwnerRoute({ cfg, agentId: agent.id, entry, heartbeat })
-          : true;
-    return {
-      agentId: agent.id,
-      enabled: summary.enabled,
-      every: summary.every,
-      everyMs: summary.everyMs,
-      waitingForRoute: summary.enabled && !hasDeliveryRoute,
-    } satisfies HeartbeatStatus;
-  });
-  const channelSummary = needsChannelPlugins
-    ? await loadChannelSummaryModule().then(({ buildChannelSummary }) =>
-        buildChannelSummary(cfg, {
-          colorize: true,
-          includeAllowFrom: true,
-          sourceConfig: options.sourceConfig,
-        }),
-      )
-    : [];
-  const mainSessionKey = resolveSystemMainSessionKey(cfg);
-  const queuedSystemEvents = peekSystemEvents(mainSessionKey);
-  const taskMaintenanceModule = await loadTaskRegistryMaintenanceModule();
-  // Status may overlap a live Gateway, so task inspection must not initialize
-  // the writable process registry or its schema-owning shared-state handle.
-  const taskInspection = taskMaintenanceModule.inspectTasksReadOnly();
-  const inspectableTasks = taskInspection.tasks;
-  const rawTasks = taskMaintenanceModule.getInspectableTaskRegistrySummary(inspectableTasks);
-  const taskAuditFindings = taskMaintenanceModule.getInspectableTaskAuditFindings(inspectableTasks);
-  const now = Date.now();
-  const taskAudit = summarizeActionableTaskAuditFindings(taskAuditFindings, { now });
-  const taskAuditRetainedLost = summarizeRetainedLostTaskAuditFindings(taskAuditFindings, { now });
-  const tasks: StatusSummary["tasks"] = {
-    ...discountRetainedLostTaskFailures(rawTasks, taskAuditRetainedLost.count),
-    ...(taskInspection.state === "migration-required"
-      ? {
-          warning:
-            "Task history is unavailable until Gateway startup or openclaw doctor --fix repairs the state database.",
-        }
-      : {}),
-  };
 
   const resolved = resolveConfiguredStatusModelRef({
     cfg,
@@ -390,26 +229,19 @@ export async function getStatusSummary(
       allowAsyncLoad: false,
     }) ?? DEFAULT_CONTEXT_TOKENS;
 
-  const candidateCache = new Map<string, SessionCandidate[]>();
-  const loadSessionCandidates = (storePath: string, agentId?: string) => {
-    const cacheKey = `${storePath}\0${agentId ?? ""}`;
-    const cached = candidateCache.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-    const candidates = listSessionCandidates(storePath, agentId);
-    candidateCache.set(cacheKey, candidates);
-    return candidates;
-  };
-  const buildSessionRows = async (
-    candidates: SessionCandidate[],
-    opts: { agentIdOverride?: string } = {},
-  ) =>
+  // Aggregate rows reuse this request's completed agent projection, with independent DTOs.
+  const sessionRows = new Map<SessionEntrySummary, SessionStatus>();
+  const buildSessionRows = async (candidates: SessionEntrySummary[]) =>
     Promise.all(
-      candidates.map(async ({ key, entry, updatedAt }) => {
+      candidates.map(async (candidate) => {
+        const cached = sessionRows.get(candidate);
+        if (cached) {
+          return { ...cached, flags: [...cached.flags] };
+        }
+        const { sessionKey: key, entry } = candidate;
+        const agentId = parseAgentSessionKey(key)?.agentId;
+        const updatedAt = entry.updatedAt ?? null;
         const age = updatedAt ? now - updatedAt : null;
-        const parsedAgentId = parseAgentSessionKey(key)?.agentId;
-        const agentId = opts.agentIdOverride ?? parsedAgentId;
         const configuredForSession = resolveConfiguredStatusModelRef({
           cfg,
           defaultProvider: DEFAULT_PROVIDER,
@@ -418,7 +250,7 @@ export async function getStatusSummary(
         });
         const configuredSessionModel = configuredForSession.model ?? DEFAULT_MODEL;
         const configuredSessionModelLabel = `${configuredForSession.provider ?? DEFAULT_PROVIDER}/${configuredSessionModel}`;
-        const resolvedModel = resolveSessionModelRef(cfg, entry, opts.agentIdOverride);
+        const resolvedModel = resolveSessionModelRef(cfg, entry, agentId);
         const model = resolvedModel.model ?? configuredSessionModel ?? null;
         const lookupModel =
           resolveStatusModelLookupRef({
@@ -443,14 +275,22 @@ export async function getStatusSummary(
           model,
           defaultProvider: configuredForSession.provider ?? DEFAULT_PROVIDER,
         });
+        const runtimeMatchesConfiguredModel =
+          selectedModelComparisonLabel != null &&
+          configuredSessionModelComparisonLabel != null &&
+          areRuntimeModelRefsEquivalent(
+            selectedModelComparisonLabel,
+            configuredSessionModelComparisonLabel,
+            { config: cfg },
+          );
+        const contextModelProvider = runtimeMatchesConfiguredModel
+          ? configuredForSession.provider
+          : lookupModel.provider;
         const modelSelectionDiffers =
           selectedModelComparisonLabel != null &&
           configuredSessionModelComparisonLabel != null &&
           selectedModelComparisonLabel !== configuredSessionModelComparisonLabel &&
-          !areRuntimeModelRefsEquivalent(
-            selectedModelComparisonLabel,
-            configuredSessionModelComparisonLabel,
-          ) &&
+          !runtimeMatchesConfiguredModel &&
           (hasUserPinnedModelSelection(entry) || hasSessionActiveAutoModelFallback(entry));
         // Session rows show the live selected model and warn for user-pinned
         // differences as well as runtime fallback selections (#96126).
@@ -480,6 +320,7 @@ export async function getStatusSummary(
             authoredContextTokens: resolveAuthoredModelContextTokens({
               cfg,
               provider: lookupModel.provider,
+              modelProvider: contextModelProvider,
               model: lookupModelId,
             }),
           }) ?? null;
@@ -494,7 +335,7 @@ export async function getStatusSummary(
           contextTokens && contextTokens > 0 && freshTotal !== undefined
             ? Math.min(999, Math.round((freshTotal / contextTokens) * 100))
             : null;
-        return {
+        const row = {
           agentId,
           key,
           kind: classifySessionKey(key, entry),
@@ -529,58 +370,157 @@ export async function getStatusSummary(
           contextTokens,
           flags: buildFlags(entry),
         } satisfies SessionStatus;
+        sessionRows.set(candidate, row);
+        return row;
       }),
     );
 
-  const storeSources = agentList.agents.map((agent) => {
-    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: agent.id });
-    return {
-      agentId: agent.id,
-      databasePath: resolveSqliteTargetFromSessionStorePath(storePath, {
-        agentId: agent.id,
-      }).path,
-      storePath,
-    };
-  });
-  const paths = new Set<string>();
-  const pathCounts = new Map<string, number>();
-  for (const source of storeSources) {
-    paths.add(source.databasePath);
-    pathCounts.set(source.databasePath, (pathCounts.get(source.databasePath) ?? 0) + 1);
-  }
+  return {
+    defaults: { model: configModel, contextTokens: configContextTokens },
+    buildSessionRows,
+  };
+}
 
-  const byAgent = await Promise.all(
-    storeSources.map(async ({ agentId, databasePath, storePath }) => {
-      const candidates = loadSessionCandidates(storePath, agentId);
-      const sessions = await buildSessionRows(
-        selectRecentSessionCandidates(candidates, RECENT_SESSION_LIMIT),
-        { agentIdOverride: agentId },
-      );
-      return {
-        agentId,
-        path: databasePath,
-        count: candidates.length,
-        recent: sessions,
-      };
-    }),
-  );
-
-  const allSessions = storeSources
-    .filter((source, index, sources) => {
-      return (
-        sources.findIndex((candidate) => candidate.databasePath === source.databasePath) === index
-      );
-    })
-    .flatMap((source) =>
-      loadSessionCandidates(
-        source.storePath,
-        pathCounts.get(source.databasePath) === 1 ? source.agentId : undefined,
-      ),
+/** Builds the aggregate status summary for agents, sessions, tasks, heartbeat, and channels. */
+export async function getStatusSummary(
+  options: {
+    includeSensitive?: boolean;
+    includeChannelSummary?: boolean;
+    config?: OpenClawConfig;
+    sourceConfig?: OpenClawConfig;
+    hostDesktopStatus?: import("../gateway/desktop/host-source.js").HostDesktopStatus;
+  } = {},
+): Promise<StatusSummary> {
+  const { includeSensitive = true, includeChannelSummary = true } = options;
+  const cfg = options.config ?? getRuntimeConfig();
+  const channelScopeConfig =
+    options.sourceConfig === undefined
+      ? { config: cfg }
+      : { config: cfg, activationSourceConfig: options.sourceConfig };
+  const needsChannelPlugins =
+    includeChannelSummary &&
+    (await channelPluginIdsModuleLoader
+      .load()
+      .then(({ hasConfiguredChannelsForReadOnlyScope }) =>
+        hasConfiguredChannelsForReadOnlyScope(channelScopeConfig),
+      ));
+  const linkContext = needsChannelPlugins
+    ? await linkChannelModuleLoader
+        .load()
+        .then(({ resolveLinkChannelContext }) =>
+          resolveLinkChannelContext(cfg, { sourceConfig: options.sourceConfig }),
+        )
+    : null;
+  const agentList = listGatewayAgentsBasic(cfg);
+  // One roster-facts batch spans enrollment and the per-agent owner-route
+  // lookup below: outside it every resolveAgentConfig re-walks the roster and
+  // a large fleet stalls the loop for the whole projection (#137570).
+  const heartbeatAgents: HeartbeatStatus[] = withAgentRosterFactsBatch(cfg, () => {
+    const heartbeatSummaries = resolveHeartbeatSummariesForAgents(
+      cfg,
+      agentList.agents.map((agent) => agent.id),
     );
-  const recent = await buildSessionRows(
-    selectRecentSessionCandidates(allSessions, RECENT_SESSION_LIMIT),
+    return agentList.agents.map((agent, index) => {
+      const summary = expectDefined(heartbeatSummaries[index], "heartbeat summary");
+      let waitingForRoute = false;
+      if (summary.enabled && (summary.target === "last" || summary.target === "owner")) {
+        const heartbeatSession = resolveHeartbeatSessionKey(
+          cfg,
+          agent.id,
+          summary.session === undefined ? undefined : { session: summary.session },
+        );
+        // Only these enabled targets consume the session route. Keep the probe
+        // read-only so status cannot create, register, or migrate an absent store.
+        const entry = loadExactSessionEntryReadOnly({
+          agentId: agent.id,
+          storePath: heartbeatSession.storePath,
+          sessionKey: heartbeatSession.sessionKey,
+        })?.entry;
+        const route = deliveryContextFromSession(entry);
+        // Owner status uses the runner's synchronous stage-1 decision.
+        waitingForRoute =
+          summary.target === "last"
+            ? !(route?.channel && route.to)
+            : !hasResolvableHeartbeatOwnerRoute({
+                cfg,
+                agentId: agent.id,
+                entry,
+                heartbeat: {
+                  ...cfg.agents?.defaults?.heartbeat,
+                  ...resolveAgentConfig(cfg, agent.id)?.heartbeat,
+                },
+              });
+      }
+      return {
+        agentId: agent.id,
+        enabled: summary.enabled,
+        every: summary.every,
+        everyMs: summary.everyMs,
+        waitingForRoute,
+      } satisfies HeartbeatStatus;
+    });
+  });
+  const channelSummary = needsChannelPlugins
+    ? await channelSummaryModuleLoader.load().then(({ buildChannelSummary }) =>
+        buildChannelSummary(cfg, {
+          colorize: true,
+          includeAllowFrom: true,
+          sourceConfig: options.sourceConfig,
+        }),
+      )
+    : [];
+  // Fleet status reads every main queue without selecting an ambient execution owner.
+  // Global session scope shares one queue, so include it only once.
+  const mainSessionKeys = new Set(
+    agentList.agents.map(({ id: agentId }) =>
+      resolveCanonicalMainSessionKey({
+        agentId,
+        mainKey: cfg.session?.mainKey,
+        sessionScope: cfg.session?.scope,
+      }),
+    ),
   );
-  const totalSessions = allSessions.length;
+  const queuedSystemEvents = [...mainSessionKeys].flatMap(peekSystemEvents);
+  const taskMaintenanceModule = await taskRegistryMaintenanceModuleLoader.load();
+  // Status may overlap a live Gateway, so task inspection must not initialize
+  // the writable process registry or its schema-owning shared-state handle.
+  const taskInspection = taskMaintenanceModule.inspectTasksReadOnly();
+  const inspectableTasks = taskInspection.tasks;
+  const rawTasks = taskMaintenanceModule.getInspectableTaskRegistrySummary(inspectableTasks);
+  const taskAuditFindings = taskMaintenanceModule.getInspectableTaskAuditFindings(inspectableTasks);
+  const now = Date.now();
+  const taskAudit = summarizeActionableTaskAuditFindings(taskAuditFindings, { now });
+  const taskAuditRetainedLost = summarizeRetainedLostTaskAuditFindings(taskAuditFindings, { now });
+  const tasks: StatusSummary["tasks"] = {
+    ...discountRetainedLostTaskFailures(rawTasks, taskAuditRetainedLost.count),
+    ...(taskInspection.state === "migration-required"
+      ? {
+          warning:
+            "Task history is unavailable until Gateway startup or openclaw doctor --fix repairs the state database.",
+        }
+      : {}),
+  };
+
+  const sessionDetails = includeSensitive ? await prepareSessionStatusDetails(cfg, now) : undefined;
+
+  const sessionStores = readStatusSessionStores(
+    cfg,
+    agentList.agents,
+    includeSensitive ? RECENT_SESSION_LIMIT : 0,
+  );
+  const byAgent = await Promise.all(
+    sessionStores.byAgent.map(async ({ agent, path, count, recent }) => ({
+      agentId: agent.id,
+      path: includeSensitive ? path : "[redacted]",
+      count,
+      recent: sessionDetails ? await sessionDetails.buildSessionRows(recent) : [],
+    })),
+  );
+  const recent = sessionDetails
+    ? await sessionDetails.buildSessionRows(
+        selectRecentSessionCandidates(sessionStores.recent, RECENT_SESSION_LIMIT),
+      )
+    : [];
   const hostDesktopStatus =
     options.hostDesktopStatus ??
     (
@@ -588,7 +528,7 @@ export async function getStatusSummary(
         await import("../gateway/desktop/host-source.js")
       ).inspectHostDesktop({ config: cfg.desktop?.host })
     ).status;
-  const summary: StatusSummary = {
+  return {
     runtimeVersion: resolveRuntimeServiceVersion(process.env),
     hostDesktop: hostDesktopStatus,
     linkChannel: linkContext
@@ -605,6 +545,7 @@ export async function getStatusSummary(
     },
     channelSummary,
     queuedSystemEvents,
+    startupMigrationWarning: readStartupMigrationWarning(includeSensitive),
     degradedSecretOwners: listActiveDegradedSecretOwners().map(
       ({ ownerKind, ownerId, state, degradationState, paths: ownerPaths, reason }) => {
         const redactedReason: string = redactSecretDegradationReason(reason);
@@ -627,15 +568,11 @@ export async function getStatusSummary(
     taskAudit,
     ...(taskAuditRetainedLost.count > 0 ? { taskAuditRetainedLost } : {}),
     sessions: {
-      paths: Array.from(paths),
-      count: totalSessions,
-      defaults: {
-        model: configModel ?? null,
-        contextTokens: configContextTokens ?? null,
-      },
+      paths: includeSensitive ? sessionStores.paths : [],
+      count: sessionStores.count,
+      defaults: sessionDetails?.defaults ?? { model: null, contextTokens: null },
       recent,
       byAgent,
     },
   };
-  return includeSensitive ? summary : redactSensitiveStatusSummary(summary);
 }

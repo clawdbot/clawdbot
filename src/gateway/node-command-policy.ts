@@ -16,11 +16,10 @@ import {
   NODE_WORKER_PRIVATE_COMMANDS,
   isPrivateNodeInvokeCommand,
 } from "../infra/node-commands.js";
-import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime.js";
+import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime-state.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import { normalizeDeviceMetadataForPolicy } from "./device-metadata-normalization.js";
 import { MOBILE_NODE_COMMANDS } from "./node-command-policy-mobile.js";
-import type { NodeSession } from "./node-registry.js";
 
 const CAMERA_COMMANDS = ["camera.list"];
 const MAC_CAMERA_COMMANDS = ["camera.ptz.status"];
@@ -273,14 +272,17 @@ export function listDangerousPluginNodeCommands(): string[] {
   if (!registry) {
     return [];
   }
-  const commands = [
-    ...registry.nodeHostCommands
-      .filter((entry) => entry.command.dangerous === true)
-      .map((entry) => entry.command.command),
-    ...registry.nodeInvokePolicies
-      .filter((entry) => entry.policy.dangerous === true)
-      .flatMap((entry) => entry.policy.commands),
-  ];
+  const commands: string[] = [];
+  registry.nodeHostCommands.forEach(({ command }) => {
+    if (command.dangerous === true) {
+      commands.push(command.command);
+    }
+  });
+  registry.nodeInvokePolicies.forEach(({ policy }) => {
+    if (policy.dangerous === true) {
+      policy.commands.forEach((command) => commands.push(command));
+    }
+  });
   return normalizeUniqueStringEntries(commands);
 }
 
@@ -294,23 +296,18 @@ function listDefaultPluginNodeCommands(platformId: PlatformId): string[] {
   if (!registry) {
     return [];
   }
-  const policyCommands = registry.nodeInvokePolicies.flatMap((entry) => {
-    if (entry.policy.dangerous === true) {
-      return [];
+  const commands: string[] = [];
+  registry.nodeInvokePolicies.forEach(({ policy }) => {
+    if (policy.dangerous !== true && policy.defaultPlatforms?.includes(platformId)) {
+      policy.commands.forEach((command) => commands.push(command));
     }
-    const defaults = entry.policy.defaultPlatforms ?? [];
-    return defaults.includes(platformId) ? entry.policy.commands : [];
   });
-  const nodeHostCommands = registry.nodeHostCommands
-    .filter((entry) => {
-      if (entry.command.dangerous === true) {
-        return false;
-      }
-      const defaults = entry.command.agentTool?.defaultPlatforms ?? [];
-      return defaults.includes(platformId);
-    })
-    .map((entry) => entry.command.command);
-  return normalizeUniqueStringEntries([...policyCommands, ...nodeHostCommands]);
+  registry.nodeHostCommands.forEach(({ command: { dangerous, agentTool, command } }) => {
+    if (dangerous !== true && agentTool?.defaultPlatforms?.includes(platformId)) {
+      commands.push(command);
+    }
+  });
+  return normalizeUniqueStringEntries(commands);
 }
 
 export function isForegroundRestrictedPluginNodeCommand(command: string): boolean {
@@ -328,10 +325,15 @@ export function isForegroundRestrictedPluginNodeCommand(command: string): boolea
       entry.policy.commands.some((policyCommand) => policyCommand.trim() === normalized),
   );
 }
-type NodeCommandPolicyNode = Pick<NodeSession, "platform" | "deviceFamily"> &
-  Partial<Pick<NodeSession, "caps" | "commands" | "connId" | "nodeId">> & {
-    approvedCommands?: readonly string[];
-  };
+type NodeCommandPolicyNode = {
+  platform?: string;
+  deviceFamily?: string;
+  caps?: string[];
+  commands?: string[];
+  connId?: string;
+  nodeId?: string;
+  approvedCommands?: readonly string[];
+};
 
 function isDesktopPlatformId(platformId: PlatformId): boolean {
   return platformId === "macos" || platformId === "windows" || platformId === "linux";
@@ -533,7 +535,7 @@ export function retainFulfilledNodeCapabilities(params: {
 
 export function isNodeCommandAllowed(params: {
   command: string;
-  declaredCommands?: string[];
+  declaredCommands?: readonly string[];
   allowlist: Set<string>;
 }): { ok: true } | { ok: false; reason: string } {
   const command = params.command.trim();
@@ -554,4 +556,50 @@ export function isNodeCommandAllowed(params: {
     return { ok: false, reason: "node did not declare commands" };
   }
   return { ok: true };
+}
+
+export type RequiredNodeCommandAuthority = {
+  command: string;
+  state: "invocable" | "pending-approval" | "undeclared" | "unauthorized";
+};
+
+/**
+ * Resolves declaration, pairing, and runtime policy once at their Gateway owner.
+ * Clients receive one closed state instead of rebuilding authority from partial lists.
+ */
+export function resolveRequiredNodeCommandAuthority(params: {
+  requiredCommands: readonly string[];
+  declaredCommands: readonly string[];
+  effectiveCommands: readonly string[];
+  withheldCommands: readonly string[];
+  allowlist: Set<string>;
+}): RequiredNodeCommandAuthority | undefined {
+  const declaredCommands = new Set(params.declaredCommands);
+  const effectiveCommands = new Set(params.effectiveCommands);
+  // A denial anywhere in the required set takes precedence over pairing approval.
+  const denied = params.requiredCommands.find((cmd) => params.withheldCommands.includes(cmd));
+  if (denied) {
+    return { command: denied, state: "unauthorized" };
+  }
+  for (const command of params.requiredCommands) {
+    if (
+      effectiveCommands.has(command) &&
+      isNodeCommandAllowed({
+        command,
+        declaredCommands: params.effectiveCommands,
+        allowlist: params.allowlist,
+      }).ok
+    ) {
+      continue;
+    }
+    if (declaredCommands.has(command) && !effectiveCommands.has(command)) {
+      return { command, state: "pending-approval" };
+    }
+    if (declaredCommands.has(command)) {
+      return { command, state: "unauthorized" };
+    }
+    return { command, state: "undeclared" };
+  }
+  const command = params.requiredCommands[0];
+  return command ? { command, state: "invocable" } : undefined;
 }

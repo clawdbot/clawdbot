@@ -3,15 +3,8 @@ import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveUserPath } from "../utils.js";
-import {
-  isPluginCandidateInstallOwnerAmbiguous,
-  resolvePluginCandidateInstallOwner,
-  resolvePluginInstallOwnerLookup,
-} from "./candidate-install-owner.js";
-import { isBundledPluginInsideDevSourceRoot } from "./dev-source-root.js";
-import type { PluginCandidate } from "./discovery.js";
+import { resolvePluginInstallOwnerLookup } from "./candidate-install-owner.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
-import type { PluginManifestRecord } from "./manifest-registry.js";
 import { isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import type { PluginLogger } from "./types.js";
@@ -128,91 +121,6 @@ function isTrackedByProvenance(params: {
     }
   }
   return matchesPathMatcher(params.index.loadPathMatcher, canonicalSourcePath);
-}
-
-function matchesExplicitInstallRule(params: {
-  pluginId: string;
-  source: string;
-  index: PluginProvenanceIndex;
-  env: NodeJS.ProcessEnv;
-}): boolean {
-  const sourcePath = resolveUserPath(params.source, params.env);
-  const canonicalSourcePath = safeRealpathSync(sourcePath) ?? sourcePath;
-  const installRule = params.index.installRules.get(params.pluginId);
-  if (!installRule || installRule.trackedWithoutPaths) {
-    return false;
-  }
-  return matchesPathMatcher(installRule.matcher, canonicalSourcePath);
-}
-
-function resolveCandidateDuplicateRank(params: {
-  candidate: PluginCandidate;
-  provenance: PluginProvenanceIndex;
-  env: NodeJS.ProcessEnv;
-}): number {
-  const installOwner = isPluginCandidateInstallOwnerAmbiguous(params.candidate)
-    ? undefined
-    : resolvePluginCandidateInstallOwner(params.candidate);
-  const isExplicitInstall =
-    params.candidate.origin === "global" &&
-    installOwner !== undefined &&
-    matchesExplicitInstallRule({
-      pluginId: installOwner,
-      source: params.candidate.source,
-      index: params.provenance,
-      env: params.env,
-    });
-
-  if (params.candidate.origin === "config") {
-    return 0;
-  }
-  if (
-    params.candidate.origin === "bundled" &&
-    isBundledPluginInsideDevSourceRoot({
-      rootDir: params.candidate.rootDir,
-      env: params.env,
-    })
-  ) {
-    return 1;
-  }
-  if (params.candidate.origin === "global" && isExplicitInstall) {
-    return 2;
-  }
-  if (params.candidate.origin === "bundled") {
-    // Bundled plugin ids stay reserved unless the operator configured an override.
-    return 3;
-  }
-  if (params.candidate.origin === "workspace") {
-    return 4;
-  }
-  return 5;
-}
-
-/** Orders duplicate plugin candidates by configured, installed, bundled, then workspace trust. */
-export function compareDuplicateCandidateOrder(params: {
-  left: PluginCandidate;
-  right: PluginCandidate;
-  manifestBySource: Map<string, PluginManifestRecord>;
-  provenance: PluginProvenanceIndex;
-  env: NodeJS.ProcessEnv;
-}): number {
-  const leftPluginId = params.manifestBySource.get(params.left.source)?.id;
-  const rightPluginId = params.manifestBySource.get(params.right.source)?.id;
-  if (!leftPluginId || leftPluginId !== rightPluginId) {
-    return 0;
-  }
-  return (
-    resolveCandidateDuplicateRank({
-      candidate: params.left,
-      provenance: params.provenance,
-      env: params.env,
-    }) -
-    resolveCandidateDuplicateRank({
-      candidate: params.right,
-      provenance: params.provenance,
-      env: params.env,
-    })
-  );
 }
 
 /** Warns when an open plugin allowlist may auto-load non-bundled plugins. */

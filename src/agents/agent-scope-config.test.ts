@@ -214,6 +214,20 @@ describe("agent roster resolution", () => {
     expect(resolveAgentOperationAgentId(cfg)).toBe("ops");
   });
 
+  it("prefers a per-agent toolProgressDetail over the roster default", () => {
+    const defaults = { toolProgressDetail: "explain" as const };
+    const entries = { main: { toolProgressDetail: "raw" as const } };
+
+    expect(resolveAgentConfig({ agents: { defaults, entries } }, "main")?.toolProgressDetail).toBe(
+      "raw",
+    );
+    expect(resolveAgentConfig({ agents: { entries } }, "main")?.toolProgressDetail).toBe("raw");
+    expect(
+      resolveAgentConfig({ agents: { defaults, entries: { main: {} } } }, "main")
+        ?.toolProgressDetail,
+    ).toBe("explain");
+  });
+
   it("resolves defaults only for the rosterless implicit main agent", () => {
     const defaults = { fastModeDefault: "auto" as const };
 
@@ -221,6 +235,25 @@ describe("agent roster resolution", () => {
     expect(resolveAgentConfig({ agents: { defaults } }, "work")).toBeUndefined();
     expect(resolveAgentConfig({ agents: { defaults, entries: {} } }, "main")).toBeUndefined();
     expect(resolveAgentConfig({ agents: { defaults, list: [] } }, "main")).toBeUndefined();
+  });
+
+  it("does not project unrelated keyed entries while resolving one agent", () => {
+    let unrelatedEntryReads = 0;
+    const entries = new Proxy(
+      { main: { name: "Primary" }, worker: { name: "Worker" } },
+      {
+        get(target, property, receiver) {
+          if (property === "worker") {
+            unrelatedEntryReads += 1;
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      },
+    );
+    const config = { agents: { ownership: "explicit" as const, entries } };
+
+    expect(resolveAgentConfig(config, "main")?.name).toBe("Primary");
+    expect(unrelatedEntryReads).toBe(0);
   });
 
   it("keeps the retained legacy owner on the inherited workspace before config write", () => {

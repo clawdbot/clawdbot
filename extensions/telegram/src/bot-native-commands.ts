@@ -71,6 +71,7 @@ type RegisterTelegramNativeCommandsParams = {
     | "groupAllowFrom"
     | "replyToMode"
     | "accountAbortSignal"
+    | "dispatchReplyFromConfig"
   >;
 };
 
@@ -303,9 +304,6 @@ export const registerTelegramNativeCommands = ({
         candidate: pluginCommand.spec,
       });
     });
-  }
-  if (pluginCatalog.selectedCommands.length > 0) {
-    pluginCommandRuntime.retainNativeCatalog("telegram");
   }
 
   if (!handleLoginCallback) {

@@ -66,6 +66,7 @@ export async function createNodeRelayBackend(params: {
   nodeId: string;
   expectedConnId: string;
   expectedPairingGeneration?: string;
+  isDispatchAuthorized: () => boolean;
   command: string;
   params: Record<string, unknown>;
 }): Promise<TerminalBackend> {
@@ -89,6 +90,7 @@ export async function createNodeRelayBackend(params: {
       ...(params.expectedPairingGeneration
         ? { expectedPairingGeneration: params.expectedPairingGeneration }
         : {}),
+      isDispatchAuthorized: params.isDispatchAuthorized,
       command: params.command,
       params: params.params,
       timeoutMs: 0,
@@ -108,11 +110,9 @@ export async function createNodeRelayBackend(params: {
       },
     })
     .then(parseExit)
-    .catch(
-      (error: unknown): TerminalBackendExit => ({
-        error: error instanceof Error ? error.message : String(error),
-      }),
-    )
+    .catch((error: unknown): TerminalBackendExit => ({
+      error: error instanceof Error ? error.message : String(error),
+    }))
     .then((exit) => {
       if (exitCallback) {
         exitCallback(exit);

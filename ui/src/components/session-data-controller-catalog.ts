@@ -19,7 +19,10 @@ import {
   sessionCatalogRequestError,
 } from "./app-sidebar-session-catalog-state.ts";
 import { sessionCatalogHostKey } from "./app-sidebar-session-types.ts";
-import type { SidebarSessionStatusFilter } from "./app-sidebar-session-types.ts";
+import type {
+  SidebarSessionOwnerFilter,
+  SidebarSessionStatusFilter,
+} from "./app-sidebar-session-types.ts";
 import {
   completePanelRefresh,
   failPanelRefresh,
@@ -35,6 +38,7 @@ export interface SessionDataControllerHost extends ReactiveControllerHost {
   promoteCreatedSession(sessionKey: string): void;
   selectedAgentIdForSessions(): string;
   sidebarSessionStatusFilter(): SidebarSessionStatusFilter;
+  sidebarSessionOwnerFilter(): SidebarSessionOwnerFilter;
   querySelector(selectors: string): Element | null;
 }
 
@@ -112,25 +116,27 @@ export function resolveSessionCatalogAgentId(
   return selected && selected !== helloDefault ? null : helloDefault;
 }
 
-function requestSessionCatalogRefresh(owner: SessionCatalogDataOwner): void {
-  const snapshot = owner.context?.gateway.snapshot;
-  owner.sessionCatalogLive.requestRefresh({
-    visible: document.visibilityState !== "hidden",
-    connected:
-      owner.isSessionDataHostConnected &&
-      owner.sessionCatalogAgentId !== null &&
-      Boolean(sessionCatalogListClient(snapshot, owner.sessionDataHostConnected)),
-    generation: owner.sessionScopeGeneration,
-    refresh: () => void owner.refreshSessionCatalogs(),
-  });
-}
-
-export function scheduleSessionCatalogRefresh(owner: SessionCatalogDataOwner): void {
+export function scheduleSessionCatalogRefresh(
+  owner: SessionCatalogDataOwner,
+  queueIfActive = false,
+): void {
   if (document.visibilityState === "hidden") {
     owner.sessionCatalogLive.cancelScheduledRefreshes();
     return;
   }
-  owner.sessionCatalogLive.scheduleActivation(() => requestSessionCatalogRefresh(owner));
+  owner.sessionCatalogLive.scheduleActivation(queueIfActive, (shouldQueue) => {
+    const snapshot = owner.context?.gateway.snapshot;
+    owner.sessionCatalogLive.requestRefresh({
+      visible: document.visibilityState !== "hidden",
+      connected:
+        owner.isSessionDataHostConnected &&
+        owner.sessionCatalogAgentId !== null &&
+        Boolean(sessionCatalogListClient(snapshot, owner.sessionDataHostConnected)),
+      generation: owner.sessionScopeGeneration,
+      queueIfActive: shouldQueue,
+      refresh: () => void owner.refreshSessionCatalogs(),
+    });
+  });
 }
 
 export function updateSessionCatalogData(owner: SessionCatalogDataOwner, defer = false): void {
@@ -156,7 +162,7 @@ export function applySessionCatalogPresence(
   payload: unknown,
 ): void {
   if (owner.sessionCatalogLive.observePresence(payload)) {
-    scheduleSessionCatalogRefresh(owner);
+    scheduleSessionCatalogRefresh(owner, true);
   }
 }
 
@@ -270,6 +276,7 @@ export async function loadMoreSessionCatalog(
     const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
       agentId,
       catalogId,
+      hostIds: Object.keys(cursors),
       cursors,
     });
     if (!isCurrentSessionCatalogRequest(owner, catalogId, client, generation, revision)) {

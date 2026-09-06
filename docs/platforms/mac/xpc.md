@@ -29,6 +29,8 @@ A local Unix socket connects the node host service to the macOS app for exec app
 - A headless node host service connects to the Gateway WebSocket.
 - `system.run` requests are forwarded to the macOS app over a local Unix socket (`ExecApprovalsSocket.swift`).
 - The app performs the exec in UI context, prompts if needed, and returns output.
+- The socket owns the request lifetime. Node cancellation or a socket deadline closes the response reader, cancelling the native prompt or command and its process group. Stopping the app's exec server also cancels and drains active requests before releasing its socket lease.
+- Clients still half-close their **write** side after sending one JSONL request. That normal request EOF does not cancel execution; the response reader remains open until the result arrives.
 
 Diagram (SCI):
 

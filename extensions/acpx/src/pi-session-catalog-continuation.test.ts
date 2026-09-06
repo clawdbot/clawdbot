@@ -144,9 +144,10 @@ describe("Pi session catalog continuation", () => {
       marker: expect.objectContaining({ offset: sessionStats.size }),
     });
     expect(createSessionEntry).toHaveBeenCalledTimes(1);
+    expect(createSessionEntry.mock.calls[0]?.[0]).not.toHaveProperty("label");
     expect(createSessionEntry).toHaveBeenCalledWith(
       expect.objectContaining({
-        label: "Pi catalog session",
+        displayName: "Pi catalog session",
         spawnedCwd: "/workspace",
         initialEntry: {
           acpBackendId: "acpx",

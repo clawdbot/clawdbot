@@ -1,11 +1,24 @@
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  CodexSessionCatalogControl,
-  CodexSessionCatalogControlFactory,
-} from "../session-catalog-types.js";
-import type { CodexThreadForkParams, CodexTurn } from "./protocol.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import {
+  createPluginRuntimeMock,
+  resetPluginRuntimeStateForTest,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseForTest,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerBindingStore } from "./session-binding.js";
+import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
+import {
+  createForkTestRuntime,
+  forkControl,
+  forkParams,
+  forkResponse,
+  codexForkTurn,
+} from "./upstream-session-fork.test-support.js";
 
 const boundaryMocks = vi.hoisted(() => ({
   listTurns: vi.fn(),
@@ -20,8 +33,7 @@ const transcriptMocks = vi.hoisted(() => ({
 
 const boundary = {
   beforeTurnId: "turn-2",
-  targetTurnId: "turn-2",
-  retainedMarker: { turnId: "turn-1", userMessageCount: 1 },
+  lastRetainedTurnId: "turn-1",
 } as const;
 
 vi.mock("openclaw/plugin-sdk/session-catalog", async (importOriginal) => ({
@@ -30,7 +42,8 @@ vi.mock("openclaw/plugin-sdk/session-catalog", async (importOriginal) => ({
   upsertSessionUpstreamLink: linkMocks.upsert,
 }));
 
-vi.mock("./transcript-mirror.js", () => ({
+vi.mock("./transcript-mirror.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./transcript-mirror.js")>()),
   importCodexThreadHistoryToTranscript: transcriptMocks.importHistory,
 }));
 
@@ -46,103 +59,10 @@ vi.mock("./upstream-fork-boundary.js", () => ({
 
 import { forkCodexUpstreamSession } from "./upstream-session-fork.js";
 
-function turn(id: string, text: string): CodexTurn {
-  return {
-    id,
-    status: "completed",
-    items: [
-      {
-        aggregatedOutput: null,
-        changes: [],
-        command: null,
-        cwd: null,
-        id: `${id}-user`,
-        name: null,
-        query: null,
-        server: null,
-        status: null,
-        text: "",
-        title: null,
-        tool: null,
-        content: [{ type: "text", text, textElements: [] }],
-        type: "userMessage",
-      },
-    ],
-  };
-}
-
-function forkResponse(threadId = "thread-forked") {
-  return {
-    approvalPolicy: "never",
-    approvalsReviewer: "user",
-    cwd: "/tmp",
-    model: "gpt-5.4",
-    modelProvider: "openai",
-    sandbox: { type: "dangerFullAccess" },
-    thread: {
-      id: threadId,
-      sessionId: "session-forked",
-      cliVersion: "0.148.0",
-      createdAt: 1715299200,
-      updatedAt: 1715299200,
-      cwd: "/tmp",
-      ephemeral: false,
-      modelProvider: "openai",
-      preview: "forked thread",
-      source: "appServer",
-      status: { type: "notLoaded" },
-      turns: [],
-    },
-  };
-}
-
-function forkParams() {
-  return {
-    targetKey: "agent:main:dashboard:forked",
-    source: {
-      agentId: "main",
-      sessionId: "session-source",
-      sessionKey: "agent:main:source",
-      storePath: "/tmp/sessions.db",
-      entryId: "entry-2",
-    },
-    upstream: {
-      catalogId: "codex",
-      hostId: "gateway:local",
-      kind: "codex-app-server" as const,
-      threadId: "thread-source",
-      ref: { connectionFingerprint: "fingerprint", threadId: "thread-source" },
-    },
-  };
-}
-
-type ForkThreadStub = (params: CodexThreadForkParams) => Promise<unknown>;
-
-function factoryForControl(control: CodexSessionCatalogControl): CodexSessionCatalogControlFactory {
-  return {
-    forRequest: () => control,
-    homesForAgent: () => [],
-    forUpstream: (_agentId, fingerprint) =>
-      fingerprint === control.connectionFingerprint ? control : undefined,
-  };
-}
-
-function forkControl(
-  forkThread: ForkThreadStub = vi.fn(async () => forkResponse()),
-  connectionFingerprint = "fingerprint",
-) {
-  const archiveThread = vi.fn(async () => undefined);
-  const control = {
-    archiveThread,
-    clientId: "client-pinned",
-    connectionFingerprint,
-    forkThread,
-  } as unknown as CodexSessionCatalogControl;
-  control.withPinnedConnection = async (run) => await run(control);
-  return { archiveThread, control, controlFactory: factoryForControl(control), forkThread };
-}
-
+let stateDir: string;
 beforeEach(() => {
+  stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-fork-owner-"));
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   boundaryMocks.listTurns.mockReset();
   linkMocks.delete.mockReset();
   linkMocks.upsert.mockReset().mockReturnValue(true);
@@ -152,11 +72,21 @@ beforeEach(() => {
   });
 });
 
+afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  resetPluginRuntimeStateForTest();
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+  fs.rmSync(stateDir, { recursive: true, force: true });
+});
+
 describe("forkCodexUpstreamSession", () => {
-  it("verifies the cut, imports the fork history, then links before binding", async () => {
-    const retainedTurn = turn("turn-1", "one");
+  it("verifies the original source cut, imports history, then links before binding", async () => {
+    const sourceThreadId = "thread-source";
+    const retainedTurn = codexForkTurn("turn-1", "one");
     boundaryMocks.listTurns
-      .mockResolvedValueOnce([turn("turn-2", "edit me")])
+      .mockResolvedValueOnce([codexForkTurn("turn-2", "edit me")])
       .mockResolvedValueOnce([retainedTurn]);
     const { archiveThread, control, controlFactory, forkThread } = forkControl();
     const events: string[] = [];
@@ -164,15 +94,17 @@ describe("forkCodexUpstreamSession", () => {
       events.push("link");
       return true;
     });
-    const mutate = vi.fn(async () => {
+    const bindingStore = createCodexTestBindingStore();
+    const write = bindingStore.mutate.bind(bindingStore);
+    const mutate = vi.spyOn(bindingStore, "mutate").mockImplementation(async (...args) => {
       events.push("bind");
-      return true;
+      return await write(...args);
     });
-    const runtime = createPluginRuntimeMock();
+    const runtime = createForkTestRuntime(undefined, bindingStore, "codex-custom");
     const createSessionEntry = vi.mocked(runtime.agent.session.createSessionEntry);
 
     const result = await forkCodexUpstreamSession(forkParams(), {
-      bindingStore: { mutate } as unknown as CodexAppServerBindingStore,
+      bindingStore,
       controlFactory,
       harnessRuntimeId: "codex-custom",
       resolveConfig: () => ({}),
@@ -180,7 +112,7 @@ describe("forkCodexUpstreamSession", () => {
     });
 
     expect(forkThread).toHaveBeenCalledWith({
-      threadId: "thread-source",
+      threadId: sourceThreadId,
       beforeTurnId: "turn-2",
       excludeTurns: true,
     });
@@ -198,6 +130,7 @@ describe("forkCodexUpstreamSession", () => {
         sessionKey: "agent:main:dashboard:forked",
         threadId: "thread-forked",
       }),
+      expect.objectContaining({ ifAbsent: true }),
     );
     expect(runtime.agent.session.createSessionEntry).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -206,6 +139,23 @@ describe("forkCodexUpstreamSession", () => {
     );
     expect(createSessionEntry.mock.calls[0]?.[0]).not.toHaveProperty("recoverMatchingInitialEntry");
     expect(events).toEqual(["link", "bind"]);
+    expect(mutate).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        kind: "set",
+        binding: expect.objectContaining({
+          connectionScope: "supervision",
+          supervisionSourceThreadId: "thread-forked",
+          preserveNativeModel: true,
+          pendingSupervisionBranch: {
+            sourceThreadId: "thread-forked",
+            connectionFingerprint: "fingerprint",
+            lastTurnId: "turn-1",
+          },
+        }),
+      }),
+      expect.any(Function),
+    );
     expect(result).toEqual({
       status: "created",
       key: "agent:main:dashboard:forked",
@@ -214,121 +164,85 @@ describe("forkCodexUpstreamSession", () => {
     expect(archiveThread).not.toHaveBeenCalled();
   });
 
-  it("forks through the secondary home selected by the upstream fingerprint", async () => {
+  it("requests a workspace sandbox when the fork creator requires isolation", async () => {
     boundaryMocks.listTurns
-      .mockResolvedValueOnce([turn("turn-2", "edit me")])
-      .mockResolvedValueOnce([turn("turn-1", "one")]);
-    const primary = forkControl(undefined, "primary-fingerprint");
-    const secondary = forkControl(undefined, "secondary-fingerprint");
-    const forUpstream = vi.fn((_agentId: string, fingerprint: string) =>
-      fingerprint === secondary.control.connectionFingerprint ? secondary.control : undefined,
-    );
-    const factory = { ...primary.controlFactory, forUpstream };
-    const params = forkParams();
-    params.upstream.ref = {
-      connectionFingerprint: "secondary-fingerprint",
-      threadId: params.upstream.threadId,
-    };
-
-    await expect(
-      forkCodexUpstreamSession(params, {
-        bindingStore: { mutate: vi.fn(async () => true) } as unknown as CodexAppServerBindingStore,
-        controlFactory: factory,
-        harnessRuntimeId: "codex",
-        resolveConfig: () => ({}),
-        runtime: createPluginRuntimeMock(),
-      }),
-    ).resolves.toMatchObject({ status: "created", key: params.targetKey });
-
-    expect(forUpstream).toHaveBeenCalledWith("main", "secondary-fingerprint");
-    expect(secondary.forkThread).toHaveBeenCalledOnce();
-    expect(primary.forkThread).not.toHaveBeenCalled();
-  });
-
-  it("fails closed when the upstream fingerprint does not resolve to a known home", async () => {
+      .mockResolvedValueOnce([codexForkTurn("turn-2", "edit me")])
+      .mockResolvedValueOnce([codexForkTurn("turn-1", "one")]);
     const { controlFactory, forkThread } = forkControl();
-    const params = forkParams();
-    params.upstream.ref = {
-      connectionFingerprint: "unknown-fingerprint",
-      threadId: params.upstream.threadId,
-    };
+    const bindingStore = createCodexTestBindingStore();
+    const runtime = createForkTestRuntime(undefined, bindingStore, "codex-custom");
+    const requiredFork = { ...forkParams(), sandbox: "required" as const };
 
-    await expect(
-      forkCodexUpstreamSession(params, {
-        bindingStore: {} as CodexAppServerBindingStore,
-        controlFactory,
-        harnessRuntimeId: "codex",
-        runtime: createPluginRuntimeMock(),
-      }),
-    ).resolves.toEqual({
-      status: "failed",
-      code: "upstream-unavailable",
-      message:
-        "This Codex thread is not available on the current connection. Reconnect to its host and try again.",
+    const result = await forkCodexUpstreamSession(requiredFork, {
+      bindingStore,
+      controlFactory,
+      harnessRuntimeId: "codex-custom",
+      resolveConfig: () => ({}),
+      runtime,
     });
 
-    expect(forkThread).not.toHaveBeenCalled();
-    expect(boundaryMocks.listTurns).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      status: "created",
+      key: forkParams().targetKey,
+      editorText: "edit me",
+    });
+    expect(forkThread).toHaveBeenCalledWith(
+      expect.objectContaining({ sandbox: "workspace-write" }),
+    );
   });
 
-  it("forks incognito sessions ephemerally and imports history from the live response", async () => {
-    const retainedTurn = turn("turn-1", "one");
-    boundaryMocks.listTurns.mockResolvedValueOnce([turn("turn-2", "edit me")]);
-    const forkThread = vi.fn(async () => {
-      const response = forkResponse();
-      return {
-        ...response,
-        thread: { ...response.thread, ephemeral: true, turns: [retainedTurn] },
+  it.each(["unknown home", "private connection drift", "private source drift"])(
+    "fails closed on %s before reading or forking native history",
+    async (scenario) => {
+      const { controlFactory, forkThread } = forkControl();
+      const params = forkParams();
+      params.upstream.ref = {
+        connectionFingerprint: scenario === "unknown home" ? "unknown-fingerprint" : "fingerprint",
+        threadId: params.upstream.threadId,
       };
-    });
-    const { controlFactory } = forkControl(forkThread);
-    const params = forkParams();
-    params.targetKey = "agent:main:dashboard:incognito-forked";
-    const mutate = vi.fn(async () => true);
 
-    await expect(
-      forkCodexUpstreamSession(params, {
-        bindingStore: { mutate } as unknown as CodexAppServerBindingStore,
-        controlFactory,
-        harnessRuntimeId: "codex",
-        resolveConfig: () => ({}),
-        runtime: createPluginRuntimeMock(),
-      }),
-    ).resolves.toMatchObject({ status: "created", key: params.targetKey });
-
-    expect(forkThread).toHaveBeenCalledWith({
-      threadId: "thread-source",
-      beforeTurnId: "turn-2",
-      ephemeral: true,
-      excludeTurns: false,
-    });
-    expect(boundaryMocks.listTurns).toHaveBeenCalledTimes(1);
-    expect(transcriptMocks.importHistory).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: params.targetKey,
-        thread: expect.objectContaining({
-          turns: expect.arrayContaining([expect.objectContaining({ id: retainedTurn.id })]),
+      await expect(
+        forkCodexUpstreamSession(params, {
+          bindingStore: {
+            read: vi.fn(() => ({
+              threadId: "thread-canonical",
+              connectionScope: "supervision",
+              supervisionSourceThreadId:
+                scenario === "private source drift" ? "other-source" : "thread-source",
+              appServerRuntimeFingerprint:
+                scenario === "private connection drift" ? "other-connection" : "fingerprint",
+              preserveNativeModel: true,
+              conversationSourceTransferComplete: true,
+              cwd: "/tmp",
+              model: "gpt-5.6-luna",
+              modelProvider: "openai",
+            })),
+          } as unknown as CodexAppServerBindingStore,
+          controlFactory,
+          harnessRuntimeId: "codex",
+          runtime: createPluginRuntimeMock(),
         }),
-      }),
-    );
-    expect(mutate).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        kind: "set",
-        binding: expect.objectContaining({ clientId: "client-pinned" }),
-      }),
-    );
-  });
+      ).resolves.toEqual({
+        status: "failed",
+        code: "upstream-unavailable",
+        message:
+          "This Codex thread is not available on the current connection. Reconnect to its host and try again.",
+      });
+
+      expect(forkThread).not.toHaveBeenCalled();
+      expect(boundaryMocks.listTurns).not.toHaveBeenCalled();
+    },
+  );
 
   it("archives a fork whose read-back history proves beforeTurnId was ignored", async () => {
     boundaryMocks.listTurns
-      .mockResolvedValueOnce([turn("turn-2", "edit me")])
-      .mockResolvedValueOnce([turn("turn-1", "one"), turn("turn-2", "edit me")]);
+      .mockResolvedValueOnce([codexForkTurn("turn-2", "edit me")])
+      .mockResolvedValueOnce([codexForkTurn("turn-1", "one"), codexForkTurn("turn-2", "edit me")]);
     const { archiveThread, controlFactory } = forkControl();
     const runtime = createPluginRuntimeMock();
 
     const result = await forkCodexUpstreamSession(forkParams(), {
-      bindingStore: { mutate: vi.fn() } as unknown as CodexAppServerBindingStore,
+      bindingStore: createCodexTestBindingStore(),
       controlFactory,
       harnessRuntimeId: "codex",
       runtime,
@@ -339,59 +253,19 @@ describe("forkCodexUpstreamSession", () => {
       code: "upstream-unavailable",
       message: expect.stringContaining("Codex version"),
     });
-    expect(archiveThread).toHaveBeenCalledWith("thread-forked");
+    expect(archiveThread).toHaveBeenCalledWith("thread-forked", undefined);
     expect(runtime.agent.session.createSessionEntry).not.toHaveBeenCalled();
     expect(linkMocks.upsert).not.toHaveBeenCalled();
   });
 
-  it("cleans the link and archives the fork when binding materialization fails", async () => {
-    boundaryMocks.listTurns
-      .mockResolvedValueOnce([turn("turn-2", "edit me")])
-      .mockResolvedValueOnce([turn("turn-1", "one")]);
-    const { archiveThread, controlFactory } = forkControl();
-    const mutate = vi.fn(async () => false);
-
-    const result = await forkCodexUpstreamSession(forkParams(), {
-      bindingStore: { mutate } as unknown as CodexAppServerBindingStore,
-      controlFactory,
-      harnessRuntimeId: "codex",
-      runtime: createPluginRuntimeMock(),
-    });
-
-    expect(result).toMatchObject({ status: "failed", code: "upstream-unavailable" });
-    expect(linkMocks.delete).toHaveBeenCalledWith("agent:main:dashboard:forked", "main");
-    expect(mutate).toHaveBeenLastCalledWith(expect.anything(), {
-      kind: "clear",
-      threadId: "thread-forked",
-    });
-    expect(archiveThread).toHaveBeenCalledWith("thread-forked");
-  });
-
-  it("archives a recoverable orphan id when the fork response is invalid", async () => {
-    boundaryMocks.listTurns.mockResolvedValueOnce([turn("turn-2", "edit me")]);
+  it("leaves unverified orphan ids unowned when the fork response is invalid", async () => {
+    boundaryMocks.listTurns.mockResolvedValueOnce([codexForkTurn("turn-2", "edit me")]);
     const { archiveThread, controlFactory } = forkControl(
       vi.fn(async () => ({ thread: { id: "thread-orphan" } })),
     );
 
     const result = await forkCodexUpstreamSession(forkParams(), {
-      bindingStore: {} as CodexAppServerBindingStore,
-      controlFactory,
-      harnessRuntimeId: "codex",
-      runtime: createPluginRuntimeMock(),
-    });
-
-    expect(result).toMatchObject({ status: "failed", code: "upstream-unavailable" });
-    expect(archiveThread).toHaveBeenCalledWith("thread-orphan");
-  });
-
-  it("rejects a fork response that reuses the source thread id", async () => {
-    boundaryMocks.listTurns.mockResolvedValueOnce([turn("turn-2", "edit me")]);
-    const { archiveThread, controlFactory } = forkControl(
-      vi.fn(async () => forkResponse("thread-source")),
-    );
-
-    const result = await forkCodexUpstreamSession(forkParams(), {
-      bindingStore: { mutate: vi.fn() } as unknown as CodexAppServerBindingStore,
+      bindingStore: { read: vi.fn(() => undefined) } as unknown as CodexAppServerBindingStore,
       controlFactory,
       harnessRuntimeId: "codex",
       runtime: createPluginRuntimeMock(),
@@ -400,4 +274,37 @@ describe("forkCodexUpstreamSession", () => {
     expect(result).toMatchObject({ status: "failed", code: "upstream-unavailable" });
     expect(archiveThread).not.toHaveBeenCalled();
   });
+
+  it.each(["thread-source", "thread-canonical"])(
+    "rejects a fork response that reuses the original or canonical source id: %s",
+    async (threadId) => {
+      boundaryMocks.listTurns.mockResolvedValueOnce([codexForkTurn("turn-2", "edit me")]);
+      const { archiveThread, controlFactory } = forkControl(
+        vi.fn(async () => forkResponse(threadId)),
+      );
+
+      const result = await forkCodexUpstreamSession(forkParams(), {
+        bindingStore: {
+          read: vi.fn(() => ({
+            threadId: "thread-canonical",
+            connectionScope: "supervision",
+            supervisionSourceThreadId: "thread-source",
+            appServerRuntimeFingerprint: "fingerprint",
+            preserveNativeModel: true,
+            conversationSourceTransferComplete: true,
+            cwd: "/tmp",
+            model: "gpt-5.6-luna",
+            modelProvider: "openai",
+          })),
+          mutate: vi.fn(),
+        } as unknown as CodexAppServerBindingStore,
+        controlFactory,
+        harnessRuntimeId: "codex",
+        runtime: createPluginRuntimeMock(),
+      });
+
+      expect(result).toMatchObject({ status: "failed", code: "upstream-unavailable" });
+      expect(archiveThread).not.toHaveBeenCalled();
+    },
+  );
 });

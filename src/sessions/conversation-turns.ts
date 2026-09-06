@@ -24,7 +24,6 @@ type PendingConversationTurn = {
   outboundMessageId?: string;
   correlationReady: Promise<void>;
   markCorrelationReady: () => void;
-  stopTimeout: () => void;
   claimed: boolean;
   settle: (reply: ConversationTurnReply | undefined) => void;
 };
@@ -55,8 +54,29 @@ const pendingTurns = resolveGlobalSingleton(
     }
   },
 );
+const pendingTurnsByOutboundId = resolveGlobalSingleton(
+  Symbol.for("openclaw.pendingConversationTurnsByOutboundId"),
+  () => new Map<string, Set<PendingConversationTurn>>(),
+  (turns) => turns.clear(),
+);
 function pendingTurnKey(agentId: string, id: string): string {
   return JSON.stringify([agentId, id]);
+}
+
+function outboundMessageKey(agentId: string, outboundMessageId: string): string {
+  return JSON.stringify([agentId, outboundMessageId]);
+}
+
+function removePendingOutboundMembership(pending: PendingConversationTurn): void {
+  if (!pending.outboundMessageId) {
+    return;
+  }
+  const key = outboundMessageKey(pending.agentId, pending.outboundMessageId);
+  const bucket = pendingTurnsByOutboundId.get(key);
+  bucket?.delete(pending);
+  if (bucket?.size === 0) {
+    pendingTurnsByOutboundId.delete(key);
+  }
 }
 
 /** Registers one process-local waiter; transcript correlation remains durable after completion. */
@@ -110,6 +130,7 @@ export function registerPendingConversationTurn(params: {
     }
     settled = true;
     markCorrelationReady();
+    removePendingOutboundMembership(pending);
     if (pendingTurns.get(key) === pending) {
       pendingTurns.delete(key);
     }
@@ -128,7 +149,6 @@ export function registerPendingConversationTurn(params: {
     createdAt,
     correlationReady,
     markCorrelationReady,
-    stopTimeout,
     claimed: false,
     settle,
   };
@@ -145,10 +165,16 @@ export function registerPendingConversationTurn(params: {
       if (pendingTurns.get(key) !== pending) {
         return;
       }
+      removePendingOutboundMembership(pending);
       pending.outboundMessageId = normalizeOptionalString(messageId);
       if (!pending.outboundMessageId) {
         pending.settle(undefined);
+        return;
       }
+      const outboundKey = outboundMessageKey(pending.agentId, pending.outboundMessageId);
+      const bucket = pendingTurnsByOutboundId.get(outboundKey) ?? new Set();
+      bucket.add(pending);
+      pendingTurnsByOutboundId.set(outboundKey, bucket);
     },
     markReady: () => {
       if (pendingTurns.get(key) !== pending) {
@@ -199,23 +225,29 @@ export async function claimPendingConversationTurnReply(params: {
   if (!agentId) {
     return undefined;
   }
-  const pending = [...pendingTurns.values()]
-    .filter(
-      (candidate) =>
-        !candidate.claimed &&
-        candidate.agentId === agentId &&
-        (candidate.conversationRef === params.conversationRef ||
-          // Some transports promote an unthreaded message into a thread whose
-          // id is that message id. Require the attested parent conversation too;
-          // shared-main sessions can contain unrelated peers.
-          (!candidate.threadId &&
-            threadId === replyToId &&
-            parentConversationRef === candidate.conversationRef)) &&
-        candidate.sessionId === params.sessionId &&
-        (!candidate.threadId || !threadId || candidate.threadId === threadId),
-    )
-    .toSorted((left, right) => left.createdAt - right.createdAt)
-    .find((candidate) => candidate.outboundMessageId === replyToId);
+  let pending: PendingConversationTurn | undefined;
+  const candidates = pendingTurnsByOutboundId.get(outboundMessageKey(agentId, replyToId));
+  for (const candidate of candidates ?? []) {
+    if (
+      candidate.claimed ||
+      candidate.agentId !== agentId ||
+      candidate.outboundMessageId !== replyToId ||
+      (candidate.conversationRef !== params.conversationRef &&
+        // Some transports promote an unthreaded message into a thread whose
+        // id is that message id. Require the attested parent conversation too;
+        // shared-main sessions can contain unrelated peers.
+        (candidate.threadId ||
+          threadId !== replyToId ||
+          parentConversationRef !== candidate.conversationRef)) ||
+      candidate.sessionId !== params.sessionId ||
+      (candidate.threadId && threadId && candidate.threadId !== threadId)
+    ) {
+      continue;
+    }
+    if (!pending || candidate.createdAt < pending.createdAt) {
+      pending = candidate;
+    }
+  }
   if (!pending) {
     return undefined;
   }

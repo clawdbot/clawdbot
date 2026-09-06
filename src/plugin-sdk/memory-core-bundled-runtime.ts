@@ -20,7 +20,7 @@ type EmbeddingProviderResult = {
   runtime?: MemoryEmbeddingProviderRuntime;
 };
 
-export type DreamingArtifactsAuditIssue = {
+type DreamingArtifactsAuditIssue = {
   severity: "warn" | "error";
   code:
     | "dreaming-session-corpus-unreadable"
@@ -42,7 +42,7 @@ export type DreamingArtifactsAuditSummary = {
   issues: DreamingArtifactsAuditIssue[];
 };
 
-export type ShortTermAuditIssue = {
+type ShortTermAuditIssue = {
   severity: "warn" | "error";
   code:
     | "recall-store-unreadable"
@@ -71,7 +71,7 @@ export type ShortTermAuditSummary = {
   issues: ShortTermAuditIssue[];
 };
 
-export type RepairShortTermPromotionArtifactsResult = {
+type RepairShortTermPromotionArtifactsResult = {
   changed: boolean;
   removedInvalidEntries: number;
   removedDanglingEntries?: number;
@@ -85,9 +85,10 @@ type RuntimeFacadeModule = {
     openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
   ) => void;
   createEmbeddingProvider: (
-    options: MemoryEmbeddingProviderCreateOptions & {
+    options: Omit<MemoryEmbeddingProviderCreateOptions, "dimensions"> & {
       provider: string;
       fallback: string;
+      outputDimensionality?: number;
     },
   ) => Promise<EmbeddingProviderResult>;
   removeGroundedShortTermCandidates: (params: {
@@ -138,35 +139,7 @@ type GroundedRemPreviewResult = {
   files: GroundedRemFilePreview[];
 };
 
-type RemDreamingPreview = {
-  sourceEntryCount: number;
-  reflections: string[];
-  candidateTruths: Array<{
-    snippet: string;
-    confidence: number;
-    evidence: string;
-  }>;
-  candidateKeys: string[];
-  bodyLines: string[];
-};
-
-type PromotionCandidate = {
-  key: string;
-  path: string;
-  startLine: number;
-  endLine: number;
-  snippet: string;
-  recallCount: number;
-  uniqueQueries: number;
-  avgScore: number;
-  maxScore: number;
-  ageDays: number;
-  firstRecalledAt: string;
-  lastRecalledAt: string;
-  promotedAt?: string;
-};
-
-export type ShortTermDreamingStatsEntry = {
+type ShortTermDreamingStatsEntry = {
   key: string;
   path: string;
   startLine: number;
@@ -183,7 +156,7 @@ export type ShortTermDreamingStatsEntry = {
   lastRecalledAt?: string;
 };
 
-export type ShortTermDreamingStats = {
+type ShortTermDreamingStats = {
   shortTermCount: number;
   recallSignalCount: number;
   dailySignalCount: number;
@@ -203,36 +176,8 @@ export type ShortTermDreamingStats = {
   promotedEntries: ShortTermDreamingStatsEntry[];
 };
 
-type RemHarnessPreviewResult = {
-  workspaceDir: string;
-  nowMs: number;
-  remConfig: {
-    enabled: boolean;
-    lookbackDays: number;
-    limit: number;
-    minPatternStrength: number;
-  };
-  deepConfig: {
-    minScore: number;
-    minRecallCount: number;
-    minUniqueQueries: number;
-    recencyHalfLifeDays: number;
-    maxAgeDays?: number;
-  };
-  recallEntryCount: number;
-  remSkipped: boolean;
-  rem: RemDreamingPreview;
-  groundedInputPaths: string[];
-  grounded: GroundedRemPreviewResult | null;
-  deep: {
-    candidateLimit?: number;
-    candidateCount: number;
-    truncated: boolean;
-    candidates: PromotionCandidate[];
-  };
-};
-
 type ApiFacadeModule = {
+  MISSING_LOCAL_MEMORY_EMBEDDING_PROVIDER_MESSAGE: string;
   configureMemoryCoreDreamingState: (
     openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
   ) => void;
@@ -255,26 +200,9 @@ type ApiFacadeModule = {
   removeBackfillDiaryEntries: (params: {
     workspaceDir: string;
   }) => Promise<{ dreamsPath: string; removed: number }>;
-  filterRecallEntriesWithinLookback: (params: {
-    entries: readonly unknown[];
-    nowMs: number;
-    lookbackDays: number;
-  }) => unknown[];
-  previewRemHarness: (params: {
-    workspaceDir: string;
-    cfg?: unknown;
-    pluginConfig?: Record<string, unknown>;
-    grounded?: boolean;
-    groundedInputPaths?: string[];
-    groundedFileLimit?: number;
-    includePromoted?: boolean;
-    candidateLimit?: number;
-    remPreviewLimit?: number;
-    nowMs?: number;
-  }) => Promise<RemHarnessPreviewResult>;
 };
 
-export type RepairDreamingArtifactsResult = {
+type RepairDreamingArtifactsResult = {
   changed: boolean;
   archiveDir?: string;
   archivedDreamsDiary: boolean;
@@ -304,6 +232,11 @@ function loadRuntimeFacadeModule(): RuntimeFacadeModule {
     createPluginStateKeyedStore<T>("memory-core", options),
   );
   return module;
+}
+
+/** Returns the memory-core-owned recovery message for an absent local provider plugin. */
+export function getMissingLocalMemoryEmbeddingProviderMessage(): string {
+  return loadApiFacadeModule().MISSING_LOCAL_MEMORY_EMBEDDING_PROVIDER_MESSAGE;
 }
 
 const acquireLocalService = createConfiguredProviderLocalServiceAcquirer(getRuntimeConfig);
@@ -381,14 +314,3 @@ export const removeBackfillDiaryEntries: ApiFacadeModule["removeBackfillDiaryEnt
   loadApiFacadeModule().removeBackfillDiaryEntries(
     ...args,
   )) as ApiFacadeModule["removeBackfillDiaryEntries"];
-
-/** Filter recall entries to the configured REM lookback window. */
-export const filterRecallEntriesWithinLookback: ApiFacadeModule["filterRecallEntriesWithinLookback"] =
-  ((...args) =>
-    loadApiFacadeModule().filterRecallEntriesWithinLookback(
-      ...args,
-    )) as ApiFacadeModule["filterRecallEntriesWithinLookback"];
-
-/** Preview REM harness output across dreaming, grounded, and deep promotion candidates. */
-export const previewRemHarness: ApiFacadeModule["previewRemHarness"] = ((...args) =>
-  loadApiFacadeModule().previewRemHarness(...args)) as ApiFacadeModule["previewRemHarness"];

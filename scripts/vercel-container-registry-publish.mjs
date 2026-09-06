@@ -4,8 +4,10 @@ import { execFileSync } from "node:child_process";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import { isMissingManifestError } from "./lib/docker-manifest-error.mjs";
 import { resolveDockerReleasePolicy } from "./lib/docker-release-policy.mjs";
 import { compareReleaseVersions } from "./lib/release-version.mjs";
+import { verifyDockerAttestations } from "./verify-docker-attestations.mjs";
 
 const IMAGETOOLS_TIMEOUT_MS = 20 * 60_000;
 const DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/;
@@ -163,28 +165,6 @@ function inspectManifestDescriptor(imageRef, execFileSyncImpl) {
   }
 }
 
-function formatCommandError(error) {
-  if (!(error instanceof Error)) {
-    return String(error);
-  }
-  const output = [error.message];
-  for (const field of ["stderr", "stdout"]) {
-    const value = error[field];
-    if (typeof value === "string") {
-      output.push(value);
-    } else if (Buffer.isBuffer(value)) {
-      output.push(value.toString("utf8"));
-    }
-  }
-  return output.join("\n");
-}
-
-function isMissingManifestError(error) {
-  return /(?:manifest unknown|no such manifest|:\s*not found(?:\s|$))/i.test(
-    formatCommandError(error),
-  );
-}
-
 function inspectImageVersion(imageRef, execFileSyncImpl, { allowMissing = false } = {}) {
   const versions = new Map();
   for (const [index, architecture] of ARCHITECTURES.entries()) {
@@ -196,7 +176,7 @@ function inspectImageVersion(imageRef, execFileSyncImpl, { allowMissing = false 
         execFileSyncImpl,
       );
     } catch (error) {
-      if (allowMissing && index === 0 && isMissingManifestError(error)) {
+      if (allowMissing && index === 0 && isMissingManifestError(error, imageRef)) {
         return null;
       }
       throw error;
@@ -292,11 +272,23 @@ export function publishVercelContainerRegistryImages(params, options = {}) {
   // unknown/unknown platforms. VCR stores those indexes but does not prepare
   // them for Sandbox, so publish a clean amd64+arm64 index from the exact image
   // manifest digests and keep the architecture tags as carbon-copy manifests.
-  // Every source ref was attestation-verified by the caller as an immutable
-  // index, so a mutable release-tag rewrite cannot change these copy inputs.
+  // Verify every immutable source here because recovery callers supply digests
+  // directly; producer-side verification alone does not protect that boundary.
+  verifyDockerAttestations({
+    execFileSyncImpl,
+    imageRefs: selectedVariants.map(({ aliasKey }) => immutableSources.byAlias.get(aliasKey)),
+    log,
+    requiredPlatforms: ARCHITECTURES.map((architecture) => ({ architecture, os: "linux" })),
+  });
   const variants = selectedVariants.map(({ aliasKey, suffix }) => {
     const manifestTag = `${plan.version}${suffix}`;
     const manifestSourceRef = immutableSources.byAlias.get(aliasKey);
+    const sourceVersion = inspectImageVersion(manifestSourceRef, execFileSyncImpl);
+    if (sourceVersion !== plan.version) {
+      throw new Error(
+        `${manifestSourceRef} reports version ${sourceVersion}, expected ${plan.version}.`,
+      );
+    }
     const platformDigests = resolvePlatformDigests(
       manifestSourceRef,
       execFileSyncImpl,

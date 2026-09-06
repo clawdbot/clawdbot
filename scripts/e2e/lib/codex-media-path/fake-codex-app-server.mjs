@@ -5,6 +5,7 @@ import {
   runFakeCodexAppServer,
 } from "../codex-app-server-fixture.mjs";
 
+const version = "0.153.4";
 const requestLog =
   process.env.OPENCLAW_CODEX_MEDIA_PATH_APP_SERVER_LOG ??
   "/tmp/openclaw-codex-media-path-app-server.jsonl";
@@ -17,8 +18,8 @@ runFakeCodexAppServer({
       sendResult(
         createFakeInitializeResponse({
           name: "openclaw-codex-media-path-e2e",
-          version: "0.125.0",
-          userAgent: "openclaw-codex-media-path-e2e/0.125.0 (Docker; test)",
+          version,
+          userAgent: `openclaw-codex-media-path-e2e/${version} (Docker; test)`,
         }),
       ),
     "thread/start": ({ params, sendResult }) =>
@@ -27,7 +28,7 @@ runFakeCodexAppServer({
           params,
           threadId: "thread-codex-media-path-e2e",
           sessionId: "session-codex-media-path-e2e",
-          version: "0.125.0",
+          version,
         }),
       ),
     "turn/start": ({ sendResult }) => {

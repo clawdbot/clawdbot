@@ -1,10 +1,11 @@
 // Full-entry coverage for before_agent_finalize revision handling in embedded runs.
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   mockedGlobalHookRunner,
   mockedRunEmbeddedAttempt,
-  overflowBaseRunParams,
+  createOverflowRunParams,
   resetSharedRunIntegrationHarnessMocks,
   useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
@@ -14,6 +15,7 @@ import type { EmbeddedRunAttemptResult } from "./run/types.js";
 const REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 
+let state: OpenClawTestState;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 
 function finalAnswerAttempt(
@@ -59,12 +61,18 @@ describe("runEmbeddedAgent before_agent_finalize", () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     resetSharedRunIntegrationHarnessMocks();
+    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+    state = await createOpenClawTestState({ label: "run.before-agent-finalize" });
     useOpenAIPlatformAuthFixture();
     mockedGlobalHookRunner.hasHooks.mockImplementation(
       (hookName: string) => hookName === "before_agent_finalize",
     );
+  });
+
+  afterEach(async () => {
+    await state?.cleanup();
   });
 
   it("turns a revise decision into one more hidden continuation", async () => {
@@ -80,7 +88,7 @@ describe("runEmbeddedAgent before_agent_finalize", () => {
       .mockResolvedValueOnce(finalAnswerAttempt("Revised answer."));
 
     await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       provider: "openai",
       model: "gpt-5.5",
       runId: "run-before-finalize-revise",
@@ -121,7 +129,7 @@ describe("runEmbeddedAgent before_agent_finalize", () => {
       .mockResolvedValueOnce(finalAnswerAttempt("Revised recovered answer."));
 
     await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       provider: "openai",
       model: "gpt-5.5",
       runId: "run-before-finalize-after-incomplete-turn",
@@ -151,7 +159,7 @@ describe("runEmbeddedAgent before_agent_finalize", () => {
     );
 
     await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       provider: "openai",
       model: "gpt-5.5",
       runId: "run-before-finalize-timeout",

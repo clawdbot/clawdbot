@@ -10,12 +10,6 @@ import {
 const suite = createChatFlowE2eSuite();
 
 const QUEUED = ["review the migration", "then update the docs", "finally run the smoke"] as const;
-const failureReloadProofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "queue-reorder-failure-reload",
-);
 
 suite.define(() => {
   it("reorders offline queued messages from the keyboard-focused handle", async () => {
@@ -65,7 +59,9 @@ suite.define(() => {
 
   it("keeps the queue order consistent through a reload after a mid-reorder storage failure", async () => {
     if (captureUiProofEnabled) {
-      await mkdir(failureReloadProofDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "queue-reorder-failure-reload"), {
+        recursive: true,
+      });
     }
     const context = await suite.newBrowserContext({
       locale: "en-US",
@@ -73,7 +69,18 @@ suite.define(() => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
-    const gateway = await installMockGateway(page);
+    const gateway = await installMockGateway(page, {
+      // A real active turn holds the restored queue while we inspect its order.
+      sessions: [
+        {
+          key: "agent:main:main",
+          kind: "direct",
+          hasActiveRun: true,
+          activeRunIds: ["queue-order-holder"],
+          status: "running",
+        },
+      ],
+    });
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -91,7 +98,9 @@ suite.define(() => {
       const queueText = () => page.locator(".chat-queue__item .chat-queue__text").allTextContents();
       expect(await queueText()).toEqual([...QUEUED]);
       if (captureUiProofEnabled) {
-        await page.screenshot({ path: `${failureReloadProofDir}/01-queued-before-failure.png` });
+        await page.screenshot({
+          path: `${path.join(suite.artifactDir, "queue-reorder-failure-reload")}/01-queued-before-failure.png`,
+        });
       }
 
       // Break durable storage for the rest of this page's lifetime, then attempt
@@ -108,12 +117,14 @@ suite.define(() => {
       await page.locator(".chat-queue__item").nth(2).locator(".chat-queue__grip").focus();
       await page.keyboard.press("ArrowUp");
 
-      // Give the failed move a moment to settle, then confirm nothing moved.
-      await page.waitForTimeout(300);
+      await page
+        .getByRole("alert")
+        .filter({ hasText: "Could not store this message for reconnect." })
+        .waitFor();
       expect(await queueText()).toEqual([...QUEUED]);
       if (captureUiProofEnabled) {
         await page.screenshot({
-          path: `${failureReloadProofDir}/02-order-unchanged-after-failure.png`,
+          path: `${path.join(suite.artifactDir, "queue-reorder-failure-reload")}/02-order-unchanged-after-failure.png`,
         });
       }
 
@@ -127,7 +138,7 @@ suite.define(() => {
       const storedQueueOrder = () =>
         page.evaluate(() =>
           Object.entries(sessionStorage)
-            .filter(([key]) => key.startsWith("openclaw.control.chatComposer.v2:"))
+            .filter(([key]) => key.startsWith("openclaw.control.chatComposer.v4:"))
             .flatMap(([, value]) => {
               try {
                 const parsed = JSON.parse(value) as {
@@ -160,7 +171,7 @@ suite.define(() => {
       expect(await queueText()).toEqual([...QUEUED]);
       if (captureUiProofEnabled) {
         await page.screenshot({
-          path: `${failureReloadProofDir}/03-consistent-order-after-reload.png`,
+          path: `${path.join(suite.artifactDir, "queue-reorder-failure-reload")}/03-consistent-order-after-reload.png`,
         });
       }
     } finally {

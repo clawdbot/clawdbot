@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession } from "../../sessions/index.js";
+import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -23,6 +25,7 @@ vi.mock("../../tools/computer-tool.js", () => ({
   invalidateComputerFrameIfMissing: hoisted.invalidateComputerFrameIfMissing,
 }));
 vi.mock("../cache-ttl.js", () => ({
+  readCacheTtlEntries: () => [],
   isCacheTtlEligibleProvider: hoisted.isCacheTtlEligibleProvider,
   readLastCacheTtlTimestamp: hoisted.readLastCacheTtlTimestamp,
 }));
@@ -57,6 +60,9 @@ function createInput(overrides: Record<string, unknown> = {}) {
     getPrePromptMessageCount: () => 4,
     getPromptCache: () => undefined,
     getPromptCacheRetention: () => "short" as const,
+    getCompactionReplayEnabled: () => false,
+    getServerToolClearingEnabled: () => false,
+    toolResultPromptProjectionState: createToolResultPromptProjectionState(),
     getSystemPrompt: () => "system prompt",
     isOpenAIResponsesApi: false,
     repairToolUseResultPairing: false,
@@ -204,74 +210,95 @@ describe("installEmbeddedAttemptContextGuards", () => {
     expect(input.activeSession.agent.transformContext).toBe(originalTransform);
   });
 
-  it("projects expired cache-TTL history before context-engine assembly once per attempt", async () => {
-    const now = Date.now();
-    hoisted.isCacheTtlEligibleProvider.mockReturnValue(true);
-    hoisted.readLastCacheTtlTimestamp.mockReturnValue(now - 300_000);
-    const input = createInput({
-      activeContextEngine: { info: { id: "test-engine", ownsCompaction: true } },
-    });
-    input.attempt = {
-      ...input.attempt,
-      config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } } as never,
-      model: { api: "anthropic-messages", contextWindow: 2_048 },
-      modelId: "claude-sonnet-4-6",
-      provider: "anthropic",
-    };
-    const originalTransform = vi.fn(async (messages: AgentMessage[]) => messages);
-    input.activeSession.agent.transformContext = originalTransform;
-    let engineMessages: AgentMessage[] | undefined;
-    hoisted.installContextEngineLoopHook.mockImplementation(({ agent }) => {
-      const previous = agent.transformContext;
-      agent.transformContext = async (messages: AgentMessage[], signal: AbortSignal) => {
-        const projected = await previous(messages, signal);
-        engineMessages = projected;
-        return projected;
-      };
-      return vi.fn(() => {
-        agent.transformContext = previous;
+  it.each([false, true])(
+    "keeps cache-TTL tool-loop bytes stable with server clearing=%s",
+    async (serverClearing) => {
+      const now = Date.now();
+      hoisted.isCacheTtlEligibleProvider.mockReturnValue(true);
+      hoisted.readLastCacheTtlTimestamp.mockReturnValue(now - 300_000);
+      const input = createInput({
+        activeContextEngine: { info: { id: "test-engine", ownsCompaction: true } },
+        getServerToolClearingEnabled: () => serverClearing,
       });
-    });
-    const messages = [
-      { role: "user", content: "first", timestamp: 1 },
-      { role: "assistant", content: [{ type: "text", text: "a1" }], timestamp: 1 },
-      {
-        role: "toolResult",
-        toolCallId: "old-tool",
-        toolName: "read",
-        content: [{ type: "text", text: "x".repeat(5_000) }],
-        timestamp: 1,
-      },
-      { role: "assistant", content: [{ type: "text", text: "a2" }], timestamp: 1 },
-      { role: "assistant", content: [{ type: "text", text: "a3" }], timestamp: 1 },
-      { role: "assistant", content: [{ type: "text", text: "a4" }], timestamp: 1 },
-    ] as AgentMessage[];
-
-    const guards = installEmbeddedAttemptContextGuards(input as never);
-    expect(hoisted.isCacheTtlEligibleProvider).toHaveBeenCalledExactlyOnceWith(
-      "anthropic",
-      "claude-sonnet-4-6",
-      "anthropic-messages",
-    );
-    expect(hoisted.readLastCacheTtlTimestamp).toHaveBeenCalledExactlyOnceWith(
-      input.sessionManager,
-      {
-        provider: "anthropic",
+      const earlierProjection = "[trimmed by an earlier client-side prune]";
+      if (serverClearing) {
+        // A projection made before this route took over (proxy/OAuth turn, or restored
+        // from the transcript marker) must keep replaying under server clearing.
+        const key = "tool:old-tool:1";
+        input.toolResultPromptProjectionState.replacements.set(key, {
+          content: [{ type: "text", text: earlierProjection }],
+          cacheTtl: "soft",
+        });
+        input.toolResultPromptProjectionState.sourceHashByKey.set(
+          key,
+          createHash("sha256")
+            .update(JSON.stringify(["x".repeat(5_000)]))
+            .digest("base64url"),
+        );
+        input.toolResultPromptProjectionState.frozen.add(key);
+      }
+      input.attempt = {
+        ...input.attempt,
+        config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } } as never,
+        model: { api: "anthropic-messages", contextWindow: 2_048 },
         modelId: "claude-sonnet-4-6",
-      },
-    );
-    await input.activeSession.agent.transformContext?.(messages, new AbortController().signal);
-    const firstTool = engineMessages?.find((message) => message.role === "toolResult");
-    expect(firstTool?.content[0]).toMatchObject({
-      type: "text",
-      text: expect.stringContaining("[Tool result trimmed:"),
-    });
+        provider: "anthropic",
+      };
+      const originalTransform = vi.fn(async (messages: AgentMessage[]) => messages);
+      input.activeSession.agent.transformContext = originalTransform;
+      let engineMessages: AgentMessage[] | undefined;
+      hoisted.installContextEngineLoopHook.mockImplementation(({ agent }) => {
+        const previous = agent.transformContext;
+        agent.transformContext = async (messages: AgentMessage[], signal: AbortSignal) => {
+          const projected = await previous(messages, signal);
+          engineMessages = projected;
+          return projected;
+        };
+        return vi.fn(() => {
+          agent.transformContext = previous;
+        });
+      });
+      const messages = [
+        { role: "user", content: "first", timestamp: 1 },
+        { role: "assistant", content: [{ type: "text", text: "a1" }], timestamp: 1 },
+        {
+          role: "toolResult",
+          toolCallId: "old-tool",
+          toolName: "read",
+          content: [{ type: "text", text: "x".repeat(5_000) }],
+          timestamp: 1,
+        },
+        { role: "assistant", content: [{ type: "text", text: "a2" }], timestamp: 1 },
+        { role: "assistant", content: [{ type: "text", text: "a3" }], timestamp: 1 },
+        { role: "assistant", content: [{ type: "text", text: "a4" }], timestamp: 1 },
+      ] as AgentMessage[];
 
-    await input.activeSession.agent.transformContext?.(messages, new AbortController().signal);
-    const secondTool = engineMessages?.find((message) => message.role === "toolResult");
-    expect(secondTool?.content[0]).toMatchObject({ type: "text", text: "x".repeat(5_000) });
+      const guards = installEmbeddedAttemptContextGuards(input as never);
+      expect(hoisted.isCacheTtlEligibleProvider).toHaveBeenCalledExactlyOnceWith(
+        "anthropic",
+        "claude-sonnet-4-6",
+        "anthropic-messages",
+      );
+      expect(hoisted.readLastCacheTtlTimestamp).toHaveBeenCalledExactlyOnceWith(
+        input.sessionManager,
+        {
+          provider: "anthropic",
+          modelId: "claude-sonnet-4-6",
+        },
+      );
+      await input.activeSession.agent.transformContext?.(messages, new AbortController().signal);
+      const firstTool = engineMessages?.find((message) => message.role === "toolResult");
+      expect(firstTool?.content[0]).toMatchObject({
+        type: "text",
+        text: serverClearing ? earlierProjection : expect.stringContaining("[Tool result trimmed:"),
+      });
 
-    guards.remove();
-    expect(input.activeSession.agent.transformContext).toBe(originalTransform);
-  });
+      await input.activeSession.agent.transformContext?.(messages, new AbortController().signal);
+      const secondTool = engineMessages?.find((message) => message.role === "toolResult");
+      expect(secondTool?.content).toEqual(firstTool?.content);
+
+      guards.remove();
+      expect(input.activeSession.agent.transformContext).toBe(originalTransform);
+    },
+  );
 });

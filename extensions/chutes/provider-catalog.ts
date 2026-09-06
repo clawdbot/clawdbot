@@ -19,10 +19,9 @@ export function buildStaticChutesProvider(): ModelProviderConfig {
  * Accepts an optional access token (API key or OAuth access token) for authenticated discovery.
  */
 export async function buildChutesProvider(accessToken?: string): Promise<ModelProviderConfig> {
-  const models = await discoverChutesModels(accessToken);
   return {
     baseUrl: CHUTES_BASE_URL,
     api: "openai-completions",
-    models: models.length > 0 ? models : structuredClone(CHUTES_MODEL_CATALOG),
+    models: await discoverChutesModels(accessToken),
   };
 }

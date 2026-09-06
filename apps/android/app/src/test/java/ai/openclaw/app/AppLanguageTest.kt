@@ -1,16 +1,18 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.chat.ChatThinkingLevelOption
 import ai.openclaw.app.i18n.NativeStringResources
 import ai.openclaw.app.i18n.joinedNativeText
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.node.NodePresenceAliveBeacon
-import ai.openclaw.app.ui.chat.contextMeterThinkingLabel
+import ai.openclaw.app.ui.chat.chatThinkingOptionLabel
 import ai.openclaw.app.ui.formatApprovalDuration
 import ai.openclaw.app.ui.formatCronWake
 import ai.openclaw.app.ui.formatUsageUpdated
 import ai.openclaw.app.ui.skillWorkshopStatusLabel
+import android.content.res.Configuration
 import android.os.Build
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.os.LocaleListCompat
@@ -25,6 +27,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.xmlpull.v1.XmlPullParser
+import java.util.Locale
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -152,8 +155,8 @@ class AppLanguageTest {
       assertEquals("Rejeté", skillWorkshopStatusLabel("rejected"))
       assertEquals("Chargement", skillWorkshopStatusLabel("loading"))
       assertEquals("future_status", skillWorkshopStatusLabel("future_status"))
-      assertEquals("Élevé", contextMeterThinkingLabel("high"))
-      assertEquals("adaptive", contextMeterThinkingLabel("adaptive"))
+      assertEquals("Élevé", chatThinkingOptionLabel(ChatThinkingLevelOption("high", "high")))
+      assertEquals("Adaptatif", chatThinkingOptionLabel(ChatThinkingLevelOption("adaptive", "adaptive")))
       val androidRelease =
         Build.VERSION.RELEASE
           ?.trim()
@@ -163,7 +166,14 @@ class AppLanguageTest {
         "Android $androidRelease (SDK ${Build.VERSION.SDK_INT})",
         NodePresenceAliveBeacon.androidPlatformMetadata(),
       )
-      assertEquals("Connexion…", gatewayConnectionStatusForDisplay("Connecting…"))
+      val frenchContext =
+        activity.get().createConfigurationContext(
+          Configuration(activity.get().resources.configuration).apply { setLocale(Locale.FRENCH) },
+        )
+      assertEquals(
+        frenchContext.getString(R.string.native_72021eb70e91b4d5),
+        gatewayConnectionStatusForDisplay("Connecting…"),
+      )
       assertEquals(
         "Impossible de charger les approbations.",
         gatewayExecApprovalTextForDisplay("Could not load approvals."),

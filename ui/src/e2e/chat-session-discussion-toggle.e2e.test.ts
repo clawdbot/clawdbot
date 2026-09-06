@@ -1,7 +1,7 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext } from "playwright";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   controlUiSessionUrl,
@@ -17,12 +17,12 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "session-discussion-toggle",
-);
+let proofDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    proofDir = createControlUiE2eArtifactDir("session-discussion-toggle");
+  }
+});
 
 let server: ControlUiE2eServer;
 let browser: Browser;
@@ -41,9 +41,6 @@ describeControlUiE2e("session discussion toggle", () => {
     }
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     server = await startControlUiE2eServer();
-    if (captureUiProof) {
-      await mkdir(proofDir, { recursive: true });
-    }
   });
 
   afterEach(closeOpenContexts);

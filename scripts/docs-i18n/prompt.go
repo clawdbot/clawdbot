@@ -61,12 +61,12 @@ var alwaysProtectedProductNames = []string{
 }
 
 var contextualProtectedProductNames = []string{
-	"Render", "Matrix", "Raft", "Chutes", "fal", "Fal", "Fireworks", "Inferrs", "Meta", "Runway", "Synthetic", "Upstash Box", "Lobster", "Mantis", "Tokenjuice",
+	"Render", "Matrix", "Raft", "Chutes", "fal", "Fal", "Fireworks", "Meta", "Runway", "Synthetic", "Upstash Box", "Lobster", "Mantis", "Tokenjuice",
 }
 
 func protectedProductNameRule() string {
 	contextualDisplay := []string{
-		"Render", "Matrix", "Raft", "Chutes", "fal (title: Fal)", "Fireworks", "Inferrs", "Meta", "Runway", "Synthetic", "Upstash Box", "Lobster", "Mantis", "Tokenjuice",
+		"Render", "Matrix", "Raft", "Chutes", "fal (title: Fal)", "Fireworks", "Meta", "Runway", "Synthetic", "Upstash Box", "Lobster", "Mantis", "Tokenjuice",
 	}
 	return fmt.Sprintf(
 		"- Keep product names in English: %s. When they name the documented product, provider, protocol, integration, runtime, or plugin, also preserve ambiguous names exactly: %s. Translate the same words normally when the source clearly uses them as ordinary prose instead of a name.",
@@ -172,7 +172,7 @@ Rules:
 - Preserve Markdown list nodes exactly: ordered versus unordered kind, nesting, item count, and ordered-list starting number. Do not let translated prose accidentally become a list item; for example, if a wrapped date would begin a line with “1.”, rephrase it or keep it on the preceding line when the source is not a list.
 - Preserve HTML/MDX tag names, attribute names, nesting, and structural attribute values exactly. Never change resource or behavior attributes such as “href”, “src”, “id”, “icon”, “path”, “type”, or “default”.
 - Translate user-visible prose inside string-valued component attributes such as “title”, “label”, “description”, and “placeholder”, unless a higher-precedence literal UI-label rule protects that value. Do not translate code-like attribute values.
-- Do not translate or modify code spans, executable code or config blocks, config keys, CLI flags, environment variables, commands, or placeholders such as __OC_I18N_####__.
+- Do not translate or modify code spans, executable code or config blocks, config keys, CLI flags, environment variables, or commands. Preserve every placeholder byte-for-byte and with exactly the same occurrence count as in the input (for example, __OC_I18N_####__). Never repeat a placeholder when expanding a comparison or clarifying a reference. Express precedence chains as an inline priority order from highest to lowest, naming each item once; use pronouns for later references.
 - Fenced text, transcript, output, and documentation examples are an exception to the preceding block rule: preserve angle-bracket placeholders, square-bracket config/protocol markers, and double-bracket directive tokens exactly, but translate ordinary human prose, including prose surrounding protected directive tokens.
 - Do not alter URLs, anchors, path fragments, or identifier spelling.
 - Preserve link-label association: translate each Markdown link label in place. Never move link markup to a different word or entity, and never replace a protected product-name label with a neighboring product name.

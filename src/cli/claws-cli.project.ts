@@ -16,10 +16,15 @@ import {
   validateClawProject,
 } from "../claws/project.js";
 import { readClawManifestFile } from "../claws/reader.js";
-import { CLAW_OUTPUT_STABILITY, type ClawAddPlan, type ClawDiagnostic } from "../claws/types.js";
+import { CLAW_OUTPUT_STABILITY, type ClawAddPlan } from "../claws/types.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+import {
+  emitClawFailure,
+  formatClawDiagnostics,
+  logClawExperimentalWarning,
+} from "./claws-cli-output.js";
 import type {
   ClawsBuildOptions,
   ClawsCreateOptions,
@@ -34,16 +39,6 @@ type PreparedDev = {
 
 const CLAW_DEV_RESULT_SCHEMA_VERSION = "openclaw.clawDev.v1" as const;
 
-function formatDiagnostics(diagnostics: ClawDiagnostic[]): string {
-  return diagnostics
-    .map((item) => `${item.level.toUpperCase()} ${item.code} ${item.path}: ${item.message}`)
-    .join("\n");
-}
-
-function logExperimentalWarning(runtime: RuntimeEnv): void {
-  runtime.log("Experimental: Claws contracts may change while RFC 0016 is under review.");
-}
-
 function reportProjectError(
   error: unknown,
   fallbackCode: string,
@@ -56,17 +51,12 @@ function reportProjectError(
 ): void {
   const code = error instanceof ClawProjectError ? error.code : fallbackCode;
   const message = error instanceof Error ? error.message : String(error);
-  if (json) {
-    writeRuntimeJson(runtime, {
-      schemaVersion,
-      stability: CLAW_OUTPUT_STABILITY,
-      ok: false,
-      error: { code, message },
-    });
-  } else {
-    runtime.error(message);
-  }
-  runtime.exit(1);
+  emitClawFailure(runtime, json, message, {
+    schemaVersion,
+    stability: CLAW_OUTPUT_STABILITY,
+    ok: false,
+    error: { code, message },
+  });
 }
 
 function logDevPlanSummary(plan: ClawAddPlan, runtime: RuntimeEnv): void {
@@ -87,7 +77,7 @@ async function prepareDev(projectPath: string, opts: ClawsDevOptions): Promise<P
       if (!result.ok) {
         throw new ClawProjectError(
           "artifact_verification_failed",
-          formatDiagnostics(result.diagnostics),
+          formatClawDiagnostics(result.diagnostics),
         );
       }
       const configSnapshot = await readConfigFileSnapshot({
@@ -155,7 +145,7 @@ export async function runClawsCreateCommand(
       });
       return;
     }
-    logExperimentalWarning(runtime);
+    logClawExperimentalWarning(runtime);
     runtime.log(`Created Claw project: ${result.root}`);
     runtime.log(`Package: ${result.packageJson.name}@${result.packageJson.version}`);
   } catch (error) {
@@ -177,18 +167,13 @@ export async function runClawsValidateCommand(
   assertExperimentalClawsEnabled();
   const result = await validateClawProject(projectPath);
   if (!result.ok) {
-    if (opts.json) {
-      writeRuntimeJson(runtime, {
-        schemaVersion: CLAW_PROJECT_RESULT_SCHEMA_VERSION,
-        stability: CLAW_OUTPUT_STABILITY,
-        ok: false,
-        root: result.root,
-        diagnostics: result.diagnostics,
-      });
-    } else {
-      runtime.error(formatDiagnostics(result.diagnostics));
-    }
-    runtime.exit(1);
+    emitClawFailure(runtime, opts.json, formatClawDiagnostics(result.diagnostics), {
+      schemaVersion: CLAW_PROJECT_RESULT_SCHEMA_VERSION,
+      stability: CLAW_OUTPUT_STABILITY,
+      ok: false,
+      root: result.root,
+      diagnostics: result.diagnostics,
+    });
     return;
   }
   if (opts.json) {
@@ -205,7 +190,7 @@ export async function runClawsValidateCommand(
     });
     return;
   }
-  logExperimentalWarning(runtime);
+  logClawExperimentalWarning(runtime);
   runtime.log(`Valid Claw project: ${result.root}`);
   runtime.log(`Package: ${result.packageJson.name}@${result.packageJson.version}`);
   for (const path of result.excludedPaths) {
@@ -225,7 +210,7 @@ export async function runClawsBuildCommand(
       writeRuntimeJson(runtime, { ...result, stability: CLAW_OUTPUT_STABILITY, ok: true });
       return;
     }
-    logExperimentalWarning(runtime);
+    logClawExperimentalWarning(runtime);
     runtime.log(`Built Claw: ${result.claw.name}@${result.claw.version}`);
     runtime.log(`Artifact: ${result.artifact}`);
     runtime.log(`Integrity: ${result.integrity}`);
@@ -277,12 +262,12 @@ export async function runClawsDevCommand(
       plan,
     });
   } else {
-    logExperimentalWarning(runtime);
+    logClawExperimentalWarning(runtime);
     runtime.log(`Claw dev preview: ${build.claw.name}@${build.claw.version}`);
     runtime.log(`Artifact integrity: ${build.integrity}`);
     logDevPlanSummary(plan, runtime);
     if (plan.blockers.length > 0) {
-      runtime.error(formatDiagnostics(plan.blockers));
+      runtime.error(formatClawDiagnostics(plan.blockers));
     }
   }
   if (plan.blockers.length > 0) {

@@ -4,10 +4,19 @@ import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 
-const { completionMock, killProcessTreeMock, spawnMock, windowsLegacyOutput } = vi.hoisted(() => ({
+const {
+  completionMock,
+  createTerminationControllerMock,
+  settleTerminationMock,
+  spawnMock,
+  terminateMock,
+  windowsLegacyOutput,
+} = vi.hoisted(() => ({
   completionMock: vi.fn(),
-  killProcessTreeMock: vi.fn(),
+  createTerminationControllerMock: vi.fn(),
+  settleTerminationMock: vi.fn(),
   spawnMock: vi.fn(),
+  terminateMock: vi.fn(),
   windowsLegacyOutput: { enabled: false },
 }));
 
@@ -42,12 +51,13 @@ vi.mock("../../process/exec.js", () => ({
   },
 }));
 
-vi.mock("../../process/kill-tree.js", () => ({
-  killProcessTree: killProcessTreeMock,
+vi.mock("../../process/exec-termination.js", () => ({
+  createCommandTerminationController: createTerminationControllerMock,
 }));
 
 type StubChild = EventEmitter & {
   kill: ReturnType<typeof vi.fn>;
+  nodeChildProcess: StubChild;
   pid?: number;
   stderr: EventEmitter;
   stdout: EventEmitter;
@@ -56,6 +66,7 @@ type StubChild = EventEmitter & {
 
 function createStubChild(): StubChild {
   const child = new EventEmitter() as StubChild;
+  child.nodeChildProcess = child;
   child.pid = 1234;
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
@@ -67,7 +78,15 @@ function createStubChild(): StubChild {
 
 describe("execCommand", () => {
   beforeEach(() => {
-    killProcessTreeMock.mockReset();
+    createTerminationControllerMock.mockReset();
+    terminateMock.mockReset();
+    terminateMock.mockReturnValue(false);
+    settleTerminationMock.mockReset();
+    settleTerminationMock.mockResolvedValue(undefined);
+    createTerminationControllerMock.mockReturnValue({
+      terminate: terminateMock,
+      settle: settleTerminationMock,
+    });
     spawnMock.mockReset();
     completionMock.mockReset();
     windowsLegacyOutput.enabled = false;
@@ -116,11 +135,20 @@ describe("execCommand", () => {
 
     expect(spawnMock).toHaveBeenCalledWith(["cmd", "arg"], {
       buffer: false,
+      cancelSignal: expect.any(AbortSignal),
       cwd: "/tmp",
       detached: process.platform !== "win32",
+      forceKillAfterDelay: 5000,
       reject: false,
       stdio: ["ignore", "pipe", "pipe"],
     });
+    expect(createTerminationControllerMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        child,
+        processTree: { mode: "graceful" },
+        killGraceMs: 5000,
+      }),
+    );
   });
 
   it("honors caller-supplied small output caps", async () => {
@@ -284,10 +312,7 @@ describe("execCommand", () => {
     wait.resolve(0);
 
     const result = await resultPromise;
-    expect(killProcessTreeMock).toHaveBeenCalledWith(1234, {
-      detached: process.platform !== "win32",
-      graceMs: 5000,
-    });
+    expect(terminateMock).toHaveBeenCalledOnce();
     expect(child.kill).not.toHaveBeenCalled();
     expect(result.code).toBe(1);
     expect(result.killed).toBe(true);
@@ -310,15 +335,36 @@ describe("execCommand", () => {
 
     const resultPromise = execCommand("cmd", [], "/tmp", { timeout: 10 });
     await vi.advanceTimersByTimeAsync(10);
-    expect(killProcessTreeMock).toHaveBeenCalledWith(1234, {
-      detached: process.platform !== "win32",
-      graceMs: 5000,
-    });
+    expect(terminateMock).toHaveBeenCalledOnce();
     expect(child.kill).not.toHaveBeenCalled();
 
     wait.resolve(null);
     const result = await resultPromise;
     expect(result.killed).toBe(true);
+  });
+
+  it("does not resolve a killed command until process-tree cleanup settles", async () => {
+    vi.useFakeTimers();
+    const child = createStubChild();
+    const wait = createDeferred<number | null>();
+    const cleanup = createDeferred();
+    spawnMock.mockReturnValue(child);
+    completionMock.mockReturnValue(wait.promise);
+    settleTerminationMock.mockReturnValue(cleanup.promise);
+    const { execCommand } = await import("./exec.js");
+
+    const resultPromise = execCommand("cmd", [], "/tmp", { timeout: 10 });
+    await vi.advanceTimersByTimeAsync(10);
+    wait.resolve(null);
+    let resolved = false;
+    void resultPromise.then(() => {
+      resolved = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(resolved).toBe(false);
+    cleanup.resolve();
+    await expect(resultPromise).resolves.toMatchObject({ killed: true });
   });
 
   it("does not crash when stdout or stderr emit an error event", async () => {

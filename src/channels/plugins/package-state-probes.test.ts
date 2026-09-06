@@ -110,8 +110,6 @@ describe("channel package-state probes", () => {
           id: "env-chat",
           configuredState: {
             env: { allOf: ["ENV_CHAT_TOKEN"] },
-            specifier: "./missing-configured-state",
-            exportName: "missingConfiguredState",
           },
         },
       } satisfies PluginChannelCatalogEntry,
@@ -133,6 +131,27 @@ describe("channel package-state probes", () => {
         env: { ENV_CHAT_TOKEN: " " },
       }),
     ).toBe(false);
+  });
+
+  it.each([
+    { name: "PATH", env: { PATH: "/usr/bin" }, configured: false },
+    { name: "mixed_case_token", env: { MIXED_CASE_TOKEN: "token" }, configured: true },
+  ])("applies the safe channel env-trigger contract to $name", ({ name, env, configured }) => {
+    listChannelCatalogEntriesMock.mockReturnValue([
+      {
+        ...makeBundledChannelCatalogEntry({ pluginId: "env-chat", channelId: "env-chat" }),
+        channel: { id: "env-chat", configuredState: { env: { allOf: [name] } } },
+      } satisfies PluginChannelCatalogEntry,
+    ]);
+
+    expect(
+      hasBundledChannelPackageState({
+        metadataKey: "configuredState",
+        channelId: "env-chat",
+        cfg: {},
+        env,
+      }),
+    ).toBe(configured);
   });
 
   it("prefers built bundled package-state probes when the catalog root is source", () => {
@@ -219,50 +238,57 @@ describe("channel package-state probes", () => {
     ).toBe(true);
   });
 
-  it("preserves source overlay precedence over packaged package-state probes", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-state-overlay-"));
-    tempDirs.push(root);
-    const sourceRoot = path.join(root, "extensions", "matrix");
-    const builtRoot = path.join(root, "dist", "extensions", "matrix");
-    fs.mkdirSync(sourceRoot, { recursive: true });
-    fs.mkdirSync(builtRoot, { recursive: true });
-    fs.writeFileSync(
-      path.join(sourceRoot, "auth-presence.js"),
-      "module.exports.hasAnyMatrixAuth = () => true;\n",
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(builtRoot, "auth-presence.js"),
-      "module.exports.hasAnyMatrixAuth = () => false;\n",
-      "utf8",
-    );
-    isBundledSourceOverlayPathMock.mockImplementation(
-      ({ sourcePath }: { sourcePath: string }) => path.resolve(sourcePath) === sourceRoot,
-    );
+  it.each(["js", "mtsx", "ctsx"])(
+    "preserves %s source overlay precedence over packaged package-state probes",
+    (extension) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-state-overlay-"));
+      tempDirs.push(root);
+      const sourceRoot = path.join(root, "extensions", "matrix");
+      const builtRoot = path.join(root, "dist", "extensions", "matrix");
+      fs.mkdirSync(sourceRoot, { recursive: true });
+      fs.mkdirSync(builtRoot, { recursive: true });
+      fs.writeFileSync(
+        path.join(sourceRoot, `auth-presence.${extension}`),
+        extension === "js"
+          ? "module.exports.hasAnyMatrixAuth = () => true;\n"
+          : "export const hasAnyMatrixAuth = (): boolean => true;\n",
+        "utf8",
+      );
+      fs.writeFileSync(
+        path.join(builtRoot, "auth-presence.js"),
+        "module.exports.hasAnyMatrixAuth = () => false;\n",
+        "utf8",
+      );
+      isBundledSourceOverlayPathMock.mockImplementation(
+        ({ sourcePath }: { sourcePath: string }) => path.resolve(sourcePath) === sourceRoot,
+      );
 
-    listChannelCatalogEntriesMock.mockReturnValue([
-      {
-        pluginId: "matrix",
-        origin: "bundled",
-        rootDir: sourceRoot,
-        channel: {
-          id: "matrix",
-          persistedAuthState: {
-            specifier: "./auth-presence",
-            exportName: "hasAnyMatrixAuth",
+      listChannelCatalogEntriesMock.mockReturnValue([
+        {
+          pluginId: "matrix",
+          origin: "bundled",
+          rootDir: sourceRoot,
+          channel: {
+            id: "matrix",
+            configuredState: {
+              specifier: `./auth-presence.${extension}`,
+              exportName: "hasAnyMatrixAuth",
+            },
+            persistedAuthState: {
+              specifier: `./auth-presence.${extension}`,
+              exportName: "hasAnyMatrixAuth",
+            },
           },
-        },
-      } satisfies PluginChannelCatalogEntry,
-    ]);
+        } satisfies PluginChannelCatalogEntry,
+      ]);
 
-    expect(
-      hasBundledChannelPackageState({
-        metadataKey: "persistedAuthState",
-        channelId: "matrix",
-        cfg: {},
-      }),
-    ).toBe(true);
-  });
+      for (const metadataKey of ["configuredState", "persistedAuthState"] as const) {
+        expect(hasBundledChannelPackageState({ metadataKey, channelId: "matrix", cfg: {} })).toBe(
+          true,
+        );
+      }
+    },
+  );
 
   it("preserves parent-mounted source overlay precedence over packaged package-state probes", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-state-parent-overlay-"));

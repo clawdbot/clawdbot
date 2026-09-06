@@ -24,7 +24,9 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveCronDeliveryPlan } from "../cron/delivery-plan.js";
 import { dispatchCronDelivery } from "../cron/isolated-agent/delivery-dispatch.js";
+import type { CronJob } from "../cron/types.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { claimAgentRunContext, clearAgentRunContext } from "../infra/agent-run-registry.js";
 import * as secureRandom from "../infra/secure-random.js";
@@ -32,7 +34,12 @@ import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.
 import * as transcriptEvents from "../sessions/transcript-events.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { persistUserTurnTranscript } from "../sessions/user-turn-transcript.test-support.js";
-import { ensureProfileForEmail, setAvatar, setDisplayName } from "../state/user-profiles.js";
+import {
+  ensureProfileForEmail,
+  listProfiles,
+  setAvatar,
+  setDisplayName,
+} from "../state/user-profiles.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -219,6 +226,7 @@ function attributedMessageProjection(value: unknown) {
     content: message.content,
     __openclaw: {
       senderId: metadata.senderId,
+      senderIdentity: metadata.senderIdentity,
       senderName: metadata.senderName,
       senderUsername: metadata.senderUsername,
       senderProfileAvatarUrl: metadata.senderProfileAvatarUrl,
@@ -272,6 +280,17 @@ describe("session.message websocket events", () => {
         );
       };
       const declaredKeys = ["agent:main:watch-00", "agent:main:watch-01"];
+      const replacementKey = "agent:main:replacement";
+      const storePath = await createSessionStoreFile();
+      await writeSessionStore({
+        storePath,
+        entries: Object.fromEntries(
+          [...declaredKeys, replacementKey].map((key) => [
+            key,
+            { sessionId: key, updatedAt: Date.now() },
+          ]),
+        ),
+      });
       const declaredPresence = onceMessage(observerWs, (message) => {
         const entry = findWatchedEntry(message);
         return (
@@ -286,7 +305,14 @@ describe("session.message websocket events", () => {
       const declaredEvent = await declaredPresence;
       const declaredEntry = findWatchedEntry(declaredEvent);
       expect(declaredEntry?.watchedSessions).toEqual(declaredKeys);
-      expect(declaredEntry?.user).toBeUndefined();
+      const ownerProfile = listProfiles().find((profile) => profile.emails.length === 0);
+      expect(ownerProfile).toBeDefined();
+      expect(declaredEntry?.user).toEqual({
+        id: ownerProfile!.id,
+        identity: { type: "profile", id: ownerProfile!.id },
+        avatarUrl: currentProfileAvatarUrl(ownerProfile!.id),
+        ...(ownerProfile!.displayName ? { name: ownerProfile!.displayName } : {}),
+      });
       expect(declaredEvent.stateVersion?.presence).toBeGreaterThan(initialPresenceVersion ?? 0);
 
       // Sidebar narration owns message subscriptions for running rows, but those
@@ -318,7 +344,6 @@ describe("session.message websocket events", () => {
         )?.watchedSessions,
       ).toEqual(declaredKeys);
 
-      const replacementKey = "agent:main:replacement";
       const replacementPresence = onceMessage(observerWs, (message) => {
         const entry = findWatchedEntry(message);
         return Array.isArray(entry?.watchedSessions) && entry.watchedSessions[0] === replacementKey;
@@ -998,27 +1023,32 @@ describe("session.message websocket events", () => {
       });
       await rpcReq(webWs, "sessions.messages.subscribe", { key: sessionKey });
 
+      const job: CronJob = {
+        id: "job-webchat",
+        name: "Current WebChat completion",
+        sessionTarget: "current",
+        sessionKey,
+        wakeMode: "now",
+        enabled: true,
+        state: {},
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        schedule: { kind: "at", at: "2030-01-01T00:00:00.000Z" },
+        payload: { kind: "agentTurn", message: "Finish later" },
+      };
       const liveEventPromise = waitForSessionMessageEvent(webWs, sessionKey);
       const dispatched = await dispatchCronDelivery({
         cfg: { session: { store: storePath } },
         cfgWithAgentDefaults: { session: { store: storePath } },
         deps: {},
-        job: {
-          id: "job-webchat",
-          name: "Current WebChat completion",
-          sessionTarget: "current",
-          sessionKey,
-          wakeMode: "now",
-          enabled: true,
-          state: {},
-          createdAtMs: 1,
-          updatedAtMs: 1,
-          schedule: { kind: "at", at: "2030-01-01T00:00:00.000Z" },
-          payload: { kind: "agentTurn", message: "Finish later" },
-        },
+        job,
         agentId: "main",
         agentSessionKey: "cron:job-webchat",
         sourceSessionKey: sessionKey,
+        sourceSessionGeneration: {
+          sessionId,
+          lifecycleRevision: "current-cron-revision",
+        },
         runSessionKey: "cron:job-webchat:run:3000",
         sessionId: "detached-cron-session",
         lifecycleRevision: "detached-cron-revision",
@@ -1032,8 +1062,9 @@ describe("session.message websocket events", () => {
           mode: "implicit",
           error: new Error("WebChat uses canonical session events"),
         },
+        deliveryPlan: resolveCronDeliveryPlan(job),
         deliveryRequested: true,
-        skipHeartbeatDelivery: false,
+        undeliveredRunStatus: "ok",
         spawnOnlyHandoff: false,
         sourceDeliveryOutcome: {
           visibleDeliveries: [],
@@ -1175,6 +1206,7 @@ describe("session.message websocket events", () => {
             idempotencyKey: params.idempotencyKey,
             sender: {
               id: profile.id,
+              identity: { type: "profile", id: profile.id },
               name: params.senderName,
               username: "ada",
             },
@@ -1212,6 +1244,7 @@ describe("session.message websocket events", () => {
         content: text,
         __openclaw: {
           senderId: profile.id,
+          senderIdentity: { type: "profile", id: profile.id },
           senderName,
           senderUsername: "ada",
           senderProfileAvatarUrl: avatarUrl,
@@ -1977,6 +2010,39 @@ describe("session.message websocket events", () => {
     });
   });
 
+  test("marks display-cap truncation structurally on live session.message events", async () => {
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: { main: { sessionId: "sess-main", updatedAt: Date.now() } },
+      storePath,
+    });
+    const transcriptMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "x".repeat(9_000) }],
+      timestamp: Date.now(),
+    };
+    await persistSessionTranscriptTurn(
+      { agentId: "main", sessionId: "sess-main", sessionKey: "agent:main:main", storePath },
+      { messages: [{ message: transcriptMessage }], updateMode: "none" },
+    );
+
+    await withOperatorSessionSubscriber(async (ws) => {
+      const { messageEvent } = await emitTranscriptUpdateAndCollectMessageEvent({
+        ws,
+        sessionKey: "agent:main:main",
+        sessionFile: "agent:main:main",
+        message: transcriptMessage,
+        messageId: "msg-capped",
+      });
+      const payload = requireRecord(messageEvent.payload, "capped message payload");
+      const message = requireRecord(payload.message, "capped message");
+      // The preview is bounded by the display cap and says so structurally, so a
+      // non-UI consumer can fetch the full row instead of sniffing the sentinel.
+      expect(JSON.stringify(message.content)).toContain("...(truncated)...");
+      expect(message["__openclaw"]).toMatchObject({ truncated: true, reason: "display-cap" });
+    });
+  });
+
   test("prefers carried transcript sequence for live session events", async () => {
     const storePath = await createSessionStoreFile();
     await writeSessionStore({
@@ -2029,7 +2095,7 @@ describe("session.message websocket events", () => {
       content: [{ type: "text", text: "early selected prompt" }],
       timestamp: Date.now(),
     };
-    await persistSessionTranscriptTurn(
+    const persisted = await persistSessionTranscriptTurn(
       {
         agentId: "main",
         sessionId: "sess-main",
@@ -2037,10 +2103,11 @@ describe("session.message websocket events", () => {
         storePath,
       },
       {
-        messages: [{ message: transcriptMessage }],
+        messages: [{ eventId: "msg-selected", message: transcriptMessage }],
         updateMode: "none",
       },
     );
+    expect(persisted.appendedCount).toBe(1);
 
     const ws = await harness.openWs();
     try {
@@ -2059,7 +2126,10 @@ describe("session.message websocket events", () => {
           sessionKey: "agent:main:main",
           storePath,
         },
-        message: transcriptMessage,
+        message: {
+          ...transcriptMessage,
+          content: [{ type: "text", text: "stale queued prompt" }],
+        },
         messageId: "msg-selected",
       });
 
@@ -2068,6 +2138,14 @@ describe("session.message websocket events", () => {
         sessionKey: "agent:main:main",
         messageId: "msg-selected",
         messageSeq: 1,
+      });
+      expect(requireRecord(messageEvent.payload, "selected session event").message).toMatchObject({
+        ...transcriptMessage,
+        __openclaw: {
+          id: "msg-selected",
+          seq: 1,
+          transcriptPosition: { source: expect.any(String), rawSeq: expect.any(Number) },
+        },
       });
     } finally {
       ws.close();
@@ -2659,6 +2737,7 @@ describe("session.message websocket events", () => {
     const ledger: WorkerTranscriptCommitStore = {
       begin: () => ({ kind: "claimed" }),
       complete: ({ outcome }) => outcome,
+      discardUncommitted: () => {},
     };
     const committer = createWorkerTranscriptCommitter({ getConfig: () => config, store: ledger });
     const identity: WorkerConnectionIdentity = {
@@ -2719,6 +2798,7 @@ describe("session.message websocket events", () => {
         ),
       );
       const outcome = await committer.commit({
+        assertCurrent: () => undefined,
         identity,
         request: {
           runEpoch: identity.ownerEpoch,

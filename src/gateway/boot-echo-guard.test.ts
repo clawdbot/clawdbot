@@ -57,4 +57,20 @@ describe("stripBootEchoFromOutboundText", () => {
     expect(tail.length).toBeGreaterThan(80);
     expect(stripBootEchoFromOutboundText(tail, LONG_BOOT_PROMPT)).toBe("");
   });
+
+  it("preserves 600 distinct surrogate-half collisions but suppresses identical echoes", () => {
+    for (let index = 0; index < 600; index += 1) {
+      const codePoint = 0x1f600 + (index % 64);
+      const sharedHigh = index < 300;
+      const prefix = sharedHigh ? "x".repeat(79) : "";
+      const suffix = sharedHigh ? "" : "x".repeat(79);
+      const bootPrompt = `${prefix}${String.fromCodePoint(codePoint)}${suffix}boot`;
+      const outbound = `${prefix}${String.fromCodePoint(codePoint + (sharedHigh ? 64 : 0x400))}${suffix}visible`;
+
+      expect(stripBootEchoFromOutboundText(outbound, bootPrompt)).toBe(outbound);
+    }
+    for (const text of [`${"x".repeat(79)}😀`, `😀${"x".repeat(77)}😁`]) {
+      expect(stripBootEchoFromOutboundText(text, text)).toBe("");
+    }
+  });
 });

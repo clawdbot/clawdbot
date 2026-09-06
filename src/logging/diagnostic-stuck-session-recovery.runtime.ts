@@ -1,20 +1,24 @@
+import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/active-run-projections.js";
 // Stuck session recovery runtime helpers inspect embedded sessions for recovery.
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
+import { resolveActiveEmbeddedRunRecoveryBlocker } from "../agents/embedded-agent-runner/run-state.js";
 import {
   abortAndDrainEmbeddedAgentRun,
   isEmbeddedAgentRunActive,
   isEmbeddedAgentRunHandleActive,
-  resolveEmbeddedAgentReplyRunPhase,
-  resolveActiveEmbeddedRunSessionId,
+  resolveEmbeddedReplyActivity,
   resolveActiveEmbeddedRunSessionIdBySessionFile,
   resolveActiveEmbeddedRunHandleSessionId,
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
 } from "../agents/embedded-agent-runner/runs.js";
+import { recoverTerminalSessionPlacementTurn } from "../agents/session-placement-admission.js";
+import { prepareStaleFollowupDrainRetirement } from "../auto-reply/reply/queue/drain.js";
 import {
   getCommandLaneActiveTaskIds,
   getCommandLaneSnapshot,
   resetCommandLane,
 } from "../process/command-queue.js";
+import { resolveRunStaleThresholdMs } from "./diagnostic-run-activity-snapshot.js";
 import { getDiagnosticSessionActivitySnapshot } from "./diagnostic-run-activity.js";
 import { diagnosticLogger as diag } from "./diagnostic-runtime.js";
 import {
@@ -62,6 +66,7 @@ function isActiveRunProgressStale(params: {
   sessionKey?: string;
   queueDepth?: number;
   staleAbortMs: number;
+  allowActiveAbort?: boolean;
   /**
    * When false, staleness is evaluated even with a zero queued backlog.
    * Run-handle recovery keeps the gate so an unqueued active run is not
@@ -70,19 +75,30 @@ function isActiveRunProgressStale(params: {
    */
   requireQueueBacklog?: boolean;
 }): boolean {
-  if ((params.queueDepth ?? 0) <= 0 && params.requireQueueBacklog !== false) {
+  if (
+    !params.allowActiveAbort &&
+    (params.queueDepth ?? 0) <= 0 &&
+    params.requireQueueBacklog !== false
+  ) {
     return false;
   }
   const activity = getDiagnosticSessionActivitySnapshot({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
   });
-  const lastProgressAgeMs = activity.lastProgressAgeMs;
+  if (params.allowActiveAbort) {
+    // Recovery may have queued before a fresh byte arrived. Revalidate the
+    // backend allowance here; active tools retain their separate recovery policy.
+    return (
+      activity.activeWorkKind === "tool_call" ||
+      activity.activeBackendLivenessDeadlineAtMs === undefined ||
+      Date.now() >= activity.activeBackendLivenessDeadlineAtMs
+    );
+  }
   // A missing activity row is the orphan-handle state: classification age is
   // the only progress evidence available, so it owns the stale fallback.
-  return typeof lastProgressAgeMs === "number"
-    ? lastProgressAgeMs >= params.staleAbortMs
-    : params.ageMs >= params.staleAbortMs;
+  const evidenceAgeMs = activity.lastProgressAgeMs ?? params.ageMs;
+  return evidenceAgeMs >= resolveRunStaleThresholdMs(activity, evidenceAgeMs, params.staleAbortMs);
 }
 
 function formatRecoveryContext(
@@ -148,6 +164,24 @@ export async function recoverStuckDiagnosticSession(
         sessionKey: params.sessionKey,
       };
     }
+    const terminalWorkerError = params.sessionId
+      ? recoverTerminalSessionPlacementTurn({
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+        })
+      : undefined;
+    if (terminalWorkerError !== undefined) {
+      // The placement owner already recorded failure and released its cleanup wait.
+      // Let ordinary turn completion unwind the reply and lane instead of resetting them.
+      return reportRecoveryOutcome({
+        status: "failed",
+        action: "fail_worker_turn",
+        reason: "terminal_worker",
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        error: terminalWorkerError,
+      });
+    }
     const fallbackActiveSessionId =
       params.sessionId && isEmbeddedAgentRunHandleActive(params.sessionId)
         ? params.sessionId
@@ -168,6 +202,7 @@ export async function recoverStuckDiagnosticSession(
         fileActiveWorkSessionId ??
         params.sessionId)
       : (fileActiveWorkSessionId ?? params.sessionId);
+    const retireStaleFollowupDrain = prepareStaleFollowupDrainRetirement(key);
     const sessionLane = key ? resolveEmbeddedSessionLane(key) : null;
     const preAbortActiveTaskIds = new Set(
       sessionLane ? getCommandLaneActiveTaskIds(sessionLane) : [],
@@ -177,17 +212,44 @@ export async function recoverStuckDiagnosticSession(
     let forceCleared = false;
     const staleActiveProgressAbortMs = resolveStaleActiveProgressAbortMs(params);
     const staleActiveLaneTaskReleaseMs = resolveStaleActiveLaneTaskReleaseMs(params);
-    const activeReplyPhase = activeWorkSessionId
-      ? resolveEmbeddedAgentReplyRunPhase(activeWorkSessionId)
+    const activeReplyActivity = activeWorkSessionId
+      ? resolveEmbeddedReplyActivity(activeWorkSessionId)
       : undefined;
+    const activeReplyPhase = activeReplyActivity?.phase;
+    // Phase changes refresh the reply operation's activity clock. Session
+    // attention age may predate maintenance, so it cannot own this timeout.
+    const activeReplyAgeMs = activeReplyActivity
+      ? Math.max(0, Date.now() - activeReplyActivity.lastActivityAtMs)
+      : undefined;
+    const maintenancePhase =
+      activeReplyPhase === "preflight_compacting" || activeReplyPhase === "memory_flushing";
+    const activeMaintenanceProtected =
+      maintenancePhase &&
+      activeReplyAgeMs !== undefined &&
+      activeReplyAgeMs < staleActiveLaneTaskReleaseMs;
 
-    if (activeReplyPhase === "waiting_for_global_lane") {
-      // A global-lane queue owner is healthy pending work. Reclaiming it here
-      // reintroduces the silent reply drop that the wait phase prevents.
+    if (activeReplyActivity?.terminalOutcomeCommitted === true) {
+      // The turn already produced its reply and only delivery/finalization is
+      // left, so the no-progress premise is false. Aborting here discards a
+      // completed answer; the finalization lease still bounds this owner.
       return reportRecoveryOutcome({
         status: "skipped",
         action: "keep_lane",
-        reason: "global_lane_wait",
+        reason: "terminal_outcome_committed",
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        activeSessionId: activeWorkSessionId,
+        activeWorkKind: "embedded_run",
+      });
+    }
+
+    if (activeReplyPhase === "waiting_for_global_lane" || activeMaintenanceProtected) {
+      // Queued replies and configured maintenance own their lane until their
+      // producer finishes or the existing compaction safety window expires.
+      return reportRecoveryOutcome({
+        status: "skipped",
+        action: "keep_lane",
+        reason: activeMaintenanceProtected ? "active_reply_work" : "global_lane_wait",
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
         activeSessionId: activeWorkSessionId,
@@ -195,16 +257,15 @@ export async function recoverStuckDiagnosticSession(
     }
 
     if (activeSessionId) {
-      const reclaimStaleActiveRun =
-        params.allowActiveAbort !== true &&
-        isActiveRunProgressStale({
-          ageMs: params.ageMs,
-          sessionId: activeSessionId,
-          sessionKey: params.sessionKey,
-          queueDepth: params.queueDepth,
-          staleAbortMs: staleActiveProgressAbortMs,
-        });
-      if (params.allowActiveAbort !== true && !reclaimStaleActiveRun) {
+      const reclaimStaleActiveRun = isActiveRunProgressStale({
+        ageMs: params.ageMs,
+        sessionId: activeSessionId,
+        sessionKey: params.sessionKey,
+        queueDepth: params.queueDepth,
+        staleAbortMs: staleActiveProgressAbortMs,
+        allowActiveAbort: params.allowActiveAbort,
+      });
+      if (!reclaimStaleActiveRun) {
         const outcome: StuckSessionRecoveryOutcome = {
           status: "skipped",
           action: "observe_only",
@@ -219,13 +280,24 @@ export async function recoverStuckDiagnosticSession(
         );
         return reportRecoveryOutcome(outcome);
       }
-      if (reclaimStaleActiveRun) {
+      if (params.allowActiveAbort !== true) {
         diag.warn(
           `stuck session recovery reclaiming stale active run: ${formatRecoveryContext(params, { activeSessionId })}`,
         );
       }
       // Active embedded runs own their cleanup; registry terminal settle bounds
       // lane release if the owner never drains after this abort.
+      const recoveryBlocker = resolveActiveEmbeddedRunRecoveryBlocker(activeSessionId);
+      if (recoveryBlocker) {
+        return {
+          status: "skipped",
+          action: "keep_lane",
+          reason: recoveryBlocker,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          activeSessionId,
+        };
+      }
       const result = await abortAndDrainEmbeddedAgentRun({
         sessionId: activeSessionId,
         sessionKey: params.sessionKey,
@@ -249,29 +321,19 @@ export async function recoverStuckDiagnosticSession(
           activeSessionId: activeWorkSessionId,
         });
       }
-      const reclaimStaleReplyWork =
-        params.allowActiveAbort !== true &&
-        isActiveRunProgressStale({
-          ageMs: params.ageMs,
-          sessionId: activeWorkSessionId,
-          sessionKey: params.sessionKey,
-          queueDepth: params.queueDepth,
-          staleAbortMs: staleActiveProgressAbortMs,
-          // Reply-only ownership must expire when proven stale even with zero
-          // queued backlog; the queue gate exists to protect run handles that
-          // are actively draining queued turns, and there is no such backlog
-          // here to protect. Recognized maintenance phases are the exception:
-          // preflight compaction and memory flush are explicitly allowed to
-          // run longer than the stale threshold (they honor a configured
-          // compaction timeout), so they keep the queue-backlog guard and are
-          // never force-cleared early by this reclaim path.
-          requireQueueBacklog:
-            activeReplyPhase === "preflight_compacting" || activeReplyPhase === "memory_flushing"
-              ? undefined
-              : false,
-        });
-      if (params.allowActiveAbort === true || reclaimStaleReplyWork) {
-        if (reclaimStaleReplyWork) {
+      const reclaimStaleReplyWork = isActiveRunProgressStale({
+        ageMs: params.ageMs,
+        sessionId: activeWorkSessionId,
+        sessionKey: params.sessionKey,
+        queueDepth: params.queueDepth,
+        staleAbortMs: staleActiveProgressAbortMs,
+        allowActiveAbort: params.allowActiveAbort,
+        // Maintenance retains its backlog gate after the safety window;
+        // other abandoned reply ownership must expire even without a queue.
+        requireQueueBacklog: maintenancePhase ? undefined : false,
+      });
+      if (reclaimStaleReplyWork) {
+        if (params.allowActiveAbort !== true) {
           diag.warn(
             `stuck session recovery reclaiming stale active reply work: ${formatRecoveryContext(
               params,
@@ -303,6 +365,21 @@ export async function recoverStuckDiagnosticSession(
       }
     }
 
+    // A terminal outcome can commit after the initial snapshot but before the
+    // abort owner checks it. Its finalization lease still owns lane release.
+    if (
+      activeSessionId &&
+      resolveEmbeddedReplyActivity(activeSessionId)?.terminalOutcomeCommitted
+    ) {
+      return reportRecoveryOutcome({
+        status: "skipped",
+        action: "keep_lane",
+        reason: "terminal_outcome_committed",
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        activeSessionId,
+      });
+    }
     if (!activeSessionId && sessionLane) {
       const laneSnapshot = getCommandLaneSnapshot(sessionLane);
       if (laneSnapshot.activeCount > 0) {
@@ -313,6 +390,7 @@ export async function recoverStuckDiagnosticSession(
         // after the ownerless-lane window and only if no fresh task appeared.
         if (!laneStartedFreshTask && params.ageMs >= staleActiveLaneTaskReleaseMs) {
           const released = resetCommandLane(sessionLane);
+          retireStaleFollowupDrain?.();
           return reportRecoveryOutcome({
             status: "released",
             action: "release_lane",
@@ -356,6 +434,7 @@ export async function recoverStuckDiagnosticSession(
     const clearStaleSession = !aborted && released === 0 && !activeSessionId;
 
     if (aborted || forceCleared || released > 0 || clearStaleSession) {
+      retireStaleFollowupDrain?.();
       const action = aborted || forceCleared ? "abort_embedded_run" : "release_lane";
       const stoppedFields = formatStoppedCronSessionDiagnosticFields(
         resolveCronSessionDiagnosticContext({ sessionKey: params.sessionKey, activeSessionId }),

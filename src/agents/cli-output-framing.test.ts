@@ -1,3 +1,4 @@
+import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { describe, expect, it, vi } from "vitest";
 import type { CliToolResultDelta, CliToolUseStartDelta } from "./cli-output-contracts.js";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
@@ -272,6 +273,152 @@ describe("createCliJsonlStreamingParser framing", () => {
     ]);
   });
 
+  it("omits the echoed tool_use_result payload MCP image tools duplicate alongside the message copy", () => {
+    const results: CliToolResultDelta[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+      onToolResult: (result) => results.push(result),
+    });
+    const data = "A".repeat(600_000);
+    const screenshotLine = (index: number) =>
+      `${JSON.stringify({
+        type: "user",
+        message: {
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: `screenshot-${index}`,
+              content: [
+                { type: "text", text: "Cursor Position: (1, 2)" },
+                {
+                  type: "image",
+                  source: { type: "base64", media_type: "image/jpeg", data },
+                },
+              ],
+            },
+          ],
+        },
+        // Claude echoes the same payload a second time outside the message.
+        tool_use_result: [
+          { type: "text", text: "Cursor Position: (1, 2)" },
+          { type: "image", source: { type: "base64", media_type: "image/jpeg", data } },
+        ],
+      })}\n`;
+
+    for (let index = 0; index < 20; index += 1) {
+      parser.push(screenshotLine(index));
+    }
+
+    expect(parser.getErrorText()).toBeNull();
+    expect(results).toHaveLength(20);
+    expect(results[0]?.result).toEqual([
+      { type: "text", text: "Cursor Position: (1, 2)" },
+      {
+        type: "image",
+        source: { type: "base64", media_type: "image/jpeg" },
+        omitted: true,
+        bytes: estimateBase64DecodedBytes(data),
+      },
+    ]);
+  });
+
+  it("omits the base64 file payload Claude echoes for built-in image reads", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+    });
+    const base64 = "A".repeat(600_000);
+    const readLine = (index: number) =>
+      `${JSON.stringify({
+        type: "user",
+        message: {
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: `read-${index}`,
+              content: [
+                {
+                  type: "image",
+                  source: { type: "base64", media_type: "image/png", data: base64 },
+                },
+              ],
+            },
+          ],
+        },
+        tool_use_result: { type: "image", file: { base64, type: "image/png", originalSize: 1 } },
+      })}\n`;
+
+    for (let index = 0; index < 20; index += 1) {
+      parser.push(readLine(index));
+    }
+
+    expect(parser.getErrorText()).toBeNull();
+  });
+
+  it.each([
+    {
+      name: "image",
+      field: "images",
+      metadata: { mediaType: "image/png" },
+    },
+    {
+      name: "document",
+      field: "documents",
+      metadata: {},
+    },
+  ] as const)(
+    "omits Agent SDK REPL $name output from retained accounting",
+    ({ field, metadata }) => {
+      const parser = createCliJsonlStreamingParser({
+        backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+        providerId: "claude-cli",
+        onAssistantDelta: () => {},
+      });
+      const base64 = "A".repeat(600_000);
+      const replLine = () =>
+        `${JSON.stringify({
+          type: "user",
+          message: { role: "user", content: [] },
+          tool_use_result: {
+            code: "return await Read({ file_path });",
+            result: {},
+            stdout: "",
+            stderr: "",
+            [field]: [{ base64, ...metadata }],
+          },
+        })}\n`;
+
+      for (let index = 0; index < 20; index += 1) {
+        parser.push(replLine());
+      }
+
+      expect(parser.getErrorText()).toBeNull();
+    },
+  );
+
+  it("normalizes a deeply nested record without exhausting the stack", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+    });
+    // Built as text: JSON.stringify is itself recursive and cannot serialize this.
+    const depth = 50_000;
+    const payload = JSON.stringify({
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: "AAAA" },
+    });
+    const line = `{"type":"user","message":{"content":[]},"tool_use_result":${
+      '{"nested":'.repeat(depth) + payload + "}".repeat(depth)
+    }}`;
+
+    expect(() => parser.push(`${line}\n`)).not.toThrow();
+    expect(parser.getErrorText()).toBeNull();
+  });
+
   it("still enforces raw Claude line and retained-text limits", () => {
     const createParser = () =>
       createCliJsonlStreamingParser({
@@ -377,6 +524,46 @@ describe("createCliJsonlStreamingParser framing", () => {
   });
 
   it.each([
+    {
+      name: "uses complete tool args from content_block_start when no deltas arrive",
+      frames: [
+        claudeBlockStart(
+          {
+            type: "tool_use",
+            id: "toolu_start",
+            name: "Bash",
+            input: { command: "ls -la" },
+          },
+          0,
+        ),
+        claudeBlockStop(0),
+      ],
+      expected: [
+        {
+          toolCallId: "toolu_start",
+          name: "Bash",
+          kind: "tool_use",
+          args: { command: "ls -la" },
+        },
+      ],
+    },
+    {
+      name: "keeps an explicit empty streamed input over the start snapshot",
+      frames: [
+        claudeBlockStart(
+          {
+            type: "tool_use",
+            id: "toolu_empty",
+            name: "Bash",
+            input: { command: "stale --from-start-block" },
+          },
+          0,
+        ),
+        claudeInputJsonDelta("{}", 0),
+        claudeBlockStop(0),
+      ],
+      expected: [{ toolCallId: "toolu_empty", name: "Bash", kind: "tool_use", args: {} }],
+    },
     {
       name: "reassembles streamed tool args from input_json_delta chunks",
       frames: [
