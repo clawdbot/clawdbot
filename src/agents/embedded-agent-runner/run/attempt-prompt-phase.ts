@@ -10,6 +10,11 @@ import {
   setAgentRunAttemptTerminalFailure,
   type AgentRunAttemptFailureSource,
 } from "../../agent-run-terminal-outcome.js";
+import { resolvePendingRuntimeContextReplay } from "../../internal-runtime-context.js";
+import {
+  createCompactionRequestBudget,
+  type CompactionRequestBudget,
+} from "../../sessions/compaction/request-budget.js";
 import { releasePendingAgentSteeringItems } from "../../subagents/registry/subagent-registry.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { log } from "../logger.js";
@@ -319,6 +324,59 @@ export async function runEmbeddedAttemptPromptPhase(
     // Publish each admission transition before the next fallible phase so outer cleanup sees it.
     publishDispatchState(state);
 
+    let compactionRequestBudget: CompactionRequestBudget | undefined;
+    if (!state.skipPromptSubmission) {
+      const userTurnRecorder = attempt.userTurnTranscriptRecorder;
+      const pendingUserIdempotencyKey =
+        attempt.skipPreparedUserTurnMessage !== true && userTurnRecorder?.hasPersisted() === true
+          ? (userTurnRecorder.getPersistedMessage?.() ?? userTurnRecorder.message)?.idempotencyKey
+          : undefined;
+      const foregroundBudget = {
+        contextWindow: promptContext.contextTokenBudget,
+        reserveTokens,
+      };
+      const pendingContextMessages = promptContext.runtimeContextMessageForCurrentTurn
+        ? [promptContext.runtimeContextMessageForCurrentTurn]
+        : [];
+      compactionRequestBudget = createCompactionRequestBudget({
+        ...foregroundBudget,
+        systemPrompt: promptContext.systemPromptForHook,
+        tools: activeSession.agent.state.tools,
+        pendingPrompt: promptContext.llmBoundaryPromptForPrecheck,
+        pendingImageCount: imageResult.images.length,
+        // The SDK replaces the queued reservation at submission. Transient
+        // installation remains separate because that carrier never enters its queue.
+        ...(appendOnlyRuntimeContext
+          ? {
+              pendingQueuedContextMessages: resolvePendingRuntimeContextReplay({
+                messages: activeSession.messages,
+                pendingContextMessages,
+                persistedUserIdempotencyKey: pendingUserIdempotencyKey,
+              }).pendingContextMessages,
+            }
+          : { pendingContextMessages }),
+        pendingAdditivePrompt: [promptBuildPrependContext, promptBuildAppendContext]
+          .filter(Boolean)
+          .join("\n\n"),
+        pendingUserIdempotencyKey,
+      });
+      attempt.onCompactionRequestBudget?.(compactionRequestBudget);
+      const streamFn = activeSession.agent.streamFn;
+      activeSession.agent.streamFn = (model, context, options) => {
+        // Summarization has its own prompt/model; it cannot replace foreground accounting.
+        if (!activeSession.isCompacting) {
+          attempt.onCompactionRequestBudget?.(
+            createCompactionRequestBudget({
+              ...foregroundBudget,
+              systemPrompt: context.systemPrompt,
+              tools: context.tools,
+            }),
+          );
+        }
+        return streamFn(model, context, options);
+      };
+    }
+
     state = await prepareEmbeddedAttemptPromptPreflight({
       appendOnlyRuntimeContext,
       compactionReplayEnabled,
@@ -348,6 +406,7 @@ export async function runEmbeddedAttemptPromptPhase(
         attempt,
         activeSession,
         contextTokenBudget: promptContext.contextTokenBudget,
+        compactionRequestBudget,
         images: imageResult.images,
         ...(leasedSteering ? { leasedSteering } : {}),
         modelPrompt: promptContext.promptForModel,

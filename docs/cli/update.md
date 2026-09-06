@@ -471,9 +471,13 @@ or checkout swap, required `doctor --fix` migrations, and state compatibility
 inspection, followed by service start
 in `restarting`. In `verifying`, the updater requires the normal 12-probe settle,
 the expected version and Git build identity, no plugin activation errors,
-channel readiness, and HTTP 200 from `/readyz`. A separate inference probe has a
-15-second budget. Provider unavailability records `inference: unavailable` as a
-warning; it does not trigger rollback by itself.
+channel readiness, and HTTP 200 from `/readyz`. It then runs a real agent turn
+through that Gateway using configured inference and verifies the saved request and
+completed response through a fresh session-storage reader. This serving check has
+a 60-second budget and must match the health-checked Gateway boot and expected
+artifact version/build. Unavailable inference, timeout, failed turns, or missing
+persistence fail verification and enter the existing repair or rollback flow.
+Health or readiness alone cannot pass verification.
 
 Plugin packages download and sync after the core Gateway is serving. When the
 plugin snapshot changes, the updater stops the service for a second measured

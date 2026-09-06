@@ -86,7 +86,21 @@ function buildTranscriptWithToolResult(toolResult: AgentMessage): SessionTreeEnt
   return messages.map((message, index) => messageEntry(message, index));
 }
 
-describe("findCutPoint with a trailing oversized tool result", () => {
+describe("findCutPoint", () => {
+  it("preserves the pending suffix before a foreground budget exists", () => {
+    const pending = messageEntry(userText("first admitted input", 3), 2);
+    const entries = [
+      messageEntry(userText("processed request", 1), 0),
+      messageEntry(assistantText("processed answer", 2), 1),
+      pending,
+      messageEntry(userText("later admitted input", 4), 3),
+    ];
+    expect(findCutPoint(entries, 0, entries.length, 1).firstKeptEntryIndex).toBe(3);
+    expect(
+      findCutPoint(entries, 0, entries.length, 1, { preserveFromEntryId: pending.id }),
+    ).toEqual({ firstKeptEntryIndex: 2, turnStartIndex: -1, isSplitTurn: false });
+  });
+
   it("counts the final tool result as larger than the keep budget", () => {
     const trailing = toolResultText(LARGE_TOOL_OUTPUT, 5);
 

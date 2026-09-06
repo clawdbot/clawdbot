@@ -34,6 +34,7 @@ export type GatewayRestartProbeAuth = {
 export type GatewayReachability = {
   reachable: boolean;
   gatewayVersion: string | null;
+  gatewayBootId?: string;
   gatewayBuildId: string | null | undefined;
   activatedPluginErrors: PluginHealthErrorSummary[];
   channelProbeErrors: Array<{ id: string; error: string }>;
@@ -264,6 +265,7 @@ export async function confirmGatewayReachable(params: {
       ...(params.signal ? { signal: params.signal } : {}),
       onHelloOk: (hello) => {
         result.gatewayVersion = hello.server.version;
+        result.gatewayBootId = hello.server.bootId;
         result.gatewayBuildId = hello.server.buildId ?? null;
       },
     });

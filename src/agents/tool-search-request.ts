@@ -97,13 +97,7 @@ function readBatchToolSearchRequest(
   return { kind: "batch", searches };
 }
 
-/**
- * Accepts the single shape, the batch shape, or both together. Strict-schema
- * and batch-minded models routinely send every property (`query: null`, an
- * empty `query` beside `queries`, or a real `query` plus `queries`); rejecting
- * those dead-ends the turn, so absent-like values are ignored and a real
- * single query is served alongside the batch.
- */
+/** Normalize scalar and batch shapes without dropping independent searches. */
 export function readToolSearchRequest(args: unknown, config: ToolSearchConfig): ToolSearchRequest {
   const params = asToolParamsRecord(args);
   const query = params.query ?? undefined;
@@ -127,24 +121,16 @@ export function readToolSearchRequest(args: unknown, config: ToolSearchConfig): 
     }
     return { kind: "single", search: readToolSearchArgs(params, config) };
   }
-  if (singleQuery === undefined) {
-    if (params.limit !== undefined || params.options !== undefined) {
-      throw new ToolInputError("set limit on each batch query, not on the batch request.");
-    }
-    return readBatchToolSearchRequest(
-      batchEntries.map((value, index) => readBatchToolSearchEntry(value, index, config)),
-      config,
-    );
+  if (singleQuery === undefined && (params.limit != null || params.options !== undefined)) {
+    throw new ToolInputError("set limit on each batch query, not on the batch request.");
   }
-  // Both shapes carry real queries: the single query joins the batch as its
-  // first entry, keeping the top-level limit scoped to that entry only.
   const searches = batchEntries.map((value, index) =>
     readBatchToolSearchEntry(value, index, config),
   );
-  const single = readToolSearchArgs(params, config);
-  const singleText = single.query.trim();
-  if (!searches.some((search) => search.query === singleText)) {
-    searches.unshift({ query: singleText, limit: single.limit });
+  if (singleQuery !== undefined) {
+    // Even identical text is an independent search with its own limit and budget.
+    const single = readToolSearchArgs(params, config);
+    searches.unshift({ query: single.query.trim(), limit: single.limit });
   }
   return readBatchToolSearchRequest(searches, config);
 }

@@ -300,22 +300,24 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       name: TOOL_SEARCH_RAW_TOOL_NAME,
       label: "Tool Search",
       description:
-        "Search the effective Tool Search catalog. Pass query for one search or queries for several independent searches in one call; when both are set, query is searched as the first batch entry. Batch results stay grouped in request order. Queries must be in English: matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Pass an exact result id or name to tool_call; use tool_describe only when you need its input schema.",
+        "Search the effective Tool Search catalog. Pass query for one search or queries for several independent searches in one call; a non-empty query joins a non-empty batch first, with its own limit. Batch results stay grouped in request order. Queries must be in English: matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Pass an exact result id or name to tool_call; use tool_describe only when you need its input schema.",
       parameters: Type.Object({
         query: Type.Optional(
           Type.Union([Type.String(), Type.Null()], {
             description:
-              "Single search query, in English. Prefer queries alone for several searches; a query set beside queries runs as the first batch entry. Null or empty is ignored when queries is present.",
+              "Single search query, in English. A non-empty query joins a non-empty batch first. Null or blank is ignored beside a non-empty batch.",
           }),
         ),
         limit: Type.Optional(
-          Type.Integer({ minimum: 1, description: "Maximum number of single-search results." }),
+          Type.Union([Type.Integer({ minimum: 1 }), Type.Null()], {
+            description:
+              "Maximum number of single-search results. Omitted or null uses the default. With only batch queries, omit this or set it to null; set limits on each batch entry.",
+          }),
         ),
         queries: Type.Optional(
           Type.Union(
             [
-              // Strict-schema models send every property; an empty or null batch
-              // beside a real query must validate so the parser can serve the query.
+              // Let the parser handle empty or null batch placeholders beside a scalar.
               Type.Array(
                 Type.Object({
                   query: Type.String({

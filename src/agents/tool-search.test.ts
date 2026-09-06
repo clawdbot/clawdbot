@@ -1,6 +1,7 @@
 // Tool search tests cover catalog compaction, scoped tool lookup, raw fallback
 // tools, hooks, abort wrapping, and transcript projection.
 
+import { validateToolArguments } from "@openclaw/ai/validation";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
@@ -406,91 +407,130 @@ describe("Tool Search", () => {
     await expect(searchTool.execute("call-unicode-query", { query })).resolves.toBeDefined();
   });
 
-  it("serves a single query beside a batch instead of rejecting the call", async () => {
+  function validatedSearchFixture() {
     const catalogRef = createToolSearchCatalogRef();
-    const config = {
-      tools: {
-        toolSearch: { enabled: true, mode: "tools", searchDefaultLimit: 2, maxSearchLimit: 10 },
-      },
-    } as never;
-    applyToolSearchCatalog({
-      tools: [
-        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
-        fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
-        fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
-        pluginTool("fake_calendar", "calendar events surface"),
-        pluginTool("fake_slack", "Slack messages surface"),
-      ],
-      config,
+    registerHeadlessToolSearchCatalog({
       catalogRef,
+      tools: [
+        pluginTool("fake_calendar", "calendar events surface"),
+        pluginTool("fake_slack_messages", "Slack messages surface"),
+        pluginTool("fake_slack_channels", "Slack channels surface"),
+        pluginTool("fake_slack_users", "Slack users surface"),
+      ],
     });
     const searchTool = expectDefined(
-      createToolSearchTools({ config, catalogRef }).find(
-        (tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME,
-      ),
-      "mixed shape search tool",
+      createToolSearchTools({
+        catalogRef,
+        config: {
+          tools: { toolSearch: { mode: "tools", searchDefaultLimit: 2, maxSearchLimit: 50 } },
+        },
+      }).find((tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME),
+      "validated search tool",
     );
+    const execute = async (input: Record<string, unknown>) => {
+      const args = validateToolArguments(searchTool, {
+        type: "toolCall",
+        id: "call-validated-search",
+        name: searchTool.name,
+        arguments: input,
+      });
+      return searchTool.execute("call-validated-search", args);
+    };
+    return { catalogRef, execute };
+  }
 
-    const groups = (details: Record<string, unknown>) =>
-      details.results as Array<{ query: string; candidates: Array<{ name: string }> }>;
-
-    // Every served shape must first pass the agent loop's argument validation.
-    for (const input of [
-      { query: "calendar", limit: 1, queries: [{ query: "Slack" }] },
-      { query: "", queries: [{ query: "Slack" }] },
-      { query: null, queries: [{ query: "Slack" }] },
-      { query: "calendar", queries: [] },
-    ]) {
-      expect(Value.Check(searchTool.parameters, input)).toBe(true);
-    }
-
-    // Strict-schema models send every property: the single query joins the batch first.
-    const mixed = groups(
-      resultDetails(
-        await searchTool.execute("call-mixed", {
-          query: "calendar",
-          limit: 1,
-          queries: [{ query: "Slack" }],
-        }),
-      ),
-    );
-    expect(mixed.map((group) => group.query)).toEqual(["calendar", "Slack"]);
-    expect(mixed[0]?.candidates.map((candidate) => candidate.name)).toEqual(["fake_calendar"]);
-    expect(mixed[1]?.candidates.map((candidate) => candidate.name)).toEqual(["fake_slack"]);
-    expect(catalogRef.current?.searchCount).toBe(2);
-
-    // A duplicated single query keeps the batch entry and its limit.
-    const duplicated = groups(
-      resultDetails(
-        await searchTool.execute("call-mixed-duplicate", {
-          query: "Slack",
-          limit: 1,
-          queries: [{ query: "Slack", limit: 2 }],
-        }),
-      ),
-    );
-    expect(duplicated.map((group) => group.query)).toEqual(["Slack"]);
-    expect(catalogRef.current?.searchCount).toBe(3);
-
-    // Absent-like single values beside a batch are ignored.
-    for (const [callId, query] of [
-      ["call-mixed-empty", ""],
-      ["call-mixed-null", null],
-    ] as const) {
-      const batchOnly = groups(
-        resultDetails(await searchTool.execute(callId, { query, queries: [{ query: "Slack" }] })),
-      );
-      expect(batchOnly.map((group) => group.query)).toEqual(["Slack"]);
-    }
-    expect(catalogRef.current?.searchCount).toBe(5);
-
-    // An empty batch beside a real query keeps the compact single-result shape.
-    const singleShape = await searchTool.execute("call-mixed-empty-batch", {
-      query: "calendar",
-      queries: [],
+  it("preserves scalar-first order and distinct limits for duplicate mixed queries", async () => {
+    const { catalogRef, execute } = validatedSearchFixture();
+    const scalar = await execute({ query: "Slack", limit: 1 });
+    const result = await execute({
+      query: " Slack ",
+      limit: 1,
+      queries: [
+        { query: "calendar", limit: 1 },
+        { query: "Slack", limit: 2 },
+        { query: "Slack", limit: 3 },
+      ],
     });
-    expect(Array.isArray(singleShape.details)).toBe(true);
-    expect(catalogRef.current?.searchCount).toBe(6);
+    expect(result.details).toEqual({
+      results: [
+        { query: "Slack", candidates: scalar.details },
+        { query: "calendar", candidates: [expect.objectContaining({ name: "fake_calendar" })] },
+        { query: "Slack", candidates: expect.any(Array) },
+        { query: "Slack", candidates: expect.any(Array) },
+      ],
+    });
+    const groups = resultDetails(result).results as Array<{ candidates: unknown[] }>;
+    expect(groups.map((group) => group.candidates.length)).toEqual([1, 1, 2, 3]);
+    expect(catalogRef.current?.searchCount).toBe(5);
+  });
+
+  it.each([undefined, null, "", "  "])(
+    "serves batch placeholders with scalar query %j through argument validation",
+    async (query) => {
+      const { execute } = validatedSearchFixture();
+      const expected = await execute({ queries: [{ query: "Slack", limit: 1 }] });
+      for (const limit of [undefined, null]) {
+        const result = await execute({ query, limit, queries: [{ query: "Slack", limit: 1 }] });
+        expect(result).toEqual(expected);
+      }
+    },
+  );
+
+  it.each([{ queries: undefined }, { queries: null }, { queries: [] }])(
+    "preserves scalar results beside batch placeholder $queries",
+    async ({ queries }) => {
+      const { execute } = validatedSearchFixture();
+      const expected = await execute({ query: "Slack" });
+      expect(Array.isArray(expected.details)).toBe(true);
+      expect(expected.details).toHaveLength(2);
+      expect(await execute({ query: "Slack", limit: null, queries })).toEqual(expected);
+    },
+  );
+
+  it.each([
+    {},
+    { query: null, limit: null, queries: null },
+    { query: null, limit: null, queries: [] },
+    { query: "", limit: null, queries: [] },
+    { query: "  ", limit: null, queries: [] },
+  ])("rejects missing searches after argument validation: %j", async (input) => {
+    const { catalogRef, execute } = validatedSearchFixture();
+    await expect(execute(input)).rejects.toThrow(/provide query or queries|non-empty array/);
+    expect(catalogRef.current?.searchCount).toBe(0);
+  });
+
+  it.each([1, 0, false, "", -1, 1.5, "invalid"])(
+    "does not discard non-null top-level batch limit %j",
+    async (limit) => {
+      const { catalogRef, execute } = validatedSearchFixture();
+      await expect(execute({ query: null, limit, queries: [{ query: "Slack" }] })).rejects.toThrow(
+        /Validation failed|set limit on each batch query/,
+      );
+      expect(catalogRef.current?.searchCount).toBe(0);
+    },
+  );
+
+  it.each([
+    {
+      input: { query: "Slack", limit: 25, queries: [{ query: "Slack", limit: 26 }] },
+      error: "resolve to 51 results",
+    },
+    {
+      input: {
+        query: "Slack",
+        limit: 1,
+        queries: Array.from({ length: 16 }, () => ({ query: "Slack", limit: 1 })),
+      },
+      error: "at most 16 entries",
+    },
+    {
+      input: { query: "é".repeat(127), limit: 1, queries: [{ query: "é".repeat(127), limit: 1 }] },
+      error: "at most 512 UTF-8 bytes",
+    },
+  ])("counts the scalar duplicate toward batch budgets: $error", async ({ input, error }) => {
+    const { catalogRef, execute } = validatedSearchFixture();
+    await expect(execute(input)).rejects.toThrow(error);
+    expect(catalogRef.current?.searchCount).toBe(0);
   });
 
   it("accepts the documented batch boundaries without deduplicating queries", async () => {

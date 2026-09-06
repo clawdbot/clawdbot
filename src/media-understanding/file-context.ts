@@ -300,33 +300,55 @@ export async function prepareFileContextFromMedia(params: {
   maxChars: number;
   assertCurrent: () => void;
 }) {
-  params.assertCurrent();
-  const ctx: MsgContext = {
-    media: [...params.media],
-    Provider: params.channelId,
-    AccountId: params.accountId,
-  };
-  const limits = resolveFileExtractionLimits(params.config);
+  return await renderInboundDocumentContext({
+    ctx: {
+      media: [...params.media],
+      Provider: params.channelId,
+      AccountId: params.accountId,
+    },
+    cfg: params.config,
+    workspaceDir: params.workspaceDir,
+    maxChars: params.maxChars,
+    assertCurrent: params.assertCurrent,
+  });
+}
+
+export type InboundDocumentContext = { text: string; images: ExtractedFileImage[] };
+
+/** Keep prompt expansion separate from inbound state so rejected steers can dispatch normally. */
+export async function renderInboundDocumentContext(params: {
+  ctx: MsgContext;
+  cfg: OpenClawConfig;
+  workspaceDir?: string;
+  maxChars?: number;
+  assertCurrent?: () => void;
+}): Promise<InboundDocumentContext> {
+  params.assertCurrent?.();
+  const { ctx, cfg } = params;
+  const limits = resolveFileExtractionLimits(cfg);
   const attachments = normalizeMediaAttachments(ctx);
   const cache = createMediaAttachmentCache(attachments, {
     localPathRoots: resolveMediaAttachmentLocalRoots({
-      cfg: params.config,
+      cfg,
       ctx,
       workspaceDir: params.workspaceDir,
     }),
-    ssrfPolicy: params.config.tools?.web?.fetch?.ssrfPolicy,
+    ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
     workspaceDir: params.workspaceDir,
   });
   try {
     const context = await extractFileContext({
       attachments,
       cache,
-      cfg: params.config,
-      limits: { ...limits, maxChars: Math.min(limits.maxChars, params.maxChars) },
+      cfg,
+      limits:
+        params.maxChars === undefined
+          ? limits
+          : { ...limits, maxChars: Math.min(limits.maxChars, params.maxChars) },
       selfServePathsEnabled: false,
       assertCurrent: params.assertCurrent,
     });
-    params.assertCurrent();
+    params.assertCurrent?.();
     return {
       text: applyAttachmentMarkerBudget(context.blocks).join("\n\n"),
       images: context.images,

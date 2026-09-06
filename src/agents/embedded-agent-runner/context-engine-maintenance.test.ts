@@ -17,6 +17,7 @@ import {
 } from "../../process/command-queue.js";
 import * as commandQueueModule from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
+import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { createQueuedTaskRunCore as createQueuedTaskRunOrNull } from "../../tasks/task-executor.js";
 import { getTaskFlowById } from "../../tasks/task-flow-registry.js";
 import { getTaskById, listTasksForOwnerKey } from "../../tasks/task-registry.js";
@@ -370,6 +371,79 @@ describe("runContextEngineMaintenance", () => {
     expect(resolveRuntimeTranscriptReadTargetMock).not.toHaveBeenCalled();
     expect(sessionManagerOpenMock).not.toHaveBeenCalled();
     expect(rewriteTranscriptEntriesInSessionManagerMock).not.toHaveBeenCalled();
+  });
+
+  it("retires a deferred worker's retained rewrite capability after disposal and settlement", async () => {
+    await withStateDirEnv("openclaw-retired-maintenance-rewrite-", async () => {
+      resetCommandQueueStateForTest();
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      const sessionKey = "agent:main:retained-maintenance-rewrite";
+      const published = vi.fn();
+      const unsubscribe = onSessionTranscriptUpdate((event) => {
+        if (event.sessionKey === sessionKey) {
+          published(event);
+        }
+      });
+      const dispose = vi.fn(async () => {});
+      let rewrite: ContextEngineRuntimeContext["rewriteTranscriptEntries"];
+      let activeRewriteResult: unknown;
+      let deferred: Promise<void> | undefined;
+      const request = {
+        replacements: [
+          {
+            entryId: "entry-1",
+            message: castAgentMessage({ role: "user", content: "updated", timestamp: 1 }),
+          },
+        ],
+      };
+      try {
+        await runContextEngineMaintenance({
+          contextEngine: {
+            info: { id: "retained", name: "Retained rewrite", turnMaintenanceMode: "background" },
+            ingest: async () => ({ ingested: true }),
+            assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+            compact: async () => ({ ok: true, compacted: false }),
+            maintain: async ({ runtimeContext }) => {
+              rewrite = runtimeContext?.rewriteTranscriptEntries;
+              activeRewriteResult = await rewrite?.(request);
+              return { changed: true, bytesFreed: 77, rewrittenEntries: 1 };
+            },
+            dispose,
+          },
+          sessionId: "retained-maintenance-rewrite",
+          sessionKey,
+          sessionFile: sessionKey,
+          reason: "turn",
+          disposeDeferredContextEngineAfterMaintenance: true,
+          onDeferredMaintenance: (work) => {
+            deferred = work;
+          },
+        });
+        await expectDefined(deferred, "deferred maintenance completion");
+        await waitForDeferredTurnMaintenanceForSession(sessionKey);
+
+        expect(activeRewriteResult).toEqual({ changed: true, bytesFreed: 77, rewrittenEntries: 1 });
+        expect(dispose).toHaveBeenCalledOnce();
+        expect(rewriteTranscriptEntriesInSessionManagerMock).toHaveBeenCalledOnce();
+        expect(published).toHaveBeenCalledOnce();
+        rewriteTranscriptEntriesInSessionManagerMock.mockClear();
+        resolveRuntimeTranscriptReadTargetMock.mockClear();
+        sessionManagerOpenMock.mockClear();
+        published.mockClear();
+
+        await expect(
+          expectDefined(rewrite, "retained rewrite capability")(request),
+        ).rejects.toMatchObject({ name: "AbortError" });
+        expect(resolveRuntimeTranscriptReadTargetMock).not.toHaveBeenCalled();
+        expect(sessionManagerOpenMock).not.toHaveBeenCalled();
+        expect(rewriteTranscriptEntriesInSessionManagerMock).not.toHaveBeenCalled();
+        expect(published).not.toHaveBeenCalled();
+      } finally {
+        await Promise.allSettled(deferred ? [deferred] : []);
+        unsubscribe();
+      }
+    });
   });
 
   it("defers turn maintenance to a hidden background task when enabled", async () => {

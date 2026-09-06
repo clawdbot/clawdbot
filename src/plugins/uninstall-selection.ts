@@ -2,7 +2,7 @@
 import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
-import type { PluginRecord } from "../plugins/registry.js";
+import type { PluginRecord } from "./registry.js";
 
 /** Resolve user input to the plugin id that should be removed from config/install records. */
 export function resolvePluginUninstallId<

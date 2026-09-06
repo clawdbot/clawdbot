@@ -56,7 +56,7 @@ export function readToolAllowlistIntersection(
 
 /** Refusal for a tool that keeps its schema but sits outside the run's execution allowlist. */
 export const TOOL_EXECUTION_GATED_MESSAGE =
-  "Unavailable during skill review. Do not retry this tool. Continue with skill_workshop under the review instructions.";
+  "Unavailable in this run. Continue with the tools permitted by the run's instructions.";
 
 export function isToolExecutionAllowed(allowNames: readonly string[], toolName: string): boolean {
   const target = normalizeToolPolicyName(toolName);
