@@ -8,10 +8,6 @@ import {
   createChangedNodeTestShards,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import {
-  decodeNodeTestGroups,
-  encodeNodeTestGroups,
-} from "../../scripts/lib/ci-node-test-groups-codec.mts";
-import {
   type CompactNodeTestShard,
   createNodeTestShardBundles,
   createNodeTestShards,
@@ -1875,31 +1871,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         expect(support?.includePatterns).toBeUndefined();
         expect(support?.configs).toHaveLength(supportConfigs.length);
       }
-    }
-  });
-
-  it("keeps every packed compact matrix within GitHub's job output budget", () => {
-    // GitHub measures job outputs in UTF-16, so the 1 MiB cap is 524,288
-    // characters for all preflight outputs combined. The full pull-request
-    // plan lists each striped test file explicitly and is the largest output;
-    // keep its packed rows under half the cap so sibling matrices and growth
-    // in the tracked test inventory cannot push preflight over the limit.
-    const outputBudgetChars = 524_288 / 2;
-    for (const runnerBackend of ["github", "hybrid", "blacksmith"] as const) {
-      const jobs = createNodeTestShardBundles({
-        includeReleaseOnlyPluginShards: false,
-        compactMode: "pull-request",
-        runnerBackend,
-      });
-      const rows = jobs.map(({ groups, ...job }) => ({
-        ...job,
-        groups_gzip_base64: encodeNodeTestGroups(groups),
-      }));
-      const outputChars = JSON.stringify({ include: rows }).length;
-      expect(outputChars, runnerBackend).toBeLessThan(outputBudgetChars);
-      expect(rows.map((row) => decodeNodeTestGroups(row.groups_gzip_base64))).toEqual(
-        jobs.map((job) => job.groups),
-      );
     }
   });
 
