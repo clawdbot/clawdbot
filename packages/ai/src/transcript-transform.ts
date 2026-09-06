@@ -34,26 +34,6 @@ function replaceImagesWithPlaceholder(
   return result;
 }
 
-function downgradeUnsupportedImages<TApi extends Api>(
-  messages: Message[],
-  model: Model<TApi>,
-): Message[] {
-  if (model.input.includes("image")) {
-    return messages;
-  }
-
-  return messages.map((message) => {
-    if (message.role === "assistant" || typeof message.content === "string") {
-      return message;
-    }
-    const placeholder =
-      message.role === "user"
-        ? NON_VISION_USER_IMAGE_PLACEHOLDER
-        : NON_VISION_TOOL_IMAGE_PLACEHOLDER;
-    return { ...message, content: replaceImagesWithPlaceholder(message.content, placeholder) };
-  });
-}
-
 function transformAssistant<TApi extends Api>(
   message: AssistantMessage,
   model: Model<TApi>,
@@ -102,12 +82,12 @@ function transformAssistant<TApi extends Api>(
     if (block.type === "text") {
       return sameModel ? block : { type: "text" as const, text: block.text };
     }
-    const { thoughtSignature: _, async: _async, ...unsigned } = block;
     // Pairing uses these IDs as shared keys, before model-specific normalization runs.
     const trimmedId = block.id.trim();
     if (sameModel) {
       return trimmedId === block.id ? block : Object.assign({}, block, { id: trimmedId });
     }
+    const { thoughtSignature: _, async: _async, ...unsigned } = block;
     const id = normalizeToolCallId?.(trimmedId, model, message) ?? trimmedId;
     if (id !== trimmedId) {
       toolCallIdMap.set(trimmedId, id);
@@ -136,21 +116,23 @@ export function transformMessages<TApi extends Api>(
         message.model === model.id;
       for (const block of message.content ?? []) {
         if (block.type === "toolCall") {
+          const id = block.id.trim();
           if (block.async && !sameModel) {
-            asyncOwners.set(block.id, message);
+            asyncOwners.set(id, message);
           } else {
-            asyncOwners.delete(block.id);
+            asyncOwners.delete(id);
           }
         }
       }
     } else if (message.role === "toolResult") {
-      const owner = asyncOwners.get(message.toolCallId);
+      const id = message.toolCallId.trim();
+      const owner = asyncOwners.get(id);
       if (owner) {
         const results = relocated.get(owner) ?? [];
         results.push(message);
         relocated.set(owner, results);
         movedResults.add(message);
-        asyncOwners.delete(message.toolCallId);
+        asyncOwners.delete(id);
       }
     }
   }
@@ -162,21 +144,7 @@ export function transformMessages<TApi extends Api>(
             : [message, ...(message.role === "assistant" ? (relocated.get(message) ?? []) : [])],
         )
       : messages;
-  const normalized = source.map((message) =>
-    message.content == null ? Object.assign({}, message, { content: [] }) : message,
-  );
-  const transformed = downgradeUnsupportedImages(normalized, model).map((message) => {
-    if (message.role === "assistant") {
-      return transformAssistant(message, model, toolCallIdMap, normalizeToolCallId);
-    }
-    if (message.role !== "toolResult") {
-      return message;
-    }
-    const trimmedId = message.toolCallId.trim();
-    const toolCallId = toolCallIdMap.get(trimmedId) ?? trimmedId;
-    return toolCallId === message.toolCallId ? message : Object.assign({}, message, { toolCallId });
-  });
-
+  const supportsImages = model.input.includes("image");
   const result: Message[] = [];
   const pendingAsyncCalls = new Map<string, ToolCall>();
   let pendingToolCalls: ToolCall[] = [];
@@ -198,8 +166,12 @@ export function transformMessages<TApi extends Api>(
     existingToolResultIds = new Set();
   };
 
-  for (const message of transformed) {
+  for (let message of source) {
+    if (message.content == null) {
+      message = { ...message, content: [] };
+    }
     if (message.role === "assistant") {
+      message = transformAssistant(message, model, toolCallIdMap, normalizeToolCallId);
       flushToolCalls();
       if (message.stopReason === "error" || message.stopReason === "aborted") {
         continue;
@@ -214,11 +186,29 @@ export function transformMessages<TApi extends Api>(
         }
         return true;
       });
-    } else if (message.role === "toolResult") {
-      existingToolResultIds.add(message.toolCallId);
-      pendingAsyncCalls.delete(message.toolCallId);
     } else {
-      flushToolCalls();
+      if (!supportsImages && typeof message.content !== "string") {
+        message = {
+          ...message,
+          content: replaceImagesWithPlaceholder(
+            message.content,
+            message.role === "user"
+              ? NON_VISION_USER_IMAGE_PLACEHOLDER
+              : NON_VISION_TOOL_IMAGE_PLACEHOLDER,
+          ),
+        };
+      }
+      if (message.role === "toolResult") {
+        const trimmedId = message.toolCallId.trim();
+        const toolCallId = toolCallIdMap.get(trimmedId) ?? trimmedId;
+        if (toolCallId !== message.toolCallId) {
+          message = { ...message, toolCallId };
+        }
+        existingToolResultIds.add(toolCallId);
+        pendingAsyncCalls.delete(toolCallId);
+      } else {
+        flushToolCalls();
+      }
     }
     result.push(message);
   }

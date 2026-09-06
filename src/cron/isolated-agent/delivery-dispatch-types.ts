@@ -4,6 +4,7 @@ import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import type { SourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.js";
+import type { CronDeliveryPlan } from "../delivery-plan.js";
 import type { CronJob, CronResolvedDeliveryState, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
@@ -28,6 +29,8 @@ export type DispatchCronDeliveryParams = {
   runEndedAt: number;
   timeoutMs: number;
   resolvedDelivery: DeliveryTargetResolution;
+  /** Preserve prepared intent instead of rereading job configuration after inference. */
+  deliveryPlan: CronDeliveryPlan;
   deliveryRequested: boolean;
   /** Finalizer-owned execution status if delivery cannot recover a presentation warning. */
   undeliveredRunStatus: "ok" | "error";

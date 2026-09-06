@@ -126,14 +126,7 @@ impl Fixture {
 
     fn poll_client(&mut self) {
         loop {
-            let mut output = OpenClawRTCOutput {
-                kind: 0,
-                bytes: ptr::null(),
-                length: 0,
-                source: OpenClawRTCAddress::default(),
-                destination: OpenClawRTCAddress::default(),
-                time: 0,
-            };
+            let mut output = OpenClawRTCOutput::default();
             assert_eq!(unsafe { openclaw_rtc_poll(self.client.0, &mut output) }, 0);
             // Copy the borrowed payload before the next C call, matching the Swift owner.
             let bytes = if output.length == 0 {
@@ -522,14 +515,19 @@ fn ice_credentials_do_not_repeat_with_noncryptographic_rng_state() {
         assert_eq!(unsafe { openclaw_rtc_offer(client.0) }, 0);
         let mut length = 0;
         let bytes = unsafe { openclaw_rtc_description(client.0, &mut length) };
-        let text = std::str::from_utf8(unsafe { std::slice::from_raw_parts(bytes, length) }).unwrap();
+        let text =
+            std::str::from_utf8(unsafe { std::slice::from_raw_parts(bytes, length) }).unwrap();
         let offer = SdpOffer::from_sdp_string(text).unwrap();
-        offer.session.ice_creds()
+        offer
+            .session
+            .ice_creds()
             .or_else(|| offer.media_lines.iter().find_map(|media| media.ice_creds()))
             .unwrap()
     };
     let first = credentials();
     let second = credentials();
-    assert!(first.ufrag != second.ufrag && first.pass != second.pass,
-        "ICE credentials must not repeat when noncryptographic RNG state repeats");
+    assert!(
+        first.ufrag != second.ufrag && first.pass != second.pass,
+        "ICE credentials must not repeat when noncryptographic RNG state repeats"
+    );
 }

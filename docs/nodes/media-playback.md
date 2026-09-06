@@ -75,6 +75,9 @@ artifact through `artifacts.download`, which returns inline base64 bytes when
 the artifact is byte-backed or a short-lived, ticketed URL when it is
 Gateway-managed.
 
+Download filenames preserve Unicode characters and literal percent sequences
+such as `%20`.
+
 Native clients resolve ticketed media against the connected Gateway URL,
 preserving its reverse-proxy path prefix. A Gateway reached at
 `wss://gateway.example/openclaw` loads managed media beneath

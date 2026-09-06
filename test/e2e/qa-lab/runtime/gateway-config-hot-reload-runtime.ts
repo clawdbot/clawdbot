@@ -13,6 +13,8 @@ import {
   type QaGatewayChild,
 } from "../../../../extensions/qa-lab/api.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import { skillCollectionReviewMonitorAgentId } from "../../../../src/cron/skill-collection-review-monitor.js";
+import type { CronJob } from "../../../../src/cron/types.js";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
 import { closeOpenClawStateDatabaseByPath } from "../../../../src/state/openclaw-state-db.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
@@ -311,6 +313,42 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         appendLog,
       });
       void retention.completion.catch(() => {});
+      await proveGroup("heartbeat and Workshop monitors", async () => {
+        for (const [every, mode] of [
+          ["1h", "auto"],
+          ["0m", "off"],
+          ["2h", "auto"],
+        ] as const) {
+          await patch({
+            agents: { entries: { qa: { heartbeat: { every } } } },
+            skills: { workshop: { autonomous: { mode } } },
+          });
+          await waitForHotReloadFact("accepted system monitor config", async () => {
+            const { jobs } = await rpc<{
+              jobs: CronJob[];
+            }>("cron.list", { includeDisabled: true, includeDeliveryPreviews: false });
+            const heartbeat = jobs.find(
+              (job) => job.agentId === "qa" && job.payload.kind === "heartbeat",
+            );
+            const review = jobs.find((job) => skillCollectionReviewMonitorAgentId(job) === "qa");
+            return heartbeat?.enabled === (every !== "0m") &&
+              heartbeat.schedule.kind === "every" &&
+              review?.enabled === (mode === "auto") &&
+              (every === "0m" ||
+                heartbeat.schedule.everyMs === (every === "1h" ? 3_600_000 : 7_200_000))
+              ? true
+              : undefined;
+          });
+        }
+        await patch({
+          agents: { entries: { qa: { heartbeat: { every: "0m" } } } },
+          skills: { workshop: { autonomous: { mode: "off" } } },
+        });
+        await verifyContinuity(
+          "heartbeat and Workshop monitors",
+          "Real config.patch writes changed persisted monitor cadence and enablement on the same Gateway boot",
+        );
+      });
       await proveHotReloadTerminalStartup(terminalProof);
 
       await proveHotReloadRequests({

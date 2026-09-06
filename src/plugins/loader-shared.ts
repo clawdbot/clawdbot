@@ -34,7 +34,6 @@ import {
   resolvePluginManifestInstallOwner,
 } from "./manifest-install-owner.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
-import type { PluginDiagnostic } from "./manifest-types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import {
@@ -271,32 +270,6 @@ function isEmptyPluginConfigJsonSchema(schema: Record<string, unknown>): boolean
     return false;
   }
   return Object.keys(schema).every((keyword) => EMPTY_PLUGIN_CONFIG_SHORTCUT_KEYWORDS.has(keyword));
-}
-
-export function pushDiagnostics(diagnostics: PluginDiagnostic[], append: PluginDiagnostic[]): void {
-  diagnostics.push(...append);
-}
-
-export function pushPluginValidationError(params: {
-  registry: PluginRegistry;
-  seenIds: Map<string, PluginRecord["origin"]>;
-  pluginId: string;
-  origin: PluginRecord["origin"];
-  record: PluginRecord;
-  message: string;
-}): void {
-  params.record.status = "error";
-  params.record.error = params.message;
-  params.record.failedAt = new Date();
-  params.record.failurePhase = "validation";
-  params.registry.plugins.push(params.record);
-  params.seenIds.set(params.pluginId, params.origin);
-  params.registry.diagnostics.push({
-    level: "error",
-    pluginId: params.record.id,
-    source: params.record.source,
-    message: params.record.error,
-  });
 }
 
 /** Builds the common manifest-backed record shape used by runtime and CLI loaders. */

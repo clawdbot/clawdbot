@@ -6,6 +6,11 @@ import { getWorkerPlacementStartupMocks } from "./server-worker-placement-startu
 const { runtimeFactoryMocks, moveDestinationMocks } = getWorkerPlacementStartupMocks();
 
 import {
+  beginGatewayRestartSignalAdmission,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../process/gateway-work-admission.js";
+import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
   startSessionWorkAdmissionInterruption,
@@ -450,7 +455,7 @@ describe("worker placement startup health lifetime", () => {
     }
   });
 
-  it("closes guarded recovery admission and drains it during environment stop", async () => {
+  it("publishes shutdown before enrollment cancellation and drains guarded recovery", async () => {
     type ReconcileGuard = (
       environmentId: string,
       reconcileCore: () => Promise<void>,
@@ -460,6 +465,7 @@ describe("worker placement startup health lifetime", () => {
     const environmentStopStarted = createDeferredCore();
     const events: string[] = [];
     let installedGuard: ReconcileGuard | undefined;
+    let environmentStopping = false;
     const placement = {
       sessionId: "session-close-guard",
       state: "provisioning" as const,
@@ -494,7 +500,15 @@ describe("worker placement startup health lifetime", () => {
         };
       }),
       start: vi.fn(),
+      isStopping: () => environmentStopping,
+      stopNodeEnrollmentWaits: vi.fn(() => {
+        expect(dispatchOptions.isShuttingDown?.()).toBe(true);
+        expect(environmentStopping).toBe(false);
+        expect(environments.stop).not.toHaveBeenCalled();
+        events.push("enrollment:cancel");
+      }),
       stop: vi.fn(async () => {
+        environmentStopping = true;
         events.push("environments:stop");
         environmentStopStarted.resolve();
         await guardedRecovery;
@@ -516,6 +530,26 @@ describe("worker placement startup health lifetime", () => {
       revokeSessionAuthority: vi.fn(),
       warn: vi.fn(),
     });
+    const dispatchOptions = runtimeFactoryMocks.createDispatch.mock.calls.at(-1)?.[0] as {
+      isShuttingDown?: () => boolean;
+    };
+    resetGatewayWorkAdmission();
+    try {
+      expect(dispatchOptions.isShuttingDown?.()).toBe(false);
+      environmentStopping = true;
+      expect(dispatchOptions.isShuttingDown?.()).toBe(true);
+      environmentStopping = false;
+      expect(dispatchOptions.isShuttingDown?.()).toBe(false);
+      const fence = beginGatewayRestartSignalAdmission();
+      expect(fence).not.toBeNull();
+      expect(dispatchOptions.isShuttingDown?.()).toBe(false);
+      markGatewayRestartDraining();
+      expect(dispatchOptions.isShuttingDown?.()).toBe(true);
+      resetGatewayWorkAdmission();
+      expect(dispatchOptions.isShuttingDown?.()).toBe(false);
+    } finally {
+      resetGatewayWorkAdmission();
+    }
     const sidecar = await runtime.startRuntime({
       isClosePreludeStarted: () => false,
       registerSidecar: vi.fn(),
@@ -542,6 +576,7 @@ describe("worker placement startup health lifetime", () => {
     await Promise.all([guardedRecovery, stopping]);
     expect(events).toEqual([
       "recovery:start",
+      "enrollment:cancel",
       "environments:stop",
       "reconcile:core",
       "recovery:end",

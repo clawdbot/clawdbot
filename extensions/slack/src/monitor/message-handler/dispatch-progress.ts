@@ -4,12 +4,10 @@ import {
   createChannelProgressWorkCounter,
   createDraftStreamLoop,
   formatChannelProgressDraftText,
-  isChannelProgressDraftWorkToolName,
   resolveChannelProgressDraftMaxLineChars,
   resolveChannelStreamingPreviewToolProgress,
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
   type ChannelProgressDraftCompositorSnapshot,
-  type ChannelProgressDraftLine,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -495,29 +493,6 @@ export function createSlackProgressRuntime(runtimeParams: {
     return false;
   };
 
-  const pushPreviewProgress = async (
-    line?: ChannelProgressDraftLine,
-    options?: { toolName?: string },
-  ) => {
-    if (!draftStream && !useNativeProgressStreaming) {
-      return false;
-    }
-    if (options?.toolName !== undefined && !isChannelProgressDraftWorkToolName(options.toolName)) {
-      return false;
-    }
-    const normalized = line?.text.replace(/\s+/g, " ").trim();
-    if (isProgressMode) {
-      if (!line || !normalized) {
-        return await progressDraft.noteActivity();
-      }
-      return await progressDraft.pushToolProgress(line, options);
-    }
-    if (!line || !normalized || !draftStream || !previewToolProgressEnabled) {
-      return false;
-    }
-    return await progressDraft.pushToolProgress(line, options);
-  };
-
   const updateDraftFromPartial = (text?: string) => {
     const trimmed = text && sanitizeAssistantVisibleText(text).trimEnd();
     if (!trimmed) {
@@ -569,7 +544,7 @@ export function createSlackProgressRuntime(runtimeParams: {
       if (!normalized) {
         return false;
       }
-      const visible = await pushPreviewProgress({
+      const visible = await progressDraft.pushToolProgress({
         id: "reasoning",
         kind: "item",
         text: normalized,

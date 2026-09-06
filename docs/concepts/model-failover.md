@@ -13,13 +13,12 @@ OpenClaw handles failures in two stages:
 1. **Auth profile rotation** within the current provider.
 2. **Model fallback** to the next model in `agents.defaults.model.fallbacks`.
 
-The embedded runner also performs bounded same-model recovery. When a transient
-network failure interrupts a provider call before any assistant content or tool
-call is produced, the provider records a transport-failure diagnostic. After a
-settled tool batch, this lets the runner continue from the current transcript up
-to twice without rerunning those tools. Partial responses and unfinished tool
-batches do not qualify for this recovery. No additional retry configuration is
-required.
+Before rotating profiles or changing models, the runner attempts bounded
+same-model recovery for temporary rate limits and provider failures. It continues
+the existing transcript, preserving partial output and completed work. The agent
+is instructed to inspect interrupted actions before deciding whether to repeat
+them. A retry status shows the wait and attempt count; cancellation remains
+available. No additional configuration is required.
 
 Thinking-level recovery applies only when the provider identifies a reasoning or
 thinking parameter. Model/account restrictions and unrelated unsupported options
@@ -36,7 +35,7 @@ policy; OpenClaw does not retry them with thinking disabled.
     Build the model candidate chain from the current model selection and the fallback policy for that selection source. Configured defaults, cron job primaries, and auto-selected fallback models can use configured fallbacks; explicit user session selections are strict.
   </Step>
   <Step title="Try the current provider">
-    Try the current provider with auth-profile rotation/cooldown rules. Embedded runs apply their bounded retry policy to replay-safe transient failures before rotating profiles or advancing model fallback.
+    Try the current provider with auth-profile rotation/cooldown rules. Runs apply bounded recovery to eligible transient failures before rotating profiles or advancing model fallback.
   </Step>
   <Step title="Advance on failover-worthy errors">
     If that provider is exhausted with a failover-worthy error, move to the next model candidate.
@@ -265,7 +264,7 @@ State is stored in the per-agent SQLite auth state:
 }
 ```
 
-Overloaded and rate-limit errors allow one same-provider auth-profile rotation by default before advancing to the next configured model fallback. The active runtime may first use its own safe retry budget; embedded runs can retry transient failures while no assistant output or tool activity has started.
+Overloaded and rate-limit errors allow one same-provider auth-profile rotation by default before advancing to the next configured model fallback. The active runtime first uses its eligible same-model recovery budget. Profile rotation and model fallback still require evidence that replaying the original attempt is safe.
 
 ## Model fallback
 
@@ -273,7 +272,9 @@ If all profiles for a provider fail, OpenClaw moves to the next model in `agents
 
 Provider-busy signals such as `ModelNotReadyException` land in the overloaded bucket and follow the same one-rotation-then-fallback policy as rate limits.
 
-The embedded failover controller owns transient retries, including overloads and server errors. `retry.provider.maxRetries` sets the retry budget (default: 3), with jittered backoff, provider retry pacing, and a fixed 90-second retry window. Once that budget or window is exhausted, recovery proceeds to profile rotation, configured model fallback, or a visible error. Provider SDKs and the reply runner do not add separate replay loops. Retry and any fallback winner remain turn-local, and replay-unsafe attempts are not retried.
+The failover controller owns OpenClaw's transient recovery budget: up to eight attempts, with jittered exponential backoff, provider retry pacing, and a 90-second retry window. Once that budget or window is exhausted, recovery proceeds to eligible profile rotation, configured model fallback, or a visible error. Continuations preserve the transcript instead of replaying the original user request. Recovery and any fallback winner remain turn-local.
+
+The embedded runtime's existing session setting `retry.provider.maxRetries` overrides its attempt budget. It is not an `openclaw.json` key and does not change a native harness's internal request retries. Native harnesses may finish their own request retries before OpenClaw begins continuation recovery; the reply runner does not add another whole-turn replay loop. See [Retry policy](/concepts/retry) for pacing and exclusions.
 
 Visible failure messages preserve the provider's HTTP status independently of retry classification. A provider HTTP 500 remains a server error in the final reply, even when recovery groups it with timeout-shaped failures. Raw provider response details stay out of that reply.
 

@@ -73,10 +73,9 @@ export function runVitestJsonReport({
 
   if (!(reportPath && fs.existsSync(resolvedReportPath))) {
     const run = spawnSync(
-      "pnpm",
+      process.execPath,
       [
-        "exec",
-        "vitest",
+        path.join(import.meta.dirname, "run-vitest.mjs"),
         "run",
         "--config",
         config,

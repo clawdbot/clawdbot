@@ -53,19 +53,35 @@ async function executeHandoff(
   log: string;
 }> {
   const noWaitPid = 0;
-  const stubDir = fs.mkdtempSync(path.join(os.tmpdir(), "launchd-stub-"));
+  const stubDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "launchd-stub-")));
   try {
     const home = path.join(stubDir, "home");
     const stateDir = path.join(home, ".openclaw");
     const systemDaemonsDir = path.join(stubDir, "LaunchDaemons");
-    const handoffEnv = { HOME: home, OPENCLAW_PROFILE: "default", OPENCLAW_STATE_DIR: stateDir };
+    const handoffEnv = {
+      HOME: home,
+      OPENCLAW_PROFILE: "default",
+      OPENCLAW_STATE_DIR: stateDir,
+      BOUNDARY_SERVICE: "synthetic-service",
+    };
+    vi.stubGlobal("process", {
+      ...process,
+      env: {
+        PATH: `${stubDir}:/usr/bin:/bin`,
+        TMPDIR: stubDir,
+        BOUNDARY_PARENT: "synthetic-parent",
+      },
+    });
     const callsPath = path.join(stubDir, "launchctl.calls");
     fs.mkdirSync(path.join(stateDir, "logs"), { recursive: true });
     fs.mkdirSync(systemDaemonsDir);
     fs.writeFileSync(
       path.join(stubDir, "launchctl"),
       `#!/bin/sh
+LAUNCHCTL_CALLS_PATH="$TMPDIR/launchctl.calls"
+LAUNCHCTL_STUB_DIR="$TMPDIR"
 printf '%s\\n' "$*" >> "$LAUNCHCTL_CALLS_PATH"
+printf '%s:%s:%s\\n' "\${BOUNDARY_PARENT+present}" "\${BOUNDARY_SERVICE+present}" "\${OPENCLAW_PROFILE+present}" >> "$TMPDIR/environment.calls"
 if [ "$1" = "print" ] && [ "$2" = "system/ai.openclaw.gateway" ]; then
   ${systemOwnership === "loaded" ? "exit 0" : "printf 'Could not find service\\n' >&2; exit 113"}
 fi
@@ -89,7 +105,7 @@ ${launchctlStub}
         waitForPid: noWaitPid,
       });
     }
-    const [, args] = requireSpawnCall();
+    const [, args, options] = requireSpawnCall();
     const script = args[1]?.replaceAll(
       "/Library/LaunchDaemons",
       `'${systemDaemonsDir.replaceAll("'", "'\\''")}'`,
@@ -112,13 +128,7 @@ ${launchctlStub}
           String(noWaitPid),
         ],
         {
-          env: {
-            ...handoffEnv,
-            TMPDIR: stubDir,
-            LAUNCHCTL_CALLS_PATH: callsPath,
-            LAUNCHCTL_STUB_DIR: stubDir,
-            PATH: `${stubDir}:/usr/bin:/bin`,
-          },
+          env: options.env,
         },
       );
     } catch (error) {
@@ -129,6 +139,12 @@ ${launchctlStub}
       exitCode = code;
     }
 
+    const envCalls = fs
+      .readFileSync(path.join(stubDir, "environment.calls"), "utf8")
+      .trim()
+      .split("\n");
+    expect(envCalls.length).toBeGreaterThan(0);
+    expect(envCalls.every((call) => call === "::")).toBe(true);
     const calls = fs
       .readFileSync(callsPath, "utf8")
       .trim()
@@ -137,6 +153,7 @@ ${launchctlStub}
     const log = fs.readFileSync(path.join(stateDir, "logs", "gateway-restart.log"), "utf8");
     return { calls, exitCode, log };
   } finally {
+    vi.unstubAllGlobals();
     fs.rmSync(stubDir, { recursive: true, force: true });
   }
 }
@@ -368,7 +385,7 @@ esac`,
     expect(args[1]).not.toContain("/tmp/evil-bin");
     expect(args[1]).not.toContain("/tmp/evil.dylib");
     expect(args[1]).not.toContain("/tmp/evil-npmrc");
-    expect(options.env.OPENCLAW_PROFILE).toBe("default");
+    expect(options.env.OPENCLAW_PROFILE).toBeUndefined();
     expect(options.env.PATH).not.toBe("/tmp/evil-bin");
     expect(options.env.DYLD_INSERT_LIBRARIES).toBeUndefined();
     expect(options.env.NPM_CONFIG_GLOBALCONFIG).toBeUndefined();

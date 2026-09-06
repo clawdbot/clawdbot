@@ -297,18 +297,23 @@ export async function runPreparedModelCatalogWorkerRequest(
     const facts = await prepareFullCatalogFacts(exactAgentFacts, catalogGeneration, "live", source);
     // Full discovery can publish routes absent from startup config. Pair those exact rows with
     // provider-owned synthetic auth before the catalog and auth modes cross the worker boundary.
-    const catalogCredentials = resolveSyntheticCredentials(
-      [...facts.modelCatalog.entries, ...facts.modelCatalog.routeVariants]
-        .map((entry) => entry.provider)
-        .filter((provider) => !startupProviderIds.has(normalizeProviderId(provider))),
-    );
+    const catalogCredentials = {
+      ...resolveSyntheticCredentials(
+        [...facts.modelCatalog.entries, ...facts.modelCatalog.routeVariants]
+          .map((entry) => entry.provider)
+          .filter((provider) => !startupProviderIds.has(normalizeProviderId(provider))),
+      ),
+      ...credentials,
+    };
     return {
       status: "ok",
       kind: "catalog",
       generationFingerprint,
       snapshot: facts.modelCatalog,
+      configuredRuntimeModels: facts.configuredRuntimeModels,
+      credentials: catalogCredentials,
       authStore,
-      authModes: resolveUsableAgentCredentialModes({ ...catalogCredentials, ...credentials }),
+      authModes: resolveUsableAgentCredentialModes(catalogCredentials),
     };
   } catch (error) {
     return {
