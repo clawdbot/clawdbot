@@ -162,6 +162,14 @@ describe("gateway agent prompt", () => {
     expect(prompt).toContain("User: continue");
   });
 
+  it("renders a sole empty tool result as its sender line instead of an empty message", () => {
+    expect(
+      buildAgentMessageFromConversationEntries([
+        { role: "tool", entry: { sender: "Tool:call_1", body: "" } },
+      ]),
+    ).toBe("Tool:call_1: ");
+  });
+
   it("preserves current user text that looks like internal display metadata", () => {
     const body = "[Thu 2026-03-12 07:00 UTC] what happened then?";
     expect(

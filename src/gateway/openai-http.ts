@@ -677,9 +677,6 @@ function buildAgentPrompt(
     const messageContent = [baseMessageContent, assistantToolCallsSummary]
       .filter((part): part is string => Boolean(part))
       .join("\n");
-    if (!messageContent) {
-      continue;
-    }
 
     const name = normalizeOptionalString(msg.name) ?? "";
     const toolCallId = normalizeOptionalString(msg.tool_call_id) ?? "";
@@ -693,6 +690,13 @@ function buildAgentPrompt(
             : name
               ? `Tool:${name}`
               : "Tool";
+
+    // An empty string is a completed tool output, not an absent message: keep
+    // tool results carrying call identity so the agent sees them as the current
+    // tool-result input instead of replaying the earlier prompt.
+    if (!messageContent && !(normalizedRole === "tool" && (toolCallId || name))) {
+      continue;
+    }
 
     conversationEntries.push({
       role: normalizedRole,

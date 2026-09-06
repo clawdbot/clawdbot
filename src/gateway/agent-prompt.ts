@@ -80,11 +80,18 @@ export function buildAgentMessageFromConversationEntries(entries: ConversationEn
   if (!currentPromptEntry) {
     return "";
   }
+  const formatEntry = (entry: HistoryEntry) => `${entry.sender}: ${entry.body}`;
   if (historyEntries.length === 0) {
+    // A sole tool result with empty output still carries call identity the agent
+    // must see (empty string is a completed output, not absence): render its
+    // sender line instead of an empty message. Only tool entries can arrive here
+    // with an empty body; every other role is dropped upstream when bodiless.
+    if (!currentPromptEntry.body && currentConversationEntry.role === "tool") {
+      return formatEntry(currentPromptEntry);
+    }
     return currentPromptEntry.body;
   }
 
-  const formatEntry = (entry: HistoryEntry) => `${entry.sender}: ${entry.body}`;
   return buildHistoryContextFromEntries({
     entries: [...historyEntries, currentPromptEntry],
     currentMessage: formatEntry(currentPromptEntry),
