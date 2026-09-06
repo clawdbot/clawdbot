@@ -3,7 +3,7 @@
  */
 
 import type { Client } from "@larksuiteoapi/node-sdk";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { FEISHU_HTTP_TIMEOUT_MS } from "./client-timeout.js";
 import { getFeishuUserAgent } from "./client.js";
@@ -696,15 +696,14 @@ export class FeishuStreamingSession {
     }
   }
 
-  async discard(): Promise<void> {
+  async discard(): Promise<FeishuStreamingCloseResult> {
     if (!this.state || this.closed) {
-      return;
+      return { visibleReplySent: false };
     }
     const { cardId, messageId } = this.state;
     if (!messageId) {
       // Accepted cards without a message receipt can still be cleared by card id.
-      await this.close("");
-      return;
+      return this.closeWithResult("");
     }
     this.closed = true;
     this.clearFlushTimer();
@@ -720,10 +719,12 @@ export class FeishuStreamingSession {
       this.state = null;
       this.pendingText = null;
       this.log?.(`Discarded streaming card: cardId=${cardId}`);
+      return { visibleReplySent: false };
     } catch (error) {
       this.log?.(`Discard failed: ${String(error)}`);
       this.closed = false;
-      await this.close("");
+      // A rejected clear leaves accepted text visible; preserve its receipt and failure.
+      return this.closeWithResult("");
     }
   }
 
