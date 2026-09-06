@@ -367,14 +367,12 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
       "Release process",
       "Testing and CI",
     ]);
-    // Every release adds a releases/<version> page, so read the published versions from the
-    // navigation rather than pinning them here; only the index-first ordering and the version
-    // route shape are invariant. Pinning the list makes this assertion fail on release PRs whose
-    // change classification never selects this lane, so the break first lands on main.
+    // Releases can add version pages and nested section pages. Read their routes from
+    // navigation rather than pinning a list that docs-only releases cannot validate here.
     expect(releaseNotes[0]).toBe("releases/index");
     expect(releaseNotes.length).toBeGreaterThan(1);
     for (const page of releaseNotes.slice(1)) {
-      expect(page).toMatch(/^releases\/\d{4}\.\d{1,2}\.\d+$/);
+      expect(page).toMatch(/^releases\/\d{4}\.\d{1,2}\.\d+(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)*$/);
     }
     const releaseRoutes = [
       ...releaseNotes,
