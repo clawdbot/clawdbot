@@ -13,15 +13,17 @@ import {
   loadTranscriptEventsSync,
   loadTranscriptHeaderSync,
   loadTranscriptTailEventsSync,
-  loadTranscriptSuffixEventsBoundedSync,
   readTranscriptMutationAtSync,
   readTranscriptStatsBatchReadOnlySync,
   readTranscriptStatsSync,
   validatePreparedAssistantAppendSync,
   readTranscriptEventAtSeqSync,
-  readPreviousIndexedTranscriptEventSync,
   readTranscriptIdentityByEventId,
 } from "./session-accessor.sqlite-read.js";
+import {
+  loadTranscriptSuffixEventsBoundedSync,
+  readPreviousIndexedTranscriptEventSync,
+} from "./session-accessor.sqlite-suffix-read.js";
 import { rewriteTranscriptMessageAtAnchor } from "./session-accessor.sqlite-transcript-message-rewrite.js";
 import {
   appendTranscriptEvent,
