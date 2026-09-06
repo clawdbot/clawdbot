@@ -88,6 +88,11 @@ function manifestSuppressionMatchesConditions(params: {
   if (!when) {
     return true;
   }
+  // Retirement repairs durable model choices. A missing route is unknown, even
+  // when the provider's default endpoint is known; never retire a sibling auth route.
+  if (params.suppression.retirement && when.baseUrlHosts?.length && !params.baseUrl) {
+    return false;
+  }
   const configuredProvider = resolveConfiguredProviderValue({
     provider: params.provider,
     config: params.config,
@@ -121,8 +126,9 @@ export function buildManifestBuiltInModelSuppressionResolver(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): ManifestModelSuppressionResolver {
-  const snapshot = loadManifestMetadataSnapshot(params);
+  const snapshot = params.metadataSnapshot ?? loadManifestMetadataSnapshot(params);
   const cache = getPluginMetadataSnapshotCache(snapshot).metadata.modelSuppressionResolvers;
   let compiled = cache.get(snapshot);
   if (!compiled) {
@@ -164,8 +170,11 @@ export function buildManifestBuiltInModelSuppressionResolver(params: {
       errorMessage: buildManifestSuppressionError({
         provider,
         modelId,
-        reason: suppression.reason,
+        reason: suppression.retirement
+          ? `${suppression.reason ?? "This model has retired."} Run \`openclaw doctor --fix\` to ${suppression.retirement.replacedBy ? `replace it with ${suppression.retirement.replacedBy}` : "clear the retired override and use the default model"}.`
+          : suppression.reason,
       }),
+      ...(suppression.retirement ? { retirement: suppression.retirement } : {}),
     };
   };
   if (params.config) {

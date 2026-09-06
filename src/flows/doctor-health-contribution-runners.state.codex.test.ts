@@ -64,6 +64,7 @@ describe("Codex session doctor health owner", () => {
 
   it("applies the exact ephemeral auth map after earlier session migration owners", async () => {
     const authProfileIdMap = new Map([["openai-codex:default", "openai:chatgpt-default"]]);
+    const retiredModelRefConfig = { agents: { defaults: { model: "openai/retired-model" } } };
     const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-doctor-session-owner" };
     const cfg = {};
     const ctx = createDoctorHealthContext({
@@ -72,6 +73,7 @@ describe("Codex session doctor health owner", () => {
       shouldRepair: true,
       configResult: {
         openAICodexAuthProfileIdMap: authProfileIdMap,
+        retiredModelRefConfig,
         blockedCodexModelIdentities: ["codex\0gpt-5.6-sol"],
       },
     });
@@ -83,6 +85,7 @@ describe("Codex session doctor health owner", () => {
       env,
       shouldRepair: true,
       authProfileIdMap,
+      retiredModelRefConfig,
       blockedModelIdentities: new Set(["codex\0gpt-5.6-sol"]),
     });
   });

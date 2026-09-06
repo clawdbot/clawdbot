@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/codex",
-  "version": "2026.9.1",
+  "version": "2026.9.2",
   "description": "OpenClaw Codex app-server harness and native session supervision plugin.",
   "repository": {
     "type": "git",
@@ -36,10 +36,10 @@
       ]
     },
     "compat": {
-      "pluginApi": ">=2026.9.1"
+      "pluginApi": ">=2026.9.2"
     },
     "build": {
-      "openclawVersion": "2026.9.1"
+      "openclawVersion": "2026.9.2"
     },
     "release": {
       "publishToClawHub": true,

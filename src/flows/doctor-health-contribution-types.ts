@@ -32,6 +32,8 @@ type DoctorConfigResult = {
   blockedCodexModelIdentities?: readonly string[];
   /** Ephemeral doctor-only auth rename plan; never part of persisted config. */
   openAICodexAuthProfileIdMap?: ReadonlyMap<string, string>;
+  /** Transient pre-retirement alias/default interpretation; current config owns auth and routes. */
+  retiredModelRefConfig?: Pick<OpenClawConfig, "agents" | "models">;
   runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
   invalidatePluginMetadataSnapshot?: () => void;
 };

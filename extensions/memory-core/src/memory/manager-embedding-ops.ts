@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { extractCuratedEntryRecallMetadata } from "openclaw/plugin-sdk/memory-core-host-engine-curated";
 import {
   enforceEmbeddingMaxInputTokens,
   hasNonTextEmbeddingParts,
@@ -14,12 +15,8 @@ import {
   buildFileEntry,
   buildMultimodalChunkForIndexing,
   chunkMarkdown,
-  extractProjectKeysFromCuratedEntry,
   hashText,
-  INVALID_PROJECT_ANNOTATION_KEY,
   MEMORY_EMBEDDING_CACHE_TABLE,
-  MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
-  MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
   remapChunkLines,
@@ -38,6 +35,7 @@ import { hasMemorySessionTombstone } from "../memory-entry-origins.js";
 import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
 import { readSessionResetRecallCutoffMetadata } from "../session-reset-recall-metadata.js";
 import type { EmbeddingProvider } from "./embeddings.js";
+import { createMemoryChunkWriter, type IndexedMemoryChunk } from "./manager-chunk-writer.js";
 import {
   collectMemoryCachedEmbeddings,
   loadMemoryEmbeddingCache,
@@ -100,81 +98,12 @@ function resolveEmbeddingSecondsTimeoutMs(seconds: number): number {
 
 type MemoryIndexEntry = MemoryIndexWorkItem["entry"];
 
-type IndexedMemoryChunk = MemoryChunk & {
-  importance: number | null;
-  triggers: string | null;
-  projectKey: string | null;
-};
-
 type PreparedMemoryIndexEntry = {
   entry: MemoryIndexEntry;
   source: MemorySource;
   chunks: IndexedMemoryChunk[];
   structuredInputBytes?: number;
 };
-
-function resolveChunkRecallMetadata(params: {
-  curatedRoot: boolean;
-  projectScopeEligible: boolean;
-  sourceLines: string[];
-  chunk: MemoryChunk;
-}): Pick<IndexedMemoryChunk, "importance" | "triggers" | "projectKey"> {
-  if (!params.curatedRoot && !params.projectScopeEligible) {
-    return { importance: null, triggers: null, projectKey: null };
-  }
-
-  const phrases = new Set<string>();
-  let importance: number | null = null;
-  const annotationStartLine = params.chunk.entryStartLine ?? params.chunk.startLine;
-  const annotationEndLine = params.chunk.entryEndLine ?? params.chunk.endLine;
-  const annotationLines = params.sourceLines.slice(annotationStartLine - 1, annotationEndLine);
-  const projectAnnotations = params.projectScopeEligible
-    ? extractProjectKeysFromCuratedEntry(annotationLines.join("\n"))
-    : { annotated: false, valid: true, keys: [] };
-  for (const line of params.curatedRoot ? annotationLines : []) {
-    const annotationSuffix = line.match(
-      /(?:\s*<!--\s*(?:trigger|importance|project)\s*:[\s\S]*?-->\s*)+$/iu,
-    )?.[0];
-    if (!annotationSuffix) {
-      continue;
-    }
-    for (const match of annotationSuffix.matchAll(
-      /<!--\s*(trigger|importance|project)\s*:\s*([\s\S]*?)\s*-->/giu,
-    )) {
-      const kind = match[1]?.toLowerCase();
-      const value = match[2]?.trim() ?? "";
-      if (kind === "trigger") {
-        for (const phrase of value.split(/[,;]/u).map((entry) => entry.trim())) {
-          if (phrase) {
-            phrases.add(phrase);
-          }
-        }
-        continue;
-      }
-      if (kind === "importance" && /^\d+$/u.test(value)) {
-        const parsed = Number.parseInt(value, 10);
-        if (parsed >= 1 && parsed <= 10) {
-          importance = Math.max(importance ?? parsed, parsed);
-        }
-      }
-    }
-  }
-
-  // Missing annotations intentionally stay NULL: pre-annotation indexes keep
-  // neutral ranking and never become trigger candidates after a reindex.
-  return {
-    importance,
-    triggers: phrases.size > 0 ? [...phrases].join("; ") : null,
-    // Invalid annotations remain scoped but unsatisfiable; treating them as NULL
-    // would make malformed project memory global and leak it into every project.
-    projectKey:
-      projectAnnotations.annotated && !projectAnnotations.valid
-        ? INVALID_PROJECT_ANNOTATION_KEY
-        : projectAnnotations.keys.length > 0
-          ? projectAnnotations.keys.join("; ")
-          : null,
-  };
-}
 
 // Retry attempts are host control state. Provider-thrown values stay opaque so
 // they cannot override the counter or break accounting when they are immutable.
@@ -858,68 +787,18 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           }
         }
         this.clearIndexedFileData(entry.path, source);
+        const writeChunk = createMemoryChunkWriter(this.db, {
+          path: entry.path,
+          source,
+          model,
+          now,
+        });
         for (const [i, chunk] of chunks.entries()) {
           const embedding = embeddings[i] ?? [];
           const id = hashText(
             `${source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${model}`,
           );
-          this.db
-            .prepare(
-              `INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT(id) DO UPDATE SET
-                 hash=excluded.hash,
-                 model=excluded.model,
-                 text=excluded.text,
-                 embedding=excluded.embedding,
-                 updated_at=excluded.updated_at`,
-            )
-            .run(
-              id,
-              entry.path,
-              source,
-              chunk.startLine,
-              chunk.endLine,
-              chunk.hash,
-              model,
-              chunk.text,
-              JSON.stringify(embedding),
-              now,
-            );
-          this.db
-            .prepare(
-              `INSERT INTO ${MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE} (
-                 chunk_id, importance, triggers, project_key
-               ) VALUES (?, ?, ?, ?)
-               ON CONFLICT(chunk_id) DO UPDATE SET
-                 importance=excluded.importance,
-                 triggers=excluded.triggers,
-                 project_key=excluded.project_key`,
-            )
-            .run(id, chunk.importance, chunk.triggers, chunk.projectKey);
-          const provenance = chunk.provenance ?? {
-            originClass: "untrusted" as const,
-            sessionKind: "unknown" as const,
-            observedAt: now,
-          };
-          this.db
-            .prepare(
-              `INSERT INTO ${MEMORY_INDEX_CHUNK_PROVENANCE_TABLE} (
-                 chunk_id, origin_class, session_kind, observed_at, supersedes_key
-               ) VALUES (?, ?, ?, ?, ?)
-               ON CONFLICT(chunk_id) DO UPDATE SET
-                 origin_class=excluded.origin_class,
-                 session_kind=excluded.session_kind,
-                 observed_at=excluded.observed_at,
-                 supersedes_key=excluded.supersedes_key`,
-            )
-            .run(
-              id,
-              provenance.originClass,
-              provenance.sessionKind,
-              provenance.observedAt,
-              provenance.supersedesKey ?? null,
-            );
+          writeChunk(id, chunk, embedding);
           if (vectorReady && embedding.length > 0) {
             replaceMemoryVectorRow({
               db: this.db,
@@ -1043,6 +922,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           pathClassification.originClass,
         );
       }
+      // Fragments inherit one entry's metadata; parse each source span once,
+      // not once per fragment of a long line or oversized entry.
+      const recallMetadata = new Map<
+        string,
+        ReturnType<typeof extractCuratedEntryRecallMetadata>
+      >();
       const chunks = (
         generation?.kind === "semantic"
           ? enforceEmbeddingMaxInputTokens(
@@ -1051,18 +936,22 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
               EMBEDDING_BATCH_MAX_TOKENS,
             )
           : baseChunks
-      ).map((chunk): IndexedMemoryChunk =>
-        Object.assign(
-          chunk,
-          resolveChunkRecallMetadata({
+      ).map((chunk): IndexedMemoryChunk => {
+        const start = chunk.entryStartLine ?? chunk.startLine;
+        const end = chunk.entryEndLine ?? chunk.endLine;
+        const span = `${start}:${end}`;
+        let metadata = recallMetadata.get(span);
+        if (!metadata) {
+          metadata = extractCuratedEntryRecallMetadata({
             curatedRoot: pathClassification.curatedRoot,
             projectScopeEligible:
               options.source === "memory" && normalizedEntryPath.toUpperCase() !== "USER.MD",
-            sourceLines,
-            chunk,
-          }),
-        ),
-      );
+            sourceLines: sourceLines.slice(start - 1, end),
+          });
+          recallMetadata.set(span, metadata);
+        }
+        return Object.assign(chunk, metadata);
+      });
       if (options.source === "sessions" && "lineMap" in entry) {
         remapChunkLines(chunks, entry.lineMap);
       }

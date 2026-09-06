@@ -123,7 +123,7 @@ describe("dashboardCommand --json", () => {
         port: 18789,
         tokenIncluded: true,
         browserUrl:
-          "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
+          "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
         browserBootstrapExpiresAtMs: 123_456,
       },
       0,

@@ -30,6 +30,7 @@ import {
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
 import { finishUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -44,7 +45,6 @@ import {
 } from "./schema-preflight.js";
 import {
   DEFAULT_PACKAGE_NAME,
-  createGlobalCommandRunner,
   normalizeTag,
   readPackageName,
   readPackageVersion,
@@ -350,7 +350,7 @@ async function updateCommandInternal(
       });
       packageInstallTarget = await resolveGlobalInstallTarget({
         manager,
-        runCommand: createGlobalCommandRunner(),
+        runCommand: runCommandWithTimeout,
         timeoutMs: updateStepTimeoutMs,
         pkgRoot: root,
         honorPackageRoot:
@@ -477,7 +477,7 @@ async function updateCommandInternal(
     { env: run.env },
   );
   recordUpdateRunPhase(run.runId, "validating", undefined, { env: run.env });
-  const packageSchemaPreflight = checkTargetDatabaseSchemas(packageTargetSchemaVersions);
+  const packageSchemaPreflight = await checkTargetDatabaseSchemas(packageTargetSchemaVersions);
   if (!opts.dryRun && hasSchemaRefusal(packageSchemaPreflight)) {
     await refuseUpdate(
       "database-schema-preflight",

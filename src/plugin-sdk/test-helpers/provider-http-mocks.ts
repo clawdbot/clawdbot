@@ -329,6 +329,9 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => ({
   postJsonRequest: providerHttpMocks.postJsonRequestMock,
   postMultipartRequest: providerHttpMocks.postMultipartRequestMock,
   providerOperationRetryConfig: (_stage: string) => true,
+  readProviderBinaryResponse: (
+    await importActual<typeof import("openclaw/plugin-sdk/provider-http")>()
+  ).readProviderBinaryResponse,
   readProviderJsonResponse: providerHttpMocks.readProviderJsonResponseMock,
   resolveProviderOperationTimeoutMs: ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
     defaultTimeoutMs,

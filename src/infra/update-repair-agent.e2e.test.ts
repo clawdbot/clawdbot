@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { text as readText } from "node:stream/consumers";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
@@ -11,6 +11,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runUpdateRepairLoop } from "./update-repair-agent.js";
+
+// Exercise the built runtime through Node's loader; Vitest's source-module graph
+// stalls inside agent command execution before the synthetic provider is called.
+vi.mock("./update-repair-agent.runtime.js", async () => {
+  const { createRequire } = await import("node:module");
+  return createRequire(import.meta.url)(
+    "../../dist/update-repair-agent.runtime.js",
+  ) as typeof import("./update-repair-agent.runtime.js");
+});
 
 type ModelRequest = {
   model?: string;

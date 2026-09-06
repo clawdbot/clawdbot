@@ -28,6 +28,14 @@ final class CookieSyncManager: NSObject {
     private(set) var state: State = .stopped
     private(set) var lastSummary: String?
 
+    var isAvailable: Bool {
+        guard AppStateStore.shared.connectionMode == .remote else { return false }
+        #if DEBUG
+        if CommandResolver.projectOpenClawExecutable() != nil { return true }
+        #endif
+        return CLIInstaller.installedLocation() != nil
+    }
+
     @ObservationIgnored private let logger = Logger(subsystem: "ai.openclaw", category: "cookie-sync")
     @ObservationIgnored private let queue = DispatchQueue(label: "ai.openclaw.cookie-sync")
     @ObservationIgnored private weak var appState: AppState?

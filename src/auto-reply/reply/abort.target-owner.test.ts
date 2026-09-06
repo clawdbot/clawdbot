@@ -89,6 +89,74 @@ async function setupStop() {
 }
 
 describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) => {
+  it("stops the selected agent's global session in an explicit roster", async () => {
+    const state = await setupStop();
+    const agentId = "selected";
+    const globalKey = "global";
+    const storePath = path.join(
+      state.params.workspaceDir,
+      "agents",
+      agentId,
+      "sessions",
+      "sessions.json",
+    );
+    const cfg = {
+      ...state.cfg,
+      agents: { ownership: "explicit" as const, entries: { other: {}, [agentId]: {} } },
+      session: {
+        scope: "global" as const,
+        store: path.join(
+          state.params.workspaceDir,
+          "agents",
+          "{agentId}",
+          "sessions",
+          "sessions.json",
+        ),
+      },
+    };
+    const scope = { agentId, storePath, sessionKey: globalKey };
+    await replaceSessionEntry(scope, state.entry);
+    const ctx = { ...state.ctx, AgentId: agentId, CommandTargetSessionKey: globalKey };
+    const isCommandTargetCurrent = () =>
+      loadSessionEntry(scope)?.sessionId === state.entry.sessionId;
+    const operation = createReplyOperation({
+      sessionKey: globalKey,
+      sessionId: state.entry.sessionId,
+      resetTriggered: false,
+    });
+    operation.attachBackend({ kind: "embedded", cancel: () => {}, isStreaming: () => true });
+    try {
+      const result = await (pathKind === "fast"
+        ? tryFastAbortFromMessage({ cfg, ctx, isCommandTargetCurrent })
+        : handleStopCommand(
+            {
+              ...state.params,
+              cfg,
+              ctx,
+              agentId,
+              sessionKey: globalKey,
+              sessionStore: { [globalKey]: state.entry },
+              storePath,
+              opts: { isCommandTargetCurrent },
+            },
+            true,
+          ));
+      expect(operation.abortSignal.aborted).toBe(true);
+      expect(result).toMatchObject(
+        pathKind === "fast"
+          ? { handled: true, aborted: true }
+          : { shouldContinue: false, reply: { text: "⚙️ Agent was aborted." } },
+      );
+      expect(loadSessionEntry(scope)).toMatchObject({
+        sessionId: state.entry.sessionId,
+        abortedLastRun: true,
+      });
+    } finally {
+      operation.complete();
+      clearSessionQueues([globalKey]);
+    }
+  });
+
   it("does not reclaim a conversation reassigned after abort preparation", async () => {
     const state = await setupStop();
     const nextKey = `${sessionKey}:thread:123.456`;

@@ -290,12 +290,11 @@ export class SessionManagerEntries extends SessionManagerPersistence {
   }
 
   getSessionName(): string | undefined {
-    for (const entry of this.getEntries().toReversed()) {
-      if (entry.type === "session_info") {
-        return entry.name?.trim() || undefined;
-      }
-    }
-    return undefined;
+    const sessionInfo = this.fileEntries.findLast(
+      (entry): entry is SessionInfoEntry =>
+        entry.type === "session_info" && this.byId.has(entry.id),
+    );
+    return sessionInfo?.name?.trim() || undefined;
   }
 
   appendCustomMessageEntry(

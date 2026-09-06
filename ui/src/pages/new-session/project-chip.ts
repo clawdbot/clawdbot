@@ -1,6 +1,5 @@
 import { html, nothing } from "lit";
 import type {
-  FsListDirResult,
   ProjectRecord,
   ProjectRecent,
   RemoteProject,
@@ -9,6 +8,7 @@ import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { renderSessionMenuItem } from "./cloud-target.ts";
 import { folderDisplayName, parentFolderDisplayName } from "./path.ts";
+import type { PlaceBrowserState } from "./place-browser-state.ts";
 import { renderPlaceBrowser } from "./place-browser.ts";
 import { disambiguate } from "./place-labels.ts";
 
@@ -100,11 +100,7 @@ export function renderProjectChip(params: {
   popoverOpen: boolean;
   popoverHiding: boolean;
   browserOpen: boolean;
-  browserListing: FsListDirResult | null;
-  browserLoading: boolean;
-  browserError: string | null;
-  browserPathDraft: string;
-  usableBrowserPath: string | null;
+  browser: PlaceBrowserState;
   registerProjectPath: string | null;
   registeringProject: boolean;
   onGuardTransition: (event: MouseEvent) => void;
@@ -116,8 +112,6 @@ export function renderProjectChip(params: {
   onSelectRemoteProject: (project: DraftRemoteProject) => void;
   onApplyFolder: (folder: string) => void;
   onBrowse: () => void;
-  onBrowserPathDraftChange: (value: string) => void;
-  onBrowserNavigate: (path: string | undefined) => void;
   onBrowserBack: () => void;
   onRegisterProject: (path: string) => void;
   onClose: () => void;
@@ -200,16 +194,11 @@ export function renderProjectChip(params: {
       ${
         params.browserOpen
           ? renderPlaceBrowser({
-              listing: params.browserListing,
+              browser: params.browser,
+              id: "new-session-place-browser",
               label: params.gatewayLabel,
-              loading: params.browserLoading,
-              error: params.browserError,
-              pathDraft: params.browserPathDraft,
-              usablePath: params.usableBrowserPath,
               registerProjectPath: params.registerProjectPath,
               registeringProject: params.registeringProject,
-              onPathDraftChange: params.onBrowserPathDraftChange,
-              onNavigate: params.onBrowserNavigate,
               onBack: params.onBrowserBack,
               onRegisterProject: params.onRegisterProject,
               onClose: params.onClose,
