@@ -18,6 +18,7 @@ const loggerMocks = vi.hoisted(() => ({
 
 vi.mock("../config/sessions/session-accessor.js", () => ({
   patchSessionEntryCore: persistenceMocks.updateSessionEntry,
+  appendSessionTranscriptReport: vi.fn(async () => ({ ok: true, value: undefined })),
 }));
 
 vi.mock("./session-utils.js", () => ({

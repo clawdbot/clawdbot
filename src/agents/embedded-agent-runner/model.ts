@@ -214,7 +214,11 @@ export async function resolveModelAsync(
       manifestAlias: normalizedRef.manifestAlias,
       workspaceDir,
       runtimeHooks,
-      preparedInlineProviderModels: preparedModelRuntime?.inlineProviderModels,
+      // Inline rows carry configured transport and headers; only their captured config can reuse them.
+      preparedInlineProviderModels:
+        cfg === preparedModelRuntime?.config
+          ? preparedModelRuntime?.inlineProviderModels
+          : undefined,
       getStaticCatalogModel: getManifestStaticCatalogModel,
     });
     if (explicitModel?.kind === "suppressed") {
