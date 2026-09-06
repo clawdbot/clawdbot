@@ -38,7 +38,7 @@ it.skipIf(process.platform !== "linux")(
           `report-�.txt-1- before ${index}\nreport-�.txt:2: needle ${index}\nreport-�.txt-3- after ${index}`,
         );
       }
-      expect(result.details).toBeUndefined();
+      expect(result.details).toEqual({ content: text });
     } finally {
       // Cleanup uses the same lossless paths that created the synthetic files.
       await Promise.all(paths.map((filePath) => fs.rm(filePath, { force: true })));

@@ -5,7 +5,7 @@ import { readTcpPortEnv } from "../env-limits.mjs";
 
 async function loadCallGateway() {
   const candidates = readdirSync("/app/dist")
-    .filter((name) => /^call(?:\.runtime)?-[A-Za-z0-9_-]+\.js$/.test(name))
+    .filter((name) => /^call(?:\.runtime)?-[A-Za-z0-9_-]+\.m?js$/.test(name))
     .toSorted();
   for (const name of candidates) {
     const mod = await import(pathToFileURL(`/app/dist/${name}`).href);

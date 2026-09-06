@@ -234,56 +234,59 @@ describe("CommandPalette lifecycle", () => {
     expect(palette.textContent).not.toContain("Stale chat");
   });
 
-  it("merges full-context matches after metadata matches without adding another search field", async () => {
-    const metadata = createSessionResult("agent:main:metadata", "needle");
-    const contextOnly = createSessionResult("agent:main:context", "Unrelated title");
-    const roster = {
-      ...metadata,
-      count: 2,
-      totalCount: 2,
-      sessions: [...metadata.sessions, ...contextOnly.sessions],
-    } as SessionsListResult;
-    const list = vi.fn<ApplicationContext<RouteId>["sessions"]["list"]>(async (options) =>
-      options?.search ? metadata : roster,
-    );
-    const searchResult: SessionsSearchResult = {
-      results: [
-        {
-          sessionKey: "agent:main:context",
-          sessionId: "context",
-          messageId: "message-context",
-          role: "assistant",
-          timestamp: 42,
-          snippet: "The needle appears only in the conversation body.",
-          score: 10,
-        },
-      ],
-    };
-    const request = vi.fn(async () => searchResult);
-    const { gateway } = createGateway(true, {
-      methods: ["sessions.search"],
-      request: request as GatewayBrowserClient["request"],
-    });
-    const { palette } = await mountPalette(createContext(gateway, list));
+  it.each([false, true])(
+    "keeps transcript snippets with a server metadata match: %s",
+    async (serverMatch) => {
+      const metadata = createSessionResult("agent:main:metadata", "needle");
+      const contextOnly = createSessionResult("agent:main:context", "Unrelated title");
+      const roster = {
+        ...metadata,
+        count: 2,
+        totalCount: 2,
+        sessions: [...metadata.sessions, ...contextOnly.sessions],
+      } as SessionsListResult;
+      const list = vi.fn<ApplicationContext<RouteId>["sessions"]["list"]>(async (options) =>
+        options?.search && !serverMatch ? metadata : roster,
+      );
+      const searchResult: SessionsSearchResult = {
+        results: [
+          {
+            sessionKey: "agent:main:context",
+            sessionId: "context",
+            messageId: "message-context",
+            role: "assistant",
+            timestamp: 42,
+            snippet: "The needle appears only in the conversation body.",
+            score: 10,
+          },
+        ],
+      };
+      const request = vi.fn(async () => searchResult);
+      const { gateway } = createGateway(true, {
+        methods: ["sessions.search"],
+        request: request as GatewayBrowserClient["request"],
+      });
+      const { palette } = await mountPalette(createContext(gateway, list));
 
-    await enterQuery(palette, "needle");
-    await vi.advanceTimersByTimeAsync(50);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    await palette.updateComplete;
+      await enterQuery(palette, "needle");
+      await vi.advanceTimersByTimeAsync(50);
+      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+      await palette.updateComplete;
 
-    expect(request).toHaveBeenCalledWith("sessions.search", {
-      agentId: "main",
-      sessionKeys: ["agent:main:metadata", "agent:main:context"],
-      query: "needle",
-      limit: 25,
-    });
-    const chatItems = [...palette.querySelectorAll<HTMLElement>(".cmd-palette__item")];
-    expect(chatItems).toHaveLength(2);
-    expect(chatItems[0]?.textContent).toContain("needle");
-    expect(chatItems[1]?.textContent).toContain("Unrelated title");
-    expect(chatItems[1]?.textContent).toContain("needle appears only in the conversation body");
-    expect(palette.querySelectorAll(".cmd-palette__input")).toHaveLength(1);
-  });
+      expect(request).toHaveBeenCalledWith("sessions.search", {
+        agentId: "main",
+        sessionKeys: ["agent:main:metadata", "agent:main:context"],
+        query: "needle",
+        limit: 25,
+      });
+      const chatItems = [...palette.querySelectorAll<HTMLElement>(".cmd-palette__item")];
+      expect(chatItems).toHaveLength(2);
+      expect(chatItems[0]?.textContent).toContain("needle");
+      expect(chatItems[1]?.textContent).toContain("Unrelated title");
+      expect(chatItems[1]?.textContent).toContain("needle appears only in the conversation body");
+      expect(palette.querySelectorAll(".cmd-palette__input")).toHaveLength(1);
+    },
+  );
 
   it("searches a bare default session key in the selected agent scope", async () => {
     const roster = createSessionResult("main", "Default chat");
