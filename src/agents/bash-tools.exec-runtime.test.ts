@@ -83,14 +83,16 @@ afterEach(() => {
 
 async function runExecWithExit(params: {
   exit: RunExit;
-  stdout?: string;
+  stdout?: string | string[];
   timeoutSec?: number | null;
   usePty?: boolean;
 }) {
   supervisorMock.spawn.mockImplementationOnce(
     async (input: { onStdout?: (chunk: string) => void }) => {
       if (params.stdout) {
-        input.onStdout?.(params.stdout);
+        for (const chunk of typeof params.stdout === "string" ? [params.stdout] : params.stdout) {
+          input.onStdout?.(chunk);
+        }
       }
       return {
         runId: "run-exit",
@@ -176,6 +178,9 @@ function requireSystemEventCall(): [string, Record<string, unknown>] {
 describe("runExecProcess cursor tracking", () => {
   it.each([
     { raw: "hello world", expected: "unknown" },
+    { raw: ["\x1b[?1l\x1b", "[?1", "h"], expected: "application" },
+    { raw: ["\x1b[?1h\x1b[?", "1", "l"], expected: "normal" },
+    { raw: ["\x1b]0;\x1b[?1h", "\x07"], expected: "unknown" },
     { raw: "\x1b[?1h", expected: "application" },
     { raw: "\x1b[?1h\x1b[?1l", expected: "normal" },
     { raw: "\x1b[?1l\x1b[?1h", expected: "application" },

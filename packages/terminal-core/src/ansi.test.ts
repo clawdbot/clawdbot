@@ -48,6 +48,48 @@ describe("terminal ansi helpers", () => {
     expect(split).toBe(joined);
   });
 
+  it.each(CSI_INTRODUCERS)(
+    "dispatches complete %s controls once across every split",
+    (_label, csi) => {
+      const input = `A${csi}6n${csi}?1hB${csi}?6n${csi}?1l${csi}31mC`;
+      for (let split = 0; split <= input.length; split += 1) {
+        const controls: string[] = [];
+        const stripper = new AnsiSequenceStripper((sequence) => controls.push(sequence));
+        expect(stripper.write(input.slice(0, split)) + stripper.write(input.slice(split))).toBe(
+          "ABC",
+        );
+        expect(controls).toEqual(["6n", "?1h", "?6n", "?1l", "31m"]);
+        expect(stripper.finish()).toBe("");
+      }
+    },
+  );
+
+  it.each([
+    ["OSC payload", "\x1b]0;\x1b[6n\x1b[?1h\x07", []],
+    ["cancelled CSI", "\x1b[6\x18n\x1b[?1\x1ah", []],
+    ["restarted CSI", "\x1b[?1\x1b[6n", ["6n"]],
+    ["C1 restart", "\x1b[?1\x9b6n", ["6n"]],
+    ["embedded C0", "\x1b[6\x07n", ["6n"]],
+    ["compatibility sequence", "\x1b[[6n", []],
+  ])("dispatches only active CSI in %s", (_label, input, expected) => {
+    const controls: string[] = [];
+    const stripper = new AnsiSequenceStripper((sequence) => controls.push(sequence));
+    for (const char of input) {
+      stripper.write(char);
+    }
+    expect(controls).toEqual(expected);
+  });
+
+  it("drops oversized and unfinished CSI metadata without dispatching partial controls", () => {
+    const controls: string[] = [];
+    const stripper = new AnsiSequenceStripper((sequence) => controls.push(sequence));
+    expect(stripper.write("A\x1b[" + "?".repeat(1024 * 1024))).toBe("A");
+    expect(stripper.write("6nB\x1b[6")).toBe("B");
+    stripper.finish();
+    expect(stripper.write("nC\x1b[6n")).toBe("nC");
+    expect(controls).toEqual(["6n"]);
+  });
+
   it("keeps a trailing ESC pending until the next chunk can identify OSC", () => {
     const chunks = ["A\u001B", "]0;title\u0007B"];
     const stripper = new AnsiSequenceStripper();
