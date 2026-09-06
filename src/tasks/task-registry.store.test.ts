@@ -592,7 +592,7 @@ describe("task-registry store runtime", () => {
           detail,
         })),
       ),
-      ...["newer-first", "newer-last"].map((taskId) => ({
+      ...Array.from(["newer-first", "newer-last"], (taskId) => ({
         ...base,
         taskId,
         runtime: "cli" as const,
@@ -603,7 +603,7 @@ describe("task-registry store runtime", () => {
       { ...base, taskId: "older", createdAt: 50, lastEventAt: 50, endedAt: 50 },
       { ...base, taskId: "missing-source", sourceId: undefined },
       { ...base, taskId: "empty-source", sourceId: "" },
-      ...(["queued", "running", "lost"] as const).map((status) => ({
+      ...Array.from(["queued", "running", "lost"] as const, (status) => ({
         ...base,
         taskId: `excluded-${status}`,
         sourceId: "job",
