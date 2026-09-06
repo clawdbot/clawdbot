@@ -116,17 +116,18 @@ function appendQueueItem(params: {
   if (params.recentMessageIdKey) {
     recordRecentQueueMessageId(params.run, params.recentMessageIdKey);
   }
-  if (params.runFollowup) {
-    rememberFollowupDrainCallback(params.key, params.runFollowup);
+  const runFollowup = params.runFollowup;
+  if (runFollowup) {
+    rememberFollowupDrainCallback(params.key, runFollowup);
   }
   const signal = params.run.abortSignal;
   const lifecycle = params.run.turnAdoptionLifecycle;
-  if (signal && lifecycle) {
+  if (signal && lifecycle && runFollowup) {
     const onAbort = () => {
       const queue = getExistingFollowupQueue(params.key);
       if (queue) {
         // Cancellation must release pending ownership even while normal draining is dormant.
-        void dropAbortedFollowups(queue, params.runFollowup).catch((error: unknown) => {
+        void dropAbortedFollowups(queue, runFollowup).catch((error: unknown) => {
           defaultRuntime.error?.(`followup queue cancellation failed: ${String(error)}`);
         });
       }

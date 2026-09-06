@@ -1087,7 +1087,7 @@ async function runQueueSummaryDelivery(
 
 export async function dropAbortedFollowups(
   queue: FollowupQueueSummaryState & Pick<FollowupQueueState, "items">,
-  runFollowup?: (run: FollowupRun) => Promise<void>,
+  runFollowup: (run: FollowupRun) => Promise<void>,
 ): Promise<number> {
   const canDrop = (run: FollowupRun) =>
     isFollowupRunAborted(run) && !queue.inFlight.has(run) && !queue.activeSummarySources.has(run);
@@ -1109,7 +1109,7 @@ export async function dropAbortedFollowups(
   await Promise.all(
     pending.map(async (item) => {
       try {
-        await runFollowup?.(item);
+        await runFollowup(item);
       } catch (error) {
         // Aborted work cannot run again; report failed presentation cleanup without restoring it.
         defaultRuntime.error?.(`followup queue cancellation cleanup failed: ${String(error)}`);
