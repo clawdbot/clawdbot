@@ -5,7 +5,6 @@ import { setImmediate } from "node:timers/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveRelativeBundledPluginPublicModuleId } from "../test-utils/bundled-plugin-public-surface.js";
 import {
   connectOk,
   getGatewayTestPort,
@@ -43,11 +42,7 @@ type QaGatewayFixtureOwner = {
   stop(): Promise<{ process: string; errors: unknown[] }>;
 };
 
-const qaModule = resolveRelativeBundledPluginPublicModuleId({
-  fromModuleUrl: import.meta.url,
-  pluginId: "qa-lab",
-  artifactBasename: "api.js",
-});
+const qaModule = "../../extensions/qa-lab/api.js";
 const { createQaGatewayChild } = (await import(qaModule)) as {
   createQaGatewayChild: () => QaGatewayFixtureOwner;
 };
