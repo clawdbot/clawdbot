@@ -98,40 +98,6 @@ function resolveConfiguredModelThinkingDefault(raw: unknown): ThinkLevel | undef
   return typeof raw === "string" ? normalizeThinkLevel(raw) : undefined;
 }
 
-/** Creates minimal model-selection state for fast test mode. */
-export function createFastTestModelSelectionState(params: {
-  agentCfg: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
-  provider: string;
-  model: string;
-}): ModelSelectionState {
-  return {
-    provider: params.provider,
-    model: params.model,
-    requestedRouteResolution: "resolved",
-    modelPolicy: createModelVisibilityPolicy({
-      cfg: { agents: { defaults: params.agentCfg } },
-      catalog: [],
-      defaultProvider: params.provider,
-      defaultModel: params.model,
-    }),
-    allowedModelKeys: new Set<string>(),
-    allowedModelCatalog: [],
-    policyAliasIndex: { byAlias: new Map(), byKey: new Map() },
-    resetModelOverride: false,
-    resetModelOverrideRef: undefined,
-    resetModelOverrideReason: undefined,
-    modelPolicyConfigPath: undefined,
-    modelPolicyRepairConfigPath: undefined,
-    resolveThinkingCatalog: async () => [],
-    resolveDefaultThinkingLevel: async () => params.agentCfg?.thinkingDefault as ThinkLevel,
-    hasConfiguredThinkingDefault: params.agentCfg?.thinkingDefault !== undefined,
-    resolveDefaultReasoningLevel: async () => "off",
-    needsModelCatalog: false,
-    modelContextWindow: undefined,
-    modelContextTokens: undefined,
-  };
-}
-
 const modelCatalogRuntimeLoader = createLazyImportLoader(
   () => import("../../agents/model-catalog.runtime.js"),
 );
