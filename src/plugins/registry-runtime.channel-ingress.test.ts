@@ -5,10 +5,16 @@ import {
   configureChannelAdmissionEvidenceCollection,
   consumeChannelAdmissionEvidence,
   readChannelContextAdmissionEvidence,
+  readChannelContextGatewayContextResolver,
 } from "../channels/message-access/admission-evidence.js";
 import type { ResolvedChannelMessageIngress } from "../channels/message-access/runtime-types.js";
 import { resolveStableChannelMessageIngress } from "../channels/message-access/runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type {
+  GatewayContextResolver,
+  GatewayRequestContext,
+} from "../gateway/server-methods/types.js";
+import { createGatewaySubagentRuntime } from "../gateway/server-plugin-subagent-runtime.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { markPluginRegistryActive, markPluginRegistryRetired } from "./registry-lifecycle.js";
 import { createPluginRegistry } from "./registry.js";
@@ -16,17 +22,27 @@ import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
-function createRuntimeBuilder(params: { origin: PluginOrigin; id?: string }) {
-  const registryBuilder = createPluginRegistry({
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    runtime: {
-      channel: { inbound: { buildContext: buildChannelInboundEventContext } },
-    } as PluginRuntime,
-    activateGlobalSideEffects: false,
-  });
+function createRuntimeBuilder(params: {
+  origin: PluginOrigin;
+  id?: string;
+  trustedOfficialInstall?: boolean;
+  resolveGatewayContext?: GatewayContextResolver;
+  registryBuilder?: ReturnType<typeof createPluginRegistry>;
+}) {
+  const registryBuilder =
+    params.registryBuilder ??
+    createPluginRegistry({
+      logger: { info() {}, warn() {}, error() {}, debug() {} },
+      runtime: {
+        channel: { inbound: { buildContext: buildChannelInboundEventContext } },
+        subagent: createGatewaySubagentRuntime(params.resolveGatewayContext),
+      } as PluginRuntime,
+      activateGlobalSideEffects: false,
+    });
   const record = createPluginRecord({
     id: params.id ?? "channel-owner",
     origin: params.origin,
+    trustedOfficialInstall: params.trustedOfficialInstall,
   });
   const api = registryBuilder.createApi(record, {
     config: {} as OpenClawConfig,
@@ -42,7 +58,7 @@ function createRuntimeBuilder(params: { origin: PluginOrigin; id?: string }) {
         docsPath: `/channels/${record.id}`,
         blurb: "test channel",
       },
-      capabilities: { chatTypes: ["direct"] },
+      capabilities: { chatTypes: ["direct", "channel"] },
       config: {
         listAccountIds: () => [],
         resolveAccount: () => ({ accountId: "default" }),
@@ -51,7 +67,9 @@ function createRuntimeBuilder(params: { origin: PluginOrigin; id?: string }) {
     },
   });
   registryBuilder.registry.plugins.push(record);
-  markPluginRegistryActive(registryBuilder.registry);
+  if (!params.registryBuilder) {
+    markPluginRegistryActive(registryBuilder.registry);
+  }
   const resolveBuildContext = () => {
     const registration = registryBuilder.registry.channels.find(
       (candidate) => candidate.plugin.id === record.id,
@@ -62,7 +80,7 @@ function createRuntimeBuilder(params: { origin: PluginOrigin; id?: string }) {
     }
     return runtime.inbound.buildContext;
   };
-  return { buildContext: resolveBuildContext(), record, registryBuilder, resolveBuildContext };
+  return { api, buildContext: resolveBuildContext(), record, registryBuilder, resolveBuildContext };
 }
 
 async function resolveIngress(
@@ -90,6 +108,7 @@ async function resolveIngress(
     subject: { stableId: participantId },
     conversation: params.conversation ?? { kind: "direct", id: "dm-1" },
     dmPolicy: "allowlist",
+    groupPolicy: "open",
     allowFrom: [participantId],
     contextBinding: params.contextBinding ?? {
       agentId: "main",
@@ -135,6 +154,94 @@ function inspect(context: object) {
 }
 
 describe("bundled channel ingress runtime ownership", () => {
+  describe.each([
+    { name: "bundled", origin: "bundled", trustedOfficialInstall: false, trusted: true },
+    { name: "official global", origin: "global", trustedOfficialInstall: true, trusted: true },
+    { name: "untrusted global", origin: "global", trustedOfficialInstall: false, trusted: false },
+  ] as const)("$name channel Gateway binding", (plugin) => {
+    it.each([
+      { kind: "direct", id: "dm-1" },
+      { kind: "channel", id: "guild-channel-1" },
+    ] as const)(
+      "binds $kind ingress only through a trusted registered runtime",
+      async (conversation) => {
+        const cleanup = configureChannelAdmissionEvidenceCollection(false);
+        const gatewayContext = { getRuntimeConfig: () => ({}) } as GatewayRequestContext;
+        const owner = createRuntimeBuilder({
+          ...plugin,
+          resolveGatewayContext: () => gatewayContext,
+        });
+        try {
+          const ingress = await resolveIngress("person-a", { conversation });
+          expect(ingress.ingress.admission).toBe("dispatch");
+          const context = owner.buildContext(contextParams({ ingress, conversation }));
+          expect(readChannelContextGatewayContextResolver(context)?.()).toBe(
+            plugin.trusted ? gatewayContext : undefined,
+          );
+          expect(readChannelContextAdmissionEvidence(context)).toBeUndefined();
+
+          const publicIngress = await resolveIngress("person-a", { conversation });
+          const publicContext = owner.api.runtime.channel.inbound.buildContext(
+            contextParams({ ingress: publicIngress, conversation }),
+          );
+          expect(readChannelContextGatewayContextResolver(publicContext)).toBeUndefined();
+        } finally {
+          markPluginRegistryRetired(owner.registryBuilder.registry);
+          cleanup();
+        }
+      },
+    );
+  });
+
+  describe.each([
+    { name: "bundled", origin: "bundled", trustedOfficialInstall: false },
+    { name: "official global", origin: "global", trustedOfficialInstall: true },
+  ] as const)("$name retained Gateway resolver", (plugin) => {
+    it.each(["retirement", "replacement"] as const)(
+      "revokes the exact owner on %s",
+      async (change) => {
+        const cleanup = configureChannelAdmissionEvidenceCollection(false);
+        const gatewayContext = { getRuntimeConfig: () => ({}) } as GatewayRequestContext;
+        const owner = createRuntimeBuilder({
+          ...plugin,
+          resolveGatewayContext: () => gatewayContext,
+        });
+        const { registryBuilder } = owner;
+        try {
+          const ingress = await resolveIngress("person-a");
+          const context = owner.buildContext(contextParams({ ingress }));
+          const retainedResolver = readChannelContextGatewayContextResolver(context);
+          expect(retainedResolver?.()).toBe(gatewayContext);
+
+          let nextBuildContext: typeof owner.buildContext;
+          if (change === "retirement") {
+            markPluginRegistryRetired(registryBuilder.registry);
+            expect(retainedResolver?.()).toBeUndefined();
+            markPluginRegistryActive(registryBuilder.registry);
+            nextBuildContext = owner.resolveBuildContext();
+          } else {
+            registryBuilder.rollbackPluginGlobalSideEffects(owner.record.id, owner.record);
+            registryBuilder.registry.plugins.splice(
+              registryBuilder.registry.plugins.indexOf(owner.record),
+              1,
+            );
+            nextBuildContext = createRuntimeBuilder({ ...plugin, registryBuilder }).buildContext;
+          }
+
+          expect(retainedResolver?.()).toBeUndefined();
+          expect(readChannelContextGatewayContextResolver(context)?.()).toBeUndefined();
+          const nextIngress = await resolveIngress("person-a");
+          const nextContext = nextBuildContext(contextParams({ ingress: nextIngress }));
+          expect(readChannelContextGatewayContextResolver(nextContext)?.()).toBe(gatewayContext);
+          expect(retainedResolver?.()).toBeUndefined();
+        } finally {
+          markPluginRegistryRetired(registryBuilder.registry);
+          cleanup();
+        }
+      },
+    );
+  });
+
   it("binds authenticated owner turns to the exact live trusted channel plugin", async () => {
     const runtime = createPluginRuntime();
     const command = vi.fn(async () => ({ payloads: [] }));
