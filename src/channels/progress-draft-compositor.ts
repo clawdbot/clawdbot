@@ -24,7 +24,6 @@ import {
   isChannelProgressDraftWorkToolName,
   mergeChannelProgressDraftLine,
   normalizeChannelProgressDraftLineIdentity,
-  resolveChannelProgressDraftConfig,
   resolveChannelProgressDraftLabel,
   resolveChannelProgressDraftMaxLineChars,
   resolveChannelProgressDraftMaxLines,
@@ -203,11 +202,11 @@ export function createChannelProgressDraftCompositor(params: {
   const getSnapshot = (): ChannelProgressDraftCompositorSnapshot => {
     const statusHeadline = resolveStatusText();
     const diffStat = resolveDiffStat();
-    const config = resolveChannelProgressDraftConfig(params.entry);
-    const label =
-      statusHeadline && config.label === undefined && config.labels === undefined
-        ? undefined
-        : resolveChannelProgressDraftLabel({ entry: params.entry, seed: params.seed });
+    const label = resolveChannelProgressDraftLabel({
+      entry: params.entry,
+      seed: params.seed,
+      narration: statusHeadline,
+    });
     return {
       lines: lines.map((line) => (typeof line === "string" ? line : { ...line })),
       ...(label ? { label } : {}),

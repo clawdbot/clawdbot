@@ -962,9 +962,13 @@ export function resolveChannelProgressDraftLabel(params: {
   entry?: StreamingCompatEntry | null;
   seed?: string;
   random?: () => number;
+  narration?: string;
 }): string | undefined {
   const progress = resolveChannelProgressDraftConfig(params.entry);
-  if (progress.label === false) {
+  if (
+    progress.label === false ||
+    (params.narration && progress.label === undefined && progress.labels === undefined)
+  ) {
     return undefined;
   }
   const normalizedLabel =
@@ -1322,7 +1326,6 @@ export function formatChannelProgressDraftText(params: {
     params.narration?.replace(/\s+/g, " ").trim() ?? "",
     PROGRESS_DRAFT_NARRATION_MAX_CHARS,
   );
-  const progress = resolveChannelProgressDraftConfig(params.entry);
   const maxLines = resolveChannelProgressDraftMaxLines(params.entry);
   const maxLineChars = resolveChannelProgressDraftMaxLineChars(params.entry);
   const formatLine = params.formatLine ?? ((line: string) => line);
@@ -1332,15 +1335,12 @@ export function formatChannelProgressDraftText(params: {
     maxLineChars,
     plain: params.presentation === "summary",
   }).map(formatLine);
-  const hasConfiguredLabel = progress.label !== undefined || progress.labels !== undefined;
-  const resolvedLabel =
-    narration && !hasConfiguredLabel
-      ? undefined
-      : resolveChannelProgressDraftLabel({
-          entry: params.entry,
-          seed: params.seed,
-          random: params.random,
-        });
+  const resolvedLabel = resolveChannelProgressDraftLabel({
+    entry: params.entry,
+    seed: params.seed,
+    random: params.random,
+    narration,
+  });
   // The status headline sits above the rolling lines instead of replacing them:
   // a headline-only draft reads as "the agent is quiet" even while tools run.
   const statusHeadline = narration ? formatLine(narration) : "";
