@@ -17,6 +17,150 @@ function mount(template: ReturnType<typeof renderChatSessionSharing>) {
 }
 
 describe("chat session sharing menu", () => {
+  it.each(["draft", "read-only"] as const)(
+    "keeps a world-readable %s session visibly public after its menu closes",
+    (visibility) => {
+      const session = {
+        key: "agent:main:current",
+        sessionId: "session-current",
+        kind: "direct" as const,
+        updatedAt: 1,
+        visibility,
+        sharingRole: "owner" as const,
+      };
+      const allowedVisibilities: Array<"draft" | "read-only"> = ["draft", "read-only"];
+      const result = {
+        sessionKey: session.key,
+        members: [],
+        identities: [],
+        role: "owner" as const,
+        allowedVisibilities,
+        publicShare: { token: `v1.${"a".repeat(96)}`, createdAt: 1 },
+      };
+      const renderIndicator = (published: boolean) =>
+        renderChatSessionSharing({
+          session,
+          state: {
+            loading: false,
+            result: published ? result : { ...result, publicShare: undefined },
+          },
+          onOpen: vi.fn(),
+          onVisibilityChange: vi.fn(),
+          onMemberChange: vi.fn(),
+          onPublicShareChange: vi.fn(),
+        });
+      const root = mount(renderIndicator(true));
+
+      const indicator = root.querySelector(".chat-pane__public-share-indicator");
+      expect(indicator?.textContent?.trim()).toBe("Public");
+      expect(indicator?.getAttribute("aria-label")).toContain("anyone can read");
+
+      render(renderIndicator(false), root);
+      expect(root.querySelector(".chat-pane__public-share-indicator")).toBeNull();
+    },
+  );
+
+  it.each([false, true])(
+    "keeps public access separate from team visibility (published=%s)",
+    (published) => {
+      const onPublicShareChange = vi.fn();
+      const onCopyPublicLink = vi.fn();
+      const onVisibilityChange = vi.fn();
+      const root = mount(
+        renderChatSessionSharing({
+          session: {
+            key: "agent:main:current",
+            sessionId: "session-current",
+            kind: "direct",
+            updatedAt: 1,
+            visibility: "draft",
+            sharingRole: "owner",
+          },
+          state: {
+            loading: false,
+            result: {
+              sessionKey: "agent:main:current",
+              members: [],
+              identities: [],
+              role: "owner",
+              allowedVisibilities: ["draft", "shared"],
+              ...(published
+                ? {
+                    publicShare: { token: `v1.${"a".repeat(96)}`, createdAt: 1 },
+                  }
+                : {}),
+            },
+          },
+          onOpen: vi.fn(),
+          onVisibilityChange,
+          onMemberChange: vi.fn(),
+          onPublicShareChange,
+          onCopyPublicLink,
+        }),
+      );
+      const dropdown = root.querySelector("wa-dropdown");
+      expect(root.textContent).toContain("Public access");
+      expect(root.textContent).toContain(
+        published ? "anyone can read without signing in" : "Only signed-in people",
+      );
+      dropdown?.dispatchEvent(
+        new CustomEvent("wa-select", {
+          detail: { item: { value: published ? "public:disable" : "public:enable" } },
+        }),
+      );
+      expect(onPublicShareChange).toHaveBeenCalledWith(!published);
+      expect(onVisibilityChange).not.toHaveBeenCalled();
+      dropdown?.dispatchEvent(
+        new CustomEvent("wa-select", { detail: { item: { value: "public:copy" } } }),
+      );
+      expect(onCopyPublicLink).toHaveBeenCalledTimes(published ? 1 : 0);
+    },
+  );
+
+  it.each(["loading", "read-only", "member"] as const)(
+    "refuses public mutations for %s controls",
+    (blocked) => {
+      const onPublicShareChange = vi.fn();
+      const root = mount(
+        renderChatSessionSharing({
+          session: {
+            key: "agent:main:current",
+            sessionId: "session-current",
+            kind: "direct",
+            updatedAt: 1,
+            visibility: "shared",
+            sharingRole: blocked === "member" ? "member" : "owner",
+          },
+          state: {
+            loading: blocked === "loading",
+            result: {
+              sessionKey: "agent:main:current",
+              members: [],
+              identities: [],
+              role: "owner",
+              allowedVisibilities: ["shared"],
+            },
+          },
+          publicShareDisabledReason: blocked === "read-only" ? "Requires write" : undefined,
+          onOpen: vi.fn(),
+          onVisibilityChange: vi.fn(),
+          onMemberChange: vi.fn(),
+          onPublicShareChange,
+        }),
+      );
+      const dropdown = root.querySelector("wa-dropdown");
+      if (blocked === "member") {
+        expect(dropdown).toBeNull();
+      } else {
+        expect(root.querySelector('[value="public:enable"]')?.hasAttribute("disabled")).toBe(true);
+        dropdown?.dispatchEvent(
+          new CustomEvent("wa-select", { detail: { item: { value: "public:enable" } } }),
+        );
+      }
+      expect(onPublicShareChange).not.toHaveBeenCalled();
+    },
+  );
+
   it("shows the owner picker with policy-gated modes and known identities", () => {
     const onVisibilityChange = vi.fn();
     const onMemberChange = vi.fn();

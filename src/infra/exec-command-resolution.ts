@@ -275,29 +275,19 @@ export function isCwdBoundHashedArgPattern(value: string | null | undefined): bo
   return typeof value === "string" && value.startsWith(CWD_BOUND_HASHED_ARG_PATTERN_PREFIX);
 }
 
-// What an allowlist entry actually authorizes, read off the same fields
-// matchAllowlist branches on. Audit surfaces render this instead of re-deriving
-// scope, which reads a narrow or inactive grant as a broad path grant.
 export type ExecAllowlistScope = "command text" | "argv+cwd" | "argv" | "any args" | "inactive";
 
 export function classifyExecAllowlistScope(
   entry: Pick<ExecAllowlistEntry, "pattern" | "source" | "argPattern">,
 ): ExecAllowlistScope {
-  const pattern = entry.pattern?.trim() ?? "";
+  const pattern = entry.pattern.trim();
   const generated = entry.source === "allow-always";
-  // Only a generated grant is honored as exact command text; every consumer of
-  // the reserved prefixes requires the source. A manual pattern that merely
-  // starts with one is an ordinary glob to matchAllowlist, so it falls through
-  // to its real scope instead of borrowing the narrower label.
+  // Reserved command markers require generated source; manual patterns remain executable globs.
   if (generated && (pattern.startsWith("=command:") || pattern.startsWith("=node-command:"))) {
     return "command text";
   }
-  // matchAllowlist skips path-only generated grants outright, and matchArgPattern
-  // rejects every legacy sha256:argv hash whatever its source, so neither entry
-  // authorizes anything; only a cwd-bound hash is a live argument restriction.
-  const legacyHashed =
-    typeof entry.argPattern === "string" &&
-    entry.argPattern.startsWith(LEGACY_HASHED_ARG_PATTERN_PREFIX);
+  // Legacy hashes never match, including on manual entries that Doctor must retain.
+  const legacyHashed = entry.argPattern?.startsWith(LEGACY_HASHED_ARG_PATTERN_PREFIX) === true;
   if (legacyHashed || (generated && !isCwdBoundHashedArgPattern(entry.argPattern))) {
     return "inactive";
   }

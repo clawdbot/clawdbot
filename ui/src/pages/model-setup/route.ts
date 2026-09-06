@@ -11,7 +11,10 @@ export const page = definePage({
   // action cannot retain a cached destination from the previous visit.
   loaderDeps: (_context: ApplicationContext, location: RouteLocation) => location.search,
   loader: (_context: ApplicationContext, { location }): ModelSetupRouteData => ({
-    firstRun: new URLSearchParams(location.search).get("firstRun") === "1",
+    // Preserve saved first-run URLs; both markers use the same explicit-choice UI.
+    firstRun: ["1", "explicit"].includes(
+      new URLSearchParams(location.search).get("firstRun") ?? "",
+    ),
   }),
   component: () =>
     import("./model-setup-page.ts").then(() => ({

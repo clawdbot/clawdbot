@@ -39,7 +39,6 @@ export type PluginToolGroups = {
 
 /** Analysis of an allowlist after matching core and plugin tool ids. */
 type AllowlistResolution = {
-  policy: ToolPolicyLike | undefined;
   unknownAllowlist: string[];
   pluginOnlyAllowlist: boolean;
 };
@@ -259,22 +258,6 @@ function buildDeclaredMcpToolPrefixes(serverNames?: Iterable<string>): Set<strin
   return prefixes;
 }
 
-function normalizeDeclaredPluginIds(values?: Iterable<string>): Set<string> {
-  return new Set(
-    Array.from(values ?? [], (value) => normalizeOptionalLowercaseString(value)).filter(
-      (value): value is string => Boolean(value),
-    ),
-  );
-}
-
-function normalizeDeclaredToolNames(values?: Iterable<string>): Set<string> {
-  return new Set(
-    Array.from(values ?? [], (value) => normalizeToolPolicyName(value)).filter(
-      (value): value is string => Boolean(value),
-    ),
-  );
-}
-
 function isDeclaredMcpAllowlistEntry(entry: string, prefixes: Set<string>): boolean {
   if (prefixes.size === 0) {
     return false;
@@ -298,20 +281,26 @@ export function analyzeAllowlistByToolType(
   declaredTools?: DeclaredToolAllowlistContext,
 ): AllowlistResolution {
   if (!policy?.allow || policy.allow.length === 0) {
-    return { policy, unknownAllowlist: [], pluginOnlyAllowlist: false };
+    return { unknownAllowlist: [], pluginOnlyAllowlist: false };
   }
   const normalized = normalizeToolList(expandShippedCoreToolPolicyNames(policy.allow));
   if (normalized.length === 0) {
-    return { policy, unknownAllowlist: [], pluginOnlyAllowlist: false };
+    return { unknownAllowlist: [], pluginOnlyAllowlist: false };
   }
-  const pluginIds = new Set([
-    ...groups.byPlugin.keys(),
-    ...normalizeDeclaredPluginIds(declaredTools?.pluginIds),
-  ]);
-  const pluginTools = new Set([
-    ...groups.all,
-    ...normalizeDeclaredToolNames(declaredTools?.pluginToolNames),
-  ]);
+  const pluginIds = new Set(groups.byPlugin.keys());
+  for (const value of declaredTools?.pluginIds ?? []) {
+    const pluginId = normalizeOptionalLowercaseString(value);
+    if (pluginId) {
+      pluginIds.add(pluginId);
+    }
+  }
+  const pluginTools = new Set(groups.all);
+  for (const value of declaredTools?.pluginToolNames ?? []) {
+    const toolName = normalizeToolPolicyName(value);
+    if (toolName) {
+      pluginTools.add(toolName);
+    }
+  }
   const mcpToolPrefixes = buildDeclaredMcpToolPrefixes(declaredTools?.mcpServerNames);
   const unknownAllowlist: string[] = [];
   let hasOnlyPluginEntries = true;
@@ -336,7 +325,6 @@ export function analyzeAllowlistByToolType(
   }
   const pluginOnlyAllowlist = hasOnlyPluginEntries;
   return {
-    policy,
     unknownAllowlist: uniqueStrings(unknownAllowlist),
     pluginOnlyAllowlist,
   };

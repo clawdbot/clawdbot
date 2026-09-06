@@ -6,6 +6,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
+import { createAgentSelectionCapability } from "../app/agent-selection.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
@@ -25,6 +26,7 @@ type CustodianPanelToggleDetail = { open?: boolean };
 type GatewayHarness = {
   gateway: ApplicationGateway;
   setConnected: (connected: boolean) => void;
+  emit: (event: string) => void;
 };
 
 function createGateway(
@@ -44,6 +46,7 @@ function createGateway(
     lastErrorCode: null,
   };
   const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
+  const events = new Set<Parameters<ApplicationGateway["subscribeEvents"]>[0]>();
   const gateway = {
     get snapshot() {
       return snapshot;
@@ -60,10 +63,18 @@ function createGateway(
       return () => listeners.delete(listener);
     },
     subscribeEventLog: () => () => undefined,
-    subscribeEvents: () => () => undefined,
+    subscribeEvents(listener) {
+      events.add(listener);
+      return () => events.delete(listener);
+    },
   } satisfies ApplicationGateway;
   return {
     gateway,
+    emit(event) {
+      for (const listener of events) {
+        listener({ type: "event", event, payload: {} });
+      }
+    },
     setConnected(nextConnected) {
       snapshot = {
         ...snapshot,
@@ -82,6 +93,10 @@ function createContext(
 ): ApplicationContext<RouteId> {
   return {
     gateway,
+    agentSelection: createAgentSelectionCapability(gateway, {
+      state: { agentsList: null },
+      subscribe: () => () => undefined,
+    }),
     agents: {
       ensureList: async () => null,
     },
@@ -234,95 +249,103 @@ describe("CommandPalette lifecycle", () => {
     expect(palette.textContent).not.toContain("Stale chat");
   });
 
-  it("merges full-context matches after metadata matches without adding another search field", async () => {
-    const metadata = createSessionResult("agent:main:metadata", "needle");
-    const contextOnly = createSessionResult("agent:main:context", "Unrelated title");
-    const roster = {
-      ...metadata,
-      count: 2,
-      totalCount: 2,
-      sessions: [...metadata.sessions, ...contextOnly.sessions],
-    } as SessionsListResult;
-    const list = vi.fn<ApplicationContext<RouteId>["sessions"]["list"]>(async (options) =>
-      options?.search ? metadata : roster,
-    );
-    const searchResult: SessionsSearchResult = {
-      results: [
-        {
-          sessionKey: "agent:main:context",
-          sessionId: "context",
-          messageId: "message-context",
-          role: "assistant",
-          timestamp: 42,
-          snippet: "The needle appears only in the conversation body.",
-          score: 10,
-        },
-      ],
-    };
-    const request = vi.fn(async () => searchResult);
-    const { gateway } = createGateway(true, {
-      methods: ["sessions.search"],
-      request: request as GatewayBrowserClient["request"],
-    });
-    const { palette } = await mountPalette(createContext(gateway, list));
+  it.each([false, true])(
+    "keeps transcript snippets with a server metadata match: %s",
+    async (serverMatch) => {
+      const metadata = createSessionResult("agent:main:metadata", "needle");
+      const contextOnly = createSessionResult("agent:main:context", "Unrelated title");
+      const roster = {
+        ...metadata,
+        count: 2,
+        totalCount: 2,
+        sessions: [...metadata.sessions, ...contextOnly.sessions],
+      } as SessionsListResult;
+      const list = vi.fn<ApplicationContext<RouteId>["sessions"]["list"]>(async (options) =>
+        options?.search && !serverMatch ? metadata : roster,
+      );
+      const searchResult: SessionsSearchResult = {
+        results: [
+          {
+            sessionKey: "agent:main:context",
+            sessionId: "context",
+            messageId: "message-context",
+            role: "assistant",
+            timestamp: 42,
+            snippet: "The needle appears only in the conversation body.",
+            score: 10,
+          },
+        ],
+      };
+      const request = vi.fn(async () => searchResult);
+      const { gateway } = createGateway(true, {
+        methods: ["sessions.search"],
+        request: request as GatewayBrowserClient["request"],
+      });
+      const { palette } = await mountPalette(createContext(gateway, list));
 
-    await enterQuery(palette, "needle");
-    await vi.advanceTimersByTimeAsync(50);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    await palette.updateComplete;
+      await enterQuery(palette, "needle");
+      await vi.advanceTimersByTimeAsync(50);
+      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+      await palette.updateComplete;
 
-    expect(request).toHaveBeenCalledWith("sessions.search", {
-      agentId: "main",
-      sessionKeys: ["agent:main:metadata", "agent:main:context"],
-      query: "needle",
-      limit: 25,
-    });
-    const chatItems = [...palette.querySelectorAll<HTMLElement>(".cmd-palette__item")];
-    expect(chatItems).toHaveLength(2);
-    expect(chatItems[0]?.textContent).toContain("needle");
-    expect(chatItems[1]?.textContent).toContain("Unrelated title");
-    expect(chatItems[1]?.textContent).toContain("needle appears only in the conversation body");
-    expect(palette.querySelectorAll(".cmd-palette__input")).toHaveLength(1);
-  });
+      expect(request).toHaveBeenCalledWith("sessions.search", {
+        agentId: "main",
+        sessionKeys: ["agent:main:metadata", "agent:main:context"],
+        query: "needle",
+        limit: 25,
+      });
+      const chatItems = [...palette.querySelectorAll<HTMLElement>(".cmd-palette__item")];
+      expect(chatItems).toHaveLength(2);
+      expect(chatItems[0]?.textContent).toContain("needle");
+      expect(chatItems[1]?.textContent).toContain("Unrelated title");
+      expect(chatItems[1]?.textContent).toContain("needle appears only in the conversation body");
+      expect(palette.querySelectorAll(".cmd-palette__input")).toHaveLength(1);
+    },
+  );
 
-  it("searches a bare default session key in the selected agent scope", async () => {
-    const roster = createSessionResult("main", "Default chat");
-    const list = vi.fn<ApplicationContext<RouteId>["sessions"]["list"]>(async (options) =>
-      options?.search ? { ...roster, count: 0, sessions: [] } : roster,
-    );
-    const request = vi.fn(async () => ({
-      results: [
-        {
-          sessionKey: "main",
-          sessionId: "default",
-          messageId: "message-default",
-          role: "assistant" as const,
-          timestamp: 42,
-          snippet: "The needle is in the default chat body.",
-          score: 10,
-        },
-      ],
-    }));
-    const { gateway } = createGateway(true, {
-      methods: ["sessions.search"],
-      request: request as GatewayBrowserClient["request"],
-    });
-    const { palette } = await mountPalette(createContext(gateway, list));
+  it.each(["main", "reviewer"])(
+    "searches a bare default session key in selected agent %s",
+    async (agentId) => {
+      const roster = createSessionResult("main", "Default chat");
+      const list = vi.fn<ApplicationContext<RouteId>["sessions"]["list"]>(async (options) =>
+        options?.search ? { ...roster, count: 0, sessions: [] } : roster,
+      );
+      const request = vi.fn(async () => ({
+        results: [
+          {
+            sessionKey: "main",
+            sessionId: "default",
+            messageId: "message-default",
+            role: "assistant" as const,
+            timestamp: 42,
+            snippet: "The needle is in the default chat body.",
+            score: 10,
+          },
+        ],
+      }));
+      const { gateway } = createGateway(true, {
+        methods: ["sessions.search"],
+        request: request as GatewayBrowserClient["request"],
+      });
+      const context = createContext(gateway, list);
+      context.agentSelection.set(agentId);
+      const { palette } = await mountPalette(context);
 
-    await enterQuery(palette, "needle");
-    await vi.advanceTimersByTimeAsync(50);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    await palette.updateComplete;
+      await enterQuery(palette, "needle");
+      await vi.advanceTimersByTimeAsync(50);
+      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+      await palette.updateComplete;
 
-    expect(request).toHaveBeenCalledWith("sessions.search", {
-      agentId: "main",
-      sessionKeys: ["main"],
-      query: "needle",
-      limit: 25,
-    });
-    expect(palette.textContent).toContain("Default chat");
-    expect(palette.textContent).toContain("needle is in the default chat body");
-  });
+      expect(request).toHaveBeenCalledWith("sessions.search", {
+        agentId,
+        sessionKeys: ["main"],
+        query: "needle",
+        limit: 25,
+      });
+      expect(palette.textContent).toContain("Default chat");
+      expect(palette.textContent).toContain("needle is in the default chat body");
+    },
+  );
 
   it("keeps metadata matches selectable when transcript search fails", async () => {
     const metadata = createSessionResult("agent:main:metadata", "Needle planning");
@@ -438,6 +461,96 @@ describe("CommandPalette lifecycle", () => {
     await vi.waitFor(() => expect(palette.textContent).toContain("Nightly invoices"));
     expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(1);
   });
+
+  it("retains model results during a failed publication read and retries on input", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ models: [{ provider: "fixture", id: "old", name: "Needle old" }] })
+      .mockRejectedValueOnce(new Error("catalog unavailable"))
+      .mockResolvedValueOnce({ models: [{ provider: "fixture", id: "new", name: "Needle new" }] });
+    const harness = createGateway(true, { methods: ["models.list"], request });
+    const { palette } = await mountPalette(createContext(harness.gateway, async () => null));
+    await enterQuery(palette, "needle");
+    await vi.advanceTimersByTimeAsync(50);
+    await palette.updateComplete;
+    expect(findPaletteOption(palette, "Needle old")).toBeDefined();
+
+    harness.emit("chat.metadata.changed");
+    await vi.advanceTimersByTimeAsync(50);
+    await palette.updateComplete;
+    expect(palette.querySelector('[role="status"]')?.textContent).toContain(
+      "Model search unavailable",
+    );
+    expect(findPaletteOption(palette, "Needle old")).toBeDefined();
+
+    await enterQuery(palette, "needle");
+    await vi.advanceTimersByTimeAsync(50);
+    await palette.updateComplete;
+    expect(findPaletteOption(palette, "Needle new")).toBeDefined();
+    expect(findPaletteOption(palette, "Needle old")).toBeUndefined();
+    expect(palette.querySelector('[role="status"]')).toBeNull();
+  });
+
+  it.each(["agent", "source", "connection", "detach", "publication", "closed"])(
+    "fences retained and pending catalog rows on %s replacement",
+    async (replacement) => {
+      const stale = createDeferred<{ models: { provider: string; id: string; name: string }[] }>();
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce({ models: [{ provider: "fixture", id: "old", name: "Needle old" }] })
+        .mockReturnValueOnce(stale.promise)
+        .mockResolvedValue({ models: [{ provider: "fixture", id: "new", name: "Needle new" }] });
+      const harness = createGateway(true, { methods: ["models.list"], request });
+      const context = createContext(harness.gateway, async () => null);
+      const { palette, provider } = await mountPalette(context);
+      await enterQuery(palette, "needle");
+      await vi.advanceTimersByTimeAsync(50);
+      await palette.updateComplete;
+      expect(findPaletteOption(palette, "Needle old")).toBeDefined();
+      harness.emit("config.changed");
+      await vi.advanceTimersByTimeAsync(50);
+      if (replacement === "agent") {
+        context.agentSelection.set("reviewer");
+      } else if (replacement === "source") {
+        const next = createGateway(true, { methods: ["models.list"], request });
+        provider.setContext(createContext(next.gateway, async () => null));
+      } else if (replacement === "connection") {
+        harness.setConnected(false);
+      } else if (replacement === "detach") {
+        palette.remove();
+      } else if (replacement === "closed") {
+        palette.togglePalette();
+        harness.emit("chat.metadata.changed");
+      } else {
+        harness.emit("chat.metadata.changed");
+      }
+      await palette.updateComplete;
+      if (replacement !== "publication") {
+        expect(findPaletteOption(palette, "Needle old")).toBeUndefined();
+      }
+      if (replacement === "connection") {
+        harness.setConnected(true);
+      } else if (replacement === "detach") {
+        provider.append(palette);
+        await enterQuery(palette, "needle");
+      } else if (replacement === "closed") {
+        await enterQuery(palette, "needle");
+      }
+      await vi.advanceTimersByTimeAsync(50);
+      stale.resolve({ models: [{ provider: "fixture", id: "stale", name: "Needle stale" }] });
+      await vi.advanceTimersByTimeAsync(50);
+      await palette.updateComplete;
+      expect(findPaletteOption(palette, "Needle new")).toBeDefined();
+      expect(findPaletteOption(palette, "Needle stale")).toBeUndefined();
+      if (replacement === "agent") {
+        expect(request).toHaveBeenLastCalledWith("models.list", {
+          view: "configured",
+          agentId: "reviewer",
+          preparedOnly: true,
+        });
+      }
+    },
+  );
 
   it("waits for two characters before searching sessions", async () => {
     const { gateway } = createGateway(true, { methods: ["sessions.search"] });
@@ -784,6 +897,25 @@ describe("CommandPalette lifecycle", () => {
     await vi.advanceTimersByTimeAsync(50);
     await palette.updateComplete;
     expect(palette.textContent).toContain("Recovered chat");
+  });
+
+  it("opens the capture section from the palette without losing its deep link", async () => {
+    const { gateway } = createGateway(true, { methods: [] });
+    gateway.snapshot.hello!.auth = { role: "operator", scopes: ["operator.admin"] };
+    const { palette } = await mountPalette(
+      createContext(
+        gateway,
+        vi.fn(async () => createSessionResult("agent:main:test", "Test")),
+      ),
+    );
+    await enterQuery(palette, "meeting capture");
+    const item = findPaletteOption(palette, "Meeting capture");
+    expect(item).toBeDefined();
+    item!.click();
+    expect(palette.onNavigate).toHaveBeenCalledWith("communications", {
+      search: "?section=transcripts",
+      hash: "#settings-communications-meeting-capture",
+    });
   });
 
   it("navigates to the plugin manager from search", async () => {

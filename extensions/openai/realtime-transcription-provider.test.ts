@@ -97,6 +97,7 @@ async function waitForFakeSocket(
   index = 0,
 ): Promise<FakeWebSocketInstance> {
   sessions.add(session);
+  await vi.dynamicImportSettled();
   const existing = FakeWebSocket.instances[index];
   if (existing) {
     return existing;

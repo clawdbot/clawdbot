@@ -22,13 +22,15 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "./runtime-snapshots.js";
 import { resolveAuthProfileDatabasePath, writePersistedAuthProfileStoreRaw } from "./sqlite.js";
+import {
+  loadAuthProfileStoreWithoutExternalProfiles,
+  saveAuthProfileStoreIfPersistenceSnapshotMatches,
+  updateAuthProfileStoreWithLock,
+} from "./store-runtime.js";
 import { createAuthOwnerTestFixtures } from "./store-state-owner.test-support.js";
 import {
   captureAuthProfileStorePersistenceSnapshot,
-  loadAuthProfileStoreWithoutExternalProfiles,
   restoreAuthProfileStorePersistenceSnapshot,
-  saveAuthProfileStoreIfPersistenceSnapshotMatches,
-  updateAuthProfileStoreWithLock,
 } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 import { persistAuthProfileBatch } from "./upsert-with-lock.js";

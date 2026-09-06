@@ -158,11 +158,11 @@ export function createCodexUserInputBridge(params: {
       });
     },
     async handleElicitationRequest(request: CodexInputRequest) {
-      if (readRawOwnString(request.params, "threadId") !== params.threadId) {
+      if (readOwnDataString(request.params, "threadId") !== params.threadId) {
         return undefined;
       }
       const requestSnapshot = structuredInput.snapshot(request.params);
-      if (requestSnapshot === undefined) {
+      if (!structuredInput.isRecord(requestSnapshot)) {
         const cancelValue = createCodexElicitationResponse("cancel");
         return await enqueue({
           requestId: request.id,
@@ -184,10 +184,12 @@ export function createCodexUserInputBridge(params: {
           },
         });
       }
+      if (readOwnDataString(requestSnapshot, "threadId") !== params.threadId) {
+        return undefined;
+      }
       const { compileCodexOrdinaryElicitation } = await import("./elicitation-input.js");
       const compiled = compileCodexOrdinaryElicitation({
-        value: requestSnapshot,
-        threadId: params.threadId,
+        snapshot: requestSnapshot,
         turnId: params.turnId,
       });
       if (compiled.kind === "ignored") {
@@ -226,7 +228,7 @@ export function createCodexUserInputBridge(params: {
       const requestId = readRequestId(notification.params);
       if (
         requestId === undefined ||
-        readOwnString(notification.params, "threadId") !== params.threadId
+        readOwnDataString(notification.params, "threadId") !== params.threadId
       ) {
         return;
       }
@@ -355,14 +357,7 @@ function readArray(
   return Array.isArray(value) && value.length <= maximum ? value : undefined;
 }
 
-function readOwnString(record: JsonObject, key: string): string | undefined {
-  const descriptor = Object.getOwnPropertyDescriptor(record, key);
-  return descriptor && "value" in descriptor && typeof descriptor.value === "string"
-    ? descriptor.value
-    : undefined;
-}
-
-function readRawOwnString(value: unknown, key: string): string | undefined {
+function readOwnDataString(value: unknown, key: string): string | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }

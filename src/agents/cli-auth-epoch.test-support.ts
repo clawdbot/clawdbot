@@ -3,8 +3,8 @@ import "./cli-auth-epoch.js";
 type CliAuthEpochDeps = {
   readCodexCliCredentialsCached: typeof import("./cli-credentials.js").readCodexCliCredentialsCached;
   readGeminiCliCredentialsCached: typeof import("./cli-credentials.js").readGeminiCliCredentialsCached;
-  ensureAuthProfileStore: typeof import("./auth-profiles/store.js").ensureAuthProfileStore;
-  loadAuthProfileStoreForRuntime: typeof import("./auth-profiles/store.js").loadAuthProfileStoreForRuntime;
+  ensureAuthProfileStore: typeof import("./auth-profiles/store-runtime.js").ensureAuthProfileStore;
+  loadAuthProfileStoreForRuntime: typeof import("./auth-profiles/store-runtime.js").loadAuthProfileStoreForRuntime;
 };
 
 type CliAuthEpochTestApi = {

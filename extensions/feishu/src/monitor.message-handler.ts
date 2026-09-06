@@ -23,6 +23,7 @@ type FeishuMessageReceiveHandlerContext = {
   handleMessage: (params: {
     cfg: ClawdbotConfig;
     event: FeishuMessageEvent;
+    preparedContent?: string;
     botOpenId?: string;
     botName?: string;
     runtime?: RuntimeEnv;
@@ -48,6 +49,7 @@ type FeishuMessageReceiveHandlerContext = {
   resolveSequentialKey?: (params: {
     accountId: string;
     event: FeishuMessageEvent;
+    preparedContent?: string;
     botOpenId?: string;
     botName?: string;
   }) => string;
@@ -204,10 +206,12 @@ export function createFeishuMessageReceiveHandler({
     messageDedupeKey?: string,
     processingClaim?: FeishuMessageProcessingClaim,
     turnAdoptionLifecycle?: FeishuIngressLifecycle,
+    preparedContent?: string,
   ) => {
     const sequentialKey = resolveSequentialKey({
       accountId,
       event,
+      preparedContent,
       botOpenId: getBotOpenId(accountId),
       botName: getBotName(accountId),
     });
@@ -219,6 +223,7 @@ export function createFeishuMessageReceiveHandler({
       await handleMessage({
         cfg,
         event,
+        preparedContent,
         botOpenId: getBotOpenId(accountId),
         botName: getBotName(accountId),
         runtime,
@@ -361,18 +366,13 @@ export function createFeishuMessageReceiveHandler({
                   ...dispatchEntry.event,
                   message: {
                     ...dispatchEntry.event.message,
-                    ...(combinedText.trim()
-                      ? {
-                          message_type: "text",
-                          content: JSON.stringify({ text: combinedText }),
-                        }
-                      : {}),
                     mentions: mergedMentions ?? dispatchEntry.event.message.mentions,
                   },
                 },
                 dispatchDedupeKey,
                 dispatchEntry.processingClaim,
                 admissionLifecycle,
+                combinedText,
               );
               await settle();
             } catch (err) {

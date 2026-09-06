@@ -18,7 +18,7 @@ import type { ExternalCliAuthDiscovery } from "./auth-profiles/external-cli-disc
 import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
-} from "./auth-profiles/store.js";
+} from "./auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 
 /** Options for discovering credentials without prompting for secret material. */

@@ -15,7 +15,7 @@ import { buildNativeHookRelayCommandPlan } from "openclaw/plugin-sdk/native-hook
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
 import { prepareCodexWorkspaceDeveloperInstructions } from "./attempt-context.js";
-import { resolveOpenClawExecPolicyForCodexAppServer } from "./config-exec-policy.js";
+import { resolveOpenClawExecPolicyForCodexAppServer } from "./config-exec-approvals.js";
 import { assertCodexModelBackedReviewerEffectiveConfig } from "./config-reviewer.js";
 import { readCodexPluginConfig, resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
 import { resolveCodexNativeExecutionPolicy } from "./native-execution-policy.js";

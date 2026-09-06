@@ -28,7 +28,7 @@ describe("write-unified-entry-dts", () => {
         "scripts/lib/tsdown-declaration-generator-inputs.mts",
         "scripts/lib/tsdown-declaration-boundary.mts",
         "scripts/lib/plugin-sdk-entrypoints.json",
-        "scripts/lib/record-shared.mjs",
+        "scripts/windows-cmd-helpers.mjs",
         "packages/normalization-core/src/mountinfo-path.ts",
         "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
         "src/state/openclaw-state-schema.sql",

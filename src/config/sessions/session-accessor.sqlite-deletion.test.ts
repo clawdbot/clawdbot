@@ -431,7 +431,7 @@ describe("session deletion and native owner state", () => {
       expect(read()).toBeUndefined();
       expect(bindings.has(sessionKey)).toBe(false);
       expect(identityListener.mock.calls).toEqual([
-        [{ kind: "delete", previous: { sessionId, sessionKeys: [sessionKey] } }],
+        [{ agentId: "main", kind: "delete", previous: { sessionId, sessionKeys: [sessionKey] } }],
       ]);
     } finally {
       unsubscribe();

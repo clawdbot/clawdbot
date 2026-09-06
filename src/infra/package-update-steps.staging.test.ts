@@ -129,7 +129,7 @@ describe("runGlobalPackageUpdateSteps staging ownership", () => {
         expect(result).toMatchObject({
           failedStep: null,
           afterVersion: "2.0.0",
-          verifiedPackageRoot: packageRoot,
+          activePackageRoot: packageRoot,
           recovery: { serviceRestartSafe: true, version: "2.0.0" },
         });
         expect(result.steps).toContainEqual(

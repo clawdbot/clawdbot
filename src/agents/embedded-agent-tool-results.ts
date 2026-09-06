@@ -71,11 +71,7 @@ export function capLiveExecResult(result: unknown): unknown {
 }
 
 function normalizeToolErrorText(text: string): string | undefined {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const firstLine = trimmed.split(/\r?\n/)[0]?.trim() ?? "";
+  const firstLine = text.trimStart().split(/\r?\n/, 1)[0]?.trim();
   if (!firstLine) {
     return undefined;
   }

@@ -3,10 +3,22 @@ import { createTestAdmittedRunContext } from "../../admitted-run-context.test-su
 import {
   createSettledFinalizationTestInput,
   createSettledProviderFailureAttempt,
+  projectSettledProviderFailureAttempt,
 } from "./settled-turn-finalization.test-support.js";
 import { prepareEmbeddedRunTerminal } from "./terminal-preparation.js";
 import { resolveSettledTurnFinalizationRequest } from "./terminal-resolution.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
+
+function createAssistantReportedProviderFailureAttempt(): EmbeddedRunAttemptResult {
+  const base = createSettledProviderFailureAttempt({ terminal: { kind: "ok" } });
+  const assistant = base.currentAttemptCompletedAssistant;
+  if (!assistant) {
+    throw new Error("Missing failed assistant");
+  }
+  assistant.errorMessage = "WebSocket error";
+  assistant.errorCode = "ERR_WEBSOCKET_TRANSPORT";
+  return projectSettledProviderFailureAttempt(base);
+}
 
 function prepareRequest(
   attempt = createSettledProviderFailureAttempt(),
@@ -47,6 +59,19 @@ describe("prepared provider errors after settled tools", () => {
     );
   });
 
+  it("finalizes a provider error reported through the completed assistant", () => {
+    const attempt = createAssistantReportedProviderFailureAttempt();
+    expect(attempt).toMatchObject({
+      terminal: { kind: "ok" },
+      settledTurnFinalizationContext: { source: "openclaw-transcript" },
+    });
+    const request = prepareRequest(attempt);
+    expect(request.payloadsWithToolMedia).toEqual([expect.objectContaining({ isError: true })]);
+    expect(resolveSettledTurnFinalizationRequest(request)).toContain(
+      "Do not repeat completed tool calls",
+    );
+  });
+
   it.each([
     { name: "missing recovery context", change: { settledTurnFinalizationContext: undefined } },
     {
@@ -77,24 +102,33 @@ describe("prepared provider errors after settled tools", () => {
     },
   );
 
-  it("preserves a structured provider refusal even with stale transient context", () => {
-    const attempt = createSettledProviderFailureAttempt();
-    const assistant = attempt.currentAttemptCompletedAssistant;
-    if (!assistant) {
-      throw new Error("Missing failed assistant");
-    }
-    assistant.diagnostics = [
-      { type: "provider_refusal", timestamp: 0, details: { provider: "openai" } },
-    ];
-    const request = prepareRequest(attempt);
-    expect(resolveSettledTurnFinalizationRequest(request)).toBeNull();
-    expect(request.payloadsWithToolMedia).toEqual([
-      expect.objectContaining({
-        isError: true,
-        text: expect.stringContaining("refused this request"),
-      }),
-    ]);
-  });
+  it.each(["provider refusal", "permanent WebSocket close"])(
+    "preserves %s even with stale transient context",
+    (failure) => {
+      const attempt = createSettledProviderFailureAttempt();
+      const assistant = attempt.currentAttemptCompletedAssistant;
+      if (!assistant) {
+        throw new Error("Missing failed assistant");
+      }
+      if (failure === "provider refusal") {
+        assistant.diagnostics = [
+          { type: "provider_refusal", timestamp: 0, details: { provider: "openai" } },
+        ];
+      } else {
+        assistant.errorCode = "ERR_WEBSOCKET_NON_RETRYABLE_CLOSE";
+      }
+      const request = prepareRequest(attempt);
+      expect(resolveSettledTurnFinalizationRequest(request)).toBeNull();
+      expect(request.payloadsWithToolMedia).toEqual([
+        expect.objectContaining({
+          isError: true,
+          text: expect.stringContaining(
+            failure === "provider refusal" ? "refused this request" : "connection refused",
+          ),
+        }),
+      ]);
+    },
+  );
 
   it("preserves a cron tool-authored silent outcome after discounting the error", () => {
     const attempt = createSettledProviderFailureAttempt();

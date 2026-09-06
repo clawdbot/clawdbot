@@ -25,8 +25,15 @@ export async function startSetupActivationWizard(params: {
   sessionId: string;
   activation: Pick<
     Parameters<typeof activateGatewaySetupInference>[0],
-    "kind" | "agentId" | "modelRef" | "authChoice" | "apiKey" | "workspace"
+    | "kind"
+    | "agentId"
+    | "modelRef"
+    | "authChoice"
+    | "apiKey"
+    | "workspace"
+    | "nativeSessionCatalogsEnabled"
   >;
+  isLocalClient?: boolean;
   timeoutMs: number;
   context: GatewayRequestContext;
   respond: RespondFn;
@@ -41,6 +48,7 @@ export async function startSetupActivationWizard(params: {
           const result = await activateGatewaySetupInference({
             ...params.activation,
             surface: "gateway",
+            isRemoteProviderAuth: params.isLocalClient !== true,
             runtime: {
               ...defaultRuntime,
               exit: (code: number | undefined): never => {
@@ -50,9 +58,11 @@ export async function startSetupActivationWizard(params: {
             prompter,
             signal,
             isCancelled: () => signal.aborted,
-            beforePersistentEffect: () => runnerSession.lockCancellation(),
+            beforePersistentEffect: () => runnerSession.lockCancellationForPreparation(),
+            onPreparationComplete: () => runnerSession.finishPreparation(),
             onCommitStarted: () => runnerSession.lockCancellation(),
           });
+          signal.throwIfAborted();
           if (!result.ok) {
             if (result.disposition === "rejected-before-promotion") {
               runnerSession.setActivationRejection({

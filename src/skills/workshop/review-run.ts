@@ -11,7 +11,7 @@ export async function runSkillWorkshopReview(
   params: RunEmbeddedAgentParams & {
     agentId: string;
     config: OpenClawConfig;
-    reviewKind: "experience" | "history-scan" | "collection-review";
+    reviewKind: "experience" | "history-scan";
   },
 ) {
   const { reviewKind, ...runParams } = params;
@@ -20,12 +20,14 @@ export async function runSkillWorkshopReview(
     ? AbortSignal.any([restartSignal, params.abortSignal])
     : restartSignal;
   abortSignal.throwIfAborted();
-  const preparedRunAdmission = prepareSystemAgentRunAdmission(
-    params.config,
-    params.runId,
-    params.agentId,
-    `skill-workshop.${reviewKind}`,
-  );
+  const preparedRunAdmission =
+    params.preparedRunAdmission ??
+    prepareSystemAgentRunAdmission(
+      params.config,
+      params.runId,
+      params.agentId,
+      `skill-workshop.${reviewKind}`,
+    );
   try {
     const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
     return await runEmbeddedAgent({
@@ -39,7 +41,7 @@ export async function runSkillWorkshopReview(
       modelSelectionLocked: true,
       modelFallbacksOverride: [],
       disableTrajectory: true,
-      skillWorkshopProposalOnly: true,
+      skillWorkshopProposalOnly: params.skillWorkshopProposalOnly ?? true,
       cleanupBundleMcpOnRunEnd: true,
       verboseLevel: "off",
     });

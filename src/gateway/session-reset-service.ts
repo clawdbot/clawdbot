@@ -1717,6 +1717,8 @@ export async function performGatewaySessionReset(params: {
             worktree: params.clearSpawnedCwd
               ? undefined
               : (preparedLifecycle?.worktree ?? currentEntry?.worktree),
+            repositoryWorkspaceId:
+              preparedLifecycle?.repositoryWorkspaceId ?? currentEntry?.repositoryWorkspaceId,
             parentSessionKey: currentEntry?.parentSessionKey,
             parentSessionId: currentEntry?.parentSessionId,
             ...creationStamp,

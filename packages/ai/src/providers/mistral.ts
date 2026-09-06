@@ -1,4 +1,3 @@
-// Mistral provider adapts Mistral streams and tool calls to the runtime.
 import { randomUUID } from "node:crypto";
 import { HTTPClient, type Fetcher } from "@mistralai/mistralai/lib/http";
 import type {
@@ -9,10 +8,13 @@ import type {
   FunctionTool,
 } from "@mistralai/mistralai/models/components";
 import { Chat } from "@mistralai/mistralai/sdk/chat";
+import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
+// Mistral provider adapts Mistral streams and tool calls to the runtime.
+import { createAssistantOutput } from "../transports/assistant-output.js";
 import {
   assignTransportErrorDetails,
   finalizeTerminalToolCallArguments,
@@ -140,7 +142,7 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
   const stream = new AssistantMessageEventStream();
 
   void (async () => {
-    const output = createOutput(model);
+    const output = createAssistantOutput(model);
 
     try {
       const apiKey = options?.apiKey || getEnvApiKey(model.provider);
@@ -257,26 +259,6 @@ export const streamSimpleMistral: StreamFunction<"mistral-conversations", Simple
         : undefined,
   } satisfies MistralOptions);
 };
-
-function createOutput(model: Model<"mistral-conversations">): AssistantMessage {
-  return {
-    role: "assistant",
-    content: [],
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "stop",
-    timestamp: Date.now(),
-  };
-}
 
 function createMistralToolCallIdNormalizer(): (id: string) => string {
   const idMap = new Map<string, string>();
@@ -668,7 +650,7 @@ async function consumeChatStream(
             output.content.push(currentBlock);
             stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
           }
-          currentBlock.thinking += thinkingDelta;
+          appendAssistantThinking(currentBlock, thinkingDelta);
           stream.push({
             type: "thinking_delta",
             contentIndex: blockIndex(),

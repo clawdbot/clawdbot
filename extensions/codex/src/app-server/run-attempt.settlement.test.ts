@@ -16,7 +16,7 @@ import {
 } from "./attempt-timeouts.js";
 import { CodexAppServerClient } from "./client.js";
 import { isJsonObject } from "./protocol.js";
-import { turnCompleted } from "./protocol.test-helpers.js";
+import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
 import {
   createNativeRunParams,
   createStartedThreadHarness,
@@ -45,7 +45,102 @@ describe("Codex app-server terminal settlement", () => {
     resetSharedCodexAppServerClientForTests();
   });
 
-  it("bounds post-terminal projection and joins late abort cleanup without stopping a shared sibling", async () => {
+  it.each([
+    { stage: "onAssistantMessageStart", nativeCompleted: true },
+    { stage: "onPartialReply", nativeCompleted: true },
+    { stage: "onReasoningStream", nativeCompleted: true },
+    { stage: "onReasoningEnd", nativeCompleted: true },
+    { stage: "onReasoningStream", nativeCompleted: false },
+  ] as const)(
+    "settles held $stage with native completion: $nativeCompleted",
+    async ({ stage, nativeCompleted }) => {
+      const held = createDeferred<void>();
+      const callback = vi.fn(() => held.promise);
+      const onAttemptTimeout = vi.fn();
+      const harness = createStartedThreadHarness();
+      const params = {
+        ...createTestParams(),
+        [stage]: callback,
+        onAttemptTimeout,
+        timeoutMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
+      };
+      vi.useFakeTimers();
+      const run = runCodexAppServerAttempt(params);
+      const settled = vi.fn();
+      void run.then(settled, settled);
+      try {
+        await harness.waitForMethod("turn/start");
+        const assistantStage = stage === "onAssistantMessageStart" || stage === "onPartialReply";
+        if (assistantStage) {
+          await harness.notify({
+            method: "item/started",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              item: { id: "answer", type: "agentMessage", phase: "final_answer", text: "" },
+            },
+          });
+        }
+        void harness.notify({
+          method: assistantStage ? "item/agentMessage/delta" : "item/reasoning/textDelta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: assistantStage ? "answer" : "reasoning-1",
+            delta: assistantStage ? "Completed answer." : "Finishing the answer.",
+          },
+        });
+        if (nativeCompleted) {
+          void harness.notify(
+            turnCompleted({
+              id: "turn-1",
+              status: "completed",
+              items: [
+                {
+                  id: "answer",
+                  type: "agentMessage",
+                  phase: "final_answer",
+                  text: "Completed answer.",
+                },
+              ],
+            }),
+          );
+        }
+        await vi.waitFor(() => expect(callback).toHaveBeenCalledOnce(), fastWait);
+        await vi.advanceTimersByTimeAsync(TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS);
+        await vi.advanceTimersByTimeAsync(TURN_FINALIZE_DRAIN_ABORT_GRACE_MS);
+        await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce(), {
+          interval: 100,
+          timeout: 15_000,
+        });
+        vi.useRealTimers();
+        const result = await run;
+        if (nativeCompleted) {
+          expect(result.terminal).toEqual({
+            kind: "ok",
+            settlementWarning: {
+              pendingStage: stage,
+              elapsedMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
+              timeoutMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
+            },
+          });
+          expect(result.assistantTexts).toEqual(["Completed answer."]);
+          expect(result.lastAssistant?.stopReason).toBe("stop");
+          expect(result.codexAppServerFailure).toBeUndefined();
+          expect(onAttemptTimeout).not.toHaveBeenCalled();
+        } else {
+          expect(readAttemptTerminal(result)).toMatchObject({ timedOut: true, aborted: true });
+          expect(onAttemptTimeout).toHaveBeenCalledOnce();
+        }
+      } finally {
+        held.resolve();
+        vi.useRealTimers();
+        await run;
+      }
+    },
+  );
+
+  it("preserves a completed reply through degraded settlement without stopping a shared sibling", async () => {
     const physical = createClientHarness();
     const startClient = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(physical.client);
     const projection = createDeferred<void>();
@@ -152,34 +247,17 @@ describe("Codex app-server terminal settlement", () => {
       );
       expect(onAttemptTimeout).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
-      expect(onAttemptTimeout).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ message: "codex app-server terminal settlement timed out" }),
-      );
-
-      const list = await waitForHarnessRequest(physical, "thread/backgroundTerminals/list");
-      expect(wireRequests().some(({ method }) => method === "turn/interrupt")).toBe(false);
-      await vi.advanceTimersByTimeAsync(4_000);
-      expect(firstSettled).not.toHaveBeenCalled();
-      expect(wireRequests().some(({ method }) => method === "thread/unsubscribe")).toBe(false);
-      physical.send({ id: list.id, result: { data: [], nextCursor: null } });
-      await vi.advanceTimersByTimeAsync(0);
-
-      // Native cleanup consumed four seconds. Projection gets its own
-      // full grace after cleanup, rather than spending it on cleanup RPCs.
-      await vi.advanceTimersByTimeAsync(TURN_FINALIZE_DRAIN_ABORT_GRACE_MS - 1);
-      expect(firstSettled).not.toHaveBeenCalled();
-      expect(wireRequests().some(({ method }) => method === "thread/unsubscribe")).toBe(false);
-      await vi.advanceTimersByTimeAsync(1);
-      const unsubscribe = await waitForHarnessRequest(physical, "thread/unsubscribe");
-      physical.send({ id: unsubscribe.id, result: {} });
+      expect(onAttemptTimeout).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(firstSettled).toHaveBeenCalledOnce(), fastWait);
       const result = await firstRun;
       expect(readAttemptTerminal(result)).toMatchObject({
-        aborted: true,
-        timedOut: true,
-        promptError: "codex app-server terminal settlement timed out",
+        aborted: false,
+        timedOut: false,
+        promptError: null,
+        settlementWarning: { pendingStage: "onReasoningStream" },
       });
-      expect(result.codexAppServerFailure?.kind).toBe("turn_settlement_timeout");
-      expect(result.promptTimeoutOutcome).toMatchObject({ replayInvalid: true });
+      expect(result.codexAppServerFailure).toBeUndefined();
+      expect(result.promptTimeoutOutcome).toBeUndefined();
       expect(result.assistantTexts).toEqual(["Completed work remains visible."]);
       expect(
         wireRequests()
@@ -190,7 +268,7 @@ describe("Codex app-server terminal settlement", () => {
               method === "thread/unsubscribe",
           )
           .map(({ params }) => params?.threadId),
-      ).toEqual(["thread-settlement", "thread-settlement"]);
+      ).toEqual([]);
       expect(physical.stdinDestroyed).toBe(false);
       expect(resolveActiveEmbeddedRunSessionId(firstParams.sessionKey)).toBeUndefined();
       expect(resolveActiveEmbeddedRunSessionId(siblingParams.sessionKey)).toBe(
@@ -228,8 +306,9 @@ describe("Codex app-server terminal settlement", () => {
   });
 
   it.each([
-    { boundary: "callback", termination: "timeout", release: "after cutoff" },
-    { boundary: "checkpoint", termination: "timeout", release: "after cutoff" },
+    { boundary: "callback", termination: "timeout", release: "during recovery" },
+    { boundary: "checkpoint", termination: "timeout", release: "during recovery" },
+    { boundary: "final", termination: "timeout", release: "during recovery" },
     { boundary: "final", termination: "timeout", release: "after cutoff" },
     { boundary: "checkpoint", termination: "abort", release: "after cutoff" },
     { boundary: "final", termination: "abort", release: "after cutoff" },
@@ -239,6 +318,7 @@ describe("Codex app-server terminal settlement", () => {
   ] as const)(
     "settles $termination at $boundary with writer release $release",
     async ({ boundary, termination, release }) => {
+      const queuedNetworkResult = boundary === "checkpoint" && termination === "timeout";
       const params = createTestParams();
       await attachSqliteSessionTarget(
         params,
@@ -303,6 +383,11 @@ describe("Codex app-server terminal settlement", () => {
       params.abortSignal = abort.signal;
       params.onAttemptTimeout = onAttemptTimeout;
       params.onAgentEvent = onAgentEvent;
+      // Whole-message preparation must not erase the terminal owner's warning.
+      params.prepareAssistantTranscriptMessage = (message) => ({
+        ...message,
+        __openclaw: undefined,
+      });
       params.timeoutMs = 60 * 60_000;
       vi.useFakeTimers();
       const settled = vi.fn();
@@ -329,25 +414,39 @@ describe("Codex app-server terminal settlement", () => {
             },
           },
         });
+        const completedCommand = {
+          id: "checkpoint-command",
+          type: "commandExecution",
+          command: "echo saved",
+          cwd: params.workspaceDir,
+          commandActions: [],
+          processId: null,
+          source: "agent",
+          status: "completed",
+          aggregatedOutput: "saved",
+          exitCode: 0,
+          durationMs: 1,
+        };
+        if (queuedNetworkResult) {
+          void harness.notify(itemNotification("item/completed", completedCommand));
+          await vi.waitFor(() => expect(checkpointMirror).toHaveBeenCalledOnce(), fastWait);
+          void harness.notify(
+            itemNotification("item/completed", {
+              id: "queued-search",
+              type: "webSearch",
+              query: "synthetic network result",
+              action: { type: "search", query: "synthetic network result" },
+              results: null,
+            }),
+          );
+        }
         const receivedAt = Date.now();
-        await harness.notify(
+        void harness.notify(
           turnCompleted({
             id: "turn-1",
             status: "completed",
             items: [
-              {
-                id: "checkpoint-command",
-                type: "commandExecution",
-                command: "echo saved",
-                cwd: params.workspaceDir,
-                commandActions: [],
-                processId: null,
-                source: "agent",
-                status: "completed",
-                aggregatedOutput: "saved",
-                exitCode: 0,
-                durationMs: 1,
-              },
+              ...(queuedNetworkResult ? [] : [completedCommand]),
               {
                 id: "checkpoint-answer",
                 type: "agentMessage",
@@ -364,9 +463,7 @@ describe("Codex app-server terminal settlement", () => {
           await vi.advanceTimersByTimeAsync(
             receivedAt + TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS - Date.now(),
           );
-          expect(onAttemptTimeout).toHaveBeenCalledExactlyOnceWith(
-            expect.objectContaining({ message: "codex app-server terminal settlement timed out" }),
-          );
+          expect(onAttemptTimeout).not.toHaveBeenCalled();
         } else if (boundary === "publication") {
           await vi.waitFor(() => expect(publishedTerminal).toHaveBeenCalledOnce(), fastWait);
         } else {
@@ -374,32 +471,43 @@ describe("Codex app-server terminal settlement", () => {
         }
         if (release === "after cutoff") {
           await vi.advanceTimersByTimeAsync(TURN_FINALIZE_DRAIN_ABORT_GRACE_MS);
-        } else {
+        } else if (release === "during recovery") {
+          await vi.advanceTimersByTimeAsync(1);
+        }
+        if (release !== "after cutoff") {
+          // The replacement final still queues behind the authoritative writer.
           checkpoint.resolve();
           await Promise.allSettled(checkpointWrites);
         }
         await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce(), fastWait);
         const result = await run;
         expect(readAttemptTerminal(result)).toMatchObject({
-          aborted: true,
-          timedOut: termination === "timeout",
-          promptError:
-            termination === "timeout" ? "codex app-server terminal settlement timed out" : null,
+          aborted: termination === "abort",
+          timedOut: false,
+          promptError: null,
         });
-        expect(result.codexAppServerFailure?.kind).toBe(
-          termination === "timeout" ? "turn_settlement_timeout" : undefined,
-        );
+        expect(result.codexAppServerFailure).toBeUndefined();
         if (termination === "timeout") {
-          expect(result.promptTimeoutOutcome).toMatchObject({ replayInvalid: true });
-        } else {
-          expect(onAttemptTimeout).not.toHaveBeenCalled();
+          expect(result.terminal).toMatchObject({
+            kind: "ok",
+            settlementWarning: {
+              pendingStage: boundary === "final" ? "transcript/mirror" : "transcript/checkpoint",
+              timeoutMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
+            },
+          });
         }
+        expect(result.promptTimeoutOutcome).toBeUndefined();
+        expect(onAttemptTimeout).not.toHaveBeenCalled();
         expect(result.assistantTexts).toEqual(["Completed before checkpoint."]);
-        expect(result.lastAssistant?.stopReason).toBe("aborted");
+        expect(result.lastAssistant?.stopReason).toBe(termination === "abort" ? "aborted" : "stop");
         expect(result.attemptUsage).toMatchObject({ input: 3, output: 7, cacheRead: 2, total: 12 });
-        expect(result.attemptUsage?.contextUsage).toEqual({ state: "unavailable" });
+        if (termination === "abort") {
+          expect(result.attemptUsage?.contextUsage).toEqual({ state: "unavailable" });
+        }
         const assistantCommitted =
-          boundary === "publication" || (boundary === "checkpoint" && release === "during grace");
+          (termination === "timeout" && release === "during recovery") ||
+          boundary === "publication" ||
+          (boundary === "checkpoint" && release === "during grace");
         expect(
           onAgentEvent.mock.calls.filter(
             ([event]) =>
@@ -408,7 +516,7 @@ describe("Codex app-server terminal settlement", () => {
           ),
         ).toHaveLength(1);
         expect(resolveActiveEmbeddedRunSessionId(transcriptTarget.sessionKey)).toBeUndefined();
-        if (release !== "after cutoff" || (boundary === "final" && termination === "abort")) {
+        if (termination === "timeout" || release !== "after cutoff" || boundary === "final") {
           checkpoint.resolve();
           await Promise.allSettled(checkpointWrites);
           const events = await readSessionTranscriptEvents(transcriptTarget);
@@ -425,11 +533,28 @@ describe("Codex app-server terminal settlement", () => {
               expect.objectContaining({
                 id: result.contextEngineTerminalAnchor?.entryId,
                 message: expect.objectContaining({
-                  stopReason: boundary === "publication" ? "stop" : "aborted",
+                  stopReason:
+                    termination === "timeout" || boundary === "publication" ? "stop" : "aborted",
                   idempotencyKey: result.assistantTranscriptIdempotencyKey,
                 }),
               }),
             ]);
+            if (termination === "timeout") {
+              expect(assistantRows[0]).toMatchObject({
+                message: {
+                  __openclaw: {
+                    settlementWarning: expect.objectContaining({
+                      timeoutMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
+                    }),
+                  },
+                },
+              });
+              if (queuedNetworkResult) {
+                expect(assistantRows[0]).toMatchObject({
+                  message: { __openclaw: { turnTainted: true } },
+                });
+              }
+            }
             if (boundary === "publication") {
               expect(publishedTerminal).toHaveBeenCalledExactlyOnceWith(
                 expect.objectContaining({ messageId: result.contextEngineTerminalAnchor?.entryId }),
@@ -450,7 +575,7 @@ describe("Codex app-server terminal settlement", () => {
           expect(result.assistantTranscriptIdempotencyKey).toBeUndefined();
           expect(result.contextEngineTerminalAnchor).toBeUndefined();
         }
-        if (boundary === "final" && termination === "abort" && release === "after cutoff") {
+        if (boundary === "final" && release === "after cutoff") {
           const nextHarness = createStartedThreadHarness(
             async (method) => {
               if (method === "thread/resume") {

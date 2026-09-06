@@ -6,6 +6,7 @@ import {
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import type { AssistantMessage } from "../../llm/types.js";
+import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
@@ -53,6 +54,7 @@ type TranscriptReport =
   | {
       kind: "custom";
       customTypes: readonly string[];
+      suppressWhenAssistantRun?: string;
       selectReport: (
         latest: CustomMessageReport | undefined,
       ) => CustomMessageReportAppend | undefined;
@@ -62,6 +64,7 @@ type ReportNavigationEntry = SessionNavigationEntry & {
   seq: number;
   customType?: string;
   assistantResponseId?: string;
+  assistantRunId?: string;
 };
 
 class TranscriptReportNavigation extends SessionEntryNavigation<ReportNavigationEntry> {
@@ -82,6 +85,9 @@ class TranscriptReportNavigation extends SessionEntryNavigation<ReportNavigation
         appendMode: entry.appendMode,
         seq,
         ...(entry.type === "custom_message" ? { customType: entry.customType } : {}),
+        ...(entry.type === "message" && entry.message.role === "assistant"
+          ? { assistantRunId: readSessionTranscriptRunId(entry.message) }
+          : {}),
         ...(entry.type === "message" &&
         entry.message.role === "assistant" &&
         typeof entry.message.responseId === "string"
@@ -234,6 +240,12 @@ export async function appendSessionTranscriptReport(
         message: applyAssistantDeliveryDirectives(report.message),
         parentId: branch.appendParentId,
       });
+      return;
+    }
+    if (
+      report.suppressWhenAssistantRun !== undefined &&
+      branch.path.some((entry) => entry.assistantRunId === report.suppressWhenAssistantRun)
+    ) {
       return;
     }
     const selected = report.selectReport(

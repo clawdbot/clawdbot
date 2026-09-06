@@ -268,6 +268,7 @@ export const validateSessionsObserverVisibilityParams = compile(
   S.SessionsObserverVisibilityParamsSchema,
 );
 export const validateSessionVisibilitySetParams = compile(S.SessionVisibilitySetParamsSchema);
+export const validateSessionPublicShareSetParams = compile(S.SessionPublicShareSetParamsSchema);
 export const validateSessionMembersListParams = compile(S.SessionMembersListParamsSchema);
 export const validateSessionMemberAddParams = compile(S.SessionMemberAddParamsSchema);
 export const validateSessionMemberRemoveParams = compile(S.SessionMemberRemoveParamsSchema);
@@ -440,6 +441,7 @@ export const validateSkillsDetailParams = compile(S.SkillsDetailParamsSchema);
 export const validateSkillsCuratorStatusParams = compile(S.SkillsCuratorStatusParamsSchema);
 export const validateSkillsCuratorActionParams = compile(S.SkillsCuratorActionParamsSchema);
 export const validateSkillsProposalsListParams = compile(S.SkillsProposalsListParamsSchema);
+export const validateSkillsWorkshopReadParams = compile(S.SkillsWorkshopReadParamsSchema);
 export const validateSkillsProposalInspectParams = compile(S.SkillsProposalInspectParamsSchema);
 export const validateSkillsProposalCreateParams = compile(S.SkillsProposalCreateParamsSchema);
 export const validateSkillsProposalUpdateParams = compile(S.SkillsProposalUpdateParamsSchema);
@@ -537,9 +539,13 @@ export const validateUpdateRunsGetResult = compile(S.UpdateRunsGetResultSchema);
 export const validateUpdateRunsListParams = compile(S.UpdateRunsListParamsSchema);
 export const validateUpdateRunsListResult = compile(S.UpdateRunsListResultSchema);
 export const validateUpdateRunChangedEvent = compile(S.UpdateRunChangedEventSchema);
+export const validateUpdateReportParams = compile(S.UpdateReportParamsSchema);
+export const validateUpdateReportResult = compile(S.UpdateReportResultSchema);
 export const validateUiCommandParams = compile(S.UiCommandParamsSchema);
 export const validateWebLoginStartParams = compile(S.WebLoginStartParamsSchema);
 export const validateWebLoginWaitParams = compile(S.WebLoginWaitParamsSchema);
 
 export const validateTranscriptsListParams = compile(S.TranscriptsListParamsSchema);
 export const validateTranscriptsGetParams = compile(S.TranscriptsGetParamsSchema);
+export const validateTranscriptsExportParams = compile(S.TranscriptsExportParamsSchema);
+export const validateTranscriptsStatusParams = compile(S.TranscriptsStatusParamsSchema);
