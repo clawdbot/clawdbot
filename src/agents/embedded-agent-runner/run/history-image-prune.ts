@@ -308,13 +308,17 @@ export function pruneProcessedHistoryImages(messages: AgentMessage[]): AgentMess
 export function installHistoryImagePruneContextTransform(
   agent: PrunableContextAgent,
   mediaOptions?: Parameters<typeof hydratePromptMediaMessages>[1],
+  privacyOptions?: { blockAllMedia?: boolean },
 ): () => void {
   const originalTransformContext = agent.transformContext;
   agent.transformContext = async (messages: AgentMessage[], signal?: AbortSignal) => {
     const prunedInput = pruneProcessedHistoryImages(messages) ?? messages;
-    const hydratedInput = mediaOptions
-      ? await hydratePromptMediaMessages(prunedInput, mediaOptions)
-      : prunedInput;
+    // When blockAllMedia is enabled, skip hydration entirely so persisted
+    // media from session history is never sent to the provider.
+    const hydratedInput =
+      privacyOptions?.blockAllMedia || !mediaOptions
+        ? prunedInput
+        : await hydratePromptMediaMessages(prunedInput, mediaOptions);
     const transformed = originalTransformContext
       ? await originalTransformContext.call(agent, hydratedInput, signal)
       : hydratedInput;

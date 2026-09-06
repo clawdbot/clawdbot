@@ -1247,6 +1247,16 @@ export function buildAgentSystemPrompt(params: {
     memorySection,
     acpEnabled,
     stableContextFiles: contextFiles.stable,
+    // Privacy config affects redaction/masking of context files and runtime
+    // line, so toggling it must invalidate the cached stable prefix.
+    privacyEnabled: params.privacyConfig?.enabled,
+    privacyPiiEnabled: params.privacyConfig?.pii?.enabled,
+    privacyPiiCategories: params.privacyConfig?.pii?.categories,
+    privacySuppressContextFiles: params.privacyConfig?.systemPrompt?.suppressContextFiles,
+    privacyMaskHostname: params.privacyConfig?.systemPrompt?.maskHostname,
+    privacyMaskOs: params.privacyConfig?.systemPrompt?.maskOs,
+    privacyMaskShell: params.privacyConfig?.systemPrompt?.maskShell,
+    privacyMaskRepoPath: params.privacyConfig?.systemPrompt?.maskRepoPath,
   });
   const stablePrefix = cacheStablePromptPrefix(stablePrefixCacheKey, () => {
     const lines = [

@@ -22,6 +22,7 @@ import {
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import { redactPiiText } from "../../privacy/payload-redact.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import {
@@ -90,9 +91,18 @@ export function runEmbeddedAgent(
   const lifecycleGeneration =
     internalParamsInput.lifecycleGeneration ??
     captureAgentRunLifecycleGeneration(internalParamsInput.runId);
+  // Privacy: redact PII in user messages at the embedded runner boundary
+  // so all callers (auto-reply, direct CLI, subagent) are covered.
+  const effectivePrompt =
+    config?.privacy?.enabled &&
+    config.privacy.pii?.enabled !== false &&
+    config.privacy.pii?.userMessages === true
+      ? redactPiiText(internalParamsInput.prompt, config.privacy)
+      : internalParamsInput.prompt;
   return withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
     runEmbeddedAgentInternal({
       ...internalParamsInput,
+      prompt: effectivePrompt,
       config,
       lifecycleGeneration,
     }),

@@ -183,13 +183,24 @@ export async function executePreparedCliRun(
     : await prepareCliPromptImagePayload({
         backend,
         prompt,
-        imagePrompt: params.imagePrompt,
+        // Privacy: suppress all media sources when blockAttachments is enabled.
+        ...(params.config?.privacy?.enabled && params.config.privacy.media?.blockAttachments
+          ? {
+              images: undefined,
+              imageOrder: undefined,
+              imagePrompt: undefined,
+              mediaImageLayout: undefined,
+              media: undefined,
+            }
+          : {
+              imagePrompt: params.imagePrompt,
+              images: params.images,
+              imageOrder: params.imageOrder,
+              mediaImageLayout: params.mediaImageLayout,
+              media: params.media,
+            }),
         workspaceDir: context.workspaceDir,
         localRoots: getAgentScopedMediaLocalRoots(params.config ?? {}, params.agentId),
-        images: params.images,
-        imageOrder: params.imageOrder,
-        mediaImageLayout: params.mediaImageLayout,
-        media: params.media,
       });
   prompt = imagePayload.prompt;
   const promptInputBackend =
