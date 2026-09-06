@@ -664,7 +664,7 @@ extensions/matrix/src/matrix/monitor/handler-state.ts	1
 extensions/matrix/src/matrix/monitor/handler.ts	2
 extensions/matrix/src/matrix/monitor/inbound-dedupe-migration.ts	2
 extensions/matrix/src/matrix/monitor/index.ts	3
-extensions/matrix/src/matrix/monitor/reaction-events.ts	2
+extensions/matrix/src/matrix/monitor/reaction-events.ts	1
 extensions/matrix/src/matrix/monitor/replies.ts	1
 extensions/matrix/src/matrix/monitor/reply-context.ts	1
 extensions/matrix/src/matrix/monitor/room-history.ts	2
@@ -1574,7 +1574,6 @@ packages/normalization-core/src/record-coerce.ts	3
 packages/normalization-core/src/stable-stringify.ts	1
 packages/normalization-core/src/string-coerce.ts	1
 packages/retry/src/index.ts	6
-packages/sdk/src/client.ts	1
 packages/sdk/src/event-hub.ts	2
 packages/sdk/src/transport.ts	3
 packages/session-url-contract/src/parse.ts	1
@@ -1763,7 +1762,7 @@ src/agents/embedded-agent-runner/run/attempt-before-agent-run.ts	2
 src/agents/embedded-agent-runner/run/attempt-client-tools.ts	2
 src/agents/embedded-agent-runner/run/attempt-context-summary.ts	2
 src/agents/embedded-agent-runner/run/attempt-execution-phase.ts	1
-src/agents/embedded-agent-runner/run/attempt-finalize.ts	3
+src/agents/embedded-agent-runner/run/attempt-finalize.ts	2
 src/agents/embedded-agent-runner/run/attempt-history.ts	17
 src/agents/embedded-agent-runner/run/attempt-llm-boundary.ts	18
 src/agents/embedded-agent-runner/run/attempt-normalization.ts	1
@@ -1776,7 +1775,7 @@ src/agents/embedded-agent-runner/run/attempt-sessions-yield.ts	1
 src/agents/embedded-agent-runner/run/attempt-setup.ts	1
 src/agents/embedded-agent-runner/run/attempt-stop-reason-recovery.ts	3
 src/agents/embedded-agent-runner/run/attempt-stream-prepare.ts	3
-src/agents/embedded-agent-runner/run/attempt-stream.ts	8
+src/agents/embedded-agent-runner/run/attempt-stream.ts	6
 src/agents/embedded-agent-runner/run/attempt-subscription-cleanup.ts	2
 src/agents/embedded-agent-runner/run/attempt-tool-call-replay-sanitization.ts	17
 src/agents/embedded-agent-runner/run/attempt-tool-call-stream-normalization.ts	4
@@ -1914,7 +1913,6 @@ src/agents/provider-tool-policy.ts	1
 src/agents/provider-transport-fetch.ts	4
 src/agents/replay-turn-classification.ts	1
 src/agents/run-termination.ts	3
-src/agents/run-timeout-attribution.ts	1
 src/agents/run-wait.ts	2
 src/agents/runtime-plan/build.ts	4
 src/agents/runtime-plan/tools.ts	3
@@ -2391,7 +2389,6 @@ src/commands/agents.commands.identity.ts	1
 src/commands/agents.config.ts	1
 src/commands/agents.providers.ts	8
 src/commands/audit.ts	2
-src/commands/auth-choice-legacy.ts	2
 src/commands/auth-choice-options.ts	2
 src/commands/auth-choice-prompt.ts	1
 src/commands/auth-choice.apply.api-providers.ts	1
@@ -2752,7 +2749,7 @@ src/gateway/channel-health-monitor.ts	6
 src/gateway/channel-thaw-restart.ts	1
 src/gateway/chat-attachments.ts	4
 src/gateway/chat-display-projection.canvas.ts	14
-src/gateway/chat-display-projection.core.ts	6
+src/gateway/chat-display-projection.core.ts	5
 src/gateway/chat-display-projection.helpers.ts	10
 src/gateway/chat-display-projection.history.ts	1
 src/gateway/chat-display-projection.sanitize.ts	15
@@ -2773,7 +2770,6 @@ src/gateway/health/collector.ts	3
 src/gateway/hooks-mapping.ts	2
 src/gateway/hooks.ts	1
 src/gateway/live-agent-probes.ts	1
-src/gateway/live-chat-projector.ts	1
 src/gateway/local-request-context.ts	2
 src/gateway/managed-image-attachments.ts	5
 src/gateway/mcp-app-operations.ts	3
@@ -2790,8 +2786,8 @@ src/gateway/node-pairing-ssh-verify.ts	1
 src/gateway/node-registry-private.ts	1
 src/gateway/node-registry.ts	5
 src/gateway/openai-agent-run-usage.ts	1
-src/gateway/openai-http.ts	28
-src/gateway/openresponses-http.ts	4
+src/gateway/openai-http.ts	27
+src/gateway/openresponses-http.ts	3
 src/gateway/operator-approval-snapshot.ts	4
 src/gateway/operator-approval-store.ts	8
 src/gateway/operator-scopes.ts	1
@@ -3234,7 +3230,6 @@ src/media/fetch.ts	2
 src/media/input-files.ts	1
 src/media/local-media-access.ts	1
 src/media/media-facts.ts	16
-src/media/media-probe.ts	1
 src/media/playback-transcode.ts	1
 src/media/runtime-prompt-image-provenance.ts	1
 src/media/store.remote.runtime.ts	1
@@ -3315,7 +3310,6 @@ src/plugin-sdk/provider-auth-login-flow-runtime.ts	6
 src/plugin-sdk/provider-auth-result.ts	4
 src/plugin-sdk/provider-auth-runtime.ts	1
 src/plugin-sdk/provider-auth.ts	1
-src/plugin-sdk/provider-catalog-live-runtime.ts	2
 src/plugin-sdk/provider-catalog-shared.ts	1
 src/plugin-sdk/provider-enable-config.ts	2
 src/plugin-sdk/provider-entry.ts	3
@@ -3892,7 +3886,6 @@ ui/src/lib/sessions/grouping.ts	4
 ui/src/lib/sessions/index.ts	1
 ui/src/lib/sessions/reconcile.ts	10
 ui/src/lib/sessions/session-key.ts	4
-ui/src/lib/sessions/swarm-activity.ts	1
 ui/src/lib/skills/index.ts	1
 ui/src/lit/stream-auto-follow-controller.ts	1
 ui/src/lit/subscriptions-controller.ts	1
@@ -3956,7 +3949,6 @@ ui/src/pages/chat/components/chat-session-sharing.ts	1
 ui/src/pages/chat/components/chat-session-workspace.ts	1
 ui/src/pages/chat/components/chat-sidebar-editor-menu.ts	2
 ui/src/pages/chat/components/chat-sidebar-region.runtime.ts	2
-ui/src/pages/chat/components/chat-swarm-progress.ts	2
 ui/src/pages/chat/components/chat-task-suggestions.ts	1
 ui/src/pages/chat/components/chat-thread-interactions.ts	3
 ui/src/pages/chat/components/chat-voice-activity.ts	1

@@ -117,6 +117,7 @@ const realGatewayFiles = [
   "device-alias-rename.real-gateway",
   "logs-lifecycle",
   "mcp-app-conformance",
+  "profile-page.real-gateway",
   "session-progress-hovercard.real-gateway",
   "usage-sessions-owner-attribution",
 ]
@@ -525,6 +526,13 @@ describe("Control UI E2E resource ownership", () => {
         {
           file: mcpFile,
           project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: "ui/src/e2e/profile-page.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial",
           phase: 1,
           workers: 1,
           fileParallelism: false,

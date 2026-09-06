@@ -210,7 +210,8 @@ describe("SOCKS proxy protocol boundaries", () => {
     },
   );
 
-  it.each([
+  // Each row owns its server, sockets, and dispatcher, so native deadline waits can overlap.
+  it.concurrent.each([
     { name: "fixed target", mode: "fixed", stall: "target", target: 100, proxy: 0 },
     { name: "environment target", mode: "environment", stall: "target", target: 100, proxy: 0 },
     {

@@ -717,6 +717,17 @@ export function describeMinimaxProviderDiscoveryContract(
 
   describe("minimax provider discovery contract", () => {
     installDiscoveryHooks(state, { providerIds: ["minimax"], loadMinimax: load });
+    beforeEach(() => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          Response.json({
+            data: [{ id: "MiniMax-M3" }, { id: "MiniMax-M2.7" }, { id: "MiniMax-M2.7-highspeed" }],
+          }),
+        ),
+      );
+    });
+    afterEach(() => vi.unstubAllGlobals());
 
     it("keeps API catalog provider-owned", async () => {
       const result = await state.runProviderCatalog({
@@ -819,6 +830,17 @@ export function describeModelStudioProviderDiscoveryContract(
 
   describe("modelstudio provider discovery contract", () => {
     installDiscoveryHooks(state, { providerIds: ["modelstudio"], loadModelStudio: load });
+    beforeEach(() => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          Response.json({
+            data: [{ id: "qwen3.5-plus" }, { id: "qwen3-max-2026-01-23" }, { id: "MiniMax-M2.5" }],
+          }),
+        ),
+      );
+    });
+    afterEach(() => vi.unstubAllGlobals());
 
     it("keeps catalog provider-owned", async () => {
       const result = await state.runProviderCatalog({

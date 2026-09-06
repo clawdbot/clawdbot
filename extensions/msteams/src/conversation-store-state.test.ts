@@ -83,9 +83,7 @@ describe("msteams conversation store (plugin state)", () => {
       "19:legacy@thread.tacv2",
       "19:new@thread.tacv2",
     ]);
-    await expect(
-      fs.promises.access(path.join(stateDir, "state", "openclaw.sqlite")),
-    ).resolves.toBeUndefined();
+    await fs.promises.access(path.join(stateDir, "state", "openclaw.sqlite"));
   });
 
   it("ignores a stale legacy JSON file at runtime", async () => {
@@ -126,7 +124,7 @@ describe("msteams conversation store (plugin state)", () => {
 
     const store = createMSTeamsConversationStoreState({ env });
     await expect(store.get("conv-current")).resolves.toEqual(ref);
-    await expect(fs.promises.access(filePath)).resolves.toBeUndefined();
+    await fs.promises.access(filePath);
   });
 
   it("hashes external conversation ids before using plugin-state keys", async () => {
