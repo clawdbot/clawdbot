@@ -761,7 +761,7 @@ _openclaw_root_completion
     {
       name: "apostrophes",
       value: "it's literal",
-      prefix: "it's",
+      prefix: "it\\'s",
     },
     {
       name: "literal command substitution",

@@ -134,6 +134,32 @@ describe("completion-cli native Bash words", () => {
       word: "--f",
       expected: ["--force"],
     },
+    ...['"f', "'f", '"f"', "\\f", 'f"i'].map((value) => ({
+      line: `openclaw completion --shell ${value}`,
+      words: ["openclaw", "completion", "--shell", value],
+      word: value === 'f"i' ? "i" : value === '"f' || value === "'f" ? "f" : value,
+      expected: [value === 'f"i' ? "ish" : "fish"],
+    })),
+    ...['"', "'"].flatMap((quote) => [
+      {
+        line: `openclaw completion --shell=${quote}f`,
+        words: ["openclaw", "completion", `--shell=${quote}f`],
+        word: "f",
+        expected: ["fish"],
+      },
+      {
+        line: `openclaw completion --shell=${quote}f`,
+        words: ["openclaw", "completion", "--shell", "=", `${quote}f`],
+        word: "f",
+        expected: ["fish"],
+      },
+      {
+        line: `openclaw completion -s ${quote}f`,
+        words: ["openclaw", "completion", "-s", `${quote}f`],
+        word: "f",
+        expected: ["fish"],
+      },
+    ]),
   ])("respects native Bash word boundaries in $line at $point", ({ words, expected, ...input }) => {
     const program = createDocumentedCompletionProgram().option("--profile <name>", "Profile");
 
