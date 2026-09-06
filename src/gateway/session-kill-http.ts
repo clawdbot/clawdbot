@@ -115,6 +115,7 @@ export async function handleSessionKillHttpRequest(
     cfg,
     sessionKey: canonicalKey,
     agentId: requestedAgent.agentId,
+    suppressTaskDelivery: true,
   });
 
   if (result.found && result.error) {

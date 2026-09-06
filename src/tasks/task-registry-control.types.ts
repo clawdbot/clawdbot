@@ -43,6 +43,8 @@ export type TaskRegistryControlRuntime = {
     expectedRunId?: string;
     expectedGeneration?: number;
     expectedOwnerKey?: string;
+    /** Operator cancel: suppress the child's completion delivery like the bulk stop paths. */
+    suppressTaskDelivery?: boolean;
     /** Consume the result synchronously while its exact run ownership is still held. */
     onResult?: (result: SubagentAdminKillResult) => undefined;
   }) => Promise<SubagentAdminKillResult>;
