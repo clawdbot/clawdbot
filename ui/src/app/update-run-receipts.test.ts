@@ -74,18 +74,47 @@ describe("update browser receipts", () => {
     expect(reloaded.triaged("ws://gateway.test", null, "1")).toBe(true);
     expect(reloaded.triaged("ws://gateway.test", null, "32")).toBe(true);
   });
-  it("extends the shipped tab receipt object without losing consumed failures on reload", () => {
-    const previous = JSON.stringify(["ws://gateway.test", null, "recorded:1000"]);
-    sessionStorage.setItem(TRIAGED_KEY, JSON.stringify({ triaged: [previous] }));
-    const receipts = createUpdateRunReceipts();
-    expect(receipts.recordTriage("ws://gateway.test", null, "new-run")).toBe(true);
-    expect(JSON.parse(sessionStorage.getItem(TRIAGED_KEY)!)).toEqual({
-      triaged: [previous, JSON.stringify(["ws://gateway.test", null, "new-run"])],
-    });
-    const reloaded = createUpdateRunReceipts();
-    expect(reloaded.triaged("ws://gateway.test", null, "recorded:1000")).toBe(true);
-    expect(reloaded.triaged("ws://gateway.test", null, "new-run")).toBe(true);
-    expect(reloaded.triaged("ws://gateway.test", "other", "new-run")).toBe(false);
-    expect(sessionStorage.getItem("openclaw:control-ui:update-triaged:v1")).toBeNull();
-  });
+  it.each(["2026.9.1", "2026.9.2", "both"])(
+    "preserves consumed failures from %s through reload and the next write",
+    (version) => {
+      const receipt = (run: string) => JSON.stringify(["ws://gateway.test", null, run]);
+      const previous = [];
+      if (version !== "2026.9.2") {
+        sessionStorage.setItem(TRIAGED_KEY, JSON.stringify({ triaged: [receipt("older")] }));
+        previous.push("older");
+      }
+      if (version !== "2026.9.1") {
+        sessionStorage.setItem(
+          "openclaw:control-ui:update-triaged:v1",
+          JSON.stringify([receipt("newer")]),
+        );
+        previous.push("newer");
+      }
+      const receipts = createUpdateRunReceipts();
+      for (const run of previous) {
+        expect(receipts.triaged("ws://gateway.test", null, run)).toBe(true);
+      }
+      expect(receipts.recordTriage("ws://gateway.test", null, "new-run")).toBe(true);
+      expect(JSON.parse(sessionStorage.getItem(TRIAGED_KEY)!)).toEqual({
+        triaged: [...previous, "new-run"].map(receipt),
+      });
+      const reloaded = createUpdateRunReceipts();
+      for (const run of [...previous, "new-run"]) {
+        expect(reloaded.triaged("ws://gateway.test", null, run)).toBe(true);
+      }
+      expect(reloaded.triaged("ws://gateway.test", "other", "new-run")).toBe(false);
+      expect(sessionStorage.getItem("openclaw:control-ui:update-triaged:v1")).toBeNull();
+    },
+  );
+
+  it.each(["not-json", JSON.stringify([42]), "x".repeat(32_768)])(
+    "does not admit triage over unreadable 2026.9.2 receipts (%#)",
+    (raw) => {
+      sessionStorage.setItem("openclaw:control-ui:update-triaged:v1", raw);
+      const receipts = createUpdateRunReceipts();
+      expect(receipts.recordTriage("ws://gateway.test", null, "new-run")).toBe(false);
+      expect(sessionStorage.getItem("openclaw:control-ui:update-triaged:v1")).toBe(raw);
+      expect(sessionStorage.getItem(TRIAGED_KEY)).toBeNull();
+    },
+  );
 });
