@@ -9,6 +9,11 @@ import { resolveUpdatedInstallCommandEnv } from "./update-command-service-env.js
 const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
 export const DEFINITION_DENIAL = /\bSERVICE_DEFINITION_(?:SEALED|UNKNOWN):[^\n]*/;
 
+/** The installed CLI observed failed health after accepting activation, not a refusal. */
+export class GatewayRestartHealthError extends Error {
+  override name = "GatewayRestartHealthError";
+}
+
 export function isPackageManagerUpdateMode(
   mode: UpdateRunResult["mode"],
 ): mode is "npm" | "pnpm" | "bun" {
@@ -41,7 +46,7 @@ export async function runUpdatedInstallGatewayCommand(
   },
   action: "install" | "restart",
   preserveDefinition = false,
-): Promise<boolean> {
+): Promise<"accepted" | "unverified"> {
   params.signal?.throwIfAborted();
   const installing = action === "install";
   const entrypoint = await resolveGatewayInstallEntrypoint(params.result.root);
@@ -50,7 +55,7 @@ export async function runUpdatedInstallGatewayCommand(
       params.signal?.throwIfAborted();
       params.assertCurrent?.();
       await runDaemonInstall({ force: true, json: params.opts.json || undefined });
-      return true;
+      return "unverified";
     }
     throw new Error(
       `updated install entrypoint not found under ${params.result.root ?? "unknown"}`,
@@ -62,9 +67,8 @@ export async function runUpdatedInstallGatewayCommand(
   } else if (preserveDefinition) {
     args.push("--preserve-definition");
   }
-  if (params.opts.json) {
-    args.push("--json");
-  }
+  // Capture one structured child result in both outer output modes.
+  args.push("--json");
   const nodeRunner = params.nodeRunner ?? resolveNodeRunner();
   const commandEnv = resolveUpdatedInstallCommandEnv({
     processEnv: installing
@@ -85,11 +89,34 @@ export async function runUpdatedInstallGatewayCommand(
     ...(params.signal ? { signal: params.signal, killProcessTree: true } : {}),
   });
   params.signal?.throwIfAborted();
-  if (res.code === 0) {
-    return true;
+  const exited =
+    res.termination === "exit" &&
+    res.signal === null &&
+    !res.killed &&
+    res.cleanup !== "forced" &&
+    res.cleanup !== "uncertain";
+  const complete = !res.stdoutTruncatedBytes && !res.outputLimitExceeded && !res.outputErrorStream;
+  const response = complete ? safeParseJsonRecord(res.stdout) : undefined;
+  if (exited && res.code === 0) {
+    return action === "restart" &&
+      response?.action === "restart" &&
+      response.ok === true &&
+      (response.result === "restarted" || response.result === "scheduled")
+      ? "accepted"
+      : "unverified";
   }
   const operation = installing ? "refresh" : "restart";
-  throw new Error(
-    `updated install ${operation} failed (${entrypoint}): ${formatCommandFailure(res.stdout, res.stderr)}`,
-  );
+  const message = `updated install ${operation} failed (${entrypoint}): ${formatCommandFailure(res.stdout, res.stderr)}`;
+  if (
+    exited &&
+    res.code === 1 &&
+    action === "restart" &&
+    response?.action === "restart" &&
+    response.ok === false &&
+    response.result === "restart-health-failed" &&
+    typeof response.error === "string"
+  ) {
+    throw new GatewayRestartHealthError(message);
+  }
+  throw new Error(message);
 }

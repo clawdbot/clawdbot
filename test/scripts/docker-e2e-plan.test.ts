@@ -209,6 +209,16 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
     );
   });
 
+  it("runs Fleet host proof only when explicitly selected", () => {
+    expect(planFor().lanes.map((lane) => lane.name)).not.toContain("fleet-cache");
+    const selected = planFor({ selectedLaneNames: ["fleet-cache"] });
+    expect(selected.lanes.map((lane) => lane.name)).toEqual(["fleet-cache"]);
+    expect(selected.needs.package).toBe(true);
+    expect(selected.needs.e2eImage).toBe(false);
+    expect(selected.needs.prepublishPluginRegistry).toBe(false);
+    expect(findLaneByName("fleet-cache")?.name).toBe("fleet-cache");
+  });
+
   it("plans the package-backed sandbox browser sidecar lane", () => {
     const plan = planFor({
       selectedLaneNames: ["sandbox-browser-sidecar"],

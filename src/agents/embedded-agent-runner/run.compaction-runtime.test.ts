@@ -14,6 +14,32 @@ describe("embedded compaction recovery authority", () => {
     vi.restoreAllMocks();
   });
 
+  it.each(
+    (["overflow", "timeout"] as const).flatMap((kind) => [true, false].map((ok) => ({ kind, ok }))),
+  )("settles no-op engine hooks for $kind recovery (ok=$ok)", async ({ kind, ok }) => {
+    await withRecoveryFixture({ oversized: false }, async (fixture) => {
+      const before = await fixture.snapshot();
+      const entry = fixture.loadEntry();
+      fixture.compact.mockResolvedValueOnce({ ok, compacted: false, reason: "proof no-op" });
+
+      await fixture.recover(kind);
+
+      expect(fixture.beforeHook).toHaveBeenCalledTimes(1);
+      expect(fixture.afterHook).toHaveBeenCalledTimes(ok ? 1 : 0);
+      if (ok) {
+        expect(fixture.afterHook).toHaveBeenCalledWith(
+          expect.objectContaining({ compactedCount: 0 }),
+          expect.objectContaining({ sessionKey: fixture.getSessionTarget()?.sessionKey }),
+        );
+      }
+      expect(fixture.maintain).not.toHaveBeenCalled();
+      expect(fixture.getCommittedSuccessor()).toBeUndefined();
+      expect(fixture.recoveryState.autoCompactionCount).toBe(0);
+      expect(fixture.loadEntry()).toEqual(entry);
+      expect(await fixture.snapshot()).toEqual(before);
+    });
+  });
+
   it.each(["overflow", "timeout"] as const)(
     "accepts a healthy declared successor through the host writer (%s)",
     async (kind) => {

@@ -1,7 +1,7 @@
 import { expect, vi } from "vitest";
 import { isPathInside } from "../../infra/path-guards.js";
 import * as pluginDiscovery from "../../plugins/discovery.js";
-import * as authProfileStore from "../auth-profiles/store.js";
+import * as authProfileStore from "../auth-profiles/store-runtime.js";
 
 export function guardModelFixtureAuth(root: string) {
   const violations: Array<string | undefined> = [];

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { renderTriagePrompt } from "../commands/triage-prompt.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { truncateUtf8Prefix, truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 import {
   updateRepairBudgetSchema,
@@ -85,26 +86,22 @@ async function validateRepair(
   signal: AbortSignal,
 ): Promise<UpdateRepairValidation> {
   signal.throwIfAborted();
-  let abort: (() => void) | undefined;
   const pending = params.validate(signal);
+  const cancelled = createDeferredCore<never>();
+  const abort = () =>
+    cancelled.reject(
+      signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason)),
+    );
   try {
-    const value = await Promise.race([
-      pending,
-      new Promise<never>((_resolve, reject) => {
-        abort = () =>
-          reject(signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason)));
-        signal.addEventListener("abort", abort, { once: true });
-        if (signal.aborted) {
-          abort();
-        }
-      }),
-    ]);
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) {
+      abort();
+    }
+    const value = await Promise.race([pending, cancelled.promise]);
     const parsed = updateRepairValidationSchema.parse(value);
     return { ...parsed, summary: repairSummary(parsed.summary, params) };
   } finally {
-    if (abort) {
-      signal.removeEventListener("abort", abort);
-    }
+    signal.removeEventListener("abort", abort);
   }
 }
 
@@ -171,6 +168,7 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
     }
     const { route, modelFallbacks } = selected;
     params.onEvent?.({ type: "route-selected", model: route.model, provider: route.provider });
+    let remainingToolCalls = budget.maxToolCalls;
     for (let turn = 1; turn <= budget.maxTurns; turn += 1) {
       assertCurrent();
       const previousScore = finalValidation.score;
@@ -200,7 +198,7 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
             modelFallbacks,
             prompt: repairPrompt(params, finalValidation),
             timeoutMs,
-            maxToolCalls: budget.maxToolCalls,
+            maxToolCalls: remainingToolCalls,
             signal: turnSignal,
             isCurrent: () => {
               assertCurrent();
@@ -231,6 +229,7 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
         },
       };
       attempts.push(attempt);
+      remainingToolCalls -= outcome.toolCalls;
       finalValidation = attempt.validation;
       // Even failed/timed-out turns may have changed files. Validate after the
       // runner has drained; never infer repair from its self-reported result.
@@ -265,7 +264,7 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
       if (turnController.signal.aborted || outcome.envelope.status === "timeout") {
         return stop("aborted", "per-turn-budget");
       }
-      if (outcome.toolCalls >= budget.maxToolCalls) {
+      if (remainingToolCalls <= 0) {
         return stop("aborted", "tool-call-budget");
       }
       if (finalValidation.score === previousScore) {
@@ -287,7 +286,6 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
   }
 }
 
-/** Unattended updater entry; shares execution and results with interactive triage. */
 export async function prepareUnattendedUpdateRepair(
   params: UpdateRepairParams,
 ): Promise<UpdateRepairResult> {

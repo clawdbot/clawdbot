@@ -202,6 +202,9 @@ the outcome. Post-core finalization children report back to their parent without
 creating a separate update run, including when an older updater cannot forward
 a run ID.
 
+Triage preserves the original update report. Any update launched during repair
+gets a separate `runId`.
+
 `openclaw update --json` includes `runId` and the `run` record. `openclaw update status --json`
 includes `activeRun` when a run is active and `lastRun` when history exists.
 Human output, chat completion notices, the Control UI update view, and the
@@ -219,6 +222,10 @@ openclaw gateway call update.runs.get --params '{"runId":"<run-id>"}'
 fields and adds optional `activeRun` and `lastRun` records. While a run is active,
 the Gateway broadcasts `update.run.changed` with `runId`, `phase`, `status`, and
 `updatedAtMs`. Reconnect and read the row to recover changes missed during restart.
+
+Native service-stop observations do not advance the update's recorded phase.
+If the Control UI cannot read fresh progress, it shows the read error alongside
+the last recorded run; use **Check status** to retry without starting another update.
 
 Phases are `requested`, `staging`, `validating`, optional `repairing`, `activating`,
 `restarting`, `verifying`, and `finished`. Status is `running`, `succeeded`,

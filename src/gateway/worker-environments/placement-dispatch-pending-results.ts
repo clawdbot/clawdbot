@@ -363,24 +363,24 @@ export async function recoverPendingWorkspaceResults(
           .catch(() => undefined);
         continue;
       }
+      const owner = {
+        sessionId: active.sessionId,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+        placementGeneration: pending.placementGeneration,
+      };
+      const journal = {
+        load: () => placements.loadWorkspaceReconciliation(owner),
+        begin: (next: Parameters<typeof placements.beginWorkspaceReconciliation>[1]) =>
+          placements.beginWorkspaceReconciliation(owner, next),
+        commit: (manifestRef: string) =>
+          placements.updateWorkspaceBaseManifest({ claim: turnClaim, manifestRef }),
+        abort: () => placements.abortWorkspaceReconciliation(owner),
+      };
       if (stagedResultRef) {
         let ownedStagedResultRef = stagedResultRef;
         // A staged result must never be destroyed by environment lifecycle.
         // Keep its fence and placement until the local apply is durably accepted.
-        const owner = {
-          sessionId: active.sessionId,
-          environmentId: active.environmentId,
-          ownerEpoch: active.activeOwnerEpoch,
-          placementGeneration: pending.placementGeneration,
-        };
-        const journal = {
-          load: () => placements.loadWorkspaceReconciliation(owner),
-          begin: (next: Parameters<typeof placements.beginWorkspaceReconciliation>[1]) =>
-            placements.beginWorkspaceReconciliation(owner, next),
-          commit: (manifestRef: string) =>
-            placements.updateWorkspaceBaseManifest({ claim: turnClaim, manifestRef }),
-          abort: () => placements.abortWorkspaceReconciliation(owner),
-        };
         await deps.workspaceOperations.run(active.environmentId, async () => {
           if (!placements.validateWorkspaceResultClaim(turnClaim)) {
             throw new Error("Recovered workspace result lost its placement owner");
@@ -484,20 +484,6 @@ export async function recoverPendingWorkspaceResults(
         }
         continue;
       }
-      const owner = {
-        sessionId: active.sessionId,
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-        placementGeneration: pending.placementGeneration,
-      };
-      const journal = {
-        load: () => placements.loadWorkspaceReconciliation(owner),
-        begin: (next: Parameters<typeof placements.beginWorkspaceReconciliation>[1]) =>
-          placements.beginWorkspaceReconciliation(owner, next),
-        commit: (manifestRef: string) =>
-          placements.updateWorkspaceBaseManifest({ claim: turnClaim, manifestRef }),
-        abort: () => placements.abortWorkspaceReconciliation(owner),
-      };
       const tunnel = await environments.startTunnel({
         environmentId: active.environmentId,
         ownerEpoch: active.activeOwnerEpoch,

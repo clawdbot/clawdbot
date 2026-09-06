@@ -88,9 +88,9 @@ import {
 import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
 import { resolveOpenAiCompatError } from "./openai-compat-errors.js";
 import {
+  applyToolChoice,
   isToolChoiceConstraintSatisfied,
   resolveUnsatisfiedToolChoiceMessage,
-  toolChoiceConstraintPrompt,
   type ToolChoiceConstraint,
 } from "./openai-tool-choice.js";
 import { wrapUntrustedFileContent } from "./openresponses-file-content.js";
@@ -303,29 +303,19 @@ function extractClientTools(body: CreateResponseBody): ClientToolDefinition[] {
   }));
 }
 
-function applyToolChoice(params: {
-  tools: ClientToolDefinition[];
-  toolChoice: CreateResponseBody["tool_choice"];
-}): {
-  tools: ClientToolDefinition[];
-  extraSystemPrompt?: string;
-  constraint?: ToolChoiceConstraint;
-} {
-  const { tools, toolChoice } = params;
+function resolveToolChoice(
+  toolChoice: CreateResponseBody["tool_choice"],
+): ToolChoiceConstraint | "none" | undefined {
   if (!toolChoice) {
-    return { tools };
+    return undefined;
   }
 
   if (toolChoice === "none") {
-    return { tools: [] };
+    return "none";
   }
 
   if (toolChoice === "required") {
-    if (tools.length === 0) {
-      throw new Error("tool_choice=required but no tools were provided");
-    }
-    const constraint: ToolChoiceConstraint = { type: "required" };
-    return { tools, extraSystemPrompt: toolChoiceConstraintPrompt(constraint), constraint };
+    return { type: "required" };
   }
 
   if (typeof toolChoice === "object" && toolChoice.type === "function") {
@@ -333,19 +323,10 @@ function applyToolChoice(params: {
     if (!targetName) {
       throw new Error("tool_choice.name is required");
     }
-    const matched = tools.filter((tool) => tool.function?.name === targetName);
-    if (matched.length === 0) {
-      throw new Error(`tool_choice requested unknown tool: ${targetName}`);
-    }
-    const constraint: ToolChoiceConstraint = { type: "function", name: targetName };
-    return {
-      tools: matched,
-      extraSystemPrompt: toolChoiceConstraintPrompt(constraint),
-      constraint,
-    };
+    return { type: "function", name: targetName };
   }
 
-  return { tools };
+  return undefined;
 }
 
 export { buildAgentPrompt } from "./openresponses-prompt.js";
@@ -625,10 +606,7 @@ export async function handleOpenResponsesHttpRequest(
   let toolChoiceConstraint: ToolChoiceConstraint | undefined;
   let resolvedClientTools = clientTools;
   try {
-    const toolChoiceResult = applyToolChoice({
-      tools: clientTools,
-      toolChoice: payload.tool_choice,
-    });
+    const toolChoiceResult = applyToolChoice(clientTools, resolveToolChoice(payload.tool_choice));
     resolvedClientTools = toolChoiceResult.tools;
     toolChoicePrompt = toolChoiceResult.extraSystemPrompt;
     toolChoiceConstraint = toolChoiceResult.constraint;

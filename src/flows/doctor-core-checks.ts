@@ -605,16 +605,16 @@ const bootstrapSizeCheck: HealthCheck = {
     }
     const { buildBootstrapInjectionStats, analyzeBootstrapBudget } =
       await import("../agents/bootstrap-budget.js");
-    const { resolveBootstrapContextForRun } = await import("../agents/bootstrap-files.js");
+    const { resolveBootstrapContextForDiagnostics } =
+      await import("../agents/bootstrap-files-diagnostics.js");
     const { resolveBootstrapMaxChars, resolveBootstrapTotalMaxChars } =
       await import("../agents/embedded-agent-helpers.js");
     const defaultAgentId = tryResolveSoleAgentId(ctx.cfg);
     const workspaceDir = ctx.cwd;
-    const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
+    const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForDiagnostics({
       workspaceDir,
       config: ctx.cfg,
       agentId: defaultAgentId,
-      readOnlyState: true,
     });
     const analysis = analyzeBootstrapBudget({
       files: buildBootstrapInjectionStats({

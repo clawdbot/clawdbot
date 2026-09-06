@@ -41,6 +41,7 @@
       "@openclaw/ai/internal/retry-after": ["./packages/ai/src/internal/retry-after.ts"],
       "@openclaw/ai/internal/runtime": ["./packages/ai/src/internal/runtime.ts"],
       "@openclaw/ai/internal/shared": ["./packages/ai/src/internal/shared.ts"],
+      "@openclaw/ai/internal/tool-schema": ["./packages/ai/src/internal/tool-schema.ts"],
       "@openclaw/agent-core": ["./packages/agent-core/src/index.ts"],
       "@openclaw/agent-core/*": ["./packages/agent-core/src/*"],
       "@openclaw/llm-core": ["./packages/llm-core/src/index.ts"],

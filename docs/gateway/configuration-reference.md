@@ -218,8 +218,8 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
   skills: {
     allowBundled: ["gemini", "peekaboo"],
     load: {
-      extraDirs: ["~/Projects/agent-scripts/skills"],
-      allowSymlinkTargets: ["~/Projects/manager/skills"],
+      extraDirs: ["~/path/to/agent-scripts/skills"],
+      allowSymlinkTargets: ["~/path/to/skills"],
     },
     install: {
       preferBrew: true,
@@ -266,7 +266,7 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
     allow: ["voice-call"],
     deny: [],
     load: {
-      paths: ["~/Projects/oss/voice-call-plugin"],
+      paths: ["~/path/to/oss/voice-call-plugin"],
     },
     entries: {
       "voice-call": {

@@ -584,6 +584,17 @@ catalog, API-key auth, and dynamic model resolution.
     that discovery inside `catalog.run`, gated on usable auth, and keep
     `staticRun` network-free for offline catalog generation.
 
+    Official provider plugins that share credentials can use
+    `resolveFirstProviderCatalogAuth(ctx.resolveProviderApiKey, providerIds)` from
+    the private runtime `openclaw/plugin-sdk/provider-catalog-shared` subpath.
+    Keep provider precedence in the caller's ordered IDs. The helper stops at
+    the first result with an `apiKey` or `discoveryApiKey` and returns that whole
+    result, preserving its profile and auth mode. An unresolved SecretRef marker
+    takes precedence over another provider's live key; fields are never mixed
+    across accounts. It returns `undefined` when no provider has auth and
+    propagates lookup failures. Official plugin releases using this host export
+    must require a host version that provides it in their `compat.pluginApi`.
+
   </Step>
 
   <Step title="Add dynamic model resolution">
@@ -794,6 +805,15 @@ catalog, API-key auth, and dynamic model resolution.
         is not auto-discovered, because OpenClaw cannot resolve its usage credential.
       </Tab>
     </Tabs>
+
+    For custom `createStreamFn` transports that accumulate JSON tool arguments,
+    use `createToolArgumentPreviewSchedule()` from `openclaw/plugin-sdk/llm`.
+    Create one schedule per tool call and pass the accumulated raw string's
+    length to it before calling `parseStreamingJson`. The returned function
+    admits preview refreshes at geometric growth checkpoints, so intermediate
+    `arguments` snapshots can remain unchanged while raw fragments arrive.
+    Keep emitting every raw delta and validate the complete arguments at the
+    transport's terminal boundary, even when the last preview was not refreshed.
 
     <Accordion title="Common provider hooks">
       OpenClaw calls hooks in roughly this order for model/provider plugins.

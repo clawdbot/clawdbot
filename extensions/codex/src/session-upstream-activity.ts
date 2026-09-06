@@ -8,10 +8,8 @@ import type {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexTurn, CodexUserInput } from "./app-server/protocol.js";
 import { isCodexThreadReadMissingError } from "./app-server/rpc-error.js";
-import {
-  sessionBindingIdentity,
-  type CodexAppServerBindingStore,
-} from "./app-server/session-binding.js";
+import { sessionBindingIdentity } from "./app-server/session-binding-record.js";
+import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
 import type {
   CodexSessionCatalogControl,
   CodexSessionCatalogControlFactory,

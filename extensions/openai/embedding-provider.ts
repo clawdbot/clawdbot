@@ -21,7 +21,6 @@ export type OpenAiEmbeddingClient = {
 };
 
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
-export const DEFAULT_OPENAI_EMBEDDING_MODEL = OPENAI_DEFAULT_EMBEDDING_MODEL;
 const OPENAI_MAX_INPUT_TOKENS: Record<string, number> = {
   "text-embedding-3-small": 8192,
   "text-embedding-3-large": 8192,
@@ -31,7 +30,7 @@ const OPENAI_MAX_INPUT_TOKENS: Record<string, number> = {
 function normalizeOpenAiModel(model: string): string {
   const trimmed = model.trim();
   if (!trimmed) {
-    return DEFAULT_OPENAI_EMBEDDING_MODEL;
+    return OPENAI_DEFAULT_EMBEDDING_MODEL;
   }
   return trimmed.startsWith("openai/") ? trimmed.slice("openai/".length) : trimmed;
 }

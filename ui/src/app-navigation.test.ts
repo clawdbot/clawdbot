@@ -273,7 +273,7 @@ describe("subtitleForRoute", () => {
       devices: "Paired devices, pairing approvals, and exec bindings.",
       "cloud-workers": "Profiles and machine sizes for cloud sessions.",
       profile: "Your display name, avatar, and identity on this gateway.",
-      communications: "Messages and text-to-speech settings.",
+      communications: "Messages, text-to-speech, and meeting capture settings.",
       appearance: "Theme and UI settings.",
       lobsterdex: "Every lobster palette that has visited this browser.",
       automation: "Commands, hooks, automations, and plugins.",

@@ -8,6 +8,7 @@ import {
   callPersonalPublicationRpc,
   createPersonalPublicationFixture,
   personalPublicationAccount,
+  expectPersonalPublicationReplay,
 } from "./github-personal-publication.test-support.js";
 import {
   SESSION_ID,
@@ -57,6 +58,17 @@ describe("repository checkpoint GitHub publication", () => {
     expect(f.runtime.effects).toEqual(["push", "pull_request"]);
     expect(mocks.findWorktree).not.toHaveBeenCalled();
     expect(mocks.resolveRepository).not.toHaveBeenCalled();
+  });
+
+  it("replays only the original personal selection and content without new repository publication work", async () => {
+    const f = await repositoryFixture();
+    const person = await createPersonalPublicationFixture();
+    f.runtime.accountId = personalPublicationAccount.accountId;
+    await expectPersonalPublicationReplay(person, (requestId) => ({
+      receipt: readRepositoryGitHubPublication(requestId),
+      commandCount: mocks.runCommand.mock.calls.length,
+      effects: [...f.runtime.effects],
+    }));
   });
 
   it.each(["shared", "personal"] as const)(

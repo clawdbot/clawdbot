@@ -74,6 +74,12 @@ it.each([
   [["scripts/e2e/lib/mcp-code-mode-probe-server.ts"], ["mcp-code-mode-gateway"]],
   [["scripts/e2e/lib/mcp-code-mode/scenario.sh"], ["mcp-code-mode-gateway"]],
   [["scripts/e2e/update-channel-switch-docker.sh"], ["update-channel-switch"]],
+  [["scripts/e2e/fleet-cache-docker.sh"], ["fleet-cache"]],
+  [["scripts/e2e/lib/fleet-cache/assert-cell.mjs"], ["fleet-cache"]],
+  [["scripts/e2e/lib/fleet-cache/podman-control.sh"], ["fleet-cache"]],
+  [["scripts/e2e/lib/fleet-cache/prepare-podman-storage.mjs"], ["fleet-cache"]],
+  [["scripts\\e2e\\lib\\fleet-cache\\probe-podman-cell.mjs"], ["fleet-cache"]],
+  [["scripts/e2e/lib/fleet-cache-unrelated/probe.mjs"], []],
   [["scripts/e2e/lib/update-channel-switch/assertions.mjs"], ["update-channel-switch"]],
   [
     [
@@ -890,6 +896,17 @@ describe("CI changed Node test plan", () => {
       targets: [target],
       pretestBuildMode: "runtime",
     });
+  });
+
+  it("retains compact metadata for the ordinary tooling delivery-cache smoke", () => {
+    const target = "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts";
+    expect(createChangedNodeTestShards([target])).toBeNull();
+    expect(buildVitestRunPlans([target])).toEqual([
+      expect.objectContaining({
+        config: "test/vitest/vitest.tooling.config.ts",
+        includePatterns: [target],
+      }),
+    ]);
   });
 
   it("prebuilds private QA dist before the QA Lab extension fallback", () => {

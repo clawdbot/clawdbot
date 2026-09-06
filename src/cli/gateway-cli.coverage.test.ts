@@ -684,31 +684,23 @@ describe("gateway-cli coverage", () => {
     },
   );
 
-  it("registers gateway discover and prints json output", async () => {
-    discoverGatewayBeacons.mockClear();
-    discoverGatewayBeacons.mockResolvedValueOnce([
-      {
-        instanceName: "Studio (OpenClaw)",
+  it.each([
+    {
+      name: "prefers the resolved service address over TXT hints",
+      beacon: {
+        instanceName: "Studio gateway",
         displayName: "Studio",
         domain: "openclaw.internal.",
         host: "studio.openclaw.internal",
         port: 18789,
-        lanHost: "studio.local",
-        tailnetDns: "studio.tailnet.ts.net",
-        gatewayPort: 18789,
+        lanHost: "untrusted.example.test",
+        tailnetDns: "untrusted.tailnet.test",
+        gatewayPort: 12345,
         sshPort: 22,
-      },
-    ]);
-
-    await runGatewayCommand(["gateway", "discover", "--json"]);
-
-    expect(discoverGatewayBeacons).toHaveBeenCalledTimes(1);
-    const out = runtimeLogs.join("\n");
-    expect(out).toContain('"beacons"');
-    expect(out).toContain("ws://");
-  });
-
-  it.each([
+        txt: { gatewayPort: "12345" },
+      } satisfies DiscoveredBeacon,
+      wsUrl: "ws://studio.openclaw.internal:18789",
+    },
     {
       name: "uses the secure scheme advertised by a TLS gateway",
       beacon: {
@@ -736,7 +728,7 @@ describe("gateway-cli coverage", () => {
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({
         count: 1,
-        beacons: [expect.objectContaining({ wsUrl })],
+        beacons: [{ ...beacon, wsUrl }],
       }),
     );
   });

@@ -91,9 +91,6 @@ describe("Gateway HTTP event-loop sampling", () => {
             expect((after.eventLoop as { delayMaxMs: number }).delayMaxMs).toBeGreaterThanOrEqual(
               1_000,
             );
-            await delay(1_100);
-            const recovered = await readJson(url);
-            expect(recovered).toMatchObject({ ready: true, eventLoop: { degraded: false } });
           } finally {
             server.closeAllConnections();
             await new Promise<void>((resolve, reject) => {

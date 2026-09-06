@@ -293,7 +293,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
 
   private renderCompactDetails() {
     const statusBanner = this.updateRun ? null : this.statusBanner;
-    if (!statusBanner || isUpdateRunAttentionVisible(this.updateRun, this.updateRunAcknowledged)) {
+    if (!statusBanner) {
       return this.renderCard();
     }
     const campaign = this.updateSchedule?.campaign;

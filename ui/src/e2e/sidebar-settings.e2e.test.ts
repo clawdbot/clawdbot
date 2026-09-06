@@ -50,6 +50,98 @@ const MISSING_AUTH_RESPONSE = {
 };
 
 suite.define(() => {
+  it("defers hidden Inbox inventory and shows fresh cron attention on return", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await page.clock.setFixedTime(Date.now());
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "cron.list": FAILED_CRON_RESPONSE,
+        "models.authStatus": MISSING_AUTH_RESPONSE,
+      },
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      const badge = page.locator("openclaw-app-sidebar .sidebar-issues-button__count");
+      await expect.poll(() => badge.textContent()).toBe("2");
+      await page.locator("openclaw-app-sidebar .sidebar-issues-button").click();
+      await page.getByText("Failed settings transition", { exact: true }).waitFor();
+      await captureSidebarUiProof(suite, page, "inbox-before-hidden-events.png");
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await gateway.setMethodResponse("cron.list", {
+        ...FAILED_CRON_RESPONSE,
+        jobs: [{ ...FAILED_CRON_RESPONSE.jobs[0], name: "Failure while away" }],
+      });
+      for (let index = 0; index < 20; index++) {
+        await gateway.emitGatewayEvent("cron", { action: "finished", jobId: `hidden-${index}` });
+      }
+      for (const method of ["cron.list", "cron.status", "models.authStatus"]) {
+        expect(await gateway.getRequests(method)).toHaveLength(1);
+      }
+      await page.getByText("Failed settings transition", { exact: true }).waitFor();
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "visible",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+        window.dispatchEvent(new Event("focus"));
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await page.getByText("Failure while away", { exact: true }).waitFor();
+      expect(await badge.textContent()).toBe("2");
+      for (const method of ["cron.list", "cron.status"]) {
+        expect(await gateway.getRequests(method)).toHaveLength(2);
+      }
+      expect(await gateway.getRequests("models.authStatus")).toHaveLength(1);
+      await captureSidebarUiProof(suite, page, "inbox-after-hidden-events.png");
+
+      await gateway.deferNext("cron.list");
+      await gateway.emitGatewayEvent("cron", { action: "finished" });
+      await gateway.waitForRequest("cron.list", { after: 2 });
+      await page.getByRole("button", { name: "Dismiss Failure while away", exact: true }).click();
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      // The first event invalidating this pending inventory arrives while hidden.
+      await gateway.emitGatewayEvent("cron", { action: "finished" });
+      await gateway.resolveDeferred("cron.list", { ...FAILED_CRON_RESPONSE, jobs: [], total: 0 });
+      expect(await gateway.getRequests("cron.list")).toHaveLength(3);
+      await gateway.deferNext("cron.list");
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "visible",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await gateway.waitForRequest("cron.list", { after: 3 });
+      await gateway.resolveDeferred("cron.list", {
+        ...FAILED_CRON_RESPONSE,
+        jobs: [
+          FAILED_CRON_RESPONSE.jobs[0],
+          { ...FAILED_CRON_RESPONSE.jobs[0], id: "fresh-job", name: "Fresh visible warning" },
+        ],
+        total: 2,
+      });
+      await page.getByText("Fresh visible warning", { exact: true }).waitFor();
+      expect(await page.locator('[data-attention-kind="cronFailed"]').count()).toBe(1);
+      expect(await badge.textContent()).toBe("2");
+      expect(await gateway.getRequests("cron.list")).toHaveLength(4);
+      await captureSidebarUiProof(suite, page, "inbox-dismissal-preserved-on-return.png");
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("refreshes stale auth attention after returning while the first auth read is pending", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",

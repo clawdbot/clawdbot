@@ -420,8 +420,11 @@ openclaw claws remove incident-triage \
 ```
 
 The default removes eligible managed state and releases referenced state.
-Eligible Claw-owned schedules appear once as removal actions; other attached
-schedules remain blockers.
+Eligible Claw-owned schedules appear once as removal actions. The serving
+Gateway also identifies this agent's config-owned heartbeat and Skill Workshop
+monitors, including disabled monitors, as removal actions. Ordinary schedules,
+imported heartbeat tasks, uncorroborated monitors, and jobs in another scheduler store
+remain blockers.
 Modified files and resources with another current owner are retained or
 blocked. Cleanup choices are part of the plan digest; `--yes` never broadens
 them. Globally installed plugins are retained while this Claw's reference is
@@ -432,8 +435,21 @@ process-wide plugin.
 Directories containing another agent's registered database are retained, even
 when that database is closed. If removal reports that an agent database is
 still open, stop the command or restart the Gateway holding it before retrying.
-Removing scheduled jobs still requires a running Gateway. A database-lease
-refusal leaves the agent config, execution approvals, and creation history unchanged.
+Preview works offline. Persisted monitor rows remain blockers until the serving
+Gateway can verify their ownership. Actual removal requires a running Gateway
+with administrator access to the same config, state database, and scheduler
+store, even when no scheduled rows remain. The Gateway requests cancellation of consented scheduled work and waits
+for its running code to finish before local cleanup. Removing a job row or
+receiving its cancellation outcome does not establish that its code has stopped.
+After config removal, cleanup also waits for the Gateway to apply that change
+and remove the monitors. A database-lease refusal leaves the agent config,
+execution approvals, and creation history unchanged.
+
+If cancellation, drainage, or config convergence cannot finish, removal reports
+`partial` with `monitor_cleanup_failed` and keeps its deletion fence and cleanup
+record. Local files remain intact. Resolve the reported failure, preview again,
+and retry removal. The fence prevents new runs and agent recreation until cleanup
+finishes; restarting the Gateway does not discard an incomplete removal.
 
 If session cleanup or transcript archive export fails after the agent is removed
 from config, removal reports `partial` with `session_cleanup_failed` and retains

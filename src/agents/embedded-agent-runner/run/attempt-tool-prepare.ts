@@ -72,6 +72,8 @@ export function prepareEmbeddedAttemptToolBase(params: {
   toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor;
 }) {
   const { attempt } = params;
+  const requireExplicitMessageTarget =
+    attempt.requireExplicitMessageTarget ?? isSubagentSessionKey(attempt.sessionKey);
   const forceDirectMessageTool = messageToolOwnsVisibleReply(attempt);
   const toolRunContext = buildEmbeddedAttemptToolRunContext({
     ...attempt,
@@ -172,6 +174,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
   // Rebuild at each call: permission refresh observes the current attempt fields.
   const buildConversationContext = () => ({
     ...toolRunContext,
+    requireExplicitMessageTarget,
     config: toolSearchRuntimeConfig,
     sessionKey: params.setup.sandboxSessionKey,
     runSessionKey:
@@ -292,8 +295,6 @@ export function prepareEmbeddedAttemptToolBase(params: {
             computerContextEpoch,
             skillInstructionDeliveryCache,
             registerRunCleanup: (cleanup) => generationCleanups.push(cleanup),
-            requireExplicitMessageTarget:
-              attempt.requireExplicitMessageTarget ?? isSubagentSessionKey(attempt.sessionKey),
             inboundEventKind: attempt.currentInboundEventKind,
             disableMessageTool: attempt.disableMessageTool,
             forceMessageTool: attempt.forceMessageTool,
@@ -381,6 +382,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     cronCreatorToolAllowlistCaptureRef,
     effectiveToolsAllow,
     forceDirectMessageTool,
+    requireExplicitMessageTarget,
     inheritedToolAllowlist,
     localModelLeanEnabled,
     localModelLeanPreserveToolNames,

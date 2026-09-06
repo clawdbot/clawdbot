@@ -30,6 +30,7 @@ export function registerGenerationRecoveryTests(
       running: boolean;
       events: string[];
       stopAllowances: Array<string | undefined>;
+      writeJson: Mock;
     };
   },
 ) {
@@ -61,7 +62,6 @@ export function registerGenerationRecoveryTests(
           steps: [],
           durationMs: 0,
         },
-        channel: "stable",
         opts: { json: true, run },
         refreshServiceEnv: false,
         serviceUpdateVerdict: before.serviceUpdateVerdict,
@@ -70,7 +70,7 @@ export function registerGenerationRecoveryTests(
         requireRunningServiceAfterRestart: true,
         timeoutMs: 1000,
       }),
-    ).toBe(false);
+    ).toBe("failed");
     const record = getUpdateRun(run.runId, { env })!;
     expect(record.verification.serviceRunning).toBe(false);
     expect(renderUpdateRunReport({ ...record, status: "failed" }).headline).not.toContain(
@@ -149,7 +149,7 @@ export function registerGenerationRecoveryTests(
         );
         return {
           code: healthy ? 0 : 1,
-          stdout: "",
+          stdout: JSON.stringify(mocks.writeJson.mock.lastCall?.[0]),
           stderr: "",
           signal: null,
           killed: false,

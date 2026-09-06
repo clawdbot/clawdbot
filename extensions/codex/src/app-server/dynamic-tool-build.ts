@@ -163,6 +163,7 @@ type DynamicToolBuildParams = {
   onCodexAppServerEvent?: (event: CodexDynamicToolBuildEvent) => void;
   onPersistentWebSearchPolicyResolved?: (allowed: boolean) => void;
   onWebSearchPolicyResolved?: (allowed: boolean) => void;
+  onMessageToolTargetResolved?: (requireExplicitMessageTarget: boolean) => void;
   computerContextEpoch?: {
     value: number;
     frameToolCallId?: string;
@@ -398,6 +399,7 @@ export async function buildDynamicTools(
     cronCreatorAuthorityUnavailableReason: input.cronCreatorAuthorityUnavailableReason,
   };
 
+  input.onMessageToolTargetResolved?.(options.requireExplicitMessageTarget === true);
   const buildOpenClawCodingTools = () => {
     const bindingOptions = { cwd: input.effectiveCwd ?? input.effectiveWorkspace };
     if (injectedOpenClawCodingToolsFactory) {

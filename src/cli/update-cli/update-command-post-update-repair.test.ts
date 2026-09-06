@@ -221,9 +221,9 @@ describe("post-activation repair after rollback refusal or failure", () => {
           });
         }
         params.onVerificationFailure?.("readyz-unhealthy");
-        return false;
+        return "restart-health-failed";
       }
-      return mocks.healthy;
+      return mocks.healthy ? "ok" : "restart-health-failed";
     });
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
@@ -343,7 +343,7 @@ describe("post-activation repair after rollback refusal or failure", () => {
       });
       mocks.restartCommand.mockImplementationOnce(async () => {
         mocks.healthy = repaired;
-        return repaired;
+        return "accepted";
       });
       const validation = await repair.validate(signal);
       const attempt = {
@@ -503,12 +503,12 @@ describe("post-activation repair after rollback refusal or failure", () => {
           if (!mocks.healthy) {
             restart.onVerificationFailure?.("readyz-unhealthy");
           }
-          return mocks.healthy;
+          return mocks.healthy ? "ok" : "restart-health-failed";
         });
         mocks.restartCommand.mockImplementation(async () => {
           await startTask();
           mocks.healthy = true;
-          return true;
+          return "accepted";
         });
         mocks.repair.mockImplementation(async (repair) => {
           const signal = new AbortController().signal;

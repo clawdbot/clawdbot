@@ -248,7 +248,7 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
       website: Type.Optional(SetupInferenceHttpsUrl),
     }),
   ),
-  /** Provider-owned browser and device-code login methods. */
+  /** Provider-owned auth, managed-install, and custom-endpoint setup methods. */
   authOptions: Type.Optional(
     Type.Array(
       closedObject({
@@ -260,7 +260,12 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
         groupLabel: Type.Optional(Type.String()),
         icon: Type.Optional(SetupInferenceHttpsUrl),
         website: Type.Optional(SetupInferenceHttpsUrl),
-        kind: Type.Union([Type.Literal("oauth"), Type.Literal("device-code")]),
+        kind: Type.Union([
+          Type.Literal("oauth"),
+          Type.Literal("device-code"),
+          Type.Literal("install"),
+          Type.Literal("custom"),
+        ]),
         featured: Type.Boolean(),
       }),
     ),
@@ -293,6 +298,18 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
       }),
     ),
   ),
+  /** Native provider conversation catalogs available on this Gateway host. */
+  nativeSessionCatalogs: Type.Optional(
+    Type.Array(
+      closedObject({
+        pluginId: NonEmptyString,
+        label: NonEmptyString,
+        detail: Type.Optional(Type.String()),
+      }),
+    ),
+  ),
+  /** Fresh setup needs an explicit native-conversation catalog choice. */
+  nativeSessionCatalogPreferenceRequired: Type.Optional(Type.Boolean()),
   workspace: NonEmptyString,
   codexAppServerDetected: Type.Optional(Type.Boolean()),
   configuredModel: Type.Optional(Type.String()),
@@ -338,6 +355,8 @@ export const SystemAgentSetupActivateParamsSchema = closedObject({
   /** Manual step only: the pasted API key or token; masked by clients, never echoed. */
   apiKey: Type.Optional(Type.String()),
   workspace: Type.Optional(Type.String()),
+  /** Fresh-install opt-in for native provider conversation discovery. */
+  nativeSessionCatalogsEnabled: Type.Optional(Type.Boolean()),
 });
 
 /** Starts interactive activation without moving artifact consent into the client. */
@@ -372,6 +391,8 @@ export const SystemAgentSetupAuthStartParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   authChoice: NonEmptyString,
   workspace: Type.Optional(Type.String()),
+  /** Fresh-install opt-in for native provider conversation discovery. */
+  nativeSessionCatalogsEnabled: Type.Optional(Type.Boolean()),
 });
 
 export const SystemAgentSetupAuthStartResultSchema = WizardStartResultSchema;

@@ -629,6 +629,7 @@ are Gateway settings and remain available in every browser.
 
   </Accordion>
   <Accordion title="Automations panel notes">
+    - Scheduler status, automation lists, and run history pause background refreshes while the browser tab is hidden and catch up when you return. Your current filters and unsaved draft stay in place; saves and runs already submitted continue.
     - Selecting a row opens a full-page detail view with an Active/Paused switch and Run now in the header (run-if-due, clone, and remove in its menu); the Settings tab edits the automation inline (prompt, details, frequency, advanced overrides) and the Run history tab shows that automation's runs.
     - Cloning an agent task retains its stored tool allowlist, model fallback list, lightweight-context setting, and external-content setting, including empty lists and explicit `false` values. Fields you change in the copy's form take precedence. The new task is authorized by the current operator; captured execution grants are not copied.
     - Both Run history views show a recorded delivery-suppression reason alongside the delivery status when available. Intentional suppression remains separate from delivery errors; the history does not infer a reason from a successful run.
@@ -747,26 +748,96 @@ The audit ledger is best-effort operational evidence, not a lossless compliance 
 
 ## Meetings page
 
-Open **Meetings** from the sidebar's Pages menu to read durable meeting notes
-across the Gateway. The page lists up to 200 recent captures, grouped by local
-day with newest meetings first. Rows show the title, provider, start time,
-duration or **In progress** state, participants, utterance count, and a short
-overview when notes are available. Captures with zero utterances remain in the
-list with muted styling and **No speech captured** instead of an overview.
-Use **Refresh** to reload the list.
+Open the sidebar's pencil menu (**Edit pinned items**) and choose **Meetings**
+to read saved meeting notes at `/meetings`. Choose **Edit pinned items** inside
+that menu to pin Meetings; it is not a default pinned item.
+Meeting transcripts are separate from agent chat-history search in **Sessions**.
 
-Select a meeting to read its notes. When recorded, **Notes: model** or
-**Notes: heuristic** identifies the summary source. The canonical notes include
-the speaker-labeled **Transcript** at the end, after decisions, action items,
-and risks. A meeting can appear before it has notes, including while capture
-is active.
+Each page contains up to 50 meetings, grouped by local day with newest first.
+Rows show participant previews, duration, an overview when available, and distinct
+**In progress** and **No speech captured** states. Search by title or session/source ID, then
+select a meeting. Existing `/meetings?selector=...` links open its saved summary. Meeting URLs are
+not searched. Open **Filters** for
+provider, account, agent, and date controls; the disclosure opens automatically
+when those filters are active. Provider, account, and agent IDs match
+exactly. Date filters use UTC session start times, with an inclusive lower bound
+and exclusive upper bound. **Next page** continues the ordered results;
+**First page**, a filter change, or **Refresh** starts a new pagination pass.
+The reader opens **Summary** first. Select **Transcript** for timestamped speaker
+text alongside the list on desktop or in a single column on mobile. Its URL
+preserves the selected meeting and tab.
 
-Meetings reads the same shared SQLite records as `openclaw transcripts`, through
-the read-only `transcripts.list` and `transcripts.get` RPCs. Both require
-`operator.read` within one trusted Gateway domain; the page is not restricted to
-the selected agent's captures. It does not start capture or regenerate notes.
+**Search within this transcript** searches the full stored transcript in bounded
+server pages. **Load more** continues through utterances or matches; only the
+latest five loaded pages stay in the browser's reading window. **Read from
+beginning** returns to the first page. **Summary** renders the stored Markdown
+notes, including their speaker-labeled transcript, and labels model-generated or
+heuristic provenance when available. Opening this tab does not run a summary job.
+Missing summaries and empty transcripts have distinct empty states.
+Saved summaries load independently of speech pages. If a transcript page exceeds
+its transfer limit, you can still read the saved notes and download an export
+within the export limit below.
+
+**Download Markdown** downloads the transcript and any stored summary;
+**Download JSONL** downloads the reader's public utterance projection, including
+full text, sequence, utterance and speaker identity, source timestamps, and
+finality when available. Provider-private metadata and local filesystem paths
+are excluded; local CLI exports retain their existing raw format. Browser exports are limited to
+4 MiB and fail visibly rather than downloading a partial file. For larger exports,
+use the [Transcripts CLI](/cli/transcripts). Archive access requires `operator.read`
+or its write/admin implication and a profile allowed to read the shared archive;
+an agent filter does not bypass that restriction.
+
+If a library read or download reports denied access, the browser clears its
+cached library and reader pages. **Retry** keeps those notes hidden until a fresh
+authorized response arrives and starts the reader from its first page. Temporary
+network errors alone do not remove already loaded reader pages. Files already
+downloaded remain yours.
+
+Configure capture in **Settings → Communications → Meeting capture**, which also
+links back to the library. Administrators can change the existing
+`transcripts.enabled` setting and add, edit, or remove `transcripts.autoStart`
+sources. Edits preserve account and source locators, titles, and custom session
+IDs through the shared config draft. Form changes auto-save through the standard
+Settings coordinator, including validation and conflict handling. If a restart
+interrupts a pending draft, the footer shows **Autosave paused after reconnect**;
+review the retained draft and select **Save** to submit it on the new connection.
+**Messages** remains the default Communications section. The full transcript schema editor
+is available under **Meeting capture → Advanced settings**.
+
+Title-only edits keep the current capture running and apply the new title to
+future captures; current and saved notes are not renamed. Continuous capture
+supports an optional custom session ID. Leave it empty for generated IDs and
+avoid reusing IDs from the same day, which can collide with existing archive
+entries. Occupancy mode chooses session IDs automatically and ignores the custom
+ID field. The editor disables that field in occupancy mode while preserving its
+saved value. Health distinguishes startup retries from capture attempts that
+cannot safely retry. See [capture configuration](/cli/transcripts#configuration).
+
+Enabled plugin manifests with explicit auto-start setup metadata are offered for
+new sources even before runtime loads. An observed runtime `canStart: false`
+prevents new setup. The manifest declares which
+locator fields are supported and required. Existing entries remain editable
+without losing fields when metadata is unavailable. Providers that only attach
+to an already-active meeting bot are not offered as boot auto-start sources.
+
+Capture is opt-in for voice channels: joining voice does not record, and recording
+participants does not grant command or agent permissions. **Enabled** permits
+capture; **Armed** reports a registered subscription, not confirmed recording.
+**Not active** and **Unknown** remain distinct. Configured URL sources remain
+unknown when the retained sanitized URL cannot prove the original invitation
+identity. Saved utterance counts come from
+durable rows. The latest saved transcript is the most recently updated session
+containing utterances, not an exact last-ingestion ordering. Source speech times
+are labeled explicitly; ingestion timestamps are not recorded. Continuous sources may span several room occupations. With occupancy mode
+enabled, capture saves notes when the room empties and may continue a recently
+stopped capture from the same source and agent within ten minutes.
+Speech-to-text may use your configured provider and incur provider usage. The UI
+does not play raw audio, generate summaries on demand, or delete transcripts.
+
+Meetings reads the same shared SQLite records as `openclaw transcripts`.
 Discord voice and the Google Meet, Microsoft Teams, and Zoom meeting plugins
-populate this store. See [Transcripts CLI](/cli/transcripts) for capture setup,
+populate this store. See the [Transcripts CLI](/cli/transcripts) for capture setup,
 agent reads, and exports.
 
 ## Operator terminal
@@ -1305,6 +1376,8 @@ For bundled builds, the Gateway retains manifest-verified assets so already-open
 Bundled public assets (themes, fonts, icons, and artwork) use `?v=<build-id>` URLs with a one-year immutable HTTP cache. The ID includes a digest of the public files, so rebuilding changed files at the same commit also changes their URLs. The Gateway snapshots this identity at startup; restart it after rebuilding an in-place installation. Unversioned requests, stale IDs, documents, `sw.js`, and custom `gateway.controlUi.root` installs keep `Cache-Control: no-cache`. The service worker keeps its network-first policy for public assets, allowing the browser's HTTP cache to satisfy matching versioned requests.
 
 Non-index static assets use `Last-Modified` for conditional `GET` and `HEAD` requests. `If-None-Match` takes precedence over `If-Modified-Since`: `*` matches an existing asset, while other values receive the normal `200` response because static assets do not emit ETags. Date-only revalidation still returns `304` for unchanged assets. If no available content encoding is acceptable, the Gateway returns `406` before evaluating either condition.
+
+All three HTTP-date formats are interpreted as UTC. Invalid or repeated `If-Modified-Since` fields are ignored, so they cannot suppress the current asset bytes. A leap-second validator remains earlier than the following second.
 
 Static asset URLs support percent-encoded filenames. Contained symlinks retain the requested asset's MIME type, and a symlinked `index.html` receives the same base-path and document preparation as other entry routes.
 
