@@ -351,9 +351,10 @@ async function handleDesktopAct(
                 : 1;
           const modifier = normalizeModifiers(desktopParams.modifiers, platform);
           if (modifier.length > 0) {
-            // The typed ClickInput has no modifier field (SDK 0.22.0). The raw
+            // The typed ClickInput has no modifier field (SDK 0.22.2). The raw
             // `click` tool accepts desktop target + modifier and, on X11, holds
-            // the modifier via XTest for the duration of the click. Unsupported
+            // the modifier via XTest for the duration of the click (confirmed
+            // with a real X11 event capture). Unsupported
             // environments (native Wayland) return a structured refusal.
             const point = scalePoint(frame, desktopParams.x, desktopParams.y, desktopParams.action);
             assertToolSuccess(
@@ -387,6 +388,12 @@ async function handleDesktopAct(
         case "left_click_drag": {
           const from = scalePoint(frame, desktopParams.fromX, desktopParams.fromY, "drag start");
           const to = scalePoint(frame, desktopParams.x, desktopParams.y, "drag end");
+          // DragInput.modifier (SDK 0.22.2) is forwarded here per its typed
+          // contract, but on Linux X11 a real X11 event capture showed the
+          // held modifier does not reach the target during the drag (unlike
+          // click above, which does). Treat this as a driver-side gap, not a
+          // regression: the request is still accepted and an unmodified drag
+          // is unaffected either way.
           const modifier = normalizeModifiers(desktopParams.modifiers, platform);
           assertToolSuccess(
             await driver.drag(
