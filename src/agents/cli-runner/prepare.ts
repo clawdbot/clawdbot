@@ -1146,11 +1146,6 @@ export async function prepareCliRunContext(
           modelId,
         })
       : undefined;
-  // Callable authoring authority stays host-owned; only proposal metadata enters the cloned grant context.
-  const skillWorkshop =
-    mcpContextBase?.skillWorkshop || skillLibraryAuthoring
-      ? { ...mcpContextBase?.skillWorkshop, libraryAuthoring: skillLibraryAuthoring }
-      : undefined;
   const mcpToolAuthAgentDir = mcpContextBase
     ? resolveRuntimeAuthProfileAgentDir(agentDir)
     : undefined;
@@ -1177,8 +1172,8 @@ export async function prepareCliRunContext(
           await resolveProjectedTools({
             cfg: runConfig,
             signal: params.abortSignal,
-            ...mcpProjectionContext,
-            ...(skillWorkshop ? { skillWorkshop } : {}),
+            context: mcpProjectionContext,
+            ...(skillLibraryAuthoring ? { skillLibraryAuthoring } : {}),
             ...(mcpToolAuth ? { authProfileStore: mcpToolAuth.store } : {}),
             ...(mcpToolAuth?.agentDir ? { authProfileStoreAgentDir: mcpToolAuth.agentDir } : {}),
           })

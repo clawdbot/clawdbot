@@ -249,6 +249,11 @@ because OpenClaw cannot safely mint message-action authority without the
 original channel-ingress claim. The terminal notice directs the user to start a
 replacement with `/new` or `/reset`.
 
+A recovered Control UI turn can finish [pinned dashboard widgets](/tools/show-widget)
+using the interrupted turn's exact session and recovery claim. A browser connection
+does not survive the restart: recovery retains dashboard authoring, while inline
+and device presentation still require their normal client capabilities.
+
 Before resuming, the gateway classifies the transcript tail to choose the tool
 restriction for the continuation. An aborted turn is the interruption itself,
 so it resumes on a best-effort basis whatever abort detail the provider or worker recorded with it:
