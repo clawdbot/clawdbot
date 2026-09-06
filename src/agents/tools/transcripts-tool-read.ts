@@ -1,14 +1,14 @@
 import type { TranscriptSessionSummary } from "../../../packages/gateway-protocol/src/schema/transcripts.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
-import { projectTranscriptSession, readTranscriptNotes } from "../../transcripts/read.js";
-import type { TranscriptsStore } from "../../transcripts/store.js";
-import { truncateUtf16Safe } from "../../utils.js";
 import {
   isTranscriptSessionActive,
   resolveSourceProvider,
-  toolText,
   type TranscriptsRuntimeContext,
-} from "./transcripts-tool-runtime.js";
+} from "../../transcripts/capture.js";
+import { projectTranscriptSession, readTranscriptNotes } from "../../transcripts/read.js";
+import type { TranscriptsStore } from "../../transcripts/store.js";
+import { truncateUtf16Safe } from "../../utils.js";
+import { toolText } from "./transcripts-tool-result.js";
 import {
   canAccessTranscriptSession,
   resolveTranscriptToolSession,

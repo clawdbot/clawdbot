@@ -776,7 +776,7 @@ policy changes apply within the existing pairing approval.
       // dangerouslyAllowHostHeaderOriginFallback: false, // dangerous Host-header origin fallback mode
     },
     cliAgents: {
-      enabled: false, // Labs: show create-capable CLI session targets in the model picker
+      enabled: true, // show create-capable CLI session targets in the model picker
     },
     terminal: {
       enabled: false,
@@ -884,7 +884,7 @@ policy changes apply within the existing pairing approval.
 - Tool activity descriptions appear automatically when supplied by the acting agent; viewing tool calls does not request utility-model completions. The former `controlUi.toolTitles` setting is retired. Run `openclaw doctor --fix` to remove it from existing configs.
 - `controlUi.automaticallyFetchFavicons`: link favicons in Control UI chat. Default: `true`. The authenticated browser asks its same-origin Gateway for each hostname. The Gateway requests only `https://<hostname>/favicon.ico`, rejects IP literals and private/internal destinations, pins public DNS results, revalidates every redirect under the same strict SSRF policy, limits redirects/time/bytes/concurrency, validates the image, and returns a private-cacheable image blob. OpenClaw does not use Google or another favicon service for this flow. This discloses linked hostnames and the Gateway's network address to those destination sites. Set `false` to prevent the browser from requesting favicon routes and the Gateway from contacting link destinations.
 - `controlUi.dangerouslyAllowHostHeaderOriginFallback`: dangerous mode that enables Host-header origin fallback for deployments that intentionally rely on Host-header origin policy.
-- `cliAgents.enabled`: opt in to the experimental **CLI agents** group in the Control UI new-session model picker. Default: `false`. The group appears only when the Gateway advertises `sessions.catalog.list`, and it includes only catalog providers that support creating sessions. Selecting one opens the same catalog-target new-session flow used by the sidebar catalog action.
+- `cliAgents.enabled`: show the experimental **CLI agents** group in the Control UI new-session model picker. Default: `true`; set `false` to disable CLI agents and native CLI session creation. The group appears only when the Gateway advertises `sessions.catalog.list`, and it includes only catalog providers that support creating sessions. Selecting one opens the same catalog-target new-session flow used by the sidebar catalog action.
 
   Catalog providers can also advertise terminal-based session creation. The method is available only when Labs `cliAgents.enabled` is on, the Gateway terminal is available, and the selected provider exposes the capability. Callers supply `cwd`; create a fresh worktree first with `worktrees.create` when needed, because terminal start does not provision one.
 

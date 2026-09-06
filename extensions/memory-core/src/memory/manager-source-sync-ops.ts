@@ -8,7 +8,10 @@ import {
 import {
   MEMORY_INDEX_FTS_TABLE,
   runWithConcurrency,
+  type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { runSqliteImmediateTransaction } from "openclaw/plugin-sdk/sqlite-runtime";
+import { MemoryIndexRevisionConflictError } from "./manager-db.js";
 import { MemoryManagerSessionSyncOps } from "./manager-session-sync-ops.js";
 import {
   isMemorySessionIndexable,
@@ -18,6 +21,7 @@ import {
   loadMemorySourceFileState,
   resolveMemorySourceFileEntries,
   resolveMemorySourceExistingHash,
+  type MemorySourceFileStateRow,
 } from "./manager-source-state.js";
 import type {
   MemoryIndexEntry,
@@ -27,15 +31,15 @@ import type {
 } from "./manager-sync-base.js";
 
 const FTS_TABLE = MEMORY_INDEX_FTS_TABLE;
-const SESSION_SYNC_YIELD_EVERY = 10;
+const SOURCE_SYNC_YIELD_EVERY = 10;
 const SOURCE_WIDE_SESSION_INDEX_FLUSH_FILES = 128;
 const log = createSubsystemLogger("memory");
 
-function createSessionSyncYield(total: number): () => Promise<void> {
+function createSourceSyncYield(total: number): () => Promise<void> {
   let completed = 0;
   return async () => {
     completed += 1;
-    if (completed < total && completed % SESSION_SYNC_YIELD_EVERY === 0) {
+    if (completed < total && completed % SOURCE_SYNC_YIELD_EVERY === 0) {
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
@@ -44,21 +48,66 @@ function createSessionSyncYield(total: number): () => Promise<void> {
 }
 
 export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyncOps {
+  protected clearIndexedFileData(pathname: string, source: MemorySource): void {
+    this.deleteVectorRowsForSource(pathname, source);
+    if (this.fts.enabled && this.fts.available) {
+      try {
+        // Lexical search is model-agnostic; remove every model for this source.
+        this.db
+          .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
+          .run(pathname, source);
+      } catch {}
+    }
+    this.db
+      .prepare("DELETE FROM memory_index_chunks WHERE path = ? AND source = ?")
+      .run(pathname, source);
+  }
+
+  protected async deleteIndexedFile(
+    pathname: string,
+    source: MemorySource,
+    expectedHash = resolveMemorySourceExistingHash({ db: this.db, path: pathname, source }),
+  ): Promise<void> {
+    await runSqliteImmediateTransaction(this.db, async () => () => {
+      if (
+        resolveMemorySourceExistingHash({ db: this.db, path: pathname, source }) !== expectedHash
+      ) {
+        return;
+      }
+      this.clearIndexedFileData(pathname, source);
+      this.db
+        .prepare("DELETE FROM memory_index_sources WHERE path = ? AND source = ?")
+        .run(pathname, source);
+    });
+  }
+
+  private async deleteStaleSourceFiles(
+    source: MemorySource,
+    rows: MemorySourceFileStateRow[],
+    activePaths: Set<string> | null,
+  ): Promise<void> {
+    if (activePaths === null) {
+      return;
+    }
+    const yieldAfterRow = createSourceSyncYield(rows.length);
+    for (const row of rows) {
+      try {
+        if (!activePaths.has(row.path)) {
+          await this.deleteIndexedFile(row.path, source, row.hash);
+        }
+      } finally {
+        await yieldAfterRow();
+      }
+    }
+  }
+
   protected override async syncMemoryFiles(params: {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
     deferIndex?: boolean;
   }): Promise<MemorySourceSyncPlan> {
-    const deleteFileByPathAndSource = this.db.prepare(
-      `DELETE FROM memory_index_sources WHERE path = ? AND source = ?`,
-    );
-    const deleteChunksByPathAndSource = this.db.prepare(
-      `DELETE FROM memory_index_chunks WHERE path = ? AND source = ?`,
-    );
-    const deleteFtsRowsByPathAndSource =
-      this.fts.enabled && this.fts.available
-        ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
-        : null;
+    // Consume this pass's dirtiness before awaits so later edits remain queued.
+    this.clearMemoryRetryState();
 
     const fileEntries = await resolveMemorySourceFileEntries({
       workspaceDir: this.workspaceDir,
@@ -86,21 +135,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       });
     }
 
-    const deleteStaleRows = async () => {
-      for (const stale of existingRows) {
-        if (activePaths.has(stale.path)) {
-          continue;
-        }
-        deleteFileByPathAndSource.run(stale.path, "memory");
-        this.deleteVectorRowsForSource(stale.path, "memory");
-        deleteChunksByPathAndSource.run(stale.path, "memory");
-        if (deleteFtsRowsByPathAndSource) {
-          try {
-            deleteFtsRowsByPathAndSource.run(stale.path, "memory");
-          } catch {}
-        }
-      }
-    };
+    const deleteStaleRows = () => this.deleteStaleSourceFiles("memory", existingRows, activePaths);
 
     if (this.batch.enabled) {
       const dirtyEntries: MemoryIndexEntry[] = [];
@@ -143,40 +178,11 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
     deferIndex?: boolean;
     prefixIndexItems?: MemoryIndexWorkItem[];
   }): Promise<MemorySourceSyncPlan> {
-    const deleteFileByPathAndSource = this.db.prepare(
-      `DELETE FROM memory_index_sources WHERE path = ? AND source = ?`,
-    );
-    const deleteChunksByPathAndSource = this.db.prepare(
-      `DELETE FROM memory_index_chunks WHERE path = ? AND source = ?`,
-    );
     const updateUnchangedSessionSourceMetadata = this.db.prepare(
       `UPDATE memory_index_sources
        SET mtime = ?, size = ?
        WHERE path = ? AND source = 'sessions' AND hash = ?`,
     );
-    const refreshUnchangedSessionSourceMetadata = (entry: MemoryIndexEntry): boolean => {
-      // Hash equality preserves chunks and embeddings; only converge the source
-      // fingerprint so restored sessions do not repeat catch-up on every startup.
-      return (
-        updateUnchangedSessionSourceMetadata.run(entry.mtimeMs, entry.size, entry.path, entry.hash)
-          .changes === 1
-      );
-    };
-    const canSkipUnchangedSessionEntry = (
-      entry: MemoryIndexEntry,
-      absPath: string,
-      existingHash: string | undefined,
-    ): boolean => {
-      if (params.needsFullReindex || existingHash !== entry.hash) {
-        return false;
-      }
-      return !this.sessionsDirtyFiles.has(absPath) || refreshUnchangedSessionSourceMetadata(entry);
-    };
-    const deleteFtsRowsByPathAndSource =
-      this.fts.enabled && this.fts.available
-        ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
-        : null;
-
     const corpusEntries = params.corpusEntries ?? (await this.listSessionCorpusEntries());
     const targetArchiveFiles = params.needsFullReindex
       ? null
@@ -224,36 +230,10 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       });
     }
 
-    const yieldAfterSessionFile = createSessionSyncYield(files.length);
-    const deleteIndexedSessionPath = (memoryPath: string) => {
-      deleteFileByPathAndSource.run(memoryPath, "sessions");
-      this.deleteVectorRowsForSource(memoryPath, "sessions");
-      deleteChunksByPathAndSource.run(memoryPath, "sessions");
-      if (deleteFtsRowsByPathAndSource) {
-        try {
-          deleteFtsRowsByPathAndSource.run(memoryPath, "sessions");
-        } catch {}
-      }
-    };
-    const deleteStaleRows = async () => {
-      if (activePaths === null) {
-        return;
-      }
-
-      const staleRows = existingRows ?? [];
-      const yieldAfterStaleSessionRow = createSessionSyncYield(staleRows.length);
-      for (const stale of staleRows) {
-        try {
-          if (activePaths.has(stale.path)) {
-            continue;
-          }
-          deleteIndexedSessionPath(stale.path);
-        } finally {
-          await yieldAfterStaleSessionRow();
-        }
-      }
-    };
-    const deleteTargetArchiveStaleLiveRows = () => {
+    const yieldAfterSessionFile = createSourceSyncYield(files.length);
+    const deleteStaleRows = () =>
+      this.deleteStaleSourceFiles("sessions", existingRows ?? [], activePaths);
+    const deleteTargetArchiveStaleLiveRows = async () => {
       if (!targetArchiveFiles) {
         return;
       }
@@ -262,26 +242,32 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
           .filter((entry) => entry.artifactKind === "active-session")
           .map((entry) => this.sessionPathForCorpusEntry(entry)),
       );
-      const staleLivePaths = Array.from(targetArchiveFiles).flatMap((file) => {
-        const { agentId, sessionId } = corpusEntryForPath(file);
-        return [
-          sessionPathForSessionIdentity(agentId, sessionId),
-          this.legacyExtensionlessSessionPathForIdentity(agentId, sessionId),
-        ];
-      });
+      const staleLivePaths = Array.from(targetArchiveFiles)
+        .flatMap((file) => {
+          const { agentId, sessionId } = corpusEntryForPath(file);
+          return [
+            sessionPathForSessionIdentity(agentId, sessionId),
+            this.legacyExtensionlessSessionPathForIdentity(agentId, sessionId),
+          ];
+        })
+        .filter((pathname) => !activeCorpusPaths.has(pathname));
       // Resolve membership after indexing, in one snapshot regardless of target count.
-      const existingSessionPaths = new Set(
+      const existingSessionHashes = new Map(
         loadMemorySourceFileState({
           db: this.db,
           source: "sessions",
           paths: staleLivePaths,
-        }).map((row) => row.path),
+        }).map((row) => [row.path, row.hash]),
       );
       for (const staleLivePath of staleLivePaths) {
-        if (activeCorpusPaths.has(staleLivePath) || !existingSessionPaths.has(staleLivePath)) {
+        if (!existingSessionHashes.has(staleLivePath)) {
           continue;
         }
-        deleteIndexedSessionPath(staleLivePath);
+        await this.deleteIndexedFile(
+          staleLivePath,
+          "sessions",
+          existingSessionHashes.get(staleLivePath),
+        );
       }
     };
     const resolveSessionIndexEntry = async (absPath: string): Promise<MemoryIndexEntry | null> => {
@@ -300,7 +286,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       if (!isMemorySessionIndexable(entry)) {
         // Archived runs may reveal their internal origin only while parsing.
         // Remove earlier index artifacts before excluding that transcript.
-        deleteIndexedSessionPath(entry.path);
+        await this.deleteIndexedFile(entry.path, "sessions");
         this.advanceSyncProgress(params.progress);
         return null;
       }
@@ -310,7 +296,25 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         path: entry.path,
         existingHashes,
       });
-      if (canSkipUnchangedSessionEntry(entry, absPath, existingHash)) {
+      if (!params.needsFullReindex && existingHash === entry.hash) {
+        // Converge restored source fingerprints without replacing unchanged chunks.
+        if (
+          this.sessionsDirtyFiles.has(absPath) &&
+          !(await runSqliteImmediateTransaction(
+            this.db,
+            async () => () =>
+              updateUnchangedSessionSourceMetadata.run(
+                entry.mtimeMs,
+                entry.size,
+                entry.path,
+                entry.hash,
+              ).changes === 1,
+          ))
+        ) {
+          throw new MemoryIndexRevisionConflictError(
+            `Memory session source ${entry.path} changed during metadata refresh; retry incremental sync.`,
+          );
+        }
         this.advanceSyncProgress(params.progress);
         return null;
       }
@@ -360,7 +364,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       }
 
       await flushPendingIndexItems();
-      deleteTargetArchiveStaleLiveRows();
+      await deleteTargetArchiveStaleLiveRows();
       await deleteStaleRows();
       return this.emptySourceSyncPlan();
     }
@@ -382,7 +386,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
     });
     await runWithConcurrency(tasks, this.getIndexConcurrency());
 
-    deleteTargetArchiveStaleLiveRows();
+    await deleteTargetArchiveStaleLiveRows();
     await deleteStaleRows();
     return this.emptySourceSyncPlan();
   }

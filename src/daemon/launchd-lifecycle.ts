@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { formatPortDiagnostics } from "../infra/ports-format.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
-import { isCurrentProcessLaunchdServiceLabel } from "./launchd-current-service.js";
+import { isCurrentProcessInsideLaunchdService } from "./launchd-current-service.js";
 import {
   execLaunchctl,
   formatLaunchctlResultDetail,
@@ -253,7 +253,7 @@ export async function restartLaunchAgent({
   const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
   await assertNoSystemLaunchDaemonOwnership(label);
 
-  const detached = isCurrentProcessLaunchdServiceLabel(label);
+  const detached = await isCurrentProcessInsideLaunchdService(label);
   if (!detached) {
     const { port: cleanupPort, probeHosts } = await resolveLaunchAgentGatewayContext(serviceEnv);
     if (cleanupPort !== null) {

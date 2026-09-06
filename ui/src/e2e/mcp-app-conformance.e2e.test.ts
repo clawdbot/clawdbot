@@ -19,6 +19,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../src/test-utils/openclaw-test-state.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import {
   appHtml,
@@ -47,12 +48,7 @@ const { executablePath: chromiumExecutablePath } = inject("controlUiE2eChromium"
 const authValue = "test";
 const sessionKey = "agent:main:mcp-app-conformance";
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.resolve(
-  process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim() || ".artifacts/control-ui-e2e",
-  "mcp-app-request-lifetime",
-);
-const proofOptions = { proofDir, captureUiProof };
-const recordHost = recordMcpAppHost.bind(undefined, proofOptions);
+let proofDir: string;
 
 let state: OpenClawTestState | undefined;
 let gatewayStartup: ReturnType<typeof startGatewayServer> | undefined;
@@ -78,10 +74,12 @@ async function settleCleanup(step: string, cleanup: () => Promise<unknown>) {
   }
 }
 async function recordCleanup() {
-  await fs.writeFile(
-    path.join(proofDir, "cleanup.json"),
-    JSON.stringify({ failures, terminalAtMs: Date.now() }, null, 2),
-  );
+  if (proofDir) {
+    await fs.writeFile(
+      path.join(proofDir, "cleanup.json"),
+      JSON.stringify({ failures, terminalAtMs: Date.now() }, null, 2),
+    );
+  }
   expect(failures).toEqual([]);
 }
 
@@ -95,9 +93,8 @@ const suite = createControlUiE2eSuite({
   resources: {
     retainedState: () => state?.root,
     run: async (signal) => {
-      // Both tests share this artifact owner; never clear between their recordings.
-      await fs.rm(proofDir, { recursive: true, force: true });
-      await fs.mkdir(proofDir, { recursive: true });
+      // Both tests share retained reports even when screenshots and video are disabled.
+      proofDir = createControlUiE2eArtifactDir("mcp-app-request-lifetime");
       signal.throwIfAborted();
       state = await createOpenClawTestState({
         prefix: "openclaw-mcp-app-conformance-",
@@ -256,7 +253,6 @@ const suite = createControlUiE2eSuite({
         );
       }
       if (tempRoot) {
-        await fs.mkdir(proofDir, { recursive: true });
         await settleCleanup("archive fixture events", () =>
           fs.copyFile(fixtureEventsPath, path.join(proofDir, "fixture-events.jsonl")),
         );
@@ -288,9 +284,6 @@ suite.define(() => {
     await suite.runScenario(context, {
       run: async (signal) => {
         signal.throwIfAborted();
-        if (captureUiProof) {
-          await fs.mkdir(proofDir, { recursive: true });
-        }
         const teardownProof = createMcpAppTeardownRecorder(proofDir, fixtureEventsPath);
         const controlContext = await newProofContext();
         const controlPage = await controlContext.newPage();
@@ -572,7 +565,7 @@ suite.define(() => {
     await suite.runScenario(context, {
       run: async (signal) => {
         signal.throwIfAborted();
-        await fs.mkdir(proofDir, { recursive: true });
+        const recordHost = recordMcpAppHost.bind(undefined, { proofDir, captureUiProof });
         await fs.writeFile(
           path.join(proofDir, "runtime.json"),
           JSON.stringify(

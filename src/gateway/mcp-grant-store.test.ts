@@ -128,6 +128,7 @@ describe("mcp-grant-store", () => {
       sessionId: "session-1",
       messageProvider: "telegram",
       clientCaps: ["tool-events"],
+      pinnedWidgetAuthoring: true,
       currentChannelId: "telegram:-1001",
       currentThreadTs: "42",
       currentMessageId: "message-1",
@@ -155,9 +156,11 @@ describe("mcp-grant-store", () => {
     ).toBeTruthy();
 
     context.clientCaps.push("caller-mutation");
+    context.pinnedWidgetAuthoring = false;
     context.sourceReplyOnly = false;
     context.toolsAllow.push("exec");
     grant.context.clientCaps?.push("return-value-mutation");
+    grant.context.pinnedWidgetAuthoring = false;
     grant.context.sourceReplyOnly = false;
     grant.context.toolsAllow?.push("write");
 
@@ -171,6 +174,7 @@ describe("mcp-grant-store", () => {
       ...context,
       sessionKey: "agent:main:telegram:group:1",
       clientCaps: ["tool-events"],
+      pinnedWidgetAuthoring: true,
       sourceReplyOnly: true,
       toolsAllow: ["message"],
     });

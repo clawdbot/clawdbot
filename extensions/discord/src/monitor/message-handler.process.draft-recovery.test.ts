@@ -484,6 +484,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
     expect(draftStream.update).toHaveBeenCalledTimes(1);
     expect(draftStream.update).toHaveBeenCalledWith(
       "Claiming my square footage. Tastefully, but with claws.\n\n🛠️ Exec\n• exec done",
+      { complete: true },
     );
     // With no label override, the implicit label stays hidden under the status headline.
     expect(String(draftStream.update.mock.calls[0]?.[0])).not.toMatch(/Working/);
@@ -525,6 +526,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
 
     expect(draftStream.update).toHaveBeenLastCalledWith(
       "Checking private context before replying.\n\n🛠️ Exec",
+      { complete: true },
     );
     expectFinalAnswerText("done");
     expect(getDeliveredFinalTexts()[0]).not.toContain("💬");
@@ -556,6 +558,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
 
     expect(draftStream.update).toHaveBeenCalledWith(
       "Implementing the change.\n\n✅ Inspect\n▸ Patch\n▢ Test",
+      { complete: true },
     );
     expect(draftStream.flush).toHaveBeenCalledTimes(1);
   });

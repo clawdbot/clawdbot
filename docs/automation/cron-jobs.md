@@ -419,6 +419,8 @@ If the bound conversation is an external channel, OpenClaw also performs its nor
 
 When the bound conversation has no external channel route — WebChat/Control UI conversations, or a gateway with no channel plugins configured — the session commit alone completes delivery and the run succeeds without attempting an external send. If the conversation does name an external route that cannot be resolved at run time, the committed result stays in the conversation and the run records the resolution failure as its delivery error: a delivery failure, not a turn failure.
 
+For current agent-turn jobs, configuring unrelated external channels does not change this behavior. An explicit delivery channel, recipient, account, or thread still uses normal channel resolution. If that resolution fails, the report remains in the conversation and the run records the delivery error, even when no external channel could be selected.
+
 <Warning>
   Every outbound automation webhook uses the strict SSRF guard. Loopback,
   private/internal, link-local, and other special-use targets are refused by
@@ -480,6 +482,8 @@ A required completion-delivery failure is distinct from an execution failure: a 
 
 Chat failure notifications include the run start time in the agent's configured user timezone. When `gateway.publicOrigin` is configured and the Control UI is enabled, they also include an `Inspect` link to the automation run. Webhook message text stays stable; integrations can read the same instant from the structured `runAtMs` field and construct their own links.
 Chat notifications show normalized failure causes or allowlisted producer facts for known command and script failures. Arbitrary commands, paths, provider bodies, secrets, delivery errors, skip reasons, diagnostics, and stack/error text remain in automation history. Failure webhooks retain the structured raw error for diagnostic integrations.
+
+A provider rejection of an unsupported model records `model_not_found` in the job state and run history. The failure notice points to `openclaw doctor --fix` for provider-declared retirements, or changing/removing the automation's model override. Known retired automation model routes fail before another inference request. Doctor replaces an override with the provider's declared successor when the agent's model policy allows it. Without a declared successor, it clears the override so the job inherits the agent default. If a pinned override's successor is disallowed, Doctor retains the reference and reports the required policy change. A missing account catalog entry or a discovery outage alone does not authorize a migration.
 
 The scheduler also provides an unconditional safety backstop. A time-based recurring job is auto-disabled after 10 consecutive execution failures; a successful run resets that streak. On the terminal failure, the richer auto-disable notification replaces the regular threshold alert. Repeated schedule-computation failures auto-disable after 3 errors. The job records `state.autoDisabled.reason` as `consecutive-failures` or `schedule-errors`, and the owning agent receives a notification with a safe cause and recovery command. Raw errors stay in automation history. After fixing the cause, run `openclaw automations enable <jobId>`; enabling clears the recorded reason and failure streaks. Because disabled jobs are hidden by the default list, use `openclaw automations list --all` to inspect them.
 

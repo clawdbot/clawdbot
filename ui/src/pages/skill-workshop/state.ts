@@ -58,7 +58,6 @@ export type SkillWorkshopState = {
   skillWorkshopFilePreviewQuery: string;
   skillWorkshopQueueWidth: number;
   skillWorkshopMode: SkillWorkshopMode;
-  skillWorkshopUseCurrentChatForRevisions: boolean;
   skillWorkshopHistoryScan: SkillWorkshopHistoryScanState;
 };
 
@@ -99,7 +98,6 @@ export function createSkillWorkshopState(data?: SkillWorkshopRouteData): SkillWo
     skillWorkshopFilePreviewQuery: "",
     skillWorkshopQueueWidth: 360,
     skillWorkshopMode: "today",
-    skillWorkshopUseCurrentChatForRevisions: false,
     skillWorkshopHistoryScan:
       data?.skillWorkshopHistoryScan ?? createSkillWorkshopHistoryScanState(),
   };

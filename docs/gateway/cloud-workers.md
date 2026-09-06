@@ -198,6 +198,8 @@ The enrolled node stores its identity, durable device token, endpoint, worker bu
 
 OpenClaw derives one canonical `cbx_...` lease ID from the durable provision operation and passes it to `crabbox warmup --lease-id`; the deterministic slug is display metadata only. If warmup commits but its response is lost, Gateway reconciliation repeats the same fixed-ID operation and Crabbox returns or adopts only the exactly attested lease. Intent drift, terminal ID reuse, and ambiguous unverified resources fail closed without allocating a replacement.
 
+A Gateway restart that interrupts pending provisioning leaves the placement in `provisioning` and resumes the same environment and provider operation after startup. Explicit **Stop cloud worker…** still requests destruction and prevents replay.
+
 An interrupted legacy dispatch may have allocated a random lease without recording its ID. OpenClaw cannot identify that allocation safely from the old operation alone. It refuses replay and slug adoption, retaining the unresolved allocation and cleanup record across restarts instead of treating the resource as gone. Identify and clean up any prior lease before starting a new dispatch; do not guess by slug. Automatic identification or settlement of the old record is not supported. Legacy records already marked failed are not reopened automatically.
 
 ### The setup command
@@ -463,7 +465,7 @@ rejected for profile or device targets and when the source runner is available
 or cannot be proven to be the exact device binding. This path has the same
 unsynced-file and in-flight-work loss boundary as the Control UI confirmation.
 
-Placement moves through a durable state machine (`local → requested → provisioning → syncing → starting → active`), so a Gateway restart mid-dispatch reconciles instead of leaking machines. A failed model turn keeps the active placement available for a retry. Workspace path conflicts keep the local version, apply the rest of the cloud result, and preserve the staged cloud ref for inspection; other reconciliation or lifecycle failures retain their durable recovery fence and diagnostic tail until recovery can safely retry or reclaim the environment.
+Placement moves through a durable state machine (`local → requested → provisioning → syncing → starting → active`), so a Gateway restart mid-dispatch reconciles instead of leaking machines; interrupted pending provisioning retains its fixed provider operation for startup replay. A failed model turn keeps the active placement available for a retry. Workspace path conflicts keep the local version, apply the rest of the cloud result, and preserve the staged cloud ref for inspection; other reconciliation or lifecycle failures retain their durable recovery fence and diagnostic tail until recovery can safely retry or reclaim the environment.
 
 Recovery requested for one worker inspects that environment and resumes only its associated workspace results and moves. Regular background sweeps still reconcile all environments. Recovery continues to wait for earlier placement operations to finish.
 

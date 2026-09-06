@@ -338,6 +338,7 @@ export async function prepareAgentRunDispatch(params: {
             },
       );
     }
+    params.io.emitStartOwner?.(params.runId, activeRunAbort.entry);
   }
 
   const workspaceOverride = resolveIngressWorkspaceOverrideForSessionRun({

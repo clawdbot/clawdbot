@@ -210,6 +210,8 @@ export async function prepareDirectCompactionAttempt(
       provider,
       modelId,
       config: params.config,
+      workspaceDir: resolvedWorkspace,
+      metadataSnapshot: preparedModelRuntime.metadataSnapshot,
       model: materializeParams.model,
       forceResolve: materializeParams.forceResolve,
       resolveModel: resolvePreparedModel,

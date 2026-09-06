@@ -197,6 +197,8 @@ export async function prepareEmbeddedRunAuthPlan(params: {
       provider: params.provider,
       modelId: params.modelId,
       config: runParams.config,
+      workspaceDir: params.workspaceDir,
+      metadataSnapshot: params.preparedModelRuntime?.metadataSnapshot,
       getModel: params.getRuntimeModel,
       nativeModelOwned: params.nativeModelOwned,
       requestedProfileId: runParams.authProfileId,

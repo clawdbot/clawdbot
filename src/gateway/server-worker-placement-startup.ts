@@ -5,6 +5,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "../config/sessions/store-maintenance-preserve.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
@@ -112,6 +113,7 @@ export function createGatewayWorkerPlacementRuntime(
   },
 ) {
   let nodeWorkerSupervisorTransport: NodeWorkerSupervisorTransport | undefined;
+  let stopped = false;
   const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
   const {
     coordinator: githubPublication,
@@ -227,6 +229,10 @@ export function createGatewayWorkerPlacementRuntime(
     createWorkerPlacementDispatchService({
       placements: params.placements,
       environments: params.environments,
+      // Must read true before enrollment cancellation in every shutdown path, so an interrupted
+      // provisioning is retained rather than terminalized. Runtime reset replaces the drain signal.
+      isShuttingDown: () =>
+        stopped || params.environments.isStopping() || getGatewayRestartDrainSignal().aborted,
       runnerAvailability,
       resolveDevicePlacementRequirement,
       isCurrentNodePlacement: (node, requirement) => {
@@ -488,7 +494,6 @@ export function createGatewayWorkerPlacementRuntime(
     const placementReconcile = { current: undefined as Promise<void> | undefined };
     const diskSpaceSweep = { current: undefined as Promise<void> | undefined };
     const placementIdleSuspend: { current: Promise<void> | undefined } = { current: undefined };
-    let stopped = false;
     const uninstallEnvironmentReconcileGuard = installWorkerPlacementReconcileGuard({
       placements: params.placements,
       environments: params.environments,

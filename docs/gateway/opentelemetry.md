@@ -603,6 +603,15 @@ see [Prometheus event-loop windows](/gateway/prometheus#event-loop-observation-w
 
 ### Diagnostics internals (memory, payloads, exporter health)
 
+- `openclaw.gc.duration_ms` (histogram, no attrs; elapsed GC duration for the hosting JavaScript isolate)
+
+GC duration uses Node.js performance entries and is exported only when metrics
+are enabled. It is not CPU time or a guaranteed stop-the-world pause. Observation
+starts when the existing diagnostics heartbeat sees an interested consumer;
+registration after startup can wait until its next 30-second tick, with no
+backfill. Diagnostics disable/shutdown disconnects immediately. See
+[GC duration coverage and correlation limits](/gateway/prometheus#garbage-collection-duration).
+
 - `openclaw.payload.large` (counter, attrs: `openclaw.payload.surface`, `openclaw.payload.action`, `openclaw.channel`, `openclaw.plugin`, `openclaw.reason`)
 - `openclaw.payload.large_bytes` (histogram, attrs: same as `openclaw.payload.large`)
 - `openclaw.memory.rss_bytes` / `openclaw.memory.heap_used_bytes` / `openclaw.memory.heap_total_bytes` / `openclaw.memory.external_bytes` / `openclaw.memory.array_buffers_bytes` (histograms, no attrs; process memory samples)

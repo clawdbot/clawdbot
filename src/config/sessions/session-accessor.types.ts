@@ -844,8 +844,10 @@ export type RestoreSessionFromCompactionCheckpointParams = {
 export type SessionEntryCreateWithTranscriptContext = {
   /** Current entry under the requested key before creation, if any. */
   existingEntry?: SessionEntry;
-  /** Current entries snapshot for validation rules such as label uniqueness. */
-  sessionEntries: Record<string, SessionEntry>;
+  /** Exact normalized target from the same snapshot, distinct from an alias-resolved entry. */
+  targetEntry?: SessionEntry;
+  /** Detached sibling-label facts; excludes the exact normalized target only. */
+  isLabelInUse: (label: string) => boolean;
 };
 
 export type SessionEntryCreateWithTranscriptResult<TError = string> =

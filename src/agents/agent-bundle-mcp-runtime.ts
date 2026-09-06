@@ -57,6 +57,7 @@ import { collectMcpPaginatedItems } from "./mcp-pagination.js";
 import { isMcpToolAllowed, normalizeMcpToolFilter } from "./mcp-tool-filter.js";
 import { normalizeMcpToolCatalog, type McpToolCatalogMetadata } from "./mcp-tool-metadata.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
+import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 
 type BundleMcpSession = {
   serverName: string;
@@ -68,6 +69,7 @@ type BundleMcpSession = {
   disconnectReason?: string;
   retiring: boolean;
   connectPromise?: Promise<void>;
+  disposePromise?: Promise<void>;
   detachStderr?: () => void;
   toolMetadata?: McpToolCatalogMetadata;
 };
@@ -190,7 +192,7 @@ function setBundleMcpDisposeTimeoutMsForTest(timeoutMs?: number): void {
       : undefined;
 }
 
-function disposeBundleMcpSession(session: BundleMcpSession): Promise<void> {
+function disposeBundleMcpSession(session: BundleMcpSession): Promise<"closed" | "uncertain"> {
   return disposeMcpClient(
     session,
     getBundleMcpTestState().disposeTimeoutMs ?? BUNDLE_MCP_DISPOSE_TIMEOUT_MS,
@@ -311,12 +313,21 @@ export function createSessionMcpRuntime(
   );
   let invalidated = false;
   let pendingDisposal = Promise.resolve();
+  let cleanupFailure: PromiseRejectedResult | undefined;
   const disposeParts = (parts: SessionMcpRuntime[]) => {
     // Replacement must join cleanup already started by config publication.
     pendingDisposal = Promise.allSettled([
       pendingDisposal,
-      ...parts.map((part) => part.dispose()),
-    ]).then(() => undefined);
+      ...parts.map(async (part) => {
+        await part.dispose();
+        if (!part.joinCleanup) {
+          throw new Error("MCP runtime does not expose cleanup ownership");
+        }
+        await part.joinCleanup();
+      }),
+    ]).then((results) => {
+      cleanupFailure ??= results.find((result) => result.status === "rejected");
+    });
     return pendingDisposal;
   };
   const runtime = createCombinedSessionMcpRuntime({
@@ -353,6 +364,19 @@ export function createSessionMcpRuntime(
     },
   };
   runtime.mcpAppsEnabled = params.cfg?.mcp?.apps?.enabled === true;
+  const joinParts = runtime.joinCleanup;
+  runtime.joinCleanup = async () => {
+    await pendingDisposal;
+    try {
+      await joinParts?.();
+    } catch (error) {
+      cleanupFailure ??= { status: "rejected", reason: error };
+    }
+    if (cleanupFailure) {
+      recordAgentCleanupFailure();
+      throw cleanupFailure.reason;
+    }
+  };
   runtime.dispose = async () => {
     connectFingerprints.clear();
     invalidated = true;
@@ -360,6 +384,9 @@ export function createSessionMcpRuntime(
     owned.clear();
     sessionMcpRuntimeOwners.delete(runtime);
     await disposeParts(retired);
+    if (cleanupFailure) {
+      recordAgentCleanupFailure();
+    }
   };
   sessionMcpRuntimeOwners.set(runtime, {
     isCurrent: () => !invalidated,
@@ -465,6 +492,31 @@ function createServerMcpRuntime(
   const catalogRetryIsDue = (): boolean =>
     catalogRetryAfterMs !== undefined && Date.now() >= catalogRetryAfterMs;
   let currentSession: BundleMcpSession | undefined;
+  let disposal: Promise<void> | undefined;
+  let cleanupFailed = false;
+  const pendingDisposals = new Set<Promise<void>>();
+  const disposeSession = (session: BundleMcpSession): Promise<void> => {
+    if (session.disposePromise) {
+      return session.disposePromise;
+    }
+    const closing = disposeBundleMcpSession(session)
+      .then((outcome) => {
+        if (outcome === "uncertain") {
+          cleanupFailed = true;
+          recordAgentCleanupFailure();
+        }
+      })
+      .catch((error: unknown) => {
+        cleanupFailed = true;
+        recordAgentCleanupFailure();
+        throw error;
+      })
+      .finally(() => pendingDisposals.delete(closing));
+    session.disposePromise = closing;
+    pendingDisposals.add(closing);
+    return closing;
+  };
+
   let serverBackoff: McpServerBackoffState | undefined;
   const recordServerToolFailure = (session: BundleMcpSession, nowMs: number) => {
     if (currentSession !== session || session.retiring) {
@@ -533,7 +585,7 @@ function createServerMcpRuntime(
     }
     session.retiring = true;
     currentSession = undefined;
-    await disposeBundleMcpSession(session);
+    await disposeSession(session);
     return true;
   };
   const localRequestTimeouts = new WeakSet<object>();
@@ -1074,33 +1126,52 @@ function createServerMcpRuntime(
         ),
       );
     },
-    async dispose() {
-      if (retiredCatalog) {
-        return;
+    async joinCleanup() {
+      await disposal;
+      await Promise.allSettled(pendingDisposals);
+      if (cleanupFailed) {
+        recordAgentCleanupFailure();
+        throw new Error("MCP runtime cleanup could not confirm closure");
       }
-      retiredCatalog = {
-        version: 1,
-        generatedAt: Date.now(),
-        servers: {},
-        tools: [],
-        diagnostics: [
-          {
-            serverName,
-            safeServerName: params.safeServerNamesByServer?.get(serverName) ?? serverName,
-            launchSummary: serverName,
-            message: "MCP server runtime retired; retry discovery on the next turn.",
-          },
-        ],
-      };
-      lifecycleAbortController.abort(createDisposedError(params.sessionId));
-      catalog = null;
-      catalogRetryAfterMs = undefined;
-      catalogInFlight = undefined;
-      const session = currentSession;
-      currentSession = undefined;
-      if (session) {
-        await disposeBundleMcpSession(session);
+    },
+    dispose() {
+      if (!disposal) {
+        retiredCatalog = {
+          version: 1,
+          generatedAt: Date.now(),
+          servers: {},
+          tools: [],
+          diagnostics: [
+            {
+              serverName,
+              safeServerName: params.safeServerNamesByServer?.get(serverName) ?? serverName,
+              launchSummary: serverName,
+              message: "MCP server runtime retired; retry discovery on the next turn.",
+            },
+          ],
+        };
+        lifecycleAbortController.abort(createDisposedError(params.sessionId));
+        catalog = null;
+        catalogRetryAfterMs = undefined;
+        const pendingCatalog = catalogInFlight;
+        catalogInFlight = undefined;
+        const session = currentSession;
+        currentSession = undefined;
+        disposal = (async () => {
+          if (session) {
+            await disposeSession(session).catch(() => undefined);
+          }
+          await pendingCatalog?.catch(() => undefined);
+          await Promise.allSettled(pendingDisposals);
+        })();
       }
+      // Physical cleanup is single-flight; uncertainty belongs to every caller.
+      void disposal.then(() => {
+        if (cleanupFailed) {
+          recordAgentCleanupFailure();
+        }
+      });
+      return disposal;
     },
   };
   return runtime;

@@ -268,7 +268,8 @@ export async function loadCommandPaletteCatalogItems(params: {
   agentId: string;
   agents: () => Promise<AgentsListResult | null>;
   methodAvailable: (method: string) => boolean;
-}): Promise<CommandPaletteCatalogItem[]> {
+}): Promise<{ items: CommandPaletteCatalogItem[]; modelSearchFailed: boolean }> {
+  let modelSearchFailed = false;
   const requestIfAvailable = async <T>(
     method: string,
     requestParams: unknown,
@@ -288,14 +289,21 @@ export async function loadCommandPaletteCatalogItems(params: {
     }),
     requestIfAvailable<SkillStatusReport>("skills.status", { agentId: params.agentId }),
     requestIfAvailable<PluginListResult>("plugins.list", {}),
-    requestIfAvailable<{ models: ModelCatalogEntry[] }>("models.list", {
-      view: "configured",
-      agentId: params.agentId,
-      preparedOnly: true,
-    }),
+    params.methodAvailable("models.list")
+      ? params.client
+          .request<{ models: ModelCatalogEntry[] }>("models.list", {
+            view: "configured",
+            agentId: params.agentId,
+            preparedOnly: true,
+          })
+          .catch(() => {
+            modelSearchFailed = true;
+            return null;
+          })
+      : null,
   ]);
 
-  return [
+  const items: CommandPaletteCatalogItem[] = [
     ...(agents?.agents ?? []).map((agent) => ({
       id: `agent-${agent.id}`,
       label: agent.identity?.name ?? agent.name ?? agent.id,
@@ -350,4 +358,5 @@ export async function loadCommandPaletteCatalogItems(params: {
         .join(" "),
     })),
   ];
+  return { items, modelSearchFailed };
 }

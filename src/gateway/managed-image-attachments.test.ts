@@ -452,31 +452,89 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(result.body.toString("utf-8")).toBe("original-image");
   });
 
-  it("serves Unicode media filenames with an encoded content disposition", async () => {
-    const { attachmentId, sessionKey } = await createFixture(stateDir, {
-      filename: "音声.mp3",
+  it.each([
+    {
+      kind: "audio",
       contentType: "audio/mpeg",
-      body: Buffer.from([0xff, 0xfb, 0x90, 0x00]),
-    });
-    const pathName = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+      filename: "音声.mp3",
+      variant: "full",
+      encodedFilename: "%E9%9F%B3%E5%A3%B0.mp3",
+    },
+    {
+      kind: "audio",
+      contentType: "audio/wav",
+      filename: "recording%20take.wav",
+      variant: "full",
+      encodedFilename: "recording%2520take.wav",
+    },
+    {
+      kind: "video",
+      contentType: "video/mp4",
+      filename: "recording%20take.mp4",
+      variant: "full",
+      encodedFilename: "recording%2520take.mp4",
+    },
+    {
+      kind: "image",
+      contentType: "image/png",
+      filename: "progress%20chart.png",
+      variant: "full",
+      encodedFilename: "progress%2520chart.png",
+    },
+    {
+      kind: "image",
+      contentType: "image/png",
+      filename: "progress%20chart.png",
+      variant: "thumbnail",
+      encodedFilename: "progress%2520chart-thumbnail.png",
+    },
+    {
+      kind: "document",
+      contentType: "text/plain",
+      filename: "progress%20report.txt",
+      variant: "full",
+      encodedFilename: "progress%2520report.txt",
+    },
+  ])(
+    "preserves $filename in $variant download metadata",
+    async ({ kind, contentType, filename, variant, encodedFilename }) => {
+      const { attachmentId, sessionKey } = await createFixture(stateDir, {
+        filename,
+        contentType,
+        body:
+          kind === "image"
+            ? createSolidPngBuffer(16, 8, { r: 24, g: 64, b: 128 })
+            : Buffer.from("media"),
+      });
+      const route = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}`;
+      const fullUrl = `${route}/full`;
+      const block =
+        kind === "document"
+          ? { type: "attachment", attachment: { url: fullUrl } }
+          : { type: kind, url: fullUrl, openUrl: fullUrl };
+      const { result } = await requestManagedImage({
+        stateDir,
+        pathName: `${route}/${variant}`,
+        authResponse: { authMethod: "token" },
+        transcriptMessages: [
+          {
+            role: "assistant",
+            content: [block],
+            __openclaw: { id: "msg-1" },
+          },
+        ],
+      });
 
-    const { result } = await requestManagedImage({
-      stateDir,
-      pathName,
-      authResponse: { authMethod: "token" },
-      transcriptMessages: [
-        {
-          role: "assistant",
-          content: [{ type: "audio", url: pathName, openUrl: pathName }],
-          __openclaw: { id: "msg-1" },
-        },
-      ],
-    });
-
-    expect(result.statusCode).toBe(200);
-    expect(result.headers["content-disposition"]).toContain("filename*=UTF-8''");
-    expect(result.headers["content-disposition"]).toContain("%E9%9F%B3%E5%A3%B0.mp3");
-  });
+      expect(result.statusCode).toBe(200);
+      expect(result.headers["content-type"]).toBe(contentType);
+      expect(result.headers["content-disposition"]).toContain(
+        `filename*=UTF-8''${encodedFilename}`,
+      );
+      expect(result.headers["content-disposition"]).toMatch(
+        kind === "document" ? /^attachment;/ : /^inline;/,
+      );
+    },
+  );
 
   it("serves a byte range from the validated managed image", async () => {
     const { attachmentId, sessionKey } = await createFixture(stateDir);

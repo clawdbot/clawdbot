@@ -23,7 +23,6 @@ import {
   type HeartbeatRunResult,
   type HeartbeatWakeHandler,
   type HeartbeatWakeIntent,
-  type HeartbeatWakeRequest,
   isRetryableHeartbeatSkipReason,
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
@@ -206,26 +205,6 @@ export function startHeartbeatRunner(opts: {
     const requestedTargetAgentId =
       requestedAgentId ??
       (requestedSessionKey ? resolveAgentIdFromSessionKey(requestedSessionKey) : undefined);
-    const allowsUnscheduledTarget =
-      requestedTargetAgentId !== undefined &&
-      isConfiguredHeartbeatAgent(wakeConfig, requestedTargetAgentId) &&
-      isTargetedUnscheduledWake({
-        source: params.source,
-        intent,
-        reason,
-        agentId: requestedAgentId,
-        sessionKey: requestedSessionKey,
-      });
-    const enrolledAgents = Array.from(state.agents.values()).filter(
-      (agent) => agent.intervalMs !== undefined,
-    );
-    if (enrolledAgents.length === 0 && !allowsUnscheduledTarget) {
-      return {
-        status: "skipped",
-        reason: "disabled",
-      } satisfies HeartbeatRunResult;
-    }
-
     const isInterval = reason === "interval";
     const startedAt = Date.now();
     const now = startedAt;
@@ -327,8 +306,20 @@ export function startHeartbeatRunner(opts: {
       let targetAgent = state.agents.get(targetAgentId);
       // A user-present targeted event may wake an unscheduled agent once. It
       // must not enroll that agent in the recurring heartbeat scheduler.
-      if (targetAgent?.intervalMs === undefined && !allowsUnscheduledTarget) {
-        return { status: "skipped", reason: "disabled" };
+      if (targetAgent?.intervalMs === undefined) {
+        const allowsUnscheduledTarget =
+          requestedTargetAgentId !== undefined &&
+          isConfiguredHeartbeatAgent(wakeConfig, requestedTargetAgentId) &&
+          isTargetedUnscheduledWake({
+            source: params.source,
+            intent,
+            reason,
+            agentId: requestedAgentId,
+            sessionKey: requestedSessionKey,
+          });
+        if (!allowsUnscheduledTarget) {
+          return { status: "skipped", reason: "disabled" };
+        }
       }
       if (!targetAgent) {
         targetAgent = createAgentState(targetAgentId, now);
@@ -341,6 +332,16 @@ export function startHeartbeatRunner(opts: {
       return outcome.ran
         ? { status: "ran", durationMs: Date.now() - startedAt }
         : (outcome.result ?? { status: "skipped", reason: "not-due" });
+    }
+
+    const enrolledAgents = Array.from(state.agents.values()).filter(
+      (agent) => agent.intervalMs !== undefined,
+    );
+    if (enrolledAgents.length === 0) {
+      return {
+        status: "skipped",
+        reason: "disabled",
+      } satisfies HeartbeatRunResult;
     }
 
     // Agent state is disjoint; concurrent broadcast dispatch prevents a slow
@@ -381,19 +382,7 @@ export function startHeartbeatRunner(opts: {
     );
   };
 
-  const wakeHandler: HeartbeatWakeHandler = async (params: HeartbeatWakeRequest) =>
-    run({
-      reason: params.reason,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      heartbeat: params.heartbeat,
-      scheduledEveryMs: params.scheduledEveryMs,
-      tasks: params.tasks,
-      retainedWork: params.retainedWork,
-      source: params.source,
-      intent: params.intent,
-    });
-  const disposeWakeHandler = setHeartbeatWakeHandler(wakeHandler);
+  const disposeWakeHandler = setHeartbeatWakeHandler(run);
   updateConfig(state.cfg);
 
   const cleanup = () => {

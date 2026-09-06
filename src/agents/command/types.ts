@@ -127,6 +127,8 @@ export type AgentCommandOpts = {
   toolsAllowIsDefault?: boolean;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
+  /** Host-authorized dashboard authoring without an originating inline renderer. */
+  pinnedWidgetAuthoring?: boolean;
   /** Preserve the originating run's message-tool policy across internal continuation turns. */
   requireExplicitMessageTarget?: boolean;
   cliSessionBindingFacts?: CliSessionBindingFacts;
@@ -138,6 +140,8 @@ export type AgentCommandOpts = {
   deliveryTargetMode?: ChannelOutboundTargetMode;
   bestEffortDeliver?: boolean;
   abortSignal?: AbortSignal;
+  /** Private source-owner fence; cancellation alone does not establish current authority. */
+  assertSourceCurrent?: () => void;
   lane?: string;
   runId?: string;
   /** Immutable gateway lifecycle ownership captured when this run was admitted. */
@@ -244,8 +248,10 @@ export type AgentCommandIngressOpts = Omit<
   | "mainRestartRecoveryOwnerLease"
   | "mainRestartRecoveryAdmitted"
   | "mainRestartRecoveryAttempt"
+  | "pinnedWidgetAuthoring"
   | "executionIdentityAdmission"
   | "operationalRunInstance"
+  | "assertSourceCurrent"
   | "skillLibraryAuthoring"
   | "cronCreatorAuthorityCapability"
   | "onAdmittedRunContext"
@@ -264,6 +270,7 @@ export type AgentCommandGatewayIngressOpts = AgentCommandIngressOpts &
     | "mainRestartRecoveryOwnerLease"
     | "mainRestartRecoveryAdmitted"
     | "mainRestartRecoveryAttempt"
+    | "pinnedWidgetAuthoring"
     | "executionIdentityAdmission"
     | "operationalRunInstance"
     | "skillLibraryAuthoring"

@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -26,6 +28,7 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotSelected
@@ -35,6 +38,7 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
@@ -89,16 +93,13 @@ class ClawComponentsTest {
 
   @Test
   fun selectedLabelsStayReadableAcrossThemeFamiliesAndLightAccents() {
-    val cases =
-      AppearanceThemeFamily.entries.flatMap { family ->
-        listOf(ThemeCase(dark = true, family = family), ThemeCase(dark = false, family = family))
-      } + appearanceAccentPalette.map { ThemeCase(dark = false, accentArgb = it) }
+    val cases = contrastThemeCases()
     val current = mutableStateOf(cases.first())
     composeRule.setContent {
       val theme = current.value
       ClawDesignTheme(dark = theme.dark, family = theme.family, accentArgb = theme.accentArgb) {
         Surface(color = ClawTheme.colors.surface) {
-          Column(Modifier.width(320.dp).padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+          Column(Modifier.width(320.dp).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             ClawSegmentedControl(options = listOf("Segment", "Other"), selected = "Segment", onSelect = {})
             ClawPill(text = "Pill", selected = true, onClick = {})
             Surface(
@@ -154,7 +155,11 @@ class ClawComponentsTest {
         "Paragraph link" to "markdown-links",
         "Table link" to "markdown-links",
       ).forEach { (label, containerTag) ->
-        val contrast = renderedLabelContrast(label, containerTag)
+        val contrast =
+          renderedLabelContrast(
+            label = composeRule.onNodeWithText(label, useUnmergedTree = true),
+            container = if (containerTag == null) composeRule.onNodeWithText(label) else composeRule.onNodeWithTag(containerTag),
+          ).ratio
         if (contrast < 4.5f) failures += "$theme, $label: $contrast:1"
       }
     }
@@ -246,41 +251,56 @@ class ClawComponentsTest {
     assertEquals(listOf(4, 3, 3), rows.map { it.size })
     assertEquals((1..10).map(Int::toString), rows.flatten())
   }
+}
 
-  private fun renderedLabelContrast(
-    label: String,
-    containerTag: String?,
-  ): Float {
-    val layouts = mutableListOf<TextLayoutResult>()
-    composeRule
-      .onNodeWithText(label, useUnmergedTree = true)
-      .assertIsDisplayed()
-      .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action -> assertTrue(action(layouts)) }
-    val layout = layouts.single().layoutInput
-    val foreground =
-      layout.text
-        .getLinkAnnotations(0, layout.text.length)
-        .firstOrNull()
-        ?.item
-        ?.styles
-        ?.style
-        ?.color ?: layout.style.color
-    assertTrue("$label must resolve its rendered foreground", foreground != Color.Unspecified)
-    val container =
-      if (containerTag == null) composeRule.onNodeWithText(label) else composeRule.onNodeWithTag(containerTag)
-    val pixels = container.captureToImage().toPixelMap()
-    // Sample painted padding, away from text, rounded corners, and one-pixel borders.
-    val background = pixels[pixels.width / 2, 2]
-    assertEquals("$label must have an opaque rendered background", 1f, background.alpha, 0.001f)
-    val foregroundLuminance = foreground.compositeOver(background).luminance()
-    val backgroundLuminance = background.luminance()
-    return (maxOf(foregroundLuminance, backgroundLuminance) + 0.05f) /
+internal data class ContrastThemeCase(
+  val dark: Boolean,
+  val family: AppearanceThemeFamily = AppearanceThemeFamily.Claw,
+  val accentArgb: Long? = null,
+)
+
+internal fun contrastThemeCases(): List<ContrastThemeCase> =
+  AppearanceThemeFamily.entries.flatMap { family ->
+    listOf(ContrastThemeCase(dark = true, family = family), ContrastThemeCase(dark = false, family = family))
+  } + appearanceAccentPalette.map { ContrastThemeCase(dark = false, accentArgb = it) }
+
+internal data class RenderedLabelContrast(
+  val foreground: Color,
+  val background: Color,
+  val sampleX: Int,
+  val sampleY: Int,
+  val ratio: Float,
+)
+
+internal fun renderedLabelContrast(
+  label: SemanticsNodeInteraction,
+  container: SemanticsNodeInteraction = label,
+): RenderedLabelContrast {
+  container.performScrollTo()
+  val layouts = mutableListOf<TextLayoutResult>()
+  label
+    .assertIsDisplayed()
+    .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action -> assertTrue(action(layouts)) }
+  val layout = layouts.single().layoutInput
+  val foreground =
+    layout.text
+      .getLinkAnnotations(0, layout.text.length)
+      .firstOrNull()
+      ?.item
+      ?.styles
+      ?.style
+      ?.color ?: layout.style.color
+  assertTrue("${layout.text} must resolve its rendered foreground", foreground != Color.Unspecified)
+  val pixels = container.captureToImage().toPixelMap()
+  // Sample painted padding, away from text, rounded corners, and one-pixel borders.
+  val sampleX = pixels.width / 2
+  val sampleY = 2
+  val background = pixels[sampleX, sampleY]
+  assertEquals("${layout.text} must have an opaque rendered background", 1f, background.alpha, 0.001f)
+  val foregroundLuminance = foreground.compositeOver(background).luminance()
+  val backgroundLuminance = background.luminance()
+  val ratio =
+    (maxOf(foregroundLuminance, backgroundLuminance) + 0.05f) /
       (minOf(foregroundLuminance, backgroundLuminance) + 0.05f)
-  }
-
-  private data class ThemeCase(
-    val dark: Boolean,
-    val family: AppearanceThemeFamily = AppearanceThemeFamily.Claw,
-    val accentArgb: Long? = null,
-  )
+  return RenderedLabelContrast(foreground, background, sampleX, sampleY, ratio)
 }

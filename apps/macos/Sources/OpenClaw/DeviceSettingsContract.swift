@@ -142,6 +142,7 @@ enum DeviceSettingsRequest: Equatable {
     case openSystemSettings(DeviceSettingsPermission)
     case open(DeviceSettingsPanel)
     case checkForUpdates
+    case installChromeExtension
 
     init?(body: Any) {
         guard let payload = body as? [String: Any], let type = payload["type"] as? String else { return nil }
@@ -161,6 +162,9 @@ enum DeviceSettingsRequest: Equatable {
             else { return nil }
             self = .open(panel)
         case "check-for-updates": self = .checkForUpdates
+        case "install-chrome-extension":
+            guard payload.count == 1 else { return nil }
+            self = .installChromeExtension
         default: return nil
         }
     }

@@ -101,6 +101,37 @@ describe("ChatStatusEventSchema", () => {
     expect(Value.Check(ChatStatusEventSchema, { ...statusEvent, phase: "thinking" })).toBe(false);
     expect(Value.Check(ChatStatusEventSchema, { ...statusEvent, detail: "Loading" })).toBe(false);
   });
+
+  it("accepts bounded retry details while preserving the required coarse phase", () => {
+    const event = {
+      runId: "run-1",
+      sessionKey: "session-1",
+      seq: 2,
+      state: "status",
+      phase: "starting_model",
+    };
+    const retry = { attempt: 2, maxAttempts: 10, reason: "rate_limit" };
+    for (const maxAttempts of [2, 10]) {
+      expect(Value.Check(ChatEventSchema, { ...event, retry: { ...retry, maxAttempts } })).toBe(
+        true,
+      );
+    }
+    for (const invalid of [
+      { attempt: 0 },
+      { attempt: 11 },
+      { attempt: 1.5 },
+      { maxAttempts: 0 },
+      { maxAttempts: 2.5 },
+      { maxAttempts: 11 },
+      { reason: "unknown" },
+      { errorBody: "provider data" },
+    ]) {
+      expect(Value.Check(ChatEventSchema, { ...event, retry: { ...retry, ...invalid } })).toBe(
+        false,
+      );
+    }
+    expect(Value.Check(ChatEventSchema, { ...event, phase: undefined, retry })).toBe(false);
+  });
 });
 
 describe("ChatErrorEventSchema", () => {

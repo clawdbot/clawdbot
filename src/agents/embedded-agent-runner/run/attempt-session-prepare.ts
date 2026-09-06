@@ -584,7 +584,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
     trigger: attempt.trigger,
     suppressNextUserMessagePersistence: attempt.suppressNextUserMessagePersistence,
     suppressTranscriptOnlyAssistantPersistence: attempt.suppressTranscriptOnlyAssistantPersistence,
-    suppressAssistantErrorPersistence: attempt.suppressAssistantErrorPersistence,
+    assistantErrorTranscript: attempt.assistantErrorTranscript,
     skipBeforeMessageWriteHooks: attempt.operation === "settled-tool-finalization",
     prepareAssistantTranscriptMessage: attempt.prepareAssistantTranscriptMessage,
     onUserMessagePreparingForPersistence: (_message, recorder) => {
@@ -612,9 +612,6 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
     },
     onUserMessageBlocked: () => {
       attempt.userTurnTranscriptRecorder?.markBlocked();
-    },
-    onAssistantErrorMessagePersisted: (message) => {
-      attempt.onAssistantErrorMessagePersisted?.(message);
     },
   });
   attempt.promptCacheKey = resolveSessionBoundaryPromptCacheKey({

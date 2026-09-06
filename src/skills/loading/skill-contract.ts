@@ -55,7 +55,10 @@ function humanizeSkillIdentifier(value: string): string {
 export function resolveSkillDisplayName(content: string, fallbackName: string): string {
   const body = content.replace(SKILL_FRONTMATTER_BLOCK, "");
   const heading = body.match(SKILL_TITLE_HEADING)?.[1]?.trim();
-  return heading || humanizeSkillIdentifier(fallbackName) || fallbackName;
+  const displayName = heading || humanizeSkillIdentifier(fallbackName) || fallbackName;
+  // A captured heading can retain the whole skill body in metadata caches.
+  // Copy UTF-16 code units without changing lone surrogates.
+  return Buffer.from(displayName, "utf16le").toString("utf16le");
 }
 
 function truncateSkillDescription(description: string, maxChars: number): string {

@@ -1018,7 +1018,7 @@ function installCleanupTrackingClient(turnStartError?: Error) {
   const events: string[] = [];
   const closeAndWait = vi.fn(async () => {
     events.push("closeAndWait");
-    return true;
+    return { exited: true, cleanup: "closed" };
   });
   const state: {
     client?: unknown;
@@ -2893,6 +2893,7 @@ describe("runCodexAppServerAttempt", () => {
         phase: "update",
         title: "Plan updated",
         source: "openclaw",
+        explanation: "1/2 complete",
         steps: plan,
       },
     });
@@ -3190,7 +3191,7 @@ describe("runCodexAppServerAttempt", () => {
       sharedClientModule,
       "clearSharedCodexAppServerClientIfCurrentAndUnclaimed",
     );
-    const closeAndWait = vi.fn(async () => true);
+    const closeAndWait = vi.fn(async () => ({ exited: true, cleanup: "closed" }));
     let notify: ((notification: CodexServerNotification) => Promise<void>) | undefined;
     const request = vi.fn(async (method: string) => {
       if (method === "configRequirements/read") {
@@ -3235,6 +3236,47 @@ describe("runCodexAppServerAttempt", () => {
     await run;
     expect(retireSpy).not.toHaveBeenCalled();
     expect(closeAndWait).not.toHaveBeenCalled();
+  });
+
+  it("projects dynamic progress cards through the shared safe status contract", async () => {
+    const params = createRunParams();
+    const onAgentEvent = vi.fn();
+    params.onAgentEvent = onAgentEvent;
+    const projector = new CodexAppServerEventProjector(params, "thread-1", "turn-1");
+
+    await projector.recordDynamicProgressCardUpdate({
+      markdown: '<progress aria-label="private" value="1" max="2"></progress>',
+      plan: [{ step: "Ship", status: "completed" }],
+    });
+    await projector.recordDynamicProgressCardUpdate({ markdown: "Working" });
+    await projector.recordDynamicProgressCardUpdate({});
+
+    expect(onAgentEvent).toHaveBeenNthCalledWith(1, {
+      stream: "plan",
+      data: {
+        phase: "update",
+        title: "Plan updated",
+        source: "openclaw",
+        explanation: "1/1 complete",
+        steps: [{ step: "Ship", status: "completed" }],
+      },
+    });
+    expect(onAgentEvent).toHaveBeenNthCalledWith(2, {
+      stream: "plan",
+      data: {
+        phase: "update",
+        title: "Plan updated",
+        source: "openclaw",
+        explanation: "Progress updated",
+        steps: [],
+      },
+    });
+    expect(onAgentEvent).toHaveBeenNthCalledWith(3, {
+      stream: "plan",
+      data: { phase: "update", title: "Plan updated", source: "openclaw", steps: [] },
+    });
+    expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain("<progress");
+    expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain("private");
   });
 
   it("keeps searchable Codex dynamic tools canonical in mirrored transcript snapshots", async () => {
@@ -5149,13 +5191,30 @@ describe("runCodexAppServerAttempt", () => {
   });
   it("forwards Codex app-server verbose tool summaries and completed output", async () => {
     const onToolResult = vi.fn();
+    const executeRead = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "file contents" }],
+      details: {},
+    }));
+    testing.setOpenClawCodingToolsFactoryForTests((options) => {
+      const tools = createOpenClawCodingTools(options).filter((tool) => tool.name === "read");
+      for (const tool of tools) {
+        tool.execute = executeRead;
+      }
+      return tools;
+    });
     const { sessionFile, workspaceDir } = createRunPaths();
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
+    setCodexTestModelSupportsTools(params, true);
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.toolsAllow = ["read"];
     params.verboseLevel = "full";
     params.onToolResult = onToolResult;
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
+    const startParams = harness.requests.find((request) => request.method === "thread/start")
+      ?.params as { dynamicTools: CodexDynamicToolSpec[] };
+    expect(specNames(startParams.dynamicTools)).toContain("read");
     await harness.notify(
       itemNotification("item/started", {
         type: "dynamicToolCall",
@@ -5169,6 +5228,24 @@ describe("runCodexAppServerAttempt", () => {
         durationMs: null,
       }),
     );
+    expect(onToolResult).not.toHaveBeenCalled();
+    const response = await harness.handleServerRequest({
+      id: "request-tool-1",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "tool-1",
+        namespace: null,
+        tool: "read",
+        arguments: { path: "README.md" },
+      },
+    });
+    expect(response).toMatchObject({
+      success: true,
+      contentItems: [{ type: "inputText", text: "file contents" }],
+    });
+    expect(executeRead).toHaveBeenCalledOnce();
     await harness.notify(
       itemNotification("item/completed", {
         type: "dynamicToolCall",
@@ -5189,7 +5266,7 @@ describe("runCodexAppServerAttempt", () => {
       text: "📖 Read: `from README.md`",
     });
     expect(onToolResult).toHaveBeenNthCalledWith(2, {
-      text: "📖 Read: `from README.md`\n```txt\nfile contents\n```",
+      text: "📖 Read\n```txt\nfile contents\n```",
     });
   });
 

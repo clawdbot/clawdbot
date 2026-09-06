@@ -66,8 +66,8 @@ const { FakeWebSocket } = vi.hoisted(() => {
   return { FakeWebSocket: MockWebSocket };
 });
 
-vi.mock("ws", () => ({
-  default: FakeWebSocket,
+vi.mock("./ws-runtime.js", () => ({
+  WebSocket: FakeWebSocket,
 }));
 
 function createStreamingAudioResponse(params: {

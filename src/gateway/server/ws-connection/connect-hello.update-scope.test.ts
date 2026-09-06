@@ -8,6 +8,8 @@ import {
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { resolveGatewayAuth } from "../../auth-resolve.js";
+import { listGatewayMethods } from "../../server-methods-list.js";
+import { LEGACY_ADVERTISED_GATEWAY_METHODS } from "../../server-methods-list.test-fixtures.js";
 import { startGatewayTailscaleExposure } from "../../server-tailscale.js";
 import { prepareTailscalePublishedOrigin } from "../../tailscale-published-origin.js";
 
@@ -320,6 +322,7 @@ describe("sendGatewayHello update detail scope", () => {
             ...context,
             handler: {
               ...context.handler,
+              gatewayMethods: listGatewayMethods(),
               socket,
               close: (code?: number, reason?: string) => socket.close(code, reason),
             },
@@ -337,6 +340,17 @@ describe("sendGatewayHello update detail scope", () => {
       };
       try {
         const original = await connect();
+        expect(original.hello.features.methods).toEqual([
+          ...LEGACY_ADVERTISED_GATEWAY_METHODS,
+          "plugins.controlUi.list",
+          "plugins.controlUi.reload",
+          "plugins.controlUi.report",
+          "plugins.controlUi.status",
+          "update.runs.get",
+          "update.runs.list",
+          "gateway.suspend.handoff",
+          "update.report",
+        ]);
         expect(original.hello.snapshot.controlUiIdentityUrl).toBe(
           "https://gateway.tailnet.ts.net/",
         );
@@ -357,6 +371,7 @@ describe("sendGatewayHello update detail scope", () => {
           expect(original.close).toHaveBeenCalledWith(1012, expect.anything()),
         );
         const renewed = await connect();
+        expect(renewed.hello.features.methods).toEqual(original.hello.features.methods);
         expect(renewed.hello.snapshot.controlUiIdentityUrl).toBe(
           withdrawal === "replacement" ? "https://replacement.tailnet.ts.net/" : undefined,
         );

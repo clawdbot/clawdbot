@@ -189,7 +189,7 @@ describe("core gateway method release trains", () => {
         .map((method) => method.name)
         .toSorted(),
     ).toEqual(TRAIN_2026_8_METHODS.toSorted());
-    for (const method of ["update.runs.get", "update.runs.list"]) {
+    for (const method of ["update.runs.get", "update.runs.list", "update.report"]) {
       expect(methods.find((candidate) => candidate.name === method)?.since).toBe("2026.9");
     }
     expect(methods.find((method) => method.name === "update.hold")?.since).toBe("2026.8");

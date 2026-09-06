@@ -125,7 +125,8 @@ tools or Active Memory escalation, but are never injected automatically.
 and search with keywords only. Leaving `provider` unset or set to `"auto"`
 falls back to keyword-only ranking when embedding setup or a request fails, as
 does `provider: "local"` (the GGUF/llama.cpp provider). Creation-time fallback
-still indexes text for keyword search, and `memory_search` includes the
+still indexes text for keyword search, including manual and background indexing
+before the first search. `memory_search` includes the
 redacted embedding-bootstrap reason in `debug.embeddingBootstrap` even when
 there are no matches.
 

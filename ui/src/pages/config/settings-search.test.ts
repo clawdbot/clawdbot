@@ -258,6 +258,60 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
+  it("refreshes prepared schema tiers while searching current draft keys and access", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        mcp: {
+          type: "object",
+          properties: {
+            servers: {
+              type: "object",
+              additionalProperties: {
+                type: "object",
+                properties: { command: { type: "string" } },
+              },
+            },
+          },
+        },
+      },
+    };
+    const servers: Record<string, { command: string }> = {};
+    const params = {
+      query: "zephyr",
+      schema,
+      value: { mcp: { servers } },
+      uiHints: { "mcp.servers.*.command": { advanced: false } },
+    };
+    expect(findSettingsSearchBlocks(params)).toEqual([]);
+    servers.zephyr = { command: "node" };
+    const common = {
+      routeId: "mcp",
+      label: "MCP",
+      search: "?section=mcp",
+      hash: "#config-section-mcp",
+    };
+    expect(findSettingsSearchBlocks(params)).toEqual([common]);
+    expect(findSettingsSearchBlocks({ ...params, canAdmin: false })).toEqual([]);
+    expect(findSettingsSearchBlocks(params)).toEqual([common]);
+    expect(findSettingsSearchBlocks({ ...params, uiHints: {} })).toEqual([
+      { ...common, search: "?section=mcp&advanced=1" },
+    ]);
+    expect(findSettingsSearchBlocks(params)).toEqual([common]);
+    expect(
+      findSettingsSearchBlocks({
+        ...params,
+        schema: {
+          type: "object",
+          properties: { mcp: { type: "object", properties: { endpoint: { type: "string" } } } },
+        },
+      }),
+    ).toEqual([]);
+    expect(findSettingsSearchBlocks(params)).toEqual([common]);
+    delete servers.zephyr;
+    expect(findSettingsSearchBlocks(params)).toEqual([]);
+  });
+
   it("finds existing update checks and channel controls on the curated Updates page", () => {
     const updateSchema = {
       type: "object",

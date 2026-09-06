@@ -14,37 +14,13 @@ import {
   REQUEST,
   seedActivePlacement,
 } from "./placement-dispatch-test-fixtures.js";
-import { createHarness } from "./placement-dispatch-test-harness.js";
-import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
+import { createHarness, createRecoveryService } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import * as support from "./service.test-support.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
-import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
 describe("worker placement restart recovery", () => {
   support.setupWorkerEnvironmentServiceSuite();
-
-  const createRecoveryService = (
-    placements: ReturnType<typeof createWorkerSessionPlacementStore>,
-    environments: ReturnType<typeof support.createService>,
-  ) =>
-    createWorkerPlacementDispatchService({
-      placements,
-      environments,
-      runnerAvailability: { read: () => undefined, version: () => 0 },
-      workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
-      runLocalBarrier: async ({ startDispatch }) => startDispatch(),
-      runRecoveryBarrier: async ({ run }) => await run("/gateway/workspace"),
-      runActivationBarrier: async ({ activate }) => activate(),
-      runMoveBarrier: async ({ begin }) => begin(),
-      resolveMoveDestination: async () => undefined,
-      runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
-      runReclaimBarrier: async ({ begin, reclaim }) => await reclaim("/gateway/workspace", begin()),
-      runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
-      resolveWorkspacePath: async () => "/gateway/workspace",
-      reportWorkspaceResultConflict: async () => {},
-      resolveWorkspaceResultConflict: async () => undefined,
-    });
 
   describe.each(["startup", "active"] as const)("%s recovery after worker retirement", (mode) => {
     it.each(["idle", "claimed turn", "pending result", "provider loss"] as const)(

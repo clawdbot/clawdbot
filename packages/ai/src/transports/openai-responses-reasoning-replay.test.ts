@@ -1,6 +1,7 @@
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
 import { convertResponsesMessages as convertProviderResponsesMessages } from "../providers/openai-responses-shared.js";
+import { createZeroUsage } from "../usage.test-support.js";
 import { buildOpenAIResponsesReasoningReplayMetadata } from "./openai-responses-compaction-replay.js";
 import { convertResponsesMessages } from "./openai-responses-replay-internal.js";
 
@@ -25,14 +26,7 @@ function createAssistant(content: AssistantMessage["content"]): AssistantMessage
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsage(),
     stopReason: "stop",
     timestamp: 0,
   };
