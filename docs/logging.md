@@ -306,8 +306,11 @@ The structured warning also includes `pid`, Node's `threadId`, and `isMainThread
 for the opener emitting it. Inspect each `openclaw logs --json` event's original
 `raw` record; ordinary console text omits structured metadata.
 An opener on the main thread may have awaited an integrity Worker, so these
-fields do not identify the thread performing every phase. Correlate the process
-ID with the log timestamp and current process; PIDs can be reused after exit.
+fields do not identify the thread performing every phase. `admissionMode` records
+the actual `sync` or `async` open driver. Async admission offloads its initial
+integrity check; resumed validation and repair can still run on the opener.
+Correlate the process ID with the log timestamp and current process; PIDs can be
+reused after exit.
 
 ### Slow reply preparation
 
