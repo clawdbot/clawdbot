@@ -658,7 +658,8 @@ export function stripMinimaxToolCallXml(text: string): string {
       closeMatch = encodedToolCallCloseRe.exec(text);
     }
     if (!closeMatch) {
-      continue;
+      // A later opening cannot find a closing marker once this search reaches the end.
+      break;
     }
 
     const end = closeMatch.index + closeMatch[0].length;

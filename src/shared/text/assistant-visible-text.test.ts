@@ -1,5 +1,5 @@
 // Assistant visible text tests cover extracting user-visible assistant output.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   sanitizeAssistantFinalAnswerText,
   sanitizeAssistantVisibleText,
@@ -686,6 +686,29 @@ describe("stripMinimaxToolCallXml", () => {
     const input = "The literal ]<]minimax[>[ delimiter is not a tool call.";
 
     expect(stripMinimaxToolCallXml(input)).toBe(input);
+  });
+
+  it("does not rescan repeated incomplete encoded openings", () => {
+    const open = "]<]minimax[>[<tool_call>";
+    const input = `${open}\n`.repeat(256);
+    const closeSource = "\\]?<\\]minimax\\[>\\[<\\/tool_call>";
+    const originalExec = RegExp.prototype.exec;
+    let closeSearches = 0;
+    const exec = vi
+      .spyOn(RegExp.prototype, "exec")
+      .mockImplementation(function (this: RegExp, value) {
+        if (this.source === closeSource) {
+          closeSearches += 1;
+        }
+        return originalExec.call(this, value);
+      });
+
+    try {
+      expect(stripMinimaxToolCallXml(input)).toBe(input);
+      expect(closeSearches).toBe(1);
+    } finally {
+      exec.mockRestore();
+    }
   });
 });
 
