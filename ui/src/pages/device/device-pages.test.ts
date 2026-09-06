@@ -489,15 +489,32 @@ describe("native device settings pages", () => {
     expect(capability.requestPermission).toHaveBeenCalledExactlyOnceWith("notifications");
     expect(row(page, "Accessibility").textContent).toContain("Denied");
     row(page, "Accessibility").querySelector<HTMLButtonElement>("button")!.click();
-    expect(capability.openSystemSettings).toHaveBeenCalledExactlyOnceWith("accessibility");
-    for (const [title, label] of [
-      ["Screen Recording", "Granted"],
-      ["Automation (Terminal)", "Unavailable"],
-    ] as const) {
-      expect(row(page, title).textContent).toContain(label);
-      expect(row(page, title).querySelector("button")).toBeNull();
-    }
+    expect(capability.requestPermission).toHaveBeenCalledWith("accessibility");
+    expect(row(page, "Screen Recording").textContent).toContain("Granted");
+    expect(row(page, "Screen Recording").querySelector("button")).toBeNull();
   });
+
+  it.each([
+    ["automation", "Automation (Terminal)", "notDetermined"],
+    ["automation", "Automation (Terminal)", "denied"],
+    ["automation", "Automation (Terminal)", "unavailable"],
+    ["accessibility", "Accessibility", "denied"],
+    ["screenRecording", "Screen Recording", "denied"],
+  ] as const)(
+    "keeps %s recovery with its native permission owner when %s is %s",
+    async (id, title, status) => {
+      const snapshot = createNativeDeviceSettingsSnapshot();
+      const permission = snapshot.permissions.entries.find((entry) => entry.id === id)!;
+      permission.status = status;
+      const { capability } = createCapability(snapshot);
+      const page = await mount("openclaw-device-permissions-page", capability);
+      const action = row(page, title).querySelector<HTMLButtonElement>("button");
+      expect(action).not.toBeNull();
+      action!.click();
+      expect(capability.requestPermission).toHaveBeenCalledExactlyOnceWith(id);
+      expect(capability.openSystemSettings).not.toHaveBeenCalled();
+    },
+  );
 
   it("enables precision with location access and changes local location and activity preferences", async () => {
     const native = createCapability();

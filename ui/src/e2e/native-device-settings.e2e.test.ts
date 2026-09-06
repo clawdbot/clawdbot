@@ -148,6 +148,17 @@ suite.define(() => {
           fullPage: true,
           path: path.join(artifactDir, "02-permissions.png"),
         });
+        const automation = permissionsPage.locator(".settings-row").filter({
+          has: page
+            .locator(".settings-row__title")
+            .filter({ hasText: /^Automation \(Terminal\)$/ }),
+        });
+        const recovery = automation.getByRole("button");
+        expect(await recovery.count()).toBe(1);
+        await recovery.click();
+        await expect
+          .poll(messages)
+          .toContainEqual({ type: "request-permission", id: "automation" });
 
         await sidebar.locator('a[href="/settings/updates"]').click();
         await page.getByRole("button", { name: "Check for Updates…", exact: true }).click();

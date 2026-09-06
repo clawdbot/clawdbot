@@ -190,6 +190,21 @@ struct DeviceSettingsBridgeTests {
         #expect(actual == expected)
     }
 
+    @Test(arguments: [
+        (AppleEventPermissionState.authorized, DeviceSettingsPermissionStatus.granted),
+        (.notDetermined, .notDetermined),
+        (.denied, .denied),
+        (.targetNotRunning, .unavailable),
+        (.targetNotAccessible, .unavailable),
+        (.failed(-1), .unavailable),
+    ])
+    func `Automation preserves first-use consent separately from denial`(
+        state: AppleEventPermissionState,
+        expected: DeviceSettingsPermissionStatus)
+    {
+        #expect(DeviceSettingsPermissionStatus(automation: state) == expected)
+    }
+
     @Test func `published JavaScript assigns the global then dispatches the exact event with escaped values`() throws {
         let script = try Self.snapshot(withNullableValues: true).javaScript()
         let prefix = "window.__OPENCLAW_NATIVE_DEVICE_SETTINGS__ = "

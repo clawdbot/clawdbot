@@ -113,6 +113,15 @@ enum DeviceSettingsPermissionStatus: String, Encodable {
         case .unknown, nil: self = .unavailable
         }
     }
+
+    init(automation state: AppleEventPermissionState) {
+        switch state {
+        case .authorized: self = .granted
+        case .notDetermined: self = .notDetermined
+        case .denied: self = .denied
+        case .targetNotRunning, .targetNotAccessible, .failed: self = .unavailable
+        }
+    }
 }
 
 enum DeviceSettingsLocationMode: String, CaseIterable, Encodable {
