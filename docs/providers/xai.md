@@ -107,6 +107,12 @@ subscription quota are separate billing buckets.
 
 - xAI decides which accounts can receive OAuth API tokens. If an account is
   not eligible, use the API-key path or check the subscription on xAI's side.
+- If the Gateway log shows `xai: OAuth profile "..." could not be resolved`,
+  the saved Grok OAuth credential no longer works (for example an expired or
+  revoked refresh token). While an xAI API key is also configured, OpenClaw
+  publishes the API-key catalog at `https://api.x.ai/v1`, billed to xAI API
+  credits instead of the Grok subscription, until you re-authenticate with
+  `openclaw models auth login --provider xai --method oauth`.
 
 <Tip>
 Use `xai-oauth` when signing in from SSH, Docker, or a VPS. OpenClaw prints a

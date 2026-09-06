@@ -1,10 +1,11 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Xai plugin entrypoint registers its OpenClaw integration.
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { defaultToolStreamExtraParams } from "openclaw/plugin-sdk/provider-stream-shared";
-import { jsonResult } from "openclaw/plugin-sdk/provider-web-search";
+import { formatCliCommand, jsonResult } from "openclaw/plugin-sdk/provider-web-search";
 import {
   buildMissingCodeExecutionApiKeyPayload,
   createCodeExecutionToolDefinition,
@@ -18,6 +19,7 @@ import {
   createLazyXaiVideoGenerationProvider,
 } from "./lazy-capability-providers.js";
 import { normalizeNativeXaiModelId } from "./model-compat.js";
+import { XAI_BASE_URL } from "./model-definitions.js";
 import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
 import {
   buildLiveXaiOAuthProvider,
@@ -73,6 +75,19 @@ function classifyXaiFailoverReason(errorMessage: string) {
     return "rate_limit" as const;
   }
   return undefined;
+}
+
+function formatXaiOAuthCatalogFallbackWarning(params: {
+  profileId: string | undefined;
+  error: unknown;
+  apiKeyFallback: boolean;
+}): string {
+  const owner = params.profileId ? `OAuth profile "${params.profileId}"` : "OAuth credential";
+  const route = params.apiKeyFallback
+    ? `publishing the API-key catalog at ${XAI_BASE_URL}, billed to xAI API credits instead of the Grok subscription`
+    : "no xAI API key is configured, so xAI models stay unavailable";
+  const loginCommand = formatCliCommand("openclaw models auth login --provider xai --method oauth");
+  return `xai: ${owner} could not be resolved (${formatErrorMessage(params.error)}); ${route}. Re-authenticate with ${loginCommand}.`;
 }
 
 function hasResolvableXaiApiKey(config: unknown, auth?: XaiToolAuthContext): boolean {
@@ -203,6 +218,7 @@ export default defineSingleProviderPluginEntry({
       order: "simple",
       run: async (ctx) => {
         const auth = ctx.resolveProviderAuth(PROVIDER_ID);
+        let oauthFailure: { error: unknown } | undefined;
         try {
           const { resolveApiKeyForProvider } =
             await import("openclaw/plugin-sdk/provider-auth-runtime");
@@ -225,29 +241,31 @@ export default defineSingleProviderPluginEntry({
               }),
             };
           }
-        } catch {
+        } catch (error) {
+          // OAuth stays advisory so a configured API key can still publish the standard
+          // catalog, but only a selected OAuth profile changes route here (Grok
+          // subscription -> xAI API credits); that failure must reach the operator.
           if (auth.mode === "oauth") {
-            // OAuth discovery is advisory; fall through so configured API-key
-            // auth can still publish the standard xAI catalog.
+            oauthFailure = { error };
           }
         }
-        if (auth.apiKey) {
-          return {
-            provider: await buildLiveXaiProvider({
-              apiKey: auth.apiKey,
-              discoveryApiKey: auth.discoveryApiKey,
+        const apiKeyAuth = auth.apiKey ? auth : ctx.resolveProviderApiKey(PROVIDER_ID);
+        if (oauthFailure) {
+          pluginApi.logger.warn(
+            formatXaiOAuthCatalogFallbackWarning({
+              profileId: auth.profileId,
+              error: oauthFailure.error,
+              apiKeyFallback: Boolean(apiKeyAuth.apiKey),
             }),
-          };
+          );
         }
-
-        const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID);
-        if (!apiKey.apiKey) {
+        if (!apiKeyAuth.apiKey) {
           return null;
         }
         return {
           provider: await buildLiveXaiProvider({
-            apiKey: apiKey.apiKey,
-            discoveryApiKey: apiKey.discoveryApiKey,
+            apiKey: apiKeyAuth.apiKey,
+            discoveryApiKey: apiKeyAuth.discoveryApiKey,
           }),
         };
       },
