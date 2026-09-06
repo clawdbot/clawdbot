@@ -1,53 +1,17 @@
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { z } from "zod";
 import type { DiscordSourceConfig, SourceRuntime, SourceStatus } from "../../types.js";
+import { checkAbort, parseApiBase, wait } from "../http.js";
 
 const retrySchema = z.object({ retry_after: z.number().finite().nonnegative() });
 const timeoutMs = 30_000;
-
-export function checkAbort(signal?: AbortSignal): void {
-  if (signal?.aborted) {
-    // Abort reasons and transport errors may contain credentials supplied by callers.
-    throw new DOMException("Discord collection aborted.", "AbortError");
-  }
-}
-
-async function wait(ms: number, signal?: AbortSignal): Promise<void> {
-  // Long server delays must not overflow Node's 32-bit timer and become immediate retries.
-  if (ms > 2_147_483_647) {
-    await wait(2_147_483_647, signal);
-    return wait(ms - 2_147_483_647, signal);
-  }
-  checkAbort(signal);
-  await new Promise<void>((resolve, reject) => {
-    const finish = () => {
-      signal?.removeEventListener("abort", abort);
-      resolve();
-    };
-    const timer = setTimeout(finish, ms);
-    const abort = () => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", abort);
-      reject(new DOMException("Discord collection aborted.", "AbortError"));
-    };
-    signal?.addEventListener("abort", abort, { once: true });
-  });
-}
 
 export function createClient(
   config: DiscordSourceConfig,
   runtime: SourceRuntime,
   status: SourceStatus,
 ) {
-  let base: URL;
-  try {
-    base = new URL(`${config.apiBaseUrl.replace(/\/+$/, "")}/`);
-  } catch {
-    throw new Error("Discord API base URL is invalid.");
-  }
-  if (base.protocol !== "https:" || base.username || base.password || base.search || base.hash) {
-    throw new Error("Discord API base URL must use HTTPS without credentials, query, or fragment.");
-  }
+  const base = parseApiBase(config.apiBaseUrl, "Discord");
 
   async function request(url: string) {
     const controller = new AbortController();
@@ -62,7 +26,7 @@ export function createClient(
     };
     let release: (() => Promise<void>) | undefined;
     try {
-      checkAbort(runtime.signal);
+      checkAbort(runtime.signal, "Discord collection aborted.");
       status.stats.apiCalls = Number(status.stats.apiCalls) + 1;
       let response: Response;
       if (runtime.fetchImpl) {
@@ -81,7 +45,7 @@ export function createClient(
         release = result.release;
       }
       const body = await response.text();
-      checkAbort(runtime.signal);
+      checkAbort(runtime.signal, "Discord collection aborted.");
       let data: unknown;
       try {
         data = JSON.parse(body);
@@ -103,18 +67,18 @@ export function createClient(
       }
       let retries = 0;
       while (true) {
-        checkAbort(runtime.signal);
+        checkAbort(runtime.signal, "Discord collection aborted.");
         let result: Awaited<ReturnType<typeof request>>;
         try {
           result = await request(url.toString());
         } catch {
-          checkAbort(runtime.signal);
+          checkAbort(runtime.signal, "Discord collection aborted.");
           if (retries >= 2) {
             throw new Error(
               "Discord request failed after retries; check connectivity and API access.",
             );
           }
-          await wait(1000 * 2 ** retries++, runtime.signal);
+          await wait(1000 * 2 ** retries++, runtime.signal, "Discord collection aborted.");
           continue;
         }
         if (result.status === 429) {
@@ -124,11 +88,12 @@ export function createClient(
           await wait(
             Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 1000,
             runtime.signal,
+            "Discord collection aborted.",
           );
           continue;
         }
         if (result.status >= 500 && retries < 2) {
-          await wait(1000 * 2 ** retries++, runtime.signal);
+          await wait(1000 * 2 ** retries++, runtime.signal, "Discord collection aborted.");
           continue;
         }
         if (result.status < 200 || result.status >= 300) {

@@ -164,15 +164,15 @@ export async function resolveTeamReportsConfig(
   const { applyResolvedAssignments, createResolverContext, resolveSecretRefValues } =
     await import("openclaw/plugin-sdk/secret-ref-runtime");
   const context = createResolverContext({ sourceConfig: fullConfig, env: process.env });
-  let githubToken = typeof config.github.token === "string" ? config.github.token : "";
-  let discordToken = typeof config.discord?.token === "string" ? config.discord.token : "";
-  const addToken = (
-    token: z.infer<typeof secretInputSchema>,
-    name: string,
-    apply: (value: string) => void,
-  ) => {
+  const tokens: Record<"github" | "discord", string> = { github: "", discord: "" };
+  for (const name of ["github", "discord"] as const) {
+    const token = config[name]?.token;
+    if (token === undefined) {
+      continue;
+    }
     if (typeof token === "string") {
-      return;
+      tokens[name] = token;
+      continue;
     }
     context.assignments.push({
       ref: token,
@@ -186,16 +186,8 @@ export async function resolveTeamReportsConfig(
         if (typeof value !== "string" || value.trim().length === 0) {
           throw new Error(`team-reports.${name}.token resolved to an empty or non-string value.`);
         }
-        apply(value);
+        tokens[name] = value;
       },
-    });
-  };
-  addToken(config.github.token, "github", (value) => {
-    githubToken = value;
-  });
-  if (config.discord) {
-    addToken(config.discord.token, "discord", (value) => {
-      discordToken = value;
     });
   }
   if (context.assignments.length > 0) {
@@ -219,7 +211,7 @@ export async function resolveTeamReportsConfig(
   return {
     github: {
       ...config.github,
-      token: githubToken,
+      token: tokens.github,
       apiBaseUrl: config.github.apiBaseUrl.replace(/\/+$/, ""),
       ignoreCommentPatterns: config.github.ignoreCommentPatterns.map(
         (pattern) => new RegExp(pattern),
@@ -229,7 +221,7 @@ export async function resolveTeamReportsConfig(
       ? {
           discord: {
             ...config.discord,
-            token: discordToken,
+            token: tokens.discord,
             apiBaseUrl: "https://discord.com/api/v10",
           },
         }

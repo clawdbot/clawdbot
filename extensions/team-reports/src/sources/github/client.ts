@@ -2,37 +2,9 @@ import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime"
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { z } from "zod";
 import type { GithubSourceConfig, SourceRuntime, SourceStatus } from "../../types.js";
+import { checkAbort, parseApiBase, wait } from "../http.js";
 
 export class GithubSourceError extends Error {}
-
-export function checkAbort(signal?: AbortSignal): void {
-  if (signal?.aborted) {
-    throw new DOMException("GitHub collection aborted", "AbortError");
-  }
-}
-
-async function wait(ms: number, signal?: AbortSignal): Promise<void> {
-  // Node timers overflow above 2^31-1; chunk long reset delays without polling the API.
-  const deadline = Date.now() + ms;
-  do {
-    checkAbort(signal);
-    await new Promise<void>((resolve, reject) => {
-      const onAbort = () => {
-        clearTimeout(timer);
-        reject(new DOMException("GitHub collection aborted", "AbortError"));
-      };
-      const timer = setTimeout(
-        () => {
-          signal?.removeEventListener("abort", onAbort);
-          resolve();
-        },
-        Math.min(Math.max(0, deadline - Date.now()), 2_147_483_647),
-      );
-      signal?.addEventListener("abort", onAbort, { once: true });
-    });
-  } while (Date.now() < deadline);
-  checkAbort(signal);
-}
 
 export function parse<T>(schema: z.ZodType<T>, value: unknown): T {
   const result = schema.safeParse(value);
@@ -55,16 +27,7 @@ export class GithubClient {
     readonly status: SourceStatus,
   ) {
     try {
-      this.base = new URL(`${cfg.apiBaseUrl.replace(/\/+$/, "")}/`);
-      if (
-        this.base.protocol !== "https:" ||
-        this.base.username ||
-        this.base.password ||
-        this.base.search ||
-        this.base.hash
-      ) {
-        throw new Error();
-      }
+      this.base = parseApiBase(cfg.apiBaseUrl, "GitHub");
     } catch {
       throw new GithubSourceError(
         "GitHub API base URL must be HTTPS without credentials, query, or fragment",
@@ -73,7 +36,7 @@ export class GithubClient {
   }
 
   warn(scope: string, error: unknown): void {
-    checkAbort(this.runtime.signal);
+    checkAbort(this.runtime.signal, "GitHub collection aborted");
     const detail =
       error instanceof GithubSourceError
         ? error.message
@@ -86,7 +49,7 @@ export class GithubClient {
   }
 
   async attempt(scope: string, action: () => Promise<void>, required = false): Promise<void> {
-    checkAbort(this.runtime.signal);
+    checkAbort(this.runtime.signal, "GitHub collection aborted");
     try {
       await action();
     } catch (error) {
@@ -113,7 +76,7 @@ export class GithubClient {
   async get(path: string): Promise<{ data: unknown; next?: string }> {
     const url = this.url(path);
     for (let failures = 0; ;) {
-      checkAbort(this.runtime.signal);
+      checkAbort(this.runtime.signal, "GitHub collection aborted");
       this.status.stats.apiCalls = Number(this.status.stats.apiCalls) + 1;
       let response: Response;
       let data: unknown;
@@ -150,7 +113,7 @@ export class GithubClient {
         }
         // Error payloads can echo credentials; neither parse errors nor API bodies escape this client.
         const body = await response.text();
-        checkAbort(this.runtime.signal);
+        checkAbort(this.runtime.signal, "GitHub collection aborted");
         if (response.ok) {
           try {
             data = JSON.parse(body);
@@ -165,7 +128,7 @@ export class GithubClient {
           }
         }
       } catch (error) {
-        checkAbort(this.runtime.signal);
+        checkAbort(this.runtime.signal, "GitHub collection aborted");
         if (error instanceof GithubSourceError) {
           throw error;
         }
@@ -178,12 +141,12 @@ export class GithubClient {
         clearTimeout(timeout);
         if (release) {
           await release().catch(() => {
-            checkAbort(this.runtime.signal);
+            checkAbort(this.runtime.signal, "GitHub collection aborted");
             throw new GithubSourceError("Could not release API response");
           });
         }
       }
-      checkAbort(this.runtime.signal);
+      checkAbort(this.runtime.signal, "GitHub collection aborted");
       const remaining = response.headers.get("x-ratelimit-remaining");
       if (remaining !== null && Number.isFinite(Number(remaining))) {
         this.status.stats.rateLimitRemaining = Number(remaining);
@@ -209,12 +172,13 @@ export class GithubClient {
             retryAfter === undefined && remaining !== "0" ? 60_000 : 0,
           ),
           this.runtime.signal,
+          "GitHub collection aborted",
         );
         continue;
       }
       if (response.status >= 500 && failures < 3) {
         failures += 1;
-        await wait(1000 * 2 ** (failures - 1), this.runtime.signal);
+        await wait(1000 * 2 ** (failures - 1), this.runtime.signal, "GitHub collection aborted");
         continue;
       }
       if (!response.ok) {
@@ -235,7 +199,7 @@ export class GithubClient {
     let next: string | undefined = path;
     const seen = new Set<string>();
     while (next) {
-      checkAbort(this.runtime.signal);
+      checkAbort(this.runtime.signal, "GitHub collection aborted");
       const canonical = this.url(next).href;
       if (seen.has(canonical)) {
         throw new GithubSourceError("API pagination did not advance");
@@ -243,7 +207,7 @@ export class GithubClient {
       seen.add(canonical);
       const page = await this.get(next);
       for (const item of parse(z.array(schema), page.data)) {
-        checkAbort(this.runtime.signal);
+        checkAbort(this.runtime.signal, "GitHub collection aborted");
         yield item;
       }
       next = page.next;

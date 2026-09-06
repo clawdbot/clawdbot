@@ -10,7 +10,8 @@ import type {
   SourceRuntime,
   SourceStatus,
 } from "../../types.js";
-import { checkAbort, GithubClient, parse, pathWithQuery } from "./client.js";
+import { checkAbort } from "../http.js";
+import { GithubClient, parse, pathWithQuery } from "./client.js";
 import {
   advisorySchema,
   collaboratorSchema,
@@ -138,7 +139,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
           );
         }
       }
-      checkAbort(runtime.signal);
+      checkAbort(runtime.signal, "GitHub collection aborted");
       return {
         people: [...people]
           .toSorted(([a], [b]) => a.localeCompare(b, "en"))
@@ -150,7 +151,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
     async collect(cfg, window, roster) {
       const status = newStatus();
       const client = new GithubClient(cfg, runtime, status);
-      checkAbort(runtime.signal);
+      checkAbort(runtime.signal, "GitHub collection aborted");
       if (
         !Number.isFinite(window.sinceMs) ||
         !Number.isFinite(window.untilMs) ||
@@ -163,7 +164,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
       const active = new Set<string>();
       const seenIssues = new Set<string>();
       const add = (item: GithubItem) => {
-        checkAbort(runtime.signal);
+        checkAbort(runtime.signal, "GitHub collection aborted");
         if (item.atMs >= window.sinceMs && item.atMs < window.untilMs) {
           items.set(`${item.kind}\0${item.url}\0${item.actor.toLowerCase()}\0${item.atMs}`, item);
         }
@@ -386,7 +387,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
           }
         });
       }
-      checkAbort(runtime.signal);
+      checkAbort(runtime.signal, "GitHub collection aborted");
       return {
         items: [...items.values()].toSorted(
           (a, b) =>
