@@ -1779,7 +1779,37 @@ describe("openai image generation provider", () => {
     );
   });
 
-  it("surfaces completed message output text when the snapshot has no image", async () => {
+  it("surfaces streamed message refusal text when the completed snapshot is empty", async () => {
+    mockCodexAuthOnly();
+    mockCodexRawStream(
+      [
+        {
+          type: "response.output_item.done",
+          item: {
+            id: "msg_refused",
+            type: "message",
+            content: [
+              {
+                type: "refusal",
+                refusal: "Your request was rejected by the safety system.",
+              },
+            ],
+          },
+        },
+        { type: "response.completed", response: { output: [] } },
+      ]
+        .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+        .join(""),
+    );
+
+    await expect(
+      generateOpenAIImage("Draw a prompt the provider refuses mid-stream"),
+    ).rejects.toThrow(
+      'Image generation refused by provider safety system: "Your request was rejected by the safety system."',
+    );
+  });
+
+  it("surfaces completed message output text as provider text instead of a safety refusal", async () => {
     mockCodexAuthOnly();
     mockCodexRawStream(
       [
@@ -1792,7 +1822,7 @@ describe("openai image generation provider", () => {
                 content: [
                   {
                     type: "output_text",
-                    text: "Your request was rejected by the safety system. safety_violations=[hidden]",
+                    text: "What size should the image be? safety_violations=[hidden]",
                   },
                 ],
               },
@@ -1805,10 +1835,46 @@ describe("openai image generation provider", () => {
     );
 
     await expect(
-      generateOpenAIImage("Draw a prompt the provider refuses in a message"),
+      generateOpenAIImage("Ask a clarifying question instead of generating an image"),
     ).rejects.toThrow(
-      /refused by provider safety system: "Your request was rejected by the safety system\./,
+      'Image generation provider returned text instead of an image: "What size should the image be?"',
     );
+  });
+
+  it("returns a completed image when a sibling image call failed", async () => {
+    mockCodexAuthOnly();
+    mockCodexRawStream(
+      [
+        {
+          type: "response.completed",
+          response: {
+            output: [
+              {
+                id: "img_ok",
+                type: "image_generation_call",
+                status: "completed",
+                result: Buffer.from("kept-image").toString("base64"),
+              },
+              {
+                id: "img_failed",
+                type: "image_generation_call",
+                status: "failed",
+                result: Buffer.from("failed-image").toString("base64"),
+              },
+            ],
+          },
+        },
+      ]
+        .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+        .join(""),
+    );
+
+    const result = await generateOpenAIImage(
+      "Keep the completed image when another image call in the same snapshot failed",
+    );
+
+    expect(result.images).toHaveLength(1);
+    expect(result.images[0]?.buffer).toEqual(Buffer.from("kept-image"));
   });
 
   it("prefers completed refusal text over a failed image-call status", async () => {

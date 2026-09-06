@@ -468,6 +468,7 @@ type OpenAICodexImageGenerationContent = {
 };
 
 type OpenAICodexImageGenerationItem = {
+  id?: string;
   type?: string;
   result?: string | null;
   revised_prompt?: string;
@@ -614,10 +615,42 @@ function sanitizeCodexRefusalText(value: unknown): string | undefined {
   if (!normalized) {
     return undefined;
   }
-  return truncateUtf16Safe(normalized, LOG_VALUE_MAX_CHARS);
+  return normalized.length > LOG_VALUE_MAX_CHARS
+    ? `${truncateUtf16Safe(normalized, LOG_VALUE_MAX_CHARS)}...`
+    : normalized;
 }
 
-function extractCodexCompletedRefusalText(
+function mergeCodexOutputItems(
+  completed: OpenAICodexImageGenerationItem[] | undefined,
+  streamed: OpenAICodexImageGenerationItem[],
+): OpenAICodexImageGenerationItem[] {
+  const merged = [...(completed ?? [])];
+  const seenIds = new Set(
+    merged
+      .map((item) => item.id)
+      .filter((id): id is string => typeof id === "string" && id.length > 0),
+  );
+  const completedHasImageCall = merged.some((item) => item.type === "image_generation_call");
+  for (const item of streamed) {
+    if (typeof item.id === "string" && item.id.length > 0) {
+      if (seenIds.has(item.id)) {
+        continue;
+      }
+      seenIds.add(item.id);
+      merged.push(item);
+      continue;
+    }
+    // Completed snapshot owns unidentifiable image calls; streamed messages
+    // still recover when the terminal output omitted them.
+    if (item.type === "image_generation_call" && completedHasImageCall) {
+      continue;
+    }
+    merged.push(item);
+  }
+  return merged;
+}
+
+function extractCodexRefusalTypedText(
   output: OpenAICodexImageGenerationItem[] | undefined,
 ): string | undefined {
   if (!output?.length) {
@@ -641,11 +674,20 @@ function extractCodexCompletedRefusalText(
       }
     }
   }
+  return undefined;
+}
+
+function extractCodexProviderText(
+  output: OpenAICodexImageGenerationItem[] | undefined,
+): string | undefined {
+  if (!output?.length) {
+    return undefined;
+  }
   for (const entry of output) {
     if (entry.type !== "message") {
       continue;
     }
-    const topLevel = sanitizeCodexRefusalText(entry.text ?? entry.refusal);
+    const topLevel = sanitizeCodexRefusalText(entry.text);
     if (topLevel) {
       return topLevel;
     }
@@ -666,9 +708,6 @@ function toCodexImage(
   index: number,
   outputFormat?: ImageGenerationOutputFormat,
 ): ImageGenerationResult["images"][number] | null {
-  if (entry.status && entry.status !== "completed") {
-    throw new Error(`OpenAI Codex image generation image call did not complete (${entry.status})`);
-  }
   if (typeof entry.result !== "string" || entry.result.length === 0) {
     return null;
   }
@@ -708,24 +747,21 @@ function extractCodexImageGenerationResult(params: {
       completedResponse = event.response;
       break;
     }
-    if (
-      event.type === "response.output_item.done" &&
-      event.item?.type === "image_generation_call" &&
-      outputItems.length < OPENAI_MAX_IMAGE_RESULTS
-    ) {
+    if (event.type === "response.output_item.done" && event.item) {
       outputItems.push(event.item);
     }
   }
   if (!completedResponse) {
     throw new Error("OpenAI Codex image generation stream closed before response.completed");
   }
-  const completedOutputItems = (completedResponse.output ?? [])
+  // Completed snapshot wins on id; streamed done items recover messages and
+  // images that the terminal output omitted.
+  const mergedOutput = mergeCodexOutputItems(completedResponse.output, outputItems);
+  const selectedOutputItems = mergedOutput
     .filter((entry) => entry.type === "image_generation_call")
     .slice(0, OPENAI_MAX_IMAGE_RESULTS);
-  // The completed snapshot owns final provider state; done events only recover
-  // compatible streams that omit their image from the terminal output.
-  const selectedOutputItems = completedOutputItems.length > 0 ? completedOutputItems : outputItems;
-  const refusalText = extractCodexCompletedRefusalText(completedResponse.output);
+  const refusalText = extractCodexRefusalTypedText(mergedOutput);
+  const providerText = extractCodexProviderText(mergedOutput);
   const images = selectedOutputItems
     .filter((item) => !item.status || item.status === "completed")
     .map((item, index) => toCodexImage(item, index, params.outputFormat))
@@ -740,6 +776,11 @@ function extractCodexImageGenerationResult(params: {
     if (unfinished?.status) {
       throw new Error(
         `OpenAI Codex image generation image call did not complete (${unfinished.status})`,
+      );
+    }
+    if (providerText) {
+      throw new Error(
+        `Image generation provider returned text instead of an image: "${providerText}"`,
       );
     }
     throw new Error("OpenAI Codex image generation completed but did not produce an image");
