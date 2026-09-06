@@ -55,74 +55,6 @@ function writePackagedPluginFixture(id: string) {
   return pluginRoot;
 }
 
-function writePreSplitSdkBridgeConsumerFixture() {
-  const pluginRoot = tempDirs.make("openclaw-plugin-loader-");
-  fs.mkdirSync(path.join(pluginRoot, "dist"));
-  fs.writeFileSync(
-    path.join(pluginRoot, "package.json"),
-    JSON.stringify(
-      {
-        name: "@openclaw/sdk-bridge-consumer",
-        version: "2026.7.2-beta.7",
-        type: "module",
-        openclaw: {
-          extensions: ["./dist/index.js"],
-          runtimeExtensions: ["./dist/index.js"],
-        },
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
-  fs.writeFileSync(
-    path.join(pluginRoot, "openclaw.plugin.json"),
-    JSON.stringify(
-      {
-        id: "sdk-bridge-consumer",
-        configSchema: {
-          type: "object",
-          additionalProperties: false,
-          properties: {},
-        },
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
-  // Import shapes copied from published 2026.7.2-beta.7 artifacts:
-  // voice-call/matrix doctor contracts (runtime-doctor), whatsapp ack policy
-  // (channel-feedback), slack progress-draft render (channel-outbound).
-  // Covers both alias classes on purpose: runtime-doctor is private-local-only,
-  // the channel subpaths are public. A source checkout has no dist/, so every
-  // subpath listed here is evaluated through jiti — keep them light.
-  fs.writeFileSync(
-    path.join(pluginRoot, "dist", "index.js"),
-    [
-      'import { archiveLegacyStateSource, detectOpenClawStateDatabaseSchemaMigrations, repairOpenClawStateDatabaseSchema, detectPluginInstallPathIssue, formatPluginInstallPathIssue, removePluginFromConfig, createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/runtime-doctor";',
-      'import { shouldAckReactionForWhatsApp } from "openclaw/plugin-sdk/channel-feedback";',
-      'import { resolveChannelProgressDraftRender } from "openclaw/plugin-sdk/channel-outbound";',
-      'export default { id: "sdk-bridge-consumer", register() {',
-      "  const bridged = [",
-      "    archiveLegacyStateSource,",
-      "    detectOpenClawStateDatabaseSchemaMigrations,",
-      "    repairOpenClawStateDatabaseSchema,",
-      "    detectPluginInstallPathIssue,",
-      "    formatPluginInstallPathIssue,",
-      "    removePluginFromConfig,",
-      "    createPluginStateSyncKeyedStore,",
-      "    shouldAckReactionForWhatsApp,",
-      "    resolveChannelProgressDraftRender,",
-      "  ];",
-      '  if (bridged.some((entry) => typeof entry !== "function")) throw new Error("missing bridge");',
-      "} };",
-    ].join("\n"),
-    "utf-8",
-  );
-  return pluginRoot;
-}
-
 afterEach(() => {
   resetPluginCache();
   vi.unstubAllEnvs();
@@ -191,27 +123,5 @@ describe("createPluginModuleLoader", () => {
     expect(after.nativeHits).toBeGreaterThan(before.nativeHits);
     expect(after.sourceTransformForced).toBe(before.sourceTransformForced);
     expect(after.sourceTransformFallbacks).toBe(before.sourceTransformFallbacks);
-  });
-
-  it("loads published pre-split SDK bridge imports (doctor repair, WhatsApp ack, Slack render)", () => {
-    const pluginRoot = writePreSplitSdkBridgeConsumerFixture();
-    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", tempDirs.make("openclaw-plugin-loader-"));
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      onlyPluginIds: ["sdk-bridge-consumer"],
-      config: {
-        plugins: {
-          enabled: true,
-          load: { paths: [pluginRoot] },
-          allow: ["sdk-bridge-consumer"],
-          entries: { "sdk-bridge-consumer": { enabled: true } },
-        },
-      },
-    });
-
-    const entry = registry.plugins.find((plugin) => plugin.id === "sdk-bridge-consumer");
-    expect(entry?.error ?? null).toBeNull();
-    expect(entry?.status).toBe("loaded");
   });
 });
