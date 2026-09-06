@@ -6,6 +6,15 @@ private let chatSessionActionsLogger = Logger(
     subsystem: "ai.openclaw",
     category: "OpenClawChat")
 
+/// One server-authoritative statement about a single session's liveness, as the
+/// source that applied it saw it. Reconciliation consumes these directly so a
+/// snapshot about one session can never retire another session's latch.
+struct GatewaySessionLivenessObservation {
+    let sessionKey: String
+    /// `nil` when the source carried no liveness for this session.
+    let hasActiveRun: Bool?
+}
+
 extension OpenClawChatViewModel {
     var canRequestSessionCompact: Bool {
         !self.isCompacting &&
@@ -609,16 +618,22 @@ extension OpenClawChatViewModel {
     }
 
     /// Drops latches the server has since contradicted. Call this only right
-    /// after applying server-authoritative session liveness; an unknown
-    /// (`nil`) or missing row is not a completion and keeps its latch.
-    func reconcileGatewayConfirmedActiveRuns() {
+    /// after applying server-authoritative session liveness, and pass the
+    /// observation itself instead of rescanning `sessions`: a single-row
+    /// snapshot states nothing about any other session, whose cached row can
+    /// still be the stale pre-run entry its latch exists to outlive. An
+    /// unknown (`nil`) liveness is not a completion and keeps its latch.
+    func reconcileGatewayConfirmedActiveRuns(
+        observing observations: [GatewaySessionLivenessObservation])
+    {
         guard !self.gatewayConfirmedActiveRunSessionKeys.isEmpty else { return }
+        let idleSessionKeys = observations.filter { $0.hasActiveRun == false }.map(\.sessionKey)
+        guard !idleSessionKeys.isEmpty else { return }
         self.gatewayConfirmedActiveRunSessionKeys = self.gatewayConfirmedActiveRunSessionKeys
             .filter { key in
-                guard let entry = self.sessions.first(where: {
-                    self.matchesCurrentSessionKey(incoming: $0.key, current: key)
-                }) else { return true }
-                return entry.hasActiveRun != false
+                !idleSessionKeys.contains {
+                    self.matchesCurrentSessionKey(incoming: $0, current: key)
+                }
             }
     }
 

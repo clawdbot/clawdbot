@@ -1290,6 +1290,80 @@ struct ChatViewModelSessionActionTests {
         #expect(await transport.switchedBranches().count == 1)
     }
 
+    @Test func `another session's lifecycle completion cannot clear a retained active run`() async {
+        let branches = self.branches()
+        // The refresh failed, so this row predates the run the Gateway reported.
+        let staleInactiveSession = self.entry(key: "main", hasActiveRun: false)
+        let otherSession = self.entry(key: "other", hasActiveRun: false)
+        let transport = SessionActionTransport(
+            branchSwitchError: GatewayResponseError(
+                method: "sessions.branches.switch",
+                code: "UNAVAILABLE",
+                message: "Branch switch is temporarily blocked.",
+                details: ["reason": AnyCodable("session-run-active")]),
+            // No canned responses, so every sessions.list throws.
+            sessionListResponses: [],
+            branches: branches)
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.sessionBranches = branches
+        viewModel.sessions = [staleInactiveSession, otherSession]
+
+        await viewModel.switchToBranch("leaf-new")
+
+        #expect(viewModel.canSwitchSessionBranch == false)
+
+        // A lifecycle end for an unrelated listed session carries authoritative
+        // liveness for that session only. It must not retire "main"'s latch,
+        // whose whole purpose is to outlive "main"'s stale inactive row.
+        viewModel.handleTransportEvent(.sessionsChanged(OpenClawChatSessionsChangedEvent(
+            sessionKey: "other",
+            reason: "run",
+            phase: "end",
+            session: self.entry(key: "other", hasActiveRun: false))))
+
+        #expect(viewModel.sessions.first(where: { $0.key == "other" })?.hasActiveRun == false)
+        #expect(viewModel.currentSessionEntry()?.hasActiveRun == false)
+        #expect(viewModel.canSwitchSessionBranch == false)
+
+        await viewModel.switchToBranch("leaf-new")
+
+        #expect(await transport.switchedBranches().count == 1)
+    }
+
+    @Test func `lifecycle completion for the rejected session clears its retained active run`() async {
+        let branches = self.branches()
+        let staleInactiveSession = self.entry(key: "main", hasActiveRun: false)
+        let transport = SessionActionTransport(
+            branchSwitchError: GatewayResponseError(
+                method: "sessions.branches.switch",
+                code: "UNAVAILABLE",
+                message: "Branch switch is temporarily blocked.",
+                details: ["reason": AnyCodable("session-run-active")]),
+            // No canned responses, so every sessions.list throws. Recovery here
+            // depends only on the lifecycle event, not on a later list.
+            sessionListResponses: [],
+            branches: branches)
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.sessionBranches = branches
+        viewModel.sessions = [staleInactiveSession]
+
+        await viewModel.switchToBranch("leaf-new")
+
+        #expect(viewModel.canSwitchSessionBranch == false)
+
+        viewModel.handleTransportEvent(.sessionsChanged(OpenClawChatSessionsChangedEvent(
+            sessionKey: "main",
+            reason: "run",
+            phase: "end",
+            session: self.entry(key: "main", hasActiveRun: false))))
+
+        #expect(viewModel.canSwitchSessionBranch)
+
+        await viewModel.switchToBranch("leaf-new")
+
+        #expect(await transport.switchedBranches().count == 2)
+    }
+
     @Test func `branch switch clears retained active run state on authoritative completion`() async {
         let branches = self.branches()
         let staleInactiveSession = self.entry(key: "main", hasActiveRun: false)

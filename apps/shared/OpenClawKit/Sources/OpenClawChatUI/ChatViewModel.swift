@@ -1138,8 +1138,15 @@ extension OpenClawChatViewModel {
             }
             self.sessions = self.applyingLocalUnreadOverrides(to: organized)
             // Reached only after the list succeeded and applied, so a failed
-            // refresh keeps every Gateway-confirmed active run latched.
-            self.reconcileGatewayConfirmedActiveRuns()
+            // refresh keeps every Gateway-confirmed active run latched. The
+            // list is authoritative for the rows it returned and silent about
+            // any session it omitted, which therefore keeps its latch.
+            self.reconcileGatewayConfirmedActiveRuns(
+                observing: organized.map {
+                    GatewaySessionLivenessObservation(
+                        sessionKey: $0.key,
+                        hasActiveRun: $0.hasActiveRun)
+                })
             self.sessionDefaults = res.defaults
             self.restoreOverlappingSettingsPatch(
                 requestID: overlappingSuccessfulSettingsPatchRequestID,

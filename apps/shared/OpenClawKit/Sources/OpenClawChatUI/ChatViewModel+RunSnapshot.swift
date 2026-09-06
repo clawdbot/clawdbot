@@ -20,7 +20,12 @@ extension OpenClawChatViewModel {
                 updated[index].hasActiveRun = sessionInfo.hasActiveRun
                 updated[index].activeRunIds = sessionInfo.activeRunIds
                 self.sessions = updated
-                self.reconcileGatewayConfirmedActiveRuns()
+                // The snapshot is authoritative for this session only.
+                self.reconcileGatewayConfirmedActiveRuns(observing: [
+                    GatewaySessionLivenessObservation(
+                        sessionKey: updated[index].key,
+                        hasActiveRun: sessionInfo.hasActiveRun),
+                ])
             } else {
                 self.updateActiveSessionRunIDs(sessionInfo.activeRunIds ?? [])
             }
