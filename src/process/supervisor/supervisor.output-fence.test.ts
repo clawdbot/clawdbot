@@ -7,7 +7,6 @@ import {
   spawnChild,
   type StubChildAdapter,
 } from "./supervisor.test-support.js";
-import type { ManagedRun } from "./types.js";
 
 const { createChildAdapterMock, createPtyAdapterMock } = vi.hoisted(() => ({
   createChildAdapterMock: vi.fn(),
