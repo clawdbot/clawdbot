@@ -39,10 +39,10 @@ function contributionLedger({
     new Set(sourcePullRequests),
     sourceReferences,
     [],
-    [],
     new Set(),
     [],
     Date.parse("2026-08-05T00:00:00Z"),
+    new Set([targetSha]),
   ) as ReturnType<typeof ledgerFor> & {
     provenance: {
       inRangePullRequests: number;
@@ -210,15 +210,15 @@ describe("renderContributionRecordEntry", () => {
       new Set(),
       new Set(),
       new Set(),
-      new Set(),
       [],
       Date.parse("2026-07-09T00:00:00Z"),
+      new Set([targetSha]),
     );
 
     expect(result.ledger).toContain("- **PR #125** Thanks @carol and @alice and @bob.");
   });
 
-  it("counts associated and PR-typed source refs before retained seed-only rows", () => {
+  it("counts associated and reachable source PRs before retained seed-only rows", () => {
     const nodes = new Map(
       [1, 2, 3].map((number) => [
         number,
@@ -227,6 +227,7 @@ describe("renderContributionRecordEntry", () => {
           closingIssuesReferences: { nodes: [] },
           mergedAt: "2026-08-04T00:00:00Z",
           title: `fix: contribution ${number}`,
+          mergeCommit: { oid: targetSha },
         },
       ]),
     );
