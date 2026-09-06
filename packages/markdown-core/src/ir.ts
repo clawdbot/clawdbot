@@ -1620,16 +1620,10 @@ export function markdownToIRWithMeta(
       : [];
   });
   const blocks = state.blocks
-    .flatMap((block) => {
+    .map((block) => {
       const start = Math.min(block.start, finalLength);
       const end = Math.min(block.end, finalLength);
-      return end > start ||
-        block.kind === "blockquote" ||
-        block.kind === "code_block" ||
-        block.kind === "heading" ||
-        block.kind === "thematic_break"
-        ? [{ ...block, start, end }]
-        : [];
+      return { ...block, start, end };
     })
     .toSorted(
       (left, right) =>

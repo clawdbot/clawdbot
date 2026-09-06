@@ -6,7 +6,7 @@ import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { listAgentEntries, resolveAgentDir } from "../agents/agent-scope-config.js";
 import { readAuthProfileStoreForTest } from "../agents/auth-profiles/oauth-test-utils.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
-import type { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
+import type { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import {

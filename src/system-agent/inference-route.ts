@@ -33,7 +33,7 @@ export type SystemAgentConfiguredRoute = {
 
 export type SystemAgentConfiguredRouteDeps = {
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
-  loadAuthProfileStoreForRuntime?: typeof import("../agents/auth-profiles/store.js").loadAuthProfileStoreForRuntime;
+  loadAuthProfileStoreForRuntime?: typeof import("../agents/auth-profiles/store-runtime.js").loadAuthProfileStoreForRuntime;
   pluginMetadataPlugins?: PluginMetadataSnapshot["plugins"];
 };
 type SystemAgentRouteProjectionDeps = Pick<

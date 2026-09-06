@@ -5,7 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { listAgentEntries } from "../agents/agent-scope.js";
 import { normalizeAuthProfileCredential } from "../agents/auth-profiles/credential-normalize.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
-import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
+import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store-runtime.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

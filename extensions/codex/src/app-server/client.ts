@@ -9,7 +9,8 @@ import { coerceErrorMessage, toStringifiedError } from "openclaw/plugin-sdk/erro
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parse as parseSemver } from "semver";
-import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
+import type { CodexAppServerStartOptions } from "./config-contracts.js";
+import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
 import { resolveDynamicToolServerRequestTimeoutMs } from "./dynamic-tool-execution.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
 import { readCodexDynamicToolCallParams } from "./protocol-validators.js";

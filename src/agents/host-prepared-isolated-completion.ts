@@ -2,7 +2,7 @@ import type {
   AgentHarnessIsolatedCompletionParamsV2,
   AgentHarnessIsolatedCompletionResult,
 } from "./harness/types.js";
-import { completeWithPreparedSimpleCompletionModel } from "./simple-completion-runtime.js";
+import { completeWithPreparedSimpleCompletionModel } from "./simple-completion-execution.js";
 
 /** Executes one zero-tool completion using the exact host-prepared model and credential. */
 export async function runHostPreparedIsolatedCompletion(

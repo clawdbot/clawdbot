@@ -504,10 +504,21 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
         'const loaderModulePath = path.join(root, "dist", "plugins", "loader.js");',
         "fs.mkdirSync(path.dirname(loaderModulePath), { recursive: true });",
         'fs.writeFileSync(loaderModulePath, "export default {};\\n", "utf8");',
+        // Internal alias scans are host snapshots; keep the alias-free host separate.
+        'const aliasFreeRoot = path.join(root, "alias-free-host");',
+        'writeJson(path.join(aliasFreeRoot, "package.json"), { name: "openclaw", type: "module" });',
+        'const aliasFreeLoaderPath = path.join(aliasFreeRoot, "loader.js");',
+        'fs.writeFileSync(aliasFreeLoaderPath, "export default {};\\n", "utf8");',
         "const originalResolver = Module._resolveFilename;",
-        "installOpenClawInternalCorePackageNativeResolver({ moduleUrl: pathToFileURL(loaderModulePath).href });",
-        "installOpenClawPluginSdkNativeResolver({ modulePath: loaderModulePath });",
+        "installOpenClawInternalCorePackageNativeResolver({ moduleUrl: pathToFileURL(aliasFreeLoaderPath).href });",
+        "installOpenClawPluginSdkNativeResolver({ modulePath: aliasFreeLoaderPath });",
         "const aliasFreeUnchanged = Module._resolveFilename === originalResolver;",
+        'const aiToolSchemaPath = path.join(root, "packages", "ai", "src", "internal", "tool-schema.ts");',
+        "fs.mkdirSync(path.dirname(aiToolSchemaPath), { recursive: true });",
+        'fs.writeFileSync(aiToolSchemaPath, "export const schemaSource = import.meta.url;\\n", "utf8");',
+        'const coreEntryPath = path.join(root, "src", "schema-probe.mjs");',
+        "fs.mkdirSync(path.dirname(coreEntryPath), { recursive: true });",
+        'fs.writeFileSync(coreEntryPath, \'export { schemaSource } from "@openclaw/ai/internal/tool-schema";\\n\', "utf8");',
         'const pluginRoot = path.join(root, "external-plugin");',
         'writeJson(path.join(pluginRoot, "package.json"), { name: "external-plugin", type: "module" });',
         'const entryPath = path.join(pluginRoot, "dist", "runtime-api.js");',
@@ -530,6 +541,10 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
         "});",
         "const module = await import(pathToFileURL(entryPath).href);",
         "const lazy = await module.loadLazy();",
+        "const core = await import(pathToFileURL(coreEntryPath).href);",
+        "if (core.schemaSource !== pathToFileURL(fs.realpathSync(aiToolSchemaPath)).href) {",
+        '  throw new Error("Internal AI tool-schema alias did not resolve to host source");',
+        "}",
         "console.log(JSON.stringify({ aliasFreeUnchanged, eager: module.eager, lazy: lazy.lazy }));",
         "",
       ].join("\n"),
@@ -548,7 +563,7 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     };
   });
 
-  it("keeps SDK aliases available for native ESM lazy imports", () => {
+  it("keeps SDK and internal schema aliases available for native ESM lazy imports", () => {
     expect(nativeEsmLazyImportProbe.stderr).toBe("");
     expect(nativeEsmLazyImportProbe.status).toBe(0);
     expect(JSON.parse(nativeEsmLazyImportProbe.stdout)).toMatchObject({
@@ -612,6 +627,11 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
       "code-spans.ts",
     );
     const aiTransportsSource = writeInternalCorePackageSource(root, "ai", "transports.ts");
+    const aiToolSchemaSource = writeInternalCorePackageSource(
+      root,
+      "ai",
+      path.join("internal", "tool-schema.ts"),
+    );
     const aiRuntimeSource = writeInternalCorePackageSource(
       root,
       "ai",
@@ -684,6 +704,9 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     expect(fs.realpathSync(requireFromCoreSource.resolve("@openclaw/ai/internal/runtime"))).toBe(
       fs.realpathSync(aiRuntimeSource),
     );
+    expect(
+      fs.realpathSync(requireFromCoreSource.resolve("@openclaw/ai/internal/tool-schema")),
+    ).toBe(fs.realpathSync(aiToolSchemaSource));
     expect(fs.realpathSync(requireFromCoreSource.resolve("@openclaw/acp-core/runtime/types"))).toBe(
       fs.realpathSync(acpCoreSource),
     );
@@ -704,6 +727,7 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     ).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/ai/internal/retry-after")).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/ai/internal/runtime")).toThrow();
+    expect(() => requireFromPlugin.resolve("@openclaw/ai/internal/tool-schema")).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/acp-core/runtime/types")).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/llm-core")).toThrow();
   });

@@ -6,7 +6,7 @@ import type { loadPersistedAuthProfileStore } from "../agents/auth-profiles/pers
 import type {
   loadAuthProfileStoreForRuntime,
   updateAuthProfileStoreWithLock,
-} from "../agents/auth-profiles/store.js";
+} from "../agents/auth-profiles/store-runtime.js";
 import type { readCodexCliActiveApiKey } from "../agents/cli-credentials.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../agents/workspace-default.js";
@@ -267,7 +267,7 @@ export type ActivateSetupInferenceDeps = {
   updateAuthProfileStoreWithLock?: typeof updateAuthProfileStoreWithLock;
   loadPersistedAuthProfileStore?: typeof loadPersistedAuthProfileStore;
   loadAuthProfileStoreForRuntime?: typeof loadAuthProfileStoreForRuntime;
-  ensureAuthProfileStore?: typeof import("../agents/auth-profiles/store.js").ensureAuthProfileStore;
+  ensureAuthProfileStore?: typeof import("../agents/auth-profiles/store-runtime.js").ensureAuthProfileStore;
   resolveCliAuthBindingFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliAuthBindingFingerprint;
   resolveCliRuntimeArtifactFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeArtifactFingerprint;
   resolveCliRuntimeOwnerFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeOwnerFingerprint;

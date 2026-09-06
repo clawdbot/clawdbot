@@ -43,7 +43,7 @@ import * as attemptStartup from "./attempt-startup.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { TURN_FINALIZE_DRAIN_ABORT_GRACE_MS, withCodexStartupTimeout } from "./attempt-timeouts.js";
 import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
-import { resolveCodexAppServerFallbackApiKeyCacheKey } from "./auth-bridge.js";
+import { resolveCodexAppServerFallbackApiKeyCacheKey } from "./auth-cache-key.js";
 import {
   consumeCodexAppServerLiveThread,
   retainCodexAppServerLiveThread,
