@@ -158,7 +158,7 @@ type DynamicToolBuildParams = {
   ignoreRuntimePlan?: boolean;
   /** Host fact resolver; injectable only for focused plugin contract tests. */
   isHostScopedToolActive?: (toolName: string) => boolean;
-  onYieldDetected: (acknowledgment?: string) => void;
+  onYieldDetected: (message: string, acknowledgment?: string) => void;
   claimYieldCompletion?: OpenClawCodingToolsOptions["claimYieldCompletion"];
   onCodexAppServerEvent?: (event: CodexDynamicToolBuildEvent) => void;
   onPersistentWebSearchPolicyResolved?: (allowed: boolean) => void;
@@ -409,7 +409,7 @@ export async function buildDynamicTools(
     enableHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
     forceHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
     onYield: (message, acknowledgment) => {
-      input.onYieldDetected(acknowledgment);
+      input.onYieldDetected(message, acknowledgment);
       input.onCodexAppServerEvent?.({
         stream: "codex_app_server.tool",
         data: { name: "sessions_yield", message },
