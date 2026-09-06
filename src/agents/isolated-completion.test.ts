@@ -152,6 +152,115 @@ describe("runIsolatedCompletion", () => {
     },
   );
 
+  it.each([false, true])(
+    "captures call-owned choices and authority before admission (retired: %s)",
+    async (retired) => {
+      const entered = createDeferred();
+      const release = createDeferred();
+      const expired = new Error("The original completion owner retired.");
+      let current = true;
+      const dispatch = vi.fn(async () => ({
+        assistant: isolatedAssistant([{ type: "text", text: "done" }]),
+      }));
+      registerIsolatedHarness({ runIsolatedCompletionV2: dispatch });
+      mocks.acquireAgentRunPreparedModelRuntime.mockImplementationOnce(async () => {
+        entered.resolve();
+        await release.promise;
+        return { snapshot: preparedModelRuntime, release: releaseRuntimeLease };
+      });
+      const mutableRequest = {
+        ...isolatedRequest(),
+        authProfileId: "openai:original",
+        streamParams: { maxTokens: 21, temperature: 0.1 },
+        assertCurrent() {
+          if (!current) {
+            throw expired;
+          }
+        },
+      };
+      const completion = runIsolatedCompletion(mutableRequest);
+      try {
+        await entered.promise;
+        mutableRequest.model = "changed-model";
+        mutableRequest.authProfileId = "openai:changed";
+        mutableRequest.streamParams.maxTokens = 84;
+        mutableRequest.streamParams.temperature = 0.9;
+        mutableRequest.agentHarnessRuntimeOverride = "changed-runtime";
+        mutableRequest.assertCurrent = () => {};
+        current = !retired;
+        release.resolve();
+
+        if (retired) {
+          await expect(completion).rejects.toBe(expired);
+          expect(dispatch).not.toHaveBeenCalled();
+          expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
+        } else {
+          await expect(completion).resolves.toMatchObject({ text: "done" });
+          expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledWith(
+            expect.objectContaining({ modelId: "gpt-test", profileId: "openai:original" }),
+          );
+          expect(dispatch).toHaveBeenCalledOnce();
+          expect(dispatch).toHaveBeenCalledWith(
+            expect.objectContaining({ streamParams: { maxTokens: 21, temperature: 0.1 } }),
+          );
+        }
+        expect(releaseRuntimeLease).toHaveBeenCalledOnce();
+      } finally {
+        release.resolve();
+        await Promise.allSettled([completion]);
+      }
+    },
+  );
+
+  it.each(["host", "cli"])(
+    "uses admitted config and directories for a newly owned %s completion",
+    async (owner) => {
+      const config = { agents: { defaults: { workspace: "/tmp/admitted-workspace" } } };
+      Object.assign(preparedModelRuntime, {
+        config,
+        agentDir: "/tmp/admitted-agent",
+        workspaceDir: "/tmp/admitted-workspace",
+      });
+      if (owner === "cli") {
+        mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
+        mocks.runCliAgent.mockResolvedValue({ payloads: [{ text: "done" }] });
+      } else {
+        registerIsolatedHarness({
+          runIsolatedCompletionV2: async () => ({
+            assistant: isolatedAssistant([{ type: "text", text: "done" }]),
+          }),
+        });
+      }
+
+      await expect(runIsolatedCompletion(isolatedRequest())).resolves.toMatchObject({
+        text: "done",
+      });
+
+      const admitted = {
+        config,
+        agentDir: "/tmp/admitted-agent",
+        workspaceDir: "/tmp/admitted-workspace",
+      };
+      expect(mocks.ensureSelectedAgentHarnessPlugin).toHaveBeenCalledWith(
+        expect.objectContaining(admitted),
+      );
+      if (owner === "cli") {
+        expect(mocks.runCliAgent).toHaveBeenCalledWith(expect.objectContaining(admitted));
+      } else {
+        expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledWith(
+          expect.objectContaining({
+            cfg: config,
+            agentDir: admitted.agentDir,
+            workspaceDir: admitted.workspaceDir,
+            provider: "openai",
+            modelId: "gpt-test",
+          }),
+        );
+      }
+      expect(releaseRuntimeLease).toHaveBeenCalledOnce();
+    },
+  );
+
   it("passes one prepared route to the selected harness and returns text", async () => {
     const runIsolatedCompletionHarness = vi.fn(async () => ({
       assistant: isolatedAssistant([{ type: "text", text: '{"ok":true}' }]),
