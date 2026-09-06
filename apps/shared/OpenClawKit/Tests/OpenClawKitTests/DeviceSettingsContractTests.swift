@@ -3,6 +3,11 @@ import OpenClawKit
 import Testing
 
 struct DeviceSettingsContractTests {
+    @Test func `Chrome extension setup accepts only the exact action payload`() {
+        #expect(DeviceSettingsRequest(body: ["type": "install-chrome-extension"]) == .installChromeExtension)
+        #expect(DeviceSettingsRequest(body: ["type": "install-chrome-extension", "command": "other"]) == nil)
+    }
+
     @Test(arguments: ["macos", "ios"])
     func `snapshots match the exact platform wire contract`(_ platform: String) throws {
         let snapshot = platform == "macos" ? Self.macSnapshot() : Self.iosSnapshot()
