@@ -5,6 +5,7 @@
  */
 import { Type, type Static } from "typebox";
 import type { Edit } from "./edit-diff.js";
+import type { TruncationResult } from "./truncate.js";
 
 export interface BashToolInput {
   command: string;
