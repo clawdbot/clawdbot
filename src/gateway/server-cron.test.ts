@@ -716,16 +716,19 @@ describe("buildGatewayCronService", () => {
           everyMs: input.schedule.kind === "every" ? input.schedule.everyMs : undefined,
           enabled: input.enabled,
         });
-        checkpoint ??= new Promise((resolve) =>
+        checkpoint ??= new Promise((resolve) => {
           setImmediate(() => {
-            if (action === "stop") state.cron.stop();
-            else {
+            if (action === "stop") {
+              state.cron.stop();
+            } else {
               loadConfigMock.mockReturnValue(replacement);
-              if (action === "supersede") nextPass = state.reconcileSystemJobs();
+              if (action === "supersede") {
+                nextPass = state.reconcileSystemJobs();
+              }
             }
             resolve();
-          }),
-        );
+          });
+        });
       }
       return result;
     });
@@ -737,7 +740,9 @@ describe("buildGatewayCronService", () => {
         expect(committed.map(({ agentId }) => agentId)).toEqual(["a"]);
       } else {
         expect(result).toBe(action === "replace" ? "converged" : "superseded");
-        if (nextPass) await expect(nextPass).resolves.toBe("converged");
+        if (nextPass) {
+          await expect(nextPass).resolves.toBe("converged");
+        }
         expect(committed).not.toContainEqual(
           expect.objectContaining(
             family === "heartbeat"
@@ -748,11 +753,14 @@ describe("buildGatewayCronService", () => {
         const jobs = (await state.cron.list({ includeDisabled: true })).filter((job) =>
           job.declarationKey?.startsWith(`${family}:`),
         );
-        expect(jobs.map((job) => job.agentId).toSorted()).toEqual(["a", "b"]);
-        for (const job of jobs)
+        expect(
+          jobs.map((job) => job.agentId).toSorted((a, b) => String(a).localeCompare(String(b))),
+        ).toEqual(["a", "b"]);
+        for (const job of jobs) {
           expect(job).toMatchObject(
             family === "heartbeat" ? { schedule: { everyMs: 7_200_000 } } : { enabled: true },
           );
+        }
       }
     } finally {
       try {

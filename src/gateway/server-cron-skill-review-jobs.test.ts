@@ -45,22 +45,25 @@ describe("reconcileSkillCollectionReviewJobs", () => {
       const recordAttempt = (id: string) => {
         observed.push({ id, progressed });
         if (observed.length === 1) {
-          checkpoint = new Promise((resolve) =>
+          checkpoint = new Promise((resolve) => {
             setImmediate(() => {
               progressed = true;
               resolve();
-            }),
-          );
+            });
+          });
           throw new Error("first mutation failed");
         }
       };
       const add = vi.fn(async (input: { agentId: string }) => {
-        if (phase === "add") recordAttempt(input.agentId);
+        if (phase === "add") {
+          recordAttempt(input.agentId);
+        }
         return monitorJob(input.agentId);
       });
       const remove = vi.fn(async (id: string) => {
-        if ((phase === "duplicate" && id.startsWith("duplicate-")) || phase === "stale")
+        if ((phase === "duplicate" && id.startsWith("duplicate-")) || phase === "stale") {
           recordAttempt(id);
+        }
         return { ok: true, removed: true };
       });
       const jobs =
@@ -97,16 +100,18 @@ describe("reconcileSkillCollectionReviewJobs", () => {
     let current = true;
     let checkpoint: Promise<void> | undefined;
     const commitGuard = () => {
-      if (!current) throw revoked;
+      if (!current) {
+        throw revoked;
+      }
     };
     const remove = vi.fn(async (_id: string, options?: { commitGuard?: () => void }) => {
       options?.commitGuard?.();
-      checkpoint ??= new Promise((resolve) =>
+      checkpoint ??= new Promise((resolve) => {
         setImmediate(() => {
           current = false;
           resolve();
-        }),
-      );
+        });
+      });
       return { ok: true, removed: true };
     });
     try {

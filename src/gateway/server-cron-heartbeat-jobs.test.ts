@@ -34,21 +34,25 @@ describe("reconcileHeartbeatMonitorJobs", () => {
       const recordAttempt = (id: string) => {
         observed.push({ id, progressed });
         if (observed.length === 1) {
-          checkpoint = new Promise((resolve) =>
+          checkpoint = new Promise((resolve) => {
             setImmediate(() => {
               progressed = true;
               resolve();
-            }),
-          );
+            });
+          });
           throw new Error("first mutation failed");
         }
       };
       const add = vi.fn(async (input: { agentId: string }) => {
-        if (mutation === "add") recordAttempt(input.agentId);
+        if (mutation === "add") {
+          recordAttempt(input.agentId);
+        }
         return monitorJob(input.agentId);
       });
       const remove = vi.fn(async (id: string) => {
-        if (mutation === "remove") recordAttempt(id);
+        if (mutation === "remove") {
+          recordAttempt(id);
+        }
         return { ok: true, removed: true };
       });
       const cfg: OpenClawConfig = {
@@ -88,17 +92,19 @@ describe("reconcileHeartbeatMonitorJobs", () => {
     let current = true;
     let checkpoint: Promise<void> | undefined;
     const commitGuard = () => {
-      if (!current) throw revoked;
+      if (!current) {
+        throw revoked;
+      }
     };
     const add = vi.fn(
       async (input: { agentId: string }, options?: { commitGuard?: () => void }) => {
         options?.commitGuard?.();
-        checkpoint ??= new Promise((resolve) =>
+        checkpoint ??= new Promise((resolve) => {
           setImmediate(() => {
             current = false;
             resolve();
-          }),
-        );
+          });
+        });
         return monitorJob(input.agentId);
       },
     );
