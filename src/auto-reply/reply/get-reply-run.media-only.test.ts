@@ -2698,7 +2698,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.shouldSteer).toBe(false);
     expect(call?.shouldFollowup).toBe(true);
     expect(call?.isActive).toBe(true);
-    expect(call?.followupRun.run.terminalReplyExpectation).toBeUndefined();
+    expect(call?.followupRun.run.terminalReplyExpectation).toBe("optional");
   });
 
   it.each([
