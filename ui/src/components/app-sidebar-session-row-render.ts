@@ -303,6 +303,7 @@ export function renderRecentSession(params: {
       session.forkSource
         ? html`<span
             class="sidebar-session-fork-indicator"
+            aria-hidden=${session.isChild ? nothing : "true"}
             role="img"
             aria-label=${t("sessionsView.forkedSession")}
             >${icons.gitFork}</span
@@ -406,11 +407,14 @@ export function renderRecentSession(params: {
               ${
                 trailingIndicator === nothing
                   ? trailingDescription
-                    ? html`<span class="sr-only" id=${stateId}>${trailingDescription}</span>`
+                    ? html`<span class="sr-only" id=${stateId} aria-hidden="true"
+                        >${trailingDescription}</span
+                      >`
                     : nothing
                   : html`<span class="session-row-aside">
                       <span
                         class="session-row-state"
+                        aria-hidden="true"
                         id=${stateId}
                         role="img"
                         aria-label=${trailingDescription}
