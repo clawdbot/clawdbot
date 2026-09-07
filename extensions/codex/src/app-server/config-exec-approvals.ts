@@ -5,8 +5,7 @@ import {
   maxAsk,
   minSecurity,
   resolveExecApprovalsFromFile,
-  resolveExecModeFromPolicy,
-  resolveExecPolicyForMode,
+  resolveExecModePolicy,
   type ExecApprovalsFile,
 } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import type {
@@ -86,7 +85,7 @@ function applyOpenClawExecPolicyLayer(
   const nextSecurity = security ?? base.security;
   const nextAsk = ask ?? base.ask;
   return {
-    mode: resolveExecModeFromPolicy({ security: nextSecurity, ask: nextAsk }),
+    mode: resolveExecModePolicy({ security: nextSecurity, ask: nextAsk }).mode,
     security: nextSecurity,
     ask: nextAsk,
     touched: true,
@@ -126,7 +125,7 @@ function applyOpenClawExecApprovalFloors(
     return base;
   }
   return {
-    mode: resolveExecModeFromPolicy({ security: nextSecurity, ask: nextAsk }),
+    mode: resolveExecModePolicy({ security: nextSecurity, ask: nextAsk }).mode,
     security: nextSecurity,
     ask: nextAsk,
     touched: true,
@@ -136,7 +135,7 @@ function applyOpenClawExecApprovalFloors(
 function resolveOpenClawExecPolicyForMode(
   mode: OpenClawExecMode,
 ): Omit<OpenClawExecPolicy, "touched"> {
-  const { security, ask } = resolveExecPolicyForMode(mode);
+  const { security, ask } = resolveExecModePolicy({ mode, security: "full", ask: "off" });
   return { mode, security, ask };
 }
 
