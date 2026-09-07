@@ -69,6 +69,12 @@ function isSessionRosterRecord(value: unknown): value is SessionRosterRecord {
   );
 }
 
+// Incognito conversations are memory-only by contract; their titles and previews
+// must never reach IndexedDB, and a stored row from an older writer is dropped too.
+export function isPersistableSessionRow(row: GatewaySessionRow): boolean {
+  return row.incognito !== true;
+}
+
 export function stripVolatileSessionRowFields(row: GatewaySessionRow): GatewaySessionRow {
   const result = { ...row };
   delete result.hasActiveRun;
@@ -229,7 +235,9 @@ export async function readSessionRoster(
       ...record,
       result: {
         ...record.result,
-        sessions: record.result.sessions.map(stripVolatileSessionRowFields),
+        sessions: record.result.sessions
+          .filter(isPersistableSessionRow)
+          .map(stripVolatileSessionRowFields),
       },
     };
   } catch {

@@ -7,6 +7,7 @@ import {
   rosterRequestResult,
   rosterTransactionDone,
   sessionRosterQuery,
+  isPersistableSessionRow,
   stripVolatileSessionRowFields,
 } from "./session-roster-cache.reader.ts";
 import {
@@ -32,7 +33,9 @@ function boundedRecord(record: SessionRosterRecord): SessionRosterRecord | null 
       query: sessionRosterQuery(record.query),
       result: {
         ...record.result,
-        sessions: record.result.sessions.map(stripVolatileSessionRowFields),
+        sessions: record.result.sessions
+          .filter(isPersistableSessionRow)
+          .map(stripVolatileSessionRowFields),
       },
     };
     const json = JSON.stringify(stripped, (key, value: unknown) =>

@@ -139,6 +139,26 @@ describe("persistent session roster", () => {
     expect(await sessionRosterCache.read("gateway-two", expected)).toBeNull();
   });
 
+  it("never persists Incognito rows and drops them from an older stored record", async () => {
+    const durable: GatewaySessionRow = { key: "agent:main:one", kind: "direct" };
+    const incognito: GatewaySessionRow = {
+      key: "agent:main:dashboard:incognito-1",
+      kind: "direct",
+      incognito: true,
+      derivedTitle: "Private conversation",
+      lastMessagePreview: "Private reply",
+    };
+    persistSessionRoster(record("gateway-one", [durable, incognito]));
+    await flushSessionRosters();
+    const saved = await sessionRosterCache.read("gateway-one", expected);
+    expect(saved?.result.sessions.map((row) => row.key)).toEqual([durable.key]);
+    expect(JSON.stringify(saved)).not.toMatch(/incognito|Private/u);
+
+    await putRaw(record("gateway-stale", [incognito, durable]));
+    const restored = await sessionRosterCache.read("gateway-stale", expected);
+    expect(restored?.result.sessions.map((row) => row.key)).toEqual([durable.key]);
+  });
+
   it.each([
     ["profile", { ...expected, profileId: "profile-two" }],
     ["agent", { ...expected, agentId: "other" }],
