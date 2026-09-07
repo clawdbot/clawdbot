@@ -7,6 +7,7 @@ import {
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
+  hasMissingSkillRequirements,
   resolveSkillStatusEntry,
   type SkillStatusEntry,
   type SkillStatusReport,
@@ -306,9 +307,7 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
   const promptHidden = report.skills.filter(
     (s) => s.eligible && !s.blockedByAgentFilter && !s.modelVisible,
   );
-  const missingReqs = report.skills.filter(
-    (s) => !s.eligible && !s.disabled && !s.blockedByAllowlist,
-  );
+  const missingReqs = report.skills.filter(hasMissingSkillRequirements);
   const agentId = report.agentId ?? opts.agent;
 
   if (opts.json) {

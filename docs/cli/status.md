@@ -42,6 +42,16 @@ security audit, plugin compatibility, and memory-vector probes are left to
 `openclaw status --all`, `openclaw status --deep`, `openclaw security audit`,
 and `openclaw memory status --deep`.
 
+## Skills diagnosis
+
+`status --all` reports eligible skills and skills with missing prerequisites for
+the workspace shown in the Skills row. Missing prerequisites use the same category as
+`openclaw skills check`: intentionally disabled skills and skills blocked by the
+bundled allowlist are excluded; agent allowlist exclusions remain independent.
+Unmet OS requirements are included in this count, although Doctor does not disable
+skills for OS incompatibility.
+Use `openclaw skills check --agent <id>` to inspect the missing requirements.
+
 ## Session and model resolution
 
 - Session status output separates `Execution:` from `Runtime:`. `Execution`
