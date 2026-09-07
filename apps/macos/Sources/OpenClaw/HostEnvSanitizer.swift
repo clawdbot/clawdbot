@@ -38,7 +38,7 @@ enum HostEnvSanitizer {
 
     private static func isNoPagerOverride(_ key: String, _ value: String) -> Bool {
         (key.uppercased() == "GIT_PAGER" || key.uppercased() == "PAGER") &&
-            (value == "" || value == "cat")
+            (value.isEmpty || value == "cat")
     }
 
     private static func isBlocked(_ upperKey: String) -> Bool {
