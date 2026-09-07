@@ -272,11 +272,12 @@ public final class OpenClawChatViewModel {
     var historyMutationGeneration: UInt64 = 0
     private var nextSessionsFetchRequestID: UInt64 = 0
     private var latestAppliedSessionsFetchRequestID: UInt64 = 0
-    /// Session keys the Gateway itself reported as running while it rejected a
-    /// session mutation. The fact outlives a failed refresh, so a `sessions.list`
-    /// error cannot re-enable a control the Gateway will keep rejecting. Only a
-    /// later server-authoritative liveness observation clears an entry.
-    var gatewayConfirmedActiveRunSessionKeys: Set<String> = []
+    /// Routed session identities the Gateway itself reported as running while it
+    /// rejected a session mutation. The fact outlives a failed refresh, so a
+    /// `sessions.list` error cannot re-enable a control the Gateway will keep
+    /// rejecting. Only a later server-authoritative liveness observation for the
+    /// same routed identity clears an entry.
+    var gatewayConfirmedActiveRunIdentities: Set<GatewayRunLivenessIdentity> = []
     /// Outbox replay waits for a sessions list from the current connection generation.
     var sessionMetadataGeneration: UInt64 = 0
     var readySessionMetadataGeneration: UInt64?

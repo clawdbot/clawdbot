@@ -1364,6 +1364,116 @@ struct ChatViewModelSessionActionTests {
         #expect(await transport.switchedBranches().count == 2)
     }
 
+    @Test func `idle history clears a retained active run when the session has no listed row`() async {
+        let branches = self.branches()
+        // The row predates the run, so only the rejection knows the session is busy.
+        let staleInactiveSession = self.entry(key: "main", hasActiveRun: false)
+        let transport = SessionActionTransport(
+            branchSwitchError: GatewayResponseError(
+                method: "sessions.branches.switch",
+                code: "UNAVAILABLE",
+                message: "Branch switch is temporarily blocked.",
+                details: ["reason": AnyCodable("session-run-active")]),
+            // No canned responses, so every sessions.list throws.
+            sessionListResponses: [],
+            branches: branches)
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.sessionBranches = branches
+        viewModel.sessions = [staleInactiveSession]
+
+        await viewModel.switchToBranch("leaf-new")
+
+        #expect(viewModel.canSwitchSessionBranch == false)
+
+        // A failed or bounded refresh can leave the current session with no row
+        // at all. History is still authoritative for the session it was
+        // requested for, so its explicit idle statement must retire the
+        // rejection rather than strand the picker against idle evidence.
+        viewModel.sessions = []
+        viewModel.applyInFlightRunSnapshot(
+            OpenClawChatHistoryPayload(
+                sessionKey: "main",
+                sessionId: nil,
+                messages: nil,
+                thinkingLevel: nil,
+                sessionInfo: OpenClawChatSessionInfo(hasActiveRun: false)),
+            for: viewModel.beginHistoryRequest())
+
+        #expect(viewModel.canSwitchSessionBranch)
+
+        await viewModel.switchToBranch("leaf-new")
+
+        #expect(await transport.switchedBranches().count == 2)
+    }
+
+    @Test func `an unknown history liveness keeps a retained active run without a listed row`() async {
+        let branches = self.branches()
+        let transport = SessionActionTransport(
+            branchSwitchError: GatewayResponseError(
+                method: "sessions.branches.switch",
+                code: "UNAVAILABLE",
+                message: "Branch switch is temporarily blocked.",
+                details: ["reason": AnyCodable("session-run-active")]),
+            sessionListResponses: [],
+            branches: branches)
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.sessionBranches = branches
+        viewModel.sessions = [self.entry(key: "main", hasActiveRun: false)]
+
+        await viewModel.switchToBranch("leaf-new")
+
+        #expect(viewModel.canSwitchSessionBranch == false)
+
+        // Reconciling without a row must not turn silence into completion.
+        viewModel.sessions = []
+        viewModel.applyInFlightRunSnapshot(
+            OpenClawChatHistoryPayload(
+                sessionKey: "main",
+                sessionId: nil,
+                messages: nil,
+                thinkingLevel: nil,
+                sessionInfo: OpenClawChatSessionInfo(hasActiveRun: nil)),
+            for: viewModel.beginHistoryRequest())
+
+        #expect(viewModel.canSwitchSessionBranch == false)
+    }
+
+    @Test func `a retained rejection stays with the agent whose run the Gateway reported`() async {
+        let branches = self.branches()
+        let transport = SessionActionTransport(
+            branchSwitchError: GatewayResponseError(
+                method: "sessions.branches.switch",
+                code: "UNAVAILABLE",
+                message: "Branch switch is temporarily blocked.",
+                details: ["reason": AnyCodable("session-run-active")]),
+            sessionListResponses: [],
+            branches: branches)
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.syncDeliveryIdentity(activeAgentId: "alpha", sessionRoutingContract: nil)
+        viewModel.sessionBranches = branches
+        viewModel.sessions = [self.entry(key: "main", hasActiveRun: false)]
+
+        await viewModel.switchToBranch("leaf-new")
+
+        #expect(viewModel.hasGatewayConfirmedActiveRunForCurrentSession)
+
+        // `main` is a presentation alias that names a different gateway session
+        // under each agent, so alpha's busy run must not disable beta's picker.
+        viewModel.syncDeliveryIdentity(activeAgentId: "beta", sessionRoutingContract: nil)
+
+        #expect(viewModel.hasGatewayConfirmedActiveRunForCurrentSession == false)
+
+        // Nor may beta's idle liveness retire the restriction alpha's run
+        // established; the two aliases are different routed sessions.
+        var idleUnderBeta = self.entry(key: "main", hasActiveRun: false)
+        idleUnderBeta.agentId = "beta"
+        viewModel.applyListedSessions([idleUnderBeta])
+
+        viewModel.syncDeliveryIdentity(activeAgentId: "alpha", sessionRoutingContract: nil)
+
+        #expect(viewModel.hasGatewayConfirmedActiveRunForCurrentSession)
+    }
+
     @Test func `branch switch clears retained active run state on authoritative completion`() async {
         let branches = self.branches()
         let staleInactiveSession = self.entry(key: "main", hasActiveRun: false)
