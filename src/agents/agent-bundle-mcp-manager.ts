@@ -13,7 +13,10 @@ import {
 import { assignSafeServerNames } from "./agent-bundle-mcp-names.js";
 import { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
 import { sessionMcpRuntimeOwners } from "./agent-bundle-mcp-runtime-owner.js";
-import type { CreateSessionMcpRuntime } from "./agent-bundle-mcp-runtime-shared.js";
+import {
+  resolveSessionMcpRuntimeIdleTtlMs,
+  type CreateSessionMcpRuntime,
+} from "./agent-bundle-mcp-runtime-shared.js";
 import type {
   SessionMcpRuntime,
   SessionMcpRuntimeLease,
@@ -173,8 +176,6 @@ export function createSessionMcpRuntimeManager(
   const manager: SessionMcpRuntimeManager = {
     acquire: acquireCurrent("full", async (params) => {
       const configReloadAtAdmission = store.configReload;
-      await lifecycle.sweepIdleRuntimes();
-      lifecycle.ensureIdleSweepTimer();
       if (params.sessionKey) {
         store.sessionIdBySessionKey.set(params.sessionKey, params.sessionId);
       }
@@ -221,7 +222,6 @@ export function createSessionMcpRuntimeManager(
           if (lease) {
             leases.push(lease);
             parts.push(lease.runtime);
-            await lifecycle.enforceRequesterRuntimeCap(params.sessionId, requester.runtimeKey);
           }
         }
         return {
@@ -258,8 +258,6 @@ export function createSessionMcpRuntimeManager(
       if (!requester) {
         return undefined;
       }
-      await lifecycle.sweepIdleRuntimes();
-      lifecycle.ensureIdleSweepTimer();
       if (params.sessionKey) {
         store.sessionIdBySessionKey.set(params.sessionKey, params.sessionId);
       }
@@ -281,13 +279,7 @@ export function createSessionMcpRuntimeManager(
       if (!lease) {
         return undefined;
       }
-      try {
-        await lifecycle.enforceRequesterRuntimeCap(params.sessionId, requester.runtimeKey);
-        return { ...lease, advertisedCatalogConfigFingerprint };
-      } catch (error) {
-        lease.releaseLease();
-        throw error;
-      }
+      return { ...lease, advertisedCatalogConfigFingerprint };
     }),
     rememberAdvertisedScopedCatalog: lifecycle.rememberAdvertisedScopedCatalog,
     getAdvertisedScopedCatalog: lifecycle.getAdvertisedScopedCatalog,
@@ -313,12 +305,10 @@ export function createSessionMcpRuntimeManager(
           }
         }
         store.requiredRetirementSessionIds.add(sessionId);
-      } else {
-        store.requiredRetirementSessionIds.delete(sessionId);
       }
       if (
         lifecycle.runtimeKeysForSessionId(sessionId).length === 0 &&
-        retirementOpts?.retainAcrossReuse !== true
+        !store.requiredRetirementSessionIds.has(sessionId)
       ) {
         return false;
       }
@@ -365,6 +355,13 @@ export function createSessionMcpRuntimeManager(
           (store.configReload?.pluginGeneration ?? 0) + (reload.reloadPlugins ? 1 : 0),
       };
       store.advertisedScopedCatalogBySessionId.clear();
+      for (const runtime of store.runtimesBySessionId.values()) {
+        const slot = store.runtimeSlots.get(runtime);
+        if (slot) {
+          slot.idleTtlMs = resolveSessionMcpRuntimeIdleTtlMs(reload.cfg);
+        }
+      }
+      lifecycle.ensureIdleSweepTimer();
       // In-flight creation checks this publication before it can expose its runtime.
       await Promise.all(
         [...store.runtimesBySessionId.values()].map(async (runtime) =>

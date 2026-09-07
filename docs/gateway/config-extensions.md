@@ -97,8 +97,26 @@ target server during config edits.
   block before passing native `mcp_servers` config to Codex. Omit the block to
   keep the server projected for every Codex app-server agent with Codex's
   default MCP approval behavior.
-- Session-scoped bundled MCP runtimes use a built-in 10-minute idle TTL.
-  One-shot embedded runs request run-end cleanup; the TTL is the backstop for long-lived sessions and future callers.
+- Session-scoped MCP runtimes stay alive between turns, including quiet periods
+  and background server work after a tool returns. Session reset/deletion or compaction ID rollover,
+  explicit Stop, and Gateway shutdown retire them and terminate owned stdio
+  children. Completing a turn in a surviving session does not retire its runtime.
+  A detached one-shot run without a surviving runtime session owns its MCP
+  lifetime and retires its runtimes at run end; retained transcripts alone do
+  not keep them alive.
+- `mcp.sessionIdleTtlMs`: optional idle eviction in milliseconds. Unset or `0`
+  keeps the session lifetime above. Positive finite values opt into eviction;
+  fractions round down. For example, `mcp: { sessionIdleTtlMs: 3600000 }` evicts
+  after one hour without use. While enabled, a sweep runs once per minute and
+  preserves active leases and pending acquisitions. This override does not
+  extend a run-owned runtime beyond run end or prevent explicit cleanup.
+  Doctor preserves this key. If an earlier `doctor --fix` removed it, restore the
+  intended value from your config backup; the deleted value cannot be inferred.
+- Each Gateway admits at most 256 OpenClaw-managed MCP runtimes across sessions
+  and requester partitions, including creation and cleanup in progress. At the
+  limit, existing runtimes stay alive and new admissions fail with a log message
+  directing you to stop or reset unused sessions. A runtime can own multiple
+  configured server connections. Native client runtimes manage their own bounds.
 - MCP config changes retire only changed or removed server connections. Unchanged
   servers keep their transports and tool catalogs; active runs can continue calling
   their tools and resources. The next turn's discovery creates changed servers from the new config. Plugin

@@ -380,7 +380,10 @@ Those saved definitions are for runtimes that OpenClaw launches or configures la
     - servers that advertise resources or prompts also expose utility tools for listing/reading resources and listing/fetching prompts; those generated utility names (`resources_list`, `resources_read`, `prompts_list`, `prompts_get`) use the same include/exclude filter
     - dynamic MCP tool-list changes invalidate the cached catalog for that session; the next discovery/use refreshes from the server
     - repeated MCP tool request/protocol failures pause that server briefly so one broken server does not consume the whole turn
-    - session-scoped bundled MCP runtimes are reaped after 10 minutes of idle time and one-shot embedded runs clean them up at run end
+    - session-scoped MCP runtimes stay alive between turns until session reset/deletion or compaction ID rollover, explicit Stop, a relevant server config change, or Gateway shutdown; owned stdio children terminate during cleanup
+    - detached one-shot runs without a surviving runtime session retire their MCP runtimes at run end; a retained transcript does not extend that lifetime
+    - `mcp.sessionIdleTtlMs` is an opt-in idle timeout in milliseconds: unset or `0` keeps runtimes alive, and positive finite values enable idle eviction (fractions round down)
+    - a Gateway admits at most 256 OpenClaw-managed runtimes across sessions and requester partitions; reaching the limit rejects new admissions until you stop or reset unused sessions. See [MCP configuration](/gateway/config-extensions#mcp) for details
 
   </Accordion>
 </AccordionGroup>
