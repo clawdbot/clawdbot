@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { requireUpdateRunDriver } from "../../infra/update-run-driver.js";
+import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
   createUpdateRun,
   getUpdateRun,
@@ -84,7 +84,10 @@ describe("update status abandoned-run reporting", () => {
 
   it.each([true, false])("reports abandonment read-only (JSON: %s)", async (json) => {
     const now = Date.now();
-    const driver = requireUpdateRunDriver();
+    const driver = readUpdateRunDriver();
+    if (!driver) {
+      throw new Error("Test process identity is unavailable");
+    }
     vi.spyOn(Date, "now").mockReturnValue(now - ABANDONED_UPDATE_RUN_MS - 10);
     const created = createUpdateRun({
       trigger: "control-ui",

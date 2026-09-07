@@ -29,7 +29,7 @@ import {
   resolveManagedUpdateRequester,
 } from "../../infra/update-requester-authority.js";
 import { normalizeControlPlaneUpdateResult } from "../../infra/update-restart-sentinel-payload.js";
-import { requireUpdateRunDriver } from "../../infra/update-run-driver.js";
+import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
   adoptUpdateRun,
   createUpdateRun,
@@ -86,7 +86,7 @@ export async function admitUpdateCommandRun(params: {
     env,
     recoverOrphanedSidecars: false,
   });
-  const driver = requireUpdateRunDriver();
+  const driver = readUpdateRunDriver();
   const created = createUpdateRun(
     {
       runId: env[UPDATE_RUN_ID_ENV]?.trim() || undefined,
@@ -133,7 +133,7 @@ export function createUpdateRunProgress(
   pendingSteps: UpdateRunStep[];
 } {
   let deferred = false;
-  const driver = requireUpdateRunDriver();
+  const driver = readUpdateRunDriver();
   const pendingSteps: UpdateRunStep[] = [];
   const record = (step: UpdateRunStep) => {
     if (deferred) {

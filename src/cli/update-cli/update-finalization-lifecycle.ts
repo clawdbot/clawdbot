@@ -1,6 +1,7 @@
 import { writeSync } from "node:fs";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
-import { requireUpdateRunDriver, type UpdateRunDriver } from "../../infra/update-run-driver.js";
+import { readUpdateRunDriver, type UpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
   adoptUpdateRun,
   createUpdateRun,
@@ -42,6 +43,7 @@ export class UpdateFinalizationLifecycle {
   private driver?: UpdateRunDriver;
   private ledgerOptions?: { env: NodeJS.ProcessEnv };
   private ownsRun = false;
+  private warnedHeartbeat = false;
   private timer?: NodeJS.Timeout;
   private deferredExitWatch?: () => void;
   completed = false;
@@ -54,7 +56,7 @@ export class UpdateFinalizationLifecycle {
   ) {}
 
   attachLedger(): void {
-    requireUpdateRunDriver();
+    this.driver = readUpdateRunDriver();
     const inherited = process.env[UPDATE_RUN_ID_ENV]?.trim();
     this.ledgerOptions = { env: { ...process.env } };
     this.runId = createUpdateRun(
@@ -62,7 +64,7 @@ export class UpdateFinalizationLifecycle {
       this.ledgerOptions,
     ).runId;
     this.ownsRun = !inherited;
-    this.driver = adoptUpdateRun(this.runId, this.ledgerOptions).origin.driver;
+    adoptUpdateRun(this.runId, this.ledgerOptions);
     if (this.active) {
       recordUpdateRunStep(
         this.runId,
@@ -103,16 +105,18 @@ export class UpdateFinalizationLifecycle {
     const active = { phase, step: `finalize:${phase}`, startedAtMs };
     this.active = active;
     this.record(active, "in_progress", startedAtMs);
-    let heartbeatFailure: { error: unknown } | undefined;
     const heartbeat = setInterval(() => {
       try {
         if (this.runId) {
           heartbeatUpdateRun(this.runId, this.driver, this.ledgerOptions);
         }
       } catch (error) {
-        // Join a still-mutating phase before reporting its failed heartbeat.
-        heartbeatFailure = { error };
-        clearInterval(heartbeat);
+        if (!this.warnedHeartbeat) {
+          this.warnedHeartbeat = true;
+          console.warn(
+            `[update finalize] Could not refresh the update heartbeat; continuing: ${formatErrorMessage(error).slice(0, 500)}`,
+          );
+        }
       }
     }, UPDATE_RUN_HEARTBEAT_MS);
     heartbeat.unref();
@@ -149,9 +153,6 @@ export class UpdateFinalizationLifecycle {
     }
     try {
       const result = await run();
-      if (heartbeatFailure) {
-        throw heartbeatFailure.error;
-      }
       end(outcome?.(result) ?? "completed");
       return result;
     } catch (error) {

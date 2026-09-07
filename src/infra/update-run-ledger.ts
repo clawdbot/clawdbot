@@ -28,7 +28,7 @@ import {
 } from "./update-run-codec.js";
 import {
   inspectUpdateRunDriver,
-  requireUpdateRunDriver,
+  readUpdateRunDriver,
   sameUpdateRunDriver,
   type UpdateRunDriver,
 } from "./update-run-driver.js";
@@ -199,12 +199,25 @@ function upsertStep(record: UpdateRunRecord, step: UpdateRunStep): void {
 
 /** Adoption is explicit: reading or reserving an existing run does not make this process its driver. */
 export function adoptUpdateRun(runId: string, options: LedgerOptions = {}): UpdateRunRecord {
-  const driver = requireUpdateRunDriver();
-  return mutateRun(
+  const driver = readUpdateRunDriver();
+  let identityUnavailable = false;
+  const adopted = mutateRun(
     runId,
     (record) => {
       if (record.status !== "running") {
         throw new Error(`Update run ${runId} is already ${record.status}; it cannot be adopted.`);
+      }
+      if (!driver) {
+        if (!record.steps.some((step) => step.step === "driver:identity-unavailable")) {
+          // Retain known parents, but their death cannot prove this adopter exited.
+          upsertStep(record, {
+            step: "driver:identity-unavailable",
+            status: "completed",
+            endedAtMs: Date.now(),
+          });
+          identityUnavailable = true;
+        }
+        return;
       }
       const previousDrivers: UpdateRunDriver[] = [];
       for (const previous of recordedUpdateRunDrivers(record)) {
@@ -240,6 +253,12 @@ export function adoptUpdateRun(runId: string, options: LedgerOptions = {}): Upda
     },
     options,
   );
+  if (identityUnavailable) {
+    console.warn(
+      "[update] Driver identity recording is unavailable. The update will continue; this run requires explicit recovery if it stops reporting progress.",
+    );
+  }
+  return adopted;
 }
 
 /** Retained orchestrators can renew their children; pruned identities cannot. */

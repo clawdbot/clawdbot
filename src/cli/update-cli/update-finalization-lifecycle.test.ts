@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
+import * as ledger from "../../infra/update-run-ledger.js";
 import { getUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
 import {
   ABANDONED_UPDATE_RUN_MS,
@@ -62,3 +63,29 @@ it.each([false, true])(
     lifecycle.complete(fails ? 1 : 0);
   },
 );
+
+it("continues finalization after heartbeat errors and warns once for the run", async () => {
+  const stopChildren = vi.fn();
+  const lifecycle = new UpdateFinalizationLifecycle(
+    false,
+    ABANDONED_UPDATE_RUN_MS * 2,
+    stopChildren,
+  );
+  lifecycle.attachLedger();
+  const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+  vi.spyOn(ledger, "heartbeatUpdateRun").mockImplementation(() => {
+    throw new Error("SQLITE_BUSY: database is locked");
+  });
+  for (const phase of ["plugins", "targetConfigConvergence"] as const) {
+    const work = createDeferredCore();
+    const running = lifecycle.run(phase, () => work.promise);
+    await vi.advanceTimersByTimeAsync(UPDATE_RUN_HEARTBEAT_MS * 2);
+    expect(stopChildren).not.toHaveBeenCalled();
+    work.resolve();
+    await expect(running).resolves.toBeUndefined();
+  }
+  lifecycle.complete(0);
+  expect(listUpdateRuns()[0]?.status).toBe("succeeded");
+  expect(warning).toHaveBeenCalledTimes(1);
+  expect(warning).toHaveBeenCalledWith(expect.stringContaining("SQLITE_BUSY"));
+});

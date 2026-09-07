@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { inspectUpdateRunDriver, requireUpdateRunDriver } from "./update-run-driver.js";
+import { inspectUpdateRunDriver, readUpdateRunDriver } from "./update-run-driver.js";
 
 const probes = vi.hoisted(() => ({
   hostname: vi.fn<() => string>(),
@@ -22,7 +22,7 @@ beforeEach(() => {
 describe("update run driver identity", () => {
   it.each([0, 123])("captures the current driver with start identity %s", (startedAt) => {
     probes.startedAt.mockReturnValue(startedAt);
-    expect(requireUpdateRunDriver()).toEqual({
+    expect(readUpdateRunDriver()).toEqual({
       host: "update-host",
       pid: process.pid,
       startIdentity: String(startedAt),
@@ -36,7 +36,7 @@ describe("update run driver identity", () => {
   ])("does not invent a missing identity (%j)", ({ host, startedAt }) => {
     probes.hostname.mockReturnValue(host);
     probes.startedAt.mockReturnValue(startedAt);
-    expect(() => requireUpdateRunDriver()).toThrow("process identity is unavailable");
+    expect(readUpdateRunDriver()).toBeUndefined();
   });
 
   it.each([

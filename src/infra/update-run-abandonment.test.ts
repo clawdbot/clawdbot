@@ -3,13 +3,11 @@ import { UPDATE_RUN_DRIVER_LIMIT } from "../../packages/gateway-protocol/src/upd
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createUpdateRunProgress } from "../cli/update-cli/update-command-run.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import * as pidAlive from "../shared/pid-alive.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { inspectUpdateRunAbandonment } from "./update-run-activity.js";
-import {
-  requireUpdateRunDriver as currentDriver,
-  type UpdateRunDriver,
-} from "./update-run-driver.js";
+import { readUpdateRunDriver, type UpdateRunDriver } from "./update-run-driver.js";
 import {
   adoptUpdateRun,
   createUpdateRun,
@@ -30,6 +28,14 @@ function isolatedOptions() {
   return { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-update-abandonment-") } };
 }
 
+function currentDriver(): UpdateRunDriver {
+  const driver = readUpdateRunDriver();
+  if (!driver) {
+    throw new Error("Test process identity is unavailable");
+  }
+  return driver;
+}
+
 function exitedDriver(): UpdateRunDriver {
   const driver = currentDriver();
   // The current PID belongs to a different generation than the recorded driver.
@@ -43,11 +49,94 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
   tempDirs.cleanup();
 });
 
 describe("abandoned update runs", () => {
+  it("adopts without identity when process inspection is unavailable", () => {
+    const options = isolatedOptions();
+    const created = createUpdateRun({ trigger: "cli" }, options);
+    vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockReturnValue(null);
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const adopted = adoptUpdateRun(created.runId, options);
+    adoptUpdateRun(created.runId, options);
+
+    expect(adopted.origin.driver).toBeUndefined();
+    expect(warning).toHaveBeenCalledTimes(1);
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringContaining("identity recording is unavailable"),
+    );
+    vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 10);
+    expect(reconcileAbandonedUpdateRuns({}, options)).toEqual([]);
+    expect(reconcileAbandonedUpdateRuns({ explicit: true }, options)).toMatchObject([
+      { runId: created.runId, status: "failed", reason: "abandoned" },
+    ]);
+  });
+
+  it("preserves a known parent and the unobservable adopter across later driver death", () => {
+    const options = isolatedOptions();
+    const parent = currentDriver();
+    const created = createUpdateRun({ trigger: "cli", origin: { driver: parent } }, options);
+    const inspection = vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockReturnValue(null);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    adoptUpdateRun(created.runId, options);
+    for (let index = 0; index < 150; index++) {
+      recordUpdateRunStep(
+        created.runId,
+        { step: `diagnostic:${index}`, status: "completed" },
+        options,
+      );
+    }
+    vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 1_000);
+    inspection.mockReturnValue(Number(parent.startIdentity));
+    expect(reconcileAbandonedUpdateRuns({ explicit: true }, options)).toEqual([]);
+    inspection.mockReturnValue(Number(parent.startIdentity) + 1);
+    expect(reconcileAbandonedUpdateRuns({}, options)).toEqual([]);
+    expect(reconcileAbandonedUpdateRuns({ explicit: true }, options)).toMatchObject([
+      { runId: created.runId, status: "failed", reason: "abandoned" },
+    ]);
+  });
+
+  it("keeps a command running after heartbeat errors and warns once across its steps", async () => {
+    const options = isolatedOptions();
+    const run = adoptUpdateRun(createUpdateRun({ trigger: "cli" }, options).runId, options);
+    const progress = createUpdateRunProgress({ runId: run.runId, env: options.env }, {});
+    progress.onHeartbeat = vi.fn(() => {
+      throw new Error("SQLITE_BUSY: database is locked");
+    });
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    for (const name of ["install", "build"]) {
+      const command = createDeferredCore<Awaited<ReturnType<CommandRunner>>>();
+      const aborted = vi.fn(() => command.reject(new Error("command aborted")));
+      const pending = runStep({
+        runCommand: (_argv, input) => {
+          input.signal?.addEventListener("abort", aborted);
+          return command.promise;
+        },
+        name,
+        argv: ["pnpm", name],
+        cwd: options.env.OPENCLAW_STATE_DIR,
+        timeoutMs: ABANDONED_UPDATE_RUN_MS,
+        progress,
+        stepIndex: 0,
+        totalSteps: 2,
+      });
+      const settled = pending.catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(UPDATE_RUN_HEARTBEAT_MS * 2);
+      expect(aborted).not.toHaveBeenCalled();
+      command.resolve({ stdout: "", stderr: "", code: 0 });
+      expect(await settled).toMatchObject({ exitCode: 0 });
+      expect(getUpdateRun(run.runId, options)?.steps).toContainEqual(
+        expect.objectContaining({ step: name, status: "completed" }),
+      );
+    }
+    expect(warning).toHaveBeenCalledTimes(1);
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining("SQLITE_BUSY"));
+  });
+
   it("classifies without writing, then finishes an aged staging run whose driver exited", () => {
     const options = isolatedOptions();
     const created = createUpdateRun(

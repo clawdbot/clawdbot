@@ -1,7 +1,7 @@
 import { backup, DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { withStateSchemaFence } from "../src/infra/state-database-coordinator.js";
-import { requireUpdateRunDriver, type UpdateRunDriver } from "../src/infra/update-run-driver.js";
+import { readUpdateRunDriver, type UpdateRunDriver } from "../src/infra/update-run-driver.js";
 import { createUpdateRun, finishUpdateRun } from "../src/infra/update-run-ledger.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../src/infra/update-run-timeouts.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../src/state/openclaw-state-db-contract.js";
@@ -158,7 +158,10 @@ describe("Gateway external shared-state ownership", () => {
     const instance = await createPublicationInstance("gateway-abandoned-update-driver");
     let observer: DatabaseSync | undefined;
     try {
-      const currentDriver = requireUpdateRunDriver();
+      const currentDriver = readUpdateRunDriver();
+      if (!currentDriver) {
+        throw new Error("Test process identity is unavailable");
+      }
       const { databasePath, runId } = seedInactiveUpdateRun(instance, {
         ageMs: ABANDONED_UPDATE_RUN_MS + 60_000,
         // A live PID with a different start identity positively proves PID reuse.
@@ -213,7 +216,10 @@ describe("Gateway external shared-state ownership", () => {
     const instance = await createPublicationInstance("gateway-inactive-update-repair");
     let observer: DatabaseSync | undefined;
     try {
-      const driver = requireUpdateRunDriver();
+      const driver = readUpdateRunDriver();
+      if (!driver) {
+        throw new Error("Test process identity is unavailable");
+      }
       const inactive = seedInactiveUpdateRun(instance, {
         ageMs: ABANDONED_UPDATE_RUN_MS + 60_000,
         phase: "staging",

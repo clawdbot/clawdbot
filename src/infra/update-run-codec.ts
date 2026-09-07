@@ -19,6 +19,7 @@ const RETAINED_STEP_NAMES = [
   "previous generation restoration",
   "post-update verification",
   "driver:adopted",
+  "driver:identity-unavailable",
   "reconcile:abandoned",
   "reconcile:superseded",
   "reconcile:acknowledged",

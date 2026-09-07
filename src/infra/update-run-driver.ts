@@ -13,7 +13,7 @@ export function sameUpdateRunDriver(left: UpdateRunDriver, right: UpdateRunDrive
   );
 }
 
-export function requireUpdateRunDriver(): UpdateRunDriver {
+export function readUpdateRunDriver(): UpdateRunDriver | undefined {
   const host = hostname();
   const startedAt = getFileLockProcessStartTime(process.pid);
   if (
@@ -23,9 +23,7 @@ export function requireUpdateRunDriver(): UpdateRunDriver {
     !Number.isSafeInteger(startedAt) ||
     startedAt < 0
   ) {
-    throw new Error(
-      "Update driver process identity is unavailable; retry when local process inspection is available.",
-    );
+    return undefined;
   }
   return { host, pid: process.pid, startIdentity: String(startedAt) };
 }

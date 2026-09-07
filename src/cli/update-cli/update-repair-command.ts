@@ -47,6 +47,25 @@ function needsPostCoreRepair(run: UpdateRunRecord): boolean {
   );
 }
 
+function inspectNewerRecoveryHistory(recoveryRuns: UpdateRunRecord[], env: NodeJS.ProcessEnv) {
+  if (!recoveryRuns.length) {
+    return { postCoreRuns: [], incomplete: false };
+  }
+  const oldestRecovery = Math.min(...recoveryRuns.map((run) => run.createdAtMs));
+  const history = listUpdateRuns({ limit: 100 }, { env });
+  const postCoreRuns = history.filter(
+    (run) =>
+      run.createdAtMs >= oldestRecovery &&
+      run.status === "failed" &&
+      run.reason === "abandoned" &&
+      !run.steps.some((step) => step.step === "reconcile:acknowledged") &&
+      needsPostCoreRepair(run),
+  );
+  // A bounded prefix cannot prove absence of interrupted work beyond its tail.
+  const incomplete = history.length === 100 && (history.at(-1)?.createdAtMs ?? 0) >= oldestRecovery;
+  return { postCoreRuns, incomplete };
+}
+
 function assertNoActiveDriver(runs: UpdateRunRecord[]): void {
   const active = runs.find((run) => !inspectUpdateRunAbandonment(run, { explicit: true }));
   if (active) {
@@ -78,13 +97,18 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
     : lastRun && isUnacknowledgedAbandonedUpdateRun(lastRun)
       ? [lastRun]
       : [];
-  const recoveryRunIds = recoveryRuns.map((run) => run.runId);
+  const history = inspectNewerRecoveryHistory(recoveryRuns, env);
+  const recoveryRunIds = [
+    ...new Set([...recoveryRuns, ...history.postCoreRuns].map((run) => run.runId)),
+  ];
 
   if (
     opts.channel !== undefined ||
     opts.acceptCapabilities ||
     recoveryRuns.length === 0 ||
-    recoveryRuns.some(needsPostCoreRepair)
+    recoveryRuns.some(needsPostCoreRepair) ||
+    history.postCoreRuns.length > 0 ||
+    history.incomplete
   ) {
     await updateFinalizeCommand(opts, recoveryRunIds);
     return;
@@ -132,7 +156,12 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
   assertConfigWriteAllowedInCurrentMode({ env });
   const currentRuns = listUpdateRuns({ active: true, limit: 100 }, options);
   assertNoActiveDriver(currentRuns);
-  if (currentRuns.some(needsPostCoreRepair)) {
+  const currentHistory = inspectNewerRecoveryHistory(recoveryRuns, env);
+  if (
+    currentRuns.some(needsPostCoreRepair) ||
+    currentHistory.postCoreRuns.length > 0 ||
+    currentHistory.incomplete
+  ) {
     throw new Error(
       "Update repair needs post-core maintenance. Stop the Gateway service through its owner before retrying; repair will not stop or restart it.",
     );

@@ -46,6 +46,9 @@ export function inspectUpdateRunAbandonment(
   if (record.status !== "running" || Date.now() - lastActivity <= ABANDONED_UPDATE_RUN_MS) {
     return undefined;
   }
+  if (!input.explicit && record.steps.some((step) => step.step === "driver:identity-unavailable")) {
+    return undefined;
+  }
   const drivers = recordedUpdateRunDrivers(record);
   if (drivers.length) {
     return drivers.every((driver) => inspectUpdateRunDriver(driver) === "dead")

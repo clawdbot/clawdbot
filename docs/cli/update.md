@@ -277,7 +277,11 @@ allow the Gateway to finish the run as `failed` with reason `abandoned` and a
 `reconcile:abandoned` step naming the rule. A live, unreadable, or foreign-host
 driver prevents reconciliation. Each helper or finalization child records its
 own identity and retains earlier drivers, because detached children can outlive
-their parent.
+their parent. If process identity recording is unavailable, the update continues
+with one warning and the run requires explicit recovery. Known parent identities
+remain protected, and automatic reconciliation stays disabled for that run.
+Heartbeat write errors warn once per driver run and do not interrupt a running
+build, install, or finalization phase.
 
 Historical rows without a driver identity require explicit `update repair` or
 a new operator-started `openclaw update`.
@@ -346,7 +350,10 @@ still blocks recovery. JSON output identifies reconciled run IDs in
 
 Explicit channel or capability changes and known incomplete post-core work use
 full finalization. Recorded activation, restart, verification, or finalization steps require
-that convergence even if the Gateway has already reconciled the run. If that
+that convergence even if the Gateway has already reconciled the run. Repair
+checks newer abandoned history as well as active rows; an older stale row cannot
+hide unfinished work from a newer update. If the bounded history inspection is
+incomplete, repair also uses full finalization. If that
 work needs maintenance while the managed service is
 running, stop the service through its owner before retrying. Doctor cannot stop
 or restart the service on the update parent's behalf.

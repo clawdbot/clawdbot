@@ -151,14 +151,21 @@ string) in the existing `origin_json` column. Each adopter becomes the current
 driver and retains distinct earlier identities in `origin.previousDrivers`.
 There are at most eight identities in total. Only positively dead identities
 are pruned; adoption is refused rather than dropping a live or uninspectable
-driver at capacity. Identity capture must succeed before a new driver starts.
+driver at capacity. If local process identity cannot be captured, adoption
+continues with one warning and a retained `driver:identity-unavailable` step.
+That marker permanently excludes the run from automatic reconciliation, even
+if known parents later exit; existing recorded identities remain protected.
+A fresh run without identity follows the legacy explicit repair/supersession
+rules below.
 This is additive JSON metadata;
 there are no new columns, tables, or schema versions. The separate
 `verification.pid` still identifies the Gateway service, not the updater.
 Adoption records a retained `driver:adopted` step. Detached children can outlive
 their parent, so either lifetime can prevent reconciliation. Adopting a terminal
 run is refused. Long command and finalization phases renew `updated_at_ms`
-every 30 seconds; only current or retained identities may renew a row. Encoding
+every 30 seconds; only current or retained identities may renew a row. Heartbeat
+write failures warn once per driver run and do not abort commands or finalization;
+step and outcome writes retain their existing failure behavior. Encoding
 reserves space for exact identity bytes before bounding and redacting other
 origin diagnostics.
 
@@ -196,6 +203,10 @@ Successful ledger-only repair records a retained `reconcile:acknowledged` step.
 A terminal abandoned row can substitute for full repair only once, within
 30 minutes of its finish time; later repair invocations keep normal plugin
 convergence behavior.
+Repair also inspects newer failed/abandoned history for unacknowledged post-core
+work, regardless of its age. An older active row cannot hide that work. If the
+bounded history prefix does not reach the selected recovery rows, repair uses
+full finalization rather than claiming that no post-core work remains.
 When full finalization is required, the selected inactive rows are rechecked
 and reconciled only after successful convergence, before success output.
 Explicit recovery validates and commits its selected rows in one transaction;

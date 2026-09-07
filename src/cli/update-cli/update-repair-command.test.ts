@@ -2,8 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { requireUpdateRunDriver } from "../../infra/update-run-driver.js";
+import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
+  acknowledgeAbandonedUpdateRun,
   createUpdateRun,
   finishUpdateRun,
   getUpdateRun,
@@ -65,7 +66,7 @@ function seedRun(
   params: { phase?: UpdateRunRecord["phase"]; liveDriver?: boolean; ageMs?: number } = {},
 ) {
   vi.mocked(Date.now).mockReturnValue(now - (params.ageMs ?? 3_600_000));
-  const driver = params.liveDriver ? requireUpdateRunDriver() : undefined;
+  const driver = params.liveDriver ? readUpdateRunDriver() : undefined;
   const run = createUpdateRun({
     trigger: "control-ui",
     before: { version: "2026.9.2" },
@@ -241,6 +242,70 @@ describe("update repair ledger recovery", () => {
       expect(mocks.finalize).toHaveBeenCalledWith({}, [run.runId]);
     },
   );
+
+  it.each(["activating", "finalize:plugins"])(
+    "does not let old active history hide newer abandoned %s work",
+    async (step) => {
+      const old = seedRun({ ageMs: ABANDONED_UPDATE_RUN_MS * 4 });
+      const newer = seedRun({ ageMs: ABANDONED_UPDATE_RUN_MS * 3 });
+      vi.mocked(Date.now).mockReturnValue(now - ABANDONED_UPDATE_RUN_MS * 2);
+      recordUpdateRunStep(newer.runId, { step, status: "completed" });
+      finishUpdateRun(newer.runId, { status: "failed", reason: "abandoned" });
+      vi.mocked(Date.now).mockReturnValue(now);
+      const recorded = listUpdateRuns();
+      mocks.finalize.mockRejectedValueOnce(new Error("Stop the service through its owner"));
+
+      await expect(updateRepairCommand({})).rejects.toThrow("Stop the service through its owner");
+
+      expect(mocks.finalize).toHaveBeenCalledWith({}, [old.runId, newer.runId]);
+      expect(mocks.reachable).not.toHaveBeenCalled();
+      expect(listUpdateRuns()).toEqual(recorded);
+    },
+  );
+
+  it("allows ledger-only repair after newer post-core abandonment was acknowledged", async () => {
+    const old = seedRun();
+    const newer = seedRun({ ageMs: 60_000, phase: "activating" });
+    finishUpdateRun(newer.runId, { status: "failed", reason: "abandoned" });
+    acknowledgeAbandonedUpdateRun(newer.runId);
+
+    await updateRepairCommand({});
+
+    expect(getUpdateRun(old.runId)).toMatchObject({ status: "failed", reason: "abandoned" });
+    expect(mocks.finalize).not.toHaveBeenCalled();
+  });
+
+  it("requires full repair when newer history exceeds the inspection bound", async () => {
+    const old = seedRun();
+    const abandoned = seedRun({ ageMs: 60_000, phase: "activating" });
+    finishUpdateRun(abandoned.runId, { status: "failed", reason: "abandoned" });
+    for (let index = 0; index < 100; index++) {
+      const newer = createUpdateRun({ trigger: "cli" });
+      finishUpdateRun(newer.runId, { status: "skipped", reason: "already-current" });
+    }
+    mocks.finalize.mockRejectedValueOnce(new Error("Stop the service through its owner"));
+
+    await expect(updateRepairCommand({})).rejects.toThrow("Stop the service through its owner");
+
+    expect(getUpdateRun(old.runId)).toEqual(old);
+    expect(mocks.reachable).not.toHaveBeenCalled();
+  });
+
+  it("rechecks newer abandoned post-core history after health probes", async () => {
+    const old = seedRun();
+    mocks.readiness.mockImplementationOnce(async () => {
+      const newer = seedRun({ ageMs: 60_000, phase: "activating" });
+      finishUpdateRun(newer.runId, { status: "failed", reason: "abandoned" });
+      return { healthz: 200, readyz: 200 };
+    });
+
+    await expect(updateRepairCommand({})).rejects.toThrow(
+      "Stop the Gateway service through its owner",
+    );
+
+    expect(getUpdateRun(old.runId)).toEqual(old);
+    expect(mocks.runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Reconciled"));
+  });
 
   it.each(["in_progress", "completed", "failed"] as const)(
     "retains full repair after a %s finalization step",
