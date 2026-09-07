@@ -5,7 +5,9 @@ function errorCode(error) {
   return error && typeof error === "object" && "code" in error ? error.code : undefined;
 }
 
-const resolveTrustedExecutablePath = pluginSecretRefSetup.resolveTrustedExecutablePath;
+const { isTrustedPathPolicyError, resolveTrustedExecutablePath } = pluginSecretRefSetup;
+
+export class OnePasswordCliPathTrustError extends Error {}
 
 export async function resolveTrustedOnePasswordCli(options = {}) {
   const configuredPath = options.configuredPath?.trim();
@@ -27,7 +29,10 @@ export async function resolveTrustedOnePasswordCli(options = {}) {
       if (errorCode(error) === "ENOENT" || errorCode(error) === "ENOTDIR") {
         continue;
       }
-      unsafeError = new Error(
+      if (!isTrustedPathPolicyError(error)) {
+        throw error;
+      }
+      unsafeError = new OnePasswordCliPathTrustError(
         `Refusing unsafe 1Password CLI path "${candidate}": ${error instanceof Error ? error.message : String(error)}`,
         { cause: error },
       );

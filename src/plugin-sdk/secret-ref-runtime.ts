@@ -16,6 +16,7 @@ import {
 } from "../secrets/plugin-setup-plan.js";
 import { createPrivateWindowsPlanFile } from "../secrets/private-plan-file.js";
 import {
+  isTrustedPathPolicyError,
   resolveTrustedExecutablePath,
   resolveTrustedPlanDirectoryPath,
 } from "../secrets/trusted-plan-path.js";
@@ -438,6 +439,7 @@ export const pluginSecretRefSetup = {
   assertValidProviderAlias: assertValidPluginSecretProviderAlias,
   buildPlan: buildPluginSecretRefSetupPlan,
   parseTargetSpecifier: parsePluginSecretTargetSpecifier,
+  isTrustedPathPolicyError,
   resolveTrustedDirectoryPath: resolveTrustedPlanDirectoryPath,
   resolveTrustedExecutablePath,
   writePlanFile: writeSecretPlanFile,

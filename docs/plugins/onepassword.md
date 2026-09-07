@@ -106,7 +106,10 @@ Before apply, status can report that the provider itself is not configured yet;
 `prerequisites ready: yes` confirms that the trusted `op` executable and an
 accepted non-empty token file are ready. After apply, `ready: yes` confirms both the
 provider wiring and prerequisites. Missing or unsafe prerequisites produce
-actionable next steps without printing the token or raw resolver errors.
+actionable next steps without printing token or secret values. An unsafe `op`
+executable also reports the redacted, plugin-owned path-validation error so
+ownership and write-access problems can be repaired directly. Unexpected
+resolver errors remain hidden.
 
 Manual provider configuration uses the existing plugin id:
 
