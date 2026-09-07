@@ -264,9 +264,12 @@ export function verifyStableMainCloseout(params) {
       (!Object.hasOwn(existingManifest, "appcast") &&
         Object.hasOwn(existingManifest, "appcastSha256"))
     : macAttachedAtCloseout;
-  // A verified recorded appcast remains bound to its original main snapshot.
-  // Fresh closeout and late macOS publication still verify the current feed.
-  const appcast = params.publishedAppcast ?? params.mainAppcast;
+  // Fresh closeout must validate the same main snapshot it hashes. Only a
+  // pending recorded closeout may use the current feed for late publication.
+  const appcast =
+    existingManifest && !appcastVerifiedAtCloseout
+      ? (params.publishedAppcast ?? params.mainAppcast)
+      : params.mainAppcast;
   if (
     macPublished &&
     (!existingManifest || !appcastVerifiedAtCloseout) &&

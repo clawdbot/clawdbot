@@ -328,6 +328,21 @@ describe("stable release closeout", () => {
     expect(result.manifest).toMatchObject({ apps: "attached", appcast: "verified" });
   });
 
+  it("validates the main appcast snapshot recorded by fresh closeout", () => {
+    const result = verifyStableMainCloseout({
+      ...validCloseoutParams,
+      mainAppcast: "<rss>stale main feed</rss>",
+      publishedAppcast:
+        "https://github.com/openclaw/openclaw/releases/download/v2026.6.8/OpenClaw-2026.6.8.zip",
+      nowMs: Date.parse("2026-06-17T00:00:00Z"),
+    });
+
+    expect(result.errors).toContain(
+      "main appcast.xml does not point at OpenClaw-2026.6.8.zip from v2026.6.8.",
+    );
+    expect(result.manifest).toBeNull();
+  });
+
   it.each([
     ["OpenClaw-2026.6.8.zip", null, "macos", "pending"],
     ["OpenClaw-Android.apk", `sha256:${"D".repeat(64)}`, "android", "verified"],
