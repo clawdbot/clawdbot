@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+import { note } from "../../packages/terminal-core/src/note.js";
 import type { ConfigSnapshotReadMeasure } from "../config/io.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -5,11 +7,22 @@ import type {
   MigrationCheckpointIdentity,
   StartupMigrationLease,
 } from "../infra/startup-migration-checkpoint.js";
+import {
+  DoctorStateMigrationRefusalError,
+  formatStartupMigrationFailure,
+  recordStartupMigrationWarnings,
+  throwIfDoctorStateMigrationRefused,
+} from "../infra/state-migrations.messages.js";
+import type {
+  LegacyStateMigrationStepReceipt,
+  MigrationMessages,
+} from "../infra/state-migrations.types.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import {
   migrationCheckpointIdentitiesMatch,
   resolveMigrationCheckpointIdentity,
 } from "./doctor-config-preflight-checkpoint.js";
+import { measureDoctorConfigPreflightStep } from "./doctor-config-preflight-measure.js";
 import type { DoctorConfigPreflightPluginSnapshotRead } from "./doctor-config-preflight-plugin-index.js";
 import {
   formatStartupPluginVerificationFailure,
@@ -17,7 +30,7 @@ import {
   runStartupUpgradeConvergence,
 } from "./doctor-config-preflight-plugin-verification.js";
 import {
-  formatStartupMigrationFailure,
+  throwStartupMigrationGuardRejected,
   throwStartupMigrationIdentityChanged,
   throwStartupMigrationRefusal,
 } from "./doctor-startup-migration-refusal.js";
@@ -35,26 +48,80 @@ type MigrationCheckpoint = {
   }) => void;
 };
 
-/** Completes startup checkpointing and plugin verification after state migration has run. */
+/** Settle package repairs before state migrations select their plugin owners. */
+export async function prepareStartupMigrationPlugins(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  measure?: ConfigSnapshotReadMeasure;
+  converge: boolean;
+  lease: StartupMigrationLease | undefined;
+  snapshotRead: DoctorConfigPreflightPluginSnapshotRead;
+  readRefreshedSnapshot: () => Promise<DoctorConfigPreflightPluginSnapshotRead>;
+  beforeStateMigrations?: (snapshot: ConfigFileSnapshot) => Promise<boolean>;
+}): Promise<DoctorConfigPreflightPluginSnapshotRead> {
+  if (params.converge) {
+    if (!params.lease) {
+      throw new Error("Startup plugin convergence requires the startup migration lease.");
+    }
+    params.lease.heartbeat();
+  }
+  setActiveDegradedPlugins([]);
+  const convergence = await (
+    params.converge ? runStartupUpgradeConvergence : refreshStartupPluginQuarantine
+  )(params);
+  setActiveDegradedPlugins(convergence.quarantinedPlugins);
+  if (convergence.blockingDiagnostic) {
+    throwStartupMigrationRefusal(
+      formatStartupPluginVerificationFailure(convergence.blockingDiagnostic),
+    );
+  }
+  if (!params.converge) {
+    return params.snapshotRead;
+  }
+  const refreshed = await params.readRefreshedSnapshot();
+  const snapshot = params.snapshotRead.snapshot;
+  if (
+    snapshot.path !== refreshed.snapshot.path ||
+    !isDeepStrictEqual(
+      snapshot.sourceConfig ?? snapshot.config,
+      refreshed.snapshot.sourceConfig ?? refreshed.snapshot.config,
+    )
+  ) {
+    throwStartupMigrationIdentityChanged();
+  }
+  if (
+    params.beforeStateMigrations &&
+    !(await measureDoctorConfigPreflightStep(
+      "converged-config-guard",
+      () => params.beforeStateMigrations?.(refreshed.snapshot),
+      params.measure,
+    ))
+  ) {
+    throwStartupMigrationGuardRejected();
+  }
+  return refreshed;
+}
+
+/** Completes startup verification and returns the accepted config and metadata generation. */
 export async function completeStartupMigrationPreflight(params: {
-  baseConfig: OpenClawConfig;
   freshConfigGuardAllowed: boolean | undefined;
   gatewayStartupCheckpointRequired: boolean;
   migrationCheckpoint: MigrationCheckpoint | undefined;
   migrationCheckpointIdentity: MigrationCheckpointIdentity | null;
-  measure?: ConfigSnapshotReadMeasure;
   readConfigSnapshotForPreflight: (
     allowCurrentPluginMetadata?: boolean,
   ) => Promise<DoctorConfigPreflightPluginSnapshotRead>;
   shouldRecordStartupCheckpoint: boolean;
   shouldRecordStateCheckpoint: boolean;
-  snapshot: ConfigFileSnapshot;
+  snapshotRead: DoctorConfigPreflightPluginSnapshotRead;
   startupMigrationEnv: NodeJS.ProcessEnv;
   startupMigrationHeartbeatError: unknown;
   startupMigrationLease: StartupMigrationLease | undefined;
   startupMigrationWarnings: readonly string[];
   stateMigrationsAllowed: boolean | undefined;
-}): Promise<void> {
+}): Promise<DoctorConfigPreflightPluginSnapshotRead> {
+  let snapshotRead = params.snapshotRead;
+  const snapshot = snapshotRead.snapshot;
   if (
     (params.shouldRecordStateCheckpoint || params.shouldRecordStartupCheckpoint) &&
     params.startupMigrationHeartbeatError
@@ -68,7 +135,7 @@ export async function completeStartupMigrationPreflight(params: {
     params.stateMigrationsAllowed &&
     params.freshConfigGuardAllowed &&
     params.startupMigrationWarnings.length === 0 &&
-    params.snapshot.valid
+    snapshot.valid
   ) {
     if (!params.migrationCheckpoint) {
       throw new Error("OpenClaw state migration checkpoint module was not loaded.");
@@ -80,61 +147,33 @@ export async function completeStartupMigrationPreflight(params: {
     });
   }
   if (params.gatewayStartupCheckpointRequired) {
-    if (params.startupMigrationWarnings.length > 0) {
+    if (params.shouldRecordStartupCheckpoint && !snapshot.valid) {
       throwStartupMigrationRefusal(
-        formatStartupMigrationFailure({
-          warnings: [...params.startupMigrationWarnings],
-          blockers: [],
-        }),
+        formatStartupMigrationFailure([
+          'OpenClaw config is invalid; run "openclaw doctor --fix" before startup.',
+        ]),
       );
     }
-    if (params.shouldRecordStartupCheckpoint && !params.snapshot.valid) {
-      throwStartupMigrationRefusal(
-        formatStartupMigrationFailure({
-          warnings: [],
-          blockers: ['OpenClaw config is invalid; run "openclaw doctor --fix" before startup.'],
-        }),
-      );
-    }
-    setActiveDegradedPlugins([]);
-    if (params.snapshot.valid) {
-      const pluginConvergence = params.shouldRecordStartupCheckpoint
-        ? await runStartupUpgradeConvergence({
-            cfg: params.baseConfig,
-            env: process.env,
-            ...(params.measure ? { measure: params.measure } : {}),
-          })
-        : await refreshStartupPluginQuarantine({
-            cfg: params.baseConfig,
-            env: process.env,
-            ...(params.measure ? { measure: params.measure } : {}),
-          });
-      setActiveDegradedPlugins(pluginConvergence.quarantinedPlugins);
-      if (pluginConvergence.blockingDiagnostic) {
-        throwStartupMigrationRefusal(
-          formatStartupPluginVerificationFailure(pluginConvergence.blockingDiagnostic),
-        );
+    if (snapshot.valid && params.shouldRecordStartupCheckpoint) {
+      const convergedSnapshotRead = await params.readConfigSnapshotForPreflight(false);
+      const convergedBaseConfig =
+        convergedSnapshotRead.snapshot.sourceConfig ?? convergedSnapshotRead.snapshot.config ?? {};
+      const convergedIdentity = resolveMigrationCheckpointIdentity({
+        snapshot: convergedSnapshotRead.snapshot,
+        baseConfig: convergedBaseConfig,
+        pluginMigrationFingerprint: convergedSnapshotRead.pluginMigrationFingerprint,
+      });
+      if (
+        !migrationCheckpointIdentitiesMatch(params.migrationCheckpointIdentity, convergedIdentity)
+      ) {
+        throwStartupMigrationIdentityChanged();
       }
-      if (params.shouldRecordStartupCheckpoint) {
-        const convergedSnapshotRead = await params.readConfigSnapshotForPreflight(false);
-        const convergedBaseConfig =
-          convergedSnapshotRead.snapshot.sourceConfig ??
-          convergedSnapshotRead.snapshot.config ??
-          {};
-        const convergedIdentity = resolveMigrationCheckpointIdentity({
-          snapshot: convergedSnapshotRead.snapshot,
-          baseConfig: convergedBaseConfig,
-          pluginMigrationFingerprint: convergedSnapshotRead.pluginMigrationFingerprint,
-        });
-        if (
-          !migrationCheckpointIdentitiesMatch(params.migrationCheckpointIdentity, convergedIdentity)
-        ) {
-          throwStartupMigrationIdentityChanged();
-        }
-      }
+      snapshotRead = convergedSnapshotRead;
     }
+    recordStartupMigrationWarnings(params.startupMigrationWarnings);
   }
-  if (params.shouldRecordStartupCheckpoint) {
+  // Advisory findings allow service, but must not certify unfinished migration work.
+  if (params.shouldRecordStartupCheckpoint && params.startupMigrationWarnings.length === 0) {
     if (!params.migrationCheckpoint) {
       throw new Error("OpenClaw startup migration checkpoint module was not loaded.");
     }
@@ -143,5 +182,37 @@ export async function completeStartupMigrationPreflight(params: {
       identity: params.migrationCheckpointIdentity,
       lease: params.startupMigrationLease,
     });
+  }
+  return snapshotRead;
+}
+
+export async function assertDoctorPreflightMigrationsComplete(params: {
+  cfg: OpenClawConfig;
+  stepReceipts: readonly LegacyStateMigrationStepReceipt[];
+  report: (result: MigrationMessages) => void;
+}): Promise<void> {
+  try {
+    throwIfDoctorStateMigrationRefused(params.stepReceipts);
+  } catch (error) {
+    if (error instanceof DoctorStateMigrationRefusalError) {
+      // A refused owner stops all later repairs. Still diagnose canonical
+      // workspace state read-only before final completion becomes unreachable.
+      const { assertConfiguredWorkspaceStateReady } =
+        await import("../agents/workspace-state-dirs.js");
+      try {
+        assertConfiguredWorkspaceStateReady({ cfg: params.cfg, operation: "doctor" });
+      } catch (workspaceError) {
+        params.report({ changes: [], warnings: [String(workspaceError)] });
+      }
+    }
+    throw error;
+  }
+}
+
+export function noteStateMigrationResult(result: MigrationMessages): void {
+  for (const key of ["changes", "notices", "warnings"] as const) {
+    if (result[key]?.length) {
+      note(result[key].map((entry) => `- ${entry}`).join("\n"), `Doctor ${key}`);
+    }
   }
 }

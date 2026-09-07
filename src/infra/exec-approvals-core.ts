@@ -3,7 +3,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import type { ApprovalScope } from "./approval-scope.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import type { ExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
-import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
+import type { ExecAllowlistEntry, McpToolGrant } from "./exec-approvals.types.js";
 
 export type ExecHost = "sandbox" | "gateway" | "node";
 export type ExecTarget = "auto" | ExecHost;
@@ -99,6 +99,18 @@ export function resolveExecModeFromPolicy(params: {
     return "full";
   }
   return "ask";
+}
+
+// Migration, policy writes, and repair hints must preserve policies that the
+// display-mode projection cannot express: always-ask and full/on-miss.
+export function resolveExactExecModeFromPolicy(params: {
+  security: ExecSecurity;
+  ask: ExecAsk;
+}): ExecMode | null {
+  if (params.ask === "always" || (params.security === "full" && params.ask === "on-miss")) {
+    return null;
+  }
+  return resolveExecModeFromPolicy(params);
 }
 
 export function resolveExecPolicyForMode(mode: ExecMode): {
@@ -244,6 +256,7 @@ export type ExecApprovalsDefaults = {
 
 export type ExecApprovalsAgent = ExecApprovalsDefaults & {
   allowlist?: ExecAllowlistEntry[];
+  mcpTools?: McpToolGrant[];
 };
 
 export type ExecApprovalsFile = {

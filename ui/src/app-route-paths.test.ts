@@ -26,6 +26,7 @@ import {
 import { createApplicationRouter, startApplicationRouter } from "./app-routes.ts";
 import type { ApplicationContext } from "./app/context.ts";
 import type { AgentsPanel } from "./lib/agents/panels.ts";
+import { createApplicationGateway } from "./test-helpers/application-context.ts";
 
 const AGENT_PANEL_CASES = [
   "overview",
@@ -38,6 +39,25 @@ const AGENT_PANEL_CASES = [
 ] as const satisfies readonly AgentsPanel[];
 
 const DYNAMIC_STARTUP_CASES = [
+  {
+    label: "person Activity",
+    routeId: "activity",
+    location: {
+      pathname: "/activity/josh-12345678",
+      search: "?time=30d&q=release",
+      hash: "#sessions",
+    },
+  },
+  {
+    label: "mounted person Activity",
+    routeId: "activity",
+    basePath: "/ui",
+    location: {
+      pathname: "/ui/activity/josh-12345678",
+      search: "?time=30d&q=release",
+      hash: "#sessions",
+    },
+  },
   {
     label: "agent panel",
     routeId: "agents",
@@ -104,14 +124,31 @@ const DYNAMIC_STARTUP_CASES = [
 ] as const satisfies readonly {
   label: string;
   routeId: RouteId;
+  basePath?: string;
   location: RouteLocation;
 }[];
+
+function createStartupContext(basePath = ""): ApplicationContext {
+  const { gateway } = createApplicationGateway({
+    phase: "stopped",
+    client: null,
+    offlineStable: false,
+    hello: null,
+    canvasPluginSurfaceUrl: null,
+    assistantAgentId: null,
+    sessionKey: "agent:main:main",
+    lastError: null,
+    lastErrorCode: null,
+  });
+  return { basePath, gateway } as unknown as ApplicationContext;
+}
 
 describe("Dynamic route startup bridge", () => {
   it("keeps share-route reservations aligned with every built-in path and alias", () => {
     const reservedRouteSegments = [
       ...new Set([
         "focus",
+        "share",
         ...Object.values(CONTROL_UI_DOCUMENT_ROUTE_PATHS).map((path) => path.slice(1)),
         ...APP_ROUTE_IDS.flatMap((routeId) => {
           const definition = routePageSpec(routeId);
@@ -189,7 +226,9 @@ describe("Dynamic route startup bridge", () => {
 
   it.each(DYNAMIC_STARTUP_CASES)(
     "loads the $label once while publishing its real location",
-    async ({ routeId, location: initialLocation }) => {
+    async (testCase) => {
+      const { routeId, location: initialLocation } = testCase;
+      const basePath = "basePath" in testCase ? testCase.basePath : "";
       let location: RouteLocation = { ...initialLocation };
       const push = vi.fn((next: RouteLocation) => {
         location = next;
@@ -215,9 +254,7 @@ describe("Dynamic route startup bridge", () => {
         route.loader = loader;
         route.component = async () => ({ render: () => null });
 
-        await startApplicationRouter(router, history, "", {
-          basePath: "",
-        } as unknown as ApplicationContext);
+        await startApplicationRouter(router, history, basePath, createStartupContext(basePath));
 
         expect(loader).toHaveBeenCalledOnce();
         expect(router.getState().matches[0]?.location).toEqual(initialLocation);
@@ -231,62 +268,70 @@ describe("Dynamic route startup bridge", () => {
     },
   );
 
-  it("loads a later dynamic history destination exactly once", async () => {
-    let location: RouteLocation = {
-      pathname: "/chat/main/01JSESSIONA",
-      search: "",
-      hash: "#first",
-    };
-    let historyListener: ((next: RouteLocation) => void) | undefined;
-    const history: RouterHistory = {
-      location: () => location,
-      push: vi.fn((next: RouteLocation) => {
-        location = next;
-      }),
-      replace: vi.fn((next: RouteLocation) => {
-        location = next;
-      }),
-      listen: (listener) => {
-        historyListener = listener;
-        return () => {
-          historyListener = undefined;
-        };
-      },
-    };
-    const router = createApplicationRouter();
-    const route = router.getRoute("chat");
-    if (!route) {
-      throw new Error("Chat route missing");
-    }
-    const loader = vi.fn<NonNullable<typeof route.loader>>(async () => ({}));
-    const originalLoader = route.loader;
-    const originalComponent = route.component;
-    try {
-      route.loader = loader;
-      route.component = async () => ({ render: () => null });
-
-      await startApplicationRouter(router, history, "", {
-        basePath: "",
-      } as unknown as ApplicationContext);
-      expect(loader).toHaveBeenCalledOnce();
-
-      location = {
-        pathname: "/chat/main/01JSESSIONB",
-        search: "?probe=1",
-        hash: "#second",
+  it.each([
+    { routeId: "chat", firstPath: "/chat/main/01JSESSIONA", nextPath: "/chat/main/01JSESSIONB" },
+    {
+      routeId: "activity",
+      firstPath: "/activity/josh-12345678",
+      nextPath: "/activity/mira-2ab34567",
+    },
+  ] as const)(
+    "loads a later $routeId history destination exactly once",
+    async ({ routeId, firstPath, nextPath }) => {
+      let location: RouteLocation = {
+        pathname: firstPath,
+        search: "",
+        hash: "#first",
       };
-      historyListener?.(location);
+      let historyListener: ((next: RouteLocation) => void) | undefined;
+      const history: RouterHistory = {
+        location: () => location,
+        push: vi.fn((next: RouteLocation) => {
+          location = next;
+        }),
+        replace: vi.fn((next: RouteLocation) => {
+          location = next;
+        }),
+        listen: (listener) => {
+          historyListener = listener;
+          return () => {
+            historyListener = undefined;
+          };
+        },
+      };
+      const router = createApplicationRouter();
+      const route = router.getRoute(routeId);
+      if (!route) {
+        throw new Error(`Route missing: ${routeId}`);
+      }
+      const loader = vi.fn<NonNullable<typeof route.loader>>(async () => ({}));
+      const originalLoader = route.loader;
+      const originalComponent = route.component;
+      try {
+        route.loader = loader;
+        route.component = async () => ({ render: () => null });
 
-      await vi.waitFor(() => {
-        expect(loader).toHaveBeenCalledTimes(2);
-        expect(loader.mock.calls[1]?.[1].location).toEqual(location);
-      });
-    } finally {
-      router.stop();
-      route.loader = originalLoader;
-      route.component = originalComponent;
-    }
-  });
+        await startApplicationRouter(router, history, "", createStartupContext());
+        expect(loader).toHaveBeenCalledOnce();
+
+        location = {
+          pathname: nextPath,
+          search: "",
+          hash: "#second",
+        };
+        historyListener?.(location);
+
+        await vi.waitFor(() => {
+          expect(loader).toHaveBeenCalledTimes(2);
+          expect(loader.mock.calls[1]?.[1].location).toEqual(location);
+        });
+      } finally {
+        router.stop();
+        route.loader = originalLoader;
+        route.component = originalComponent;
+      }
+    },
+  );
 
   it("keeps a loader not-found state without rejecting startup", async () => {
     let location: RouteLocation = { pathname: "/", search: "", hash: "" };
@@ -310,9 +355,7 @@ describe("Dynamic route startup bridge", () => {
       route.component = async () => ({ render: () => null });
 
       await expect(
-        startApplicationRouter(router, history, "", {
-          basePath: "",
-        } as unknown as ApplicationContext),
+        startApplicationRouter(router, history, "", createStartupContext()),
       ).resolves.toBeUndefined();
 
       expect(location.pathname).toBe("/chat");
@@ -354,9 +397,7 @@ describe("Dynamic route startup bridge", () => {
       route.component = async () => ({ render: () => null });
 
       await expect(
-        startApplicationRouter(router, history, "", {
-          basePath: "",
-        } as unknown as ApplicationContext),
+        startApplicationRouter(router, history, "", createStartupContext()),
       ).resolves.toBeUndefined();
 
       expect(loader).toHaveBeenCalledTimes(2);
@@ -391,9 +432,7 @@ describe("Dynamic route startup bridge", () => {
       route.component = async () => ({ render: () => null });
 
       await expect(
-        startApplicationRouter(router, history, "", {
-          basePath: "",
-        } as unknown as ApplicationContext),
+        startApplicationRouter(router, history, "", createStartupContext()),
       ).rejects.toBe(failure);
     } finally {
       router.stop();
@@ -523,6 +562,7 @@ describe("Memory tab route paths", () => {
   );
 
   it("rejects unknown and nested Memory tab segments", () => {
+    expect(memoryTabFromPath("/settings/memory//")).toBeNull();
     expect(memoryTabFromPath("/settings/memory/unknown")).toBeNull();
     expect(memoryTabFromPath("/settings/memory/dreams/extra")).toBeNull();
     expect(routeIdFromPath("/settings/memory/unknown")).toBeNull();
@@ -551,6 +591,7 @@ describe("Plugins hub tab route paths", () => {
   );
 
   it("rejects unknown and nested Plugins hub tab segments", () => {
+    expect(pluginsHubTabFromPath("/settings/plugins//")).toBeNull();
     expect(pluginsHubTabFromPath("/settings/plugins/unknown")).toBeNull();
     expect(pluginsHubTabFromPath("/settings/plugins/discover/extra")).toBeNull();
     expect(routeIdFromPath("/settings/plugins/unknown")).toBeNull();

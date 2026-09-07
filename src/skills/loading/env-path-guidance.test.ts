@@ -13,15 +13,6 @@ type GuidanceCase = {
 
 const CASES: GuidanceCase[] = [
   {
-    file: "skills/session-logs/SKILL.md",
-    required: ["OPENCLAW_STATE_DIR"],
-    forbidden: [
-      "for f in ~/.openclaw/agents/<agentId>/sessions/*.jsonl",
-      'rg -l "phrase" ~/.openclaw/agents/<agentId>/sessions/*.jsonl',
-      "~/.openclaw/agents/<agentId>/sessions/<id>.jsonl",
-    ],
-  },
-  {
     file: "skills/gh-issues/SKILL.md",
     required: ["OPENCLAW_CONFIG_PATH"],
     forbidden: ["cat ~/.openclaw/openclaw.json"],

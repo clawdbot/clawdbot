@@ -21,7 +21,7 @@ Pick a setup workflow based on how often you want updates and whether you want t
 
 ## Prereqs (from source)
 
-- Node 24.15+ recommended (Node 22 LTS, currently `22.22.3+`, still supported)
+- Node 24.16+ LTS or Node 26.1+ (recommended)
 - `pnpm` required for source checkouts. OpenClaw loads bundled plugins from the
   `extensions/*` pnpm workspace packages in dev mode, so root `npm install` does
   not prepare the full source tree.
@@ -32,9 +32,8 @@ publication cooldown to npm dependencies, with trusted `@openai/codex` and
 `@openai/codex-*` packages exempt. The standalone pnpm toolchain is managed separately.
 
 For npm tooling that reads the project's `.npmrc`, use npm **11.19 or newer** for
-install and `npm pack` cooldowns and Codex exclusions. Node 22's bundled npm 10
-ignores these settings; Node runtime support does not imply support for its
-bundled npm as a source resolver. [Published/global installs](/install) do not
+install and `npm pack` cooldowns and Codex exclusions. Node runtime support does
+not imply support for its bundled npm as a source resolver. [Published/global installs](/install) do not
 inherit the repository's `.npmrc`. Source installs continue to use pnpm.
 
 pnpm owns root and plugin-local dependencies, including workspace links and
@@ -113,22 +112,26 @@ pnpm openclaw setup
 pnpm gateway:watch
 ```
 
-`gateway:watch` starts or restarts the Gateway watch process in a named tmux
-session (`openclaw-gateway-watch-main`) and auto-attaches from interactive
-terminals. Non-interactive shells stay detached and print
-`tmux attach -t openclaw-gateway-watch-main`; use
-`OPENCLAW_GATEWAY_WATCH_ATTACH=0 pnpm gateway:watch` to keep an interactive run
-detached, or `pnpm gateway:watch:raw` for foreground watch mode. The watcher
-stops the active profile's installed Gateway service before taking over its
-configured/default port, preventing the service supervisor from replacing the
-source process. The service stays installed; run `pnpm openclaw gateway start`
-when you finish watching. The tmux pane remains available after startup failure
-so another terminal or agent can attach or capture its logs. The watcher
-reloads on relevant source, config, and bundled-plugin metadata changes. If the
-watched Gateway exits during startup, `gateway:watch` runs
-`openclaw doctor --fix --non-interactive` once and retries; set
-`OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR=0` to disable that dev-only repair pass.
-TypeScript rebuilds triggered by `pnpm openclaw ...` or `pnpm gateway:watch` preserve existing `dist/control-ui` assets but do not rebuild them. Run `pnpm ui:build` once and again after `ui/` changes, or use `pnpm ui:dev` while developing the Control UI.
+What `gateway:watch` does:
+
+- It starts or restarts the Gateway watch process in a named tmux session,
+  `openclaw-gateway-watch-main`, and auto-attaches from interactive terminals.
+- Non-interactive shells stay detached and print
+  `tmux attach -t openclaw-gateway-watch-main`. Run
+  `OPENCLAW_GATEWAY_WATCH_ATTACH=0 pnpm gateway:watch` to keep an interactive
+  run detached, or `pnpm gateway:watch:raw` for foreground watch mode.
+- It stops the active profile's installed Gateway service before it takes over
+  that service's configured or default port. This prevents the service
+  supervisor from replacing the source process. The service stays installed.
+  Run `pnpm openclaw gateway start` when you finish watching.
+- The tmux pane remains available after a startup failure, so another terminal
+  or agent can attach to it or capture its logs.
+- It reloads on relevant source, config, and bundled-plugin metadata changes.
+- If the watched Gateway exits during startup, `gateway:watch` runs
+  `openclaw doctor --fix --non-interactive` once and retries. Set
+  `OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR=0` to disable that dev-only repair pass.
+
+TypeScript rebuilds triggered by `pnpm openclaw ...` or `pnpm gateway:watch` preserve existing `dist/control-ui` assets. When the Gateway starts, it rebuilds missing, incomplete, or stale bundled UI assets before serving them. Headless commands do not rebuild the UI. Run `pnpm ui:build` after `ui/` changes, or use `pnpm ui:dev` while developing the Control UI.
 
 ### 2) Point the macOS app at your running Gateway
 

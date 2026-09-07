@@ -126,8 +126,10 @@ export type GatewayBrowserClientOptions = {
   clientVersion?: string;
   clientBuildId?: string;
   platform?: string;
+  deviceFamily?: string;
   mode?: GatewayClientMode;
   instanceId?: string;
+  scopes?: string[];
   onHello?: (hello: GatewayHelloOk) => void;
   onEvent?: (evt: EventFrame) => void;
   onClose?: (info: {
@@ -401,6 +403,7 @@ export class GatewayBrowserClient {
       version: this.opts.clientVersion ?? "control-ui",
       buildId: this.opts.clientBuildId,
       platform: this.opts.platform ?? navigator.platform ?? "web",
+      deviceFamily: this.opts.deviceFamily,
       mode: this.opts.mode ?? GATEWAY_CLIENT_MODES.WEBCHAT,
       instanceId: this.opts.instanceId,
       ...(timeZone ? { timeZone } : {}),
@@ -423,12 +426,15 @@ export class GatewayBrowserClient {
     if (deviceIdentity) {
       selectedAuth = this.selectConnectAuth({ role, deviceId: deviceIdentity.deviceId });
     }
+    // The single secret input uses token; retain explicit native passwords and
+    // copy only selected shared auth, never bootstrap or device credentials.
+    selectedAuth.authPassword ??= selectedAuth.authToken;
     const scopes = resolveGatewayConnectScopes({
       requestedScopes: selectedAuth.authBootstrapToken
         ? this.opts.bootstrapProfile === CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT
           ? [...CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES]
           : [...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES]
-        : undefined,
+        : this.opts.scopes,
       usingStoredDeviceToken: selectedAuth.usingStoredDeviceToken,
       storedScopes: selectedAuth.storedScopes,
       defaultScopes: CONTROL_UI_OPERATOR_SCOPES,
@@ -438,7 +444,7 @@ export class GatewayBrowserClient {
       client,
       role,
       scopes,
-      authToken: selectedAuth.authBootstrapToken ?? selectedAuth.authToken,
+      authToken: selectedAuth.signatureToken,
       connectNonce,
       connectChallengeTs,
     });
@@ -457,6 +463,7 @@ export class GatewayBrowserClient {
           "approvals",
           "task-suggestions",
           "terminal-offset-seq",
+          "terminal-session-metadata",
           "tool-events",
           "inline-widgets",
           "ui-commands",

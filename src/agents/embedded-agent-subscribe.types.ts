@@ -22,9 +22,11 @@ import type {
   ToolProgressDetailMode,
   ToolResultFormat,
 } from "./embedded-agent-subscribe.shared-types.js";
+import type { PreparedProviderFailoverOwner } from "./failover/provider-patterns.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { AgentSession } from "./sessions/index.js";
+import type { NormalizedUsage } from "./usage.js";
 export type { BlockReplyChunking } from "./embedded-agent-subscribe.shared-types.js";
 
 type ReasoningStreamPayload = Pick<
@@ -70,6 +72,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
   blockReplyChunking?: BlockReplyChunking;
   onPartialReply?: (payload: PartialReplyPayload) => boolean | void | Promise<boolean | void>;
   onAssistantMessageStart?: () => void | Promise<void>;
+  /** Assistant fragment usage before queued delivery; fragments may be intermediate. */
+  onModelUsage?: (usage: NormalizedUsage | undefined) => void;
   onExecutionPhase?: (info: {
     phase: "tool_execution_started";
     tool?: string;
@@ -109,6 +113,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
    */
   suppressLiveStreamOutput?: boolean;
   config?: OpenClawConfig;
+  /** Prepared endpoint ownership can differ from the assistant's provider route ID. */
+  providerOwner?: PreparedProviderFailoverOwner;
   compactionCountOwner?: EmbeddedRunAttemptInternalParams["compactionCountOwner"];
   onContextAccountingEvent?: EmbeddedRunAttemptInternalParams["onContextAccountingEvent"];
   sessionPersistence?: EmbeddedRunAttemptParams["sessionPersistence"];

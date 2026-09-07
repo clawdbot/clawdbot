@@ -146,6 +146,18 @@ still has `off`/`on` reasoning maps.
 }
 ```
 
+### Model instances and context
+
+With preload enabled, OpenClaw routes chat requests to a loaded instance with
+enough context for the selected model budget. A newly loaded instance is addressed by the
+identifier returned by LM Studio. Your configured model reference and conversation model identity
+keep the canonical model key.
+
+With preload enabled, embedding requests also check that their model is loaded and route to the
+instance prepared for the configured context length. This avoids truncating input through a smaller
+loaded instance and lets memory embeddings recover after model eviction even when LM Studio JIT
+loading is disabled. Embedding model and cache identity keep the canonical model key.
+
 ### Disabling preload
 
 LM Studio supports just-in-time (JIT) model loading, loading models on first request. OpenClaw
@@ -196,6 +208,14 @@ require `models.providers.<id>.request.allowPrivateNetwork: true`; set it to `fa
 the default trust.
 
 ## Troubleshooting
+
+### Model discovery failures
+
+When a configured server cannot list models, OpenClaw reports an unavailable catalog or a
+catalog authentication rejection. A refresh can keep the last successful inventory when the
+connection and credentials still match. A successful empty response clears discovered models;
+explicitly configured models remain available without discovery. Restore the server connection
+or correct its credentials, then refresh the model list.
 
 ### LM Studio not detected
 

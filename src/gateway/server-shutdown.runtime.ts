@@ -1,6 +1,11 @@
 export async function prepareGatewayShutdownRuntime() {
   const [
-    { createGatewayCloseHandler, drainActiveSessionsForShutdown, runGatewayClosePrelude },
+    {
+      prepareGatewayClose,
+      completeGatewayClose,
+      drainActiveSessionsForShutdown,
+      runGatewayClosePrelude,
+    },
     { runGlobalGatewayStopSafely },
     { flushPendingSessionsChangedEvents },
     { closeMcpLoopbackServer },
@@ -20,7 +25,7 @@ export async function prepareGatewayShutdownRuntime() {
     import("../tasks/task-registry.maintenance.js"),
     import("../agents/main-session-recovery/main-session-restart-recovery.js"),
     import("../agents/agent-bundle-lsp-runtime.js"),
-    import("./embeddings-http.js"),
+    import("./embeddings-provider-lifetime.js"),
     import("../hooks/gmail-watcher.js"),
     import("../agents/code-mode-state.js"),
     import("../agents/provider-transport-dispatcher-pool.js"),
@@ -29,7 +34,8 @@ export async function prepareGatewayShutdownRuntime() {
   await prepareActivePluginRegistryShutdown();
 
   return {
-    createGatewayCloseHandler,
+    prepareGatewayClose,
+    completeGatewayClose,
     drainActiveSessionsForShutdown,
     runGatewayClosePrelude,
     runGlobalGatewayStopSafely,

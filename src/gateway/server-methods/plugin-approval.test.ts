@@ -3,14 +3,17 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type TestContext } from "vitest";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
-import { ExecApprovalManager } from "../exec-approval-manager.js";
+import type { ExecApprovalManager } from "../exec-approval-manager.js";
+import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import { createPluginApprovalHandlers } from "./plugin-approval.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-function createManager() {
-  return new ExecApprovalManager<PluginApprovalRequestPayload>({ approvalKind: "plugin" });
+function createManager(testContext: TestContext) {
+  return createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
+    approvalKind: "plugin",
+  });
 }
 
 function createLogGatewayMock() {
@@ -251,8 +254,8 @@ const invalidRequestCases = [
 describe("createPluginApprovalHandlers", () => {
   let manager: ExecApprovalManager<PluginApprovalRequestPayload>;
 
-  beforeEach(() => {
-    manager = createManager();
+  beforeEach((testContext) => {
+    manager = createManager(testContext);
   });
 
   afterEach(() => {
@@ -393,8 +396,9 @@ describe("createPluginApprovalHandlers", () => {
 
     it("delivers requests to iOS push with the exec-equivalent visibility gate", async () => {
       const handleRequested = vi.fn(async () => true);
+      const iosPushDelivery = { handleRequested };
       const handlers = createPluginApprovalHandlers(manager, {
-        iosPushDelivery: { handleRequested },
+        iosPushDelivery,
       });
       const respond = vi.fn();
       const opts = createMockOptions(
@@ -422,6 +426,7 @@ describe("createPluginApprovalHandlers", () => {
       const approvalId = await waitForAcceptedApproval(respond);
 
       expect(handleRequested).toHaveBeenCalledTimes(1);
+      expect(handleRequested.mock.contexts).toEqual([iosPushDelivery]);
       const requestCall = mockCall(handleRequested, 0, "iOS request delivery");
       expect(requireRecord(requestCall[0], "iOS request").id).toBe(approvalId);
       const deliveryOptions = requireRecord(requestCall[1], "iOS delivery options");

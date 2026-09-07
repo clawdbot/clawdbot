@@ -1,10 +1,21 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { promoteToPopoverTopLayer } from "./menu-surface.ts";
 
-afterEach(() => {
+const bridge = vi.hoisted(() => ({ available: false }));
+vi.mock("../app/native-browser-host.ts", () => ({
+  hasNativeBrowserBridge: () => bridge.available,
+}));
+
+let unsubscribe: (() => void) | undefined;
+afterEach(async () => {
   document.body.replaceChildren();
+  await Promise.resolve();
+  unsubscribe?.();
+  unsubscribe = undefined;
+  bridge.available = false;
 });
 
 describe("promoteToPopoverTopLayer", () => {
@@ -58,5 +69,38 @@ describe("openclaw-menu-surface", () => {
     document.body.append(surface);
     expect(surface.hasAttribute("popover")).toBe(false);
     expect(surface.querySelector(".menu")).toBe(menu);
+  });
+});
+
+describe("native overlay occlusion for menus", () => {
+  it("keeps overlapping surfaces occluded until their close or removal, including shadow roots", async () => {
+    bridge.available = true;
+    const changes = vi.fn();
+    unsubscribe = subscribeNativeOverlayOcclusion(changes);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = host.attachShadow({ mode: "open" });
+    const first = document.createElement("div");
+    const second = document.createElement("div");
+    root.append(first, second);
+    first.showPopover = vi.fn();
+    promoteToPopoverTopLayer(first);
+    promoteToPopoverTopLayer(first);
+    // Fallback surfaces must also occlude: native webviews cover in-page menus.
+    promoteToPopoverTopLayer(second);
+    expect(changes.mock.calls).toEqual([[false], [true]]);
+
+    const closed = new Event("toggle");
+    Object.defineProperty(closed, "newState", { value: "closed" });
+    first.dispatchEvent(closed);
+    expect(changes.mock.calls).toEqual([[false], [true]]);
+    second.remove();
+    await Promise.resolve();
+    expect(changes.mock.calls).toEqual([[false], [true], [false]]);
+
+    promoteToPopoverTopLayer(first);
+    host.remove();
+    await Promise.resolve();
+    expect(changes.mock.calls).toEqual([[false], [true], [false], [true], [false]]);
   });
 });

@@ -6,11 +6,8 @@ import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withEnvOverride, withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
 import { runWriteConfigHealth } from "../flows/doctor-health-contribution-runners.config.js";
-import type { DoctorHealthFlowContext } from "../flows/doctor-health-contribution-types.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
-import { createDoctorPrompter, type DoctorOptions } from "./doctor-prompter.js";
+import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
 
 const noteMock = vi.hoisted(() => vi.fn<(message: string, title?: string) => void>());
 
@@ -32,15 +29,8 @@ describe("doctor --fix with a validation-blocked candidate", () => {
           agents: { defaults: { heartbeat: { every: 5 } } },
         });
         const rawBefore = await fs.readFile(configPath, "utf-8");
-        const runtime: RuntimeEnv = { error: vi.fn(), exit: vi.fn(), log: vi.fn() };
-        const options: DoctorOptions = { nonInteractive: true, repair: true };
-        const prompter = createDoctorPrompter({ runtime, options });
-        const configResult = await loadAndMaybeMigrateDoctorConfig({
-          options,
-          confirm: (params) => prompter.confirm(params),
-          runtime,
-          prompter,
-        });
+        const ctx = await prepareDoctorContext(configPath);
+        const { configResult } = ctx;
 
         // The unknown-key repair is computed, but held until the write commits.
         expect(configResult.shouldWriteConfig).toBe(true);
@@ -48,21 +38,6 @@ describe("doctor --fix with a validation-blocked candidate", () => {
           (configResult.pendingChangePanels ?? []).some((panel) => panel.includes("gatway")),
         ).toBe(true);
         expect(noteMock.mock.calls.some(([, title]) => title === "Doctor changes")).toBe(false);
-
-        const ctx: DoctorHealthFlowContext = {
-          runtime,
-          options,
-          prompter,
-          configResult,
-          cfg: configResult.cfg,
-          cfgForPersistence: structuredClone(configResult.cfg),
-          sourceConfigValid: configResult.sourceConfigValid ?? true,
-          configPath,
-          stateDirExistedAtStart: true,
-          ...(configResult.runWithPluginMetadataSnapshot
-            ? { runWithPluginMetadataSnapshot: configResult.runWithPluginMetadataSnapshot }
-            : {}),
-        };
 
         // The write must refuse gracefully — no throw, no change panel, no file write.
         await expect(runWriteConfigHealth(ctx)).resolves.toBeUndefined();

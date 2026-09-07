@@ -1,4 +1,3 @@
-// Discord plugin module implements handle action.guild admin behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   readNonNegativeIntegerParam,
@@ -24,15 +23,7 @@ import {
 
 type Ctx = Pick<
   ChannelMessageActionContext,
-  | "action"
-  | "params"
-  | "cfg"
-  | "accountId"
-  | "requesterSenderId"
-  | "senderIsOwner"
-  | "toolContext"
-  | "mediaLocalRoots"
-  | "mediaReadFile"
+  "action" | "params" | "cfg" | "accountId" | "requesterSenderId" | "senderIsOwner" | "toolContext"
 >;
 
 function readDiscordRequesterSenderId(ctx: Ctx): string | undefined {
@@ -123,6 +114,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         ...senderParam(senderUserId),
       },
       cfg,
+      actionOptions,
     );
   }
 
@@ -155,6 +147,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         ...senderParam(senderUserId),
       },
       cfg,
+      actionOptions,
     );
   }
 
@@ -368,7 +361,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         ...senderParam(senderUserId),
       },
       cfg,
-      { mediaLocalRoots: ctx.mediaLocalRoots },
+      actionOptions,
     );
   }
 
@@ -425,6 +418,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   if (action === "thread-reply") {
     const content = readStringParam(actionParams, "message", {
       required: true,
+      trim: false,
     });
     const mediaUrl =
       readStringParam(actionParams, "media", { trim: false }) ??

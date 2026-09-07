@@ -28,11 +28,7 @@ import {
   withCdpSocket,
 } from "./cdp.helpers.js";
 import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
-import {
-  finalizeRoleSnapshot,
-  findRoleSnapshotLineRef,
-  type RoleSnapshotIdentityMode,
-} from "./pw-role-snapshot.js";
+import { finalizeRoleSnapshot, type RoleSnapshotIdentityMode } from "./pw-role-snapshot.js";
 import {
   appendRoleSnapshotDepthTruncationMarker,
   ROLE_SNAPSHOT_MAX_DEPTH,
@@ -112,106 +108,28 @@ export async function captureScreenshot(opts: {
       await send("Page.enable");
 
       // Headless background tabs need activation to produce a frame. Preserve
-      // focus only when the launched process is authoritatively known headed.
+      // focus only when the browser process is authoritatively known headed.
       if (opts.headless !== false) {
         await send("Page.bringToFront").catch(() => {});
-      }
-
-      // For full-page captures, temporarily expand the viewport to the content
-      // size so the entire page is within the viewport bounds.  We save the
-      // current viewport state and restore it after capture so pre-existing
-      // device emulation (mobile width, DPR, touch) is not lost.
-      let savedVp: { w: number; h: number; dpr: number; sw: number; sh: number } | undefined;
-      if (opts.fullPage) {
-        const metrics = (await send("Page.getLayoutMetrics")) as {
-          cssContentSize?: { width?: number; height?: number };
-          contentSize?: { width?: number; height?: number };
-        };
-        const size = metrics?.cssContentSize ?? metrics?.contentSize;
-        const contentWidth = size?.width ?? 0;
-        const contentHeight = size?.height ?? 0;
-        if (contentWidth > 0 && contentHeight > 0) {
-          const vpResult = (await send("Runtime.evaluate", {
-            expression:
-              "({ w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio, sw: screen.width, sh: screen.height })",
-            returnByValue: true,
-          })) as {
-            result?: {
-              value?: { w?: number; h?: number; dpr?: number; sw?: number; sh?: number };
-            };
-          };
-          const v = vpResult?.result?.value;
-          const currentW = v?.w ?? 0;
-          const currentH = v?.h ?? 0;
-          savedVp = {
-            w: currentW,
-            h: currentH,
-            dpr: v?.dpr ?? 1,
-            sw: v?.sw ?? currentW,
-            sh: v?.sh ?? currentH,
-          };
-          // mobile: false is the safe default — CDP provides no way to query
-          // the active mobile flag, and inferring from navigator.maxTouchPoints
-          // would false-positive on touch-enabled desktops.
-          await send("Emulation.setDeviceMetricsOverride", {
-            width: Math.ceil(Math.max(currentW, contentWidth)),
-            height: Math.ceil(Math.max(currentH, contentHeight)),
-            deviceScaleFactor: savedVp.dpr,
-            mobile: false,
-            screenWidth: savedVp.sw,
-            screenHeight: savedVp.sh,
-          });
-        }
       }
 
       const format = opts.format ?? "png";
       const quality =
         format === "jpeg" ? Math.max(0, Math.min(100, Math.round(opts.quality ?? 85))) : undefined;
 
-      try {
-        // Chrome 146+ managed/headful browsers reject fromSurface: false.
-        // For ordinary viewport captures, keep CDP's captureBeyondViewport
-        // default (false), matching Playwright's Chromium path.
-        const result = (await send("Page.captureScreenshot", {
-          format,
-          ...(quality !== undefined ? { quality } : {}),
-          ...(opts.fullPage ? { captureBeyondViewport: true } : {}),
-        })) as { data?: string };
+      // This path has no Playwright viewport owner. Chromium captures the whole
+      // document without changing its layout; emulated pages use their owner session.
+      const result = (await send("Page.captureScreenshot", {
+        format,
+        ...(quality !== undefined ? { quality } : {}),
+        ...(opts.fullPage ? { captureBeyondViewport: true } : {}),
+      })) as { data?: string };
 
-        const base64 = result?.data;
-        if (!base64) {
-          throw new Error("Screenshot failed: missing data");
-        }
-        return Buffer.from(base64, "base64");
-      } finally {
-        if (savedVp) {
-          // Clear the temporary viewport expansion first.  If the tab had
-          // prior device emulation the clear will change the viewport back to
-          // the browser's natural dimensions — detect that and re-apply the
-          // saved emulation so the tab's original state is preserved.
-          await send("Emulation.clearDeviceMetricsOverride").catch(() => {});
-          try {
-            const postResult = (await send("Runtime.evaluate", {
-              expression:
-                "({ w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio })",
-              returnByValue: true,
-            })) as { result?: { value?: { w?: number; h?: number; dpr?: number } } };
-            const p = postResult?.result?.value;
-            if (p?.w !== savedVp.w || p?.h !== savedVp.h || p?.dpr !== savedVp.dpr) {
-              await send("Emulation.setDeviceMetricsOverride", {
-                width: savedVp.w,
-                height: savedVp.h,
-                deviceScaleFactor: savedVp.dpr,
-                mobile: false,
-                screenWidth: savedVp.sw,
-                screenHeight: savedVp.sh,
-              });
-            }
-          } catch {
-            // Best-effort restoration; ignore failures in the cleanup path.
-          }
-        }
+      const base64 = result?.data;
+      if (!base64) {
+        throw new Error("Screenshot failed: missing data");
       }
+      return Buffer.from(base64, "base64");
     },
     { commandTimeoutMs: opts.timeoutMs, lookup: opts.lookup },
   );
@@ -501,6 +419,7 @@ type RoleTreeNode = {
   url?: string;
   cursorInfo?: CursorInteractiveInfo;
   frameId?: string;
+  iframeLineIndex?: number;
 };
 
 function buildRoleTree(nodes: RawAXNode[]): { tree: RoleTreeNode[]; roots: number[] } {
@@ -526,7 +445,6 @@ function buildRoleTree(nodes: RawAXNode[]): { tree: RoleTreeNode[]; roots: numbe
     });
   }
 
-  const childIndexes = new Set<number>();
   for (let index = 0; index < tree.length; index += 1) {
     for (const childId of tree[index]?.raw.childIds ?? []) {
       const childIndex = byId.get(childId);
@@ -535,11 +453,12 @@ function buildRoleTree(nodes: RawAXNode[]): { tree: RoleTreeNode[]; roots: numbe
       }
       tree[index]?.children.push(childIndex);
       expectDefined(tree[childIndex], "CDP child node index").parent = index;
-      childIndexes.add(childIndex);
     }
   }
 
-  const roots = tree.map((_node, index) => index).filter((index) => !childIndexes.has(index));
+  const roots = tree
+    .map((_node, index) => index)
+    .filter((index) => tree[index]?.parent === undefined);
   const stack = roots.map((index) => ({ index, depth: 0 }));
   while (stack.length) {
     const current = stack.pop();
@@ -586,7 +505,7 @@ function renderRoleTree(
   index: number,
   output: string[],
   options: CdpRoleSnapshotOptions,
-  state: { truncated: boolean },
+  state: { truncated: boolean; recordIframePositions?: boolean },
   indentOffset = 0,
 ): void {
   const node = tree[index];
@@ -608,6 +527,10 @@ function renderRoleTree(
     const nth = node.nth !== undefined && node.nth > 0 ? ` [nth=${node.nth}]` : "";
     const value = node.value ? ` value=${JSON.stringify(node.value)}` : "";
     const url = node.url ? ` [url=${node.url}]` : "";
+    if (state.recordIframePositions && node.ref && node.frameId) {
+      // A repeated AX child still expands after its first rendered occurrence.
+      node.iframeLineIndex ??= output.length;
+    }
     output.push(
       `${indent}- ${node.role}${name}${ref}${nth}${value}${url}${cursorSuffix(node.cursorInfo)}`,
     );
@@ -630,7 +553,7 @@ async function findCursorInteractiveElements(
         const roles = new Set(["button","link","textbox","checkbox","radio","combobox","listbox","menuitem","menuitemcheckbox","menuitemradio","option","searchbox","slider","spinbutton","switch","tab","treeitem"]);
         const tags = new Set(["a","button","input","select","textarea","details","summary"]);
         document.querySelectorAll("[${attr}]").forEach((el) => el.removeAttribute("${attr}"));
-        for (const el of Array.from(document.body ? document.body.querySelectorAll("*") : [])) {
+        for (const el of document.body ? document.body.querySelectorAll("*") : []) {
           if (!(el instanceof HTMLElement) || el.closest("[hidden],[aria-hidden='true']")) continue;
           const tagName = el.tagName.toLowerCase();
           if (tags.has(tagName)) continue;
@@ -874,17 +797,16 @@ async function buildCdpRoleSnapshot(params: {
     }
   }
 
-  const lines: string[] = [];
-  const renderState = { truncated: false };
+  let lines: string[] = [];
+  const renderState = { truncated: false, recordIframePositions: params.recurseIframes };
   for (const root of roots) {
     renderRoleTree(tree, root, lines, params.options, renderState);
   }
 
   if (params.recurseIframes) {
-    const iframeNodes = tree.filter((node) => node.ref && node.frameId);
-    for (const iframe of iframeNodes) {
-      const lineIndex = lines.findIndex((line) => findRoleSnapshotLineRef(line) === iframe.ref);
-      if (lineIndex < 0 || !iframe.frameId) {
+    let childLinesByIndex: Map<number, string[]> | undefined;
+    for (const iframe of tree) {
+      if (iframe.iframeLineIndex === undefined || !iframe.frameId) {
         continue;
       }
       const child = await buildCdpRoleSnapshot({
@@ -900,7 +822,20 @@ async function buildCdpRoleSnapshot(params: {
         continue;
       }
       Object.assign(refs, child.refs);
-      lines.splice(lineIndex + 1, 0, ...child.lines.map((line) => `  ${line}`));
+      (childLinesByIndex ??= new Map()).set(iframe.iframeLineIndex, child.lines);
+    }
+    if (childLinesByIndex) {
+      const expanded: string[] = [];
+      for (let index = 0; index < lines.length; index++) {
+        expanded.push(lines[index]!);
+        const childLines = childLinesByIndex.get(index);
+        if (childLines) {
+          for (const childLine of childLines) {
+            expanded.push(`  ${childLine}`);
+          }
+        }
+      }
+      lines = expanded;
     }
   }
 

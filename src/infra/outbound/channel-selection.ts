@@ -18,21 +18,22 @@ import {
 } from "../../utils/message-channel.js";
 import { createDedupeCache } from "../dedupe.js";
 import { formatErrorMessage } from "../errors.js";
+import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import {
-  normalizeDeliverableOutboundChannel,
-  resolveOutboundChannelPlugin,
-} from "./channel-resolution.js";
-import { listRuntimeVisibleChannelPlugins } from "./runtime-visible-channels.js";
+  getRuntimeVisibleChannelPlugin,
+  listRuntimeVisibleChannelPlugins,
+} from "./runtime-visible-channels.js";
 
 /** Source that explains how message channel selection chose its result. */
 type MessageChannelSelectionSource = "explicit" | "tool-context-fallback" | "single-configured";
 
-function resolveAvailableKnownChannel(params: {
+function resolveAvailableChannel(params: {
   cfg: OpenClawConfig;
   value?: string | null;
   agentId?: string;
 }): { channel: string; plugin: ChannelPlugin } | undefined {
-  const normalized = normalizeDeliverableOutboundChannel(params.value);
+  // Availability belongs to the scoped resolver, not the process-root channel list.
+  const normalized = normalizeMessageChannel(params.value);
   if (!normalized) {
     return undefined;
   }
@@ -51,7 +52,7 @@ function resolveAvailableKnownChannel(params: {
     agentId: params.agentId,
     allowBootstrap: true,
   });
-  return plugin ? { channel: normalized, plugin } : undefined;
+  return plugin ? { channel: plugin.id, plugin } : undefined;
 }
 
 /** Checks whether a channel has a non-disabled config entry. */
@@ -196,7 +197,7 @@ async function listConfiguredMessageChannelPlugins(
 ): Promise<ChannelPlugin[]> {
   const plugins: ChannelPlugin[] = [];
   for (const plugin of listRuntimeVisibleChannelPlugins()) {
-    if (!isDeliverableMessageChannel(plugin.id)) {
+    if (!resolveOutboundChannelPlugin({ channel: plugin.id, cfg })) {
       continue;
     }
     if (await isPluginConfigured(plugin, cfg, accountResolution)) {
@@ -228,13 +229,13 @@ export async function resolveMessageChannelSelection(params: {
 }> {
   const normalized = normalizeMessageChannel(params.channel);
   if (normalized) {
-    const availableExplicit = resolveAvailableKnownChannel({
+    const availableExplicit = resolveAvailableChannel({
       cfg: params.cfg,
       value: params.channel,
       agentId: params.agentId,
     });
     if (!availableExplicit) {
-      const fallback = resolveAvailableKnownChannel({
+      const fallback = resolveAvailableChannel({
         cfg: params.cfg,
         value: params.fallbackChannel,
         agentId: params.agentId,
@@ -247,7 +248,7 @@ export async function resolveMessageChannelSelection(params: {
           source: "tool-context-fallback",
         };
       }
-      if (!isDeliverableMessageChannel(normalized)) {
+      if (!isDeliverableMessageChannel(normalized) && !getRuntimeVisibleChannelPlugin(normalized)) {
         throw new Error(formatUnknownChannelMessage({ channel: normalized }));
       }
       const repairHint = isConfiguredChannel(params.cfg, normalized)
@@ -269,7 +270,7 @@ export async function resolveMessageChannelSelection(params: {
     };
   }
 
-  const fallback = resolveAvailableKnownChannel({
+  const fallback = resolveAvailableChannel({
     cfg: params.cfg,
     value: params.fallbackChannel,
     agentId: params.agentId,

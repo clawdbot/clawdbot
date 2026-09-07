@@ -4,6 +4,11 @@ import { normalizeStructuredPromptSection } from "@openclaw/ai/internal/shared";
  */
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
+import {
+  hashToolResultProjectionSnapshot,
+  serializeCacheTtlToolResultProjections,
+  type ToolResultPromptProjectionState,
+} from "../session-prompt-state.js";
 
 /** Custom transcript marker used to preserve cache-TTL pruning state across attempts. */
 const ATTEMPT_CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
@@ -91,15 +96,22 @@ export function appendAttemptCacheTtlIfNeeded(params: {
   modelApi?: string;
   isCacheTtlEligibleProvider: (provider: string, modelId: string, modelApi?: string) => boolean;
   now?: number;
+  toolResultPromptProjectionState: ToolResultPromptProjectionState;
 }): boolean {
   if (!shouldAppendAttemptCacheTtl(params)) {
     return false;
   }
-  params.sessionManager.appendCustomEntry?.(ATTEMPT_CACHE_TTL_CUSTOM_TYPE, {
-    timestamp: params.now ?? Date.now(),
-    provider: params.provider,
-    modelId: params.modelId,
-  });
+  if (params.sessionManager.appendCustomEntry) {
+    const snapshot = serializeCacheTtlToolResultProjections(params.toolResultPromptProjectionState);
+    const hash = hashToolResultProjectionSnapshot(snapshot);
+    params.sessionManager.appendCustomEntry(ATTEMPT_CACHE_TTL_CUSTOM_TYPE, {
+      timestamp: params.now ?? Date.now(),
+      provider: params.provider,
+      modelId: params.modelId,
+      ...(hash !== params.toolResultPromptProjectionState.lastWrittenSnapshotHash ? snapshot : {}),
+    });
+    params.toolResultPromptProjectionState.lastWrittenSnapshotHash = hash;
+  }
   return true;
 }
 

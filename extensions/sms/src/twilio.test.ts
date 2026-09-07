@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import { resolveTwilioStatusCallbackUrl } from "./public-webhook-url.js";
 import {
   buildTwilioInboundMessage,
@@ -77,28 +78,6 @@ async function readTestTwilioForm(body: string): Promise<Record<string, string>>
   const req = createMockIncomingRequest([body]);
   req.headers = { "content-length": String(Buffer.byteLength(body)) };
   return await readTwilioWebhookForm(req);
-}
-
-function cancelTrackedTextResponse(
-  text: string,
-  init?: ResponseInit,
-): {
-  response: Response;
-  wasCanceled: () => boolean;
-} {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return {
-    response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
 }
 
 describe("Twilio SMS helpers", () => {

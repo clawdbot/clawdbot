@@ -4,6 +4,7 @@ import { defineConfig, type ViteUserConfig } from "vitest/config";
 import {
   intersectIncludePatterns,
   loadPatternListFromEnv,
+  matchesVitestGlob,
   narrowIncludePatternsForCli,
   relativizeScopedPatterns,
 } from "./vitest.pattern-file.ts";
@@ -46,7 +47,7 @@ function includePatternIsFullyExcluded(includePattern: string, excludePattern: s
   const exclude = normalizePathPattern(excludePattern);
   return (
     include === exclude ||
-    path.matchesGlob(include, exclude) ||
+    matchesVitestGlob(include, exclude) ||
     directoryPatternCoversInclude(exclude, include)
   );
 }
@@ -63,12 +64,6 @@ export function shouldPassWithNoTestsForCliIncludes(
       includePatternIsFullyExcluded(includePattern, excludePattern),
     ),
   );
-}
-
-export function resolveVitestIsolation(
-  _env: Record<string, string | undefined> = process.env,
-): boolean {
-  return false;
 }
 
 const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
@@ -229,7 +224,7 @@ export function createScopedVitestConfig(
     ? relativizeScopedPatterns(includeFromEnv, scopedDir)
     : includeFromEnv;
   const scopedCliInclude = cliInclude ? relativizeScopedPatterns(cliInclude, scopedDir) : null;
-  const isolate = options?.isolate ?? resolveVitestIsolation(options?.env);
+  const isolate = options?.isolate ?? false;
   const setupFiles = [
     ...new Set([
       ...(baseTest.setupFiles ?? []),

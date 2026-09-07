@@ -529,6 +529,73 @@ describe("worker command lifetime gate", () => {
     expect(createWorkerRuntimeEnvironment).not.toHaveBeenCalled();
   });
 
+  it("handles a turn and its cancellation in the same input chunk", async () => {
+    const harness = managedHarness();
+    const running = runWorkerCommand({ ...harness, managed: true });
+    harness.input.write(
+      serializeWorkerProcessInput(buildWorkerProcessTurn(harness.launch)) +
+        serializeWorkerProcessInput({ type: "cancel", turnId: harness.launch.assignment.turnId }),
+    );
+
+    await running;
+
+    expect(runWorkerDescriptor).toHaveBeenCalledOnce();
+    expect(vi.mocked(runWorkerDescriptor).mock.calls[0]?.[1]?.signal?.reason).toMatchObject({
+      message: "worker turn cancelled",
+    });
+  });
+
+  it("delivers cancellation before rejecting a later oversized frame in the same chunk", async () => {
+    const harness = managedHarness();
+    const started = createDeferred<AbortSignal>();
+    vi.mocked(runWorkerDescriptor).mockImplementationOnce(async (_launch, options) => {
+      const signal = options?.signal;
+      if (!signal) {
+        throw new Error("expected managed worker abort signal");
+      }
+      started.resolve(signal);
+      await new Promise<void>((resolve) => {
+        signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      return { status: "completed", transcriptLeafId: null, transcriptNextSeq: 1 };
+    });
+    const running = runWorkerCommand({ ...harness, managed: true });
+    harness.turn();
+    const signal = await started.promise;
+    const rejected = expect(running).rejects.toThrow("exceeds the protocol payload limit");
+    harness.input.write(
+      Buffer.concat([
+        Buffer.from(
+          serializeWorkerProcessInput({ type: "cancel", turnId: harness.launch.assignment.turnId }),
+        ),
+        Buffer.alloc(WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES + 1, 120),
+      ]),
+    );
+
+    await rejected;
+
+    expect(signal.reason).toMatchObject({ message: "worker turn cancelled" });
+    expect(harness.results).toEqual([]);
+    expect(managedRuntime.close).toHaveBeenCalledOnce();
+  });
+
+  it.each(["empty", "unterminated"])(
+    "closes %s managed input at EOF without admitting a turn",
+    async (input) => {
+      const harness = managedHarness();
+      const running = runWorkerCommand({ ...harness, managed: true });
+      harness.input.end(
+        input === "empty" ? undefined : JSON.stringify(buildWorkerProcessTurn(harness.launch)),
+      );
+
+      await running;
+
+      expect(runWorkerDescriptor).not.toHaveBeenCalled();
+      expect(createWorkerRuntimeEnvironment).not.toHaveBeenCalled();
+      expect(harness.results).toEqual([]);
+    },
+  );
+
   it.each(["standalone", "managed"] as const)(
     "preserves ordinary two-image input through the %s parser",
     async (mode) => {
@@ -592,12 +659,20 @@ describe("worker command lifetime gate", () => {
       delta > 0 ? expect(running).rejects.toThrow("exceeds the protocol payload limit") : running;
     if (mode === "managed") {
       // Raw input independently verifies the receiver, including serializer-rejected bytes.
-      harness.input.write(encoded);
+      const bytes = Buffer.from(encoded);
+      const split = bytes.indexOf(Buffer.from("漢")) + 1;
+      harness.input.write(bytes.subarray(0, split));
+      harness.input.write(bytes.subarray(split));
     } else {
       harness.input.end(encoded);
     }
     await outcome;
     expect(runWorkerDescriptor).toHaveBeenCalledTimes(delta > 0 ? 0 : 1);
+    if (delta <= 0) {
+      expect(vi.mocked(runWorkerDescriptor).mock.calls[0]?.[0].assignment.systemPrompt).toBe(
+        harness.launch.assignment.systemPrompt,
+      );
+    }
     console.info(
       "worker-input-boundary",
       JSON.stringify({ mode, bytes: targetBytes, accepted: delta <= 0 }),

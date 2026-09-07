@@ -1,7 +1,7 @@
 import {
   buildCredentialSafetyPrompt,
   buildDelegationGuidanceSection,
-  buildHarnessVisibleReplyGuidance,
+  buildUiPresentationPrompt,
   buildSkillWorkshopPromptSection,
   resolveMainSessionDelegationMode,
   SKILL_WORKSHOP_TOOL_NAME,
@@ -18,19 +18,36 @@ import {
   type CodexDynamicToolSpec,
 } from "./protocol.js";
 
+export type CodexThreadPromptContext = Pick<
+  EmbeddedRunAttemptParams,
+  | "config"
+  | "agentId"
+  | "sessionKey"
+  | "modelId"
+  | "disableTools"
+  | "disableMessageTool"
+  | "delegationCapability"
+  | "toolsAllow"
+  | "sourceReplyDeliveryMode"
+  | "promptMode"
+  | "extraSystemPrompt"
+>;
+
 export function buildDeveloperInstructions(
-  params: EmbeddedRunAttemptParams,
+  params: CodexThreadPromptContext,
   options: { dynamicTools?: readonly CodexDynamicToolSpec[] } = {},
 ): string {
   const deferredToolNames = new Set<string>();
   let secretsToolName: string | undefined;
+  let showWidgetToolName: string | undefined;
+  let dashboardToolName: string | undefined;
+  let portalToolName: string | undefined;
   let hasSkillWorkshop = false;
   let hasSessionsSpawn = false;
   let hasSessionsYield = false;
   let hasSubagentsList = false;
   let hasSessionsSend = false;
   let hasSeenDirectNamespace = false;
-  let messageToolAvailable = options.dynamicTools ? false : params.disableMessageTool !== true;
   for (const spec of options.dynamicTools ?? []) {
     const isDirectNamespace =
       spec.type === "namespace" &&
@@ -41,18 +58,27 @@ export function buildDeveloperInstructions(
     }
     for (const tool of spec.type === "namespace" ? spec.tools : [spec]) {
       const name = tool.name.trim();
+      const qualifiedName = spec.type === "namespace" ? `${spec.name}.${name}` : name;
       if (tool.deferLoading === true && name) {
         deferredToolNames.add(name);
       }
       if (name === "secrets" && params.disableTools !== true) {
-        secretsToolName ??= spec.type === "namespace" ? `${spec.name}.${name}` : name;
+        secretsToolName ??= qualifiedName;
+      }
+      if (name === "show_widget") {
+        showWidgetToolName ??= qualifiedName;
+      }
+      if (name === "dashboard") {
+        dashboardToolName ??= qualifiedName;
+      }
+      if (name === "portal") {
+        portalToolName ??= qualifiedName;
       }
       hasSkillWorkshop ||= name === SKILL_WORKSHOP_TOOL_NAME;
       hasSessionsSpawn ||= name === "sessions_spawn";
       hasSessionsYield ||= isDirectNamespace && name === "sessions_yield";
       hasSubagentsList ||= name === "subagents";
       hasSessionsSend ||= name === "sessions_send";
-      messageToolAvailable ||= name === "message";
     }
   }
   const nativeCommandGuidance = listRegisteredPluginAgentPromptGuidance({
@@ -109,10 +135,9 @@ export function buildDeveloperInstructions(
           hasSessionsSend,
         }).join("\n")
       : undefined,
-    buildHarnessVisibleReplyGuidance({
-      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-      messageToolAvailable,
-    }),
+    params.disableTools !== true && params.promptMode !== "minimal" && params.promptMode !== "none"
+      ? buildUiPresentationPrompt({ showWidgetToolName, dashboardToolName, portalToolName })
+      : undefined,
     buildCredentialSafetyPrompt(secretsToolName),
     nativeCommandGuidance,
     params.extraSystemPrompt,

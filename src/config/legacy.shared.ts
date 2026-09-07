@@ -1,6 +1,5 @@
 // Defines shared legacy config rule contracts for detection and migration.
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
-import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { isRecord } from "../utils.js";
 export type LegacyConfigRule = {
   path: string[];
@@ -46,22 +45,6 @@ export const ensureRecord = (
   const next: Record<string, unknown> = {};
   root[key] = next;
   return next;
-};
-
-export const mergeMissing = (target: Record<string, unknown>, source: Record<string, unknown>) => {
-  for (const [key, value] of Object.entries(source)) {
-    if (value === undefined || isBlockedObjectKey(key)) {
-      continue;
-    }
-    const existing = target[key];
-    if (existing === undefined) {
-      target[key] = value;
-      continue;
-    }
-    if (isRecord(existing) && isRecord(value)) {
-      mergeMissing(existing, value);
-    }
-  }
 };
 
 export const mapLegacyAudioTranscription = (value: unknown): Record<string, unknown> | null => {

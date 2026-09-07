@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { withSuppressedNotes } from "../../../packages/terminal-core/src/note.js";
+import type { DoctorConfigPreflightResult } from "../../commands/doctor-config-preflight.js";
 import { readConfigFileSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { createInvalidConfigError } from "../../config/io.invalid-config.js";
 import type { ConfigSnapshotReadMeasure } from "../../config/io.js";
@@ -15,6 +16,10 @@ import {
 import type { ConfigFileSnapshot } from "../../config/types.js";
 import { resolveExecApprovalsPath } from "../../infra/exec-approvals-config.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
+import {
+  adoptProcessPluginCache,
+  getPluginMetadataSnapshotCache,
+} from "../../plugins/plugin-cache.js";
 import { ExitError, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import type { InvalidConfigRecoveryDeps } from "../invalid-config-recovery.js";
 
@@ -199,10 +204,6 @@ async function getConfigSnapshot(
       ...(measure ? { measure } : {}),
     });
   }
-  // Tests often mutate config fixtures; caching can make those flaky.
-  if (process.env.VITEST === "true") {
-    return readConfigFileSnapshot(measure ? { measure } : undefined);
-  }
   if (!configSnapshotPromise) {
     const pendingSnapshot = readConfigFileSnapshot(measure ? { measure } : undefined);
     configSnapshotPromise = pendingSnapshot;
@@ -234,7 +235,7 @@ export async function ensureConfigReady(
   const subcommandName = commandPath[1];
   const isRestartController =
     (commandName === "gateway" || commandName === "daemon") && subcommandName === "restart";
-  let preflightSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | null = null;
+  let preflightResult: DoctorConfigPreflightResult | null = null;
   const shouldConsiderStateMigration =
     !params.validateConfigOnly &&
     commandName !== "config" &&
@@ -272,8 +273,8 @@ export async function ensureConfigReady(
       });
     try {
       return !params.suppressDoctorStdout
-        ? (await runDoctorConfigPreflight()).snapshot
-        : (await withSuppressedNotes(runDoctorConfigPreflight)).snapshot;
+        ? await runDoctorConfigPreflight()
+        : await withSuppressedNotes(runDoctorConfigPreflight);
     } catch (error) {
       if (error instanceof ExitError) {
         // The migration owner has unwound its lease and heartbeat before this handoff.
@@ -287,7 +288,7 @@ export async function ensureConfigReady(
     shouldConsiderStateMigration &&
     (!requiresLegacyStateInput || hasLegacyStateMigrationInputs())
   ) {
-    preflightSnapshot = await runStateMigrationPreflight();
+    preflightResult = await runStateMigrationPreflight();
   }
 
   // Read-only diagnostics must not record config health. Core-only validation
@@ -302,17 +303,17 @@ export async function ensureConfigReady(
         ? ({ observe: false } as const)
         : undefined;
   let snapshot =
-    preflightSnapshot ?? (await getConfigSnapshot(configSnapshotOptions, params.measure));
+    preflightResult?.snapshot ?? (await getConfigSnapshot(configSnapshotOptions, params.measure));
   if (
-    !preflightSnapshot &&
+    !preflightResult &&
     !didRunDoctorConfigFlow &&
     shouldConsiderStateMigration &&
     requiresLegacyStateInput &&
     snapshot.valid &&
     snapshotHasConfiguredSessionStore(snapshot)
   ) {
-    preflightSnapshot = await runStateMigrationPreflight();
-    snapshot = preflightSnapshot;
+    preflightResult = await runStateMigrationPreflight();
+    snapshot = preflightResult.snapshot;
   }
   const isBareGatewayForegroundRun =
     commandName === "gateway" && (subcommandName === undefined || subcommandName.trim() === "");
@@ -341,8 +342,15 @@ export async function ensureConfigReady(
   const invalid = snapshot.exists && !snapshot.valid;
   if (!invalid) {
     setRuntimeConfigSnapshot(snapshot.runtimeConfig ?? snapshot.config, snapshot.sourceConfig);
-  }
-  if (!invalid) {
+    if (
+      shouldRequireStartupMigrationCheckpoint(commandPath) &&
+      preflightResult?.pluginMetadataSnapshot
+    ) {
+      // Carry verified package facts into the final config reread without publishing Gateway policy.
+      adoptProcessPluginCache(
+        getPluginMetadataSnapshotCache(preflightResult.pluginMetadataSnapshot),
+      );
+    }
     return;
   }
 

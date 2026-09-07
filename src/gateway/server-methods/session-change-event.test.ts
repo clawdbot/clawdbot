@@ -3,6 +3,8 @@ import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-ow
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
+import { readGatewayAccessRevision } from "../gateway-access-revision.js";
+import { loadCachedSessionSharingSnapshot } from "../session-sharing-snapshot-cache.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -13,7 +15,12 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../session-sharing.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../session-sharing.js")>();
-  return { ...actual, invalidateSessionSharingSnapshot: mocks.invalidate };
+  return {
+    ...actual,
+    invalidateSessionSharingSnapshot: mocks.invalidate.mockImplementation(
+      actual.invalidateSessionSharingSnapshot,
+    ),
+  };
 });
 
 vi.mock("../session-utils.js", async (importOriginal) => {
@@ -62,11 +69,13 @@ function createContext(
     chatAbortControllers,
     getRuntimeConfig: () => config,
     getSessionEventSubscriberConnIds: () => receivers,
+    mentionInbox: { invalidate: vi.fn() },
   } as unknown as GatewayRequestContext;
 }
 
 beforeEach(() => {
   vi.useFakeTimers();
+  mocks.invalidate();
   mocks.invalidate.mockClear();
   mocks.loadRow.mockClear();
   mocks.rowLabel = "first";
@@ -81,6 +90,7 @@ describe("sessions.changed coalescing", () => {
   it("emits a leading row and one trailing row with the latest state", () => {
     const context = createContext();
     const initialVersion = readSessionsMutationVersion(context);
+    const initialAccessRevision = readGatewayAccessRevision();
 
     emitSessionsChanged(context, { reason: "create", sessionKey: "agent:main:chat" });
     mocks.rowLabel = "latest";
@@ -98,8 +108,40 @@ describe("sessions.changed coalescing", () => {
       reason: "send",
     });
     expect(readSessionsMutationVersion(context)).toBe(initialVersion + 3);
+    expect(readGatewayAccessRevision()).toBe(initialAccessRevision + 3);
     expect(mocks.invalidate).toHaveBeenCalledTimes(3);
   });
+
+  it.each([true, false])(
+    "refreshes metadata projections without expiring access (receivers: %s)",
+    (receivesEvents) => {
+      const context = createContext(new Set(receivesEvents ? ["conn-1"] : []));
+      const sessionKey = "agent:main:metadata";
+      const initialVersion = readSessionsMutationVersion(context);
+      const initialAccessRevision = readGatewayAccessRevision();
+      const resolve = vi.fn(() => ({
+        canonicalKey: sessionKey,
+        snapshot: { incognito: false, visibility: "shared" as const },
+      }));
+      loadCachedSessionSharingSnapshot({ sessionKey, resolve });
+
+      emitSessionsChanged(context, { reason: "patch", sessionKey }, { accessChanged: false });
+
+      expect(readGatewayAccessRevision()).toBe(initialAccessRevision);
+      expect(readSessionsMutationVersion(context)).toBe(initialVersion + 1);
+      expect(context.mentionInbox?.invalidate).toHaveBeenCalledOnce();
+      loadCachedSessionSharingSnapshot({ sessionKey, resolve });
+      expect(resolve).toHaveBeenCalledTimes(2);
+      if (receivesEvents) {
+        const payload = vi.mocked(context.broadcastToConnIds).mock.calls[0]?.[1];
+        expect(payload).toMatchObject({ reason: "patch", sessionKey, label: "first" });
+        expect(payload).not.toHaveProperty("accessChanged");
+      } else {
+        expect(context.broadcastToConnIds).not.toHaveBeenCalled();
+        expect(mocks.loadRow).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("emits the latest trailing row by the sustained-mutation deadline", () => {
     const context = createContext();
@@ -327,6 +369,10 @@ describe("sessions.changed coalescing", () => {
 
     expect(readSessionsMutationVersion(context)).toBe(initialVersion + 1);
     expect(mocks.invalidate).toHaveBeenCalledOnce();
+    expect(context.mentionInbox?.invalidate).toHaveBeenCalledOnce();
+    expect(mocks.invalidate.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(context.mentionInbox!.invalidate).mock.invocationCallOrder[0]!,
+    );
     expect(mocks.loadRow).not.toHaveBeenCalled();
     expect(context.broadcastToConnIds).not.toHaveBeenCalled();
   });

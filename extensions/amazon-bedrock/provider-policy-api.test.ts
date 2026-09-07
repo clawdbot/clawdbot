@@ -87,6 +87,22 @@ describe("amazon-bedrock provider-policy-api", () => {
   });
 
   it.each([
+    "global.anthropic.claude-opus-4-70",
+    "arn:aws:bedrock:us-west-2:123456789012:inference-profile/us.anthropic.claude-opus-4-80",
+  ])("does not treat numeric Opus version prefixes as supported models: %s", (modelId) => {
+    const profile = resolveThinkingProfile({ provider: "amazon-bedrock", modelId });
+
+    expect(profile?.levels.map((level) => level.id)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+    ]);
+    expect(profile?.defaultLevel).toBeUndefined();
+  });
+
+  it.each([
     {
       canonicalModelId: "claude-fable-5",
       defaultLevel: "high",

@@ -17,7 +17,7 @@ internal class ShellNavigation(
   settingsRouteFromHome: Boolean = false,
   dashboardSessionKey: String = "main",
 ) {
-  var activeTab by mutableStateOf(activeTab.unifiedChatTab())
+  var activeTab by mutableStateOf(activeTab)
     private set
   var settingsRoute by mutableStateOf(settingsRoute)
     private set
@@ -27,7 +27,7 @@ internal class ShellNavigation(
   // Single-slot origin: Back from a cross-tab detail (settings route, Sessions,
   // Providers) returns to the tab that opened it; deeper history intentionally
   // collapses to Overview so the shell never accumulates a navigation stack.
-  private var returnTab by mutableStateOf(returnTab?.unifiedChatTab())
+  private var returnTab by mutableStateOf(returnTab)
 
   // Distinguishes a detail reached from the Settings Home list (Back unwinds to
   // Home) from one opened cross-tab (Back leaves the Settings tab entirely).
@@ -35,11 +35,10 @@ internal class ShellNavigation(
 
   /** Tab-bar-style switch: Back from the selected tab returns to Overview. */
   fun selectTab(tab: Tab) {
-    val destination = tab.unifiedChatTab()
-    if (destination == Tab.Settings) settingsRoute = SettingsRoute.Home
+    if (tab == Tab.Settings) settingsRoute = SettingsRoute.Home
     settingsRouteFromHome = false
     returnTab = null
-    activeTab = destination
+    activeTab = tab
   }
 
   /** Opens a settings route from another tab, remembering the origin for Back. */
@@ -57,9 +56,8 @@ internal class ShellNavigation(
 
   /** Opens a detail tab (Sessions, Providers) from another tab, remembering the origin for Back. */
   fun openDetailTab(tab: Tab) {
-    val destination = tab.unifiedChatTab()
-    if (activeTab != destination) returnTab = activeTab
-    activeTab = destination
+    if (activeTab != tab) returnTab = activeTab
+    activeTab = tab
   }
 
   /** Opens the web dashboard for the chat session that initiated navigation. */
@@ -83,6 +81,10 @@ internal class ShellNavigation(
   }
 
   companion object {
+    // Android may restore a saved Voice destination from before voice moved into
+    // Chat. Normalize it here so runtime navigation only contains live screens.
+    private fun restoreTab(name: String): Tab = if (name == "Voice") Tab.Chat else Tab.valueOf(name)
+
     /** Persists shell navigation across process death for rememberSaveable. */
     val Saver =
       listSaver<ShellNavigation, String>(
@@ -97,9 +99,9 @@ internal class ShellNavigation(
         },
         restore = { saved ->
           ShellNavigation(
-            activeTab = Tab.valueOf(saved[0]),
+            activeTab = restoreTab(saved[0]),
             settingsRoute = SettingsRoute.valueOf(saved[1]),
-            returnTab = saved[2].takeIf { it.isNotEmpty() }?.let(Tab::valueOf),
+            returnTab = saved[2].takeIf { it.isNotEmpty() }?.let(::restoreTab),
             settingsRouteFromHome = saved[3].toBoolean(),
             dashboardSessionKey = saved.getOrNull(4) ?: "main",
           )
@@ -107,6 +109,3 @@ internal class ShellNavigation(
       )
   }
 }
-
-/** Keeps saved state and legacy deep links compatible after Voice moved into Chat. */
-private fun Tab.unifiedChatTab(): Tab = if (this == Tab.Voice) Tab.Chat else this

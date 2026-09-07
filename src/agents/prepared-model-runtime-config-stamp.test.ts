@@ -31,7 +31,7 @@ let state: OpenClawTestState;
 describe("prepared model runtime config stamps", () => {
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "prepared-model-runtime" });
-    resetPreparedModelRuntimeHarness(state);
+    await resetPreparedModelRuntimeHarness(state);
     mocks.configuredAgentIds = ["default"];
   });
 

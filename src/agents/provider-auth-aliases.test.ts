@@ -9,7 +9,7 @@ const pluginRegistryMocks = vi.hoisted(() => {
   return {
     loadPluginManifestRegistryForInstalledIndex: loadManifestRegistry,
     loadPluginManifestRegistryForPluginRegistry: loadManifestRegistry,
-    loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
+    loadPluginRegistrySnapshotWithMetadata: vi.fn(() => ({ snapshot: { plugins: [] } })),
     resolveInstalledManifestRegistryIndexFingerprint: vi.fn(() => "test-index"),
     loadPluginMetadataSnapshot: vi.fn((params: unknown) => {
       const registry = loadManifestRegistry(params) ?? { plugins: [], diagnostics: [] };
@@ -38,7 +38,8 @@ vi.mock("../plugins/manifest-registry-installed.js", () => ({
 vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry:
     pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry,
-  loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
+  loadPluginRegistrySnapshotWithMetadata:
+    pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata,
 }));
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
@@ -55,6 +56,7 @@ import type { InstalledPluginIndexRecord } from "../plugins/installed-plugin-ind
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { snapshotReaderSlot } from "../plugins/plugin-metadata-snapshot-readers.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { createProviderAuthResolver } from "./models-config.providers.secrets.js";
 import { resolveProviderAuthAliasMap, resolveProviderIdForAuth } from "./provider-auth-aliases.js";
@@ -130,6 +132,7 @@ function createPluginMetadataSnapshot(params: {
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
     },
     metrics: {
       registrySnapshotMs: 0,
@@ -143,14 +146,24 @@ function createPluginMetadataSnapshot(params: {
 }
 
 async function prepareAliasSnapshot(plugins: PluginManifestRecord[]) {
-  const metadata = await vi.importActual<typeof import("../plugins/plugin-metadata-snapshot.js")>(
-    "../plugins/plugin-metadata-snapshot.js",
-  );
-  const source = createPluginMetadataSnapshot({ plugins });
-  const snapshot = metadata.restorePluginMetadataSnapshot(
-    metadata.rebasePluginMetadataSnapshotManifestRegistry(source, source.manifestRegistry),
-  );
-  return { metadata, snapshot };
+  const readers = Object.getOwnPropertyDescriptors(snapshotReaderSlot);
+  try {
+    const metadata = await vi.importActual<typeof import("../plugins/plugin-metadata-snapshot.js")>(
+      "../plugins/plugin-metadata-snapshot.js",
+    );
+    const source = createPluginMetadataSnapshot({ plugins });
+    const snapshot = metadata.restorePluginMetadataSnapshot(
+      metadata.rebasePluginMetadataSnapshotManifestRegistry(source, source.manifestRegistry),
+    );
+    return { metadata, snapshot };
+  } finally {
+    // importActual retains this fixture's mocked dependencies. Its readers must
+    // not outlive the fixture or replace another file's provider metadata.
+    for (const key of Reflect.ownKeys(snapshotReaderSlot)) {
+      Reflect.deleteProperty(snapshotReaderSlot, key);
+    }
+    Object.defineProperties(snapshotReaderSlot, readers);
+  }
 }
 
 describe("provider auth aliases", () => {
@@ -162,8 +175,10 @@ describe("provider auth aliases", () => {
       plugins: [],
       diagnostics: [],
     });
-    pluginRegistryMocks.loadPluginRegistrySnapshot.mockReset();
-    pluginRegistryMocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
+    pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockReset();
+    pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      snapshot: { plugins: [] },
+    });
     pluginRegistryMocks.loadPluginMetadataSnapshot.mockClear();
   });
 

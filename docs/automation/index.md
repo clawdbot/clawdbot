@@ -123,6 +123,17 @@ See [Heartbeat](/gateway/heartbeat).
 - **Task Flow** coordinates multi-step flows above individual tasks.
 - **Tasks** automatically track all detached work so you can inspect and audit it.
 
+## Retired inferred commitments
+
+The inferred commitments experiment has been removed: OpenClaw no longer
+extracts follow-ups from conversations or delivers them through heartbeat.
+The `openclaw commitments` maintenance CLI is also gone. The database migration
+discards the old commitment rows and removes their table and indexes.
+
+For reminders or scheduled work, create an explicit
+[automation](/automation/cron-jobs). Automations are an alternative with a
+schedule and instructions you choose; they do not restore inferred follow-ups.
+
 ## Related
 
 - [Automations](/automation/cron-jobs) — precise scheduling and one-shot reminders

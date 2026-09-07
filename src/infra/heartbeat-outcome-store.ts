@@ -1,5 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Insertable, Selectable } from "kysely";
+import type { EmbeddedRunTrigger } from "../agents/embedded-agent-runner/run/params.js";
 import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 import {
   resolveSqliteScope,
@@ -8,7 +9,11 @@ import {
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import type { HeartbeatWakeSource } from "./heartbeat-wake.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
 
 const HEARTBEAT_OUTCOME_SUMMARY_MAX_CHARS = 4_000;
 const HEARTBEAT_OUTCOME_REASON_MAX_CHARS = 1_000;
@@ -18,7 +23,10 @@ const HEARTBEAT_OUTCOME_TASK_NAME_MAX_CHARS = 200;
 const HEARTBEAT_OUTCOME_MAX_TASKS = 32;
 
 type HeartbeatOutcomeTable = OpenClawAgentKyselyDatabase["heartbeat_outcomes"];
-type HeartbeatOutcomeDatabase = Pick<OpenClawAgentKyselyDatabase, "heartbeat_outcomes">;
+type HeartbeatOutcomeDatabase = Pick<
+  OpenClawAgentKyselyDatabase,
+  "heartbeat_outcomes" | "session_nodes"
+>;
 type HeartbeatOutcomeRow = Selectable<HeartbeatOutcomeTable>;
 type HeartbeatOutcomeInsert = Insertable<HeartbeatOutcomeTable>;
 
@@ -128,6 +136,18 @@ export function persistHeartbeatOutcome(params: {
   runOpenClawAgentWriteTransaction(
     ({ db }) => {
       const agentDb = getNodeSqliteKysely<HeartbeatOutcomeDatabase>(db);
+      const owner = executeSqliteQueryTakeFirstSync(
+        db,
+        agentDb
+          .selectFrom("session_nodes")
+          .select("session_key")
+          .where("session_key", "=", params.sessionKey),
+      );
+      // Transient isolated runs may have no durable base row.
+      // Without one, no later user turn can claim an outcome.
+      if (!owner) {
+        return;
+      }
       executeSqliteQuerySync(
         db,
         agentDb
@@ -199,7 +219,7 @@ export function claimHeartbeatOutcomeForRun(params: {
 }
 
 /** Formats persisted state as model-only provenance context, never transcript text. */
-export function buildHeartbeatOutcomeContext(
+function buildHeartbeatOutcomeContext(
   outcome: PersistedHeartbeatOutcome | undefined,
 ): string | undefined {
   if (!outcome) {
@@ -223,4 +243,25 @@ export function buildHeartbeatOutcomeContext(
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");
+}
+
+/** Claim bounded next-user context only after the runtime owner has admitted the turn. */
+export function claimHeartbeatContextForUserRun(
+  params: Omit<Parameters<typeof claimHeartbeatOutcomeForRun>[0], "sessionKey"> & {
+    sessionKey?: string;
+    trigger?: EmbeddedRunTrigger;
+    detached?: boolean;
+    assertCurrent: (() => void) | undefined;
+  },
+): string | undefined {
+  if (params.trigger !== "user" || params.detached || !params.sessionKey) {
+    return undefined;
+  }
+  if (!params.assertCurrent) {
+    throw new Error("Heartbeat outcome context requires an active admitted run");
+  }
+  params.assertCurrent();
+  return buildHeartbeatOutcomeContext(
+    claimHeartbeatOutcomeForRun({ ...params, sessionKey: params.sessionKey }),
+  );
 }

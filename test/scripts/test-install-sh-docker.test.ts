@@ -1000,10 +1000,10 @@ printf 'status=%s\\n' "$status"
   });
 
   it("rejects non-root smoke Node runtimes without node:sqlite", () => {
-    const result = runNonrootNodePreflight("22.22.3", { sqlite: false });
+    const result = runNonrootNodePreflight("24.16.0", { sqlite: false });
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("unsupported node 22.22.3: missing node:sqlite");
+    expect(result.stderr).toContain("unsupported node 24.16.0: missing node:sqlite");
   });
 
   it("rejects non-root smoke Node runtimes with vulnerable system SQLite", () => {
@@ -1014,9 +1014,11 @@ printf 'status=%s\\n' "$status"
   });
 
   it("accepts non-root smoke Node runtimes that match the installer runtime floor", () => {
-    expect(runNonrootNodePreflight("22.22.3").status).toBe(0);
+    expect(runNonrootNodePreflight("22.23.2").status).toBe(1);
     expect(runNonrootNodePreflight("24.16.0").status).toBe(0);
-    expect(runNonrootNodePreflight("25.9.0").status).toBe(0);
+    expect(runNonrootNodePreflight("25.9.0").status).toBe(1);
+    expect(runNonrootNodePreflight("26.0.0").status).toBe(1);
+    expect(runNonrootNodePreflight("26.1.0").status).toBe(0);
   });
 
   it("runs the root Dockerfile build with the CI heap limit", () => {
@@ -1049,6 +1051,23 @@ printf 'status=%s\\n' "$status"
     expect(dockerfile).toContain(
       "node /app/node_modules/playwright-core/cli.js install --with-deps chromium",
     );
+  });
+
+  it("verifies fs-safe native loading before and after Docker runtime assembly", () => {
+    const dockerfile = readFileSync("Dockerfile", "utf8");
+    const verifier = readFileSync("scripts/docker/verify-native-addons.sh", "utf8");
+
+    expect(dockerfile).toContain(
+      "COPY scripts/docker/verify-fs-safe-native.mjs ./scripts/docker/verify-fs-safe-native.mjs",
+    );
+    expect(dockerfile.match(/RUN sh scripts\/docker\/verify-native-addons\.sh/gu)).toHaveLength(2);
+    expect(dockerfile).toContain(
+      "node /tmp/verify-fs-safe-native.mjs --package-root /app --mode require",
+    );
+    expect(verifier).toContain(
+      "node scripts/docker/verify-fs-safe-native.mjs --package-root /app --mode require",
+    );
+    expect(verifier).toContain("if grep -qx 'matrix' /tmp/openclaw-selected-plugin-dirs; then");
   });
 
   it("passes the baked browser build arg through Docker setup", () => {
@@ -1653,6 +1672,194 @@ describe("install-sh E2E runner", () => {
 });
 
 describe("install-sh smoke runner", () => {
+  it.runIf(process.platform !== "win32").each([0, 23])(
+    "reaps the heartbeat timer and preserves command exit %i",
+    (exitCode) => {
+      const root = tempDirs.make("openclaw-smoke-heartbeat-");
+      const bin = join(root, "bin");
+      const pidFile = join(root, "timer.pid");
+      mkdirSync(bin);
+      writeFileSync(
+        join(bin, "sleep"),
+        '#!/bin/bash\nexec >/dev/null 2>&1\nprintf "%s" "$$" >"$SLEEP_PID_FILE"\nexec /bin/sleep "$@"\n',
+        { mode: 0o755 },
+      );
+      const runner = readFileSync(SMOKE_RUNNER_PATH, "utf8");
+      const heartbeat = runner.slice(
+        runner.indexOf("run_with_heartbeat() {"),
+        runner.indexOf("\nis_self_swapped_package_process_exit()"),
+      );
+      const command = `
+const fs = require("node:fs");
+const timer = setInterval(() => {
+  if (fs.existsSync(process.env.SLEEP_PID_FILE) && /^\\d+$/.test(fs.readFileSync(process.env.SLEEP_PID_FILE, "utf8"))) {
+    clearInterval(timer);
+    process.exit(${exitCode});
+  }
+}, 5);
+setTimeout(() => process.exit(99), 2000).unref();
+`;
+      let timerPid = 0;
+      try {
+        const result = spawnSync(
+          "bash",
+          [
+            "-c",
+            `set -euo pipefail
+HEARTBEAT_INTERVAL=60
+${heartbeat}
+command_result=0
+run_with_heartbeat fixture "$HOST_NODE" -e "$COMMAND_SOURCE" || command_result=$?
+printf 'command-status=%s\\n' "$command_result"
+`,
+          ],
+          {
+            encoding: "utf8",
+            timeout: 5_000,
+            env: {
+              HOME: root,
+              PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+              SLEEP_PID_FILE: pidFile,
+              HOST_NODE: process.execPath,
+              COMMAND_SOURCE: command,
+            },
+          },
+        );
+        timerPid = Number(readFileSync(pidFile, "utf8"));
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout.trim()).toBe(`command-status=${exitCode}`);
+        expect(timerPid).toBeGreaterThan(0);
+        expect(isProcessAlive(timerPid)).toBe(false);
+      } finally {
+        if (timerPid && isProcessAlive(timerPid)) {
+          process.kill(timerPid, "SIGKILL");
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32").each([
+    { scenario: "idle", exitCode: 0, updateCount: 2 },
+    { scenario: "candidate refusal", exitCode: 21, updateCount: 2 },
+    { scenario: "live process", exitCode: 1, updateCount: 0 },
+    { scenario: "service definition", exitCode: 1, updateCount: 0 },
+    { scenario: "service manager", exitCode: 1, updateCount: 0 },
+    { scenario: "inspection failure", exitCode: 1, updateCount: 0 },
+  ])(
+    "uses the baseline manual path only after offline proof and checks candidate defaults: $scenario",
+    ({ scenario, exitCode, updateCount }) => {
+      const root = tempDirs.make("openclaw-update-smoke-");
+      const bin = join(root, "bin");
+      const globalRoot = join(root, "node_modules");
+      const versionFile = join(root, "version");
+      const callsFile = join(root, "updates.jsonl");
+      const preload = join(root, "native-inspection.cjs");
+      mkdirSync(bin);
+      mkdirSync(join(globalRoot, "openclaw"), { recursive: true });
+      writeFileSync(join(globalRoot, "openclaw", "package.json"), '{"version":"2026.8.2"}');
+      writeFileSync(versionFile, "2026.8.2");
+      writeFileSync(callsFile, "");
+      symlinkSync(process.execPath, join(bin, "node"));
+      writeFileSync(
+        join(bin, "npm"),
+        '#!/bin/bash\nif [[ " $* " == *" root -g "* ]]; then printf "%s\\n" "$FAKE_GLOBAL_ROOT"; fi\n',
+        { mode: 0o755 },
+      );
+      writeFileSync(join(bin, "timeout"), '#!/bin/bash\nshift 2\nexec "$@"\n', { mode: 0o755 });
+      writeFileSync(
+        join(bin, "openclaw"),
+        `#!${process.execPath}
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  console.log("OpenClaw " + fs.readFileSync(process.env.FAKE_VERSION_FILE, "utf8"));
+} else if (args[0] === "update") {
+  const before = fs.readFileSync(process.env.FAKE_VERSION_FILE, "utf8");
+  fs.appendFileSync(process.env.FAKE_CALLS_FILE, JSON.stringify(args) + "\\n");
+  if (before === "2026.8.2" && !args.includes("--no-restart")) process.exit(20);
+  if (before === "2026.9.1" && (args.includes("--no-restart") || process.env.FAKE_SCENARIO === "candidate refusal")) process.exit(21);
+  fs.writeFileSync(process.env.FAKE_VERSION_FILE, "2026.9.1");
+  console.log(JSON.stringify({
+    status: "ok", before: { version: before }, after: { version: "2026.9.1" },
+    steps: [
+      { name: "global update", exitCode: 0, command: "npm install " + args[args.indexOf("--tag") + 1] },
+      { name: "openclaw doctor", exitCode: 0 },
+    ],
+  }));
+}
+`,
+        { mode: 0o755 },
+      );
+      // Simulate native /proc and service files; execute the complete shell runner and CLI boundary.
+      writeFileSync(
+        preload,
+        `const fs = require("node:fs");
+const realRead = fs.readFileSync;
+const realList = fs.readdirSync;
+const realStat = fs.lstatSync;
+const absent = () => { throw Object.assign(new Error("absent"), { code: "ENOENT" }); };
+Object.defineProperty(process, "platform", { value: "linux" });
+Object.defineProperty(process, "ppid", { value: 1 });
+fs.lstatSync = (file, ...args) => {
+  if (String(file).startsWith("/run/")) {
+    if (process.env.FAKE_SCENARIO === "service manager") return {};
+    return absent();
+  }
+  return realStat(file, ...args);
+};
+fs.readdirSync = (file, ...args) => {
+  if (file === "/proc") return ["1", String(process.pid), ...(process.env.FAKE_SCENARIO === "live process" ? ["42"] : [])];
+  if (String(file).endsWith("/systemd")) {
+    if (process.env.FAKE_SCENARIO === "inspection failure") throw Object.assign(new Error("inspection denied"), { code: "EACCES" });
+    return process.env.FAKE_SCENARIO === "service definition" ? [{ name: "openclaw-gateway.service", parentPath: file }] : [];
+  }
+  return realList(file, ...args);
+};
+fs.readFileSync = (file, ...args) => {
+  if (file === "/proc/1/cmdline") return "bash\\0/usr/local/bin/openclaw-install-smoke\\0";
+  if (file === "/proc/42/cmdline") return "openclaw-gateway\\0";
+  return realRead(file, ...args);
+};
+`,
+      );
+      const result = spawnSync("bash", [SMOKE_RUNNER_PATH], {
+        encoding: "utf8",
+        env: {
+          HOME: root,
+          PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+          NODE_OPTIONS: `--require=${preload}`,
+          FAKE_SCENARIO: scenario,
+          FAKE_GLOBAL_ROOT: globalRoot,
+          FAKE_VERSION_FILE: versionFile,
+          FAKE_CALLS_FILE: callsFile,
+          OPENCLAW_INSTALL_SMOKE_MODE: "update",
+          OPENCLAW_INSTALL_UPDATE_BASELINE: "2026.8.2",
+          OPENCLAW_INSTALL_UPDATE_BASELINE_TAG_URL: "http://baseline.invalid/openclaw.tgz",
+          OPENCLAW_INSTALL_UPDATE_EXPECT_VERSION: "2026.9.1",
+          OPENCLAW_INSTALL_UPDATE_TAG_URL: "http://candidate.invalid/openclaw.tgz",
+          OPENCLAW_INSTALL_SMOKE_HEARTBEAT_INTERVAL: "0",
+        },
+      });
+      const calls = readFileSync(callsFile, "utf8")
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as string[]);
+      expect(result.status, result.stderr).toBe(exitCode);
+      expect(calls).toHaveLength(updateCount);
+      if (updateCount > 0) {
+        expect(calls[0]).toContain("--no-restart");
+        expect(calls[1]).not.toContain("--no-restart");
+      }
+      if (exitCode === 0) {
+        expect(result.stdout).toContain("Verified idle container");
+        expect(result.stdout.trim().endsWith("OK")).toBe(true);
+      } else {
+        expect(result.stdout.trim().endsWith("OK")).toBe(false);
+      }
+    },
+  );
+
   it("passes the URL and installer arguments through the timed pipeline unchanged", () => {
     const installerArgs = [
       "--install-method",
@@ -1706,6 +1913,63 @@ describe("install-sh smoke runner", () => {
       "-c",
     ]);
   });
+
+  it.each([
+    ["2026.8.2", "2026.9.3", 0],
+    ["2026.9.2", "2026.9.3", 0],
+    ["2026.9.2", "2026.9.4", 0],
+    ["2026.9.1", "2026.9.3", 0],
+    ["2026.9.2", "2026.9.3", 17],
+  ])(
+    "routes installer transition %s → %s and preserves exit %s",
+    (baseline, candidate, failure) => {
+      const runner = readFileSync(SMOKE_RUNNER_PATH, "utf8");
+      const start = runner.indexOf("run_update_smoke() {");
+      const body = runner.slice(start, runner.indexOf("\nrun_update_candidate()", start));
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `
+set -eu
+${body}
+resolve_update_baseline_version() { :; }
+npm_install_global() { :; }
+print_install_audit() { :; }
+verify_installed_cli() { :; }
+assert_update_smoke_offline() { echo idle; }
+run_historical_external_transition() { echo external; return 99; }
+run_update_candidate() { echo "self-update:$1:$*"; if [[ "$1" == "$UPDATE_BASELINE_VERSION" ]]; then return "$FAILURE"; fi; }
+verify_candidate_ai_runtime() { echo verified; }
+run_update_smoke
+`,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PACKAGE_NAME: "openclaw",
+            UPDATE_BASELINE_VERSION: baseline,
+            UPDATE_EXPECT_VERSION: candidate,
+            UPDATE_BASELINE_TAG_URL: "",
+            UPDATE_TAG_URL: "https://fixture.invalid/candidate.tgz",
+            FAILURE: String(failure),
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(failure);
+      expect(result.stdout).toContain("idle\n");
+      expect(result.stdout).toContain(`self-update:${baseline}:${baseline} --no-restart\n`);
+      expect(result.stdout).not.toContain("external\n");
+      if (failure === 0) {
+        expect(result.stdout).toContain(`self-update:${candidate}:${candidate}\n`);
+        expect(result.stdout).toContain("verified\n");
+      } else {
+        expect(result.stdout).not.toContain(`self-update:${candidate}:`);
+        expect(result.stdout).not.toContain("verified\n");
+      }
+    },
+  );
 
   it("wraps long npm/update operations with heartbeat and install-size audits", () => {
     const script = readFileSync(SMOKE_RUNNER_PATH, "utf8");
@@ -2212,6 +2476,13 @@ if [ "\${1:-}" = "pm" ] && [ "\${2:-}" = "-g" ] && [ "\${3:-}" = "untrusted" ]; 
 fi
 if [ "\${1:-}" = "run" ] && [ "\${2:-}" = "--bun" ]; then
   echo "OpenClaw 2026.6.17"
+  exit 0
+fi
+if [[ "\${1:-}" == */verify-fs-safe-native.mjs ]]; then
+  test "\${2:-}" = "--package-root"
+  test -d "\${3:-}"
+  test "\${4:-}" = "--mode"
+  test "\${5:-}" = "require"
   exit 0
 fi
 if [[ "\${1:-}" == */openclaw.mjs ]]; then

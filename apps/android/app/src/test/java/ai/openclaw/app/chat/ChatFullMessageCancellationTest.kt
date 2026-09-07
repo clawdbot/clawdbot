@@ -183,7 +183,8 @@ class ChatFullMessageCancellationTest {
           async(Dispatchers.IO) {
             gate.ownerThread.set(Thread.currentThread())
             fixture.selectionSetupGate.set(gate)
-            fixture.controller.switchSession(FULL_MESSAGE_SECOND_CHAT, ownerAgentId = "main")
+            // Hydration shares the reset without holding the explicit-choice monitor.
+            fixture.controller.load(FULL_MESSAGE_SECOND_CHAT, ownerAgentId = "main")
           }
         try {
           withTimeout(FULL_MESSAGE_READY_TIMEOUT_MS) { gate.entered.await() }
@@ -279,6 +280,7 @@ class ChatFullMessageCancellationTest {
         val controller =
           ChatController(
             scope = scope,
+            commandOutbox = scope.createChatCommandOutbox(),
             json = Json { ignoreUnknownKeys = true },
             requestGateway = { method, params -> liveSession.request(method, params) },
             requestGatewayForGateway = { gatewayId, method, params -> liveSession.requestForEndpoint(gatewayId, method, params) },

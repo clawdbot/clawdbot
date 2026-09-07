@@ -91,6 +91,11 @@ describe("Crabbox warm-image CLI", () => {
 
   it("inspects retained capture ownership after reopening SQLite without changing it", async () => {
     const record = pendingCapture();
+    record.image!.runtimeIdentity = {
+      nodeBootstrapSha256: "a".repeat(64),
+      executionMode: "worker-turn",
+      workerBundleSha256: "b".repeat(64),
+    };
     openCrabboxWarmImageStore().register("profile", record);
     resetPluginStateStoreForTests();
 
@@ -105,6 +110,7 @@ describe("Crabbox warm-image CLI", () => {
           state: "available",
           createdAtMs: record.image!.createdAtMs,
           lastUsedAtMs: record.image!.lastUsedAtMs,
+          runtimeIdentity: record.image!.runtimeIdentity,
           allocations: {},
           capture: {
             selector: SELECTOR,

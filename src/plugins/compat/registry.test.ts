@@ -83,10 +83,30 @@ describe("plugin compatibility registry", () => {
       (record) =>
         record.status === "removal-pending" &&
         record.removeAfter !== undefined &&
-        record.removeAfter <= "2026-07-30",
+        record.removeAfter <= "2026-09-02",
     );
 
     expect(staleRemovalWindows).toEqual([]);
+    for (const code of [
+      "plugin-sdk-config-runtime-subpath",
+      "plugin-sdk-channel-reply-pipeline-subpath",
+      "plugin-sdk-infra-runtime-subpath",
+      "plugin-sdk-channel-lifecycle-subpath",
+      "plugin-sdk-channel-message-subpath",
+    ] as const satisfies readonly PluginCompatCode[]) {
+      const record = records.get(code);
+      expect(record).toMatchObject({
+        status: "removal-pending",
+        deprecated: "2026-07-06",
+        warningStarts: "2026-07-06",
+        removeAfter: "2026-10-01",
+        docsPath: "/plugins/sdk-migration",
+      });
+      expect(record?.replacement).toMatch(
+        /retain until supported external plugin migration is verified/u,
+      );
+    }
+
     expect(records.get("plugin-sdk-media-understanding-public-demotion")).toMatchObject({
       status: "removal-pending",
       removeAfter: "2026-09-30",

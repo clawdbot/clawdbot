@@ -8,6 +8,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
@@ -48,10 +49,14 @@ const TEST_PHYSICAL_MEMORY_BYTES = 16 * 1024 * 1024 * 1024;
 // fixtures prove only their declared hierarchy instead of inheriting the runner's RAM.
 vi.spyOn(os, "totalmem").mockReturnValue(TEST_PHYSICAL_MEMORY_BYTES);
 const readFileSync = fs.readFileSync.bind(fs);
-vi.spyOn(fs, "readFileSync").mockImplementation((filePath, options) =>
-  filePath === "/proc/meminfo" && options === "utf8"
-    ? "MemTotal:       16777216 kB\nMemAvailable:   16777216 kB\n"
-    : readFileSync(filePath, options),
+vi.spyOn(fs, "readFileSync").mockImplementation(
+  (filePath, options?: BufferEncoding | fs.ReadFileSyncOptions | null) =>
+    filePath === "/proc/meminfo" && options === "utf8"
+      ? "MemTotal:       16777216 kB\nMemAvailable:   16777216 kB\n"
+      : readFileSync(
+          filePath,
+          typeof options === "string" ? { encoding: options } : (options ?? {}),
+        ),
 );
 const NO_MEMORY_LIMIT = {
   availableMemoryBytes: TEST_PHYSICAL_MEMORY_BYTES,
@@ -210,13 +215,25 @@ describe("resolveTsdownBuildInvocation", () => {
     );
   });
 
-  it("expands the full-build unified selector into one runtime and bounded declaration graphs", () => {
+  it.each([
+    {
+      label: "implicit unified declarations",
+      selected: [],
+      expected: TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
+    },
+    {
+      label: "explicit declaration subset",
+      selected: TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
+      expected: TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
+    },
+  ])("serializes runtime and $label without adding other groups", ({ selected, expected }) => {
     const results = resolveTsdownBuildInvocations({
       args: [
         "--config",
         "tsdown.config.ts",
         "--filter",
         TSDOWN_UNIFIED_CONFIG_GROUP,
+        ...selected.flatMap((group) => ["--filter", group]),
         "--format",
         "esm",
       ],
@@ -227,13 +244,13 @@ describe("resolveTsdownBuildInvocation", () => {
       ...NO_MEMORY_LIMIT,
     });
 
-    expect(results).toHaveLength(1 + TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.length);
+    expect(results).toHaveLength(1 + expected.length);
     expect(
       results.map((result) => {
         const filterIndex = result.args.indexOf("--filter");
         return result.args[filterIndex + 1];
       }),
-    ).toEqual([TSDOWN_UNIFIED_CONFIG_GROUP, ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS]);
+    ).toEqual([TSDOWN_UNIFIED_CONFIG_GROUP, ...expected]);
     for (const result of results) {
       expect(result.args).toEqual(expect.arrayContaining(["--config", "tsdown.config.ts"]));
       expect(result.args).toEqual(expect.arrayContaining(["--format", "esm"]));
@@ -2339,10 +2356,10 @@ describe("runTsdownBuildInvocation", () => {
               clears.mockRestore();
               timers.mockRestore();
               clock.mockRestore();
-              if (abortFailure) {
-                throw abortFailure;
-              }
             }
+          }
+          if (abortFailure) {
+            throw abortFailure;
           }
         });
       },

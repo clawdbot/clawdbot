@@ -24,7 +24,6 @@ type EmbeddedRunReplyItem = {
   presentation?: ReplyPayload["presentation"];
   interactive?: ReplyPayload["interactive"];
   channelData?: Record<string, unknown>;
-  nonTerminalToolErrorWarning?: boolean;
   sourceReplyMirror?: { idempotencyKey?: string; transcriptOwner?: true };
 };
 

@@ -19,6 +19,7 @@ import {
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
 import {
   parseManagedOutgoingArtifactId,
   resolveManagedOutgoingMediaArtifactDownload,
@@ -257,7 +258,7 @@ function collectArtifactsFromMessage(params: {
   if (params.taskId && messageTaskId !== params.taskId) {
     return;
   }
-  const content = Array.isArray(msg.content) ? msg.content : [];
+  const content = readAssistantDisplayContent(msg);
   for (let contentIndex = 0; contentIndex < content.length; contentIndex += 1) {
     const block = asOptionalRecord(content[contentIndex]);
     if (!block || !isArtifactBlock(block)) {
@@ -347,11 +348,6 @@ async function loadArtifacts(
         includeDownloadData: opts.includeDownloadData,
         downloadArtifactId: opts.downloadArtifactId,
       });
-    },
-    {
-      mode: "full",
-      reason: "artifact query transcript scan",
-      cache: "skip",
     },
   );
   return {

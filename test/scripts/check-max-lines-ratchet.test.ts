@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   collectCurrentSuppressionState,
+  collectLintDisableDirectives,
   hasAllRuleDisable,
   hasMaxLinesDisable,
   isGovernedSourcePath,
@@ -61,6 +62,28 @@ afterEach(() => {
 });
 
 describe("check-max-lines-ratchet", () => {
+  it.each(["\n", "\r\n"])("preserves directive discovery with %j line endings", (newline) => {
+    const source = [
+      'const text = "\u{1f680} /* oxlint-disable max-lines */";',
+      "const template = `// eslint-disable max-lines`;",
+      "function example() {",
+      "  /* oxlint-disable no-console */",
+      "} // eslint-disable no-debugger",
+      "consume(",
+      "  1",
+      "  // oxlint-disable no-console",
+      ");",
+      "// eslint-disable max-lines, eqeqeq",
+    ].join(newline);
+
+    expect(collectLintDisableDirectives(source)).toEqual([
+      ["no-debugger"],
+      ["no-console"],
+      ["no-console"],
+      ["max-lines", "eqeqeq"],
+    ]);
+  });
+
   it("recognizes suppressions without matching reason prose", () => {
     expect(hasMaxLinesDisable("/* oxlint-disable max-lines -- TODO: split. */\n")).toBe(true);
     expect(hasMaxLinesDisable("// eslint-disable-next-line no-console, max-lines\n")).toBe(true);

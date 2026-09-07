@@ -26,12 +26,27 @@ const moveDestinationMocks = vi.hoisted(() => ({
     storePath: "/tmp/openclaw-worker-placement-session.sqlite",
   })),
   resolveSessionRuntime: vi.fn(() => "codex"),
-  resolveSessionTarget: vi.fn(() => ({
-    config: {},
-    entry: {},
-    target: { agentId: "main", canonicalKey: "agent:main:move-source" },
-    worktree: { path: "/gateway/workspace" },
-  })),
+  resolveSessionTarget: vi.fn(
+    (
+      _params: Parameters<
+        typeof import("./server-worker-placement-session-target.js").resolveWorkerPlacementSessionTarget
+      >[0],
+    ): ReturnType<
+      typeof import("./server-worker-placement-session-target.js").resolveWorkerPlacementSessionTarget
+    > => ({
+      config: {},
+      entry: {},
+      target: {
+        agentId: "main",
+        canonicalKey: "agent:main:move-source",
+        store: {},
+        storeKeys: ["agent:main:move-source"],
+        storePath: "/tmp/openclaw-worker-placement-session.sqlite",
+      },
+      worktree: { id: "worktree-recovery", path: "/gateway/workspace" },
+      workspace: { kind: "local", path: "/gateway/workspace" },
+    }),
+  ),
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => {

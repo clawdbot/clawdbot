@@ -1,5 +1,6 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { collectBaseArrayPaths } from "../../../../src/config/patch-replace-paths.js";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../format-error.ts";
 import type { RuntimeConfigCapability } from "./runtime-config-capability.ts";
@@ -19,7 +20,9 @@ export type McpServerSummary = {
   tls: "verify-off" | "mtls" | null;
 };
 
-export type McpServersPatchBuildResult = { patch: Record<string, unknown> } | { error: string };
+export type McpServersPatchBuildResult =
+  | { patch: Record<string, unknown>; replacePaths?: string[] }
+  | { error: string };
 
 function splitMcpCommandLine(value: string): string[] | null {
   const parts: string[] = [];
@@ -188,7 +191,10 @@ export function buildRemoveMcpServerPatch(
   name: string,
 ): McpServersPatchBuildResult {
   return Object.hasOwn(servers, name)
-    ? { patch: { [name]: null } }
+    ? {
+        patch: { [name]: null },
+        replacePaths: collectBaseArrayPaths(servers[name], `mcp.servers.${name}`),
+      }
     : { error: t("mcpServers.missing", { name }) };
 }
 
@@ -216,6 +222,7 @@ export async function patchMcpServers(
             options: {
               raw: { mcp: { servers: built.patch } },
               note: options.note,
+              ...(built.replacePaths?.length ? { replacePaths: built.replacePaths } : {}),
             },
           };
     });

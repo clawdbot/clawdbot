@@ -55,38 +55,43 @@ function packageRootLooksInstalled(root: string) {
   return root.replaceAll("\\", "/").endsWith("/node_modules/openclaw");
 }
 
-function smokeInInstalledLayoutIfNeeded() {
-  if (process.env[installedLayoutEnv] === "1" || packageRootLooksInstalled(packageRoot)) {
-    return;
-  }
-
+function smokeInInstalledLayout() {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-smoke-"));
   const nodeModulesRoot = path.join(tempRoot, "node_modules");
   const installedPackageRoot = path.join(nodeModulesRoot, "openclaw");
-  fs.mkdirSync(nodeModulesRoot, { recursive: true });
-  fs.symlinkSync(packageRoot, installedPackageRoot, "dir");
-
   try {
+    fs.mkdirSync(installedPackageRoot, { recursive: true });
+    fs.copyFileSync(
+      path.join(packageRoot, "package.json"),
+      path.join(installedPackageRoot, "package.json"),
+    );
+    fs.cpSync(path.join(packageRoot, "dist"), path.join(installedPackageRoot, "dist"), {
+      recursive: true,
+      mode: fs.constants.COPYFILE_FICLONE,
+    });
+    fs.symlinkSync(
+      fs.realpathSync(path.join(packageRoot, "node_modules")),
+      path.join(installedPackageRoot, "node_modules"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
     const result = spawnSync(
       process.execPath,
-      [
-        "--preserve-symlinks",
-        fileURLToPath(import.meta.url),
-        "--package-root",
-        installedPackageRoot,
-      ],
+      [fileURLToPath(import.meta.url), "--package-root", installedPackageRoot],
       {
         env: { ...process.env, [installedLayoutEnv]: "1" },
         stdio: "inherit",
       },
     );
-    process.exit(result.status ?? 1);
+    return result.status ?? 1;
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 }
 
-smokeInInstalledLayoutIfNeeded();
+if (process.env[installedLayoutEnv] !== "1" && !packageRootLooksInstalled(packageRoot)) {
+  // Let the layout owner's finally run before terminating this process.
+  process.exit(smokeInInstalledLayout());
+}
 
 async function importBuiltModule(absolutePath: string): Promise<unknown> {
   const imported: unknown = await import(pathToFileURL(absolutePath).href);

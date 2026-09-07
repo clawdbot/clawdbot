@@ -6,10 +6,7 @@ import type { Command } from "commander";
 import { FsSafeError, readRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { resolveBrowserActRequestTimeoutMs } from "../../browser/act-policy.js";
 import type { BrowserActRequest, BrowserFormField } from "../../browser/client-actions.types.js";
-import {
-  normalizeBrowserFormField,
-  normalizeBrowserFormFieldValue,
-} from "../../browser/form-fields.js";
+import { normalizeBrowserFormFields } from "../../browser/form-fields.js";
 import { callBrowserRequest, type BrowserParentOpts } from "../browser-cli-shared.js";
 import { danger, defaultRuntime } from "../core-api.js";
 
@@ -107,24 +104,7 @@ export async function readFields(opts: {
   if (!Array.isArray(parsed)) {
     throw new Error("fields must be an array");
   }
-  return parsed.map((entry, index) => {
-    if (!entry || typeof entry !== "object") {
-      throw new Error(`fields[${index}] must be an object`);
-    }
-    const rec = entry as Record<string, unknown>;
-    const parsedField = normalizeBrowserFormField(rec);
-    if (!parsedField) {
-      throw new Error(`fields[${index}] must include ref`);
-    }
-    if (
-      rec.value === undefined ||
-      rec.value === null ||
-      normalizeBrowserFormFieldValue(rec.value) !== undefined
-    ) {
-      return parsedField;
-    }
-    throw new Error(`fields[${index}].value must be string, number, boolean, or null`);
-  });
+  return normalizeBrowserFormFields(parsed);
 }
 
 /** Cap on batch action JSON read from files or stdin. */

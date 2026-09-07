@@ -5,7 +5,7 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-f
 import {
   buildSessionEntry,
   loadMemorySessionMetadata,
-  parseUsageCountedSessionIdFromFileName,
+  matchesSessionEntryPrefixHash,
   sessionPathForFile,
   statSessionEntrySync,
   type SessionTranscriptCorpusEntry,
@@ -95,11 +95,7 @@ type SessionIngestionScan = {
 type DayDisposition = "include" | "skip" | "block";
 
 function buildSessionScope(agentId: string, sessionId: string): string {
-  const logicalId =
-    parseUsageCountedSessionIdFromFileName(sessionId) ??
-    parseUsageCountedSessionIdFromFileName(`${sessionId}.jsonl`) ??
-    sessionId;
-  return `${agentId}:${logicalId}`;
+  return `${agentId}:${sessionId}`;
 }
 
 function sessionPathFromCorpus(entry: SessionTranscriptCorpusEntry): string {
@@ -118,7 +114,7 @@ export function sessionIngestionSourceFromCorpus(
   const scope =
     entry.transcriptSource === "sqlite"
       ? `${entry.agentId}:${sessionPath}`
-      : buildSessionScope(entry.agentId, path.basename(entry.sessionFile));
+      : buildSessionScope(entry.agentId, entry.sessionId);
   return {
     agentId: entry.agentId,
     absolutePath: entry.sessionFile,
@@ -325,12 +321,19 @@ export async function scanSessionIngestionSource(params: {
   ) {
     return emptyScan("unchanged", params.previous);
   }
-  const sameContent =
-    params.previous?.mtimeMs === fileFingerprint.mtimeMs &&
-    params.previous.size === fileFingerprint.size &&
-    params.previous.contentHash === terminalState.contentHash &&
-    params.previous.lineCount === lines.length;
-  const startIndex = sameContent
+  // Reuse the full hash for unchanged capped scans; only appends need a prefix hash.
+  const previousSnapshotMatches =
+    params.previous !== undefined &&
+    params.previous.contentHash.length > 0 &&
+    ((params.previous.lineCount === lines.length &&
+      params.previous.contentHash === terminalState.contentHash) ||
+      (params.previous.lineCount < lines.length &&
+        matchesSessionEntryPrefixHash(
+          entry,
+          params.previous.lineCount,
+          params.previous.contentHash,
+        )));
+  const startIndex = previousSnapshotMatches
     ? Math.max(0, Math.min(params.previous?.lastContentLine ?? 0, lines.length))
     : 0;
   const seen = new Set(params.seenMessages[params.source.scope] ?? []);

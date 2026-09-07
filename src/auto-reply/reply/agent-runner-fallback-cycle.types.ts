@@ -4,6 +4,7 @@ import type { DeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import type { ContextEngineLogicalTurnLease } from "../../agents/harness/context-engine-logical-turn.js";
+import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ThinkLevel } from "../thinking.js";
@@ -12,6 +13,7 @@ import type {
   AgentTurnCompaction,
   AgentTurnInternalResult,
   AgentTurnParams,
+  CompletedAgentAuthSelection,
   EmbeddedAgentRunResult,
   RuntimeFallbackAttempt,
 } from "./agent-runner-execution.types.js";
@@ -32,11 +34,13 @@ export type AgentFallbackCandidateCommonParams = {
   runId: string;
   runAbortSignal?: AbortSignal;
   runLane: RunEmbeddedAgentParams["lane"];
+  isFallbackRetry: boolean;
   isFinalFallbackAttempt?: boolean;
   suppressQueuedUserPersistenceForCandidate: boolean;
   userTurnTranscriptRecorder: RunEmbeddedAgentParams["userTurnTranscriptRecorder"];
   contextEngineLogicalTurnLease: ContextEngineLogicalTurnLease;
   onContextEngineTurnCandidate: RunEmbeddedAgentParams["onContextEngineTurnCandidate"];
+  assistantErrorTranscript: RunEmbeddedAgentParams["assistantErrorTranscript"];
   notifyUserMessagePersisted: () => void;
   fastModeStartedAtMs: number;
   fastModeAutoProgressState: FastModeAutoProgressState;
@@ -55,8 +59,12 @@ export type AgentFallbackCandidateCommonParams = {
 };
 
 export type AgentFallbackCycleState = {
+  maintenanceAuthProfile?: CompletedAgentAuthSelection;
+  compactionRequestBudget?: CompactionRequestBudget;
   deferredLifecycle: DeferredEmbeddedRunLifecycleManager;
   lifecycleGeneration: string;
+  /** Turn admission time; terminal backstops must not stamp failure time as the start. */
+  turnStartedAtMs: number;
   compaction: AgentTurnCompaction;
   /** Failure attribution only; model start does not prove current token freshness. */
   postCompactionModelAttempted: boolean;
@@ -96,7 +104,7 @@ export type AgentFallbackCycleParams = {
   runtimeConfig: OpenClawConfig;
   liveModelSwitchRuntimeEntry?: Pick<
     SessionEntry,
-    "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked"
+    "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked" | "pluginOwnerId"
   >;
   runId: string;
   runAbortSignal?: AbortSignal;

@@ -16,6 +16,14 @@ describe("worker portal RPC authority", () => {
     );
     const request = { toolCallId: "portal-call", action: "open" as const, port: 3000 };
 
+    await expect(
+      workerService.executeSessionTool(identity, "portal", {
+        toolCallId: "wrong-family",
+        arguments: { action: "read", artifact_path: "scripts/helper.sh" },
+      }),
+    ).resolves.toEqual({ ok: false, closeReason: "invalid-frame" });
+    expect(executeSessionTool).not.toHaveBeenCalled();
+
     await expect(workerService.executeSessionTool(identity, "portal", request)).resolves.toEqual({
       ok: true,
       result,

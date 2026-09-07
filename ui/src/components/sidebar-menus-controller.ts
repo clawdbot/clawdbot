@@ -1,4 +1,5 @@
 import { nothing, type ReactiveController, type ReactiveControllerHost } from "lit";
+import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import type { AgentIdentityResult } from "../api/types.ts";
 import {
   cancelRoutePreload,
@@ -12,14 +13,15 @@ import type { ThemeMode } from "../app/theme.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import {
-  scopedSessionPullRequestKey,
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
 } from "../lib/session-pull-requests.ts";
+import { parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
-import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
+import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
+import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import { SidebarCatalogMenuController } from "./app-sidebar-catalog-menu.ts";
 import { isSidebarRouteActive, renderSidebarNavRoute } from "./app-sidebar-nav-menus.ts";
 import type {
@@ -28,7 +30,6 @@ import type {
   SidebarSessionMenuState,
   SidebarSessionSortMode,
 } from "./app-sidebar-session-types.ts";
-import type { SidebarWorkboardBoard, SidebarWorkboardRenderers } from "./app-sidebar-workboard.ts";
 import type { SessionDataController } from "./session-data-controller.ts";
 import { fetchSessionMenuWork } from "./session-menu-work.ts";
 import type { SessionMenuWork } from "./session-menu.ts";
@@ -51,18 +52,23 @@ type SidebarMenuAgent = {
   identity?: { name?: string; emoji?: string; avatar?: string; avatarUrl?: string };
 };
 
+type MenuPosition = { x: number; y: number };
+type CatalogMenuPosition = MenuPosition & { catalogId: string };
+
 interface SidebarMenusControllerState {
   customizeMenuPosition: { x: number; y: number } | null;
   moreMenuPosition: { x: number; y: number } | null;
   sessionMenu: SidebarSessionMenuState | null;
   sessionMenuWork: SessionMenuWork | null;
   sessionGroupMenu: SidebarSessionGroupMenuState | null;
-  sessionSortMenuPosition: { x: number; y: number } | null;
-  catalogViewMenuPosition: { catalogId: string; x: number; y: number } | null;
+  sessionSortMenuPosition: MenuPosition | null;
+  catalogViewMenuPosition: CatalogMenuPosition | null;
   agentMenuPosition: { x: number; top: number } | null;
   agentMenuInteractionState: AgentMenuInteractionState;
   identityMenuPosition: { x: number; bottom: number; width: number } | null;
 }
+
+export type SidebarFilterMenuView = "root" | "specific-owner";
 
 type SidebarMenusRenderer = {
   renderSidebarAgentMenuForController(controller: SidebarMenusController): unknown;
@@ -78,7 +84,6 @@ type SidebarMenusRenderer = {
 interface SidebarMenusControllerHost
   extends ReactiveControllerHost, SessionOrganizerControllerHost {
   readonly activeRouteId?: NavigationRouteId;
-  readonly activeWorkboardBoardId: string;
   readonly basePath: string;
   readonly canPairDevice: boolean;
   readonly connected: boolean;
@@ -105,6 +110,7 @@ interface SidebarMenusControllerHost
       | "sessionResultsByAgent"
       | "sessionsLoading"
       | "sessionsResult"
+      | "invalidateSessionCatalogs"
     >;
   readonly sessionDataContext: ApplicationContext<RouteId> | undefined;
   readonly sessionOrganizer: SessionOrganizerController;
@@ -130,8 +136,7 @@ interface SidebarMenusControllerHost
   setSessionOwnerFilter(ownerId: string | null, involvingMe?: boolean): void;
   readonly terminalAvailable: boolean;
   readonly themeMode: ThemeMode;
-  readonly workboardBoards: readonly SidebarWorkboardBoard[];
-  readonly workboardRenderers?: SidebarWorkboardRenderers;
+  pluginNavigation(): ControlUiRegistration<ControlUiNavigationItem>[];
   activeChipAgent(): {
     activeId: string;
     agent: SidebarMenuAgent | undefined;
@@ -159,8 +164,9 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
   sessionMenu: SidebarSessionMenuState | null = null;
   sessionMenuWork: SessionMenuWork | null = null;
   sessionGroupMenu: SidebarSessionGroupMenuState | null = null;
-  sessionSortMenuPosition: { x: number; y: number } | null = null;
-  catalogViewMenuPosition: { catalogId: string; x: number; y: number } | null = null;
+  sessionSortMenuPosition: MenuPosition | null = null;
+  catalogViewMenuPosition: CatalogMenuPosition | null = null;
+  filterMenuView: SidebarFilterMenuView = "root";
   agentMenuPosition: { x: number; top: number } | null = null;
   // Anchored by its bottom edge so the footer menu grows upward regardless of height.
   identityMenuPosition: { x: number; bottom: number; width: number } | null = null;
@@ -193,6 +199,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     },
   );
   readonly catalogMenu: SidebarCatalogMenuController;
+  pluginActionLifetime = new AbortController();
 
   constructor(readonly host: SidebarMenusControllerHost) {
     host.addController(this);
@@ -201,15 +208,41 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
       beforeOpen: () => void this.dismissTransientMenus(),
       requestUpdate: () => host.requestUpdate(),
       terminalAvailable: () => host.terminalAvailable,
+      beginMutation: () => host.sessionData.beginSessionMutation(),
+      isMutationCurrent: (scope) => host.sessionData.isSessionMutationScopeCurrent(scope),
+      archive: (scope, params) => scope.client.request("sessions.catalog.archive", params),
+      afterDelete: async (scope, key) => {
+        host.sessionData.invalidateSessionCatalogs();
+        if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+          return;
+        }
+        const active = parseCatalogSessionKey(host.getRouteSessionKey());
+        if (
+          host.activeRouteId === "chat" &&
+          active?.catalogId === key.catalogId &&
+          active.hostId === key.hostId &&
+          active.threadId === key.threadId
+        ) {
+          host.onNavigate?.("chat", {
+            pathname: pathForRoute("chat", host.basePath),
+            search: "",
+            hash: "",
+          });
+        }
+      },
       navigate: ({ routeId, navigation }) => host.onNavigate?.(routeId, navigation),
     });
   }
 
   hostConnected(): void {
+    if (this.pluginActionLifetime.signal.aborted) {
+      this.pluginActionLifetime = new AbortController();
+    }
     this.menuRendererImport.schedule();
   }
 
   hostDisconnected(): void {
+    this.pluginActionLifetime.abort();
     this.menuRendererImport.dispose();
     this.clearAgentMenuHoverTimers();
     for (const timer of this.routePreloadTimers.values()) {
@@ -394,7 +427,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     }
     const { selectedAgentId } = this.host.getSessionNavigationState();
     const store = sessionPullRequestsForGateway(context.gateway);
-    const pullRequestKey = scopedSessionPullRequestKey(
+    const pullRequestKey = scopedSessionArtifactKey(
       session.key,
       parseAgentSessionKey(session.key)?.agentId ?? selectedAgentId,
     );
@@ -449,6 +482,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     const rect = trigger.getBoundingClientRect();
     this.dismissTransientMenus();
     this.sessionSortMenuTrigger = trigger;
+    this.filterMenuView = "root";
     this.updateState("sessionSortMenuPosition", {
       x: Math.max(8, Math.min(rect.right, window.innerWidth - menuWidth - 8)),
       y: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - menuMaxHeight - 8)),
@@ -470,10 +504,35 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     const menuMaxHeight = 360;
     this.dismissTransientMenus();
     this.catalogViewMenuTrigger = trigger;
+    this.filterMenuView = "root";
     this.updateState("catalogViewMenuPosition", {
       catalogId,
       x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
       y: Math.max(8, Math.min(y, window.innerHeight - menuMaxHeight - 8)),
+    });
+  }
+
+  setFilterMenuView(view: SidebarFilterMenuView) {
+    if (!this.sessionSortMenuPosition && !this.catalogViewMenuPosition) {
+      return;
+    }
+    this.filterMenuView = view;
+    this.host.requestUpdate();
+    this.focusFilterMenuView();
+  }
+
+  private focusFilterMenuView() {
+    void this.host.updateComplete.then(() => {
+      const trigger = this.sessionSortMenuTrigger ?? this.catalogViewMenuTrigger;
+      const dropdown = trigger
+        ?.closest("openclaw-app-sidebar")
+        ?.querySelector<HTMLElement>(".sidebar-session-sort-menu");
+      const menu = dropdown?.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+      if (!dropdown || !menu) {
+        return;
+      }
+      menu.scrollTop = 0;
+      dropdown.querySelector<HTMLElement>("wa-dropdown-item:not([disabled])")?.focus();
     });
   }
 
@@ -697,9 +756,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     return renderSidebarNavRoute({
       routeId,
       href: sessionTarget?.href ?? pathForRoute(routeId, this.host.basePath),
-      active:
-        isSidebarRouteActive(this.host.activeRouteId, routeId) &&
-        !(routeId === "workboard" && this.activeWorkboardBoardIsPinned()),
+      active: isSidebarRouteActive(this.host.activeRouteId, routeId),
       onNavigate: () => {
         this.host.onNavigate?.(routeId, sessionTarget?.options);
       },
@@ -710,17 +767,5 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
 
   renderMoreMenu() {
     return this.menuRenderer?.renderSidebarMoreMenuForController(this) ?? nothing;
-  }
-
-  private activeWorkboardBoardIsPinned(): boolean {
-    return Boolean(
-      this.host.activeWorkboardBoardId &&
-      this.host
-        .reconciledSidebarZone()
-        .entries.some(
-          (entry) =>
-            entry.type === "workboard" && entry.boardId === this.host.activeWorkboardBoardId,
-        ),
-    );
   }
 }

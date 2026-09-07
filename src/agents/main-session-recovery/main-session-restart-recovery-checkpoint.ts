@@ -7,6 +7,7 @@ import {
   type SessionTranscriptTurnLifecyclePatch,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import {
   hasInterSessionUserProvenance,
   isCompletionReportInputProvenance,
@@ -21,7 +22,6 @@ import {
 import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
 import { isRestartAbortTailArtifact } from "./main-session-restart-recovery-resume-policy.js";
 import {
-  buildRestartRecoveryExpectedState,
   mainSessionRecoveryLog,
   resolveRestartRecoveryTerminalClientRunId,
 } from "./main-session-restart-recovery-shared.js";

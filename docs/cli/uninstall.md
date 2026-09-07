@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw uninstall` (remove gateway service + local
 read_when:
   - You want to remove the gateway service and/or local state
   - You want a dry-run first
-title: "Uninstall"
+title: "Uninstall CLI"
 ---
 
 # `openclaw uninstall`
@@ -25,7 +25,7 @@ removed; uninstall it via npm/pnpm separately.
 | `--dry-run`         | `false` | Print planned actions without removing files.        |
 
 With no scope flags, an interactive multiselect prompts for which components
-to remove (defaults to service, state, workspace preselected).
+to remove (defaults to the Gateway service only).
 
 ## Examples
 

@@ -1,10 +1,14 @@
 // Maintains channel catalog entries advertised by plugins.
 import { normalizeOptionalString as resolveOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
+import {
+  getCurrentPluginMetadataSnapshotState,
+  getGatewayPluginMetadataSnapshot,
+} from "./current-plugin-metadata-state.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import type { PluginPackageChannel, PluginPackageInstall } from "./manifest.js";
+import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 export type PluginChannelCatalogEntry = {
@@ -35,22 +39,19 @@ type ChannelCatalogParams = {
 export function listChannelCatalogEntries(
   params: ChannelCatalogParams = {},
 ): PluginChannelCatalogEntry[] {
-  // Preserve the ledger-read behavior for callers supplying an exact discovery.
-  if (params.discovery) {
-    resolveInstallRecords(params);
+  // The discovery owner retains each scope and its raw shadows. A validated
+  // Gateway-wide manifest union loses both workspace scope and trust alternatives.
+  let discovery = params.discovery;
+  if (!discovery) {
+    const installRecords = resolveInstallRecords(params);
+    discovery = discoverOpenClawPlugins({
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      extraPaths: params.extraPaths,
+      ...(installRecords && Object.keys(installRecords).length > 0 ? { installRecords } : {}),
+    });
   }
-  const snapshot =
-    !params.discovery && !params.installRecords ? getGatewayPluginMetadataSnapshot() : undefined;
-  // Keep bundled owners available to callers that exclude untrusted workspace shadows.
-  const candidates = snapshot
-    ? [
-        ...snapshot.plugins,
-        ...(snapshot.bundledManifestRegistry?.plugins ?? []).filter(
-          (bundled) => snapshot.byPluginId.get(bundled.id)?.rootDir !== bundled.rootDir,
-        ),
-      ]
-    : (params.discovery ?? resolveChannelCatalogDiscovery(params)).candidates;
-  return candidates.flatMap((candidate) => {
+  return discovery.candidates.flatMap((candidate) => {
     if (params.origin && candidate.origin !== params.origin) {
       return [];
     }
@@ -58,7 +59,11 @@ export function listChannelCatalogEntries(
     if (!channel?.id) {
       return [];
     }
-    const pluginId = "id" in candidate ? candidate.id : resolveChannelCatalogPluginId(candidate);
+    const pluginId =
+      resolveOptionalString(candidate.bundledManifest?.id) ??
+      resolveOptionalString(candidate.bundledManifestId) ??
+      resolveOptionalString(candidate.packageManifest?.plugin?.id) ??
+      resolveOptionalString(candidate.idHint);
     if (!pluginId) {
       return [];
     }
@@ -78,32 +83,20 @@ export function listChannelCatalogEntries(
   });
 }
 
-function resolveChannelCatalogDiscovery(params: ChannelCatalogParams) {
-  const installRecords = resolveInstallRecords(params);
-  return discoverOpenClawPlugins({
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    extraPaths: params.extraPaths,
-    ...(installRecords && Object.keys(installRecords).length > 0 ? { installRecords } : {}),
-  });
-}
-
-function resolveChannelCatalogPluginId(
-  candidate: PluginDiscoveryResult["candidates"][number],
-): string | undefined {
-  return (
-    resolveOptionalString(candidate.bundledManifest?.id) ??
-    resolveOptionalString(candidate.bundledManifestId) ??
-    resolveOptionalString(candidate.packageManifest?.plugin?.id) ??
-    resolveOptionalString(candidate.idHint)
-  );
-}
-
 function resolveInstallRecords(
   params: ChannelCatalogParams,
 ): Record<string, PluginInstallRecord> | undefined {
   if (params.installRecords || params.origin === "bundled") {
     return params.installRecords;
+  }
+  const snapshot = getGatewayPluginMetadataSnapshot();
+  if (
+    snapshot &&
+    getCurrentPluginMetadataSnapshotState().envFingerprint ===
+      resolvePluginMetadataEnvFingerprint(params.env)
+  ) {
+    // Ledger writes prepare the next boot; catalog reads retain this generation's package paths.
+    return snapshot.index.installRecords;
   }
   try {
     return loadInstalledPluginIndexInstallRecordsSync(params.env ? { env: params.env } : {});

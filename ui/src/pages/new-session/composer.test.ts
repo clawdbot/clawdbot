@@ -14,10 +14,11 @@ import {
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { adjustTextareaHeight } from "../chat/components/chat-composer-dom.ts";
+import { buildLocalUserMessage } from "../chat/user-message-content.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import { NewSessionComposerTextareaController } from "./composer.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
-import { renderNewSessionDraftComposer } from "./draft-composer.ts";
+import { renderNewSessionBody, renderNewSessionDraftComposer } from "./draft-composer.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 
 const attachmentDrafts: NewSessionAttachmentDraft[] = [];
@@ -32,11 +33,8 @@ function renderComposer(
     dictationActive?: boolean;
     dictationPreview?: string;
     dictationStatus?: TemplateResult;
-    terminalAction?: {
-      canStart: boolean;
-      disabledReason?: string;
-      onStart: () => void;
-    };
+    nativeTerminal?: boolean;
+    onUnsupportedAttachment?: () => void;
     submitting?: boolean;
     messageLocked?: boolean;
     visibility?: NewSessionVisibility;
@@ -88,7 +86,8 @@ function renderComposer(
         dictationActive: overrides.dictationActive,
         dictationPreview: overrides.dictationPreview,
         dictationStatus: overrides.dictationStatus,
-        terminalAction: overrides.terminalAction,
+        nativeTerminal: overrides.nativeTerminal,
+        onUnsupportedAttachment: overrides.onUnsupportedAttachment,
         submitting: overrides.submitting ?? false,
         textareaController,
         messageLocked: overrides.messageLocked,
@@ -148,6 +147,45 @@ afterEach(() => {
   replaceSlashCommands(buildFallbackSlashCommands());
 });
 
+describe("new-session submission preview", () => {
+  it.each([
+    { userId: "profile-alex", placement: "gutter" },
+    { userId: null, placement: "footer" },
+  ])("immediately shows the own-user avatar in the $placement", ({ userId, placement }) => {
+    const container = document.createElement("div");
+    const avatarUrl = "/api/users/profile-alex/avatar?v=1";
+    render(
+      renderNewSessionBody({
+        error: null,
+        pendingMessage: buildLocalUserMessage({
+          createdAt: 1,
+          text: "Hello from Alex",
+          sender: {
+            identity: { type: "profile", id: "profile-alex" },
+            name: "Alex",
+            profileAvatarUrl: avatarUrl,
+          },
+        }),
+        userId,
+        submitting: true,
+        renderDraft: () => html``,
+        onOpenImage: () => {},
+      }),
+      container,
+    );
+
+    const group = container.querySelector(".chat-group.user");
+    const avatar = group?.querySelector(
+      placement === "gutter"
+        ? ":scope > .chat-avatar-slot img"
+        : ":scope > .chat-group-footer > .chat-group-footer__meta .chat-author-avatar img",
+    );
+    expect(avatar?.getAttribute("src")).toBe(avatarUrl);
+    expect(group?.classList.contains("chat-group--with-footer")).toBe(true);
+    expect(group?.closest(".chat-thread--direct") !== null).toBe(placement === "footer");
+  });
+});
+
 describe("new-session composer keyboard submission", () => {
   it("opens slash commands and inserts the selected command with Enter", () => {
     replaceSlashCommands([
@@ -192,6 +230,55 @@ describe("new-session composer keyboard submission", () => {
     expect(message).toBe("/test-command ");
     expect(onSubmit).not.toHaveBeenCalled();
   });
+
+  it.each(["keyboard", "pointer"])(
+    "submits a selected non-skill command argument with %s",
+    (selection) => {
+      replaceSlashCommands([
+        {
+          key: "mode",
+          name: "mode",
+          description: "Choose a mode.",
+          args: "<mode>",
+          argOptions: ["fast", "careful"],
+        },
+      ]);
+      const onInput = vi.fn();
+      const onSubmit = vi.fn();
+      const { composer } = renderComposer({ onInput, onSubmit });
+      const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+      if (!textarea) {
+        throw new Error("Expected composer textarea");
+      }
+
+      textarea.value = "/mode";
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+      textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+      if (selection === "keyboard") {
+        textarea.dispatchEvent(
+          new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),
+        );
+      } else {
+        composer.querySelector<HTMLElement>(".slash-menu-item")?.click();
+      }
+
+      expect(onInput).toHaveBeenLastCalledWith("/mode ");
+      const fastOption = Array.from(
+        composer.querySelectorAll<HTMLElement>(".slash-menu-item"),
+      ).find((item) => item.querySelector(".slash-menu-name")?.textContent?.trim() === "fast");
+      expect(fastOption).toBeInstanceOf(HTMLElement);
+      if (selection === "keyboard") {
+        textarea.dispatchEvent(
+          new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),
+        );
+      } else {
+        fastOption?.click();
+      }
+
+      expect(onInput).toHaveBeenLastCalledWith("/mode fast");
+      expect(onSubmit).toHaveBeenCalledOnce();
+    },
+  );
 
   it("drops a pending skill completion when the selected agent changes", async () => {
     const response = createDeferred<CommandsListResult>();
@@ -603,41 +690,21 @@ describe("new-session composer start control", () => {
     expect(start?.getAttribute("aria-label")).toBe("Starting…");
   });
 
-  it("renders the terminal action as a direct square-terminal button on the right", () => {
-    const onStart = vi.fn();
-    const { composer } = renderComposer({
-      terminalAction: { canStart: true, onStart },
-    });
-    const trigger = composer.querySelector<HTMLButtonElement>(
-      ".new-session-page__start-menu-trigger",
-    );
-
-    expect(composer.querySelector(".new-session-page__start-split")).not.toBeNull();
-    expect(trigger?.disabled).toBe(false);
-    expect(trigger?.getAttribute("aria-label")).toBe("Start in terminal");
-    expect(trigger?.querySelector("svg")).not.toBeNull();
-    expect(
-      trigger?.previousElementSibling?.querySelector(".new-session-page__start-submit"),
-    ).not.toBeNull();
-    trigger?.click();
-    expect(onStart).toHaveBeenCalledOnce();
-  });
-
-  it("disables the terminal action with its existing tooltip reason pattern", () => {
-    const onStart = vi.fn();
-    const reason = "This Gateway does not support this session action.";
-    const { composer } = renderComposer({
-      terminalAction: { canStart: false, disabledReason: reason, onStart },
-    });
-    const trigger = composer.querySelector<HTMLButtonElement>(
-      ".new-session-page__start-menu-trigger",
-    );
-    const tooltips = composer.querySelectorAll<HTMLElement>("openclaw-tooltip");
-
-    expect(trigger?.disabled).toBe(true);
-    expect((tooltips[1] as HTMLElement & { content?: string })?.content).toBe(reason);
-    trigger?.click();
-    expect(onStart).not.toHaveBeenCalled();
+  it.each(["button", "Enter"])("native terminal %s uses the sole primary submission", (action) => {
+    const onSubmit = vi.fn();
+    const { composer } = renderComposer({ nativeTerminal: true, onSubmit });
+    const button = composer.querySelector<HTMLButtonElement>(".new-session-page__start-submit")!;
+    expect(button.getAttribute("aria-label")).toBe("Start in terminal");
+    expect(composer.querySelectorAll(".chat-send-btn")).toHaveLength(1);
+    expect(composer.querySelector('input[type="file"]')).toBeNull();
+    if (action === "button") {
+      button.click();
+    } else {
+      composer
+        .querySelector("textarea")!
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    }
+    expect(onSubmit).toHaveBeenCalledOnce();
   });
 });
 
@@ -747,6 +814,30 @@ describe("new-session composer sizing lifecycle", () => {
 });
 
 describe("new-session composer attachment drops", () => {
+  it("rejects native file drops and pastes visibly and keeps restored attachments removable", () => {
+    const onUnsupportedAttachment = vi.fn();
+    const { attachmentDraft, composer, rerender } = renderComposer({
+      nativeTerminal: true,
+      onUnsupportedAttachment,
+    });
+    const file = new File(["image"], "pic.png", { type: "image/png" });
+    const drop = createDragEvent("drop", [file]);
+    composer.dispatchEvent(drop);
+    expect(drop.defaultPrevented).toBe(true);
+    expect(onUnsupportedAttachment).toHaveBeenCalledOnce();
+    const paste = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(paste, "clipboardData", { value: { files: [file] } });
+    composer.querySelector("textarea")?.dispatchEvent(paste);
+    expect(paste.defaultPrevented).toBe(true);
+    expect(onUnsupportedAttachment).toHaveBeenCalledTimes(2);
+    expect(attachmentDraft.attachments).toEqual([]);
+    attachmentDraft.restore([{ id: "old", fileName: "old.txt", mimeType: "text/plain" }]);
+    rerender();
+    const remove = composer.querySelector<HTMLButtonElement>('[aria-label*="Remove"]');
+    expect(remove?.disabled).toBe(false);
+    remove?.click();
+    expect(attachmentDraft.attachments).toEqual([]);
+  });
   it("surfaces authorization reasons on the disabled submit control", () => {
     const { composer } = renderComposer({
       canSubmit: false,
@@ -912,6 +1003,18 @@ describe("new-session composer dictation insertion", () => {
 
     expect(textareaController.insertTranscript("please")).toBe("ship please it");
     expect(textarea.value).toBe("ship please it");
+  });
+
+  it("preserves edits made after Stop before inserting a late transcript", () => {
+    const { composer, textareaController } = renderComposer({ message: "ship it" });
+    const textarea = draftTextarea(composer, "ship it", 4);
+    textareaController.captureSelection();
+    textarea.value = "ship it today";
+    textarea.selectionStart = 4;
+    textarea.selectionEnd = 4;
+
+    expect(textareaController.insertTranscript("please", true)).toBe("ship please it today");
+    expect(textarea.value).toBe("ship please it today");
   });
 
   it("replaces the range the writer had highlighted", () => {

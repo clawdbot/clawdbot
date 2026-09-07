@@ -14,6 +14,10 @@ import { OpenClawSchema } from "./zod-schema.js";
 
 const nonBooleanConfigCases = [
   {
+    name: "gateway.controlUi.communityInvite",
+    config: { gateway: { controlUi: { communityInvite: "yes" } } },
+  },
+  {
     name: "gateway.controlUi.sessionObserver",
     config: {
       gateway: {
@@ -633,11 +637,11 @@ describe("gateway.controlUi.allowExternalEmbedUrls", () => {
   });
 });
 
-describe("gateway.controlUi.sessionObserver", () => {
+describe.each(["sessionObserver", "communityInvite"])("gateway.controlUi.%s", (key) => {
   it("accepts boolean values", () => {
     for (const value of [true, false]) {
       const result = OpenClawSchema.safeParse({
-        gateway: { controlUi: { sessionObserver: value } },
+        gateway: { controlUi: { [key]: value } },
       });
       expect(result.success).toBe(true);
     }
@@ -729,6 +733,19 @@ describe("plugins.entries.*.hooks", () => {
       expect(result.success).toBe(false);
     }
   });
+});
+
+describe("mcp.sessionIdleTtlMs", () => {
+  it.each([0, 1000.9, 7_200_000])("accepts the historical value %s", (sessionIdleTtlMs) => {
+    expect(OpenClawSchema.safeParse({ mcp: { sessionIdleTtlMs } }).success).toBe(true);
+  });
+
+  it.each([-1, Number.NaN, Number.POSITIVE_INFINITY, "1000"])(
+    "rejects invalid idle TTL %s",
+    (sessionIdleTtlMs) => {
+      expect(OpenClawSchema.safeParse({ mcp: { sessionIdleTtlMs } }).success).toBe(false);
+    },
+  );
 });
 
 describe("mcp.apps.enabled", () => {

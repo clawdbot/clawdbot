@@ -1,5 +1,6 @@
 // Codex tests cover client plugin behavior.
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { SemVer } from "semver";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CodexAppServerClient,
@@ -14,6 +15,7 @@ const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 660_000;
 
 describe("CodexAppServerClient", () => {
   const clients: CodexAppServerClient[] = [];
+  const newerMinorVersion = new SemVer(CODEX_APP_SERVER_VERSION).inc("minor").version;
 
   function startInitialize() {
     const harness = createClientHarness();
@@ -36,6 +38,35 @@ describe("CodexAppServerClient", () => {
     }
     clients.length = 0;
   });
+
+  it.each([true, false])(
+    "bounds image frames only when the transport declares a limit (%s)",
+    async (bounded) => {
+      const harness = createClientHarness({
+        maxFrameBytes: bounded ? 16 * 1024 * 1024 : undefined,
+      });
+      clients.push(harness.client);
+      const input = [
+        { type: "image", url: `data:image/png;base64,${"A".repeat(16 * 1024 * 1024)}` },
+      ];
+      const request = harness.client.request("turn/start", { threadId: "thread", input });
+      if (bounded) {
+        const error = await request.catch((requestError: unknown) => requestError);
+        expect(error).toBeInstanceOf(Error);
+        expect(error).toMatchObject({ message: expect.stringContaining("transport frame limit") });
+        expect(isCodexAppServerIndeterminateTransportError(error)).toBe(false);
+        expect(harness.writes).toEqual([]);
+      } else {
+        const sent = JSON.parse(await harness.waitForWrite(0));
+        harness.send({ id: sent.id, result: { turn: { id: "turn" } } });
+        await expect(request).resolves.toEqual({ turn: { id: "turn" } });
+      }
+      const next = harness.client.request("model/list", {});
+      const sent = JSON.parse(await harness.waitForWrite(bounded ? 0 : 1));
+      harness.send({ id: sent.id, result: { models: [] } });
+      await expect(next).resolves.toEqual({ models: [] });
+    },
+  );
 
   it("routes request responses by id", async () => {
     const harness = createClientHarness();
@@ -500,9 +531,11 @@ describe("CodexAppServerClient", () => {
 
   it.each([
     ["0.149.0", 0],
-    ["0.152.0-alpha.4", 1],
-    ["0.152.0", 1],
-    ["1.0.0", 1],
+    [`${CODEX_APP_SERVER_VERSION}-alpha.4`, 0],
+    [CODEX_APP_SERVER_VERSION, 0],
+    [`${newerMinorVersion}-alpha.4`, 1],
+    [newerMinorVersion, 1],
+    [new SemVer(CODEX_APP_SERVER_VERSION).inc("major").version, 1],
   ])("accepts app-server version %s for normal startup validation", async (version, warnings) => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const { harness, initializing, outbound } = startInitialize();

@@ -1,3 +1,4 @@
+import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { sanitizeForPromptLiteral } from "../agents/sanitize-for-prompt.js";
 import { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
 import { summarizeApprovalScope } from "../infra/approval-scope.js";
@@ -12,10 +13,17 @@ import {
 } from "../infra/exec-approval-reply.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { formatFencedCodeBlock } from "../shared/markdown-code.js";
+import type { createChannelApprovalAuth } from "./approval-auth-helpers.js";
+import type {
+  ApprovalResolveResult,
+  resolveApprovalOverGateway,
+} from "./approval-gateway-runtime.js";
+import { readApprovalReactionDecisionList } from "./approval-reaction-binding.js";
 import {
   buildApprovalPendingReplyPayload,
   buildPluginApprovalPendingReplyPayload,
 } from "./approval-renderers.js";
+import { isApprovalNotFoundError } from "./error-runtime.js";
 import type { ReplyPayload } from "./reply-payload.js";
 export { shouldSuppressLocalNativeExecApprovalPrompt } from "./approval-native-helpers.js";
 export {
@@ -83,6 +91,76 @@ export type ApprovalReactionTargetResolution<TRoute = unknown> =
     approvalKind: ChannelApprovalKind;
     route?: TRoute;
   };
+
+/** Validate the shared persisted fields without changing transport-owned metadata. */
+export function readApprovalReactionTargetRecord(
+  target: unknown,
+): (ApprovalReactionTargetRecord & { approvalKind: ChannelApprovalKind }) | null {
+  if (
+    !isRecord(target) ||
+    typeof target.approvalId !== "string" ||
+    (target.approvalKind !== "exec" && target.approvalKind !== "plugin")
+  ) {
+    return null;
+  }
+  const allowedDecisions = readApprovalReactionDecisionList(target.allowedDecisions);
+  return allowedDecisions
+    ? { approvalId: target.approvalId, approvalKind: target.approvalKind, allowedDecisions }
+    : null;
+}
+
+/** Admit an explicit approver and retire transport bindings only on terminal resolution. */
+export async function settleApprovalReaction(params: {
+  request: Parameters<typeof resolveApprovalOverGateway>[0] & {
+    channel: string;
+    accountId: string;
+    senderId: string;
+  };
+  approvers: readonly string[];
+  authorizeActorAction: ReturnType<
+    typeof createChannelApprovalAuth
+  >["approvalAuth"]["authorizeActorAction"];
+  loadResolver: () => Promise<typeof resolveApprovalOverGateway>;
+  clearTarget: () => void;
+  onResolved: (result: ApprovalResolveResult) => void;
+  onError?: (error: unknown) => void;
+  logVerboseMessage?: (message: string) => void;
+}): Promise<"denied" | "resolved" | "not-found"> {
+  const { request, logVerboseMessage } = params;
+  const { channel, approvalId, senderId } = request;
+  if (params.approvers.length === 0) {
+    logVerboseMessage?.(
+      `${channel}: approval reaction denied id=${approvalId}; reactions require explicit approvers`,
+    );
+    return "denied";
+  }
+  if (!params.authorizeActorAction({ ...request, action: "approve" }).authorized) {
+    logVerboseMessage?.(`${channel}: approval reaction denied id=${approvalId} sender=${senderId}`);
+    return "denied";
+  }
+  const resolve = await params.loadResolver();
+  try {
+    const result = await resolve(request);
+    // Losing surfaces receive the canonical winner too; both outcomes retire controls.
+    params.clearTarget();
+    params.onResolved(result);
+    return "resolved";
+  } catch (error) {
+    if (isApprovalNotFoundError(error)) {
+      params.clearTarget();
+      logVerboseMessage?.(
+        `${channel}: approval reaction ignored for expired approval id=${approvalId} sender=${senderId}`,
+      );
+      return "not-found";
+    }
+    params.onError?.(error);
+    logVerboseMessage?.(
+      `${channel}: approval reaction failed id=${approvalId} sender=${senderId}: ${String(error)}`,
+    );
+    // The channel's ingress/poller owns replay; retain the binding and propagate failure.
+    throw error;
+  }
+}
 
 /** Reply payload enriched with reaction decision metadata. */
 export type ApprovalReactionPromptPayload = ReplyPayload & {
@@ -361,6 +439,16 @@ function buildApprovalReactionPromptText(params: {
     info.push(`**Expires in:** ${formatExecApprovalExpiresIn(view.expiresAtMs, params.nowMs)}`);
     info.push(`**Full id:** \`${view.approvalId}\``);
     sections.push(info.join("\n"));
+  } else if (view.approvalKind === "system-agent") {
+    const details = [
+      "**OpenClaw change requires approval**",
+      `**Change:** ${view.operationSummary}`,
+    ];
+    if (view.agentId) {
+      details.push(`**Agent:** ${view.agentId}`);
+    }
+    details.push(`**Expires in:** ${formatExecApprovalExpiresIn(view.expiresAtMs, params.nowMs)}`);
+    sections.push(details.join("\n"));
   } else {
     const header = ["**Plugin approval required**", `**ID:** ${view.approvalId}`];
     sections.push(header.join("\n"));
@@ -492,6 +580,25 @@ export function buildApprovalReactionPendingContent(params: {
         ...payload,
         text: replaceApprovalIdPlaceholder(payload.text, request.id),
       }),
+    };
+  }
+  if (params.view.approvalKind === "system-agent") {
+    if (request.approvalKind !== "system-agent") {
+      throw new Error("approval request and view kinds do not match");
+    }
+    return {
+      reactionPayload,
+      manualFallbackPayload: withoutPresentation(
+        buildApprovalPendingReplyPayload({
+          approvalKind: "system-agent",
+          approvalId: request.id,
+          approvalSlug: request.id.slice(0, 8),
+          text: reactionPayload.text ?? "",
+          agentId: params.view.agentId ?? null,
+          allowedDecisions: reactionPayload.allowedDecisions,
+          sessionKey: request.request.sessionKey ?? null,
+        }),
+      ),
     };
   }
   if (request.approvalKind !== "exec") {

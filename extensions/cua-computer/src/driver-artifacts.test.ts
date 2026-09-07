@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { inspectCuaDriverArtifacts } from "./driver-artifact-verification.js";
 
 const temporaryDirectories: string[] = [];
@@ -147,14 +148,40 @@ describe("verifyInstalledCuaDriverArtifacts (real resolution)", () => {
   // threw PATH_NOT_EXPORTED and every real install reported
   // COMPUTER_DRIVER_PACKAGE_MISSING even with the packages present.
   it("resolves the installed SDK package through import conditions", async () => {
-    const { verifyInstalledCuaDriverArtifacts } = await import("./driver-artifacts.js");
-    const result = verifyInstalledCuaDriverArtifacts();
-    if (process.platform === "linux" || process.platform === "win32") {
-      expect(result).toMatchObject({ ok: true, applicable: true });
-    } else if (!result.ok) {
-      // Other hosts are out of the fulfiller's scope but must never report a
-      // missing package for an installed SDK.
-      expect(result.code).not.toBe("COMPUTER_DRIVER_PACKAGE_MISSING");
+    vi.resetModules();
+    const artifactVerification = await import("./driver-artifact-verification.js");
+    const inspect = vi.spyOn(artifactVerification, "inspectCuaDriverArtifacts");
+    try {
+      const { verifyInstalledCuaDriverArtifacts } = await import("./driver-artifacts.js");
+      const result = verifyInstalledCuaDriverArtifacts();
+      if (process.platform === "linux" || process.platform === "win32") {
+        expect(result).toMatchObject({ ok: true, applicable: true });
+      } else if (!result.ok) {
+        // Other hosts are out of the fulfiller's scope but must never report a
+        // missing package for an installed SDK.
+        expect(result.code).not.toBe("COMPUTER_DRIVER_PACKAGE_MISSING");
+      }
+
+      // macOS does not verify native digests, but must still exercise the real
+      // dependency owner used by Linux/Windows isolated installs.
+      const inspection = inspect.mock.lastCall?.[0];
+      const resolvePackageJson = inspection?.resolvePackageJson;
+      const sdkManifestPath = resolvePackageJson?.("@trycua/cua-driver");
+      if (!sdkManifestPath || !resolvePackageJson) {
+        throw new Error("Installed CUA Driver SDK resolution was not observed");
+      }
+      const platformSuffix =
+        process.platform === "linux"
+          ? `-${inspection?.linuxLibc}`
+          : process.platform === "win32"
+            ? "-msvc"
+            : "";
+      const platformPackage = `@trycua/cua-driver-${process.platform}-${process.arch}${platformSuffix}`;
+      expect(resolvePackageJson(platformPackage)).toBe(
+        createRequire(sdkManifestPath).resolve(`${platformPackage}/package.json`),
+      );
+    } finally {
+      inspect.mockRestore();
     }
   });
 });

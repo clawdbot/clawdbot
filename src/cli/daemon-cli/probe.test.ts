@@ -323,7 +323,6 @@ describe("probeGatewayStatus", () => {
       expect(probeGatewayMock).not.toHaveBeenCalled();
       expect(callGatewayMock).toHaveBeenCalledOnce();
       expect(callGatewayMock).toHaveBeenCalledWith({
-        url: "ws://127.0.0.1:19191",
         localPortOverride,
         token: "temp-token",
         password: undefined,
@@ -332,7 +331,9 @@ describe("probeGatewayStatus", () => {
         method: "status",
         timeoutMs: 5_000,
         sharedStateMode: "read-only",
+        skipImplicitAuth: true,
         configPath: "/tmp/openclaw-daemon/openclaw.json",
+        serviceTargetUrl: "ws://127.0.0.1:19191",
         onHelloOk: expect.any(Function),
       });
     },
@@ -356,7 +357,6 @@ describe("probeGatewayStatus", () => {
     expect(probeGatewayMock).not.toHaveBeenCalled();
     expect(callGatewayMock).toHaveBeenCalledOnce();
     expect(callGatewayMock).toHaveBeenCalledWith({
-      url: "ws://127.0.0.1:19191",
       token: "temp-token",
       password: undefined,
       tlsFingerprint: undefined,
@@ -366,6 +366,8 @@ describe("probeGatewayStatus", () => {
       method: "status",
       timeoutMs: 30_000,
       sharedStateMode: "read-only",
+      skipImplicitAuth: true,
+      serviceTargetUrl: "ws://127.0.0.1:19191",
       onHelloOk: expect.any(Function),
     });
   });
@@ -406,7 +408,6 @@ describe("probeGatewayStatus", () => {
     });
 
     expect(callGatewayMock).toHaveBeenCalledWith({
-      url: "ws://127.0.0.1:19191",
       token: "temp-token",
       password: undefined,
       tlsFingerprint: undefined,
@@ -414,8 +415,10 @@ describe("probeGatewayStatus", () => {
       method: "status",
       timeoutMs: 5_000,
       sharedStateMode: "read-only",
+      skipImplicitAuth: true,
       onHelloOk: expect.any(Function),
       localPortOverride: undefined,
+      serviceTargetUrl: "ws://127.0.0.1:19191",
     });
   });
 
@@ -624,5 +627,60 @@ describe("probeGatewayStatus", () => {
       error: "missing scope: operator.admin",
     });
     expect(probeGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("passes a service-derived url as serviceTargetUrl without triggering the explicit-override guard", async () => {
+    callGatewayMock.mockReset();
+    probeGatewayMock.mockReset();
+    callGatewayMock.mockImplementationOnce(async (opts) => {
+      opts.onHelloOk?.({
+        server: { version: "2026.8.1", buildId: "build-1", connId: "conn-1" },
+        auth: { role: "operator", scopes: ["operator.admin"] },
+      });
+      return { status: "ok" };
+    });
+
+    const serviceUrl = "wss://service.example:19191";
+    await probeGatewayStatus({
+      url: serviceUrl,
+      token: "temp-token",
+      timeoutMs: 5_000,
+      requireRpc: true,
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledOnce();
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({ serviceTargetUrl: serviceUrl }),
+    );
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({ url: expect.anything() }),
+    );
+  });
+
+  it("passes an explicit CLI --url override to callGateway", async () => {
+    callGatewayMock.mockReset();
+    probeGatewayMock.mockReset();
+    callGatewayMock.mockImplementationOnce(async (opts) => {
+      opts.onHelloOk?.({
+        server: { version: "2026.8.1", buildId: "build-1", connId: "conn-1" },
+        auth: { role: "operator", scopes: ["operator.admin"] },
+      });
+      return { status: "ok" };
+    });
+
+    const urlOverride = "wss://explicit.example:19001";
+    await probeGatewayStatus({
+      url: "ws://127.0.0.1:19191",
+      urlOverride,
+      token: "explicit-token",
+      timeoutMs: 5_000,
+      requireRpc: true,
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledOnce();
+    expect(callGatewayMock).toHaveBeenCalledWith(expect.objectContaining({ url: urlOverride }));
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({ serviceTargetUrl: expect.anything() }),
+    );
   });
 });

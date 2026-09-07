@@ -82,7 +82,9 @@ Model refs follow the pattern `openrouter/<provider>/<model>`. For the full list
 available providers and models, see [/concepts/model-providers](/concepts/model-providers).
 </Note>
 
-Bundled fallback models, used when live catalog discovery is unavailable:
+Bundled starter models enrich a nonempty public catalog. A failed live request
+reports a discovery failure rather than substituting these rows; a successful
+empty response stays empty:
 
 | Model ref                         | Notes                        |
 | --------------------------------- | ---------------------------- |

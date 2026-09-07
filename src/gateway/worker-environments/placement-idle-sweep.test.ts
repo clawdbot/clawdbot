@@ -157,10 +157,13 @@ describe("worker placement idle suspension", () => {
         await releaseOperation.promise;
         return active;
       };
-      const coordinated = coordinateWorkerPlacementDispatch({
-        ...harness.service,
-        ...(kind === "dispatch" ? { dispatch: blockedOperation } : { move: blockedOperation }),
-      });
+      const coordinated = coordinateWorkerPlacementDispatch(
+        {
+          ...harness.service,
+          ...(kind === "dispatch" ? { dispatch: blockedOperation } : { move: blockedOperation }),
+        },
+        (_request, run) => run(),
+      );
       const inFlight =
         kind === "dispatch"
           ? coordinated.dispatch(REQUEST)
@@ -323,14 +326,17 @@ describe("worker placement idle suspension", () => {
       getSessionWorkAdmissionCheck: async () => () => false,
     });
     const active = await harness.service.dispatch(REQUEST);
-    const coordinated = coordinateWorkerPlacementDispatch({
-      ...harness.service,
-      dispatch: async () => {
-        dispatchStarted.resolve();
-        await releaseDispatch.promise;
-        return active;
+    const coordinated = coordinateWorkerPlacementDispatch(
+      {
+        ...harness.service,
+        dispatch: async () => {
+          dispatchStarted.resolve();
+          await releaseDispatch.promise;
+          return active;
+        },
       },
-    });
+      (_request, run) => run(),
+    );
     const unrelatedDispatch = coordinated.dispatch({
       ...REQUEST,
       sessionId: "another-session",

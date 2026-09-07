@@ -147,6 +147,9 @@ describe("sessions tool", () => {
             ownership: "explicit",
             entries: { ops: {}, research: {} },
           },
+          // Narrowed visibility keeps the cross-agent denial as the observable proof
+          // that the foreign bare row was resolved to its owner, not treated as self.
+          tools: { sessions: { visibility: "agent" } },
         },
         callGateway,
       });

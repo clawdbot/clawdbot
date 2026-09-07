@@ -1,8 +1,10 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   appendTranscriptMessage,
+  loadSessionEntryReadOnly,
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -10,6 +12,7 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import { loadCliSessionHistoryMessages } from "../cli-runner/session-history.js";
 import type { RunCliAgentParams } from "../cli-runner/types.js";
+import { SessionManager } from "../sessions/index.js";
 import { resolveEmbeddedCliBackendDispatchEligibility } from "./cli-backend-dispatch-eligibility.js";
 import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
@@ -592,24 +595,18 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     expect(observed).toHaveLength(2);
   });
 
-  it("retires only the run's session MCP runtime instead of the process-wide server", async () => {
-    runCliAgent.mockResolvedValue(cliRunResult());
-    const params = baseRunParams({ cleanupBundleMcpOnRunEnd: true });
-    await runEmbeddedAgentViaCliBackendIfEligible(params);
-    // The CLI runner's flag would close the shared loopback MCP server, which
-    // concurrent turns may still be using; it must never be forwarded.
-    expect(runCliAgent.mock.calls[0]?.[0]).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
-    expect(retireSessionMcpRuntimeForSessionKey).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionKey: params.sessionKey }),
-    );
-    expect(retireSessionMcpRuntime).not.toHaveBeenCalled();
-  });
-
-  it("skips MCP runtime cleanup when the caller did not request it", async () => {
-    runCliAgent.mockResolvedValue(cliRunResult());
-    await runEmbeddedAgentViaCliBackendIfEligible(baseRunParams());
-    expect(retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
-  });
+  it.each([true, undefined])(
+    "delegates MCP lifetime policy %s to the CLI settlement owner",
+    async (cleanupBundleMcpOnRunEnd) => {
+      runCliAgent.mockResolvedValue(cliRunResult());
+      await runEmbeddedAgentViaCliBackendIfEligible(baseRunParams({ cleanupBundleMcpOnRunEnd }));
+      expect(runCliAgent.mock.calls[0]?.[0]?.cleanupBundleMcpOnRunEnd).toBe(
+        cleanupBundleMcpOnRunEnd,
+      );
+      expect(retireSessionMcpRuntime).not.toHaveBeenCalled();
+      expect(retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
+    },
+  );
 
   it("mirrors the run into the transcript recorder", async () => {
     runCliAgent.mockImplementation(async (cliParams: { runId: string }) => {
@@ -705,4 +702,49 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     const result = await runEmbeddedAgentViaCliBackendIfEligible(baseRunParams());
     expect(result?.meta.agentMeta?.cliSessionBinding).toBeUndefined();
   });
+});
+
+describe("detached CLI transcript ownership", () => {
+  it.each([false, true])(
+    "does not mirror a detached turn into durable metadata (existing: %s)",
+    async (existing) => {
+      const root = tempDirs.make("openclaw-detached-cli-");
+      const storePath = path.join(root, "final", "openclaw-agent.sqlite");
+      const params = baseRunParams({
+        agentId: "main",
+        sessionPersistence: "detached",
+        sessionManager: SessionManager.inMemory(root),
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "recall-session",
+          sessionKey: "agent:main:recall",
+          storePath,
+        },
+      });
+      if (existing) {
+        await upsertSessionEntryCore(params.sessionTarget, {
+          sessionId: params.sessionId,
+          updatedAt: 1,
+          liveModelSwitchPending: true,
+        });
+      }
+      const before = loadSessionEntryReadOnly(params.sessionTarget);
+      const recorder = await vi.importActual<typeof import("./cli-backend-dispatch-transcript.js")>(
+        "./cli-backend-dispatch-transcript.js",
+      );
+      createCliDispatchTranscriptRecorder.mockImplementationOnce(
+        recorder.createCliDispatchTranscriptRecorder,
+      );
+      await expect(runEmbeddedAgentViaCliBackendIfEligible(params)).resolves.toMatchObject({
+        payloads: [{ text: "recall summary" }],
+      });
+      expect(runCliAgent).toHaveBeenCalledOnce();
+      expect(loadSessionEntryReadOnly(params.sessionTarget)).toEqual(before);
+      if (!existing) {
+        await expect(fs.access(path.dirname(storePath))).rejects.toThrow();
+      } else {
+        expect(loadTranscriptEventsSync(params.sessionTarget)).toEqual([]);
+      }
+    },
+  );
 });

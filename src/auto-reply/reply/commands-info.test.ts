@@ -152,7 +152,12 @@ describe("info command handlers", () => {
 
     const result = await handleExportSessionCommand(params, true);
 
-    expect(result).toEqual({ shouldContinue: false });
+    expect(result).toEqual({
+      shouldContinue: false,
+      ...(isAuthorizedSender
+        ? { reply: { text: expect.stringContaining("commands.ownerAllowFrom") } }
+        : {}),
+    });
     expect(buildExportSessionReplyMock).not.toHaveBeenCalled();
   });
 
@@ -190,7 +195,10 @@ describe("info command handlers", () => {
 
     const result = await handleExportTrajectoryCommand(params, true);
 
-    expect(result).toEqual({ shouldContinue: false });
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: expect.stringContaining("commands.ownerAllowFrom") },
+    });
     expect(buildExportTrajectoryCommandReplyMock).not.toHaveBeenCalled();
   });
 

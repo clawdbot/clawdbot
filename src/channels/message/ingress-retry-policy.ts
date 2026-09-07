@@ -3,6 +3,14 @@
  *
  * Channel-specific non-retryable classification stays out of core; pass it in.
  */
+import {
+  collectNestedErrorCandidates,
+  extractErrorCode,
+} from "@openclaw/normalization-core/error-coercion";
+import {
+  SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE,
+  SESSION_WORK_START_CHANGED_ERROR_CODE,
+} from "../../config/sessions/work-start-error.js";
 import { computeBackoff } from "../../infra/backoff.js";
 
 export const DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS = 8;
@@ -98,6 +106,7 @@ export function resolveIngressFailureDisposition(params: {
   now?: number;
 }): IngressFailureDisposition {
   const now = params.now ?? Date.now();
+  const { maxAttempts } = resolveConfig(params.config);
   const attempt = resolveIngressAttemptNumber(params.event);
   const message = params.formatError(params.err);
   const nonRetryable = params.resolveNonRetryableFailure?.(params.err) ?? null;
@@ -106,6 +115,24 @@ export function resolveIngressFailureDisposition(params: {
       kind: "fail",
       reason: nonRetryable.reason,
       message: nonRetryable.message,
+      attempt,
+    };
+  }
+  const errorCodes = new Set(collectNestedErrorCandidates(params.err).map(extractErrorCode));
+  // Retrying this terminal generation blocks the authorized reset behind it.
+  if (errorCodes.has(SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE)) {
+    return {
+      kind: "fail",
+      reason: "restart-recovery-tombstone",
+      message,
+      attempt,
+    };
+  }
+  if (attempt >= maxAttempts && errorCodes.has(SESSION_WORK_START_CHANGED_ERROR_CODE)) {
+    return {
+      kind: "fail",
+      reason: "session-start-conflict-retry-limit",
+      message,
       attempt,
     };
   }

@@ -1,11 +1,12 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ColumnType, Generated } from "kysely";
+import type { ColumnType, Generated, InferResult } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
+  prepareSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -61,6 +62,19 @@ export type PreparedSessionTranscriptProjection = PreparedSessionTranscriptProje
 type ProjectionDeleteChunkResult = {
   hasMore: boolean;
   owned: boolean;
+};
+
+export type SessionTranscriptProjectionRow = {
+  event_json: string;
+  seq: number;
+  created_at: number;
+};
+
+type SessionTranscriptProjectionSource = {
+  sessionId: string;
+  transcriptUpdatedAt: number | null;
+  rows: () => Iterable<SessionTranscriptProjectionRow>;
+  row: (seq: number) => SessionTranscriptProjectionRow | undefined;
 };
 
 function getProjectionKysely(db: DatabaseSync) {
@@ -191,6 +205,14 @@ export function visitSessionTranscriptProjection(
     ftsRow: (row: TranscriptIndexEntry) => void;
   },
 ): PreparedSessionTranscriptProjectionMetadata | undefined {
+  const source = readProjectionSource(db, sessionId);
+  return source ? visitProjectionSource(source, visitor) : undefined;
+}
+
+function readProjectionSource(
+  db: DatabaseSync,
+  sessionId: string,
+): SessionTranscriptProjectionSource | undefined {
   const kysely = getProjectionKysely(db);
   const session = executeSqliteQueryTakeFirstSync(
     db,
@@ -206,10 +228,29 @@ export function visitSessionTranscriptProjection(
     .selectFrom("transcript_events")
     .select(["event_json", "seq", "created_at"])
     .where("session_id", "=", sessionId);
+  const read = prepareSqliteQuerySync<number, InferResult<typeof query>[number]>(db, (parameter) =>
+    query.where(
+      "seq",
+      "=",
+      parameter((seq) => seq),
+    ),
+  );
+  return {
+    sessionId,
+    transcriptUpdatedAt: session.transcript_updated_at,
+    rows: () => iterateSqliteQuerySync(db, query.orderBy("seq", "asc")),
+    row: (seq) => read(seq).rows[0],
+  };
+}
+
+function visitProjectionSource(
+  source: SessionTranscriptProjectionSource,
+  visitor: Parameters<typeof visitSessionTranscriptProjection>[2],
+): PreparedSessionTranscriptProjectionMetadata | undefined {
   let sourceIndexedSeq = -1;
   const tree = scanSessionTranscriptTree(
     (function* () {
-      for (const row of iterateSqliteQuerySync(db, query.orderBy("seq", "asc"))) {
+      for (const row of source.rows()) {
         sourceIndexedSeq = row.seq;
         const event: unknown = JSON.parse(row.event_json);
         const navigation: Record<string, unknown> & { seq: number } = { seq: row.seq };
@@ -241,10 +282,7 @@ export function visitSessionTranscriptProjection(
     visiblePath.length > 0
       ? (function* () {
           for (const node of visiblePath) {
-            const row = executeSqliteQueryTakeFirstSync(
-              db,
-              query.where("seq", "=", node.entry.seq),
-            );
+            const row = source.row(node.entry.seq);
             if (row) {
               yield row;
             }
@@ -252,7 +290,7 @@ export function visitSessionTranscriptProjection(
         })()
       : tree.hasLeafControl
         ? []
-        : iterateSqliteQuerySync(db, query.orderBy("seq", "asc"));
+        : source.rows();
   let activeEventCount = 0;
   let activeMessageCount = 0;
   for (const row of rows) {
@@ -276,10 +314,36 @@ export function visitSessionTranscriptProjection(
     activeEventCount,
     activeMessageCount,
     leafEventId: tree.appendParentId,
-    sessionId,
+    sessionId: source.sessionId,
     sourceIndexedSeq,
-    sourceTranscriptUpdatedAt: session.transcript_updated_at,
+    sourceTranscriptUpdatedAt: source.transcriptUpdatedAt,
   };
+}
+
+function prepareProjectionSource(
+  source: SessionTranscriptProjectionSource,
+): PreparedSessionTranscriptProjection | undefined {
+  const activeRows: PreparedSessionTranscriptProjection["activeRows"] = [];
+  const ftsRows: TranscriptIndexEntry[] = [];
+  const metadata = visitProjectionSource(source, {
+    activeRow: (row) => activeRows.push(row),
+    ftsRow: (row) => ftsRows.push(row),
+  });
+  return metadata ? { ...metadata, activeRows, ftsRows } : undefined;
+}
+
+/** The worker owns these ordered raw rows; memory-backed transcripts never reopen a path. */
+export function prepareMemorySessionTranscriptProjection(
+  sessionId: string,
+  transcriptUpdatedAt: number | null,
+  rows: ReadonlyMap<number, SessionTranscriptProjectionRow>,
+): PreparedSessionTranscriptProjection | undefined {
+  return prepareProjectionSource({
+    sessionId,
+    transcriptUpdatedAt,
+    rows: () => rows.values(),
+    row: (seq) => rows.get(seq),
+  });
 }
 
 /** Reads and resolves one projection on a worker-owned SQLite snapshot. */
@@ -290,13 +354,8 @@ export function prepareSessionTranscriptProjection(
   return runSqliteDeferredTransactionSync(
     db,
     () => {
-      const activeRows: PreparedSessionTranscriptProjection["activeRows"] = [];
-      const ftsRows: TranscriptIndexEntry[] = [];
-      const metadata = visitSessionTranscriptProjection(db, sessionId, {
-        activeRow: (row) => activeRows.push(row),
-        ftsRow: (row) => ftsRows.push(row),
-      });
-      return metadata ? { ...metadata, activeRows, ftsRows } : undefined;
+      const source = readProjectionSource(db, sessionId);
+      return source ? prepareProjectionSource(source) : undefined;
     },
     {
       databaseLabel: "agent transcript projection",

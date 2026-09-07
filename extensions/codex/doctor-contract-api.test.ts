@@ -198,6 +198,75 @@ describe("codex doctor contract", () => {
     expect(legacyConfigRules[2]?.match({ approvalPolicy: "on-request" })).toBe(false);
   });
 
+  it.each([
+    { legacy: { turnCompletionIdleTimeoutMs: 123_456 }, defaults: { timeoutSeconds: 42 } },
+    { legacy: { turnAssistantCompletionIdleTimeoutMs: 234_567 }, defaults: { timeoutSeconds: 0 } },
+    { legacy: { postToolRawAssistantCompletionIdleTimeoutMs: 345_678 }, defaults: undefined },
+    {
+      legacy: {
+        turnCompletionIdleTimeoutMs: null,
+        turnAssistantCompletionIdleTimeoutMs: 0,
+        postToolRawAssistantCompletionIdleTimeoutMs: "private-retired-value",
+      },
+      defaults: { timeoutSeconds: 0 },
+    },
+  ])(
+    "reports and removes retired turn idle settings $legacy without changing the run budget",
+    ({ legacy, defaults }) => {
+      const appServer = {
+        requestTimeoutMs: 120_000,
+        mode: "guardian",
+        headers: { "X-Test": "kept" },
+      };
+      const original = {
+        agents: { defaults },
+        plugins: {
+          entries: {
+            codex: {
+              enabled: true,
+              config: {
+                codexDynamicToolsLoading: "direct",
+                appServer: { ...appServer, ...legacy },
+              },
+            },
+            unrelated: { enabled: false },
+          },
+        },
+      };
+      const before = structuredClone(original);
+      const rule = legacyConfigRules.find((candidate) =>
+        candidate.match(original.plugins.entries.codex.config.appServer),
+      );
+      expect(rule?.path).toEqual(["plugins", "entries", "codex", "config", "appServer"]);
+      expect(rule?.message).toContain("openclaw doctor --fix");
+
+      const result = normalizeCompatibilityConfig({ cfg: original });
+
+      expect(result.config).toEqual({
+        ...original,
+        plugins: {
+          ...original.plugins,
+          entries: {
+            ...original.plugins.entries,
+            codex: { enabled: true, config: { codexDynamicToolsLoading: "direct", appServer } },
+          },
+        },
+      });
+      expect(result.changes).toEqual(
+        Object.keys(legacy).map(
+          (key) =>
+            `Removed retired plugins.entries.codex.config.appServer.${key}; native Codex owns provider liveness and turn completion. agents.defaults.timeoutSeconds was not changed.`,
+        ),
+      );
+      expect(original).toEqual(before);
+      expect(rule?.match(appServer)).toBe(false);
+      expect(normalizeCompatibilityConfig({ cfg: result.config })).toEqual({
+        config: result.config,
+        changes: [],
+      });
+    },
+  );
+
   it("removes the retired dynamic tools profile without dropping other Codex config", () => {
     const original = {
       plugins: {
@@ -353,7 +422,7 @@ describe("codex doctor contract", () => {
         }),
       ),
     ).resolves.toMatchObject({ state: "active", binding: { threadId: "thread-1" } });
-    await expect(fs.access(`${fixture.sidecarPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${fixture.sidecarPath}.migrated`);
     expect(
       getSessionEntry({
         agentId: "main",
@@ -458,7 +527,7 @@ describe("codex doctor contract", () => {
         storePath: fixture.storePath,
       }),
     ).toMatchObject({ agentHarnessId: "codex" });
-    await expect(fs.access(`${fixture.sidecarPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${fixture.sidecarPath}.migrated`);
 
     await removeCodexDoctorFixture(fixture.stateDir);
   });
@@ -502,7 +571,7 @@ describe("codex doctor contract", () => {
         }),
       ),
     ).resolves.toMatchObject({ sessionId: "explicit-ops-owner" });
-    await expect(fs.access(`${fixture.sidecarPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${fixture.sidecarPath}.migrated`);
 
     await removeCodexDoctorFixture(fixture.stateDir);
   });
@@ -566,7 +635,7 @@ describe("codex doctor contract", () => {
     expect(JSON.stringify(stored)).not.toContain("user-mcp-marker");
     expect(JSON.stringify(stored)).not.toContain("legacy-secret");
     await expect(fs.access(fixture.sidecarPath)).rejects.toThrow();
-    await expect(fs.access(`${fixture.sidecarPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${fixture.sidecarPath}.migrated`);
     await expect(fixture.migration.migrateLegacyState(fixture.params)).resolves.toEqual({
       changes: [],
       warnings: [],
@@ -644,7 +713,7 @@ describe("codex doctor contract", () => {
       binding: { dynamicToolsFingerprint: expectedFingerprint },
     });
     await expect(fs.access(fixture.sidecarPath)).rejects.toThrow();
-    await expect(fs.access(`${fixture.sidecarPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${fixture.sidecarPath}.migrated`);
     await expect(fixture.migration.migrateLegacyState(fixture.params)).resolves.toEqual({
       changes: [],
       warnings: [],
@@ -716,7 +785,7 @@ describe("codex doctor contract", () => {
       binding: { dynamicToolsFingerprint: expectedFingerprint },
     });
     await expect(fs.access(fixture.sidecarPath)).rejects.toThrow();
-    await expect(fs.access(`${fixture.sidecarPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${fixture.sidecarPath}.migrated`);
     await expect(fixture.migration.migrateLegacyState(fixture.params)).resolves.toEqual({
       changes: [],
       warnings: [],
@@ -1047,7 +1116,7 @@ describe("codex doctor contract", () => {
     expect(result.warnings).toEqual([
       expect.stringContaining(`canonical plugin state changed at ${sessionBindingKey}`),
     ]);
-    await expect(fs.access(fixture.sidecarPath)).resolves.toBeUndefined();
+    await fs.access(fixture.sidecarPath);
     await expect(store.lookup(sessionBindingKey)).resolves.toEqual(retired);
     await expect(
       fs.readFile(path.join(fixture.sessionsDir, "sessions.json"), "utf8").then(JSON.parse),
@@ -1238,7 +1307,7 @@ describe("codex doctor contract", () => {
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0]).toContain("session index");
     expect(result.warnings[0]).toContain(detail);
-    await expect(fs.access(fixture.sidecarPath)).resolves.toBeUndefined();
+    await fs.access(fixture.sidecarPath);
     await expect(fs.access(`${fixture.sidecarPath}.migrated`)).rejects.toThrow();
     await expect(openBindingStore(fixture.env).entries()).resolves.toEqual([]);
 

@@ -25,7 +25,8 @@ vi.mock("./discovery.js", () => ({
   discoverOpenClawPlugins: (...args: unknown[]) => discoverOpenClawPluginsMock(...args),
 }));
 
-vi.mock("./manifest.js", () => ({
+vi.mock("./manifest.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./manifest.js")>()),
   loadPluginManifest: (...args: unknown[]) => loadPluginManifestMock(...args),
 }));
 

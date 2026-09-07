@@ -823,7 +823,7 @@ The SUT manifest below intentionally narrows the bundled Slack plugin's
 production install (`extensions/slack/src/setup-shared.ts:12`) to the
 permissions and events covered by the live Slack QA suite. For the
 production-channel setup as users see it, see
-[Slack channel quick setup](/channels/slack#quick-setup); the QA Driver/SUT
+[Slack channel quick setup](/channels/slack/setup#quick-setup); the QA Driver/SUT
 pair is intentionally separate because the lane needs two distinct bot user
 ids in one workspace.
 
@@ -1131,7 +1131,15 @@ commands run against the active Gateway. Each CLI command has a two-minute
 execution limit. Stop closes admission immediately and settles all owned process
 groups; leader exit does not bypass shutdown or the bounded wait for inherited
 stdio to close. On POSIX, CLI commands use their own process groups, so concurrent
-commands do not replace the active Gateway's identity.
+commands do not replace the active Gateway's identity. CLI failures, including
+timeouts, cancellations, and stream faults, retain bounded, redacted stderr and
+stdout captured through shutdown. Packaged plugin setup errors distinguish
+`update repair --help` from `update repair`.
+
+Gateway RPC calls wait for reconnection only while the request is unsent. Once
+sent, a lost connection is reported to the scenario without replaying the
+request: the Gateway may already have committed it. Scenario code must inspect
+the resulting state before deciding whether an interrupted action is safe to retry.
 
 Transport adapters drain their driver work in
 `cleanup()` and release Gateway-backed credentials in
@@ -1259,6 +1267,11 @@ The baseline list should stay broad enough to cover:
 - `aimock` starts an AIMock-backed provider server for experimental
   protocol, fixture, record/replay, and chaos coverage. It is additive and
   does not replace the `mock-openai` scenario dispatcher.
+
+For an IPv6 loopback server, run `pnpm openclaw qa mock-openai --host ::1`.
+The printed URL includes brackets, such as `http://[::1]:<port>`; use that URL
+when configuring a client. QA Lab also brackets IPv6 hosts in its listen and
+advertised URLs. Pass the bare address to `--host`.
 
 Provider-lane implementation lives under `extensions/qa-lab/src/providers/`.
 Each provider owns its defaults, local server startup, gateway model config,
@@ -1405,6 +1418,10 @@ the suite output and whose artifact paths are resolved relative to that
 producer `qa-evidence.json`. When `qa suite` is reached through `qa run
 --qa-profile`, the same `qa-evidence.json` also includes the profile
 scorecard summary for the selected taxonomy categories.
+
+`qa confidence-report` keeps `productImpact` and `qaImpact` annotations in their
+own Markdown table cells, collapsing whitespace for display. The JSON summary
+preserves the annotation values, including internal line breaks.
 
 Treat coverage output as a discovery aid, not a gate replacement; the
 selected scenario still needs the right provider mode, live transport,

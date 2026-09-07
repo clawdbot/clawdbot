@@ -182,8 +182,8 @@ export type CustomApiCompatibility = "openai" | "openai-responses" | "anthropic"
 /** Config mutation result for a custom API setup pass. */
 export type CustomApiResult = {
   config: OpenClawConfig;
-  providerId?: string;
-  modelId?: string;
+  providerId: string;
+  modelId: string;
   providerIdRenamedFrom?: string;
 };
 

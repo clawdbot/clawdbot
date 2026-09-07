@@ -30,6 +30,8 @@ UI behavior:
 - Selecting `always` in the Android third-party build first requests foreground permission, explains the background access, then opens Android app settings for the separate **Allow all the time** grant.
 - Android Play builds do not declare background location permission or show `always`.
 - If the OS denies the requested level, the app reverts to the highest granted level and shows status.
+- On Android, turning Precise Location off limits shared coordinates even if the OS still grants precise access. Cached and fresh fixes use a 2 km grid with slowly changing random offsets; approximate responses omit altitude, speed, and bearing and report at least 2,000 meters of uncertainty. An already less accurate fix keeps its larger uncertainty.
+- Android rechecks precision before constructing the response, so turning the toggle off while a request is waiting also limits that response. This does not revoke the OS permission or retract locations already shared.
 
 ## Permissions mapping (node.permissions)
 

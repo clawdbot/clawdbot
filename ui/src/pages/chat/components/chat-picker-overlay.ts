@@ -1,4 +1,6 @@
 import { syncAnchoredOverlay } from "../../../components/anchored-overlay.ts";
+import { consumeTooltipEscape } from "../../../components/tooltip.ts";
+import { clearChatModelSearchOnEscape } from "./chat-model-picker-search.ts";
 
 const MOBILE_COMPOSER_OVERLAY_QUERY =
   "(max-width: 640px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)";
@@ -63,7 +65,15 @@ function dismissChatComposerPickersOutside(event: PointerEvent): void {
 }
 
 function dismissChatComposerPickersOnEscape(event: KeyboardEvent): void {
-  if (event.key !== "Escape" || document.querySelector(".shell-nav[aria-modal='true']")) {
+  if (
+    event.defaultPrevented ||
+    consumeTooltipEscape(event, document) ||
+    event.key !== "Escape" ||
+    document.querySelector(".shell-nav[aria-modal='true']")
+  ) {
+    return;
+  }
+  if (clearChatModelSearchOnEscape(event)) {
     return;
   }
   const pickers = openChatComposerPickers();
@@ -75,8 +85,12 @@ function dismissChatComposerPickersOnEscape(event: KeyboardEvent): void {
   }
   event.preventDefault();
   event.stopPropagation();
-  const lastPicker = pickers.at(-1);
-  pickers.forEach(closeComposerPicker);
+  // A nested menu restores focus inside its still-open parent picker.
+  const deepestPickers = pickers.filter(
+    (picker) => !pickers.some((other) => other !== picker && picker.contains(other)),
+  );
+  const lastPicker = deepestPickers.at(-1);
+  deepestPickers.forEach(closeComposerPicker);
   invocationComposer?.dispatchEvent(new CustomEvent(CHAT_COMPOSER_DISMISS_INVOCATIONS_EVENT));
   invocationComposer
     ?.querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea")
@@ -119,7 +133,7 @@ function closeOtherChatComposerPickers(source: HTMLElement): void {
     return;
   }
   for (const picker of openChatComposerPickers(composer)) {
-    if (picker !== source) {
+    if (picker !== source && !picker.contains(source)) {
       closeComposerPicker(picker);
     }
   }

@@ -1,8 +1,16 @@
 import path from "node:path";
 import type { InternalSessionEntry } from "../config/sessions.js";
+import {
+  createSessionWorkStartChangedError,
+  SessionWorkStartChangedError,
+} from "../config/sessions/lifecycle.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { assertAgentRunLifecycleGenerationCurrent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getSessionWorkAdmissionOwnerRelease } from "../sessions/session-lifecycle-admission.js";
 import type { AgentCommandOpts } from "./command/types.js";
+import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "./main-session-recovery/main-session-recovery-admission.js";
 import { repairMainSessionRecoveryMutation } from "./main-session-recovery/main-session-recovery-lifecycle.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "./main-session-recovery/main-session-recovery-owner-release.js";
 import {
@@ -107,7 +115,7 @@ async function claimAgentCommandRecoveryOwner(params: {
       target: { sessionKey, storePath: params.prepared.storePath },
     });
     if (recoveryInspection.kind === "invalidated") {
-      throw new Error(`Session "${sessionKey}" changed while starting work. Retry.`);
+      throw createSessionWorkStartChangedError(sessionKey);
     }
     if (recoveryInspection.kind === "required") {
       throw new Error(
@@ -129,7 +137,7 @@ async function claimAgentCommandRecoveryOwner(params: {
     target: { sessionKey, storePath: params.prepared.storePath },
   });
   if (claim.kind === "invalidated") {
-    throw new Error(`Session "${sessionKey}" changed while starting work. Retry.`);
+    throw createSessionWorkStartChangedError(sessionKey);
   }
   if (claim.kind === "not_required") {
     return undefined;
@@ -173,8 +181,69 @@ export async function runWithAgentCommandRecoveryOwner<
       }
       throw error;
     }
-    const acquired = await claimAgentCommandRecoveryOwner({ ...params, prepared });
+    const target = prepared;
+    const mayWaitForRecovery =
+      params.mode === "claim" &&
+      params.opts.inputProvenance?.sourceTool === "subagent_settle" &&
+      params.opts.sessionEffects !== "internal" &&
+      !params.opts.mainRestartRecoveryAdmitted &&
+      !params.opts.mainRestartRecoveryOwnerLease;
+    const recoveryOwnerRelease = () =>
+      mayWaitForRecovery
+        ? getSessionWorkAdmissionOwnerRelease({
+            scope: target.storePath,
+            identities: [target.sessionKey, target.previousSessionId ?? target.sessionId],
+            owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
+          })
+        : undefined;
+    let pendingOwner = recoveryOwnerRelease();
+    let acquired: AcquiredRecoveryOwner | undefined;
+    for (;;) {
+      if (pendingOwner) {
+        // Keep the accepted settle turn (and its idempotency key) alive rather
+        // than returning a cached no-turn rejection to the durable delivery owner.
+        await racePromiseWithAbortSignal(pendingOwner, params.opts.abortSignal);
+        params.opts.abortSignal?.throwIfAborted();
+        assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+        await prepared.runLease?.release();
+        prepared = undefined;
+        prepared = await params.prepare(params.opts);
+        if (
+          prepared.sessionId !== target.sessionId ||
+          prepared.previousSessionId !== target.previousSessionId ||
+          prepared.sessionKey !== target.sessionKey ||
+          path.resolve(prepared.storePath) !== path.resolve(target.storePath)
+        ) {
+          throw createSessionWorkStartChangedError(target.sessionKey ?? target.sessionId);
+        }
+      }
+      if (mayWaitForRecovery) {
+        params.opts.abortSignal?.throwIfAborted();
+        assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+      }
+      try {
+        acquired = await claimAgentCommandRecoveryOwner({ ...params, prepared });
+      } catch (error) {
+        // A recovery owner can start during the writer-ordered claim. Only a
+        // proven live owner makes this rejection waitable; stale/deleted rows
+        // and tombstones still fail through the unchanged durable guard.
+        pendingOwner =
+          error instanceof SessionWorkStartChangedError ? recoveryOwnerRelease() : undefined;
+        if (!pendingOwner) {
+          throw error;
+        }
+        continue;
+      }
+      pendingOwner = acquired ? undefined : recoveryOwnerRelease();
+      if (!pendingOwner) {
+        break;
+      }
+    }
     lease = acquired?.lease;
+    if (mayWaitForRecovery) {
+      params.opts.abortSignal?.throwIfAborted();
+      assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+    }
     // Preparation uses a detached working copy. Carry the owner transaction's
     // exact row forward so successful settlement can consume the same recovery cycle.
     refreshPreparedRecoveryOwnerTarget(prepared, acquired);

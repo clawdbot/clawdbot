@@ -7,18 +7,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runQaSuiteCommand = vi.hoisted(() => vi.fn());
 const loadMatrixQaE2eeRuntime = vi.hoisted(() => vi.fn());
+const resolveLiveTransportQaScenarioIds = vi.hoisted(() => vi.fn());
 const runFlowWorkers = vi.hoisted(() => vi.fn());
 
 vi.mock("../../cli.runtime.js", () => ({ runQaSuiteCommand }));
 vi.mock("../matrix/substrate/e2ee-client.js", () => ({ loadMatrixQaE2eeRuntime }));
 vi.mock("../../suite-run-standard.js", () => ({ runQaFlowSuiteStandard: runFlowWorkers }));
 vi.mock("../../suite-run-isolated.js", () => ({ runQaFlowSuiteIsolated: runFlowWorkers }));
+vi.mock("./scenario-selection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./scenario-selection.js")>()),
+  resolveLiveTransportQaScenarioIds,
+}));
 
 import { runQaSuite } from "../../suite-launch.runtime.js";
 import type { QaSuiteResolvedRunContext } from "../../suite-types.js";
 import type { QaSuiteRunParams } from "../../suite.js";
 import { matrixQaCliRegistration } from "../matrix/cli.js";
-import { runLiveTransportQaSuiteCommand } from "./live-transport-suite.runtime.js";
+import {
+  runLiveTransportQaSuiteCommand,
+  runStandardLiveTransportQaSuiteCommand,
+} from "./live-transport-suite.runtime.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -28,6 +36,7 @@ describe("live transport suite runtime", () => {
     vi.clearAllMocks();
     runQaSuiteCommand.mockReset();
     loadMatrixQaE2eeRuntime.mockReset();
+    resolveLiveTransportQaScenarioIds.mockReset();
     runFlowWorkers.mockReset();
   });
 
@@ -255,6 +264,44 @@ describe("live transport suite runtime", () => {
       explicitScenarioSelection: false,
     });
   });
+
+  it.each([
+    { channelId: "discord", scenarioId: "discord-canary" },
+    { channelId: "slack", scenarioId: "slack-canary" },
+    { channelId: "whatsapp", scenarioId: "whatsapp-canary" },
+  ])(
+    "propagates the exact $channelId selection context through the standard suite owner",
+    async ({ channelId, scenarioId }) => {
+      resolveLiveTransportQaScenarioIds.mockReturnValueOnce([scenarioId]);
+
+      await runStandardLiveTransportQaSuiteCommand({
+        channelId,
+        options: {
+          primaryModel: "openai/custom-selection-model",
+          profile: "all",
+          providerMode: "mock-openai",
+          scenarioIds: [scenarioId, scenarioId],
+        },
+      });
+
+      expect(resolveLiveTransportQaScenarioIds).toHaveBeenLastCalledWith({
+        channelId,
+        primaryModel: "openai/custom-selection-model",
+        profile: "all",
+        providerMode: "mock-openai",
+        scenarioIds: [scenarioId, scenarioId],
+        supportsModuleFlows: true,
+      });
+      expect(runQaSuiteCommand).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          channel: channelId,
+          primaryModel: "openai/custom-selection-model",
+          providerMode: "mock-openai",
+          scenarioIds: [scenarioId],
+        }),
+      );
+    },
+  );
 
   it("preserves explicit scenario selection after resolving defaults", async () => {
     await runLiveTransportQaSuiteCommand({

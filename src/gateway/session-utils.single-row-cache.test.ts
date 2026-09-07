@@ -1,6 +1,7 @@
 /**
  * Tests fresh child state in exact session-row Gateway projections.
  */
+import { existsSync } from "node:fs";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -12,6 +13,7 @@ import {
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 
 const subagentRegistryReadMock = vi.hoisted(() => {
@@ -34,6 +36,7 @@ const subagentRegistryReadMock = vi.hoisted(() => {
     }
     return {
       runsByControllerSessionKey,
+      swarmRunsByRequesterSessionKey: new Map(),
       getDisplaySubagentRun: vi.fn(
         (childSessionKey: string) => runsByChildSessionKey.get(childSessionKey) ?? null,
       ),
@@ -74,10 +77,11 @@ const subagentRegistryReadMock = vi.hoisted(() => {
 
 vi.mock("../agents/subagents/registry/subagent-registry-read.js", () => subagentRegistryReadMock);
 
+import { listSessionFixture } from "./session-list.test-support.js";
 import {
   buildGatewaySessionInfo,
-  listSessionsFromStoreAsync,
   loadGatewaySessionEntryReadOnly,
+  loadGatewaySessionLifecycleSnapshot,
   loadGatewaySessionRow,
   loadSessionEntry,
 } from "./session-utils.js";
@@ -217,26 +221,139 @@ describe("single gateway session row child projections", () => {
     vi.clearAllMocks();
   });
 
-  test("hides internal effects from listings while preserving exact reads for private history", async () => {
-    await withSingleRowCacheStore(
-      "openclaw-single-row-hidden-effects-",
-      "/tmp/openclaw-single-row-hidden-effects",
-      async ({ now, storePath }) => {
-        const hidden = resolveInternalSessionEffectsIdentity({
-          agentId: MAIN_AGENT_ID,
-          runId: "suppressed-effects",
-        });
-        await seedSessionEntries(storePath, {
-          [hidden.sessionKey]: parentSession(hidden.sessionId, now),
-        });
+  test("retains the loaded owner after a qualified main alias becomes global", async () => {
+    await withStateDirEnv("openclaw-single-row-global-owner-", async () => {
+      const cfg: OpenClawConfig = {
+        session: { scope: "global" },
+        agents: {
+          entries: {
+            main: { default: true, model: { primary: "openai/gpt-5.4" } },
+            research: { model: { primary: "openai/gpt-5.5" } },
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(cfg, cfg);
+      await replaceSessionEntry(
+        { agentId: "research", sessionKey: "global" },
+        { sessionId: "research-main", updatedAt: 42 },
+      );
+      const key = "agent:research:main";
+      expect(loadGatewaySessionEntryReadOnly(key)).toMatchObject({
+        agentId: "research",
+        canonicalKey: "global",
+        entry: { sessionId: "research-main" },
+      });
+      expect.soft(loadGatewaySessionLifecycleSnapshot(key).row).toMatchObject({
+        key: "global",
+        sessionId: "research-main",
+        agentId: "research",
+        model: "gpt-5.5",
+      });
+      expect(loadGatewaySessionRow(key, { agentId: "research" })).toMatchObject({
+        key: "global",
+        agentId: "research",
+        model: "gpt-5.5",
+      });
+    });
+  });
 
-        expect(loadSessionEntry(hidden.sessionKey).entry).toBeUndefined();
-        expect(loadGatewaySessionEntryReadOnly(hidden.sessionKey).entry?.sessionId).toBe(
-          hidden.sessionId,
-        );
-        expect(loadExactSessionEntryReadOnly({ ...hidden, storePath })?.entry.sessionId).toBe(
-          hidden.sessionId,
-        );
+  test.each([undefined, false])(
+    "reads only the selected session while preserving projections and hidden effects (clone: %s)",
+    async (clone) => {
+      await withSingleRowCacheStore(
+        "openclaw-single-row-hidden-effects-",
+        "/tmp/openclaw-single-row-hidden-effects",
+        async ({ now, storePath }) => {
+          const hidden = resolveInternalSessionEffectsIdentity({
+            agentId: MAIN_AGENT_ID,
+            runId: "suppressed-effects",
+          });
+          const sessionKey = "agent:main:main";
+          const visible: SessionEntry = {
+            ...parentSession("visible-session", now),
+            skillsSnapshot: { prompt: "saved skill prompt", skills: [] },
+            systemPromptReport: {
+              source: "run",
+              generatedAt: now,
+              systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
+              injectedWorkspaceFiles: [],
+              skills: { promptChars: 0, entries: [] },
+              tools: { listChars: 0, schemaChars: 0, entries: [] },
+            },
+          };
+          await seedSessionEntries(storePath, {
+            [sessionKey]: visible,
+            [hidden.sessionKey]: parentSession(hidden.sessionId, now),
+            ...Object.fromEntries(
+              Array.from({ length: 24 }, (_, index) => [
+                `agent:main:unrelated-${index}`,
+                { ...visible, sessionId: `unrelated-session-${index}` },
+              ]),
+            ),
+          });
+
+          // The canonical store scan belongs to handle admission, before repeated row lookups.
+          expect(loadExactSessionEntryReadOnly({ sessionKey, storePath })?.entry.sessionId).toBe(
+            visible.sessionId,
+          );
+          const parse = vi.spyOn(JSON, "parse");
+          try {
+            const metadata = loadSessionEntry("main", {
+              agentId: MAIN_AGENT_ID,
+              clone,
+              projection: "list",
+            });
+            expect(metadata).toMatchObject({
+              agentId: MAIN_AGENT_ID,
+              canonicalKey: sessionKey,
+              storePath,
+              entry: parentSession(visible.sessionId, now),
+            });
+            expect(metadata.entry?.skillsSnapshot).toBeUndefined();
+            expect(metadata.entry?.systemPromptReport).toBeUndefined();
+            expect(parse.mock.calls.some(([value]) => value.includes("saved skill prompt"))).toBe(
+              false,
+            );
+            expect(loadSessionEntry("main", { agentId: MAIN_AGENT_ID, clone })).toMatchObject({
+              agentId: metadata.agentId,
+              canonicalKey: metadata.canonicalKey,
+              storePath: metadata.storePath,
+              entry: visible,
+            });
+
+            expect(loadSessionEntry(hidden.sessionKey, { clone }).entry).toBeUndefined();
+            expect(
+              loadSessionEntry(hidden.sessionKey, { clone, projection: "list" }).entry,
+            ).toBeUndefined();
+            expect(loadGatewaySessionEntryReadOnly(hidden.sessionKey).entry?.sessionId).toBe(
+              hidden.sessionId,
+            );
+            expect(loadExactSessionEntryReadOnly({ ...hidden, storePath })?.entry.sessionId).toBe(
+              hidden.sessionId,
+            );
+            expect(
+              parse.mock.calls.filter(
+                ([value]) => typeof value === "string" && value.includes("unrelated-session-"),
+              ),
+            ).toHaveLength(0);
+          } finally {
+            parse.mockRestore();
+          }
+        },
+      );
+    },
+  );
+
+  test("preserves missing-store behavior for borrowed and owned entry lookups", async () => {
+    await withSingleRowCacheStore(
+      "openclaw-single-row-missing-store-",
+      "/tmp/openclaw-single-row-missing-store",
+      async () => {
+        const databasePath = resolveOpenClawAgentSqlitePath({ agentId: MAIN_AGENT_ID });
+        expect(loadSessionEntry("main", { clone: false }).entry).toBeUndefined();
+        expect(existsSync(databasePath)).toBe(false);
+        expect(loadSessionEntry("main").entry).toBeUndefined();
+        expect(existsSync(databasePath)).toBe(true);
       },
     );
   });
@@ -248,11 +365,10 @@ describe("single gateway session row child projections", () => {
       async ({ now, storePath }) => {
         const store: Record<string, SessionEntry> = {
           "agent:main:subagent:parent-a": parentSession("parent-a", now),
-          "agent:main:subagent:child-a": runningChildSession(
-            "child-a",
-            "agent:main:subagent:parent-a",
-            now,
-          ),
+          "agent:main:subagent:child-a": {
+            ...runningChildSession("child-a", "agent:main:subagent:parent-a", now),
+            skillsSnapshot: { prompt: "child saved skill prompt", skills: [] },
+          },
           "agent:main:subagent:parent-b": parentSession("parent-b", now),
           "agent:main:subagent:child-b": runningChildSession(
             "child-b",
@@ -275,7 +391,9 @@ describe("single gateway session row child projections", () => {
           const loaded = loadGatewaySessionEntryReadOnly("agent:main:subagent:parent-a", {
             clone: false,
             includeStoreChildEntries: true,
+            projection: "list",
           });
+          expect(loaded.store["agent:main:subagent:child-a"]?.skillsSnapshot).toBeUndefined();
           const entriesSpy = vi.spyOn(Object, "entries");
           try {
             const row = buildGatewaySessionInfo({ ...loaded, key: loaded.canonicalKey, now });
@@ -369,7 +487,7 @@ describe("single gateway session row child projections", () => {
           },
         } as OpenClawConfig;
 
-        const asyncListed = await listSessionsFromStoreAsync({
+        const asyncListed = await listSessionFixture({
           cfg,
           storePath,
           store,

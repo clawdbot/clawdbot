@@ -29,8 +29,6 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
     pluginLocalRuntimeDeps: ["@larksuiteoapi/node-sdk"],
     minHostVersionBaseline: "2026.3.22",
   },
-  { pluginId: "google" },
-  { pluginId: "google-meet" },
   {
     pluginId: "googlechat",
     pluginLocalRuntimeDeps: ["google-auth-library"],
@@ -42,13 +40,10 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   },
   { pluginId: "irc", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "line", minHostVersionBaseline: "2026.3.22" },
-  { pluginId: "amazon-bedrock" },
-  { pluginId: "amazon-bedrock-mantle" },
   {
     pluginId: "diffs",
     pluginLocalRuntimeDeps: ["@pierre/diffs"],
   },
-  { pluginId: "file-transfer" },
   {
     pluginId: "matrix",
     pluginLocalRuntimeDeps: [
@@ -63,7 +58,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   { pluginId: "mattermost", minHostVersionBaseline: "2026.3.22" },
   {
     pluginId: "memory-lancedb",
-    pluginLocalRuntimeDeps: ["@lancedb/lancedb", "apache-arrow"],
+    pluginLocalRuntimeDeps: ["apache-arrow"],
     minHostVersionBaseline: "2026.3.22",
   },
   {
@@ -77,10 +72,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
     pluginLocalRuntimeDeps: ["nostr-tools"],
     minHostVersionBaseline: "2026.3.22",
   },
-  { pluginId: "openshell" },
-  { pluginId: "slack" },
   { pluginId: "synology-chat", minHostVersionBaseline: "2026.3.22" },
-  { pluginId: "telegram" },
   { pluginId: "tlon", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "tokenjuice", pluginLocalRuntimeDeps: ["tokenjuice"] },
   { pluginId: "twitch", minHostVersionBaseline: "2026.3.22" },
@@ -99,21 +91,29 @@ for (const params of packageManifestContractTests) {
   describePackageManifestContract(params);
 }
 
-it("resolves Anthropic's installed Agent SDK at the plugin and root runtime pins", () => {
-  const dependencyName = "@anthropic-ai/claude-agent-sdk";
-  const pluginPackagePath = path.resolve(process.cwd(), "extensions/anthropic/package.json");
-  const pluginManifest = JSON.parse(fs.readFileSync(pluginPackagePath, "utf8")) as PackageManifest;
-  const rootManifest = JSON.parse(fs.readFileSync("package.json", "utf8")) as PackageManifest;
-  const sdkEntry = createRequire(pluginPackagePath).resolve(dependencyName);
-  // The SDK exports sdk.mjs beside its manifest, but does not export ./package.json.
-  const sdkManifest = JSON.parse(
-    fs.readFileSync(path.join(path.dirname(sdkEntry), "package.json"), "utf8"),
+it("bundles LanceDB JavaScript while installing matching native bindings per platform", () => {
+  const dependencyName = "@lancedb/lancedb";
+  const pluginPackagePath = path.resolve(process.cwd(), "extensions/memory-lancedb/package.json");
+  const pluginManifest = JSON.parse(
+    fs.readFileSync(pluginPackagePath, "utf8"),
+  ) as PackageManifest & {
+    devDependencies?: Record<string, string>;
+  };
+  const entry = createRequire(pluginPackagePath).resolve(dependencyName);
+  const lancedbManifest = JSON.parse(
+    fs.readFileSync(path.resolve(path.dirname(entry), "../package.json"), "utf8"),
   ) as PackageManifest;
+  // LanceDB's loader and native ABI must stay at the same version on every supported platform.
+  const nativeBindings = Object.fromEntries(
+    Object.entries(lancedbManifest.optionalDependencies ?? {}).filter(([name]) =>
+      name.startsWith(`${dependencyName}-`),
+    ),
+  );
 
-  expect(sdkManifest.name).toBe(dependencyName);
-  expect(sdkManifest.version).toBeTypeOf("string");
-  expect(sdkManifest.version).toBe(pluginManifest.dependencies?.[dependencyName]);
-  expect(sdkManifest.version).toBe(rootManifest.dependencies?.[dependencyName]);
+  expect(Object.keys(nativeBindings).length).toBeGreaterThan(0);
+  expect(pluginManifest.dependencies?.[dependencyName]).toBeUndefined();
+  expect(pluginManifest.devDependencies?.[dependencyName]).toBe(lancedbManifest.version);
+  expect(pluginManifest.optionalDependencies).toEqual(nativeBindings);
 });
 
 describe("plugin package authoring metadata", () => {

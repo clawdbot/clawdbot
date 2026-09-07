@@ -1,5 +1,6 @@
 /** Private JSONL worker exposing the CLI node-host runtime to the macOS app. */
 import { createInterface } from "node:readline";
+import { requestExitAfterOneShotOutput } from "../cli/one-shot-exit.js";
 import { VERSION } from "../version.js";
 import type { NodeHostClient } from "./client.js";
 import { loadNodeHostConfig } from "./config.js";
@@ -135,5 +136,8 @@ export async function runNodeHostWorker(): Promise<void> {
   } finally {
     process.off("SIGINT", onInterrupt);
     process.off("SIGTERM", onTerminate);
+    // runtime.close() drains only runtime-owned owners. A plugin-owned child keeps
+    // ref'd pipes past that point and pins the loop, so exit must not wait for a drain.
+    requestExitAfterOneShotOutput();
   }
 }

@@ -1,6 +1,6 @@
 /**
  * Regression coverage for gateway-backed agent run waiting.
- * Exercises timeout normalization, reply snapshots, and dynamic drain loops.
+ * Exercises timeout normalization, run-owned replies, and dynamic drain loops.
  */
 import {
   addTimerTimeoutGraceMs,
@@ -15,12 +15,10 @@ vi.mock("../gateway/call.js", () => ({
 }));
 
 import {
-  isRecoverableAgentWaitError,
   readLatestAssistantReply,
-  readLatestAssistantReplySnapshot,
   waitForAgentRun,
   waitForAgentRunsToDrain,
-  waitForAgentRunAndReadUpdatedAssistantReply,
+  waitForAgentRunReply,
 } from "./run-wait.js";
 
 type AgentWaitGatewayRequest = {
@@ -171,49 +169,6 @@ describe("readLatestAssistantReply", () => {
     expect(result).toBe("older worker reply");
   });
 
-  it("stops at trailing transcript artifacts for waited reply extraction", async () => {
-    callGatewayMock.mockResolvedValue({
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "older worker reply" }],
-          timestamp: 10,
-        },
-        {
-          role: "assistant",
-          provider: "openclaw",
-          model: "gateway-injected",
-          content: [{ type: "text", text: "gateway notice" }],
-          timestamp: 11,
-        },
-      ],
-    });
-
-    const result = await readLatestAssistantReplySnapshot({
-      sessionKey: "agent:main:target",
-      stopAtTranscriptArtifact: true,
-    });
-
-    expect(result).toEqual({});
-  });
-
-  it("returns assistant fingerprints for delta comparisons", async () => {
-    callGatewayMock.mockResolvedValue({
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "new output" }],
-          timestamp: 42,
-        },
-      ],
-    });
-
-    const result = await readLatestAssistantReplySnapshot({ sessionKey: "agent:main:child" });
-
-    expect(result.text).toBe("new output");
-    expect(result.fingerprint).toContain('"timestamp":42');
-  });
-
   it("reads only final_answer text from phased assistant history", async () => {
     callGatewayMock.mockResolvedValue({
       messages: [
@@ -296,8 +251,49 @@ describe("waitForAgentRun", () => {
     expect(result).toEqual({
       status: "error",
       error: "gateway closed (1006): transport close",
+      retryableTransportError: true,
     });
-    expect(isRecoverableAgentWaitError(result.error)).toBe(true);
+  });
+
+  it.each([
+    "ECONNRESET",
+    "ECONNREFUSED",
+    "ETIMEDOUT",
+    "EPIPE",
+    "EHOSTUNREACH",
+    "ENETUNREACH",
+    "EAI_AGAIN",
+    "UND_ERR_SOCKET",
+  ])("records %s recovery only when the wait RPC rejects", async (code) => {
+    const error = `connect ${code} 127.0.0.1:443`;
+    callGatewayMock.mockResolvedValueOnce({
+      status: "error",
+      error,
+      retryableTransportError: true,
+    });
+    const terminal = await waitForAgentRun({ runId: "run-terminal", timeoutMs: 500 });
+    expect(terminal).toMatchObject({ status: "error", error });
+    expect(terminal).not.toHaveProperty("retryableTransportError");
+
+    callGatewayMock.mockRejectedValueOnce(new Error(error));
+    await expect(waitForAgentRun({ runId: "run-disconnected", timeoutMs: 500 })).resolves.toEqual({
+      status: "error",
+      error,
+      retryableTransportError: true,
+    });
+  });
+
+  it.each([
+    undefined,
+    "",
+    "gateway timeout",
+    "gateway request timeout for agent.wait",
+    "ENOENT: no such file",
+    "getaddrinfo ENOTFOUND gateway.example.com",
+  ])("does not mark a nonrecoverable rejected wait RPC: %s", async (error) => {
+    callGatewayMock.mockRejectedValueOnce(new Error(error));
+    const result = await waitForAgentRun({ runId: "run-unrecoverable", timeoutMs: 500 });
+    expect(result).not.toHaveProperty("retryableTransportError");
   });
 
   it("preserves pending agent.wait status", async () => {
@@ -334,6 +330,42 @@ describe("waitForAgentRun", () => {
       status: "ok",
       terminalReply: { disposition: "visible", text: "final reply" },
     });
+  });
+
+  it.each([
+    { name: "confirmed final source reply", sourceReplyDelivered: true, expected: true },
+    { name: "progress-only reply", sourceReplyDelivered: false, expected: undefined },
+    { name: "another destination", sourceReplyDelivered: undefined, expected: undefined },
+    { name: "non-boolean marker", sourceReplyDelivered: "true", expected: undefined },
+    {
+      name: "another run",
+      sourceReplyDelivered: true,
+      receiptRunId: "run-other",
+      expected: undefined,
+    },
+  ])("accepts source delivery evidence only for the waited run: $name", async (entry) => {
+    callGatewayMock.mockResolvedValue({
+      status: "ok",
+      terminalReceipt: {
+        runId: entry.receiptRunId ?? "run-source-reply",
+        sessionId: "session-source",
+        turnId: "turn-source",
+        requested: { provider: "openai", model: "gpt-5.6-luna" },
+        effective: {
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          responseModel: "gpt-5.6-luna",
+        },
+        successfulToolNames: ["message"],
+        rerouted: false,
+        terminalDisposition: "visible",
+        sourceReplyDelivered: entry.sourceReplyDelivered,
+      },
+    });
+
+    const result = await waitForAgentRun({ runId: "run-source-reply", timeoutMs: 500 });
+
+    expect(result.sourceReplyDelivered).toBe(entry.expected);
   });
 
   it("normalizes wait timeouts before sending agent.wait", async () => {
@@ -467,275 +499,77 @@ describe("waitForAgentRun", () => {
   });
 });
 
-describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
+describe("waitForAgentRunReply", () => {
   beforeEach(() => {
     callGatewayMock.mockReset();
   });
 
-  type TranscriptMessage = Record<string, unknown>;
-  type WaitedReplyCase = {
-    name: string;
-    runId: string;
-    messages: TranscriptMessage[];
-    expected: Record<string, unknown>;
-    baseline?: { text?: string; fingerprint?: string };
-    sessionKey?: string;
-    wait?: Record<string, unknown>;
-  };
-
-  const assistant = (text: string, metadata: TranscriptMessage = {}): TranscriptMessage => ({
-    role: "assistant",
-    content: [{ type: "text", text }],
-    ...metadata,
-  });
-  const interSession = (text: string, metadata: TranscriptMessage = {}): TranscriptMessage =>
-    assistant(text, {
-      provenance: {
-        kind: "inter_session",
-        sourceSessionKey: "agent:main:source",
-        sourceTool: "sessions_send",
-      },
-      ...metadata,
-    });
-  const messageToolMirror = (
-    text: string,
-    mirror: TranscriptMessage,
-    metadata: TranscriptMessage = {},
-  ): TranscriptMessage =>
-    assistant(text, {
-      openclawMessageToolMirror: { toolName: "message", ...mirror },
-      ...metadata,
-    });
-
-  const sameReply = assistant("same reply", { timestamp: 42 });
-  const previousReply = assistant("previous real reply", { timestamp: 41 });
-  const forwardedRequest = interSession("forwarded request", {
-    __openclaw: { seq: 41 },
-    timestamp: 41,
-  });
-  const pendingSourceReply = messageToolMirror(
-    "source reply awaiting delivery",
-    {
-      toolCallId: "call-message-send",
-      sourceReplySink: "internal-ui",
-      sourceMessageSeq: 42,
-    },
-    { timestamp: 42 },
-  );
-  const olderBaseline = { text: "older reply", fingerprint: "old-fingerprint" };
-
-  const cases: WaitedReplyCase[] = [
-    {
-      name: "returns undefined when the latest assistant fingerprint matches the baseline",
-      runId: "run-1",
-      messages: [sameReply],
-      baseline: { text: "same reply", fingerprint: JSON.stringify(sameReply) },
-      expected: { status: "ok", replyText: undefined },
-    },
-    {
-      name: "returns undefined when a text-only baseline matches the latest assistant reply",
-      runId: "run-text-baseline",
-      messages: [sameReply],
-      baseline: { text: "same reply" },
-      expected: { status: "ok", replyText: undefined },
-    },
-    {
-      name: "does not treat a message-tool delivery mirror as a new waited reply",
-      runId: "run-source-reply",
-      messages: [
-        previousReply,
-        assistant("already delivered source reply", {
-          provider: "openclaw",
-          model: "delivery-mirror",
-          timestamp: 42,
-        }),
-      ],
-      baseline: { text: "previous real reply", fingerprint: JSON.stringify(previousReply) },
-      expected: { status: "ok", replyText: undefined },
-    },
-    {
-      name: "does not treat a projected message-tool mirror as a new waited reply",
-      runId: "run-projected-source-reply",
-      messages: [
-        previousReply,
-        messageToolMirror(
-          "already delivered source reply",
-          { toolCallId: "call-message-send" },
-          { timestamp: 42 },
-        ),
-      ],
-      baseline: { text: "previous real reply", fingerprint: JSON.stringify(previousReply) },
-      expected: { status: "ok", replyText: undefined },
-    },
-    {
-      name: "returns a projected message-tool reply held for outer A2A delivery",
-      runId: "run-internal-source-reply",
-      sessionKey: "agent:worker:main",
-      messages: [forwardedRequest, pendingSourceReply],
-      expected: { status: "ok", replyText: "source reply awaiting delivery" },
-    },
-    {
-      name: "prefers an internal source reply over a later private final",
-      runId: "run-internal-source-reply-with-private-final",
-      sessionKey: "agent:worker:main",
-      messages: [forwardedRequest, pendingSourceReply, assistant("Done", { timestamp: 43 })],
-      expected: { status: "ok", replyText: "source reply awaiting delivery" },
-    },
-    {
-      name: "does not let a late internal result cross an inter-session turn boundary",
-      runId: "run-after-late-internal-source-reply",
-      sessionKey: "agent:worker:main",
-      messages: [
-        interSession("new forwarded request", { __openclaw: { seq: 42 }, timestamp: 42 }),
-        messageToolMirror(
-          "stale source reply",
-          {
-            toolCallId: "call-message-before-request",
-            sourceReplySink: "internal-ui",
-            sourceMessageSeq: 41,
-          },
-          { timestamp: 41 },
-        ),
-        assistant("fresh reply", { timestamp: 43 }),
-      ],
-      expected: { status: "ok", replyText: "fresh reply" },
-    },
-    {
-      name: "does not return a private final written after a message-tool delivery mirror",
-      runId: "run-source-reply-with-private-final",
-      messages: [
-        interSession("forwarded request", { timestamp: 41 }),
-        messageToolMirror(
-          "already delivered source reply",
-          { toolCallId: "call-message-send" },
-          { timestamp: 42 },
-        ),
-        assistant("Done", { timestamp: 43 }),
-      ],
-      expected: { status: "ok", replyText: undefined },
-    },
-    {
-      name: "does not let an older turn's message-tool mirror suppress a fresh reply",
-      runId: "run-after-older-source-reply",
-      messages: [
-        messageToolMirror(
-          "older delivered reply",
-          { toolCallId: "call-older-message-send" },
-          { timestamp: 40 },
-        ),
-        interSession("new forwarded request", { timestamp: 41 }),
-        assistant("fresh reply", { timestamp: 42 }),
-      ],
-      expected: { status: "ok", replyText: "fresh reply" },
-    },
-    {
-      name: "does not resurrect an older reply when only a delivery mirror is newer",
-      runId: "run-source-reply-without-baseline",
-      messages: [
-        assistant("stale previous reply", { timestamp: 41 }),
-        assistant("already delivered source reply", {
-          provider: "openclaw",
-          model: "delivery-mirror",
-          timestamp: 42,
-        }),
-      ],
-      expected: { status: "ok", replyText: undefined },
-    },
-    {
-      name: "returns the new assistant text when the fingerprint changes",
-      runId: "run-2",
-      messages: [assistant("fresh reply", { timestamp: 99 })],
-      baseline: olderBaseline,
-      expected: { status: "ok", replyText: "fresh reply" },
-    },
-    {
-      name: "preserves successful wait metadata when returning an updated reply",
-      runId: "run-with-metadata",
-      messages: [assistant("fresh reply", { timestamp: 99 })],
-      baseline: olderBaseline,
-      wait: {
-        status: "ok",
-        startedAt: 100,
-        endedAt: 200,
-        stopReason: "completed",
-        yielded: true,
-        providerStarted: true,
-      },
-      expected: {
-        status: "ok",
-        startedAt: 100,
-        endedAt: 200,
-        stopReason: "completed",
-        yielded: true,
-        providerStarted: true,
-        replyText: "fresh reply",
-      },
-    },
-  ];
-
-  it.each(cases)("$name", async ({ runId, messages, expected, baseline, sessionKey, wait }) => {
-    callGatewayMock
-      .mockResolvedValueOnce(wait ?? { status: "ok" })
-      .mockResolvedValueOnce({ messages });
-
-    const result = await waitForAgentRunAndReadUpdatedAssistantReply({
-      runId,
-      sessionKey: sessionKey ?? "agent:main:child",
-      timeoutMs: 1_000,
-      baseline,
-    });
-
-    expect(result).toEqual(expected);
-    expect(callGatewayMock.mock.calls.map(([request]) => request.method)).toEqual([
-      "agent.wait",
-      "chat.history",
-    ]);
-  });
-
-  it("returns an authoritative visible terminal reply without reading history", async () => {
+  it("returns the run's reply and metadata without consulting unrelated session history", async () => {
     callGatewayMock.mockImplementation(async (request) => {
-      if (request.method === "agent.wait") {
-        return {
-          status: "ok",
-          terminalReply: { disposition: "visible", text: "authoritative reply" },
-        };
+      if (request.method !== "agent.wait") {
+        throw new Error("session history is not delivery evidence");
       }
-      throw new Error("history unavailable");
+      return {
+        status: "ok",
+        startedAt: 100,
+        endedAt: 200,
+        stopReason: "completed",
+        yielded: true,
+        providerStarted: true,
+        terminalReply: { disposition: "visible", text: "authoritative reply" },
+      };
     });
 
-    const result = await waitForAgentRunAndReadUpdatedAssistantReply({
+    const result = await waitForAgentRunReply({
       runId: "run-visible-terminal-reply",
-      sessionKey: "agent:main:child",
       timeoutMs: 1_000,
     });
 
     expect(result).toEqual({
       status: "ok",
+      startedAt: 100,
+      endedAt: 200,
+      stopReason: "completed",
+      yielded: true,
+      providerStarted: true,
       terminalReply: { disposition: "visible", text: "authoritative reply" },
       replyText: "authoritative reply",
     });
     expect(callGatewayMock.mock.calls.map(([request]) => request.method)).toEqual(["agent.wait"]);
   });
 
-  it.each(["silent", "empty"] as const)(
-    "does not resurrect transcript text after an authoritative %s terminal reply",
-    async (disposition) => {
-      callGatewayMock.mockImplementation(async (request) => {
-        if (request.method === "agent.wait") {
-          return { status: "ok", terminalReply: { disposition } };
-        }
+  it.each([
+    { name: "silent", terminalReply: { disposition: "silent" } },
+    { name: "empty", terminalReply: { disposition: "empty" } },
+    { name: "missing", terminalReply: undefined },
+  ])("does not resurrect history for a $name terminal reply", async ({ terminalReply }) => {
+    callGatewayMock.mockImplementation(async (request) => {
+      if (request.method !== "agent.wait") {
         throw new Error("history must not override terminal reply evidence");
+      }
+      return { status: "ok", terminalReply };
+    });
+
+    const result = await waitForAgentRunReply({ runId: "run-no-reply", timeoutMs: 1_000 });
+
+    expect(result).toEqual({ status: "ok", terminalReply });
+    expect(result.replyText).toBeUndefined();
+    expect(callGatewayMock.mock.calls.map(([request]) => request.method)).toEqual(["agent.wait"]);
+  });
+
+  it.each(["timeout", "error", "pending"] as const)(
+    "does not return visible text from a run whose status is %s",
+    async (status) => {
+      callGatewayMock.mockResolvedValue({
+        status,
+        terminalReply: { disposition: "visible", text: "unfinished reply" },
       });
 
-      const result = await waitForAgentRunAndReadUpdatedAssistantReply({
-        runId: `run-${disposition}-terminal-reply`,
-        sessionKey: "agent:main:child",
-        timeoutMs: 1_000,
-        baseline: { text: "older reply" },
-      });
+      const result = await waitForAgentRunReply({ runId: "run-unfinished", timeoutMs: 1_000 });
 
-      expect(result).toEqual({ status: "ok", terminalReply: { disposition } });
-      expect(callGatewayMock.mock.calls.map(([request]) => request.method)).toEqual(["agent.wait"]);
+      expect(result.status).toBe(status);
+      expect(result.replyText).toBeUndefined();
+      expect(callGatewayMock).toHaveBeenCalledOnce();
     },
   );
 });
@@ -873,31 +707,5 @@ describe("waitForAgentRunsToDrain", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-});
-
-describe("isRecoverableAgentWaitError", () => {
-  it.each([
-    "ECONNRESET",
-    "ECONNREFUSED",
-    "ETIMEDOUT",
-    "EPIPE",
-    "EHOSTUNREACH",
-    "ENETUNREACH",
-    "EAI_AGAIN",
-    "UND_ERR_SOCKET",
-  ])("recovers from %s connection failures", (code) => {
-    expect(isRecoverableAgentWaitError(`connect ${code} 127.0.0.1:443`)).toBe(true);
-  });
-
-  it.each([
-    undefined,
-    "",
-    "gateway timeout",
-    "gateway request timeout for agent.wait",
-    "ENOENT: no such file",
-    "getaddrinfo ENOTFOUND gateway.example.com",
-  ])("does not recover from %s", (error) => {
-    expect(isRecoverableAgentWaitError(error)).toBe(false);
   });
 });

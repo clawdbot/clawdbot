@@ -4,6 +4,7 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { normalizeSandboxHostCsp } from "../agents/sandbox-host.js";
 import { BoardValidationError } from "./board-layout.js";
+import { normalizeGitHubActionsGrant } from "./github-actions-capability.js";
 
 const MAX_DECLARED_ORIGINS = 32;
 const MAX_DECLARED_TOOLS = 64;
@@ -62,7 +63,7 @@ function normalizeTool(value: string): string {
   ) {
     return invalidDeclaration(`invalid board widget tool capability: ${value}`);
   }
-  return tool;
+  return normalizeGitHubActionsGrant(tool);
 }
 
 export function normalizeBoardWidgetDeclared(

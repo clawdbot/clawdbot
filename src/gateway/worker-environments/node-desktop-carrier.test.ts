@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import type { NodeDesktopStreamBroker } from "../desktop/node-stream-broker.js";
+import * as observeBridge from "../desktop/observe-bridge.js";
 import { createDesktopSessionRegistry } from "../desktop/session-registry.js";
 import type {
   NodeWorkerSupervisorNodeProof,
@@ -105,6 +106,12 @@ describe("worker node desktop carrier", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("observes an exact durable node desktop without SSH and preauthenticates it", async () => {
+    const mint = vi.spyOn(observeBridge, "mintDesktopObserverToken");
+    const client = { invalidated: false };
+    const requester = {
+      signal: new AbortController().signal,
+      isCurrent: () => !client.invalidated,
+    };
     const record = support.seedReadyNodeDesktop("worker-node-desktop-observe");
     let nowMs = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => nowMs);
@@ -120,7 +127,7 @@ describe("worker node desktop carrier", () => {
     });
     carrier.bindRuntime({ transport: transport.transport, streamBroker: streamed.broker });
 
-    const observing = carrier.observe({ record, control: false });
+    const observing = carrier.observe({ record, control: false, requester });
     await support.waitForFast(() => expect(transport.invoke).toHaveBeenCalledOnce());
     nowMs = 50_000;
     streamed.attachNext();
@@ -132,6 +139,12 @@ describe("worker node desktop carrier", () => {
       control: false,
     });
     expect(await observing).not.toHaveProperty("vncPassword");
+    const mintedRequester = mint.mock.calls[0]?.[0].requester;
+    expect(mintedRequester).toBe(requester);
+    expect(mintedRequester?.isCurrent()).toBe(true);
+    client.invalidated = true;
+    expect(mintedRequester?.isCurrent()).toBe(false);
+    expect(requester.signal.aborted).toBe(false);
     expect(transport.invoke).toHaveBeenCalledWith(
       expect.objectContaining({
         params: {

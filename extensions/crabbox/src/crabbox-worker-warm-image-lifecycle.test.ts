@@ -109,7 +109,7 @@ describe("Crabbox warm-image lifecycle ownership", () => {
         if (argv[2] === "create") {
           const checkpointId = refreshing ? replacementId : CHECKPOINT_ID;
           providerCheckpoints.add(checkpointId);
-          return checkpointResult(checkpointId, argv[argv.indexOf("--id") + 1]!, "pending");
+          return checkpointResult(checkpointId, argv[argv.indexOf("--id") + 1]!, "completed");
         }
         if (argv[2] === "delete") {
           const checkpointId = argv[3];

@@ -87,6 +87,12 @@ Use this when you want Tavily-specific search controls instead of generic `web_s
 | `include_domains` | string array | (none)                                 | Only include results from these domains.      |
 | `exclude_domains` | string array | (none)                                 | Exclude results from these domains.           |
 
+For publication metadata, use `topic: "news"`. When Tavily supplies a
+`published_date`, OpenClaw returns it as `published`; GMT news timestamps are
+converted to ISO 8601. Missing dates, relative ages, and arbitrary text stay
+absent. A `time_range` filter is not evidence of a publication date, and returned
+dates still need source verification for freshness-sensitive workflows.
+
 Search depth tradeoff:
 
 | Depth      | Speed  | Relevance | Best for                             |

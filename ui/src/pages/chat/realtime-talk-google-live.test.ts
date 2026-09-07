@@ -477,13 +477,18 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       }),
       request: vi.fn(async (method: string, params: Record<string, unknown>) => {
         if (method === "chat.abort") {
-          expect(params).toEqual({ sessionKey: "main", runId });
+          expect(params).toEqual({ sessionKey: "agent:main:main", agentId: "main", runId });
           return { ok: true, aborted: true };
         }
         expect(method).toBe("talk.client.toolCall");
         expect(params.callId).toBe("call-1");
         expect(params.name).toBe(REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME);
-        return { runId };
+        return {
+          runId,
+          idempotencyKey: runId,
+          agentId: "main",
+          agentSessionKey: "agent:main:main",
+        };
       }),
     } as unknown as RealtimeTalkTransportContext["client"];
     const transport = await createTransport({ onStatus }, client);
@@ -512,7 +517,11 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     }
 
     await waitForFast(() => {
-      expect(client["request"]).toHaveBeenCalledWith("chat.abort", { sessionKey: "main", runId });
+      expect(client["request"]).toHaveBeenCalledWith("chat.abort", {
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        runId,
+      });
     });
     expect(onStatus).not.toHaveBeenCalledWith("listening");
   });
@@ -526,7 +535,12 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       }),
       request: vi.fn(async (method: string) => {
         expect(method).toBe("talk.client.toolCall");
-        return { runId: "run-1" };
+        return {
+          runId: "run-1",
+          idempotencyKey: "run-1",
+          agentId: "main",
+          agentSessionKey: "agent:main:main",
+        };
       }),
     } as unknown as RealtimeTalkTransportContext["client"];
     const transport = await createTransport({}, client);
@@ -681,7 +695,12 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
         return { ok: true, aborted: true };
       }
       expect(method).toBe("talk.client.toolCall");
-      return { runId: `run-${String(params.callId)}` };
+      return {
+        runId: `run-${String(params.callId)}`,
+        idempotencyKey: `run-${String(params.callId)}`,
+        agentId: "main",
+        agentSessionKey: "agent:main:main",
+      };
     });
     const client = {
       addEventListener: vi.fn((listener: (event: { event: string; payload?: unknown }) => void) => {
@@ -723,12 +742,14 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
 
     await waitForFast(() =>
       expect(client["request"]).toHaveBeenCalledWith("chat.abort", {
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
+        agentId: "main",
         runId: "run-call-1",
       }),
     );
     expect(client["request"]).not.toHaveBeenCalledWith("chat.abort", {
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
+      agentId: "main",
       runId: "run-call-2",
     });
     await waitForFast(() =>
@@ -749,7 +770,8 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     );
     await waitForFast(() =>
       expect(client["request"]).toHaveBeenCalledWith("chat.abort", {
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
+        agentId: "main",
         runId: "run-call-2",
       }),
     );
@@ -758,8 +780,16 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
   });
 
   it("aborts an initial consult request and ignores a replay of its cancelled call id", async () => {
-    let resolveToolCall: (value: { runId: string }) => void = () => undefined;
-    const pendingToolCall = new Promise<{ runId: string }>((resolve) => {
+    let resolveToolCall: (value: {
+      runId: string;
+      agentId: string;
+      agentSessionKey: string;
+    }) => void = () => undefined;
+    const pendingToolCall = new Promise<{
+      runId: string;
+      agentId: string;
+      agentSessionKey: string;
+    }>((resolve) => {
       resolveToolCall = resolve;
     });
     const request = vi.fn((method: string): Promise<unknown> => {
@@ -790,10 +820,11 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
         true,
       ),
     );
-    resolveToolCall({ runId: "run-1" });
+    resolveToolCall({ runId: "run-1", agentId: "main", agentSessionKey: "agent:main:main" });
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("chat.abort", {
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
+        agentId: "main",
         runId: "run-1",
       }),
     );

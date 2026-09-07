@@ -8,15 +8,21 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fixtureCapabilityConsentArgs } from "../package-compat.mjs";
+import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
+import { packFutureUpdateFixture } from "../update-first-hop-package-fixtures.mjs";
 import { observePostCoreCommand } from "./process-observer.mjs";
 
+// Without a core tarball, run only the plugin reinstall boundary against the supplied CLI.
 export async function runConsentScenario(entry, coreTarball) {
-  assert(entry && coreTarball, "expected installed entry and canonical core tarball");
-  const coreHash = createHash("sha256");
-  for await (const chunk of fs.createReadStream(coreTarball)) {
-    coreHash.update(chunk);
+  assert(entry, "expected CLI entry");
+  let coreTarballSha256;
+  if (coreTarball) {
+    const coreHash = createHash("sha256");
+    for await (const chunk of fs.createReadStream(coreTarball)) {
+      coreHash.update(chunk);
+    }
+    coreTarballSha256 = coreHash.digest("hex");
   }
-  const coreTarballSha256 = coreHash.digest("hex");
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-update-consent-"));
   const pluginId = "update-consent-fixture";
   const packageName = `@acme/${pluginId}`;
@@ -133,7 +139,8 @@ export async function runConsentScenario(entry, coreTarball) {
         env: {
           ...process.env,
           OPENCLAW_NPM_REGISTRY_PORT: String(registryPort ?? 0),
-          OPENCLAW_NPM_REGISTRY_UPSTREAM: "https://registry.npmjs.org",
+          OPENCLAW_NPM_REGISTRY_UPSTREAM:
+            process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL || "https://registry.npmjs.org",
         },
         stdio: ["ignore", "inherit", "inherit"],
       },
@@ -147,16 +154,19 @@ export async function runConsentScenario(entry, coreTarball) {
     process.env.npm_config_registry = process.env.NPM_CONFIG_REGISTRY;
   }
 
-  async function snapshot(label, version) {
+  async function snapshot(label, version, enabled = true) {
     const report = JSON.parse(
       (await cli(label, ["plugins", "inspect", pluginId, "--runtime", "--json"])).output,
     );
-    assert.equal(report.plugin.status, "loaded");
+    assert.equal(report.plugin.status, enabled ? "loaded" : "disabled");
+    assert.equal(report.plugin.enabled, enabled);
+    const config = JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8"));
+    assert.equal(config.plugins.entries[pluginId].enabled, enabled);
     const record = report.install;
     assert.equal(record.version, `${version}.0.0`);
     assert.deepEqual(
       report.tools.flatMap((tool) => tool.names).toSorted(),
-      expectedSurface(version).tools,
+      enabled ? expectedSurface(version).tools : [],
     );
     const surface = expectedSurface(version);
     assert.deepEqual(record.acceptedSurface, surface);
@@ -169,8 +179,11 @@ export async function runConsentScenario(entry, coreTarball) {
     assert(record.acceptedSurfaceAt);
     const bytes = fs.readFileSync(path.join(record.installPath, "index.js"), "utf8");
     assert.equal(bytes, artifacts.get(version).code);
+    const pkg = JSON.parse(fs.readFileSync(path.join(record.installPath, "package.json"), "utf8"));
+    assert.equal(pkg.version, `${version}.0.0`);
     snapshots.push({
       label,
+      enabled,
       record,
       payloadSha256: createHash("sha256").update(bytes).digest("hex"),
     });
@@ -221,14 +234,64 @@ export async function runConsentScenario(entry, coreTarball) {
           }),
         );
         fs.writeFileSync(path.join(dir, "index.js"), code);
-        const tarball = path.join(root, `fixture-${version}.tgz`);
-        execFileSync("tar", ["-czf", tarball, "-C", path.dirname(dir), "package"]);
+        const filename = execFileSync("npm", ["pack", "--pack-destination", root, "--silent"], {
+          cwd: dir,
+          encoding: "utf8",
+        }).trim();
+        const tarball = path.join(root, filename);
         artifacts.set(version, {
           tarball,
           code,
           integrity: `sha512-${createHash("sha512").update(fs.readFileSync(tarball)).digest("base64")}`,
         });
       }
+      const reinstall = (version) => [
+        "plugins",
+        "install",
+        `npm-pack:${artifacts.get(version).tarball}`,
+        "--force",
+      ];
+      await cli("reinstall-initial", [...reinstall(1), "--accept-capabilities"]);
+      await snapshot("reinstall-initial-state", 1);
+      await cli("disable", ["plugins", "disable", pluginId]);
+      await cli("reinstall-unchanged", reinstall(1));
+      const disabled = await snapshot("reinstall-unchanged-disabled", 1, false);
+      const configBefore = fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8");
+      const indexBefore = readPluginInstallIndex();
+      assert.deepEqual(indexBefore.installRecords[pluginId], disabled.record);
+      const rejected = await cli("reinstall-widened-denied", reinstall(2), { allowFailure: true });
+      assert.equal(rejected.code, 1, `${rejected.output}\n${rejected.diagnostic}`);
+      assert.match(rejected.output + rejected.diagnostic, /requires capability consent/i);
+      assert.equal(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8"), configBefore);
+      assert.deepEqual(readPluginInstallIndex(), indexBefore);
+      assert.deepEqual(await snapshot("reinstall-denied-preserved", 1, false), disabled);
+      await cli("reinstall-widened-accepted", [...reinstall(2), "--accept-capabilities"]);
+      const acceptedDisabled = await snapshot("reinstall-accepted-disabled", 2, false);
+      assert.deepEqual(readPluginInstallIndex().installRecords[pluginId], acceptedDisabled.record);
+      await cli("reinstall-enable", ["plugins", "enable", pluginId]);
+      assert.deepEqual(await snapshot("reinstall-enabled", 2), acceptedDisabled);
+      const reinstallAssertions = [
+        "unchanged forced reinstall reuses acceptance and preserves authored disablement",
+        "widened forced reinstall without consent preserves config, package, and SQLite index",
+        "accepted forced reinstall replaces package and acceptance while remaining disabled",
+        "explicit enable activates the reviewed replacement",
+      ];
+      if (!coreTarball) {
+        console.log(
+          JSON.stringify(
+            { status: "passed", root, assertions: reinstallAssertions, runs, snapshots },
+            null,
+            2,
+          ),
+        );
+        return;
+      }
+      const deniedCoreTarball = path.join(root, "core-denied-future.tgz");
+      const acceptedCoreTarball = path.join(root, "core-accepted-future.tgz");
+      const coreUpdateFixtures = [
+        packFutureUpdateFixture(coreTarball, deniedCoreTarball, 0),
+        packFutureUpdateFixture(coreTarball, acceptedCoreTarball, 1),
+      ];
       await serve(1);
       await cli("initial-install", [
         "plugins",
@@ -246,7 +309,7 @@ export async function runConsentScenario(entry, coreTarball) {
       await serve(2);
       const denied = await cli(
         "update-denied",
-        ["update", "--tag", coreTarball, "--yes", "--json"],
+        ["update", "--tag", deniedCoreTarball, "--yes", "--json"],
         { allowFailure: true },
       );
       const deniedResult = JSON.parse(denied.output);
@@ -281,13 +344,18 @@ export async function runConsentScenario(entry, coreTarball) {
       const accepted = await cli("update-accepted", [
         "update",
         "--tag",
-        coreTarball,
+        acceptedCoreTarball,
         "--accept-capabilities",
         "--yes",
         "--no-restart",
         "--json",
       ]);
-      JSON.parse(accepted.output);
+      const acceptedResult = JSON.parse(accepted.output);
+      assert.equal(acceptedResult.status, "ok", "accepted core update must execute, not skip");
+      const installedPackage = JSON.parse(
+        fs.readFileSync(path.resolve(path.dirname(entry), "..", "package.json"), "utf8"),
+      );
+      assert.equal(installedPackage.version, coreUpdateFixtures[1].targetVersion);
       assert(
         accepted.children.some((child) => child.postCore),
         "accepted update did not hand off to a fresh post-core process",
@@ -318,7 +386,9 @@ export async function runConsentScenario(entry, coreTarball) {
             status: "passed",
             root,
             coreTarballSha256,
+            coreUpdateFixtures,
             assertions: [
+              ...reinstallAssertions,
               "no-consent preserves old payload and record",
               "repair accepts exact surface and integrity",
               "acceptance grants no future widening",

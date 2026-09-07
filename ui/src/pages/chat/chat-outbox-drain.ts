@@ -1,6 +1,10 @@
 import { CHAT_INPUT_RUN_ID_MAX_CHARS } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import {
+  findChatSubmissionMessage,
+  readChatInputReceipt,
+} from "../../lib/chat/history-message-identity.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import {
   listStoredChatOutboxes,
@@ -28,26 +32,30 @@ import {
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import {
+  isInterruptedChatInput,
+  readStoredChatOutbox,
+  reconcilePendingChatOutboxInput,
+} from "./chat-outbox-receipts.ts";
+import {
   consumeChatOutboxRetry,
   retryableGatewayDelayMs,
   scheduleChatOutboxRetry,
   settleChatOutboxRetry,
 } from "./chat-outbox-retry.ts";
-import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import {
   anyChatOutboxPaneMatches,
   readQueuedMessageById,
-  removeDeliveredQueuedChatSendForRun,
   removeQueuedMessageWithoutReleasing,
   syncVisibleChatQueueProjection,
   updateQueuedMessage,
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import {
-  chatMessagesContainQueuedSend,
   chatSendHoldReason,
   OFFLINE_QUEUE_STORAGE_ERROR,
+  UNCONFIRMED_CHAT_SEND_ERROR,
   retireDeliveredQueuedUserTurn,
+  requiresChatInputConsumption,
   surfaceChatDeliveryFailure,
 } from "./chat-send-support.ts";
 import { formatConnectError } from "./connect-error.ts";
@@ -64,6 +72,7 @@ export type QueuedChatSendOptions = {
   pendingSettings?: Promise<boolean>;
   previousAttachments?: ChatAttachment[];
   previousDraft?: string;
+  previousMentions?: ChatQueueItem["mentions"];
   restoreAttachments?: boolean;
   restoreDraft?: boolean;
   /** Recognized remote commands remain editable when the Gateway rejects them. */
@@ -100,8 +109,6 @@ type StoredChatOutboxDrainLane = {
   rerun: boolean;
 };
 
-export const UNCONFIRMED_CHAT_SEND_ERROR =
-  "Reconnected before delivery was confirmed. Check the conversation — retry only if your message didn't arrive.";
 const UNCERTAIN_CLEAR_SUCCESSOR_ERROR =
   "A preceding /clear may have completed. Review the current conversation before retrying.";
 
@@ -127,15 +134,6 @@ export function scheduleStoredChatOutboxRetry(
   );
 }
 
-function readStoredChatOutbox(
-  host: ChatHost,
-  scope: StoredChatOutboxScope,
-): StoredChatOutbox | undefined {
-  return listStoredChatOutboxes(host).find(
-    (outbox) => outbox.sessionKey === scope.sessionKey && outbox.agentId === scope.agentId,
-  );
-}
-
 function sessionRunProvesQueuedDelivery(
   sessionInfo: ChatHistoryResult["sessionInfo"],
   item: ChatQueueItem,
@@ -146,6 +144,7 @@ function sessionRunProvesQueuedDelivery(
       sessionInfo?.lastRunId === item.sendRunId),
   );
 }
+
 async function readCurrentStoredChatHistory(
   host: ChatHost,
   outbox: StoredChatOutbox,
@@ -155,17 +154,39 @@ async function readCurrentStoredChatHistory(
   dependencies: ChatOutboxDrainDependencies,
 ): Promise<ChatHistoryResult | "blocked" | "continue"> {
   let history: ChatHistoryResult;
+  let pendingBefore: number | undefined;
+  const request = {
+    sessionKey: outbox.sessionKey,
+    ...(isUiGlobalSessionKey(outbox.sessionKey) && outbox.agentId
+      ? { agentId: outbox.agentId }
+      : {}),
+    ...(item.sendRunId && item.sendRunId.length <= CHAT_INPUT_RUN_ID_MAX_CHARS
+      ? { inputRunIds: [item.sendRunId] }
+      : {}),
+  };
   try {
     history = await client.request<ChatHistoryResult>("chat.history", {
-      sessionKey: outbox.sessionKey,
-      ...(isUiGlobalSessionKey(outbox.sessionKey) && outbox.agentId
-        ? { agentId: outbox.agentId }
-        : {}),
+      ...request,
       limit: 1000,
-      ...(item.sendRunId && item.sendRunId.length <= CHAT_INPUT_RUN_ID_MAX_CHARS
-        ? { inputRunIds: [item.sendRunId] }
-        : {}),
     });
+    // Custody receipts are exact but display pages contain only twenty inputs.
+    // Follow their bounded cursor instead of stranding an older accepted head.
+    while (
+      readChatInputReceipt(history, item) === "pending" &&
+      !history.pendingInputs?.items.some((input) => input.runId === item.sendRunId) &&
+      history.pendingInputs?.nextBefore !== undefined &&
+      (pendingBefore === undefined || history.pendingInputs.nextBefore < pendingBefore)
+    ) {
+      if (host.client !== client || host.connectionEpoch !== connectionEpoch || !host.connected) {
+        return "blocked";
+      }
+      pendingBefore = history.pendingInputs.nextBefore;
+      history = await client.request<ChatHistoryResult>("chat.history", {
+        ...request,
+        limit: 20,
+        pendingBefore,
+      });
+    }
   } catch (err) {
     const connectionCurrent =
       host.client === client && host.connectionEpoch === connectionEpoch && host.connected;
@@ -218,26 +239,25 @@ async function readCurrentStoredChatHistory(
     return "continue";
   }
   syncVisibleChatQueueProjection(host);
-  const historySessionId = history.sessionInfo?.sessionId ?? history.sessionId;
-  const inputRunId =
-    !item.sessionId || item.sessionId === historySessionId ? item.sendRunId : undefined;
-  const acceptedPendingInput =
-    inputRunId && history.pendingInputs?.items.some((input) => input.runId === inputRunId);
-  const consumedInput =
-    inputRunId && history.inputConsumptions?.some((input) => input.runId === inputRunId);
-  // Gateway chat run IDs equal client idempotency keys; terminal-event retirement
-  // uses the same delivery proof, even before the transcript marker is persisted.
+  const pendingInput = reconcilePendingChatOutboxInput(host, outbox, item, history, pendingBefore);
+  if (pendingInput !== undefined) {
+    return pendingInput;
+  }
+  const inputReceipt = readChatInputReceipt(history, item);
+  // Ordinary chat needs input consumption; command lifecycle receipts retain
+  // their separate contract when no user transcript message is produced.
   if (
-    acceptedPendingInput ||
-    consumedInput ||
-    chatMessagesContainQueuedSend(history.messages, item) ||
-    sessionRunProvesQueuedDelivery(history.sessionInfo, item)
+    inputReceipt ||
+    findChatSubmissionMessage(
+      history.messages,
+      item.sendRunId,
+      requiresChatInputConsumption(item),
+    ) ||
+    (!requiresChatInputConsumption(item) &&
+      sessionRunProvesQueuedDelivery(history.sessionInfo, item))
   ) {
-    // Pending custody already owns the display bytes; other delivery proof must
-    // finish the outbox owner's attachment handoff before releasing local bytes.
-    const retired = acceptedPendingInput
-      ? removeDeliveredQueuedChatSendForRun(host, item.sendRunId, outbox) !== null
-      : (await retireDeliveredQueuedUserTurn(host, item.sendRunId, outbox)) === "retired";
+    const retired =
+      (await retireDeliveredQueuedUserTurn(host, item.sendRunId, outbox)) === "retired";
     if (
       !retired ||
       host.client !== client ||
@@ -247,11 +267,8 @@ async function readCurrentStoredChatHistory(
       return "blocked";
     }
     if (visibleSessionMatches(host, outbox.sessionKey, outbox.agentId)) {
-      if (acceptedPendingInput && historySessionId && host.currentSessionId === historySessionId) {
-        applyChatPendingInputs(host, history.pendingInputs);
-      }
       void loadChatHistory(host, {
-        supersedeInFlight: Boolean(acceptedPendingInput || consumedInput),
+        supersedeInFlight: Boolean(inputReceipt),
       });
     }
     return "continue";
@@ -302,6 +319,15 @@ async function reconcileStoredChatOutboxHead(
   }
   const historyArgs = [host, outbox, item, client, connectionEpoch, dependencies] as const;
   const history = await readCurrentStoredChatHistory(...historyArgs);
+  if (
+    typeof history !== "string" &&
+    isInterruptedChatInput(history, item) &&
+    (item.queueMode === "steer" ||
+      item.queueMode === "interrupt" ||
+      !(visibleSessionMatches(host, outbox.sessionKey, outbox.agentId) && isChatBusy(host)))
+  ) {
+    return "send";
+  }
   // Passive unknown sends need positive delivery proof; only an explicit retry
   // may continue through idle reconciliation to the same idempotency key.
   if (

@@ -19,6 +19,7 @@ it("projects session actors and explicitly clears absent attribution", () => {
   ).toMatchObject({
     createdActor: { type: "human", id: "profile-ada", label: "Ada" },
     archivedBy: null,
+    archiveReason: null,
     participants: [{ identity: { type: "profile", id: "profile-bob" }, label: "Bob" }],
     participantCount: 1,
   });
@@ -30,11 +31,13 @@ it("projects session actors and explicitly clears absent attribution", () => {
         kind: "direct",
         updatedAt: 2,
         archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
+        archiveReason: "active-session-cap",
       },
     }),
   ).toMatchObject({
     createdActor: null,
     archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
+    archiveReason: "active-session-cap",
     participants: [],
     participantCount: 0,
   });
@@ -87,10 +90,14 @@ it("serializes merge tombstones without flattening row-only execution fields", (
   expect(snapshot).toMatchObject({
     agentStatus: null,
     observerDigest: null,
+    activeModel: null,
+    activeModelProvider: null,
     traceLevel: "full",
     session: {
       agentStatus: null,
       observerDigest: null,
+      activeModel: null,
+      activeModelProvider: null,
       traceLevel: "full",
       worktree: { id: "wt-1", branch: "feature", repoRoot: "/private/repo" },
       execNode: "private-node",
@@ -189,13 +196,24 @@ it.each(["user", "auto", null] as const)(
         updatedAt: 1,
         model: "model-a",
         modelProvider: "provider",
+        activeModel: "model-b",
+        activeModelProvider: "fallback-provider",
         modelOverrideSource,
       },
       lifecycle: true,
       includeSession: true,
     });
-    expect(snapshot.modelOverrideSource).toBeUndefined();
-    expect(snapshot.session).not.toHaveProperty("modelOverrideSource");
+    for (const field of [
+      "model",
+      "modelProvider",
+      "activeModel",
+      "activeModelProvider",
+      "modelOverrideSource",
+      "agentRuntime",
+    ]) {
+      expect(snapshot).not.toHaveProperty(field);
+      expect(snapshot.session).not.toHaveProperty(field);
+    }
   },
 );
 

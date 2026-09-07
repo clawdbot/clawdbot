@@ -3,6 +3,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type {
@@ -10,12 +11,12 @@ import type {
   SessionTranscriptRawDeltaResult,
   SessionTranscriptReadScope,
 } from "./session-accessor.sqlite-contract.js";
-import { coerceSqliteNumber } from "./session-accessor.sqlite-normalize.js";
 import {
   getSessionKysely,
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { normalizeVisibleMessageLimit } from "./session-accessor.sqlite-visible-cursor.js";
 import {
   resolveSqliteSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
@@ -38,19 +39,6 @@ type RawTranscriptCursor = {
 type SessionTranscriptRawDeltaPage = Extract<SessionTranscriptRawDeltaResult, { kind: "page" }>;
 
 type ResolvedTranscriptReadScope = ReturnType<typeof resolveSqliteTranscriptReadScope>;
-
-function normalizeRawDeltaLimit(
-  value: number | undefined,
-  fallback: number,
-  maximum: number,
-  name: string,
-): number {
-  const resolved = value ?? fallback;
-  if (!Number.isInteger(resolved) || resolved < 1 || resolved > maximum) {
-    throw new RangeError(`${name} must be an integer between 1 and ${String(maximum)}`);
-  }
-  return resolved;
-}
 
 function encodeRawTranscriptCursor(cursor: RawTranscriptCursor): string {
   return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
@@ -109,13 +97,13 @@ export function readTranscriptRawDelta(
   limits: SessionTranscriptRawDeltaLimits = {},
 ): SessionTranscriptRawDeltaResult {
   const resolved = resolveSqliteTranscriptReadScope(scope);
-  const maxEvents = normalizeRawDeltaLimit(
+  const maxEvents = normalizeVisibleMessageLimit(
     limits.maxEvents,
     DEFAULT_RAW_TRANSCRIPT_MAX_EVENTS,
     MAX_RAW_TRANSCRIPT_EVENTS,
     "maxEvents",
   );
-  const maxBytes = normalizeRawDeltaLimit(
+  const maxBytes = normalizeVisibleMessageLimit(
     limits.maxBytes,
     DEFAULT_RAW_TRANSCRIPT_MAX_BYTES,
     MAX_RAW_TRANSCRIPT_BYTES,
@@ -194,7 +182,7 @@ function readRawDeltaInTransaction(
       .limit(1),
   );
   const maxSeq = Math.min(
-    frontier ? coerceSqliteNumber(frontier.seq) : -1,
+    frontier ? sqliteNumber(frontier.seq) : -1,
     beforeEventSeq === undefined ? Number.POSITIVE_INFINITY : beforeEventSeq - 1,
   );
   if (cursor.lastSeq > maxSeq) {
@@ -221,8 +209,8 @@ function readRawDeltaInTransaction(
       .orderBy("seq", "asc")
       .limit(maxEvents + 1),
   ).rows.map((row) => ({
-    seq: coerceSqliteNumber(row.seq),
-    serializedBytes: coerceSqliteNumber(row.serialized_bytes),
+    seq: sqliteNumber(row.seq),
+    serializedBytes: sqliteNumber(row.serialized_bytes),
   }));
 
   let serializedBytes = 0;
@@ -250,7 +238,7 @@ function readRawDeltaInTransaction(
             .orderBy("seq", "asc"),
         ).rows.map((row) => ({
           event: JSON.parse(row.event_json),
-          seq: coerceSqliteNumber(row.seq),
+          seq: sqliteNumber(row.seq),
         }));
   const nextCursor = encodeRawTranscriptCursor({ ...cursor, lastSeq });
   const requiredBytes =

@@ -1,10 +1,12 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { crabboxCommandError } from "./crabbox-worker-command-error.js";
 import { runCrabboxCommand, type CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import {
   buildCrabboxAllocationArgs,
   nonEmptyString,
+  resolveCrabboxWarmImageProfileKey,
   type parseCrabboxProfile,
   type resolveCrabboxProvisionProfile,
 } from "./crabbox-worker-profile.js";
@@ -43,6 +45,7 @@ type AllocationContext = LeaseContext & {
   profile: ReturnType<typeof resolveCrabboxProvisionProfile>["profile"];
   slug: string;
   projectKey?: string;
+  nodeRuntimeIdentity?: WarmAllocationRecord["runtimeIdentity"];
   timeoutMs: () => number;
 };
 
@@ -68,22 +71,6 @@ export function resolveCrabboxWarmImageCaptureTimeoutMs(provider: string): numbe
     WARM_IMAGE_CAPTURE_TIMEOUT_MS +
     checkpointCaptureTimeoutMs(provider)
   );
-}
-
-function resolveCrabboxWarmImageProfileKey(profile: CrabboxProfile, projectKey?: string): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify({
-        backendProvider: profile.provider,
-        setup: profile.setup ?? "",
-        setupEnvKeys: [...(profile.setupEnv ?? [])].toSorted(),
-        desktop: profile.desktop ?? false,
-        // Exact class is intentionally conservative; cross-class reuse comes later.
-        machineClass: profile.class,
-        ...(projectKey ? { projectKey } : {}),
-      }),
-    )
-    .digest("hex");
 }
 
 export function createCrabboxWarmImageManager(dependencies: {
@@ -188,6 +175,7 @@ export function createCrabboxWarmImageManager(dependencies: {
         timeoutMs,
       );
     } catch (error) {
+      assertCurrent(context);
       if (matches(openStore().lookup(key))) {
         warnOnce(
           `checkpoint retirement (${operation.checkpointId} deletion obligation retained; retry during periodic maintenance or next warm-image-enabled worker teardown; inspect with openclaw crabbox warm-images)`,
@@ -306,12 +294,20 @@ export function createCrabboxWarmImageManager(dependencies: {
     context: AllocationContext,
     profile: CrabboxProfile & { class: string },
   ) => {
+    if (!context.nodeRuntimeIdentity) {
+      throw new Error("Crabbox warm-image allocation requires a prepared node runtime identity");
+    }
     const key = resolveCrabboxWarmImageProfileKey(profile, context.projectKey);
     const replay = lookupLease(context.id);
     if (replay) {
       if (replay.key !== key || replay.machineClass !== profile.class) {
         throw new Error(
           "Crabbox provision retry changed its recorded profile or project identity.",
+        );
+      }
+      if (!isDeepStrictEqual(replay.runtimeIdentity, context.nodeRuntimeIdentity)) {
+        throw new Error(
+          "Crabbox provision retry changed or lacks its recorded node runtime identity; stop the worker before reprovisioning",
         );
       }
       return replay;
@@ -327,6 +323,7 @@ export function createCrabboxWarmImageManager(dependencies: {
           await deleteImage(context, key, observed);
         }
       } catch (error) {
+        assertCurrent(context);
         available = false;
         warnOnce("verification", error);
       }
@@ -367,6 +364,7 @@ export function createCrabboxWarmImageManager(dependencies: {
             choice,
             machineClass: profile.class,
             phase: "pending",
+            runtimeIdentity: structuredClone(context.nodeRuntimeIdentity),
           },
         },
       };
@@ -475,6 +473,7 @@ export function createCrabboxWarmImageManager(dependencies: {
           if (
             !owner ||
             !key ||
+            !owner.runtimeIdentity ||
             (owner.projectKey ? owner.phase !== "prepared" : owner.phase !== "enrolled")
           ) {
             return;
@@ -493,6 +492,19 @@ export function createCrabboxWarmImageManager(dependencies: {
             return;
           }
           if (existing.image) {
+            const runtimeMatches = isDeepStrictEqual(
+              existing.image.runtimeIdentity,
+              owner.runtimeIdentity,
+            );
+            // A different publication won after this allocation chose its source. An opaque
+            // digest is not a newer-version claim; only that source's borrowers may refresh it.
+            if (
+              !runtimeMatches &&
+              (owner.choice.kind !== "checkpoint" ||
+                owner.choice.checkpointId !== existing.image.checkpointId)
+            ) {
+              return;
+            }
             // The successful fork already attested this image. A concurrently replaced
             // image still needs its own verification before capture or retirement.
             const state =
@@ -508,6 +520,7 @@ export function createCrabboxWarmImageManager(dependencies: {
             } else if (
               state !== "missing" &&
               Date.now() - existing.image.createdAtMs < WARM_IMAGE_REFRESH_MS &&
+              runtimeMatches &&
               (!owner.projectKey || existing.image.baseCommit === owner.baseCommit)
             ) {
               return;
@@ -601,6 +614,7 @@ export function createCrabboxWarmImageManager(dependencies: {
                 ...created,
                 createdAtMs: now,
                 lastUsedAtMs: Math.max(now, current.image?.lastUsedAtMs ?? 0),
+                runtimeIdentity: structuredClone(owner.runtimeIdentity),
                 ...(owner.baseCommit ? { baseCommit: owner.baseCommit } : {}),
               },
               ...(current.image && current.image.checkpointId !== created.checkpointId

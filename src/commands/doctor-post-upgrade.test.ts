@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import { resolveInstalledPluginIndexStorePath } from "../plugins/installed-plugin-index-store.js";
@@ -12,6 +13,7 @@ import {
   closeOpenClawStateDatabaseByPath,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { VERSION } from "../version.js";
 import { runPostUpgradeProbes } from "./doctor-post-upgrade.js";
 
 async function makeFixtureRoot(prefix: string): Promise<string> {
@@ -24,7 +26,10 @@ async function cleanupFixtureRoot(root: string): Promise<void> {
   await fs.rm(root, { recursive: true, force: true });
 }
 
-function createIndex(plugins: InstalledPluginIndex["plugins"]): InstalledPluginIndex {
+function createIndex(
+  plugins: InstalledPluginIndex["plugins"],
+  installRecords: InstalledPluginIndex["installRecords"] = {},
+): InstalledPluginIndex {
   return {
     version: 1,
     hostContractVersion: "test-host",
@@ -32,7 +37,7 @@ function createIndex(plugins: InstalledPluginIndex["plugins"]): InstalledPluginI
     migrationVersion: 1,
     policyHash: "test-policy",
     generatedAtMs: 1,
-    installRecords: {},
+    installRecords,
     plugins,
     diagnostics: [],
   };
@@ -72,6 +77,8 @@ async function writePluginFixture(
     includePackageJsonRecord?: boolean;
     manifest?: Record<string, unknown> | false;
     manifestHash?: string;
+    enabled?: boolean;
+    installRecord?: PluginInstallRecord;
   },
 ) {
   const pluginDir = path.join(root, params.location ?? "user-plugins", params.id);
@@ -95,21 +102,24 @@ async function writePluginFixture(
     await fs.writeFile(manifestPath, JSON.stringify(params.manifest ?? { id: params.id }), "utf-8");
   }
   await writePersistedInstalledPluginIndex(
-    createIndex([
-      {
-        pluginId: params.id,
-        rootDir: pluginDir,
-        enabled: true,
-        origin: params.origin ?? "global",
-        startup: { sidecar: false, memory: false, agentHarnesses: [] },
-        compat: [],
-        ...(hasPackageJson && params.includePackageJsonRecord !== false
-          ? { packageJson: { path: "package.json", hash: "package-hash" } }
-          : {}),
-        manifestPath: params.manifest === false ? "" : manifestPath,
-        manifestHash: params.manifestHash ?? "",
-      },
-    ]),
+    createIndex(
+      [
+        {
+          pluginId: params.id,
+          rootDir: pluginDir,
+          enabled: params.enabled ?? true,
+          origin: params.origin ?? "global",
+          startup: { sidecar: false, memory: false, agentHarnesses: [] },
+          compat: [],
+          ...(hasPackageJson && params.includePackageJsonRecord !== false
+            ? { packageJson: { path: "package.json", hash: "package-hash" } }
+            : {}),
+          manifestPath: params.manifest === false ? "" : manifestPath,
+          manifestHash: params.manifestHash ?? "",
+        },
+      ],
+      params.installRecord ? { [params.id]: params.installRecord } : {},
+    ),
     { stateDir: root },
   );
 }
@@ -608,6 +618,66 @@ describe("runPostUpgradeProbes — plugin.manifest_drift", () => {
       expect(finding).toBeDefined();
       expect(finding?.level).toBe("warn");
       expect(finding?.plugin).toBe("drifted");
+    });
+  });
+});
+
+describe("runPostUpgradeProbes — plugin.version_drift", () => {
+  it.each([
+    {
+      label: "outdated official install",
+      id: "whatsapp",
+      version: "2026.7.1",
+      enabled: true,
+      drift: true,
+    },
+    {
+      label: "matching official install",
+      id: "whatsapp",
+      version: VERSION,
+      enabled: true,
+      drift: false,
+    },
+    {
+      label: "disabled official install",
+      id: "whatsapp",
+      version: "2026.7.1",
+      enabled: false,
+      drift: false,
+    },
+    { label: "community install", id: "community", version: "1.2.3", enabled: true, drift: false },
+  ])("checks $label against the upgraded core", async ({ id, version, enabled, drift }) => {
+    await withFixtureRoot("version-drift", async (root) => {
+      await writePluginFixture(root, {
+        id,
+        enabled,
+        packageJson: { name: `@openclaw/${id}`, version, openclaw: { extensions: ["./index.js"] } },
+        files: { "index.js": "export default {};" },
+        installRecord: {
+          source: "npm",
+          spec: `@openclaw/${id}@latest`,
+          resolvedName: `@openclaw/${id}`,
+          resolvedVersion: version,
+        },
+      });
+
+      const report = await runPostUpgradeProbes({ stateDir: root });
+      expect(report.findings).toEqual(
+        drift
+          ? [
+              expect.objectContaining({
+                code: "plugin.version_drift",
+                level: "warn",
+                plugin: id,
+                message: expect.stringContaining(`openclaw plugins update ${id}`),
+              }),
+            ]
+          : [],
+      );
+      if (drift) {
+        expect(report.findings[0]?.message).toContain(version);
+        expect(report.findings[0]?.message).toContain(VERSION);
+      }
     });
   });
 });

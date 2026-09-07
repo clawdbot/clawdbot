@@ -576,20 +576,51 @@ describe("messageCommand", () => {
     expect(actionCall.params.pollQuestion).toBe("Ship it?");
   });
 
-  it("includes a stable top-level messageId in JSON output", async () => {
-    runMessageActionMock.mockResolvedValueOnce({
-      kind: "send",
-      channel: "discord",
-      action: "send",
-      to: "channel:general",
-      handledBy: "plugin",
+  it.each([
+    {
+      name: "nested",
       payload: {
         ok: true,
         result: {
           messageId: "msg-json-1",
           channelId: "general",
         },
-      } as { ok: boolean } & Record<string, unknown>,
+      },
+      expectedMessageId: "msg-json-1",
+      expectedPayload: {
+        ok: true,
+        result: {
+          messageId: "msg-json-1",
+          channelId: "general",
+        },
+      },
+    },
+    {
+      name: "direct-before-nested",
+      payload: {
+        messageId: " direct-id ",
+        result: { messageId: "nested-id" },
+      },
+      expectedMessageId: "direct-id",
+      expectedPayload: {
+        messageId: " direct-id ",
+        result: { messageId: "nested-id" },
+      },
+    },
+    {
+      name: "array object",
+      payload: Object.assign([], { messageId: " array-id " }),
+      expectedMessageId: "array-id",
+      expectedPayload: [],
+    },
+  ])("includes a stable top-level messageId from a $name payload", async (testCase) => {
+    runMessageActionMock.mockResolvedValueOnce({
+      kind: "send",
+      channel: "discord",
+      action: "send",
+      to: "channel:general",
+      handledBy: "plugin",
+      payload: testCase.payload,
       dryRun: false,
     });
 
@@ -600,14 +631,8 @@ describe("messageCommand", () => {
 
     const output = vi.mocked(runtime.log).mock.calls[0]?.[0];
     const json = JSON.parse(String(output)) as { messageId?: string; payload?: unknown };
-    expect(json.messageId).toBe("msg-json-1");
-    expect(json.payload).toEqual({
-      ok: true,
-      result: {
-        messageId: "msg-json-1",
-        channelId: "general",
-      },
-    });
+    expect(json.messageId).toBe(testCase.expectedMessageId);
+    expect(json.payload).toEqual(testCase.expectedPayload);
     expect(json).not.toHaveProperty("ok");
   });
 

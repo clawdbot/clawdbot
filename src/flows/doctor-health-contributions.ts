@@ -4,6 +4,10 @@ import fs from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import { emitDoctorNotes } from "../commands/doctor/emit-notes.js";
+import {
+  DoctorStateMigrationRefusalError,
+  throwIfDoctorStateMigrationRefused,
+} from "../infra/state-migrations.messages.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import {
@@ -18,7 +22,6 @@ import {
   resolveDoctorMode,
   resolveDoctorWorkspaceDir,
 } from "./doctor-health-contribution-utils.js";
-import { createDoctorHealthContribution } from "./doctor-health-contribution.js";
 import { resolveFinalDoctorHealthContributions } from "./doctor-health-contributions-final.js";
 import { resolveInitialDoctorHealthContributions } from "./doctor-health-contributions-initial.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
@@ -60,8 +63,10 @@ async function reportDeferredLegacyState(ctx: DoctorHealthFlowContext): Promise<
   const omittedDetailCount = pendingDetails.length - displayedDetails.length;
   const remediation =
     ctx.configWriteRefusal === "validation"
-      ? 'Fix the config errors above, then rerun "openclaw doctor --fix".'
-      : 'Resolve the Gateway or cron-store condition above, then rerun "openclaw doctor --fix".';
+      ? "Fix the config errors above."
+      : ctx.configWriteRefusal === "include-ownership"
+        ? "Repair the include boundary named above by hand."
+        : "Resolve the Gateway or cron-store condition above.";
   note(
     [
       "Pending owners and blockers:",
@@ -202,89 +207,29 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
 }
 
 async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { resolveSecretInputRef } = await loadSecretTypesModule();
-  const { buildGatewayTokenSecretRefFixHint, buildGatewayTokenSecretRefUnavailableMessage } =
-    await loadDoctorCoreChecksModule();
-  const { resolveGatewayAuth } = await import("../gateway/auth.js");
-  const { resolveGatewayAuthToken } = await import("../gateway/auth-token-resolution.js");
-  const { note } = await loadNoteModule();
-  const { randomToken } = await loadOnboardHelpersModule();
-  if (resolveDoctorMode(ctx.cfg) !== "local" || !ctx.sourceConfigValid) {
+  if (!ctx.sourceConfigValid) {
     return;
   }
+  const { detectGatewayAuthHealth } = await loadDoctorCoreChecksModule();
+  const [finding] = await detectGatewayAuthHealth({
+    cfg: ctx.cfg,
+    env: ctx.env,
+    allowExecSecretRefs: ctx.options.allowExec,
+  });
+  if (!finding) {
+    return;
+  }
+  const { resolveSecretInputRef } = await loadSecretTypesModule();
+  const { note } = await loadNoteModule();
   const gatewayTokenRef = resolveSecretInputRef({
     value: ctx.cfg.gateway?.auth?.token,
     defaults: ctx.cfg.secrets?.defaults,
   }).ref;
-  const auth = resolveGatewayAuth({
-    authConfig: ctx.cfg.gateway?.auth,
-    tailscaleMode: ctx.cfg.gateway?.tailscale?.mode ?? "off",
-  });
-  // Modes that don't need a token: password, none, trusted-proxy.
-  // This aligns with hasExplicitGatewayInstallAuthMode() in auth-install-policy.ts.
-  // Previously, only "password" and "token" (with a token present) were excluded,
-  // causing doctor --fix to overwrite trusted-proxy/none configs with token mode.
-  const hasInlineToken = typeof auth.token === "string" && auth.token.trim() !== "";
-  const needsToken =
-    auth.mode !== "password" &&
-    auth.mode !== "none" &&
-    auth.mode !== "trusted-proxy" &&
-    (auth.mode !== "token" || !hasInlineToken || Boolean(gatewayTokenRef));
-  if (!needsToken) {
-    return;
-  }
-  let unresolvedRefReason: string | undefined;
-  if (gatewayTokenRef && gatewayTokenRef.source === "exec") {
-    const { getSkippedExecRefStaticError } = await import("../secrets/exec-resolution-policy.js");
-    const staticError = getSkippedExecRefStaticError({ ref: gatewayTokenRef, config: ctx.cfg });
-    if (staticError) {
-      unresolvedRefReason = undefined;
-    } else if (ctx.options.allowExec !== true) {
-      return;
-    } else {
-      const resolvedToken = await resolveGatewayAuthToken({
-        cfg: ctx.cfg,
-        env: ctx.env ?? process.env,
-        unresolvedReasonStyle: "detailed",
-        envFallback: "never",
-      });
-      if (resolvedToken.source === "secretRef") {
-        return;
-      }
-      unresolvedRefReason = resolvedToken.unresolvedRefReason;
-    }
-  } else {
-    const resolvedToken = await resolveGatewayAuthToken({
-      cfg: ctx.cfg,
-      env: ctx.env ?? process.env,
-      unresolvedReasonStyle: "detailed",
-    });
-    if (gatewayTokenRef ? resolvedToken.source === "secretRef" : resolvedToken.token) {
-      return;
-    }
-    unresolvedRefReason = resolvedToken.unresolvedRefReason;
-  }
+  note([finding.message, finding.fixHint].filter(Boolean).join("\n"), "Gateway auth");
   if (gatewayTokenRef) {
-    const reason = buildGatewayTokenSecretRefUnavailableMessage({
-      cfg: ctx.cfg,
-      ref: gatewayTokenRef,
-      unresolvedRefReason,
-    });
-    note(
-      [
-        reason,
-        "Doctor will not overwrite gateway.auth.token with a plaintext value.",
-        buildGatewayTokenSecretRefFixHint(gatewayTokenRef),
-      ].join("\n"),
-      "Gateway auth",
-    );
+    note("Doctor will not overwrite gateway.auth.token with a plaintext value.", "Gateway auth");
     return;
   }
-
-  note(
-    "Gateway auth is off or missing a token. Token auth is now the recommended default (including loopback).",
-    "Gateway auth",
-  );
   const shouldSetToken =
     ctx.options.generateGatewayToken === true
       ? true
@@ -297,6 +242,7 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
   if (!shouldSetToken) {
     return;
   }
+  const { randomToken } = await loadOnboardHelpersModule();
   const nextToken = randomToken();
   ctx.cfg = {
     ...ctx.cfg,
@@ -560,10 +506,17 @@ async function runDoctorHealthContributionList(
   contributions: readonly DoctorHealthContribution[],
 ): Promise<void> {
   const runWithPluginMetadataSnapshot = ctx.runWithPluginMetadataSnapshot;
+  throwIfDoctorStateMigrationRefused(ctx.configResult.stateMigrationStepReceipts);
   for (const contribution of contributions) {
     try {
       const run = async () => {
-        await contribution.run(ctx);
+        try {
+          await contribution.run(ctx);
+        } finally {
+          // Deferred session writers settle here. An optional diagnostic cannot
+          // turn their recorded refusal into permission for later repairs.
+          throwIfDoctorStateMigrationRefused(ctx.configResult.stateMigrationStepReceipts);
+        }
         if (ctx.configWriteRefusal) {
           await reportDeferredLegacyState(ctx);
         }
@@ -580,7 +533,9 @@ async function runDoctorHealthContributionList(
         return;
       }
     } catch (error) {
-      await (contribution.required ? Promise.reject(error as Error) : Promise.resolve());
+      if (contribution.required || error instanceof DoctorStateMigrationRefusalError) {
+        throw error;
+      }
       const { note } = await loadNoteModule();
       note(`${contribution.id} run failed: ${scrubDoctorErrorMessage(error)}`, "Doctor warnings");
     }
@@ -595,7 +550,6 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[
     Symbol.for("openclaw.doctorHealthContributionsTestApi")
   ] = {
-    createDoctorHealthContribution,
     resolveDoctorHealthContributions,
     runDoctorHealthContributionList,
   };

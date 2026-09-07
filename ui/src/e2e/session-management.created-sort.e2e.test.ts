@@ -57,10 +57,7 @@ suite.define(() => {
       await captureUiProof(suite, page, "sidebar-created-sort-before-refresh.png");
       const initialListCount = (await gateway.getRequests("sessions.list")).length;
 
-      await gateway.setMethodResponse(
-        "sessions.list",
-        sessionsListResponse([...olderRows, newestRow]),
-      );
+      await gateway.setSessionsListResponse(sessionsListResponse([...olderRows, newestRow]));
       await gateway.emitGatewayEvent("sessions.changed", {
         key: newestKey,
         kind: "direct",

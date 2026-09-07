@@ -1,5 +1,15 @@
 import type { TSchema } from "typebox";
-// LLM Core type module defines shared TypeScript contracts.
+import type {
+  ModelDataCostRates,
+  ModelDataMediaInputConfig,
+  ModelDataRawPricingTier,
+  ModelDataThinkingFormat,
+  ModelDataThinkingLevel,
+  ModelDataThinkingLevelMap,
+  ModelRoutingMaxPrice,
+  ModelRoutingPercentiles,
+  ModelRoutingSortConfig,
+} from "./model-data.js";
 import type { AssistantMessageDiagnostic } from "./utils/diagnostics.js";
 export type { AssistantMessageDiagnostic, DiagnosticErrorInfo } from "./utils/diagnostics.js";
 
@@ -34,11 +44,11 @@ export type KnownImagesProvider = "openrouter";
 export type ImagesProvider = string;
 
 /** Normalized reasoning-effort levels shared across provider-specific knobs. */
-export type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export type ThinkingLevel = Exclude<ModelDataThinkingLevel, "off">;
 /** Model thinking setting including explicit disabled state. */
-export type ModelThinkingLevel = "off" | ThinkingLevel;
+export type ModelThinkingLevel = ModelDataThinkingLevel;
 /** Provider-specific values for normalized thinking levels. */
-export type ThinkingLevelMap = Partial<Record<ModelThinkingLevel, string | null>>;
+export type ThinkingLevelMap = ModelDataThinkingLevelMap;
 
 /** Token budgets for each thinking level (token-based providers only) */
 export interface ThinkingBudgets {
@@ -118,6 +128,23 @@ export interface StreamOptions {
    */
   onResponse?: (response: ProviderResponse, model: Model) => void | Promise<void>;
   /**
+   * Observe a live response that accepts user input before generation finishes.
+   * `steer` resolves false only when the input was definitely not admitted;
+   * admitted input cannot be withdrawn. Providers settle pending submissions
+   * before closing the response and call the returned cleanup on closure.
+   */
+  onActiveResponse?: (control: {
+    steer(messages: readonly UserMessage[]): Promise<boolean>;
+    /** Read-only after closure: deferred input still needs an explicit continuation request. */
+    needsContinuation?: () => boolean;
+  }) => (() => void) | void;
+  /**
+   * The caller can execute completed async calls before generation finishes.
+   * Providers advertise async tools only with this host capability; this is
+   * independent of parallel execution of an ordinary completed tool batch.
+   */
+  asyncToolExecution?: boolean;
+  /**
    * Optional custom HTTP headers to include in API requests.
    * Merged with provider defaults; can override default headers.
    * Not supported by all providers (e.g., AWS Bedrock uses SDK auth).
@@ -128,10 +155,7 @@ export interface StreamOptions {
    * For example, OpenAI and Anthropic SDK clients default to 10 minutes.
    */
   timeoutMs?: number;
-  /**
-   * Maximum retry attempts for providers/SDKs that support client-side retries.
-   * For example, OpenAI and Anthropic SDK clients default to 2.
-   */
+  /** @deprecated Ignored by built-in text transports; retries are owned by the host runner. */
   maxRetries?: number;
   /**
    * Maximum delay in milliseconds to wait for a retry when the server requests a long wait.
@@ -275,6 +299,8 @@ export interface ImageContent {
 
 /** Normalized assistant tool call emitted by providers or repaired from text. */
 export interface ToolCall {
+  /** The provider completed this call and permits generation to continue without its result. */
+  async?: true;
   type: "toolCall";
   id: string;
   name: string;
@@ -310,7 +336,7 @@ export interface Usage {
 }
 
 /** Per-million-token rates for separately billed token buckets. */
-export type ModelCostRates = Pick<Usage["cost"], "input" | "output" | "cacheRead" | "cacheWrite">;
+export type ModelCostRates = ModelDataCostRates;
 
 /** One whole-request tier on the cache-inclusive prompt-token axis. */
 export type PricingTier = ModelCostRates & {
@@ -318,10 +344,7 @@ export type PricingTier = ModelCostRates & {
   range: [number, number];
 };
 
-export type RawPricingTier = ModelCostRates & {
-  /** `[start]` is an open-ended upper tier. */
-  range: [number, number] | [number];
-};
+export type RawPricingTier = ModelDataRawPricingTier;
 
 /** Normalized pricing used by token accounting and usage summaries. */
 export type ModelCostConfig = ModelCostRates & { tieredPricing?: PricingTier[] };
@@ -340,12 +363,9 @@ export interface UserMessage {
   content: string | (TextContent | ImageContent)[];
   timestamp: number; // Unix timestamp in milliseconds
   /**
-   * Marks a user message that carries transient current-turn runtime context
-   * (e.g. an OpenClaw runtime-context carrier appended after the active user
-   * turn). Such messages are volatile — present only on the turn they belong to
-   * and stripped on replay — so providers must NOT anchor a prompt-cache
-   * breakpoint on them, or the breakpoint would land on bytes that change every
-   * turn. Anchoring stays on the last stable (non-carrier) user message.
+   * Marks a user message carrying runtime context. Provider replay policy decides
+   * whether the carrier is transient or retained append-only; only retained
+   * carriers are stable prompt-cache anchors.
    */
   runtimeContextCarrier?: boolean;
 }
@@ -501,6 +521,8 @@ export interface OpenAICompletionsCompat {
   supportsDeveloperRole?: boolean;
   /** Whether the provider supports `reasoning_effort`. Default: auto-detected from URL. */
   supportsReasoningEffort?: boolean;
+  /** Per-level reasoning effort overrides, e.g. map "off" to "low" for models that cannot disable thinking. */
+  reasoningEffortMap?: Record<string, string>;
   /** Whether the provider supports `stream_options: { include_usage: true }` for token usage in streaming responses. Default: true. */
   supportsUsageInStreaming?: boolean;
   /** Which field to use for max tokens. Default: auto-detected from URL. */
@@ -514,14 +536,7 @@ export interface OpenAICompletionsCompat {
   /** Whether all replayed assistant messages must include an empty reasoning_content field when reasoning is enabled. Default: auto-detected from URL. */
   requiresReasoningContentOnAssistantMessages?: boolean;
   /** Format for reasoning/thinking parameter. "openai" uses reasoning_effort, "openrouter" uses reasoning: { effort }, "deepseek" uses thinking: { type } plus reasoning_effort, "together" uses reasoning: { enabled } plus reasoning_effort when supported, "zai" uses top-level enable_thinking: boolean, "qwen" uses top-level enable_thinking: boolean, and "qwen-chat-template" uses chat_template_kwargs.enable_thinking. Default: "openai". */
-  thinkingFormat?:
-    | "openai"
-    | "openrouter"
-    | "deepseek"
-    | "together"
-    | "zai"
-    | "qwen"
-    | "qwen-chat-template";
+  thinkingFormat?: ModelDataThinkingFormat;
   /** OpenRouter-specific routing preferences. Only used when baseUrl points to OpenRouter. */
   openRouterRouting?: OpenRouterRouting;
   /** Vercel AI Gateway routing preferences. Only used when baseUrl points to Vercel AI Gateway. */
@@ -546,6 +561,10 @@ export interface OpenAICompletionsCompat {
 export interface OpenAIResponsesCompat {
   /** Whether the provider supports the `developer` role (vs `system`). Default: true. */
   supportsDeveloperRole?: boolean;
+  /** Whether to send reasoning effort settings. Defaults to the model's known capabilities. */
+  supportsReasoningEffort?: boolean;
+  /** Provider-native reasoning efforts accepted by the model. Overrides known model defaults. */
+  supportedReasoningEfforts?: string[];
   /** Whether the model accepts the `temperature` parameter. Default: true. */
   supportsTemperature?: boolean;
   /** Whether to send the OpenAI `session_id` cache-affinity header from `options.sessionId` when caching is enabled. Default: true. */
@@ -592,6 +611,7 @@ export interface AnthropicMessagesCompat {
  * OpenRouter provider routing preferences.
  * Controls which upstream providers OpenRouter routes requests to.
  * Sent as the `provider` field in the OpenRouter API request body.
+ * Own member declarations preserve existing module-augmentation semantics.
  * @see https://openrouter.ai/docs/guides/routing/provider-selection
  */
 export interface OpenRouterRouting {
@@ -614,53 +634,13 @@ export interface OpenRouterRouting {
   /** A list of quantization levels to filter providers by (e.g., ["fp16", "bf16", "fp8", "fp6", "int8", "int4", "fp4", "fp32"]). */
   quantizations?: string[];
   /** Sorting strategy. Can be a string (e.g., "price", "throughput", "latency") or an object with `by` and `partition`. */
-  sort?:
-    | string
-    | {
-        /** The sorting metric: "price", "throughput", "latency". */
-        by?: string;
-        /** Partitioning strategy: "model" (default) or "none". */
-        partition?: string | null;
-      };
+  sort?: string | ModelRoutingSortConfig;
   /** Maximum price per million tokens (USD). */
-  max_price?: {
-    /** Price per million prompt tokens. */
-    prompt?: number | string;
-    /** Price per million completion tokens. */
-    completion?: number | string;
-    /** Price per image. */
-    image?: number | string;
-    /** Price per audio unit. */
-    audio?: number | string;
-    /** Price per request. */
-    request?: number | string;
-  };
+  max_price?: ModelRoutingMaxPrice;
   /** Preferred minimum throughput (tokens/second). Can be a number (applies to p50) or an object with percentile-specific cutoffs. */
-  preferred_min_throughput?:
-    | number
-    | {
-        /** Minimum tokens/second at the 50th percentile. */
-        p50?: number;
-        /** Minimum tokens/second at the 75th percentile. */
-        p75?: number;
-        /** Minimum tokens/second at the 90th percentile. */
-        p90?: number;
-        /** Minimum tokens/second at the 99th percentile. */
-        p99?: number;
-      };
+  preferred_min_throughput?: number | ModelRoutingPercentiles;
   /** Preferred maximum latency (seconds). Can be a number (applies to p50) or an object with percentile-specific cutoffs. */
-  preferred_max_latency?:
-    | number
-    | {
-        /** Maximum latency in seconds at the 50th percentile. */
-        p50?: number;
-        /** Maximum latency in seconds at the 75th percentile. */
-        p75?: number;
-        /** Maximum latency in seconds at the 90th percentile. */
-        p90?: number;
-        /** Maximum latency in seconds at the 99th percentile. */
-        p99?: number;
-      };
+  preferred_max_latency?: number | ModelRoutingPercentiles;
 }
 
 /**
@@ -675,7 +655,6 @@ export interface VercelGatewayRouting {
   order?: string[];
 }
 
-// Model interface for the unified model system
 export interface Model<TApi extends Api = Api> {
   id: string;
   name: string;
@@ -706,21 +685,13 @@ export interface Model<TApi extends Api = Api> {
   /** Compatibility overrides for OpenAI-compatible APIs. If not set, auto-detected from baseUrl. */
   compat?: TApi extends "openai-completions"
     ? OpenAICompletionsCompat
-    : TApi extends "openai-responses"
+    : TApi extends "openai-responses" | "azure-openai-responses" | "openai-codex-responses"
       ? OpenAIResponsesCompat
       : TApi extends "anthropic-messages"
         ? AnthropicMessagesCompat
         : never;
   /** Provider-documented media input limits used by attachment preprocessing. */
-  mediaInput?: {
-    image?: {
-      maxBytes?: number;
-      maxPixels?: number;
-      maxSidePx?: number;
-      preferredSidePx?: number;
-      tokenMode?: "tile" | "detail" | "provider";
-    };
-  };
+  mediaInput?: ModelDataMediaInputConfig;
 }
 
 export interface ImagesModel<TApi extends ImagesApi = ImagesApi> extends Omit<

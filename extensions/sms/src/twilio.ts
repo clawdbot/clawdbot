@@ -309,13 +309,17 @@ export async function readTwilioWebhookForm(req: IncomingMessage): Promise<Recor
   const body = await readRequestBodyWithLimit(req, {
     maxBytes: WEBHOOK_BODY_LIMIT_BYTES,
     timeoutMs: WEBHOOK_BODY_TIMEOUT_MS,
+    // Defer destruction so the webhook can answer 413 before the connection closes.
+    destroyOnLimit: false,
   });
   return parseTwilioFormBody(body);
 }
 
+export const TWIML_CONTENT_TYPE = "text/xml; charset=utf-8";
+
 export function respondTwiml(res: ServerResponse, statusCode: number, body = ""): void {
   res.statusCode = statusCode;
-  res.setHeader("content-type", "text/xml; charset=utf-8");
+  res.setHeader("content-type", TWIML_CONTENT_TYPE);
   res.end(body || "<Response></Response>");
 }
 

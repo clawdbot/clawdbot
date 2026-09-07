@@ -5,9 +5,12 @@ import {
   type GatewayGuildCreateDispatchData,
 } from "discord-api-types/v10";
 import { reportChannelRoomJoin } from "openclaw/plugin-sdk/channel-join-intro-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Client } from "../internal/discord.js";
 import { DiscordGuildJoinIntroductionListener } from "./listeners.guild-join.js";
+import { createDiscordLivePolicyReader } from "./live-policy.js";
 
 const mocks = vi.hoisted(() => ({
   reportChannelRoomJoin: vi.fn(async () => ({ kind: "posted" as const })),
@@ -142,6 +145,34 @@ describe("Discord guild join introductions", () => {
         { sender: "Casey", text: "Newest deployment" },
       ],
     });
+  });
+
+  it("rejects a guild introduction whose policy changes during permission lookup", async () => {
+    const guilds = { "guild-1": { channels: { "system-channel": { enabled: true } } } };
+    let cfg: OpenClawConfig = { channels: { discord: { groupPolicy: "allowlist", guilds } } };
+    const readPolicy = createDiscordLivePolicyReader({
+      cfg,
+      accountId: "work",
+      readConfig: () => cfg,
+      resolvedAllowlist: { guildEntries: guilds, allowFrom: [] },
+    });
+    const entered = createDeferred<void>();
+    const permission = createDeferred<boolean>();
+    mocks.canViewDiscordGuildChannel.mockImplementationOnce(() => {
+      entered.resolve();
+      return permission.promise;
+    });
+    const listener = createListener({ cfg, readPolicy });
+    const pending = listener.handle(guildCreateEvent(), createClient());
+    await entered.promise;
+    cfg = { channels: { discord: { groupPolicy: "disabled", guilds: {} } } };
+    permission.resolve(true);
+    await pending;
+    expect(reportChannelRoomJoin).not.toHaveBeenCalled();
+    await listener.handle(guildCreateEvent(), createClient());
+    expect(reportChannelRoomJoin).toHaveBeenCalledWith(
+      expect.objectContaining({ roomAllowed: false }),
+    );
   });
 
   it("never introduces the bot for a stale guild-create reconnect snapshot", async () => {

@@ -5,7 +5,10 @@ import {
   resolvePrimaryStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
-import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
+import {
+  resolveCollapsedSessionAuthPinSource,
+  resolveSessionAuthProfileOverrideSource,
+} from "../config/sessions/auth-profile-override-provenance.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -44,6 +47,7 @@ export {
   resolveAgentContextLimits,
   resolveAgentDir,
   resolveDefaultAgentDir,
+  resolveAgentRunCwd,
   resolveAgentWorkspaceDir,
   resolveAgentWorkspaceProvisioning,
   tryResolveConfiguredAgentWorkspaceDir,
@@ -203,7 +207,7 @@ export function resolveAutoFallbackPrimaryProbe(params: {
     return undefined;
   }
   const fallbackAuthProfileId = normalizeOptionalString(entry.authProfileOverride);
-  const fallbackAuthProfileIdSource = resolveSessionAuthProfileOverrideSource(entry);
+  const fallbackAuthProfileIdSource = resolveCollapsedSessionAuthPinSource(entry);
   return {
     provider: originProvider,
     model: originModel,
@@ -300,15 +304,19 @@ export function clearAutoFallbackPrimaryProbeSelection(
 
 export { resolveAgentIdFromSessionKey };
 
-export function resolveSessionAgentIdsStrict(params: {
+type SessionAgentResolutionParams = {
   sessionKey?: string;
   config?: OpenClawConfig;
   agentId?: string | undefined;
   fallbackAgentId?: string;
-}): {
-  defaultAgentId: string;
-  sessionAgentId: string;
-} {
+};
+
+const SESSION_AGENT_SELECTION_CONTEXT = {
+  surface: "session agent resolution",
+  hint: "Pass an agentId, an agent-scoped session key, or a prepared fallbackAgentId.",
+};
+
+function resolveSelectedSessionAgentId(params: SessionAgentResolutionParams): string | undefined {
   const explicitAgentIdRaw = normalizeLowercaseStringOrEmpty(params.agentId);
   const explicitAgentId = explicitAgentIdRaw ? normalizeAgentId(explicitAgentIdRaw) : null;
   const fallbackAgentIdRaw = normalizeLowercaseStringOrEmpty(params.fallbackAgentId);
@@ -343,29 +351,39 @@ export function resolveSessionAgentIdsStrict(params: {
       hint: `The shared fixed-store row belongs to "${persistedStoreOwner.agentId}", not "${requestedUnscopedAgentId}".`,
     });
   }
-  const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
-  const sessionAgentId =
+  return (
     sessionKeyAgentId ??
     (persistedStoreOwner.kind === "configured" ? persistedStoreOwner.agentId : undefined) ??
     requestedUnscopedAgentId ??
+    undefined
+  );
+}
+
+export function resolveSessionAgentIdsStrict(params: SessionAgentResolutionParams): {
+  defaultAgentId: string;
+  sessionAgentId: string;
+} {
+  const selectedAgentId = resolveSelectedSessionAgentId(params);
+  const cfg = params.config ?? {};
+  const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
+  const sessionAgentId =
+    selectedAgentId ??
     compatibilityAgentId ??
-    resolveDefaultAgentId(cfg, {
-      surface: "session agent resolution",
-      hint: "Pass an agentId, an agent-scoped session key, or a prepared fallbackAgentId.",
-    });
+    resolveDefaultAgentId(cfg, SESSION_AGENT_SELECTION_CONTEXT);
   const defaultAgentId = compatibilityAgentId ?? sessionAgentId;
   return { defaultAgentId, sessionAgentId };
 }
 
 export const resolveSessionAgentIds = resolveSessionAgentIdsStrict;
 
-export function resolveSessionAgentIdStrict(params: {
-  sessionKey?: string;
-  config?: OpenClawConfig;
-  agentId?: string;
-  fallbackAgentId?: string;
-}): string {
-  return resolveSessionAgentIdsStrict(params).sessionAgentId;
+export function resolveSessionAgentIdStrict(params: SessionAgentResolutionParams): string {
+  const selectedAgentId = resolveSelectedSessionAgentId(params);
+  const cfg = params.config ?? {};
+  return (
+    selectedAgentId ??
+    tryResolveLegacyCompatibilityAgentId(cfg) ??
+    resolveDefaultAgentId(cfg, SESSION_AGENT_SELECTION_CONTEXT)
+  );
 }
 
 export const resolveSessionAgentId = resolveSessionAgentIdStrict;
@@ -420,6 +438,18 @@ function updateAgentModelPrimary(
 
 export type AgentModelPrimaryWriteTarget = "agent" | "defaults";
 
+export function resolveAgentModelPrimaryWriteTarget(
+  cfg: OpenClawConfig,
+  agentId: string,
+  options: { target?: AgentModelPrimaryWriteTarget; forceAgent?: boolean } = {},
+): AgentModelPrimaryWriteTarget {
+  const id = normalizeAgentId(agentId);
+  const target = options.target ?? (options.forceAgent ? "agent" : undefined);
+  return target !== "defaults" && (target === "agent" || resolveAgentExplicitModelPrimary(cfg, id))
+    ? "agent"
+    : "defaults";
+}
+
 export function setAgentEffectiveModelPrimary(
   cfg: OpenClawConfig,
   agentId: string,
@@ -428,9 +458,10 @@ export function setAgentEffectiveModelPrimary(
 ): AgentModelPrimaryWriteTarget {
   const id = normalizeAgentId(agentId);
   const target = options.target ?? (options.forceAgent ? "agent" : undefined);
+  const resolvedTarget = resolveAgentModelPrimaryWriteTarget(cfg, id, options);
   // An explicit agent target pins the write even without an existing model,
   // so a per-agent override never rewrites the shared default route.
-  if (target !== "defaults" && (target === "agent" || resolveAgentExplicitModelPrimary(cfg, id))) {
+  if (resolvedTarget === "agent") {
     const entry = resolveMutableAgentEntry(cfg, id);
     if (entry) {
       entry.model = updateAgentModelPrimary(entry.model, primary);

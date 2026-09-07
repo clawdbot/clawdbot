@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Verifies `openclaw update` succeeds when a managed external plugin is corrupt.
-# The lane installs an older published OpenClaw package, corrupts an npm-managed
-# plugin payload, then updates to the prepared package artifact.
+# The lane installs the prepared candidate, corrupts an npm-managed plugin,
+# then updates to a synthetic future package with the same storage schema.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

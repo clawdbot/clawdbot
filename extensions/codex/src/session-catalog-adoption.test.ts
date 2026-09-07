@@ -406,9 +406,10 @@ describe("Codex supervision actions", () => {
       }),
     );
     expect(transcriptMirrorMocks.importCodexThreadHistoryToTranscript).toHaveBeenCalledWith({
+      assertCurrent: expect.any(Function),
       thread: sourceThread,
       storePath: resolveStorePath(undefined, { agentId: "main" }),
-      sessionId: "openclaw-session-1",
+      sessionId: runtime.agent.session.getSessionEntry({ sessionKey: first.sessionKey })!.sessionId,
       sessionKey: first.sessionKey,
       agentId: "main",
       cwd: "/workspace/project",
@@ -416,15 +417,16 @@ describe("Codex supervision actions", () => {
       modelProvider: "openai",
       config,
     });
-    await expect(
+    expect(
       bindingStore.read(
         sessionBindingIdentity({
-          sessionId: "openclaw-session-1",
+          sessionId: runtime.agent.session.getSessionEntry({ sessionKey: first.sessionKey })!
+            .sessionId,
           sessionKey: first.sessionKey,
           config,
         }),
       ),
-    ).resolves.toMatchObject({
+    ).toMatchObject({
       threadId: "thread-1",
       connectionScope: "supervision",
       supervisionSourceThreadId: "thread-1",
@@ -677,11 +679,12 @@ describe("Codex supervision actions", () => {
     expect(control.archiveThread).not.toHaveBeenCalled();
 
     const identity = sessionBindingIdentity({
-      sessionId: "openclaw-session-1",
+      sessionId: runtime.agent.session.getSessionEntry({ sessionKey: continued.sessionKey })!
+        .sessionId,
       sessionKey: continued.sessionKey,
       config,
     });
-    const pending = (await bindingStore.read(identity))?.pendingSupervisionBranch;
+    const pending = bindingStore.read(identity)?.pendingSupervisionBranch;
     if (!pending) {
       throw new Error("expected a pending supervision branch");
     }

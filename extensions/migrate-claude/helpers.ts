@@ -43,26 +43,14 @@ export function sanitizeName(name: string): string {
     .replaceAll(/^-+|-+$/g, "");
 }
 
-export async function readText(filePath: string | undefined): Promise<string | undefined> {
-  if (!filePath) {
-    return undefined;
-  }
-  try {
-    return await fs.readFile(filePath, "utf8");
-  } catch {
-    return undefined;
-  }
-}
-
 export async function readJsonObject(
   filePath: string | undefined,
 ): Promise<Record<string, unknown>> {
-  const content = await readText(filePath);
-  if (!content) {
+  if (!filePath) {
     return {};
   }
   try {
-    const parsed = JSON.parse(content) as unknown;
+    const parsed = JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
     return isRecord(parsed) ? parsed : {};
   } catch {
     return {};

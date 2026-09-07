@@ -69,22 +69,18 @@ function createEnterpriseClient(): EnterpriseTestClient {
   } as unknown as EnterpriseTestClient;
 }
 
-function eventScope(client: WebClient, teamId = "T1", uploadCompletionClient: WebClient = client) {
+function eventScope(client: WebClient, teamId = "T1", writeClient: WebClient = client) {
   return {
     teamId,
     client,
-    uploadCompletionClient,
+    writeClient,
   };
 }
 
-function enterpriseOptions(
-  client: WebClient,
-  teamId = "T1",
-  uploadCompletionClient: WebClient = client,
-) {
+function enterpriseOptions(client: WebClient, teamId = "T1", writeClient: WebClient = client) {
   return {
     cfg: ENTERPRISE_CFG,
-    eventScope: eventScope(client, teamId, uploadCompletionClient),
+    eventScope: eventScope(client, teamId, writeClient),
   };
 }
 
@@ -155,7 +151,7 @@ describe("sendMessageSlack Enterprise listener scope", () => {
     }
   });
 
-  it("uses the exact listener client without a token or team_id method payload", async () => {
+  it("uses the listener-scoped writer without a token or team_id method payload", async () => {
     const client = createEnterpriseClient();
     const installationState = registerSlackInstallationState("default", "enterprise");
     try {
@@ -236,6 +232,7 @@ describe("sendMessageSlack Enterprise listener scope", () => {
     expect(secondClient.chat.postMessage).not.toHaveBeenCalled();
 
     secondScope.client = replacementClient;
+    secondScope.writeClient = replacementClient;
     firstDeferred.release();
     await Promise.all([first, second]);
 
@@ -288,37 +285,40 @@ describe("sendMessageSlack Enterprise listener scope", () => {
     );
   });
 
-  it("rejects Enterprise media before upload without the one-shot completion client", async () => {
-    const client = createEnterpriseClient();
-    const scope = eventScope(client);
-    delete (scope as { uploadCompletionClient?: WebClient }).uploadCompletionClient;
+  it.each([undefined, "https://example.com/image.png"])(
+    "rejects delivery without the one-shot writer (media: %s)",
+    async (mediaUrl) => {
+      const client = createEnterpriseClient();
+      const scope = eventScope(client);
+      delete (scope as { writeClient?: WebClient }).writeClient;
 
-    await expect(
-      sendMessageSlack("C123", "caption", {
-        cfg: ENTERPRISE_CFG,
-        eventScope: scope,
-        mediaUrl: "https://example.com/image.png",
-      }),
-    ).rejects.toThrow("missing_enterprise_slack_upload_completion_client");
+      await expect(
+        sendMessageSlack("C123", "caption", {
+          cfg: ENTERPRISE_CFG,
+          eventScope: scope,
+          mediaUrl,
+        }),
+      ).rejects.toThrow("missing_enterprise_slack_write_client");
 
-    expect(client.files.getUploadURLExternal).not.toHaveBeenCalled();
-    expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
-  });
+      expect(client.files.getUploadURLExternal).not.toHaveBeenCalled();
+      expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
+    },
+  );
 
-  it("uses a completion-only client and keeps remaining posts on the listener client", async () => {
+  it("keeps upload URL reads on the listener and completion plus posts on the one-shot writer", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuard.mockResolvedValue({
       response: { ok: true, status: 200 },
       release,
     });
     const listenerClient = createEnterpriseClient();
-    const uploadCompletionClient = createEnterpriseClient();
-    listenerClient.chat.postMessage
+    const writeClient = createEnterpriseClient();
+    writeClient.chat.postMessage
       .mockResolvedValueOnce({ ok: true, ts: "123.001", channel: "C123" })
       .mockResolvedValueOnce({ ok: true, ts: "123.002", channel: "C123" });
 
     const result = await sendMessageSlack("C123", "12345678abcdefghZ", {
-      ...enterpriseOptions(listenerClient, "T1", uploadCompletionClient),
+      ...enterpriseOptions(listenerClient, "T1", writeClient),
       mediaUrl: "https://example.com/image.png",
       textLimit: 8,
       mediaMaxBytes: 5,
@@ -333,17 +333,17 @@ describe("sendMessageSlack Enterprise listener scope", () => {
     );
     expect(listenerClient.files.getUploadURLExternal).toHaveBeenCalledOnce();
     expect(listenerClient.files.completeUploadExternal).not.toHaveBeenCalled();
-    expect(uploadCompletionClient.files.getUploadURLExternal).not.toHaveBeenCalled();
-    expect(uploadCompletionClient.files.completeUploadExternal).toHaveBeenCalledWith({
+    expect(writeClient.files.getUploadURLExternal).not.toHaveBeenCalled();
+    expect(writeClient.files.completeUploadExternal).toHaveBeenCalledWith({
       files: [{ id: "F123", title: "image.png" }],
       channel_id: "C123",
       initial_comment: "12345678",
     });
-    expect(listenerClient.chat.postMessage.mock.calls.map((call) => call[0]?.text)).toEqual([
+    expect(writeClient.chat.postMessage.mock.calls.map((call) => call[0]?.text)).toEqual([
       "abcdefgh",
       "Z",
     ]);
-    expect(uploadCompletionClient.chat.postMessage).not.toHaveBeenCalled();
+    expect(listenerClient.chat.postMessage).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledOnce();
     expect(result.receipt).toMatchObject({
       primaryPlatformMessageId: "F123",

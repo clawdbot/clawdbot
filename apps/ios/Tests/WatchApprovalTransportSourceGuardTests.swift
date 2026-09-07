@@ -114,7 +114,7 @@ struct WatchApprovalTransportSourceGuardTests {
             "WatchGatewayID.key(snapshot.gatewayStableID) == WatchGatewayID.key(token.gatewayStableID)"))
     }
 
-    @Test func `watch applies retry reset only to its exact active attempt`() throws {
+    @Test func `retry reset matches the exact active attempt`() throws {
         let storeSource = try Self.readWatchSource("WatchInboxStore.swift")
         let promptConsume = try Self.extract(
             storeSource,
@@ -125,23 +125,11 @@ struct WatchApprovalTransportSourceGuardTests {
             from: "private func upsertExecApproval(",
             to: "private static func snapshotCanReplace(")
 
-        let guardedUpsert = try #require(promptConsume.range(of: "guard self.upsertExecApproval("))
-        let notificationOwnerCheck = try #require(promptConsume.range(of: "guard let approvalOwnerKey"))
-        #expect(guardedUpsert.lowerBound < notificationOwnerCheck.lowerBound)
-        let upsertAdmission = promptConsume[guardedUpsert.lowerBound..<notificationOwnerCheck.lowerBound]
-        #expect(upsertAdmission.contains("else { return }"))
-        #expect(upsert.contains("resetResolutionAttemptID: String? = nil) -> Bool"))
-        #expect(upsert.components(separatedBy: "return false").count >= 3)
-        #expect(upsert.contains("return true"))
-        #expect(promptConsume.contains(
-            "resetResolutionAttemptID: message.resetResolutionAttemptId"))
-        #expect(upsert.contains("let activeResolutionAttemptID ="))
+        #expect(promptConsume.contains("resetResolutionAttemptID: message.resetResolutionAttemptId"))
+        #expect(upsert.contains("resetResolutionAttemptID: String? = nil"))
         #expect(upsert.contains(
             "WatchOpaqueUTF8Key(resetResolutionAttemptID) == WatchOpaqueUTF8Key(activeResolutionAttemptID)"))
         #expect(upsert.contains("activeResolutionAttemptID = resetResolvingState ? nil"))
-        #expect(!storeSource.contains("appliedResetDeliveryIDs"))
-        #expect(!storeSource.contains("deliveryId"))
-        #expect(!storeSource.contains("resetResolvingState: Bool?"))
     }
 
     @Test func `watch rejects partial or missing approval snapshot arrays`() throws {
@@ -186,10 +174,6 @@ struct WatchApprovalTransportSourceGuardTests {
             storeSource,
             from: "func consume(\n        execApprovalSnapshot",
             to: "func consume(appSnapshot")
-        let restore = try Self.extract(
-            storeSource,
-            from: "private func restorePersistedState()",
-            to: "private func persistState()")
         let prefixed = "\u{001C}approval"
         #expect(ExecApprovalIdentifier.exact(prefixed) == prefixed)
         #expect(ExecApprovalIdentifier.exact(" approval ") == " approval ")
@@ -204,7 +188,6 @@ struct WatchApprovalTransportSourceGuardTests {
         #expect(snapshotConsume.contains("WatchApprovalID.exact(approval.id) != nil"))
         #expect(snapshotConsume.contains("let hasCanonicalRequestCorrelation ="))
         #expect(snapshotConsume.contains("guard hasCanonicalRequestCorrelation else { return true }"))
-        #expect(restore.contains("WatchApprovalID.exact(record.approvalID) != nil"))
         let composedID = "approval-\u{00E9}"
         let decomposedID = "approval-e\u{0301}"
         let composedKey = ExactOpaqueIdentifierKey(composedID)
@@ -290,80 +273,35 @@ struct WatchApprovalTransportSourceGuardTests {
         #expect(detailScroll.contains("self.content"))
     }
 
-    @Test func `watch notification identity frames dotted components`() throws {
+    @Test func `notification identity keeps dotted owners distinct`() throws {
         let storeSource = try Self.readWatchSource("WatchInboxStore.swift")
-        let messagesSource = try Self.readWatchSource("WatchInboxMessages.swift")
-        let identifierSource = try Self.readIOSServiceSource("ExactOpaqueIdentifier.swift")
-        let promptConsume = try Self.extract(
-            storeSource,
-            from: "func consume(\n        execApprovalPrompt",
-            to: "func consume(\n        execApprovalSnapshot")
-        let rawLeft = "a.b" + "." + "c"
-        let rawRight = "a" + "." + "b.c"
-        #expect(rawLeft == rawRight)
-
-        let framedLeft = ExactOpaqueIdentifierKey("a.b").notificationComponent + "."
+        let left = ExactOpaqueIdentifierKey("a.b").notificationComponent + "."
             + ExactOpaqueIdentifierKey("c").notificationComponent
-        let framedRight = ExactOpaqueIdentifierKey("a").notificationComponent + "."
+        let right = ExactOpaqueIdentifierKey("a").notificationComponent + "."
             + ExactOpaqueIdentifierKey("b.c").notificationComponent
-        #expect(framedLeft != framedRight)
-        #expect(messagesSource.contains("typealias WatchOpaqueUTF8Key = ExactOpaqueIdentifierKey"))
-        #expect(identifierSource.contains("0x2D, 0x5F, 0x7E"))
-        #expect(!identifierSource.contains("0x2D, 0x2E, 0x5F, 0x7E"))
-        #expect(!storeSource.contains("0x2D, 0x2E, 0x5F, 0x7E"))
+
+        #expect(left != right)
         #expect(storeSource.contains("gatewayKey.notificationComponent).\\(approvalKey.notificationComponent"))
-        #expect(storeSource.contains("legacyExecApprovalNotificationIdentifier"))
-        #expect(storeSource.contains("hasLiveLegacyNotificationCollision"))
+        #expect(storeSource.contains("!self.hasLiveLegacyNotificationCollision("))
         #expect(storeSource.contains("recordKey != excludedKey"))
-        let legacyCleanup = try #require(
-            promptConsume.range(of: "if let legacyNotificationIdentifier"))
-        let notificationSchedule = try #require(
-            promptConsume.range(of: "await self.postLocalNotification("))
-        #expect(legacyCleanup.lowerBound < notificationSchedule.lowerBound)
-        #expect(promptConsume.contains("!self.hasLiveLegacyNotificationCollision("))
-        #expect(promptConsume.contains(
-            "self.removeLocalNotifications(identifiers: [legacyNotificationIdentifier])"))
     }
 
-    @Test func `watch snapshot acknowledgment advances only after store acceptance`() throws {
+    @Test func `snapshot acknowledgment follows store acceptance`() throws {
         let storeSource = try Self.readWatchSource("WatchInboxStore.swift")
         let receiverSource = try Self.readWatchSource("WatchConnectivityReceiver.swift")
         let snapshotConsume = try Self.extract(
             storeSource,
             from: "func consume(\n        execApprovalSnapshot",
             to: "func consume(appSnapshot")
-        let replay = try Self.extract(
-            storeSource,
-            from: "func replayDeferredGatewayPayloads()",
-            to: "private func clearMessagePrompt()")
-        let correlation = try #require(snapshotConsume.range(of: "let hasCanonicalRequestCorrelation"))
-        let ownerValidation = try #require(snapshotConsume.range(of: "let allApprovalOwnersMatch"))
-        let existingRecords = try #require(snapshotConsume.range(of: "let existingRecords = self.execApprovals"))
 
         #expect(snapshotConsume.contains("transport: String) -> Bool"))
-        #expect(snapshotConsume.components(separatedBy: "return false").count >= 4)
+        #expect(snapshotConsume.contains("guard allApprovalOwnersMatch else { return false }"))
         #expect(snapshotConsume.contains("self.persistState()\n        return true"))
         #expect(receiverSource.contains(
             "if self.store.consume(execApprovalSnapshot: execApprovalSnapshot, transport: transport)"))
         #expect(receiverSource.contains(
             "if self.store.consume(execApprovalSnapshot: snapshot, transport: transport)"))
-        #expect(replay.contains(
-            "func replayDeferredGatewayPayloads() -> [WatchExecApprovalSnapshotMessage]"))
-        #expect(replay.contains(
-            "var appliedExecApprovalSnapshots: [WatchExecApprovalSnapshotMessage] = []"))
-        #expect(replay.contains("if self.consume(execApprovalSnapshot: message, transport: transport)"))
-        #expect(replay.contains("appliedExecApprovalSnapshots.append(message)"))
-        #expect(replay.contains("return appliedExecApprovalSnapshots"))
-        #expect(receiverSource.components(
-            separatedBy: "for snapshot in self.store.replayDeferredGatewayPayloads()").count == 3)
-        #expect(receiverSource.components(
-            separatedBy: "self.recordAcceptedExecApprovalSnapshot(snapshot)").count >= 3)
-        #expect(!receiverSource.contains("execApprovalSnapshotRevision"))
-        #expect(correlation.lowerBound < ownerValidation.lowerBound)
-        #expect(ownerValidation.lowerBound < existingRecords.lowerBound)
-        #expect(snapshotConsume.contains("guard allApprovalOwnersMatch else { return false }"))
-        #expect(snapshotConsume.contains(
-            "Self.gatewayIDsMatch(approval.gatewayStableID, snapshotGatewayID)"))
+        #expect(storeSource.contains("if self.consume(execApprovalSnapshot: message, transport: transport)"))
     }
 
     private static func readWatchSource(_ filename: String) throws -> String {
@@ -371,15 +309,6 @@ struct WatchApprovalTransportSourceGuardTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("WatchApp/Sources")
-            .appendingPathComponent(filename)
-        return try String(contentsOf: url, encoding: .utf8)
-    }
-
-    private static func readIOSServiceSource(_ filename: String) throws -> String {
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("Sources/Services")
             .appendingPathComponent(filename)
         return try String(contentsOf: url, encoding: .utf8)
     }

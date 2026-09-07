@@ -3,7 +3,11 @@ import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core";
 import type { Selectable } from "kysely";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  sqliteStringSet,
+} from "../../infra/kysely-sync.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import { normalizeCronRuntimeAuthority } from "../runtime-authority.js";
@@ -87,6 +91,7 @@ function ensureCronRuntimeAuthorityTable(db: DatabaseSync): void {
 function loadCronRuntimeAuthorityRows(
   db: DatabaseSync,
   storeKey: string,
+  jobIds: Iterable<string>,
 ): CronRuntimeAuthorityRow[] {
   if (!tableExists(db, CRON_RUNTIME_AUTHORITY_TABLE)) {
     return [];
@@ -96,7 +101,8 @@ function loadCronRuntimeAuthorityRows(
     getCronAuthorityKysely(db)
       .selectFrom("cron_job_runtime_authorities")
       .selectAll()
-      .where("store_key", "=", storeKey),
+      .where("store_key", "=", storeKey)
+      .where("job_id", "in", sqliteStringSet([...jobIds])),
   ).rows;
 }
 
@@ -127,7 +133,7 @@ export function loadCronRuntimeAuthorities(params: {
 }): CronRuntimeAuthorityLoadResult {
   const jobsById = new Map(params.jobs.map((job) => [job.id, job] as const));
   const repairJobIds: string[] = [];
-  for (const row of loadCronRuntimeAuthorityRows(params.db, params.storeKey)) {
+  for (const row of loadCronRuntimeAuthorityRows(params.db, params.storeKey, jobsById.keys())) {
     const job = jobsById.get(row.job_id);
     if (!job) {
       continue;
@@ -174,7 +180,7 @@ export function repairCronRuntimeAuthorityRows(params: {
   const requested = new Set(params.jobIds);
   const jobsById = new Map(params.jobs.map((job) => [job.id, job] as const));
   let repaired = false;
-  for (const row of loadCronRuntimeAuthorityRows(params.db, params.storeKey)) {
+  for (const row of loadCronRuntimeAuthorityRows(params.db, params.storeKey, requested)) {
     if (!requested.has(row.job_id)) {
       continue;
     }
@@ -195,6 +201,8 @@ export function replaceCronRuntimeAuthorityRows(params: {
   db: DatabaseSync;
   storeKey: string;
   jobs: readonly CronStoredJob[];
+  preserveExistingForJobIds?: ReadonlySet<string>;
+  writeMissingForJobIds?: ReadonlySet<string>;
 }): void {
   const hasPersistedAuthority = params.jobs.some(
     (job) => job.runtimeAuthority || job.runtimeAuthorityRecoveryRequired === true,
@@ -204,7 +212,30 @@ export function replaceCronRuntimeAuthorityRows(params: {
   }
   ensureCronRuntimeAuthorityTable(params.db);
   const database = getCronAuthorityKysely(params.db);
+  const existingRowsByJobId = params.preserveExistingForJobIds
+    ? new Map(
+        loadCronRuntimeAuthorityRows(
+          params.db,
+          params.storeKey,
+          params.jobs.map((job) => job.id),
+        ).map((row) => [row.job_id, row]),
+      )
+    : undefined;
   for (const job of params.jobs) {
+    // Doctor must not replay a pre-prompt authority snapshot. Keep the current
+    // child only while its inputs match; missing stays missing unless legacy job_json owns it.
+    if (params.preserveExistingForJobIds?.has(job.id)) {
+      const existingRow = existingRowsByJobId?.get(job.id);
+      if (existingRow) {
+        if (applyCronRuntimeAuthorityRow(job, existingRow) === "repair") {
+          writeRecoveryRow(params.db, params.storeKey, job.id);
+        }
+        continue;
+      }
+      if (!params.writeMissingForJobIds?.has(job.id)) {
+        continue;
+      }
+    }
     if (job.runtimeAuthorityRecoveryRequired === true) {
       writeRecoveryRow(params.db, params.storeKey, job.id);
       continue;

@@ -273,7 +273,9 @@ export async function assertOpenClawStateWriteAllowedAtPath(options: {
   databasePath: string;
   env?: NodeJS.ProcessEnv;
   recoverOrphanedSidecars?: boolean;
+  signal?: AbortSignal;
 }): Promise<void> {
+  options.signal?.throwIfAborted();
   const databasePath = path.resolve(options.databasePath);
   const recoverOrphanedSidecars = options.recoverOrphanedSidecars !== false;
   if (recoverOrphanedSidecars) {
@@ -291,8 +293,9 @@ export async function assertOpenClawStateWriteAllowedAtPath(options: {
     );
     return;
   }
-  const prepared = await prepareSqliteReadOnlyLocation(databasePath);
+  const prepared = await prepareSqliteReadOnlyLocation(databasePath, { signal: options.signal });
   try {
+    options.signal?.throwIfAborted();
     assertOwnershipAllowsWrite(
       inspectOwnershipThroughConnection(prepared.location, databasePath),
       databasePath,

@@ -392,6 +392,15 @@ describe("agent command registration", () => {
     );
   });
 
+  it("documents set-identity --workspace as a locator", () => {
+    const program = new Command();
+    registerAgentsCommands(program);
+    const agents = program.commands.find((command) => command.name() === "agents");
+    const setIdentity = agents?.commands.find((command) => command.name() === "set-identity");
+    const help = setIdentity?.helpInformation() ?? "";
+    expect(help.replace(/\s+/g, " ")).toContain("does not change the stored workspace");
+  });
+
   it("documents bind accountId resolution behavior in help text", () => {
     const program = new Command();
     registerAgentsCommands(program);

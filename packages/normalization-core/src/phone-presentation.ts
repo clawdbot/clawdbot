@@ -1,19 +1,11 @@
-import {
-  getCountries,
-  getCountryCallingCode,
-  parsePhoneNumberFromString,
-} from "libphonenumber-js/min";
+import { parsePhoneNumberFromString } from "libphonenumber-js/min";
+import metadata from "libphonenumber-js/min/metadata";
 
-const sharedCountryCallingCodes = (() => {
-  const counts = new Map<string, number>();
-  for (const country of getCountries()) {
-    const callingCode = getCountryCallingCode(country);
-    counts.set(callingCode, (counts.get(callingCode) ?? 0) + 1);
-  }
-  return new Set(
-    [...counts.entries()].filter(([, count]) => count > 1).map(([callingCode]) => callingCode),
-  );
-})();
+const sharedCountryCallingCodes = new Set(
+  Object.entries(metadata.country_calling_codes)
+    .filter(([, countries]) => countries.length > 1)
+    .map(([callingCode]) => callingCode),
+);
 
 export function formatInternationalPhoneNumberForDisplay(
   raw: string,

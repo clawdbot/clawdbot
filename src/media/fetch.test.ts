@@ -1412,6 +1412,26 @@ describe("readRemoteMediaBuffer", () => {
       fileName: "fallback.csv",
     },
     {
+      name: "unusable extended filename dot before plain",
+      header: "attachment; filename*=UTF-8''.; filename=fallback.csv",
+      fileName: "fallback.csv",
+    },
+    {
+      name: "unusable extended filename dot after plain",
+      header: "attachment; filename=fallback.csv; filename*=UTF-8''.",
+      fileName: "fallback.csv",
+    },
+    {
+      name: "unusable extended filename encoded parent before plain",
+      header: "attachment; filename*=UTF-8''%2E%2E; filename=fallback.csv",
+      fileName: "fallback.csv",
+    },
+    {
+      name: "unusable extended filename encoded parent after plain",
+      header: "attachment; filename=fallback.csv; filename*=UTF-8''%2E%2E",
+      fileName: "fallback.csv",
+    },
+    {
       name: "unsupported extended charset falls back to plain filename",
       header: "attachment; filename*=UTF-16''bad.csv; filename=fallback.csv",
       fileName: "fallback.csv",

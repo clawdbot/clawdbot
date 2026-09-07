@@ -4,6 +4,7 @@ import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.types.js";
 import type {
   PluginDiagnostic,
+  PluginManifestModelIdNormalizationProvider,
   PluginManifestProviderEndpoint,
   PluginManifestProviderRequestProvider,
 } from "./manifest-types.js";
@@ -13,7 +14,6 @@ import type {
 } from "./plugin-registry-snapshot.types.js";
 
 export type PluginMetadataSnapshotPluginIdScope = {
-  key: string;
   resolve: (params: { index: InstalledPluginIndex }) => readonly string[] | undefined;
 };
 
@@ -33,6 +33,8 @@ export type PluginMetadataSnapshotOwnerMaps = {
   setupProviders: ReadonlyMap<string, readonly string[]>;
   commandAliases: ReadonlyMap<string, readonly string[]>;
   contracts: ReadonlyMap<string, readonly string[]>;
+  /** Empty views must not fall through to process-current model normalization policies. */
+  modelIdNormalizationPolicies: ReadonlyMap<string, PluginManifestModelIdNormalizationProvider>;
   providerAuthAliases?: ReadonlyMap<string, readonly PluginProviderAuthAliasCandidate[]>;
   providerEndpoints?: readonly PluginManifestProviderEndpoint[];
   providerRequests?: ReadonlyMap<string, PluginManifestProviderRequestProvider>;

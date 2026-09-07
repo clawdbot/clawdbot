@@ -1,20 +1,28 @@
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
-import { SessionManager } from "../agents/sessions/session-manager.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { withTranscriptWriteTransaction } from "../config/sessions/session-accessor.js";
+import { appendSessionTranscriptReport } from "../config/sessions/session-accessor.js";
 import type { GitHubPublicationCoordinator } from "./github-publication.js";
 
 const GITHUB_PUBLICATION_RESPONSE_PREFIX = "github-publication:";
 
 function formatGitHubPublicationResult(result: SessionGitHubPublicationResult): string {
+  const publisher = result.publisher;
+  const source =
+    publisher?.source === "personal"
+      ? "My GitHub"
+      : publisher?.source === "agent-override"
+        ? "Agent override"
+        : "System";
+  const acting = publisher ? ` Using @${publisher.login} (${source}).` : "";
   switch (result.status) {
     case "published":
-      return `Published ${result.repository} branch ${result.branch}: ${result.url}`;
+      return `Published ${result.repository} branch ${result.branch}: ${result.url}${acting}`;
     case "failed":
-      return `GitHub publication failed: ${result.message} ${result.nextAction}`;
+      return `GitHub publication failed: ${result.message} ${result.nextAction}${acting}`;
     case "publishing":
     case "requested":
-      return result.message;
+    case "needs_confirmation":
+      return `${result.message}${acting}`;
   }
   return result satisfies never;
 }
@@ -43,45 +51,38 @@ export function createGitHubPublicationTranscriptReporter(
     if (entry?.sessionId !== params.sessionId || target.canonicalKey !== params.sessionKey) {
       throw new Error("GitHub publication transcript owner changed");
     }
-    await withTranscriptWriteTransaction(
+    const appended = await appendSessionTranscriptReport(
       {
         agentId: target.agentId,
         sessionId: params.sessionId,
         sessionKey: target.canonicalKey,
         storePath: target.storePath,
       },
-      (transcriptTarget) => {
-        const manager = SessionManager.open(transcriptTarget);
-        const exists = manager.getBranch().some((transcriptEntry) => {
-          return (
-            transcriptEntry.type === "message" &&
-            transcriptEntry.message.role === "assistant" &&
-            transcriptEntry.message.responseId ===
-              `${GITHUB_PUBLICATION_RESPONSE_PREFIX}${params.result.requestId}`
-          );
-        });
-        if (!exists) {
-          manager.appendMessage({
-            role: "assistant",
-            content: [{ type: "text", text: formatGitHubPublicationResult(params.result) }],
-            api: "openai-responses",
-            provider: "openclaw",
-            model: "gateway-publication",
-            responseId: `${GITHUB_PUBLICATION_RESPONSE_PREFIX}${params.result.requestId}`,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "stop",
-            timestamp: Date.now(),
-          });
-        }
+      {
+        kind: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: formatGitHubPublicationResult(params.result) }],
+          api: "openai-responses",
+          provider: "openclaw",
+          model: "gateway-publication",
+          responseId: `${GITHUB_PUBLICATION_RESPONSE_PREFIX}${params.result.requestId}`,
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "stop",
+          timestamp: Date.now(),
+        },
       },
     );
+    if (!appended.ok) {
+      throw new Error("GitHub publication transcript owner changed", { cause: appended.error });
+    }
     coordinator.markReported(params.result.requestId);
   };
 }

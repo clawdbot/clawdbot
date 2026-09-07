@@ -1,7 +1,8 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import Anthropic from "@anthropic-ai/sdk";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { streamWithIdleTimeout } from "../../../../src/agents/embedded-agent-runner/run/llm-idle-timeout.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
 import type { Context, Model } from "../types.js";
 import { streamAnthropic } from "./anthropic.js";
@@ -80,7 +81,6 @@ async function streamAnthropicSseFrames(
   try {
     const result = await streamAnthropic(makeModel(`http://127.0.0.1:${address.port}`), context, {
       apiKey: "test-api-key",
-      maxRetries: 0,
     }).result();
     return { stopReason: result.stopReason, errorMessage: result.errorMessage };
   } finally {
@@ -104,6 +104,67 @@ describe("Anthropic malformed SSE frames", () => {
 
     expect(result.stopReason).toBe("stop");
     expect(result.errorMessage).toBeUndefined();
+  });
+
+  it("keeps a response alive while Anthropic sends protocol pings", async () => {
+    const idleTimeoutMs = 1_000;
+    const finalResponseDelayMs = 1_200;
+    let pingCount = 0;
+    const server = createServer((request, response) => {
+      response.writeHead(200, {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache",
+      });
+      const writeFrame = ([event, data]: (typeof WELL_FORMED_FRAMES)[number]) => {
+        response.write(`event: ${event}\ndata: ${data}\n\n`);
+      };
+      writeFrame(WELL_FORMED_FRAMES[0]);
+      const pingTimer = setInterval(() => {
+        pingCount += 1;
+        response.write('event: ping\ndata: {"type":"ping"}\n\n');
+      }, 20);
+      const finalTimer = setTimeout(() => {
+        clearInterval(pingTimer);
+        for (const frame of WELL_FORMED_FRAMES.slice(1)) {
+          writeFrame(frame);
+        }
+        response.end();
+      }, finalResponseDelayMs);
+      response.on("close", () => {
+        clearInterval(pingTimer);
+        clearTimeout(finalTimer);
+      });
+      void request.resume();
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const address = server.address() as AddressInfo;
+    try {
+      const onIdleTimeout = vi.fn();
+      const stream = (await Promise.resolve(
+        streamWithIdleTimeout(streamAnthropic as never, idleTimeoutMs, onIdleTimeout)(
+          makeModel(`http://127.0.0.1:${address.port}`),
+          context,
+          { apiKey: "test-api-key" },
+        ),
+      )) as ReturnType<typeof streamAnthropic>;
+      for await (const event of stream) {
+        // The idle watchdog guards consumer waits between provider events.
+        void event;
+      }
+      const result = await stream.result();
+
+      expect(result.stopReason).toBe("stop");
+      expect(result.content).toEqual([expect.objectContaining({ type: "text", text: "ok" })]);
+      expect(onIdleTimeout).not.toHaveBeenCalled();
+      expect(pingCount).toBeGreaterThan(0);
+      expect(finalResponseDelayMs).toBeGreaterThan(idleTimeoutMs);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 
   it.each([
@@ -161,7 +222,6 @@ describe("Anthropic malformed SSE frames", () => {
     const stream = streamAnthropic({ ...makeModel(baseUrl), provider }, context, {
       apiKey: "test-api-key",
       client,
-      maxRetries: 0,
     });
     const eventTypes: string[] = [];
     for await (const event of stream) {

@@ -7,7 +7,12 @@ import { join } from "node:path";
 import { Client as TeamsApiClient } from "@microsoft/teams.api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
-import { sendAdaptiveCardMSTeams, sendMessageMSTeams, sendPollMSTeams } from "./send.js";
+import {
+  editMessageMSTeams,
+  sendAdaptiveCardMSTeams,
+  sendMessageMSTeams,
+  sendPollMSTeams,
+} from "./send.js";
 
 const serviceUrl = "https://smba.trafficmanager.net/amer";
 const conversationId = "19:channel@thread.tacv2";
@@ -19,7 +24,9 @@ const mockState = vi.hoisted(() => ({
   uploadAndShareSharePoint: vi.fn(),
   getDriveItemProperties: vi.fn(),
   buildTeamsFileInfoCard: vi.fn(),
-  sendMSTeamsMessages: vi.fn(async () => ["text-message-1"]),
+  sendMSTeamsMessages: vi.fn<(typeof import("./messenger.js"))["sendMSTeamsMessages"]>(async () => [
+    "text-message-1",
+  ]),
 }));
 
 vi.mock("openclaw/plugin-sdk/outbound-media", () => ({
@@ -79,12 +86,14 @@ vi.mock("./messenger.js", () => ({
 }));
 
 type CapturedRequest = {
+  method: string;
   path: string;
   body: Record<string, unknown>;
 };
 
 type TeamsSdkHttpTransport = {
   post: (destination: string, data?: unknown) => Promise<{ data: unknown }>;
+  put: (destination: string, data?: unknown) => Promise<{ data: unknown }>;
 };
 
 async function withRealTeamsSdkHttp<T>(
@@ -98,6 +107,7 @@ async function withRealTeamsSdkHttp<T>(
     });
     request.once("end", () => {
       requests.push({
+        method: request.method ?? "",
         path: request.url ?? "",
         body: JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>,
       });
@@ -114,18 +124,20 @@ async function withRealTeamsSdkHttp<T>(
     const api = new TeamsApiClient(serviceUrl);
     // OpenClaw's minimal SDK ambient declaration omits the real client's public HTTP transport.
     const transport = (api as unknown as { http: TeamsSdkHttpTransport }).http;
-    vi.spyOn(transport, "post").mockImplementation(async (destination, data) => {
-      const destinationUrl = new URL(destination);
-      const response = await fetch(
-        `http://127.0.0.1:${port}${destinationUrl.pathname}${destinationUrl.search}`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(data),
-        },
-      );
-      return { data: await response.json() };
-    });
+    for (const method of ["post", "put"] as const) {
+      vi.spyOn(transport, method).mockImplementation(async (destination, data) => {
+        const destinationUrl = new URL(destination);
+        const response = await fetch(
+          `http://127.0.0.1:${port}${destinationUrl.pathname}${destinationUrl.search}`,
+          {
+            method: method.toUpperCase(),
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(data),
+          },
+        );
+        return { data: await response.json() };
+      });
+    }
 
     return await run({ api, requests });
   } finally {
@@ -504,6 +516,81 @@ describe.each(structuredSenders)("Microsoft Teams $label thread routing", ({ sen
             attachments: [{ contentType: "application/vnd.microsoft.card.adaptive" }],
           },
         });
+      });
+    },
+  );
+});
+
+describe("Teams text preparation at the SDK HTTP boundary", () => {
+  const source = "# Deployment status\n\n@[Alex](11111111-2222-3333-4444-555555555555)";
+  const expectedText = "**Deployment status**\n\n<at>Alex</at>";
+  const expectedMention = {
+    type: "mention",
+    text: "<at>Alex</at>",
+    mentioned: { id: "11111111-2222-3333-4444-555555555555", name: "Alex" },
+  };
+  const expectedAiEntity = {
+    type: "https://schema.org/Message",
+    "@type": "Message",
+    "@context": "https://schema.org",
+    "@id": "",
+    additionalType: ["AIGeneratedContent"],
+  };
+
+  it.each(["edit", "file-caption"] as const)(
+    "preserves normal-send text and mention semantics for %s",
+    async (surface) => {
+      vi.clearAllMocks();
+      mockState.requiresFileConsent.mockReturnValue(false);
+      mockSharePointFileUpload();
+      const actualMessenger =
+        await vi.importActual<typeof import("./messenger.js")>("./messenger.js");
+      mockState.sendMSTeamsMessages.mockImplementation(actualMessenger.sendMSTeamsMessages);
+      await withRealTeamsSdkHttp(async ({ api, requests }) => {
+        mockState.resolveMSTeamsSendContext.mockResolvedValue({
+          app: { api },
+          appId: "app-id",
+          conversationId,
+          ref: {
+            serviceUrl,
+            agent: { id: "28:bot", name: "OpenClaw", role: "bot" },
+            user: { id: "29:user" },
+            conversation: { id: conversationId, conversationType: "channel" },
+          },
+          conversationType: "channel",
+          replyStyle: "top-level",
+          sdkCloudOptions: { cloud: "Public" },
+          tokenProvider: { getAccessToken: vi.fn() },
+          sharePointSiteId: "sharepoint-site-1",
+          log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        });
+        await sendMessageMSTeams({ cfg: {}, to: conversationId, text: source });
+        expect(requests[0]?.body.text).toBe(expectedText);
+        expect
+          .soft(requests[0]?.body.entities)
+          .toEqual(expect.arrayContaining([expectedMention, expectedAiEntity]));
+
+        if (surface === "edit") {
+          await editMessageMSTeams({
+            cfg: {},
+            to: conversationId,
+            text: source,
+            activityId: "sdk-http-message-1",
+          });
+        } else {
+          await sendMessageMSTeams({
+            cfg: {},
+            to: conversationId,
+            text: source,
+            mediaUrl: "https://media.example.com/report.pdf",
+          });
+        }
+        expect(requests).toHaveLength(2);
+        expect(requests[1]?.method).toBe(surface === "edit" ? "PUT" : "POST");
+        expect.soft(requests[1]?.body.text).toBe(expectedText);
+        expect
+          .soft(requests[1]?.body.entities)
+          .toEqual(expect.arrayContaining([expectedMention, expectedAiEntity]));
       });
     },
   );

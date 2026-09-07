@@ -34,6 +34,10 @@ function createMaintenanceFixture(command: string, exitCode: number) {
     XDG_CONFIG_HOME: join(home, ".config"),
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
+    GIT_AUTHOR_NAME: "OpenClaw Test",
+    GIT_AUTHOR_EMAIL: "test@example.invalid",
+    GIT_COMMITTER_NAME: "OpenClaw Test",
+    GIT_COMMITTER_EMAIL: "test@example.invalid",
     GIT_TERMINAL_PROMPT: "0",
     GIT_CONFIG_COUNT: "1",
     GIT_CONFIG_KEY_0: "test.fromCount",
@@ -44,12 +48,9 @@ function createMaintenanceFixture(command: string, exitCode: number) {
   const git = (args: string[], input?: string) =>
     execFileSync("git", args, { cwd: repo, env, input, encoding: "utf8" }).trim();
   git(["init", "-q", "-b", "main"]);
-  git(["config", "user.name", "OpenClaw Test"]);
-  git(["config", "user.email", "test@example.invalid"]);
-  git(["config", "commit.gpgSign", "false"]);
   writeFileSync(join(repo, "base.txt"), "synthetic maintenance fixture\n");
   git(["add", "base.txt"]);
-  git(["commit", "-qm", "base"]);
+  git(["-c", "commit.gpgSign=false", "commit", "-qm", "base"]);
   git(["remote", "add", "origin", repo]);
   git(["fetch", "-q", "origin", "main"]);
 

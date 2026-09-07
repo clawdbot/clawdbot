@@ -1159,8 +1159,12 @@ describe("AcpSessionManager turn results", () => {
     });
   });
 
-  it("fails immediately when startTurn events fail before terminal result settles", async () => {
+  it("cancels a failed startTurn event stream before surfacing its error", async () => {
     const runtimeState = createRuntime();
+    const result = createDeferred<{ status: "cancelled" }>();
+    const cancel = vi.fn(async () => {
+      result.resolve({ status: "cancelled" });
+    });
     const closeStream = vi.fn(async () => {});
     runtimeState.runtime.startTurn = vi.fn((input) => ({
       requestId: input.requestId,
@@ -1168,8 +1172,8 @@ describe("AcpSessionManager turn results", () => {
         yield { type: "text_delta" as const, stream: "output" as const, text: "partial" };
         throw new AcpRuntimeError("ACP_TURN_FAILED", "event stream disconnected");
       })(),
-      result: new Promise<never>(() => {}),
-      cancel: vi.fn(async () => {}),
+      result: result.promise,
+      cancel,
       closeStream,
     }));
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
@@ -1196,6 +1200,7 @@ describe("AcpSessionManager turn results", () => {
       code: "ACP_TURN_FAILED",
       message: "event stream disconnected",
     });
+    expect(cancel).toHaveBeenCalledOnce();
     expect(closeStream).toHaveBeenCalledWith({ reason: "turn-events-error" });
   });
 
@@ -1487,15 +1492,38 @@ describe("AcpSessionManager turn results", () => {
   }
 
   function expectFreshRetry(scenario: ReturnType<typeof setupStaleResumeScenario>) {
-    expect(scenario.runtimeState.prepareFreshSession).toHaveBeenCalledWith({
+    const pendingHandle = {
       sessionKey: scenario.sessionKey,
-    });
+      agentId: "claude",
+      backend: "acpx",
+      runtimeSessionName: `${scenario.sessionKey}:persistent:runtime`,
+      cwd: undefined,
+      acpxRecordId: undefined,
+    };
+    expect(scenario.runtimeState.prepareFreshSession.mock.calls).toEqual([
+      [
+        {
+          sessionKey: scenario.sessionKey,
+          agentId: "claude",
+          persistedHandle: { ...pendingHandle, backendSessionId: "acpx-sid-stale" },
+        },
+      ],
+      [
+        {
+          sessionKey: scenario.sessionKey,
+          agentId: "claude",
+          persistedHandle: pendingHandle,
+        },
+      ],
+    ]);
     expect(scenario.runtimeState.ensureSession).toHaveBeenCalledTimes(2);
     expectRecordFields(mockCallArg(scenario.runtimeState.ensureSession), {
       sessionKey: scenario.sessionKey,
+      agentId: "claude",
       resumeSessionId: "acpx-sid-stale",
     });
     expect(mockCallArg(scenario.runtimeState.ensureSession, 1).resumeSessionId).toBeUndefined();
+    expect(mockCallArg(scenario.runtimeState.ensureSession, 1).agentId).toBe("claude");
     expect(scenario.getMeta().identity?.acpxSessionId).toBe("acpx-sid-fresh");
     expect(scenario.getMeta().identity?.state).toBe("resolved");
     const states = extractStatesFromUpserts();

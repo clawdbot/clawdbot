@@ -302,6 +302,7 @@ describe("run-opengrep.sh", () => {
       git(source, "init", "-q", "--initial-branch=main");
       git(source, "config", "user.email", "test@example.com");
       git(source, "config", "user.name", "Test User");
+      git(source, "config", "uploadpack.allowFilter", "true");
       copyRunOpengrepFiles(source);
       for (const name of ["ensure-base-commit", "git-owner"]) {
         fs.cpSync(`.github/actions/${name}`, path.join(source, ".github/actions", name), {
@@ -324,13 +325,14 @@ describe("run-opengrep.sh", () => {
     });
 
     it.each([
-      { shape: "merge", branch: "main", depth: 2, passes: true },
-      { shape: "linear", branch: "feature", depth: 2, passes: true },
-      { shape: "merge without parents", branch: "main", depth: 1, passes: false },
-      { shape: "linear without base", branch: "feature", depth: 1, passes: false },
+      { shape: "merge", branch: "main", depth: 2, partial: false, passes: true },
+      { shape: "partial merge", branch: "main", depth: 2, partial: true, passes: true },
+      { shape: "linear", branch: "feature", depth: 2, partial: false, passes: true },
+      { shape: "merge without parents", branch: "main", depth: 1, partial: false, passes: false },
+      { shape: "linear without base", branch: "feature", depth: 1, partial: false, passes: false },
     ])(
       "prepares and scans a shallow $shape checkout without unrelated base fetches",
-      ({ branch, depth, passes }) => {
+      ({ branch, depth, partial, passes }) => {
         const repo = createTempDir("openclaw-opengrep-shallow-");
         git(
           source,
@@ -338,15 +340,26 @@ describe("run-opengrep.sh", () => {
           "--quiet",
           "--no-local",
           `--depth=${depth}`,
+          ...(partial ? ["--filter=blob:none"] : []),
           "--branch",
           branch,
           source,
           repo,
         );
         expect(git(repo, "rev-parse", "--is-shallow-repository")).toBe("true");
-        const hasPayloadBase =
-          spawnSync("git", ["cat-file", "-e", `${staleBase}^{commit}`], { cwd: repo }).status === 0;
-        expect(hasPayloadBase).toBe(branch === "feature" && depth === 2);
+        if (partial) {
+          expect(git(repo, "config", "--get", "remote.origin.promisor")).toBe("true");
+        }
+        // Probe local storage only: resolving a missing object in a partial clone can fetch it.
+        const localObjects = git(
+          repo,
+          "cat-file",
+          "--batch-all-objects",
+          "--batch-check=%(objectname)",
+        );
+        expect(localObjects.split("\n").includes(staleBase)).toBe(
+          branch === "feature" && depth === 2,
+        );
         const { argsPath, binDir } = installOpengrepStub(repo);
         const trace = path.join(createTempDir("openclaw-opengrep-trace-"), "git.jsonl");
         const result = runChangedPathsWorkflow(repo, staleBase, {

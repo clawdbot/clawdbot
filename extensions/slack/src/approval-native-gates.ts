@@ -13,6 +13,7 @@ import {
 import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
+  SystemAgentApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
 import {
@@ -43,7 +44,10 @@ import {
   parseSlackTarget,
 } from "./target-parsing.js";
 
-export type SlackNativeApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
+export type SlackNativeApprovalRequest =
+  | ExecApprovalRequest
+  | PluginApprovalRequest
+  | SystemAgentApprovalRequest;
 export type SlackOriginTarget = {
   to: string;
   accountId?: string | null;

@@ -8,7 +8,7 @@ import {
   configSnapshot,
   createAmbientVerifiedBinding,
   SystemAgentChatEngine,
-  advanceGatewayWizardToToken,
+  advanceGatewayWizardToSecretStorage,
   type OpenClawConfig,
   type WizardPrompter,
 } from "./chat-engine.test-support.js";
@@ -19,7 +19,6 @@ describe("SystemAgentChatEngine runtime", () => {
     const wizardRuns: string[] = [];
     const engine = new SystemAgentChatEngine({
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
       runChannelSetupWizard: async (channel: string, prompter: WizardPrompter) => {
         wizardRuns.push(channel);
@@ -92,7 +91,6 @@ describe("SystemAgentChatEngine runtime", () => {
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       appendAuditEntry,
       deps: { loadOverview: fakeOverviewLoader() },
     });
@@ -160,7 +158,6 @@ describe("SystemAgentChatEngine runtime", () => {
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       appendAuditEntry,
       deps: { loadOverview: fakeOverviewLoader() },
     });
@@ -207,12 +204,11 @@ describe("SystemAgentChatEngine runtime", () => {
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       appendAuditEntry,
       deps: { loadOverview: fakeOverviewLoader() },
     });
 
-    const { portStep, tokenStep } = await advanceGatewayWizardToToken(engine);
+    const { portStep, storageStep } = await advanceGatewayWizardToSecretStorage(engine);
     expect(portStep.text).toContain(
       "changing the Gateway port, bind address, or auth credential requires a Gateway restart",
     );
@@ -221,10 +217,10 @@ describe("SystemAgentChatEngine runtime", () => {
     );
     expect(portStep.text).toContain("Gateway port");
 
-    expect(tokenStep.text).toContain("Gateway token");
-    expect(tokenStep.sensitive).toBe(true);
+    expect(storageStep.sensitive).not.toBe(true);
 
-    const done = await engine.handle("gateway-secret-value");
+    // Choosing plaintext storage generates the secret and writes the config; no secret is typed.
+    const done = await engine.handle("1");
 
     expect(done.text).toContain("Done — gateway settings saved.");
     expect(done.text).toContain("Restart the Gateway to apply them (`restart gateway`).");
@@ -234,7 +230,10 @@ describe("SystemAgentChatEngine runtime", () => {
         gateway: expect.objectContaining({
           port: 19001,
           bind: "lan",
-          auth: expect.objectContaining({ mode: "token", token: "gateway-secret-value" }),
+          auth: expect.objectContaining({
+            mode: "token",
+            token: expect.stringMatching(/^\S{16,}$/),
+          }),
           tailscale: expect.objectContaining({ mode: "off" }),
         }),
       }),
@@ -252,8 +251,11 @@ describe("SystemAgentChatEngine runtime", () => {
       summary: "Configured Gateway via chat setup",
       details: { capability: "gateway" },
     });
-    expect(JSON.stringify(engine.historySince(0))).not.toContain("gateway-secret-value");
-    expect(JSON.stringify(engine.historySince(0))).toContain("<redacted secret>");
+    // Nothing was typed, and the generated secret never enters the transcript.
+    const written = mocks.writeWizardConfigFile.mock.calls[0]?.[0] as OpenClawConfig | undefined;
+    const generatedToken = written?.gateway?.auth?.token;
+    expect(typeof generatedToken).toBe("string");
+    expect(JSON.stringify(engine.historySince(0))).not.toContain(generatedToken);
   });
 
   it("rechecks inference authority immediately before a hosted Gateway write", async () => {
@@ -294,7 +296,6 @@ describe("SystemAgentChatEngine runtime", () => {
       surface: "gateway",
       verifiedInference,
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: {
         loadOverview: fakeOverviewLoader(),
         readConfigFileSnapshot: vi.fn(async () => {
@@ -305,11 +306,11 @@ describe("SystemAgentChatEngine runtime", () => {
       },
     });
 
-    const { tokenStep } = await advanceGatewayWizardToToken(engine);
-    expect(tokenStep.sensitive).toBe(true);
+    const { storageStep } = await advanceGatewayWizardToSecretStorage(engine);
+    expect(storageStep.text).toContain("store the Gateway");
     baseReadsRemaining = 1;
 
-    const stopped = await engine.handle("gateway-secret-value");
+    const stopped = await engine.handle("1");
 
     expect(stopped.text).toContain("Gateway setup stopped");
     expect(mocks.writeWizardConfigFile).not.toHaveBeenCalled();
@@ -327,7 +328,6 @@ describe("SystemAgentChatEngine runtime", () => {
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
     });
 
@@ -344,7 +344,6 @@ describe("SystemAgentChatEngine runtime", () => {
     const engine = new SystemAgentChatEngine({
       surface: "cli",
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
       runGatewaySetupWizard: async (prompter) => {
         await prompter.text({ message: "Gateway token", sensitive: true });
@@ -381,7 +380,6 @@ describe("SystemAgentChatEngine runtime", () => {
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       appendAuditEntry,
       deps: { loadOverview: fakeOverviewLoader() },
     });
@@ -400,7 +398,6 @@ describe("SystemAgentChatEngine runtime", () => {
     const engine = new SystemAgentChatEngine({
       surface: "cli",
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
       runSearchSetupWizard: async (prompter) => {
         await prompter.text({ message: "Provider API key", sensitive: true });
@@ -429,7 +426,6 @@ describe("SystemAgentChatEngine runtime", () => {
     });
     const engine = new SystemAgentChatEngine({
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
     });
 
@@ -447,7 +443,6 @@ describe("SystemAgentChatEngine runtime", () => {
     });
     const engine = new SystemAgentChatEngine({
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
       runChannelSetupWizard: async () => {},
       appendAuditEntry,
@@ -504,7 +499,6 @@ describe("SystemAgentChatEngine runtime", () => {
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
     });
 
@@ -580,7 +574,6 @@ describe("SystemAgentChatEngine runtime", () => {
       surface: "gateway",
       verifiedInference,
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: {
         loadOverview: fakeOverviewLoader(),
         readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
@@ -655,7 +648,6 @@ describe("SystemAgentChatEngine runtime", () => {
       surface: "gateway",
       verifiedInference,
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: {
         loadOverview: fakeOverviewLoader(),
         readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
@@ -698,7 +690,6 @@ describe("hosted channel post-write hooks", () => {
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
     });
 

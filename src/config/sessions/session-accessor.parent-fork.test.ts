@@ -72,6 +72,45 @@ afterEach(async () => {
 });
 
 describe("forkSessionFromParentTranscript", () => {
+  it.each(["existing-entry", "decision-skip"])(
+    "checks authority before applying a %s child patch",
+    async (reason) => {
+      const root = await makeRoot("openclaw-parent-fork-skip-guard-");
+      const storePath = path.join(root, "sessions.json");
+      const parentKey = "agent:main:main";
+      const childKey = "agent:main:child";
+      await replaceSessionEntry(
+        { sessionKey: parentKey, storePath },
+        {
+          sessionId: "parent-guarded",
+          updatedAt: 1,
+          totalTokens: 200_000,
+          totalTokensFresh: true,
+          totalTokensVersion: 1,
+        },
+      );
+      await replaceSessionEntry(
+        { sessionKey: childKey, storePath },
+        { sessionId: "child-guarded", updatedAt: 1, label: "original" },
+      );
+      const original = loadSessionEntry({ sessionKey: childKey, storePath });
+      await expect(
+        forkSessionEntryFromParentTarget({
+          storePath,
+          parentTarget: { canonicalKey: parentKey, storeKeys: [parentKey] },
+          sessionTarget: { canonicalKey: childKey, storeKeys: [childKey] },
+          skipForkWhen: () => reason === "existing-entry",
+          skipPatch: () => ({ label: "unauthorized" }),
+          decisionSkipPatch: () => ({ label: "unauthorized" }),
+          commitGuard: () => {
+            throw new Error("parent authority closed");
+          },
+        }),
+      ).rejects.toThrow("parent authority closed");
+      expect(loadSessionEntry({ sessionKey: childKey, storePath })).toEqual(original);
+    },
+  );
+
   it("checks authority inside same- and cross-database transcript commits", async () => {
     const root = await makeRoot("openclaw-parent-fork-guard-");
     const storePath = path.join(root, "sessions.json");
@@ -225,6 +264,7 @@ describe("forkSessionFromParentTranscript", () => {
     })) as Record<string, unknown>[];
     const forkedHeader = forkedEntries[0];
     expect(forkedHeader?.type).toBe("session");
+    expect(forkedHeader?.version).toBe(3);
     expect(forkedHeader?.id).toBe(fork.sessionId);
     expect(forkedHeader?.cwd).toBe(cwd);
     expect(
@@ -784,6 +824,7 @@ describe("forkSessionFromParentTranscript", () => {
     expect(records).toHaveLength(1);
     const header = records[0];
     expect(header?.type).toBe("session");
+    expect(header?.version).toBe(4);
     expect(header?.id).toBe(fork.sessionId);
     expect(
       parseSqliteSessionFileMarker(

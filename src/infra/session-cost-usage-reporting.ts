@@ -3,10 +3,7 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
-import {
-  isPrimarySessionTranscriptFileName,
-  parseUsageCountedSessionIdFromFileName,
-} from "../config/sessions/artifacts.js";
+import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -62,15 +59,12 @@ export async function discoverAllSessions(params: {
 
   for (const file of files) {
     // Do not exclude by endMs: a session can have activity in range even if it continued later.
-    const filePath = file.filePath;
-    const fileName = path.basename(filePath);
-    const sqliteMarker = parseSqliteSessionFileMarker(filePath);
-
-    const sessionId = sqliteMarker?.sessionId ?? parseUsageCountedSessionIdFromFileName(fileName);
+    const { filePath, sourcePath: sessionFile, sessionId } = file;
     if (!sessionId) {
       continue;
     }
-    const isPrimaryTranscript = sqliteMarker ? true : isPrimarySessionTranscriptFileName(fileName);
+    const isPrimaryTranscript =
+      file.kind === "sqlite" || isPrimarySessionTranscriptFileName(path.basename(sessionFile));
 
     // Try to read first user message for label extraction
     let firstUserMessage: string | undefined;
@@ -121,7 +115,7 @@ export async function discoverAllSessions(params: {
     if (shouldReplace) {
       discovered.set(sessionId, {
         sessionId,
-        sessionFile: filePath,
+        sessionFile,
         mtime: file.mtimeMs,
         firstUserMessage: firstUserMessage ?? existing?.firstUserMessage,
       });
@@ -225,7 +219,7 @@ export async function loadSessionUsageTimeSeries(params: {
     }
   }
 
-  const points: Array<Omit<SessionUsageTimePoint, "cumulativeTokens" | "cumulativeCost">> = [];
+  let points: Array<Omit<SessionUsageTimePoint, "cumulativeTokens" | "cumulativeCost">> = [];
   const agentDir = resolveUsageCostAgentDir(params.config, params.agentId);
   const resolveCost = createUsageCostResolver({ config: params.config, agentDir });
 
@@ -249,65 +243,51 @@ export async function loadSessionUsageTimeSeries(params: {
     });
   }
 
-  // Sort by timestamp
+  points.sort((a, b) => a.timestamp - b.timestamp);
+
+  const maxPoints = params.maxPoints ?? 100;
+  if (points.length > maxPoints) {
+    const step = Math.ceil(points.length / maxPoints);
+    const downsampled: typeof points = [];
+    let bucket: (typeof points)[number] | undefined;
+    let bucketSize = 0;
+    for (const point of points) {
+      if (!bucket || bucketSize === step) {
+        bucket = {
+          timestamp: point.timestamp,
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: 0,
+        };
+        downsampled.push(bucket);
+        bucketSize = 0;
+      }
+      bucket.timestamp = point.timestamp;
+      bucket.input += point.input;
+      bucket.output += point.output;
+      bucket.cacheRead += point.cacheRead;
+      bucket.cacheWrite += point.cacheWrite;
+      bucket.totalTokens += point.totalTokens;
+      bucket.cost += point.cost;
+      bucketSize += 1;
+    }
+    points = downsampled;
+  }
+
+  // Accumulate after sampling to preserve the bucket-based floating-point sums.
   let cumulativeTokens = 0;
   let cumulativeCost = 0;
-  const sortedPoints: SessionUsageTimePoint[] = points
-    .toSorted((a, b) => a.timestamp - b.timestamp)
-    .map((point) => {
+  return {
+    sessionId: params.sessionId,
+    points: points.map((point) => {
       cumulativeTokens += point.totalTokens;
       cumulativeCost += point.cost;
       return Object.assign(point, { cumulativeTokens, cumulativeCost });
-    });
-
-  // Optionally downsample if too many points
-  const maxPoints = params.maxPoints ?? 100;
-  if (sortedPoints.length > maxPoints) {
-    const step = Math.ceil(sortedPoints.length / maxPoints);
-    const downsampled: SessionUsageTimePoint[] = [];
-    let downsampledCumulativeTokens = 0;
-    let downsampledCumulativeCost = 0;
-    for (let i = 0; i < sortedPoints.length; i += step) {
-      const bucket = sortedPoints.slice(i, i + step);
-      const bucketLast = bucket[bucket.length - 1];
-      if (!bucketLast) {
-        continue;
-      }
-
-      let bucketInput = 0;
-      let bucketOutput = 0;
-      let bucketCacheRead = 0;
-      let bucketCacheWrite = 0;
-      let bucketTotalTokens = 0;
-      let bucketCost = 0;
-      for (const point of bucket) {
-        bucketInput += point.input;
-        bucketOutput += point.output;
-        bucketCacheRead += point.cacheRead;
-        bucketCacheWrite += point.cacheWrite;
-        bucketTotalTokens += point.totalTokens;
-        bucketCost += point.cost;
-      }
-
-      downsampledCumulativeTokens += bucketTotalTokens;
-      downsampledCumulativeCost += bucketCost;
-
-      downsampled.push({
-        timestamp: bucketLast.timestamp,
-        input: bucketInput,
-        output: bucketOutput,
-        cacheRead: bucketCacheRead,
-        cacheWrite: bucketCacheWrite,
-        totalTokens: bucketTotalTokens,
-        cost: bucketCost,
-        cumulativeTokens: downsampledCumulativeTokens,
-        cumulativeCost: downsampledCumulativeCost,
-      });
-    }
-    return { sessionId: params.sessionId, points: downsampled };
-  }
-
-  return { sessionId: params.sessionId, points: sortedPoints };
+    }),
+  };
 }
 
 export async function loadSessionLogs(params: {

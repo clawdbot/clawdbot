@@ -109,29 +109,57 @@ export async function gatewayStatusCommand(
         )
       : undefined;
 
-  const probePass = await withProgress(
-    {
-      label: "Inspecting gateways…",
-      indeterminate: true,
-      enabled: opts.json !== true,
-    },
-    async () =>
-      await runGatewayStatusProbePass({
-        cfg,
-        opts,
-        overallTimeoutMs,
-        discoveryTimeoutMs,
-        wideAreaDomain,
-        baseTargets,
-        remotePort,
-        sshTarget,
-        sshIdentity,
-        loadSshTunnelModule,
-        localTlsFingerprint: localCertificate?.ok
-          ? localCertificate.value.fingerprintSha256
-          : undefined,
-      }),
-  );
+  const controller = new AbortController();
+  let abortSignal: "SIGINT" | "SIGTERM" | undefined;
+  const onSigInt = () => {
+    if (!abortSignal) {
+      abortSignal = "SIGINT";
+      controller.abort();
+    }
+  };
+  const onSigTerm = () => {
+    if (!abortSignal) {
+      abortSignal = "SIGTERM";
+      controller.abort();
+    }
+  };
+  process.on("SIGINT", onSigInt);
+  process.on("SIGTERM", onSigTerm);
+  const probePass = await (async () => {
+    try {
+      return await withProgress(
+        {
+          label: "Inspecting gateways…",
+          indeterminate: true,
+          enabled: opts.json !== true,
+        },
+        async () =>
+          await runGatewayStatusProbePass({
+            cfg,
+            opts,
+            overallTimeoutMs,
+            discoveryTimeoutMs,
+            wideAreaDomain,
+            baseTargets,
+            remotePort,
+            sshTarget,
+            sshIdentity,
+            loadSshTunnelModule,
+            localTlsFingerprint: localCertificate?.ok
+              ? localCertificate.value.fingerprintSha256
+              : undefined,
+            signal: controller.signal,
+          }),
+      );
+    } finally {
+      process.off("SIGINT", onSigInt);
+      process.off("SIGTERM", onSigTerm);
+    }
+  })();
+  if (abortSignal) {
+    runtime.exit(abortSignal === "SIGINT" ? 130 : 143);
+    return;
+  }
 
   const warnings = buildGatewayStatusWarnings({
     probed: probePass.probed,

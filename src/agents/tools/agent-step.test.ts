@@ -1,5 +1,5 @@
 // Agent step tests cover nested session handoff, transcript bookkeeping, and
-// MCP runtime retirement after completed nested turns.
+// MCP runtime survival after completed nested turns.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { runAgentStep } from "./agent-step.js";
@@ -11,7 +11,7 @@ vi.mock("../../sessions/session-participant-recording.js", () => ({
 }));
 
 const runWaitMocks = vi.hoisted(() => ({
-  waitForAgentRunAndReadUpdatedAssistantReply: vi.fn(),
+  waitForAgentRunReply: vi.fn(),
 }));
 
 const bundleMcpRuntimeMocks = vi.hoisted(() => ({
@@ -19,8 +19,7 @@ const bundleMcpRuntimeMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../run-wait.js", () => ({
-  waitForAgentRunAndReadUpdatedAssistantReply:
-    runWaitMocks.waitForAgentRunAndReadUpdatedAssistantReply,
+  waitForAgentRunReply: runWaitMocks.waitForAgentRunReply,
 }));
 
 vi.mock("../agent-bundle-mcp-tools.js", () => ({
@@ -33,7 +32,7 @@ describe("runAgentStep", () => {
     vi.clearAllMocks();
   });
 
-  it("retires bundle MCP runtime after successful nested agent steps", async () => {
+  it("preserves bundle MCP runtime after successful nested agent steps", async () => {
     // Nested steps disable automatic delivery and carry provenance so the reply
     // returns through the message tool path instead of the channel.
     const gatewayCalls: CallGatewayOptions[] = [];
@@ -41,7 +40,7 @@ describe("runAgentStep", () => {
       gatewayCalls.push(opts);
       return { runId: "run-nested" } as T;
     };
-    runWaitMocks.waitForAgentRunAndReadUpdatedAssistantReply.mockResolvedValue({
+    runWaitMocks.waitForAgentRunReply.mockResolvedValue({
       status: "ok",
       replyText: "done",
     });
@@ -86,15 +85,12 @@ describe("runAgentStep", () => {
         promptedAt: expect.any(Number),
       }),
     );
-    expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).toHaveBeenCalledWith({
-      sessionKey: "agent:main:subagent:child",
-      reason: "nested-agent-step-complete",
-    });
+    expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
   });
 
   it("does not retire bundle MCP runtime while nested agent steps are still pending", async () => {
     const callGateway = async <T = unknown>(): Promise<T> => ({ runId: "run-pending" }) as T;
-    runWaitMocks.waitForAgentRunAndReadUpdatedAssistantReply.mockResolvedValue({
+    runWaitMocks.waitForAgentRunReply.mockResolvedValue({
       status: "timeout",
     });
 
@@ -119,7 +115,7 @@ describe("runAgentStep", () => {
     testing.setDepsForTest({
       agentCommandFromIngress,
     });
-    runWaitMocks.waitForAgentRunAndReadUpdatedAssistantReply.mockResolvedValue({
+    runWaitMocks.waitForAgentRunReply.mockResolvedValue({
       status: "ok",
       replyText: "done",
     });
@@ -175,10 +171,7 @@ describe("runAgentStep", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).toHaveBeenCalledWith({
-      sessionKey: "agent:main:subagent:child",
-      reason: "nested-agent-step-complete",
-    });
+    expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
   });
 
   it("returns trusted terminal presentations from incomplete transcript turns", async () => {
