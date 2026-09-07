@@ -336,11 +336,18 @@ export async function runCodeModeScriptHeadless(params: {
           if (!ready || context.yieldSignal.aborted) {
             return { kind: "checkpoint" };
           }
+          // Admission already charged worker queue/initialization time. Respect that
+          // exact grant as well as the configured slice and the headless wall deadline.
+          const timeoutMs = Math.min(
+            context.maxTimeoutMs,
+            config.timeoutMs,
+            remainingHeadlessMs(deadline),
+          );
           const delivery = takeSettledBridgeRequests(pending);
           pending = pending.filter((entry) => !entry.settled);
           return {
             kind: "continue",
-            timeoutMs: Math.min(config.timeoutMs, remainingHeadlessMs(deadline)),
+            timeoutMs,
             settledRequests: delivery.requests,
             pendingRequests: pending.map(({ id, method, args }) => ({ id, method, args })),
             onConsumed: delivery.release,

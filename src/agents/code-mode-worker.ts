@@ -28,7 +28,10 @@ export type CodeModeWorkerInlineHost = {
    * their cell-owner signal, not the shorter-lived worker-task signal. */
   onBoundary: (
     boundary: CodeModeWorkerBoundary,
-    context: WorkerTaskRequestContext,
+    context: WorkerTaskRequestContext & {
+      /** Exact queue/initialization-adjusted grant sent to the worker and enforced there. */
+      maxTimeoutMs: number;
+    },
   ) => Promise<CodeModeWorkerContinuation & { onConsumed?: () => void }>;
   onInputConsumed?: () => void;
 };
@@ -107,6 +110,7 @@ export async function runCodeModeWorker(
     ? new WorkerTaskPool<unknown, unknown>({ workerUrl, maxWorkers: 1 })
     : getCodeModePool(codeModeWorkerUrl());
   const startedAt = performance.now();
+  let admittedTimeoutMs: number | undefined;
   try {
     const message = await pool.run(
       async () => {
@@ -115,20 +119,18 @@ export async function runCodeModeWorker(
           return workerData;
         }
         const config = isRecord(workerData.config) ? workerData.config : undefined;
-        return {
-          ...workerData,
-          ...modules,
-          // Queueing and initialization consume the same guest budget as
-          // parsing and execution; admission must not restart the deadline.
-          ...(config && typeof config.timeoutMs === "number"
-            ? {
-                config: {
-                  ...config,
-                  timeoutMs: Math.max(0, config.timeoutMs - (performance.now() - startedAt)),
-                },
-              }
-            : {}),
-        };
+        const prepared: Record<string, unknown> = { ...workerData, ...modules };
+        if (config && typeof config.timeoutMs === "number") {
+          // Queueing and initialization consume the same budget as parsing and execution.
+          const admittedConfig = {
+            ...config,
+            timeoutMs: Math.max(0, config.timeoutMs - (performance.now() - startedAt)),
+          };
+          // Both sides receive the exact value produced by this single admission calculation.
+          admittedTimeoutMs = admittedConfig.timeoutMs;
+          prepared.config = admittedConfig;
+        }
+        return prepared;
       },
       {
         timeoutMs,
@@ -139,10 +141,17 @@ export async function runCodeModeWorker(
               if (!isRecord(value) || value.status !== "boundary") {
                 throw new Error("invalid code mode worker boundary");
               }
+              if (
+                admittedTimeoutMs === undefined ||
+                !Number.isFinite(admittedTimeoutMs) ||
+                admittedTimeoutMs <= 0
+              ) {
+                throw new Error("invalid code mode worker admission budget");
+              }
               const { onConsumed, ...input } = await inlineHost.onBoundary(
                 // SAFETY: The private worker owns this boundary, never a guest routing identity.
                 value as CodeModeWorkerBoundary,
-                context,
+                { ...context, maxTimeoutMs: admittedTimeoutMs },
               );
               return {
                 input,

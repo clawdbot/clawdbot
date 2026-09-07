@@ -403,7 +403,10 @@ computation, and inline tool waits share that budget; approval waits pause it.
 The model-facing `exec` description includes the effective limit. Blocking guest
 computation that exhausts the budget fails with `timeout`. Unfinished tool calls
 can instead return `waiting`, so a later `wait` can resume them with a fresh call
-budget. When the shell `exec` tool is available, use it for heavier computation
+budget. Headless continuations also honor the exact worker-admission budget after
+queueing and initialization, alongside their configured slice limit and single
+headless wall-clock deadline. A checkpoint does not reset that wall deadline.
+When the shell `exec` tool is available, use it for heavier computation
 and keep guest JavaScript focused on coordinating tools and processing results.
 
 If code mode is enabled but QuickJS-WASI cannot load, OpenClaw fails closed
