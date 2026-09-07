@@ -10,6 +10,7 @@ import {
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
 } from "./admitted-run-context.js";
+import { bindCodeModeTranscriptAuthority } from "./code-mode-transcript-authority.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import {
   resetCodeModeTestState,
@@ -86,6 +87,60 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     expect(resumed.status).toBe("completed");
     expect(resumed.value).toBe("done");
     expect(resumed.output).toEqual([{ type: "text", text: "after" }]);
+  });
+
+  it("requires each waiting result commit but does not gate terminal results", async () => {
+    const harness = createCodeModeHarness();
+    const captureWaiting = vi.fn();
+    const verifyWaiting = vi.fn(() => false);
+    const authority = { captureWaiting, verifyWaiting } as never;
+    bindCodeModeTranscriptAuthority(harness.catalogRef, authority);
+    const codeModeTools = createCodeModeTools(harness.ctx);
+    applyCodeModeCatalog({
+      ...harness.ctx,
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+    });
+    const exec = expectDefined(codeModeTools[0], "exec");
+    const wait = expectDefined(codeModeTools[1], "wait");
+    const first = resultDetails(
+      await exec.execute("exec-waiting", {
+        code: 'await yield_control("pause"); return "done";',
+      }),
+    );
+    expect(first.status).toBe("waiting");
+    expect(captureWaiting).toHaveBeenCalledTimes(1);
+    await expect(wait.execute("wait-uncommitted", { runId: first.runId })).rejects.toThrow(
+      "committed waiting result",
+    );
+
+    verifyWaiting.mockReturnValue(true);
+    const terminal = resultDetails(await wait.execute("wait-committed", { runId: first.runId }));
+    expect(terminal.status).toBe("completed");
+    expect(captureWaiting).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a concurrent re-wait after the committed predecessor", async () => {
+    const harness = createCodeModeHarness();
+    const authority = {
+      captureWaiting: vi.fn(),
+      verifyWaiting: vi.fn(() => true),
+    } as never;
+    bindCodeModeTranscriptAuthority(harness.catalogRef, authority);
+    const codeModeTools = createCodeModeTools(harness.ctx);
+    applyCodeModeCatalog({ ...harness.ctx, tools: codeModeTools });
+    const exec = expectDefined(codeModeTools[0], "exec");
+    const wait = expectDefined(codeModeTools[1], "wait");
+    const first = resultDetails(
+      await exec.execute("exec-concurrent", {
+        code: 'await yield_control("pause"); return "done";',
+      }),
+    );
+    const results = await Promise.allSettled([
+      wait.execute("wait-concurrent-a", { runId: first.runId }),
+      wait.execute("wait-concurrent-b", { runId: first.runId }),
+    ]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
   });
 
   it("keeps inline nested approval inside the original admitted run beyond the Code Mode budget", async () => {

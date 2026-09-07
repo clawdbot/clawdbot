@@ -1,5 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  type OpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { ensureSessionGoalOperationsSchema } from "../../state/openclaw-agent-goal-operations-schema.js";
 import {
   applySessionGoalOperation,
@@ -51,7 +54,7 @@ import { mergeSessionEntry, type SessionEntry } from "./types.js";
 type SqliteExpectedSessionTranscriptTurnResult = {
   sessionTurnMutationResult?: SessionTranscriptTurnMutationResult;
   appendedMessages: TranscriptMessageAppendResult<unknown>[];
-  rejectedReason?: "session-rebound";
+  rejectedReason?: "session-rebound" | "validation-conflict";
   sessionEntry: SessionEntry | undefined;
   sessionFile: string;
 };
@@ -73,6 +76,7 @@ export async function appendExpectedSessionTranscriptTurn(
     sessionTurnMutation?: SessionTranscriptTurnMutation;
     sessionFile: string;
     touchSessionEntry?: boolean;
+    validateBeforeAppend?: (database: OpenClawAgentDatabase) => boolean;
   },
 ): Promise<SqliteExpectedSessionTranscriptTurnResult> {
   const initialEntry = options.initialSessionEntry
@@ -175,6 +179,15 @@ export async function appendExpectedSessionTranscriptTurn(
         result = sqliteSessionTranscriptTurnRebound(fresh, options.sessionFile);
         return;
       }
+      if (options.validateBeforeAppend && !options.validateBeforeAppend(transactionDb)) {
+        result = {
+          appendedMessages: [],
+          rejectedReason: "validation-conflict",
+          sessionEntry: cloneSessionEntry(currentEntry),
+          sessionFile: options.sessionFile,
+        };
+        return;
+      }
       const goal = mutation
         ? applySessionGoalOperation(currentEntry, mutation.operation, Date.now())
         : undefined;
@@ -226,8 +239,9 @@ export async function appendExpectedSessionTranscriptTurn(
       if (
         options.atomicGroup &&
         (appendedMessages.length !== messages.length ||
-          appendedMessages.some((message) => message.appended) !==
-            appendedMessages.every((message) => message.appended))
+          (messages.length > 0 &&
+            appendedMessages.some((message) => message.appended) !==
+              appendedMessages.every((message) => message.appended)))
       ) {
         throw new Error("SQLite transcript batch was not wholly inserted or replayed");
       }

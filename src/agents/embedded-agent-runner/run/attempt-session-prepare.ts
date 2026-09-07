@@ -20,6 +20,10 @@ import {
 } from "../../agent-settings.js";
 import { toToolDefinitions } from "../../agent-tool-definition-adapter.js";
 import { raceWithAbortSignal } from "../../agent-tools.abort.js";
+import {
+  bindCodeModeTranscriptAuthority,
+  resolveCodeModeTranscriptAuthority,
+} from "../../code-mode-transcript-authority.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import { resolveUserTimezone } from "../../date-time.js";
 import { bootstrapHarnessContextEngine } from "../../harness/context-engine-lifecycle.js";
@@ -559,6 +563,10 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
   // Publish ownership before awaiting preparation; outer cleanup must receive
   // this same manager even when replay validation or bootstrap fails.
   input.onSessionManagerCreated(unguardedSessionManager);
+  const transcriptAuthority = resolveCodeModeTranscriptAuthority(attempt);
+  if (transcriptAuthority) {
+    bindCodeModeTranscriptAuthority(unguardedSessionManager, transcriptAuthority);
+  }
   const assertInitialUserTurnReplay = await input.withOwnedTranscriptWrite(() =>
     preparePersistedCurrentUserTurn({
       sessionManager: unguardedSessionManager,

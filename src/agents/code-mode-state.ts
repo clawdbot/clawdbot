@@ -178,6 +178,15 @@ export function removeExpiredRuns(now = Date.now()): void {
   }
 }
 
+/** Refresh lifecycle expiry before admitting a transcript-certified wait. */
+export function resolveCodeModeWaitAdmission(runId: string): string | undefined {
+  removeExpiredRuns();
+  if (resumingRunIds.has(runId)) {
+    return undefined;
+  }
+  return activeRuns.get(runId)?.replayId;
+}
+
 export function disposeCodeModeRun(runId: string): void {
   const state = activeRuns.get(runId);
   activeRuns.delete(runId);

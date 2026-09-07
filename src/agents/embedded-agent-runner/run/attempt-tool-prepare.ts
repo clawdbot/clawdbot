@@ -19,6 +19,10 @@ import { createSkillInstructionDeliveryCache } from "../../agent-tools.read.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
 import { createCodeModePermissionChangeReason } from "../../code-mode-permission-change.js";
 import type { CodeModeSkill } from "../../code-mode-skills.js";
+import {
+  bindCodeModeTranscriptAuthority,
+  CodeModeTranscriptAuthority,
+} from "../../code-mode-transcript-authority.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import {
   isLocalModelLeanEnabled,
@@ -149,6 +153,22 @@ export function prepareEmbeddedAttemptToolBase(params: {
   const cronCreatorToolAllowlistCaptureRef: CronToolsAllowCaptureRef = {};
   const inheritedToolAllowlist: string[] = [];
   const runCleanups: Array<(reason: string) => Promise<void>> = [];
+  const transcriptTarget = attempt.sessionTarget;
+  if (
+    codeModeControlsEnabledForRun &&
+    transcriptTarget?.sessionId &&
+    transcriptTarget.sessionKey &&
+    transcriptTarget.storePath &&
+    transcriptTarget.expectedWriterRunId
+  ) {
+    const authority = new CodeModeTranscriptAuthority({
+      ...transcriptTarget,
+      sessionId: transcriptTarget.sessionId,
+    });
+    bindCodeModeTranscriptAuthority(attempt, authority);
+    bindCodeModeTranscriptAuthority(toolSearchCatalogRef!, authority);
+    runCleanups.push(async () => authority.close());
+  }
   const generationCleanups: Array<(reason: string) => Promise<void>> = [];
   const retiringGenerations = new Set<Promise<void>>();
   let retiredCleanupFailed = false;

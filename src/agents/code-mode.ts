@@ -26,6 +26,7 @@ import {
   readRunId,
   resolveCodeModeConfig,
 } from "./code-mode-runtime.js";
+import { resolveCodeModeTranscriptAuthority } from "./code-mode-transcript-authority.js";
 import {
   normalizeCodeModeTimeoutResult,
   CodeModeHeadlessAbortError,
@@ -51,7 +52,7 @@ import {
   type ToolSearchCatalogRef,
   type ToolSearchToolContext,
 } from "./tool-search-types.js";
-import type { AnyAgentTool } from "./tools/common.js";
+import { ToolInputError, type AnyAgentTool } from "./tools/common.js";
 
 export { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME };
 export {
@@ -188,6 +189,7 @@ function createCodeModeExecDescription(
 }
 
 export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
+  const transcriptAuthority = resolveCodeModeTranscriptAuthority(ctx.catalogRef);
   // The surface planner owns activation. Capture limits once so an admitted
   // control remains executable during model overrides and restart recovery.
   const config = resolveCodeModeConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId);
@@ -226,6 +228,9 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       ctx.abortSignal?.throwIfAborted();
       const input = readCode(args);
       const executionContext = getAgentToolExecutionContext();
+      const assistantTurnId =
+        executionContext?.assistantMessage.responseId?.trim() ||
+        executionContext?.assistantMessage.turnId?.trim();
       let runtime: ToolSearchRuntime | undefined;
       const result = normalizeCodeModeTimeoutResult(
         await runCodeModeExec({
@@ -234,9 +239,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
           config,
           resultBudget,
           code: input.code,
-          assistantTurnId:
-            executionContext?.assistantMessage.responseId?.trim() ||
-            executionContext?.assistantMessage.turnId?.trim(),
+          assistantTurnId,
           language: input.language,
           restartSafe: ctx.forceRestartSafeTools === true || input.restartSafe,
           signal,
@@ -247,6 +250,14 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
         }),
       );
       markCodeModePermissionChangeResult(result, signal);
+      if (result.status === "waiting") {
+        transcriptAuthority?.captureWaiting({
+          assistantTurnId,
+          runId: result.runId,
+          toolCallId,
+          toolName: CODE_MODE_EXEC_TOOL_NAME,
+        });
+      }
       return formatToolSearchControlResult(result, runtime, undefined, result.status);
     },
   } as AnyAgentTool);
@@ -269,12 +280,20 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       onUpdate?: AgentToolUpdateCallback,
     ) => {
       ctx.abortSignal?.throwIfAborted();
+      const executionContext = getAgentToolExecutionContext();
+      const assistantTurnId =
+        executionContext?.assistantMessage.responseId?.trim() ||
+        executionContext?.assistantMessage.turnId?.trim();
       let runtime: ToolSearchRuntime | undefined;
+      const runId = readRunId(args);
+      if (transcriptAuthority && !transcriptAuthority.verifyWaiting(runId)) {
+        throw new ToolInputError("code mode run lacks a committed waiting result.");
+      }
       const result = normalizeCodeModeTimeoutResult(
         await runWait({
           toolCallId,
           ctx,
-          runId: readRunId(args),
+          runId,
           signal,
           onUpdate,
           onRuntime: (value) => {
@@ -283,6 +302,14 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
         }),
       );
       markCodeModePermissionChangeResult(result, signal);
+      if (result.status === "waiting") {
+        transcriptAuthority?.captureWaiting({
+          assistantTurnId,
+          runId,
+          toolCallId,
+          toolName: CODE_MODE_WAIT_TOOL_NAME,
+        });
+      }
       return formatToolSearchControlResult(result, runtime, undefined, result.status);
     },
   } as AnyAgentTool);
