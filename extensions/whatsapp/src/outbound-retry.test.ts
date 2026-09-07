@@ -108,6 +108,12 @@ describe("sendWhatsAppOutboundWithRetry", () => {
       name: "a retryable signal only in the cause",
       error: new Error("request failed", { cause: new Error("socket disconnected") }),
     },
+    {
+      name: "a disconnect status carried only by a nested error",
+      error: Object.assign(new Error("request failed"), {
+        error: { output: { statusCode: 428 } },
+      }),
+    },
   ])("does not retry $name", async ({ error }) => {
     const send = vi.fn<() => Promise<string>>().mockRejectedValue(error);
     const onRetry = vi.fn();

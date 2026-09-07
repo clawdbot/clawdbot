@@ -1,7 +1,7 @@
 // WhatsApp plugin module implements outbound retry behavior.
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelApiRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
-import { formatError, getStatusCode } from "./session-errors.js";
+import { formatError } from "./session-errors.js";
 import { isWhatsAppSocketOperationTimeoutError } from "./socket-timing.js";
 
 const WHATSAPP_OUTBOUND_MAX_ATTEMPTS = 3;
@@ -28,17 +28,31 @@ class WhatsAppOutboundRetryError extends Error {
   }
 }
 
+// Read only the direct error's own status fields. getStatusCode would also
+// unwrap error.error.output.statusCode, but a disconnect status buried in a
+// nested wrapper does not prove this send died pre-delivery, and retrying on
+// an inner error can replay a non-idempotent send.
+function getDirectStatusCode(error: unknown): number | undefined {
+  // SAFETY: arbitrary thrown send failure; the field is read then narrowed by typeof.
+  const outputStatus = (error as { output?: { statusCode?: unknown } })?.output?.statusCode;
+  // SAFETY: arbitrary thrown send failure; the field is read then narrowed by typeof.
+  const status = (error as { status?: unknown })?.status;
+  const statusCode = outputStatus ?? status;
+  return typeof statusCode === "number" ? statusCode : undefined;
+}
+
 function isRetryableWhatsAppOutboundError(error: unknown): boolean {
   // Outbound sends surface direct failures; inspecting wrappers or causes can
   // replay a non-idempotent send. A direct local timeout may have delivered it.
   if (isChannelPartialDeliveryError(error) || isWhatsAppSocketOperationTimeoutError(error)) {
     return false;
   }
+  // SAFETY: arbitrary thrown send failure; the code is used only after a typeof string check.
   const code = (error as { code?: unknown })?.code;
   if (typeof code === "string" && WHATSAPP_PRE_DELIVERY_ERROR_CODES.has(code)) {
     return true;
   }
-  const statusCode = getStatusCode(error);
+  const statusCode = getDirectStatusCode(error);
   if (
     typeof statusCode === "number" &&
     WHATSAPP_RETRYABLE_DISCONNECT_STATUS_CODES.has(statusCode)
