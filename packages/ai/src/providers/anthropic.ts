@@ -650,11 +650,11 @@ async function buildParams(
     : undefined;
   const tools = convertedTools?.tools;
   const toolProjection = convertedTools?.projection;
-  const systemCacheControlCount = countNativeCacheControlMarkers(system);
-  const toolCacheControlCount = countNativeCacheControlMarkers(tools);
   const messageCacheControlLimit = Math.max(
     0,
-    ANTHROPIC_CACHE_CONTROL_LIMIT - systemCacheControlCount - toolCacheControlCount,
+    ANTHROPIC_CACHE_CONTROL_LIMIT -
+      countNativeCacheControlMarkers(system) -
+      countNativeCacheControlMarkers(tools),
   );
   const replayPlan = buildAnthropicReplayPlan(context.messages, model, {
     enabled: !isOAuthTokenResult && options?.anthropicServerCompaction === true,
