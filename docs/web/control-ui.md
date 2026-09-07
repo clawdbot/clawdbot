@@ -137,7 +137,7 @@ Every section heading from the previous single-page version keeps its anchor her
 - <a id="updates" />[Updates](/web/control-ui/settings#updates)
 - <a id="apps-and-extensions" />[Apps and extensions](/web/control-ui/settings#apps-and-extensions)
 - <a id="side-panel-keyboard-shortcuts" />[Side panel keyboard shortcuts](/web/control-ui/settings#side-panel-keyboard-shortcuts)
-- <a id="this-mac-(macos-app)" />[this mac (macos app)](</web/control-ui/settings#this-mac-(macos-app)>)
+- <a id="this-mac-(macos-app)" />[This device (macOS and iOS apps)](/web/control-ui/settings#this-mac-macos-app)
 - <a id="custom-plugin-ui" />[Custom plugin UI](/web/control-ui/settings#custom-plugin-ui)
 - <a id="import-assistant-memory" />[Import assistant memory](/web/control-ui/settings#import-assistant-memory)
 - <a id="mcp-page" />[MCP page](/web/control-ui/settings#mcp-page)
