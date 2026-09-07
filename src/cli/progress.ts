@@ -1,6 +1,7 @@
 // Terminal progress reporter used by long-running CLI commands.
 import { spinner } from "@clack/prompts";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { truncateToVisibleWidth, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import {
   createOscProgressController,
   supportsOscProgress,
@@ -13,6 +14,22 @@ import {
 import { theme } from "../../packages/terminal-core/src/theme.js";
 
 const DEFAULT_DELAY_MS = 0;
+// Clack adds a frame, two spaces and up to three dots; leave one spare column.
+const SPINNER_DECORATION_COLUMNS = 7;
+
+function readProgressColumns(stream: NodeJS.WriteStream): number | undefined {
+  return Number.isFinite(stream.columns) && stream.columns > 0
+    ? Math.floor(stream.columns)
+    : undefined;
+}
+
+function clampSpinnerLabel(label: string, columns: number | undefined): string {
+  if (columns === undefined) {
+    return label;
+  }
+  const width = columns - SPINNER_DECORATION_COLUMNS;
+  return visibleWidth(label) <= width ? label : `${truncateToVisibleWidth(label, width - 1)}…`;
+}
 // Only one active progress renderer may own the terminal line at a time.
 let activeProgress = 0;
 
@@ -110,7 +127,11 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
       })
     : null;
 
-  const spin = allowSpinner ? spinner({ output: stream }) : null;
+  let spinnerColumns = readProgressColumns(stream);
+  let spin =
+    allowSpinner && (spinnerColumns === undefined || spinnerColumns > SPINNER_DECORATION_COLUMNS)
+      ? spinner({ output: stream })
+      : null;
   const renderLine = allowLine
     ? () => {
         if (!started) {
@@ -156,7 +177,7 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
       }
     }
     if (spin) {
-      spin.message(theme.accent(label));
+      spin.message(theme.accent(clampSpinnerLabel(label, spinnerColumns)));
     }
     if (renderLine) {
       renderLine();
@@ -166,13 +187,32 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
     }
   };
 
+  const onResize = () => {
+    const columns = readProgressColumns(stream);
+    if (columns === undefined || spinnerColumns === undefined) {
+      return;
+    }
+    // Clack captures its cleanup width at construction, so never expand past it.
+    spinnerColumns = Math.min(spinnerColumns, columns);
+    if (spinnerColumns <= SPINNER_DECORATION_COLUMNS) {
+      spin?.clear();
+      spin = null;
+      stream.off("resize", onResize);
+      return;
+    }
+    applyState();
+  };
+  if (spin && spinnerColumns !== undefined) {
+    stream.on("resize", onResize);
+  }
+
   const start = () => {
     if (started) {
       return;
     }
     started = true;
     if (spin) {
-      spin.start(theme.accent(label));
+      spin.start(theme.accent(clampSpinnerLabel(label, spinnerColumns)));
     }
     applyState();
   };
@@ -209,6 +249,9 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
       return;
     }
     finished = true;
+    if (spinnerColumns !== undefined && allowSpinner) {
+      stream.off("resize", onResize);
+    }
     if (timer) {
       clearTimeout(timer);
       timer = null;

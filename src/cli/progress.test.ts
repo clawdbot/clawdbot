@@ -1,6 +1,8 @@
+import { EventEmitter } from "node:events";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 // Progress tests cover CLI progress rendering and lifecycle cleanup.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { stripAnsi, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { createCliProgress, shouldUseInteractiveProgressSpinner } from "./progress.js";
 
 const clackMocks = vi.hoisted(() => {
@@ -8,12 +10,21 @@ const clackMocks = vi.hoisted(() => {
     start: vi.fn(),
     message: vi.fn(),
     stop: vi.fn(),
+    clear: vi.fn(),
   };
   return {
     spinner: vi.fn(() => spinnerInstance),
     spinnerInstance,
   };
 });
+
+function progressStream(columns?: number) {
+  return Object.assign(new EventEmitter(), {
+    isTTY: true,
+    columns,
+    write: vi.fn(),
+  }) as unknown as NodeJS.WriteStream & { write: ReturnType<typeof vi.fn> };
+}
 
 vi.mock("@clack/prompts", () => ({
   spinner: clackMocks.spinner,
@@ -42,7 +53,155 @@ describe("cli progress", () => {
     clackMocks.spinnerInstance.start.mockClear();
     clackMocks.spinnerInstance.message.mockClear();
     clackMocks.spinnerInstance.stop.mockClear();
+    clackMocks.spinnerInstance.clear.mockClear();
   });
+
+  it.each([
+    "Checking channel status (probe)…",
+    "\u001b[36m检查频道 👩‍💻 状态检查频道状态检查频道状态\u001b[0m",
+  ])("keeps initial and updated spinner labels within the display width: %s", (label) => {
+    const stream = progressStream(32);
+    const progress = createCliProgress({ label, stream });
+    try {
+      const initial = clackMocks.spinnerInstance.start.mock.calls.at(-1)?.[0] as string;
+      expect(visibleWidth(initial)).toBeLessThanOrEqual(25);
+      expect(stripAnsi(initial)).toMatch(/…$/u);
+      progress.setLabel(`Updated ${label}`);
+      const updated = clackMocks.spinnerInstance.message.mock.calls.at(-1)?.[0] as string;
+      expect(visibleWidth(updated)).toBeLessThanOrEqual(25);
+      expect(stripAnsi(updated)).toMatch(/^Updated .*…$/u);
+    } finally {
+      progress.done();
+    }
+    expect(stream.listenerCount("resize")).toBe(0);
+  });
+
+  it.each([80, undefined, 0, Number.NaN, Number.POSITIVE_INFINITY])(
+    "preserves fitting or unknown-width spinner labels at %s columns",
+    (columns) => {
+      const stream = progressStream(columns);
+      const label = "Checking channel status (probe)…";
+      const progress = createCliProgress({ label, stream });
+      try {
+        expect(stripAnsi(clackMocks.spinnerInstance.start.mock.calls.at(-1)?.[0] as string)).toBe(
+          label,
+        );
+      } finally {
+        progress.done();
+      }
+      expect(stream.listenerCount("resize")).toBe(0);
+    },
+  );
+
+  it("tightens the spinner width on resize without exceeding its original cleanup width", () => {
+    const stream = progressStream(32);
+    const progress = createCliProgress({ label: "Checking channel status (probe)…", stream });
+    try {
+      expect(stream.listenerCount("resize")).toBe(1);
+      stream.columns = 80;
+      stream.emit("resize");
+      progress.setLabel("Checking channel status (probe)…");
+      expect(
+        visibleWidth(clackMocks.spinnerInstance.message.mock.calls.at(-1)?.[0] as string),
+      ).toBeLessThanOrEqual(25);
+      stream.columns = 20;
+      stream.emit("resize");
+      expect(
+        visibleWidth(clackMocks.spinnerInstance.message.mock.calls.at(-1)?.[0] as string),
+      ).toBeLessThanOrEqual(13);
+      stream.columns = 80;
+      stream.emit("resize");
+      progress.setLabel("Another long channel status message");
+      expect(
+        visibleWidth(clackMocks.spinnerInstance.message.mock.calls.at(-1)?.[0] as string),
+      ).toBeLessThanOrEqual(13);
+    } finally {
+      progress.done();
+    }
+    expect(stream.listenerCount("resize")).toBe(0);
+    const calls = clackMocks.spinnerInstance.message.mock.calls.length;
+    stream.emit("resize");
+    expect(clackMocks.spinnerInstance.message).toHaveBeenCalledTimes(calls);
+  });
+
+  it.each([1, 6, 7])("retains OSC progress without a spinner at %s columns", (columns) => {
+    vi.stubEnv("TERM_PROGRAM", "ghostty");
+    const stream = progressStream(columns);
+    const label = "Checking channel status (probe)…";
+    const progress = createCliProgress({ label, stream });
+    try {
+      expect(clackMocks.spinner).not.toHaveBeenCalled();
+      expect(stream.listenerCount("resize")).toBe(0);
+      expect(stream.write).toHaveBeenCalledWith(`\u001b]9;4;3;;${label}\u001b\\`);
+      progress.setPercent(50);
+      expect(stream.write).toHaveBeenCalledWith(`\u001b]9;4;1;50;${label}\u001b\\`);
+    } finally {
+      progress.done();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("clears a spinner once on tiny resize while keeping OSC progress alive", () => {
+    vi.stubEnv("TERM_PROGRAM", "ghostty");
+    const stream = progressStream(32);
+    const progress = createCliProgress({ label: "Checking channel status (probe)…", stream });
+    try {
+      stream.columns = 6;
+      stream.emit("resize");
+      expect(clackMocks.spinnerInstance.clear).toHaveBeenCalledTimes(1);
+      expect(clackMocks.spinnerInstance.stop).not.toHaveBeenCalled();
+      expect(stream.listenerCount("resize")).toBe(0);
+      stream.columns = 80;
+      stream.emit("resize");
+      progress.setLabel("Still working");
+      progress.setPercent(50);
+      expect(stream.write).toHaveBeenCalledWith("\u001b]9;4;1;50;Still working\u001b\\");
+      expect(clackMocks.spinnerInstance.start).toHaveBeenCalledTimes(1);
+    } finally {
+      progress.done();
+      progress.done();
+      vi.unstubAllEnvs();
+    }
+    expect(clackMocks.spinnerInstance.clear).toHaveBeenCalledTimes(1);
+    expect(clackMocks.spinnerInstance.stop).not.toHaveBeenCalled();
+  });
+
+  it("removes the spinner resize listener when finished before its delayed start", () => {
+    vi.useFakeTimers();
+    const stream = progressStream(32);
+    const progress = createCliProgress({ label: "Delayed", stream, delayMs: 100 });
+    try {
+      progress.done();
+      stream.emit("resize");
+      vi.runAllTimers();
+      expect(stream.listenerCount("resize")).toBe(0);
+      expect(clackMocks.spinnerInstance.start).not.toHaveBeenCalled();
+    } finally {
+      progress.done();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["line", "log", "none"] as const)(
+    "does not clamp labels or listen for resize with fallback=%s",
+    (fallback) => {
+      const stream = progressStream(10);
+      stream.isTTY = fallback !== "log";
+      const label = "Checking channel status (probe)…";
+      const progress = createCliProgress({ label, stream, fallback });
+      try {
+        expect(clackMocks.spinner).not.toHaveBeenCalled();
+        expect(stream.listenerCount("resize")).toBe(0);
+        if (fallback !== "none") {
+          expect(
+            stream.write.mock.calls.some(([chunk]) => stripAnsi(String(chunk)).includes(label)),
+          ).toBe(true);
+        }
+      } finally {
+        progress.done();
+      }
+    },
+  );
 
   it("logs progress when non-tty and fallback=log", () => {
     const writes: string[] = [];
