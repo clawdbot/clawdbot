@@ -115,6 +115,27 @@ describe("msteams setup surface", () => {
     ).resolves.toEqual(["MS Teams: needs app credentials"]);
   });
 
+  it("rejects conversation IDs as user IDs when Graph lookup is unavailable", async () => {
+    const stableUserId = "0123456789abcdef";
+    resolveMSTeamsUserAllowlist.mockRejectedValue(new Error("Graph unavailable"));
+    const note = vi.fn(async () => {});
+    const text = vi
+      .fn()
+      .mockResolvedValueOnce(`conversation:${stableUserId}`)
+      .mockResolvedValueOnce(stableUserId);
+
+    const next = await delegatedMsteamsSetupWizard.dmPolicy?.promptAllowFrom?.({
+      cfg: { channels: { msteams: {} } },
+      prompter: { note, text } as never,
+    });
+
+    expect(note).toHaveBeenCalledWith(
+      "Graph lookup unavailable. Use user IDs only.",
+      "MS Teams allowlist",
+    );
+    expect(next?.channels?.msteams?.allowFrom).toEqual([stableUserId]);
+  });
+
   it("finalize keeps env credentials when available and accepted", async () => {
     vi.stubEnv("MSTEAMS_APP_ID", "env-app");
     vi.stubEnv("MSTEAMS_APP_PASSWORD", "env-secret");

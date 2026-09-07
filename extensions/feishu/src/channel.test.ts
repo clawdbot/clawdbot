@@ -148,6 +148,111 @@ describe("feishuPlugin metadata", () => {
   });
 });
 
+describe("feishuPlugin security", () => {
+  it("exposes account-scoped DM policy to security audits", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          allowFrom: ["*", "feishu:user:ou_owner"],
+          accounts: {
+            ops: {
+              appId: "cli_ops",
+              appSecret: "secret_ops",
+              dmPolicy: "open",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const resolveDmPolicy = feishuPlugin.security?.resolveDmPolicy;
+    if (!resolveDmPolicy) {
+      throw new Error("feishu security.resolveDmPolicy unavailable");
+    }
+
+    const result = resolveDmPolicy({
+      cfg,
+      accountId: "ops",
+      account: feishuPlugin.config.resolveAccount(cfg, "ops"),
+    });
+
+    expect(result).toMatchObject({
+      policy: "open",
+      allowFrom: ["*", "feishu:user:ou_owner"],
+      policyPath: "channels.feishu.accounts.ops.dmPolicy",
+      allowFromPath: "channels.feishu.",
+    });
+    expect(result?.normalizeEntry?.("feishu:user:ou_owner")).toBe("user:ou_owner");
+  });
+
+  it("tracks a root DM policy separately from an account allowlist", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+          accounts: {
+            ops: {
+              appId: "cli_ops",
+              appSecret: "secret_ops",
+              allowFrom: ["*"],
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const resolveDmPolicy = feishuPlugin.security?.resolveDmPolicy;
+    if (!resolveDmPolicy) {
+      throw new Error("feishu security.resolveDmPolicy unavailable");
+    }
+
+    const result = resolveDmPolicy({
+      cfg,
+      accountId: "ops",
+      account: feishuPlugin.config.resolveAccount(cfg, "ops"),
+    });
+
+    expect(result).toMatchObject({
+      policy: "open",
+      allowFrom: ["*"],
+      policyPath: "channels.feishu.dmPolicy",
+      allowFromPath: "channels.feishu.accounts.ops.",
+    });
+  });
+
+  it("preserves the authored account key in audit paths after normalized lookup", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          accounts: {
+            " Ops ": {
+              appId: "cli_ops",
+              appSecret: "secret_ops",
+              dmPolicy: "open",
+              allowFrom: ["*"],
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const resolveDmPolicy = feishuPlugin.security?.resolveDmPolicy;
+    if (!resolveDmPolicy) {
+      throw new Error("feishu security.resolveDmPolicy unavailable");
+    }
+
+    const result = resolveDmPolicy({
+      cfg,
+      accountId: "ops",
+      account: feishuPlugin.config.resolveAccount(cfg, "ops"),
+    });
+
+    expect(result).toMatchObject({
+      policy: "open",
+      allowFrom: ["*"],
+      policyPath: "channels.feishu.accounts. Ops .dmPolicy",
+      allowFromPath: "channels.feishu.accounts. Ops .",
+    });
+  });
+});
+
 describe("feishuPlugin config", () => {
   it.each([
     {

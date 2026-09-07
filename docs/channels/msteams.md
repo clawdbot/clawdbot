@@ -142,6 +142,13 @@ Microsoft Teams has one account per channel configuration. Set policies directly
 - Do not rely on UPN/display-name matching for allowlists; they can change. OpenClaw disables direct name matching by default; opt in with `channels.msteams.dangerouslyAllowNameMatching: true`.
 - The wizard can resolve names to IDs via Microsoft Graph when credentials allow.
 
+Legacy `conversation:<stable-user-id>` entries in `allowFrom` are still projected to the
+bare user ID at startup, including `teams:` and `msteams:` prefixes. The security audit
+classifies that effective user access, not a grant to the conversation. Replace these
+entries with explicit AAD object IDs; raw conversation-form sender identities and
+approval principals remain rejected. Actual chat IDs such as `19:...@thread.tacv2`
+do not grant DM access.
+
 **Group access**
 
 - Default: `channels.msteams.groupPolicy = "allowlist"` (blocked unless you add `groupAllowFrom`). Set `channels.msteams.groupPolicy` explicitly to choose another policy; the root schema default takes precedence over `channels.defaults.groupPolicy`.

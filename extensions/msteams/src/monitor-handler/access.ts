@@ -5,7 +5,6 @@ import {
   channelIngressRoutes,
   resolveStableChannelMessageIngress,
   type ChannelIngressContextBinding,
-  type StableChannelIngressIdentityParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -21,67 +20,11 @@ import type {
 } from "../conversation-store.js";
 import { formatUnknownError } from "../errors.js";
 import { normalizeMSTeamsConversationId } from "../inbound.js";
+import { msteamsIngressIdentity } from "../ingress-identity.js";
 import type { MSTeamsMonitorLogger } from "../monitor-types.js";
 import { resolveMSTeamsAllowlistMatch, resolveMSTeamsRouteConfig } from "../policy.js";
-import { looksLikeMSTeamsConversationId } from "../resolve-allowlist.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
-
-const MSTEAMS_SENDER_NAME_KIND = "plugin:msteams-sender-name" as const;
-const MSTEAMS_CONVERSATION_ID_KIND = "plugin:msteams-conversation-id" as const;
-const msteamsIngressIdentity = {
-  key: "sender-id",
-  // Bot Framework authenticates the connector and vouches for the activity, without this
-  // plugin independently proving exact ownership of every from.id representation.
-  authentication: "asserted",
-  normalize: normalizeIngressValue,
-  aliases: [
-    {
-      key: "sender-name",
-      kind: MSTEAMS_SENDER_NAME_KIND,
-      normalizeEntry: normalizeSenderNameIngressValue,
-      normalizeSubject: normalizeSenderNameIngressValue,
-      authentication: "mutable",
-    },
-    {
-      key: "conversation-id",
-      kind: MSTEAMS_CONVERSATION_ID_KIND,
-      authentication: "asserted",
-      normalizeEntry: normalizeAllowlistConversationId,
-      normalizeSubject: normalizeAllowlistConversationId,
-    },
-  ],
-  isWildcardEntry: (entry) => normalizeIngressValue(entry) === "*",
-  resolveEntryId: ({ entryIndex, fieldKey }) =>
-    `msteams-entry-${entryIndex + 1}:${
-      fieldKey === "sender-name"
-        ? "name"
-        : fieldKey === "conversation-id"
-          ? "conversation-id"
-          : "id"
-    }`,
-} satisfies StableChannelIngressIdentityParams;
-
-function normalizeIngressValue(value?: string | null): string | null {
-  return normalizeOptionalLowercaseString(value) ?? null;
-}
-
-function normalizeSenderNameIngressValue(value?: string | null): string | null {
-  const normalized = normalizeIngressValue(value);
-  if (!normalized) {
-    return null;
-  }
-  // Conversation allowlist entries must never become spoofable display-name principals.
-  return looksLikeMSTeamsConversationId(normalizeMSTeamsConversationId(normalized))
-    ? null
-    : normalized;
-}
-
-function normalizeAllowlistConversationId(value?: string | null): string | null {
-  const trimmed = value?.trim();
-  // Microsoft Graph conversation IDs are opaque; case-folding would authorize a different chat.
-  return trimmed ? normalizeMSTeamsConversationId(trimmed) : null;
-}
 
 function formatMSTeamsSenderReason(params: {
   reasonCode: string;

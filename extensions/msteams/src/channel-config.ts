@@ -1,14 +1,22 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
-import { createTopLevelChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
+import {
+  buildAccountScopedDmSecurityPolicy,
+  createTopLevelChannelConfigAdapter,
+} from "openclaw/plugin-sdk/channel-config-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
+import {
+  classifyMSTeamsEntryAuthentication,
+  normalizeMSTeamsDmPrincipal,
+} from "./ingress-identity.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
 export type ResolvedMSTeamsAccount = {
   accountId: string;
   enabled: boolean;
   configured: boolean;
+  config: { dangerouslyAllowNameMatching?: boolean };
   tokenStatus: "available" | "configured_unavailable" | "missing";
   credentialDiagnostics?: Extract<
     ReturnType<typeof tryReadSecretFileSync>,
@@ -46,6 +54,10 @@ export function resolveMSTeamsAccount(cfg: OpenClawConfig): ResolvedMSTeamsAccou
     accountId: DEFAULT_ACCOUNT_ID,
     enabled: config?.enabled !== false,
     configured: Boolean(credentials),
+    config:
+      typeof config?.dangerouslyAllowNameMatching === "boolean"
+        ? { dangerouslyAllowNameMatching: config.dangerouslyAllowNameMatching }
+        : {},
     tokenStatus: !credentials ? "missing" : unavailable ? "configured_unavailable" : "available",
     ...(unavailable ? { credentialDiagnostics: [certificate.diagnostic] } : {}),
   };
@@ -68,3 +80,25 @@ export const msteamsConfigAdapter = createTopLevelChannelConfigAdapter<
   formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
   resolveDefaultTo: (account) => account.defaultTo,
 });
+export function resolveMSTeamsDmPolicy({
+  cfg,
+  accountId,
+  account,
+}: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  account: ResolvedMSTeamsAccount;
+}) {
+  const config = cfg.channels?.msteams;
+  return buildAccountScopedDmSecurityPolicy({
+    cfg,
+    channelKey: "msteams",
+    accountId: accountId ?? account.accountId,
+    policy: config?.dmPolicy,
+    allowFrom: config?.allowFrom,
+    policyPathSuffix: "dmPolicy",
+    normalizeEntry: (raw) =>
+      normalizeMSTeamsDmPrincipal(raw, config?.dangerouslyAllowNameMatching === true),
+    classifyEntryAuthentication: classifyMSTeamsEntryAuthentication,
+  });
+}

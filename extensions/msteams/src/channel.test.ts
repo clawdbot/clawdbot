@@ -92,6 +92,7 @@ describe("msteamsPlugin", () => {
         accountId: "default",
         enabled: true,
         configured: true,
+        config: {},
         tokenStatus: "available",
       });
       expect(plugin.config.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([
@@ -212,6 +213,7 @@ describe("msteamsPlugin", () => {
       accountId: "default",
       enabled: true,
       configured: true,
+      config: {},
       tokenStatus: "available",
     });
   });
@@ -260,6 +262,114 @@ describe("msteamsPlugin", () => {
       "plugin",
       "system-agent",
     ]);
+  });
+
+  it("exposes the configured DM policy to security audits", () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          ...createConfiguredMSTeamsCfg().channels?.msteams,
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    } as OpenClawConfig;
+    for (const plugin of [msteamsPlugin, msteamsSetupPlugin]) {
+      const resolveDmPolicy = plugin.security?.resolveDmPolicy;
+      if (!resolveDmPolicy) {
+        throw new Error("msteams security.resolveDmPolicy unavailable");
+      }
+
+      const result = resolveDmPolicy({
+        cfg,
+        account: plugin.config.resolveAccount(cfg, "default"),
+      });
+
+      expect(result).toMatchObject({
+        policy: "open",
+        allowFrom: ["*"],
+        policyPath: "channels.msteams.dmPolicy",
+        allowFromPath: "channels.msteams.",
+      });
+      expect(result?.normalizeEntry?.(" 0123456789ABCDEF ")).toBe("0123456789abcdef");
+      expect(result?.normalizeEntry?.(" msteams:user:0123456789ABCDEF ")).toBe("0123456789abcdef");
+      expect(result?.normalizeEntry?.(" teams:0123456789ABCDEF ")).toBe("0123456789abcdef");
+    }
+    expect(msteamsSetupPlugin.security?.resolveDmPolicy).toBe(
+      msteamsPlugin.security?.resolveDmPolicy,
+    );
+  });
+
+  it("keeps critical open-group findings on the setup security surface", async () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          ...createConfiguredMSTeamsCfg().channels?.msteams,
+          groupPolicy: "open",
+        },
+      },
+    } as OpenClawConfig;
+
+    for (const plugin of [msteamsPlugin, msteamsSetupPlugin]) {
+      const collectWarnings = plugin.security?.collectWarnings;
+      if (!collectWarnings) {
+        throw new Error("msteams security.collectWarnings unavailable");
+      }
+
+      const warnings = await collectWarnings({
+        cfg,
+        accountId: "default",
+        account: plugin.config.resolveAccount(cfg, "default"),
+      });
+      expect(warnings).toEqual([
+        expect.objectContaining({
+          checkId: "channels.msteams.groups.open",
+          severity: "critical",
+        }),
+      ]);
+    }
+    expect(msteamsSetupPlugin.security?.collectWarnings).toBe(
+      msteamsPlugin.security?.collectWarnings,
+    );
+  });
+
+  it("classifies authored Teams identities for security audits", () => {
+    const stableId = "40a1a0ed-4ff2-4164-a219-55518990c197";
+    const stableNonUuidId = "0123456789abcdef";
+    const cfg = {
+      channels: {
+        msteams: {
+          ...createConfiguredMSTeamsCfg().channels?.msteams,
+          dmPolicy: "allowlist",
+          allowFrom: [stableId, stableNonUuidId, "Alice Example", "alice@example.com"],
+          dangerouslyAllowNameMatching: true,
+        },
+      },
+    } as OpenClawConfig;
+
+    for (const plugin of [msteamsPlugin, msteamsSetupPlugin]) {
+      const account = plugin.config.resolveAccount(cfg, "default");
+      const policy = plugin.security?.resolveDmPolicy?.({ cfg, account });
+      const classify = policy?.classifyEntryAuthentication;
+      if (!classify) {
+        throw new Error("msteams DM entry classifier unavailable");
+      }
+
+      expect(account.config).toEqual({ dangerouslyAllowNameMatching: true });
+      expect(classify(stableId)).toBe("asserted");
+      expect(classify(`teams:user:${stableId}`)).toBe("asserted");
+      expect(classify(stableNonUuidId)).toBe("asserted");
+      expect(classify(`msteams:user:${stableNonUuidId}`)).toBe("asserted");
+      expect(classify("Alice Example")).toBe("mutable");
+      expect(classify("alice@example.com")).toBe("mutable");
+      expect(classify("19:group@thread.tacv2")).toBeUndefined();
+      expect(classify(`conversation:${stableNonUuidId}`)).toBe("asserted");
+      expect(classify(`msteams:conversation:${stableNonUuidId}`)).toBe("asserted");
+      expect(classify(` teams:conversation:${stableId.toUpperCase()} `)).toBe("asserted");
+      expect(classify("conversation:Alice Example")).toBeUndefined();
+      expect(classify("msteams:conversation:alice@example.com")).toBeUndefined();
+      expect(classify("teams:conversation:19:group@thread.tacv2")).toBeUndefined();
+    }
   });
 
   it("advertises legacy and group-management message-tool actions together", () => {
@@ -526,6 +636,7 @@ describe("msTeamsApprovalAuth", () => {
   it.each([
     ["conversation", `conversation:${otherUserId}`],
     ["provider-prefixed conversation", `msteams:conversation:${otherUserId}`],
+    ["whitespace-padded provider conversation", ` msteams:conversation:${otherUserId} `],
     ["chat", `chat:${otherUserId}`],
     ["email", "owner@example.com"],
     ["display name", "Owner Display"],

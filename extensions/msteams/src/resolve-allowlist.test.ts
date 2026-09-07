@@ -120,19 +120,27 @@ describe("projectStableMSTeamsUserAllowlist", () => {
         "*",
         "accessGroup:operators",
         "msteams:user:40a1a0ed-4ff2-4164-a219-55518990c197",
+        "teams:user:0123456789abcdef",
         "Alice Example",
       ]),
-    ).toEqual(["*", "accessGroup:operators", "40a1a0ed-4ff2-4164-a219-55518990c197"]);
+    ).toEqual([
+      "*",
+      "accessGroup:operators",
+      "40a1a0ed-4ff2-4164-a219-55518990c197",
+      "0123456789abcdef",
+    ]);
   });
 
-  it("does not authorize group conversation IDs in the direct-message allowlist", () => {
+  it("preserves legacy typed stable IDs while dropping opaque conversation IDs", () => {
     expect(
       projectStableMSTeamsUserAllowlist([
         "19:group@thread.tacv2",
         "19:legacy@thread.skype",
+        "conversation:0123456789abcdef",
+        "msteams:conversation:fedcba9876543210",
         "user:40a1a0ed-4ff2-4164-a219-55518990c197",
       ]),
-    ).toEqual(["40a1a0ed-4ff2-4164-a219-55518990c197"]);
+    ).toEqual(["0123456789abcdef", "fedcba9876543210", "40a1a0ed-4ff2-4164-a219-55518990c197"]);
   });
 });
 

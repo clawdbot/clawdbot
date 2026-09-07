@@ -41,6 +41,7 @@ import {
 import { resolveMSTeamsPrivateQaRuntime } from "./qa/private-runtime.js";
 import { createMSTeamsReplayContext } from "./replay-context.js";
 import {
+  isStableMSTeamsUserId,
   looksLikeMSTeamsConversationId,
   projectStableMSTeamsGroupAllowlist,
   projectStableMSTeamsUserAllowlist,
@@ -118,11 +119,10 @@ export async function monitorMSTeamsProvider(
       .replace(/^(msteams|teams):/i, "")
       .replace(/^user:/i, "")
       .trim();
-  const isStableUserId = (entry: string) => /^[0-9a-fA-F-]{16,}$/.test(entry);
   const cleanAllowEntries = (entries?: string[]) =>
     entries?.map((entry) => cleanAllowEntry(entry)).filter((entry) => entry && entry !== "*") ?? [];
   const isMutableUserEntry = (entry: string) =>
-    !isStableUserId(entry) &&
+    !isStableMSTeamsUserId(entry) &&
     !/^accessGroup:/i.test(entry) &&
     !looksLikeMSTeamsConversationId(normalizeMSTeamsConversationId(entry));
 

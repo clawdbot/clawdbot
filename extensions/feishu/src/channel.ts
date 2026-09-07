@@ -1,11 +1,12 @@
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-resolution";
+import { DEFAULT_ACCOUNT_ID, resolveAccountEntry } from "openclaw/plugin-sdk/account-resolution";
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import { createActionGate, ToolAuthorizationError } from "openclaw/plugin-sdk/channel-actions";
 import {
   adaptScopedAccountAccessor,
   createHybridChannelConfigAdapter,
+  createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import type {
   ChannelMessageActionAdapter,
@@ -88,7 +89,7 @@ import {
   resolveFeishuReplyMode,
   type FeishuOutboundSendMedia,
 } from "./outbound.js";
-import { resolveFeishuGroupToolPolicy } from "./policy.js";
+import { normalizeFeishuAllowEntry, resolveFeishuGroupToolPolicy } from "./policy.js";
 import {
   assertFeishuCardWithinEnvelope,
   buildFeishuPresentationCard,
@@ -1064,6 +1065,61 @@ function resolveRequestedFeishuMemberIdType(
   return undefined;
 }
 
+const resolveFeishuDmPolicyBase = createScopedDmSecurityResolver<ResolvedFeishuAccount>({
+  channelKey: "feishu",
+  resolvePolicy: (account) => account.config.dmPolicy,
+  resolveAllowFrom: (account) => account.config.allowFrom,
+  policyPathSuffix: "dmPolicy",
+  normalizeEntry: normalizeFeishuAllowEntry,
+});
+
+function resolveFeishuDmFieldBasePath(params: {
+  cfg: ClawdbotConfig;
+  accountId?: string | null;
+  field: "dmPolicy" | "allowFrom";
+}): string {
+  const accountId = params.accountId?.trim() || DEFAULT_ACCOUNT_ID;
+  const channelConfig: unknown = params.cfg.channels?.feishu;
+  const accounts = isRecord(channelConfig) ? channelConfig.accounts : undefined;
+  const accountConfig = isRecord(accounts) ? resolveAccountEntry(accounts, accountId) : undefined;
+  // Reuse canonical account selection, then recover its authored key so diagnostic paths point
+  // at the actual config entry rather than the normalized runtime id.
+  const configAccountId =
+    isRecord(accounts) && isRecord(accountConfig)
+      ? Object.keys(accounts).find((key) => accounts[key] === accountConfig)
+      : undefined;
+  if (
+    configAccountId !== undefined &&
+    isRecord(accountConfig) &&
+    accountConfig[params.field] !== undefined
+  ) {
+    return `channels.feishu.accounts.${configAccountId}.`;
+  }
+  if (isRecord(channelConfig) && channelConfig[params.field] !== undefined) {
+    return "channels.feishu.";
+  }
+  return configAccountId !== undefined
+    ? `channels.feishu.accounts.${configAccountId}.`
+    : "channels.feishu.";
+}
+
+const resolveFeishuDmPolicy = (params: Parameters<typeof resolveFeishuDmPolicyBase>[0]) => {
+  const accountId = params.accountId ?? params.account.accountId;
+  return {
+    ...resolveFeishuDmPolicyBase(params),
+    policyPath: `${resolveFeishuDmFieldBasePath({
+      cfg: params.cfg,
+      accountId,
+      field: "dmPolicy",
+    })}dmPolicy`,
+    allowFromPath: resolveFeishuDmFieldBasePath({
+      cfg: params.cfg,
+      accountId,
+      field: "allowFrom",
+    }),
+  };
+};
+
 export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResult> =
   createChatChannelPlugin({
     base: {
@@ -2002,6 +2058,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       message: feishuMessageAdapter,
     },
     security: {
+      resolveDmPolicy: resolveFeishuDmPolicy,
       collectWarnings: ({ cfg, accountId }) => collectFeishuOpenGroupFindings({ cfg, accountId }),
       collectAuditFindings: ({ cfg }) => collectFeishuSecurityAuditFindings({ cfg }),
     },

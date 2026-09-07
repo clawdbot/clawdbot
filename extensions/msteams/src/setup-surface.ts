@@ -14,6 +14,7 @@ import {
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
 import { formatUnknownError } from "./errors.js";
+import { isStableMSTeamsUserId } from "./ingress-identity.js";
 import {
   parseMSTeamsTeamEntry,
   resolveMSTeamsChannelAllowlist,
@@ -37,10 +38,6 @@ export function openDelegatedOAuthUrl(url: string): Promise<void> {
   return Promise.reject(
     new Error(`Automatic browser launch is not available. Open this URL manually: ${url}`),
   );
-}
-
-function looksLikeGuid(value: string): boolean {
-  return /^[0-9a-fA-F-]{16,}$/.test(value);
 }
 
 async function promptMSTeamsAllowFrom(params: {
@@ -82,7 +79,7 @@ async function promptMSTeamsAllowFrom(params: {
     }).catch(() => null);
 
     if (!resolved) {
-      const ids = parts.filter((part) => looksLikeGuid(part));
+      const ids = parts.filter((part) => isStableMSTeamsUserId(part));
       if (ids.length !== parts.length) {
         await params.prompter.note(
           t("wizard.msteams.graphLookupUnavailable"),
