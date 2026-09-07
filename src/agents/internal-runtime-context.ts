@@ -15,7 +15,19 @@ const ESCAPED_INTERNAL_RUNTIME_CONTEXT_END = "[[OPENCLAW_INTERNAL_CONTEXT_END]]"
 
 /** Notice inserted into runtime-generated context blocks. */
 export const OPENCLAW_RUNTIME_CONTEXT_NOTICE =
+  "This context is runtime-generated, not user-authored.";
+/**
+ * Pre-`29e00e22a9` notice wording. Emitters no longer produce it, but stored
+ * transcripts and in-flight sessions still contain it, so detection and
+ * stripping must keep recognizing it.
+ */
+export const LEGACY_OPENCLAW_RUNTIME_CONTEXT_NOTICE =
   "This context is runtime-generated, not user-authored. Keep internal details private.";
+/** Every notice wording that marks a runtime-generated context block. */
+export const OPENCLAW_RUNTIME_CONTEXT_NOTICES: readonly string[] = [
+  OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+  LEGACY_OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+];
 /** Position-independent instructions for context belonging to the active user turn. */
 export const OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER =
   "OpenClaw runtime context for the active user request in this turn. Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.";
@@ -24,8 +36,24 @@ export const OPENCLAW_RUNTIME_EVENT_HEADER = "OpenClaw runtime event.";
 /** Custom message type used for structured runtime-context messages. */
 export const OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE = "openclaw.runtime-context";
 
-const LEGACY_INTERNAL_CONTEXT_HEADER =
-  ["OpenClaw runtime context (internal):", OPENCLAW_RUNTIME_CONTEXT_NOTICE, ""].join("\n") + "\n";
+const LEGACY_INTERNAL_CONTEXT_HEADERS: readonly string[] = OPENCLAW_RUNTIME_CONTEXT_NOTICES.map(
+  (notice) => ["OpenClaw runtime context (internal):", notice, ""].join("\n") + "\n",
+);
+
+/** Locate the earliest legacy runtime-context header at or after `from`. */
+function findLegacyInternalContextHeader(
+  text: string,
+  from: number,
+): { index: number; header: string } | null {
+  let found: { index: number; header: string } | null = null;
+  for (const header of LEGACY_INTERNAL_CONTEXT_HEADERS) {
+    const index = text.indexOf(header, from);
+    if (index !== -1 && (!found || index < found.index)) {
+      found = { index, header };
+    }
+  }
+  return found;
+}
 
 const LEGACY_INTERNAL_EVENT_MARKER = "[Internal task completion event]";
 const LEGACY_INTERNAL_EVENT_SEPARATOR = "\n\n---\n\n";
@@ -174,12 +202,13 @@ function stripLegacyInternalRuntimeContext(text: string): string {
   let next = text;
   let searchFrom = 0;
   for (;;) {
-    const headerStart = next.indexOf(LEGACY_INTERNAL_CONTEXT_HEADER, searchFrom);
-    if (headerStart === -1) {
+    const header = findLegacyInternalContextHeader(next, searchFrom);
+    if (!header) {
       return next;
     }
 
-    const eventStart = headerStart + LEGACY_INTERNAL_CONTEXT_HEADER.length;
+    const headerStart = header.index;
+    const eventStart = headerStart + header.header.length;
     if (!next.startsWith(LEGACY_INTERNAL_EVENT_MARKER, eventStart)) {
       searchFrom = eventStart;
       continue;
@@ -228,7 +257,7 @@ function stripRuntimeContextPromptPreface(text: string): string {
     const nextLine = lines[index + 1] ?? "";
     if (
       RUNTIME_CONTEXT_PROMPT_HEADERS.includes(line.trim()) &&
-      nextLine.trim() === OPENCLAW_RUNTIME_CONTEXT_NOTICE
+      OPENCLAW_RUNTIME_CONTEXT_NOTICES.includes(nextLine.trim())
     ) {
       changed = true;
       index += 1;
@@ -258,7 +287,7 @@ export function stripInternalRuntimeContext(
   if (
     !text.includes(INTERNAL_RUNTIME_CONTEXT_BEGIN) &&
     !text.includes(INTERNAL_RUNTIME_CONTEXT_END) &&
-    !text.includes(OPENCLAW_RUNTIME_CONTEXT_NOTICE)
+    !OPENCLAW_RUNTIME_CONTEXT_NOTICES.some((notice) => text.includes(notice))
   ) {
     return text;
   }
@@ -299,9 +328,9 @@ export function hasInternalRuntimeContext(text: string): boolean {
   }
   return (
     findDelimitedTokenIndex(text, INTERNAL_RUNTIME_CONTEXT_BEGIN, 0) !== -1 ||
-    text.includes(LEGACY_INTERNAL_CONTEXT_HEADER) ||
+    LEGACY_INTERNAL_CONTEXT_HEADERS.some((header) => text.includes(header)) ||
     RUNTIME_CONTEXT_PROMPT_HEADERS.some((header) =>
-      text.includes(`${header}\n${OPENCLAW_RUNTIME_CONTEXT_NOTICE}`),
+      OPENCLAW_RUNTIME_CONTEXT_NOTICES.some((notice) => text.includes(`${header}\n${notice}`)),
     )
   );
 }

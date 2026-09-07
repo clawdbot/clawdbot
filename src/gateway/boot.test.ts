@@ -27,7 +27,8 @@ const {
   replaceSessionEntry,
   replaceTranscriptEvents,
 } = await import("../config/sessions/session-accessor.js");
-const { stripInternalRuntimeContext } = await import("../agents/internal-runtime-context.js");
+const { stripInternalRuntimeContext, OPENCLAW_RUNTIME_CONTEXT_NOTICE } =
+  await import("../agents/internal-runtime-context.js");
 const { getBootEchoContextForSession } = await import("./boot-echo-guard.js");
 
 describe("runBootOnce", () => {
@@ -305,9 +306,7 @@ describe("runBootOnce", () => {
     // Regression for #53732.
     expect(message).toContain("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>");
     expect(message).toContain("<<<END_OPENCLAW_INTERNAL_CONTEXT>>>");
-    expect(message).toContain(
-      "This context is runtime-generated, not user-authored. Keep internal details private.",
-    );
+    expect(message).toContain(OPENCLAW_RUNTIME_CONTEXT_NOTICE);
     const stripped = stripInternalRuntimeContext(message);
     expect(stripped).not.toContain(content);
     expect(stripped).not.toContain("BOOT.md:");

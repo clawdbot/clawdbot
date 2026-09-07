@@ -10,6 +10,7 @@ import {
   extractInternalRuntimeContext,
   hasInternalRuntimeContext,
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  LEGACY_OPENCLAW_RUNTIME_CONTEXT_NOTICE,
   INTERNAL_RUNTIME_CONTEXT_END,
   OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
@@ -135,6 +136,35 @@ describe("internal runtime context codec", () => {
         ` \t${header}\r\n ${OPENCLAW_RUNTIME_CONTEXT_NOTICE} \r\n\r\nVisible reply`,
       ),
     ).toBe("Visible reply");
+  });
+
+  // The notice wording was trimmed in `29e00e22a9`. Emitters and detection are
+  // now driven by the same constants, but stored transcripts and in-flight
+  // sessions still carry the pre-trim wording, so both must stay detectable.
+  it.each([
+    ["current", OPENCLAW_RUNTIME_CONTEXT_NOTICE],
+    ["legacy", LEGACY_OPENCLAW_RUNTIME_CONTEXT_NOTICE],
+  ])("detects and strips the %s notice wording", (_name, notice) => {
+    const preface = [OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER, notice].join("\n");
+
+    expect(hasInternalRuntimeContext(preface)).toBe(true);
+    expect(stripInternalRuntimeContext(`${preface}\n\nVisible reply`)).toBe("Visible reply");
+
+    const legacyEventBlock = [
+      "OpenClaw runtime context (internal):",
+      notice,
+      "",
+      "[Internal task completion event]",
+      "<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>child<<<END_UNTRUSTED_CHILD_RESULT>>>",
+      "",
+      "Action:",
+      "follow up",
+      "",
+      "Visible reply",
+    ].join("\n");
+
+    expect(hasInternalRuntimeContext(legacyEventBlock)).toBe(true);
+    expect(stripInternalRuntimeContext(legacyEventBlock)).toBe("Visible reply");
   });
 
   it.each([

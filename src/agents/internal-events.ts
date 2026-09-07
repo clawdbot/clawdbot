@@ -21,6 +21,7 @@ import {
   escapeInternalRuntimeContextDelimiters,
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
+  OPENCLAW_RUNTIME_CONTEXT_NOTICE,
 } from "./internal-runtime-context.js";
 import { wrapPromptDataBlock } from "./sanitize-for-prompt.js";
 
@@ -230,7 +231,7 @@ export function formatAgentInternalEventsForPrompt(events?: AgentInternalEvent[]
   return [
     INTERNAL_RUNTIME_CONTEXT_BEGIN,
     "OpenClaw runtime context (internal):",
-    "This context is runtime-generated, not user-authored.",
+    OPENCLAW_RUNTIME_CONTEXT_NOTICE,
     "",
     blocks.join("\n\n---\n\n"),
     INTERNAL_RUNTIME_CONTEXT_END,
@@ -250,7 +251,7 @@ export function formatGeneratedMediaDeliveryRetryForPrompt(mediaUrls: string[]):
   return [
     INTERNAL_RUNTIME_CONTEXT_BEGIN,
     "OpenClaw runtime context (internal):",
-    "This context is runtime-generated, not user-authored.",
+    OPENCLAW_RUNTIME_CONTEXT_NOTICE,
     "",
     "[Generated media delivery retry]",
     "A previous agent turn delivered only part of this generated-media result.",
