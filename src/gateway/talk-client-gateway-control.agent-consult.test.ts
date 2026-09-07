@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import {
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
@@ -105,11 +106,17 @@ describe("Talk client agent consult admission", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     embeddedRunsTesting.resetActiveEmbeddedRuns();
-    mocks.prepareAgentRunAdmission.mockReturnValue({
-      operationalRunInstance: { instanceId: "instance:run-talk", runId: "run-talk" },
-      admit: vi.fn(),
-      close: mocks.close,
-    });
+    mocks.createOperationalRunInstanceRef.mockImplementation((runId: string) => ({
+      instanceId: `instance:${runId}`,
+      runId,
+    }));
+    mocks.prepareAgentRunAdmission.mockImplementation(
+      (params: { operationalRunInstance: OperationalRunInstanceRef }) => ({
+        operationalRunInstance: params.operationalRunInstance,
+        admit: vi.fn(),
+        close: mocks.close,
+      }),
+    );
     mocks.runEmbeddedAgentCore.mockResolvedValue({ payloads: [] });
     mocks.controlRealtimeVoiceAgentRun.mockResolvedValue({
       ok: true,
@@ -194,13 +201,18 @@ describe("Talk client agent consult admission", () => {
       const core = deferred<void>();
       const chatAbortControllers = new Map();
       const isRunCurrent = vi.fn(() => true);
-      mocks.consultRealtimeVoiceAgent.mockImplementationOnce(async (params: ConsultParams) => {
+      const operationalRunInstance = {
+        instanceId: `instance:${entrypoint}`,
+        runId: "run-talk",
+      };
+      mocks.createOperationalRunInstanceRef.mockReturnValueOnce(operationalRunInstance);
+      mocks.runEmbeddedAgentCore.mockImplementationOnce(async () => {
         const handle = createEmbeddedRunHandle({ runId: "run-talk" });
-        params.onRunStarted?.({ runId: "run-talk", sessionId: "session-talk", timeoutMs: 1 });
         await withGatewayToolCallerIdentity(
           {
             agentId: "researcher",
             sessionKey: "agent:researcher:talk",
+            operationalRunInstance,
             embeddedRunToolAuthorityBinding: () => ({
               source: "attempt",
               project: () => "authority",
@@ -211,7 +223,7 @@ describe("Talk client agent consult admission", () => {
         );
         await core.promise;
         clearActiveEmbeddedRun("session-talk", handle, "agent:researcher:talk");
-        return { text: "done" };
+        return { payloads: [] };
       });
       const runner = createTalkClientAgentConsultRunner({
         config,
@@ -274,15 +286,20 @@ describe("Talk client agent consult admission", () => {
     });
     const authority = resolveTalkAgentConsultAuthority(client.connect.scopes, client);
     const handle = createEmbeddedRunHandle({ runId: "run-talk" });
+    const operationalRunInstance = {
+      instanceId: "instance:publication",
+      runId: "run-talk",
+    };
     const projectToolAuthority = vi.fn(() => "authority");
-    mocks.consultRealtimeVoiceAgent.mockImplementationOnce(async (params: ConsultParams) => {
-      params.onRunStarted?.({ runId: "run-talk", sessionId: "session-talk", timeoutMs: 1 });
+    mocks.createOperationalRunInstanceRef.mockReturnValueOnce(operationalRunInstance);
+    mocks.runEmbeddedAgentCore.mockImplementationOnce(async () => {
       announced.resolve();
       await publish.promise;
       await withGatewayToolCallerIdentity(
         {
           agentId: "researcher",
           sessionKey: "agent:researcher:talk",
+          operationalRunInstance,
           embeddedRunToolAuthorityBinding: () => ({
             source: "reply",
             project: projectToolAuthority,
@@ -293,7 +310,7 @@ describe("Talk client agent consult admission", () => {
       );
       await finish.promise;
       clearActiveEmbeddedRun("session-talk", handle, "agent:researcher:talk");
-      return { text: "done" };
+      return { payloads: [] };
     });
     const runner = createTalkClientAgentConsultRunner({
       config,
@@ -346,17 +363,364 @@ describe("Talk client agent consult admission", () => {
     }
   });
 
+  it("refreshes steering authority when the admitted run publishes a new attempt", async () => {
+    const secondPublished = deferred<void>();
+    const finish = deferred<void>();
+    const chatAbortControllers = new Map();
+    const firstHandle = createEmbeddedRunHandle({ runId: "run-talk" });
+    const secondHandle = createEmbeddedRunHandle({ runId: "run-talk" });
+    const operationalRunInstance = {
+      instanceId: "instance:retry",
+      runId: "run-talk",
+    };
+    let firstLive = true;
+    const firstProject = vi.fn(() => {
+      if (!firstLive) {
+        throw new Error("first attempt expired");
+      }
+      return "first-authority";
+    });
+    const secondProject = vi.fn(() => "second-authority");
+    mocks.createOperationalRunInstanceRef.mockReturnValueOnce(operationalRunInstance);
+    mocks.runEmbeddedAgentCore.mockImplementationOnce(async () => {
+      await withGatewayToolCallerIdentity(
+        {
+          agentId: "researcher",
+          sessionKey: "agent:researcher:talk",
+          operationalRunInstance,
+          embeddedRunToolAuthorityBinding: () => ({
+            source: "attempt",
+            project: firstProject,
+            assertActive: () => {
+              if (!firstLive) {
+                throw new Error("first attempt expired");
+              }
+            },
+          }),
+        },
+        () => setActiveEmbeddedRun("session-talk", firstHandle, "agent:researcher:talk"),
+      );
+      await Promise.resolve();
+      firstLive = false;
+      clearActiveEmbeddedRun("session-talk", firstHandle, "agent:researcher:talk");
+      await withGatewayToolCallerIdentity(
+        {
+          agentId: "researcher",
+          sessionKey: "agent:researcher:talk",
+          operationalRunInstance,
+          embeddedRunToolAuthorityBinding: () => ({
+            source: "attempt",
+            project: secondProject,
+            assertActive: () => {},
+          }),
+        },
+        () => setActiveEmbeddedRun("session-talk", secondHandle, "agent:researcher:talk"),
+      );
+      secondPublished.resolve();
+      await finish.promise;
+      clearActiveEmbeddedRun("session-talk", secondHandle, "agent:researcher:talk");
+      return { payloads: [] };
+    });
+    mocks.controlRealtimeVoiceAgentRun.mockImplementationOnce(async (params) => {
+      params.getToolAuthorityOverlay?.();
+      return {
+        ok: true,
+        mode: "steer",
+        sessionKey: "agent:researcher:talk",
+        sessionId: "session-talk",
+        active: true,
+        queued: true,
+        target: "embedded",
+        message: "Steering accepted.",
+        speak: true,
+        show: true,
+        suppress: false,
+      };
+    });
+    const runner = createTalkClientAgentConsultRunner({
+      config,
+      context: { chatAbortControllers, logGateway: { warn: vi.fn() } } as never,
+      sessionTarget: {
+        agentId: "researcher",
+        sessionKey: "main",
+        canonicalKey: "agent:researcher:talk",
+        storePath: "/tmp/sessions",
+      },
+      ownerConnId: "connection-owner",
+      getVoiceSessionId: () => "voice-session",
+      initialItems: [],
+      registerRun: vi.fn(),
+      isRunCurrent: () => true,
+    });
+    const run = runner.runPrompt({ prompt: "first task" });
+    await secondPublished.promise;
+
+    try {
+      await expect(runner.runPrompt.steer?.({ prompt: "latest task" })).resolves.toEqual({
+        text: "",
+      });
+      expect(firstProject).not.toHaveBeenCalled();
+      expect(secondProject).toHaveBeenCalledOnce();
+    } finally {
+      finish.resolve();
+      await run;
+    }
+  });
+
+  it("rejects steering when a replacement reuses the run id from another admission", async () => {
+    const secondPublished = deferred<void>();
+    const finish = deferred<void>();
+    const outbound = vi.fn();
+    const admittedRun = { instanceId: "instance:owner", runId: "run-talk" };
+    const replacementRun = { instanceId: "instance:replacement", runId: "run-talk" };
+    const firstHandle = createEmbeddedRunHandle({ runId: "run-talk" });
+    const secondHandle = createEmbeddedRunHandle({ runId: "run-talk" });
+    const replacementProject = vi.fn(() => "replacement-authority");
+    mocks.createOperationalRunInstanceRef.mockReturnValueOnce(admittedRun);
+    mocks.runEmbeddedAgentCore.mockImplementationOnce(async () => {
+      await withGatewayToolCallerIdentity(
+        {
+          agentId: "researcher",
+          sessionKey: "agent:researcher:talk",
+          operationalRunInstance: admittedRun,
+          embeddedRunToolAuthorityBinding: () => ({
+            source: "attempt",
+            project: () => "owner-authority",
+            assertActive: () => {},
+          }),
+        },
+        () => setActiveEmbeddedRun("session-talk", firstHandle, "agent:researcher:talk"),
+      );
+      clearActiveEmbeddedRun("session-talk", firstHandle, "agent:researcher:talk");
+      await withGatewayToolCallerIdentity(
+        {
+          agentId: "researcher",
+          sessionKey: "agent:researcher:talk",
+          operationalRunInstance: replacementRun,
+          embeddedRunToolAuthorityBinding: () => ({
+            source: "attempt",
+            project: replacementProject,
+            assertActive: () => {},
+          }),
+        },
+        () => setActiveEmbeddedRun("session-talk", secondHandle, "agent:researcher:talk"),
+      );
+      secondPublished.resolve();
+      await finish.promise;
+      clearActiveEmbeddedRun("session-talk", secondHandle, "agent:researcher:talk");
+      return { payloads: [] };
+    });
+    mocks.controlRealtimeVoiceAgentRun.mockImplementationOnce(async (params) => {
+      params.getToolAuthorityOverlay?.();
+      outbound();
+      throw new Error("unexpected outbound enqueue");
+    });
+    const runner = createTalkClientAgentConsultRunner({
+      config,
+      context: { chatAbortControllers: new Map(), logGateway: { warn: vi.fn() } } as never,
+      sessionTarget: {
+        agentId: "researcher",
+        sessionKey: "main",
+        canonicalKey: "agent:researcher:talk",
+        storePath: "/tmp/sessions",
+      },
+      ownerConnId: "connection-owner",
+      getVoiceSessionId: () => "voice-session",
+      initialItems: [],
+      registerRun: vi.fn(),
+      isRunCurrent: () => true,
+    });
+    const run = runner.runPrompt({ prompt: "first task" });
+    await secondPublished.promise;
+
+    try {
+      await expect(runner.runPrompt.steer?.({ prompt: "latest task" })).rejects.toThrow(
+        "backend is no longer current",
+      );
+      expect(replacementProject).not.toHaveBeenCalled();
+      expect(outbound).not.toHaveBeenCalled();
+    } finally {
+      finish.resolve();
+      await run;
+    }
+  });
+
+  it("does not let a stale runtime bind a replacement owner before admission", async () => {
+    const firstAnnounced = deferred<void>();
+    const secondAnnounced = deferred<void>();
+    const releaseFirst = deferred<void>();
+    const releaseSecond = deferred<void>();
+    const staleRun = { instanceId: "instance:stale", runId: "run-talk" };
+    const currentRun = { instanceId: "instance:current", runId: "run-talk" };
+    let invocation = 0;
+    mocks.createOperationalRunInstanceRef
+      .mockReturnValueOnce(staleRun)
+      .mockReturnValueOnce(currentRun);
+    mocks.consultRealtimeVoiceAgent.mockImplementation(async (params: ConsultParams) => {
+      invocation += 1;
+      params.onRunStarted?.({ runId: "run-talk", sessionId: "session-talk", timeoutMs: 1 });
+      if (invocation === 1) {
+        firstAnnounced.resolve();
+        await releaseFirst.promise;
+      } else {
+        secondAnnounced.resolve();
+        await releaseSecond.promise;
+      }
+      await params.agentRuntime.runEmbeddedAgent(coreParams);
+      return { text: "done" };
+    });
+    const runner = createTalkClientAgentConsultRunner({
+      config,
+      context: { chatAbortControllers: new Map(), logGateway: { warn: vi.fn() } } as never,
+      sessionTarget: {
+        agentId: "researcher",
+        sessionKey: "main",
+        canonicalKey: "agent:researcher:talk",
+        storePath: "/tmp/sessions",
+      },
+      ownerConnId: "connection-owner",
+      getVoiceSessionId: () => "voice-session",
+      initialItems: [],
+      registerRun: vi.fn(),
+      isRunCurrent: () => true,
+    });
+    const first = runner.runPrompt({ prompt: "first task" });
+    await firstAnnounced.promise;
+    expect(runner.runPrompt.claimFailureAppend()).toBe(true);
+    const second = runner.runPrompt({ prompt: "replacement task" });
+    await secondAnnounced.promise;
+
+    try {
+      releaseFirst.resolve();
+      await expect(first).rejects.toThrow("admission is no longer current");
+      releaseSecond.resolve();
+      await expect(second).resolves.toEqual({ text: "done" });
+      expect(mocks.prepareAgentRunAdmission).toHaveBeenCalledOnce();
+      expect(mocks.prepareAgentRunAdmission).toHaveBeenCalledWith(
+        expect.objectContaining({ operationalRunInstance: currentRun }),
+      );
+      expect(runner.runPrompt.claimFailureAppend()).toBe(true);
+    } finally {
+      releaseFirst.resolve();
+      releaseSecond.resolve();
+      await Promise.allSettled([first, second]);
+      runner.runPrompt.claimFailureAppend();
+    }
+  });
+
+  it("rejects a stale owner before it can announce over its replacement", async () => {
+    const firstWaiting = deferred<void>();
+    const releaseFirst = deferred<void>();
+    const secondPublished = deferred<void>();
+    const finishSecond = deferred<void>();
+    const chatAbortControllers = new Map();
+    const registerRun = vi.fn();
+    const currentRun = { instanceId: "instance:current-owner", runId: "run-talk" };
+    const secondHandle = createEmbeddedRunHandle({ runId: "run-talk" });
+    const project = vi.fn(() => "current-authority");
+    let invocation = 0;
+    mocks.createOperationalRunInstanceRef.mockReturnValueOnce(currentRun);
+    mocks.consultRealtimeVoiceAgent.mockImplementation(async (params: ConsultParams) => {
+      invocation += 1;
+      if (invocation === 1) {
+        firstWaiting.resolve();
+        await releaseFirst.promise;
+        params.onRunStarted?.({ runId: "run-talk", sessionId: "session-talk", timeoutMs: 1 });
+        await params.agentRuntime.runEmbeddedAgent(coreParams);
+        return { text: "stale" };
+      }
+      params.onRunStarted?.({ runId: "run-talk", sessionId: "session-talk", timeoutMs: 1 });
+      await params.agentRuntime.runEmbeddedAgent(coreParams);
+      return { text: "current" };
+    });
+    mocks.runEmbeddedAgentCore.mockImplementationOnce(async () => {
+      await withGatewayToolCallerIdentity(
+        {
+          agentId: "researcher",
+          sessionKey: "agent:researcher:talk",
+          operationalRunInstance: currentRun,
+          embeddedRunToolAuthorityBinding: () => ({
+            source: "attempt",
+            project,
+            assertActive: () => {},
+          }),
+        },
+        () => setActiveEmbeddedRun("session-talk", secondHandle, "agent:researcher:talk"),
+      );
+      secondPublished.resolve();
+      await finishSecond.promise;
+      clearActiveEmbeddedRun("session-talk", secondHandle, "agent:researcher:talk");
+      return { payloads: [] };
+    });
+    mocks.controlRealtimeVoiceAgentRun.mockImplementationOnce(async (params) => {
+      params.getToolAuthorityOverlay?.();
+      return {
+        ok: true,
+        mode: "steer",
+        sessionKey: "agent:researcher:talk",
+        sessionId: "session-talk",
+        active: true,
+        queued: true,
+        target: "embedded",
+        message: "Steering accepted.",
+        speak: true,
+        show: true,
+        suppress: false,
+      };
+    });
+    const runner = createTalkClientAgentConsultRunner({
+      config,
+      context: { chatAbortControllers, logGateway: { warn: vi.fn() } } as never,
+      sessionTarget: {
+        agentId: "researcher",
+        sessionKey: "main",
+        canonicalKey: "agent:researcher:talk",
+        storePath: "/tmp/sessions",
+      },
+      ownerConnId: "connection-owner",
+      getVoiceSessionId: () => "voice-session",
+      initialItems: [],
+      registerRun,
+      isRunCurrent: () => true,
+    });
+    const first = runner.runPrompt({ prompt: "first task" });
+    await firstWaiting.promise;
+    expect(runner.runPrompt.claimFailureAppend()).toBe(true);
+    const second = runner.runPrompt({ prompt: "replacement task" });
+    await secondPublished.promise;
+
+    try {
+      releaseFirst.resolve();
+      await expect(first).rejects.toThrow("admission is no longer current");
+      await expect(runner.runPrompt.steer?.({ prompt: "latest task" })).resolves.toEqual({
+        text: "",
+      });
+      expect(registerRun).toHaveBeenCalledOnce();
+      expect(project).toHaveBeenCalledOnce();
+    } finally {
+      releaseFirst.resolve();
+      finishSecond.resolve();
+      await Promise.allSettled([first, second]);
+      runner.runPrompt.claimFailureAppend();
+    }
+  });
+
   it("installs steering ownership before readiness and delays backend admission", async () => {
     const ready = deferred<void>();
     const finish = deferred<void>();
     const chatAbortControllers = new Map();
     const handle = createEmbeddedRunHandle({ runId: "run-talk" });
-    mocks.consultRealtimeVoiceAgent.mockImplementationOnce(async (params: ConsultParams) => {
-      params.onRunStarted?.({ runId: "run-talk", sessionId: "session-talk", timeoutMs: 1 });
+    const operationalRunInstance = {
+      instanceId: "instance:readiness",
+      runId: "run-talk",
+    };
+    mocks.createOperationalRunInstanceRef.mockReturnValueOnce(operationalRunInstance);
+    mocks.runEmbeddedAgentCore.mockImplementationOnce(async () => {
       await withGatewayToolCallerIdentity(
         {
           agentId: "researcher",
           sessionKey: "agent:researcher:talk",
+          operationalRunInstance,
           embeddedRunToolAuthorityBinding: () => ({
             source: "attempt",
             project: () => "authority",
@@ -367,7 +731,7 @@ describe("Talk client agent consult admission", () => {
       );
       await finish.promise;
       clearActiveEmbeddedRun("session-talk", handle, "agent:researcher:talk");
-      return { text: "done" };
+      return { payloads: [] };
     });
     const runner = createTalkClientAgentConsultRunner({
       config,

@@ -24,6 +24,7 @@ import {
 } from "../../infra/agent-run-registry.js";
 import type { DiagnosticEmbeddedRunOwner } from "../../logging/diagnostic-run-activity.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import type { OperationalRunInstanceRef } from "../admitted-run-context.js";
 
 /**
  * Shared process state for embedded-agent runs, queues, and snapshots.
@@ -108,6 +109,7 @@ export type EmbeddedRunRegistration = {
   /** Registration-owned presentation fact; retained cleanup must not reappear after context release. */
   projectSessionActive?: boolean;
   toolAuthority?: ReturnType<EmbeddedRunToolAuthorityBinding>;
+  operationalRunInstance?: OperationalRunInstanceRef;
   sessionId: string;
   sessionKey?: string;
   agentId?: string;
@@ -123,6 +125,7 @@ export type EmbeddedRunCompletionRegistration = {
 export type EmbeddedRunCompletionClaim = {
   runId: string;
   lifecycleGeneration: string;
+  operationalRunInstance?: OperationalRunInstanceRef;
   promoted: boolean;
   settleRegistration: (registration: EmbeddedRunCompletionRegistration | undefined) => void;
 };

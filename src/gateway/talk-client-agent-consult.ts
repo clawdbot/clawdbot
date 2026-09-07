@@ -1,3 +1,4 @@
+import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import type { EmbeddedRunCompletionRegistration } from "../agents/embedded-agent-runner/run-state.js";
 import { prepareEmbeddedAgentRunCompletionClaim } from "../agents/embedded-agent-runner/runs.js";
 import { resolveCommandAuthorization } from "../auto-reply/command-auth.js";
@@ -54,7 +55,11 @@ const loadTalkAgentExecution = createLazyRuntimeModule(async () => {
   };
 });
 
-function createTalkClientAgentRuntime(params: { config: OpenClawConfig; rawSourceRef?: string }) {
+function createTalkClientAgentRuntime(params: {
+  config: OpenClawConfig;
+  rawSourceRef?: string;
+  bindOperationalRunInstance?: (instance: OperationalRunInstanceRef) => void;
+}) {
   const agentRuntime = createPluginRuntime().agent;
   const runEmbeddedAgent: typeof agentRuntime.runEmbeddedAgent = async (runParams) => {
     runParams.abortSignal?.throwIfAborted();
@@ -64,9 +69,11 @@ function createTalkClientAgentRuntime(params: { config: OpenClawConfig; rawSourc
     if (!agentId || !sessionId || !sessionKey || !storePath) {
       throw new Error("Talk consult requires its prepared transcript target");
     }
+    const operationalRunInstance = execution.createOperationalRunInstanceRef(runParams.runId);
+    params.bindOperationalRunInstance?.(operationalRunInstance);
     const preparedRunAdmission = execution.prepareAgentRunAdmission({
       cfg: params.config,
-      operationalRunInstance: execution.createOperationalRunInstanceRef(runParams.runId),
+      operationalRunInstance,
       facts: {
         runId: runParams.runId,
         agentId,
@@ -202,6 +209,20 @@ export function createTalkClientAgentConsultRunner(params: {
     voiceSessionId?: string;
   };
   let promptOwner: PromptOwner | undefined;
+  const createOwnedAgentRuntime = (owner: PromptOwner) =>
+    createTalkClientAgentRuntime({
+      config: params.config,
+      ...(params.ownerConnId ? { rawSourceRef: params.ownerConnId } : {}),
+      bindOperationalRunInstance: (instance) => {
+        if (
+          promptOwner !== owner ||
+          owner.identity?.runId !== instance.runId ||
+          owner.completionClaim?.bindOperationalRunInstance(instance) !== true
+        ) {
+          throw new Error("The active Talk consult admission is no longer current");
+        }
+      },
+    });
   const runArgs = async (
     args: unknown,
     signal?: AbortSignal,
@@ -230,7 +251,7 @@ export function createTalkClientAgentConsultRunner(params: {
           confirmationId: parsedArgs.confirmationId,
         })
       : undefined;
-    const runtime = getAgentRuntime();
+    const runtime = owner ? createOwnedAgentRuntime(owner) : getAgentRuntime();
     const talkConfig = normalizeTalkSection(params.config.talk);
     // A voice turn outlives offer setup and must drain under its own root,
     // while new turns still respect suspension and restart admission.
@@ -261,6 +282,14 @@ export function createTalkClientAgentConsultRunner(params: {
           abortSignal: signal,
           onRunStarted: ({ runId, sessionId, timeoutMs }) => {
             if (owner) {
+              if (
+                promptOwner !== owner ||
+                owner.requestSignal?.aborted === true ||
+                !isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration) ||
+                params.getVoiceSessionId() !== voiceSessionId
+              ) {
+                throw new Error("The active Talk consult admission is no longer current");
+              }
               owner.identity = { runId, sessionId };
               owner.completionClaim = prepareEmbeddedAgentRunCompletionClaim(sessionId, runId);
               void owner.completionClaim.registered.then(owner.resolveRegistration);
@@ -367,11 +396,17 @@ export function createTalkClientAgentConsultRunner(params: {
     if (!owner) {
       throw new Error("No active Talk consult is available to steer");
     }
-    const registration = await owner.registered;
+    await owner.registered;
     signal?.throwIfAborted();
     const identity = owner.identity;
     const ownerSignal = owner.signal;
-    if (!registration || !identity || !ownerSignal || !isOwnerCurrent(owner, identity.sessionId)) {
+    const completionClaim = owner.completionClaim;
+    if (
+      !completionClaim ||
+      !identity ||
+      !ownerSignal ||
+      !isOwnerCurrent(owner, identity.sessionId)
+    ) {
       throw new Error("The active Talk consult is no longer current");
     }
     const result = await controlRealtimeVoiceAgentRun({
@@ -385,6 +420,10 @@ export function createTalkClientAgentConsultRunner(params: {
         if (!isOwnerCurrent(owner, identity.sessionId)) {
           throw new Error("The active Talk consult is no longer current");
         }
+        const registration = completionClaim.resolveCurrentRegistration();
+        if (!registration) {
+          throw new Error("The active Talk consult backend is no longer current");
+        }
         const overlay = prepareTalkClientControlAuthority({
           config: params.config,
           sessionTarget: params.sessionTarget,
@@ -392,7 +431,11 @@ export function createTalkClientAgentConsultRunner(params: {
           source: registration.toolAuthority.source,
           agentRuntime: getAgentRuntime(),
         });
-        if (!registration.toolAuthority.project(overlay)) {
+        const projected = registration.toolAuthority.project(overlay);
+        if (
+          !projected ||
+          completionClaim.resolveCurrentRegistration()?.toolAuthority !== registration.toolAuthority
+        ) {
           throw new Error("The active Talk consult caller authority no longer matches");
         }
         return overlay;
