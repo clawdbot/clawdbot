@@ -24,17 +24,13 @@ const processGatewayAllowlistMock = vi.hoisted(() =>
 );
 
 vi.mock("./bash-tools.exec-host-gateway.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("./bash-tools.exec-host-gateway.js")
-  >()),
+  ...(await importOriginal<typeof import("./bash-tools.exec-host-gateway.js")>()),
   processGatewayAllowlist: processGatewayAllowlistMock,
 }));
 
 vi.mock("./bash-tools.exec-host-node.js", () => ({
   executeNodeHostCommand: async () => {
-    throw new Error(
-      "node host execution is not used by guard entrypoint tests",
-    );
+    throw new Error("node host execution is not used by guard entrypoint tests");
   },
 }));
 
