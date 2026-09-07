@@ -75,21 +75,20 @@ esac
   mkdirSync(native);
   writeFileSync(join(wrapper, "package.json"), '{"version":"12.3.4"}');
   executable(join(native, "pnpm"), "#!/bin/sh\necho 12.3.4\n");
-  const archives = [
-    ["node", "node-v24.19.0-linux-x64.tar.xz", "sha256"],
-    ["wrapper", "pnpm-12.3.4.tgz", "sha512"],
-    ["native", "exe.linux-x64-12.3.4.tgz", "sha512"],
-  ];
-  const hashes: string[] = [];
-  for (const [directory, name, algorithm] of archives) {
+  function archive(directory: string, name: string, algorithm: string) {
     const output = join(origin, name);
     execFileSync("tar", [name.endsWith(".xz") ? "-cJf" : "-czf", output, "-C", stage, directory]);
     const bytes = readFileSync(output);
-    hashes.push(createHash(algorithm).update(bytes).digest("hex"));
     writeFileSync(join(image, name), bytes);
+    return createHash(algorithm).update(bytes).digest("hex");
   }
+  const hashes = {
+    node: archive("node", "node-v24.19.0-linux-x64.tar.xz", "sha256"),
+    wrapper: archive("wrapper", "pnpm-12.3.4.tgz", "sha512"),
+    native: archive("native", "exe.linux-x64-12.3.4.tgz", "sha512"),
+  };
   const productionSpec = scriptSource.match(/^pnpm_spec="([^"]+)"$/mu)?.[1] ?? "";
-  const spec = `${productionSpec.split("+")[0]}+sha512.${hashes[1]}`;
+  const spec = `${productionSpec.split("+")[0]}+sha512.${hashes.wrapper}`;
   writeFileSync(join(root, "package.json"), JSON.stringify({ packageManager: spec }));
   executable(
     join(bin, "curl"),
@@ -106,7 +105,7 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 if [[ "$url" == */SHASUMS256.txt ]]; then
-  printf '%s  %s\\n' ${JSON.stringify(hashes[0])} node-v24.19.0-linux-x64.tar.xz > "$output"
+  printf '%s  %s\\n' ${JSON.stringify(hashes.node)} node-v24.19.0-linux-x64.tar.xz > "$output"
 else
   cp ${JSON.stringify(join(origin, "node-v24.19.0-linux-x64.tar.xz"))} "$output"
 fi
@@ -136,10 +135,10 @@ fi
   // Only the trusted fixture's anchors change; candidate/image state never supplies them.
   script = script
     .replace(productionSpec, spec)
-    .replaceAll("14b342e71204f811bde6153be8e04b62aef63c236fef92b55f9c83154b409647", hashes[0])
+    .replaceAll("14b342e71204f811bde6153be8e04b62aef63c236fef92b55f9c83154b409647", hashes.node)
     .replaceAll(
       "d99a8e9523e47f05f5879711f853e259ff3e17eda1653ff74ef8542b9b22807ab06900888aaf11ec21b186774ab3adc9b5c2e2d9ad50a68fb05ff128c9f8f225",
-      hashes[2],
+      hashes.native,
     );
   const scriptPath = join(root, "bootstrap.sh");
   writeFileSync(scriptPath, script);

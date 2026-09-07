@@ -4551,8 +4551,12 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(hydrate.if).toBe(
       "${{ inputs.crabbox_job != 'hydrate-github' && inputs.crabbox_job != 'hydrate-windows-daemon' }}",
     );
-    expect(workflowStep(hydrate, "Setup Node.js").uses).toBe(SETUP_NODE_V6);
-    expect(workflowStep(hydrate, "Setup Node.js").with?.["node-version"]).toBe("24");
+    const hydrateNode = workflowStep(hydrate, "Setup Node.js");
+    expect(hydrateNode.shell).toBe("bash");
+    expect(hydrateNode.run).toContain(
+      "source .github/actions/setup-pnpm-store-cache/ensure-node.sh",
+    );
+    expect(hydrateNode.run).toContain('openclaw_ensure_node "24.x"');
     const hydratePnpm = workflowStep(hydrate, "Setup pnpm and dependencies");
     expect(hydratePnpm.if).toBeUndefined();
     expect(hydratePnpm.run).toContain('corepack enable --install-directory "$PNPM_HOME"');

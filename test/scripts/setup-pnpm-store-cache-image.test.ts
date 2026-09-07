@@ -34,16 +34,15 @@ function fixture() {
   for (const directory of [image, runnerTemp, stage]) {
     mkdirSync(directory);
   }
-  const hashes: string[] = [];
-  for (const name of ["pnpm-12.3.4.tgz", "exe.linux-x64-12.3.4.tgz"]) {
+  function archive(name: string) {
     writeFileSync(join(stage, "pnpm"), name);
     execFileSync("tar", ["-czf", join(image, name), "-C", root, "stage"]);
-    hashes.push(
-      createHash("sha512")
-        .update(readFileSync(join(image, name)))
-        .digest("hex"),
-    );
+    return createHash("sha512")
+      .update(readFileSync(join(image, name)))
+      .digest("hex");
   }
+  const wrapperHash = archive("pnpm-12.3.4.tgz");
+  const nativeHash = archive("exe.linux-x64-12.3.4.tgz");
   // The fixture is a trusted script with synthetic anchors, not a candidate-supplied pin.
   const script = source
     .replaceAll("/opt/crabbox/toolchain-archives", image)
@@ -51,15 +50,15 @@ function fixture() {
     .replaceAll("process.arch", '"x64"')
     .replace(
       "961aa41fb077da3a04a441d9f8e15ebc0c96da8ef710b2eb67bf9ee7cb0610eabd48f1fd85f51cffe73846785fa0f87c56a3a872a1d893f8446741b5cce45457",
-      hashes[0],
+      wrapperHash,
     )
     .replace(
       "d99a8e9523e47f05f5879711f853e259ff3e17eda1653ff74ef8542b9b22807ab06900888aaf11ec21b186774ab3adc9b5c2e2d9ad50a68fb05ff128c9f8f225",
-      hashes[1],
+      nativeHash,
     );
   const scriptPath = join(root, "seed.mjs");
   writeFileSync(scriptPath, script);
-  const spec = `pnpm@12.3.4+sha512.${hashes[0]}`;
+  const spec = `pnpm@12.3.4+sha512.${wrapperHash}`;
   return {
     root,
     image,
