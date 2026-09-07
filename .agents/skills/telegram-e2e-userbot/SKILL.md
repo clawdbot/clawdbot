@@ -112,7 +112,11 @@ through the Test Bot API proxy, then removes the state and releases the lease.
 
 Done when the doctor reports Convex source, loaded credentials, isolated TDLib
 state, Test Server, authorized user, Bot API proxy, disabled group privacy,
-active group membership, and the SUT bot.
+active bot and tester group membership, tester text permission, and the SUT bot.
+The leased user driver repeats the tester access check before announcing group
+readiness, so canary sends cannot use a different lease's doctor result. A denied
+check sends no message and asks the pool owner to repair the test group; it does
+not change permissions or disable credentials using the CI broker role.
 
 ## 4. Drive and record
 

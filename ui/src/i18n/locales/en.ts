@@ -5,6 +5,7 @@ import * as agentEn from "./en-agents.ts";
 
 export const en: TranslationMap & {
   configPage: TranslationMap;
+  connection: TranslationMap;
   configView: TranslationMap;
   debug: TranslationMap & { overlay: TranslationMap };
   // Lazy en-devices.ts assigns into this namespace.
@@ -113,6 +114,11 @@ export const en: TranslationMap & {
     probeOk: "Probe ok",
     probeFailed: "Probe failed",
     reloadConfig: "Reload Config",
+    multiSelect: {
+      addCustom: "Add “{value}”",
+      noMatches: "No matches",
+      remove: "Remove {value}",
+    },
     loadConfig: "Load config",
     loadApprovals: "Load approvals",
     settingsSections: "Settings sections",
@@ -463,11 +469,6 @@ export const en: TranslationMap & {
         "Logging out of account {accountId} stops its listener and deletes its saved credentials.",
       logoutNotCleared:
         "No stored WhatsApp session was cleared. It may already be absent, or its auth directory may require manual cleanup.",
-    },
-    gatewayUrlConfirmation: {
-      title: "Change Gateway URL",
-      subtitle: "This will reconnect to a different gateway server",
-      warning: "Only confirm if you trust this URL. Malicious URLs can compromise your system.",
     },
     nostr: {
       title: "Nostr",
@@ -1469,6 +1470,7 @@ export const en: TranslationMap & {
       inheritDefault: "Inherit default",
       inheritDefaultModel: "Inherit default ({model})",
       fallbacks: "Fallbacks",
+      addFallback: "Add fallback…",
     },
     toolCatalog: {
       groups: {
@@ -3919,30 +3921,18 @@ export const en: TranslationMap & {
       expired: "The administrator access request expired.",
       error: "Administrator access request failed: {error}",
     },
-    access: {
-      title: "Gateway Access",
-      subtitle: "Where the dashboard connects and how it authenticates.",
-      wsUrl: "WebSocket URL",
-      token: "Gateway Token",
-      password: "Password (not stored)",
-      passwordPlaceholder: "system or shared password",
-      sessionKey: "Default Session Key",
-      connectHint: "Click Connect to apply connection changes.",
-      trustedProxy: "Authenticated via trusted proxy.",
-      showToken: "Show token",
-      hideToken: "Hide token",
-      toggleTokenVisibility: "Toggle token visibility",
-      showPassword: "Show password",
-      hidePassword: "Hide password",
-      togglePasswordVisibility: "Toggle password visibility",
-    },
-    snapshot: {
-      title: "Snapshot",
-      subtitle: "Latest gateway handshake information.",
-      status: "Status",
-      tickInterval: "Tick Interval",
-      lastChannelsRefresh: "Last Channels Refresh",
-      lastError: "Last error",
+    // Settings → Gateway copy lives in the lazy en-settings catalog; the anchor keeps its merge target.
+    access: {},
+    switchGateway: {
+      title: "Switch to a different Gateway?",
+      summary: "This link asks the browser to connect somewhere else.",
+      current: "Current",
+      next: "Link",
+      note: "Anything you enter after switching goes to that host.",
+      noteToken: "The link also carries a token for it.",
+      noteScoped: "Your saved credential for {host} stays here and is not sent.",
+      confirm: "Switch to {host}",
+      cancel: "Keep current Gateway",
     },
     help: {
       title: "How to connect",

@@ -239,6 +239,20 @@ replacement or background update campaigns; see [Updating](/install/updating)
 for those separate entry points. A required plugin capability consent remains
 an explicit recovery step and is recorded in the survivor summary.
 
+The `2026.9.2` to `2026.9.3` survivor transition exercises the installed updater.
+Shared-state migration content can be current while the published schema version
+remains at 15 until the old updater clears its publication grace period. Schema
+proof records both values and requires current content; it does not wait for or
+force publication. See [older updater schema handling](/reference/database-schemas#schema-bumps-and-older-updaters).
+
+`test:docker:release-upgrade-user-journey` separately covers the explicit external
+package-manager and fresh Doctor procedure, with an owner-stopped Gateway,
+verified backup, and retained baseline and new conversations through Gateway
+history. Its receipt records `selfUpdatePassed: false` and a `not-run` self-update
+status; external installation is not evidence of an internal updater outcome.
+Agent-schema and unsupported shared-state migration refusals remain covered by
+the Doctor owner tests.
+
 Scale the fixture with `OPENCLAW_UPGRADE_SURVIVOR_VOLUME_SESSIONS`,
 `OPENCLAW_UPGRADE_SURVIVOR_VOLUME_EVENTS_PER_SESSION`, and
 `OPENCLAW_UPGRADE_SURVIVOR_VOLUME_CRON_JOBS`. The default budget for the

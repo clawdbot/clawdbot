@@ -525,6 +525,7 @@ describe("worker provisioning cancellation ownership", () => {
         prepareNodeBootstrap: async (_record, signal?: AbortSignal) => {
           preparing.resolve();
           await racePromiseWithAbortSignal(prepared.promise, signal);
+          return support.NODE_BOOTSTRAP.sha256;
         },
       },
     );

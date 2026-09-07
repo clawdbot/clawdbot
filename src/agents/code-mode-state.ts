@@ -4,6 +4,7 @@ import {
   resolveExpiresAtMsFromDurationSeconds,
 } from "@openclaw/normalization-core/number-coercion";
 import type { Snapshot } from "quickjs-wasi";
+import { observeAgentRunApprovalWait } from "./agent-run-approval-wait.js";
 import { raceWithAbortSignal } from "./agent-tools.abort.js";
 import { runBridgeRequest } from "./code-mode-bridge.js";
 import type { CodeModeCatalogProjection } from "./code-mode-catalog.js";
@@ -73,6 +74,8 @@ export function createCodeModeRunOwner(ctx: ToolSearchToolContext, config: CodeM
   const inbox = new CodeModeProgramDataInbox(config);
   const runId = `cm_${randomUUID()}`;
   const closed = new AbortController();
+  // Observe approvals for the entire cell, including parked gaps.
+  const approvalWait = observeAgentRunApprovalWait(ctx);
   const signal = ctx.abortSignal
     ? AbortSignal.any([closed.signal, ctx.abortSignal])
     : closed.signal;
@@ -86,6 +89,7 @@ export function createCodeModeRunOwner(ctx: ToolSearchToolContext, config: CodeM
     }
     inbox.close();
     releaseCall();
+    approvalWait.dispose();
     signal.removeEventListener("abort", onLifetimeAbort);
     disposers?.delete(close);
     liveRunOwners.delete(owner);
@@ -103,6 +107,7 @@ export function createCodeModeRunOwner(ctx: ToolSearchToolContext, config: CodeM
     signal,
     inbox,
     close,
+    approvalWait,
     bindCall(callSignal?: AbortSignal): AbortSignal {
       releaseCall();
       if (signal.aborted) {

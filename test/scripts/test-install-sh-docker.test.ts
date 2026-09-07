@@ -1914,6 +1914,63 @@ fs.readFileSync = (file, ...args) => {
     ]);
   });
 
+  it.each([
+    ["2026.8.2", "2026.9.3", 0],
+    ["2026.9.2", "2026.9.3", 0],
+    ["2026.9.2", "2026.9.4", 0],
+    ["2026.9.1", "2026.9.3", 0],
+    ["2026.9.2", "2026.9.3", 17],
+  ])(
+    "routes installer transition %s → %s and preserves exit %s",
+    (baseline, candidate, failure) => {
+      const runner = readFileSync(SMOKE_RUNNER_PATH, "utf8");
+      const start = runner.indexOf("run_update_smoke() {");
+      const body = runner.slice(start, runner.indexOf("\nrun_update_candidate()", start));
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `
+set -eu
+${body}
+resolve_update_baseline_version() { :; }
+npm_install_global() { :; }
+print_install_audit() { :; }
+verify_installed_cli() { :; }
+assert_update_smoke_offline() { echo idle; }
+run_historical_external_transition() { echo external; return 99; }
+run_update_candidate() { echo "self-update:$1:$*"; if [[ "$1" == "$UPDATE_BASELINE_VERSION" ]]; then return "$FAILURE"; fi; }
+verify_candidate_ai_runtime() { echo verified; }
+run_update_smoke
+`,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PACKAGE_NAME: "openclaw",
+            UPDATE_BASELINE_VERSION: baseline,
+            UPDATE_EXPECT_VERSION: candidate,
+            UPDATE_BASELINE_TAG_URL: "",
+            UPDATE_TAG_URL: "https://fixture.invalid/candidate.tgz",
+            FAILURE: String(failure),
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(failure);
+      expect(result.stdout).toContain("idle\n");
+      expect(result.stdout).toContain(`self-update:${baseline}:${baseline} --no-restart\n`);
+      expect(result.stdout).not.toContain("external\n");
+      if (failure === 0) {
+        expect(result.stdout).toContain(`self-update:${candidate}:${candidate}\n`);
+        expect(result.stdout).toContain("verified\n");
+      } else {
+        expect(result.stdout).not.toContain(`self-update:${candidate}:`);
+        expect(result.stdout).not.toContain("verified\n");
+      }
+    },
+  );
+
   it("wraps long npm/update operations with heartbeat and install-size audits", () => {
     const script = readFileSync(SMOKE_RUNNER_PATH, "utf8");
 

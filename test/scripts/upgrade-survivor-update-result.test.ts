@@ -9,6 +9,131 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const command = resolve("scripts/e2e/lib/upgrade-survivor/assertions.mjs");
 
+describe("upgrade survivor updater restart ownership", () => {
+  it.each(
+    [
+      { outcome: "success", future: false, repaired: false },
+      { outcome: "recoverable", future: false, repaired: false },
+      { outcome: "success", future: true, repaired: false },
+      { outcome: "success", future: true, repaired: true },
+    ].flatMap(({ outcome, future, repaired }) =>
+      [true, false].map((replacement) => ({ outcome, future, repaired, replacement })),
+    ),
+  )(
+    "$outcome future=$future repaired=$repaired replacement=$replacement",
+    ({ outcome, future, repaired, replacement }) => {
+      const root = tempDirs.make("survivor-restart-result-");
+      const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
+      const helper = source.slice(
+        source.indexOf("update_candidate()"),
+        source.indexOf("\nreplace_historical_mobile_pairing_candidate()"),
+      );
+      const expectedVersion = future ? "2100.1.0" : "2026.9.2";
+      const expectedSpec = future ? "file:/fixture/future.tgz" : "file:/fixture/candidate.tgz";
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `set -eu
+ARTIFACT_ROOT="$1"
+EXPECTED_VERSION="$2"
+OUTCOME="$3"
+AFTER_REPAIR="$4"
+REPLACEMENT="$5"
+update_repair_required="$6"
+SCENARIO="$7"
+UPDATE_RESTART_MODE=auto-auth
+COMMAND_TIMEOUT=1
+ROOT_MANAGED_VPS=0
+baseline_spec=2026.9.1
+baseline_version=2026.9.1
+candidate_version=2026.9.2
+CANDIDATE_KIND=ref
+UPDATE_JSON="$ARTIFACT_ROOT/update.json"
+UPDATE_ERR="$ARTIFACT_ROOT/update.err"
+POST_UPDATE_VALIDATE_JSON="$ARTIFACT_ROOT/validate.json"
+POST_UPDATE_VALIDATE_ERR="$ARTIFACT_ROOT/validate.err"
+SYSTEMCTL_SHIM_PID_FILE="$ARTIFACT_ROOT/service.pid"
+SYSTEMCTL_SHIM_LOG="$ARTIFACT_ROOT/service.log"
+printf '1234\n' >"$SYSTEMCTL_SHIM_PID_FILE"
+printf 'start\nready\n' >"$SYSTEMCTL_SHIM_LOG"
+: >"$ARTIFACT_ROOT/events"
+candidate_update_spec() { printf 'file:/fixture/candidate.tgz'; }
+read_installed_version() { printf '%s' "$EXPECTED_VERSION"; }
+openclaw_e2e_print_log() { :; }
+openclaw_e2e_maybe_timeout() {
+  printf '%s\n' "$@" >"$ARTIFACT_ROOT/argv"
+  printf 'update\n' >>"$ARTIFACT_ROOT/events"
+  if [ "$REPLACEMENT" = 1 ]; then
+    printf '5678\n' >"$SYSTEMCTL_SHIM_PID_FILE"
+    printf 'restart\n' >>"$SYSTEMCTL_SHIM_LOG"
+  fi
+  [ "$OUTCOME" = success ]
+}
+node() {
+  if [ "$1" = -e ]; then printf 1000; return; fi
+  [ "$1" = scripts/e2e/lib/upgrade-survivor/assertions.mjs ] || return 90
+  printf '%s|%s\n' "$2" "$4" >>"$ARTIFACT_ROOT/events"
+  [ "$4" = "$EXPECTED_VERSION" ] || return 91
+  [ "$5" = "$last_update_observation_root" ] && [ -d "$5" ] || return 92
+  case "$2" in
+    assert-recoverable-update-json) [ "$6" = "$baseline_version" ] && [ "$OUTCOME" = recoverable ] ;;
+    assert-successful-update-json) [ "$OUTCOME" = success ] ;;
+    *) return 93 ;;
+  esac
+}
+assert_update_restart_service_replaced() {
+  printf 'replacement|%s|%d\n' "$1" "$2" >>"$ARTIFACT_ROOT/events"
+  [ "$1" = 1234 ] && [ "$2" -eq 2 ] && [ "$REPLACEMENT" = 1 ]
+}
+${helper}
+result_status=0
+update_candidate "$AFTER_REPAIR" "$8" "$EXPECTED_VERSION" || result_status=$?
+printf '\nresult:%s:%s:%s\n' "\${update_outcome:-unset}" "\${update_restart_source:-unset}" "\${update_exit_code:-unset}"
+exit "$result_status"
+`,
+          "restart-result",
+          root,
+          expectedVersion,
+          outcome,
+          future ? "1" : "0",
+          replacement ? "1" : "0",
+          repaired ? "1" : "0",
+          future ? "mobile-pairing-reconnect" : "legacy-operator-state",
+          expectedSpec,
+        ],
+        { encoding: "utf8", timeout: 10_000 },
+      );
+      expect(result.status, result.stderr).toBe(replacement ? 0 : 1);
+      const args = readFileSync(join(root, "argv"), "utf8").trim().split("\n");
+      expect(args.slice(args.indexOf("openclaw") + 1)).toEqual([
+        "update",
+        "--tag",
+        expectedSpec,
+        "--yes",
+        "--json",
+      ]);
+      const events = readFileSync(join(root, "events"), "utf8").trim().split("\n");
+      expect(events).toEqual([
+        "update",
+        ...(!future ? [`assert-recoverable-update-json|${expectedVersion}`] : []),
+        ...(outcome === "success" ? [`assert-successful-update-json|${expectedVersion}`] : []),
+        "replacement|1234|2",
+      ]);
+      const attribution = !replacement
+        ? "unset"
+        : !future
+          ? "baseline-update"
+          : repaired
+            ? "candidate-after-repair"
+            : "candidate-to-future";
+      expect(result.stdout).toContain(
+        `result:${outcome}:${attribution}:${outcome === "recoverable" ? 1 : 0}`,
+      );
+    },
+  );
+});
+
 function deniedUpdate() {
   return {
     status: "error",

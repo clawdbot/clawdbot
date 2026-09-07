@@ -317,6 +317,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
   handoffFromGateway?: (state: GatewayServiceState) => Promise<boolean>;
   expectedService?: Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict">;
   activatedInstall?: { packageUpdateNodeRunner?: string; invocationCwd?: string };
+  onStopped?: (state: PreManagedServiceStop) => void;
   timeoutMs?: number;
 }): Promise<PreManagedServiceStop> {
   const uninspected = { stopped: false, inspected: false, runtimeInspected: false, running: false };
@@ -536,6 +537,8 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
       await service.stop({
         env: currentState.env,
         stdout: params.jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout,
+        // Native stop may unload the service before a later port check fails.
+        onMutation: () => params.onStopped?.({ ...inspected, stopped: true, stoppedAtMs }),
       });
     }
     if (windowsTaskAutoStartRecovery) {

@@ -4,7 +4,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { fetchFirecrawlContent } from "../extensions/firecrawl/api.ts";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import { extractReadableContent } from "../src/web-fetch/content-extractors.runtime.js";
-import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "./lib/bounded-response.mjs";
+import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 
 const DEFAULT_URLS = [
   "https://en.wikipedia.org/wiki/Web_scraping",
@@ -36,18 +36,6 @@ function truncate(value: string, max = 180): string {
   return value.length > max ? `${truncateUtf16Safe(value, max)}…` : value;
 }
 
-function readBoundedResponseText(
-  response: Response,
-  label: string,
-  signal: AbortSignal,
-  maxBytes = FETCH_HTML_MAX_BYTES,
-): Promise<string> {
-  return readBoundedResponseTextWithLimit(response, label, maxBytes, {
-    createTooLargeError: (message: string) => new Error(message),
-    signal,
-  });
-}
-
 async function fetchHtml(
   url: string,
   options: FetchHtmlOptions = {},
@@ -71,8 +59,8 @@ async function fetchHtml(
     const body = await readBoundedResponseText(
       res,
       "local HTML fetch",
-      controller.signal,
       options.maxBytes ?? FETCH_HTML_MAX_BYTES,
+      { signal: controller.signal },
     );
     return {
       ok: res.ok,

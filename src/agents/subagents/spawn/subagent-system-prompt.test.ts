@@ -35,6 +35,16 @@ describe("subagent spawn envelope", () => {
       expect(`${systemPrompt}\n${message}`.match(/UNIQUE_SUBAGENT_TASK/g)).toHaveLength(1);
       expect(systemPrompt).toMatch(/\[Subagent Task\].*current child session/);
       expect(systemPrompt).toMatch(/inherited task envelopes.*background reference/);
+      const soleChild = buildEnvelope({ completionMode, soleCollectorChild: true });
+      expect(soleChild.systemPrompt).toBe(systemPrompt);
+      expect(soleChild.message).toBe(message);
+      if (completionMode === "collector") {
+        expect(soleChild.acceptedNote).toBe(
+          `${acceptedNote} This is the only collector child in its group so far; unless more parallel children follow, an ordinary spawn (omit collect) is simpler and can be steered.`,
+        );
+      } else {
+        expect(soleChild.acceptedNote).toBe(acceptedNote);
+      }
     },
   );
 

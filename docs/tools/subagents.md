@@ -76,7 +76,8 @@ completion path described in the accepted receipt:
 - Ordinary announcing runs return an internal completion event to the requester,
   which reviews the result and decides whether a user-facing update is needed.
 - [Swarm collectors](/tools/swarm) return results through explicit collection,
-  not completion notifications.
+  not completion notifications; reserve them for large parallel fan-out (several
+  similar children, about five or more), and use ordinary spawns for one or a few.
 - Thread-bound session runs with a deliverable bound route reply directly to that
   thread, without a separate parent announcement.
 - Caller-managed quiet runs send no completion notification.
