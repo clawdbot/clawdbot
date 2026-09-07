@@ -10,11 +10,16 @@ import { resolveAgentRunSessionTarget } from "../agents/run-session-target.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import * as providerAuthPersistence from "../plugins/provider-auth-persistence.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { projectInferenceRoute, sameDefaultInferenceRoute } from "./inference-route.js";
 import type { ActivateSetupInferenceDeps } from "./setup-inference-core.js";
-import { applyManualAuthConfig, rollbackManualAuthProfiles } from "./setup-inference-persist.js";
+import {
+  applyManualAuthConfig,
+  persistManualAuthProfiles,
+  rollbackManualAuthProfiles,
+} from "./setup-inference-persist.js";
 import { buildPreparedProviderTestPlan } from "./setup-inference-plan-helpers.js";
 import { completeSetupInferenceConfig } from "./setup-inference-verify.js";
 import { createSystemAgentModelSelectionUpdater } from "./setup-model-selection.js";
@@ -201,6 +206,54 @@ describe("prepared provider config commit", () => {
 });
 
 describe("manual auth rollback", () => {
+  it("keeps the persistence failure first when protected rollback also fails", async () => {
+    const persistenceError = new Error("synthetic profile persistence failure");
+    const rollbackError = new Error("synthetic protected rollback failure");
+    const profiles = [
+      {
+        profileId: "fixture:default",
+        credential: {
+          type: "token" as const,
+          provider: "fixture",
+          token: "synthetic-token",
+        },
+      },
+    ];
+    const rollback = vi.fn(async () => {
+      throw rollbackError;
+    });
+    const stage = vi
+      .spyOn(providerAuthPersistence, "stageProviderAuthProfilesForPersistence")
+      .mockResolvedValueOnce({
+        profiles,
+        commit: vi.fn(async () => {}),
+        rollback,
+      });
+
+    let failure: unknown;
+    try {
+      await persistManualAuthProfiles({
+        profiles,
+        agentDir: "/synthetic/agent",
+        deps: {
+          updateAuthProfileStoreWithLock: vi.fn(async () => {
+            throw persistenceError;
+          }),
+        },
+        secretStorage: { config: {} },
+      });
+    } catch (error) {
+      failure = error;
+    }
+    stage.mockRestore();
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    const aggregate = failure as AggregateError;
+    expect(aggregate.errors).toEqual([persistenceError, rollbackError]);
+    expect(aggregate.cause).toBe(aggregate.errors[0]);
+    expect(rollback).toHaveBeenCalledOnce();
+  });
+
   it("settles protected storage after indeterminate profile removal", async () => {
     const insertedProfileIds = new Set(["fixture:inserted"]);
     const rollback = vi.fn(async (_retainProfileIds?: ReadonlySet<string>) => {});

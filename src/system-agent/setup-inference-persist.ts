@@ -368,10 +368,11 @@ export async function persistManualAuthProfiles(params: {
     try {
       await prepared?.rollback();
     } catch (rollbackError) {
+      // oxlint-disable-next-line preserve-caught-error -- AggregateError.errors retains rollbackError; cause remains the initiating persistence failure.
       throw new AggregateError(
         [error, rollbackError],
         "Manual provider auth persistence failed and protected storage could not be released.",
-        { cause: rollbackError },
+        { cause: error },
       );
     }
     throw error;

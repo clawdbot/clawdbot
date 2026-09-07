@@ -9,6 +9,7 @@ import {
 } from "../agents/auth-profiles/store-runtime.js";
 import type { OAuthCredential } from "../agents/auth-profiles/types.js";
 import { runSecretsAudit } from "../secrets/audit.js";
+import * as secretStore from "../secrets/store/secret-store.js";
 import {
   listSecretStoreEntries,
   readSecretStoreValue,
@@ -400,6 +401,47 @@ describe("provider auth protected persistence", () => {
     expect(aggregate.errors[0]).toBe(persistenceError);
     expect(aggregate.errors[1]).toBeInstanceOf(AggregateError);
     expect(aggregate.cause).toBe(persistenceError);
+  });
+
+  it("keeps the materialization failure first when protected rollback also fails", async () => {
+    const rootDir = tempDirs.make("openclaw-provider-auth-materialization-failure-");
+    const stateDir = path.join(rootDir, "state");
+    const persistenceError = new Error("synthetic protected write failure");
+    const rollbackError = new Error("synthetic protected rollback failure");
+    const rollback = vi.fn(() => {
+      throw rollbackError;
+    });
+    const write = vi
+      .spyOn(secretStore, "writeSecretStoreEntryWithRollback")
+      .mockImplementationOnce(() => ({ rollback }))
+      .mockImplementationOnce(() => {
+        throw persistenceError;
+      });
+
+    let failure: unknown;
+    try {
+      await stageProviderAuthProfilesForPersistence({
+        profiles: [
+          protectedTokenProfile("openai:first", "candidate-a"),
+          protectedTokenProfile("openai:second", "candidate-b"),
+        ],
+        config: {},
+        stateDir,
+      });
+    } catch (error) {
+      failure = error;
+    }
+    write.mockRestore();
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    const aggregate = failure as AggregateError;
+    expect(aggregate.errors[0]).toBeInstanceOf(Error);
+    const materializationError = aggregate.errors[0] as Error;
+    expect(materializationError.cause).toBe(persistenceError);
+    expect(aggregate.errors[1]).toBeInstanceOf(AggregateError);
+    expect((aggregate.errors[1] as AggregateError).errors).toEqual([rollbackError]);
+    expect(aggregate.cause).toBe(aggregate.errors[0]);
+    expect(rollback).toHaveBeenCalledOnce();
   });
 
   it("clears completed-login failure state in the immediate-commit path", async () => {

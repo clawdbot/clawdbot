@@ -201,10 +201,11 @@ function materializeProviderAuthProfiles(params: {
     try {
       rollback();
     } catch (rollbackError) {
+      // oxlint-disable-next-line preserve-caught-error -- AggregateError.errors retains rollbackError; cause remains the initiating persistence failure.
       throw new AggregateError(
         [error, rollbackError],
         "Provider credential persistence failed and protected-store rollback could not be confirmed.",
-        { cause: rollbackError },
+        { cause: error },
       );
     }
     throw error;
