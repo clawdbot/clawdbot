@@ -77,8 +77,9 @@ export async function fetchCodexUsage(
   const primary = asOptionalRecord(rateLimit?.primary_window);
   if (primary) {
     const resetAt = asFiniteNumber(primary.reset_at);
+    const minutes = Math.round((asFiniteNumber(primary.limit_window_seconds) ?? 10_800) / 60);
     windows.push({
-      label: `${Math.round((asFiniteNumber(primary.limit_window_seconds) ?? 10_800) / 3600)}h`,
+      label: minutes % 60 === 0 ? `${minutes / 60}h` : `${minutes}m`,
       usedPercent: clampPercent(asFiniteNumber(primary.used_percent) ?? 0),
       resetAt: resetAt ? resetAt * 1000 : undefined,
     });

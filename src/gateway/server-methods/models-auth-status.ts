@@ -307,7 +307,6 @@ function mapAuthStatusProvider(params: {
     runtimeStore.runtimeLocalProfileIds ??
       Object.keys(store.profiles).filter((profileId) => !params.externalProfileIds.has(profileId)),
   );
-  const providerOrderLocked = params.configBoundAuthProviders.has(authProviderKey);
   const configuredOrderLocked = profileOrder.order !== undefined && !profileOrder.fromStore;
   const effectiveProfiles = provider.effectiveProfiles ?? provider.profiles;
   // Auth health already resolved credential priority. Missing or pending quota for
@@ -361,41 +360,45 @@ function mapAuthStatusProvider(params: {
         store,
         profileId: profile.profileId,
       });
-      const usage = params.usageByProfile.get(profile.profileId);
+      const profileUsage = params.usageByProfile.get(profile.profileId);
       const lastUsedAt = store.usageStats?.[profile.profileId]?.lastUsed;
-      return {
-        profileId: profile.profileId,
-        type: profile.type,
-        status: profile.status,
-        reasonCode: profile.reasonCode,
-        source: params.configBoundProfileIds.has(profile.profileId)
-          ? "config"
-          : params.externalProfileIds.has(profile.profileId)
-            ? "external"
-            : localProfileIds.has(profile.profileId)
-              ? "saved"
-              : "inherited",
-        expiry: buildExpiry(profile.remainingMs, profile.expiresAt),
-        ...(params.externalCliProfileIds.has(profile.profileId) ? { externallyManaged: true } : {}),
-        ...(params.includeProfileDetails && metadata.displayName
+      return Object.assign(
+        {
+          profileId: profile.profileId,
+          type: profile.type,
+          status: profile.status,
+          reasonCode: profile.reasonCode,
+          source: params.configBoundProfileIds.has(profile.profileId)
+            ? ("config" as const)
+            : params.externalProfileIds.has(profile.profileId)
+              ? ("external" as const)
+              : localProfileIds.has(profile.profileId)
+                ? ("saved" as const)
+                : ("inherited" as const),
+          expiry: buildExpiry(profile.remainingMs, profile.expiresAt),
+        },
+        params.externalCliProfileIds.has(profile.profileId)
+          ? { externallyManaged: true as const }
+          : {},
+        params.includeProfileDetails && metadata.displayName
           ? { displayName: metadata.displayName }
-          : {}),
-        ...(params.includeProfileDetails && metadata.email ? { email: metadata.email } : {}),
-        ...(params.includeProfileDetails && lastUsedAt ? { lastUsedAt } : {}),
-        ...(params.includeProfileDetails && usage ? { usage: mapUsageStatus(usage) } : {}),
-        ...(params.includeProfileDetails && params.pendingUsageProfileIds.has(profile.profileId)
-          ? { usageRefreshPending: true }
-          : {}),
-        ...((profile.type === "oauth" || profile.type === "token") &&
-        params.logoutProfileIds.has(profile.profileId) &&
-        !params.configBoundProfileIds.has(profile.profileId)
-          ? { logoutSupported: true }
-          : {}),
-      };
+          : {},
+        params.includeProfileDetails && metadata.email ? { email: metadata.email } : {},
+        params.includeProfileDetails && lastUsedAt ? { lastUsedAt } : {},
+        params.includeProfileDetails && profileUsage ? { usage: profileUsage } : {},
+        params.includeProfileDetails && params.pendingUsageProfileIds.has(profile.profileId)
+          ? { usageRefreshPending: true as const }
+          : {},
+        (profile.type === "oauth" || profile.type === "token") &&
+          params.logoutProfileIds.has(profile.profileId) &&
+          !params.configBoundProfileIds.has(profile.profileId)
+          ? { logoutSupported: true as const }
+          : {},
+      );
     }),
     ...(profileOrder.order !== undefined ? { profileOrder: profileOrder.order } : {}),
     ...(profileOrder.fromStore && localOrderStored ? { profileOrderStored: true } : {}),
-    ...(providerOrderLocked
+    ...(params.configBoundAuthProviders.has(authProviderKey)
       ? { profileOrderLocked: "provider-config" as const }
       : configuredOrderLocked
         ? { profileOrderLocked: "auth-config" as const }
@@ -662,10 +665,8 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         store,
       });
       const activeUsageProviderIds = new Set(providerUsageRuntime.providerIds);
-      for (const provider of providerUsageRuntime.providerIds) {
-        if (providerUsageRuntime.directApiKeys.has(provider)) {
-          providerWideUsageIds.add(provider);
-        }
+      for (const provider of providerUsageRuntime.directApiKeys.keys()) {
+        providerWideUsageIds.add(provider);
       }
       const usageProviderIds = new Set<UsageProviderId>();
       const usageTargets: Array<{ profileId: string; providerId: UsageProviderId }> = [];

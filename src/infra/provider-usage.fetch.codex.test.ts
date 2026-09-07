@@ -73,7 +73,7 @@ describe("fetchCodexUsage", () => {
       makeResponse(200, {
         rate_limit: {
           primary_window: {
-            limit_window_seconds: 10_800,
+            limit_window_seconds: 300,
             used_percent: 7,
             reset_at: 1_700_000_000,
           },
@@ -88,7 +88,7 @@ describe("fetchCodexUsage", () => {
 
     const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
     expect(result.windows).toEqual([
-      { label: "3h", usedPercent: 7, resetAt: 1_700_000_000_000 },
+      { label: "5m", usedPercent: 7, resetAt: 1_700_000_000_000 },
       { label: "Week", usedPercent: 10, resetAt: 1_700_500_000_000 },
     ]);
   });
