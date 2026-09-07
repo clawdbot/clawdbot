@@ -2366,5 +2366,119 @@ describe("buildGuardedModelFetch", () => {
       },
     );
   });
+
+  describe("transient pre-stream 5xx transport retry", () => {
+    type GuardedResult = {
+      response: Response;
+      finalUrl: string;
+      release: ReturnType<typeof vi.fn>;
+    };
+
+    function guardedResult(status: number, contentType = "application/json"): GuardedResult {
+      return {
+        response: new Response(JSON.stringify({ error: { message: "boom" } }), {
+          status,
+          headers: { "content-type": contentType },
+        }),
+        finalUrl: "https://api.openai.com/v1/responses",
+        release: vi.fn(async () => undefined),
+      };
+    }
+
+    function queueResults(...results: GuardedResult[]): void {
+      let index = 0;
+      fetchWithSsrFGuardMock.mockImplementation(async () => {
+        const result = results[Math.min(index, results.length - 1)];
+        index += 1;
+        return result;
+      });
+    }
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    async function postJson(): Promise<Response> {
+      const fetcher = buildGuardedModelFetch(sentinelModel());
+      const pending = fetcher("https://api.openai.com/v1/responses", {
+        method: "POST",
+        body: JSON.stringify({ model: "gpt-5.5", input: "hi" }),
+      });
+      await vi.runAllTimersAsync();
+      return await pending;
+    }
+
+    it("retries a transient 500 and wires the final attempt's release", async () => {
+      vi.useFakeTimers();
+      const first = guardedResult(500);
+      const second = guardedResult(200);
+      queueResults(first, second);
+      const response = await postJson();
+
+      expect(response.status).toBe(200);
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
+      expect(first.release).toHaveBeenCalledTimes(1);
+    });
+
+    it("bounds the retry at two attempts before surfacing the 5xx", async () => {
+      vi.useFakeTimers();
+      const attempts = [guardedResult(503), guardedResult(503), guardedResult(503)];
+      queueResults(...attempts);
+      const response = await postJson();
+      await response.text();
+
+      expect(response.status).toBe(503);
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(3);
+      expect(attempts[0]?.release).toHaveBeenCalledTimes(1);
+      expect(attempts[1]?.release).toHaveBeenCalledTimes(1);
+      // Consuming the final response's body runs the final attempt's release,
+      // proving the managed response wired the last attempt (not an earlier one).
+      expect(attempts[2]?.release).toHaveBeenCalledTimes(1);
+    });
+
+    it("never retries SSE responses", async () => {
+      vi.useFakeTimers();
+      const only = guardedResult(500, "text/event-stream");
+      queueResults(only);
+      const response = await postJson();
+
+      expect(response.status).toBe(500);
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+      expect(only.release).not.toHaveBeenCalled();
+    });
+
+    it("does not retry non-5xx error responses", async () => {
+      vi.useFakeTimers();
+      const only = guardedResult(400);
+      queueResults(only);
+      const response = await postJson();
+
+      expect(response.status).toBe(400);
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+      expect(only.release).not.toHaveBeenCalled();
+    });
+
+    it("does not retry non-replayable request bodies", async () => {
+      vi.useFakeTimers();
+      const only = guardedResult(500);
+      queueResults(only);
+      const fetcher = buildGuardedModelFetch(sentinelModel());
+      const pending = fetcher("https://api.openai.com/v1/responses", {
+        method: "POST",
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("chunk"));
+            controller.close();
+          },
+        }),
+      });
+      await vi.runAllTimersAsync();
+      const response = await pending;
+
+      expect(response.status).toBe(500);
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+      expect(only.release).not.toHaveBeenCalled();
+    });
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

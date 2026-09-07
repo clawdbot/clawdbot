@@ -48,6 +48,7 @@ import {
   mergeModelProviderRequestOverrides,
   resolveProviderRequestPolicyConfig,
 } from "./provider-request-config.js";
+import { retryTransientPreStream5xx } from "./provider-transport-5xx-retry.js";
 import { getProviderTransportDispatcherPool } from "./provider-transport-dispatcher-pool.js";
 
 const DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS = 60;
@@ -908,6 +909,19 @@ export function buildGuardedModelFetch(
         `dispatcher=${result.dispatcherReused ? "reused" : "new"} ` +
         `contentType=${response.headers.get("content-type") ?? ""}`,
     );
+    // A single transient pre-stream 5xx from a transport that does not
+    // self-retry would otherwise terminate the run outright, even with
+    // fallback models configured. Bounded transport-level retry for plain
+    // error bodies; see retryTransientPreStream5xx for the safety bounds.
+    ({ result, response } = await retryTransientPreStream5xx({
+      model,
+      result,
+      response,
+      guardedFetchOptions,
+      log,
+      fetchStartedAt,
+      signal: localServiceSignal,
+    }));
     if (shouldBypassLongSdkRetry(response)) {
       const headers = new Headers(response.headers);
       headers.set("x-should-retry", "false");
