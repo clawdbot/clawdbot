@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -16,7 +16,11 @@ import {
   sealUpdateCheckpointRestoreSharedDatabase,
   verifyUpdateCheckpointRestore,
 } from "./update-checkpoint-restore.js";
-import { buildCheckpointReaderRuntime } from "./update-checkpoint-runtime.test-support.js";
+import {
+  buildCheckpointReaderRuntime,
+  waitForCheckpointReader,
+  releaseCheckpointReader,
+} from "./update-checkpoint-runtime.test-support.js";
 import { captureUpdateCheckpoint, type UpdateCheckpointAccess } from "./update-checkpoint.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "./update-run-ledger.js";
 import {
@@ -46,6 +50,7 @@ function mutate(file: string, sql: string) {
 }
 async function fixture(
   failure?: "late-unavailable" | "preparation-interrupted" | "prepared-return-lost",
+  readerRace?: "seal" | "apply",
 ) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "checkpoint-recovery-")));
   roots.push(root);
@@ -56,6 +61,8 @@ async function fixture(
   const file = path.join(stateDir, "state", "openclaw.sqlite");
   const { runtime: fixtureRuntime } = await buildCheckpointReaderRuntime(
     path.join(root, "package"),
+    false,
+    readerRace === "seal",
   );
   const runtime = { ...fixtureRuntime, buildId: null };
   let record = beginUpdateRecovery(
@@ -125,6 +132,11 @@ async function fixture(
     file,
     "INSERT INTO config_machine_state VALUES('operator.new-work','\"online verification work\"',42)",
   );
+  if (readerRace) {
+    // Deliberately use a consolidated source so an external test writer does
+    // not defer its own WAL changes until the seal owner closes its handle.
+    mutate(file, "PRAGMA journal_mode=DELETE");
+  }
   const preparing = {
     ...access,
     checkpointRef,
@@ -227,6 +239,141 @@ async function fixture(
 }
 
 describe("checkpoint publication with the actual recovery owner", () => {
+  describe.each(["seal", "apply"] as const)("%s reader await", (operation) => {
+    // Active rows, non-active bindings, physical identity, runtime identity and
+    // current authority have independent guards after the external reader.
+    for (const mutation of [
+      "none",
+      "record",
+      "binding",
+      "stage-binding",
+      "identity",
+      "stage-identity",
+      "runtime",
+      "fence",
+    ] as const) {
+      // SQLite prevents replacement of open files on Windows. Keep the
+      // closed-source apply replacement case on every platform.
+      it.skipIf(
+        process.platform === "win32" &&
+          (mutation === "stage-identity" || (operation === "seal" && mutation === "identity")),
+      )(
+        `checks final committed intent and ${mutation} change before effect`,
+        async () => {
+          const f = await fixture(undefined, operation);
+          const runtimeRoot = f.access.binding.fromRuntime.root;
+          let record = f.record;
+          if (operation === "apply") {
+            record = await sealUpdateCheckpointRestoreSharedDatabase({
+              ...f.request,
+              recoveryRecord: record,
+              fence,
+            });
+            // Rebuild only this disposable runtime before validation begins.
+            await fs.unlink(path.join(runtimeRoot, "node_modules"));
+            await buildCheckpointReaderRuntime(runtimeRoot, false, true);
+          }
+          let current = true;
+          const assertCurrent = () => {
+            if (!current) {
+              throw new Error("Fixture fence lost");
+            }
+          };
+          const planBefore = await fs.readFile(f.request.planRef.planPath);
+          const request = { ...f.request, recoveryRecord: record, assertQuiescent: assertCurrent };
+          const running =
+            operation === "seal"
+              ? sealUpdateCheckpointRestoreSharedDatabase({ ...request, fence: { assertCurrent } })
+              : restoreUpdateCheckpointResource(request);
+          // Attach rejection handling immediately, including on barrier failure.
+          const settled = running.then(
+            (value) => ({ value, error: null }),
+            (error: unknown) => ({ value: null, error }),
+          );
+          try {
+            const child = await waitForCheckpointReader(runtimeRoot);
+            expect(child.pid).not.toBe(process.pid);
+            expect(child.verdict).toMatchObject({ status: "exact", requiresWrite: false });
+            const sourceRecord = loadUpdateRecovery(record.runId, { path: f.file });
+            const stagedRecord = loadUpdateRecovery(record.runId, { path: f.stage });
+            expect(sourceRecord).toEqual(stagedRecord);
+            expect(sourceRecord?.restore).toMatchObject({
+              planSha256: f.request.planRef.planSha256,
+              phase: "intent",
+              resourceCursor: 0,
+            });
+            expect(child.sha256).toBe(
+              createHash("sha256")
+                .update(await fs.readFile(f.stage))
+                .digest("hex"),
+            );
+            if (mutation === "record") {
+              mutate(
+                f.file,
+                "UPDATE config_machine_state SET updated_at_ms = updated_at_ms + 1 WHERE state_key LIKE 'update.recovery.%'",
+              );
+            } else if (mutation === "binding" || mutation === "stage-binding") {
+              mutate(
+                mutation === "binding" ? f.file : f.stage,
+                "UPDATE config_machine_state SET value_json = '\"changed during reader\"' WHERE state_key = 'operator.new-work'",
+              );
+            } else if (mutation === "identity" || mutation === "stage-identity") {
+              const target = mutation === "identity" ? f.file : f.stage;
+              await fs.rename(target, target + ".held");
+              await fs.copyFile(target + ".held", target);
+            } else if (mutation === "runtime") {
+              await fs.appendFile(
+                path.join(runtimeRoot, "dist", "index.js"),
+                "\n// changed while loaded\n",
+              );
+            } else if (mutation === "fence") {
+              current = false;
+            }
+            const sourceBefore = await inspectCheckpointFile(f.file);
+            const stageBefore = await inspectCheckpointFile(f.stage);
+            await releaseCheckpointReader(runtimeRoot);
+            const outcome = await settled;
+            if (mutation === "none") {
+              expect(outcome.error).toBeNull();
+              if (operation === "apply") {
+                expect(outcome.value).toMatchObject({ status: "applied" });
+              } else {
+                expect(outcome.value).toEqual(sourceRecord);
+              }
+            } else {
+              if (operation === "seal") {
+                expect(outcome.error).toBeInstanceOf(Error);
+              } else {
+                expect(outcome.error).toBeNull();
+                expect(outcome.value).toMatchObject({
+                  status: ["runtime", "stage-binding", "stage-identity", "fence"].includes(mutation)
+                    ? "unavailable"
+                    : "conflict",
+                });
+              }
+              expect(await inspectCheckpointFile(f.file)).toEqual(sourceBefore);
+              expect(await inspectCheckpointFile(f.stage)).toEqual(stageBefore);
+              expect(
+                await inspectCheckpointFile(path.join(f.shared.stageDirectory, "displaced")),
+              ).toBeNull();
+              expect(await fs.readFile(f.configPath, "utf8")).toBe("candidate config");
+            }
+            expect(await fs.readFile(f.request.planRef.planPath)).toEqual(planBefore);
+            for (const base of [f.file, f.stage]) {
+              for (const suffix of ["-wal", "-shm", "-journal"]) {
+                expect(await fs.stat(base + suffix).catch(() => null)).toBeNull();
+              }
+            }
+          } finally {
+            await releaseCheckpointReader(runtimeRoot);
+            await settled;
+          }
+        },
+        30_000,
+      );
+    }
+  });
+
   it("does not seal successfully without the actual retained reader even when the in-transaction callback approves", async () => {
     const f = await fixture();
     await fs.rename(

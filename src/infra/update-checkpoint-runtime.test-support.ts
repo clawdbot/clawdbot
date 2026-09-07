@@ -1,3 +1,4 @@
+import { watch } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { build } from "esbuild";
@@ -9,7 +10,11 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
  * implementation. Only the version and schema assets differ; no canned verdict
  * or injected subprocess implementation substitutes for the retained reader.
  */
-export async function buildCheckpointReaderRuntime(root: string, newer = false) {
+export async function buildCheckpointReaderRuntime(
+  root: string,
+  newer = false,
+  pauseReader = false,
+) {
   const version = newer ? "2.0.0" : "1.0.0";
   const schemaVersion = OPENCLAW_STATE_SCHEMA_VERSION + (newer ? 1 : 0);
   const schema = newer
@@ -41,6 +46,30 @@ export async function buildCheckpointReaderRuntime(root: string, newer = false) 
         const [command, operation, file, json] = process.argv.slice(2);
         if (command !== "database" || operation !== "preflight" || json !== "--json") process.exit(2);
         const result = await preflightOpenClawStateDatabasePath(file);
+        ${
+          pauseReader
+            ? `
+        const fs = await import("node:fs/promises");
+        const { watch } = await import("node:fs");
+        const { createHash } = await import("node:crypto");
+        const releasePath = ${JSON.stringify(path.join(root, "reader-release"))};
+        const release = new Promise((resolve, reject) => {
+          const timer = setTimeout(() => { watcher.close(); reject(new Error("Reader not released")); }, 15000);
+          const watcher = watch(${JSON.stringify(root)}, () => {
+            void fs.access(releasePath).then(() => { clearTimeout(timer); watcher.close(); resolve(); }, () => {});
+          });
+        });
+        await fs.writeFile(${JSON.stringify(path.join(root, "reader-ready.tmp"))}, JSON.stringify({
+          pid: process.pid,
+          sha256: createHash("sha256").update(await fs.readFile(file)).digest("hex"),
+          verdict: result,
+        }));
+        await fs.rename(${JSON.stringify(path.join(root, "reader-ready.tmp"))}, ${JSON.stringify(path.join(root, "reader-ready.json"))});
+        await release;
+        `
+            : ""
+        }
+
         process.stdout.write(JSON.stringify(result));
         if (result.status === "incompatible" || result.status === "indeterminate") process.exitCode = 1;
       `,
@@ -79,4 +108,42 @@ export async function buildCheckpointReaderRuntime(root: string, newer = false) 
     ],
   });
   return { runtime: { root, nodePath: process.execPath, version }, schema, schemaVersion };
+}
+
+/** A child-side barrier after the real reader; no production injection point. */
+export async function waitForCheckpointReader(root: string): Promise<{
+  pid: number;
+  sha256: string;
+  verdict: { status: string; requiresWrite: boolean };
+}> {
+  const file = path.join(root, "reader-ready.json");
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      watcher.close();
+      reject(new Error("Reader did not reach barrier"));
+    }, 15000);
+    const read = () => {
+      void fs.readFile(file, "utf8").then(
+        (raw) => {
+          // Only the atomically renamed ready file contains the complete signal.
+          let value;
+          try {
+            value = JSON.parse(raw);
+          } catch {
+            return;
+          }
+          clearTimeout(timer);
+          watcher.close();
+          resolve(value);
+        },
+        () => {},
+      );
+    };
+    const watcher = watch(root, read);
+    read();
+  });
+}
+
+export async function releaseCheckpointReader(root: string) {
+  await fs.writeFile(path.join(root, "reader-release"), "release");
 }
