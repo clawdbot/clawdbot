@@ -32,11 +32,10 @@ function accountSuppliesCredential(params: {
   entry: ChannelAccountEntry;
   field: string;
   fileField: string;
-  defaults: SecretDefaults | undefined;
 }): boolean {
-  const { entry, field, fileField, defaults } = params;
+  const { entry, field, fileField } = params;
   return (
-    hasConfiguredSecretInput(entry.account[field], defaults) ||
+    hasConfiguredSecretInput(entry.account[field]) ||
     Boolean(normalizeOptionalString(entry.account[fileField]))
   );
 }
@@ -100,7 +99,7 @@ export function collectRuntimeConfigAssignments(params: {
       topLevelInheritedAccountActive: (entry) =>
         entry.enabled &&
         normalizeOptionalAccountId(entry.accountId) === DEFAULT_ACCOUNT_ID &&
-        !accountSuppliesCredential({ entry, field, fileField, defaults: params.defaults }),
+        !accountSuppliesCredential({ entry, field, fileField }),
       // An account's own credential is read ahead of its credential file, so an enabled
       // account always consumes it.
       accountActive: ({ enabled }) => enabled,
