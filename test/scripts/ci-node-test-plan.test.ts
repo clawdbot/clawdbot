@@ -18,7 +18,10 @@ import {
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
 import { listVitestRuntimeConsumerFiles } from "../../scripts/lib/vitest-build-prerequisites.mts";
-import { createCompactSplitTimingGeneration } from "../../scripts/lib/vitest-shard-metadata.mts";
+import {
+  createCompactSplitTimingGeneration,
+  parseCompactSplitTimingKey,
+} from "../../scripts/lib/vitest-shard-metadata.mts";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, sortRepoPaths, toRepoPath } from "../../src/test-utils/repo-files.js";
 import {
@@ -3133,13 +3136,184 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           runner: expect.stringMatching(/^blacksmith-(?:4|8)vcpu-ubuntu-2404$/u),
         },
       ]);
-      const policies = (plan: typeof before) =>
-        plan
+      type Group = (typeof groups)[number];
+      const isRepartitionableTooling = (group: Group) =>
+        runnerBackend === "github" &&
+        /^core-tooling-\d+-hosted-\d+$/u.test(group.shard_name) &&
+        group.configs.includes("test/vitest/vitest.tooling.config.ts") &&
+        group.includePatterns !== undefined &&
+        group.includePatterns.length > 0 &&
+        !group.requiresDist &&
+        group.pretestBuildMode === undefined &&
+        [BUNDLED_NODE_TEST_RUNNER, DEFAULT_NODE_TEST_RUNNER, EXTRA_LARGE_NODE_TEST_RUNNER].includes(
+          group.runner,
+        );
+      const toolingParent = (group: Group) => group.shard_name.replace(/-hosted-\d+$/u, "");
+      const timingFamilies = (plan: typeof before) => {
+        const families = new Map<string, Array<{ group: Group; part: number }>>();
+        for (const group of plan.flatMap((shard) => shard.groups)) {
+          if (/^core-tooling-\d+-hosted-\d+$/u.test(group.shard_name)) {
+            expect(group.timing_key).toBeDefined();
+          }
+          if (group.timing_key === undefined) {
+            continue;
+          }
+          const key = expectDefined(parseCompactSplitTimingKey(group.timing_key));
+          const name = expectDefined(/^(.+)-hosted-([1-9]\d*)$/u.exec(group.shard_name));
+          const parent = expectDefined(name[1]);
+          const part = Number(name[2]);
+          expect(
+            key.selectorKey.split("#selector-")[0],
+            "timing key parent must match hosted group name",
+          ).toBe(parent);
+          expect(key.part, "timing key part must match hosted group ordinal").toBe(part);
+          const family = families.get(parent) ?? [];
+          family.push({ group, part });
+          families.set(parent, family);
+        }
+        for (const family of families.values()) {
+          family.sort((a, b) => a.part - b.part);
+        }
+        return families;
+      };
+      const expectedTimingKeys = (
+        parent: string,
+        family: Array<{ group: Group; part: number }>,
+      ) => {
+        const first = expectDefined(family[0]).group;
+        return createCompactSplitTimingGeneration({
+          parentShardName: parent,
+          configs: first.configs,
+          env: first.env,
+          stripes: family.map(({ group }) => {
+            expect(group.configs).toEqual(first.configs);
+            expect(group.env).toEqual(first.env);
+            const files = expectDefined(group.includePatterns);
+            expect(files.length).toBeGreaterThan(0);
+            return files;
+          }),
+        }).timingKeys;
+      };
+      const expectTimingFamilies = (plan: typeof before) => {
+        for (const [parent, family] of timingFamilies(plan)) {
+          expect(family.map(({ part }) => part)).toEqual(
+            Array.from({ length: family.length }, (_, index) => index + 1),
+          );
+          expect(family.map(({ group }) => group.timing_key)).toEqual(
+            expectedTimingKeys(parent, family),
+          );
+        }
+      };
+      const policies = (plan: typeof before) => {
+        const nonPlugin = plan
           .flatMap((shard) => shard.groups)
-          .filter((group) => group.shard_name !== "agentic-plugins")
-          .map(({ runner: _runner, ...group }) => group)
-          .toSorted((a, b) => a.shard_name.localeCompare(b.shard_name));
+          .filter((group) => group.shard_name !== "agentic-plugins");
+        return {
+          descriptors: nonPlugin
+            .filter((group) => !isRepartitionableTooling(group))
+            .map(({ runner: _runner, ...group }) => group)
+            .toSorted((a, b) => a.shard_name.localeCompare(b.shard_name)),
+          // Allocation may change, but every file must retain its complete execution policy.
+          tooling: nonPlugin
+            .filter(isRepartitionableTooling)
+            .flatMap((group) =>
+              expectDefined(group.includePatterns).map((file) => ({
+                parent: toolingParent(group),
+                file,
+                configs: group.configs,
+                env: group.env,
+                pretestBuildMode: group.pretestBuildMode,
+                requiresDist: group.requiresDist,
+                runner: group.runner,
+                exclusive: isExclusiveCompactShardName(group.shard_name),
+              })),
+            )
+            .toSorted((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
+        };
+      };
+      expectTimingFamilies(before);
+      expectTimingFamilies(after);
       expect(policies(after)).toEqual(policies(before));
+      if (runnerBackend === "github") {
+        const regenerateTimingKeys = (plan: typeof before) => {
+          for (const [parent, family] of timingFamilies(plan)) {
+            const keys = expectedTimingKeys(parent, family);
+            family.forEach(({ group }, index) => {
+              group.timing_key = expectDefined(keys[index]);
+            });
+          }
+        };
+        for (const mutation of ["missing", "duplicated", "env", "runner"] as const) {
+          const mutated = structuredClone(after);
+          const tooling = mutated.flatMap((shard) => shard.groups).filter(isRepartitionableTooling);
+          const target = expectDefined(
+            tooling.find((group) => expectDefined(group.includePatterns).length > 1),
+          );
+          const files = expectDefined(target.includePatterns);
+          if (mutation === "missing") {
+            files.pop();
+          } else if (mutation === "duplicated") {
+            const otherFamily = expectDefined(
+              tooling.find((group) => toolingParent(group) !== toolingParent(target)),
+            );
+            files.push(expectDefined(expectDefined(otherFamily.includePatterns)[0]));
+          } else if (mutation === "env") {
+            for (const { group } of expectDefined(
+              timingFamilies(mutated).get(toolingParent(target)),
+            )) {
+              group.env = { ...group.env, OPENCLAW_VITEST_MAX_WORKERS: "3" };
+            }
+          } else {
+            target.runner =
+              target.runner === BUNDLED_NODE_TEST_RUNNER
+                ? DEFAULT_NODE_TEST_RUNNER
+                : BUNDLED_NODE_TEST_RUNNER;
+          }
+          regenerateTimingKeys(mutated);
+          expectTimingFamilies(mutated);
+          expect(
+            () => expect(policies(mutated)).toEqual(policies(before)),
+            `${mutation} must fail policy equality even with valid timing keys`,
+          ).toThrow();
+        }
+        for (const identity of ["parent", "part"] as const) {
+          const forged = structuredClone(after);
+          const families = timingFamilies(forged);
+          const [parent, family] = expectDefined(
+            [...families].find(([, entries]) => entries.length >= 2),
+          );
+          const wrongParent = `${parent}-forged`;
+          expect(families.has(wrongParent)).toBe(false);
+          const ordered = identity === "part" ? family.toReversed() : family;
+          const keys = expectedTimingKeys(identity === "parent" ? wrongParent : parent, ordered);
+          ordered.forEach(({ group }, index) => {
+            group.timing_key = expectDefined(keys[index]);
+          });
+          expect(() => expectTimingFamilies(forged)).toThrow(
+            identity === "parent"
+              ? "timing key parent must match hosted group name"
+              : "timing key part must match hosted group ordinal",
+          );
+        }
+        const stale = structuredClone(after);
+        const staleGroup = expectDefined(
+          stale
+            .flatMap((shard) => shard.groups)
+            .find(
+              (group) =>
+                isRepartitionableTooling(group) && expectDefined(group.includePatterns).length > 1,
+            ),
+        );
+        const savedKey = expectDefined(staleGroup.timing_key);
+        expectDefined(staleGroup.includePatterns).pop();
+        regenerateTimingKeys(stale);
+        expectTimingFamilies(stale);
+        staleGroup.timing_key = savedKey;
+        expect(
+          () => expectTimingFamilies(stale),
+          "stale generation key must fail identity",
+        ).toThrow();
+      }
       expect(
         after.every(
           (shard) =>
