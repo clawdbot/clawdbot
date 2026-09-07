@@ -125,6 +125,14 @@ final class DashboardAlertPresenter {
     }
 }
 
+#if DEBUG
+extension DashboardAlertPresenter {
+    var _testPendingAlerts: [NSAlert] {
+        self.pending.values.map(\.alert)
+    }
+}
+#endif
+
 @MainActor
 private final class DashboardAlertPanel: NSPanel {
     override func cancelOperation(_: Any?) {

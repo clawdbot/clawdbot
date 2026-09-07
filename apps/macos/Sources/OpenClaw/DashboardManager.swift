@@ -1606,6 +1606,10 @@ extension DashboardManager {
         self.auxiliaryWindows.values.map { ($0.target, $0.controller) }
     }
 
+    func _testPendingGatewayAlerts() -> [NSAlert] {
+        self.alertPresenter._testPendingAlerts
+    }
+
     func _testSetMainTarget(_ target: DashboardGatewayTarget) {
         self.mainTarget = target
         if target != .primary, let controller {
