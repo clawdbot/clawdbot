@@ -88,7 +88,7 @@ describe("line setup wizard", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    } satisfies OpenClawConfig;
 
     const state = credential.inspect({ cfg, accountId: "default" });
 

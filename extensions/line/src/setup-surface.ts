@@ -111,9 +111,8 @@ function createLineTokenCredential(params: {
     inputPrompt: params.inputPrompt,
     allowEnv: ({ accountId }) => accountId === DEFAULT_ACCOUNT_ID,
     resolveAccount: ({ cfg, accountId }) => resolveLineAccount({ cfg, accountId }),
-    // `configuredFields` above already answers both "is this configured" questions through the
-    // shared secret-input check, which reads a configured reference the runtime has not resolved.
-    // Overriding them here with the resolved value is what made a reference look unset.
+    // `configuredFields` above answers both "is this configured" questions through the shared
+    // secret-input check, which reads a configured reference the runtime has not resolved yet.
     resolvedValue: (account) => normalizeOptionalString(account[params.configKey]),
     envValue: ({ accountId }) =>
       accountId === DEFAULT_ACCOUNT_ID

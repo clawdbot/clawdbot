@@ -1,5 +1,5 @@
 // Line plugin module implements secret contract behavior.
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { DEFAULT_ACCOUNT_ID, normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   collectConditionalChannelFieldAssignments,
   createChannelSecretTargetRegistryEntries,
@@ -44,18 +44,19 @@ function accountSuppliesCredential(params: {
 /**
  * LINE resolves a default account from channel-level credentials even when the accounts map
  * names only other accounts, so the root credential keeps a consumer the shared surface omits.
- * The account has to be admitted first: without it the root credential has nothing to serve and
- * resolving it would run an exec or store provider for no consumer.
+ * An id the router cannot read is not that account: it never matches the reader's lookup either.
  */
 function resolveLineSecretSurface(params: {
   channel: Record<string, unknown>;
-  env: NodeJS.ProcessEnv;
+  rootAdmitsDefaultAccount: boolean;
 }): ChannelAccountSurface {
   const surface = resolveChannelAccountSurface(params.channel);
   if (
     !surface.hasExplicitAccounts ||
-    surface.accounts.some((entry) => normalizeAccountId(entry.accountId) === DEFAULT_ACCOUNT_ID) ||
-    !channelRootAdmitsDefaultLineAccount({ config: params.channel, env: params.env })
+    !params.rootAdmitsDefaultAccount ||
+    surface.accounts.some(
+      (entry) => normalizeOptionalAccountId(entry.accountId) === DEFAULT_ACCOUNT_ID,
+    )
   ) {
     return surface;
   }
@@ -77,7 +78,14 @@ export function collectRuntimeConfigAssignments(params: {
   if (!channel) {
     return;
   }
-  const surface = resolveLineSecretSurface({ channel, env: params.context.env });
+  // The channel-level credentials only have a consumer while the channel admits a default
+  // account. Resolving them without one runs an exec or store provider for nobody, so the same
+  // answer gates both the accounts-map branch and the one where no accounts map narrows it.
+  const rootAdmitsDefaultAccount = channelRootAdmitsDefaultLineAccount({
+    config: channel,
+    env: params.context.env,
+  });
+  const surface = resolveLineSecretSurface({ channel, rootAdmitsDefaultAccount });
   for (const { field, fileField } of LINE_CREDENTIALS) {
     collectConditionalChannelFieldAssignments({
       channelKey: LINE_CHANNEL,
@@ -86,12 +94,12 @@ export function collectRuntimeConfigAssignments(params: {
       surface,
       defaults: params.defaults,
       context: params.context,
-      topLevelActiveWithoutAccounts: true,
+      topLevelActiveWithoutAccounts: rootAdmitsDefaultAccount,
       // Only the default account falls back to channel-level credentials, and only while it
       // supplies neither the inline value nor its own credential file.
       topLevelInheritedAccountActive: (entry) =>
         entry.enabled &&
-        normalizeAccountId(entry.accountId) === DEFAULT_ACCOUNT_ID &&
+        normalizeOptionalAccountId(entry.accountId) === DEFAULT_ACCOUNT_ID &&
         !accountSuppliesCredential({ entry, field, fileField, defaults: params.defaults }),
       // An account's own credential is read ahead of its credential file, so an enabled
       // account always consumes it.

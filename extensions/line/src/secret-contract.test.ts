@@ -155,6 +155,39 @@ describe("LINE secret contract", () => {
     ]);
   });
 
+  it("leaves a channel-level signing secret unresolved when no accounts map narrows it either", () => {
+    const context = collect({
+      channels: { line: { enabled: true, channelSecret: STORE_SECRET_REF } },
+    });
+
+    expect(context.assignments).toStrictEqual([]);
+    expect(context.warnings).toEqual([
+      {
+        code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+        path: "channels.line.channelSecret",
+        message:
+          "channels.line.channelSecret: no enabled LINE account inherits this channel-level channelSecret.",
+      },
+    ]);
+  });
+
+  it("treats an account id the router cannot read as a different account than the default", () => {
+    const context = collect({
+      channels: {
+        line: {
+          enabled: true,
+          channelAccessToken: STORE_TOKEN_REF,
+          accounts: { "!!!": { channelSecret: "named-secret" } },
+        },
+      },
+    });
+
+    expect(context.assignments.map((assignment) => [assignment.path, assignment.ownerId])).toEqual([
+      ["channels.line.channelAccessToken", "line:default"],
+    ]);
+    expect(context.warnings).toStrictEqual([]);
+  });
+
   it("collects an account's own credentials", () => {
     const context = collect({
       channels: {
