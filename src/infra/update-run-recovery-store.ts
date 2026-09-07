@@ -12,13 +12,15 @@ import { UPDATE_RECOVERY_KEY_END, UPDATE_RECOVERY_KEY_PREFIX } from "./update-ru
 import {
   decodeUpdateRecovery,
   encodeUpdateRecovery,
+  inspectUpdateRecovery,
+  type UpdateRecoveryInspection,
   UpdateRecoveryConflictError,
   type UpdateRecoveryRecord,
 } from "./update-run-recovery-schema.js";
 import type { UpdateRecoveryFence, UpdateRecoveryRevision } from "./update-run-recovery.js";
 type RecoveryDatabase = Pick<DB, "update_runs" | "config_machine_state">;
 
-export function readRecoveries(db: DatabaseSync): UpdateRecoveryRecord[] {
+function readRecoveryRows(db: DatabaseSync) {
   if (!tableExists(db, "config_machine_state")) {
     return [];
   }
@@ -30,8 +32,16 @@ export function readRecoveries(db: DatabaseSync): UpdateRecoveryRecord[] {
       .where("state_key", ">=", UPDATE_RECOVERY_KEY_PREFIX)
       .where("state_key", "<", UPDATE_RECOVERY_KEY_END)
       .orderBy("state_key", "asc"),
-  ).rows.map((row) =>
+  ).rows;
+}
+export function readRecoveries(db: DatabaseSync): UpdateRecoveryRecord[] {
+  return readRecoveryRows(db).map((row) =>
     decodeUpdateRecovery(row.value_json, row.state_key.slice(UPDATE_RECOVERY_KEY_PREFIX.length)),
+  );
+}
+export function inspectRecoveries(db: DatabaseSync): UpdateRecoveryInspection[] {
+  return readRecoveryRows(db).map((row) =>
+    inspectUpdateRecovery(row.value_json, row.state_key.slice(UPDATE_RECOVERY_KEY_PREFIX.length)),
   );
 }
 export function writeRecovery<T>(

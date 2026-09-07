@@ -25,7 +25,6 @@ const mocks = vi.hoisted(() => ({
   restart: vi.fn<typeof import("./update-command-service.js").maybeRestartService>(),
   restartCommand:
     vi.fn<typeof import("./update-command-service-command.js").runUpdatedInstallGatewayCommand>(),
-  serving: vi.fn<typeof import("../../infra/update-serving-verification.js").verifyUpdateServing>(),
   healthy: false,
   version: "2026.9.3",
   stop: vi.fn<
@@ -99,9 +98,6 @@ vi.mock("./update-command-service-command.js", async (importOriginal) => ({
 }));
 vi.mock("./update-command-convergence.js", () => ({
   convergeUpdatePlugins: mocks.converge,
-}));
-vi.mock("../../infra/update-serving-verification.js", () => ({
-  verifyUpdateServing: mocks.serving,
 }));
 vi.mock("./update-command-result.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-result.js")>()),
@@ -196,28 +192,6 @@ function fixture(): FinishUpdateParams {
 describe("post-activation repair after rollback refusal or failure", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.serving.mockReset().mockImplementation(async (params) => ({
-      status: "verified",
-      receipt: {
-        runId: params.runId,
-        gateway: {
-          bootId: "repair-boot",
-          version: params.expectedVersion,
-          buildId: params.expectedBuildId ?? null,
-        },
-        agentId: "main",
-        sessionKey: "repair-session",
-        sessionId: "repair-session-id",
-        agentRunId: "00000000-0000-4000-8000-000000000002",
-        verifiedAtMs: Date.now(),
-        transcript: {
-          generation: "repair-generation",
-          maxSeq: 2,
-          user: { entryId: "user-entry", seq: 1 },
-          assistant: { entryId: "assistant-entry", seq: 2 },
-        },
-      },
-    }));
     mocks.healthy = false;
     mocks.version = "2026.9.3";
     mocks.readService.mockResolvedValue({
@@ -267,16 +241,13 @@ describe("post-activation repair after rollback refusal or failure", () => {
     { rollback: "unavailable", repaired: false },
     { rollback: "restored", repaired: true },
     { rollback: "restored", repaired: false },
-    { rollback: "blocked", repaired: false, healthy: true, servingUnavailable: true },
-    { rollback: "restored", repaired: false, healthy: true, servingUnavailable: true },
+    { rollback: "blocked", repaired: false, healthy: true, readinessUnavailable: true },
+    { rollback: "restored", repaired: false, healthy: true, readinessUnavailable: true },
   ])(
-    "$rollback rollback with repaired=$repaired servingUnavailable=$servingUnavailable",
-    async ({ rollback, repaired, healthy, servingUnavailable }) => {
-      if (servingUnavailable) {
-        mocks.serving.mockResolvedValue({
-          status: "unavailable",
-          reason: "persistence-unavailable",
-        });
+    "$rollback rollback with repaired=$repaired readinessUnavailable=$readinessUnavailable",
+    async ({ rollback, repaired, healthy, readinessUnavailable }) => {
+      if (readinessUnavailable) {
+        mocks.readyz.mockResolvedValue({ readyz: 503 });
       }
       const params = fixture();
       if (rollback === "unavailable") {
@@ -421,18 +392,6 @@ describe("post-activation repair after rollback refusal or failure", () => {
           },
         });
       }
-      if (healthy || repaired) {
-        expect(mocks.serving).toHaveBeenCalledWith(
-          expect.objectContaining({
-            runId: run.runId,
-            env: run.env,
-            expectedVersion: rollback === "restored" ? "2026.9.1" : "2026.9.3",
-          }),
-        );
-        expect(mocks.serving.mock.invocationCallOrder.at(-1)).toBeGreaterThan(
-          mocks.restartCommand.mock.invocationCallOrder.at(-1)!,
-        );
-      }
       // Plugin writes complete in the original stopped interval even when the
       // subsequent activation/repair fails; they are never rerun after restore.
       expect(mocks.converge).toHaveBeenCalledOnce();
@@ -477,7 +436,6 @@ describe("post-activation repair after rollback refusal or failure", () => {
                 serviceRunning: true,
                 versionMatch: true,
                 readyz: true,
-                inferenceProbe: "passed",
               },
             }
           : {}),
@@ -607,10 +565,7 @@ describe("post-activation repair after rollback refusal or failure", () => {
             await convergence.beforeDoctor?.();
             expect(enabled).toBe(false);
             if (!finalProof) {
-              mocks.serving.mockResolvedValue({
-                status: "unavailable",
-                reason: "persistence-unavailable",
-              });
+              mocks.readyz.mockResolvedValue({ readyz: 503 });
             }
             return {
               resultWithPostUpdate: {
@@ -639,9 +594,6 @@ describe("post-activation repair after rollback refusal or failure", () => {
         expect(mocks.restartCommand).toHaveBeenCalledOnce();
         expect(mocks.stop).toHaveBeenCalledOnce();
         expect(enabled).toBe(activated && finalProof);
-        if (activated) {
-          expect(mocks.serving).toHaveBeenCalledOnce();
-        }
         expect(signals.map((signal) => process.listenerCount(signal))).toEqual(baselineListeners);
       } finally {
         for (const recovery of recoveries) {
@@ -651,7 +603,7 @@ describe("post-activation repair after rollback refusal or failure", () => {
     },
   );
 
-  it.each(["restart-result", "restart-error", "serving-result"] as const)(
+  it.each(["restart-result", "restart-error", "readiness-result"] as const)(
     "does not continue repair after authority is lost during %s",
     async (boundary) => {
       const params = fixture();
@@ -671,13 +623,11 @@ describe("post-activation repair after rollback refusal or failure", () => {
           provider: "openai",
           model: "gpt-4.1",
         });
-        if (boundary === "serving-result") {
+        if (boundary === "readiness-result") {
           mocks.healthy = true;
-          const serving = mocks.serving.getMockImplementation()!;
-          mocks.serving.mockImplementationOnce(async (request) => {
-            const result = await serving(request);
+          mocks.readyz.mockImplementationOnce(async () => {
             revoke();
-            return result;
+            return { readyz: 200 };
           });
         } else {
           mocks.restartCommand.mockImplementationOnce(async () => {
@@ -705,7 +655,6 @@ describe("post-activation repair after rollback refusal or failure", () => {
         onVerified,
       });
       expect(onVerified).not.toHaveBeenCalled();
-      expect(mocks.serving).toHaveBeenCalledTimes(boundary === "serving-result" ? 1 : 0);
       expect(getUpdateRun(run.runId, { env: run.env })).toEqual(settledRun);
     },
   );

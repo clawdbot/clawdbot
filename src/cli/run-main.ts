@@ -1144,6 +1144,22 @@ async function runCliWithPreparedOutputMode(
       }
     });
   }
+  if (
+    !isHelpOrVersionInvocation &&
+    normalizedInvocation.primary === "doctor" &&
+    process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1"
+  ) {
+    // Debug capture can migrate shared state before Commander reaches Doctor.
+    // Resolve the update guard after selectors settle, before any bootstrap writer.
+    const [{ guardUpdateDoctorSchemaUpgrade }, { defaultRuntime }] = await Promise.all([
+      import("../commands/doctor-update-schema-guard.js"),
+      import("../runtime.js"),
+    ]);
+    await guardUpdateDoctorSchemaUpgrade({
+      runtime: defaultRuntime,
+      json: options.builtInMachineOutput,
+    });
+  }
   await configureStartupTraces();
   if (!isHelpOrVersionInvocation && isGatewayRunInvocation) {
     await startupTrace.measure("gateway-run-select-environment", async () => {

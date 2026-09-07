@@ -20,6 +20,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import type { UpdateRunRecord, UpdateRunPhase, UpdateRunStep } from "./update-run-record.js";
+import type { UpdateRecoveryReadinessReceipt } from "./update-run-recovery-schema.js";
 import { UpdateRunRecordSchema } from "./update-run-schema.js";
 
 const JSON_BYTES = 16 * 1024;
@@ -547,8 +548,7 @@ export function finishVerifiedUpdateRunInTransaction(
   runId: string,
   result: {
     status: "succeeded" | "rolled-back";
-    version: string;
-    buildId: string | null;
+    receipt: UpdateRecoveryReadinessReceipt;
     reason?: string;
   },
   options: LedgerOptions = {},
@@ -575,16 +575,20 @@ export function finishVerifiedUpdateRunInTransaction(
       record.reason = result.reason ?? null;
       record.finishedAtMs = now;
       record.confirmedAtMs = now;
-      record.after = { ...record.after, version: result.version };
+      const { gateway, checks } = result.receipt;
+      record.after = { ...record.after, version: gateway.version };
       record.verification = {
         ...record.verification,
-        runningVersion: result.version,
-        runningBuildId: result.buildId ?? undefined,
+        runningVersion: gateway.version,
+        runningBuildId: gateway.buildId ?? undefined,
         booted: true,
-        serviceRunning: true,
+        serviceRunning: checks.serviceRunning,
         versionMatch: true,
-        settled: true,
-        inferenceProbe: "passed",
+        settled: checks.settled,
+        readyz: checks.readyz,
+        channelsReady: checks.channelsReady,
+        // The validated receipt requires pluginsReady; earlier failures are superseded.
+        pluginErrors: [],
       };
     },
     options,

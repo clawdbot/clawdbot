@@ -32,6 +32,7 @@
     "../../src/system-agent/**",
     "../../src/logging/**",
     "../../src/hooks/**",
-    "../../src/daemon/**"
+    "../../src/daemon/**",
+    "../../src/plugin-state/**"
   ]
 }

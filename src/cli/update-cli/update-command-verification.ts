@@ -4,12 +4,12 @@ import { resolveGatewayService } from "../../daemon/service.js";
 import type { UpdateRepairValidation } from "../../infra/update-repair-protocol.js";
 import { recordUpdateRunStep, recordUpdateRunVerification } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
-import { verifyUpdateServing } from "../../infra/update-serving-verification.js";
 import { defaultRuntime } from "../../runtime.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { resolveGatewayRestartProbeContext } from "../daemon-cli/restart-health-probe.js";
 import {
+  inspectGatewayRestart,
   renderRestartDiagnostics,
   waitForGatewayHealthyRestart,
   waitForGatewayHttpReadiness,
@@ -20,6 +20,7 @@ import type { PostUpdateLaunchAgentRecoveryResult } from "./update-command-launc
 import {
   assertUpdateCommandRecovery,
   persistUpdateCommandServingReceipt,
+  UpdateCommandRecoveryPendingError,
 } from "./update-command-recovery.js";
 import {
   formatPostUpdateGatewayRecoveryInstructions,
@@ -82,12 +83,23 @@ export async function verifyUpdatedGateway(params: {
 }): Promise<UpdateRepairValidation> {
   // Proof belongs to the recovery record that began this observation. Reloading
   // the executor's newest record after an await could bless a reclaimed run.
-  let expectedRecovery = params.opts.recovery?.getRecord();
+  const originalRun = params.opts.run;
+  const originalRecovery = params.opts.recovery;
+  const proofOptions = {
+    ...params.opts,
+    ...(originalRun ? { run: { ...originalRun, env: { ...originalRun.env } } } : {}),
+  };
+  let expectedRecovery = originalRecovery
+    ? structuredClone(originalRecovery.getRecord())
+    : undefined;
   const assertCurrent = () => {
     params.signal?.throwIfAborted();
     params.assertCurrent?.();
-    if (params.opts.recovery) {
-      assertUpdateCommandRecovery(params.opts, expectedRecovery);
+    if (params.opts.run !== originalRun || params.opts.recovery !== originalRecovery) {
+      throw new UpdateCommandRecoveryPendingError("Readiness observation lost its admitted owner.");
+    }
+    if (originalRecovery) {
+      assertUpdateCommandRecovery(proofOptions, expectedRecovery);
     }
   };
   assertCurrent();
@@ -131,82 +143,109 @@ export async function verifyUpdatedGateway(params: {
   });
   assertCurrent();
   const readyz = http.readyz === 200;
-  recordUpdateGatewayHealth(params.opts.run, health, params.gatewayPort, readyz);
+  if (expectedRecovery && health.healthy && health.runtime.status === "running" && readyz) {
+    const restart = expectedRecovery.effects.at(-1);
+    const identity = restart?.runtime === "previous" ? expectedRecovery.from : expectedRecovery.to;
+    // HTTP has no boot identity. Sandwich it between authenticated health probes
+    // so readiness cannot combine different gateway lifetimes.
+    const finalHealth = await inspectGatewayRestart({
+      service,
+      port: params.gatewayPort,
+      env: params.serviceEnv,
+      expectedVersion: identity.version,
+      ...(identity.buildId ? { expectedBuildId: identity.buildId } : {}),
+      probeContext: context,
+      ...(params.signal ? { signal: params.signal } : {}),
+    });
+    assertCurrent();
+    if (
+      !health.healthy ||
+      health.runtime.status !== "running" ||
+      !health.gatewayBootId ||
+      !finalHealth.healthy ||
+      finalHealth.runtime.status !== "running" ||
+      health.gatewayBootId !== finalHealth.gatewayBootId ||
+      health.gatewayVersion !== finalHealth.gatewayVersion ||
+      health.gatewayBuildId !== finalHealth.gatewayBuildId ||
+      health.activatedPluginErrors?.length ||
+      health.channelProbeErrors?.length ||
+      finalHealth.activatedPluginErrors?.length ||
+      finalHealth.channelProbeErrors?.length
+    ) {
+      throw new UpdateCommandRecoveryPendingError(
+        "Readiness did not remain on the observed running gateway.",
+      );
+    }
+    health = finalHealth;
+  }
   if (launchAgentRecovery?.attempted) {
     defaultRuntime.error(
       launchAgentRecovery.recovered ? launchAgentRecovery.message : launchAgentRecovery.detail,
     );
   }
-  const serviceRunning = !params.requireRunningService || health.runtime.status === "running";
+  const serviceRunning =
+    !(params.requireRunningService || expectedRecovery) || health.runtime.status === "running";
   if (health.healthy && serviceRunning && readyz) {
-    const run = params.opts.run;
-    const expectedVersion = params.expectedVersion;
-    // A healthy port does not prove this update served or persisted a turn.
-    // Missing transaction/artifact identity cannot be replaced with the observed boot.
-    const serving =
-      run && expectedVersion && health.gatewayBootId
-        ? await verifyUpdateServing({
-            runId: run.runId,
-            config: context.config,
-            env: params.serviceEnv,
-            gatewayPort: params.gatewayPort,
-            expectedVersion,
-            expectedBuildId: params.expectedBuildId,
-            expectedBootId: health.gatewayBootId,
-            ...(params.signal ? { signal: params.signal } : {}),
-          })
-        : !run || !expectedVersion
-          ? ({ status: "failed", reason: "invalid-request" } as const)
-          : ({ status: "unavailable", reason: "identity-unavailable" } as const);
     assertCurrent();
-    if (serving.status === "verified") {
-      expectedRecovery = persistUpdateCommandServingReceipt(params.opts, serving.receipt);
+    const verifiedAtMs = Date.now();
+    if (expectedRecovery) {
+      const restart = expectedRecovery.effects.at(-1);
+      if (
+        restart?.kind !== "service-restart" ||
+        restart.state !== "observed" ||
+        !health.gatewayBootId ||
+        !health.gatewayVersion ||
+        health.gatewayBuildId === undefined
+      ) {
+        throw new UpdateCommandRecoveryPendingError(
+          "Readiness requires the observed restart identity.",
+        );
+      }
+      expectedRecovery = persistUpdateCommandServingReceipt(proofOptions, {
+        kind: "readiness",
+        runId: expectedRecovery.runId,
+        transactionId: expectedRecovery.transactionId,
+        claimId: expectedRecovery.claimId,
+        revision: expectedRecovery.revision,
+        effectId: restart.effectId,
+        runtime: restart.runtime,
+        gateway: {
+          bootId: health.gatewayBootId,
+          version: health.gatewayVersion,
+          buildId: health.gatewayBuildId,
+        },
+        checks: {
+          serviceRunning: true,
+          pluginsReady: true,
+          channelsReady: true,
+          settled: true,
+          readyz: true,
+        },
+        verifiedAtMs,
+      });
       assertCurrent();
     }
-    if (run) {
-      recordUpdateRunVerification(
-        run.runId,
-        {
-          inferenceProbe:
-            serving.status === "verified"
-              ? "passed"
-              : serving.status === "unavailable"
-                ? "unavailable"
-                : "failed",
-        },
-        { env: run.env },
-      );
-      recordUpdateRunStep(
-        run.runId,
-        {
-          step: "gateway verification",
-          status: serving.status === "verified" ? "completed" : "failed",
-          endedAtMs: Date.now(),
-          ...(serving.status === "verified" ? {} : { detail: serving.reason }),
-        },
-        { env: run.env },
-      );
-    }
-    if (serving.status !== "verified") {
-      // Only public-safe producer reasons leave this boundary; the receipt is private.
-      const reason = `serving-verification-${serving.reason}`;
-      defaultRuntime.error(`Gateway serving verification failed: ${serving.reason}.`);
-      return { ok: false, score: 7, summary: reason };
-    }
+    recordUpdateGatewayHealth(proofOptions.run, health, params.gatewayPort, readyz);
+    params.onVerified?.(verifiedAtMs);
     assertCurrent();
-    params.onVerified?.(serving.receipt.verifiedAtMs);
-    if (!params.opts.json) {
-      defaultRuntime.log(
-        theme.success("Gateway: restarted, served a turn, and verified persistence."),
+    if (params.opts.run) {
+      recordUpdateRunStep(
+        params.opts.run.runId,
+        { step: "gateway verification", status: "completed", endedAtMs: Date.now() },
+        { env: params.opts.run.env },
       );
+    }
+
+    if (!params.opts.json) {
+      defaultRuntime.log(theme.success("Gateway: restarted and verified."));
     }
     return {
       ok: true,
-      score: 8,
-      summary:
-        "Gateway service, version, plugins, channels, readiness, and persisted turn verified.",
+      score: 7,
+      summary: "Gateway service, version, plugins, channels, and readiness verified.",
     };
   }
+  recordUpdateGatewayHealth(proofOptions.run, health, params.gatewayPort, readyz);
   const diagnosticLines: [string, ...string[]] = [
     "Gateway did not become healthy after restart.",
     ...(!readyz ? ["Gateway /readyz did not return HTTP 200."] : []),

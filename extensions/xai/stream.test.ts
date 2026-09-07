@@ -11,7 +11,6 @@ import {
 import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { XAI_BASE_URL } from "./model-definitions.js";
-import { XAI_GROK_OAUTH_BASE_URL } from "./provider-catalog.js";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 import { wrapXaiProviderStream } from "./stream.js";
 import {
@@ -169,7 +168,13 @@ async function captureXaiResponsesPayloadWithThinking(
 }
 
 describe("xai stream wrappers", () => {
-  it.each(["grok-4.5", "auto"])("adds the Grok OAuth proxy request contract for %s", (id) => {
+  it.each(
+    ["grok-4.5", "auto"].flatMap((id) =>
+      ["https://cli-chat-proxy.grok.com/v1", "https://CLI-CHAT-PROXY.GROK.COM:443/v1/"].map(
+        (baseUrl) => ({ id, baseUrl }),
+      ),
+    ),
+  )("adds the Grok OAuth proxy request contract for $id at $baseUrl", ({ id, baseUrl }) => {
     let capturedHeaders: Record<string, string> | undefined;
     let capturedModelId: string | undefined;
     const baseStreamFn: StreamFn = (model, _context, options) => {
@@ -197,7 +202,7 @@ describe("xai stream wrappers", () => {
         contextWindow: 500_000,
         maxTokens: 64_000,
         params: { canonicalModelId: "grok-4.5" },
-        baseUrl: "https://cli-chat-proxy.grok.com/v1",
+        baseUrl,
       },
       { messages: [] },
       { headers: { "X-XAI-Token-Auth": "operator-value", "X-Existing": "kept" } },
@@ -215,6 +220,9 @@ describe("xai stream wrappers", () => {
   it.each([
     ["the public API-key endpoint", "xai", "https://api.x.ai/v1"],
     ["a different provider", "other", "https://cli-chat-proxy.grok.com/v1"],
+    ["a different port", "xai", "https://cli-chat-proxy.grok.com:444/v1"],
+    ["a different path", "xai", "https://cli-chat-proxy.grok.com/v10"],
+    ["a lookalike host", "xai", "https://cli-chat-proxy.grok.com.example/v1"],
   ])("does not add Grok OAuth headers for %s", (_label, provider, baseUrl) => {
     let capturedHeaders: Record<string, string> | undefined;
     const baseStreamFn: StreamFn = (_model, _context, options) => {
@@ -747,7 +755,7 @@ describe("xai stream wrappers", () => {
   });
 
   it.each([
-    ["Grok OAuth proxy", XAI_GROK_OAUTH_BASE_URL],
+    ["Grok OAuth proxy", "https://cli-chat-proxy.grok.com/v1"],
     ["custom endpoint", "https://proxy.example/v1"],
   ])("counts every function output before replaying sparse images for %s", (_label, baseUrl) => {
     const callIds = ["a", "b", "c", "d"].map((suffix) => `${"x".repeat(64)}${suffix}`);

@@ -53,6 +53,9 @@ describe("TTS text preparation – stripMarkdown", () => {
   it("preserves underscores inside words while still stripping italic markers", () => {
     const cases = [
       ["here_is_a_message", "here_is_a_message"],
+      ["foo_bar_baz", "foo_bar_baz"],
+      ["https://cdn.example/my_file_name.png", "https://cdn.example/my_file_name.png"],
+      ["e\u0301_mail_.txt", "e\u0301_mail_.txt"],
       ["snake_case_var", "snake_case_var"],
       ["use foo_bar_baz in code", "use foo_bar_baz in code"],
       ["This is _italic_ text", "This is italic text"],

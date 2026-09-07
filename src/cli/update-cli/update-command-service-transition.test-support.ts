@@ -120,7 +120,6 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
       let servingBuildId = "previous-build";
       if (mode === "git") {
         mocks.health.mockImplementation(async ({ port, expectedBuildId }) => ({
-          gatewayBootId: "service-boot",
           healthy: mocks.running && (!expectedBuildId || expectedBuildId === servingBuildId),
           staleGatewayPids: [],
           runtime: { status: mocks.running ? "running" : "stopped" },

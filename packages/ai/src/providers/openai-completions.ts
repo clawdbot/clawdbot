@@ -1,12 +1,5 @@
 // OpenAI completions provider adapts chat completions to the agent runtime.
 import type OpenAI from "openai";
-import type {
-  ChatCompletionAssistantMessageParam,
-  ChatCompletionContentPartText,
-  ChatCompletionDeveloperMessageParam,
-  ChatCompletionMessageParam,
-  ChatCompletionSystemMessageParam,
-} from "openai/resources/chat/completions.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
@@ -14,6 +7,11 @@ import { reasoningTagTextPolicy, type OpenAICompletionsOptions } from "../provid
 // OpenAI completions provider adapts chat completions to the agent runtime.
 import { createAssistantOutput } from "../transports/assistant-output.js";
 import {
+  applyCompletionsAnthropicCacheControl,
+  resolveCompletionsCacheControl,
+} from "../transports/openai-completions-cache-control.js";
+import {
+  detectOpenAICompletionsCompat,
   resolveOpenAICompletionsCompat,
   type ResolvedOpenAICompletionsCompat,
 } from "../transports/openai-completions-compat.js";
@@ -50,7 +48,6 @@ import {
   getFirstStreamEventTimeoutHandler,
   getFirstStreamEventTimeoutMs,
 } from "../utils/stream-first-event-timeout.js";
-import { splitSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { resolveCacheRetention } from "./cache-retention.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { finalizeOpenAICompletionsToolCalls } from "./openai-completions-tool-calls.js";
@@ -69,23 +66,6 @@ import { buildBaseOptions } from "./simple-options.js";
 
 export type { OpenAICompletionsOptions } from "../provider-options.js";
 export { convertMessages } from "../openai-completions-messages.js";
-
-interface OpenAICompatCacheControl {
-  type: "ephemeral";
-  ttl?: string;
-}
-
-type ChatCompletionInstructionMessageParam =
-  | ChatCompletionDeveloperMessageParam
-  | ChatCompletionSystemMessageParam;
-
-type ChatCompletionTextPartWithCacheControl = ChatCompletionContentPartText & {
-  cache_control?: OpenAICompatCacheControl;
-};
-
-type ChatCompletionToolWithCacheControl = OpenAI.Chat.Completions.ChatCompletionTool & {
-  cache_control?: OpenAICompatCacheControl;
-};
 
 export const streamOpenAICompletions: StreamFunction<
   "openai-completions",
@@ -323,7 +303,13 @@ function buildParams(
   compat: ResolvedOpenAICompletionsCompat = resolveOpenAICompletionsCompat(model),
   cacheRetention: CacheRetention = resolveCacheRetention(options?.cacheRetention),
 ) {
-  const cacheControl = getCompatCacheControl(compat, cacheRetention);
+  const { endpointClass } = detectOpenAICompletionsCompat(model).capabilities;
+  const cacheControl = resolveCompletionsCacheControl(
+    compat,
+    cacheRetention,
+    endpointClass === "openrouter" ||
+      (endpointClass === "default" && model.provider === "openrouter"),
+  );
   // Transient runtime-context carrier indexes skip cache anchoring so the breakpoint
   // stays on the last stable user turn; conversion-to-policy must not splice messages.
   const cacheOptOutIndexes = new Set<number>();
@@ -427,8 +413,17 @@ function buildParams(
     params.tools = [];
   }
 
-  if (cacheControl) {
-    applyAnthropicCacheControl(messages, params.tools, cacheControl, cacheOptOutIndexes);
+  if (compat.cacheControlFormat === "anthropic") {
+    applyCompletionsAnthropicCacheControl(
+      params,
+      cacheControl ?? null,
+      cacheOptOutIndexes,
+      endpointClass !== "modelstudio-native" &&
+        !(
+          endpointClass === "default" &&
+          ["modelstudio", "dashscope", "qwen"].includes(model.provider)
+        ),
+    );
   }
 
   if (options?.toolChoice) {
@@ -532,146 +527,6 @@ function clampOpenAICompletionsMaxTokens(
   return modelMaxTokens === undefined || requestedMaxTokens <= modelMaxTokens
     ? requestedMaxTokens
     : modelMaxTokens;
-}
-
-function getCompatCacheControl(
-  compat: ResolvedOpenAICompletionsCompat,
-  cacheRetention: CacheRetention,
-): OpenAICompatCacheControl | undefined {
-  if (compat.cacheControlFormat !== "anthropic" || cacheRetention === "none") {
-    return undefined;
-  }
-
-  const ttl = cacheRetention === "long" && compat.supportsLongCacheRetention ? "1h" : undefined;
-  return { type: "ephemeral", ...(ttl ? { ttl } : {}) };
-}
-
-function applyAnthropicCacheControl(
-  messages: ChatCompletionMessageParam[],
-  tools: OpenAI.Chat.Completions.ChatCompletionTool[] | undefined,
-  cacheControl: OpenAICompatCacheControl,
-  cacheOptOutIndexes: ReadonlySet<number>,
-): void {
-  addCacheControlToSystemPrompt(messages, cacheControl);
-  addCacheControlToLastTool(tools, cacheControl);
-  addCacheControlToLastConversationMessage(messages, cacheControl, cacheOptOutIndexes);
-}
-
-function addCacheControlToSystemPrompt(
-  messages: ChatCompletionMessageParam[],
-  cacheControl: OpenAICompatCacheControl,
-): void {
-  for (const message of messages) {
-    if (message.role === "system" || message.role === "developer") {
-      addCacheControlToInstructionMessage(message, cacheControl);
-      return;
-    }
-  }
-}
-
-function addCacheControlToLastConversationMessage(
-  messages: ChatCompletionMessageParam[],
-  cacheControl: OpenAICompatCacheControl,
-  cacheOptOutIndexes: ReadonlySet<number>,
-): void {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i];
-    if (!message || cacheOptOutIndexes.has(i)) {
-      continue;
-    }
-    if (message.role === "user" || message.role === "assistant") {
-      if (addCacheControlToMessage(message, cacheControl)) {
-        return;
-      }
-    }
-  }
-}
-
-function addCacheControlToLastTool(
-  tools: OpenAI.Chat.Completions.ChatCompletionTool[] | undefined,
-  cacheControl: OpenAICompatCacheControl,
-): void {
-  if (!tools || tools.length === 0) {
-    return;
-  }
-
-  const lastTool: ChatCompletionToolWithCacheControl | undefined = tools.at(-1);
-  if (!lastTool) {
-    return;
-  }
-  lastTool.cache_control = cacheControl;
-}
-
-function addCacheControlToInstructionMessage(
-  message: ChatCompletionInstructionMessageParam,
-  cacheControl: OpenAICompatCacheControl,
-): boolean {
-  return addCacheControlToTextContent(message, cacheControl);
-}
-
-function addCacheControlToMessage(
-  message: ChatCompletionMessageParam,
-  cacheControl: OpenAICompatCacheControl,
-): boolean {
-  if (message.role === "user" || message.role === "assistant") {
-    return addCacheControlToTextContent(message, cacheControl);
-  }
-  return false;
-}
-
-function addCacheControlToTextContent(
-  message:
-    | ChatCompletionInstructionMessageParam
-    | ChatCompletionAssistantMessageParam
-    | Extract<ChatCompletionMessageParam, { role: "user" }>,
-  cacheControl: OpenAICompatCacheControl,
-): boolean {
-  const content = message.content;
-  if (typeof content === "string") {
-    if (content.length === 0) {
-      return false;
-    }
-    message.content = buildCacheControlledTextParts(content, cacheControl);
-    return true;
-  }
-
-  if (!Array.isArray(content)) {
-    return false;
-  }
-
-  for (let i = content.length - 1; i >= 0; i--) {
-    const part = content[i];
-    if (part?.type === "text") {
-      const text = (part as ChatCompletionTextPartWithCacheControl).text;
-      content.splice(i, 1, ...buildCacheControlledTextParts(text, cacheControl));
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function buildCacheControlledTextParts(
-  text: string,
-  cacheControl: OpenAICompatCacheControl,
-): ChatCompletionTextPartWithCacheControl[] {
-  const split = splitSystemPromptCacheBoundary(text);
-  if (!split) {
-    return [{ type: "text", text, cache_control: cacheControl }];
-  }
-
-  const parts: ChatCompletionTextPartWithCacheControl[] = [];
-  if (split.stablePrefix) {
-    parts.push({
-      type: "text",
-      text: split.stablePrefix,
-      cache_control: cacheControl,
-    });
-  }
-  if (split.dynamicSuffix) {
-    parts.push({ type: "text", text: split.dynamicSuffix });
-  }
-  return parts.length > 0 ? parts : [{ type: "text", text: "" }];
 }
 
 function convertTools(

@@ -7,7 +7,6 @@ import {
   RecoveryPackageStateSchema,
   RecoveryPackageEffectSchema,
 } from "./update-run-recovery-package-schema.js";
-import { UpdateServingReceiptSchema } from "./update-serving-verification-receipt.js";
 
 const exactText = z.string().min(1).max(32_768);
 const absolutePath = exactText.refine((value) => path.isAbsolute(value));
@@ -18,6 +17,38 @@ const runtime = z.strictObject({
   version: exactText,
   buildId: exactText.nullable(),
 });
+
+/** Observed readiness facts only. The producer must preserve its original recovery
+ * claim/revision across awaited health and HTTP probes. No serialized authority.
+ * Deliberately no legacy transform: transcript receipts cannot establish readiness,
+ * and rewriting them during read would also invalidate publication commitments.
+ */
+export const UpdateRecoveryReadinessReceiptSchema = z.strictObject({
+  kind: z.literal("readiness", {
+    error:
+      "Legacy update verification is not readiness evidence; explicit reconciliation is required.",
+  }),
+  runId: z.uuid(),
+  transactionId: z.uuid(),
+  claimId: z.uuid(),
+  revision: counter,
+  effectId: z.uuid(),
+  runtime: z.enum(["candidate", "previous"]),
+  gateway: z.strictObject({
+    bootId: z.string().min(1).max(96),
+    version: z.string().min(1).max(256),
+    buildId: z.string().min(1).max(256).nullable(),
+  }),
+  checks: z.strictObject({
+    serviceRunning: z.literal(true),
+    pluginsReady: z.literal(true),
+    channelsReady: z.literal(true),
+    settled: z.literal(true),
+    readyz: z.literal(true),
+  }),
+  verifiedAtMs: counter,
+});
+export type UpdateRecoveryReadinessReceipt = z.infer<typeof UpdateRecoveryReadinessReceiptSchema>;
 
 const UpdateRecoveryEffectSchema = z
   .strictObject({
@@ -81,8 +112,37 @@ const afterImage = z.strictObject({
 });
 export type UpdateRecoveryAfterImage = z.infer<typeof afterImage>;
 
+// Decode-only compatibility for receipts persisted before readiness replaced model
+// probes. This is the exact retired storage shape, not an inference producer or a
+// conversion to current evidence. Keep it private to the inspection schema.
+const legacyIdentifier = z.string().min(1).max(256);
+const legacyAnchor = z.strictObject({ entryId: legacyIdentifier, seq: counter });
+const legacyServingReceipt = z
+  .strictObject({
+    runId: z.uuid(),
+    gateway: UpdateRecoveryReadinessReceiptSchema.shape.gateway,
+    agentId: legacyIdentifier,
+    sessionKey: z.string().min(1).max(512),
+    sessionId: legacyIdentifier,
+    agentRunId: z.uuid(),
+    transcript: z.strictObject({
+      generation: legacyIdentifier,
+      maxSeq: counter,
+      user: legacyAnchor,
+      assistant: legacyAnchor,
+    }),
+    verifiedAtMs: counter,
+  })
+  .refine(
+    (receipt) =>
+      receipt.transcript.user.seq < receipt.transcript.assistant.seq &&
+      receipt.transcript.assistant.seq <= receipt.transcript.maxSeq,
+    { message: "Invalid legacy serving transcript sequence" },
+  );
+const inspectionReceipt = z.union([UpdateRecoveryReadinessReceiptSchema, legacyServingReceipt]);
+
 /** Private operational state, never passed through the redacted history codec. */
-export const UpdateRecoveryRecordSchema = z
+const recoveryInspectionRecordSchema = z
   .strictObject({
     runId: z.uuid(),
     transactionId: z.uuid(),
@@ -132,7 +192,7 @@ export const UpdateRecoveryRecordSchema = z
       .strictObject({
         runtime: z.enum(["candidate", "previous"]),
         effectId: z.uuid(),
-        receipt: UpdateServingReceiptSchema,
+        receipt: inspectionReceipt,
       })
       .nullable(),
     package: RecoveryPackageStateSchema.optional(),
@@ -141,7 +201,7 @@ export const UpdateRecoveryRecordSchema = z
         status: z.enum(["succeeded", "rolled-back"]),
         committedAtMs: counter,
         commitRevision: counter,
-        receipt: UpdateServingReceiptSchema,
+        receipt: inspectionReceipt,
         pairId: z.uuid().nullable(),
       })
       .optional(),
@@ -155,6 +215,40 @@ export const UpdateRecoveryRecordSchema = z
     primaryFailure: z.strictObject({ code: exactText, effectId: z.uuid().nullable() }).nullable(),
   })
   .superRefine((record, ctx) => {
+    const verification = record.verification;
+    if (verification) {
+      const receipt = verification.receipt;
+      const identity = verification.runtime === "candidate" ? record.to : record.from;
+      const restart = record.effects.find((effect) => effect.effectId === verification.effectId);
+      if (
+        receipt.runId !== record.runId ||
+        ("kind" in receipt &&
+          (receipt.transactionId !== record.transactionId ||
+            receipt.claimId !== record.claimId ||
+            receipt.revision >= record.revision ||
+            receipt.runtime !== verification.runtime ||
+            receipt.effectId !== verification.effectId)) ||
+        receipt.gateway.version !== identity.version ||
+        receipt.gateway.buildId !== identity.buildId ||
+        restart?.kind !== "service-restart" ||
+        restart.state !== "observed" ||
+        restart.runtime !== verification.runtime ||
+        restart.observedIdentity !== receipt.gateway.bootId ||
+        (!record.terminal && restart !== record.effects.at(-1))
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          message: "Verification evidence does not match recovery and restart",
+        });
+      }
+    }
+    if (
+      verification &&
+      record.terminal &&
+      !isDeepStrictEqual(verification.receipt, record.terminal.receipt)
+    ) {
+      ctx.addIssue({ code: "custom", message: "Terminal and verification receipts differ" });
+    }
     const native = record.nativeManager;
     const nativeFinal = native?.effects.at(-1)?.after ?? native?.original;
     if (
@@ -239,6 +333,51 @@ export const UpdateRecoveryRecordSchema = z
     ) {
       ctx.addIssue({ code: "custom", message: "Terminal outcome and selected pair differ" });
     }
+    if (record.terminal && "kind" in record.terminal.receipt) {
+      const receipt = record.terminal.receipt;
+      const role = record.terminal.status === "succeeded" ? "candidate" : "previous";
+      const identity = role === "candidate" ? record.to : record.from;
+      const restart = record.effects.find((effect) => effect.effectId === receipt.effectId);
+      if (
+        receipt.transactionId !== record.transactionId ||
+        receipt.runtime !== role ||
+        receipt.revision + 2 !== record.terminal.commitRevision ||
+        receipt.gateway.version !== identity.version ||
+        receipt.gateway.buildId !== identity.buildId ||
+        restart?.kind !== "service-restart" ||
+        restart.state !== "observed" ||
+        restart.runtime !== role ||
+        restart.observedIdentity !== receipt.gateway.bootId ||
+        (verification && !isDeepStrictEqual(verification.receipt, receipt))
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          message: "Terminal readiness does not match its recorded restart",
+        });
+      }
+    }
+    if (record.terminal && !("kind" in record.terminal.receipt)) {
+      // Legacy receipts have no effect/claim fields. Validate against the stored
+      // final restart, without manufacturing the missing readiness bindings.
+      const receipt = record.terminal.receipt;
+      const role = record.terminal.status === "succeeded" ? "candidate" : "previous";
+      const identity = role === "candidate" ? record.to : record.from;
+      const restart = record.effects.findLast((effect) => effect.kind === "service-restart");
+      if (
+        (verification &&
+          (verification.runtime !== role || verification.effectId !== restart?.effectId)) ||
+        receipt.gateway.version !== identity.version ||
+        receipt.gateway.buildId !== identity.buildId ||
+        restart?.state !== "observed" ||
+        restart.runtime !== role ||
+        restart.observedIdentity !== receipt.gateway.bootId
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          message: "Legacy terminal evidence differs from its recorded restart",
+        });
+      }
+    }
     const pair = record.retainedPair;
     const retention = record.package?.descriptor.retention;
     if (
@@ -301,7 +440,50 @@ export const UpdateRecoveryRecordSchema = z
       refs.push(image.afterUpdate.ref);
     }
   });
+/** Execution/mutation decoding remains readiness-only. The inspection shape is
+ * intentionally wider, so an inspected legacy row is not a mutation input. */
+export const UpdateRecoveryRecordSchema = recoveryInspectionRecordSchema.safeExtend({
+  verification: recoveryInspectionRecordSchema.shape.verification
+    .unwrap()
+    .extend({
+      receipt: UpdateRecoveryReadinessReceiptSchema,
+    })
+    .nullable(),
+  terminal: recoveryInspectionRecordSchema.shape.terminal
+    .unwrap()
+    .extend({
+      receipt: UpdateRecoveryReadinessReceiptSchema,
+    })
+    .optional(),
+});
 export type UpdateRecoveryRecord = z.infer<typeof UpdateRecoveryRecordSchema>;
+export type UpdateRecoveryInspection = {
+  readonly format: "current" | "legacy-serving";
+  /** Exact retained bytes; never serialize the parsed view back over the source. */
+  readonly raw: string;
+  readonly record: z.infer<typeof recoveryInspectionRecordSchema>;
+};
+
+/** Read-only historical inspection. Unknown/corrupt rows fail, never disappear.
+ * No migration, receipt upgrade, claim acquisition, or mutation eligibility. */
+export function inspectUpdateRecovery(raw: string, runId: string): UpdateRecoveryInspection {
+  if (Buffer.byteLength(raw) > MAX_RECOVERY_BYTES) {
+    throw new Error("Update recovery record exceeds its storage limit");
+  }
+  const record = recoveryInspectionRecordSchema.parse(JSON.parse(raw));
+  if (record.runId !== runId) {
+    throw new Error("Update recovery record does not match its history run");
+  }
+  const receipts = [record.verification?.receipt, record.terminal?.receipt];
+  return {
+    format: receipts.some((receipt) => receipt && !("kind" in receipt))
+      ? "legacy-serving"
+      : "current",
+    raw,
+    record,
+  };
+}
+
 export type UpdateRecoveryEffect = z.infer<typeof UpdateRecoveryEffectSchema>;
 
 export class UpdateRecoveryConflictError extends Error {

@@ -80,7 +80,7 @@ describe("restart health", () => {
     };
     callGateway.mockImplementation(
       gatewayHealthResponse({
-        server: { version: "2026.8.1", connId: "tls-ready" },
+        server: { version: "2026.8.1", connId: "tls-ready", bootId: "readiness-boot" },
         health: null,
       }),
     );
@@ -92,7 +92,11 @@ describe("restart health", () => {
         configuredProbe,
         config: { gateway: { tls: { enabled: true } } },
       }),
-    ).resolves.toMatchObject({ reachable: true, gatewayVersion: "2026.8.1" });
+    ).resolves.toMatchObject({
+      reachable: true,
+      gatewayVersion: "2026.8.1",
+      gatewayBootId: "readiness-boot",
+    });
     expect(callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         localPortOverride: 18789,
@@ -101,28 +105,6 @@ describe("restart health", () => {
       }),
     );
   });
-
-  it.each(["running", "stopped"] as const)(
-    "preserves the boot that supplied health when service is %s",
-    async (status) => {
-      callGateway.mockImplementation(
-        gatewayHealthResponse({
-          server: { version: "2026.8.1", bootId: "health-boot" },
-        }),
-      );
-      const snapshot = await inspectGatewayRestartWithSnapshot({
-        runtime: status === "running" ? { status, pid: 4242 } : { status },
-        portUsage: {
-          port: 18789,
-          status: "busy",
-          listeners: [{ pid: 4242, command: "openclaw-gateway" }],
-          hints: [],
-        },
-        expectedVersion: "2026.8.1",
-      });
-      expect(snapshot).toMatchObject({ healthy: true, gatewayBootId: "health-boot" });
-    },
-  );
 
   it("does not exceed the start deadline when a listener never responds", async () => {
     const server = createServer(() => {});

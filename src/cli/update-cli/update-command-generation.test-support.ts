@@ -159,7 +159,6 @@ export function registerGenerationRecoveryTests(
       });
       mocks.health.mockImplementation(async ({ port, expectedVersion }) => ({
         healthy: mocks.running,
-        gatewayBootId: "service-boot",
         staleGatewayPids: [],
         runtime: { status: mocks.running ? "running" : "stopped" },
         gatewayVersion: mocks.running ? VERSION : undefined,

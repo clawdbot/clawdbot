@@ -1065,9 +1065,15 @@ Codex harness forwards the other bootstrap files as developer instructions:
   should use `memory_search` or `memory_get` when durable memory is relevant.
   If tools are disabled, memory search is unavailable, or the active
   workspace differs from the agent memory workspace, `MEMORY.md` uses the
-  normal bounded turn-context path instead.
-- `BOOTSTRAP.md`, when present, is forwarded as OpenClaw turn input reference
-  context.
+  bounded turn input reference path instead.
+- `BOOTSTRAP.md`, when present, uses the same turn input reference path.
+  These references are introduced on the first turn of a new native thread,
+  after a cold resume (including a Gateway restart), after native compaction,
+  or when their rendered content changes. Unchanged references are omitted
+  on subsequent warm turns once the complete reference block has been submitted.
+  If prompt fitting drops or truncates the block, a later turn introduces it again.
+  Tracking is process-local; reference content
+  remains ordinary user input in native history.
 
 ## Environment overrides
 

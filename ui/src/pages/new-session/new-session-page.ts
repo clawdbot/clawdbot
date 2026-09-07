@@ -35,7 +35,6 @@ import {
   closeAgentPicker,
   closeSessionMenus,
   createControllerHost,
-  handleSessionPickerEvent,
   isPlaceTopologyEvent,
   presenceStateSignature,
 } from "./new-session-runtime.ts";
@@ -235,19 +234,16 @@ export class NewSessionPage extends OpenClawLightDomElement {
     if (event instanceof KeyboardEvent) {
       focusChatComposerFromPrintableKeydown(this, event);
     }
-    handleSessionPickerEvent(this, event);
   }
 
   override connectedCallback() {
     super.connectedCallback();
     document.addEventListener("keydown", this, true);
-    document.addEventListener("pointerdown", this, true);
     window.addEventListener("beforeunload", this.flushDraft);
   }
 
   override disconnectedCallback() {
     document.removeEventListener("keydown", this, true);
-    document.removeEventListener("pointerdown", this, true);
     window.removeEventListener("beforeunload", this.flushDraft);
     retainDraft(this.context, this.submission, this.openedFor, this.messageOwnerKey);
     this.subscriptions.clear();

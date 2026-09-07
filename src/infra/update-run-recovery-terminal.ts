@@ -16,7 +16,7 @@ import { mutateRecovery, readRecoveries, requireRevision } from "./update-run-re
 import type { UpdateRecoveryFence } from "./update-run-recovery.js";
 
 /**
- * Executor must finish awaited package/checkpoint/serving verification first.
+ * Executor must finish awaited package/checkpoint/readiness verification first.
  * assertReady revalidates that live authority and current final proof synchronously
  * inside the same transaction. Neither persisted receipts nor package roles are
  * service authority. No filesystem retirement occurs in this function.
@@ -50,6 +50,11 @@ export function commitUpdateRecoveryTerminal(
         !verification ||
         verification.runtime !== runtime ||
         verification.receipt.runId !== record.runId ||
+        verification.receipt.transactionId !== record.transactionId ||
+        verification.receipt.claimId !== record.claimId ||
+        verification.receipt.revision + 1 !== record.revision ||
+        verification.receipt.runtime !== runtime ||
+        verification.receipt.effectId !== verification.effectId ||
         verification.receipt.gateway.version !== identity.version ||
         verification.receipt.gateway.buildId !== identity.buildId ||
         restart?.kind !== "service-restart" ||
@@ -178,8 +183,7 @@ export function commitUpdateRecoveryTerminal(
         record.runId,
         {
           status: input.status,
-          version: identity.version,
-          buildId: identity.buildId,
+          receipt: verification.receipt,
           ...(record.primaryFailure ? { reason: record.primaryFailure.code } : {}),
         },
         options,

@@ -2,6 +2,7 @@ package ai.openclaw.app.ui
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.recalculateWindowInsets
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.DrawerState
@@ -16,6 +17,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
@@ -63,6 +65,7 @@ internal fun bookPaneBounds(
 internal fun SidebarNavigationShell(
   drawerState: DrawerState,
   bookPanes: BookPaneBounds? = null,
+  sidebarBand: IntRect? = null,
   gesturesEnabled: Boolean = true,
   drawerContent: @Composable () -> Unit,
   content: @Composable () -> Unit,
@@ -78,7 +81,20 @@ internal fun SidebarNavigationShell(
       key(drawerState) {
         ModalDrawerSheet(
           drawerState = drawerState,
-          modifier = Modifier.widthIn(max = 360.dp).testTag("sidebar-drawer"),
+          modifier =
+            Modifier
+              .widthIn(max = 360.dp)
+              .fillMaxWidth()
+              .layout { measurable, constraints ->
+                // Keep Material's real width anchors; only the stationary vertical band changes.
+                val height = sidebarBand?.height ?: constraints.maxHeight
+                val sheet = measurable.measure(Constraints.fixed(constraints.maxWidth, height))
+                layout(sheet.width, constraints.maxHeight) {
+                  sheet.place(0, sidebarBand?.top ?: 0)
+                }
+              }.recalculateWindowInsets()
+              .clipToBounds()
+              .testTag("sidebar-drawer"),
         ) {
           // The closed empty sheet retains real measured anchors in permanent mode.
           if (bookPanes == null) sidebar()

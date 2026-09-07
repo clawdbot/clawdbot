@@ -4,6 +4,7 @@
 import { getPublicKeyAsync, hashes, signAsync, utils } from "@noble/ed25519";
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { DevicePairingList } from "../../../../src/gateway/device-pairing-list.types.js";
 import {
   type DeviceAuthEntry,
   type DeviceAuthStore,
@@ -14,6 +15,13 @@ import { getSafeLocalStorage } from "../../local-storage.ts";
 import { cloneConfigObject, removePathValue, setPathValue } from "../config-form-utils.ts";
 // Shared Nodes operations used by the Control UI page and Gateway event hooks.
 import { formatUiError } from "../format-error.ts";
+
+export type {
+  DevicePairingList,
+  DeviceTokenSummary,
+  PairedDevice,
+  PendingDevice,
+} from "../../../../src/gateway/device-pairing-list.types.js";
 
 // @noble/ed25519 defaults its SHA-512 to crypto.subtle, which browsers gate to
 // secure contexts. On plain-HTTP origins the pure-JS digests load lazily so
@@ -35,55 +43,6 @@ type GatewayRequestClient = {
 type NodesGatewaySnapshot = {
   client: GatewayRequestClient | null;
   connected: boolean;
-};
-
-export type DeviceTokenSummary = {
-  role: string;
-  scopes?: string[];
-  createdAtMs?: number;
-  rotatedAtMs?: number;
-  revokedAtMs?: number;
-  lastUsedAtMs?: number;
-};
-
-export type PendingDevice = {
-  requestId: string;
-  deviceId: string;
-  publicKey?: string;
-  displayName?: string;
-  role?: string;
-  roles?: string[];
-  scopes?: string[];
-  remoteIp?: string;
-  isRepair?: boolean;
-  ts?: number;
-};
-
-export type PairedDevice = {
-  deviceId: string;
-  publicKey?: string;
-  displayName?: string;
-  /** Operator-assigned label; preferred over client displayName when rendering. */
-  operatorLabel?: string;
-  platform?: string;
-  clientId?: string;
-  clientMode?: string;
-  role?: string;
-  roles?: string[];
-  scopes?: string[];
-  remoteIp?: string;
-  tokens?: DeviceTokenSummary[];
-  approvedVia?: "owner" | "silent" | "trusted-cidr" | "ssh-verified" | "bootstrap";
-  /** Server-computed: the device currently holds a live gateway connection. */
-  connected?: boolean;
-  createdAtMs?: number;
-  approvedAtMs?: number;
-  lastSeenAtMs?: number;
-};
-
-export type DevicePairingList = {
-  pending: PendingDevice[];
-  paired: PairedDevice[];
 };
 
 export type ExecSecurity = "deny" | "allowlist" | "full";
@@ -293,10 +252,7 @@ export async function loadDevices(state: DevicesState, opts?: { quiet?: boolean 
   }
   const generation = state.requestGeneration;
   try {
-    const res = await client.request<{
-      pending?: Array<PendingDevice>;
-      paired?: Array<PairedDevice>;
-    }>("device.pair.list", {});
+    const res = await client.request<Partial<DevicePairingList>>("device.pair.list", {});
     if (isCurrentNodesRequest(state, client, generation)) {
       state.devicesList = {
         pending: Array.isArray(res?.pending) ? res.pending : [],

@@ -3,6 +3,7 @@ import { reopenPackageUpdateTransaction } from "../../infra/package-update-recov
 import { createUpdateRecoveryCheckpointAdapter } from "../../infra/update-run-recovery-checkpoint.js";
 import { createUpdateRecoveryPackageHooks } from "../../infra/update-run-recovery-package.js";
 import { createUpdateRecoveryCheckpointReplay } from "../../infra/update-run-recovery-replay.js";
+import type { UpdateRecoveryReadinessReceipt } from "../../infra/update-run-recovery-schema.js";
 import { commitUpdateRecoveryTerminal } from "../../infra/update-run-recovery-terminal.js";
 import {
   assertExactUpdateRecoveryClaim,
@@ -11,7 +12,6 @@ import {
   UpdateRecoveryRequiredError,
   type UpdateRecoveryRecord,
 } from "../../infra/update-run-recovery.js";
-import type { UpdateServingReceipt } from "../../infra/update-serving-verification-receipt.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { OpenClawStateLeaseContext } from "../../state/openclaw-state-lease.js";
 import type { UpdateCommandOptions } from "./shared.js";
@@ -68,7 +68,7 @@ export function assertUpdateCommandRecovery(
 
 export function persistUpdateCommandServingReceipt(
   opts: UpdateCommandOptions,
-  receipt: UpdateServingReceipt,
+  receipt: UpdateRecoveryReadinessReceipt,
 ): UpdateRecoveryRecord | undefined {
   const recovery = opts.recovery;
   if (!recovery) {
@@ -81,7 +81,7 @@ export function persistUpdateCommandServingReceipt(
   const record = recovery.getRecord();
   const restart = record.effects.at(-1);
   if (restart?.kind !== "service-restart" || restart.state !== "observed") {
-    throw new UpdateCommandRecoveryPendingError("Reconcile the restart before serving proof.");
+    throw new UpdateCommandRecoveryPendingError("Reconcile the restart before readiness proof.");
   }
   const next = recordUpdateRecoveryVerification(
     record,

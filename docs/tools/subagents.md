@@ -355,9 +355,13 @@ starting a sibling. The requester is announced once such a follow-up finishes
 normally; a follow-up that yields again leaves the run paused and the requester
 waiting.
 
-Automatic continuation is specific to the plugin runtime API above. Ordinary
-follow-ups through routes not tracked as sub-agent runs neither continue the
-paused run nor announce its requester.
+The registry also continues a yielded sub-agent when its announced children
+settle, including an orchestrator spawned by cron. That internal settlement
+wake preserves the original requester and delivers the orchestrator's completion
+there. Ordinary follow-ups through routes not tracked as sub-agent runs neither
+continue the paused run nor announce its requester. See
+[Subagent yield handoff](/concepts/subagent-yield-handoff) for lifecycle ownership
+and the remaining boundary for channel progress after yield.
 
 Among plugin runtime follow-ups, continuation applies to those that use default
 delivery. A follow-up that supplies its own requester or completion-delivery

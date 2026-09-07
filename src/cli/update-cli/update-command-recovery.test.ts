@@ -172,15 +172,18 @@ async function fixture(rollback = false) {
   persistUpdateCommandServingReceipt(opts, {
     runId: run.runId,
     gateway: { bootId: "boot", version: rollback ? from.version : to.version, buildId: null },
-    agentId: "main",
-    sessionKey: "agent:main:test",
-    sessionId: "session",
-    agentRunId: randomUUID(),
-    transcript: {
-      generation: "g",
-      maxSeq: 2,
-      user: { entryId: "u", seq: 1 },
-      assistant: { entryId: "a", seq: 2 },
+    kind: "readiness",
+    transactionId: record.transactionId,
+    claimId: record.claimId,
+    revision: record.revision,
+    effectId: restartId,
+    runtime,
+    checks: {
+      serviceRunning: true,
+      pluginsReady: true,
+      channelsReady: true,
+      settled: true,
+      readyz: true,
     },
     verifiedAtMs: Date.now(),
   });
@@ -262,7 +265,7 @@ describe("durable terminal finalizer consumer", () => {
     expect(committed?.package?.descriptor.retention?.state).toBe("selected");
     expect(getUpdateRun(f.run.runId, f.options)?.status).toBe("succeeded");
     expect(await fs.readFile(path.join(f.backup, "package.json"), "utf8")).toContain("1.0.0");
-    expect(JSON.stringify(getUpdateRun(f.run.runId, f.options))).not.toContain("agent:main:test");
+    expect(JSON.stringify(getUpdateRun(f.run.runId, f.options))).not.toContain("pluginsReady");
   });
 
   it("leaves rolled-back material for explicit retirement without selecting a replacement", async () => {

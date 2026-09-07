@@ -116,6 +116,7 @@ export async function executeMutableUpdate(params: {
   packageInstallSpec: string | null;
   packageInstallEnv?: NodeJS.ProcessEnv;
   packageInstallTarget?: ResolvedGlobalInstallTarget;
+  packageTargetVersion?: string;
   packageTargetSchemaVersions?: OpenClawSchemaVersions;
   packageUpdateNodeRunner?: string;
   managedServiceNodeRunner?: string;
@@ -527,6 +528,17 @@ export async function executeMutableUpdate(params: {
       });
     }
     if (params.updateInstallKind === "package") {
+      await recheckSchemas(params.packageTargetSchemaVersions);
+      const { preflightConfiguredNpmPluginTargets } =
+        await import("./update-command-plugin-preflight.js");
+      const context = admission!.contexts.at(-1)!;
+      await preflightConfiguredNpmPluginTargets({
+        config: context.configSnapshot.sourceConfig,
+        env: context.env,
+        targetVersion: params.packageTargetVersion ?? null,
+        channel: params.channel,
+        timeoutMs: params.updateStepTimeoutMs,
+      });
       await recheckSchemas(params.packageTargetSchemaVersions);
       await params.prepareMutableUpdate(admission?.managedEnv);
       await stopManagedServiceBeforeMutableUpdate(undefined, "inspect");

@@ -23,6 +23,12 @@ import {
 import { setupNativeManagerFixture } from "./update-run-recovery-native.test-support.js";
 import { defineUpdateRecoveryPackageTests } from "./update-run-recovery-package.test-support.js";
 import {
+  decodeUpdateRecovery,
+  encodeUpdateRecovery,
+  inspectUpdateRecovery,
+  type UpdateRecoveryReadinessReceipt,
+} from "./update-run-recovery-schema.js";
+import {
   acceptUpdateRecoveryHandoff,
   assertNoPendingUpdateRecovery,
   assertUpdateRecoveryClaim,
@@ -30,6 +36,7 @@ import {
   bindUpdateRecoveryCheckpoint,
   claimUpdateRecovery,
   loadUpdateRecoveries,
+  inspectUpdateRecoveries,
   loadUpdateRecovery,
   prepareUpdateRecoveryHandoff,
   recordUpdateRecoveryFailure,
@@ -39,7 +46,6 @@ import {
   UpdateRecoveryConflictError,
   UpdateRecoveryRequiredError,
 } from "./update-run-recovery.js";
-import type { UpdateServingReceipt } from "./update-serving-verification-receipt.js";
 
 const tempDirs = createTempDirTracker();
 // Test owns every writer of these disposable databases.
@@ -85,7 +91,7 @@ function beginCapturedRecovery(fixture: ReturnType<typeof setup>) {
   );
   return bindUpdateRecoveryCheckpoint(record, checkpointFor(fixture), fence, fixture.options);
 }
-function setupServing(runtime: "candidate" | "previous" = "candidate") {
+function setupReadiness(runtime: "candidate" | "previous" = "candidate") {
   const fixture = setup();
   const record = beginCapturedRecovery(fixture);
   const restartEffectId = randomUUID();
@@ -110,18 +116,21 @@ function setupServing(runtime: "candidate" | "previous" = "candidate") {
     fixture.options,
   );
   const identity = runtime === "candidate" ? fixture.to : fixture.from;
-  const receipt: UpdateServingReceipt = {
+  const receipt: UpdateRecoveryReadinessReceipt = {
+    kind: "readiness",
     runId: fixture.run.runId,
+    transactionId: observed.transactionId,
+    claimId: observed.claimId,
+    revision: observed.revision,
+    effectId: restartEffectId,
+    runtime,
     gateway: { bootId: "serving-boot", version: identity.version, buildId: identity.buildId },
-    agentId: "main",
-    sessionKey: "agent:main:update-verification:synthetic",
-    sessionId: "synthetic-session",
-    agentRunId: randomUUID(),
-    transcript: {
-      generation: "synthetic-generation",
-      maxSeq: 3,
-      user: { entryId: "synthetic-user", seq: 1 },
-      assistant: { entryId: "synthetic-assistant", seq: 3 },
+    checks: {
+      serviceRunning: true,
+      pluginsReady: true,
+      channelsReady: true,
+      settled: true,
+      readyz: true,
     },
     verifiedAtMs: Date.now(),
   };
@@ -296,7 +305,7 @@ describe("durable update recovery", () => {
   });
 
   it("fences the parent before a single-use handoff and accepts the fresh candidate after reopening", () => {
-    const { root, options, run, observed, receipt, to } = setupServing();
+    const { root, options, run, observed, receipt, to } = setupReadiness();
     const verified = recordUpdateRecoveryVerification(
       observed,
       { runtime: "candidate", receipt },
@@ -430,7 +439,7 @@ describe("durable update recovery", () => {
   it.each(["candidate", "previous"] as const)(
     "reopens private %s proof bound to the observed boot without exposing it in history",
     (runtime) => {
-      const { options, run, observed, receipt, restartEffectId } = setupServing(runtime);
+      const { options, run, observed, receipt, restartEffectId } = setupReadiness(runtime);
       const recorded = recordUpdateRecoveryVerification(
         observed,
         { runtime, receipt },
@@ -443,41 +452,168 @@ describe("durable update recovery", () => {
         effectId: restartEffectId,
         receipt,
       });
-      expect(JSON.stringify(getUpdateRun(run.runId, options))).not.toContain(receipt.sessionId);
+      expect(JSON.stringify(getUpdateRun(run.runId, options))).not.toContain(
+        receipt.gateway.bootId,
+      );
       expect(recorded.revision).toBe(observed.revision + 1);
     },
   );
 
-  it.each(["run", "version", "build", "boot", "runtime"] as const)(
-    "rejects proof from a different %s without changing persisted state",
-    (mismatch) => {
-      const { options, run, observed, receipt } = setupServing();
-      if (mismatch === "run") {
-        receipt.runId = randomUUID();
+  it.each([
+    "run",
+    "version",
+    "build",
+    "boot",
+    "runtime",
+    "transaction",
+    "claim",
+    "revision",
+    "effect",
+  ] as const)("rejects proof from a different %s without changing persisted state", (mismatch) => {
+    const { options, run, observed, receipt } = setupReadiness();
+    if (mismatch === "transaction") {
+      receipt.transactionId = randomUUID();
+    }
+    if (mismatch === "claim") {
+      receipt.claimId = randomUUID();
+    }
+    if (mismatch === "revision") {
+      receipt.revision++;
+    }
+    if (mismatch === "effect") {
+      receipt.effectId = randomUUID();
+    }
+    if (mismatch === "run") {
+      receipt.runId = randomUUID();
+    }
+    if (mismatch === "version") {
+      receipt.gateway.version = "3.0.0";
+    }
+    if (mismatch === "build") {
+      receipt.gateway.buildId = null;
+    }
+    if (mismatch === "boot") {
+      receipt.gateway.bootId = "another-boot";
+    }
+    expect(() =>
+      recordUpdateRecoveryVerification(
+        observed,
+        {
+          runtime: mismatch === "runtime" ? "previous" : "candidate",
+          receipt,
+        },
+        fence,
+        options,
+      ),
+    ).toThrow("final observed update runtime");
+    expect(loadUpdateRecovery(run.runId, options)).toEqual(observed);
+  });
+
+  it.each(["serviceRunning", "pluginsReady", "channelsReady", "settled", "readyz"] as const)(
+    "refuses incomplete %s evidence without persisting verification",
+    (check) => {
+      const { options, run, observed, receipt } = setupReadiness();
+      for (const value of [false, undefined]) {
+        const input = { ...receipt, checks: { ...receipt.checks, [check]: value } };
+        expect(() =>
+          recordUpdateRecoveryVerification(
+            observed,
+            {
+              runtime: "candidate",
+              receipt: input as UpdateRecoveryReadinessReceipt,
+            },
+            fence,
+            options,
+          ),
+        ).toThrow();
+        expect(loadUpdateRecovery(run.runId, options)).toEqual(observed);
       }
-      if (mismatch === "version") {
-        receipt.gateway.version = "3.0.0";
-      }
-      if (mismatch === "build") {
-        receipt.gateway.buildId = null;
-      }
-      if (mismatch === "boot") {
-        receipt.gateway.bootId = "another-boot";
-      }
-      expect(() =>
-        recordUpdateRecoveryVerification(
-          observed,
-          {
-            runtime: mismatch === "runtime" ? "previous" : "candidate",
-            receipt,
-          },
-          fence,
-          options,
-        ),
-      ).toThrow("final observed update runtime");
-      expect(loadUpdateRecovery(run.runId, options)).toEqual(observed);
     },
   );
+
+  it("inspects retained legacy transcript verification without rewriting or admitting work", () => {
+    const { options, run, observed, receipt } = setupReadiness();
+    const legacy = {
+      runId: run.runId,
+      gateway: receipt.gateway,
+      verifiedAtMs: receipt.verifiedAtMs,
+      agentId: "main",
+      sessionKey: "agent:main:legacy",
+      sessionId: "legacy-session",
+      agentRunId: randomUUID(),
+      transcript: {
+        generation: "legacy",
+        maxSeq: 2,
+        user: { entryId: "u", seq: 1 },
+        assistant: { entryId: "a", seq: 2 },
+      },
+    };
+    const raw = JSON.stringify({
+      ...observed,
+      verification: {
+        runtime: "candidate",
+        effectId: receipt.effectId,
+        receipt: legacy,
+      },
+    });
+    const { db } = openOpenClawStateDatabase(options);
+    const key = "update.recovery." + run.runId;
+    db.prepare("UPDATE config_machine_state SET value_json=? WHERE state_key=?").run(raw, key);
+    const inspected = inspectUpdateRecoveries(options);
+    expect(inspected).toHaveLength(1);
+    expect(inspected[0]).toEqual({ format: "legacy-serving", raw, record: JSON.parse(raw) });
+    expect(() => loadUpdateRecovery(run.runId, options)).toThrow(/legacy.*readiness/i);
+    expect(() => assertNoPendingUpdateRecovery(options)).toThrow(/legacy.*readiness/i);
+    expect(
+      db.prepare("SELECT value_json FROM config_machine_state WHERE state_key=?").get(key)
+        ?.value_json,
+    ).toBe(raw);
+    // Neither silently discarding proof nor translating a transcript into readiness is allowed.
+    expect(inspectUpdateRecovery(raw, run.runId)).toEqual(inspected[0]);
+    expect(() => decodeUpdateRecovery(raw, run.runId)).toThrow(/legacy.*readiness/i);
+    expect(() => claimUpdateRecovery(observed, fence, options)).toThrow();
+    expect(() =>
+      recordUpdateRecoveryVerification(observed, { runtime: "candidate", receipt }, fence, options),
+    ).toThrow();
+    expect(
+      db.prepare("SELECT value_json FROM config_machine_state WHERE state_key=?").get(key)
+        ?.value_json,
+    ).toBe(raw);
+    const corrupt = JSON.parse(raw);
+    corrupt.verification.receipt.transcript.assistant.seq = 0;
+    expect(() => inspectUpdateRecovery(JSON.stringify(corrupt), run.runId)).toThrow();
+    const stale = JSON.parse(raw);
+    stale.effects.push({
+      ...observed.effects.at(-1),
+      effectId: randomUUID(),
+      observedIdentity: "later-boot",
+    });
+    expect(() => inspectUpdateRecovery(JSON.stringify(stale), run.runId)).toThrow();
+    corrupt.verification.receipt = { ...legacy, kind: "readiness" };
+    expect(() => inspectUpdateRecovery(JSON.stringify(corrupt), run.runId)).toThrow();
+    expect(() => inspectUpdateRecovery(raw, randomUUID())).toThrow("history run");
+    const bare = { ...observed, verification: null };
+    expect(encodeUpdateRecovery(decodeUpdateRecovery(JSON.stringify(bare), run.runId))).toBe(
+      JSON.stringify(bare),
+    );
+  });
+
+  it("cannot reuse same-boot readiness after the claim is reclaimed", () => {
+    const { options, run, observed, receipt } = setupReadiness();
+    const claimed = claimUpdateRecovery(observed, fence, options);
+    expect(() =>
+      recordUpdateRecoveryVerification(
+        claimed,
+        {
+          runtime: "candidate",
+          receipt,
+        },
+        fence,
+        options,
+      ),
+    ).toThrow();
+    expect(loadUpdateRecovery(run.runId, options)).toEqual(claimed);
+  });
 
   it.each([
     "service-restart",
@@ -485,43 +621,52 @@ describe("durable update recovery", () => {
     "package-activation",
     "package-restore",
     "claim",
-  ] as const)("invalidates serving proof before %s and rejects a stale revision", (transition) => {
-    const { options, run, observed, receipt } = setupServing();
-    const verified = recordUpdateRecoveryVerification(
-      observed,
-      { runtime: "candidate", receipt },
-      fence,
-      options,
-    );
-    const next =
-      transition === "claim"
-        ? claimUpdateRecovery(verified, fence, options)
-        : recordUpdateRecoveryIntent(
-            verified,
-            {
-              effectId: randomUUID(),
-              kind: transition,
-              resourceId: "gateway",
-              runtime: "candidate",
-            },
-            fence,
-            options,
-          );
-    expect(loadUpdateRecovery(run.runId, options)?.verification).toBeNull();
-    expect(() =>
-      recordUpdateRecoveryVerification(verified, { runtime: "candidate", receipt }, fence, options),
-    ).toThrow(UpdateRecoveryConflictError);
-    if (transition !== "claim") {
+  ] as const)(
+    "invalidates readiness proof before %s and rejects a stale revision",
+    (transition) => {
+      const { options, run, observed, receipt } = setupReadiness();
+      const verified = recordUpdateRecoveryVerification(
+        observed,
+        { runtime: "candidate", receipt },
+        fence,
+        options,
+      );
+      const next =
+        transition === "claim"
+          ? claimUpdateRecovery(verified, fence, options)
+          : recordUpdateRecoveryIntent(
+              verified,
+              {
+                effectId: randomUUID(),
+                kind: transition,
+                resourceId: "gateway",
+                runtime: "candidate",
+              },
+              fence,
+              options,
+            );
+      expect(loadUpdateRecovery(run.runId, options)?.verification).toBeNull();
       expect(() =>
-        recordUpdateRecoveryVerification(next, { runtime: "candidate", receipt }, fence, options),
-      ).toThrow("final observed update runtime");
-    }
-  });
+        recordUpdateRecoveryVerification(
+          verified,
+          { runtime: "candidate", receipt },
+          fence,
+          options,
+        ),
+      ).toThrow(UpdateRecoveryConflictError);
+      if (transition !== "claim") {
+        expect(() =>
+          recordUpdateRecoveryVerification(next, { runtime: "candidate", receipt }, fence, options),
+        ).toThrow("final observed update runtime");
+      }
+    },
+  );
 
   it("keeps missing-state reads non-creating", () => {
     const root = tempDirs.make("openclaw-update-recovery-empty-");
     const options = { env: { OPENCLAW_STATE_DIR: root } };
     expect(loadUpdateRecoveries(options)).toEqual([]);
+    expect(inspectUpdateRecoveries(options)).toEqual([]);
     expect(() => assertNoPendingUpdateRecovery(options)).not.toThrow();
     expect(fs.readdirSync(root)).toEqual([]);
   });

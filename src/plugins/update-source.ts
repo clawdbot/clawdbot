@@ -444,33 +444,38 @@ export function isTrustedSourceLinkedOfficialBridgeNpmInstall(params: {
   return Boolean(officialPackageName && requestedPackageName === officialPackageName);
 }
 
-export async function resolveNpmUpdateSpecs(params: {
+/** Shares recorded target and catalog replacement precedence with update admission. */
+export function resolveNpmUpdateTarget(params: {
   record: PluginInstallRecord;
+  trustedOfficialInstall?: ReturnType<
+    typeof officialInstallRecords.resolveTrustedSourceLinkedOfficialNpmInstall
+  >;
   specOverride?: string;
-  officialSpecOverride?: string;
+  syncOfficialPluginInstalls?: boolean;
   updateChannel?: UpdateChannel;
-  officialPackageName?: string;
   coreVersion?: string;
   timeoutMs?: number;
-}): Promise<{
-  installSpec?: string;
-  recordSpec?: string;
-  fallbackSpec?: string;
-  fallbackLabel?: string;
-  npmResolution?: NpmSpecResolution;
-  channelReason?: "tag-behind-latest";
-}> {
-  const recordSpec = params.specOverride ?? params.record.spec ?? params.officialSpecOverride;
-  if (!recordSpec) {
-    return {};
-  }
-  return resolveNpmInstallSpecsForUpdateChannel({
-    spec: recordSpec,
-    updateChannel: params.updateChannel,
-    officialPackageName: params.officialPackageName,
-    coreVersion: params.coreVersion,
-    timeoutMs: params.timeoutMs,
-  });
+}) {
+  const official = params.trustedOfficialInstall;
+  const specOverride =
+    params.specOverride ??
+    (official?.replacementPluginId || official?.replaceNpmPackage ? official.npmSpec : undefined);
+  const spec =
+    specOverride ??
+    params.record.spec ??
+    (params.syncOfficialPluginInstalls ? official?.npmSpec : undefined);
+  return {
+    specOverride,
+    target: spec
+      ? {
+          spec,
+          updateChannel: params.updateChannel,
+          officialPackageName: resolveNpmSpecPackageName(official?.npmSpec),
+          coreVersion: params.coreVersion,
+          timeoutMs: params.timeoutMs,
+        }
+      : undefined,
+  };
 }
 
 export function resolveClawHubUpdateSpecs(params: {

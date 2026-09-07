@@ -113,6 +113,7 @@ import {
 } from "../test-helpers/model-routing-decision-e2e-fixtures.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
+import { prepareCliBundleMcpCaptureAttempt, prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
@@ -4893,10 +4894,119 @@ describe("prepareCliRunContext", () => {
       const args = context.preparedBackend.backend.args ?? [];
       const mcpConfigPath = args[args.indexOf("--mcp-config") + 1];
       const rawBundle = JSON.parse(fs.readFileSync(mcpConfigPath ?? "", "utf-8")) as {
-        mcpServers?: Record<string, unknown>;
+        mcpServers?: Record<string, { timeout?: number }>;
       };
       expect(Object.keys(rawBundle.mcpServers ?? {})).toEqual(["openclaw"]);
+      expect(rawBundle.mcpServers?.openclaw?.timeout).toBe(3_610_000);
     } finally {
+      await cleanup?.();
+    }
+  });
+
+  it("preserves an existing user MCP timeout beside the generated Claude loopback", async () => {
+    const userMcpConfigPath = path.join(fixture.session.dir, "user-mcp.json");
+    fs.writeFileSync(
+      userMcpConfigPath,
+      JSON.stringify({
+        mcpServers: {
+          localUser: {
+            type: "http",
+            url: "http://127.0.0.1:43119/mcp",
+            timeout: 12_345,
+          },
+        },
+      }),
+    );
+    setRawCliBackendForPrepareTest({
+      id: "claude-cli",
+      pluginId: "anthropic",
+      bundleMcp: true,
+      bundleMcpMode: "claude-config-file",
+      config: {
+        command: "claude",
+        args: ["--print"],
+        resumeArgs: ["--resume", "{sessionId}"],
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        input: "stdin",
+        sessionMode: "existing",
+      },
+    });
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime: vi.fn(() => ({
+        port: 31783,
+        ownerToken: "loopback-owner-token",
+        nonOwnerToken: "loopback-non-owner-token",
+      })),
+      ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
+      createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
+      mintMcpLoopbackClientGrant: vi.fn(createTestMcpLoopbackClientGrant),
+      resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
+    });
+
+    let cleanup: (() => Promise<void>) | undefined;
+    let mergedCleanup: (() => Promise<void>) | undefined;
+    try {
+      const context = await fixture.prepare({
+        sessionKey: "agent:main:main",
+        provider: "claude-cli",
+        config: createCliBackendConfig(),
+      });
+      cleanup = context.preparedBackend.cleanup;
+      expect(context.params.cliToolAvailability).toBeUndefined();
+      const args = context.preparedBackend.backend.args ?? [];
+      const generatedConfigPath = expectDefined(
+        args[args.indexOf("--mcp-config") + 1],
+        "generated Claude MCP config path",
+      );
+      const generatedConfig = JSON.parse(
+        fs.readFileSync(generatedConfigPath, "utf-8"),
+      ) as NonNullable<Parameters<typeof prepareCliBundleMcpConfig>[0]["additionalConfig"]>;
+      expect(generatedConfig.mcpServers.openclaw?.timeout).toBe(3_610_000);
+
+      const merged = await prepareCliBundleMcpConfig({
+        enabled: true,
+        mode: "claude-config-file",
+        backend: {
+          command: "claude",
+          args: ["--print", "--mcp-config", userMcpConfigPath],
+          resumeArgs: ["--resume", "{sessionId}", "--mcp-config", userMcpConfigPath],
+        },
+        workspaceDir: fixture.session.dir,
+        additionalConfig: generatedConfig,
+      });
+      mergedCleanup = merged.cleanup;
+      const mergedArgs = merged.backend.args ?? [];
+      const mcpConfigPath = expectDefined(
+        mergedArgs[mergedArgs.indexOf("--mcp-config") + 1],
+        "merged Claude MCP config path",
+      );
+      const readConfig = () =>
+        JSON.parse(fs.readFileSync(mcpConfigPath, "utf-8")) as {
+          mcpServers?: Record<string, { headers?: Record<string, string>; timeout?: number }>;
+        };
+
+      expect(readConfig().mcpServers).toMatchObject({
+        openclaw: { timeout: 3_610_000 },
+        localUser: { timeout: 12_345 },
+      });
+
+      await prepareCliBundleMcpCaptureAttempt({
+        mode: "claude-config-file",
+        backend: merged.backend,
+        env: merged.env,
+        captureKey: "attempt-timeout-proof",
+      });
+
+      expect(readConfig().mcpServers).toMatchObject({
+        openclaw: {
+          timeout: 3_610_000,
+          headers: { "x-openclaw-cli-capture-key": "attempt-timeout-proof" },
+        },
+        localUser: { timeout: 12_345 },
+      });
+    } finally {
+      await mergedCleanup?.();
       await cleanup?.();
     }
   });

@@ -184,6 +184,6 @@ export function describeSecretsTool(): string {
     "Request waits for human; value goes straight to shared store, never model/chat. Use the returned store SecretRef for supported config fields.",
     "Gateway egress only: enabled proxy + exact allowedHosts required; no hosts blocks egress, not config refs. No plaintext fallback.",
     SECRET_EGRESS_USAGE_PROMPT,
-    "Operator-set env entries are readable; never request them here. no_answer: report blocker or use best judgment, never ask for credentials in chat.",
+    "Operator-set env entries are readable and managed separately from this protected store. no_answer means no credential was supplied.",
   ].join(" ");
 }

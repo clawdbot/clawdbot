@@ -17,6 +17,7 @@ import { appendUpdateRecoveryAfterImage } from "./update-run-recovery-after-imag
 import { UPDATE_RECOVERY_KEY_END, UPDATE_RECOVERY_KEY_PREFIX } from "./update-run-recovery-keys.js";
 import {
   UpdateRecoveryRecordSchema,
+  UpdateRecoveryReadinessReceiptSchema,
   decodeUpdateRecovery,
   encodeUpdateRecovery,
   UpdateRecoveryConflictError,
@@ -24,6 +25,7 @@ import {
   parseUpdateRecoveryCheckpoint,
   sealUpdateRecoveryPublication,
   UpdateRecoveryRestoreProgressSchema,
+  type UpdateRecoveryInspection,
   type UpdateRecoveryAfterImage,
   type UpdateRecoveryRestoreProgress,
   type UpdateRecoveryEffect,
@@ -35,6 +37,7 @@ import {
 } from "./update-run-recovery-snapshot.js";
 import {
   readRecoveries,
+  inspectRecoveries,
   writeRecovery,
   requireRevision,
   mutateRecovery,
@@ -62,6 +65,20 @@ export type UpdateRecoveryRevision = Pick<
 
 /** Correlation only. The receiving runtime must independently reacquire authority. */
 export type UpdateRecoveryHandoff = UpdateRecoveryRevision & { handoffId: string };
+
+/** Private read-only compatibility surface for diagnostics and retained-pair
+ * inspection. Legacy receipts remain exact historical evidence, never authority.
+ * Execution loaders below deliberately reject them instead of upgrading them. */
+export function inspectUpdateRecoveries(
+  options: OpenClawStateDatabaseOptions = {},
+): UpdateRecoveryInspection[] {
+  return (
+    withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+      ({ db }) => inspectRecoveries(db),
+      options,
+    ) ?? []
+  );
+}
 
 /** Must run before general database open, admission writes, or runtime migration. */
 export function loadUpdateRecoveries(
@@ -391,7 +408,7 @@ export function recordUpdateRecoveryFailure(
  * Persist the actual producer receipt after the final observed restart. The
  * restart owner supplies bootId as its observedIdentity. This only binds facts;
  * finalization still requires current lifecycle authority and fresh verification
- * after repair, restore, restart, abort, or transcript reset/rewrite.
+ * after repair, restore, restart, abort, or claim change.
  */
 export function recordUpdateRecoveryVerification(
   expected: UpdateRecoveryRevision,
@@ -403,7 +420,8 @@ export function recordUpdateRecoveryVerification(
     expected,
     fence,
     (record) => {
-      const { runtime, receipt } = verification;
+      const { runtime } = verification;
+      const receipt = UpdateRecoveryReadinessReceiptSchema.parse(verification.receipt);
       const identity = runtime === "candidate" ? record.to : record.from;
       const restart = record.effects.at(-1);
       if (
@@ -413,12 +431,17 @@ export function recordUpdateRecoveryVerification(
         restart.runtime !== runtime ||
         restart.observedIdentity !== receipt.gateway.bootId ||
         receipt.runId !== record.runId ||
+        receipt.transactionId !== record.transactionId ||
+        receipt.claimId !== record.claimId ||
+        receipt.revision !== record.revision ||
+        receipt.runtime !== runtime ||
+        receipt.effectId !== restart.effectId ||
         receipt.gateway.version !== identity.version ||
         receipt.gateway.buildId !== identity.buildId
       ) {
-        throw new Error("Serving verification does not match the final observed update runtime");
+        throw new Error("Readiness verification does not match the final observed update runtime");
       }
-      record.verification = { ...verification, effectId: restart.effectId };
+      record.verification = { runtime, receipt, effectId: restart.effectId };
     },
     options,
   );

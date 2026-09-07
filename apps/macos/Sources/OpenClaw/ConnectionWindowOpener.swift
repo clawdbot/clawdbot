@@ -14,7 +14,6 @@ enum ConnectionTab: CaseIterable, Hashable {
 @Observable
 final class ConnectionWindowOpener {
     static let shared = ConnectionWindowOpener()
-    static let windowID = "connection"
 
     var selectedTab: ConnectionTab = .connection
     private var openWindowAction: (@MainActor () -> Void)?

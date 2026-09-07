@@ -39,6 +39,20 @@ downtime through convergence and final verification, plus verification
 results. See
 [Validation and activation](/cli/update#validation-and-activation) for the checks.
 
+Package updates also check npm availability for enabled configured plugins before
+stopping the serving Gateway or replacing the installed core. The check uses the
+same plugin version rules as post-update synchronization, including release-cohort
+tracking, beta selection, and extended-stable targets. A missing version or registry
+error refuses the update with `plugin-target-unavailable`; `--dry-run` reports the
+same refusal. Retry when the registry or mirror is ready, select an older available
+core with `openclaw update --tag <version>`, or disable the affected plugin before
+retrying. Extended-stable does not accept `--tag`; retry later or explicitly switch
+channels. Bundled and path-installed plugins do not require registry requests.
+When enabled npm plugins need admission, a package spec whose core version cannot
+be resolved before staging is also refused; select an exact registry version.
+This metadata check does not reserve downloads, so later download failures can
+still require recovery.
+
 Switch channels or target a specific version:
 
 ```bash
@@ -100,6 +114,43 @@ leaves already-current packages in place so a no-op refresh does not require
 another restart.
 
 See [Release channels](/install/development-channels) for channel semantics.
+
+### Updating from 2026.9.2 across a schema bump
+
+When the target release needs a newer shared-state or registered agent database
+schema, its Doctor refuses an update driven by OpenClaw 2026.9.2 before applying
+repairs. That release introduced the update ledger but still accesses it with old
+code after running the target's Doctor. Migrating first would leave the updater
+unable to finish or safely restore the previous release.
+
+The refusal reports the on-disk and target schema versions and, when readable,
+the driving updater version. Let the failed update finish restoring the previous
+package. OpenClaw 2026.9.2 treats any failed post-install verification as unsafe
+for an automatic restart and leaves the Gateway service stopped; run
+`openclaw gateway start` to bring the previous release back on its untouched
+database, then run the manual update from a shell outside the Gateway. Replace
+`<target>` with the exact target version from the refusal:
+
+```bash
+openclaw gateway stop
+npm install -g openclaw@<target> --allow-scripts=openclaw
+openclaw doctor --fix
+openclaw gateway start
+```
+
+Run each command only after the previous one succeeds. On npm 11.15 and earlier,
+omit `--allow-scripts=openclaw`. For a pnpm-owned install, replace the install
+command with `pnpm add -g --allow-build=openclaw openclaw@<target>`; for Bun, use
+`bun add -g --trust openclaw@<target>`.
+
+Same-schema updates continue normally. Earlier updaters, including 2026.9.1,
+do not reopen shared state after Doctor and can cross schema bumps without this
+refusal. Later transactional updaters fence old ledger access and hand completion
+to the candidate, including 2026.9.3 prereleases. The guard requires an active update ledger run from an affected
+updater; a missing table or no running row preserves the earlier update behavior.
+The guard does not undo an earlier migration; if the database is already newer
+than the restored package, install a compatible target and finish Doctor before
+starting the Gateway. See [Database schemas](/reference/database-schemas).
 
 ### From chat
 
@@ -663,7 +714,7 @@ made after the backup.
 If a newly activated package fails verification, `openclaw update` compares the
 shared and affected per-agent SQLite `user_version` values with their
 pre-activation values and checks that configuration content is unchanged.
-Databases first created during activation or serving verification are
+Databases first created during activation or verification are
 schema-neutral when their version matches the candidate's supported version for
 that database kind. A changed schema version or missing pre-existing database,
 or a new database at a foreign version, still blocks rollback. Before restoring
@@ -674,8 +725,9 @@ update, it stops the candidate and restores the previous generation: package,
 command shim, service definition, and config writer stamp. Owned, writable
 service metadata is refreshed; protected service definitions are preserved.
 The CLI verifies the restarted previous Gateway's service health, version/build
-identity, plugins, channels, and `/readyz` again, then requires a new successful
-agent turn and fresh readback of its saved request and response.
+identity, plugins, channels, and `/readyz` again. Update verification does not use
+model inference: the managed service must be running and own its port, and the
+Gateway hello handshake must match the expected artifact.
 
 The candidate may have advanced the config writer stamp without changing config
 content. Rollback restores that stamp and uses the existing intentional-recovery
@@ -689,19 +741,11 @@ measured from service stop through verified recovery. The headline is
 verification failure. The command still exits nonzero; recovery does not turn a
 rejected candidate into a successful update.
 
-Serving verification is required, not advisory. It uses configured inference and
-has a 60-second budget. The saved reply must include the run-specific verification
-token as a whole word; punctuation or a short sentence around it is accepted.
-Unavailable inference, timeout, an incomplete turn, a non-matching response, or
-missing saved messages fails verification. `response-mismatch` means the turn was
-saved but its reply did not contain the token; `persistence-missing` means no
-committed request/response pair was found. Use `openclaw update status` for the
-recorded reason and `openclaw triage` to diagnose a failed check. Recovery guidance
-reports whether the Gateway is running or stopped from the latest service
-observation, even when a running candidate did not pass verification.
-A restored Gateway must pass its own serving
-check before the run can finish as `rolled-back`; candidate proof cannot be reused
-after a restart or restoration.
+Use `openclaw update status` for the recorded reason and `openclaw triage` to
+diagnose a failed check. Recovery guidance reports whether the Gateway is running
+or stopped from the latest service observation, even when a running candidate did
+not pass verification. A restored Gateway must pass its own verification checks
+before the run can finish as `rolled-back`.
 
 If configuration content changed or the databases are not schema-neutral, rollback is refused with
 `state-migrated-no-rollback`. The updater attempts
