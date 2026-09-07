@@ -43,7 +43,7 @@ decision across awaited work.
 
 ## Sandbox bind parsing
 
-`openclaw/plugin-sdk/sandbox-bind-spec` exports
+`openclaw/plugin-sdk/agent-harness-runtime` exports
 `splitSandboxBindSpec(spec, options?)`. It returns raw `{ host, container, options }`
 segments, or `null` when no host/container separator exists. Windows host drive
 prefixes are always preserved. Pass `{ allowWindowsContainerPath: true }` to

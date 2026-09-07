@@ -1,5 +1,5 @@
 // Policy plugin sandbox posture evidence.
-import { splitSandboxBindSpec } from "openclaw/plugin-sdk/sandbox-bind-spec";
+import { splitSandboxBindSpec } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   asNonArrayRecord,
   isRecord,

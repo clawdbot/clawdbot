@@ -420,10 +420,6 @@
     "./plugin-sdk/sandbox": {
       "default": "./dist/plugin-sdk/sandbox.js"
     },
-    "./plugin-sdk/sandbox-bind-spec": {
-      "types": "./dist/plugin-sdk/sandbox-bind-spec.d.ts",
-      "default": "./dist/plugin-sdk/sandbox-bind-spec.js"
-    },
     "./plugin-sdk/routing": {
       "types": "./dist/plugin-sdk/routing.d.ts",
       "default": "./dist/plugin-sdk/routing.js"

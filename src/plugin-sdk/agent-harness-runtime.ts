@@ -489,6 +489,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRun(
 
 export { resolveSandboxContext } from "../agents/sandbox.js";
 export type { SandboxContext, SandboxWorkspaceAccess } from "../agents/sandbox.js";
+export { splitSandboxBindSpec } from "../agents/sandbox/bind-spec.js";
 export {
   hasSandboxBindContainerPathAliases,
   hasSandboxBindReadonlyHostShadows,

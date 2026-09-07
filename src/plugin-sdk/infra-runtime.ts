@@ -142,7 +142,6 @@ export {
   resolveExecApprovalsSocketPath,
   resolveExecApprovalsTranscriptPath,
   resolveExecApprovalUnavailableDecisions,
-  resolveExecModePolicy,
   resolveExecutableTrustPath,
   resolveExecutionTargetCandidatePath,
   resolveExecutionTargetResolution,
