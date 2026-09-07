@@ -472,7 +472,7 @@ export async function writeConfigFileFromContext(
         });
       },
     });
-    recordUpdateDoctorConfigWrite(configPath, nextHash);
+    recordUpdateDoctorConfigWrite(configPath, previousHash, nextHash);
     try {
       options.assertConfigPathForWrite?.();
     } catch (error) {

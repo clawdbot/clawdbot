@@ -127,11 +127,15 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
     // Only the child writer can attribute bytes to Doctor; a later read may contain an operator save.
     const { hash } = await readUpdateConfigSnapshot(configSnapshot.path);
     const doctorHash = doctorResult?.configHash;
+    const doctorInputHash = doctorResult?.configInputHash;
     params.onConfigSnapshot?.({
       ...configSnapshot,
       hash,
       doctorOwned:
-        hash === (doctorHash === "unchanged" || !doctorHash ? configSnapshot.hash : doctorHash),
+        doctorInputHash === undefined
+          ? hash === configSnapshot.hash
+          : doctorInputHash === configSnapshot.hash &&
+            hash === (doctorHash === "unchanged" ? doctorInputHash : doctorHash),
     });
   }
   const completedDoctorStep = markPackagePostInstallDoctorAdvisory(doctorStep, doctorResult);

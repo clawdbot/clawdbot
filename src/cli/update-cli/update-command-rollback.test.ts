@@ -318,8 +318,11 @@ describe("verified package rollback", () => {
           { change: "readonly-config", previousVerified: true, restored: true, service: "stopped" },
         ]),
     { change: "doctor", previousVerified: true, restored: true, service: "stopped" },
+    { change: "doctor-unchanged", previousVerified: true, restored: true, service: "stopped" },
+    { change: "doctor-missing-input", previousVerified: true, restored: false, service: "stopped" },
     { change: "doctor-include", previousVerified: true, restored: true, service: "stopped" },
     { change: "doctor-include-edit", previousVerified: true, restored: false, service: "stopped" },
+    { change: "doctor-input-edit", previousVerified: true, restored: false, service: "stopped" },
     { change: "doctor-capture-edit", previousVerified: true, restored: false, service: "stopped" },
     { change: "doctor-operator-edit", previousVerified: true, restored: false, service: "stopped" },
     { change: "doctor-locked-edit", previousVerified: true, restored: false, service: "stopped" },
@@ -409,30 +412,50 @@ describe("verified package rollback", () => {
       if (change.startsWith("doctor")) {
         fs.writeFileSync(path.join(candidateRoot, "dist/entry.js"), "export {};\n");
         vi.spyOn(updateShared, "runUpdateStep").mockImplementationOnce(async (step) => {
-          await captureUpdateDoctorConfigWrites(configPath, async (capture) => {
-            await createConfigIO({ env: process.env, pluginValidation: "skip" }).writeConfigFile(
-              {
-                ...config,
-                meta: {
-                  migrations: { modelPolicyAllowlist: true },
-                  lastTouchedVersion: "2026.9.3",
-                },
-                agents: {
-                  defaults: {
-                    ...authored.agents.defaults,
-                    modelPolicy: { allow: ["openai/gpt-5.6-luna"] },
-                  },
-                },
-                wizard: { lastRunVersion: "2026.9.3", lastRunCommand: "doctor" },
-              },
-              { lastTouchedVersionOverride: "2026.9.3", skipPluginValidation: true },
+          if (change === "doctor-input-edit") {
+            fs.writeFileSync(
+              configPath,
+              JSON.stringify({ ...authored, logging: { level: "debug" } }),
             );
+          }
+          await captureUpdateDoctorConfigWrites(configPath, async (capture) => {
+            const io = createConfigIO({ env: process.env, pluginValidation: "skip" });
+            const input = await io.readConfigFileSnapshot();
+            if (change !== "doctor-unchanged") {
+              await io.writeConfigFile(
+                {
+                  ...(input.sourceConfigBeforeMigrations ?? input.sourceConfig),
+                  meta: {
+                    migrations: { modelPolicyAllowlist: true },
+                    lastTouchedVersion: "2026.9.3",
+                  },
+                  agents: {
+                    defaults: {
+                      ...authored.agents.defaults,
+                      modelPolicy: { allow: ["openai/gpt-5.6-luna"] },
+                    },
+                  },
+                  wizard: { lastRunVersion: "2026.9.3", lastRunCommand: "doctor" },
+                },
+                {
+                  baseSnapshot: input,
+                  lastTouchedVersionOverride: "2026.9.3",
+                  skipPluginValidation: true,
+                },
+              );
+            }
             if (change === "doctor-capture-edit") {
               operatorEdit();
             }
             await writeUpdatePostInstallDoctorResult({
               resultPath: step.env!.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH!,
-              result: { status: "ok", configHash: capture.hash },
+              result: {
+                status: "ok",
+                configHash: capture.hash,
+                ...(change === "doctor-missing-input"
+                  ? {}
+                  : { configInputHash: capture.inputHash }),
+              },
             });
           });
           return {
@@ -608,14 +631,16 @@ describe("verified package rollback", () => {
         expect(rollback).toHaveBeenCalledOnce();
         expect(fs.readFileSync(configPath, "utf8")).toBe(originalRaw);
       }
-      if (change === "doctor" || change === "doctor-include") {
+      if (change === "doctor" || change === "doctor-unchanged" || change === "doctor-include") {
         expect(fs.readFileSync(configPath, "utf8")).toBe(originalRaw);
         if (process.platform !== "win32") {
           expect(fs.statSync(configPath).mode & 0o777).toBe(0o600);
         }
       }
       if (change.startsWith("doctor-") && change.endsWith("edit")) {
-        if (change === "doctor-include-edit") {
+        if (change === "doctor-input-edit") {
+          expect(fs.readFileSync(configPath, "utf8")).toContain('"debug"');
+        } else if (change === "doctor-include-edit") {
           expect(fs.readFileSync(includePath, "utf8")).toContain('"debug"');
         } else {
           expect(fs.readFileSync(configPath, "utf8")).toContain("Operator edit after activation");
@@ -629,6 +654,7 @@ describe("verified package rollback", () => {
         change === "none" ||
           change === "readonly-config" ||
           change === "doctor" ||
+          change === "doctor-unchanged" ||
           change === "doctor-include" ||
           change === "doctor-locked-edit" ||
           change === "doctor-restore-edit" ||

@@ -149,14 +149,17 @@ export function registerDoctorConfigReceiptTests(
   runDoctorHealthFlow: typeof import("./doctor-health.js").runDoctorHealthFlow,
   postInstallAdvisory: NonNullable<DoctorHealthFlowContext["postInstallDoctorResult"]>,
 ) {
-  it.each(["unchanged", "ok", "error", "advisory"] as const)(
-    "reports the last committed Doctor config hash before exiting (%s)",
+  it.each(["unchanged", "ok", "error", "advisory", "interleaved"] as const)(
+    "reports the consumed input and last committed Doctor config hash before exiting (%s)",
     async (outcome) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const resultPath = state.path("doctor-result.json");
         vi.stubEnv("OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH", resultPath);
         const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
         let expectedHash = "unchanged";
+        const expectedInputHash = hashConfigRaw(
+          fs.existsSync(state.configPath) ? fs.readFileSync(state.configPath, "utf8") : null,
+        );
         const failure = new Error("health check failed after config commit");
         mocks.runContributions.mockImplementation(async (ctx) => {
           if (outcome === "unchanged") {
@@ -164,9 +167,12 @@ export function registerDoctorConfigReceiptTests(
           }
           const io = createConfigIO({ env: state.env, pluginValidation: "skip" });
           // Preflight and final repair can both write. Only the last payload belongs in the receipt.
-          for (const port of [19101, 19102]) {
+          for (const port of [19101, 19102, 19103]) {
             const written = await io.writeConfigFile({ gateway: { mode: "local", port } });
             expectedHash = written.persistedHash;
+            if (outcome === "interleaved" && port === 19101) {
+              fs.appendFileSync(state.configPath, "\n");
+            }
           }
           fs.appendFileSync(state.configPath, "\n// operator saved after Doctor\n");
           if (outcome === "error") {
@@ -189,6 +195,9 @@ export function registerDoctorConfigReceiptTests(
               ? postInstallAdvisory
               : { status: outcome === "error" ? "error" : "ok" }),
             configHash: expectedHash,
+            ...(outcome === "unchanged" || outcome === "interleaved"
+              ? {}
+              : { configInputHash: expectedInputHash }),
           },
         });
         if (outcome !== "unchanged") {

@@ -734,11 +734,12 @@ Gateway hello handshake must match the expected artifact.
 
 The candidate’s own Doctor migrations in the main config file do not block rollback, including on
 a fresh install’s first update. The updater retains the config immediately before
-Doctor and checks the file against the content hash reported by Doctor’s writer. Rollback restores
-those original bytes only while the current file matches that hash. Restoration
+Doctor and verifies that Doctor consumed those captured bytes before making changes.
+It also checks the current file against the output hash reported by Doctor’s writer.
+Rollback restores the original bytes only while both hashes match. Restoration
 holds the normal config writer lock and rechecks the hash after acquiring it. Operator edits
-made after activation block restoration, including edits between Doctor’s last write
-and the updater’s capture. Separate `$include` files must retain
+made after activation block restoration, including edits before Doctor reads the
+config and between Doctor’s last write and the updater’s capture. Separate `$include` files must retain
 their pre-activation configuration content; they are not restored by the root-file
 snapshot. The existing intentional-recovery
 allowance applies only to service commands, so the older-binary guard does not

@@ -77,7 +77,7 @@ export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorO
 async function runDoctorHealthFlowWithResult(
   runtime: RuntimeEnv | undefined,
   options: DoctorOptions,
-  updateResult?: { resultPath: string; capture: { hash: string } },
+  updateResult?: { resultPath: string; capture: { hash: string; inputHash?: string } },
 ) {
   const effectiveRuntime = runtime ?? (await import("../runtime.js")).defaultRuntime;
   // Config loading can initialize SQLite-backed state before integrity runs.
@@ -212,7 +212,13 @@ async function runDoctorHealthFlowWithResult(
       if (updateResult) {
         await writeUpdatePostInstallDoctorResult({
           resultPath: updateResult.resultPath,
-          result: { ...doctorResult, configHash: updateResult.capture.hash },
+          result: {
+            ...doctorResult,
+            configHash: updateResult.capture.hash,
+            ...(updateResult.capture.inputHash === undefined
+              ? {}
+              : { configInputHash: updateResult.capture.inputHash }),
+          },
         });
       }
     }

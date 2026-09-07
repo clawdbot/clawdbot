@@ -31,22 +31,33 @@ export type UpdatePostInstallDoctorResult = (
         details: string[];
       };
     }
-) & { configHash?: string };
+) & { configHash?: string; configInputHash?: string };
 
-const doctorConfigWrites = new AsyncLocalStorage<{ path: string; hash: string }>();
+type DoctorConfigCapture = { path: string; hash: string; inputHash?: string };
+const doctorConfigWrites = new AsyncLocalStorage<DoctorConfigCapture>();
 
 export function captureUpdateDoctorConfigWrites<T>(
   configPath: string,
-  run: (capture: { path: string; hash: string }) => Promise<T>,
+  run: (capture: DoctorConfigCapture) => Promise<T>,
 ): Promise<T> {
   const capture = { path: path.resolve(configPath), hash: "unchanged" };
   return doctorConfigWrites.run(capture, () => run(capture));
 }
 
-/** Record the serialized payload at publication, never a later filesystem read. */
-export function recordUpdateDoctorConfigWrite(configPath: string, hash: string): void {
+/** Pair the consumed snapshot with the serialized payload at publication, never a later read. */
+export function recordUpdateDoctorConfigWrite(
+  configPath: string,
+  inputHash: string | null,
+  hash: string,
+): void {
   const capture = doctorConfigWrites.getStore();
   if (capture && capture.path === path.resolve(configPath)) {
+    if (capture.hash === "unchanged") {
+      capture.inputHash = inputHash ?? undefined;
+    } else if (inputHash !== capture.hash) {
+      // An outside write between Doctor passes breaks ownership permanently for this run.
+      delete capture.inputHash;
+    }
     capture.hash = hash;
   }
 }
@@ -128,7 +139,17 @@ function parseUpdatePostInstallDoctorResult(value: unknown): UpdatePostInstallDo
   ) {
     return null;
   }
-  const configWrite = configHash === undefined ? {} : { configHash };
+  const configInputHash = record.configInputHash;
+  if (
+    configInputHash !== undefined &&
+    (typeof configInputHash !== "string" || !/^[0-9a-f]{64}$/u.test(configInputHash))
+  ) {
+    return null;
+  }
+  const configWrite = {
+    ...(configHash === undefined ? {} : { configHash }),
+    ...(configInputHash === undefined ? {} : { configInputHash }),
+  };
   if (record.status === "ok" || record.status === "error") {
     return { status: record.status, ...configWrite };
   }

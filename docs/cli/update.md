@@ -532,12 +532,13 @@ reason. See [Automatic rollback](/install/updating#automatic-schema-neutral-roll
 for the restoration and package-manager guards. The candidate’s own Doctor
 migrations in the main config file do not block rollback, including on a fresh
 install’s first update. Separate `$include` files must retain their pre-activation
-configuration content. Restoration holds the normal config writer lock and
+configuration content. Doctor must have consumed the captured pre-update config,
+and the current file must match its reported output. Restoration holds the normal config writer lock and
 rechecks the captured hash before writing.
 When needed, rollback replaces the main config with the exact bytes captured before
 Doctor and owner-only permissions (`0600`), including the previous writer stamp.
 Operator edits made after activation block
-restoration, including edits between Doctor’s last write and the updater’s capture; the next action names the changed config file. A failure alone does not
+restoration, including edits before Doctor reads the config or after its last write; the next action names the changed config file. A failure alone does not
 authorize restarting the candidate.
 
 If the config file changed after the activation Doctor pass or the databases are

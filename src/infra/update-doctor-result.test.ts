@@ -18,7 +18,7 @@ afterEach(async () => {
 describe("post-install doctor result IPC", () => {
   it.each([
     { status: "ok" as const, configHash: "unchanged" },
-    { status: "error" as const, configHash: "a".repeat(64) },
+    { status: "error" as const, configHash: "a".repeat(64), configInputHash: "b".repeat(64) },
     {
       ...createDeferredConfiguredPluginRepairDoctorResult(["deferred repair"]),
       configHash: "b".repeat(64),
