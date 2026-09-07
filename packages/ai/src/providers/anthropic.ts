@@ -661,8 +661,6 @@ async function buildParams(
     authProfileId: options?.authProfileId,
     sessionId: options?.sessionId,
   });
-  // Transient runtime-context carrier indexes skip cache anchoring so the breakpoint
-  // stays on the last stable user turn; conversion-to-policy must not splice messages.
   const cacheBreakpointOptOutMessageIndexes = new Set<number>();
   const params: MessageCreateParamsStreaming = {
     model: model.id,

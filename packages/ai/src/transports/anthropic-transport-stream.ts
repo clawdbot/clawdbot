@@ -584,8 +584,6 @@ async function buildAnthropicParams(
     authProfileId: options?.authProfileId,
     sessionId: options?.sessionId,
   });
-  // Transient runtime-context carrier indexes skip cache anchoring so the breakpoint
-  // stays on the last stable user turn; conversion-to-policy must not splice messages.
   const cacheBreakpointOptOutMessageIndexes = new Set<number>();
   const messages = await convertAnthropicMessages(
     transformTransportMessages(replayPlan.messages, model, normalizeAnthropicToolCallId),
