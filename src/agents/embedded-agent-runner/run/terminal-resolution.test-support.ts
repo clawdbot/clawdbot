@@ -71,6 +71,7 @@ export function makeTerminalInput(overrides: TerminalInputOverrides = {}): Termi
     replayState: { ...attempt.replayMetadata, replayInvalid: false },
     activePromptPersisted: true,
     activateInternalPrompt: vi.fn(),
+    markOwnedTranscriptRetry: vi.fn(),
     activateCompactionContinuation: vi.fn(),
     clearCompactionContinuation: vi.fn(),
     setSuppressNextUserMessagePersistence: vi.fn(),

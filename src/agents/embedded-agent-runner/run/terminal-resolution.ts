@@ -111,9 +111,7 @@ export function resolveSettledTurnFinalizationRequest(input: {
   attempt: EmbeddedRunAttemptResult;
   activeErrorContext: { provider: string; model: string };
   modelApi: Parameters<typeof resolveReasoningOnlyRetryInstruction>[0]["modelApi"];
-  executionContract: Parameters<
-    typeof resolveReasoningOnlyRetryInstruction
-  >[0]["executionContract"];
+  executionContract: string | undefined;
   payloadsWithToolMedia: EmbeddedAgentRunResult["payloads"];
   recoveredFinalAssistantPayloadsAfterPromptTimeout?: EmbeddedAgentRunResult["payloads"];
   hasTerminalToolPresentation: boolean;
@@ -190,9 +188,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   attemptAssistant?: AssistantMessage;
   activeErrorContext: { provider: string; model: string };
   modelApi: Parameters<typeof resolveReasoningOnlyRetryInstruction>[0]["modelApi"];
-  executionContract: Parameters<
-    typeof resolveReasoningOnlyRetryInstruction
-  >[0]["executionContract"];
+  executionContract: string | undefined;
   terminalState: EmbeddedRunTerminalState;
   payloadsWithToolMedia: EmbeddedAgentRunResult["payloads"];
   recoveredFinalAssistantPayloadsAfterPromptTimeout?: EmbeddedAgentRunResult["payloads"];
@@ -208,6 +204,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   replayState: EmbeddedRunReplayState;
   activePromptPersisted: boolean;
   activateInternalPrompt: (prompt: string) => void;
+  markOwnedTranscriptRetry: () => void;
   activateCompactionContinuation: (instruction: string) => void;
   clearCompactionContinuation: () => void;
   setSuppressNextUserMessagePersistence: (value: boolean) => void;
@@ -474,6 +471,9 @@ export async function resolveEmbeddedRunTerminal(input: {
     input.activateInternalPrompt(
       `${BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX}\n\n${beforeFinalizeRevisionReason}`,
     );
+    // Settlement excluded the rejected draft with a leaf control. Wait for its
+    // transcript projection to rebuild before reopening for the hidden pass.
+    input.markOwnedTranscriptRetry();
     log.warn(
       `before_agent_finalize requested one more pass: ` +
         `runId=${runParams.runId} sessionId=${runParams.sessionId} ` +

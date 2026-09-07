@@ -182,6 +182,36 @@ describe("terminal resolution", () => {
     expect(markEmbeddedRunAuthProfileSuccess).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    { reason: "Review the numbers with sql-worker.", action: "retry", ownedRetries: 1 },
+    { reason: undefined, action: "complete", ownedRetries: 0 },
+  ])("marks $ownedRetries owned retries for $action", async ({ reason, action, ownedRetries }) => {
+    const text = "Draft answer.";
+    const assistant = buildEmbeddedRunnerAssistant({ content: [{ type: "text", text }] });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [text],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      beforeAgentFinalizeRevisionReason: reason,
+    });
+    const input = makeTerminalInput({
+      attempt,
+      attemptAssistant: assistant,
+      payloadsWithToolMedia: [{ text }],
+    });
+
+    const resolved = await resolveEmbeddedRunTerminal(input);
+
+    expect(resolved.action).toBe(action);
+    expect(input.markOwnedTranscriptRetry).toHaveBeenCalledTimes(ownedRetries);
+    if (reason) {
+      expect(input.activateInternalPrompt).toHaveBeenCalledWith(expect.stringContaining(reason));
+    } else {
+      expect(input.activateInternalPrompt).not.toHaveBeenCalled();
+      expect(resolved).toMatchObject({ result: { payloads: [{ text }] } });
+    }
+  });
+
   it.each(["openai:selected", undefined])(
     "reports the successful profile %s privately for command maintenance",
     async (authProfileId) => {
