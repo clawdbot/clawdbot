@@ -11,6 +11,8 @@ import {
   truncateSanitizedExternalContent,
   wrapWebContent,
 } from "../../security/external-content.js";
+import { resolveWebSearchProviderModelSchema } from "../../web-search/provider-model-schema.js";
+import { projectProviderModelSchema } from "../../web-search/provider-schema.js";
 import { runWebSearch } from "../../web-search/runtime.js";
 import type { AnyAgentTool } from "./common.js";
 import { asToolParamsRecord, jsonResult, textResult } from "./common.js";
@@ -76,6 +78,28 @@ const WebSearchSchema = {
   },
 } satisfies Record<string, unknown>;
 
+function createModelFacingWebSearchSchema(options: {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  sandboxed?: boolean;
+  runtimeWebSearch?: RuntimeWebSearchMetadata;
+  lateBindRuntimeConfig?: boolean;
+}): Record<string, unknown> {
+  const runtimeContext = resolveWebSearchToolRuntimeContext({
+    config: options.config,
+    lateBindRuntimeConfig: options.lateBindRuntimeConfig,
+    runtimeWebSearch: options.runtimeWebSearch,
+  });
+  const selectedProviderSchema = runtimeContext.providerSelectionId
+    ? resolveWebSearchProviderModelSchema({
+        config: runtimeContext.config,
+        providerId: runtimeContext.providerSelectionId,
+        sandboxed: options.sandboxed,
+      })
+    : null;
+  return projectProviderModelSchema(WebSearchSchema, selectedProviderSchema);
+}
+
 function isWebSearchDisabled(config?: OpenClawConfig): boolean {
   const search = config?.tools?.web?.search;
   return Boolean(search && typeof search === "object" && search.enabled === false);
@@ -100,7 +124,13 @@ export function createWebSearchTool(options?: {
     resultContentSource: "network",
     description:
       "Search current web; normalized provider results. Supports freshness and date-range filters (freshness, date_after/date_before) and domain filtering (domain_filter).",
-    parameters: WebSearchSchema,
+    parameters: createModelFacingWebSearchSchema({
+      config: options?.config,
+      agentDir: options?.agentDir,
+      sandboxed: options?.sandboxed,
+      runtimeWebSearch: options?.runtimeWebSearch,
+      lateBindRuntimeConfig: options?.lateBindRuntimeConfig,
+    }),
     outputSchema: WebSearchOutputSchema,
     execute: async (_toolCallId, args, signal) => {
       // Late binding lets long-lived agents pick up runtime web-search credentials/config without

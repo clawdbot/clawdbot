@@ -1428,9 +1428,26 @@ catalog, API-key auth, and dynamic model resolution.
             const acme = (searchConfigTarget.acme ??= {});
             acme.apiKey = value;
           },
+          modelSchema: {
+            parameters: {
+              type: "object",
+              properties: {
+                result_depth: { type: "string", enum: ["brief", "deep"] },
+              },
+              required: ["result_depth"],
+            },
+            providerParameters: ["result_depth"],
+          },
           createTool: () => ({
             description: "Search the web through Acme Search.",
-            parameters: {},
+            parameters: {
+              type: "object",
+              properties: {
+                query: { type: "string" },
+                result_depth: { type: "string", enum: ["brief", "deep"] },
+              },
+              required: ["query", "result_depth"],
+            },
             execute: async (args) => ({ content: [] }),
           }),
         });
@@ -1439,7 +1456,26 @@ catalog, API-key auth, and dynamic model resolution.
         Both provider types share the same credential-wiring shape:
         `hint`, `envVars`, `placeholder`, `signupUrl`, `credentialPath`,
         `getCredentialValue`, `setCredentialValue`, and `createTool` are all
-        required.
+        required. When search providers add top-level parameters beyond the
+        shared `web_search` surface, declare them in the lightweight
+        `modelSchema` artifact. Core projects only the selected provider's
+        listed properties, including their declared required status, without
+        loading provider runtime code while preparing agent tools. The public
+        artifact is resolved for enabled installed plugins as well as bundled
+        plugins, so keep its imports limited to lightweight SDK contracts.
+        This model-visible extension is intentionally narrow: one provider may
+        declare at most 8 parameters. Parameter names must match
+        `[a-z][a-z0-9_]*` and be at most 64 characters. The complete schema
+        artifact must fit within 2,048 UTF-8 bytes, 6 nested levels, 128 JSON
+        nodes, 32 entries per object or array, 64 characters per object key,
+        and 256 characters per string. Supported property-schema keywords are
+        `type`, `title`, `description`, `enum`, `const`, `default`, `examples`,
+        `pattern`, `format`, numeric, string, item, and property bounds,
+        `nullable`, `uniqueItems`, `properties`, `required`, `items`,
+        `additionalProperties`, `not`, `anyOf`, `oneOf`, and `allOf`. Artifacts
+        must contain only plain data properties; accessors and non-plain objects
+        are not read. Invalid, oversized, or over-deep artifacts are rejected as
+        a whole, leaving the shared `web_search` schema unchanged.
 
         Search providers using `openclaw/plugin-sdk/provider-web-search` should
         resolve `resolveSearchCacheTtlMs(searchConfig)` once per execution and

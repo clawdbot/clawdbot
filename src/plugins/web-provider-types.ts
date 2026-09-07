@@ -108,6 +108,12 @@ export type WebSearchProviderPlugin = {
   credentialNote?: string;
   autoDetectOrder?: number;
   credentialPath: string;
+  /** Lightweight model-facing schema projected without loading the provider runtime. */
+  modelSchema?: {
+    parameters: TSchema;
+    /** Top-level provider-owned parameters projected into the shared web_search schema. */
+    providerParameters: readonly string[];
+  };
   inactiveSecretPaths?: string[];
   getCredentialValue: (searchConfig?: Record<string, unknown>) => unknown;
   setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) => void;

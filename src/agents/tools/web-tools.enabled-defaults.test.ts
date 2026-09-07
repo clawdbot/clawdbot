@@ -80,6 +80,8 @@ vi.mock("../../web-search/runtime.js", async () => {
   };
   return {
     resolveWebSearchDefinition: resolveRuntimeDefinition,
+    resolveWebSearchProviderToolDefinition: (options?: unknown) =>
+      resolveRuntimeDefinition(options as never)?.definition ?? null,
     resolveWebSearchProviderId: () => "",
     runWebSearch: async (options: {
       config?: unknown;

@@ -16,6 +16,7 @@ import { logVerbose } from "../globals.js";
 import { sortPluginEntriesForAutoDetect } from "../plugins/plugin-entry-order.js";
 import { resolveManifestContractOwnerPluginId } from "../plugins/plugin-registry-contributions.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
+import type { WebSearchProviderToolDefinition } from "../plugins/web-provider-types.js";
 import {
   resolvePluginWebSearchProviders,
   resolveRuntimeWebSearchProviders,
@@ -338,6 +339,30 @@ function resolveWebSearchCandidates(
     ...fallbackProviders.filter((entry) => !preferredIds.includes(entry.id)),
   ];
   return orderedProviders;
+}
+
+/** Resolves the prepared provider's model-facing tool definition without executing a search. */
+export function resolveWebSearchProviderToolDefinition(
+  options?: ResolveWebSearchDefinitionParams,
+): WebSearchProviderToolDefinition | null {
+  const { config, search, runtimeWebSearch } = resolveWebSearchRequestContext(options);
+  const candidates = resolveWebSearchCandidates({
+    ...options,
+    config,
+    runtimeWebSearch,
+    preferInputConfig: true,
+  });
+  const candidate = candidates[0];
+  if (!candidate) {
+    return null;
+  }
+  return candidate.createTool({
+    config,
+    agentDir: options?.agentDir,
+    // SAFETY: RuntimeWebSearchConfig is a string-keyed config object consumed read-only by providers.
+    searchConfig: search as Record<string, unknown> | undefined,
+    runtimeMetadata: runtimeWebSearch,
+  });
 }
 
 /** Reports whether web_search can use the prepared selection or resolve an agent-scoped provider. */

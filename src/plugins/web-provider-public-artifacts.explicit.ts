@@ -1,7 +1,11 @@
 // Extracts explicit public artifacts from web provider plugin manifests.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { loadBundledPublicArtifactEntries } from "./public-artifact-factories.js";
+import {
+  collectPublicArtifactFactories,
+  loadBundledPublicArtifactEntries,
+} from "./public-artifact-factories.js";
+import { loadPluginPublicArtifactModuleFromCandidatesSync } from "./public-surface-loader.js";
 import type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
@@ -43,6 +47,37 @@ function isWebProviderPlugin(
   );
 }
 
+function loadInstalledProviderEntriesFromRoot<TProvider extends object>(params: {
+  pluginRoot: string;
+  pluginId: string;
+  artifactCandidates: readonly string[];
+  suffix: string;
+  isProvider: (value: unknown) => value is TProvider;
+}): Array<TProvider & { pluginId: string }> | null {
+  const mod = loadPluginPublicArtifactModuleFromCandidatesSync({
+    pluginRoot: params.pluginRoot,
+    artifactCandidates: params.artifactCandidates,
+  });
+  if (!mod) {
+    return null;
+  }
+  const errors: unknown[] = [];
+  const providers = collectPublicArtifactFactories({
+    mod,
+    suffix: params.suffix,
+    isArtifact: params.isProvider,
+    onFactoryError: (error) => errors.push(error),
+  });
+  if (providers.length === 0) {
+    if (errors.length > 0) {
+      throw new Error(`Unable to initialize web providers for plugin ${params.pluginId}`, {
+        cause: errors.length === 1 ? errors[0] : new AggregateError(errors),
+      });
+    }
+    return null;
+  }
+  return providers.map((provider) => Object.assign({}, provider, { pluginId: params.pluginId }));
+}
 function resolveBundledExplicitProviders<TProvider>(params: {
   onlyPluginIds: readonly string[];
   loadProviders: (pluginId: string) => TProvider[] | null;
@@ -70,6 +105,18 @@ export function loadBundledWebSearchProviderEntriesFromDir(params: {
     suffix: "WebSearchProvider",
     isArtifact: (value): value is WebSearchProviderPlugin => isWebProviderPlugin(value),
     partialFailureLabel: "web providers",
+  });
+}
+
+export function loadInstalledWebSearchProviderEntriesFromRoot(params: {
+  pluginRoot: string;
+  pluginId: string;
+}): PluginWebSearchProviderEntry[] | null {
+  return loadInstalledProviderEntriesFromRoot<WebSearchProviderPlugin>({
+    ...params,
+    artifactCandidates: WEB_SEARCH_ARTIFACT_CANDIDATES,
+    suffix: "WebSearchProvider",
+    isProvider: (value): value is WebSearchProviderPlugin => isWebProviderPlugin(value),
   });
 }
 

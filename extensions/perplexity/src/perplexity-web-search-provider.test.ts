@@ -51,6 +51,13 @@ function createConfiguredPerplexityTool(
   return tool;
 }
 
+function parseRequestBody(init: RequestInit | undefined): Record<string, unknown> {
+  if (typeof init?.body !== "string") {
+    throw new Error("Expected JSON request body");
+  }
+  return JSON.parse(init.body) as Record<string, unknown>;
+}
+
 describe("perplexity web search provider", () => {
   beforeEach(() => {
     withTrustedWebSearchEndpointMock.mockReset();
@@ -604,6 +611,188 @@ describe("perplexity web search provider", () => {
       search_after_date_filter: "1/1/2024",
       search_before_date_filter: "6/30/2024",
     });
+  });
+
+  it("advertises search_context_size in native and chat schemas", () => {
+    const provider = createPerplexityWebSearchProvider();
+    const nativeTool = provider.createTool({ config: {}, searchConfig: {} });
+    const chatTool = provider.createTool({
+      config: {},
+      searchConfig: {},
+      runtimeMetadata: {
+        providerSource: "configured",
+        diagnostics: [],
+        perplexityTransport: "chat_completions",
+      },
+    });
+    const nativeParameters = nativeTool?.parameters as
+      | { properties?: Record<string, { enum?: unknown; type?: unknown }> }
+      | undefined;
+    const chatParameters = chatTool?.parameters as
+      | { properties?: Record<string, { enum?: unknown; type?: unknown }> }
+      | undefined;
+
+    expect(nativeParameters?.properties?.search_context_size).toMatchObject({
+      type: "string",
+      enum: ["low", "medium", "high"],
+    });
+    expect(chatParameters?.properties?.search_context_size).toMatchObject({
+      type: "string",
+      enum: ["low", "medium", "high"],
+    });
+    expect(chatParameters?.properties?.max_tokens).toBeUndefined();
+  });
+
+  it("rejects invalid search_context_size values before network calls", async () => {
+    await withEnvAsync(
+      { [perplexityApiKeyEnv]: directPerplexityApiKey, [openRouterApiKeyEnv]: undefined },
+      async () => {
+        const provider = createPerplexityWebSearchProvider();
+        const tool = provider.createTool({ config: {}, searchConfig: {} });
+        if (!tool) {
+          throw new Error("Expected tool definition");
+        }
+
+        await expect(
+          tool.execute({ query: "OpenClaw docs", search_context_size: "huge" }),
+        ).resolves.toEqual({
+          error: "invalid_search_context_size",
+          message: "search_context_size must be low, medium, or high.",
+          docs: "https://docs.openclaw.ai/tools/web",
+        });
+      },
+    );
+  });
+
+  it("rejects mixed native content budget controls", async () => {
+    await withEnvAsync(
+      { [perplexityApiKeyEnv]: directPerplexityApiKey, [openRouterApiKeyEnv]: undefined },
+      async () => {
+        const provider = createPerplexityWebSearchProvider();
+        const tool = provider.createTool({ config: {}, searchConfig: {} });
+        if (!tool) {
+          throw new Error("Expected tool definition");
+        }
+
+        await expect(
+          tool.execute({
+            query: "OpenClaw docs",
+            search_context_size: "low",
+            max_tokens: 1000,
+          }),
+        ).resolves.toEqual({
+          error: "conflicting_content_budget",
+          message:
+            "search_context_size cannot be used with max_tokens or max_tokens_per_page. Use either search_context_size or explicit token budgets, not both.",
+          docs: "https://docs.openclaw.ai/tools/web",
+        });
+      },
+    );
+  });
+
+  it("sends search_context_size to the native Search API and caches by value", async () => {
+    withTrustedWebSearchEndpointMock.mockReset();
+    withTrustedWebSearchEndpointMock.mockImplementation(
+      async (_params: { init: RequestInit }, run: (response: Response) => Promise<unknown>) =>
+        await run(
+          new Response(
+            JSON.stringify({
+              results: [{ title: "OpenClaw", url: "https://openclaw.ai", snippet: "Docs" }],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        ),
+    );
+
+    await withEnvAsync(
+      { [perplexityApiKeyEnv]: directPerplexityApiKey, [openRouterApiKeyEnv]: undefined },
+      async () => {
+        const provider = createPerplexityWebSearchProvider();
+        const tool = provider.createTool({ config: {}, searchConfig: {} });
+        if (!tool) {
+          throw new Error("Expected tool definition");
+        }
+
+        const query = `OpenClaw search context native ${Date.now()}`;
+        await tool.execute({ query, search_context_size: "low" });
+        await tool.execute({ query, search_context_size: "high" });
+
+        expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledTimes(2);
+        const bodies = withTrustedWebSearchEndpointMock.mock.calls.map((call) => {
+          const [request] = call as [{ init: RequestInit }];
+          return parseRequestBody(request.init);
+        });
+        expect(bodies.map((body: Record<string, unknown>) => body.search_context_size)).toEqual([
+          "low",
+          "high",
+        ]);
+      },
+    );
+  });
+
+  it("sends search_context_size through Sonar compatibility web_search_options", async () => {
+    withTrustedWebSearchEndpointMock.mockReset();
+    withTrustedWebSearchEndpointMock.mockImplementationOnce(
+      async (_params: { init: RequestInit }, run: (response: Response) => Promise<unknown>) =>
+        await run(
+          new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content: "OpenClaw answer",
+                    annotations: [
+                      {
+                        type: "url_citation",
+                        url_citation: { url: "https://openclaw.ai" },
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        ),
+    );
+
+    await withEnvAsync(
+      { [perplexityApiKeyEnv]: undefined, [openRouterApiKeyEnv]: undefined },
+      async () => {
+        const provider = createPerplexityWebSearchProvider();
+        const tool = provider.createTool({
+          config: {
+            plugins: {
+              entries: {
+                perplexity: {
+                  config: {
+                    webSearch: {
+                      apiKey: directPerplexityApiKey,
+                      model: "perplexity/sonar-pro",
+                    },
+                  },
+                },
+              },
+            },
+          },
+          searchConfig: {},
+        });
+        if (!tool) {
+          throw new Error("Expected tool definition");
+        }
+
+        await tool.execute({
+          query: `OpenClaw search context chat ${Date.now()}`,
+          search_context_size: "MEDIUM",
+        });
+
+        expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledTimes(1);
+        const [request] = withTrustedWebSearchEndpointMock.mock.calls[0] as [{ init: RequestInit }];
+        expect(parseRequestBody(request.init).web_search_options).toEqual({
+          search_context_size: "medium",
+        });
+      },
+    );
   });
 
   it.each([

@@ -2,6 +2,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/web-provider-types.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
+import { schemaDeclaresProperty } from "./provider-schema.js";
 import type { RunWebSearchResult } from "./runtime-types.js";
 
 type ExecuteWebSearchCandidatesParams = {
@@ -14,6 +15,48 @@ type ExecuteWebSearchCandidatesParams = {
   signal?: AbortSignal;
   allowFallback: boolean;
 };
+
+class UnsupportedWebSearchProviderParameterError extends Error {}
+
+const SHARED_WEB_SEARCH_PARAMETERS = new Set([
+  "query",
+  "count",
+  "limit",
+  "country",
+  "language",
+  "freshness",
+  "date_after",
+  "date_before",
+  "search_lang",
+  "ui_lang",
+  "domain_filter",
+  "max_tokens",
+  "max_tokens_per_page",
+]);
+
+function assertProviderSupportsRequestedParameters(params: {
+  candidate: PluginWebSearchProviderEntry;
+  definition: ReturnType<PluginWebSearchProviderEntry["createTool"]>;
+  args: Record<string, unknown>;
+}): void {
+  if (!params.definition) {
+    return;
+  }
+  for (const [parameter, value] of Object.entries(params.args)) {
+    if (value === undefined) {
+      continue;
+    }
+    if (SHARED_WEB_SEARCH_PARAMETERS.has(parameter)) {
+      continue;
+    }
+    if (schemaDeclaresProperty(params.definition.parameters, parameter)) {
+      continue;
+    }
+    throw new UnsupportedWebSearchProviderParameterError(
+      `web_search parameter "${parameter}" is not supported by provider "${params.candidate.id}".`,
+    );
+  }
+}
 
 function isStructuredAvailabilityError(result: unknown): result is { error: string } {
   if (!result || typeof result !== "object" || !("error" in result)) {
@@ -45,6 +88,11 @@ export async function executeWebSearchCandidates(
         sawUnavailableProvider = true;
         continue;
       }
+      assertProviderSupportsRequestedParameters({
+        candidate,
+        definition,
+        args: params.args,
+      });
       const executed = await definition.execute(params.args, { signal: params.signal });
       // Cancellation wins races with provider completion or cleanup failures. Otherwise an
       // ignored signal could return stale work or trigger another provider fallback.
@@ -61,6 +109,9 @@ export async function executeWebSearchCandidates(
       };
     } catch (error) {
       params.signal?.throwIfAborted();
+      if (error instanceof UnsupportedWebSearchProviderParameterError) {
+        throw error;
+      }
       lastError = error;
       if (!params.allowFallback) {
         throw error;

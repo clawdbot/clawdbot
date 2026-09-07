@@ -483,6 +483,7 @@ provider, OpenClaw does not show the `x_search` prompt.
 | `date_before`         | Results before this date (YYYY-MM-DD)                              |
 | `ui_lang`             | UI language code (Brave only)                                      |
 | `domain_filter`       | Domain allowlist/denylist array (Perplexity only)                  |
+| `search_context_size` | `low`, `medium`, or `high` content budget (Perplexity)             |
 | `max_tokens`          | Total content token budget, native Perplexity Search API only      |
 | `max_tokens_per_page` | Per-page extraction token limit, native Perplexity Search API only |
 
@@ -494,10 +495,14 @@ provider, OpenClaw does not show the `x_search` prompt.
   accept `count` for shared-tool compatibility, but it does not change the
   grounded answer shape. Gemini treats `day` freshness as a recency hint; wider
   freshness values and explicit dates set Google Search grounding time ranges.
-  Perplexity behaves the same way when you use the Sonar/OpenRouter
-  compatibility path (`plugins.entries.perplexity.config.webSearch.baseUrl` /
-  `model` or `OPENROUTER_API_KEY`); that path also drops `max_tokens` and
-  `max_tokens_per_page` support.
+  Perplexity accepts `search_context_size` on both the native Search API and
+  the Sonar/OpenRouter compatibility path
+  (`plugins.entries.perplexity.config.webSearch.baseUrl` / `model` or
+  `OPENROUTER_API_KEY`). On the native path, do not combine it with
+  `max_tokens` or `max_tokens_per_page`. The model-facing schema exposes
+  `search_context_size` only when the prepared selected provider declares that
+  capability; the execution boundary also rejects unsupported calls as a
+  fail-safe if provider configuration changes during a long-lived session.
   SearXNG accepts `http://` only for trusted private-network or loopback hosts;
   public SearXNG endpoints must use `https://`.
   Firecrawl and Tavily only support `query` and `count` through `web_search`
@@ -625,6 +630,12 @@ await web_search({
 await web_search({
   query: "product reviews",
   domain_filter: ["-reddit.com", "-pinterest.com"],
+});
+
+// Perplexity content extraction budget
+await web_search({
+  query: "detailed AI research",
+  search_context_size: "high",
 });
 ```
 

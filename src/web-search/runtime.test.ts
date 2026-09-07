@@ -224,6 +224,85 @@ describe("web search runtime", () => {
     });
   });
 
+  it("rejects provider-owned parameters before dispatch to an unsupported provider", async () => {
+    const execute = vi.fn(async (args: Record<string, unknown>) => ({ ...args, ok: true }));
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createDuckDuckGoSearchProvider({
+        createTool: () => ({
+          description: "duckduckgo",
+          parameters: {
+            type: "object",
+            properties: { query: { type: "string" } },
+          },
+          execute,
+        }),
+      }),
+    ]);
+
+    await expect(
+      runWebSearch({
+        config: {
+          tools: {
+            web: {
+              search: { provider: "duckduckgo" },
+            },
+          },
+        },
+        args: { query: "hello", result_depth: "high" },
+      }),
+    ).rejects.toThrow(
+      'web_search parameter "result_depth" is not supported by provider "duckduckgo".',
+    );
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("forwards provider-owned parameters when the selected provider declares them", async () => {
+    const execute = vi.fn(async (args: Record<string, unknown>) => ({ ...args, ok: true }));
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createWebSearchTestProvider({
+        pluginId: "perplexity",
+        id: "perplexity",
+        credentialPath: "",
+        requiresCredential: false,
+        createTool: () => ({
+          description: "perplexity",
+          providerParameters: ["result_depth"],
+          parameters: {
+            type: "object",
+            properties: {
+              query: { type: "string" },
+              result_depth: {
+                type: "string",
+                enum: ["low", "medium", "high"],
+              },
+            },
+          },
+          execute,
+        }),
+      }),
+    ]);
+
+    await expect(
+      runWebSearch({
+        config: {
+          tools: {
+            web: {
+              search: { provider: "perplexity" },
+            },
+          },
+        },
+        args: { query: "hello", result_depth: "high" },
+      }),
+    ).resolves.toEqual({
+      provider: "perplexity",
+      result: { query: "hello", result_depth: "high", ok: true },
+    });
+    expect(execute).toHaveBeenCalledExactlyOnceWith(
+      { query: "hello", result_depth: "high" },
+      { signal: undefined },
+    );
+  });
+
   it("accepts the prepared provider selection without rediscovering providers", () => {
     expect(
       hasUsableWebSearchProvider({
