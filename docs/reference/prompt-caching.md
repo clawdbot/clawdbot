@@ -150,8 +150,19 @@ cache billing are described in [Model Studio context caching](https://www.alibab
 
 - Anthropic Claude model refs (`amazon-bedrock/*anthropic.claude*`, plus AWS system inference profile prefixes `us.`/`eu.`/`global.anthropic.claude*`) support explicit `cacheRetention` pass-through.
 - The stable system prefix is checkpointed separately from dynamic runtime additions. Conversation checkpoints advance through retained history, including tool results; transient runtime-context carriers remain outside the cached prefix. Bedrock Mantle's Anthropic Messages transport also preserves the separate stable system boundary.
-- Non-Anthropic Bedrock models (for example `amazon.nova-*`) resolve to no cache retention at runtime, regardless of any configured `cacheRetention` value.
+- Nova Micro, Lite, Pro, Premier (`amazon.nova-{micro,lite,pro,premier}-v1:0`), and Nova 2 Lite (`amazon.nova-2-lite-v1:0`) support explicit checkpoints in `system` and `messages`, including their AWS geographic inference profiles and foundation-model ARNs. Both `short` and `long` use Nova's five-minute TTL; `none` disables explicit checkpoints. OpenClaw does not add tool checkpoints for Nova.
+- Other non-Claude Bedrock models remain at `cacheRetention: "none"`.
+- With no configured retention, the Converse transport uses its default `short` window for supported Nova models.
 - Opaque Bedrock application inference profile ARNs (profile IDs that do not contain `claude`) also resolve to no cache retention unless `cacheRetention` is set explicitly, since the model family cannot be inferred from the ARN alone.
+
+AWS's [prompt caching guide](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html)
+and model cards for [Micro](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-micro.html),
+[Lite](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-lite.html),
+[Pro](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-pro.html),
+[Premier](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-premier.html),
+and [Nova 2 Lite](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-2-lite.html)
+list these limits: a 1K-token minimum, four checkpoints, and at most 20K cached
+tokens for Nova. Provider token limits still determine whether a checkpoint is cached.
 
 ### OpenRouter
 
@@ -347,7 +358,7 @@ Prompt-cache observations record `input`, `cacheRead`, and `cacheWrite` per comp
 - **High `cacheWrite` on Anthropic**: often means the cache breakpoint is landing on content that changes every request.
 - **Low OpenAI `cacheRead`**: verify the stable prefix is at the front, the repeated prefix is at least 1024 tokens, and the same `prompt_cache_key` is reused for turns that should share a cache.
 - **No effect from `cacheRetention`**: confirm the model key matches `agents.defaults.models["provider/model"]`.
-- **Bedrock Nova requests with cache settings**: expected - these resolve to no cache retention at runtime.
+- **Bedrock Nova requests without cache hits**: verify that the model is one of the supported variants above and the prefix meets AWS's token limits; `long` still uses a five-minute TTL.
 
 Related docs:
 

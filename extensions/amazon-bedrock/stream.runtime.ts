@@ -3,7 +3,7 @@
  * thinking, cache points, images, and usage into Bedrock Converse Stream calls.
  */
 import {
-  CachePointType,
+  type CachePointBlock,
   CacheTTL,
   BedrockRuntimeClient,
   type BedrockRuntimeClientConfig,
@@ -81,7 +81,7 @@ import {
   stripSystemPromptCacheBoundary,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { supportsBedrockModelPromptCaching, type BedrockOptions } from "./bedrock-options.js";
+import { resolveBedrockCachePoint, type BedrockOptions } from "./bedrock-options.js";
 import { supportsBedrockNativeMaxEffort } from "./thinking-policy.js";
 
 type Block = (TextContent | ThinkingContent | ToolCall) & {
@@ -263,6 +263,7 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
     try {
       client = new BedrockRuntimeClient(config);
       const cacheRetention = resolveCacheRetention(options.cacheRetention);
+      const cachePoint = resolveBedrockCachePoint(model, cacheRetention);
       const additionalModelRequestFields = buildAdditionalModelRequestFields(model, options);
       const thinking = (additionalModelRequestFields as Record<string, unknown> | undefined)
         ?.thinking;
@@ -272,8 +273,8 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
         (thinking as { type?: unknown }).type === "adaptive";
       let commandInput = {
         modelId: model.id,
-        messages: convertMessages(context, model, cacheRetention),
-        system: buildSystemPrompt(context.systemPrompt, model, cacheRetention),
+        messages: convertMessages(context, model, cachePoint),
+        system: buildSystemPrompt(context.systemPrompt, cacheRetention, cachePoint),
         inferenceConfig: {
           ...(options.maxTokens !== undefined && { maxTokens: options.maxTokens }),
           ...(options.temperature !== undefined &&
@@ -924,8 +925,8 @@ function supportsThinkingSignature(model: Model<"bedrock-converse-stream">): boo
 
 function buildSystemPrompt(
   systemPrompt: string | undefined,
-  model: Model<"bedrock-converse-stream">,
   cacheRetention: CacheRetention,
+  cachePoint: CachePointBlock | undefined,
 ): SystemContentBlock[] | undefined {
   if (!systemPrompt) {
     return undefined;
@@ -940,14 +941,8 @@ function buildSystemPrompt(
     ? [{ text: sanitizeSurrogates(stablePrefix) }]
     : [];
 
-  // Add cache point for supported Claude models when caching is enabled
-  if (stablePrefix && supportsBedrockModelPromptCaching(model)) {
-    blocks.push({
-      cachePoint: {
-        type: CachePointType.DEFAULT,
-        ...(cacheRetention === "long" ? { ttl: CacheTTL.ONE_HOUR } : {}),
-      },
-    });
+  if (stablePrefix && cachePoint) {
+    blocks.push({ cachePoint });
   }
 
   if (split?.dynamicSuffix) {
@@ -988,7 +983,7 @@ function createBedrockToolResult(message: ToolResultMessage): ContentBlock.ToolR
 function convertMessages(
   context: Context,
   model: Model<"bedrock-converse-stream">,
-  cacheRetention: CacheRetention,
+  cachePoint: CachePointBlock | undefined,
 ): Message[] {
   const result: Message[] = [];
   let firstVolatileMessageIndex: number | undefined;
@@ -1161,23 +1156,14 @@ function convertMessages(
 
   // Cache points include their entire prefix, so anchors after transient runtime
   // context would still cache volatile bytes even when those anchors are stable.
-  if (
-    cacheRetention !== "none" &&
-    supportsBedrockModelPromptCaching(model) &&
-    result.at(-1)?.role === ConversationRole.USER
-  ) {
+  if (cachePoint && result.at(-1)?.role === ConversationRole.USER) {
     const cacheAnchor = result.findLast(
       (message, index) =>
         message.role === ConversationRole.USER &&
         (firstVolatileMessageIndex === undefined || index < firstVolatileMessageIndex),
     );
     if (cacheAnchor?.content) {
-      cacheAnchor.content.push({
-        cachePoint: {
-          type: CachePointType.DEFAULT,
-          ...(cacheRetention === "long" ? { ttl: CacheTTL.ONE_HOUR } : {}),
-        },
-      });
+      cacheAnchor.content.push({ cachePoint });
     }
   }
 

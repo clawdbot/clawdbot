@@ -304,6 +304,58 @@ describe("Bedrock reasoning replay", () => {
 });
 
 describe("Bedrock prompt cache ownership", () => {
+  it.each([
+    ["amazon.nova-micro-v1:0", true],
+    ["eu.amazon.nova-lite-v1:0", true],
+    ["apac.amazon.nova-pro-v1:0", true],
+    ["us.amazon.nova-premier-v1:0", true],
+    ["global.amazon.nova-2-lite-v1:0", true],
+    ["arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-pro-v1:0", true],
+    ["arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.amazon.nova-pro-v1:0", true],
+    ["amazon.nova-sonic-v1:0", false],
+    ["amazon.nova-lite-v2:0", false],
+    ["amazon.nova-pro-v1:0:custom", false],
+    ["meta.llama3-70b-instruct-v1:0", false],
+    [
+      "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/amazon.nova-pro-v1:0",
+      false,
+    ],
+  ])("emits only supported Nova checkpoints for %s", async (id, supported) => {
+    for (const cacheRetention of ["short", "long", "none"] as const) {
+      const payload = await capturePayload(
+        bedrockModel({ id, name: "Nova Pro" }),
+        {
+          systemPrompt: `Stable workspace${SYSTEM_PROMPT_CACHE_BOUNDARY}Today: Monday`,
+          messages: [{ role: "user", content: "Hello", timestamp: 0 }],
+          tools: [
+            {
+              name: "lookup",
+              description: "Look up a value",
+              parameters: { type: "object", properties: {} },
+            },
+          ],
+        },
+        { cacheRetention },
+      );
+      if (supported && cacheRetention !== "none") {
+        expect(payload.system).toEqual([
+          { text: "Stable workspace" },
+          { cachePoint: { type: "default" } },
+          { text: "Today: Monday" },
+        ]);
+        expect(payload.messages?.[0]?.content).toEqual([
+          { text: "Hello" },
+          { cachePoint: { type: "default" } },
+        ]);
+      } else {
+        expect(JSON.stringify(payload)).not.toContain("cachePoint");
+      }
+      expect(payload.toolConfig?.tools).toHaveLength(1);
+      expect(payload.toolConfig?.tools?.[0]).toHaveProperty("toolSpec.name", "lookup");
+      expect(JSON.stringify(payload.toolConfig)).not.toContain("cachePoint");
+    }
+  });
+
   it.each(["direct", "application-profile"])(
     "advances the retained-carrier checkpoint through a tool loop (%s)",
     async (route) => {
