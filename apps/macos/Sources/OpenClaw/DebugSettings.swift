@@ -36,26 +36,19 @@ struct DebugSettings: View {
     }
 
     var body: some View {
-        ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: 14) {
-                self.header
-
-                self.overviewSection
-                self.launchdSection
-                self.appInfoSection
-                self.gatewaySection
-                self.logsSection
-                self.portsSection
-                self.pathsSection
-                self.quickActionsSection
-                self.canvasSection
-                self.experimentsSection
-
-                Spacer(minLength: 0)
-            }
-            .settingsDetailContent()
-            .groupBoxStyle(PlainSettingsGroupBoxStyle())
+        Form {
+            self.overviewSection
+            self.launchdSection
+            self.appInfoSection
+            self.gatewaySection
+            self.logsSection
+            self.portsSection
+            self.pathsSection
+            self.quickActionsSection
+            self.canvasSection
+            self.experimentsSection
         }
+        .formStyle(.grouped)
         .task {
             guard !self.isPreview else { return }
             self.loadSessionStorePath()
@@ -73,7 +66,7 @@ struct DebugSettings: View {
     }
 
     private var launchdSection: some View {
-        GroupBox("Gateway startup") {
+        Section("Gateway startup") {
             VStack(alignment: .leading, spacing: 8) {
                 Toggle("Attach only (skip launchd install)", isOn: self.$launchAgentWriteDisabled)
                     .onChange(of: self.launchAgentWriteDisabled) { _, newValue in
@@ -102,38 +95,32 @@ struct DebugSettings: View {
         }
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Debug")
-                .font(.title3.weight(.semibold))
-            Text("Tools for diagnosing local issues (Gateway, ports, logs, Canvas).")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-        }
-    }
-
     private var overviewSection: some View {
-        HStack(spacing: 12) {
-            DebugMetricCard(
-                title: "App Health",
-                value: self.healthStore.state.debugTitle,
-                icon: "heart.text.square",
-                tint: self.healthStore.state.tint,
-                subtitle: self.healthStore.summaryLine)
+        Section {
+            HStack(spacing: 12) {
+                DebugMetricCard(
+                    title: "App Health",
+                    value: self.healthStore.state.debugTitle,
+                    icon: "heart.text.square",
+                    tint: self.healthStore.state.tint,
+                    subtitle: self.healthStore.summaryLine)
 
-            DebugMetricCard(
-                title: "Gateway",
-                value: self.gatewayManager.status.label,
-                icon: "antenna.radiowaves.left.and.right",
-                tint: self.gatewayManager.status.debugTint,
-                subtitle: self.canRestartGateway ? "Local process" : "Remote connection")
+                DebugMetricCard(
+                    title: "Gateway",
+                    value: self.gatewayManager.status.label,
+                    icon: "antenna.radiowaves.left.and.right",
+                    tint: self.gatewayManager.status.debugTint,
+                    subtitle: self.canRestartGateway ? "Local process" : "Remote connection")
 
-            DebugMetricCard(
-                title: "App PID",
-                value: "\(ProcessInfo.processInfo.processIdentifier)",
-                icon: "number.square",
-                tint: .blue,
-                subtitle: Bundle.main.bundleURL.lastPathComponent)
+                DebugMetricCard(
+                    title: "App PID",
+                    value: "\(ProcessInfo.processInfo.processIdentifier)",
+                    icon: "number.square",
+                    tint: .blue,
+                    subtitle: Bundle.main.bundleURL.lastPathComponent)
+            }
+        } footer: {
+            Text("Tools for diagnosing local issues (Gateway, ports, logs, Canvas).")
         }
     }
 
@@ -144,7 +131,7 @@ struct DebugSettings: View {
     }
 
     private var appInfoSection: some View {
-        GroupBox("App") {
+        Section("App") {
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
                 GridRow {
                     self.gridLabel("Health")
@@ -182,7 +169,7 @@ struct DebugSettings: View {
     }
 
     private var gatewaySection: some View {
-        GroupBox("Gateway") {
+        Section("Gateway") {
             VStack(alignment: .leading, spacing: 10) {
                 Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
                     GridRow {
@@ -255,7 +242,7 @@ struct DebugSettings: View {
     }
 
     private var logsSection: some View {
-        GroupBox("Logs") {
+        Section("Logs") {
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
                 GridRow {
                     self.gridLabel("Pino log")
@@ -314,7 +301,7 @@ struct DebugSettings: View {
     }
 
     private var portsSection: some View {
-        GroupBox("Ports") {
+        Section("Ports") {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     Text("Port diagnostics")
@@ -395,7 +382,7 @@ struct DebugSettings: View {
     }
 
     private var pathsSection: some View {
-        GroupBox("Paths") {
+        Section("Paths") {
             VStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("OpenClaw project root")
@@ -451,7 +438,7 @@ struct DebugSettings: View {
     }
 
     private var quickActionsSection: some View {
-        GroupBox("Quick actions") {
+        Section("Quick actions") {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     Button("Send Test Notification") {
@@ -550,7 +537,7 @@ struct DebugSettings: View {
     }
 
     private var canvasSection: some View {
-        GroupBox("Canvas") {
+        Section("Canvas") {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Enable/disable Canvas in General settings.")
                     .font(.caption)
@@ -598,7 +585,7 @@ struct DebugSettings: View {
     }
 
     private var experimentsSection: some View {
-        GroupBox("Experiments") {
+        Section("Experiments") {
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
                 GridRow {
                     self.gridLabel("Icon override")
@@ -841,24 +828,6 @@ extension DebugSettings {
     }
 }
 
-struct PlainSettingsGroupBoxStyle: GroupBoxStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            configuration.label
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
-            configuration.content
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.quaternary.opacity(0.34), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(.white.opacity(0.055))
-        }
-    }
-}
-
 private struct DebugMetricCard: View {
     let title: String
     let value: String
@@ -889,13 +858,8 @@ private struct DebugMetricCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(12)
+        .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(.quaternary.opacity(0.28), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(.white.opacity(0.055))
-        }
     }
 }
 
@@ -925,7 +889,7 @@ extension GatewayProcessManager.Status {
 struct DebugSettings_Previews: PreviewProvider {
     static var previews: some View {
         DebugSettings(state: .preview)
-            .frame(width: ConnectionWindow.width, height: ConnectionWindow.height)
+            .frame(width: ConnectionWindow.width, height: 720)
     }
 }
 #endif
