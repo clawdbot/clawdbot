@@ -61,7 +61,7 @@ suite.define(() => {
         },
       });
 
-      const response = await page.goto(`${suite.server.baseUrl}agents`);
+      const response = await page.goto(`${suite.server.baseUrl}settings/agents`);
       expect(response?.status()).toBe(200);
 
       // Click auto-waits for the elements to be actionable (enabled), so

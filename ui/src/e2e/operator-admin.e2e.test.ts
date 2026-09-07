@@ -389,7 +389,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}agents`);
+      await page.goto(`${suite.server.baseUrl}settings/agents`);
       await gateway.waitForRequest("agents.list");
       await selectAgentOnAgentsPage(page, "Reviewer");
       await page.locator("#agents-tab-overview").click();
@@ -516,7 +516,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}agents`);
+      await page.goto(`${suite.server.baseUrl}settings/agents`);
       await gateway.waitForRequest("agents.list");
       await selectAgentOnAgentsPage(page, "Reviewer");
       const setDefault = page.locator(".agents-toolbar-actions button").nth(1);
