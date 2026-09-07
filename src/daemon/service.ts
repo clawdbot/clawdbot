@@ -109,6 +109,7 @@ export type GatewayService = {
 
 type ReadGatewayServiceStateArgs = GatewayServiceEnvArgs & {
   requireEffective?: boolean;
+  requireLoadedCommand?: boolean;
   validateEnvBeforeStatusRead?: (env: GatewayServiceEnv) => void;
 };
 
@@ -219,7 +220,11 @@ export async function readGatewayServiceState(
     };
   }
   const command = args.requireEffective
-    ? await service.readCommand(baseEnv, { timeoutMs, requireEffective: true })
+    ? await service.readCommand(baseEnv, {
+        timeoutMs,
+        requireEffective: true,
+        ...(args.requireLoadedCommand ? { requireLoaded: true } : {}),
+      })
     : await service.readCommand(baseEnv, { timeoutMs }).catch(() => null);
   const env = mergeGatewayServiceEnv(baseEnv, command);
   // Reject persisted selector drift before invoking the native service manager.

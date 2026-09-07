@@ -109,9 +109,15 @@ async function readSystemdManagerCommand(
       Math.max(1, Math.floor((deadlineAt - performance.now()) / remainingCalls--)),
     );
     if (result.code !== 0) {
+      const detail = result.stderr.trim();
       if (
-        args.includes("LoadUnit") &&
-        result.stderr.trim() === `Call failed: Unit ${unitName} not found.`
+        result.termination === "exit" &&
+        ((args.includes("LoadUnit") && detail === `Call failed: Unit ${unitName} not found.`) ||
+          (args.includes("GetUnit") &&
+            (detail === `Call failed: Unit ${unitName} not loaded.` ||
+              detail === `Call failed: Unit ${unitName} not found.`)) ||
+          (args.includes("GetUnitFileState") &&
+            detail === `Call failed: Unit file ${unitName} does not exist.`))
       ) {
         return null;
       }
@@ -129,12 +135,43 @@ async function readSystemdManagerCommand(
     }
     return properties.map((property) => property?.data);
   };
+  const assertAbsentWithoutLoading = async (): Promise<null> => {
+    // GetUnit only proves that a unit is not currently loaded. An existing
+    // authored or native unit file must not be mistaken for service absence.
+    if (localDefinition) {
+      throw unavailable();
+    }
+    const fileState = await query(
+      [
+        "call",
+        manager,
+        "/org/freedesktop/systemd1",
+        `${manager}.Manager`,
+        "GetUnitFileState",
+        "s",
+        unitName,
+      ],
+      ["s"],
+    );
+    if (fileState !== null) {
+      throw unavailable();
+    }
+    return null;
+  };
   const loaded = await query(
-    ["call", manager, "/org/freedesktop/systemd1", `${manager}.Manager`, "LoadUnit", "s", unitName],
+    [
+      "call",
+      manager,
+      "/org/freedesktop/systemd1",
+      `${manager}.Manager`,
+      opts?.requireLoaded ? "GetUnit" : "LoadUnit",
+      "s",
+      unitName,
+    ],
     ["o"],
   );
   if (!loaded) {
-    return null;
+    return opts?.requireLoaded ? await assertAbsentWithoutLoading() : null;
   }
   const loadedUnit = loaded[0];
   const unitPath = Array.isArray(loadedUnit) && loadedUnit.length === 1 ? loadedUnit[0] : null;
@@ -153,7 +190,7 @@ async function readSystemdManagerCommand(
   const [sourcePath, dropInPaths, reloadPending, loadState] = unitProperties ?? [];
   // LoadUnit also returns objects for missing units; only LoadState proves absence.
   if (loadState === "not-found") {
-    return null;
+    return opts?.requireLoaded ? await assertAbsentWithoutLoading() : null;
   }
   if (
     loadState !== "loaded" ||

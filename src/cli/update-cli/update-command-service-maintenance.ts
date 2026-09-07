@@ -227,6 +227,7 @@ export function createWindowsTaskAutoStartGuard(params: {
     const state = await readGatewayServiceState(resolveGatewayService(), {
       env: before.serviceEnv,
       requireEffective: true,
+      requireLoadedCommand: true,
       validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
       timeoutMs: params.timeoutMs,
     });
@@ -340,6 +341,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     serviceState = await readGatewayServiceState(service, {
       env: process.env,
       requireEffective: true,
+      requireLoadedCommand: true,
       validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
       timeoutMs: params.timeoutMs,
     });
@@ -486,6 +488,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     const currentState = await readGatewayServiceState(service, {
       env: serviceState.env,
       requireEffective: true,
+      requireLoadedCommand: true,
       validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
       timeoutMs: params.timeoutMs,
     });

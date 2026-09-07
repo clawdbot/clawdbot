@@ -87,6 +87,8 @@ export type GatewayServiceEnvArgs = {
 export type GatewayServiceReadOptions = {
   timeoutMs?: number;
   requireEffective?: boolean;
+  /** Command inspection must not load an unloaded native unit. */
+  requireLoaded?: boolean;
 };
 
 export type GatewayServiceEnvironmentValueSource = "inline" | "file" | "inline-and-file";

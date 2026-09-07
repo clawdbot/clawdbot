@@ -333,14 +333,15 @@ function mockSystemdManagerProperties(
   vi.spyOn(systemdExec, "execBusctlUser").mockRestore();
   execFileMock.mockReset();
   execFileMock.mockImplementation((_command, args, _options, callback) => {
-    const propertyOutput = args.includes("LoadUnit")
-      ? JSON.stringify({
-          type: "o",
-          data: ["/org/freedesktop/systemd1/unit/openclaw_2dgateway_2eservice"],
-        })
-      : args.includes("org.freedesktop.systemd1.Unit")
-        ? unitOutput
-        : output;
+    const propertyOutput =
+      args.includes("LoadUnit") || args.includes("GetUnit")
+        ? JSON.stringify({
+            type: "o",
+            data: ["/org/freedesktop/systemd1/unit/openclaw_2dgateway_2eservice"],
+          })
+        : args.includes("org.freedesktop.systemd1.Unit")
+          ? unitOutput
+          : output;
     if (propertyOutput instanceof Error) {
       callback(createExecFileError(propertyOutput.message), "", propertyOutput.message);
       return;
@@ -1579,6 +1580,64 @@ describe("readSystemdServiceExecStart", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
+
+  it("strict inspection never loads a unit before the update checkpoint boundary", async () => {
+    mockReadGatewayServiceFile(["[Service]", "ExecStart=/usr/bin/openclaw gateway run"]);
+    mockSystemdManagerProperties(
+      buildSystemdManagerPropertyOutput({
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+      }),
+    );
+    await expect(
+      readSystemdServiceExecStart(
+        { HOME: TEST_SERVICE_HOME },
+        { requireEffective: true, requireLoaded: true },
+      ),
+    ).resolves.toMatchObject({ programArguments: ["/usr/bin/openclaw", "gateway", "run"] });
+    expect(execFileMock.mock.calls.some((call) => call[1].includes("LoadUnit"))).toBe(false);
+    expect(execFileMock.mock.calls[0]?.[1]).toContain("GetUnit");
+  });
+
+  it.each(["local", "global", "absent", "unreadable"] as const)(
+    "loaded-only inspection does not activate or adopt an unloaded %s definition",
+    async (scenario) => {
+      execFileMock.mockReset();
+      if (scenario === "local") {
+        mockReadGatewayServiceFile(["[Service]", "ExecStart=/usr/bin/openclaw gateway run"]);
+      } else {
+        vi.spyOn(fs, "readFile").mockRejectedValue(
+          Object.assign(new Error("missing base"), { code: "ENOENT" }),
+        );
+      }
+      execFileMock.mockImplementation((_command, args, _options, callback) => {
+        if (args.includes("GetUnitFileState") && scenario === "global") {
+          callback(null, JSON.stringify({ type: "s", data: ["disabled"] }), "");
+          return;
+        }
+        const message = args.includes("GetUnitFileState")
+          ? scenario === "absent"
+            ? `Call failed: Unit file ${GATEWAY_SERVICE} does not exist.`
+            : "Call failed: Permission denied"
+          : `Call failed: Unit ${GATEWAY_SERVICE} not loaded.`;
+        callback(createExecFileError(message), "", message);
+      });
+      const result = readSystemdServiceExecStart(
+        { HOME: TEST_SERVICE_HOME },
+        { requireEffective: true, requireLoaded: true },
+      );
+      if (scenario === "absent") {
+        await expect(result).resolves.toBeNull();
+      } else {
+        await expect(result).rejects.toThrow("could not be inspected");
+      }
+      expect(
+        execFileMock.mock.calls.every(
+          (call) => call[1].includes("GetUnit") || call[1].includes("GetUnitFileState"),
+        ),
+      ).toBe(true);
+      expect(execFileMock).toHaveBeenCalledTimes(scenario === "local" ? 1 : 2);
+    },
+  );
 
   it("strictly distinguishes a missing base unit from an unreadable existing unit", async () => {
     execFileMock.mockImplementation((_command, _args, _options, callback) => {

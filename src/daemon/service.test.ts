@@ -186,6 +186,21 @@ describe("resolveGatewayService", () => {
 });
 
 describe("readGatewayServiceState", () => {
+  it("passes update loaded-only admission to the real command adapter", async () => {
+    const readCommand = vi.fn(async () => null);
+    const service = createService({ readCommand });
+    await readGatewayServiceState(service, {
+      requireEffective: true,
+      requireLoadedCommand: true,
+      timeoutMs: 100,
+    });
+    expect(readCommand).toHaveBeenCalledWith(expect.anything(), {
+      requireEffective: true,
+      requireLoaded: true,
+      timeoutMs: 100,
+    });
+  });
+
   it.each(managerlessPreflightCases)(
     "handles managerless Linux preflight for $updateInstallKind restart=$shouldRestart ($condition)",
     async ({ updateInstallKind, shouldRestart, condition, portUsage, portSource }) => {
