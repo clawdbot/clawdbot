@@ -2,6 +2,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createResolverContext } from "openclaw/plugin-sdk/secret-ref-runtime";
 import { describe, expect, it } from "vitest";
+import { lineChannelPluginCommon } from "./channel-shared.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 
 const STORE_TOKEN_REF = { source: "store", provider: "default", id: "LINE_TOKEN" } as const;
@@ -25,6 +26,15 @@ describe("LINE secret contract", () => {
       "channels.line.channelAccessToken",
       "channels.line.channelSecret",
     ]);
+  });
+
+  it("publishes the contract on the plugin so the secret target CLI can read it", () => {
+    expect(lineChannelPluginCommon.secrets?.secretTargetRegistryEntries).toBe(
+      secretTargetRegistryEntries,
+    );
+    expect(lineChannelPluginCommon.secrets?.collectRuntimeConfigAssignments).toBe(
+      collectRuntimeConfigAssignments,
+    );
   });
 
   it("collects channel-level credentials when no accounts map narrows them", () => {

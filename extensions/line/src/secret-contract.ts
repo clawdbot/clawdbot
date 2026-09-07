@@ -49,18 +49,13 @@ function accountSuppliesCredential(params: {
  */
 function resolveLineSecretSurface(params: {
   channel: Record<string, unknown>;
-  defaults: SecretDefaults | undefined;
   env: NodeJS.ProcessEnv;
 }): ChannelAccountSurface {
   const surface = resolveChannelAccountSurface(params.channel);
   if (
     !surface.hasExplicitAccounts ||
     surface.accounts.some((entry) => normalizeAccountId(entry.accountId) === DEFAULT_ACCOUNT_ID) ||
-    !channelRootAdmitsDefaultLineAccount({
-      config: params.channel,
-      secretDefaults: params.defaults,
-      env: params.env,
-    })
+    !channelRootAdmitsDefaultLineAccount({ config: params.channel, env: params.env })
   ) {
     return surface;
   }
@@ -82,11 +77,7 @@ export function collectRuntimeConfigAssignments(params: {
   if (!channel) {
     return;
   }
-  const surface = resolveLineSecretSurface({
-    channel,
-    defaults: params.defaults,
-    env: params.context.env,
-  });
+  const surface = resolveLineSecretSurface({ channel, env: params.context.env });
   for (const { field, fileField } of LINE_CREDENTIALS) {
     collectConditionalChannelFieldAssignments({
       channelKey: LINE_CHANNEL,
