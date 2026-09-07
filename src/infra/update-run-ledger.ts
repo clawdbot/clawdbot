@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
@@ -383,43 +384,64 @@ export function recordUpdateRunStep(
   );
 }
 
+type FinishUpdateRunResult = {
+  status: Exclude<UpdateRunRecord["status"], "running">;
+  reason?: string;
+  after?: UpdateRunRecord["after"];
+  downtimeMs?: number;
+};
+
+function finishRunRecord(record: UpdateRunRecord, result: FinishUpdateRunResult): void {
+  // CLI and the new Gateway may finish together. The first durable terminal outcome wins.
+  if (record.status !== "running") {
+    return;
+  }
+  const now = Date.now();
+  // A thrown command or interrupted updater can miss its completion callback.
+  // Terminal runs cannot retain live steps after their lifecycle closes.
+  for (const step of record.steps) {
+    if (step.step === record.phase || step.status === "in_progress") {
+      step.status =
+        result.status === "failed"
+          ? "failed"
+          : result.status === "skipped"
+            ? "skipped"
+            : "completed";
+      step.endedAtMs = now;
+    }
+  }
+  record.status = result.status;
+  record.phase = "finished";
+  record.reason = result.reason ?? null;
+  record.finishedAtMs = now;
+  record.after = { ...record.after, ...result.after };
+  record.downtimeMs = result.downtimeMs ?? record.downtimeMs;
+}
+
 export function finishUpdateRun(
   runId: string,
-  result: {
-    status: Exclude<UpdateRunRecord["status"], "running">;
-    reason?: string;
-    after?: UpdateRunRecord["after"];
-    downtimeMs?: number;
-  },
+  result: FinishUpdateRunResult,
   options: LedgerOptions = {},
 ): UpdateRunRecord {
-  return mutateRun(
-    runId,
+  return mutateRun(runId, (record) => finishRunRecord(record, result), options);
+}
+
+/** Caller owns preview admission and excludes recovery under this same transaction. */
+export function finishInterruptedUpdatePreviewInTransaction(
+  db: DatabaseSync,
+  expected: UpdateRunRecord,
+  options: LedgerOptions,
+): void {
+  if (!db.isTransaction || expected.status !== "running" || expected.phase !== "requested") {
+    throw new Error("Preview interruption requires an active admission and transaction");
+  }
+  mutateRunInTransaction(
+    db,
+    expected.runId,
     (record) => {
-      // CLI and the new Gateway may finish together. The first durable terminal outcome wins.
-      if (record.status !== "running") {
-        return;
+      if (isDeepStrictEqual(record, expected)) {
+        finishRunRecord(record, { status: "skipped", reason: "interrupted" });
       }
-      const now = Date.now();
-      // A thrown command or interrupted updater can miss its completion callback.
-      // Terminal runs cannot retain live steps after their lifecycle closes.
-      for (const step of record.steps) {
-        if (step.step === record.phase || step.status === "in_progress") {
-          step.status =
-            result.status === "failed"
-              ? "failed"
-              : result.status === "skipped"
-                ? "skipped"
-                : "completed";
-          step.endedAtMs = now;
-        }
-      }
-      record.status = result.status;
-      record.phase = "finished";
-      record.reason = result.reason ?? null;
-      record.finishedAtMs = now;
-      record.after = { ...record.after, ...result.after };
-      record.downtimeMs = result.downtimeMs ?? record.downtimeMs;
     },
     options,
   );

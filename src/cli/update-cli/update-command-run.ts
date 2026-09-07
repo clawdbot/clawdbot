@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { assertConfigWriteAllowedInCurrentMode } from "../../config/config.js";
 import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
@@ -31,18 +32,27 @@ import {
 import { normalizeControlPlaneUpdateResult } from "../../infra/update-restart-sentinel-payload.js";
 import {
   createUpdateRun,
+  finishInterruptedUpdatePreviewInTransaction,
   finishUpdateRun,
   getUpdateRun,
   recordUpdateRunPhase,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
-import { summarizeUpdateStepFailure, type UpdateRunStep } from "../../infra/update-run-record.js";
+import {
+  summarizeUpdateStepFailure,
+  type UpdateRunRecord,
+  type UpdateRunStep,
+} from "../../infra/update-run-record.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
+import { readRecoveries } from "../../infra/update-run-recovery-store.js";
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner.js";
+import { defaultRuntime } from "../../runtime.js";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
 import { VERSION } from "../../version.js";
+import { registerSignalExitBarrier, waitForSignalExitBarriers } from "../signal-exit-barrier.js";
 import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateCommandOptions } from "./shared.js";
 import { suppressDeprecations } from "./suppress-deprecations.js";
 import {
@@ -54,6 +64,13 @@ import {
   isGatewayServiceManagementAllowedForUpdate,
   resolveManagedServicePackageUpdatePlan,
 } from "./update-command-service-plan.js";
+
+// Identity in this map is minted only for a new local preview, never reconstructed
+// from a run ID, process absence, or another invocation's diagnostic history.
+const previewAdmissions = new WeakMap<
+  object,
+  { record: UpdateRunRecord; env: NodeJS.ProcessEnv }
+>();
 
 export async function admitUpdateCommandRun(params: {
   opts: UpdateCommandOptions;
@@ -102,7 +119,82 @@ export async function admitUpdateCommandRun(params: {
   const requesterAuthority = requester
     ? await createManagedUpdateRequesterAuthority(requester, env)
     : undefined;
-  return { runId: record.runId, env, ...(requesterAuthority ? { requesterAuthority } : {}) };
+  const run = { runId: record.runId, env, ...(requesterAuthority ? { requesterAuthority } : {}) };
+  if (
+    params.opts.dryRun === true &&
+    !env[UPDATE_RUN_ID_ENV] &&
+    env.OPENCLAW_UPDATE_RUN_HANDOFF !== "1" &&
+    env[POST_CORE_UPDATE_ENV] !== "1"
+  ) {
+    previewAdmissions.set(run, { record, env: { ...env } });
+  }
+  return run;
+}
+
+/** Own signal diagnostics only for the admitted preview's lexical lifetime. */
+export async function withUpdatePreviewSignals<T>(
+  opts: UpdateCommandOptions,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const admission = opts.dryRun === true && opts.run ? previewAdmissions.get(opts.run) : undefined;
+  if (!admission || !opts.run) {
+    return await operation();
+  }
+  previewAdmissions.delete(opts.run);
+  const { record: expected, env } = admission;
+  let interrupted = false;
+  let shutdown: Promise<void> | undefined;
+  const unregister = registerSignalExitBarrier(async () => {
+    if (
+      !interrupted ||
+      process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1" ||
+      process.env[POST_CORE_UPDATE_ENV] === "1"
+    ) {
+      return;
+    }
+    // Missing/displaced canonical state, pending recovery, or a changed row is
+    // not permission to open a writable runtime or dispose of another owner.
+    await assertUpdateRecoveryAdmission({ env });
+    if (!isDeepStrictEqual(getUpdateRun(expected.runId, { env }), expected)) {
+      return;
+    }
+    runOpenClawStateWriteTransaction(
+      (database) => {
+        const options = { env, database };
+        if (
+          readRecoveries(database.db).some(
+            (entry) => entry.runId === expected.runId || !entry.terminal,
+          )
+        ) {
+          return;
+        }
+        finishInterruptedUpdatePreviewInTransaction(database.db, expected, options);
+      },
+      { env },
+    );
+  });
+  const onSignal = (code: number) => {
+    interrupted = true;
+    shutdown ??= waitForSignalExitBarriers()
+      .catch(() => {
+        defaultRuntime.error(
+          "Preview interruption could not be recorded; history remains pending.",
+        );
+      })
+      .finally(() => process.exit(code));
+  };
+  const onSigint = () => onSignal(130);
+  const onSigterm = () => onSignal(143);
+  process.on("SIGINT", onSigint);
+  process.on("SIGTERM", onSigterm);
+  try {
+    return await operation();
+  } finally {
+    await shutdown;
+    process.off("SIGINT", onSigint);
+    process.off("SIGTERM", onSigterm);
+    unregister();
+  }
 }
 
 export function failUpdateCommandRun(
