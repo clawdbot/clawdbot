@@ -131,12 +131,24 @@ suite.define(() => {
           .toBe(2);
         await page.getByText("Uploading 2 of 2").waitFor();
         await expect.poll(async () => await progress.getAttribute("aria-valuenow")).toBe("1");
+        const relativeLockDirectory = ".openclaw\\tmp\\openclaw\\terminal-upload-lock";
+        const privatePath = "C:\\Users\\operator\\private\\request.log";
+        const recoveryMessage =
+          "terminal upload staging is busy; retry after other uploads finish. " +
+          `If it stays blocked after a crash, locate ${relativeLockDirectory} under the home directory ` +
+          "of the account running this terminal's Gateway or node host. Stop all Gateway and " +
+          "node-host processes using that staging root, remove only this lock directory, then restart them.";
         await gateway.rejectDeferred("terminal.upload", {
           code: "UNAVAILABLE",
-          message: "paired node went offline",
+          message: `${recoveryMessage} Diagnostic: ${privatePath}; token=synthetic-terminal-secret-value`,
         });
         await page.getByText("Upload failed").waitFor();
-        await page.getByText("paired node went offline").waitFor();
+        const uploadError = page.locator(".tp-upload-card__error");
+        await expect.poll(async () => await uploadError.textContent()).toContain(recoveryMessage);
+        const displayedError = await uploadError.textContent();
+        expect(displayedError).toContain("[redacted path]");
+        expect(displayedError).not.toContain(privatePath);
+        expect(displayedError).not.toContain("synthetic-terminal-secret-value");
         expect(await page.getByRole("button", { name: "Retry" }).isVisible()).toBe(true);
         expect((await gateway.getRequests("terminal.input")).length).toBe(0);
         if (errorScreenshotPath) {
