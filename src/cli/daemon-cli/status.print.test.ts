@@ -105,7 +105,6 @@ vi.mock("./shared.js", async (importOriginal) => ({
     warnText: (text: string) => text,
     errorText: (text: string) => text,
   }),
-  filterDaemonEnv: () => ({}),
   formatRuntimeStatus: () => "running (pid 8000)",
   resolveRuntimeStatusColor: () => "",
   safeDaemonEnv: () => [],
