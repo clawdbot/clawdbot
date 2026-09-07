@@ -22,6 +22,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
+import { minimatch } from "minimatch";
 import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -3889,10 +3890,68 @@ NODE
         OPENCLAW_DOCKER_ALL_LANES: "${{ needs.preflight.outputs.docker_seed_lanes }}",
         OPENCLAW_DOCKER_ALL_LIVE_MODE: "skip",
         OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: "1",
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@latest",
+        OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "legacy-operator-state",
+        OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: "auto-auth",
         OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM: parallelism,
       },
     });
     expect(parallelism).toContain("&& 3 || 1");
+  });
+
+  it.each([
+    { repository: "openclaw/openclaw", ref: "refs/heads/main", expected: true },
+    { repository: "openclaw/openclaw", ref: "refs/heads/feature", expected: false },
+    { repository: "fork/openclaw", ref: "refs/heads/main", expected: false },
+  ])(
+    "gates only canonical main pushes admitted by CI ($repository $ref)",
+    ({ repository, ref, expected }) => {
+      const push = readCiWorkflow().on.push;
+      expect(push.branches).toEqual(["main"]);
+      expect(push).not.toHaveProperty("paths");
+      expect(push["paths-ignore"]).toEqual(["**/*.md", "docs/**"]);
+      const result = runCiManifestFixture({
+        bundledPlanner: true,
+        eventName: "push",
+        repository,
+        changedPaths: ["assets/logo.svg"],
+        scopeEnv: { GITHUB_REF: ref },
+      });
+      expect(result.status, result.output).toBe(0);
+      expect(result.outputs.run_docker_seed_e2e).toBe(String(expected));
+      expect(result.outputs.docker_seed_lanes).toBe(expected ? "published-upgrade-survivor" : "");
+    },
+  );
+
+  it.each([
+    { paths: ["README.md"], admitted: false },
+    { paths: [".agents/skills/example/SKILL.md"], admitted: false },
+    { paths: ["docs/ci.md", "docs/images/diagram.svg"], admitted: false },
+    { paths: ["docs/reference/schema.json"], admitted: false },
+    { paths: ["src/ordinary.ts"], admitted: true },
+    { paths: ["assets/logo.svg"], admitted: true },
+    { paths: ["README.md", "src/ordinary.ts"], admitted: true },
+    { paths: ["docs/ci.md", "assets/logo.svg"], admitted: true },
+  ])("admits main push paths $paths to CI: $admitted", ({ paths, admitted }) => {
+    const ignored: string[] = readCiWorkflow().on.push["paths-ignore"] ?? [];
+    // GitHub skips paths-ignore only when every changed path matches a pattern.
+    const runsCi = paths.some(
+      (changedPath) => !ignored.some((pattern) => minimatch(changedPath, pattern, { dot: true })),
+    );
+    expect(runsCi).toBe(admitted);
+    if (!runsCi) {
+      return;
+    }
+    const result = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: "push",
+      repository: "openclaw/openclaw",
+      changedPaths: paths,
+      scopeEnv: { GITHUB_REF: "refs/heads/main" },
+    });
+    expect(result.status, result.output).toBe(0);
+    expect(result.outputs.run_docker_seed_e2e).toBe("true");
+    expect(result.outputs.docker_seed_lanes).toBe("published-upgrade-survivor");
   });
 
   it("splits Windows tests two ways on every runner backend", () => {

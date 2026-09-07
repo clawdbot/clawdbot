@@ -118,10 +118,10 @@ function renderSessionSummary(
   let toolCounts: Map<string, number> | undefined;
   if (filteredLogs) {
     toolCounts = new Map();
-    for (const log of filteredLogs) {
-      const { tools } = parseToolSummary(log.content);
-      for (const [name] of tools) {
-        toolCounts.set(name, (toolCounts.get(name) || 0) + 1);
+    // Result rows carry tool names for filtering, but only assistant rows record calls.
+    for (const log of filteredLogs.filter(({ role }) => role === "assistant")) {
+      for (const [name, count] of parseToolSummary(log.content).tools) {
+        toolCounts.set(name, (toolCounts.get(name) ?? 0) + count);
       }
     }
   }

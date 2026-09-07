@@ -218,34 +218,24 @@ const RUNTIME_CONTEXT_PROMPT_HEADERS: readonly string[] = [
   OPENCLAW_RUNTIME_EVENT_HEADER,
 ];
 
+const RUNTIME_CONTEXT_NOTICE_PATTERN = new RegExp(
+  OPENCLAW_RUNTIME_CONTEXT_NOTICE.split(/\s+/).map(escapeRegExp).join("\\s+"),
+);
+const RUNTIME_CONTEXT_PREFACE_PATTERN = new RegExp(
+  `^[ \\t]*(?:${RUNTIME_CONTEXT_PROMPT_HEADERS.flatMap((header) => {
+    const sentences = header.split(". ");
+    // Echoes may start at a header sentence, but the notice alone is ordinary text.
+    return sentences.map((_, index) =>
+      sentences.slice(index).join(". ").split(/\s+/).map(escapeRegExp).join("\\s+"),
+    );
+  }).join("|")})\\s+${RUNTIME_CONTEXT_NOTICE_PATTERN.source}[ \\t]*(?:\\r?\\n|$)`,
+  "gm",
+);
+
 function stripRuntimeContextPromptPreface(text: string): string {
-  const lines = text.split(/\r?\n/);
-  let changed = false;
-  const output: string[] = [];
-
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index] ?? "";
-    const nextLine = lines[index + 1] ?? "";
-    if (
-      RUNTIME_CONTEXT_PROMPT_HEADERS.includes(line.trim()) &&
-      nextLine.trim() === OPENCLAW_RUNTIME_CONTEXT_NOTICE
-    ) {
-      changed = true;
-      index += 1;
-      while (index + 1 < lines.length && (lines[index + 1] ?? "").trim() === "") {
-        index += 1;
-      }
-      continue;
-    }
-    output.push(line);
-  }
-
-  return changed
-    ? output
-        .join("\n")
-        .replace(/\n{3,}/g, "\n\n")
-        .trim()
-    : text;
+  // Each alternative has a fixed word count; unrelated lines never grow a candidate scan.
+  const stripped = text.replace(RUNTIME_CONTEXT_PREFACE_PATTERN, "");
+  return stripped === text ? text : stripped.replace(/\n{3,}/g, "\n\n").trim();
 }
 
 /** Remove protected and legacy runtime-context blocks from text. */
@@ -253,12 +243,12 @@ export function stripInternalRuntimeContext(
   text: string,
   options: { preserveSurroundingWhitespace?: boolean; separator?: string } = {},
 ): string {
-  // All removable formats contain a delimiter or the exact runtime notice.
+  // All removable formats contain a delimiter or the whitespace-tolerant runtime notice.
   // Skip delimiter scans and line parsing for ordinary display text.
   if (
     !text.includes(INTERNAL_RUNTIME_CONTEXT_BEGIN) &&
     !text.includes(INTERNAL_RUNTIME_CONTEXT_END) &&
-    !text.includes(OPENCLAW_RUNTIME_CONTEXT_NOTICE)
+    !RUNTIME_CONTEXT_NOTICE_PATTERN.test(text)
   ) {
     return text;
   }

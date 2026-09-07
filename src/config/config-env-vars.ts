@@ -362,8 +362,15 @@ export function initializePublishedConfigRuntimeEnv(
   pendingConfigRuntimeEnvPublication = null;
 }
 
-export function resetPublishedConfigRuntimeEnv(): void {
-  publishedConfigRuntimeEnvState = { generation: 0, ownedEnv: {}, sourceConfig: null };
+export function resetPublishedConfigRuntimeEnv(
+  options: { preserveOwnership?: boolean } = {},
+): void {
+  publishedConfigRuntimeEnvState = options.preserveOwnership
+    ? {
+        ...publishedConfigRuntimeEnvState,
+        generation: publishedConfigRuntimeEnvState.generation + 1,
+      }
+    : { generation: 0, ownedEnv: {}, sourceConfig: null };
   publishedConfigRuntimeEnvEpoch += 1;
   pendingConfigRuntimeEnvPublication = null;
 }

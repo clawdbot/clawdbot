@@ -241,8 +241,8 @@ const { resetPreparedModelRuntimeSnapshotsForTest } =
   await import("./prepared-model-runtime.test-support.js");
 const { resolveThinkingProfile } = await import("../auto-reply/thinking.js");
 
-beforeEach(() => {
-  resetPreparedModelRuntimeSnapshotsForTest();
+beforeEach(async () => {
+  await resetPreparedModelRuntimeSnapshotsForTest();
   mocks.loadAgentRuntimePluginRegistryHandle
     .mockReset()
     .mockReturnValue(createEmptyPluginRegistry());

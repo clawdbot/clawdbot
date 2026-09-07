@@ -8,12 +8,16 @@ function copyCommand(event: Event) {
   (event.currentTarget as HTMLElement).querySelector<HTMLButtonElement>(".chat-copy-btn")?.click();
 }
 
-export function renderConnectCommand(command: string) {
+export function renderConnectCommand(command: string, variant: "inline" | "hero" = "inline") {
   const copyLabel = t("connection.help.copyCommand");
   return html`
     <openclaw-tooltip .content=${copyLabel}>
       <div
-        class="login-gate__command"
+        class=${
+          variant === "hero"
+            ? "login-gate__command login-gate__command--hero"
+            : "login-gate__command"
+        }
         role="button"
         tabindex="0"
         aria-label=${t("connection.help.copyCommandAria", { command })}
