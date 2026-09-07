@@ -51,6 +51,7 @@ import {
   readReferencedSessionIdsAfterTargetMutation,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import { refreshSqliteSessionPlannerStatisticsBestEffort } from "./session-accessor.sqlite-maintenance.js";
+import type { SqliteReclamationWorker } from "./session-accessor.sqlite-reclamation-worker.js";
 import {
   createHistoricalGenerationReclamationPlan,
   createLifecycleArtifactReclamationPlan,
@@ -310,6 +311,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
   expectedPluginOwnerId: string | undefined,
   recordCommit: (database: OpenClawAgentDatabase) => void,
   markCommitted: () => void,
+  worker?: SqliteReclamationWorker,
 ): Promise<DeleteSessionEntryLifecycleResult> {
   const prepared = await runExclusiveSqliteSessionWrite(resolved, async () => {
     // Opening a store can register durable ownership, even before the deletion transaction.
@@ -488,6 +490,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
                 forceInProcess: hasPreparedNativeSessionDeletion(),
                 onInProcessCommit: recordCommit,
                 plan: reclamationPlan,
+                worker,
               });
               if (reclaimed.kind !== reclamationPlan.kind) {
                 throw new Error(
@@ -544,6 +547,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
               forceInProcess: hasPreparedNativeSessionDeletion(),
               onInProcessCommit: recordCommit,
               plan: reclamationPlan,
+              worker,
             });
             if (reclaimed.kind !== reclamationPlan.kind) {
               throw new Error(
@@ -611,6 +615,7 @@ export async function deleteSessionEntryLifecycle(
 export async function deleteDiskBudgetSessionEntryLifecycle(
   params: DeleteSessionEntryLifecycleParams,
   resolved: ResolvedSqliteScope,
+  worker: SqliteReclamationWorker,
 ): Promise<DeleteSessionEntryLifecycleResult> {
   // A shared store lends its physical owner, not the victim's logical identity.
   // Validate against captured ownership so a custom selector cannot retarget cleanup.
@@ -632,6 +637,7 @@ export async function deleteDiskBudgetSessionEntryLifecycle(
         undefined,
         recordCommit,
         markCommitted,
+        worker,
       ),
     { scheduleNext: false },
   );

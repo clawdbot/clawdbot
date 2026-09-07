@@ -201,6 +201,73 @@ describe("tsdown config", () => {
     },
   );
 
+  it("keeps session reclamation outside the archive worker bootstrap", async () => {
+    const workerEntry = "config/sessions/session-accessor.sqlite-archive.worker";
+    const selected = configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
+    if (!selected) {
+      throw new Error("Missing session archive worker build config");
+    }
+    const entries = selected.entry as Record<string, string>;
+    // Include the parent store: shared chunks must not pull its lifecycle writes
+    // into the one-shot materialize/publish worker's static closure.
+    const bundles = await build({
+      ...selected,
+      config: false,
+      entry: Object.fromEntries(
+        [workerEntry, "plugin-sdk/session-store-runtime"].map((name) => [name, entries[name]!]),
+      ),
+      outDir: fs.realpathSync(createTempDir("openclaw-archive-worker-imports-")),
+      dts: false,
+      logLevel: "silent",
+    });
+    try {
+      const chunks = new Map(
+        bundles.flatMap((bundle) =>
+          bundle.chunks
+            .filter((chunk) => chunk.type === "chunk")
+            .map((chunk) => [chunk.fileName, chunk] as const),
+        ),
+      );
+      const queue = [`${workerEntry}.js`];
+      const visited = new Set<string>();
+      const modules = new Set<string>();
+      for (const name of queue) {
+        if (visited.has(name)) {
+          continue;
+        }
+        visited.add(name);
+        const chunk = chunks.get(name);
+        if (!chunk) {
+          throw new Error(`Missing archive worker chunk: ${name}`);
+        }
+        for (const [id, module] of Object.entries(chunk.modules)) {
+          if (module.renderedLength > 0) {
+            modules.add(id.replaceAll("\\", "/"));
+          }
+        }
+        for (const specifier of chunk.imports) {
+          const target = specifier.startsWith(".")
+            ? path.posix.normalize(path.posix.join(path.posix.dirname(name), specifier))
+            : specifier;
+          if (chunks.has(target)) {
+            queue.push(target);
+          }
+        }
+      }
+      expect(
+        [...modules].filter((id) =>
+          /\/session-accessor\.sqlite-(?:reclamation|lifecycle-state|entry-store|archive)\.ts$/u.test(
+            id,
+          ),
+        ),
+      ).toEqual([]);
+    } finally {
+      for (const bundle of bundles) {
+        await bundle[Symbol.asyncDispose]();
+      }
+    }
+  });
+
   it("builds retained config repairs without plugin runtime or state migration closures", async () => {
     const selected = configs.find((config) => config.outDir === "dist/config-doctor");
     expect(selected?.name).toBe(TSDOWN_UNIFIED_CONFIG_GROUP);
