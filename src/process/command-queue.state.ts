@@ -1,6 +1,7 @@
 // Shared command-queue runtime state, split out of command-queue.ts so the
 // capacity-group policy can read lane state without importing the queue itself.
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { pickNextAmongHeads } from "./command-queue.priority.js";
 import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
 import { CommandLane } from "./lanes.js";
 
@@ -140,18 +141,32 @@ export function enqueueLaneQueue(queue: LaneQueue, entry: QueueEntry): number {
 }
 
 export function peekLaneQueue(queue: LaneQueue): QueueEntry | undefined {
-  return (
-    peekQueueRing(queue.foreground) ??
-    peekQueueRing(queue.normal) ??
-    peekQueueRing(queue.background)
-  );
+  // Fresh foreground always drains first. Aged lower tiers cannot become
+  // foreground, so a nonempty FG ring never yields to drain-time promotion.
+  const foreground = peekQueueRing(queue.foreground);
+  if (foreground) {
+    return foreground;
+  }
+  const heads: QueueEntry[] = [];
+  const normal = peekQueueRing(queue.normal);
+  const background = peekQueueRing(queue.background);
+  if (normal) {
+    heads.push(normal);
+  }
+  if (background) {
+    heads.push(background);
+  }
+  return pickNextAmongHeads(heads);
 }
 
 export function dequeueLaneQueue(queue: LaneQueue): QueueEntry | undefined {
-  const entry =
-    dequeueQueueRing(queue.foreground) ??
-    dequeueQueueRing(queue.normal) ??
-    dequeueQueueRing(queue.background);
+  const next = peekLaneQueue(queue);
+  if (!next) {
+    return undefined;
+  }
+  // Dequeue from the winning entry's static ring. Aging changes selection
+  // only; it does not move work between rings.
+  const entry = dequeueQueueRing(getPriorityRing(queue, next.priority));
   if (entry) {
     delete entry.queued;
     queue.length -= 1;
