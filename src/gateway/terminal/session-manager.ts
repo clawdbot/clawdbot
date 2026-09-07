@@ -88,6 +88,16 @@ export class TerminalSessionManager {
     this.scrollbackChars = options.scrollbackChars ?? DEFAULT_SCROLLBACK_CHARS;
   }
 
+
+  /** Clipboard/RPC padding must not miss exact Map keys stored at create time. */
+  private normalizeSessionLookupId(sessionId: string): string {
+    return sessionId.trim();
+  }
+
+  private getSession(sessionId: string): TerminalSession | undefined {
+    return this.sessions.get(this.normalizeSessionLookupId(sessionId));
+  }
+
   /** Number of live sessions; used by tests and health surfaces. */
   get size(): number {
     return this.sessions.size;
@@ -413,7 +423,7 @@ export class TerminalSessionManager {
 
   /** Closes one session on operator request. */
   close(connId: string, sessionId: string): boolean {
-    const session = this.sessions.get(sessionId);
+    const session = this.getSession(sessionId);
     if (!session) {
       return false;
     }
@@ -485,7 +495,7 @@ export class TerminalSessionManager {
    * agent-owned sessions gain shared viewers.
    */
   attach(connId: string, sessionId: string): TerminalAttachSummary | undefined {
-    const session = this.sessions.get(sessionId);
+    const session = this.getSession(sessionId);
     if (!session || session.closed) {
       return undefined;
     }
@@ -529,7 +539,7 @@ export class TerminalSessionManager {
 
   /** Raw buffered output for one session, or undefined when it is gone. */
   snapshot(sessionId: string): string | undefined {
-    const session = this.sessions.get(sessionId);
+    const session = this.getSession(sessionId);
     if (!session || session.closed) {
       return undefined;
     }
@@ -772,7 +782,7 @@ export class TerminalSessionManager {
   }
 
   private interactiveSession(connId: string, sessionId: string): TerminalSession | undefined {
-    const session = this.sessions.get(sessionId);
+    const session = this.getSession(sessionId);
     if (!session || session.closed) {
       return undefined;
     }
@@ -791,7 +801,7 @@ export class TerminalSessionManager {
     owner: AgentTerminalOwner,
     sessionId: string,
   ): TerminalSession | undefined {
-    const session = this.sessions.get(sessionId);
+    const session = this.getSession(sessionId);
     if (!session || session.closed || !agentTerminalOwnerMatches(session.owner, owner)) {
       return undefined;
     }
