@@ -13,11 +13,17 @@ const CLAUDE_RESTRICTED_SETTINGS =
   '{"disableAllHooks":true,"enabledPlugins":{},"autoMemoryEnabled":false,"claudeMdExcludes":["**/CLAUDE.md","**/CLAUDE.local.md","**/.claude/rules/**"]}';
 const CLAUDE_MEMORY_ISOLATION_ARGS = ["--settings", CLAUDE_MEMORY_ISOLATION_SETTINGS];
 
-function normalizeClaudeArgs(args: string[]): string[] | undefined {
-  return normalizeClaudeBackendConfig({ command: "claude", args, output: "json", input: "arg" }, {
+function normalizeClaudeArgs(
+  args: string[],
+  context: Parameters<typeof normalizeClaudeBackendConfig>[1] = {
     backendId: "claude-cli",
     config: { tools: { exec: { mode: "ask" } } },
-  } as Parameters<typeof normalizeClaudeBackendConfig>[1]).args;
+  },
+): string[] | undefined {
+  return normalizeClaudeBackendConfig(
+    { command: "claude", args, output: "json", input: "arg" },
+    context,
+  ).args;
 }
 
 function readSettingsPayload(args: readonly string[]): string | undefined {
@@ -158,10 +164,13 @@ describe("Claude backend memory isolation", () => {
     // Restricted runs strip the inherited payload and substitute their own, so
     // the ordinary default must neither leak through nor double up.
     const resolved = resolveClaudeCliExecutionArgs({
-      backendId: "claude-cli",
+      workspaceDir: "/tmp",
+      provider: "claude-cli",
+      modelId: "claude-opus-4-8",
+      useResume: false,
       baseArgs: ["-p", "--settings", CLAUDE_MEMORY_ISOLATION_SETTINGS],
       toolAvailability: { native: [], openClaw: ["openclaw"] },
-    } as Parameters<typeof resolveClaudeCliExecutionArgs>[0]);
+    });
 
     expect(resolved.filter((arg) => arg.startsWith("--settings"))).toHaveLength(1);
     expect(readSettingsPayload(resolved)).toBe(CLAUDE_RESTRICTED_SETTINGS);
