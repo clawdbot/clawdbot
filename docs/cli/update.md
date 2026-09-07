@@ -338,8 +338,14 @@ listed separately as requiring verification. Protected and blocked artifacts
 include reason codes.
 
 Before applying, stop the Gateway for that same profile/state directory and wait
-for other SQLite maintenance commands to finish. Cleanup requires exclusive
-offline state ownership and never stops or restarts a service itself.
+for other SQLite maintenance commands to finish. Stop database readers too,
+including watchers that repeatedly run `openclaw sessions --all-agents --json`,
+and keep them stopped until cleanup exits. Read-only SQLite connections can
+create or change WAL/SHM sidecars, invalidating cleanup's destination check even
+when session content is unchanged. If cleanup reports `Recovery destination
+database changed; preview cleanup again.`, stop those readers, preview again,
+and retry. Cleanup requires exclusive offline state ownership and never stops
+or restarts a service itself.
 
 <Warning>
 Cleanup permanently removes the selected rollback originals, including branches
@@ -423,11 +429,13 @@ aligned:
 
 ### Validation and activation
 
-If the resolved package version equals the installed version, or the Git target
-SHA equals `HEAD`, the run finishes `skipped` with reason `already-current`.
-It does not stop, replace, or restart the Gateway. Read-only plugin convergence
-checks can still report repair needs; use `openclaw update repair` to apply them.
-An explicit `--channel` selection still persists the channel for future updates.
+If the resolved package version equals the installed version without changing
+the selected channel or installation method, or the Git target SHA equals
+`HEAD`, the run finishes `skipped` with reason `already-current`. A same-version
+explicit `--channel` or installation-method change finishes successfully.
+Neither path stops or restarts the Gateway unless the installation method
+changes. Read-only plugin convergence checks can still report repair needs; use
+`openclaw update repair` to apply them.
 
 For targets that support candidate validation, the old Gateway keeps serving through `staging` and
 `validating`. The updater uses the candidate entrypoint for Doctor lint
@@ -479,6 +487,22 @@ artifact version/build. Unavailable inference, timeout, failed turns, or missing
 persistence fail verification and enter the existing repair or rollback flow.
 Health or readiness alone cannot pass verification.
 
+The saved assistant reply may contain punctuation or a short sentence, but must
+include the run-specific verification token as a whole word. The check still
+requires the matching run, transcript lineage, provider/model metadata, and a
+successful stop reason. Reports, chat notices, and `openclaw update status` retain
+the failed check and its next action:
+
+| Reason                | Meaning and next action                                                                                                       |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `response-mismatch`   | The completed turn was saved, but the reply did not contain the token. Run `openclaw triage` to inspect the configured agent. |
+| `turn-incomplete`     | Saved transcript evidence did not prove a complete, valid turn. Run `openclaw triage` to inspect the turn and its lineage.    |
+| `persistence-missing` | No committed request/response pair was found. Run `openclaw triage` to inspect session persistence.                           |
+
+A candidate can be running while verification fails. Recovery guidance uses the
+latest observed service state and names the running version when known; an
+earlier activation stop does not mean the service remains stopped.
+
 Plugin packages download and sync after the core Gateway is serving. When the
 plugin snapshot changes, the updater stops the service for a second measured
 activation window, runs the required full Doctor migration pass under exclusive
@@ -490,14 +514,19 @@ is verified. If activation fails before a working package is confirmed and rollb
 cannot be verified, finalization retains the backup and reports its location. Keep
 that backup and repair the installation before restarting, including for older
 targets without migration continuation. Automatic rollback requires that retained package, its pre-update verification, unchanged
-configuration content, and unchanged shared and affected per-agent SQLite
-`user_version` values. The updater restores the previous generation and verifies
+configuration content, and unchanged pre-existing shared and affected per-agent
+SQLite `user_version` values. A database first created during activation or
+verification is schema-neutral only at the candidate's supported version for its
+database kind; a missing pre-existing database or a new database at a foreign
+version blocks rollback. Newly created databases must also be readable by the
+previous package; unknown or incompatible support refuses rollback with
+`rollback-state-unverified`. The updater restores the previous generation and verifies
 it running before finishing `rolled-back`, preserving the failing check as its
 reason. See [Automatic rollback](/install/updating#automatic-schema-neutral-rollback)
 for the restoration and package-manager guards. A failure alone does not
 authorize restarting the candidate.
 
-If configuration content or a schema version changed, automatic rollback is refused with
+If configuration content changed or the databases are not schema-neutral, automatic rollback is refused with
 `state-migrated-no-rollback`. The updater enters `repairing` on the installed
 candidate, also used if rollback itself fails. If the previous package was
 already restored, repair targets that version. Between repair attempts, the

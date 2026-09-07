@@ -223,5 +223,5 @@ Shared-token WebSocket clients without a trusted device identity cannot self-dec
 - [Operator scopes](/gateway/operator-scopes)
 - [Gateway security](/gateway/security)
 - [Remote access](/gateway/remote)
-- [Plugin manifest](/plugins/manifest#contracts-reference)
+- [Plugin manifest](/plugins/manifest/capabilities#contracts-reference)
 - [SDK subpaths](/plugins/sdk-subpaths)

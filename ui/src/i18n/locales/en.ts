@@ -1112,6 +1112,7 @@ export const en: TranslationMap & {
     archivedBy: "Archived by {name}",
     archiveReason: "Archive reason",
     archiveReasonManual: "Archived manually",
+    archiveReasonAgeRetention: "Automatically archived by age retention",
     archiveReasonActiveSessionCap:
       "Automatically archived because the active-session limit was reached",
     archiveReasonStaleDashboard: "Automatically archived after dashboard inactivity",
@@ -1862,6 +1863,7 @@ export const en: TranslationMap & {
     retry: "Retry",
     applyChanges: "Apply changes",
     rawDiscard: "Discard",
+    reloadBlocked: "Finish saving or discard pending config changes before reloading.",
     rawDraftBlocksApply:
       "Unsaved raw config edits — save or discard them in the Raw editor before restarting.",
     rawDraftPendingFormTitle:
@@ -2783,10 +2785,13 @@ export const en: TranslationMap & {
       title: "Speaker voice",
       description: "Voice used for spoken replies. GPT-Live locks the voice once a call starts.",
       default: "Provider default",
+      unsupported: "unsupported",
+      unsupportedDefault:
+        "This saved voice is unavailable for the selected route. Provider default will be used.",
     },
     gptLive: {
       title: "GPT-Live",
-      hint: "GPT-Live works with a ChatGPT subscription: sign in once with “openclaw models auth login --provider openai”. No Platform API key needed for browser or Gateway-relay Talk. Delegated work can be steered while running and requires exact spoken confirmation for high-impact actions.",
+      hint: "Released browser/Gateway-owned WebRTC tries OAuth first and falls back to a Platform API key. Direct backend sockets and unlisted or private routes require Platform API-key access. Delegated work can be steered while running and requires exact spoken confirmation for high-impact actions.",
       ready: "Ready",
     },
   },
@@ -3424,7 +3429,7 @@ export const en: TranslationMap & {
   githubConnections: {
     title: "GitHub connections",
     description:
-      "Choose the account for each purpose. Your verified sign-in identity and co-author credit stay separate.",
+      "Publishing access is separate from your verified GitHub sign-in and co-author credit. Connect an account here to publish with it.",
     mine: "My GitHub",
     system: "System GitHub",
     personalDescription: "Your account for explicitly selected Publish PR actions.",
@@ -3434,7 +3439,10 @@ export const en: TranslationMap & {
     signInRequired: "Personal sign-in required",
     connected: "Connected",
     disconnected: "Not connected",
-    notLoaded: "Not verified",
+    notLoaded: "Status not loaded",
+    checking: "Checking connection…",
+    statusUnavailable: "Connection status unavailable",
+    manage: "Manage connections",
     reconnectRequired: "Reconnect required",
     connectMine: "Connect My GitHub",
     changeMine: "Change My GitHub",
@@ -3480,7 +3488,8 @@ export const en: TranslationMap & {
       linkedEmails: "Linked emails",
       linkedEmailsDescription: "Email addresses connected to this profile.",
       githubAccount: "GitHub account",
-      githubAccountDescription: "Automatically verified from your GitHub-backed sign-in.",
+      githubAccountDescription:
+        "Verified sign-in identity, not permission to publish. Manage publishing access under GitHub connections below.",
       githubVerified: "Verified from your GitHub-backed sign-in",
       githubUnavailable: "Unavailable",
       githubUnavailableDescription: "GitHub-backed sign-in is unavailable. Refresh to retry.",
@@ -3588,8 +3597,8 @@ export const en: TranslationMap & {
         "Compares saved instructions with the installed skill. Intermediate edits and supporting files are not shown.",
       noSavedVersion: "No saved version is available to compare with this skill.",
       savedVersionError: "Could not load saved versions. Refresh to try again.",
+      comparing: "Comparing saved instructions…",
       unchanged: "The instructions match this saved version.",
-      diffTruncated: "This diff is shortened. Some changes may not be shown.",
     },
     recency: {
       today: "Today",

@@ -8,7 +8,6 @@ import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-ru
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
@@ -369,11 +368,7 @@ export async function verifySetupInferenceConfig(params: {
         return {
           ok: false,
           status: "unavailable",
-          // Same reason as the owner drift path below: a bare sentence here hides the
-          // registry or harness load failure the operator needs in order to act.
-          error: await redactSetupInferenceError(
-            `Could not bind the configured inference plugin runtime. Refresh or reinstall the plugin and retry. (${formatErrorMessage(error)})`,
-          ),
+          error: `Could not bind the configured inference plugin runtime. Refresh or reinstall the plugin and retry. (${await redactSetupInferenceError(error)})`,
         };
       }
     }
@@ -446,10 +441,7 @@ export async function verifySetupInferenceConfig(params: {
           return {
             ok: false,
             status: "auth",
-            // The owner revalidation already reports why it drifted, including a plugin
-            // runtime or harness load failure. Replacing it with a generic sentence left
-            // operators with no way to tell a real owner change from a broken runtime.
-            error: await redactSetupInferenceError(formatErrorMessage(error)),
+            error: await redactSetupInferenceError(error),
             ...(authProfiles ? { authProfiles } : {}),
           };
         }

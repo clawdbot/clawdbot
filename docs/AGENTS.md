@@ -13,7 +13,7 @@ This directory owns docs authoring, published link rules, and docs i18n policy.
 
 - The publish pipeline pushes docs to `https://docs.openclaw.ai` from the `openclaw/docs` mirror.
 - Internal doc links in `docs/**/*.md` must stay root-relative with no `.md` or `.mdx` suffix (example: `[Config](/gateway/configuration)`).
-- Section cross-references should use anchors on root-relative paths (example: `[Hooks](/gateway/configuration-reference#hooks)`).
+- Section cross-references should use anchors on root-relative paths (example: `[Hooks](/gateway/config-hooks#hooks)`).
 - Anchor IDs come from the shared publishing parser in `scripts/lib/docs-markdown.mjs`. Verify them with `pnpm docs:check-links:anchors`, not Mintlify's independent checker. Published heading IDs stay stable. Compatibility aliases never replace an existing target.
 - Use an explicit `<a id="stable-section-name" />` for a durable section link when heading wording may change. Keep existing named anchors when reorganizing content.
 - README and other GitHub-rendered docs should keep absolute docs URLs so links work outside the docs site.

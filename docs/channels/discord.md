@@ -1459,7 +1459,9 @@ at startup. After the last human leaves, it waits 30 seconds before leaving and
 generating notes; a return during that grace keeps capture running. Episodes use
 generated session IDs, ignoring a configured `sessionId`. A session stopped less
 than 10 minutes ago can reopen for the same source after a Gateway restart or a
-short gap, preserving its ID, start time, and accumulated utterances.
+short gap when its stored origin confirms a generated ID. It preserves its ID,
+start time, and accumulated utterances. Supplied IDs and legacy records with an
+unknown origin stay archived; capture starts fresh without changing those notes.
 
 Notes include participants, an overview, decisions, action items, and risks.
 They use the agent's utility model, falling back to its primary model and then

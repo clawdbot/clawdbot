@@ -1,3 +1,4 @@
+import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -34,6 +35,132 @@ describe("Workshop current collection", () => {
     await browser?.close();
     await server?.close();
   });
+
+  it.each([
+    { lineCount: 41, width: 1280, fullRewrite: false },
+    { lineCount: 450, width: 1280, fullRewrite: false },
+    { lineCount: 700, width: 390, fullRewrite: false },
+    { lineCount: 3800, width: 1280, fullRewrite: true },
+  ])(
+    "reads the complete $lineCount-line changed skill at $width px",
+    async ({ lineCount, width, fullRewrite }) => {
+      const fixture = createSkillWorkshopCollectionFixture();
+      const previous = Array.from({ length: lineCount }, (_, index) =>
+        fullRewrite
+          ? `- Check saved release item ${String(index + 1).padStart(4, "0")} and confirm its original result.`
+          : index > 0 && index % 7 === 0
+            ? ""
+            : `Review instruction ${index + 1}.`,
+      );
+      const current = fullRewrite
+        ? previous.map(
+            (_, index) =>
+              `- Verify new rollout step ${String(index + 1).padStart(4, "0")} and record the reviewed outcome.`,
+          )
+        : previous
+            .with(Math.floor(lineCount / 2), "Check the middle instruction.")
+            .with(lineCount - 2, "Check the final rollback instruction.");
+      fixture.responses["skills.workshop.read"].cases[0]!.response.content = current.join("\n");
+      fixture.responses["skills.proposals.inspect"].cases = fixture.responses[
+        "skills.proposals.inspect"
+      ].cases.map((entry) =>
+        entry.match.proposalId === "history-0"
+          ? {
+              ...entry,
+              response: {
+                ...entry.response,
+                content: previous.join("\n"),
+                record: {
+                  ...entry.response.record,
+                  target: { ...entry.response.record.target, source: "openclaw-workshop" },
+                },
+              },
+            }
+          : entry,
+      );
+      const proof = createControlUiE2eArtifactDir(`workshop-document-${lineCount}-${width}`);
+      const context = await browser.newContext({
+        viewport: { width, height: 900 },
+        recordVideo: { dir: proof, size: { width, height: 900 } },
+        serviceWorkers: "block",
+      });
+      const page = await context.newPage();
+      try {
+        const gateway = await installMockGateway(page, {
+          featureMethods: [...defaultControlUiFeatureMethods, ...fixture.featureMethods],
+          methodResponses: fixture.responses,
+        });
+        await page.goto(`${server.baseUrl}skills/workshop`);
+        const reader = page.locator(".sw-collection__reader");
+        if (fullRewrite) {
+          await reader.getByText("Comparing saved instructions…", { exact: true }).waitFor();
+          expect(await reader.locator(".sidebar-markdown li").allTextContents()).toEqual(
+            current.map((line) => line.slice(2)),
+          );
+          const search = page.getByRole("searchbox", { name: "Search installed skills" });
+          await search.fill("release-review");
+          expect(await search.inputValue()).toBe("release-review");
+        }
+        await reader.locator("details[open] .chat-diff").waitFor();
+        const displayed = await reader
+          .locator("details[open] .chat-diff__row:not(.chat-diff__row--del) .chat-diff__text")
+          .allTextContents();
+        const rowHeights = await reader.locator(".chat-diff__row").evaluateAll((rows) => ({
+          first: rows[0]!.getBoundingClientRect().height,
+          blank: rows
+            .filter((row) => row.querySelector(".chat-diff__text")?.textContent === "")
+            .map((row) => row.getBoundingClientRect().height),
+        }));
+        writeFileSync(
+          path.join(proof, "document.json"),
+          JSON.stringify(
+            {
+              previous,
+              current,
+              displayed,
+              rowHeights,
+              html: await reader.innerHTML(),
+              requests: await gateway.getRequests(),
+            },
+            null,
+            2,
+          ),
+        );
+        await page.screenshot({ animations: "disabled", path: path.join(proof, "01-start.png") });
+        expect(displayed).toEqual(current);
+        expect(rowHeights.first).toBeGreaterThan(0);
+        if (!fullRewrite) {
+          expect(rowHeights.blank.length).toBeGreaterThan(0);
+        }
+        expect(rowHeights.blank.every((height) => height >= rowHeights.first)).toBe(true);
+        expect(await reader.locator(".sidebar-markdown").count()).toBe(0);
+        expect(await reader.locator(".chat-diff__row--skip").count()).toBe(0);
+        expect(
+          await reader.locator(".chat-diff__row--add .chat-diff__text").allTextContents(),
+        ).toEqual(
+          fullRewrite
+            ? current
+            : ["Check the middle instruction.", "Check the final rollback instruction."],
+        );
+        expect(
+          await reader.locator(".chat-diff__row--del .chat-diff__text").allTextContents(),
+        ).toEqual(
+          fullRewrite ? previous : [previous[Math.floor(lineCount / 2)], previous[lineCount - 2]],
+        );
+        const last = reader.getByText(current.at(-1)!, { exact: true });
+        await last.scrollIntoViewIfNeeded();
+        expect(await last.isVisible()).toBe(true);
+        expect(await page.evaluate(() => document.body.scrollWidth <= window.innerWidth)).toBe(
+          true,
+        );
+        await page.screenshot({ animations: "disabled", path: path.join(proof, "02-end.png") });
+      } catch (error) {
+        await reportWorkshopFailure(page, error);
+      } finally {
+        await context.close();
+      }
+    },
+  );
 
   it.each([
     { action: "Apply", status: "applied", remaining: 0, width: 1280 },

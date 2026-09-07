@@ -103,9 +103,10 @@ Side-effecting methods require idempotency keys (see schema).
 ## Gateway-controlled WebRTC Talk
 
 `talk.client.create` accepts the additive capability `gateway-control-v1`.
-OpenAI GA Realtime requires resolvable Platform API-key authentication for this
-mode. Native GPT-Live retains its configured ChatGPT OAuth or Platform
-API-key authentication. A successful result includes
+The released browser/Gateway-owned WebRTC route tries OAuth first and falls
+back to Platform API-key authentication. Direct backend sockets and unlisted
+or private realtime routes require Platform API-key authentication. A
+successful result includes
 `clientControl: { owner: "gateway" }`, a 60-second single-use Gateway broker
 token in `clientSecret`, and the relative
 `offerUrl: "/plugins/openai/realtime/calls"`.
@@ -1134,7 +1135,7 @@ best-effort and may drop records on saturation, terminal persistence failure,
 or shutdown timeout, so this surface is not a lossless compliance archive.
 
 Recording is on by default and controlled by
-[`logging.audit.enabled`](/gateway/configuration-reference#audit). Message
+[`logging.audit.enabled`](/gateway/config-observability#audit). Message
 recording is separately controlled by `logging.audit.messages` and defaults to
 `"off"`. When
 recording is disabled, `audit.activity.list` keeps serving records written

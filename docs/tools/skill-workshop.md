@@ -103,8 +103,10 @@ Open **Plugins → Workshop** and select the agent whose skills you want to insp
 
 - **Skills** opens by default and lists the skills currently installed in that
   agent's Workshop directory. Skills with instruction changes appear first.
-  Select one to compare its saved applied instructions with the current skill.
-  Unchanged skills show their current instructions.
+  Select one to read its complete current instructions. Changed skills show
+  additions and removals inline with all unchanged sections in one scrollable
+  comparison. Unchanged skills show their current instructions as Markdown.
+  Current instructions remain readable while saved versions are compared.
 - **Suggestions** contains pending proposals that you can evaluate, revise,
   apply, or reject.
 
@@ -114,9 +116,9 @@ or counted as installed skills.
 
 Comparisons use retained applied versions, not a complete edit timeline.
 Relative dates identify the saved baseline, not when later edits occurred.
-Supporting files and frontmatter are not compared. Missing versions and shortened
-diffs are labeled; no historical content is reconstructed.
-If the preview omits changed lines, the current instructions remain readable.
+Supporting files and frontmatter are not compared. Missing versions are labeled;
+the complete current instructions remain readable without a saved version.
+No historical content is reconstructed.
 
 Removing an installed skill does not remove its proposal history. Reading a
 historical draft does not restore or reinstall it. Handwritten and externally

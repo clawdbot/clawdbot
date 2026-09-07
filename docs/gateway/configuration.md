@@ -277,7 +277,7 @@ skipped when a candidate contains a redacted secret placeholder such as `***` or
     ```
 
     - Use `channels.<provider>.healthMonitor.enabled` or `channels.<provider>.accounts.<id>.healthMonitor.enabled` to control auto-restarts for one channel or account.
-    - See [Health Checks](/gateway/health) for operational debugging and the [full reference](/gateway/configuration-reference#gateway) for all fields.
+    - See [Health Checks](/gateway/health) for operational debugging and the [full reference](/gateway/config-gateway#gateway) for all fields.
 
   </Accordion>
 
@@ -462,7 +462,7 @@ skipped when a candidate contains a redacted secret placeholder such as `***` or
     - Keep hook sessions isolated unless durable context is intentional. Direct persistent hooks require an explicit, prefix-bounded request `sessionKey`; mapped persistent hooks require a stable mapping key or `hooks.defaultSessionKey`.
     - For hook-driven agents, prefer strong modern model tiers and strict tool policy (for example messaging-only plus sandboxing where possible).
 
-    See [full reference](/gateway/configuration-reference#hooks) for all mapping options and Gmail integration.
+    See [full reference](/gateway/config-hooks#hooks) for all mapping options and Gmail integration.
 
   </Accordion>
 

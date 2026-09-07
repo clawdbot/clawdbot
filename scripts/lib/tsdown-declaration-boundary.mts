@@ -51,11 +51,9 @@ export function createDeclarationInputBoundary(cwd: string) {
         // Hermetic declaration inputs must not inherit an ancestor install's exposed packages.
         const ancestorInstall = findAncestorInstall(root, real);
         const diagnosis = ancestorInstall
-          ? `This checkout is nested inside another install at ${ancestorInstall}; module resolution walked out of the checkout and read a package from it. Run this lane in a checkout that is not nested inside another node_modules, or repair that ancestor install to the repository's isolated layout (nodeLinker: isolated in pnpm-workspace.yaml), which keeps transitive packages out of its root rather than exposing them to nested checkouts.`
-          : `Install declaration dependencies inside ${root}; shared installs and external symlinks are unsupported.`;
-        throw new Error(
-          `Declaration input escapes checkout: ${absolute} -> ${real}. ${diagnosis} If the checkout is not nested inside another install, the compiled package imported a dependency it does not declare, which is the boundary violation this check exists to catch.`,
-        );
+          ? `This checkout is nested inside another install at ${ancestorInstall}. Module resolution can read candidate manifests there even with a complete local install and a checkout-local final resolution. Repeating pnpm install will not isolate ancestor lookup. Provision a separate physical checkout outside ancestor node_modules installations, run pnpm install --frozen-lockfile there, and rerun declaration preparation and its dependent checks there. Do not modify the ancestor install or share its node_modules.`
+          : `Keep declaration dependencies and compiler files physically inside ${root}; shared installs and external symlinks are unsupported. Inspect the reported path and dependency links; this error alone does not establish a missing or undeclared dependency.`;
+        throw new Error(`Declaration input escapes checkout: ${absolute} -> ${real}. ${diagnosis}`);
       }
       return absolute;
     },

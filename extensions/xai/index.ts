@@ -206,6 +206,9 @@ export default defineSingleProviderPluginEntry({
       order: "simple",
       run: async (ctx) => {
         const auth = ctx.resolveProviderAuth(PROVIDER_ID);
+        if (auth.preparationFailed) {
+          return null;
+        }
         const { resolveApiKeyForProvider } =
           await import("openclaw/plugin-sdk/provider-auth-runtime");
         const runtimeAuth = await resolveApiKeyForProvider({
@@ -214,6 +217,8 @@ export default defineSingleProviderPluginEntry({
           ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
           ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
           ...(auth.profileId ? { profileId: auth.profileId, lockedProfile: true } : {}),
+          // Prepared direct auth must not reopen failed profile candidates.
+          ...(!auth.profileId && auth.mode !== "none" ? { allowAuthProfileFallback: false } : {}),
         }).catch(() => undefined);
         const selectedAuth =
           runtimeAuth?.mode === "oauth" && runtimeAuth.apiKey

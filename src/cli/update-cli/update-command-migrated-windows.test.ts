@@ -148,6 +148,7 @@ it.each([
       const runId = "migrated-windows-run";
       const operation = continueMigratedUpdateInFreshProcess(
         {
+          mutationStarted: true,
           root,
           result: { status: "ok", mode: "npm", root, runId, steps: [], durationMs: 0 },
           installKindChanged: false,

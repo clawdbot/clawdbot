@@ -14,7 +14,7 @@ import {
 } from "../agents/prepared-model-runtime.js";
 import { resolveProviderModelMaterializationAuthMode } from "../agents/provider-model-route-auth.js";
 import { applyPreparedRuntimeAuthToModel } from "../agents/provider-request-config.js";
-import { protectPreparedProviderRuntimeAuth } from "../agents/provider-secret-egress.js";
+import { protectPreparedProviderRuntimeAuth } from "../agents/provider-runtime-auth-protection.js";
 import { providerUsesCredentialScopedModelMetadata } from "../agents/runtime-plan/credential-scoped-model.js";
 import { getModelRegistryRuntime } from "../agents/sessions/model-registry-runtime.js";
 import { bindModelLlmRuntime } from "../llm/model-runtime-binding.js";

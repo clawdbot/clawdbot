@@ -52,7 +52,6 @@ function resolveRoutedCliLogLevel(argv: string[]): LogLevel | null | undefined {
 async function prepareRoutedCommand(params: {
   argv: string[];
   commandPath: string[];
-  loadPlugins?: boolean | ((argv: string[]) => boolean);
   machineOutput?: boolean;
 }) {
   const { startupPolicy } = resolveCliExecutionStartupContext({
@@ -67,14 +66,11 @@ async function prepareRoutedCommand(params: {
     showBanner: process.stdout.isTTY && !startupPolicy.suppressDoctorStdout,
     version: VERSION,
   });
-  const shouldLoadPlugins =
-    typeof params.loadPlugins === "function" ? params.loadPlugins(params.argv) : params.loadPlugins;
   // Routed commands still honor config guards, logging policy, and plugin loading decisions.
   await ensureCliExecutionBootstrap({
     runtime: defaultRuntime,
     commandPath: params.commandPath,
     startupPolicy,
-    loadPlugins: shouldLoadPlugins ?? startupPolicy.loadPlugins,
   });
 }
 
@@ -112,7 +108,6 @@ export async function tryRouteCli(
   await prepareRoutedCommand({
     argv,
     commandPath: invocation.commandPath,
-    loadPlugins: route.loadPlugins,
     machineOutput: options.machineOutput,
   });
   return route.run(argv);

@@ -505,51 +505,36 @@ describe("device lifecycle", () => {
     );
   });
 
-  it("invalidates an in-flight node wake when the node token rotates", async () => {
-    rotateDeviceTokenMock.mockResolvedValue({
-      ok: true,
-      entry: {
-        token: "new-node-token",
-        role: "node",
-        scopes: [],
-        createdAtMs: 456,
-        rotatedAtMs: 789,
-      },
-    });
-    const lifecycle = captureNodeWakeLifecycle("device-1");
-    const opts = createOptions(
-      "device.token.rotate",
-      { deviceId: "device-1", role: "node" },
-      { client: createClient(["operator.admin"], "admin-device", { isDeviceTokenAuth: true }) },
-    );
+  it.each(["device.token.rotate", "device.token.revoke"] as const)(
+    "invalidates an in-flight node wake after %s",
+    async (method) => {
+      const mutation =
+        method === "device.token.rotate" ? rotateDeviceTokenMock : revokeDeviceTokenMock;
+      mutation.mockResolvedValue({
+        ok: true,
+        entry:
+          method === "device.token.rotate"
+            ? {
+                token: "new-node-token",
+                role: "node",
+                scopes: [],
+                createdAtMs: 456,
+                rotatedAtMs: 789,
+              }
+            : { role: "node", revokedAtMs: 789 },
+      });
+      const lifecycle = captureNodeWakeLifecycle("device-1");
+      const opts = createOptions(
+        method,
+        { deviceId: "device-1", role: "node" },
+        { client: createClient(["operator.admin"], "admin-device", { isDeviceTokenAuth: true }) },
+      );
 
-    await expectDefined(
-      deviceHandlers["device.token.rotate"],
-      'deviceHandlers["device.token.rotate"] test invariant',
-    )(opts);
+      await expectDefined(deviceHandlers[method], method)(opts);
 
-    expect(lifecycle.aborted).toBe(true);
-  });
-
-  it("invalidates an in-flight node wake when the node token is revoked", async () => {
-    revokeDeviceTokenMock.mockResolvedValue({
-      ok: true,
-      entry: { role: "node", revokedAtMs: 789 },
-    });
-    const lifecycle = captureNodeWakeLifecycle("device-1");
-    const opts = createOptions(
-      "device.token.revoke",
-      { deviceId: "device-1", role: "node" },
-      { client: createClient(["operator.admin"], "admin-device", { isDeviceTokenAuth: true }) },
-    );
-
-    await expectDefined(
-      deviceHandlers["device.token.revoke"],
-      'deviceHandlers["device.token.revoke"] test invariant',
-    )(opts);
-
-    expect(lifecycle.aborted).toBe(true);
-  });
+      expect(lifecycle.aborted).toBe(true);
+    },
+  );
 
   it("keeps node wake ownership across unrelated operator token rotation", async () => {
     mockRotateOperatorTokenSuccess();
@@ -569,67 +554,47 @@ describe("device lifecycle", () => {
     releaseNodeWakeLifecycle("device-1", lifecycle);
   });
 
-  it("invalidates affected clients synchronously before responding to device.token.rotate", async () => {
-    mockPairedOperatorDevice();
-    mockRotateOperatorTokenSuccess();
-    const opts = createOptions(
-      "device.token.rotate",
-      { deviceId: "device-1", role: "operator", scopes: ["operator.pairing"] },
-      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
-    );
-    const respond = vi.mocked(opts.respond);
-    const invalidate = vi.mocked(opts.context.invalidateClientsForDevice!);
-    const disconnect = vi.mocked(opts.context.disconnectClientsForDevice!);
+  it.each(["device.token.rotate", "device.token.revoke"] as const)(
+    "invalidates affected clients synchronously before responding to %s",
+    async (method) => {
+      const rotating = method === "device.token.rotate";
+      if (rotating) {
+        mockPairedOperatorDevice();
+        mockRotateOperatorTokenSuccess();
+      } else {
+        revokeDeviceTokenMock.mockResolvedValue({
+          ok: true,
+          entry: { role: "operator", revokedAtMs: 456 },
+        });
+      }
+      const opts = createOptions(
+        method,
+        {
+          deviceId: "device-1",
+          role: "operator",
+          ...(rotating ? { scopes: ["operator.pairing"] } : {}),
+        },
+        { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
+      );
+      const respond = vi.mocked(opts.respond);
+      const invalidate = vi.mocked(opts.context.invalidateClientsForDevice!);
+      const disconnect = vi.mocked(opts.context.disconnectClientsForDevice!);
 
-    respond.mockImplementation(() => {
-      expect(invalidate).toHaveBeenCalledWith("device-1", {
-        role: "operator",
-        reason: "device-token-rotated",
+      respond.mockImplementation(() => {
+        expect(invalidate).toHaveBeenCalledWith("device-1", {
+          role: "operator",
+          reason: rotating ? "device-token-rotated" : "device-token-revoked",
+        });
+        expect(disconnect).not.toHaveBeenCalled();
       });
-      expect(disconnect).not.toHaveBeenCalled();
-    });
 
-    await expectDefined(
-      deviceHandlers["device.token.rotate"],
-      'deviceHandlers["device.token.rotate"] test invariant',
-    )(opts);
-    await Promise.resolve();
+      await expectDefined(deviceHandlers[method], method)(opts);
+      await Promise.resolve();
 
-    expect(respond).toHaveBeenCalled();
-    expect(disconnect).toHaveBeenCalledWith("device-1", { role: "operator" });
-  });
-
-  it("invalidates affected clients synchronously before responding to device.token.revoke", async () => {
-    revokeDeviceTokenMock.mockResolvedValue({
-      ok: true,
-      entry: { role: "operator", revokedAtMs: 456 },
-    });
-    const opts = createOptions(
-      "device.token.revoke",
-      { deviceId: "device-1", role: "operator" },
-      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
-    );
-    const respond = vi.mocked(opts.respond);
-    const invalidate = vi.mocked(opts.context.invalidateClientsForDevice!);
-    const disconnect = vi.mocked(opts.context.disconnectClientsForDevice!);
-
-    respond.mockImplementation(() => {
-      expect(invalidate).toHaveBeenCalledWith("device-1", {
-        role: "operator",
-        reason: "device-token-revoked",
-      });
-      expect(disconnect).not.toHaveBeenCalled();
-    });
-
-    await expectDefined(
-      deviceHandlers["device.token.revoke"],
-      'deviceHandlers["device.token.revoke"] test invariant',
-    )(opts);
-    await Promise.resolve();
-
-    expect(respond).toHaveBeenCalled();
-    expect(disconnect).toHaveBeenCalledWith("device-1", { role: "operator" });
-  });
+      expect(respond).toHaveBeenCalled();
+      expect(disconnect).toHaveBeenCalledWith("device-1", { role: "operator" });
+    },
+  );
 
   it("treats normalized device ids as self-owned for token rotation", async () => {
     mockPairedOperatorDevice();

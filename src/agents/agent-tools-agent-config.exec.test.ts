@@ -74,10 +74,14 @@ describe("Agent-specific exec tool defaults", () => {
 
   afterEach(() => {
     resetProcessRegistryForTests();
+    vi.useRealTimers();
     tempDirs.cleanup();
   });
 
   it("keeps each actual exec result for its own agent retention after another process tool loads", async () => {
+    vi.useFakeTimers({
+      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
     const config: OpenClawConfig = {
       tools: { exec: { host: "gateway", mode: "full", cleanupMs: 60_000 } },
       agents: {
@@ -103,7 +107,12 @@ describe("Agent-specific exec tool defaults", () => {
       if (!sessionId) {
         throw new Error("Expected an actual background process session");
       }
-      await vi.waitFor(() => expect(getFinishedSession(sessionId)).toBeDefined());
+      await vi.waitFor(() =>
+        expect(getFinishedSession(sessionId)).toMatchObject({
+          exitCode: 0,
+          terminalStatus: "completed",
+        }),
+      );
       return sessionId;
     };
     // Neither lazy process tool has run when these processes are admitted.
@@ -115,14 +124,8 @@ describe("Agent-specific exec tool defaults", () => {
       throw new Error("Expected process tools for both agents");
     }
     await shortProcess.execute("load-short-process", { action: "list" });
-    console.log(
-      "[retention-proof] Both commands completed; observing their retention for 95 seconds.",
-    );
-    const observedAt = Date.now();
     // The old 60s global TTL sweeps every 30s, so allow its next full sweep.
-    await new Promise((resolve) => {
-      setTimeout(resolve, 95_000);
-    });
+    await vi.advanceTimersByTimeAsync(95_000);
     const longResult = await longProcess.execute("long-retention-log", {
       action: "log",
       sessionId: longId,
@@ -131,21 +134,12 @@ describe("Agent-specific exec tool defaults", () => {
       action: "log",
       sessionId: shortId,
     });
-    console.log(
-      JSON.stringify({
-        retentionObservation: {
-          elapsedMs: Date.now() - observedAt,
-          longStatus: (longResult.details as { status?: string }).status,
-          shortStatus: (shortResult.details as { status?: string }).status,
-        },
-      }),
-    );
     expect(shortResult.details).toMatchObject({ status: "failed" });
     expect(longResult.details).toMatchObject({ status: "completed" });
     expect(longResult.content[0]).toMatchObject({
       text: expect.stringContaining("retention-result"),
     });
-  }, 120_000);
+  });
 
   it.each([0, 3_000])(
     "inherits the global exec approval running notice delay %i",

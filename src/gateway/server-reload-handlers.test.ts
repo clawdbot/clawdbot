@@ -1121,10 +1121,7 @@ async function runManagedOwnershipScenario(params: {
   const configB = structuredClone(initialConfig);
   const snapshot = (config: OpenClawConfig) => makePreparedSecretsSnapshot(config);
   const writeListenerRef = createConfigWriteListenerRef();
-  let resolveAccepted: (() => void) | undefined;
-  const accepted = new Promise<void>((resolve) => {
-    resolveAccepted = resolve;
-  });
+  const { promise: accepted, resolve: resolveAccepted } = createDeferred();
   const acceptTerminalConfig = vi.fn(() => resolveAccepted?.());
   const commitRuntimePolicy = vi.fn();
   const prepareTerminalConfig = vi.fn();
@@ -3729,10 +3726,7 @@ describe("gateway restart deferral preflight", () => {
   });
 
   it("defers a restart emission retry while host suspension is prepared", async () => {
-    let recordRetryEmission: (() => void) | undefined;
-    const retryEmitted = new Promise<void>((resolve) => {
-      recordRetryEmission = resolve;
-    });
+    const { promise: retryEmitted, resolve: recordRetryEmission } = createDeferred();
     const requestRecoveryRestart = vi
       .fn<NonNullable<ReloadHandlerParams["requestRecoveryRestart"]>>()
       .mockReturnValueOnce({ status: "failed" })
@@ -4070,14 +4064,8 @@ describe("gateway restart deferral preflight", () => {
   });
 
   it("does not schedule post-commit hot recovery after restart handling stops", async () => {
-    let markChannelStart: (() => void) | undefined;
-    const channelStart = new Promise<void>((resolve) => {
-      markChannelStart = resolve;
-    });
-    let releaseChannelStart: (() => void) | undefined;
-    const channelStartBlocked = new Promise<void>((resolve) => {
-      releaseChannelStart = resolve;
-    });
+    const { promise: channelStart, resolve: markChannelStart } = createDeferred();
+    const { promise: channelStartBlocked, resolve: releaseChannelStart } = createDeferred();
     const requestRecoveryRestart = vi.fn<
       NonNullable<ReloadHandlerParams["requestRecoveryRestart"]>
     >(() => ({ status: "emitted" }));
@@ -5414,14 +5402,8 @@ describe("gateway Gmail hot reload handlers", () => {
         },
       ]);
 
-      let releasePreparation = () => {};
-      let markPreparationStarted: (() => void) | undefined;
-      const preparationStarted = new Promise<void>((resolve) => {
-        markPreparationStarted = resolve;
-      });
-      const preparationGate = new Promise<void>((resolve) => {
-        releasePreparation = resolve;
-      });
+      const { promise: preparationStarted, resolve: markPreparationStarted } = createDeferred();
+      const { promise: preparationGate, resolve: releasePreparation } = createDeferred();
       activateRuntimeSecrets.mockImplementationOnce(async (config: OpenClawConfig) => {
         markPreparationStarted?.();
         await preparationGate;
@@ -5776,14 +5758,8 @@ describe("gateway Gmail hot reload handlers", () => {
     } as OpenClawConfig;
     const terminalPolicy = createTerminalLaunchPolicy(initialConfig);
     const expectedReloadError = "config reload failed: Error: restart secrets preflight failed";
-    let recordReloadFailure: (() => void) | undefined;
-    const reloadFailed = new Promise<void>((resolve) => {
-      recordReloadFailure = resolve;
-    });
-    let recordRestartRetired: (() => void) | undefined;
-    const restartRetired = new Promise<void>((resolve) => {
-      recordRestartRetired = resolve;
-    });
+    const { promise: reloadFailed, resolve: recordReloadFailure } = createDeferred();
+    const { promise: restartRetired, resolve: recordRestartRetired } = createDeferred();
     const logReload = {
       info: vi.fn(),
       warn: vi.fn(),
@@ -6036,14 +6012,8 @@ describe("gateway Gmail hot reload handlers", () => {
     async (outcome) => {
       vi.useFakeTimers();
       const harness = createManagedRestartSequenceHarness();
-      let markPreflightStarted: (() => void) | undefined;
-      const preflightStarted = new Promise<void>((resolve) => {
-        markPreflightStarted = resolve;
-      });
-      let releasePreflight: (() => void) | undefined;
-      const preflightBlocked = new Promise<void>((resolve) => {
-        releasePreflight = resolve;
-      });
+      const { promise: preflightStarted, resolve: markPreflightStarted } = createDeferred();
+      const { promise: preflightBlocked, resolve: releasePreflight } = createDeferred();
       harness.activateRuntimeSecrets.mockImplementationOnce(async (config: OpenClawConfig) => {
         markPreflightStarted?.();
         await preflightBlocked;
@@ -6229,14 +6199,9 @@ describe("gateway Gmail hot reload handlers", () => {
   it("supersedes a blocked emission preflight without marking sessions or signaling", async () => {
     vi.useFakeTimers();
     const harness = createManagedRestartSequenceHarness();
-    let releaseEmissionPreflight = () => {};
-    let recordEmissionPreflightStarted: (() => void) | undefined;
-    const emissionPreflightStarted = new Promise<void>((resolve) => {
-      recordEmissionPreflightStarted = resolve;
-    });
-    const emissionPreflightGate = new Promise<void>((resolve) => {
-      releaseEmissionPreflight = resolve;
-    });
+    const { promise: emissionPreflightStarted, resolve: recordEmissionPreflightStarted } =
+      createDeferred();
+    const { promise: emissionPreflightGate, resolve: releaseEmissionPreflight } = createDeferred();
     const originalActivateRuntimeSecrets = harness.activateRuntimeSecrets.getMockImplementation();
     if (!originalActivateRuntimeSecrets) {
       throw new Error("Expected managed secrets activation implementation");
@@ -6417,10 +6382,7 @@ describe("gateway Gmail hot reload handlers", () => {
     );
     const commitRuntimePolicy = vi.fn();
     type ReloadOutcome = { status: "promoted" } | { status: "failed"; message: string };
-    let settleReload: ((outcome: ReloadOutcome) => void) | undefined;
-    const reloadOutcome = new Promise<ReloadOutcome>((resolve) => {
-      settleReload = resolve;
-    });
+    const { promise: reloadOutcome, resolve: settleReload } = createDeferred<ReloadOutcome>();
     const promoteSnapshot = vi.fn(async () => {
       settleReload?.({ status: "promoted" });
       return true;
@@ -6479,10 +6441,8 @@ describe("gateway Gmail hot reload handlers", () => {
     const writeListenerRef = createConfigWriteListenerRef();
     let restartSignal: AbortSignal | undefined;
     type GmailRestartOutcome = { status: "started" } | { status: "failed"; message: string };
-    let settleRestart: ((outcome: GmailRestartOutcome) => void) | undefined;
-    const restartOutcome = new Promise<GmailRestartOutcome>((resolve) => {
-      settleRestart = resolve;
-    });
+    const { promise: restartOutcome, resolve: settleRestart } =
+      createDeferred<GmailRestartOutcome>();
     hoisted.startGmailWatcherWithLogs.mockImplementationOnce(
       async (params: GmailWatcherRestartParams) => {
         restartSignal = params.signal;
@@ -6581,14 +6541,8 @@ describe("gateway Gmail hot reload handlers", () => {
 
   it("does not start a Gmail restart after the managed reloader stops before hot reload applies", async () => {
     const writeListenerRef = createConfigWriteListenerRef();
-    let releaseSecrets: (() => void) | undefined;
-    let secretsEntered: (() => void) | undefined;
-    const secretsStarted = new Promise<void>((resolve) => {
-      secretsEntered = resolve;
-    });
-    const releaseSecretsPromise = new Promise<void>((resolve) => {
-      releaseSecrets = resolve;
-    });
+    const { promise: secretsStarted, resolve: secretsEntered } = createDeferred();
+    const { promise: releaseSecretsPromise, resolve: releaseSecrets } = createDeferred();
     const initialConfig = createGmailConfig("old@example.com");
     const nextConfig = createGmailConfig("next@example.com");
     const reloader = startManagedGatewayConfigReloader({

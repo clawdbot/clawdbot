@@ -395,7 +395,7 @@ workspace plugin remains disabled or excluded from the allowlist. Linked install
 and explicit `plugins.load.paths` entries follow the normal policy for their
 resolved plugin origin. See
 [Configure plugin policy](/tools/plugin#configure-plugin-policy)
-and [Configuration reference](/gateway/configuration-reference#plugins).
+and [Configuration reference](/gateway/config-extensions#plugins).
 
 Use `--pin` on npm installs to save the resolved exact spec (`name@version`) in the managed plugin index while keeping the default behavior unpinned.
 </Note>

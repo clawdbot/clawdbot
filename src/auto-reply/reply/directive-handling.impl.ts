@@ -88,8 +88,10 @@ export async function handleDirectiveOnly(
     currentElevatedLevel,
   } = params;
   const allowPrivilegedPersistence = canPersistSessionDirectiveDefaults(params);
-  const rejectModelTransaction = (errorText: string) =>
-    rejectSessionDirectiveTransaction(params.persistenceState, errorText);
+  const rejectModelTransaction = (errorText: string) => {
+    params.onRejection?.();
+    return rejectSessionDirectiveTransaction(params.persistenceState, errorText);
+  };
   const acknowledgeIgnoredDirective = (
     reply: ReplyPayload,
     ignoredDirective: IgnoredSessionDirectiveFlag,
@@ -370,6 +372,7 @@ export async function handleDirectiveOnly(
     }
     const unexpectedExecArguments = maybeHandleUnexpectedDirectiveArguments(directives);
     if (unexpectedExecArguments) {
+      params.onRejection?.();
       return unexpectedExecArguments;
     }
     if (!directives.hasExecOptions) {
@@ -404,6 +407,7 @@ export async function handleDirectiveOnly(
 
   const unexpectedArguments = maybeHandleUnexpectedDirectiveArguments(directives);
   if (unexpectedArguments) {
+    params.onRejection?.();
     return unexpectedArguments;
   }
 

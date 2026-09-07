@@ -10,6 +10,8 @@ minimumReleaseAgeStrict: true
 
 # Trusted Codex runtimes are outside the dependency cooldown.
 minimumReleaseAgeExclude:
+  # Reviewed Proxyline Bun runtime fix; remove after 2026-09-13 20:51 UTC.
+  - "@openclaw/proxyline@0.3.11"
   # GHSA-vp8m-p9jh-q5pm / GHSA-w293-vg96-wgc3 security fixes; remove after 2026-09-12.
   - "undici@8.10.2"
   - "undici@7.29.1"
