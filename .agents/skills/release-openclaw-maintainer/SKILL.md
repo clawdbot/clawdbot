@@ -32,6 +32,18 @@ validated publication and verification; do not ask again unless identity,
 channel, scope, or material risk changes. Ship authority for ordinary code is
 not release authority.
 
+An operator's explicit approval to do whatever is needed to prepare a named
+release is standing authority for the necessary preparation decisions and
+repairs. Carry it through candidate and tooling fixes, upgrade/migration design,
+reviewed test or security-inventory alignments, isolated proof, commits, pushes,
+and validation recovery. Record the decision, its evidence, and the selected
+support contract; do not ask again merely because an already-approved class of
+work reaches an implementation or verification step. Continue independent work
+while resolving a blocker. This authority does not permit hiding defects,
+lowering a gate to manufacture success, destructive changes to operator state,
+unrelated work, or publication. A prepare-only request still requires a separate
+publication instruction before releasing artifacts or a bridge version.
+
 Keep one compact state record using
 [the handoff template](references/release-handoff-template.md): effective goal,
 version/tag/branch, cut/Code/Tooling/Release SHAs, active parent run and attempt,
