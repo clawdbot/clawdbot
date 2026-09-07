@@ -14,7 +14,122 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { captureAppIdentity } from "./app-identity.mjs";
 import { readCommand } from "./command-read.mjs";
-import { admitProof } from "./proof-admission.mjs";
+import { admitProof, ProofMemoryScope } from "./proof-admission.mjs";
+
+const processCensusSource = String.raw`import ctypes
+import errno
+import json
+import os
+import sys
+import time
+
+
+class UsageInfo(ctypes.Structure):
+    _fields_ = [("uuid", ctypes.c_ubyte * 16)] + [
+        (name, ctypes.c_uint64)
+        for name in (
+            "user_time", "system_time", "package_wakeups", "interrupt_wakeups",
+            "pageins", "wired_size", "resident_size", "physical_footprint",
+            "start_abstime", "exit_abstime",
+        )
+    ]
+
+
+class DarwinProcesses:
+    def __init__(self):
+        if sys.platform != "darwin" or os.geteuid() != 0:
+            raise RuntimeError("The complete cross-user census requires the hosted read-only collector")
+        if ctypes.sizeof(UsageInfo) != 96:
+            raise RuntimeError("Unexpected source-derived libproc structure layout")
+        self.lib = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        self.lib.proc_listallpids.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        self.lib.proc_listallpids.restype = ctypes.c_int
+        self.lib.proc_pid_rusage.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+        self.lib.proc_pid_rusage.restype = ctypes.c_int
+
+    def pids(self):
+        estimate = self.lib.proc_listallpids(None, 0)
+        if estimate <= 0:
+            raise OSError(ctypes.get_errno(), "proc_listallpids size query failed")
+        buffer = (ctypes.c_int * (estimate * 2))()
+        count = self.lib.proc_listallpids(buffer, ctypes.sizeof(buffer))
+        if count <= 0 or count >= len(buffer):
+            raise RuntimeError("Process enumeration failed or filled its buffer")
+        return set(pid for pid in buffer[:count] if pid > 0)
+
+    def sample(self, pid):
+        usage = UsageInfo()
+        ctypes.set_errno(0)
+        result = self.lib.proc_pid_rusage(pid, 0, ctypes.byref(usage))
+        if result != 0:
+            error = OSError(ctypes.get_errno(), f"proc_pid_rusage failed for {pid}")
+            error.capture = {"api": "proc_pid_rusage", "flavor": 0, "pid": pid, "status": result,
+                             "bufferHex": bytes(usage).hex(), "bufferState": "zero-initialized before call"}
+            raise error
+        return {"rssBytes": str(usage.resident_size), "startAbstime": str(usage.start_abstime),
+                "exitAbstime": str(usage.exit_abstime), "executableUUID": bytes(usage.uuid).hex(), "status": result, "errno": 0}
+
+
+def observe_process(reader, pid, journal):
+    observation = {"pid": pid}
+    journal.append(observation)
+    try:
+        observation["sample"] = reader.sample(pid)
+    except Exception as error:
+        observation["failure"] = {"type": type(error).__name__, "message": str(error),
+                                  "errno": getattr(error, "errno", None), "capture": getattr(error, "capture", None)}
+        raise
+    return {"pid": pid, **observation["sample"]}
+
+
+def census(reader, boot_session, clock=time.monotonic):
+    result = {"complete": False, "bootSession": boot_session, "processes": [], "observations": [], "enumerations": [], "notPresent": []}
+    rows = {}
+    deadline = clock() + 9
+    try:
+        pending = reader.pids()
+        while pending:
+            result["enumerations"].append(sorted(pending))
+            for pid in sorted(pending):
+                if clock() >= deadline:
+                    raise RuntimeError("Process census collection deadline; no partial admission")
+                try:
+                    rows[pid] = observe_process(reader, pid, result["observations"])
+                except OSError as error:
+                    if error.errno != errno.ESRCH:
+                        raise
+                    result["notPresent"].append({"pid": pid, "errno": error.errno, "error": str(error)})
+            current = reader.pids()
+            pending = current - rows.keys()
+            # A returned PID with no readable instance is missing, not a zero-size process.
+            if pending.intersection(entry["pid"] for entry in result["notPresent"]):
+                raise RuntimeError("An unobserved PID is still listed; process ownership is unknown")
+            for pid in sorted(current.intersection(rows)):
+                if clock() >= deadline:
+                    raise RuntimeError("Process census collection deadline; no partial admission")
+                recheck = observe_process(reader, pid, result["observations"])
+                if recheck["startAbstime"] != rows[pid]["startAbstime"]:
+                    raise RuntimeError(f"Process {pid} changed birth tag during census collection")
+                rows[pid] = recheck
+            current = reader.pids()
+            pending |= current - rows.keys()
+            rows = {pid: row for pid, row in rows.items() if pid in current}
+        result["processes"] = list(rows.values())
+        result["complete"] = True
+    except Exception as error:
+        result["processes"] = list(rows.values())
+        result["error"] = {"type": type(error).__name__, "message": str(error), "errno": getattr(error, "errno", None)}
+    return result
+
+
+if __name__ == "__main__":
+    try:
+        result = census(DarwinProcesses(), sys.argv[1])
+    except Exception as error:
+        result = {"complete": False, "error": {"type": type(error).__name__, "message": str(error)}}
+    print(json.dumps(result, separators=(",", ":")), flush=True)
+    raise SystemExit(0 if result["complete"] else 1)
+`;
 
 const baseline = "c78e6aea330f58982252c15348341d34645a0ed5";
 const dispatch = "f26-read-notice-baseline-v3";
@@ -47,6 +162,13 @@ let monitorFailure;
 let monitor;
 let originFree;
 let record;
+let memoryScope;
+const memoryIdentity = {
+  baseline,
+  harness: process.env.GITHUB_WORKFLOW_SHA,
+  run: process.env.GITHUB_RUN_ID,
+  attempt: process.env.GITHUB_RUN_ATTEMPT,
+};
 function clean(text) {
   return text
     .replaceAll(token, "[REDACTED]")
@@ -63,19 +185,68 @@ function measure(recorder = record) {
     raw.physicalMemory = read("sysctl", ["-n", "hw.memsize"]);
     raw.vmStat = read("vm_stat", []);
     raw.processes = read("ps", ["-axo", "uid=,pid=,ppid=,rss=,comm="]);
+    raw.bootSession = read("sysctl", ["-n", "kern.bootsessionuuid"]);
+    let origin;
+    if (!memoryScope && !admissionOnly) {
+      const previous = JSON.parse(
+        readFileSync(path.join(root, "apps/ios/build/F26Prebuild/public/preflight.json")),
+      );
+      for (const key of ["baseline", "harness", "run", "attempt"])
+        assert.equal(
+          previous[key],
+          memoryIdentity[key],
+          "Prebuild scope belongs to another operation",
+        );
+      assert.equal(previous.phase, "prebuild");
+      assert.equal(previous.state, "admitted");
+      assert.equal(previous.sourceVerified, true);
+      assert.equal(
+        previous.runtimeManifestSha256,
+        createHash("sha256")
+          .update(readFileSync(path.join(input, "RUNTIME.json")))
+          .digest("hex"),
+      );
+      origin = previous.measurement.taskMemory.origin;
+    }
+    raw.processCensus = JSON.parse(
+      read("sudo", [
+        "-n",
+        "--",
+        "/usr/bin/python3",
+        "-I",
+        "-S",
+        "-c",
+        processCensusSource,
+        raw.bootSession,
+      ]),
+    );
+    if (!memoryScope) {
+      memoryScope = new ProofMemoryScope({
+        identity: memoryIdentity,
+        phase: admissionOnly ? "prebuild" : "runtime",
+        census: raw.processCensus,
+        currentPid: process.pid,
+        origin,
+      });
+    }
+    const taskMemory = memoryScope.observe(raw.processCensus);
     const memory = Number(raw.physicalMemory);
     const pageSize = Number(raw.vmStat.match(/page size of (\d+) bytes/)[1]);
     const freePages = Number(raw.vmStat.match(/Pages free:\s+(\d+)/)[1]);
     const inactivePages = Number(raw.vmStat.match(/Pages inactive:\s+(\d+)/)[1]);
     const freeMemory = (freePages + inactivePages) * pageSize;
-    const rss = raw.processes.split("\n").reduce((sum, line) => {
-      const columns = line.trim().split(/\s+/);
-      return sum + (Number(columns[0]) === process.getuid() ? Number(columns[3]) * 1024 : 0);
-    }, 0);
     const disk = statfsSync(root);
     raw.fileSystem = { availableBlocks: disk.bavail, blockSize: disk.bsize };
     const freeDisk = disk.bavail * disk.bsize;
-    return { at: Date.now(), memory, freeMemory, runnerUserRSS: rss, freeDisk, raw };
+    return {
+      at: Date.now(),
+      memory,
+      freeMemory,
+      taskRSS: taskMemory.taskRSS,
+      taskMemory,
+      freeDisk,
+      raw,
+    };
   } catch (error) {
     recorder("measurement-read-failed", { error: String(error), raw });
     throw error;
@@ -134,7 +305,11 @@ const preflight = admitted.preflight;
 record = admitted.record;
 originFree = preflight.measurement.freeDisk;
 if (admissionOnly) {
-  record("prebuild-admission-complete", { productStarted: false, processGroups: [] });
+  record("prebuild-admission-complete", {
+    productStarted: false,
+    processGroups: [],
+    taskMemoryOrigin: memoryScope.origin,
+  });
   process.exit(0);
 }
 const environment = {
@@ -155,6 +330,13 @@ function start(name, command, args, env = environment) {
     stdio: ["ignore", "pipe", "pipe"],
   });
   processes.add(child);
+  const memoryLaunch = child.pid === undefined ? undefined : memoryScope.spawned(name, child.pid);
+  child.once("exit", (code, signal) => {
+    if (memoryLaunch) {
+      memoryScope.exited(memoryLaunch, { code, signal });
+      record("memory-launch-exit", { name, pid: child.pid, code, signal });
+    }
+  });
   if (child.pid) processGroups.add(child.pid);
   record("started", { name, pid: child.pid, command, args });
   for (const stream of [child.stdout, child.stderr]) {
@@ -236,7 +418,7 @@ monitor = setInterval(() => {
     const { raw: _raw, ...summary } = snapshot;
     record("measurement", summary);
     assert(Date.now() < deadline, "60-minute phase deadline");
-    assert(snapshot.runnerUserRSS <= 5 * gib, "5 GiB aggregate runner-user RSS ceiling");
+    assert(snapshot.taskRSS <= 5 * gib, "5 GiB task resident-sum ceiling");
     assert(snapshot.freeMemory >= gib, "1 GiB whole-host memory safeguard");
     assert(
       snapshot.freeDisk >= 4 * gib && originFree - snapshot.freeDisk <= 20 * gib,

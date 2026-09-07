@@ -59,7 +59,7 @@ test("a below-limit admission writes its exact refused sample before exporting i
   const sample = {
     memory: 8 * 1024 ** 3,
     freeMemory: 1024 ** 3,
-    runnerUserRSS: 1024 ** 3,
+    taskRSS: 1024 ** 3,
     freeDisk: 32 * 1024 ** 3,
     raw: {
       physicalMemory: "8589934592",
@@ -87,7 +87,7 @@ test("a below-limit admission writes its exact refused sample before exporting i
   assert.deepEqual(receipt.conditions, {
     physicalMemory: true,
     freeMemory: false,
-    runnerResidentMemory: true,
+    taskResidentMemory: true,
     disk: true,
   });
   assert.equal(
@@ -145,7 +145,7 @@ test("the original admission boundaries still accept a fitting sample", () => {
     measure: () => ({
       memory: 6 * 1024 ** 3,
       freeMemory: 2 * 1024 ** 3,
-      runnerUserRSS: 5 * 1024 ** 3 - 1,
+      taskRSS: 5 * 1024 ** 3 - 1,
       freeDisk: 24 * 1024 ** 3,
     }),
   });
@@ -153,7 +153,7 @@ test("the original admission boundaries still accept a fitting sample", () => {
   assert.deepEqual(result.preflight.conditions, {
     physicalMemory: true,
     freeMemory: true,
-    runnerResidentMemory: true,
+    taskResidentMemory: true,
     disk: true,
   });
 });

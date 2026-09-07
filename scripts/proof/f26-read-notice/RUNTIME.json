@@ -1,7 +1,7 @@
 {
   "version": 1,
   "baselineMain": "c78e6aea330f58982252c15348341d34645a0ed5",
-  "purpose": "Temporary targeted baseline proof; no product repair",
+  "purpose": "Temporary targeted baseline proof with approved task-resident accounting; no product repair",
   "files": [
     {
       "path": "app-identity.mjs",
@@ -45,13 +45,13 @@
     },
     {
       "path": "proof-admission.mjs",
-      "bytes": 2470,
-      "sha256": "bb00e839826078abd641736d4c541a910bcebd5369693f1e1c67bcdebdebcc91"
+      "bytes": 7820,
+      "sha256": "cee4fa0aafbcda6533d25576e174ac4aa86ecb896e3758bcec56a4a937bf17bf"
     },
     {
       "path": "proof-admission.test.mjs",
-      "bytes": 6281,
-      "sha256": "f6b6d8cb192af35a5217624c944c97d323a6eb3c239e0770c877e9401666c475"
+      "bytes": 6265,
+      "sha256": "00c51c77ed0c527b945fc0431bf4b7008183dc875bbac455bac6f70c1b1da7a7"
     },
     {
       "path": "relay-core.mjs",
@@ -65,8 +65,8 @@
     },
     {
       "path": "run-hosted.mjs",
-      "bytes": 16656,
-      "sha256": "f4e45b0c9ef9c116cfbc70b7f059591775ea21a2a0c46a591d0c57effafc292e"
+      "bytes": 23843,
+      "sha256": "f7ec54ec81fcb971f462c728d60f121d2948b11760b01504f53627ad6d942c98"
     },
     {
       "path": "ui-case.swift",
