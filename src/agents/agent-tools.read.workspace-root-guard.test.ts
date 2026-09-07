@@ -17,9 +17,10 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("./sandbox-paths.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./sandbox-paths.js")>()),
+vi.mock("./sandbox-paths.js", () => ({
   assertSandboxPath: mocks.assertSandboxPath,
+  isSandboxRootEscapeError: (error: unknown): error is Error =>
+    error instanceof Error && /^Path escapes sandbox root \(/i.test(error.message),
 }));
 
 function createToolHarness() {
