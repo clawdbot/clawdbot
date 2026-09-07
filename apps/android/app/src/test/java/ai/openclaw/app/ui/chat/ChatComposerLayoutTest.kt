@@ -26,6 +26,8 @@ import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.testFold
 import android.Manifest
+import android.annotation.SuppressLint
+import android.app.Activity
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Rect
@@ -33,6 +35,7 @@ import android.provider.Settings
 import android.speech.SpeechRecognizer
 import android.view.KeyEvent
 import android.view.View
+import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inspector.WindowInspector
 import androidx.activity.compose.LocalActivity
@@ -88,6 +91,7 @@ import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.isPopup
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
@@ -128,7 +132,15 @@ import androidx.lifecycle.LifecycleRegistry
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
 import androidx.window.layout.DisplayFeature
+import androidx.window.layout.WindowInfoTracker
+import androidx.window.layout.WindowInfoTrackerDecorator
+import androidx.window.layout.WindowLayoutInfo
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -171,6 +183,7 @@ class ChatComposerLayoutTest {
   private val viewModelStore = ViewModelStore()
   private var originalAnimatorScale: String? = null
   private var renderedCanvasColor = Color.Unspecified
+  private lateinit var chatActivity: Activity
   private lateinit var insetView: View
   private var observedBottomInsets: Pair<Int, Int>? = null
   private lateinit var renderedDensity: Density
@@ -655,6 +668,56 @@ class ChatComposerLayoutTest {
       assertEquals("The resized transcript reaches its latest edge", 0f, range.value(), 0f)
       assertEquals("The same complete history fits after resizing", 0f, range.maxValue(), 0f)
       composeRule.onNodeWithContentDescription(nativeString("Jump to latest")).assertDoesNotExist()
+    }
+  }
+
+  @Test
+  @Config(qualifiers = "w1000dp-h800dp-mdpi")
+  @SuppressLint("RestrictedApi")
+  fun chatActionsNativeWindowStaysInTheAnchorFoldPane() {
+    val fold = testFold(Rect(490, 0, 510, 800))
+    WindowInfoTracker.overrideDecorator(
+      object : WindowInfoTrackerDecorator {
+        override fun decorate(tracker: WindowInfoTracker): WindowInfoTracker =
+          object : WindowInfoTracker by tracker {
+            override fun windowLayoutInfo(activity: Activity): Flow<WindowLayoutInfo> =
+              flow {
+                emit(WindowLayoutInfo(listOf(fold)))
+                awaitCancellation()
+              }
+          }
+      },
+    )
+    try {
+      showChat(viewportWidth = 490.dp, viewportHeight = { 640.dp })
+      composeRule.runOnIdle {
+        val published = runBlocking { WindowInfoTracker.getOrCreate(chatActivity).windowLayoutInfo(chatActivity).first() }
+        assertEquals(listOf(fold), published.displayFeatures)
+      }
+      readerHeaderControl("Chat actions").performClick()
+      composeRule.onNode(hasText(nativeString("Refresh chat")) and hasClickAction()).assertIsDisplayed()
+      composeRule.runOnIdle {
+        val roots = WindowInspector.getGlobalWindowViews().filter { it.isAttachedToWindow }
+        val popup =
+          roots.single { (it.layoutParams as? WindowManager.LayoutParams)?.type == WindowManager.LayoutParams.TYPE_APPLICATION_SUB_PANEL }
+        val activityRoot = chatActivity.window.decorView
+        assertTrue("The menu must have a separate native owner", popup !== activityRoot)
+        assertTrue("Native popup geometry must be nonzero", popup.width > 0 && popup.height > 0)
+        val activityScreen = IntArray(2).also(activityRoot::getLocationOnScreen)
+        val activityWindow = IntArray(2).also(activityRoot::getLocationInWindow)
+        val popupScreen = IntArray(2).also(popup::getLocationOnScreen)
+        val bounds = Rect(popupScreen[0], popupScreen[1], popupScreen[0] + popup.width, popupScreen[1] + popup.height)
+        val params = popup.layoutParams as WindowManager.LayoutParams
+        val originX = activityScreen[0] - activityWindow[0]
+        println("Native menu bounds=$bounds requested=(${params.x},${params.y},${params.width},${params.height}) activityOriginX=$originX fold=${fold.bounds}")
+        assertEquals("The fixture must model the native sub-panel's horizontal placement", originX + params.x, bounds.left)
+        assertTrue(
+          "Actual Chat actions native window $bounds must stay left of the Activity fold at ${originX + fold.bounds.left}",
+          bounds.left >= originX && bounds.right <= originX + fold.bounds.left,
+        )
+      }
+    } finally {
+      WindowInfoTracker.reset()
     }
   }
 
@@ -1754,6 +1817,28 @@ class ChatComposerLayoutTest {
   }
 
   @Test
+  fun attachmentMenuDoesNotRestoreWhileDraftAndExplicitReopeningRemainUsable() {
+    val restoration = StateRestorationTester(composeRule)
+    showChat(viewportHeight = { 640.dp }, restorationTester = restoration)
+    composeRule.onNode(hasSetTextAction()).performTextInput("retained menu draft")
+    composeRule.onNodeWithContentDescription(nativeString("Add attachment")).performClick()
+    composeRule.onNodeWithText(nativeString("Photos")).assertIsDisplayed()
+    val old =
+      WindowInspector.getGlobalWindowViews().single {
+        it.isAttachedToWindow && (it.layoutParams as? WindowManager.LayoutParams)?.type == WindowManager.LayoutParams.TYPE_APPLICATION_SUB_PANEL
+      }
+    restoration.emulateSavedInstanceStateRestore()
+    composeRule.waitForIdle()
+    assertFalse(old.isAttachedToWindow)
+    composeRule.onNode(isPopup()).assertDoesNotExist()
+    composeRule.onNode(hasSetTextAction()).assertTextEquals("retained menu draft")
+    composeRule.onNodeWithContentDescription(nativeString("Add attachment")).performClick()
+    for (label in listOf("Photos", "Videos", "Files")) {
+      composeRule.onNodeWithText(nativeString(label)).assertIsDisplayed()
+    }
+  }
+
+  @Test
   fun narrowComposerKeepsModelNamesOnOneLineWithLargeTextAndContextUsage() {
     NativeStringResources.setApplicationLocales(LocaleListCompat.forLanguageTags("fr"))
     val fontScale = mutableStateOf(1f)
@@ -2412,11 +2497,15 @@ class ChatComposerLayoutTest {
     displayFeatures: (() -> List<DisplayFeature>)? = null,
     viewportOffset: () -> IntOffset = { IntOffset.Zero },
     layoutDirection: () -> LayoutDirection = { LayoutDirection.Ltr },
+    restorationTester: StateRestorationTester? = null,
   ): MainViewModel {
     val viewModel = MainViewModel(app, prefs, SavedStateHandle())
     viewModelStore.put("chat", viewModel)
     viewModel.enterScreenshotFixtureMode(AndroidScreenshotScene.Chat)
-    composeRule.setContent {
+    val setContent = restorationTester?.let { it::setContent } ?: composeRule::setContent
+    setContent {
+      val currentActivity = requireNotNull(LocalActivity.current)
+      SideEffect { chatActivity = currentActivity }
       if (useChatShell) {
         val activity = requireNotNull(LocalActivity.current)
         val view = LocalView.current

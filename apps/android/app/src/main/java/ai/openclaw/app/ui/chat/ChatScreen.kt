@@ -56,6 +56,8 @@ import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.operatorScopesAllowAdmin
 import ai.openclaw.app.operatorScopesAllowWrite
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
+import ai.openclaw.app.ui.FoldAwareDropdownMenu
+import ai.openclaw.app.ui.FoldAwareMenuItem
 import ai.openclaw.app.ui.TabletopPaneBounds
 import ai.openclaw.app.ui.copyGatewayDiagnosticsReport
 import ai.openclaw.app.ui.design.ClawAgentAvatar
@@ -150,8 +152,6 @@ import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -1282,53 +1282,30 @@ private fun ChatHeader(
           contentDescription = nativeString("Chat actions"),
           onClick = { actionsMenuExpanded = true },
         )
-        DropdownMenu(expanded = actionsMenuExpanded, onDismissRequest = { actionsMenuExpanded = false }) {
-          DropdownMenuItem(
-            text = { Text(nativeString("Refresh chat")) },
-            leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
-            onClick = {
-              actionsMenuExpanded = false
-              onRefresh()
+        FoldAwareDropdownMenu(
+          expanded = actionsMenuExpanded,
+          onDismissRequest = { actionsMenuExpanded = false },
+          items =
+            buildList {
+              add(FoldAwareMenuItem("refresh", nativeString("Refresh chat"), onRefresh, Icons.Default.Refresh))
+              if (branches.size > 1) {
+                add(
+                  FoldAwareMenuItem(
+                    "branches",
+                    nativeString("Switch branch"),
+                    onOpenBranchSwitcher,
+                    Icons.Default.ArrowDropDown,
+                    enabled = branchSwitchEnabled && !branchesLoading,
+                  ),
+                )
+              }
+              add(FoldAwareMenuItem("dashboard", nativeString("Dashboard"), onOpenDashboard, Icons.Default.Dashboard))
+              add(FoldAwareMenuItem("background", nativeString("Background tasks"), onOpenBackgroundTasks, Icons.Default.HourglassEmpty))
+              if (workspaceGit) {
+                add(FoldAwareMenuItem("worktree", newChatInWorktreeLabel, onNewChatInWorktree, enabled = newChatEnabled))
+              }
             },
-          )
-          if (branches.size > 1) {
-            DropdownMenuItem(
-              text = { Text(nativeString("Switch branch")) },
-              leadingIcon = { Icon(Icons.Default.ArrowDropDown, contentDescription = null) },
-              enabled = branchSwitchEnabled && !branchesLoading,
-              onClick = {
-                actionsMenuExpanded = false
-                onOpenBranchSwitcher()
-              },
-            )
-          }
-          DropdownMenuItem(
-            text = { Text(nativeString("Dashboard")) },
-            leadingIcon = { Icon(Icons.Default.Dashboard, contentDescription = null) },
-            onClick = {
-              actionsMenuExpanded = false
-              onOpenDashboard()
-            },
-          )
-          DropdownMenuItem(
-            text = { Text(nativeString("Background tasks")) },
-            leadingIcon = { Icon(Icons.Default.HourglassEmpty, contentDescription = null) },
-            onClick = {
-              actionsMenuExpanded = false
-              onOpenBackgroundTasks()
-            },
-          )
-          if (workspaceGit) {
-            DropdownMenuItem(
-              text = { Text(newChatInWorktreeLabel) },
-              enabled = newChatEnabled,
-              onClick = {
-                actionsMenuExpanded = false
-                onNewChatInWorktree()
-              },
-            )
-          }
-        }
+        )
       }
     }
   }
@@ -3585,7 +3562,7 @@ private fun ChatInputPill(
   modifier: Modifier = Modifier,
 ) {
   val hardwareEnterHandler = remember { PhysicalChatSendKeyHandler() }
-  var attachmentMenuExpanded by rememberSaveable { mutableStateOf(false) }
+  var attachmentMenuExpanded by remember { mutableStateOf(false) }
   val draftStyle = chatDraftStyle()
 
   Surface(
@@ -3654,20 +3631,16 @@ private fun ChatInputPill(
               Icon(imageVector = Icons.Default.Add, contentDescription = nativeString("Add attachment"), modifier = Modifier.size(20.dp))
             }
           }
-          DropdownMenu(expanded = attachmentMenuExpanded, onDismissRequest = { attachmentMenuExpanded = false }) {
-            DropdownMenuItem(text = { Text(nativeString("Photos")) }, leadingIcon = { Icon(Icons.Default.Photo, contentDescription = null) }, onClick = {
-              attachmentMenuExpanded = false
-              onPickImages()
-            })
-            DropdownMenuItem(text = { Text(nativeString("Videos")) }, leadingIcon = { Icon(Icons.Default.Videocam, contentDescription = null) }, onClick = {
-              attachmentMenuExpanded = false
-              onPickVideo()
-            })
-            DropdownMenuItem(text = { Text(nativeString("Files")) }, leadingIcon = { Icon(Icons.Default.AttachFile, contentDescription = null) }, onClick = {
-              attachmentMenuExpanded = false
-              onPickAudioOrDocument()
-            })
-          }
+          FoldAwareDropdownMenu(
+            expanded = attachmentMenuExpanded,
+            onDismissRequest = { attachmentMenuExpanded = false },
+            items =
+              listOf(
+                FoldAwareMenuItem("photos", nativeString("Photos"), onPickImages, Icons.Default.Photo),
+                FoldAwareMenuItem("videos", nativeString("Videos"), onPickVideo, Icons.Default.Videocam),
+                FoldAwareMenuItem("files", nativeString("Files"), onPickAudioOrDocument, Icons.Default.AttachFile),
+              ),
+          )
         }
         Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
           ChatComposerModelPicker(
