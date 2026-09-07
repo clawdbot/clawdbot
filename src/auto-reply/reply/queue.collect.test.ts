@@ -16,7 +16,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
-import type { FollowupRun, QueueSettings } from "./queue.js";
+import type { FollowupRun, InternalFollowupRun, QueueSettings } from "./queue.js";
 import {
   admitFollowupRunLifecycle,
   completeFollowupRunLifecycle,
@@ -32,14 +32,6 @@ import {
 import { resolveFollowupDeliveryContextKey } from "./queue/drain.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
-
-type InternalFollowupRun = FollowupRun & {
-  currentTurnImagesPrepared?: true;
-  mediaImageLayout?: {
-    slots: Array<{ kind: "inline" | "offloaded"; factIndex?: number }>;
-    suppressedFactIndexes: number[];
-  };
-};
 
 installQueueRuntimeErrorSilencer();
 
@@ -2024,6 +2016,167 @@ describe("followup queue collect routing", () => {
 
     expect(calls[0]?.images).toEqual([firstImage, secondImage]);
     expect(calls[0]?.imageOrder).toEqual(["inline", "inline"]);
+  });
+
+  function historyImage(messageId: string, sender: string, position: number, count: number) {
+    return {
+      path: `/openclaw-test/${messageId}.png`,
+      contentType: "image/png",
+      sender,
+      sentAtMs: 1_700_000_000_000,
+      messagePosition: position,
+      messageCount: count,
+      messageId,
+    };
+  }
+
+  it("carries inherited-image provenance across collected batches", async () => {
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-history-images-${Date.now()}`,
+    );
+    const keptImage = { type: "image" as const, data: "kept", mimeType: "image/png" };
+    const laterImage = { type: "image" as const, data: "later", mimeType: "image/png" };
+    const ada = historyImage("m-a", "Ada", 1, 1);
+    const grace = historyImage("m-g", "Grace", 1, 1);
+
+    for (const [prompt, image, retained] of [
+      ["one", keptImage, ada],
+      ["two", laterImage, grace],
+    ] as const) {
+      const preparedRun: InternalFollowupRun = {
+        ...createRun({ prompt, originatingChannel: "slack", originatingTo: "channel:A" }),
+        currentTurnImagesPrepared: true,
+        images: [image],
+        imageOrder: ["inline"],
+        historyImages: [retained],
+      };
+      enqueueFollowupRun(key, preparedRun, settings);
+    }
+
+    await drainRecordedQueue(key, runFollowup, done);
+
+    const collected = calls[0] as InternalFollowupRun | undefined;
+    expect(collected?.images).toEqual([keptImage, laterImage]);
+    // Every inherited image the batch sends keeps the provenance that places it.
+    expect(collected?.historyImages).toEqual([ada, grace]);
+  });
+
+  it("bounds retained images across a collected burst", async () => {
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-history-cap-${Date.now()}`,
+    );
+    // Six turns of four retained images each would put 24 in one prompt; the
+    // batch may not outweigh a single turn.
+    for (const turn of [1, 2, 3, 4, 5, 6]) {
+      const preparedRun: InternalFollowupRun = {
+        ...createRun({
+          prompt: `turn ${turn}`,
+          originatingChannel: "slack",
+          originatingTo: "channel:A",
+        }),
+        currentTurnImagesPrepared: true,
+        images: [1, 2, 3, 4].map((n) => ({
+          type: "image" as const,
+          data: `t${turn}-i${n}`,
+          mimeType: "image/png",
+        })),
+        imageOrder: ["inline", "inline", "inline", "inline"],
+        historyImages: [1, 2, 3, 4].map((n) => historyImage(`t${turn}-m${n}`, "Ada", n, 4)),
+      };
+      enqueueFollowupRun(key, preparedRun, settings);
+    }
+
+    await drainRecordedQueue(key, runFollowup, done);
+
+    const collected = calls[0] as InternalFollowupRun | undefined;
+    expect(collected?.historyImages).toHaveLength(4);
+    // Images and provenance drop together, so every delivered image keeps a note.
+    expect(collected?.images).toHaveLength(4);
+    expect(collected?.imageOrder).toHaveLength(4);
+  });
+
+  it("keeps a newly retained image when history windows overlap", async () => {
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-history-overlap-${Date.now()}`,
+    );
+    // Successive turns re-read a growing window: A, then A/B, then A/B/C. The
+    // repeated images render with a different position each time, so identity has
+    // to come from the image, or the budget fills with duplicates and drops C.
+    const windows = [
+      [historyImage("m-a", "Ada", 1, 1)],
+      [historyImage("m-a", "Ada", 1, 2), historyImage("m-b", "Ada", 2, 2)],
+      [
+        historyImage("m-a", "Ada", 1, 3),
+        historyImage("m-b", "Ada", 2, 3),
+        historyImage("m-c", "Ada", 3, 3),
+      ],
+    ];
+    windows.forEach((retained, index) => {
+      const preparedRun: InternalFollowupRun = {
+        ...createRun({
+          prompt: `turn ${index + 1}`,
+          originatingChannel: "slack",
+          originatingTo: "channel:A",
+        }),
+        currentTurnImagesPrepared: true,
+        images: retained.map((image) => ({
+          type: "image" as const,
+          data: image.messageId,
+          mimeType: "image/png",
+        })),
+        imageOrder: retained.map(() => "inline" as const),
+        historyImages: retained,
+      };
+      enqueueFollowupRun(key, preparedRun, settings);
+    });
+
+    await drainRecordedQueue(key, runFollowup, done);
+
+    const collected = calls[0] as InternalFollowupRun | undefined;
+    const ids = collected?.historyImages?.map((image) => image.messageId) ?? [];
+    // The newest image must survive; dropping it loses content the member asked about.
+    expect(ids).toContain("m-c");
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("keeps the newest retained image when the window rolls past the budget", async () => {
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-history-roll-${Date.now()}`,
+    );
+    // A rolling window: the first turn fills the budget, the second drops the
+    // oldest and adds a new one. The member is asking about the newest image, so
+    // filling the budget oldest-first would discard exactly what they want.
+    const windows = [
+      ["m-a", "m-b", "m-c", "m-d"],
+      ["m-b", "m-c", "m-d", "m-e"],
+    ];
+    windows.forEach((ids, index) => {
+      const retained = ids.map((id, position) => historyImage(id, "Ada", position + 1, ids.length));
+      const preparedRun: InternalFollowupRun = {
+        ...createRun({
+          prompt: `turn ${index + 1}`,
+          originatingChannel: "slack",
+          originatingTo: "channel:A",
+        }),
+        currentTurnImagesPrepared: true,
+        images: retained.map((image) => ({
+          type: "image" as const,
+          data: image.messageId,
+          mimeType: "image/png",
+        })),
+        imageOrder: retained.map(() => "inline" as const),
+        historyImages: retained,
+      };
+      enqueueFollowupRun(key, preparedRun, settings);
+    });
+
+    await drainRecordedQueue(key, runFollowup, done);
+
+    const collected = calls[0] as InternalFollowupRun | undefined;
+    const ids = collected?.historyImages?.map((image) => image.messageId) ?? [];
+    expect(ids).toContain("m-e");
+    expect(ids).toHaveLength(4);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
   it("preserves prepared empty image state across collected batches", async () => {

@@ -8,7 +8,7 @@ import type { MsgContext } from "../templating.js";
 import type { HistoryEntry } from "./history.types.js";
 
 const RECENT_HISTORY_IMAGE_TTL_MS = 30 * 60_000;
-const RECENT_HISTORY_IMAGE_LIMIT = 4;
+export const RECENT_HISTORY_IMAGE_LIMIT = 4;
 
 export type RecentInboundHistoryImage = {
   path: string;
@@ -130,4 +130,20 @@ export function appendRecentHistoryImageContext(params: {
   return [params.promptText, notes.join("\n")]
     .filter((part) => part.trim().length > 0)
     .join("\n\n");
+}
+
+/**
+ * Attach inherited-image provenance to a turn prompt so the model can place them.
+ *
+ * Renders from the retained images themselves rather than a pre-rendered block, so
+ * the notes are numbered against the set the turn actually carries: a collected
+ * batch renumbers across its merged images instead of restarting per queued turn.
+ */
+export function withRecentHistoryImageNotes(
+  prompt: string,
+  images: { historyImages?: readonly RecentInboundHistoryImage[] },
+): string {
+  return images.historyImages?.length
+    ? appendRecentHistoryImageContext({ promptText: prompt, images: [...images.historyImages] })
+    : prompt;
 }

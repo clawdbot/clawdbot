@@ -362,6 +362,38 @@ describe("buildLineMessageContext", () => {
     ]);
   });
 
+  it("carries a kept message's media and id, not just the line it renders", async () => {
+    // What a following mention reattaches lives in these two fields, so passing
+    // history through has to keep the whole entry rather than the parts a
+    // transcript line happens to need.
+    const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" });
+    const kept = {
+      sender: "user:user-2",
+      body: "<image>",
+      timestamp: 1000,
+      messageId: "kept-message",
+      media: [
+        {
+          path: "/tmp/openclaw-line-test/kept.png",
+          contentType: "image/png",
+          kind: "image" as const,
+          messageId: "kept-message",
+        },
+      ],
+    };
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+      inboundHistory: [kept],
+    });
+
+    expect(context?.ctxPayload.InboundHistory).toEqual([kept]);
+  });
+
   it("keeps inbound log previews UTF-16 well-formed at the limit", async () => {
     const timestamp = 1_700_000_000_000;
     const logCfg: OpenClawConfig = {

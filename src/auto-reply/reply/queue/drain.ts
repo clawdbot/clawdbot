@@ -43,6 +43,7 @@ import {
   previewQueueSummaryPrompt,
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
+import { RECENT_HISTORY_IMAGE_LIMIT } from "../history-media.js";
 import { isRoutableChannel } from "../route-reply.js";
 import { clearFollowupQueue, FOLLOWUP_QUEUES, trimSummaryElisionsToCap } from "./state.js";
 import {
@@ -52,14 +53,8 @@ import {
   isFollowupRunDeferredError,
   retireFollowupRunCancellation,
   type FollowupRun,
+  type InternalFollowupRun,
 } from "./types.js";
-
-type InternalFollowupRun = FollowupRun & {
-  /** Keep admission state out of the public plugin-facing FollowupRun contract. */
-  currentTurnImagesPrepared?: true;
-  /** Admission-owned layout; fact indexes are relative to this run's media array. */
-  mediaImageLayout?: MediaImageLayout;
-};
 
 function hasPreparedCurrentTurnImages(run: FollowupRun): boolean {
   return (run as InternalFollowupRun).currentTurnImagesPrepared === true;
@@ -501,28 +496,87 @@ function renderCollectItemPrompt(item: FollowupRun, idx: number, prompt: string)
   return `${buildCollectItemPrefix(item, idx)}${prompt}`.trim();
 }
 
+/** Identity of a retained image, stable across the history windows that re-read it. */
+function historyImageIdentity(image: { messageId?: string; path: string }): string {
+  return [image.messageId ?? "", image.path].join("\0");
+}
+
 function collectQueuedPromptMedia(
-  items: FollowupRun[],
+  items: InternalFollowupRun[],
 ): Pick<FollowupRun, "images" | "imageOrder" | "media"> &
-  Pick<InternalFollowupRun, "currentTurnImagesPrepared" | "mediaImageLayout"> {
+  Pick<InternalFollowupRun, "currentTurnImagesPrepared" | "mediaImageLayout" | "historyImages"> {
   const images: NonNullable<FollowupRun["images"]> = [];
   const imageOrder: NonNullable<FollowupRun["imageOrder"]> = [];
   const media: NonNullable<FollowupRun["media"]> = [];
   const mediaImageSlots: MediaImageLayout["slots"] = [];
   const suppressedFactIndexes: number[] = [];
+  // Retained images and their provenance travel together, selected per image.
+  // Identity is the image, never its rendered note: a note carries its position in
+  // the history window, so the same image re-read from a grown window renders
+  // differently and text equality would call it new, filling the budget with
+  // duplicates and dropping whatever arrived last. The batch reuses the per-turn
+  // limit, so a collected turn never carries more retained images than one turn could.
+  const historyImages: NonNullable<InternalFollowupRun["historyImages"]> = [];
+  // Pick the survivors before building anything, walking newest item first: a
+  // rolling window re-reads mostly the same images, so filling the budget in queue
+  // order spends it on the oldest and drops the newly arrived one - the image the
+  // member is most likely asking about.
+  const keptHistoryIdentities = new Set<string>();
+  for (const item of items.toReversed()) {
+    const candidates = item.historyImages ?? [];
+    if (candidates.length === 0 || item.images?.length !== candidates.length) {
+      continue;
+    }
+    for (const image of candidates.toReversed()) {
+      if (keptHistoryIdentities.size >= RECENT_HISTORY_IMAGE_LIMIT) {
+        break;
+      }
+      keptHistoryIdentities.add(historyImageIdentity(image));
+    }
+  }
+  const seenHistoryImages = new Set<string>();
   const currentTurnImagesPrepared = items.every(hasPreparedCurrentTurnImages);
   for (const item of items) {
     const mediaOffset = media.length;
-    const internalItem = item as InternalFollowupRun;
-    if (item.images) {
-      images.push(...item.images);
+    const itemHistoryImages = item.historyImages ?? [];
+    // A retained image already carried by an earlier item in this batch is dropped,
+    // but the rest of that item still travels: successive turns re-read a growing
+    // window, so skipping a partly-seen item whole would discard the newest image.
+    const takenHistoryIndexes = itemHistoryImages.flatMap((image, index) => {
+      const identity = historyImageIdentity(image);
+      return keptHistoryIdentities.has(identity) && !seenHistoryImages.has(identity) ? [index] : [];
+    });
+    // Per-image selection needs provenance and payload index-aligned, which is what
+    // a history-carrying turn produces: it only inherits images when it brought none
+    // of its own. Should that ever not hold, the item travels whole rather than being
+    // sliced against an alignment this cannot confirm - dropping a member's image is
+    // the worse failure, and the per-turn resolver still bounds what one item carries.
+    const canSelectPerImage = item.images?.length === itemHistoryImages.length;
+    const keptHistoryIndexes = canSelectPerImage
+      ? takenHistoryIndexes
+      : itemHistoryImages.map((_, index) => index);
+    // Every retained image here is already in the batch, so the item adds nothing.
+    if (itemHistoryImages.length > 0 && canSelectPerImage && keptHistoryIndexes.length === 0) {
+      if (item.media) {
+        media.push(...item.media);
+      }
+      continue;
     }
-    if (item.imageOrder) {
-      imageOrder.push(...item.imageOrder);
-    }
+    const keepsEveryImage = itemHistoryImages.length === 0 || !canSelectPerImage;
+    const itemImages = keepsEveryImage
+      ? (item.images ?? [])
+      : keptHistoryIndexes.flatMap((index) => item.images?.[index] ?? []);
+    const itemImageOrder = keepsEveryImage
+      ? (item.imageOrder ?? [])
+      : keptHistoryIndexes.flatMap((index) => item.imageOrder?.[index] ?? []);
+    images.push(...itemImages);
+    imageOrder.push(...itemImageOrder);
     if (currentTurnImagesPrepared) {
-      const itemSlots: MediaImageLayout["slots"] =
-        internalItem.mediaImageLayout?.slots ?? item.imageOrder?.map((kind) => ({ kind })) ?? [];
+      const allSlots: MediaImageLayout["slots"] =
+        item.mediaImageLayout?.slots ?? item.imageOrder?.map((kind) => ({ kind })) ?? [];
+      const itemSlots: MediaImageLayout["slots"] = keepsEveryImage
+        ? allSlots
+        : keptHistoryIndexes.flatMap((index) => allSlots[index] ?? []);
       mediaImageSlots.push(
         ...itemSlots.map((slot) =>
           slot.factIndex === undefined
@@ -531,13 +585,20 @@ function collectQueuedPromptMedia(
         ),
       );
       suppressedFactIndexes.push(
-        ...(internalItem.mediaImageLayout?.suppressedFactIndexes ?? []).map(
+        ...(item.mediaImageLayout?.suppressedFactIndexes ?? []).map(
           (factIndex) => factIndex + mediaOffset,
         ),
       );
     }
     if (item.media) {
       media.push(...item.media);
+    }
+    for (const index of keptHistoryIndexes) {
+      const image = itemHistoryImages[index];
+      if (image) {
+        seenHistoryImages.add(historyImageIdentity(image));
+        historyImages.push(image);
+      }
     }
   }
   const mediaImageLayout =
@@ -550,6 +611,7 @@ function collectQueuedPromptMedia(
     ...(currentTurnImagesPrepared || imageOrder.length > 0 ? { imageOrder } : {}),
     ...(mediaImageLayout ? { mediaImageLayout } : {}),
     ...(media.length > 0 ? { media } : {}),
+    ...(historyImages.length > 0 ? { historyImages } : {}),
   };
 }
 

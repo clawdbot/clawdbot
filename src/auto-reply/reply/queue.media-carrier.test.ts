@@ -13,7 +13,7 @@ import {
 } from "../../channels/message-access/admission-evidence.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
-import type { FollowupRun, QueueSettings } from "./queue.js";
+import type { FollowupRun, InternalFollowupRun, QueueSettings } from "./queue.js";
 import { enqueueFollowupRun, FollowupRunDeferredError, scheduleFollowupDrain } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import {
@@ -22,6 +22,7 @@ import {
 } from "./queue/drain.js";
 import { clearFollowupQueue } from "./queue/state.js";
 import { createReplyOperation } from "./reply-run-registry.js";
+import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler } from "./typing-mode.js";
 
@@ -92,6 +93,86 @@ afterEach(() => {
 });
 
 describe("followup prompt metadata carrier", () => {
+  it("carries inherited-image provenance into an accepted steer", async () => {
+    // `steer` is the default queue mode, so this is the ordinary path an active
+    // run takes. Images ride in the payload while the prompt is injected
+    // separately; without the notes the run gets bytes it cannot attribute.
+    const key = "agent:main:steer-history-notes";
+    queueKeys.add(key);
+    const run: InternalFollowupRun = {
+      ...createQueueTestRun({ prompt: "what was in that photo?", messageId: "steer-notes" }),
+      images: [{ type: "image", data: "kept-png", mimeType: "image/png" }],
+      imageOrder: ["inline"],
+      historyImages: [
+        {
+          path: "/openclaw-test/m-kept.png",
+          contentType: "image/png",
+          sender: "Ada",
+          sentAtMs: 1_700_000_000_000,
+          messagePosition: 1,
+          messageCount: 1,
+          messageId: "m-kept",
+        },
+      ],
+    };
+    const operation = createReplyOperation({
+      sessionKey: key,
+      sessionId: run.run.sessionId,
+      resetTriggered: false,
+    });
+    operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
+    // The fingerprint is derived from the bound route, so the backend and the
+    // steer below have to carry the value the operation actually minted.
+    const steerAuthority = operation.bindToolAuthorityRoute({
+      provider: run.run.provider,
+      model: run.run.model,
+    });
+    const injected: string[] = [];
+    operation.attachBackend({
+      kind: "embedded",
+      supportsQueueMessageImages: true,
+      toolAuthorityFingerprint: steerAuthority,
+      cancel: vi.fn(),
+      messageInjection: {
+        isAvailable: () => true,
+        queueMessage: vi.fn(async (text: string) => {
+          injected.push(text);
+        }),
+      },
+    });
+    operation.setPhase("running");
+    const typing = createMockTypingController();
+    try {
+      await expect(
+        runActiveReplySteer({
+          followupRun: run,
+          opts: undefined,
+          providedReplyOperation: operation,
+          queueKey: key,
+          releaseAdmissionTicket: vi.fn(),
+          replyOperationRunState: undefined,
+          resolvedQueue: { mode: "steer", debounceMs: 0 },
+          restartRecoverySourceTurnId: "steer-notes",
+          runFollowup: vi.fn(),
+          sessionCtx: {},
+          sessionKey: key,
+          touchActiveSessionEntry: async () => {},
+          typing,
+          typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+          toolAuthorityFingerprint: steerAuthority,
+        }),
+      ).resolves.toBe("handled");
+
+      // The steer path renders provenance from the retained image itself.
+      expect(injected).toHaveLength(1);
+      expect(injected[0]).toContain("what was in that photo?");
+      expect(injected[0]).toContain("[Recent image 1 from Ada");
+      expect(injected[0]).toContain("message m-kept");
+    } finally {
+      operation.complete();
+    }
+  });
+
   it("drains the complete parked image turn after active steering rejects it", async () => {
     const key = "agent:main:parked-media-fallback";
     queueKeys.add(key);

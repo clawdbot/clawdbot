@@ -8,6 +8,7 @@ import type {
   CurrentInboundPromptContext,
   RunEmbeddedAgentParams,
 } from "../../../agents/embedded-agent-runner/run/params.js";
+import type { MediaImageLayout } from "../../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import type { ModelFallbackRouteResolution } from "../../../agents/model-fallback.types.js";
 import type { ScheduledToolPolicyContext } from "../../../agents/scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../../../agents/subagents/announce/subagent-announce-handoff.js";
@@ -43,6 +44,7 @@ import type {
   TraceLevel,
   VerboseLevel,
 } from "../directives.js";
+import type { RecentInboundHistoryImage } from "../history-media.js";
 import type { ReplyOperationRunState } from "../reply-operation-run-state.js";
 
 export type QueueDropPolicy = "old" | "new" | "summarize";
@@ -95,6 +97,21 @@ export class FollowupRunDeferredError extends Error {
 export function isFollowupRunDeferredError(error: unknown): error is FollowupRunDeferredError {
   return error instanceof FollowupRunDeferredError;
 }
+
+/**
+ * Admission-owned state carried alongside a queued run.
+ *
+ * Kept off the public plugin-facing {@link FollowupRun} contract, and declared
+ * once here so admission, drain collection, and execution cannot disagree about
+ * which fields a queued turn carries.
+ */
+export type InternalFollowupRun = FollowupRun & {
+  currentTurnImagesPrepared?: true;
+  /** Admission-owned layout; fact indexes are relative to this run's media array. */
+  mediaImageLayout?: MediaImageLayout;
+  /** Images inherited from room history, carried with the provenance they need. */
+  historyImages?: RecentInboundHistoryImage[];
+};
 
 export type FollowupRun = {
   prompt: string;

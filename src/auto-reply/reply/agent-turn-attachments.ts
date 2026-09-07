@@ -34,7 +34,8 @@ type AgentTurnAttachmentRuntime = Pick<
 const AGENT_TURN_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
 const AGENT_TURN_ATTACHMENT_TIMEOUT_MS = 1_000;
 
-function hasInboundHistoryMedia(ctx: MsgContext): boolean {
+/** True when the room kept media on a message that did not start this turn. */
+export function hasInboundHistoryMedia(ctx: MsgContext): boolean {
   return (
     Array.isArray(ctx.InboundHistory) &&
     ctx.InboundHistory.some((entry) => Array.isArray(entry.media) && entry.media.length > 0)
