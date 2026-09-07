@@ -2075,6 +2075,19 @@
                       "gateway/configuration",
                       "gateway/configuration-reference",
                       "gateway/config-agents",
+                      {
+                        "group": "Agents",
+                        "pages": [
+                          "gateway/config-agents/workspace-and-bootstrap",
+                          "gateway/config-agents/models",
+                          "gateway/config-agents/runtime-and-cli-backends",
+                          "gateway/config-agents/heartbeat-compaction-and-streaming",
+                          "gateway/config-agents/sandbox",
+                          "gateway/config-agents/entries-and-multi-agent",
+                          "gateway/config-agents/sessions",
+                          "gateway/config-agents/messages-and-talk"
+                        ]
+                      },
                       "gateway/config-automation",
                       "gateway/config-browser-ui-desktop",
                       "gateway/config-channels",
@@ -2443,6 +2456,19 @@
                   "plugins/sdk-subpaths",
                   "plugins/sdk-entrypoints",
                   "plugins/sdk-runtime",
+                  {
+                    "group": "Plugin runtime helpers",
+                    "pages": [
+                      "plugins/sdk-runtime/config-and-utilities",
+                      "plugins/sdk-runtime/agent",
+                      "plugins/sdk-runtime/models",
+                      "plugins/sdk-runtime/background-work",
+                      "plugins/sdk-runtime/gateway-and-nodes",
+                      "plugins/sdk-runtime/media",
+                      "plugins/sdk-runtime/state-and-system",
+                      "plugins/sdk-runtime/channel"
+                    ]
+                  },
                   "plugins/sdk-agent-harness",
                   "plugins/sdk-setup",
                   "plugins/sdk-testing"

@@ -236,7 +236,7 @@ If you need truly separate workspaces/personas ("personal" and "public" must nev
 
 Related:
 
-- Configuration keys and defaults: [Gateway configuration](/gateway/config-agents#agentsdefaultssandbox)
+- Configuration keys and defaults: [Gateway configuration](/gateway/config-agents/sandbox#agentsdefaultssandbox)
 - Debugging why a tool is blocked: [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated)
 - Bind mounts details: [Sandboxing](/gateway/sandboxing#multiple-folders-for-one-agent)
 

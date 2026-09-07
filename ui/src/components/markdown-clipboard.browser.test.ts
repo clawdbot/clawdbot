@@ -1,6 +1,6 @@
 import { html, nothing, render } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { renderMessageImages } from "../pages/chat/components/chat-message-images.ts";
 import { renderMessageMarkdown } from "../pages/chat/components/chat-message-text.ts";
@@ -51,6 +51,16 @@ afterEach(() => {
   }
 });
 
+afterAll(() => {
+  window.dispatchEvent(new PageTransitionEvent("pagehide"));
+});
+
+async function waitForDiagram(diagram: HTMLElement) {
+  const { page } = await import("vitest/browser");
+  await expect.element(page.elementLocator(diagram).getByRole("img")).toBeVisible();
+  await diagram.shadowRoot!.querySelector("img")!.decode();
+}
+
 async function mountCopy(surface: "code" | "table" | "mermaid" | "message") {
   const owner = document.body.appendChild(document.createElement("section"));
   owners.push(owner);
@@ -80,6 +90,7 @@ async function mountCopy(surface: "code" | "table" | "mermaid" | "message") {
     diagram.source = "flowchart LR\nA --> B";
     owner.append(diagram);
     await diagram.updateComplete;
+    await waitForDiagram(diagram);
     button = diagram.shadowRoot?.querySelector(".copy-button") ?? null;
   } else {
     render(renderCopyButton("Current message"), owner);
@@ -319,6 +330,7 @@ describe("Markdown clipboard operation lifetime", () => {
     pending.reject(new Error("Synthetic clipboard rejection"));
     await flushCopy();
     expect(fallbackCopies).toEqual([]);
+    await waitForDiagram(diagram);
   });
 
   it("keeps the newer table-copy feedback when an older request rejects", async () => {

@@ -16,6 +16,7 @@ type BrowserDispatchRequest = {
   query?: Record<string, unknown>;
   body?: unknown;
   signal?: AbortSignal;
+  requester?: BrowserRequest["requester"];
 };
 
 type BrowserDispatchResponse = {
@@ -119,6 +120,7 @@ export function createBrowserRouteDispatcher(ctx: BrowserRouteContext) {
             query,
             body,
             signal,
+            requester: req.requester,
           },
           res,
         );
