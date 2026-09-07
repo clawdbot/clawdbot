@@ -79,7 +79,6 @@ let package = Package(
             resources: [
                 .copy("Resources/OpenClaw.icns"),
                 .copy("Resources/NativeSessionCatalogs.json"),
-                .copy("Resources/BrowserInspect.js"),
                 .copy("Resources/AppIcons"),
                 .copy("Resources/DeviceModels"),
                 .copy("Resources/ProviderIcons"),

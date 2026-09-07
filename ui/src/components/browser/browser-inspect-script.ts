@@ -1,4 +1,5 @@
-function openclawInspectBrowserElement(x, y) {
+// Shared page function for Gateway Chromium and native WebKit inspection.
+export const browserInspectScript = String.raw`function openclawInspectBrowserElement(x, y) {
   const el = document.elementFromPoint(x, y);
   if (!el) return null;
   const rect = el.getBoundingClientRect();
@@ -17,4 +18,4 @@ function openclawInspectBrowserElement(x, y) {
     rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
     focusable: typeof el.tabIndex === "number" && el.tabIndex >= 0,
   };
-}
+}`;

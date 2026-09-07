@@ -27,7 +27,7 @@ export type NativeBrowserTab = {
   openerTabId?: string;
 };
 export type NativeBrowserState = { revision: number; tabs: NativeBrowserTab[] };
-export type NativeBrowserRect = { x: number; y: number; width: number; height: number };
+type NativeBrowserRect = { x: number; y: number; width: number; height: number };
 export type NativeBrowserMessage =
   | { type: "open"; tabId: string; url: string; activate?: boolean }
   | { type: "navigate"; tabId: string; url: string }

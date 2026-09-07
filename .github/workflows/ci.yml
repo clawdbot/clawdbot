@@ -3684,6 +3684,7 @@ jobs:
               fi
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
+              pnpm check:browser-inspect-script:swift
               if has_package_script "check:temp-path-guardrails"; then
                 pnpm check:temp-path-guardrails
               elif [[ "$FROZEN_TARGET" == "true" ]]; then
@@ -4741,7 +4742,7 @@ jobs:
           elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
             # Frozen release targets before the shared wrappers used these commands directly.
             swiftlint lint --config config/swiftlint.yml
-            swiftformat --lint apps/macos/Sources --config config/swiftformat --exclude '**/OpenClawProtocol,**/HostEnvSecurityPolicy.generated.swift'
+            swiftformat --lint apps/macos/Sources --config config/swiftformat --exclude '**/OpenClawProtocol,**/HostEnvSecurityPolicy.generated.swift,**/BrowserInspectScript.generated.swift'
           else
             echo "Current CI targets must provide the Swift lint and format wrappers." >&2
             exit 1

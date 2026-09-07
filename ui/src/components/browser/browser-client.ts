@@ -7,10 +7,10 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
-import browserInspectScript from "../../../../apps/macos/Sources/OpenClaw/Resources/BrowserInspect.js?raw";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import { buildAssistantMediaUrl } from "../../app/assistant-media.ts";
 import { t } from "../../i18n/index.ts";
+import { browserInspectScript } from "./browser-inspect-script.ts";
 import type { BrowserRoute } from "./browser-target.ts";
 
 export type BrowserRequestClient = Pick<GatewayBrowserClient, "request">;

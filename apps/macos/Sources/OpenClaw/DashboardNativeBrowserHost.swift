@@ -21,13 +21,6 @@ struct DashboardBrowserState: Codable, Equatable, Sendable {
 /// Tabs belong to the window. A panel scope owns only its current presentation.
 @MainActor
 final class DashboardNativeBrowserHost {
-    private static let inspectionScript = Result {
-        guard let resource = Bundle.module.url(forResource: "BrowserInspect", withExtension: "js") else {
-            throw DashboardBrowserError.unavailable
-        }
-        return try String(contentsOf: resource, encoding: .utf8)
-    }
-
     private struct Tab {
         let id: String
         let browser: DashboardBrowserTab
@@ -281,7 +274,7 @@ extension DashboardNativeBrowserHost {
     func inspect(tabId: String, x: Double, y: Double) async throws -> [String: Any] {
         let webView = try self.requireWebView(tabId)
         guard x.isFinite, y.isFinite, x >= 0, y >= 0 else { throw DashboardBrowserError.invalidRequest }
-        let script = try Self.inspectionScript.get()
+        let script = BrowserInspectScript.source
         let node = try await webView.evaluateJavaScript("(\(script))(\(x), \(y))")
         guard self.webView(for: tabId) === webView else { throw DashboardBrowserError.unknownTab }
         return ["ok": true, "node": node ?? NSNull()]
