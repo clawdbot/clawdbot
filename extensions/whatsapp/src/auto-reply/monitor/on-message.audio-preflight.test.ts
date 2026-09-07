@@ -99,8 +99,10 @@ import { createTestWebAudioInboundMessage } from "../../inbound/test-message.tes
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { createWebOnMessageHandler } from "./on-message.js";
 
-function makeAudioMsg(): AdmittedWebInboundMessage {
-  return createTestWebAudioInboundMessage();
+function makeAudioMsg(
+  overrides: Parameters<typeof createTestWebAudioInboundMessage>[0] = {},
+): AdmittedWebInboundMessage {
+  return createTestWebAudioInboundMessage(overrides);
 }
 
 function makeGroupAudioMsg(): AdmittedWebInboundMessage {
@@ -398,7 +400,7 @@ describe("createWebOnMessageHandler audio preflight", () => {
     });
     const handler = makeHandler();
 
-    await handler(makeAudioMsg());
+    await handler(makeAudioMsg({ event: { id: "wa-inbound-99" } }));
 
     expect(capturedCtx).toEqual({
       media: [
@@ -415,6 +417,9 @@ describe("createWebOnMessageHandler audio preflight", () => {
       OriginatingChannel: "whatsapp",
       OriginatingTo: "+15550000002",
       AccountId: "default",
+      MessageSid: "wa-inbound-99",
+      MessageSidFirst: "wa-inbound-99",
+      MessageSidFull: "whatsapp:wa-inbound-99",
     });
   });
 

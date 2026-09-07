@@ -347,6 +347,8 @@ export async function resolveMatrixIngressContent(config: {
       accountId,
       originatingTo: `room:${roomId}`,
       messageThreadId: thread.threadId,
+      messageId: event.event_id,
+      chatType: isDirectMessage ? "direct" : "channel",
     });
   }
 

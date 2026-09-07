@@ -322,6 +322,7 @@ describe("matrix qa config", () => {
           models: [{ provider: "openai", model: "baseline", capabilities: ["audio"] }],
           audio: {
             enabled: false,
+            echoReply: true,
             prompt: "baseline prompt",
             scope: {
               default: "allow",
@@ -402,6 +403,7 @@ describe("matrix qa config", () => {
     currentMedia.models = [{ provider: "openai", model: "previous" }];
     currentMedia.audio = {
       enabled: true,
+      echoReply: false,
       prompt: "previous prompt",
       adjacentAudio: "current",
       scope: {
@@ -498,6 +500,7 @@ describe("matrix qa config", () => {
       audio: {
         adjacentAudio: "current",
         enabled: false,
+        echoReply: true,
         prompt: "baseline prompt",
         scope: {
           default: "allow",

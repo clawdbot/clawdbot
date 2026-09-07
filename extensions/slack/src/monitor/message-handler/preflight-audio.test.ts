@@ -9,6 +9,7 @@ import {
   discardSlackPreflightMedia,
   findCaptionlessSlackAudioFile,
   formatSlackAudioTranscriptForAgent,
+  resolveSlackEchoReplyMessageId,
   resolveSlackPreflightAudioTranscript,
 } from "./preflight-audio.js";
 
@@ -129,5 +130,24 @@ describe("Slack captionless audio preflight", () => {
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("resolveSlackEchoReplyMessageId", () => {
+  it("prefers root thread reply target over child message ts", () => {
+    expect(
+      resolveSlackEchoReplyMessageId({
+        messageTs: "1712345678.000200",
+        threadReplyToId: "1712345678.000100",
+      }),
+    ).toBe("1712345678.000100");
+  });
+
+  it("falls back to message ts for top-level messages", () => {
+    expect(
+      resolveSlackEchoReplyMessageId({
+        messageTs: "1712345678.000100",
+      }),
+    ).toBe("1712345678.000100");
   });
 });

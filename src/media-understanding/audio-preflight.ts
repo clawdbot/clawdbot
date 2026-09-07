@@ -67,6 +67,7 @@ export async function transcribeFirstAudio(params: {
         cfg,
         transcript,
         format: audioConfig.echoFormat ?? DEFAULT_ECHO_TRANSCRIPT_FORMAT,
+        reply: audioConfig.echoReply === true,
       });
     }
 

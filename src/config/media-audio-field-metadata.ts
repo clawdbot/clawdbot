@@ -1,5 +1,22 @@
-/** User-facing audio config metadata; the help map owns the supported field paths. */
-export const MEDIA_AUDIO_FIELD_HELP = {
+/** Config paths with user-facing metadata for audio understanding settings. */
+const MEDIA_AUDIO_FIELD_KEYS = [
+  "tools.media.audio.enabled",
+  "tools.media.audio.preferredModel",
+  "tools.media.audio.maxBytes",
+  "tools.media.audio.maxChars",
+  "tools.media.audio.prompt",
+  "tools.media.audio.timeoutSeconds",
+  "tools.media.audio.language",
+  "tools.media.audio.scope",
+  "tools.media.audio.attachments",
+  "tools.media.audio.echoTranscript",
+  "tools.media.audio.echoFormat",
+  "tools.media.audio.echoReply",
+] as const;
+
+type MediaAudioFieldKey = (typeof MEDIA_AUDIO_FIELD_KEYS)[number];
+
+export const MEDIA_AUDIO_FIELD_HELP: Record<MediaAudioFieldKey, string> = {
   "tools.media.audio.enabled":
     "Enable audio understanding so voice notes or audio clips can be transcribed for agent context.",
   "tools.media.audio.preferredModel":
@@ -21,8 +38,10 @@ export const MEDIA_AUDIO_FIELD_HELP = {
   "tools.media.audio.echoTranscript":
     "Echo the audio transcript to the originating chat before agent processing. Enable this when users need to verify what the system heard.",
   "tools.media.audio.echoFormat":
-    "Format the echoed transcript with a {transcript} placeholder. Keep the placeholder intact so delivery includes the transcript.",
-} satisfies Record<string, string>;
+    'Format the echoed transcript with a {transcript} placeholder (default 📝 "{transcript}"). Keep the placeholder intact so delivery includes the transcript.',
+  "tools.media.audio.echoReply":
+    "Send the transcript echo as a reply/quote to the inbound voice message when the channel supports it. Opt-in so existing enabled echoes keep ordinary send semantics on upgrade.",
+};
 
 export const MEDIA_AUDIO_FIELD_LABELS: Record<keyof typeof MEDIA_AUDIO_FIELD_HELP, string> = {
   "tools.media.audio.enabled": "Enable Audio Understanding",
@@ -36,4 +55,5 @@ export const MEDIA_AUDIO_FIELD_LABELS: Record<keyof typeof MEDIA_AUDIO_FIELD_HEL
   "tools.media.audio.attachments": "Audio Understanding Attachment Policy",
   "tools.media.audio.echoTranscript": "Echo Transcript to Chat",
   "tools.media.audio.echoFormat": "Transcript Echo Format",
+  "tools.media.audio.echoReply": "Reply to Voice Message",
 };

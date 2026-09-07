@@ -1012,6 +1012,7 @@ const ToolsMediaAudioSchema = z
     attachments: MediaUnderstandingAttachmentsSchema,
     echoTranscript: z.boolean().optional(),
     echoFormat: z.string().optional(),
+    echoReply: z.boolean().optional(),
   })
   .strict()
   .optional();
