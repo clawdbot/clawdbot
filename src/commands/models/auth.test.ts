@@ -65,6 +65,7 @@ const mocks = vi.hoisted(() => ({
   validateAnthropicSetupToken: vi.fn<() => string | undefined>(() => undefined),
   promoteAuthProfileInOrder: vi.fn(),
   callGateway: vi.fn(),
+  isImplicitLocalGatewayTarget: vi.fn(() => Promise.resolve(true)),
   resolvePluginSetupProviderCore: vi.fn(),
   resolvePluginSetupRegistry: vi.fn(),
   readSecretStoreValue: vi.fn(() => ({
@@ -180,6 +181,8 @@ vi.mock("../../infra/remote-env.js", () => ({
 
 vi.mock("../../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
+  GatewayLocalBackendSharedAuthUnavailableError: class extends Error {},
+  isImplicitLocalGatewayTarget: mocks.isImplicitLocalGatewayTarget,
 }));
 
 vi.mock("../../plugins/provider-oauth-flow.js", () => ({
@@ -494,11 +497,11 @@ describe("modelsAuthLoginCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       "Tip: Codex-capable models can use native Codex web search. Configure the `web_search` tool with `openclaw configure --section web`. Docs: https://docs.openclaw.ai/tools/web",
     );
-    expect(mocks.callGateway).toHaveBeenCalledWith({
-      method: "models.authStatus",
-      params: { refresh: true, agentId: "main" },
-      timeoutMs: 3000,
-    });
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: { refresh: true, agentId: "main" },
+      }),
+    );
   });
 
   it("persists a provider-minted Copilot token through the protected store", async () => {
@@ -582,16 +585,22 @@ describe("modelsAuthLoginCommand", () => {
 
   it("keeps login successful when the running gateway cannot refresh auth state", async () => {
     const runtime = createRuntime();
-    mocks.callGateway.mockRejectedValueOnce(new Error("gateway unavailable"));
+    mocks.callGateway.mockImplementationOnce(async (options: { onHelloOk?: () => void }) => {
+      options.onHelloOk?.();
+      throw new Error("refresh rejected");
+    });
 
     await expect(modelsAuthLoginCommand({ provider: "openai" }, runtime)).resolves.toBeUndefined();
 
     expect(mocks.upsertAuthProfileAfterLoginWithLock).toHaveBeenCalledOnce();
-    expect(mocks.callGateway).toHaveBeenCalledWith({
-      method: "models.authStatus",
-      params: { refresh: true, agentId: "main" },
-      timeoutMs: 3000,
-    });
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: { refresh: true, agentId: "main" },
+      }),
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Warning: Model auth changes were saved, but the running Gateway could not refresh them. Run `openclaw gateway restart` to apply the saved changes.",
+    );
   });
 
   it("creates store order for relogin when configured profiles would shadow the new profile", async () => {
@@ -876,11 +885,11 @@ describe("modelsAuthLoginCommand", () => {
       (readMockCallArg(mocks.upsertAuthProfileAfterLoginWithLock) as UpsertAuthProfileCall)
         .agentDir,
     ).toBe("/tmp/openclaw/agents/coder");
-    expect(mocks.callGateway).toHaveBeenCalledWith({
-      method: "models.authStatus",
-      params: { refresh: true, agentId: "coder" },
-      timeoutMs: 3000,
-    });
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: { refresh: true, agentId: "coder" },
+      }),
+    );
   });
 
   it("forwards an app-owned cancellation signal to provider auth", async () => {
@@ -1278,6 +1287,25 @@ describe("modelsAuthLoginCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining('Removed cached auth profiles for provider "openai"'),
     );
+    expect(mocks.callGateway).toHaveBeenCalledTimes(2);
+  });
+
+  it("--force refreshes after the purge when replacement login fails", async () => {
+    const runtime = createRuntime();
+    runProviderAuth.mockRejectedValueOnce(new Error("provider rejected login"));
+
+    await expect(
+      modelsAuthLoginCommand({ provider: "openai", force: true }, runtime),
+    ).rejects.toThrow("provider rejected login");
+
+    expect(mocks.removeProviderAuthProfilesWithLock).toHaveBeenCalledOnce();
+    expect(mocks.callGateway).toHaveBeenCalledOnce();
+    expect(mocks.removeProviderAuthProfilesWithLock.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.callGateway.mock.invocationCallOrder[0]!,
+    );
+    expect(mocks.callGateway.mock.invocationCallOrder[0]).toBeLessThan(
+      runProviderAuth.mock.invocationCallOrder[0]!,
+    );
   });
 
   it("--force does not purge when omitted", async () => {
@@ -1446,11 +1474,11 @@ describe("modelsAuthLoginCommand", () => {
         credential: expect.objectContaining({ type: "token", token: "openai-token" }),
       }),
     );
-    expect(mocks.callGateway).toHaveBeenCalledWith({
-      method: "models.authStatus",
-      params: { refresh: true, agentId: "main" },
-      timeoutMs: 3000,
-    });
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: { refresh: true, agentId: "main" },
+      }),
+    );
   });
 
   it("writes pasted Anthropic setup-tokens and logs the preference note", async () => {
@@ -1496,11 +1524,11 @@ describe("modelsAuthLoginCommand", () => {
       },
       agentDir: "/tmp/openclaw/agents/coder",
     });
-    expect(mocks.callGateway).toHaveBeenCalledWith({
-      method: "models.authStatus",
-      params: { refresh: true, agentId: "coder" },
-      timeoutMs: 3000,
-    });
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: { refresh: true, agentId: "coder" },
+      }),
+    );
   });
 
   it("rejects pasted token expiries that cannot fit in the Date timestamp range", async () => {
@@ -1609,11 +1637,11 @@ describe("modelsAuthLoginCommand", () => {
       mode: "api_key",
     });
     expect(runtime.log).toHaveBeenCalledWith("Auth profile: openai:manual (openai/api_key)");
-    expect(mocks.callGateway).toHaveBeenCalledWith({
-      method: "models.authStatus",
-      params: { refresh: true, agentId: "coder" },
-      timeoutMs: 3000,
-    });
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: { refresh: true, agentId: "coder" },
+      }),
+    );
   });
 
   it("writes piped OpenAI Codex API keys to API-key profiles", async () => {

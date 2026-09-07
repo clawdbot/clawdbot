@@ -1553,15 +1553,19 @@ describe("models.authStatus", () => {
     expect(mocks.loadDeferredCatalog).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps last-good secrets runtime snapshots when explicit refresh fails", async () => {
+  it("reports secrets runtime failures during an explicit auth refresh", async () => {
     mocks.refreshActiveProviderAuthRuntimeSnapshot.mockRejectedValueOnce(
       new Error("refresh failed"),
     );
 
-    await handler(createOptions({ refresh: true }));
+    const opts = createOptions({ refresh: true });
+    await handler(opts);
 
     expect(mocks.refreshActiveProviderAuthRuntimeSnapshot).toHaveBeenCalledTimes(1);
-    expect(mocks.loadDeferredCatalog).toHaveBeenCalledTimes(1);
+    expect(mocks.loadDeferredCatalog).not.toHaveBeenCalled();
+    const [ok, , error] = firstRespondCall(opts) ?? [];
+    expect(ok).toBe(false);
+    expect(error?.message).toContain("refresh failed");
   });
 
   it("invalidateModelAuthStatusCache() preserves fresh auth reads", async () => {

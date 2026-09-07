@@ -142,7 +142,7 @@ export async function loadPreparedGatewayModelCatalogSnapshot(
         // replacement auth cannot be combined with stale catalog or metadata.
         continue;
       }
-      refreshedAuth = undefined;
+      throw error;
     }
     return {
       ...projectGatewayModelCatalogSnapshot(owner),
