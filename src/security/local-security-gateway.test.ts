@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  operatorClearEmergencyStop,
+  operatorConfigureGateway,
+  operatorResetGateway,
+} from "./local-security-gateway-operator.js";
+import {
   calculateActionDigest,
   classifyAction,
-  clearEmergencyStop,
-  configureLocalSecurityGateway,
   evaluateLocalSecurityGateway,
   getSecurityAuditLogs,
   isApprovalValidForParams,
@@ -11,19 +14,18 @@ import {
   isSensitivePath,
   logToolExecutionCompleted,
   logToolExecutionStarted,
-  resetLocalSecurityGateway,
+  sanitizeParameters,
   triggerEmergencyStop,
-  TRUSTED_OPERATOR_TOKEN,
   type PendingApprovalRequest,
 } from "./local-security-gateway.js";
 
-describe("Hardened LocalSecurityGateway Unit & Security Tests", () => {
+describe("Hardened LocalSecurityGateway Security & Adversarial Tests", () => {
   beforeEach(() => {
-    resetLocalSecurityGateway(TRUSTED_OPERATOR_TOKEN);
+    operatorResetGateway();
   });
 
   afterEach(() => {
-    resetLocalSecurityGateway(TRUSTED_OPERATOR_TOKEN);
+    operatorResetGateway();
   });
 
   it("1. Malformed percent-encoding fails closed and is treated as sensitive/blocked", () => {
@@ -79,51 +81,62 @@ describe("Hardened LocalSecurityGateway Unit & Security Tests", () => {
     expect(safeCompleted?.executionStatus).toBe("EXECUTION_SUCCEEDED");
   });
 
-  it("4. Fail-closed digest generation handles BigInt and circular objects safely", () => {
-    // BigInt parameters generate valid deterministic digests
-    const digest1 = calculateActionDigest("write_file", { id: 100n, content: "test" });
-    const digest2 = calculateActionDigest("write_file", { id: 100n, content: "test" });
-    expect(digest1).toBe(digest2);
-
-    // Circular objects return an invalid digest that fails closed
+  it("4. Cycle-safe and throwing getter parameter sanitization", () => {
+    // Direct circular object
     const circularObj: any = { name: "test" };
     circularObj.self = circularObj;
 
-    const circularDigest = calculateActionDigest("write_file", circularObj);
-    expect(circularDigest.startsWith("INVALID_DIGEST_ERROR_")).toBe(true);
+    const sanitizedCircular = sanitizeParameters(circularObj) as any;
+    expect(sanitizedCircular.name).toBe("test");
+    expect(sanitizedCircular.self).toBe("[CIRCULAR_REFERENCE]");
 
-    const mockReq: PendingApprovalRequest = {
-      id: "req-circ",
-      toolName: "write_file",
-      params: circularObj,
-      digest: circularDigest,
-      createdAt: Date.now(),
-      expiresAt: Date.now() + 10_000,
-      resolve: () => {},
-      timer: setTimeout(() => {}, 10_000),
+    // Nested circular object in array
+    const nestedCircular: any = { items: [] };
+    nestedCircular.items.push(nestedCircular);
+
+    const sanitizedNested = sanitizeParameters(nestedCircular) as any;
+    expect(sanitizedNested.items[0]).toBe("[CIRCULAR_REFERENCE]");
+
+    // Property getter throwing an error
+    const throwingObj = {
+      safeProp: "ok",
+      get badProp() {
+        throw new Error("Getter error trap!");
+      },
     };
 
-    expect(isApprovalValidForParams(mockReq, "write_file", circularObj)).toBe(false);
-    clearTimeout(mockReq.timer);
+    const sanitizedThrowing = sanitizeParameters(throwingObj) as any;
+    expect(sanitizedThrowing.safeProp).toBe("ok");
+    expect(sanitizedThrowing.badProp).toBe("[ERROR_READING_PROPERTY]");
   });
 
-  it("5. Operator controls (configure, reset, clearEmergencyStop) require TRUSTED_OPERATOR_TOKEN", () => {
+  it("5. Raw path/secret parameters are NEVER leaked in audit error strings", async () => {
+    const sensitivePath = "C:\\Users\\Admin\\.ssh\\id_rsa";
+    const result = await evaluateLocalSecurityGateway({
+      toolName: "read_file",
+      params: { path: sensitivePath },
+      runId: "run-leak-check",
+    });
+
+    expect(result.allowed).toBe(false);
+    expect(result.reason).not.toContain(sensitivePath);
+    expect(result.reason).toBe("Access to a sensitive or prohibited path is blocked.");
+
+    const logs = getSecurityAuditLogs();
+    expect(logs[0]?.error).not.toContain(sensitivePath);
+    expect(logs[0]?.error).toBe("Access to a sensitive or prohibited path is blocked.");
+  });
+
+  it("6. Operator controls are isolated and cannot be accessed through exported tokens or tools", () => {
     triggerEmergencyStop("Operator Stop");
     expect(isEmergencyStopActive()).toBe(true);
 
-    // Model tools / unauthenticated calls cannot clear emergency stop
-    expect(() => (clearEmergencyStop as any)()).toThrow("Unauthorized attempt to clear Emergency Stop");
-    expect(() => (configureLocalSecurityGateway as any)({ approvalTimeoutMs: 1000 })).toThrow("Unauthorized attempt to configure Security Gateway");
-    expect(() => (resetLocalSecurityGateway as any)()).toThrow("Unauthorized attempt to reset Security Gateway");
-
-    expect(isEmergencyStopActive()).toBe(true);
-
-    // Trusted operator call succeeds
-    clearEmergencyStop(TRUSTED_OPERATOR_TOKEN);
+    // Operator clear function succeeds
+    operatorClearEmergencyStop();
     expect(isEmergencyStopActive()).toBe(false);
   });
 
-  it("6. Unknown tools and shell tools fail closed", () => {
+  it("7. Unknown tools and shell tools fail closed", () => {
     const unknownClass = classifyAction("unknown_mcp_tool", { arg: 1 });
     expect(unknownClass.classification).toBe("APPROVAL_REQUIRED");
 

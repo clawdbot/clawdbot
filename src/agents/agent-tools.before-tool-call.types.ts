@@ -103,7 +103,9 @@ export type HookBlockedReason =
   | "plugin-before-tool-call"
   | "plugin-approval"
   | "plugin-approval-unavailable"
-  | "tool-loop";
+  | "tool-loop"
+  | "security-gateway-blocked"
+  | "security-gateway-rejected";
 
 type HookBlockedOutcome = {
   blocked: true;

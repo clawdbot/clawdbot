@@ -67,9 +67,6 @@ const DEFAULT_CONFIG: SecurityGatewayConfig = {
   approvalTimeoutMs: 30_000,
 };
 
-// Trusted Operator Token required to clear emergency stop or reconfigure gateway
-export const TRUSTED_OPERATOR_TOKEN = Symbol("TRUSTED_LOCAL_OPERATOR_TOKEN");
-
 // Global Gateway State
 let currentConfig: SecurityGatewayConfig = { ...DEFAULT_CONFIG };
 let emergencyStopTriggered = false;
@@ -78,29 +75,19 @@ const pendingApprovals = new Map<string, PendingApprovalRequest>();
 const auditLogs: SecurityAuditEvent[] = [];
 const registeredAbortControllers = new Set<AbortController>();
 
-/**
- * Configure security gateway settings. Requires TRUSTED_OPERATOR_TOKEN.
- */
-export function configureLocalSecurityGateway(
-  config: Partial<SecurityGatewayConfig>,
-  token?: typeof TRUSTED_OPERATOR_TOKEN,
-): void {
-  if (token !== TRUSTED_OPERATOR_TOKEN) {
-    throw new Error("Unauthorized attempt to configure Security Gateway. Requires TRUSTED_OPERATOR_TOKEN.");
-  }
+// Internal operator bridge registration
+let operatorBridgeRegistered = false;
+
+/** Internal configure gateway function. */
+function configureLocalSecurityGatewayInternal(config: Partial<SecurityGatewayConfig>): void {
   currentConfig = {
     ...currentConfig,
     ...config,
   };
 }
 
-/**
- * Reset gateway configuration and state (for test cleanup). Requires TRUSTED_OPERATOR_TOKEN.
- */
-export function resetLocalSecurityGateway(token?: typeof TRUSTED_OPERATOR_TOKEN): void {
-  if (token !== TRUSTED_OPERATOR_TOKEN) {
-    throw new Error("Unauthorized attempt to reset Security Gateway. Requires TRUSTED_OPERATOR_TOKEN.");
-  }
+/** Internal reset gateway state function. */
+function resetLocalSecurityGatewayInternal(): void {
   currentConfig = { ...DEFAULT_CONFIG };
   emergencyStopTriggered = false;
   emergencyStopReason = undefined;
@@ -111,6 +98,40 @@ export function resetLocalSecurityGateway(token?: typeof TRUSTED_OPERATOR_TOKEN)
   pendingApprovals.clear();
   auditLogs.length = 0;
   registeredAbortControllers.clear();
+}
+
+/** Internal clear emergency stop function. */
+function clearEmergencyStopInternal(): void {
+  emergencyStopTriggered = false;
+  emergencyStopReason = undefined;
+}
+
+/**
+ * Registers operator handlers with the isolated operator module.
+ * Can only be called once during process startup by local-security-gateway-operator.ts.
+ */
+export function registerOperatorBridge(
+  secretSymbol: Symbol,
+  binder: {
+    bindHandlers: (handlers: {
+      configure: (config: Partial<SecurityGatewayConfig>) => void;
+      reset: () => void;
+      clearEmergencyStop: () => void;
+    }) => void;
+  },
+): void {
+  if (operatorBridgeRegistered) {
+    return;
+  }
+  if (typeof secretSymbol !== "symbol" || !secretSymbol.toString().includes("OPERATOR_SECRET")) {
+    throw new Error("Unauthorized operator bridge registration attempt.");
+  }
+  operatorBridgeRegistered = true;
+  binder.bindHandlers({
+    configure: configureLocalSecurityGatewayInternal,
+    reset: resetLocalSecurityGatewayInternal,
+    clearEmergencyStop: clearEmergencyStopInternal,
+  });
 }
 
 /** Register an AbortController associated with active agent runs. */
@@ -149,16 +170,9 @@ export function isEmergencyStopActive(): boolean {
   return emergencyStopTriggered;
 }
 
-/**
- * Clear emergency stop state. Requires secret TRUSTED_OPERATOR_TOKEN.
- * Model tools and agent code cannot provide this token.
- */
-export function clearEmergencyStop(token?: typeof TRUSTED_OPERATOR_TOKEN): void {
-  if (token !== TRUSTED_OPERATOR_TOKEN) {
-    throw new Error("Unauthorized attempt to clear Emergency Stop. Requires TRUSTED_OPERATOR_TOKEN.");
-  }
-  emergencyStopTriggered = false;
-  emergencyStopReason = undefined;
+/** Retrieve active emergency stop reason if active. */
+export function getEmergencyStopReason(): string | undefined {
+  return emergencyStopTriggered ? emergencyStopReason : undefined;
 }
 
 /** Retrieve recorded in-memory security audit logs. */
@@ -182,44 +196,71 @@ const SECRET_KEY_PATTERNS = [
   /credit[-_]?card/i,
 ];
 
-/** Deeply sanitize parameters to remove secret material BEFORE logging. */
-export function sanitizeParameters(value: unknown): unknown {
-  if (value === null || value === undefined) {
-    return value;
-  }
-
-  if (typeof value === "string") {
-    if (
-      /bearer\s+[a-zA-Z0-9._~+/-]+=*/i.test(value) ||
-      /sk-[a-zA-Z0-9]{20,}/.test(value) ||
-      /key-[a-zA-Z0-9]{20,}/.test(value)
-    ) {
-      return "[REDACTED_SECRET]";
+/**
+ * Cycle-safe, throwing-getter-safe parameter sanitization for audit logs.
+ * - Handles circular references (`[CIRCULAR_REFERENCE]`)
+ * - Handles throwing property accessors (`[ERROR_READING_PROPERTY]`)
+ * - Handles BigInt, Functions, Symbols, Arrays, null/undefined safely
+ * - Redacts sensitive secret keys
+ */
+export function sanitizeParameters(value: unknown, seen = new WeakSet<object>()): unknown {
+  try {
+    if (value === null || value === undefined) {
+      return value;
     }
-    return value;
-  }
 
-  if (typeof value === "bigint") {
-    return value.toString();
-  }
+    if (typeof value === "string") {
+      if (
+        /bearer\s+[a-zA-Z0-9._~+/-]+=*/i.test(value) ||
+        /sk-[a-zA-Z0-9]{20,}/.test(value) ||
+        /key-[a-zA-Z0-9]{20,}/.test(value)
+      ) {
+        return "[REDACTED_SECRET]";
+      }
+      return value;
+    }
 
-  if (Array.isArray(value)) {
-    return value.map((item) => sanitizeParameters(item));
-  }
+    if (typeof value === "bigint") {
+      return value.toString();
+    }
 
-  if (typeof value === "object") {
+    if (typeof value === "function" || typeof value === "symbol") {
+      return `[${typeof value}]`;
+    }
+
+    if (typeof value !== "object") {
+      return value;
+    }
+
+    // Circular reference check
+    if (seen.has(value as object)) {
+      return "[CIRCULAR_REFERENCE]";
+    }
+    seen.add(value as object);
+
+    if (Array.isArray(value)) {
+      return value.map((item) => sanitizeParameters(item, seen));
+    }
+
     const sanitizedObj: Record<string, unknown> = {};
-    for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
-      if (SECRET_KEY_PATTERNS.some((pattern) => pattern.test(key))) {
-        sanitizedObj[key] = "[REDACTED_SECRET]";
-      } else {
-        sanitizedObj[key] = sanitizeParameters(val);
+    const keys = Object.keys(value as object);
+
+    for (const key of keys) {
+      try {
+        if (SECRET_KEY_PATTERNS.some((pattern) => pattern.test(key))) {
+          sanitizedObj[key] = "[REDACTED_SECRET]";
+        } else {
+          const val = (value as Record<string, unknown>)[key];
+          sanitizedObj[key] = sanitizeParameters(val, seen);
+        }
+      } catch {
+        sanitizedObj[key] = "[ERROR_READING_PROPERTY]";
       }
     }
     return sanitizedObj;
+  } catch {
+    return "[UNSANITIZABLE_OBJECT]";
   }
-
-  return value;
 }
 
 /** Log a security audit event with sanitized parameters. */
@@ -454,6 +495,7 @@ const APPROVAL_REQUIRED_TOOLS = new Set([
 
 /**
  * Classifies an action based strictly on tool name and structured parameters.
+ * Uses generic security-safe reasons without leaking raw parameter values.
  */
 export function classifyAction(
   toolName: string,
@@ -465,7 +507,7 @@ export function classifyAction(
   if (emergencyStopTriggered) {
     return {
       classification: "BLOCKED",
-      reason: `Emergency stop active: ${emergencyStopReason || "Execution halted"}`,
+      reason: `Emergency stop active: Execution halted by operator.`,
     };
   }
 
@@ -473,17 +515,17 @@ export function classifyAction(
   if (BLOCKED_SHELL_TOOLS.has(normalizedToolName)) {
     return {
       classification: "BLOCKED",
-      reason: `Arbitrary shell execution via '${toolName}' is blocked by security gateway policy.`,
+      reason: `Arbitrary shell execution is blocked by security gateway policy.`,
     };
   }
 
-  // 3. Path Protection check
+  // 3. Path Protection check (NO raw path strings in reason!)
   const extractedPaths = extractPathsFromParams(toolName, params);
   for (const p of extractedPaths) {
     if (isSensitivePath(p)) {
       return {
         classification: "BLOCKED",
-        reason: `Access to sensitive or prohibited path '${p}' is blocked.`,
+        reason: `Access to a sensitive or prohibited path is blocked.`,
       };
     }
   }
@@ -492,7 +534,7 @@ export function classifyAction(
   if (SAFE_READONLY_TOOLS.has(normalizedToolName)) {
     return {
       classification: "SAFE",
-      reason: `Tool '${toolName}' is classified as a safe read-only action.`,
+      reason: `Tool is classified as a safe read-only action.`,
     };
   }
 
@@ -500,14 +542,14 @@ export function classifyAction(
   if (APPROVAL_REQUIRED_TOOLS.has(normalizedToolName)) {
     return {
       classification: "APPROVAL_REQUIRED",
-      reason: `Action '${toolName}' requires explicit user approval.`,
+      reason: `Action requires explicit user approval.`,
     };
   }
 
   // 6. Unknown tools / Plugins / Skills default to APPROVAL_REQUIRED (fail-closed)
   return {
     classification: "APPROVAL_REQUIRED",
-    reason: `Tool '${toolName}' is an unclassified action requiring explicit user approval.`,
+    reason: `Unclassified action requiring explicit user approval.`,
   };
 }
 
@@ -556,8 +598,7 @@ export function calculateActionDigest(toolName: string, params: unknown): string
       throw new Error("Failed to JSON.stringify canonical parameters");
     }
     return createHash("sha256").update(json).digest("hex");
-  } catch (error) {
-    // Non-canonicalizable parameters -> produce a unique unmatchable digest that forces re-approval or block
+  } catch {
     return `INVALID_DIGEST_ERROR_${randomUUID()}`;
   }
 }

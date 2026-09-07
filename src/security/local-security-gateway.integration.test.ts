@@ -2,10 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.wrapper.js";
 import type { AnyAgentTool } from "../agents/agent-tools.types.js";
 import {
-  configureLocalSecurityGateway,
-  resetLocalSecurityGateway,
+  operatorConfigureGateway,
+  operatorResetGateway,
+} from "./local-security-gateway-operator.js";
+import {
   triggerEmergencyStop,
-  TRUSTED_OPERATOR_TOKEN,
   type PendingApprovalRequest,
 } from "./local-security-gateway.js";
 
@@ -19,11 +20,11 @@ function createMockTool(name: string, impl = vi.fn().mockResolvedValue({ content
 
 describe("Local Security Gateway Tool Pipeline Integration", () => {
   beforeEach(() => {
-    resetLocalSecurityGateway(TRUSTED_OPERATOR_TOKEN);
+    operatorResetGateway();
   });
 
   afterEach(() => {
-    resetLocalSecurityGateway(TRUSTED_OPERATOR_TOKEN);
+    operatorResetGateway();
   });
 
   it("SAFE action (read_file) automatically executes through tool wrapper", async () => {
@@ -42,15 +43,12 @@ describe("Local Security Gateway Tool Pipeline Integration", () => {
     const rawTool = createMockTool("write_file", mockExecute);
     const wrappedTool = wrapToolWithBeforeToolCallHook(rawTool);
 
-    configureLocalSecurityGateway(
-      {
-        approvalHandler: (request: PendingApprovalRequest) => {
-          expect(request.toolName).toBe("write_file");
-          return "APPROVAL_GRANTED";
-        },
+    operatorConfigureGateway({
+      approvalHandler: (request: PendingApprovalRequest) => {
+        expect(request.toolName).toBe("write_file");
+        return "APPROVAL_GRANTED";
       },
-      TRUSTED_OPERATOR_TOKEN,
-    );
+    });
 
     const result = await wrappedTool.execute("call-2", { path: "output.txt", content: "hello" });
 
@@ -63,12 +61,9 @@ describe("Local Security Gateway Tool Pipeline Integration", () => {
     const rawTool = createMockTool("delete_file", mockExecute);
     const wrappedTool = wrapToolWithBeforeToolCallHook(rawTool);
 
-    configureLocalSecurityGateway(
-      {
-        approvalHandler: () => "REJECTED_USER",
-      },
-      TRUSTED_OPERATOR_TOKEN,
-    );
+    operatorConfigureGateway({
+      approvalHandler: () => "REJECTED_USER",
+    });
 
     const result = (await wrappedTool.execute("call-3", { path: "output.txt" })) as any;
 
@@ -86,7 +81,7 @@ describe("Local Security Gateway Tool Pipeline Integration", () => {
 
     expect(mockExecute).not.toHaveBeenCalled();
     expect(result.details?.deniedReason).toBe("security-gateway-blocked");
-    expect(result.content[0]?.text).toContain("Arbitrary shell execution via 'exec' is blocked");
+    expect(result.content[0]?.text).toContain("Arbitrary shell execution is blocked");
   });
 
   it("BLOCKED PowerShell tool call NEVER executes", async () => {
@@ -98,7 +93,7 @@ describe("Local Security Gateway Tool Pipeline Integration", () => {
 
     expect(mockExecute).not.toHaveBeenCalled();
     expect(result.details?.deniedReason).toBe("security-gateway-blocked");
-    expect(result.content[0]?.text).toContain("Arbitrary shell execution via 'powershell' is blocked");
+    expect(result.content[0]?.text).toContain("Arbitrary shell execution is blocked");
   });
 
   it("Attempted sensitive path access (e.g. .ssh/id_rsa) is BLOCKED and never executes", async () => {
@@ -110,7 +105,7 @@ describe("Local Security Gateway Tool Pipeline Integration", () => {
 
     expect(mockExecute).not.toHaveBeenCalled();
     expect(result.details?.deniedReason).toBe("security-gateway-blocked");
-    expect(result.content[0]?.text).toContain("Access to sensitive or prohibited path");
+    expect(result.content[0]?.text).toContain("Access to a sensitive or prohibited path is blocked.");
   });
 
   it("Emergency Stop cancels active pending approval and halts execution", async () => {
@@ -118,15 +113,12 @@ describe("Local Security Gateway Tool Pipeline Integration", () => {
     const rawTool = createMockTool("computer", mockExecute);
     const wrappedTool = wrapToolWithBeforeToolCallHook(rawTool);
 
-    configureLocalSecurityGateway(
-      {
-        approvalTimeoutMs: 5_000,
-        approvalHandler: () => {
-          // Pending...
-        },
+    operatorConfigureGateway({
+      approvalTimeoutMs: 5_000,
+      approvalHandler: () => {
+        // Pending...
       },
-      TRUSTED_OPERATOR_TOKEN,
-    );
+    });
 
     const executionPromise = wrappedTool.execute("call-7", { action: "click" });
 
