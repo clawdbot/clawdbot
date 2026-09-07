@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 
@@ -21,7 +22,7 @@ struct DeviceSettingsConsentTests {
     }
 
     @Test func `location increases need consent but unchanged access and decreases do not`() throws {
-        let transitions: [(DeviceSettingsLocationMode, DeviceSettingsLocationMode, DeviceSettingsConsent?)] = [
+        let transitions: [(OpenClawLocationMode, OpenClawLocationMode, DeviceSettingsConsent?)] = [
             (.off, .off, nil),
             (.off, .whileUsing, .locationWhileUsing),
             (.off, .always, .locationAlways),
@@ -76,7 +77,7 @@ struct DeviceSettingsConsentTests {
     private func consent(
         _ key: DeviceSettingKey, raw: Any,
         enabled: Bool = true,
-        locationMode: DeviceSettingsLocationMode = .off) throws -> DeviceSettingsConsent?
+        locationMode: OpenClawLocationMode = .off) throws -> DeviceSettingsConsent?
     {
         let request = try #require(DeviceSettingsRequest(body: ["type": "set", "key": key.rawValue, "value": raw]))
         guard case let .set(parsedKey, value) = request else {

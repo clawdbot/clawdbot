@@ -39,6 +39,7 @@ class DevicePermissionsPage extends OpenClawLightDomElement {
   private renderPermissions(snapshot: NativeDeviceSettingsSnapshot) {
     const capability = this.context.nativeDeviceSettings;
     const { permissions } = snapshot;
+    // Preserve denial recovery; unavailable native targets may recover through another request.
     return html`
       ${renderSettingsSection(
         { title: t("configPage.deviceSettings.systemAccess") },
@@ -49,7 +50,7 @@ class DevicePermissionsPage extends OpenClawLightDomElement {
             stackedOnNarrow: true,
             control: html`
               ${renderSettingsStatus({ kind: status === "granted" ? "ok" : status === "denied" ? "danger" : "muted", label: t(`configPage.deviceSettings.permissionStatuses.${status}`) })}
-              ${status === "notDetermined" ? html`<button type="button" class="btn" @click=${() => capability?.requestPermission(id)}>${t("configPage.deviceSettings.grant")}</button>` : status === "denied" ? html`<button type="button" class="btn" @click=${() => capability?.openSystemSettings(id)}>${t("configPage.deviceSettings.openSystemSettings")}</button>` : nothing}
+              ${status === "notDetermined" || status === "unavailable" ? html`<button type="button" class="btn" @click=${() => capability?.requestPermission(id)}>${status === "unavailable" ? t("common.retry") : t("configPage.deviceSettings.grant")}</button>` : status === "denied" ? html`<button type="button" class="btn" @click=${() => capability?.openSystemSettings(id)}>${t("configPage.deviceSettings.openSystemSettings")}</button>` : nothing}
             `,
           }),
         ),

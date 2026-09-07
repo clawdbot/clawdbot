@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 
 @MainActor
 enum DeviceSettingsConsent: Equatable {
@@ -20,7 +21,7 @@ enum DeviceSettingsConsent: Equatable {
         cookieSyncEnabled: Bool,
         cookieDomains: [String],
         cookieProfile: String,
-        locationMode: DeviceSettingsLocationMode) -> Self?
+        locationMode: OpenClawLocationMode) -> Self?
     {
         switch (key, value) {
         case (.cookieSyncEnabled, .boolean(true)): .cookieSync
@@ -31,7 +32,7 @@ enum DeviceSettingsConsent: Equatable {
         case (.wakeEnabled, .boolean(true)): .voiceWake
         case (.locationPrecise, .boolean(true)): .preciseLocation
         case let (.locationMode, .string(mode)):
-            switch (locationMode, DeviceSettingsLocationMode(rawValue: mode)) {
+            switch (locationMode, OpenClawLocationMode(rawValue: mode)) {
             case (.off, .whileUsing): .locationWhileUsing
             case (.off, .always), (.whileUsing, .always): .locationAlways
             default: nil

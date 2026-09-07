@@ -167,10 +167,9 @@ struct DeviceSettingsBridgeTests {
         let locations: [(OpenClawLocationMode, String)] = [
             (.off, "off"), (.whileUsing, "whileUsing"), (.always, "always"),
         ]
-        for (native, wire) in locations {
-            let mapped = DeviceSettingsLocationMode(native)
-            #expect(mapped.nativeMode == native)
-            #expect(try String(decoding: JSONEncoder().encode(mapped), as: UTF8.self) == "\"\(wire)\"")
+        #expect(Set(OpenClawLocationMode.allCases.map(\.rawValue)) == Set(locations.map(\.1)))
+        for (mode, wire) in locations {
+            #expect(try String(decoding: JSONEncoder().encode(mode), as: UTF8.self) == "\"\(wire)\"")
         }
         #expect(DeviceSettingsPermissionStatus(.granted) == .granted)
         #expect(DeviceSettingsPermissionStatus(.notGranted) == .denied)
@@ -188,6 +187,21 @@ struct DeviceSettingsBridgeTests {
         let expected = try #require(JSONSerialization
             .jsonObject(with: Data(Self.expectedSnapshot.utf8)) as? NSDictionary)
         #expect(actual == expected)
+    }
+
+    @Test(arguments: [
+        (AppleEventPermissionState.authorized, DeviceSettingsPermissionStatus.granted),
+        (.notDetermined, .notDetermined),
+        (.denied, .denied),
+        (.targetNotRunning, .unavailable),
+        (.targetNotAccessible, .unavailable),
+        (.failed(-1), .unavailable),
+    ])
+    func `Automation preserves first-use consent separately from denial`(
+        state: AppleEventPermissionState,
+        expected: DeviceSettingsPermissionStatus)
+    {
+        #expect(DeviceSettingsPermissionStatus(automation: state) == expected)
     }
 
     @Test func `published JavaScript assigns the global then dispatches the exact event with escaped values`() throws {

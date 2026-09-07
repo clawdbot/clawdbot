@@ -490,13 +490,41 @@ describe("native device settings pages", () => {
     expect(row(page, "Accessibility").textContent).toContain("Denied");
     row(page, "Accessibility").querySelector<HTMLButtonElement>("button")!.click();
     expect(capability.openSystemSettings).toHaveBeenCalledExactlyOnceWith("accessibility");
-    for (const [title, label] of [
-      ["Screen Recording", "Granted"],
-      ["Automation (Terminal)", "Unavailable"],
-    ] as const) {
-      expect(row(page, title).textContent).toContain(label);
-      expect(row(page, title).querySelector("button")).toBeNull();
-    }
+    expect(row(page, "Screen Recording").textContent).toContain("Granted");
+    expect(row(page, "Screen Recording").querySelector("button")).toBeNull();
+  });
+
+  it.each([
+    ["automation", "Automation (Terminal)", "notDetermined", "requestPermission", "Grant…"],
+    [
+      "automation",
+      "Automation (Terminal)",
+      "denied",
+      "openSystemSettings",
+      "Open System Settings…",
+    ],
+    ["automation", "Automation (Terminal)", "unavailable", "requestPermission", "Retry"],
+    ["accessibility", "Accessibility", "denied", "openSystemSettings", "Open System Settings…"],
+    [
+      "screenRecording",
+      "Screen Recording",
+      "denied",
+      "openSystemSettings",
+      "Open System Settings…",
+    ],
+  ] as const)("routes %s recovery when %s is %s", async (id, title, status, method, label) => {
+    const snapshot = createNativeDeviceSettingsSnapshot();
+    const permission = snapshot.permissions.entries.find((entry) => entry.id === id)!;
+    permission.status = status;
+    const { capability } = createCapability(snapshot);
+    const page = await mount("openclaw-device-permissions-page", capability);
+    const action = row(page, title).querySelector<HTMLButtonElement>("button");
+    expect(action).not.toBeNull();
+    expect(action!.textContent?.trim()).toBe(label);
+    action!.click();
+    expect(capability[method]).toHaveBeenCalledExactlyOnceWith(id);
+    const other = method === "requestPermission" ? "openSystemSettings" : "requestPermission";
+    expect(capability[other]).not.toHaveBeenCalled();
   });
 
   it("enables precision with location access and changes local location and activity preferences", async () => {

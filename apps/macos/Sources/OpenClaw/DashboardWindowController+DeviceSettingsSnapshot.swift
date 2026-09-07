@@ -73,7 +73,7 @@ extension DashboardWindowController {
             permissions: .init(
                 entries: permissions,
                 location: .init(
-                    mode: DeviceSettingsLocationMode(locationMode),
+                    mode: locationMode,
                     precise: defaults.object(forKey: locationPreciseKey) as? Bool ?? true)),
             voice: .init(
                 supported: voiceWakeSupported && SpeechRecognitionRequestPolicy.supportsPassiveVoiceWake(
@@ -131,10 +131,13 @@ extension DashboardWindowController {
     }
 
     private static func devicePermissionEntries() async -> [DeviceSettingsSnapshot.Permissions.Entry] {
-        let monitored = await PermissionManager.authorizationStatus([.accessibility, .screenRecording, .appleScript])
+        let monitored = await PermissionManager.authorizationStatus([.accessibility, .screenRecording])
         var statuses = Dictionary(uniqueKeysWithValues: DeviceSettingsPermission.allCases.map {
             ($0, DeviceSettingsPermissionStatus(monitored[$0.capability]))
         })
+        // Automation distinguishes first-use consent from denial; the shared capability Boolean does not.
+        statuses[.automation] = await DeviceSettingsPermissionStatus(
+            automation: AppleEventPermissionProbe.live.state(askUserIfNeeded: false))
         if PermissionManager.notificationCenterAvailable {
             let settings = await UNUserNotificationCenter.current().notificationSettings()
             statuses[.notifications] = DeviceSettingsPermissionStatus(
