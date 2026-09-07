@@ -1,13 +1,23 @@
 // Covers active runtime plugin registry state and reset behavior.
-import { afterEach, describe, expect, it } from "vitest";
+import { mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   getLoadedRuntimePluginRegistry,
   listLoadedRuntimePluginIds,
   listRuntimePluginIdsFromRegistry,
-  registryMatchesManifestPluginIds,
+  createRuntimePluginManifestLookup,
 } from "./active-runtime-registry.js";
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
-import { clearPluginLoaderCache } from "./loader.test-fixtures.js";
+import {
+  cleanupPluginLoaderFixturesForTest,
+  clearPluginLoaderCache,
+  EMPTY_PLUGIN_SCHEMA,
+  loadOpenClawPlugins,
+  makePluginLoaderTempDir,
+  writePlugin,
+} from "./loader.test-fixtures.js";
+import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
@@ -16,6 +26,8 @@ afterEach(() => {
   clearPluginLoaderCache();
   resetPluginRuntimeStateForTest();
 });
+
+afterAll(cleanupPluginLoaderFixturesForTest);
 
 function createRegistryWithPlugin(pluginId: string): PluginRegistry {
   const registry = createEmptyPluginRegistry();
@@ -216,41 +228,251 @@ describe("getLoadedRuntimePluginRegistry", () => {
     ).toBeUndefined();
   });
 
-  it("reuses built bundled runtimes for the matching source manifest owner", () => {
-    const registry = createOwnedRegistryWithPlugin("demo", "/dist/extensions/demo");
-
-    expect(
-      registryMatchesManifestPluginIds(
-        registry,
-        [
-          {
-            id: "demo",
-            origin: "bundled",
-            rootDir: "/extensions/demo",
-            source: "/extensions/demo/index.ts",
-          } as never,
-        ],
-        ["demo"],
-      ),
-    ).toBe(true);
-  });
-
   it("rejects a request registry when a workspace selects another physical owner", () => {
     const registry = createOwnedRegistryWithPlugin("demo", "/plugins/demo");
 
     expect(
-      registryMatchesManifestPluginIds(
-        registry,
-        [
-          {
-            id: "demo",
-            origin: "workspace",
-            rootDir: "/tmp/session-workspace/.openclaw/extensions/demo",
-            source: "/tmp/session-workspace/.openclaw/extensions/demo/index.js",
-          } as never,
-        ],
-        ["demo"],
-      ),
-    ).toBe(false);
+      createRuntimePluginManifestLookup(registry, [
+        {
+          id: "demo",
+          origin: "workspace",
+          rootDir: "/tmp/session-workspace/.openclaw/extensions/demo",
+          source: "/tmp/session-workspace/.openclaw/extensions/demo/index.js",
+        } as never,
+      ])("demo"),
+    ).toBeUndefined();
   });
+});
+
+it.each(["setup", "full"] as const)(
+  "matches the executable setup source selected by a %s load",
+  (channelPluginLoadIntent) => {
+    const runtime = writePlugin({
+      id: "setup-fixture",
+      filename: "index.cjs",
+      body: 'module.exports = { id: "setup-fixture", register() {} };',
+    });
+    for (const label of ["old", "new"]) {
+      writeFileSync(
+        path.join(runtime.dir, `${label}.cjs`),
+        `module.exports = { plugin: {
+        id: "setup-channel", meta: { id: "setup-channel", label: ${JSON.stringify(label)},
+          selectionLabel: "Fixture", docsPath: "/synthetic", blurb: "Synthetic fixture" },
+        capabilities: { chatTypes: ["direct"] },
+        config: { listAccountIds: () => [], resolveAccount: () => ({}) },
+      }};`,
+      );
+    }
+    const options = (label: string) => ({
+      config: { plugins: { allow: [runtime.id], entries: { [runtime.id]: { enabled: true } } } },
+      env: {},
+      installRecords: {},
+      onlyPluginIds: [runtime.id],
+      activate: false,
+      channelPluginLoadIntent,
+      manifestRegistry: createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: runtime.id,
+            origin: "global",
+            rootDir: runtime.dir,
+            source: runtime.file,
+            channels: ["setup-channel"],
+            configSchema: EMPTY_PLUGIN_SCHEMA,
+            setupSource: path.join(runtime.dir, `${label}.cjs`),
+            providerDiscoverySource: path.join(runtime.dir, `${label}.cjs`),
+            capabilityCatalogSource: path.join(runtime.dir, `${label}.cjs`),
+          },
+        ],
+      }).manifestRegistry,
+    });
+    const old = loadOpenClawPlugins(options("old"));
+    const next = loadOpenClawPlugins(options("new"));
+    expect(old.plugins[0]?.status).toBe("loaded");
+    setActivePluginRegistry(old, "old");
+    const reused = getLoadedRuntimePluginRegistry({ loadOptions: options("new") });
+    if (channelPluginLoadIntent === "setup") {
+      expect([old.channels[0]?.plugin.meta.label, next.channels[0]?.plugin.meta.label]).toEqual([
+        "old",
+        "new",
+      ]);
+      expect(reused === undefined).toBe(true);
+    } else {
+      expect(old.channels).toEqual([]);
+      expect(reused === old).toBe(true);
+    }
+  },
+);
+
+it.each([
+  { sourceFormat: "cts", builtFormat: "cjs", preferBuiltPluginArtifacts: false },
+  { sourceFormat: "cts", builtFormat: "cjs", preferBuiltPluginArtifacts: true },
+  { sourceFormat: "mts", builtFormat: "mjs", preferBuiltPluginArtifacts: false },
+  { sourceFormat: "mts", builtFormat: "mjs", preferBuiltPluginArtifacts: true },
+])(
+  "reuses selected bundled setup $sourceFormat/$builtFormat artifacts with built=$preferBuiltPluginArtifacts",
+  ({ sourceFormat, builtFormat, preferBuiltPluginArtifacts }) => {
+    const schema = EMPTY_PLUGIN_SCHEMA;
+    const packageRoot = makePluginLoaderTempDir();
+    const options = [
+      { format: sourceFormat, tree: "extensions" },
+      { format: builtFormat, tree: "dist/extensions" },
+      { format: builtFormat, tree: "dist-runtime/extensions" },
+    ].map(({ format, tree }) => {
+      const rootDir = path.join(packageRoot, tree, "bundled-setup");
+      mkdirSync(rootDir, { recursive: true });
+      const source = path.join(rootDir, `index.${format}`);
+      const setupSource = path.join(rootDir, `setup.${format}`);
+      const label = tree === "extensions" ? "source" : "built";
+      const exported = ["mts", "mjs"].includes(format) ? "export default" : "module.exports =";
+      writeFileSync(source, `${exported} { id: "bundled-setup", register() {} };`);
+      writeFileSync(
+        setupSource,
+        `${exported} { plugin: {
+      id: "bundled-setup", meta: { id: "bundled-setup", label: ${JSON.stringify(label)}, selectionLabel: "Fixture", docsPath: "/synthetic", blurb: "Synthetic fixture" },
+      capabilities: { chatTypes: ["direct"] }, config: { listAccountIds: () => [], resolveAccount: () => ({}) },
+    }};`,
+      );
+      writeFileSync(
+        path.join(rootDir, "package.json"),
+        JSON.stringify({
+          openclaw: { extensions: [`./index.${format}`], setupEntry: `./setup.${format}` },
+        }),
+      );
+      writeFileSync(
+        path.join(rootDir, "openclaw.plugin.json"),
+        JSON.stringify({ id: "bundled-setup", channels: ["bundled-setup"], configSchema: schema }),
+      );
+      return {
+        config: {
+          plugins: { allow: ["bundled-setup"], entries: { "bundled-setup": { enabled: true } } },
+        },
+        env: {},
+        installRecords: {},
+        onlyPluginIds: ["bundled-setup"],
+        activate: false,
+        preferBuiltPluginArtifacts,
+        channelPluginLoadIntent: "setup" as const,
+        manifestRegistry: createPluginMetadataSnapshotFixture({
+          plugins: [
+            {
+              id: "bundled-setup",
+              origin: "bundled",
+              rootDir,
+              source,
+              setupSource,
+              channels: ["bundled-setup"],
+              configSchema: schema,
+            },
+          ],
+        }).manifestRegistry,
+      };
+    });
+    const expectedLabel = (index: number) =>
+      preferBuiltPluginArtifacts || index !== 0 ? "built" : "source";
+    for (const [loadedIndex, loadedOptions] of options.entries()) {
+      const loaded = loadOpenClawPlugins(loadedOptions);
+      expect(loaded.channels[0]?.plugin.meta.label).toBe(expectedLabel(loadedIndex));
+      setActivePluginRegistry(loaded, "canonical-view");
+      for (const [requestedIndex, requestedOptions] of options.entries()) {
+        expect(getLoadedRuntimePluginRegistry({ loadOptions: requestedOptions }) === loaded).toBe(
+          expectedLabel(loadedIndex) === expectedLabel(requestedIndex),
+        );
+      }
+    }
+  },
+);
+
+it("does not reuse a different explicitly selected bundled entry", () => {
+  const runtime = writePlugin({
+    id: "entry-fixture",
+    filename: "index.cjs",
+    body: `module.exports = { id: "entry-fixture", register(api) {
+      api.registerProvider({ id: "entry-provider", label: "Old", auth: [] });
+    }};`,
+  });
+  const selectedSource = path.join(runtime.dir, "selected.cjs");
+  writeFileSync(
+    selectedSource,
+    `module.exports = { id: "entry-fixture", register(api) {
+    api.registerProvider({ id: "entry-provider", label: "Selected", auth: [] });
+  }};`,
+  );
+  const options = (source: string) => ({
+    config: { plugins: { allow: [runtime.id], entries: { [runtime.id]: { enabled: true } } } },
+    env: {},
+    installRecords: {},
+    onlyPluginIds: [runtime.id],
+    activate: false,
+    manifestRegistry: createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: runtime.id,
+          origin: "bundled",
+          rootDir: runtime.dir,
+          source,
+          sourcePreferred: true,
+          providers: ["entry-provider"],
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+      ],
+    }).manifestRegistry,
+  });
+  const old = loadOpenClawPlugins(options(runtime.file));
+  expect(old.providers[0]?.provider.label).toBe("Old");
+  setActivePluginRegistry(old, "old-entry");
+  expect(
+    getLoadedRuntimePluginRegistry({ loadOptions: options(selectedSource) }) === undefined,
+  ).toBe(true);
+  expect(loadOpenClawPlugins(options(selectedSource)).providers[0]?.provider.label).toBe(
+    "Selected",
+  );
+});
+
+it("compares the executed artifact after the loader's final staging pass", () => {
+  const packageRoot = makePluginLoaderTempDir();
+  let source = path.join(
+    packageRoot,
+    "dist-runtime/extensions/a/dist-runtime/extensions/b/dist-runtime/extensions/c/index.cjs",
+  );
+  const selectedSource = source;
+  for (let stage = 0; stage <= 3; stage += 1) {
+    mkdirSync(path.dirname(source), { recursive: true });
+    writeFileSync(
+      source,
+      `module.exports = { id: "staged-fixture", register(api) {
+        api.registerProvider({ id: "staged-provider", label: "stage-${stage}", auth: [] });
+      }};`,
+    );
+    source = source.replace(
+      `${path.sep}dist-runtime${path.sep}extensions${path.sep}`,
+      `${path.sep}dist${path.sep}extensions${path.sep}`,
+    );
+  }
+  const options = {
+    config: {
+      plugins: { allow: ["staged-fixture"], entries: { "staged-fixture": { enabled: true } } },
+    },
+    env: {},
+    installRecords: {},
+    onlyPluginIds: ["staged-fixture"],
+    activate: false,
+    preferBuiltPluginArtifacts: false,
+    manifestRegistry: createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "staged-fixture",
+          origin: "bundled",
+          rootDir: path.dirname(selectedSource),
+          source: selectedSource,
+          providers: ["staged-provider"],
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+      ],
+    }).manifestRegistry,
+  };
+  const loaded = loadOpenClawPlugins(options);
+  expect(loaded.providers[0]?.provider.label).toBe("stage-3");
+  setActivePluginRegistry(loaded, "executed-stage");
+  expect(getLoadedRuntimePluginRegistry({ loadOptions: options }) === loaded).toBe(true);
 });

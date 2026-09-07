@@ -1887,7 +1887,6 @@ src/agents/provider-attribution.ts	14
 src/agents/provider-auth-aliases.ts	1
 src/agents/provider-http-errors.ts	1
 src/agents/provider-local-service.ts	4
-src/agents/provider-model-normalization.runtime.ts	1
 src/agents/provider-model-route.ts	1
 src/agents/provider-request-config.ts	6
 src/agents/provider-secret-egress.ts	3

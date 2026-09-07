@@ -22,6 +22,7 @@ vi.mock("../../config/config.js", () => ({
     const loaded = await mocks.readConfigFileSnapshot();
     const writeSnapshot = {
       path: "/tmp/openclaw.json",
+      parsed: loaded.sourceConfig ?? loaded.config,
       runtimeConfig: loaded.config,
       ...loaded,
     };
@@ -37,6 +38,11 @@ vi.mock("../../config/config.js", () => ({
 
 vi.mock("./load-config.js", () => ({
   loadModelsConfig: (...args: unknown[]) => mocks.loadModelsConfig(...args),
+}));
+
+// Real provider activation is covered by model-selection.runtime.test.ts.
+vi.mock("./model-selection.runtime.js", () => ({
+  withModelCommandProviderRuntime: (_params: unknown, run: () => unknown) => run(),
 }));
 
 function makeRuntime(): RuntimeEnv & { logs: string[] } {

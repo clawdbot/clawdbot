@@ -401,7 +401,7 @@ describe("usage-format", () => {
   it("skips manifest model normalization for raw cost lookup", () => {
     const manifestSpy = vi.spyOn(
       manifestModelIdNormalization,
-      "normalizeProviderModelIdWithManifest",
+      "resolveManifestModelIdNormalizationPolicies",
     );
     const config = {
       models: {
