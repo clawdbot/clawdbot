@@ -111,50 +111,57 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
     runId: run.runId,
   };
   recoveryState.triageTarget.root = prepared.discoveredRoot;
-  const presentation = createUpdateProgress(!opts.json, run);
+  let disposePresentation: (() => void) | undefined;
+  let executionStarted = false;
   try {
-    await withUpdateFailureTriage(
-      { ...opts, invocationCwd },
-      recoveryState.triageTarget,
-      async () => {
-        await withUpdateInProgressEnv(invocationCwd, async () => {
-          let failure: { error: unknown } | undefined;
+    const presentation = createUpdateProgress(!opts.json, run);
+    disposePresentation = presentation.dispose;
+    await withUpdateFailureTriage({ ...opts, invocationCwd }, recoveryState.triageTarget, () =>
+      withUpdateInProgressEnv(invocationCwd, async () => {
+        executionStarted = true;
+        let failure: { error: unknown } | undefined;
+        try {
+          await updateCommandInternal(opts, recoveryState, invocationCwd, prepared, presentation);
+        } catch (error) {
+          failure = { error };
+        }
+        try {
+          await recoveryState.windowsTaskAutoStartRecovery?.restore();
+          await recoveryState.windowsTaskAutoStartRecovery?.complete();
+        } catch (restoreError) {
+          let error = restoreError;
           try {
-            await updateCommandInternal(opts, recoveryState, invocationCwd, prepared, presentation);
-          } catch (error) {
-            failure = { error };
+            await recoveryState.windowsTaskAutoStartRecovery?.complete(false);
+          } catch (compensationError) {
+            error = new AggregateError(
+              [error, compensationError],
+              `Windows task autostart recovery failed: ${formatErrorMessage(error)}; ${formatErrorMessage(compensationError)}`,
+              { cause: error },
+            );
           }
-          try {
-            await recoveryState.windowsTaskAutoStartRecovery?.restore();
-            await recoveryState.windowsTaskAutoStartRecovery?.complete();
-          } catch (restoreError) {
-            let error = restoreError;
-            try {
-              await recoveryState.windowsTaskAutoStartRecovery?.complete(false);
-            } catch (compensationError) {
-              error = new AggregateError(
-                [error, compensationError],
-                `Windows task autostart recovery failed: ${formatErrorMessage(error)}; ${formatErrorMessage(compensationError)}`,
-                { cause: error },
-              );
+          failure = mergeWindowsTaskRecoveryFailure(failure, error);
+        }
+        if (failure) {
+          if (!recoveryState.ledgerHandoffOwned) {
+            if (failure.error instanceof UpdateCommandFailure) {
+              completeUpdateCommandRun(failure.error.result, run);
+            } else {
+              failUpdateCommandRun(failure.error, run);
             }
-            failure = mergeWindowsTaskRecoveryFailure(failure, error);
           }
-          if (failure) {
-            if (!recoveryState.ledgerHandoffOwned) {
-              if (failure.error instanceof UpdateCommandFailure) {
-                completeUpdateCommandRun(failure.error.result, run);
-              } else {
-                failUpdateCommandRun(failure.error, run);
-              }
-            }
-            throw failure.error;
-          }
-        });
-      },
+          throw failure.error;
+        }
+      }),
     );
+  } catch (error) {
+    // Execution owns its unwind, including helper-pending rollback and migrated state.
+    // This boundary only terminalizes failures before that owner starts.
+    if (!executionStarted) {
+      failUpdateCommandRun(error, run);
+    }
+    throw error;
   } finally {
-    presentation.dispose();
+    disposePresentation?.();
   }
 }
 
@@ -668,7 +675,8 @@ async function updateCommandInternal(
   if (!execution) {
     return;
   }
-  const { result, preManagedServiceStop, ownedManagedUpdateContext, recoveryEnv } = execution;
+  const { ownedManagedUpdateContext, recoveryEnv, ...executionState } = execution;
+  const { result } = executionState;
   result.runId = run.runId;
   if (result.status === "skipped" && result.reason === "already-current") {
     stop();
@@ -682,10 +690,8 @@ async function updateCommandInternal(
   const finalizationConfigSnapshot = ownedManagedUpdateContext?.configSnapshot ?? configSnapshot;
   stop();
   const finalization = {
-    mutationStarted: execution.mutationStarted,
+    ...executionState,
     expectedVersion: targetVersion ?? undefined,
-    result,
-    failure: execution.failure,
     root,
     previousInstallRoot: discoveredRoot,
     installKindChanged: switchToGit || switchToPackage,
@@ -696,7 +702,6 @@ async function updateCommandInternal(
     downgradeRisk,
     shouldRestart,
     opts,
-    preManagedServiceStop,
     ownedManagedUpdateEnv: ownedManagedUpdateContext?.env,
     controlPlaneUpdateSentinelMeta,
     preUpdatePluginInstallRecords:
@@ -705,11 +710,6 @@ async function updateCommandInternal(
     packageUpdateNodeRunner,
     updateStepTimeoutMs,
     invocationCwd,
-    packageTransaction: execution.packageTransaction,
-    schemaVersions: execution.schemaVersions,
-    candidateSchemaVersions: execution.candidateSchemaVersions,
-    previousSchemaVersions: execution.previousSchemaVersions,
-    previousVerified: execution.previousVerified,
   };
   const rollbackBlockedReason = await inspectActivatedUpdateState({
     result,

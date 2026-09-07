@@ -3,6 +3,7 @@ import fs from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { formatErrorMessage } from "../../scripts/lib/error-format.mts";
 import {
@@ -22,11 +23,16 @@ describe("scripts/run-vitest-profile", () => {
   const repoRoot = path.resolve(import.meta.dirname, "../..");
   afterEach(() => lifetime.cleanup());
 
-  async function runProfileProcess(args: string[], root: string, signal: AbortSignal) {
+  async function runProfileProcess(
+    args: string[],
+    root: string,
+    signal: AbortSignal,
+    env?: NodeJS.ProcessEnv,
+  ) {
     const result = await lifetime.track(
       runNodeScript(
         args,
-        { PATH: process.env.PATH, HOME: root, USERPROFILE: root, CI: "1" },
+        { PATH: process.env.PATH, HOME: root, USERPROFILE: root, CI: "1", ...env },
         undefined,
         {
           cwd: root,
@@ -340,6 +346,36 @@ it("holds admitted work until the caller releases it", async () => {
   ])("prints $mode help for $flags without starting a test server", ({ mode, flags }, { signal }) =>
     lifetime.run(async () => {
       const root = createTempDir("oc-profile-help-");
+      const ordering = path.join(root, "hash-order.jsonl");
+      const preload = path.join(root, "observe-hash-order.mjs");
+      fs.writeFileSync(
+        preload,
+        `import crypto from "node:crypto";
+import fs from "node:fs";
+import inspector from "node:inspector/promises";
+import { syncBuiltinESMExports } from "node:module";
+let profiling = false;
+inspector.Session = class extends inspector.Session {
+  async post(method, ...params) {
+    const result = await super.post(method, ...params);
+    if (method === "Profiler.start") profiling = true;
+    return result;
+  }
+};
+const getHashes = crypto.getHashes;
+let recorded = false;
+crypto.getHashes = function() {
+  if (!recorded) {
+    recorded = true;
+    const tlsLoaded = process.moduleLoadList.includes("NativeModule tls");
+    fs.appendFileSync(${JSON.stringify(ordering)}, JSON.stringify({ tlsLoaded, profiling }) + "\\n");
+    // Fail before entering the native lock race, rather than waiting for it to hang.
+    if (tlsLoaded) throw new Error("TLS initialized before hash enumeration");
+  }
+  return getHashes();
+};
+syncBuiltinESMExports();`,
+      );
       const args = [
         path.join(repoRoot, "scripts/run-vitest-profile.mts"),
         mode,
@@ -348,7 +384,17 @@ it("holds admitted work until the caller releases it", async () => {
         "--",
         ...flags,
       ];
-      const result = await runProfileProcess(args, root, signal);
+      const result = await runProfileProcess(args, root, signal, {
+        NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
+      });
+      expect(
+        fs
+          .readFileSync(ordering, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line)),
+        result.output,
+      ).toEqual([{ tlsLoaded: false, profiling: mode === "main" }]);
       expect(result.code, result.output).toBe(0);
       expect(result.output).toContain("Usage:");
     }),

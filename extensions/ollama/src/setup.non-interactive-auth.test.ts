@@ -78,6 +78,32 @@ describe("Ollama non-interactive onboarding", () => {
     upsertAuthProfileWithLock.mockClear();
   });
 
+  it.each([{ capabilities: ["embedding"] }, { capabilities: ["embedding", "tools"] }])(
+    "rejects an explicitly selected embedding-only model with capabilities $capabilities",
+    async ({ capabilities }) => {
+      vi.stubGlobal(
+        "fetch",
+        createOllamaFetchMock({
+          tags: ["embedding-model"],
+          capabilities: { "embedding-model": capabilities },
+        }),
+      );
+      const runtime = createRuntime();
+      const nextConfig = { agents: { defaults: { model: { primary: "ollama/qwen3:1.7b" } } } };
+      const result = await configureOllamaNonInteractive({
+        nextConfig,
+        opts: { customBaseUrl: "http://127.0.0.1:11434", customModelId: "embedding-model" },
+        runtime,
+      });
+      expect(result).toBe(nextConfig);
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(runtime.error).toHaveBeenCalledWith(
+        "Ollama model embedding-model only supports embeddings. Choose a chat model instead.",
+      );
+      expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     {
       label: "Ollama reports a pull failure",
@@ -171,7 +197,10 @@ describe("Ollama non-interactive onboarding", () => {
   });
 
   it("persists only installed local models when selecting a discovered custom model", async () => {
-    const fetchMock = createOllamaFetchMock({ tags: ["qwen3:1.7b"] });
+    const fetchMock = createOllamaFetchMock({
+      tags: ["qwen3:1.7b"],
+      capabilities: { "qwen3:1.7b": ["completion", "embedding"] },
+    });
     vi.stubGlobal("fetch", fetchMock);
     const runtime = createRuntime();
 

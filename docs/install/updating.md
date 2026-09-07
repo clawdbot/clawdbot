@@ -229,8 +229,8 @@ Installer-driven switches verify the replacement before the working owner is ret
 
 Candidate validation failures leave the old Gateway serving. After activation,
 package recovery can restore the retained previous package only when the shared
-and affected pre-existing per-agent database schema versions and configuration
-content are unchanged. A database first created by the candidate is neutral only
+and affected pre-existing per-agent database schema versions are unchanged and
+configuration has not changed since the candidate’s activation Doctor pass. A database first created by the candidate is neutral only
 at its supported schema version for that database kind. The restored
 Gateway must pass the same runtime checks before recovery is reported as
 complete. A schema migration prevents automatic package rollback; replacing
@@ -716,7 +716,8 @@ made after the backup.
 
 If a newly activated package fails verification, `openclaw update` compares the
 shared and affected per-agent SQLite `user_version` values with their
-pre-activation values and checks that configuration content is unchanged.
+pre-activation values and checks that the config file still matches the content
+reported by the candidate’s activation Doctor writer.
 Databases first created during activation or verification are
 schema-neutral when their version matches the candidate's supported version for
 that database kind. A changed schema version or missing pre-existing database,
@@ -725,17 +726,27 @@ code, the updater also checks that the previous package supports any new databas
 unknown or incompatible support refuses rollback with `rollback-state-unverified`.
 When both checks pass and the retained previous package was verified before the
 update, it stops the candidate and restores the previous generation: package,
-command shim, service definition, and config writer stamp. Owned, writable
+command shim, service definition, and exact pre-activation config bytes, including
+the previous writer stamp. Config replacements use owner-only permissions (`0600`);
+unchanged config needs no write. Owned, writable
 service metadata is refreshed; protected service definitions are preserved.
 The CLI verifies the restarted previous Gateway's service health, version/build
 identity, plugins, channels, and `/readyz` again. Update verification does not use
 model inference: the managed service must be running and own its port, and the
 Gateway hello handshake must match the expected artifact.
 
-The candidate may have advanced the config writer stamp without changing config
-content. Rollback restores that stamp and uses the existing intentional-recovery
-allowance only for its service commands, so the older-binary guard does not block
-recovery. The allowance is never saved in config or the service environment.
+The candidate’s own Doctor migrations in the main config file do not block rollback, including on
+a fresh install’s first update. The updater retains the config immediately before
+Doctor and verifies that Doctor consumed those captured bytes before making changes.
+It also checks the current file against the output hash reported by Doctor’s writer.
+Rollback restores the original bytes only while both hashes match. Restoration
+holds the normal config writer lock and rechecks the hash after acquiring it. Operator edits
+made after activation block restoration, including edits before Doctor reads the
+config and between Doctor’s last write and the updater’s capture. Separate `$include` files must retain
+their pre-activation configuration content; they are not restored by the root-file
+snapshot. The existing intentional-recovery
+allowance applies only to service commands, so the older-binary guard does not
+block recovery; it is never saved in config or the service environment.
 
 Successful recovery leaves the previous Gateway running and finishes the run as
 `rolled-back`, with `after.version` set to the previous version and downtime
@@ -749,16 +760,20 @@ diagnose a failed check. Recovery guidance reports whether the Gateway is runnin
 or stopped from the latest service observation, even when a running candidate did
 not pass verification. A restored Gateway must pass its own verification checks
 before the run can finish as `rolled-back`.
+Automatic triage never follows a verified rollback; it runs only when the update
+ends failed.
 
-If configuration content changed or the databases are not schema-neutral, rollback is refused with
-`state-migrated-no-rollback`. The updater attempts
+If the config file changed after the activation Doctor pass or the databases are
+not schema-neutral, rollback is refused with
+`state-migrated-no-rollback`. For config edits, the next action names the file
+whose changes blocked restoration. The updater attempts
 [bounded unattended repair](/install/updating#unattended-repair-on-your-own-inference)
 on the installed candidate, preserving migrated state. The same repair slot can
 run if rollback itself fails, targeting the previous release if its package was
 already restored. If repair cannot pass verification, the update
 fails with the original reason and recorded repair attempts. Use `openclaw triage`
 or the printed repair command before considering an older version.
-Automatic rollback restores code, not a full state snapshot.
+Automatic rollback restores code and the captured config, not a full state snapshot.
 The candidate's temporary migration-rehearsal snapshots are removed after
 validation and do not replace your backup.
 If the schema comparison cannot be completed, automatic rollback is refused
@@ -987,7 +1002,7 @@ dependencies, generated runtime files, or state, but a candidate with changed
 tracked source fails before the Gateway stops; fix the source revision before retrying.
 
 After activation, the updater can also enter `repairing` when verification fails
-and changed configuration content or a schema migration prevents rollback, or
+and config edits after the activation Doctor pass or a schema migration prevent rollback, or
 when rollback itself fails. This repair targets the runtime that remains
 installed and preserves migrated state. After each turn, the updater starts or
 restarts a stopped or unhealthy service once, then reruns the service, version,

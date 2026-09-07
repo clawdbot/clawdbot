@@ -280,6 +280,14 @@ authority. OpenClaw retains cancellation, watchdogs, session policy, and MCP
 grant ownership. Paired-node execution and
 manual compaction continue through the existing host-managed process path.
 
+Reusable transports receive a run-bound `liveSession` capability. Before creating
+an initial or replacement process, await `liveSession.restart()` unless the
+current process is reusable. This joins the previous process exit and its
+host-owned resource cleanup; waiting for the child exit alone is insufficient.
+The host rejects restart when the caller is revoked or an exact live generation
+must be preserved. `register()` remains a synchronous admission check and refuses
+replacement while cleanup is unresolved.
+
 `runtimeArtifact` is plugin-owned. It is consulted
 only when a live inference turn mints or revalidates verified setup authority;
 normal CLI runs do not require it. A backend without this declaration cannot

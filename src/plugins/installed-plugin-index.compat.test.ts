@@ -10,7 +10,9 @@ import {
   createInstalledPluginEnabledPredicate,
   isInstalledPluginEnabled,
   loadInstalledPluginIndex,
+  loadInstalledPluginIndexWithDiscovery,
 } from "./installed-plugin-index.js";
+import { listAvailableManifestContractValues } from "./manifest-contract-eligibility.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -88,15 +90,29 @@ describe("bundled provider compatibility in installed plugin indexes", () => {
     const { candidate, env } = createFixture();
     const config = { plugins: { allow: ["listed"] } };
     setMode(env, "compat");
-    const index = loadInstalledPluginIndex({ candidates: [candidate], config, env });
+    const { index, manifestRegistry } = loadInstalledPluginIndexWithDiscovery({
+      candidates: [candidate],
+      config,
+      env,
+    });
+    const listValues = () =>
+      listAvailableManifestContractValues({
+        snapshot: { index, plugins: manifestRegistry.plugins },
+        contract: "speechProviders",
+        config,
+        env,
+      });
 
     expect(index.plugins[0]?.enabled).toBe(true);
     expect(isInstalledPluginEnabled(index, PLUGIN_ID, config, env)).toBe(true);
+    expect(listValues()).toEqual([PLUGIN_ID]);
 
     setMode(env, "allowlist");
     expect(isInstalledPluginEnabled(index, PLUGIN_ID, config, env)).toBe(false);
+    expect(listValues()).toEqual([]);
 
     setMode(env, "compat");
+    expect(listValues()).toEqual([PLUGIN_ID]);
     expect(
       isInstalledPluginEnabled(
         index,

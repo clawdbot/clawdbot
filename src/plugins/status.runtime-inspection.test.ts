@@ -6,7 +6,8 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
-import { persistPluginInstall, selectInstallMutationWriteOptions } from "./install-persistence.js";
+import { selectInstallMutationWriteOptions } from "./install-config-mutation.js";
+import { persistPluginInstall } from "./install-persistence.js";
 import { readPersistedInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import {
@@ -86,7 +87,7 @@ describe("plugin runtime inspection", () => {
     },
   );
 
-  it("selects a newly installed legacy runtime kind without changing the running inventory", () => {
+  it("selects a newly installed legacy runtime kind without changing the running inventory", async () => {
     const plugin = writePlugin({
       id: "legacy-memory-candidate",
       body: 'module.exports = { id: "legacy-memory-candidate", kind: "memory", register() {} };\n',
@@ -99,14 +100,14 @@ describe("plugin runtime inspection", () => {
       },
     };
 
-    withEnv({ OPENCLAW_STATE_DIR: makePluginLoaderTempDir() }, () => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: makePluginLoaderTempDir() }, async () => {
       useNoBundledPlugins();
       const bootConfig = { plugins: { enabled: false } };
       const boot = loadPluginMetadataSnapshot({ config: bootConfig, env: process.env });
       setGatewayPluginMetadataSnapshot(boot, { config: bootConfig, env: process.env });
       const activeRegistry = getActivePluginRegistry();
 
-      const result = applySlotSelectionForPlugin(config, plugin.id);
+      const result = await applySlotSelectionForPlugin(config, plugin.id);
 
       expect(result.config.plugins?.slots?.memory).toBe(plugin.id);
       expect(getGatewayPluginMetadataSnapshot()).toBe(boot);
@@ -299,87 +300,98 @@ describe("plugin runtime inspection", () => {
     },
   );
 
-  it("rechecks install authority before inspecting each legacy package entry", async () => {
-    const stateDir = makePluginLoaderTempDir();
-    const configPath = path.join(stateDir, "openclaw.json");
-    await withEnvAsync(
-      {
-        OPENCLAW_HOME: stateDir,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_CONFIG_PATH: configPath,
-      },
-      async () => {
-        useNoBundledPlugins();
-        await writeConfigFile({});
-        await withPluginLifecycleLease({}, async () => {
-          const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
-          const previousConfig = fs.readFileSync(configPath, "utf8");
-          loadPluginMetadataSnapshot({ allowCurrent: false, config: snapshot.config });
-          const pluginId = "slot-authority-candidate";
-          const pluginDir = path.join(
-            stateDir,
-            "npm",
-            "projects",
-            pluginId,
-            "node_modules",
-            pluginId,
-          );
-          fs.mkdirSync(pluginDir, { recursive: true });
-          fs.writeFileSync(
-            path.join(pluginDir, "package.json"),
-            JSON.stringify({
-              name: pluginId,
-              version: "1.0.0",
-              openclaw: { extensions: ["./first.cjs", "./second.cjs"] },
-            }),
-          );
-          fs.writeFileSync(
-            path.join(pluginDir, "openclaw.plugin.json"),
-            JSON.stringify({ id: pluginId, configSchema: { type: "object" } }),
-          );
-          for (const [entry, kind] of [
-            ["first", "memory"],
-            ["second", "context-engine"],
-          ]) {
+  it.each(["during-import", "between-entries"] as const)(
+    "rechecks install authority when it closes %s",
+    async (closedAt) => {
+      const stateDir = makePluginLoaderTempDir();
+      const configPath = path.join(stateDir, "openclaw.json");
+      await withEnvAsync(
+        {
+          OPENCLAW_HOME: stateDir,
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_CONFIG_PATH: configPath,
+        },
+        async () => {
+          useNoBundledPlugins();
+          await writeConfigFile({});
+          await withPluginLifecycleLease({}, async () => {
+            const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
+            const previousConfig = fs.readFileSync(configPath, "utf8");
+            loadPluginMetadataSnapshot({ allowCurrent: false, config: snapshot.config });
+            const pluginId = "slot-authority-candidate";
+            const pluginDir = path.join(
+              stateDir,
+              "npm",
+              "projects",
+              pluginId,
+              "node_modules",
+              pluginId,
+            );
+            fs.mkdirSync(pluginDir, { recursive: true });
             fs.writeFileSync(
-              path.join(pluginDir, `${entry}.cjs`),
-              `require("node:fs").writeFileSync(${JSON.stringify(path.join(stateDir, `${entry}.txt`))}, "imported");
+              path.join(pluginDir, "package.json"),
+              JSON.stringify({
+                name: pluginId,
+                version: "1.0.0",
+                openclaw: { extensions: ["./first.cjs", "./second.cjs"] },
+              }),
+            );
+            fs.writeFileSync(
+              path.join(pluginDir, "openclaw.plugin.json"),
+              JSON.stringify({ id: pluginId, configSchema: { type: "object" } }),
+            );
+            for (const [entry, kind] of [
+              ["first", "memory"],
+              ["second", "context-engine"],
+            ]) {
+              fs.writeFileSync(
+                path.join(pluginDir, `${entry}.cjs`),
+                `require("node:fs").writeFileSync(${JSON.stringify(path.join(stateDir, `${entry}.txt`))}, "imported");
 module.exports = { id: ${JSON.stringify(`${pluginId}/${entry}`)}, kind: ${JSON.stringify(kind)}, register() {} };
 `,
+              );
+            }
+            let authorityActive = true;
+
+            await expect(
+              persistPluginInstall({
+                snapshot: {
+                  config: snapshot.config,
+                  baseHash: snapshot.hash ?? undefined,
+                  writeOptions,
+                },
+                pluginId,
+                install: { source: "npm", installPath: pluginDir, version: "1.0.0" },
+                beforePersistentApply() {
+                  if (
+                    !authorityActive ||
+                    (closedAt === "between-entries" &&
+                      fs.existsSync(path.join(stateDir, "first.txt")))
+                  ) {
+                    throw new Error("install authority closed");
+                  }
+                  if (closedAt === "during-import") {
+                    queueMicrotask(() => {
+                      authorityActive = false;
+                    });
+                  }
+                },
+              }),
+            ).rejects.toThrow("install authority closed");
+
+            expect(fs.existsSync(path.join(stateDir, "first.txt"))).toBe(
+              closedAt === "between-entries",
             );
-          }
-          let authorityActive = true;
-
-          await expect(
-            persistPluginInstall({
-              snapshot: {
-                config: snapshot.config,
-                baseHash: snapshot.hash ?? undefined,
-                writeOptions,
-              },
-              pluginId,
-              install: { source: "npm", installPath: pluginDir, version: "1.0.0" },
-              beforePersistentApply() {
-                if (!authorityActive) {
-                  throw new Error("install authority closed");
-                }
-                queueMicrotask(() => {
-                  authorityActive = false;
-                });
-              },
-            }),
-          ).rejects.toThrow("install authority closed");
-
-          expect(fs.existsSync(path.join(stateDir, "first.txt"))).toBe(true);
-          expect(fs.existsSync(path.join(stateDir, "second.txt"))).toBe(false);
-          expect(fs.readFileSync(configPath, "utf8")).toBe(previousConfig);
-          expect(
-            (await readPersistedInstalledPluginIndexInstallRecords())?.[pluginId],
-          ).toBeUndefined();
-        });
-      },
-    );
-  });
+            expect(fs.existsSync(path.join(stateDir, "second.txt"))).toBe(false);
+            expect(fs.readFileSync(configPath, "utf8")).toBe(previousConfig);
+            expect(
+              (await readPersistedInstalledPluginIndexInstallRecords())?.[pluginId],
+            ).toBeUndefined();
+          });
+        },
+      );
+    },
+  );
 
   it("captures full registrations through the non-activating inspection mode", () => {
     const pluginDir = makePluginLoaderTempDir();

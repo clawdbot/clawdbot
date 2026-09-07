@@ -4,6 +4,7 @@ import type { Model } from "../../llm/types.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../auth-profiles.js";
+import { createSelectedAuthProfileUnavailableError } from "../auth-profiles/selection-error.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { resolveAgentHarnessPolicy } from "../harness/policy.js";
 import { normalizeStaticProviderModelId } from "../model-ref-shared.js";
@@ -240,6 +241,14 @@ export function resolveDynamicModelAuthProfile(params: {
   }
   const credential = store.profiles[profileId];
   const configuredMode = params.cfg?.auth?.profiles?.[profileId]?.mode;
+  if (explicitProfileId && !credential && configuredMode !== "aws-sdk") {
+    // Credential-scoped discovery cannot distinguish a missing model after its profile is removed.
+    throw createSelectedAuthProfileUnavailableError({
+      provider: params.provider,
+      modelId: params.modelId,
+      profileId,
+    });
+  }
   return {
     authProfileId: profileId,
     ...(credential?.type || configuredMode

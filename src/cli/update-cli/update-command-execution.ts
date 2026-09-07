@@ -46,6 +46,7 @@ import {
   UpdatePreMutationError,
   type UpdateCommandOptions,
 } from "./shared.js";
+import type { UpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import { inspectUpdateDatabaseContexts } from "./update-command-database-context.js";
 import { createBeforeGitMutation, updateGitInstall } from "./update-command-git.js";
 import {
@@ -92,6 +93,7 @@ type MutableUpdateExecutionResult = {
   candidateSchemaVersions?: OpenClawSchemaVersions;
   previousSchemaVersions?: OpenClawSchemaVersions;
   previousVerified?: boolean;
+  activationConfig?: UpdateConfigSnapshot;
 };
 
 export async function executeMutableUpdate(params: {
@@ -160,6 +162,10 @@ export async function executeMutableUpdate(params: {
   let candidateSchemaVersions: OpenClawSchemaVersions | undefined;
   let previousSchemaVersions: OpenClawSchemaVersions | undefined;
   let previousVerified = false;
+  let activationConfig: MutableUpdateExecutionResult["activationConfig"];
+  const onConfigSnapshot: PackageInstallUpdateParams["onConfigSnapshot"] = (snapshot) => {
+    activationConfig = snapshot;
+  };
   let candidateFailureReason: string | undefined;
   let validatedConfigSnapshot: { config: OpenClawConfig; hash?: string | null } | undefined;
   const originalRecovery = () =>
@@ -200,6 +206,9 @@ export async function executeMutableUpdate(params: {
           phase,
           expectedService: admission?.services.get(mutationRoot),
           updateRun: params.opts.run,
+          onStopped: (state) => {
+            preManagedServiceStop = state;
+          },
           handoffFromGateway: (state) =>
             handoffUpdateFromGateway({
               state,
@@ -251,9 +260,11 @@ export async function executeMutableUpdate(params: {
         throw new UpdatePreMutationError("managed-service-preflight", err.message);
       }
       params.stop();
-      throw new Error(`Failed to stop managed gateway service before update: ${String(err)}`, {
-        cause: err,
-      });
+      throw new UpdatePreMutationError(
+        "managed-service-stop-failed",
+        `Failed to stop managed gateway service before update: ${String(err)}`,
+        { cause: err },
+      );
     }
 
     if (phase === "inspect" && preManagedServiceStop?.serviceUpdateVerdict?.kind === "foreign") {
@@ -544,6 +555,7 @@ export async function executeMutableUpdate(params: {
         onTransaction: (transaction) => {
           packageTransaction = transaction;
         },
+        onConfigSnapshot,
       };
       await recheckSchemas(params.packageTargetSchemaVersions);
       result = await runPackageInstallUpdate({
@@ -580,6 +592,7 @@ export async function executeMutableUpdate(params: {
         onTransaction: (transaction) => {
           packageTransaction = transaction;
         },
+        onConfigSnapshot,
         // Foreign inspection metadata cannot authorize backup or Doctor writes.
         getManagedServiceEnv: () => ownedManagedUpdateContext?.env,
         invocationCwd: params.invocationCwd,
@@ -668,5 +681,6 @@ export async function executeMutableUpdate(params: {
     candidateSchemaVersions,
     previousSchemaVersions,
     previousVerified,
+    activationConfig,
   };
 }

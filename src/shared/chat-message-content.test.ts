@@ -237,3 +237,14 @@ describe("resolveAssistantMessagePhase", () => {
     ).toBeUndefined();
   });
 });
+
+it.each(["    code", "\tcode", "\n\n    code"])("retains selected phase source: %j", (text) => {
+  expect(extractAssistantPhaseText({ role: "assistant", content: text })).toBe(text);
+  expect(
+    extractAssistantPhaseText({
+      role: "assistant",
+      phase: "final_answer",
+      content: [{ type: "text", text }],
+    }),
+  ).toBe(text);
+});

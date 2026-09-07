@@ -385,6 +385,7 @@ export async function preflightOpenClawStateDatabasePath(
 /** Read schema headers and optionally verify current schema shape without repairing it. */
 export async function preflightOpenClawDatabaseSchemas(options: {
   env: NodeJS.ProcessEnv;
+  scope?: "state";
   signal?: AbortSignal;
   supportedVersions: OpenClawSchemaVersions;
   verifyCurrentSchemaShape?: boolean;
@@ -479,6 +480,9 @@ export async function preflightOpenClawDatabaseSchemas(options: {
         }
       }
 
+      if (options.scope === "state") {
+        return result;
+      }
       try {
         registeredDatabases = readRegisteredAgentDatabases(stateDatabase, statePath);
       } catch (error) {
@@ -511,6 +515,9 @@ export async function preflightOpenClawDatabaseSchemas(options: {
     } finally {
       stateSnapshot?.cleanup();
     }
+  }
+  if (options.scope === "state") {
+    return result;
   }
   let agentTargets = registeredDatabases;
   if (options.configuredAgentDatabaseTargets !== undefined) {

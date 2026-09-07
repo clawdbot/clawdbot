@@ -617,7 +617,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 
   <Accordion title="Bedrock Claude notes">
     - Anthropic Claude models on Bedrock (`amazon-bedrock/*anthropic.claude*`) accept `cacheRetention` pass-through when configured.
-    - Non-Anthropic Bedrock models are forced to `cacheRetention: "none"` at runtime.
+    - Supported Nova models offer opt-in explicit caching: set `cacheRetention` explicitly to `short` or `long` for system/message checkpoints with a five-minute TTL. Unset retention adds no checkpoints. Nova explicit caching has not been live-verified against AWS by OpenClaw maintainers yet. Other non-Claude models remain at `cacheRetention: "none"`; see [Bedrock prompt caching](/reference/prompt-caching#amazon-bedrock) for model IDs, AWS limits, and the live acceptance proof gap.
     - API-key smart defaults also seed `cacheRetention: "short"` for Claude-on-Bedrock refs when no explicit value is set.
 
   </Accordion>

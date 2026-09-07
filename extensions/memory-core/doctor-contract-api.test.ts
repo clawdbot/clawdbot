@@ -1844,7 +1844,7 @@ describe("memory-core doctor dreaming migration", () => {
       { id: "chunk-1", text: "remember this" },
     ]);
     await expect(fs.access(sharedAgentPath)).rejects.toThrow();
-    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${legacyPath}.migrated`);
   });
 
   it("ignores transient memory SQLite files when discovering default sidecars", async () => {

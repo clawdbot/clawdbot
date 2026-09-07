@@ -18,7 +18,12 @@ suite.define(() => {
         page,
         /\/assets\/command-palette-[^/?]+\.js(?:\?.*)?$/u,
       );
-      await page.goto(`${suite.server.baseUrl}chat`);
+      // Keep an unrelated route loader present so palette assertions cannot depend on it.
+      const chatModule = await holdModuleResponse(
+        page,
+        /\/assets\/chat-page-[^/?]+\.js(?:\?.*)?$/u,
+      );
+      await page.goto(`${suite.server.baseUrl}chat?session=main`);
 
       try {
         // Navigation can finish before the shell installs its shortcut handler.
@@ -29,12 +34,17 @@ suite.define(() => {
         await shell.waitFor({ state: "visible" });
         await paletteModule.request;
         expect(await shell.getAttribute("aria-label")).toBe("Loading…");
-        expect(await page.locator(".lazy-view-state--loading").count()).toBe(0);
+        await page
+          .locator("openclaw-router-outlet .lazy-view-state--loading")
+          .waitFor({ state: "attached" });
+        expect(await shell.locator(".lazy-view-state--loading").count()).toBe(0);
 
+        chatModule.release();
         paletteModule.release();
         await page.locator(".cmd-palette__input:not([disabled])").waitFor({ state: "visible" });
       } finally {
         paletteModule.release();
+        chatModule.release();
       }
     });
   });

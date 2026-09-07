@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
 import { WorkerTaskPool } from "./worker-task-pool.js";
 import type { PoolFixtureInput, PoolFixtureResult } from "./worker-task-pool.test-support.js";
 
@@ -46,6 +48,90 @@ afterEach(async () => {
 });
 
 describe("worker task pool", () => {
+  it.each(["abort", "close"] as const)(
+    "keeps host cancellation callbacks in the admitted caller context on %s",
+    async (ending) => {
+      const context = new AsyncLocalStorage<string>();
+      const pool = createPool();
+      const entered = createDeferredCore();
+      const abort = new AbortController();
+      const observed: Array<string | undefined> = [];
+      const run = context.run("owner", () =>
+        pool.run(
+          { label: "cancel", exchanges: 1 },
+          {
+            timeoutMs: 10000,
+            signal: abort.signal,
+            onRequest: async (_value, { signal }) => {
+              entered.resolve();
+              return await new Promise((_, reject) => {
+                signal.addEventListener(
+                  "abort",
+                  () => {
+                    observed.push(context.getStore());
+                    reject(new Error("closed"));
+                  },
+                  { once: true },
+                );
+              });
+            },
+          },
+        ),
+      );
+      const result = Promise.allSettled([run]);
+      await entered.promise;
+      await context.run("unrelated caller", async () => {
+        if (ending === "abort") {
+          abort.abort();
+        } else {
+          await pool.close();
+        }
+      });
+      expect((await result)[0]?.status).toBe("rejected");
+      expect(observed).toEqual(["owner"]);
+    },
+  );
+
+  it("keeps each queued and reused task's caller context through preparation and host exchanges", async () => {
+    const context = new AsyncLocalStorage<string>();
+    const pool = createPool();
+    const observed: Array<{ owner: string; stage: string; actual: string | undefined }> = [];
+    const submit = (owner: string) =>
+      context.run(owner, () =>
+        pool.run(
+          () => {
+            observed.push({ owner, stage: "prepare", actual: context.getStore() });
+            return { label: owner, exchanges: 2 };
+          },
+          {
+            timeoutMs: 10000,
+            onInputConsumed: () => {
+              observed.push({ owner, stage: "initial receipt", actual: context.getStore() });
+            },
+            onRequest: async () => {
+              observed.push({ owner, stage: "request", actual: context.getStore() });
+              await Promise.resolve();
+              return {
+                input: null,
+                timeoutMs: 10000,
+                onConsumed: () => {
+                  observed.push({ owner, stage: "reply receipt", actual: context.getStore() });
+                },
+              };
+            },
+          },
+        ),
+      );
+    const [first, queued] = await Promise.all([submit("first"), submit("queued")]);
+    const reused = await submit("reused");
+    expect(first.threadId).toBe(queued.threadId);
+    expect(reused.threadId).toBe(first.threadId);
+    expect(observed).toHaveLength(18);
+    for (const item of observed) {
+      expect(item.actual, item.stage + ":" + item.owner).toBe(item.owner);
+    }
+  });
+
   it("bounds parallel execution and reuses warm workers for queued requests", async () => {
     const pool = createPool({ workerUrl, maxWorkers: 2 });
     const counters = new SharedArrayBuffer(8);

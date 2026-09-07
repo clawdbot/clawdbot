@@ -579,7 +579,7 @@ suite.define(() => {
         );
         const configGetsBeforeReplacement = (await gateway.getRequests("config.get")).length;
         const connectsBeforeReplacement = (await gateway.getRequests("connect")).length;
-        await page.getByRole("textbox", { name: "WebSocket URL" }).fill("ws://127.0.0.1:19999");
+        await page.getByRole("textbox", { name: "Gateway URL" }).fill("ws://127.0.0.1:19999");
         await page.getByRole("button", { name: "Connect", exact: true }).click();
         await expect
           .poll(async () => (await gateway.getRequests("connect")).length)

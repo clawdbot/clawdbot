@@ -109,14 +109,10 @@ export function createTypingSignaler(params: {
     if (disabled) {
       return;
     }
-    const renderable = isRenderableText(text);
-    if (renderable) {
-      hasRenderableText = true;
-    } else if (normalizeOptionalString(text)) {
-      return;
-    } else {
+    if (!isRenderableText(text)) {
       return;
     }
+    hasRenderableText = true;
     if (shouldStartOnText) {
       await typing.startTypingOnText(text);
       return;

@@ -2,6 +2,7 @@
 
 package ai.openclaw.app
 
+import ai.openclaw.app.gateway.GatewayBootstrapHandoff
 import ai.openclaw.app.gateway.GatewayCustomHeaders
 import ai.openclaw.app.gateway.GatewayRegistryStore
 import ai.openclaw.app.gateway.GatewayStoreMigration
@@ -80,6 +81,9 @@ class SecurePrefs(
   context: Context,
   private val securePrefsOverride: SharedPreferences? = null,
 ) {
+  private val gatewayCredentialLock = Any()
+  private val gatewayCredentialRevisions = mutableMapOf<String, Long>()
+
   companion object {
     private const val displayNameKey = "node.displayName"
     private const val locationModeKey = "location.enabledMode"
@@ -509,19 +513,23 @@ class SecurePrefs(
   }
 
   fun loadGatewayCredentials(stableId: String): GatewayCredentials {
-    // Credential reads are gateway state; force the lazy registry so the one-time
-    // legacy migration has run before the first per-gateway bundle is resolved.
+    // The lazy migration can write credentials; initialize it before taking the
+    // credential lock so concurrent first access cannot invert those locks.
     gatewayRegistry
-    val raw = securePrefs.getString(gatewayCredentialsKey(stableId), null) ?: return GatewayCredentials()
-    return runCatching { json.decodeFromString<GatewayCredentials>(raw).normalized() }.getOrDefault(GatewayCredentials())
+    return synchronized(gatewayCredentialLock) {
+      val raw = securePrefs.getString(gatewayCredentialsKey(stableId), null) ?: return GatewayCredentials()
+      return runCatching { json.decodeFromString<GatewayCredentials>(raw).normalized() }.getOrDefault(GatewayCredentials())
+    }
   }
 
   fun saveGatewayCredentials(
     stableId: String,
     credentials: GatewayCredentials,
   ) {
-    securePrefs.edit {
-      putString(gatewayCredentialsKey(stableId), json.encodeToString(credentials.normalized()))
+    synchronized(gatewayCredentialLock) {
+      val key = gatewayCredentialsKey(stableId)
+      gatewayCredentialRevisions[key] = (gatewayCredentialRevisions[key] ?: 0L) + 1L
+      securePrefs.edit { putString(key, json.encodeToString(credentials.normalized())) }
     }
   }
 
@@ -535,7 +543,34 @@ class SecurePrefs(
   }
 
   fun clearGatewayCredentials(stableId: String) {
-    securePrefs.edit { remove(gatewayCredentialsKey(stableId)) }
+    synchronized(gatewayCredentialLock) {
+      val key = gatewayCredentialsKey(stableId)
+      gatewayCredentialRevisions[key] = (gatewayCredentialRevisions[key] ?: 0L) + 1L
+      securePrefs.edit { remove(key) }
+    }
+  }
+
+  internal fun prepareGatewayBootstrapHandoff(
+    stableId: String,
+    bootstrapToken: String,
+    allowStoredTokenRecovery: Boolean,
+  ): GatewayBootstrapHandoff {
+    gatewayRegistry
+    return synchronized(gatewayCredentialLock) {
+      val key = gatewayCredentialsKey(stableId)
+      val revision = gatewayCredentialRevisions[key]
+      val credentials = loadGatewayCredentials(stableId)
+      GatewayBootstrapHandoff(allowStoredTokenRecovery) {
+        synchronized(gatewayCredentialLock) {
+          when {
+            gatewayCredentialRevisions[key] != revision -> false
+            credentials.bootstrapToken == null -> true
+            credentials.bootstrapToken != bootstrapToken.trim() -> false
+            else -> commitSecureStrings(mapOf(key to json.encodeToString(credentials.copy(bootstrapToken = null))))
+          }
+        }
+      }
+    }
   }
 
   /**
@@ -611,6 +646,22 @@ class SecurePrefs(
     key: String,
     value: String,
   ): Boolean = securePrefs.edit().putString(key, value).commit()
+
+  internal fun commitSecureStrings(values: Map<String, String>): Boolean =
+    synchronized(securePrefs) {
+      val previous = values.keys.associateWith { securePrefs.getString(it, null) }
+      val editor = securePrefs.edit()
+      values.forEach { (key, value) -> editor.putString(key, value) }
+      val committed = runCatching { editor.commit() }.getOrDefault(false)
+      if (!committed) {
+        // commit(false) can still publish its changes in memory. Keep failed handoffs
+        // from looking complete to a later reconnect in this process.
+        securePrefs.edit {
+          previous.forEach { (key, value) -> if (value == null) remove(key) else putString(key, value) }
+        }
+      }
+      return committed
+    }
 
   fun remove(key: String) {
     securePrefs.edit { remove(key) }
