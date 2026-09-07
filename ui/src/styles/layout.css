@@ -1272,14 +1272,8 @@ openclaw-settings-save-indicator:empty {
   overflow-wrap: anywhere;
 }
 
-.sidebar-session-error.sidebar-session-catalog-error .callout__content {
-  max-height: none;
-  flex-basis: 100%;
-  overflow: visible;
-}
-
-.sidebar-session-catalog-error .btn {
-  margin-inline-start: auto;
+.sidebar-session-catalog-error {
+  overflow-wrap: anywhere;
 }
 
 .sidebar-session-error .callout__dismiss {

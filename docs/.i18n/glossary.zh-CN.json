@@ -2196,6 +2196,46 @@
     "target": "构建与开发"
   },
   {
+    "source": "CI pipeline jobs",
+    "target": "CI 流水线作业"
+  },
+  {
+    "source": "Watch a CI run",
+    "target": "查看 CI 运行"
+  },
+  {
+    "source": "CI checkout ownership",
+    "target": "CI 检出归属"
+  },
+  {
+    "source": "CI scope and routing",
+    "target": "CI 范围与路由"
+  },
+  {
+    "source": "CI runner classes",
+    "target": "CI 运行器类型"
+  },
+  {
+    "source": "CI capacity and shard weights",
+    "target": "CI 容量与分片权重"
+  },
+  {
+    "source": "Release validation workflows",
+    "target": "发布验证工作流"
+  },
+  {
+    "source": "Scheduled and maintenance workflows",
+    "target": "定时与维护工作流"
+  },
+  {
+    "source": "Local checks and Testbox",
+    "target": "本地检查与 Testbox"
+  },
+  {
+    "source": "Release channels",
+    "target": "发布渠道"
+  },
+  {
     "source": "Transport and framing",
     "target": "传输与分帧"
   },

@@ -576,7 +576,15 @@ describe("settings sidebar search", () => {
     expect(container.querySelector(".sidebar-footer-bar__status")).toBeNull();
     expect(container.querySelector("openclaw-settings-save-indicator")).not.toBeNull();
 
+    // A Gateway-confirmed suspension outranks the ordinary offline pill while reconnecting.
     renderSidebar(true, "connection refused?token=settings-secret", 3, false, "prepared");
+    expect(container.querySelector(".sidebar-footer-bar__status--suspended")?.textContent).toBe(
+      "Suspended",
+    );
+    expect(container.querySelector("button.sidebar-footer-bar__status")).toBeNull();
+    expect(container.querySelector("openclaw-settings-save-indicator")).toBeNull();
+
+    renderSidebar(true, "connection refused?token=settings-secret", 3);
     expect(container.querySelector("openclaw-settings-save-indicator")).toBeNull();
     const button = container.querySelector<HTMLButtonElement>(".sidebar-footer-bar__status");
     expect(button?.hasAttribute("title")).toBe(false);
