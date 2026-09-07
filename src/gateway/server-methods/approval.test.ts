@@ -856,6 +856,45 @@ describe("unified approval handlers", () => {
     expect(response.error).toMatchObject({ code: "INVALID_REQUEST" });
   });
 
+  it("looks up and resolves a live approval when approval.get/resolve receive a padded id", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const pending = registerExec(managers.exec, { id: "padded-approval-lookup" });
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      databaseOptions,
+    });
+    const paddedId = ` ${pending.record.id} `;
+
+    // Negative control: live Map lookup is exact and misses clipboard padding.
+    expect(managers.exec.getLiveSnapshot(paddedId)).toBeNull();
+
+    const got = await invoke({
+      handlers,
+      method: "approval.get",
+      body: { id: paddedId },
+      client: createClient({ deviceId: "reviewer" }),
+    });
+    expect(got.ok).toBe(true);
+    expect(got.result).toMatchObject({
+      approval: { id: pending.record.id, status: "pending" },
+    });
+
+    const resolved = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body: { id: paddedId, kind: "exec", decision: "deny" },
+      client: createClient({ deviceId: "reviewer" }),
+    });
+    expect(resolved.ok).toBe(true);
+    expect(resolved.result).toMatchObject({
+      applied: true,
+      approval: { id: pending.record.id, status: "denied", decision: "deny" },
+    });
+    await expect(pending.decision).resolves.toBe("deny");
+  });
+
   it.for(["approval.get", "approval.resolve"] as const)(
     "returns sanitized UNAVAILABLE when %s cannot read durable state",
     async (method, testContext) => {
