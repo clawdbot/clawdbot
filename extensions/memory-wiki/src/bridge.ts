@@ -17,7 +17,7 @@ import {
   renderWikiMarkdown,
   slugifyWikiSegment,
 } from "./markdown.js";
-import { syncImportedSourcePages } from "./source-import.js";
+import { syncImportedSourcePages, type BridgeMemoryWikiResult } from "./source-import.js";
 import { writeImportedSourcePage } from "./source-page-shared.js";
 import { resolveArtifactKey } from "./source-path-shared.js";
 import {
@@ -31,16 +31,6 @@ type BridgeArtifact = {
   workspaceDir: string;
   relativePath: string;
   absolutePath: string;
-};
-
-export type BridgeMemoryWikiResult = {
-  importedCount: number;
-  updatedCount: number;
-  skippedCount: number;
-  removedCount: number;
-  artifactCount: number;
-  workspaces: number;
-  pagePaths: string[];
 };
 
 export function resolveMemoryWikiVaultAgentId(

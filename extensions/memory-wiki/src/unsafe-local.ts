@@ -6,7 +6,6 @@ import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { walkMemoryWikiDirectory } from "./bounded-walk.js";
-import type { BridgeMemoryWikiResult } from "./bridge.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import {
   createWikiPageFilename,
@@ -15,7 +14,7 @@ import {
   slugifyWikiSegment,
   toWikiPageSummary,
 } from "./markdown.js";
-import { syncImportedSourcePages } from "./source-import.js";
+import { syncImportedSourcePages, type BridgeMemoryWikiResult } from "./source-import.js";
 import { writeImportedSourcePage } from "./source-page-shared.js";
 import { resolveArtifactKey } from "./source-path-shared.js";
 import {

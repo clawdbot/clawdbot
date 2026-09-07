@@ -1,4 +1,3 @@
-import type { BridgeMemoryWikiResult } from "./bridge.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
 import type { writeImportedSourcePage } from "./source-page-shared.js";
@@ -9,6 +8,16 @@ import {
   type MemoryWikiImportedSourceGroup,
 } from "./source-sync-state.js";
 import { initializeMemoryWikiVault } from "./vault.js";
+
+export type BridgeMemoryWikiResult = {
+  importedCount: number;
+  updatedCount: number;
+  skippedCount: number;
+  removedCount: number;
+  artifactCount: number;
+  workspaces: number;
+  pagePaths: string[];
+};
 
 type ImportedSourceBatch = {
   results: Awaited<ReturnType<typeof writeImportedSourcePage>>[];
