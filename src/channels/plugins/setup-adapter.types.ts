@@ -43,6 +43,7 @@ export type ChannelSetupAdapter<Input extends { name?: string } = ChannelSetupIn
    * Selects the account-key rule for single-account promotion. When absent, prefer the exact
    * target key, then the existing normalized scan. With "case-insensitive", normalize the target
    * and select its exact key, else the first trimmed case-insensitive match, else the canonical id.
+   * Declare it on channels whose readers select account entries with resolveAccountEntry.
    */
   accountEntryLookup?: "case-insensitive";
   singleAccountKeysToMove?: readonly string[];

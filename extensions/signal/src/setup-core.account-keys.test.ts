@@ -233,7 +233,7 @@ describe("signalSetupAdapter account keys", () => {
       accounts: { "Work Phone": { name: "Work" }, personal: { name: "Personal" } },
     });
 
-    // The promotion writer targets the configured defaultAccount (setup-helpers.ts:375-384), so
+    // The promotion writer targets the configured defaultAccount (setup-helpers.ts:370-379), so
     // the oracle has to see the original config to preview this write into "Work Phone".
     expect(
       signalSetupAdapter.validateInput?.({
@@ -328,7 +328,7 @@ describe("signalSetupAdapter account keys", () => {
       const authored = structuredClone(cfg);
 
       // With no exact key the promotion and the account lookup both take the first key in map
-      // order (src/channels/plugins/setup-helpers.ts:354-357, src/routing/account-lookup.ts:18-22),
+      // order (src/channels/plugins/setup-helpers.ts:349-352, src/routing/account-lookup.ts:18-22),
       // so a last-wins lookup would refuse this valid promotion.
       expect(
         signalSetupAdapter.validateInput?.({ cfg, accountId: "work", input: externalNativeInput }),

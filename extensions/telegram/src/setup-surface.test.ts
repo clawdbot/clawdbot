@@ -141,9 +141,9 @@ describe("Telegram setup promotion contract", () => {
       accountId: "new-account",
       input: { token: "789:NEW_TEST_TOKEN" },
     });
-    // Check the serialized configuration rather than an in-memory clone.
-    const serialized = JSON.stringify(written);
-    const next = JSON.parse(serialized) as OpenClawConfig;
+    // The result only counts once it survives the config writer's serialize and reread.
+    const persisted = JSON.stringify(written);
+    const next = JSON.parse(persisted) as OpenClawConfig;
 
     expect(resolveTelegramAccount({ cfg: next, accountId: "default" }).token).toBe("root-tok");
     expect(next.channels?.telegram?.accounts?.personal).toEqual({ name: "P" });

@@ -329,8 +329,10 @@ function resolveExistingAccountKey(
   accountEntryLookup: ChannelSetupAdapter["accountEntryLookup"],
 ): string {
   if (accountEntryLookup !== "case-insensitive") {
-    // Prefer an exact target key before the existing normalized scan. The scan retains its
-    // existing treatment of blocked and canonical-less keys.
+    // A promotion aimed at a canonical id lands on that key even when an alias is listed first, and
+    // one aimed at an id that only an alias spells lands on that alias rather than seeding a
+    // canonical twin. Unlike resolveNormalizedAccountEntry (account-lookup.ts:27-51) the scan skips
+    // no blocked or canonical-less key, so accounts["!!!"] takes a promotion aimed at "default".
     if (Object.hasOwn(accounts, targetAccountId)) {
       return targetAccountId;
     }
