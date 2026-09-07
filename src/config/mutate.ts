@@ -671,271 +671,279 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
       `Config mutation cannot update external $include target ${includePath}; edit the included file directly or move it under the config directory.`,
     );
   }
-  const includeTarget = await resolveExpectedRootBoundIncludeFile({
-    configPath: params.snapshot.path,
-    includePath,
-    allowedRoots,
-    expectedAbsolutePath: expectedIncludeTarget,
-  });
-  const previousIncludeRaw = await readRootBoundFileRawIfExists(includeTarget);
-  const previousIncludeHash = hashConfigIncludeRaw(previousIncludeRaw);
-  const expectedIncludeHash = params.writeOptions?.includeFileHashesForWrite?.[includePath];
-  if (expectedIncludeHash !== undefined && expectedIncludeHash !== previousIncludeHash) {
-    throw new ConfigMutationConflictError("included config changed since last load");
-  }
-  const envForRestore =
-    resolveWriteEnvSnapshotForPath({
-      actualConfigPath: params.snapshot.path,
-      expectedConfigPath: params.writeOptions?.expectedConfigPath,
-      envSnapshotForRestore: params.writeOptions?.envSnapshotForRestore,
-    }) ??
-    params.io?.env ??
-    process.env;
-  const snapshotHasBrokenInclude = snapshotProvesBrokenInclude(params.snapshot, includePath);
-  if (
-    previousIncludeRaw === null &&
-    (!snapshotHasBrokenInclude || expectedIncludeHash === undefined)
-  ) {
-    throw new ConfigMutationConflictError("included config changed since last load");
-  }
-  let includedValueToWrite = nextConfigRecord[key];
-  if (previousIncludeRaw !== null) {
-    let authoredIncludeValue: unknown;
-    let parsedInclude = false;
-    try {
-      authoredIncludeValue = parseJsonWithJson5Fallback(previousIncludeRaw);
-      parsedInclude = true;
-    } catch {
-      // A validated replacement is the repair path for a malformed include.
-      if (!snapshotHasBrokenInclude || expectedIncludeHash === undefined) {
-        throw new ConfigMutationConflictError("included config changed since last load");
-      }
-    }
-    if (parsedInclude) {
-      if (containsConfigIncludeDirective(authoredIncludeValue)) {
-        return null;
-      }
-      const currentIncludedValue = resolveConfigEnvVars(authoredIncludeValue, envForRestore, {
-        onMissing: () => {},
+  // Include sources can be shared by different root configs. Participate in
+  // their exact canonical target lock through preparation, commit and rollback.
+  return await withConfigWriteLock(
+    expectedIncludeTarget,
+    async () => {
+      const includeTarget = await resolveExpectedRootBoundIncludeFile({
+        configPath: params.snapshot.path,
+        includePath,
+        allowedRoots,
+        expectedAbsolutePath: expectedIncludeTarget,
       });
-      // Compare source with source: the snapshot may already have converted a
-      // legacy roster even though the conflict-checked include bytes are unchanged.
-      const snapshotSource =
-        params.snapshot.sourceConfigBeforeMigrations ?? params.snapshot.sourceConfig;
-      const snapshotIncludedValue = (snapshotSource as Record<string, unknown>)[key];
-      if (!isDeepStrictEqual(currentIncludedValue, snapshotIncludedValue)) {
+      const previousIncludeRaw = await readRootBoundFileRawIfExists(includeTarget);
+      const previousIncludeHash = hashConfigIncludeRaw(previousIncludeRaw);
+      const expectedIncludeHash = params.writeOptions?.includeFileHashesForWrite?.[includePath];
+      if (expectedIncludeHash !== undefined && expectedIncludeHash !== previousIncludeHash) {
         throw new ConfigMutationConflictError("included config changed since last load");
       }
-      includedValueToWrite = restoreEnvVarRefs(
-        includedValueToWrite,
-        authoredIncludeValue,
-        envForRestore,
-      );
-    }
-  }
-  const deferRuntimeActivation = hasManagedRuntimeConfigWriteOwner(params.snapshot.path);
-  const runtimeEnvBaseline = deferRuntimeActivation
-    ? resolveManagedRuntimeEnvBaseline()
-    : undefined;
-  const runtimeCandidateEnv = runtimeEnvBaseline
-    ? createConfigRuntimeEnvBase(runtimeEnvBaseline.sourceConfig, process.env, {
-        preservedKeys: GATEWAY_CONFIG_SELECTION_ENV_KEYS,
-      })
-    : cloneEnvWithPlatformSemantics(writeEnv);
-  const authoredRuntimeCandidate = restoreEnvVarRefs(
-    nextConfig,
-    params.snapshot.parsed,
-    envForRestore,
-  ) as OpenClawConfig;
-  applyConfigEnvVars(authoredRuntimeCandidate, runtimeCandidateEnv);
-  const runtimeConfigToWrite = resolveConfigEnvVars(
-    {
-      ...authoredRuntimeCandidate,
-      [key]: includedValueToWrite,
-    },
-    runtimeCandidateEnv,
-    { onMissing: () => {} },
-  ) as OpenClawConfig;
-  const validated = validateConfigObjectWithPlugins(
-    runtimeConfigToWrite,
-    params.writeOptions?.skipPluginValidation ? { pluginValidation: "skip" } : undefined,
-  );
-  if (!validated.ok) {
-    throw createInvalidConfigError(
-      params.snapshot.path,
-      formatInvalidConfigDetails(validated.issues),
-    );
-  }
-
-  const runtimeConfigSnapshot = getRuntimeConfigSnapshot();
-  const runtimeConfigSourceSnapshot = getRuntimeConfigSourceSnapshot();
-  const hadRuntimeSnapshot = Boolean(runtimeConfigSnapshot);
-  const hadBothSnapshots = Boolean(runtimeConfigSnapshot && runtimeConfigSourceSnapshot);
-  let managedPreparedCandidates = new Map<symbol, RuntimeConfigWritePreparedCandidate>();
-  let runtimePreflightResult: unknown;
-  if (runtimeEnvBaseline) {
-    managedPreparedCandidates = await preflightManagedRuntimeConfigWrite(
-      params.snapshot.path,
-      runtimeConfigToWrite,
-      params.writeOptions?.runtimeRefresh,
-    );
-    assertManagedRuntimeEnvGeneration(runtimeEnvBaseline.generation);
-  } else {
-    runtimePreflightResult = await preflightRuntimeSnapshotWrite({
-      nextSourceConfig: runtimeConfigToWrite,
-      refreshOptions: params.writeOptions?.runtimeRefresh,
-      formatRefreshError: (error) => formatErrorMessage(error),
-      createRefreshError: (detail, cause) =>
-        new Error(
-          `Config write blocked before committing ${includePath}: active SecretRef resolution failed: ${detail}`,
-          { cause },
-        ),
-    });
-  }
-  const committedIncludeRaw = formatJsonFileValue(includedValueToWrite);
-  const committedIncludeHash = hashConfigIncludeRaw(committedIncludeRaw);
-  const callerPreCommit = params.writeOptions?.preCommitRuntimePreflight;
-  assertConfigPathForWrite();
-  await assertRootConfigStillMatchesSnapshot(params.snapshot);
-  const includeRawAtCommit = await readRootBoundFileRawIfExists(includeTarget);
-  if (hashConfigIncludeRaw(includeRawAtCommit) !== hashConfigIncludeRaw(previousIncludeRaw)) {
-    throw new ConfigMutationConflictError("included config changed while preparing write");
-  }
-  await writeRootBoundJsonFile({
-    configPath: params.snapshot.path,
-    includePath,
-    allowedRoots,
-    expectedTargetPath: expectedIncludeTarget,
-    value: includedValueToWrite,
-    expectedRaw: includeRawAtCommit,
-    rootSnapshot: params.snapshot,
-    assertConfigPathForWrite,
-    skipOutputLogs: params.writeOptions?.skipOutputLogs,
-    preCommitRuntimePreflight:
-      runtimeEnvBaseline || callerPreCommit
-        ? async () => {
-            if (runtimeEnvBaseline) {
-              assertManagedRuntimeEnvGeneration(runtimeEnvBaseline.generation);
-            }
-            await callerPreCommit?.(runtimeConfigToWrite);
+      const envForRestore =
+        resolveWriteEnvSnapshotForPath({
+          actualConfigPath: params.snapshot.path,
+          expectedConfigPath: params.writeOptions?.expectedConfigPath,
+          envSnapshotForRestore: params.writeOptions?.envSnapshotForRestore,
+        }) ??
+        params.io?.env ??
+        process.env;
+      const snapshotHasBrokenInclude = snapshotProvesBrokenInclude(params.snapshot, includePath);
+      if (
+        previousIncludeRaw === null &&
+        (!snapshotHasBrokenInclude || expectedIncludeHash === undefined)
+      ) {
+        throw new ConfigMutationConflictError("included config changed since last load");
+      }
+      let includedValueToWrite = nextConfigRecord[key];
+      if (previousIncludeRaw !== null) {
+        let authoredIncludeValue: unknown;
+        let parsedInclude = false;
+        try {
+          authoredIncludeValue = parseJsonWithJson5Fallback(previousIncludeRaw);
+          parsedInclude = true;
+        } catch {
+          // A validated replacement is the repair path for a malformed include.
+          if (!snapshotHasBrokenInclude || expectedIncludeHash === undefined) {
+            throw new ConfigMutationConflictError("included config changed since last load");
           }
-        : undefined,
-  });
-  const envBeforePostWriteRead = { ...writeEnv };
-  let envAfterPostWriteRead = envBeforePostWriteRead;
-  try {
-    if (
-      params.writeOptions?.skipRuntimeSnapshotRefresh &&
-      !hadRuntimeSnapshot &&
-      !getRuntimeConfigSnapshotRefreshHandler()
-    ) {
-      return { persistedHash: null, persistedConfig: runtimeConfigToWrite };
-    }
-
-    let refreshed: Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>;
-    try {
-      refreshed = await readConfigSnapshotForMutation({
-        ownedConfigPathForWrite: params.snapshot.path,
-        io: params.io,
-        writeOptions: params.writeOptions,
-      });
-    } finally {
-      envAfterPostWriteRead = { ...writeEnv };
-    }
-    const refreshedSnapshot = refreshed.snapshot;
-    assertConfigPathForWrite();
-    assertExpectedConfigPathMatches(refreshedSnapshot, params.snapshot.path);
-    const persistedHash = resolveConfigSnapshotHash(refreshedSnapshot);
-    if (!refreshedSnapshot.valid) {
-      throw createInvalidConfigError(
-        params.snapshot.path,
-        formatInvalidConfigDetails(refreshedSnapshot.issues),
-      );
-    }
-    if (!persistedHash) {
-      throw new Error(
-        `Config was written to ${params.snapshot.path}, but no persisted hash was available.`,
-      );
-    }
-
-    const notifyCommittedWrite = () => {
-      const currentRuntimeConfig = getRuntimeConfigSnapshot();
-      const notificationRuntimeConfig = deferRuntimeActivation
-        ? refreshedSnapshot.runtimeConfig
-        : currentRuntimeConfig;
-      if (!notificationRuntimeConfig) {
-        return;
+        }
+        if (parsedInclude) {
+          if (containsConfigIncludeDirective(authoredIncludeValue)) {
+            return null;
+          }
+          const currentIncludedValue = resolveConfigEnvVars(authoredIncludeValue, envForRestore, {
+            onMissing: () => {},
+          });
+          // Compare source with source: the snapshot may already have converted a
+          // legacy roster even though the conflict-checked include bytes are unchanged.
+          const snapshotSource =
+            params.snapshot.sourceConfigBeforeMigrations ?? params.snapshot.sourceConfig;
+          const snapshotIncludedValue = (snapshotSource as Record<string, unknown>)[key];
+          if (!isDeepStrictEqual(currentIncludedValue, snapshotIncludedValue)) {
+            throw new ConfigMutationConflictError("included config changed since last load");
+          }
+          includedValueToWrite = restoreEnvVarRefs(
+            includedValueToWrite,
+            authoredIncludeValue,
+            envForRestore,
+          );
+        }
       }
-      const notificationPreparedCandidates = new Map(
-        [...managedPreparedCandidates].map(([ownerId, candidate]) => [
-          ownerId,
-          {
-            ...candidate,
-            runtimeConfig:
-              candidate.reapplyRuntimeOverlays?.(refreshedSnapshot.runtimeConfig) ??
-              candidate.runtimeConfig,
-            compareConfig:
-              candidate.reapplyCompareOverlays?.(refreshedSnapshot.sourceConfig) ??
-              candidate.compareConfig,
-          },
-        ]),
+      const deferRuntimeActivation = hasManagedRuntimeConfigWriteOwner(params.snapshot.path);
+      const runtimeEnvBaseline = deferRuntimeActivation
+        ? resolveManagedRuntimeEnvBaseline()
+        : undefined;
+      const runtimeCandidateEnv = runtimeEnvBaseline
+        ? createConfigRuntimeEnvBase(runtimeEnvBaseline.sourceConfig, process.env, {
+            preservedKeys: GATEWAY_CONFIG_SELECTION_ENV_KEYS,
+          })
+        : cloneEnvWithPlatformSemantics(writeEnv);
+      const authoredRuntimeCandidate = restoreEnvVarRefs(
+        nextConfig,
+        params.snapshot.parsed,
+        envForRestore,
+      ) as OpenClawConfig;
+      applyConfigEnvVars(authoredRuntimeCandidate, runtimeCandidateEnv);
+      const runtimeConfigToWrite = resolveConfigEnvVars(
+        {
+          ...authoredRuntimeCandidate,
+          [key]: includedValueToWrite,
+        },
+        runtimeCandidateEnv,
+        { onMissing: () => {} },
+      ) as OpenClawConfig;
+      const validated = validateConfigObjectWithPlugins(
+        runtimeConfigToWrite,
+        params.writeOptions?.skipPluginValidation ? { pluginValidation: "skip" } : undefined,
       );
-      notifyRuntimeConfigWriteListeners(
-        attachRuntimeConfigWriteApplication(
-          createRuntimeConfigWriteNotification({
-            configPath: params.snapshot.path,
-            sourceConfig: refreshedSnapshot.sourceConfig,
-            runtimeConfig: notificationRuntimeConfig,
-            persistedHash,
-            afterWrite: params.afterWrite ?? params.writeOptions?.afterWrite,
-            runtimeRefresh: params.writeOptions?.runtimeRefresh,
-            ...(notificationPreparedCandidates.size > 0
-              ? { preparedCandidatesByOwner: notificationPreparedCandidates }
-              : {}),
-          }),
-          getRuntimeConfigWriteApplication(params.writeOptions ?? {}),
-        ),
-      );
-    };
-    await finalizeRuntimeSnapshotWrite({
-      nextSourceConfig: refreshedSnapshot.sourceConfig,
-      refreshOptions: params.writeOptions?.runtimeRefresh,
-      hadRuntimeSnapshot,
-      hadBothSnapshots,
-      loadFreshConfig: () => refreshedSnapshot.runtimeConfig,
-      notifyCommittedWrite,
-      preflightResult: runtimePreflightResult,
-      deferRuntimeActivation,
-      formatRefreshError: (error) => formatErrorMessage(error),
-      createRefreshError: (detail, cause) =>
-        new Error(
-          `Config was written to ${params.snapshot.path}, but runtime snapshot refresh failed: ${detail}`,
-          { cause },
-        ),
-    });
-    return { persistedHash, persistedConfig: refreshedSnapshot.sourceConfig };
-  } catch (error) {
-    try {
-      const rolledBack = await rollbackJsonFileWriteIfUnchanged({
-        target: includeTarget,
-        previousRaw: includeRawAtCommit,
-        committedHash: committedIncludeHash,
-      });
-      if (rolledBack) {
-        restoreEnvChangesIfUnchanged({
-          env: writeEnv,
-          before: envBeforePostWriteRead,
-          after: envAfterPostWriteRead,
+      if (!validated.ok) {
+        throw createInvalidConfigError(
+          params.snapshot.path,
+          formatInvalidConfigDetails(validated.issues),
+        );
+      }
+
+      const runtimeConfigSnapshot = getRuntimeConfigSnapshot();
+      const runtimeConfigSourceSnapshot = getRuntimeConfigSourceSnapshot();
+      const hadRuntimeSnapshot = Boolean(runtimeConfigSnapshot);
+      const hadBothSnapshots = Boolean(runtimeConfigSnapshot && runtimeConfigSourceSnapshot);
+      let managedPreparedCandidates = new Map<symbol, RuntimeConfigWritePreparedCandidate>();
+      let runtimePreflightResult: unknown;
+      if (runtimeEnvBaseline) {
+        managedPreparedCandidates = await preflightManagedRuntimeConfigWrite(
+          params.snapshot.path,
+          runtimeConfigToWrite,
+          params.writeOptions?.runtimeRefresh,
+        );
+        assertManagedRuntimeEnvGeneration(runtimeEnvBaseline.generation);
+      } else {
+        runtimePreflightResult = await preflightRuntimeSnapshotWrite({
+          nextSourceConfig: runtimeConfigToWrite,
+          refreshOptions: params.writeOptions?.runtimeRefresh,
+          formatRefreshError: (error) => formatErrorMessage(error),
+          createRefreshError: (detail, cause) =>
+            new Error(
+              `Config write blocked before committing ${includePath}: active SecretRef resolution failed: ${detail}`,
+              { cause },
+            ),
         });
       }
-    } catch (rollbackError) {
-      throw new Error(
-        `${formatErrorMessage(error)} Rollback failed: ${formatErrorMessage(rollbackError)}`,
-        { cause: rollbackError },
-      );
-    }
-    throw error;
-  }
+      const committedIncludeRaw = formatJsonFileValue(includedValueToWrite);
+      const committedIncludeHash = hashConfigIncludeRaw(committedIncludeRaw);
+      const callerPreCommit = params.writeOptions?.preCommitRuntimePreflight;
+      assertConfigPathForWrite();
+      await assertRootConfigStillMatchesSnapshot(params.snapshot);
+      const includeRawAtCommit = await readRootBoundFileRawIfExists(includeTarget);
+      if (hashConfigIncludeRaw(includeRawAtCommit) !== hashConfigIncludeRaw(previousIncludeRaw)) {
+        throw new ConfigMutationConflictError("included config changed while preparing write");
+      }
+      await writeRootBoundJsonFile({
+        configPath: params.snapshot.path,
+        includePath,
+        allowedRoots,
+        expectedTargetPath: expectedIncludeTarget,
+        value: includedValueToWrite,
+        expectedRaw: includeRawAtCommit,
+        rootSnapshot: params.snapshot,
+        assertConfigPathForWrite,
+        skipOutputLogs: params.writeOptions?.skipOutputLogs,
+        preCommitRuntimePreflight:
+          runtimeEnvBaseline || callerPreCommit
+            ? async () => {
+                if (runtimeEnvBaseline) {
+                  assertManagedRuntimeEnvGeneration(runtimeEnvBaseline.generation);
+                }
+                await callerPreCommit?.(runtimeConfigToWrite);
+              }
+            : undefined,
+      });
+      const envBeforePostWriteRead = { ...writeEnv };
+      let envAfterPostWriteRead = envBeforePostWriteRead;
+      try {
+        if (
+          params.writeOptions?.skipRuntimeSnapshotRefresh &&
+          !hadRuntimeSnapshot &&
+          !getRuntimeConfigSnapshotRefreshHandler()
+        ) {
+          return { persistedHash: null, persistedConfig: runtimeConfigToWrite };
+        }
+
+        let refreshed: Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>;
+        try {
+          refreshed = await readConfigSnapshotForMutation({
+            ownedConfigPathForWrite: params.snapshot.path,
+            io: params.io,
+            writeOptions: params.writeOptions,
+          });
+        } finally {
+          envAfterPostWriteRead = { ...writeEnv };
+        }
+        const refreshedSnapshot = refreshed.snapshot;
+        assertConfigPathForWrite();
+        assertExpectedConfigPathMatches(refreshedSnapshot, params.snapshot.path);
+        const persistedHash = resolveConfigSnapshotHash(refreshedSnapshot);
+        if (!refreshedSnapshot.valid) {
+          throw createInvalidConfigError(
+            params.snapshot.path,
+            formatInvalidConfigDetails(refreshedSnapshot.issues),
+          );
+        }
+        if (!persistedHash) {
+          throw new Error(
+            `Config was written to ${params.snapshot.path}, but no persisted hash was available.`,
+          );
+        }
+
+        const notifyCommittedWrite = () => {
+          const currentRuntimeConfig = getRuntimeConfigSnapshot();
+          const notificationRuntimeConfig = deferRuntimeActivation
+            ? refreshedSnapshot.runtimeConfig
+            : currentRuntimeConfig;
+          if (!notificationRuntimeConfig) {
+            return;
+          }
+          const notificationPreparedCandidates = new Map(
+            [...managedPreparedCandidates].map(([ownerId, candidate]) => [
+              ownerId,
+              {
+                ...candidate,
+                runtimeConfig:
+                  candidate.reapplyRuntimeOverlays?.(refreshedSnapshot.runtimeConfig) ??
+                  candidate.runtimeConfig,
+                compareConfig:
+                  candidate.reapplyCompareOverlays?.(refreshedSnapshot.sourceConfig) ??
+                  candidate.compareConfig,
+              },
+            ]),
+          );
+          notifyRuntimeConfigWriteListeners(
+            attachRuntimeConfigWriteApplication(
+              createRuntimeConfigWriteNotification({
+                configPath: params.snapshot.path,
+                sourceConfig: refreshedSnapshot.sourceConfig,
+                runtimeConfig: notificationRuntimeConfig,
+                persistedHash,
+                afterWrite: params.afterWrite ?? params.writeOptions?.afterWrite,
+                runtimeRefresh: params.writeOptions?.runtimeRefresh,
+                ...(notificationPreparedCandidates.size > 0
+                  ? { preparedCandidatesByOwner: notificationPreparedCandidates }
+                  : {}),
+              }),
+              getRuntimeConfigWriteApplication(params.writeOptions ?? {}),
+            ),
+          );
+        };
+        await finalizeRuntimeSnapshotWrite({
+          nextSourceConfig: refreshedSnapshot.sourceConfig,
+          refreshOptions: params.writeOptions?.runtimeRefresh,
+          hadRuntimeSnapshot,
+          hadBothSnapshots,
+          loadFreshConfig: () => refreshedSnapshot.runtimeConfig,
+          notifyCommittedWrite,
+          preflightResult: runtimePreflightResult,
+          deferRuntimeActivation,
+          formatRefreshError: (error) => formatErrorMessage(error),
+          createRefreshError: (detail, cause) =>
+            new Error(
+              `Config was written to ${params.snapshot.path}, but runtime snapshot refresh failed: ${detail}`,
+              { cause },
+            ),
+        });
+        return { persistedHash, persistedConfig: refreshedSnapshot.sourceConfig };
+      } catch (error) {
+        try {
+          const rolledBack = await rollbackJsonFileWriteIfUnchanged({
+            target: includeTarget,
+            previousRaw: includeRawAtCommit,
+            committedHash: committedIncludeHash,
+          });
+          if (rolledBack) {
+            restoreEnvChangesIfUnchanged({
+              env: writeEnv,
+              before: envBeforePostWriteRead,
+              after: envAfterPostWriteRead,
+            });
+          }
+        } catch (rollbackError) {
+          throw new Error(
+            `${formatErrorMessage(error)} Rollback failed: ${formatErrorMessage(rollbackError)}`,
+            { cause: rollbackError },
+          );
+        }
+        throw error;
+      }
+    },
+    writeEnv,
+  );
 }
 
 function resolveConfigWriteResult(
