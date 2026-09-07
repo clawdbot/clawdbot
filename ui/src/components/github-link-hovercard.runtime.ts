@@ -425,11 +425,6 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     this.hovercard.scheduleClose();
   };
 
-  private readonly handleCardPointerEnter = () => {
-    this.hovercard.pointerOverCard = true;
-    this.hovercard.clearClose();
-  };
-
   private readonly handleCardPointerLeave = () => {
     this.hovercard.pointerOverCard = false;
     // A pointer-opened card must release fully on mouse-out even if a click
@@ -438,22 +433,6 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     if (this.activeTrigger === "pointer") {
       this.hovercard.cardFocusInside = false;
     }
-    this.hovercard.scheduleClose();
-  };
-
-  // The card is portaled to document.body, so focus landing on its title link
-  // never reaches the provider's delegated focusin/focusout listeners; track it
-  // directly so keyboard users can tab into the link without losing the card.
-  private readonly handleCardFocusIn = () => {
-    this.hovercard.cardFocusInside = true;
-    this.hovercard.clearClose();
-  };
-
-  private readonly handleCardFocusOut = (event: FocusEvent) => {
-    if (event.relatedTarget instanceof Node && this.hovercard.card?.contains(event.relatedTarget)) {
-      return;
-    }
-    this.hovercard.cardFocusInside = false;
     this.hovercard.scheduleClose();
   };
 
@@ -564,10 +543,7 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     renderLoading(card);
     // The card is portaled to document.body, so the provider's delegated pointer
     // listeners never see it; it reports its own hover to keep intent shared.
-    card.addEventListener("pointerenter", this.handleCardPointerEnter);
     card.addEventListener("pointerleave", this.handleCardPointerLeave);
-    card.addEventListener("focusin", this.handleCardFocusIn);
-    card.addEventListener("focusout", this.handleCardFocusOut);
     card.addEventListener("keydown", this.handleCardKeyDown);
     this.hovercard.mount(anchor, card, "vertical", true, () => render(nothing, card));
 

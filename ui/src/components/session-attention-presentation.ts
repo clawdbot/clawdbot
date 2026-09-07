@@ -4,6 +4,7 @@ import type { SidebarRecentSession, SidebarSessionAttention } from "./app-sideba
 import { formatWebUiIconErrorText } from "./error-presentation.ts";
 import { icons } from "./icons.ts";
 import { resolveSessionAttentionIcon } from "./session-attention-icon-registry.ts";
+import { renderSessionGlyph } from "./session-glyph.ts";
 
 function keepQuestionFocusOnTooltip(event: FocusEvent) {
   // The hand is its own tooltip target; bubbling would also open the row hovercard.
@@ -60,25 +61,10 @@ export function sessionAttentionSubtitle(attention: SidebarSessionAttention): st
   }
 }
 
-export function renderSessionRunSpinner(showTitle = true, queued = false) {
-  const label = t(queued ? "sessionsView.statusQueued" : "sessionsView.activeRun");
-  return html`<span
-    class="session-run-spinner sidebar-recent-session__state${
-      queued ? " session-run-spinner--queued" : ""
-    }"
-    role="img"
-    aria-label=${label}
-    title=${showTitle ? label : nothing}
-  ></span>`;
-}
-
-export function sessionHasRunningWork(session: SidebarRecentSession): boolean {
-  return session.hasActiveRun || session.runningChildCount > 0;
-}
-
-export function renderSessionState(session: SidebarRecentSession, showTitle = true) {
-  if (sessionHasRunningWork(session)) {
-    return renderSessionRunSpinner(showTitle, session.hasActiveRun && session.status === "queued");
+export function renderSessionState(session: SidebarRecentSession) {
+  if (session.hasActiveRun) {
+    const queued = session.hasActiveRun && session.status === "queued";
+    return renderSessionGlyph({ content: nothing, running: true, queued });
   }
   if (!session.isChild) {
     return session.unread

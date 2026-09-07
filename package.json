@@ -403,7 +403,8 @@
     "!dist/plugin-sdk/agent-harness-registration.d.ts",
     "!dist/plugin-sdk/session-catalog-paging.d.ts",
     "!dist/plugin-sdk/provider-auth-aliases.d.ts",
-    "!dist/plugin-sdk/provider-model-metadata.d.ts"
+    "!dist/plugin-sdk/provider-model-metadata.d.ts",
+    "!dist/plugin-sdk/websocket-runtime.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -813,6 +814,9 @@
     "./plugin-sdk/gateway-runtime": {
       "types": "./dist/plugin-sdk/gateway-runtime.d.ts",
       "default": "./dist/plugin-sdk/gateway-runtime.js"
+    },
+    "./plugin-sdk/websocket-runtime": {
+      "default": "./dist/plugin-sdk/websocket-runtime.js"
     },
     "./plugin-sdk/cli-argv": {
       "types": "./dist/plugin-sdk/cli-argv.d.ts",

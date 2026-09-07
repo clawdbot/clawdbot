@@ -522,6 +522,12 @@ only reviewed exec approval posture for selected agents.
 | `tools.alsoAllow.expected`      | `tools.alsoAllow` and per-agent `tools.alsoAllow`           | Require exact `alsoAllow` entries and report missing or unexpected additive tool grants.                 |
 | `tools.denyTools`               | `tools.deny` and `agents.entries.*.tools.deny`              | Require configured tool deny lists to include tool ids or groups such as `group:runtime` and `group:fs`. |
 
+Tool requirements use the same group membership, aliases, and `*` matching as
+core tool policy. For example, `group:fs` includes `ls`, `group:runtime` includes
+`secrets`, `cron` resolves to `automations`, and the image-understanding tool is
+`view_image`. A required deny list must cover every tool in a required group;
+an empty list covers nothing, and denying `write` does not deny `apply_patch`.
+
 ## Run checks
 
 Run policy-only checks during authoring:

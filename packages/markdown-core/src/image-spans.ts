@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import MarkdownIt from "markdown-it";
+import MarkdownIt, { type MarkdownIt as MarkdownItParser, type StateInline } from "markdown-it";
 
 export type MarkdownImageSpan = {
   start: number;
@@ -7,8 +7,13 @@ export type MarkdownImageSpan = {
   destination: string;
 };
 
-/** Finds inline image destinations without treating code or escaped syntax as media. */
-export function findMarkdownImageSpans(markdown: string): MarkdownImageSpan[] {
+type ImageScanEnvironment = {
+  onImage: (state: StateInline, start: number) => void;
+};
+
+let imageParser: MarkdownItParser | undefined;
+
+function createImageParser(): MarkdownItParser {
   const md = new MarkdownIt("commonmark");
   md.inline.ruler.enableOnly(["image"]);
   const parseImage = expectDefined(md.inline.ruler.getRules("")[0], "Markdown image rule");
@@ -18,15 +23,23 @@ export function findMarkdownImageSpans(markdown: string): MarkdownImageSpan[] {
   // Media normalization owns URL spelling and allowlist matching, not the renderer.
   md.normalizeLink = (url) => url;
   md.validateLink = () => true;
-  const environment = {};
-  const blocks = md.parse(markdown, environment);
-  const lineOffsets = [0];
-  // Block maps count CRLF and bare CR as line breaks before source normalization.
-  for (const newline of markdown.matchAll(/\r\n?|\n/g)) {
-    lineOffsets.push(newline.index + newline[0].length);
-  }
-  const sourceLines = markdown.replace(/\0/g, "\uFFFD").split(/\r\n?|\n/);
+  md.inline.ruler.at("image", (state, silent) => {
+    const start = state.pos;
+    const matched = parseImage(state, silent);
+    if (matched && !silent) {
+      // The shared rule retains parser configuration, never document state.
+      // SAFETY: Every parse below supplies a fresh ImageScanEnvironment.
+      const environment = state.env as ImageScanEnvironment;
+      environment.onImage(state, start);
+    }
+    return matched;
+  });
+  return md;
+}
 
+/** Finds inline image destinations without treating code or escaped syntax as media. */
+export function findMarkdownImageSpans(markdown: string): MarkdownImageSpan[] {
+  const md = (imageParser ??= createImageParser());
   const images: MarkdownImageSpan[] = [];
   let source = "";
   let inlineLines: Array<{ start: number; offset: number }> = [];
@@ -41,23 +54,30 @@ export function findMarkdownImageSpans(markdown: string): MarkdownImageSpan[] {
     }
     return position + expectDefined(inlineLines[inlineLine], "Markdown inline line").offset;
   };
-  md.inline.ruler.at("image", (state, silent) => {
-    const start = state.pos;
-    const matched = parseImage(state, silent);
-    // Image labels recurse into the inline parser; only the outer source owns offsets.
-    if (matched && !silent && state.src === source) {
+  const environment: ImageScanEnvironment = {
+    onImage: (state, start) => {
+      // Image labels recurse into the inline parser; only the outer source owns offsets.
+      if (state.src !== source) {
+        return;
+      }
       const token = expectDefined(state.tokens.at(-1), "Parsed Markdown image");
       if (token.meta?.label) {
-        return matched;
+        return;
       }
       images.push({
         start: sourceOffset(start),
         end: sourceOffset(state.pos),
         destination: String(expectDefined(token.attrGet("src"), "Markdown image destination")),
       });
-    }
-    return matched;
-  });
+    },
+  };
+  const blocks = md.parse(markdown, environment);
+  const lineOffsets = [0];
+  // Block maps count CRLF and bare CR as line breaks before source normalization.
+  for (const newline of markdown.matchAll(/\r\n?|\n/g)) {
+    lineOffsets.push(newline.index + newline[0].length);
+  }
+  const sourceLines = markdown.replace(/\0/g, "\uFFFD").split(/\r\n?|\n/);
   // Parse the same inline content as the renderer. Reintroducing container
   // markers can change inline HTML/code semantics and hide valid images.
   for (const block of blocks) {

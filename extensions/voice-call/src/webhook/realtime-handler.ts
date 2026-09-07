@@ -29,6 +29,7 @@ import {
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
+import { rejectWebSocketUpgrade } from "openclaw/plugin-sdk/websocket-runtime";
 import { resolveVoiceCallPublicPathPrefix, type VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
 import { REALTIME_VOICE_END_CALL_TOOL_NAME } from "../realtime-call-control.js";
@@ -435,9 +436,10 @@ export class RealtimeCallHandler {
   }
 
   handleWebSocketUpgrade(request: http.IncomingMessage, socket: Duplex, head: Buffer): void {
+    // HTTP no longer owns socket errors after handing off an upgrade.
+    socket.once("error", () => socket.destroy());
     if (this.closing) {
-      socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
-      socket.destroy();
+      rejectWebSocketUpgrade(socket, { status: 503 });
       return;
     }
 
@@ -445,8 +447,7 @@ export class RealtimeCallHandler {
     const token = url.pathname.split("/").pop() ?? null;
     const callerMeta = token ? this.consumeStreamToken(token) : null;
     if (!callerMeta) {
-      socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
-      socket.destroy();
+      rejectWebSocketUpgrade(socket, { status: 401 });
       return;
     }
 
