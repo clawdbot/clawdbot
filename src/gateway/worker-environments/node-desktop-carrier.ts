@@ -5,6 +5,7 @@ import {
 } from "../../infra/node-commands.js";
 import type { WorkerDesktopApp, WorkerDesktopEndpoint } from "../../plugins/types.js";
 import type { NodeDesktopStreamBroker } from "../desktop/node-stream-broker.js";
+import type { DesktopObserveRequester } from "../desktop/observe-requester.js";
 import {
   DesktopSessionStaleOwnerError,
   type DesktopSessionRegistry,
@@ -263,6 +264,7 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
   const observe = async (request: {
     record: WorkerEnvironmentRecord;
     control: boolean;
+    requester?: DesktopObserveRequester;
   }): Promise<WorkerDesktopObserveResult> => {
     const binding = snapshotNodeDesktopBinding(request.record);
     const active: ActiveNodeDesktopStream = {
@@ -350,6 +352,7 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
         sourceKey: binding.environmentId,
         ownerEpoch: binding.ownerEpoch,
         control: request.control,
+        requester: request.requester,
         attachment,
         preauth: {
           auth: "vnc-password",

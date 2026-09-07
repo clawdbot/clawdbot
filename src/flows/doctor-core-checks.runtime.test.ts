@@ -2,10 +2,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
 import { retainGatewayResponsePayload } from "../../packages/gateway-client/src/protocol-request.js";
-import { testing as mcpResolverTesting } from "../agents/mcp-connection-resolver.js";
+import { createMcpProofPluginRegistry } from "../agents/mcp-connection-resolver.test-fixtures.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { GATEWAY_HEALTH_RATE_LIMITED_MESSAGE } from "../commands/gateway-health-auth-diagnostic.js";
 import { GatewaySecretRefUnavailableError } from "../gateway/credentials.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 
 const mocks = vi.hoisted(() => ({
@@ -109,7 +110,6 @@ function bundleMcpTool(name: string, parameters: unknown): AnyAgentTool {
 
 describe("doctor runtime tool schema checks", () => {
   beforeEach(() => {
-    mcpResolverTesting.setMcpServerConnectionResolversForTest(undefined);
     mocks.createOpenClawCodingTools.mockReset().mockReturnValue([]);
     mocks.createBundleMcpToolRuntime.mockReset().mockReturnValue({
       tools: [],
@@ -497,42 +497,43 @@ describe("doctor runtime tool schema checks", () => {
   });
 
   it("does not probe requester-scoped MCP servers without a requester", async () => {
-    const resolveConnection = vi.fn();
-    mcpResolverTesting.setMcpServerConnectionResolversForTest([
-      {
-        pluginId: "fuzzplugin",
+    const resolverRegistry = createMcpProofPluginRegistry();
+    await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
+      const resolveConnection = vi.fn();
+      const resolverApi = resolverRegistry.apiFor("fuzzplugin");
+      resolverApi.registerMcpServerConnectionResolver({
         serverName: "fuzzplugin",
         resolve: resolveConnection,
-      },
-    ]);
+      });
 
-    await expect(
-      collectRuntimeToolSchemaFindings({
-        mcp: {
-          servers: {
-            fuzzplugin: {
-              url: "https://placeholder.invalid/mcp",
-              transport: "streamable-http",
-              auth: "oauth",
+      await expect(
+        collectRuntimeToolSchemaFindings({
+          mcp: {
+            servers: {
+              fuzzplugin: {
+                url: "https://placeholder.invalid/mcp",
+                transport: "streamable-http",
+                auth: "oauth",
+              },
             },
           },
-        },
-      }),
-    ).resolves.toContainEqual({
-      checkId: "core/doctor/runtime-tool-schemas",
-      severity: "info",
-      message:
-        'Configured requester-scoped MCP server "fuzzplugin" was not probed without an authenticated requester.',
-      path: "mcp.servers.fuzzplugin",
-      requirement: "authenticated requester context",
-      fixHint: "Verify this server from an authenticated agent turn.",
+        }),
+      ).resolves.toContainEqual({
+        checkId: "core/doctor/runtime-tool-schemas",
+        severity: "info",
+        message:
+          'Configured requester-scoped MCP server "fuzzplugin" was not probed without an authenticated requester.',
+        path: "mcp.servers.fuzzplugin",
+        requirement: "authenticated requester context",
+        fixHint: "Verify this server from an authenticated agent turn.",
+      });
+      expect(resolveConnection).not.toHaveBeenCalled();
+      expect(mocks.createBundleMcpToolRuntime).toHaveBeenCalledWith(
+        expect.objectContaining({
+          excludeServerNames: new Set(["fuzzplugin"]),
+        }),
+      );
     });
-    expect(resolveConnection).not.toHaveBeenCalled();
-    expect(mocks.createBundleMcpToolRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({
-        excludeServerNames: new Set(["fuzzplugin"]),
-      }),
-    );
   });
 
   it("does not report bundle MCP schemas filtered out by the final runtime tool policy", async () => {

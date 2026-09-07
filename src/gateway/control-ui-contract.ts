@@ -125,17 +125,24 @@ export type ControlUiSessionBranch = {
 export type ControlUiSessionPullRequests = {
   pullRequests: ControlUiSessionPullRequest[];
   /**
+   * Present whenever the session's checkout resolves to a GitHub remote,
+   * independent of whether a PR or branch row exists.
+   */
+  repository?: { owner: string; repo: string };
+  /**
    * Present when the session's non-default GitHub branch has a creatable PR
    * on origin or local changed files in the working tree.
    */
   branch?: ControlUiSessionBranch;
   /** GitHub quota exhausted; entries may be stale until the limit resets. */
   rateLimited: boolean;
+  /** A failed PR lookup may still carry independently resolved repository facts. */
+  status?: "ready" | "rate-limited" | "unavailable";
 };
 
 /** Per-session pushed state; unavailable snapshots preserve prior UI state. */
 export type ControlUiSessionPullRequestSnapshot = ControlUiSessionPullRequests & {
-  status: "ready" | "rate-limited" | "unavailable";
+  status: NonNullable<ControlUiSessionPullRequests["status"]>;
 };
 
 /** Targeted delta event for sessions watched by one Control UI connection. */

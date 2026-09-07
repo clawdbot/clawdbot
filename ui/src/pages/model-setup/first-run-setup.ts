@@ -21,6 +21,7 @@ import {
   type ModelSetupActivationState,
   type ModelSetupPageState,
   type ModelSetupVerifyState,
+  type ModelSetupWizardResult,
 } from "./state.ts";
 
 export type ModelSetupConnection = Pick<
@@ -282,14 +283,18 @@ export class FirstRunSetup {
     return this.pending;
   }
 
-  recordActivation(
-    activation: FirstRunActivation | null,
-    result: SystemAgentSetupActivateResult,
-  ): void {
+  recordActivation(activation: FirstRunActivation | null, result: ModelSetupWizardResult): void {
     if (!activation) {
       return;
     }
-    if (!result.ok) {
+    // Generic errors can follow committed settings; only proven rejection or
+    // non-admission permits replacement setup.
+    if (
+      result.status === "cancelled" ||
+      result.status === "not-admitted" ||
+      (result.status === "error" &&
+        result.activationRejection?.disposition === "rejected-before-promotion")
+    ) {
       // Retiring the receipt must not discard an active, definitive failure.
       if (this.ownsActivation(activation)) {
         activation.outcome = "rejected";
@@ -300,12 +305,13 @@ export class FirstRunSetup {
       }
       return;
     }
-    if (!result.modelRef || this.pending !== activation || !this.ownsActivation(activation)) {
+    const modelRef = result.status === "done" ? result.modelActivation?.modelRef : undefined;
+    if (!modelRef || this.pending !== activation || !this.ownsActivation(activation)) {
       return;
     }
     // Capture the verified target before config refresh can replace the hello
     // and retire the Lit task that otherwise owns this response.
-    activation.modelRef = result.modelRef;
+    activation.modelRef = modelRef;
     activation.outcome = "verified";
     activation.receipt = persistFirstRunActivationReceipt(this.host.context(), activation);
   }

@@ -219,6 +219,17 @@ if (args[0] === "models") {
 }
 if (args[0] === "update") {
   const phase = args.includes("--help") ? "help" : "repair";
+  if (phase === "repair" && process.env.QA_ASSERT_AUTH_HANDOFF === "1") {
+    const { DatabaseSync } = await import("node:sqlite");
+    const db = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
+    try {
+      const leases = db.prepare("SELECT owner_pid FROM agent_database_leases").all();
+      if (leases.length) throw new Error("staged auth database still leased by parent");
+      record({ kind: "auth-handoff", leases: leases.length });
+    } finally {
+      db.close();
+    }
+  }
   if (process.env.QA_FAIL_PLUGIN_SETUP === phase) {
     record({ kind: "plugins", args, authDbPath, configPath, stateDir });
     await fail(8, "plugin fixture rejected: Authorization: Bearer " + "fixture-plugin-secret".repeat(200));
@@ -1670,6 +1681,41 @@ describe("buildQaRuntimeEnv", () => {
       expect(anthropicStoreProfile.provider).toBe("anthropic");
       expect(anthropicStoreProfile.key).toBe("qa-mock-not-a-real-key");
     }
+  });
+
+  it("releases staged live auth stores before packaged Doctor starts", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "qa-synthetic-auth-handoff");
+    const fixtureRoot = await tempDirs.makeTempDir("qa-live-auth-handoff-");
+    const tempParentDir = path.join(fixtureRoot, "gateway-temp");
+    const recordPath = path.join(fixtureRoot, "commands.jsonl");
+    await mkdir(tempParentDir);
+    const fixturePath = await writePackagedGatewayFixture(fixtureRoot);
+    const owner = ownGateway();
+    await expect(
+      owner.start({
+        repoRoot: process.cwd(),
+        command: {
+          executablePath: process.execPath,
+          argsPrefix: [fixturePath],
+          tempParentDir,
+          usePackagedPlugins: true,
+        },
+        providerMode: "live-frontier",
+        primaryModel: "openai/gpt-5.4",
+        alternateModel: "openai/gpt-5.4",
+        transportBaseUrl: "http://127.0.0.1:43123",
+        runtimeEnvPatch: {
+          QA_RECORD_PATH: recordPath,
+          QA_ASSERT_AUTH_HANDOFF: "1",
+        },
+      }),
+    ).rejects.toThrow("fixture gateway exit");
+    const records = await readJsonLines(recordPath);
+    expect(records.find((record) => record.kind === "auth-handoff")).toMatchObject({ leases: 0 });
+    expect(records.at(-1)).toMatchObject({
+      kind: "gateway",
+      authProfileIds: ["qa-live-openai-env"],
+    });
   });
 
   it.each([false, true])(

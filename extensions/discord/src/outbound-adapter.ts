@@ -93,6 +93,7 @@ async function maybeSendDiscordWebhookText(params: DiscordOutboundMessageContext
     replyTo: params.replyToId ?? undefined,
     username: truncateUtf16Safe(username, 80) || undefined,
     avatarUrl: normalizeOptionalString(params.identity?.avatarUrl),
+    tableMode: params.formatting?.tableMode,
     ...resolveDiscordDeliveryOptions(params),
   });
 }

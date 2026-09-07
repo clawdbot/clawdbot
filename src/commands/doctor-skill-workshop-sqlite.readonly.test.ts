@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { createCoreHealthChecks } from "../flows/doctor-core-checks.js";
+import { exitCodeFromFindings, runDoctorLintChecks } from "../flows/doctor-lint-flow.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import { importLegacySkillProposal } from "../skills/workshop/store.js";
@@ -37,6 +39,105 @@ async function snapshotDatabase(databasePath: string) {
 }
 
 describe("read-only Skill Workshop migration inspection", () => {
+  it.each([
+    { roots: [], proposal: false, preserved: 0, automatic: false },
+    { roots: ["eligible"], proposal: false, preserved: 0, automatic: true },
+    { roots: ["ambiguous"], proposal: false, preserved: 1, automatic: false },
+    { roots: ["invalid"], proposal: false, preserved: 1, automatic: false },
+    { roots: ["eligible", "ambiguous", "invalid"], proposal: false, preserved: 2, automatic: true },
+    { roots: ["ambiguous"], proposal: true, preserved: 1, automatic: true },
+  ])(
+    "gives truthful read-only lint remediation for roots=$roots proposal=$proposal",
+    async ({ roots, proposal, preserved, automatic }) => {
+      await withOpenClawTestState({ layout: "split" }, async (state) => {
+        const config = {
+          agents: {
+            entries: {
+              main: { workspace: state.workspaceDir },
+              alpha: { workspace: path.join(state.root, "shared-workspace") },
+              beta: { workspace: path.join(state.root, "shared-workspace") },
+            },
+          },
+        };
+        await state.writeConfig(config);
+        const configBefore = await fs.readFile(state.configPath);
+        const manifests = await Promise.all(
+          roots.map(async (kind, index) => {
+            const contents = JSON.stringify({
+              schema: kind === "invalid" ? "invalid" : "openclaw.skill-collection-backup.v1",
+              id: "legacy-backup",
+              createdAt: "2026-09-01T00:00:00.000Z",
+              workspaceDir:
+                kind === "ambiguous" ? config.agents.entries.alpha.workspace : state.workspaceDir,
+              skillDirs: [],
+              resultSkillDirs: [],
+              resultSkillHashes: {},
+            });
+            const file = await state.writeText(
+              `skill-workshop/collection-backups/${index.toString(16).padStart(16, "0")}/legacy-backup/manifest.json`,
+              contents,
+            );
+            return { file, contents };
+          }),
+        );
+        if (proposal) {
+          importLegacySkillProposal({
+            record: createAppliedLegacyProposal({
+              id: "readonly-workshop-20260907-1234567890",
+              title: "Legacy Workshop",
+              description: "Pending relocation",
+              content: "# Preserved\n",
+              target: {
+                skillKey: "legacy",
+                skillDir: path.join(state.workspaceDir, "skills", "legacy"),
+              },
+            }),
+            ownerAgentId: "main",
+            store: { env: state.env },
+          });
+        }
+        closeOpenClawStateDatabaseForTest();
+        const databasePath = resolveOpenClawStateSqlitePath(state.env);
+        const databaseBefore = proposal ? await snapshotDatabase(databasePath) : undefined;
+        const filesBefore = await fs.readdir(state.stateDir, { recursive: true });
+
+        const result = await runDoctorLintChecks(
+          { mode: "lint", runtime: { log() {}, error() {}, exit() {} }, cfg: config },
+          {
+            checks: createCoreHealthChecks().filter((check) => "detect" in check),
+            onlyIds: ["core/doctor/skill-workshop-relocation"],
+          },
+        );
+
+        expect(result.checksRun).toBe(1);
+        expect(result.findings).toHaveLength(roots.length || proposal ? 1 : 0);
+        expect(exitCodeFromFindings(result.findings)).toBe(roots.length || proposal ? 1 : 0);
+        if (result.findings.length > 0) {
+          const finding = result.findings[0]!;
+          expect(finding.severity).toBe("warning");
+          expect(finding.fixHint?.includes("Run `openclaw doctor --fix`")).toBe(automatic);
+          expect(finding.fixHint).not.toContain("retire legacy backup roots");
+          if (preserved > 0) {
+            expect(finding.message).toContain(`${preserved} preserved`);
+            expect(finding.fixHint).toMatch(/manual/i);
+            expect(finding.fixHint).toContain("workspace ownership");
+            expect(finding.fixHint).toContain("manifests");
+          }
+        }
+        expect(await fs.readdir(state.stateDir, { recursive: true })).toEqual(filesBefore);
+        expect(await fs.readFile(state.configPath)).toEqual(configBefore);
+        for (const manifest of manifests) {
+          expect(await fs.readFile(manifest.file, "utf8")).toBe(manifest.contents);
+        }
+        if (proposal) {
+          expect(await snapshotDatabase(databasePath)).toEqual(databaseBefore);
+        } else {
+          await expect(fs.access(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+      });
+    },
+  );
+
   it.each([
     { version: 16, sourcePresent: true },
     { version: 16, sourcePresent: false },
@@ -94,6 +195,7 @@ describe("read-only Skill Workshop migration inspection", () => {
           externalProposalCount: 1,
           externalProposalCountsByAgent: { main: 1 },
           legacyBackupRootCount: 0,
+          preservedLegacyBackupRootCount: 0,
         });
 
         closeOpenClawStateDatabaseForTest();
@@ -188,6 +290,7 @@ describe("read-only Skill Workshop migration inspection", () => {
         externalProposalCount: 9,
         externalProposalCountsByAgent: { main: 5, other: 2, retired: 1, unknown: 1 },
         legacyBackupRootCount: 0,
+        preservedLegacyBackupRootCount: 0,
       });
     });
   });

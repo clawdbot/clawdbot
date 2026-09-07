@@ -270,7 +270,7 @@ applies only when `offset` is zero or omitted. The Gateway derives the viewer
 identity from the authenticated connection, not a client-supplied identity.
 The shared page's pagination metadata is unchanged, so use `nextOffset`, not the
 number of returned rows, when loading another page, and merge rows by session
-key. See [Session list bootstrap](/gateway/protocol#session-list-bootstrap).
+key. See [Session list bootstrap](/gateway/protocol/rpc-methods#session-list-bootstrap).
 
 Merge subsequent `sessions.changed` events by `sessionKey`. Session change
 payloads can carry live `inputTokens`, `outputTokens`, `totalTokens`,

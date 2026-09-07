@@ -12,6 +12,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.unit.dp
+import androidx.window.layout.DisplayFeature
 
 @Composable
 internal fun UnifiedChatShellScreen(
@@ -21,6 +22,8 @@ internal fun UnifiedChatShellScreen(
   onOpenDashboard: (String) -> Unit,
   onOpenGatewaySettings: () -> Unit,
   onOpenProvidersModels: () -> Unit,
+  tabletopPanes: TabletopPaneBounds? = null,
+  features: List<DisplayFeature> = emptyList(),
 ) {
   val talkModeEnabled by viewModel.talkModeEnabled.collectAsState()
   val startTalk = rememberChatRealtimeTalkLauncher(viewModel)
@@ -45,6 +48,8 @@ internal fun UnifiedChatShellScreen(
       onOpenDashboard = onOpenDashboard,
       onOpenGatewaySettings = onOpenGatewaySettings,
       onOpenProvidersModels = onOpenProvidersModels,
+      tabletopPanes = tabletopPanes,
+      features = features,
     )
   }
 }

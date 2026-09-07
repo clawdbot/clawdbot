@@ -115,6 +115,7 @@ export async function spawnSubagentDirect(
       groupId: swarmGroupId,
       schedulerGroupKey: swarmSchedulerGroupKey,
       launchReplayKey: swarmLaunchReplayKey,
+      soleImplicitMember,
       reservationPending,
     },
     admission: {
@@ -140,6 +141,7 @@ export async function spawnSubagentDirect(
       targetAgentId,
       sandboxMode,
       swarmEnabled: swarmConfig.enabled,
+      requesterSandboxed: ctx.sandboxed,
     });
     if (!childPlan.ok) {
       return childPlan.result;
@@ -267,6 +269,7 @@ export async function spawnSubagentDirect(
           : "quiet";
     const envelope = buildSubagentSpawnEnvelope({
       completionMode,
+      soleCollectorChild: soleImplicitMember,
       spawnMode,
       task,
       requesterSessionKey,

@@ -15,6 +15,7 @@ type CopilotQueueMessageOptions = Parameters<typeof queueAgentHarnessMessage>[2]
 
 export function registerCopilotActiveRun(params: {
   abortActiveSession: () => void;
+  agentId: string;
   bridge: ReturnType<typeof attachEventBridge> | undefined;
   canAcceptSteering: () => boolean;
   startedAtMs?: number;
@@ -152,6 +153,7 @@ export function registerCopilotActiveRun(params: {
     activeRunHandle,
     params.input.sessionKey,
     params.input.sessionFile,
+    params.agentId,
   );
   params.input.replyOperation?.attachBackend(activeRunHandle);
   return activeRunHandle;

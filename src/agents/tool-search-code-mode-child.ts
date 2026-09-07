@@ -63,7 +63,8 @@ function bridgeResultPayload(message) {
   if (!message.ok) {
     return typeof message.error === "string" ? message.error : "tool bridge failed";
   }
-  const json = JSON.stringify(toJsonSafe(message.value));
+  // IPC already normalized the value; keep the string boundary into the guest.
+  const json = JSON.stringify(message.value);
   return typeof json === "string" ? json : "null";
 }
 

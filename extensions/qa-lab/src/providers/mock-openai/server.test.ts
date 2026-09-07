@@ -560,13 +560,19 @@ describe("qa mock openai server", () => {
     });
 
     const retained = requireArray(
-      await fetch(`${server.baseUrl}/debug/requests`).then((response) => response.json()),
+      await getJson(server, "/debug/requests"),
       "retained debug requests",
     );
     expect(retained).toHaveLength(debugRequestLimit);
     expect(requireRecord(retained[0], "retained request 0").cursor).toBe(2);
     expect(requireRecord(retained.at(-1), "last retained request").cursor).toBe(
       debugRequestLimit + 1,
+    );
+    expect(String(requireRecord(retained[0], "retained request 0").allInputText)).toContain(
+      "cursor request 1",
+    );
+    expect(String(requireRecord(retained.at(-1), "last retained request").allInputText)).toContain(
+      "cursor request overflow",
     );
 
     const nextRequests = requireArray(
@@ -601,25 +607,6 @@ describe("qa mock openai server", () => {
     expect(await invalid.json()).toEqual({
       error: "after must be a non-negative safe integer",
     });
-  });
-
-  it("retains enough debug requests for long shared QA runs", async () => {
-    const server = await startMockServer();
-
-    for (let index = 0; index < 250; index += 1) {
-      await expectOpenAiNonStreamingResponsesJson(server, {
-        input: [makeUserInput(`debug retention request ${index}`)],
-      });
-    }
-
-    const requestLog = requireArray(await getJson(server, "/debug/requests"), "debug requests");
-    expect(requestLog).toHaveLength(250);
-    expect(String(requireRecord(requestLog[0], "debug request 0").allInputText)).toContain(
-      "debug retention request 0",
-    );
-    expect(String(requireRecord(requestLog[249], "debug request 249").allInputText)).toContain(
-      "debug retention request 249",
-    );
   });
 
   it("serves health and streamed responses", async () => {

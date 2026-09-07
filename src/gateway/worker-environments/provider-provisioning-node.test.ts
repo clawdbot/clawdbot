@@ -45,6 +45,17 @@ describe("node worker provider provisioning", () => {
         ok: true,
         payload: support.BOOTSTRAP_RECEIPT,
       }));
+      const transport: NodeWorkerSupervisorTransport = {
+        hasCurrentRunner: () => true,
+        listCurrentNodes: async () => [node],
+        isCurrent: (candidate) => candidate === node,
+        invoke,
+      };
+      const ensureNodeWorkerBundle = createGatewayNodeWorkerBundleInstaller({
+        gatewayNamespace: "gateway-test",
+        getTransport: () => transport,
+        transfer,
+      });
       const workerService = support.createService(
         support.createProvider({
           supportedExecutionModes: ["worker-turn", "remote-exec"],
@@ -55,16 +66,7 @@ describe("node worker provider provisioning", () => {
           }),
         }),
         {
-          ensureNodeWorkerBundle: createGatewayNodeWorkerBundleInstaller({
-            gatewayNamespace: "gateway-test",
-            getTransport: () => ({
-              hasCurrentRunner: () => true,
-              listCurrentNodes: async () => [node],
-              isCurrent: (candidate) => candidate === node,
-              invoke,
-            }),
-            transfer,
-          }),
+          ensureNodeWorkerBundle,
         },
       );
       try {
@@ -194,6 +196,7 @@ describe("node worker provider provisioning", () => {
           prepareNodeBootstrap: async () => {
             entered.resolve();
             await prepared.promise;
+            return support.NODE_BOOTSTRAP.sha256;
           },
           prepareNodeEnrollment: async () => {
             throw new Error("provider does not need enrollment in this case");

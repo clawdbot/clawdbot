@@ -5,13 +5,14 @@ import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import type { RuntimeContextFragment } from "../agents/internal-runtime-context.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
-import { resolveSystemEventOptionsOwnerAgentId } from "../infra/system-event-ownership.js";
+import { resolveSystemEventOwnerAgentId } from "../infra/system-event-ownership.js";
 import {
   createUpdateRun,
   finishUpdateRun,
@@ -626,6 +627,13 @@ function mockRestartContinuation(
 let testState: OpenClawTestState;
 
 describe("scheduleRestartSentinelWake", () => {
+  const expectedGeneratedMediaContext: RuntimeContextFragment[] = [
+    {
+      kind: "runtime-instruction",
+      text: "Deliver the generated media listed below to the user.",
+    },
+    { kind: "conversation-data", text: "Generated media:\nMEDIA:/tmp/proof.png" },
+  ];
   afterEach(async () => {
     resetGatewayWorkAdmission();
     vi.useRealTimers();
@@ -1608,6 +1616,7 @@ describe("scheduleRestartSentinelWake", () => {
         expectFinal: true,
         forceSyntheticClient: true,
         internalDeliveryMediaUrls: ["/tmp/proof.png"],
+        runtimeContextFragments: expectedGeneratedMediaContext,
         resolveGatewayContext,
         onAccepted: expect.any(Function),
       },
@@ -1702,6 +1711,7 @@ describe("scheduleRestartSentinelWake", () => {
         expectFinal: true,
         forceSyntheticClient: true,
         internalDeliveryMediaUrls: ["/tmp/proof.png"],
+        runtimeContextFragments: expectedGeneratedMediaContext,
         internalDeliverySuppressText: true,
         onAccepted: expect.any(Function),
       },
@@ -1953,6 +1963,7 @@ describe("scheduleRestartSentinelWake", () => {
         expectFinal: true,
         forceSyntheticClient: true,
         internalDeliveryMediaUrls: ["/tmp/proof.png"],
+        runtimeContextFragments: expectedGeneratedMediaContext,
         internalDeliverySuppressText: true,
         onAccepted: expect.any(Function),
       },
@@ -3502,7 +3513,7 @@ describe("scheduleRestartSentinelWake", () => {
       );
       const eventOptions = mocks.enqueueSystemEvent.mock.calls[0]?.[1];
       expect(eventOptions).toMatchObject({ sessionKey, deliveryContext: context });
-      expect(resolveSystemEventOptionsOwnerAgentId(eventOptions as object)).toBe("ops");
+      expect(resolveSystemEventOwnerAgentId(eventOptions as object)).toBe("ops");
       expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
         source: "restart-sentinel",
         intent: "immediate",
@@ -3543,7 +3554,7 @@ describe("scheduleRestartSentinelWake", () => {
     });
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
     const eventOptions = mocks.enqueueSystemEvent.mock.calls[0]?.[1];
-    expect(resolveSystemEventOptionsOwnerAgentId(eventOptions as object)).toBe("ops");
+    expect(resolveSystemEventOwnerAgentId(eventOptions as object)).toBe("ops");
     expect(eventOptions).not.toHaveProperty("deliveryContext");
   });
 
@@ -3562,7 +3573,7 @@ describe("scheduleRestartSentinelWake", () => {
 
     const eventOptions = mocks.enqueueSystemEvent.mock.calls[0]?.[1];
     expect(eventOptions).toMatchObject({ sessionKey: "global" });
-    expect(resolveSystemEventOptionsOwnerAgentId(eventOptions as object)).toBe("ops");
+    expect(resolveSystemEventOwnerAgentId(eventOptions as object)).toBe("ops");
     expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
       source: "restart-sentinel",
       intent: "immediate",

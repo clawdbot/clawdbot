@@ -89,6 +89,8 @@ The ticketed byte routes support:
 - `ETag` and `If-Range` for safe resume of immutable managed originals
 - `HEAD` requests with the same content metadata and no response body
 
+For immutable originals, `If-None-Match` compares complete quoted tags using weak comparison. Commas and asterisks inside a quoted tag are literal; only a standalone `*` is a wildcard. A nonmatching tag leaves the normal full or ranged response intact.
+
 Local assistant files can change, and playback renditions can become available
 after a conversion retry. These responses revalidate without reusable validators:
 cached ETags or modification dates cannot suppress fresh bytes, and `If-Range`
@@ -103,9 +105,9 @@ ticket from the authenticated Gateway when needed.
 Chat attachments may include `sizeBytes`, `durationMs`, `width`, and `height`.
 OpenClaw also uses `ffprobe`, when available, to fill audio duration and video
 duration/dimensions for media facts and the Control UI `?meta=1` availability
-probe. Video dimensions account for quarter-turn display rotation; image
-dimensions account for EXIF orientation. Probing is best-effort: a missing or
-failed probe leaves fields absent instead of rejecting the attachment.
+probe. Video dimensions account for non-square pixels and quarter-turn display
+rotation; image dimensions account for EXIF orientation. Probing is best-effort:
+a missing or failed probe leaves fields absent instead of rejecting the attachment.
 
 Gateway-managed assistant attachments use these per-file caps:
 

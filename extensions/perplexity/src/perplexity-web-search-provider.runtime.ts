@@ -390,76 +390,53 @@ export async function executePerplexitySearch(
 
   const start = Date.now();
   const timeoutSeconds = resolveSearchTimeoutSeconds(searchConfig);
-  const payload =
+  const result =
     runtime.transport === "chat_completions"
-      ? {
+      ? await runPerplexitySearch({
           query,
-          provider: "perplexity",
+          apiKey: runtime.apiKey,
+          baseUrl: runtime.baseUrl,
           model: runtime.model,
-          tookMs: Date.now() - start,
-          externalContent: {
-            untrusted: true,
-            source: "web_search",
-            provider: "perplexity",
-            wrapped: true,
-          },
-          ...(await (async () => {
-            const result = await runPerplexitySearch({
-              query,
-              apiKey: runtime.apiKey!,
-              baseUrl: runtime.baseUrl,
-              model: runtime.model,
-              timeoutSeconds,
-              signal,
-              freshness,
-            });
-            return {
-              content: wrapWebContent(result.content, "web_search"),
-              citations: result.citations,
-            };
-          })()),
-        }
-      : {
+          timeoutSeconds,
+          signal,
+          freshness,
+        })
+      : await runPerplexitySearchApi({
           query,
-          provider: "perplexity",
-          count: 0,
-          tookMs: Date.now() - start,
-          externalContent: {
-            untrusted: true,
-            source: "web_search",
-            provider: "perplexity",
-            wrapped: true,
-          },
-          results: await runPerplexitySearchApi({
-            query,
-            apiKey: runtime.apiKey,
-            count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
-            timeoutSeconds,
-            signal,
-            country: country ?? undefined,
-            searchDomainFilter: domainFilter,
-            searchRecencyFilter: freshness,
-            searchLanguageFilter: language ? [language] : undefined,
-            searchAfterDate: dateAfter ? isoToPerplexityDate(dateAfter) : undefined,
-            searchBeforeDate: dateBefore ? isoToPerplexityDate(dateBefore) : undefined,
-            maxTokens: maxTokens ?? undefined,
-            maxTokensPerPage: maxTokensPerPage ?? undefined,
-          }),
-        };
-
-  if (Array.isArray((payload as { results?: unknown[] }).results)) {
-    (payload as { count: number }).count = (payload as { results: unknown[] }).results.length;
-    (payload as { tookMs: number }).tookMs = Date.now() - start;
-  } else {
-    (payload as { tookMs: number }).tookMs = Date.now() - start;
-  }
+          apiKey: runtime.apiKey,
+          count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
+          timeoutSeconds,
+          signal,
+          country: country ?? undefined,
+          searchDomainFilter: domainFilter,
+          searchRecencyFilter: freshness,
+          searchLanguageFilter: language ? [language] : undefined,
+          searchAfterDate: dateAfter ? isoToPerplexityDate(dateAfter) : undefined,
+          searchBeforeDate: dateBefore ? isoToPerplexityDate(dateBefore) : undefined,
+          maxTokens: maxTokens ?? undefined,
+          maxTokensPerPage: maxTokensPerPage ?? undefined,
+        });
+  const resultFields = Array.isArray(result)
+    ? { results: result }
+    : {
+        content: wrapWebContent(result.content, "web_search"),
+        citations: result.citations,
+      };
+  const payload = {
+    query,
+    provider: "perplexity",
+    ...(Array.isArray(result) ? { count: result.length } : { model: runtime.model }),
+    tookMs: Date.now() - start,
+    externalContent: {
+      untrusted: true,
+      source: "web_search",
+      provider: "perplexity",
+      wrapped: true,
+    },
+    ...resultFields,
+  };
 
   signal?.throwIfAborted();
   writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
   return payload;
 }
-
-export const testing = {
-  resolvePerplexityRequestModel,
-  resolvePerplexityApiKey,
-} as const;

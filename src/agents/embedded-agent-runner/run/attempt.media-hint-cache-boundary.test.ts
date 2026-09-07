@@ -1,147 +1,174 @@
-// Regression guard for #85203: per-turn media-generation task hints must sit BELOW
-// the system-prompt cache boundary so the cacheable prefix stays byte-identical
-// turn-to-turn. Mirrors the composition order used at attempt.ts (embedded runner)
-// and cli-runner/prepare.ts: hook prependSystemContext stays in the cacheable prefix,
-// media task hints are routed below the boundary via prependSystemPromptAddition.
-import { describe, expect, it, vi } from "vitest";
-
-const imageGenerationTaskStatusMocks = vi.hoisted(() => ({
-  buildActiveImageGenerationTaskPromptContextForSession: vi.fn(),
-  buildImageGenerationTaskStatusDetails: vi.fn(() => ({})),
-  buildImageGenerationTaskStatusText: vi.fn(() => "Image generation task status"),
-  findActiveImageGenerationTaskForSession: vi.fn(),
-  IMAGE_GENERATION_TASK_KIND: "image_generation",
-}));
-const videoGenerationTaskStatusMocks = vi.hoisted(() => ({
-  buildActiveVideoGenerationTaskPromptContextForSession: vi.fn(),
-  buildVideoGenerationTaskStatusDetails: vi.fn(() => ({})),
-  buildVideoGenerationTaskStatusText: vi.fn(() => "Video generation task status"),
-  findActiveVideoGenerationTaskForSession: vi.fn(),
-  VIDEO_GENERATION_TASK_KIND: "video_generation",
-}));
-const musicGenerationTaskStatusMocks = vi.hoisted(() => ({
-  buildActiveMusicGenerationTaskPromptContextForSession: vi.fn(),
-  buildMusicGenerationTaskStatusDetails: vi.fn(() => ({})),
-  buildMusicGenerationTaskStatusText: vi.fn(() => "Music generation task status"),
-  findActiveMusicGenerationTaskForSession: vi.fn(),
-  MUSIC_GENERATION_TASK_KIND: "music_generation",
-}));
-
-vi.mock("../../media-generation-task-status.js", () => ({
-  ...imageGenerationTaskStatusMocks,
-  ...musicGenerationTaskStatusMocks,
-  ...videoGenerationTaskStatusMocks,
-}));
-
+// #85203: exercise production assembly so live media facts cannot rewrite history's prefix.
 import {
-  ensureSystemPromptCacheBoundary,
   SYSTEM_PROMPT_CACHE_BOUNDARY,
   splitSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createHookRunner } from "../../../plugins/hooks.js";
+import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
+import * as mediaTaskStatus from "../../media-generation-task-status.js";
 import {
-  appendModelIdentitySystemPrompt,
-  buildModelIdentityPromptLine,
-} from "../../system-prompt.js";
+  createTestSession,
+  registerAgentSessionLoopTestLifecycle,
+  testModel,
+} from "../../sessions/agent-session-loop-correctness.test-support.js";
 import {
-  prependSystemPromptAddition,
-  resolveAttemptMediaTaskSystemPromptAddition,
-} from "./attempt-prompt-helpers.js";
-import { composeSystemPromptWithHookContext } from "./attempt-thread-helpers.js";
+  prepareEmbeddedAttemptPromptAssembly,
+  prepareEmbeddedAttemptPromptContext,
+} from "./attempt-prompt-build.js";
+import { forgetPromptBuildDrainCacheForRun } from "./attempt-prompt-helpers.js";
+import type { EmbeddedRunAttemptParams } from "./types.js";
 
-const MEDIA_HINT = "Active image generation task in progress";
-const HOOK = "Static plugin guidance"; // documented static-cacheable hook field, constant per turn
+vi.mock("../../../plugins/host-hook-state.js", () => ({
+  drainPluginNextTurnInjectionContext: vi.fn(async () => ({ queuedInjections: [] })),
+}));
+
+registerAgentSessionLoopTestLifecycle();
+
+beforeEach(() => {
+  vi.spyOn(
+    mediaTaskStatus,
+    "buildActiveImageGenerationTaskPromptContextForSession",
+  ).mockReturnValue(undefined);
+  vi.spyOn(
+    mediaTaskStatus,
+    "buildActiveVideoGenerationTaskPromptContextForSession",
+  ).mockReturnValue(undefined);
+  vi.spyOn(
+    mediaTaskStatus,
+    "buildActiveMusicGenerationTaskPromptContextForSession",
+  ).mockReturnValue(undefined);
+});
+afterEach(() => vi.restoreAllMocks());
+
+const HOOK = "Static plugin guidance";
 const BASE = `Stable workspace prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic channel guidance`;
-const MODEL = "test-model-x"; // any non-empty model yields a "Current model identity:" line
-const MODEL_IDENTITY_FRAGMENT = "Current model identity:";
+const OVERRIDE = "Custom hook system prompt without a cache boundary";
 
-// Mirror the production composition order at attempt.ts / cli-runner/prepare.ts:
-// 1) compose base with the static hook prepend/append (above-boundary, cacheable),
-// 2) route the per-turn media task hints below the cache boundary (when a task is active),
-// 3) before appending the model identity line, ensure a cache boundary exists (covers
-//    marker-free hook systemPrompt overrides) so the identity lands below it, not in the
-//    cached prefix.
-function composeTurn(opts: { activeImageTask: boolean; base?: string; hook?: string }): string {
-  imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession.mockReturnValue(
-    opts.activeImageTask ? MEDIA_HINT : undefined,
-  );
-  videoGenerationTaskStatusMocks.buildActiveVideoGenerationTaskPromptContextForSession.mockReturnValue(
-    undefined,
-  );
-  musicGenerationTaskStatusMocks.buildActiveMusicGenerationTaskPromptContextForSession.mockReturnValue(
-    undefined,
-  );
-  const base = opts.base ?? BASE;
-  const composed =
-    composeSystemPromptWithHookContext({
-      baseSystemPrompt: base,
-      prependSystemContext: opts.hook ?? HOOK,
-    }) ?? base;
-  const mediaTaskSystemPromptAddition = resolveAttemptMediaTaskSystemPromptAddition({
-    sessionKey: "agent:main:discord:direct:123",
-    trigger: "user",
+async function createTurnFixture(systemPromptOverride?: string) {
+  const { session, sessionManager, modelRegistry } = await createTestSession();
+  const runId = `media-cache-${systemPromptOverride ? "override" : "base"}`;
+  const admission = prepareSystemAgentRunAdmission({}, runId, "main", "media-cache-test");
+  onTestFinished(() => {
+    admission.close();
+    forgetPromptBuildDrainCacheForRun(runId);
   });
-  const routed = mediaTaskSystemPromptAddition
-    ? prependSystemPromptAddition({
-        systemPrompt: ensureSystemPromptCacheBoundary(composed),
-        systemPromptAddition: mediaTaskSystemPromptAddition,
-      })
-    : composed;
-  // Production appends the model identity line after media routing; ensure the boundary first
-  // (when an identity line will be added) so it lands below the boundary, not in the cached
-  // prefix — the regression the marker-free idle case caught.
-  const withIdentityBoundary =
-    buildModelIdentityPromptLine(MODEL) && routed.trim().length > 0
-      ? ensureSystemPromptCacheBoundary(routed)
-      : routed;
-  return appendModelIdentitySystemPrompt({ systemPrompt: withIdentityBoundary, model: MODEL });
+  const attempt: EmbeddedRunAttemptParams = {
+    admittedRunContext: await admission.admit("embedded"),
+    authStorage: modelRegistry.authStorage,
+    authProfileStore: { version: 1, profiles: {} },
+    modelRegistry,
+    config: {},
+    model: testModel,
+    modelId: testModel.id,
+    provider: testModel.provider,
+    thinkLevel: "off",
+    prompt: "How is the image progressing?",
+    transcriptPrompt: "How is the image progressing?",
+    runId,
+    sessionId: runId,
+    sessionKey: `agent:main:${runId}`,
+    sessionFile: "",
+    sessionPersistence: "detached",
+    trigger: "user",
+    timeoutMs: 10_000,
+    workspaceDir: "/tmp/media-cache-test",
+  };
+  const hookRunner = createHookRunner({
+    hooks: [],
+    plugins: [],
+    typedHooks: [
+      {
+        pluginId: "cache-test",
+        hookName: "before_prompt_build",
+        source: "test",
+        handler: async () => ({
+          systemPrompt: systemPromptOverride,
+          prependSystemContext: HOOK,
+        }),
+      },
+    ],
+  });
+  return async (progress?: string) => {
+    vi.mocked(
+      mediaTaskStatus.buildActiveImageGenerationTaskPromptContextForSession,
+    ).mockReturnValue(
+      progress
+        ? `- tool=image_generate; task=task-1; status=running; progress_json="${progress}"`
+        : undefined,
+    );
+    let systemPromptText = BASE;
+    const setActiveSessionSystemPrompt = (next: string) => {
+      systemPromptText = next;
+      session.agent.state.systemPrompt = next;
+    };
+    const prompt = await prepareEmbeddedAttemptPromptAssembly({
+      attempt,
+      activeSession: session,
+      sessionManager,
+      hookRunner,
+      hookAgentId: "main",
+      diagnosticTrace: { traceId: "11111111111111111111111111111111" },
+      isRawModelRun: false,
+      sessionAgentId: "main",
+      runtimeModel: testModel.id,
+      systemPromptText,
+      applyPromptBuildToolsAllow: () => ["image_generate"],
+      setActiveSessionSystemPrompt,
+      setLeasedSteering: vi.fn(),
+    });
+    return prepareEmbeddedAttemptPromptContext({
+      attempt,
+      capabilityToolNames: new Set(["image_generate"]),
+      messages: session.messages,
+      prompt,
+      replaceSessionMessages: (messages) => {
+        session.agent.state.messages = messages;
+      },
+      includeBoundaryTimestamp: false,
+      isRawModelRun: false,
+      sessionAgentId: "main",
+      setActiveSessionSystemPrompt,
+      systemPromptText,
+      toolResultPromptProjectionState: {
+        replacements: new Map(),
+        frozen: new Set(),
+        ambiguousBaseKeys: new Set(),
+        restoredCacheTtl: new Map(),
+        sourceHashByKey: new Map(),
+      },
+    });
+  };
 }
 
-describe("#85203 media task hints stay below the system-prompt cache boundary", () => {
-  it("cached stablePrefix is identical across a media-active turn and a media-idle turn", () => {
-    const withMedia = splitSystemPromptCacheBoundary(composeTurn({ activeImageTask: true }));
-    const withoutMedia = splitSystemPromptCacheBoundary(composeTurn({ activeImageTask: false }));
-    expect(withMedia?.stablePrefix).toBe(withoutMedia?.stablePrefix);
-  });
+describe("#85203 media facts preserve the complete assembled system prompt", () => {
+  it.each([
+    { scenario: "existing boundary", override: undefined },
+    { scenario: "marker-free hook override", override: OVERRIDE },
+  ])("keeps static hooks and model identity stable with $scenario", async ({ override }) => {
+    const prepareTurn = await createTurnFixture(override);
+    const rendering = await prepareTurn("Rendering image");
+    const encoding = await prepareTurn("Encoding image");
+    const idle = await prepareTurn();
 
-  it("documented static hook guidance stays in the cacheable prefix (use-case coverage)", () => {
-    const split = splitSystemPromptCacheBoundary(composeTurn({ activeImageTask: true }));
-    expect(split?.stablePrefix).toContain(HOOK);
-  });
-
-  it("media hint lands below the boundary (dynamic suffix), not in the cached prefix", () => {
-    const split = splitSystemPromptCacheBoundary(composeTurn({ activeImageTask: true }));
-    expect(split?.dynamicSuffix).toContain(MEDIA_HINT);
-    expect(split?.stablePrefix ?? "").not.toContain(MEDIA_HINT);
-  });
-
-  // A hook that returns a full systemPrompt override produces a marker-free base; the
-  // ensureSystemPromptCacheBoundary wrap inserts a boundary so media still routes below it.
-  it("inserts a boundary for a marker-free hook systemPrompt override so media stays uncached", () => {
-    const OVERRIDE = "Custom hook system prompt override without a cache boundary";
-    const split = splitSystemPromptCacheBoundary(
-      composeTurn({ activeImageTask: true, base: OVERRIDE, hook: "" }),
+    expect(encoding.systemPromptForHook).toBe(rendering.systemPromptForHook);
+    expect(idle.systemPromptForHook).toBe(rendering.systemPromptForHook);
+    expect(rendering.runtimeContextMessageForCurrentTurn?.content).toContain(
+      'progress_json="Rendering image"',
     );
+    expect(encoding.runtimeContextMessageForCurrentTurn?.content).toContain(
+      'progress_json="Encoding image"',
+    );
+    expect(idle.runtimeContextMessageForCurrentTurn?.content).toContain(
+      "tool=image_generate; none",
+    );
+    expect(rendering.systemPromptForHook).not.toContain("task=task-1");
+
+    const split = splitSystemPromptCacheBoundary(idle.systemPromptForHook);
     expect(split).toBeDefined();
-    expect(split?.stablePrefix).toBe(OVERRIDE);
-    expect(split?.stablePrefix ?? "").not.toContain(MEDIA_HINT);
-    expect(split?.dynamicSuffix).toContain(MEDIA_HINT);
-  });
-
-  // Without ensuring the boundary on idle turns too, a marker-free override has the later
-  // model-identity append land above the (absent) boundary, so the idle cached prefix
-  // diverges from the active turn and prompt caching breaks across active/idle transitions.
-  it("marker-free override: idle cached prefix matches the active turn after model identity is appended", () => {
-    const OVERRIDE = "Custom hook system prompt override without a cache boundary";
-    const active = splitSystemPromptCacheBoundary(
-      composeTurn({ activeImageTask: true, base: OVERRIDE, hook: "" }),
-    );
-    const idle = splitSystemPromptCacheBoundary(
-      composeTurn({ activeImageTask: false, base: OVERRIDE, hook: "" }),
-    );
-    expect(active?.stablePrefix).toBe(OVERRIDE);
-    expect(idle).toBeDefined();
-    expect(idle?.stablePrefix).toBe(active?.stablePrefix);
-    expect(idle?.stablePrefix ?? "").not.toContain(MODEL_IDENTITY_FRAGMENT);
-    expect(idle?.dynamicSuffix).toContain(MODEL_IDENTITY_FRAGMENT);
+    expect(split?.stablePrefix).toContain(HOOK);
+    expect(split?.stablePrefix).toContain(override ?? "Stable workspace prefix");
+    expect(split?.stablePrefix).not.toContain("Current model identity:");
+    expect(split?.dynamicSuffix).toContain("Current model identity:");
   });
 });

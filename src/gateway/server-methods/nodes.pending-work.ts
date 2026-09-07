@@ -23,13 +23,13 @@ import {
   NODE_WAKE_RECONNECT_WAIT_MS,
   releaseNodeWakeLifecycle,
 } from "../node-wake-state.js";
-import { respondUnavailableOnThrow } from "./nodes.helpers.js";
 import { isNodePairingWorkCurrent } from "./nodes.shared.js";
 import {
   maybeSendNodeWakeNudge,
   maybeWakeNodeWithApns,
   waitForNodeReconnect,
 } from "./nodes.wake.js";
+import { respondUnavailableOnThrow } from "./response.js";
 import type { RespondFn } from "./shared-types.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";

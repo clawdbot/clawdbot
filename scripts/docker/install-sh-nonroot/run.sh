@@ -17,12 +17,11 @@ fi
 
 echo "==> Pre-flight: ensure supported Node is already present"
 node -e '
-  const [major, minor, patch] = process.versions.node.split(".").map(Number);
+  const [major, minor] = process.versions.node.split(".").map(Number);
   const ok =
-    (major === 22 && (minor > 22 || (minor === 22 && patch >= 3))) ||
-    (major === 24 && minor >= 15) ||
-    (major === 25 && minor >= 9) ||
-    major >= 26;
+    (major === 24 && minor >= 16) ||
+    (major === 26 && minor >= 1) ||
+    major > 26;
   if (!ok) {
     process.stderr.write(`unsupported node ${process.versions.node}\n`);
     process.exit(1);

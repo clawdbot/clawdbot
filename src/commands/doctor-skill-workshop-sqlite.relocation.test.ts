@@ -79,6 +79,7 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
       externalProposalCount: 1,
       externalProposalCountsByAgent: { main: 1 },
       legacyBackupRootCount: 0,
+      preservedLegacyBackupRootCount: 0,
     });
     await expect(fs.access(legacySkillFile)).resolves.toBeUndefined();
 
@@ -163,6 +164,8 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
     await expect(readSkillProposalRecord(update.id, { env: testState.env })).resolves.toMatchObject(
       {
         status: "pending",
+        createdAt: update.createdAt,
+        updatedAt: update.updatedAt,
         target: {
           skillDir: path.dirname(workshopSkillFile),
           skillFile: workshopSkillFile,
@@ -251,6 +254,7 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
       externalProposalCount: 1,
       externalProposalCountsByAgent: { retired: 1 },
       legacyBackupRootCount: 0,
+      preservedLegacyBackupRootCount: 0,
     });
     const result = await migrateLegacySkillWorkshopProposals({ config, env: testState.env });
 
@@ -416,6 +420,7 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
       externalProposalCount: 0,
       externalProposalCountsByAgent: {},
       legacyBackupRootCount: 0,
+      preservedLegacyBackupRootCount: 0,
     });
     await expectWorkshopMigrationConverged({ env: testState.env });
   });

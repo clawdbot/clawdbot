@@ -1,16 +1,10 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
-import { persistHeartbeatOutcome } from "../../../infra/heartbeat-outcome-store.js";
 import type { Context, Model, SimpleStreamOptions } from "../../../llm/types.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
+import type { StreamFn } from "../../runtime/index.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -25,6 +19,10 @@ import {
 } from "../../sessions/compaction/request-budget.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { SettingsManager } from "../../sessions/settings-manager.js";
+import {
+  createPromptCacheRequestObserver,
+  type PromptCacheRequestObservation,
+} from "../prompt-cache-request-observer.js";
 import {
   getEmbeddedSessionPromptState,
   clearEmbeddedSessionPromptStates,
@@ -120,14 +118,11 @@ type PromptErrorCall = {
   yieldMessage: string | null;
 };
 
-const tempStateDirs: string[] = [];
-
 function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 } = {}) {
   const order: string[] = [];
   const promptState: EmbeddedAttemptPromptState = {
     contextBudgetStatus: undefined,
     preflightRecovery: undefined,
-    promptCacheChangesForTurn: null,
     yieldAborted: false,
   };
   const executionState: PromptPhaseInput["state"] = {
@@ -148,6 +143,7 @@ function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 } = {}) 
     },
   };
   const sessionManager = {
+    getHeader: () => ({ version: 3 }),
     appendCustomEntry: vi.fn(),
     getEntries: vi.fn(() => []),
   };
@@ -163,7 +159,6 @@ function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 } = {}) 
     input.setLeasedSteering(lease);
     return {
       hookCtx: {},
-      promptCacheChangesForTurn: [],
       leasedSteering: lease,
       transcriptLeafId: "leaf-1",
     };
@@ -280,7 +275,10 @@ function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 } = {}) 
         },
       },
       systemPrompt: { runtimeInfo: { model: "model-1" } },
-      toolCatalog: { toolSearch: { compacted: false } },
+      toolCatalog: {
+        toolSearch: { compacted: false },
+        toolSearchRunPlan: { capabilityToolNames: new Set(["read"]) },
+      },
       promptToolPolicy: {
         current: {
           activeToolNames: ["read"],
@@ -333,9 +331,6 @@ beforeEach(() => {
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   vi.unstubAllEnvs();
-  for (const stateDir of tempStateDirs.splice(0)) {
-    fs.rmSync(stateDir, { recursive: true, force: true });
-  }
 });
 
 registerAgentSessionLoopTestLifecycle();
@@ -344,6 +339,56 @@ afterEach(() => {
 });
 
 describe("runEmbeddedAttemptPromptPhase", () => {
+  it("observes canonical request prefixes before managed cache consumption and skips compaction", async () => {
+    const fixture = createFixture();
+    const session = fixture.input.prepared.sessionRuntime.agentSession.activeSession;
+    const observations = vi.fn<(observation: PromptCacheRequestObservation) => void>();
+    const observer = createPromptCacheRequestObserver(
+      { sessionId: "prompt-phase-cache-observer", streamStrategy: "test" },
+      observations,
+    );
+    fixture.input.preparedStreamRuntime.cache.onModelRequest = observer.onModelRequest;
+    let compacting = false;
+    Object.defineProperty(session, "isCompacting", { get: () => compacting });
+    mocks.prepareGooglePromptCache.mockImplementation(
+      async ({ streamFn }: { streamFn: StreamFn }): Promise<StreamFn> =>
+        (model, context, options) =>
+          streamFn(model, { ...context, systemPrompt: undefined, tools: undefined }, options),
+    );
+    mocks.submitPrompt.mockImplementation(async () => {
+      const tool = { name: "read", description: "Read text", parameters: Type.Object({}) };
+      for (const [index, cacheRead] of [10_000, 0, 10_000].entries()) {
+        await session.agent.streamFn(testModel, {
+          systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}turn ${index}`,
+          messages: [],
+          tools: [{ ...tool, description: index === 2 ? "Read workspace text" : tool.description }],
+        });
+        observer.onModelUsage({ input: 10_000 - cacheRead, cacheRead, cacheWrite: 0 });
+        if (index === 0) {
+          compacting = true;
+          await session.agent.streamFn(testModel, {
+            systemPrompt: "Summarize",
+            messages: [],
+            tools: [],
+          });
+          compacting = false;
+        }
+      }
+    });
+    await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
+    expect(fixture.readState().promptError).toBeNull();
+    expect(observations.mock.calls.map(([observation]) => observation)).toMatchObject([
+      { requestIndex: 1, broke: false, cacheRead: 10_000, changes: null },
+      { requestIndex: 2, broke: true, cacheRead: 0, changes: null },
+      {
+        requestIndex: 3,
+        broke: false,
+        cacheRead: 10_000,
+        changes: [{ code: "tools", detail: "tool set changed with same count" }],
+      },
+    ]);
+  });
+
   it.each([
     { appendOnlyRuntimeContext: true, queued: false },
     { appendOnlyRuntimeContext: false, queued: false },
@@ -668,41 +713,6 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     },
   );
 
-  it("does not claim heartbeat outcomes for detached user-triggered runs", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-prompt-phase-heartbeat-"));
-    tempStateDirs.push(stateDir);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    await upsertSessionEntryCore(
-      { agentId: "main", env: process.env, sessionKey: "agent:main:main" },
-      { sessionId: "prompt-phase-heartbeat-test", updatedAt: 1 },
-    );
-    persistHeartbeatOutcome({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      runSessionKey: "agent:main:main:heartbeat",
-      response: { outcome: "progress", notify: false, summary: "Heartbeat context" },
-      occurredAt: 1,
-      env: process.env,
-    });
-    const fixture = createFixture();
-    Object.assign(fixture.input.attempt, {
-      sessionKey: "agent:main:main",
-      sessionPersistence: "detached",
-      trigger: "user",
-    });
-
-    await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
-
-    expect(mocks.preparePromptContext.mock.calls[0]?.[0]).not.toHaveProperty(
-      "heartbeatOutcomeContext",
-    );
-    expect(
-      openOpenClawAgentDatabase({ agentId: "main", env: process.env })
-        .db.prepare("SELECT context_run_id, context_claimed_at FROM heartbeat_outcomes")
-        .get(),
-    ).toEqual({ context_run_id: null, context_claimed_at: null });
-  });
-
   it("runs prompt work in phase order and publishes prompt outputs", async () => {
     const fixture = createFixture();
 
@@ -725,7 +735,6 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       "stop-steering",
     ]);
     expect(fixture.sessionRuntimeState.prePromptMessageCount).toBe(2);
-    expect(fixture.promptState.promptCacheChangesForTurn).toEqual([]);
     expect(fixture.promptState.finalPromptText).toBe("hello");
     expect(mocks.preparePromptContext).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -136,11 +136,13 @@ async function resolveGithubTokenCandidates(): Promise<Array<{ source: string; t
 }
 
 describeLive("github-copilot connection-bound Responses IDs live", () => {
-  it("rewrites replayed item IDs and preserves streamed tool arguments", async () => {
+  it("rewrites replayed item IDs and preserves streamed tool arguments", async ({ skip }) => {
     logProgress("start");
     const candidates = await resolveGithubTokenCandidates();
     if (candidates.length === 0) {
-      logProgress("skip (no GitHub Copilot token found in env or auth profile)");
+      skip(
+        "No GitHub Copilot token found in env vars OPENCLAW_LIVE_GITHUB_COPILOT_TOKEN / COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN or the github-copilot auth profile",
+      );
       return;
     }
 

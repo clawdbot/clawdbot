@@ -24,7 +24,7 @@ export function decorateCitations(
   }
   return results.map((entry) => {
     const citation = formatCitation(entry);
-    const snippet = `${entry.snippet.trim()}\n\nSource: ${citation}`;
+    const snippet = `${entry.snippet.trimEnd()}\n\nSource: ${citation}`;
     return { ...entry, citation, snippet };
   });
 }

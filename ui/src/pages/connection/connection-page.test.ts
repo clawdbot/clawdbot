@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
@@ -10,7 +9,6 @@ import type {
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { loadSettings } from "../../app/settings.ts";
 import {
   createApplicationContextProvider,
   createApplicationGateway,
@@ -72,37 +70,94 @@ describe("supportsSystemInfo", () => {
   });
 });
 
+function editInput(page: ConnectionPage, label: string, value: string) {
+  const input = control(page, `input[aria-label="${label}"]`);
+  input.value = value;
+  input.dispatchEvent(new Event("input"));
+}
+
 describe("ConnectionPage credentials", () => {
-  it("re-scopes credentials when the Gateway URL changes", () => {
-    const page = new ConnectionPage();
-    const state = page as unknown as {
-      settings: ReturnType<typeof loadSettings>;
-      password: string;
-      context: ApplicationContext;
-      render: () => ReturnType<ConnectionPage["render"]>;
-    };
-    state.settings = {
-      ...loadSettings(),
+  it("re-scopes credentials when the Gateway URL changes", async () => {
+    const current = source({
+      request: vi.fn().mockResolvedValue(deviceSystemInfo),
+    } as unknown as GatewayBrowserClient);
+    Object.assign(current.gateway.connection, {
       gatewayUrl: "wss://gateway.example/openclaw",
       token: "old-token",
-    };
-    state.password = "old-password";
-    state.context = {
-      gateway: { snapshot: { phase: "stopped", hello: null, lastError: null } },
-      channels: { state: { channelsLastSuccess: null } },
-    } as unknown as ApplicationContext;
-    const container = document.createElement("div");
-    render(state.render(), container);
-    const input = container.querySelector<HTMLInputElement>('input[aria-label="WebSocket URL"]');
-    if (!input) {
-      throw new Error("expected Gateway URL input");
-    }
+      password: "old-password",
+    });
+    const connect = vi.spyOn(current.gateway, "connect");
+    const { page } = await mount(current.gateway);
 
-    input.value = "wss://other-gateway.example/openclaw";
-    input.dispatchEvent(new Event("input"));
+    editInput(page, "Gateway URL", "wss://other-gateway.example/openclaw");
+    await settleLitElement(page);
+    expect(control(page, 'input[aria-label="Gateway secret"]').value).toBe("");
+    control(page, "button.btn.primary").click();
+    expect(connect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gatewayUrl: "wss://other-gateway.example/openclaw",
+        token: "",
+        password: "",
+      }),
+    );
+  });
 
-    expect(state.settings.token).toBe("");
-    expect(state.password).toBe("");
+  it.each([
+    { token: "saved-token", password: "saved-password", displayed: "saved-token" },
+    { token: "", password: "injected-password", displayed: "injected-password" },
+  ])(
+    "replaces the displayed secret without retaining a hidden credential: $displayed",
+    async ({ token, password, displayed }) => {
+      const current = source({
+        request: vi.fn().mockResolvedValue(deviceSystemInfo),
+      } as unknown as GatewayBrowserClient);
+      Object.assign(current.gateway.connection, { token, password });
+      const connect = vi.spyOn(current.gateway, "connect");
+      const { page } = await mount(current.gateway);
+      const secret = () => control(page, 'input[aria-label="Gateway secret"]');
+      expect(page.querySelectorAll(".settings-secret input")).toHaveLength(1);
+      expect(secret().value).toBe(displayed);
+      expect(page.querySelector('[role="radiogroup"]')).toBeNull();
+      control(page, ".settings-row__control > button.btn").click();
+      expect(connect).toHaveBeenLastCalledWith(expect.objectContaining({ token, password }));
+
+      editInput(page, "Gateway secret", "");
+      await settleLitElement(page);
+      expect(secret().value).toBe("");
+      editInput(page, "Gateway secret", "edited-secret");
+      await settleLitElement(page);
+      control(page, "button.btn.primary").click();
+      expect(connect).toHaveBeenLastCalledWith(
+        expect.objectContaining({ token: "edited-secret", password: "" }),
+      );
+    },
+  );
+
+  it("highlights Connect and shows the unsaved hint only while the draft differs", async () => {
+    const current = source({
+      request: vi.fn().mockResolvedValue(deviceSystemInfo),
+    } as unknown as GatewayBrowserClient);
+    const { page } = await mount(current.gateway);
+    const actions = () => [
+      ...page.querySelectorAll<HTMLButtonElement>(".settings-row__control > button.btn"),
+    ];
+    const connectButton = () => control(page, ".settings-row__control > button.btn");
+    const hint = "Unsaved changes apply when you connect.";
+    expect(actions().map((button) => button.textContent?.trim())).toEqual(["Connect"]);
+    expect(connectButton().className).toBe("btn");
+    expect(page.textContent).not.toContain(hint);
+    editInput(page, "Gateway secret", "draft-token");
+    await settleLitElement(page);
+    expect(connectButton().className).toBe("btn primary");
+    expect(page.textContent).toContain(hint);
+    editInput(page, "Gateway secret", "");
+    await settleLitElement(page);
+    expect(connectButton().className).toBe("btn");
+    expect(page.textContent).not.toContain(hint);
+    editInput(page, "Default session", "draft-session");
+    await settleLitElement(page);
+    expect(connectButton().className).toBe("btn primary");
+    expect(page.textContent).toContain(hint);
   });
 });
 
@@ -113,29 +168,21 @@ describe("ConnectionPage Gateway lifecycle", () => {
     const first = source(client);
     const { page, context, provider } = await mount(first.gateway);
     const input = (label: string) => control(page, `input[aria-label="${label}"]`);
-    const edit = (label: string, value: string) => {
-      input(label).value = value;
-      input(label).dispatchEvent(new Event("input"));
-    };
-    edit("Gateway Token", "draft-token");
-    edit("Password (not stored)", "draft-password");
-    edit("Default Session Key", "draft-session");
-    control(page, 'button[aria-label="Toggle token visibility"]').click();
-    control(page, 'button[aria-label="Toggle password visibility"]').click();
+    editInput(page, "Gateway secret", "draft-secret");
+    editInput(page, "Default session", "draft-session");
+    control(page, 'button[aria-label="Toggle secret visibility"]').click();
     await settleLitElement(page);
-    expect(input("Gateway Token").type).toBe("text");
-    expect(input("Password (not stored)").type).toBe("text");
+    expect(input("Gateway secret").type).toBe("text");
 
     first.publish({ ...first.gateway.snapshot, phase: "reconnecting" });
     await settleLitElement(page);
-    expect(input("Gateway Token").type).toBe("password");
-    expect(input("Password (not stored)").type).toBe("password");
+    expect(input("Gateway secret").type).toBe("password");
     expect(page.querySelector(".config-host__name")?.textContent?.trim()).toBe("—");
     first.publish({ ...first.gateway.snapshot, phase: "connected", sessionKey: "remote-session" });
     await settleLitElement(page);
-    expect(input("Gateway Token").value).toBe("draft-token");
-    expect(input("Password (not stored)").value).toBe("draft-password");
-    expect(input("Default Session Key").value).toBe("draft-session");
+    expect(input("Gateway secret").value).toBe("draft-secret");
+    expect(input("Default session").value).toBe("draft-session");
+    expect(input("Gateway secret").type).toBe("password");
     expect(request).toHaveBeenCalledTimes(2);
 
     const second = source(client);
@@ -145,10 +192,9 @@ describe("ConnectionPage Gateway lifecycle", () => {
     });
     provider.setContext({ ...context, gateway: second.gateway });
     await settleLitElement(page);
-    expect(input("Gateway Token").value).toBe("replacement-token");
-    expect(input("Password (not stored)").value).toBe("replacement-password");
-    expect(input("Default Session Key").value).toBe("main");
-    expect(input("Gateway Token").type).toBe("password");
+    expect(input("Gateway secret").value).toBe("replacement-token");
+    expect(input("Default session").value).toBe("main");
+    expect(input("Gateway secret").type).toBe("password");
     expect(request).toHaveBeenCalledTimes(3);
   });
 

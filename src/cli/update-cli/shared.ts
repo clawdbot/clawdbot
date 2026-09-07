@@ -1,5 +1,4 @@
 // Shared update command primitives for channel resolution, install roots, and subprocess steps.
-import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -72,8 +71,9 @@ export class UpdatePreMutationError extends Error {
   constructor(
     readonly reason: string,
     message: string,
+    options?: ErrorOptions,
   ) {
-    super(message);
+    super(message, options);
     this.name = "UpdatePreMutationError";
   }
 }
@@ -444,49 +444,41 @@ const COMPLETION_CACHE_MANUAL_REFRESH_HINT =
 export async function tryWriteCompletionCache(
   root: string,
   jsonMode: boolean,
+  timeoutMs = COMPLETION_CACHE_WRITE_TIMEOUT_MS,
 ): Promise<"completed" | "failed" | "skipped"> {
   const binPath = path.join(root, "openclaw.mjs");
   if (!(await pathExists(binPath))) {
     return "skipped";
   }
 
-  const result = spawnSync(resolveNodeRunner(), [binPath, "completion", "--write-state"], {
-    cwd: root,
-    env: {
-      ...process.env,
-      [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1",
-    },
-    encoding: "utf-8",
-    timeout: COMPLETION_CACHE_WRITE_TIMEOUT_MS,
-  });
-
-  if (result.error) {
-    if (!jsonMode) {
-      const err = result.error as NodeJS.ErrnoException;
-      const reason =
-        err.code === "ETIMEDOUT"
-          ? `timed out after ${COMPLETION_CACHE_WRITE_TIMEOUT_MS / 1000}s`
-          : String(result.error);
-      defaultRuntime.log(
-        theme.warn(
-          `Completion cache update failed: ${reason}. ${COMPLETION_CACHE_MANUAL_REFRESH_HINT}`,
-        ),
-      );
+  let failure: string;
+  try {
+    const result = await runCommandWithTimeout(
+      [resolveNodeRunner(), binPath, "completion", "--write-state"],
+      {
+        cwd: root,
+        env: { ...process.env, [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1" },
+        input: "",
+        timeoutMs,
+        killProcessTree: true,
+      },
+    );
+    if (result.code === 0) {
+      return "completed";
     }
-    return "failed";
+    failure =
+      result.termination === "timeout"
+        ? `timed out after ${timeoutMs / 1000}s`
+        : result.stderr.trim();
+  } catch (error) {
+    failure = String(error);
   }
-
-  if (result.status !== 0) {
-    if (!jsonMode) {
-      const stderr = (result.stderr ?? "").trim();
-      const detail = stderr ? ` (${stderr})` : "";
-      defaultRuntime.log(
-        theme.warn(
-          `Completion cache update failed${detail}. ${COMPLETION_CACHE_MANUAL_REFRESH_HINT}`,
-        ),
-      );
-    }
-    return "failed";
+  if (!jsonMode) {
+    defaultRuntime.log(
+      theme.warn(
+        `Completion cache update failed${failure ? `: ${failure}` : ""}. ${COMPLETION_CACHE_MANUAL_REFRESH_HINT}`,
+      ),
+    );
   }
-  return "completed";
+  return "failed";
 }

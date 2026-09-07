@@ -28,6 +28,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -588,6 +589,9 @@ class GatewayBootstrapAuthTest {
     assertNull(auth.token)
     assertEquals("setup-bootstrap-token", auth.bootstrapToken)
     assertNull(auth.password)
+    assertFalse(auth.bootstrapHandoff!!.allowStoredTokenRecovery)
+    prefs.saveGatewayCredentials(endpoint.stableId, bootstrapToken = "setup-bootstrap-token")
+    assertTrue(runtime.resolveGatewayConnectAuth(endpoint).bootstrapHandoff!!.allowStoredTokenRecovery)
   }
 
   @Test
@@ -914,6 +918,30 @@ class GatewayBootstrapAuthTest {
     assertNull(prompt.fingerprintSha256)
     assertEquals(GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT, prompt.probeFailure)
   }
+
+  @Test
+  fun authResetInvalidatesHandoffBeforeWaitingForConnectionCleanup() =
+    runBlocking {
+      val (_, prefs, runtime) = gatewayFixture()
+      val endpoint = gatewayEndpoint()
+      prefs.setManualTls(false)
+      prefs.saveGatewayCredentials(endpoint.stableId, bootstrapToken = "setup")
+      assertTrue(runtime.connectSwitchingGateway(endpoint, auth(bootstrapToken = "setup")))
+      val desired = waitForDesiredConnection(runtime, "nodeSession")
+      val handoff = readField<ai.openclaw.app.gateway.GatewayBootstrapHandoff>(desired, "bootstrapHandoff")
+      val switchMutex = readField<Mutex>(runtime, "gatewaySwitchMutex")
+      switchMutex.lock()
+      val reset = async(start = CoroutineStart.UNDISPATCHED) { runtime.resetGatewaySetupAuth(endpoint.stableId) }
+      try {
+        assertFalse(reset.isCompleted)
+        assertFalse(handoff.complete())
+        assertEquals("setup", prefs.loadGatewayCredentials(endpoint.stableId).bootstrapToken)
+      } finally {
+        switchMutex.unlock()
+      }
+      assertTrue(reset.await())
+      assertNull(prefs.loadGatewayCredentials(endpoint.stableId).bootstrapToken)
+    }
 
   @Test
   fun resetGatewaySetupAuth_clearsOnlyTargetGatewayCredentialsAndDeviceTokens() =

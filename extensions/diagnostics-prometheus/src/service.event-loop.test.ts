@@ -1,6 +1,14 @@
 import { createServer } from "node:http";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { baseEvent, createMetricsHarness, trusted, untrusted } from "./service.test-helpers.js";
+
+// HTTP scrapes in this file exercise an authorized operator; the exporter's scope guard is
+// covered in service.http-scope.test.ts.
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+  getPluginRuntimeGatewayRequestScope: () => ({
+    client: { connect: { scopes: ["operator.read"] } },
+  }),
+}));
 
 describe("diagnostics-prometheus runtime metrics", () => {
   it.each([false, true])(

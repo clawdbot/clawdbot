@@ -99,7 +99,7 @@ suite.define(() => {
           message: "The Gateway needs a matching token or password.",
           details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
         });
-        await page.getByText("Auth required", { exact: true }).waitFor();
+        await page.getByText("This Gateway expects its token", { exact: true }).waitFor();
         await expect.poll(() => helperCalls).toBe(1);
         await page.screenshot({ path: path.join(artifactDir, "1-auth-required.png") });
 

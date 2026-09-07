@@ -27,6 +27,11 @@ export const TSGO_CORE_TEST_SHARDS = [
     config: "test/tsconfig/tsconfig.core.test.gateway-other.json",
   },
   { name: "infra", group: "src", config: "test/tsconfig/tsconfig.core.test.infra.json" },
+  {
+    name: "state-logging",
+    group: "src",
+    config: "test/tsconfig/tsconfig.core.test.state-logging.json",
+  },
   { name: "commands", group: "src", config: "test/tsconfig/tsconfig.core.test.commands.json" },
   {
     name: "plugins-platform",

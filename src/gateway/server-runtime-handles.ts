@@ -2,7 +2,10 @@
 // Provides stop-safe defaults for timers, sidecars, subscriptions, and services.
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
-import type { GatewayHotReloadStatus } from "./config-reload-status.types.js";
+import type {
+  GatewayDeferredChannelReload,
+  GatewayHotReloadStatus,
+} from "./config-reload-status.types.js";
 import type { GatewayDiscovery } from "./server-discovery-runtime.js";
 import {
   MEDIA_CLEANUP_STOP_TIMEOUT_MS,
@@ -21,6 +24,7 @@ import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach
 export type GatewayConfigReloaderHandle = {
   stop: () => Promise<void>;
   hotReloadStatus?: () => GatewayHotReloadStatus;
+  getDeferredChannelReloads?: () => readonly GatewayDeferredChannelReload[];
   notifyPluginMetadataChanged: () => void;
   isConfigReloadSettled: () => boolean;
 };

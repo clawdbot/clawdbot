@@ -128,7 +128,9 @@ suite.define(() => {
           expect(response?.status()).toBe(200);
           const confirmation = page.locator("openclaw-gateway-url-confirmation");
           await confirmation.waitFor();
-          await confirmation.getByRole("button", { name: "Confirm", exact: true }).click();
+          await confirmation
+            .getByRole("button", { name: `Switch to ${gatewayUrl.host}`, exact: true })
+            .click();
           await expect
             .poll(() => page.locator(".profile-hero__name").textContent())
             .toBe("Test Person");

@@ -24,6 +24,49 @@ describe("projectAnthropicTools", () => {
     expect(reversed.tools).toEqual(first.tools);
   });
 
+  it("retains same-original duplicates while sorting their descriptions", () => {
+    const projection = projectAnthropicTools(
+      ["Zulu", "Alpha"].map((description) => ({
+        name: "Read",
+        description,
+        parameters: { type: "object", properties: {} },
+      })),
+      (name) => name.toLowerCase(),
+    );
+
+    expect(projection.inputToolCount).toBe(2);
+    expect(projection.unavailableOriginalNames).toEqual(new Set());
+    expect(projection.tools).toEqual([
+      {
+        originalName: "Read",
+        wireName: "read",
+        description: "Alpha",
+        inputSchema: { type: "object", properties: {}, required: [] },
+      },
+      {
+        originalName: "Read",
+        wireName: "read",
+        description: "Zulu",
+        inputSchema: { type: "object", properties: {}, required: [] },
+      },
+    ]);
+  });
+
+  it.each([
+    { names: ["Read", "Read", "read"], first: "Read", last: "read" },
+    { names: ["read", "read", "Read"], first: "read", last: "Read" },
+  ])(
+    "keeps the first accepted spelling in a collision after $first duplicates",
+    ({ names, first, last }) => {
+      expect(() =>
+        projectAnthropicTools(
+          names.map((name) => ({ name, description: name, parameters: { type: "object" } })),
+          () => "Read",
+        ),
+      ).toThrow(`Anthropic tool names "${first}" and "${last}" both map to "Read"`);
+    },
+  );
+
   it.each([
     { name: "implicit dialect", dialect: undefined, definitionsKey: "$defs" },
     {

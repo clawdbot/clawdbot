@@ -1,4 +1,3 @@
-// Memory Host SDK module implements secret input behavior.
 import {
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,

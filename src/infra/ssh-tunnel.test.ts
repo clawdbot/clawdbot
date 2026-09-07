@@ -1,6 +1,7 @@
 // Covers SSH target parsing and tunnel startup preflight behavior.
 import { EventEmitter } from "node:events";
 import net from "node:net";
+import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 
@@ -426,6 +427,42 @@ describe("startSshPortForward", () => {
       }
     },
   );
+
+  it("preserves diagnostic lines split across stderr chunks at startup failure", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      stderr: new PassThrough(),
+      kill: vi.fn(() => {
+        queueMicrotask(() => child.emit("close", 255, null));
+        return true;
+      }),
+    });
+    const connect = vi.spyOn(net, "connect").mockImplementation(() => new net.Socket());
+    mocks.spawn.mockImplementationOnce(() => {
+      queueMicrotask(() => {
+        child.stderr.write("Warning: file /tmp/qa clé ");
+        child.stderr.write("name not found.\r");
+        child.stderr.write("\nFinal diagnostic without newline");
+        child.stderr.end();
+        child.emit("exit", 255, null);
+      });
+      return child;
+    });
+    try {
+      await expect(
+        startSshPortForward({
+          target: "synthetic.example",
+          localPortPreferred: 43210,
+          remotePort: 18789,
+          timeoutMs: 250,
+        }),
+      ).rejects.toThrow(
+        "ssh exited (255)\nWarning: file /tmp/qa clé name not found.\nFinal diagnostic without newline",
+      );
+    } finally {
+      connect.mockRestore();
+      child.stderr.destroy();
+    }
+  });
 
   it.each(["active", "teardown"] as const)(
     "does not crash when stderr errors while the tunnel is %s",

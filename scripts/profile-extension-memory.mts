@@ -265,10 +265,10 @@ export async function runCase({
       resolve(result);
     }
 
-    child.stdout.on("data", (chunk) => {
+    child.stdout.setEncoding("utf8").on("data", (chunk) => {
       stdout = appendBoundedTail(stdout, chunk, OUTPUT_CAPTURE_MAX_CHARS);
     });
-    child.stderr.on("data", (chunk) => {
+    child.stderr.setEncoding("utf8").on("data", (chunk) => {
       const rssScan = scanMaxRssMb(stderrRssTail, chunk, maxRssMb);
       stderrRssTail = rssScan.tail;
       maxRssMb = rssScan.maxRssMb;

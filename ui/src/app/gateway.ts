@@ -47,6 +47,8 @@ export type ApplicationGateway = {
   readonly connection: ApplicationGatewayConnection;
   readonly connectionRevision: number;
   readonly eventLog: readonly EventLogEntry[];
+  /** Advances when the connection or authentication context retires diagnostic history. */
+  readonly eventLogRevision: number;
   connect: (connection?: ApplicationGatewayConnectOptions) => void;
   setSessionKey: (sessionKey: string) => void;
   start: () => void;

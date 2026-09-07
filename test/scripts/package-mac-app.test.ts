@@ -8,6 +8,7 @@ import {
   readdirSync,
   realpathSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { availableParallelism } from "node:os";
@@ -1302,6 +1303,86 @@ describe("package-mac-app plist stamping", () => {
     expect(helperCopy).toContain('chmod +x "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"');
   });
 
+  it.each(["primary", "secondary"])(
+    "merges framework architectures when %s file output exceeds the pipe buffer",
+    (verboseFramework) => {
+      const root = tempDirs.make("openclaw-package-framework-pipe-");
+      const primary = path.join(root, "primary.framework");
+      const secondary = path.join(root, "secondary.framework");
+      const destination = path.join(root, "destination.framework");
+      for (const framework of [primary, secondary, destination]) {
+        mkdirSync(framework);
+        writeFileSync(
+          path.join(framework, "Fixture"),
+          framework === secondary ? "arm64 x86_64\n" : "arm64\n",
+        );
+        writeFileSync(path.join(framework, "Info.plist"), "resource\n");
+      }
+      const description = path.join(root, "file-output");
+      // A matching first line followed by more than a pipe can buffer makes an
+      // early-exiting grep kill the producer, without depending on scheduling.
+      writeFileSync(
+        description,
+        "Mach-O universal binary with 2 architectures\n" + "architecture detail\n".repeat(65536),
+      );
+      const helper = getMergeFrameworkMachOsBlock()
+        .replaceAll("/usr/bin/file", "fixture_file")
+        .replaceAll("/usr/bin/lipo", "fixture_lipo");
+      const result = runHelper(`
+        set -euo pipefail
+        fixture_file() {
+          if [[ "$1" == */Info.plist ]]; then
+            printf 'XML document\\n'
+          elif [[ "$1" == */${verboseFramework}.framework/Fixture ]]; then
+            cat ${JSON.stringify(description)}
+          else
+            printf 'Mach-O 64-bit executable\\n'
+          fi
+        }
+        fixture_lipo() {
+          case "$1" in
+            -info) printf 'Architectures in the fat file: %s are: %s\\n' "$2" "$(cat "$2")" ;;
+            -thin)
+              [[ "$2" == x86_64 && "$4" == -output ]] || return 2
+              printf '%s\\n' "$2" > "$5" ;;
+            -create)
+              [[ "$4" == -output ]] || return 2
+              cat "$2" "$3" > "$5" ;;
+            *) return 2 ;;
+          esac
+        }
+        ${helper}
+        merge_framework_machos ${JSON.stringify(primary)} ${JSON.stringify(destination)} ${JSON.stringify(secondary)}
+      `);
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(path.join(destination, "Fixture"), "utf8")).toBe("arm64\nx86_64\n");
+      expect(readFileSync(path.join(destination, "Info.plist"), "utf8")).toBe("resource\n");
+    },
+  );
+
+  it("builds and bundles the macOS control CLI for every requested architecture", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const buildLoop = readFileSync(swiftScriptPath, "utf8");
+    const cliCopy = script.slice(
+      script.indexOf('echo "🚚 Copying macOS control CLI"'),
+      script.indexOf(
+        'if [[ "$SKIP_MLX_TTS" == "1" ]]; then',
+        script.indexOf('echo "🚚 Copying binary"'),
+      ),
+    );
+
+    expect(buildLoop).toContain('--product openclaw-mac --build-path "$BUILD_PATH" --arch "$arch"');
+    expect(cliCopy).toContain(
+      'cp "$(mac_cli_bin_for_arch "$PRIMARY_ARCH")" "$APP_ROOT/Contents/MacOS/openclaw-mac"',
+    );
+    expect(cliCopy).toContain('/usr/bin/lipo -create "${MAC_CLI_BIN_INPUTS[@]}"');
+    expect(cliCopy).toContain('chmod +x "$APP_ROOT/Contents/MacOS/openclaw-mac"');
+    expect(cliCopy).toContain(
+      '/usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/openclaw-mac"',
+    );
+  });
+
   it.runIf(process.platform === "darwin")(
     "merges framework Mach-O binaries when the checkout path contains glob metacharacters",
     () => {
@@ -1465,46 +1546,62 @@ describe("package-mac-app plist stamping", () => {
     expect(dev.stdout).toContain("reached-build");
   });
 
-  it("falls back to corepack pnpm when the pnpm shim is absent", () => {
-    const helperBlock = getPackageManagerHelperBlock();
-    const tempRoot = tempDirs.make("openclaw-package-pnpm-root-");
-    const toolsDir = tempDirs.make("openclaw-package-pnpm-tools-");
-    const logPath = path.join(tempRoot, "corepack.log");
+  for (const { name, runner, expectedCommands } of [
+    {
+      name: "uses pnpm when Corepack is absent",
+      runner: "pnpm",
+      expectedCommands: ["install --frozen-lockfile --config.node-linker=hoisted", "build"],
+    },
+    {
+      name: "falls back to corepack pnpm when the pnpm shim is absent",
+      runner: "corepack",
+      expectedCommands: [
+        "pnpm --version",
+        "pnpm install --frozen-lockfile --config.node-linker=hoisted",
+        "pnpm build",
+      ],
+    },
+  ] as const) {
+    it(name, () => {
+      const helperBlock = getPackageManagerHelperBlock();
+      const tempRoot = tempDirs.make("openclaw-package-pnpm-root-");
+      const toolsDir = tempDirs.make("openclaw-package-pnpm-tools-");
+      const logPath = path.join(tempRoot, "corepack.log");
 
-    const corepackPath = path.join(toolsDir, "corepack");
-    writeFileSync(
-      corepackPath,
-      [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
-        'printf \'%s|%s\\n\' "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"',
-        'if [[ "${1:-}" == "pnpm" && "${2:-}" == "--version" ]]; then',
-        "  echo '11.2.2'",
-        "fi",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    chmodSync(corepackPath, 0o755);
+      symlinkSync("/bin/bash", path.join(toolsDir, "bash"));
+      const runnerPath = path.join(toolsDir, runner);
+      writeFileSync(
+        runnerPath,
+        [
+          "#!/usr/bin/env bash",
+          "set -euo pipefail",
+          'printf \'%s|%s\\n\' "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"',
+          'if [[ "${1:-}" == "pnpm" && "${2:-}" == "--version" ]]; then',
+          "  echo '11.2.2'",
+          "fi",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      chmodSync(runnerPath, 0o755);
 
-    const result = runHelper(`
+      const result = runHelper(`
       set -euo pipefail
       ROOT_DIR=${JSON.stringify(tempRoot)}
       OPENCLAW_TEST_LOG=${JSON.stringify(logPath)}
       export OPENCLAW_TEST_LOG
-      PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+      PATH=${JSON.stringify(toolsDir)}
       ${helperBlock}
       run_pnpm install --frozen-lockfile --config.node-linker=hoisted
       run_pnpm build
     `);
 
-    expect(result.status).toBe(0);
-    expect(readFileSync(logPath, "utf8").trim().split("\n")).toEqual([
-      `${tempRoot}|pnpm --version`,
-      `${tempRoot}|pnpm install --frozen-lockfile --config.node-linker=hoisted`,
-      `${tempRoot}|pnpm build`,
-    ]);
-  });
+      expect(result.status).toBe(0);
+      expect(readFileSync(logPath, "utf8").trim().split("\n")).toEqual(
+        expectedCommands.map((command) => `${tempRoot}|${command}`),
+      );
+    });
+  }
 
   it("prefers repo Corepack pnpm over a global pnpm shim", () => {
     const helperBlock = getPackageManagerHelperBlock();
@@ -1512,6 +1609,8 @@ describe("package-mac-app plist stamping", () => {
     const outerRoot = tempDirs.make("openclaw-package-pnpm-outer-");
     const toolsDir = tempDirs.make("openclaw-package-pnpm-tools-");
     const logPath = path.join(tempRoot, "pnpm.log");
+    symlinkSync("/bin/bash", path.join(toolsDir, "bash"));
+    symlinkSync("/usr/bin/grep", path.join(toolsDir, "grep"));
 
     writeFileSync(
       path.join(tempRoot, "package.json"),
@@ -1553,7 +1652,7 @@ describe("package-mac-app plist stamping", () => {
       ROOT_DIR=${JSON.stringify(tempRoot)}
       OPENCLAW_TEST_LOG=${JSON.stringify(logPath)}
       export OPENCLAW_TEST_LOG
-      PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+      PATH=${JSON.stringify(toolsDir)}
       cd ${JSON.stringify(outerRoot)}
       ${helperBlock}
       run_pnpm --version
@@ -1571,17 +1670,10 @@ describe("package-mac-app plist stamping", () => {
     const helperBlock = getPackageManagerHelperBlock();
     const tempRoot = tempDirs.make("openclaw-package-pnpm-root-");
     const toolsDir = tempDirs.make("openclaw-package-pnpm-tools-");
-    // Hosts with a system corepack in /usr/bin (plus a cached pnpm) would satisfy
-    // the detection this test needs to fail; an empty cache with network disabled
-    // keeps "corepack pnpm is unavailable" true everywhere.
-    const corepackHome = tempDirs.make("openclaw-package-corepack-home-");
-
     const result = runHelper(`
       set -euo pipefail
       ROOT_DIR=${JSON.stringify(tempRoot)}
-      PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
-      export COREPACK_HOME=${JSON.stringify(corepackHome)}
-      export COREPACK_ENABLE_NETWORK=0
+      PATH=${JSON.stringify(toolsDir)}
       ${helperBlock}
       run_pnpm build
     `);

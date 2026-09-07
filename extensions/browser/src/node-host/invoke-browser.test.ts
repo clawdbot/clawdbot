@@ -665,10 +665,7 @@ describe("runBrowserProxyCommand", () => {
 
       const error = await runBrowserProxyCommand(
         JSON.stringify({ method: "POST", path: "/act" }),
-      ).then(
-        () => null,
-        (err: unknown) => err,
-      );
+      ).catch((err: unknown) => err);
       expect(error).toBeInstanceOf(Error);
       expect((error as Error).message).toBe(
         `browser proxy file read failed for ${secondPath}: Error: browser proxy files exceed 16 MiB aggregate limit`,
@@ -702,6 +699,25 @@ describe("runBrowserProxyCommand", () => {
     await expect(
       runBrowserProxyCommand(JSON.stringify({ method: "POST", path: "/act" })),
     ).rejects.toThrow("browser proxy payload exceeds 24 MiB encoded limit");
+  });
+
+  it.each([-1, 0, 1])("enforces the exact quoted payload limit at offset %i", async (delta) => {
+    const prefix = '\0\u0001\b\t\n\f\r"\\/Ω漢🦞\u2028\u2029\ud800a\udc00';
+    const maxBytes = 24 * 1024 * 1024;
+    const overhead = Buffer.byteLength(
+      JSON.stringify(JSON.stringify({ result: { result: prefix } })),
+    );
+    const body = { result: prefix + "a".repeat(maxBytes + delta - overhead) };
+    const expected = JSON.stringify({ result: body });
+    expect(Buffer.byteLength(JSON.stringify(expected))).toBe(maxBytes + delta);
+    dispatcherMocks.dispatch.mockResolvedValueOnce({ status: 200, body });
+
+    const result = runBrowserProxyCommand(JSON.stringify({ method: "POST", path: "/act" }));
+    if (delta > 0) {
+      await expect(result).rejects.toThrow("browser proxy payload exceeds 24 MiB encoded limit");
+    } else {
+      await expect(result).resolves.toBe(expected);
+    }
   });
 
   it("adds profile and browser status details on ws-backed timeouts", async () => {
@@ -993,39 +1009,23 @@ describe("runBrowserProxyCommand", () => {
     expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
   });
 
-  it("rejects persistent profile deletion when allowProfiles is configured", async () => {
+  it.each([
+    { name: "deletion", request: { method: "DELETE", path: "/profiles/poc" } },
+    {
+      name: "reset",
+      request: {
+        method: "POST",
+        path: "/reset-profile",
+        body: { profile: "openclaw", name: "openclaw" },
+      },
+    },
+  ])("rejects persistent profile $name when allowProfiles is configured", async ({ request }) => {
     configMocks.loadConfig.mockReturnValue({
       browser: {},
       nodeHost: { browserProxy: { enabled: true, allowProfiles: ["openclaw"] } },
     });
-
     await expect(
-      runBrowserProxyCommand(
-        JSON.stringify({
-          method: "DELETE",
-          path: "/profiles/poc",
-          timeoutMs: 50,
-        }),
-      ),
-    ).rejects.toThrow("INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles");
-    expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
-  });
-
-  it("rejects persistent profile reset when allowProfiles is configured", async () => {
-    configMocks.loadConfig.mockReturnValue({
-      browser: {},
-      nodeHost: { browserProxy: { enabled: true, allowProfiles: ["openclaw"] } },
-    });
-
-    await expect(
-      runBrowserProxyCommand(
-        JSON.stringify({
-          method: "POST",
-          path: "/reset-profile",
-          body: { profile: "openclaw", name: "openclaw" },
-          timeoutMs: 50,
-        }),
-      ),
+      runBrowserProxyCommand(JSON.stringify({ ...request, timeoutMs: 50 })),
     ).rejects.toThrow("INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles");
     expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
   });

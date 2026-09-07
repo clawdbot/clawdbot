@@ -54,7 +54,8 @@ export function spawnOwnedVitestProcess(spec: {
   };
   let child;
   try {
-    const containingRoot = fs.realpathSync(env.TMPDIR || env.TMP || env.TEMP || tmpdir());
+    // Native realpath expands Windows short names before children create filesystem watchers.
+    const containingRoot = fs.realpathSync.native(env.TMPDIR || env.TMP || env.TEMP || tmpdir());
     // An intermediate runner can die before publishing its own cleanup result.
     // Its containing owner must already hold the obligation before allocation.
     const containingOwner = findVitestResourceOwner(containingRoot);

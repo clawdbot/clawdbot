@@ -10,10 +10,7 @@ export type ApprovalRequestFilterInput = {
 };
 
 /** Matches session filters as literal substrings first, then bounded safe regexes. */
-export function matchesApprovalRequestSessionFilter(
-  sessionKey: string,
-  patterns: string[],
-): boolean {
+function matchesApprovalRequestSessionFilter(sessionKey: string, patterns: string[]): boolean {
   return patterns.some((pattern) => {
     if (sessionKey.includes(pattern)) {
       return true;

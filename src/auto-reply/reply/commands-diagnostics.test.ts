@@ -4,6 +4,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+import type {
+  LegacyInteractiveReply,
+  MessagePresentationAction,
+} from "../../interactive/payload.js";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
 import { createPluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -745,28 +749,71 @@ describe("diagnostics command", () => {
     expect(execCalls).toHaveLength(1);
   });
 
-  it("routes confirmations back to the Codex diagnostics handler without repeating the preamble", async () => {
-    const { handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
-    const commandHandler = vi.fn(async (ctx: PluginCommandContext) => ({
-      text: `confirmed ${ctx.args}`,
-    }));
-    registerHostTrustedReservedCommandForTest({
-      name: "codex",
-      description: "Codex command",
-      acceptsArgs: true,
-      handler: commandHandler,
-      ownership: "reserved",
-    });
+  it.each([
+    {
+      action: { type: "command", command: "/codex diagnostics confirm abc123def456" },
+      expectedAction: { type: "command", command: "/diagnostics confirm abc123def456" },
+    },
+    {
+      action: { type: "callback", value: "/codex diagnostics cancel abc123def456" },
+      expectedAction: { type: "callback", value: "/diagnostics cancel abc123def456" },
+    },
+    {
+      action: { type: "model-picker", version: 1, snapshotToken: "picker-1", intent: "cancel" },
+      expectedAction: {
+        type: "model-picker",
+        version: 1,
+        snapshotToken: "picker-1",
+        intent: "cancel",
+      },
+    },
+    {
+      action: { type: "url", url: "https://example.com/diagnostics" },
+      expectedAction: { type: "url", url: "https://example.com/diagnostics" },
+    },
+  ] satisfies Array<{
+    action: MessagePresentationAction;
+    expectedAction: MessagePresentationAction;
+  }>)(
+    "routes confirmations with $action.type actions without repeating the preamble",
+    async ({ action, expectedAction }) => {
+      const { handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
+      const interactive: LegacyInteractiveReply = {
+        blocks: [{ type: "buttons", buttons: [{ label: "Continue", action }] }],
+      };
+      const expectedInteractive: LegacyInteractiveReply = {
+        blocks: [{ type: "buttons", buttons: [{ label: "Continue", action: expectedAction }] }],
+      };
+      if (action.type !== "url" && expectedAction.type !== "url") {
+        interactive.blocks.push({ type: "select", options: [{ label: "Continue", action }] });
+        expectedInteractive.blocks.push({
+          type: "select",
+          options: [{ label: "Continue", action: expectedAction }],
+        });
+      }
+      const commandHandler = vi.fn(async (ctx: PluginCommandContext) => ({
+        text: `confirmed ${ctx.args}`,
+        interactive,
+      }));
+      registerHostTrustedReservedCommandForTest({
+        name: "codex",
+        description: "Codex command",
+        acceptsArgs: true,
+        handler: commandHandler,
+        ownership: "reserved",
+      });
 
-    const result = await handleDiagnosticsCommand(
-      buildDiagnosticsParams("/diagnostics confirm abc123def456"),
-      true,
-    );
+      const result = await handleDiagnosticsCommand(
+        buildDiagnosticsParams("/diagnostics confirm abc123def456"),
+        true,
+      );
 
-    expect(result?.shouldContinue).toBe(false);
-    expect(commandHandler).toHaveBeenCalledTimes(1);
-    expect(result?.reply?.text).toBe("confirmed diagnostics confirm abc123def456");
-  });
+      expect(result?.shouldContinue).toBe(false);
+      expect(commandHandler).toHaveBeenCalledTimes(1);
+      expect(result?.reply?.text).toBe("confirmed diagnostics confirm abc123def456");
+      expect(result?.reply?.interactive).toEqual(expectedInteractive);
+    },
+  );
 
   it("does not delegate diagnostics to a non-Codex plugin command", async () => {
     const { handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();

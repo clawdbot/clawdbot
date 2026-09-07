@@ -3,7 +3,6 @@ import {
   beginMcpLoopbackToolCallCapture,
   clearMcpLoopbackToolCallCapture,
   type McpLoopbackToolCallStart,
-  type McpLoopbackToolCallTerminalOutcome,
   waitForMcpLoopbackToolCallCaptureIdle,
 } from "../../gateway/mcp-http.loopback-runtime.js";
 import { shouldUseInternalSourceReplySink } from "../../infra/outbound/internal-source-reply.js";
@@ -40,6 +39,7 @@ import {
 import { readToolResultDetails } from "../tool-result-error.js";
 import { closeCliLiveSession } from "./cli-live-session-registry.js";
 import { attachCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
+import * as Deadline from "./execute-ask-user-deadline.js";
 import {
   appendUniqueCliMessagingEvidence,
   buildMessagingToolSendEvidenceKey,
@@ -53,27 +53,8 @@ import type { PreparedCliRunContext } from "./types.js";
 const CLI_LOOPBACK_CORRELATION_MAX_CALLS = 64;
 const CLI_MCP_DELIVERY_DRAIN_GRACE_MS = 5_000;
 const CLI_MCP_REQUEST_ADMISSION_GRACE_MS = 250;
-
-type CliToolTerminalOutcome = McpLoopbackToolCallTerminalOutcome | { outcome: "completed" };
-type CliLoopbackCall = {
-  admitted: McpLoopbackToolCallStart;
-  current: McpLoopbackToolCallStart;
-  boundToolCallId?: string;
-  outcome?: CliToolTerminalOutcome;
-  ambiguous: boolean;
-  ambiguityGroup?: CliLoopbackAmbiguityGroup;
-};
-type CliLoopbackAmbiguityGroup = {
-  calls: Set<CliLoopbackCall>;
-  activeToolCallIds: Set<string>;
-};
-type ActiveCliTool = {
-  toolName: string;
-  args: Record<string, unknown>;
-  loopbackCall?: CliLoopbackCall;
-  loopbackAmbiguous: boolean;
-  ambiguityGroup?: CliLoopbackAmbiguityGroup;
-};
+type ActiveCliTool = Deadline.ActiveCliTool;
+type CliLoopbackCall = Deadline.CliLoopbackCall;
 
 export function createCliToolTracking(context: PreparedCliRunContext) {
   let gatewayCaptureKey: string | undefined;
@@ -92,6 +73,10 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   const cliLoopbackCalls: CliLoopbackCall[] = [];
   const activeCliTools = new Map<string, ActiveCliTool>();
   let cliLoopbackCorrelationOverflowed = false;
+  const askUserDeadlines = Deadline.createAskUserDeadlineTracking(
+    activeCliTools,
+    () => cliLoopbackCorrelationOverflowed,
+  );
   const messagingToolSentTexts: string[] = [];
   const messagingToolSentTextKeys = new Set<string>();
   const messagingToolSentMediaUrls: string[] = [];
@@ -118,7 +103,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         activeTool.loopbackCall !== undefined && calls.includes(activeTool.loopbackCall),
     ),
   ) => {
-    const groups = new Set<CliLoopbackAmbiguityGroup>();
+    const groups = new Set<Deadline.CliLoopbackAmbiguityGroup>();
     for (const call of calls) {
       if (call.ambiguityGroup) {
         groups.add(call.ambiguityGroup);
@@ -161,6 +146,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       activeTool.ambiguityGroup = group;
       group.activeToolCallIds.add(toolCallId);
     }
+    askUserDeadlines.refresh();
   };
   const matchingActiveCliTools = (call: McpLoopbackToolCallStart): Array<[string, ActiveCliTool]> =>
     Array.from(activeCliTools.entries()).filter(([, activeTool]) =>
@@ -181,6 +167,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         }
       }
       cliLoopbackCalls.length = 0;
+      askUserDeadlines.refresh();
       return undefined;
     }
     const retained: CliLoopbackCall = { admitted: call, current: call, ambiguous: false };
@@ -199,6 +186,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       activeTool.ambiguityGroup = call.ambiguityGroup;
       call.ambiguityGroup.activeToolCallIds.add(toolCallId);
     }
+    askUserDeadlines.refresh();
   };
   const removeCliLoopbackCall = (call: CliLoopbackCall | undefined) => {
     if (!call) {
@@ -413,6 +401,8 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         const candidate = candidates.at(0);
         if (candidates.length === 1 && candidate && !candidate.ambiguous) {
           candidate.current = current;
+          const toolName = normalizeCliMessagingToolName(current.toolName);
+          askUserDeadlines.update(candidate, toolName, current.args);
         } else if (candidates.length > 0) {
           markCliLoopbackCallsAmbiguous(candidates);
         }
@@ -439,7 +429,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         inFlightPreparedMessagingCalls.delete(call);
       },
       onToolCallResult: (call) => {
-        const terminalOutcome: CliToolTerminalOutcome =
+        const terminalOutcome: Deadline.CliToolTerminalOutcome =
           call.outcome === "blocked"
             ? { outcome: call.outcome, deniedReason: call.deniedReason }
             : { outcome: call.outcome };
@@ -552,6 +542,9 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     result?: unknown;
   }) => {
     const activeTool = activeCliTools.get(event.toolCallId);
+    if (activeTool?.loopbackCall) {
+      askUserDeadlines.clear(activeTool.loopbackCall);
+    }
     activeCliTools.delete(event.toolCallId);
     retireCliLoopbackCorrelation(event.toolCallId, activeTool);
     const pending = pendingMessagingCalls.get(event.toolCallId);
@@ -664,6 +657,8 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   });
   return {
     beginGatewayCapture,
+    getActiveLoopbackAskUserDeadline: askUserDeadlines.get,
+    onActiveLoopbackAskUserDeadlineChange: askUserDeadlines.onChange,
     handleCliToolUseStart,
     handleCliToolResult,
     resolveCliLoopbackTerminalOutcome,

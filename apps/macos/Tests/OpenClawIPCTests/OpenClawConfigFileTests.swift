@@ -556,7 +556,7 @@ struct OpenClawConfigFileTests {
 
     @MainActor
     @Test
-    func `save dict rejects gateway mode removal and keeps previous config`() async throws {
+    func `save dict requires explicit allowance for primary clear and keeps other writers guarded`() async throws {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
         let configPath = stateDir.appendingPathComponent("openclaw.json")
@@ -612,6 +612,24 @@ struct OpenClawConfigFileTests {
             } else {
                 Issue.record("Missing rejected payload path")
             }
+
+            let selection = PrimaryGatewayControlConfiguration.clear
+            let replacement = try selection.replacingRoot(OpenClawConfigFile.loadDict(), effectiveLocalPort: 18789)
+            #expect(OpenClawConfigFile.saveDict(replacement.root, allowGatewayModeRemoval: selection.isClear))
+            let cleared = OpenClawConfigFile.loadDict()
+            let gateway = try #require(cleared["gateway"] as? [String: Any])
+            #expect(gateway["mode"] == nil)
+            #expect(gateway["remote"] == nil)
+            #expect((gateway["auth"] as? [String: String])?["token"] == "test-token")
+
+            let direct = try PrimaryGatewayControlConfiguration.direct(
+                url: #require(URL(string: "wss://gateway.example/")),
+                token: nil, password: nil, tlsFingerprint: nil)
+                .replacingRoot(cleared, effectiveLocalPort: 18789)
+            #expect(OpenClawConfigFile.saveDict(direct.root))
+            #expect(GatewayRemoteConfig
+                .resolveUrlString(root: OpenClawConfigFile.loadDict()) == "wss://gateway.example/")
+            #expect(!OpenClawConfigFile.saveDict(replacement.root))
         }
     }
 }
