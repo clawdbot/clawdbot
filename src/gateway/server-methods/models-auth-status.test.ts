@@ -2038,6 +2038,66 @@ describe("models.authStatus", () => {
     }
   });
 
+  it("uses the config-bound account without treating its profile ID as a billing key", async () => {
+    const provider = "openrouter";
+    const selectedId = "openrouter:two";
+    mocks.getRuntimeConfig.mockReturnValue({
+      models: {
+        providers: {
+          openrouter: { apiKey: selectedId, baseUrl: "https://openrouter.ai/api/v1", models: [] },
+        },
+      },
+    });
+    const { buildAuthHealthSummary } = await vi.importActual<
+      typeof import("../../agents/auth-health.js")
+    >("../../agents/auth-health.js");
+    mocks.buildAuthHealthSummary.mockImplementation(buildAuthHealthSummary);
+    mocks.listProviderUsagePluginDescriptors.mockReturnValue([
+      { provider, displayName: "OpenRouter" },
+    ]);
+    setPreparedAuthStore({
+      version: 1,
+      order: { openrouter: ["openrouter:one", selectedId] },
+      profiles: Object.fromEntries(
+        ["openrouter:one", selectedId].map((id) => [
+          id,
+          {
+            type: "api_key" as const,
+            provider,
+            key: `synthetic-${id}`,
+            metadata: { authFlow: "oauth-pkce" },
+          },
+        ]),
+      ),
+    });
+    mocks.loadProviderUsageSummary.mockImplementation(async (options = {}) => ({
+      updatedAt: 0,
+      providers: [
+        {
+          provider,
+          displayName: "OpenRouter",
+          windows: [
+            {
+              label: "Monthly key budget",
+              usedPercent: options.authProfile?.profileId === selectedId ? 20 : 10,
+            },
+          ],
+        },
+      ],
+    }));
+    await readAuthStatus();
+    await waitForFast(async () =>
+      expect((await readAuthStatus()).usageRefreshPending).toBeUndefined(),
+    );
+    const result = (await readAuthStatus()).providers[0];
+    expect.soft(result?.usageProfileId).toBe(selectedId);
+    expect.soft(result?.usage?.windows[0]?.usedPercent).toBe(20);
+    expect.soft(result?.independentUsage).toBeUndefined();
+    expect(
+      mocks.loadProviderUsageSummary.mock.calls.every(([options]) => options?.authProfile),
+    ).toBe(true);
+  });
+
   it.each(["token", "api_key"] as const)(
     "keeps login priority with a %s backup",
     async (backupType) => {

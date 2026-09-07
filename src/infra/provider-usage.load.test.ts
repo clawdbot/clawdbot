@@ -148,7 +148,21 @@ describe("provider-usage.load", () => {
         displayName: "OpenRouter",
         windows: [{ label: context.token, usedPercent: 10 }],
       }));
-      const options = { authStore, config: {}, env: {} };
+      const options = {
+        authStore,
+        config: {
+          models: {
+            providers: {
+              openrouter: {
+                apiKey: "openrouter:login",
+                baseUrl: "https://openrouter.ai/api/v1",
+                models: [],
+              },
+            },
+          },
+        },
+        env: {},
+      };
       const account = await loadProviderUsageSummary({
         ...options,
         authProfile: { provider: "openrouter", profileId: "openrouter:login" },

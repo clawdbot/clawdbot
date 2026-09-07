@@ -12,7 +12,10 @@ import {
 } from "../agents/auth-profiles.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
-import { resolveUsableCustomProviderApiKey } from "../agents/model-auth.js";
+import {
+  resolveProviderEntryApiKeyProfileReference,
+  resolveUsableCustomProviderApiKey,
+} from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
@@ -88,6 +91,16 @@ function resolveProviderApiKeyFromConfig(params: {
     const envKey = resolveEnvApiKey(providerId, params.state.env)?.apiKey;
     if (envKey) {
       return envKey;
+    }
+    if (params.state.providerOnly && params.state.allowAuthProfileStore) {
+      const binding = resolveProviderEntryApiKeyProfileReference({
+        cfg: params.state.cfg,
+        provider: providerId,
+        store: resolveUsageAuthStore({ ...params.state, providerOnly: false }),
+      });
+      if ("profileId" in binding) {
+        continue;
+      }
     }
     const key = resolveUsableCustomProviderApiKey({
       cfg: params.state.cfg,

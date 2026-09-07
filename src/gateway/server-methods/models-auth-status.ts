@@ -28,6 +28,7 @@ import {
   resolvePersistedAuthProfileOwnerAgentDir,
 } from "../../agents/auth-profiles.js";
 import { getRuntimeExternalCliProfileIds } from "../../agents/auth-profiles/runtime-external-profile-references.js";
+import { resolveProviderEntryApiKeyProfileReference } from "../../agents/model-auth.js";
 import {
   clearCurrentProviderAuthState,
   warmCurrentProviderAuthStateOffMainThread,
@@ -308,9 +309,19 @@ function mapAuthStatusProvider(params: {
   );
   const configuredOrderLocked = profileOrder.order !== undefined && !profileOrder.fromStore;
   const effectiveProfiles = provider.effectiveProfiles ?? provider.profiles;
-  // Auth health already resolved credential priority. Missing or pending quota for
-  // that account must not substitute a lower-priority account's usage.
-  const usageProfile = effectiveProfiles[0];
+  const binding = resolveProviderEntryApiKeyProfileReference({
+    cfg: config,
+    provider: provider.provider,
+    store,
+    authAliasLookupParams: params.authAliasLookupParams,
+  });
+  // An explicit binding takes precedence over ordinary credential priority.
+  const usageProfile =
+    binding.kind === "profile"
+      ? effectiveProfiles.find((profile) => profile.profileId === binding.profileId)
+      : binding.kind === "profile-incompatible"
+        ? undefined
+        : effectiveProfiles[0];
   const usageKey =
     effectiveProfiles
       .map((profile) => resolveUsageProviderId(provider.provider, { credentialType: profile.type }))
@@ -626,7 +637,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         store,
       });
       const activeUsageProviderIds = new Set(providerUsageRuntime.providerIds);
-      for (const provider of providerUsageRuntime.directApiKeys.keys()) {
+      for (const provider of apiKeys.keys()) {
         providerWideUsageIds.add(provider);
       }
       const usageProviderIds = new Set<UsageProviderId>();

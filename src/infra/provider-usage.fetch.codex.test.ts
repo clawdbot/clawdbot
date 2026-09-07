@@ -140,6 +140,7 @@ describe("fetchCodexUsage", () => {
   it("keeps credits as a provider unit instead of assuming dollars", async () => {
     const mockFetch = createProviderUsageFetch(async () =>
       makeResponse(200, {
+        plan_type: { name: "Plus" },
         credits: { balance: "7.5" },
       }),
     );
