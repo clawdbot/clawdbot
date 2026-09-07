@@ -17,7 +17,10 @@ import { readScheduledTaskCommand } from "./schtasks-layout.js";
 import { resolveServiceManagerEnv } from "./service-process-env.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type { GatewayServiceCommandConfig, GatewayServiceEnv } from "./service-types.js";
-import { WINDOWS_TASK_SUPERVISOR_FLAG } from "./windows-task-supervisor-contract.js";
+import {
+  WINDOWS_TASK_SUPERVISOR_CHILD_FLAG,
+  WINDOWS_TASK_SUPERVISOR_FLAG,
+} from "./windows-task-supervisor-contract.js";
 
 type WindowsProcessSnapshotEntry = {
   ProcessId?: number;
@@ -85,6 +88,24 @@ export function findInstalledProcessPid(
       continue;
     }
     const pid = getSnapshotProcessId(entry);
+    if (pid) {
+      return pid;
+    }
+  }
+  return null;
+}
+
+/** Finds the current supervised child or a legacy directly launched Gateway. */
+export function findInstalledGatewayChildPid(
+  entries: WindowsProcessSnapshotEntry[],
+  port: number,
+  installedArguments: string[],
+): number | null {
+  for (const argv of [
+    [...installedArguments, WINDOWS_TASK_SUPERVISOR_CHILD_FLAG],
+    installedArguments,
+  ]) {
+    const pid = findInstalledProcessPid(entries, port, argv, () => true);
     if (pid) {
       return pid;
     }
@@ -177,14 +198,18 @@ export async function resolveScheduledTaskOwnedGatewayPids(
     }
     // Prefer the Gateway PID; before admission its exact supervisor still owns startup.
     // /End can leave that supervisor alive, so stop must find it before a Gateway exists.
-    for (const argv of [
-      installedArguments,
+    const gatewayPid = findInstalledGatewayChildPid(snapshot, port, installedArguments);
+    if (gatewayPid) {
+      return [gatewayPid];
+    }
+    const supervisorPid = findInstalledProcessPid(
+      snapshot,
+      port,
       [...installedArguments, WINDOWS_TASK_SUPERVISOR_FLAG],
-    ]) {
-      const pid = findInstalledProcessPid(snapshot, port, argv, () => true);
-      if (pid) {
-        return [pid];
-      }
+      () => true,
+    );
+    if (supervisorPid) {
+      return [supervisorPid];
     }
     // A listener can be dual-stack or belong to another task; Windows control requires CIM argv proof.
     return [];

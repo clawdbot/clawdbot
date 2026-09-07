@@ -59,7 +59,13 @@ export async function runHostedStopNativeProbe(params: {
       const childExit = once(child, "exit");
       fs.writeFileSync(params.childPidPath, String(child.pid));
       const server = createServer((request, response) => {
-        if (request.method !== "POST" || request.url !== "/approved-stop" || requested) {
+        const action =
+          request.url === "/approved-stop"
+            ? "stop"
+            : request.url === "/approved-restart"
+              ? "restart"
+              : null;
+        if (request.method !== "POST" || !action || requested) {
           response.writeHead(404).end();
           return;
         }
@@ -70,7 +76,7 @@ export async function runHostedStopNativeProbe(params: {
             const lines: string[] = [];
             await runSystemAgentGatewayTask(async () => {
               const result = await executeSystemAgentOperation(
-                { kind: "gateway-stop" },
+                { kind: action === "stop" ? "gateway-stop" : "gateway-restart" },
                 {
                   log: (...args) => lines.push(args.join(" ")),
                   error: () => {
@@ -91,17 +97,21 @@ export async function runHostedStopNativeProbe(params: {
                 },
               );
               assert.equal(result.applied, true);
-              assert(lines.includes("Scheduled Gateway stop"));
-              assert(lines.includes("[openclaw] done: gateway.stop"));
+              const summary =
+                action === "stop" ? "Scheduled Gateway stop" : "Scheduled Gateway restart";
+              assert(lines.includes(summary));
+              assert(lines.includes(`[openclaw] done: gateway.${action}`));
               const audits = createSqliteAuditRecordStore<SystemAgentAuditEntry>({
                 scope: SYSTEM_AGENT_AUDIT_SCOPE,
                 maxEntries: SYSTEM_AGENT_AUDIT_MAX_ENTRIES,
               }).entries();
-              assert.equal(audits.length, 1);
-              assert.equal(audits[0]?.value.summary, "Scheduled Gateway stop");
+              // A supervised restart preserves the state database for the replacement.
+              // Verify this operation appended exactly once without assuming empty history.
+              assert.equal(audits.filter((entry) => entry.value.summary === summary).length, 1);
+              assert.equal(audits.at(-1)?.value.summary, summary);
               assert.equal(closed, false);
               assert.deepEqual(snapshot(), { roots: 1, active: 1, queued: 0 });
-              appendEvent("operation-settled", { ...snapshot(), audit: "Scheduled Gateway stop" });
+              appendEvent("operation-settled", { ...snapshot(), audit: summary });
             });
             assert.deepEqual(snapshot(), { roots: 1, active: 0, queued: 0 });
             await new Promise<void>((resolve, reject) => {
@@ -115,7 +125,7 @@ export async function runHostedStopNativeProbe(params: {
           } finally {
             callerLive = false;
           }
-        }, "native-hosted-stop").catch((error: unknown) => {
+        }, `native-hosted-${action}`).catch((error: unknown) => {
           const detail = error instanceof Error ? error.message.slice(0, 500) : "Non-error failure";
           appendEvent("request-failed", { detail });
           response.destroy();

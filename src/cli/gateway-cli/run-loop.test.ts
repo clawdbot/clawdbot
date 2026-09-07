@@ -147,6 +147,7 @@ const restartGatewayProcessWithFreshPid = vi.fn<
   (_opts?: { env?: NodeJS.ProcessEnv }) => {
     mode: "supervised" | "disabled" | "failed";
     detail?: string;
+    exitCode?: number;
     handoffSpawned?: Promise<boolean>;
   }
 >(() => ({ mode: "disabled" }));
@@ -2885,6 +2886,32 @@ describe("runGatewayLoop", () => {
       } else {
         process.env.OPENCLAW_GATEWAY_RESTART_TRACE = originalTraceEnv;
       }
+    }
+  });
+
+  it("returns the supervisor-owned restart code after releasing the lock", async () => {
+    vi.clearAllMocks();
+    peekGatewaySigusr1RestartReason.mockReturnValue(undefined);
+    process.env.OPENCLAW_WINDOWS_TASK_NAME = "OpenClaw Gateway";
+
+    try {
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const lockRelease = vi.fn(async () => {});
+        acquireGatewayLock.mockResolvedValueOnce({ release: lockRelease });
+        restartGatewayProcessWithFreshPid.mockReturnValueOnce({
+          mode: "supervised",
+          exitCode: 75,
+        });
+
+        const { runtime, exited } = await createSignaledLoopHarness();
+        captureSignal("SIGUSR1")();
+
+        await expect(exited).resolves.toBe(75);
+        expect(lockRelease).toHaveBeenCalledOnce();
+        expect(runtime.exit).toHaveBeenCalledWith(75);
+      });
+    } finally {
+      delete process.env.OPENCLAW_WINDOWS_TASK_NAME;
     }
   });
 

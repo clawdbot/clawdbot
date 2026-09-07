@@ -1,16 +1,23 @@
 // Windows Task Scheduler bridge: retain the Job Object owner until the Gateway exits.
 import { quoteCmdScriptArg } from "../../daemon/cmd-argv.js";
-import { WINDOWS_TASK_SUPERVISOR_FLAG } from "../../daemon/windows-task-supervisor-contract.js";
-import { getProcessSupervisor } from "../../process/supervisor/index.js";
+import {
+  WINDOWS_TASK_SUPERVISOR_CHILD_FLAG,
+  WINDOWS_TASK_SUPERVISOR_FLAG,
+  WINDOWS_TASK_SUPERVISOR_RESTART_EXIT_CODE,
+} from "../../daemon/windows-task-supervisor-contract.js";
+import { getProcessSupervisor, type ManagedRun } from "../../process/supervisor/index.js";
 
 function renderGatewayTaskCommand(): string {
   const childArgs = [...process.execArgv, ...process.argv.slice(1)].filter(
-    (argument) => argument !== WINDOWS_TASK_SUPERVISOR_FLAG,
+    (argument) =>
+      argument !== WINDOWS_TASK_SUPERVISOR_FLAG && argument !== WINDOWS_TASK_SUPERVISOR_CHILD_FLAG,
   );
   if (childArgs.length === 0) {
     throw new Error("Windows task supervisor could not resolve the Gateway command");
   }
-  return [process.execPath, ...childArgs].map((argument) => quoteCmdScriptArg(argument)).join(" ");
+  return [process.execPath, ...childArgs, WINDOWS_TASK_SUPERVISOR_CHILD_FLAG]
+    .map((argument) => quoteCmdScriptArg(argument))
+    .join(" ");
 }
 
 /**
@@ -22,20 +29,37 @@ export async function runWindowsGatewayTaskSupervisor(): Promise<void> {
   if (process.platform !== "win32") {
     throw new Error("--task-supervisor is only available to the Windows Gateway service");
   }
-  const managed = await getProcessSupervisor().spawn({
-    mode: "anchored-shell",
-    command: renderGatewayTaskCommand(),
-    scopeKey: `gateway-task-supervisor:${process.pid}`,
-    captureOutput: false,
-  });
-  const cancel = () => managed.cancel("signal");
+  let managed: ManagedRun | null = null;
+  let cancelled = false;
+  const cancel = () => {
+    cancelled = true;
+    managed?.cancel("signal");
+  };
   process.once("SIGINT", cancel);
   process.once("SIGTERM", cancel);
   try {
-    const result = await managed.wait();
-    await managed.waitForExtinction?.();
-    if (result.exitCode !== 0) {
-      process.exitCode = result.exitCode ?? 1;
+    while (true) {
+      managed = await getProcessSupervisor().spawn({
+        mode: "anchored-shell",
+        command: renderGatewayTaskCommand(),
+        scopeKey: `gateway-task-supervisor:${process.pid}`,
+        captureOutput: false,
+      });
+      if (cancelled) {
+        managed.cancel("signal");
+      }
+      const result = await managed.wait();
+      await managed.waitForExtinction?.();
+      managed = null;
+      if (!cancelled && result.exitCode === WINDOWS_TASK_SUPERVISOR_RESTART_EXIT_CODE) {
+        // The child has released its Gateway lock and extinguished descendants.
+        // Only this private outcome permits replacement; stop and update handoffs exit 0.
+        continue;
+      }
+      if (result.exitCode !== 0) {
+        process.exitCode = result.exitCode ?? 1;
+      }
+      return;
     }
   } finally {
     process.removeListener("SIGINT", cancel);
