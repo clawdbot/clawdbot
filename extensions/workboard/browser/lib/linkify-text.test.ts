@@ -36,6 +36,22 @@ describe("renderLinkedPlainText", () => {
     expect(container.textContent).toBe("See (https://example.com)");
   });
 
+  it("preserves balanced parentheses in bare and markdown destinations", () => {
+    const wiki = "https://en.wikipedia.org/wiki/Function_(mathematics)";
+    const bare = renderLinked(`Read ${wiki}.`);
+    expect(bare.querySelector("a")?.getAttribute("href")).toBe(wiki);
+    expect(bare.textContent).toBe(`Read ${wiki}.`);
+
+    const markdown = renderLinked(`See [wiki](${wiki}) next.`);
+    expect(markdown.querySelector("a")?.textContent).toBe("wiki");
+    expect(markdown.querySelector("a")?.getAttribute("href")).toBe(wiki);
+    expect(markdown.textContent).toBe("See wiki next.");
+
+    const wrapped = renderLinked(`See (${wiki})`);
+    expect(wrapped.querySelector("a")?.getAttribute("href")).toBe(wiki);
+    expect(wrapped.textContent).toBe(`See (${wiki})`);
+  });
+
   it("links http markdown and localhost URLs", () => {
     const container = renderLinked("Try [local](http://127.0.0.1:8080/status) today.");
     const link = container.querySelector("a");

@@ -329,8 +329,8 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
             card.notes
               ? html`
                   <section class="workboard-detail__section">
-                  <h3>${t("workboard.fieldNotes")}</h3>
-                  <p>${renderLinkedPlainText(card.notes)}</p>
+                    <h3>${t("workboard.fieldNotes")}</h3>
+                    <p>${renderLinkedPlainText(card.notes)}</p>
                   </section>
                 `
               : nothing

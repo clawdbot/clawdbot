@@ -596,7 +596,9 @@ describe("renderWorkboard", () => {
       "https://www.ringli.no/",
     );
 
-    buttonByLabel(container, "Edit card")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    buttonByLabel(container, "Edit card")?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true }),
+    );
     renderView();
     expect(container.querySelector(".workboard-draft ol a")?.getAttribute("href")).toBe(
       "https://www.ringli.no/",
