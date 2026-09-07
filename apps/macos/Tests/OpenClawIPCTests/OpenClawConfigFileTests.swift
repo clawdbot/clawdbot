@@ -525,7 +525,7 @@ struct OpenClawConfigFileTests {
                 ],
             ])
 
-            let saved = OpenClawConfigFile.saveDict([
+            let result = OpenClawConfigFile.saveDictResult([
                 "gateway": [
                     "mode": "local",
                 ],
@@ -534,7 +534,7 @@ struct OpenClawConfigFileTests {
                 ],
             ])
 
-            #expect(saved)
+            #expect(result == .success)
             let data = try Data(contentsOf: configPath)
             let root = try JSONSerialization.jsonObject(with: data) as? [String: Any]
             let gateway = root?["gateway"] as? [String: Any]
@@ -582,13 +582,13 @@ struct OpenClawConfigFileTests {
             ])
             let before = try String(contentsOf: configPath, encoding: .utf8)
 
-            let saved = OpenClawConfigFile.saveDict([
+            let result = OpenClawConfigFile.saveDictResult([
                 "browser": [
                     "enabled": false,
                 ],
             ])
 
-            #expect(!saved)
+            #expect(result == .failure(.rejected))
             let after = try String(contentsOf: configPath, encoding: .utf8)
             #expect(after == before)
 
@@ -613,5 +613,18 @@ struct OpenClawConfigFileTests {
                 Issue.record("Missing rejected payload path")
             }
         }
+    }
+
+    @Test
+    func `save result identifies serialization failures without exposing values`() {
+        let result = OpenClawConfigFile.saveDictResult([
+            "gateway": ["remote": ["token": Date()]],
+        ])
+
+        guard case .failure(.serialization) = result else {
+            Issue.record("Expected a serialization failure")
+            return
+        }
+        #expect(result == .failure(.serialization))
     }
 }

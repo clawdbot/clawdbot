@@ -417,7 +417,7 @@ struct AppStateRemoteConfigTests {
             var saveAttempts = 0
             let state = AppState(preview: true, gatewayConfigSaver: { _ in
                 saveAttempts += 1
-                return false
+                return .failure(.rejected)
             })
             state._testEnableGatewayConfigSync()
             let adapter = DashboardPrimaryGatewayAdapter(state: state)
@@ -445,7 +445,7 @@ struct AppStateRemoteConfigTests {
     }
 
     @Test
-    func `failed gateway config sync retains dirty fields`() async {
+    func `failed gateway config sync exposes recovery while retaining draft`() async {
         let configPath = TestIsolation.tempConfigPath()
         await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
             #expect(OpenClawConfigFile.saveDict([
@@ -458,7 +458,13 @@ struct AppStateRemoteConfigTests {
                     ],
                 ],
             ]))
-            let state = AppState(preview: true, gatewayConfigSaver: { _ in false })
+            var rejectSaves = true
+            let state = AppState(preview: true, gatewayConfigSaver: { root in
+                if rejectSaves {
+                    return .failure(.fileSystem)
+                }
+                return OpenClawConfigFile.saveDictResult(root)
+            })
             state._testEnableGatewayConfigSync()
 
             state.remoteToken = "app-token"
@@ -467,9 +473,77 @@ struct AppStateRemoteConfigTests {
             #expect(state.remoteTokenDirty)
             #expect(state._testDirtyGatewayConfigFields == ["gateway.remote.token"])
             #expect(!state._testGatewayConfigIsCurrentForRouting)
+            #expect(state.gatewayConfigWriteError ==
+                "The configuration file could not be written. " +
+                    "Check its permissions and available disk space, then retry.")
+            #expect(state.gatewayConfigWriteCanRetry)
             let remote = (OpenClawConfigFile.loadDict()["gateway"] as? [String: Any])?["remote"]
                 as? [String: Any]
             #expect(remote?["token"] as? String == "disk-token")
+
+            rejectSaves = false
+            #expect(state.retryGatewayConfigSave())
+            #expect(state.gatewayConfigWriteError == nil)
+            #expect(!state.remoteTokenDirty)
+            #expect(state._testGatewayConfigIsCurrentForRouting)
+            let savedRemote = (OpenClawConfigFile.loadDict()["gateway"] as? [String: Any])?["remote"]
+                as? [String: Any]
+            #expect(savedRemote?["token"] as? String == "app-token")
+
+            rejectSaves = true
+            state.remoteToken = "discarded-token"
+            await state._testAwaitGatewayConfigSync()
+            #expect(state.gatewayConfigWriteError != nil)
+
+            state.reloadGatewayConfigFromFile()
+            #expect(state.remoteToken == "app-token")
+            #expect(state.gatewayConfigWriteError == nil)
+            #expect(state._testDirtyGatewayConfigFields.isEmpty)
+            #expect(state._testGatewayConfigIsCurrentForRouting)
+
+            try? Data("not json".utf8).write(to: URL(fileURLWithPath: configPath), options: .atomic)
+            state.remoteToken = "preserved-draft"
+            await state._testAwaitGatewayConfigSync()
+            state.reloadGatewayConfigFromFile()
+            #expect(state.remoteToken == "preserved-draft")
+            #expect(state.remoteTokenDirty)
+            #expect(!state._testGatewayConfigIsCurrentForRouting)
+        }
+    }
+
+    @Test
+    func `externally persisted draft clears write failure`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            #expect(OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "transport": "direct",
+                        "url": "wss://gateway.example.test",
+                        "token": "disk-token",
+                    ],
+                ],
+            ]))
+            let state = AppState(preview: true, gatewayConfigSaver: { _ in .failure(.fileSystem) })
+            state._testEnableGatewayConfigSync()
+
+            state.remoteToken = "app-token"
+            await state._testAwaitGatewayConfigSync()
+            #expect(state.gatewayConfigWriteError != nil)
+
+            var root = OpenClawConfigFile.loadDict()
+            var gateway = root["gateway"] as? [String: Any] ?? [:]
+            var remote = gateway["remote"] as? [String: Any] ?? [:]
+            remote["token"] = "app-token"
+            gateway["remote"] = remote
+            root["gateway"] = gateway
+            #expect(OpenClawConfigFile.saveDict(root))
+            state._testApplyConfigFromDisk()
+
+            #expect(state.gatewayConfigWriteError == nil)
+            #expect(!state.remoteTokenDirty)
+            #expect(state._testGatewayConfigIsCurrentForRouting)
         }
     }
 
@@ -570,7 +644,9 @@ struct AppStateRemoteConfigTests {
             let state = AppState(
                 preview: true,
                 gatewayConfigSaver: { root in
-                    rejectSaves ? false : OpenClawConfigFile.saveDict(root)
+                    rejectSaves
+                        ? .failure(.rejected)
+                        : OpenClawConfigFile.saveDictResult(root)
                 })
             state.remoteIdentity = "/tmp/app-identity"
             state.remoteToken = "app-token"

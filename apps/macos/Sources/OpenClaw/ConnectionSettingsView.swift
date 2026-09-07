@@ -31,6 +31,12 @@ struct ConnectionSettingsView: View {
     var body: some View {
         Form {
             self.statusSection
+            if self.isNixMode {
+                Text("Connection settings are read-only in Nix mode. Edit the Nix source and rebuild.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            GatewayConfigWriteRecoveryView(state: self.state)
             self.gatewayModeSection
 
             if self.state.connectionMode != .remote,
@@ -38,6 +44,7 @@ struct ConnectionSettingsView: View {
             {
                 Section("Remote Access") {
                     GatewayConfigConflictRecoveryView(state: self.state)
+                        .disabled(self.isNixMode)
                 }
             }
 
@@ -49,7 +56,8 @@ struct ConnectionSettingsView: View {
                 TailscaleIntegrationSection(
                     connectionMode: self.state.connectionMode,
                     isPaused: self.state.isPaused,
-                    isActive: self.isActive)
+                    isActive: self.isActive,
+                    isConfigReadOnly: self.isNixMode)
             case .remote:
                 self.remoteAccessSection
                 self.nearbyGatewaysSection
@@ -184,6 +192,7 @@ struct ConnectionSettingsView: View {
                 }
                 .labelsHidden()
                 .fixedSize()
+                .disabled(self.isNixMode)
             } label: {
                 Text("OpenClaw runs")
                 Text("Own a Gateway on this Mac, or attach to one on another host.")
@@ -298,6 +307,7 @@ struct ConnectionSettingsView: View {
                 .labelsHidden()
                 .pickerStyle(.segmented)
                 .fixedSize()
+                .disabled(self.isNixMode)
             }
 
             if self.state.remoteTransport == .ssh {
@@ -312,6 +322,7 @@ struct ConnectionSettingsView: View {
                     .multilineTextAlignment(.leading)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: Self.fieldWidth)
+                    .disabled(self.isNixMode)
             } label: {
                 Text("Gateway token")
                 Text("Used when the remote Gateway requires token auth.")
@@ -327,6 +338,7 @@ struct ConnectionSettingsView: View {
             }
 
             GatewayConfigConflictRecoveryView(state: self.state)
+                .disabled(self.isNixMode)
 
             if self.state.remoteTransport == .ssh {
                 self.sshCommandDetails
@@ -354,6 +366,7 @@ struct ConnectionSettingsView: View {
                     .multilineTextAlignment(.leading)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: Self.fieldWidth)
+                    .disabled(self.isNixMode)
                 self.remoteTestButton(disabled: !canTest)
             }
         }
@@ -370,6 +383,7 @@ struct ConnectionSettingsView: View {
                     .multilineTextAlignment(.leading)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: Self.fieldWidth)
+                    .disabled(self.isNixMode)
                 self.remoteTestButton(
                     disabled: self.state.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
@@ -432,6 +446,7 @@ struct ConnectionSettingsView: View {
             { gateway in
                 self.applyDiscoveredGateway(gateway)
             }
+            .disabled(self.isNixMode)
         } header: {
             Text("Nearby Gateways")
         } footer: {
@@ -445,6 +460,7 @@ struct ConnectionSettingsView: View {
                 "Identity file",
                 text: self.$state.remoteIdentity,
                 prompt: Text(verbatim: "/Users/you/.ssh/id_ed25519"))
+                .disabled(self.isNixMode)
             TextField(
                 "Project root",
                 text: self.$state.remoteProjectRoot,
