@@ -1432,7 +1432,7 @@ packages/acp-core/src/types.ts	2
 packages/agent-core/src/agent-loop.ts	3
 packages/agent-core/src/harness/compaction/branch-summarization.ts	1
 packages/agent-core/src/harness/compaction/compaction.ts	2
-packages/agent-core/src/harness/messages.ts	3
+packages/agent-core/src/harness/messages.ts	2
 packages/agent-core/src/harness/session/tool-result-pairing.ts	17
 packages/agent-core/src/harness/session/uuid.ts	1
 packages/agent-core/src/harness/utils/truncate.ts	1
