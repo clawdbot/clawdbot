@@ -54,7 +54,7 @@ function runScript(scriptPath: string, env: Record<string, string>) {
 }
 
 async function waitForListening(child: ChildProcess, port: number, output: () => string) {
-  await new Promise<void>((resolve, reject) => {
+  return await new Promise<number>((resolve, reject) => {
     let settled = false;
     const timeout = setTimeout(() => {
       if (settled) {
@@ -63,7 +63,7 @@ async function waitForListening(child: ChildProcess, port: number, output: () =>
       settled = true;
       reject(new Error(`mock server did not listen on ${port}: ${output()}`));
     }, 3_000);
-    const finish = (error?: Error) => {
+    const finish = (error?: Error, boundPort = port) => {
       if (settled) {
         return;
       }
@@ -73,17 +73,21 @@ async function waitForListening(child: ChildProcess, port: number, output: () =>
         reject(error);
         return;
       }
-      resolve();
+      resolve(boundPort);
     };
-    if (output().includes(`mock-openai listening on ${port}`)) {
-      finish();
-      return;
-    }
-    child.stdout?.on("data", () => {
-      if (output().includes(`mock-openai listening on ${port}`)) {
-        finish();
+    const checkListening = () => {
+      const match = /(?:^|\n)mock-openai listening on ([1-9]\d{0,4})(?: \(HTTPS?\))?\r?\n/u.exec(
+        output(),
+      );
+      if (match) {
+        const boundPort = Number(match[1]);
+        if (boundPort <= 65_535 && (port === 0 || port === boundPort)) {
+          finish(undefined, boundPort);
+        }
       }
-    });
+    };
+    checkListening();
+    child.stdout?.on("data", checkListening);
     child.once("exit", (code, signal) => {
       finish(new Error(`mock server exited before listening: code=${code} signal=${signal}`));
     });
@@ -120,7 +124,7 @@ async function withMockServer(
     },
   ) => Promise<void>,
 ) {
-  const port = await getFreePort();
+  const port = env.MOCK_PORT === undefined ? await getFreePort() : Number(env.MOCK_PORT);
   let stderr = "";
   let stdout = "";
   const child = spawn(process.execPath, [scriptPath], {
@@ -136,8 +140,8 @@ async function withMockServer(
     stderr += chunk;
   });
   try {
-    await waitForListening(child, port, () => `${stdout}\n${stderr}`);
-    await run(`http://127.0.0.1:${port}`, {
+    const boundPort = await waitForListening(child, port, () => stdout);
+    await run(`http://127.0.0.1:${boundPort}`, {
       stderr: () => stderr,
       stdout: () => stdout,
     });
@@ -780,6 +784,35 @@ describe("mock OpenAI response markers", () => {
 });
 
 describe("e2e mock and config helper numeric limits", () => {
+  it("reports the actual OS-assigned port for MOCK_PORT=0", async () => {
+    await withMockServer(mockOpenAiPath, { MOCK_PORT: "0" }, async (baseUrl, output) => {
+      expect(Number(new URL(baseUrl).port)).toBeGreaterThan(0);
+      expect(output.stdout()).not.toContain("mock-openai listening on 0\n");
+      const response = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ input: "ephemeral listener" }),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("OPENCLAW_E2E_OK");
+    });
+  });
+
+  it.each(["0tcp", "-0", "0.5", ""])("rejects malformed ephemeral port %j", (port) => {
+    const result = runScript(mockOpenAiPath, { MOCK_PORT: port });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(`invalid MOCK_PORT: ${port}`);
+  });
+
+  it("keeps zero invalid for other launcher port settings", () => {
+    const fallback = runScript(mockOpenAiPath, { OPENCLAW_MOCK_OPENAI_PORT: "0" });
+    expect(fallback.status).not.toBe(0);
+    expect(fallback.stderr).toContain("invalid OPENCLAW_MOCK_OPENAI_PORT: 0");
+    const webSearch = runScript(webSearchMockPath, { MOCK_PORT: "0" });
+    expect(webSearch.status).not.toBe(0);
+    expect(webSearch.stderr).toContain("invalid MOCK_PORT: 0");
+  });
+
   it("rejects loose mock OpenAI port env values", () => {
     const mockPort = runScript(mockOpenAiPath, { MOCK_PORT: "44080tcp" });
     expect(mockPort.status).not.toBe(0);
