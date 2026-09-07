@@ -1,6 +1,12 @@
 // Doctor disk-space tests cover byte formatting, warning generation, and note rendering.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
+import { registerMaintenanceCommands } from "../cli/program/register.maintenance.js";
+import { defaultRuntime } from "../runtime.js";
 import { collectDiskSpaceHealthFindings, formatBytes, noteDiskSpace } from "./doctor-disk-space.js";
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
@@ -60,6 +66,7 @@ describe("collectDiskSpaceHealthFindings thresholds", () => {
   it("returns a warning finding when space is low (below 500 MB)", () => {
     expect(collectFindingsAt(300 * 1024 * 1024)).toEqual([
       expect.objectContaining({
+        severity: "warning",
         message: expect.stringContaining("Low disk space"),
         target: "300 MB",
         requirement: "low-free-space",
@@ -70,6 +77,7 @@ describe("collectDiskSpaceHealthFindings thresholds", () => {
   it("returns a critical finding when space is very low (below 100 MB)", () => {
     expect(collectFindingsAt(50 * 1024 * 1024)).toEqual([
       expect.objectContaining({
+        severity: "error",
         message: expect.stringContaining("CRITICAL"),
         target: "50 MB",
         requirement: "critical-free-space",
@@ -79,7 +87,13 @@ describe("collectDiskSpaceHealthFindings thresholds", () => {
 
   it("returns critical at exactly 0 bytes", () => {
     expect(collectFindingsAt(0)).toEqual([
-      expect.objectContaining({ requirement: "critical-free-space" }),
+      expect.objectContaining({ severity: "error", requirement: "critical-free-space" }),
+    ]);
+  });
+
+  it("keeps exactly 100 MB at warning severity", () => {
+    expect(collectFindingsAt(100 * 1024 * 1024)).toEqual([
+      expect.objectContaining({ severity: "warning", requirement: "low-free-space" }),
     ]);
   });
 
@@ -95,9 +109,78 @@ describe("collectDiskSpaceHealthFindings thresholds", () => {
 
   it("returns critical at exactly 99 MB (just below critical)", () => {
     expect(collectFindingsAt(99 * 1024 * 1024)).toEqual([
-      expect.objectContaining({ requirement: "critical-free-space" }),
+      expect.objectContaining({ severity: "error", requirement: "critical-free-space" }),
     ]);
   });
+});
+
+describe("registered doctor disk-space lint", () => {
+  it.each([
+    { availableMegabytes: 50, expectedExitCode: 1, expectedSeverity: "error" },
+    { availableMegabytes: 100, expectedExitCode: 0, expectedSeverity: undefined },
+  ])(
+    "applies the actual error threshold and exit status at $availableMegabytes MB",
+    async ({ availableMegabytes, expectedExitCode, expectedSeverity }) => {
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-disk-space-"));
+      fs.writeFileSync(
+        path.join(stateDir, "openclaw.json"),
+        JSON.stringify({ gateway: { mode: "local" } }),
+      );
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
+      const statfs = vi.spyOn(fs, "statfsSync").mockReturnValue({
+        type: 0,
+        bsize: 1024 * 1024,
+        blocks: 1000,
+        bfree: availableMegabytes,
+        bavail: availableMegabytes,
+        files: 0,
+        frsize: 1024 * 1024,
+        ffree: 0,
+      });
+      const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
+
+      try {
+        const program = new Command();
+        registerMaintenanceCommands(program);
+        await program.parseAsync(
+          [
+            "doctor",
+            "--lint",
+            "--only",
+            "core/doctor/disk-space",
+            "--severity-min",
+            "error",
+            "--json",
+          ],
+          { from: "user" },
+        );
+
+        expect(exit).toHaveBeenCalledWith(expectedExitCode);
+        const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+        expect(payload).toMatchObject({
+          ok: expectedExitCode === 0,
+          checksRun: 1,
+          findings:
+            expectedSeverity === undefined
+              ? []
+              : [
+                  expect.objectContaining({
+                    checkId: "core/doctor/disk-space",
+                    severity: expectedSeverity,
+                  }),
+                ],
+        });
+      } finally {
+        exit.mockRestore();
+        stdout.mockRestore();
+        statfs.mockRestore();
+        vi.unstubAllEnvs();
+        fs.rmSync(stateDir, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 describe("noteDiskSpace", () => {
