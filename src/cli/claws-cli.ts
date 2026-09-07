@@ -7,40 +7,28 @@ export type ClawsInspectOptions = {
   json?: boolean;
 };
 
-export type ClawsCreateOptions = {
+export type ClawsCreateOptions = ClawsInspectOptions & {
   name?: string;
   agentId?: string;
-  json?: boolean;
 };
 export type ClawsValidateOptions = { json?: boolean };
 export type ClawsBuildOptions = { out: string; json?: boolean };
 export type ClawsDevOptions = { agentId?: string; workspace?: string; json?: boolean };
 
-export type ClawsAddOptions = {
+export type ClawsAddOptions = ClawsDevOptions & {
   dryRun?: boolean;
   yes?: boolean;
   planIntegrity?: string;
-  json?: boolean;
-  agentId?: string;
-  workspace?: string;
 };
 
 export type ClawsStatusOptions = { json?: boolean };
-export type ClawsUpdateOptions = {
+export type ClawsUpdateOptions = Omit<ClawsAddOptions, "agentId" | "workspace"> & {
   from?: string;
-  dryRun?: boolean;
-  yes?: boolean;
-  planIntegrity?: string;
-  json?: boolean;
 };
-export type ClawsRemoveOptions = {
-  dryRun?: boolean;
-  yes?: boolean;
-  planIntegrity?: string;
+export type ClawsRemoveOptions = Omit<ClawsAddOptions, "agentId" | "workspace"> & {
   removeUnused?: boolean;
   removeReferenced?: string[];
   forceReferenced?: boolean;
-  json?: boolean;
 };
 export type ClawsExportOptions = { out: string; bootstrap?: string; json?: boolean };
 

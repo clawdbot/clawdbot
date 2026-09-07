@@ -572,31 +572,23 @@ function escapeUnsupportedTelegramHtmlWithTableFallback(html: string): string {
   );
 }
 
-function isInsideTelegramHtmlCodeContext(html: string, offset: number): boolean {
-  let codeDepth = 0;
-  let preDepth = 0;
-  for (const tag of tokenizeHtmlTags(html)) {
-    if (tag.start >= offset) {
-      break;
-    }
-    const tagName = tag.name;
-    if (tagName !== "code" && tagName !== "pre") {
-      continue;
-    }
-    const isClosing = tag.closing;
-    if (tagName === "code") {
-      codeDepth = isClosing ? Math.max(0, codeDepth - 1) : codeDepth + 1;
-    } else {
-      preDepth = isClosing ? Math.max(0, preDepth - 1) : preDepth + 1;
-    }
-  }
-  return codeDepth > 0 || preDepth > 0;
-}
-
 function normalizeTelegramLegacyHtmlTables(html: string): string {
+  const tags = tokenizeHtmlTags(html);
+  const depth = { code: 0, pre: 0 };
+  let nextTag: ReturnType<typeof tags.next> | undefined;
   TELEGRAM_RICH_HTML_TABLE_PATTERN.lastIndex = 0;
   return html.replace(TELEGRAM_RICH_HTML_TABLE_PATTERN, (tableHtml, offset: number) => {
-    if (isInsideTelegramHtmlCodeContext(html, offset)) {
+    nextTag ??= tags.next();
+    // Table offsets increase in the original HTML. Keep the next tag pending
+    // so each table sees its exact code context without rescanning earlier tags.
+    while (!nextTag.done && nextTag.value.start < offset) {
+      const { name, closing } = nextTag.value;
+      if (name === "code" || name === "pre") {
+        depth[name] = closing ? Math.max(0, depth[name] - 1) : depth[name] + 1;
+      }
+      nextTag = tags.next();
+    }
+    if (depth.code > 0 || depth.pre > 0) {
       return tableHtml;
     }
     const rows = parseTelegramRichHtmlTableRows(tableHtml);

@@ -30,6 +30,7 @@ import { listPluginServiceHealthFailures } from "../../plugins/service-health.js
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
+import { createPermitPool } from "../../shared/permit-pool.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../../utils/absolute-deadline.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import {
@@ -242,91 +243,9 @@ type HealthChannelPlan = {
   accountSummaries: Record<string, ChannelAccountHealthSummary>;
 };
 
-type HealthOperationRelease = () => void;
-type HealthOperationWaiter = {
-  deadlineAtMs: number;
-  resolve: (release: HealthOperationRelease | null) => void;
-  timer: ReturnType<typeof setTimeout>;
-  settled: boolean;
-};
-
 // Permits outlive response deadlines so an unfinished plugin hook cannot be
 // replaced by later health refreshes and amplify process-wide probe work.
-let activeHealthOperations = 0;
-const healthOperationWaiters: HealthOperationWaiter[] = [];
-
-function settleHealthOperationWaiter(
-  waiter: HealthOperationWaiter,
-  release: HealthOperationRelease | null,
-): void {
-  if (waiter.settled) {
-    return;
-  }
-  waiter.settled = true;
-  clearTimeout(waiter.timer);
-  waiter.resolve(release);
-}
-
-function releaseNextHealthOperationWaiter(): void {
-  while (healthOperationWaiters.length > 0) {
-    const waiter = healthOperationWaiters.shift();
-    if (!waiter || waiter.settled) {
-      continue;
-    }
-    if (Date.now() >= waiter.deadlineAtMs) {
-      settleHealthOperationWaiter(waiter, null);
-      continue;
-    }
-    settleHealthOperationWaiter(waiter, createHealthOperationRelease());
-    return;
-  }
-}
-
-function createHealthOperationRelease(): HealthOperationRelease {
-  activeHealthOperations += 1;
-  let released = false;
-  return () => {
-    if (released) {
-      return;
-    }
-    released = true;
-    activeHealthOperations -= 1;
-    releaseNextHealthOperationWaiter();
-  };
-}
-
-async function acquireHealthOperationPermit(
-  deadlineAtMs: number,
-): Promise<HealthOperationRelease | null> {
-  if (Date.now() >= deadlineAtMs) {
-    return null;
-  }
-  if (activeHealthOperations < HEALTH_PROBE_CONCURRENCY) {
-    return createHealthOperationRelease();
-  }
-
-  return await new Promise<HealthOperationRelease | null>((resolve) => {
-    const waiter: HealthOperationWaiter = {
-      deadlineAtMs,
-      resolve,
-      timer: setTimeout(
-        () => {
-          const index = healthOperationWaiters.indexOf(waiter);
-          if (index >= 0) {
-            healthOperationWaiters.splice(index, 1);
-          }
-          settleHealthOperationWaiter(waiter, null);
-        },
-        Math.max(1, deadlineAtMs - Date.now()),
-      ),
-      settled: false,
-    };
-    if (typeof waiter.timer === "object" && "unref" in waiter.timer) {
-      waiter.timer.unref();
-    }
-    healthOperationWaiters.push(waiter);
-  });
-}
+const healthOperationPermits = createPermitPool(HEALTH_PROBE_CONCURRENCY);
 
 function buildHealthTimeoutRecord(
   accountId: string,
@@ -509,7 +428,7 @@ async function runHealthAccountWithinDeadline(
 ): Promise<ChannelAccountHealthSummary> {
   // Own permit admission and release too: neither a deadline nor shutdown may orphan a hook.
   const operation = trackAsyncWork(async () => {
-    const release = await acquireHealthOperationPermit(params.deadlineAtMs);
+    const release = await healthOperationPermits.acquire({ deadlineAtMs: params.deadlineAtMs });
     if (!release) {
       return buildHealthTimeoutRecord(params.accountId, params.timeoutMs);
     }

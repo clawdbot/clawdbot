@@ -253,7 +253,7 @@ export function createManagedServiceManagerBoundary({
           });
           ledger.recordUpdateRunVerification(${JSON.stringify(run.runId)}, {
             serviceRunning: false, pid: ${parentPid}, readyz: false, settled: false,
-            channelsReady: false, pluginErrors: ["candidate plugin failed"], inferenceProbe: "passed",
+            channelsReady: false, pluginErrors: ["candidate plugin failed"],
           });
           const managerFs = require("node:fs");
           const managerState = JSON.parse(managerFs.readFileSync(${JSON.stringify(statePath)}, "utf8"));

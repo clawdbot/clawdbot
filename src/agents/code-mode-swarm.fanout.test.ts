@@ -12,18 +12,29 @@ describe("Swarm pipeline backpressure", () => {
     { limit: 16, count: 20, partial: false, followup: false },
     { limit: 3, count: 6, partial: true, followup: false },
     { limit: 16, count: 30, partial: true, followup: true },
+    { limit: 16, count: 65, partial: false, followup: true, refill: true },
   ])(
     "accounts for $count items with $limit slots, partial settlement $partial and follow-up tools $followup",
-    async ({ limit, count, partial, followup }) => {
+    async ({ limit, count, partial, followup, refill = false }) => {
       const config = resolveCodeModeConfig({
         tools: { codeMode: { enabled: true, maxPendingToolCalls: limit } },
       });
       const source = `
-      const outcomes = await Promise.allSettled(Array.from({ length: ${count} }, async (_, index) => {
+      const initial = ${refill} ? Array.from({ length: 16 }, (_, i) => progress({ value: "initial-" + i })) : [];
+      const timers = ${refill} ? Array.from({ length: 128 }, () => setTimeout(() => { throw new Error("canceled queued timer fired"); }, 60_000)) : [];
+      const collecting = Promise.allSettled(Array.from({ length: ${count} }, async (_, index) => {
         const next = await agents.run("first-" + index, { phase: "First" });
         if (${followup}) await progress({ value: index });
         return await agents.run(next, { phase: "Second" });
       }));
+      if (${refill}) {
+        await Promise.all(initial);
+        timers.forEach(clearTimeout);
+        for (let batch = 0; batch < 2; batch++) {
+          await Promise.all(Array.from({ length: 128 }, (_, i) => progress({ value: batch + "-" + i })));
+        }
+      }
+      const outcomes = await collecting;
       return outcomes.map(outcome => outcome.status === "fulfilled"
         ? { status: outcome.status, value: outcome.value }
         : { status: outcome.status, error: outcome.reason.message });
@@ -110,7 +121,16 @@ describe("Swarm pipeline backpressure", () => {
             ({ value }) => value !== 1,
           )
         : [];
-      expect(progressItems).toHaveLength(expectedProgress.length);
+      const expectedRefills = refill
+        ? [
+            ...Array.from({ length: 16 }, (_, i) => ({ value: "initial-" + i })),
+            ...[0, 1].flatMap((batch) =>
+              Array.from({ length: 128 }, (_, i) => ({ value: batch + "-" + i })),
+            ),
+          ]
+        : [];
+      expect(progressItems).toHaveLength(expectedProgress.length + expectedRefills.length);
+      expect(progressItems).toEqual(expect.arrayContaining(expectedRefills));
       expect(progressItems).toEqual(expect.arrayContaining(expectedProgress));
     },
   );

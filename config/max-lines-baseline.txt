@@ -236,7 +236,6 @@ extensions/telegram/src/format.ts
 extensions/telegram/src/lane-delivery.test.ts
 extensions/telegram/src/message-cache.ts
 extensions/telegram/src/polling-session.test.ts
-extensions/telegram/src/polling-session.ts
 extensions/telegram/src/send.test.ts
 extensions/telegram/src/thread-bindings.ts
 extensions/telegram/src/webhook.test.ts

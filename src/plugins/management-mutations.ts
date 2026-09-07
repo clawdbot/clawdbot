@@ -37,6 +37,7 @@ import {
   refreshManagedPluginMetadata,
   listManagedPlugins,
 } from "./management-service.js";
+import { isBundledManifestOwner } from "./manifest-owner-policy.js";
 import {
   getOfficialExternalPluginCatalogManifest,
   listOfficialExternalPluginCatalogEntries,
@@ -381,8 +382,10 @@ export async function mutateManagedPluginEnabled(
       }
       next = enableResult.config;
       policyPluginId = enableResult.pluginId;
-      // CLI slot inspection uses the enabled config, including legacy runtime-only kinds.
-      const slotResult = applySlotSelectionForPlugin(next, pluginId, cli ? undefined : metadata);
+      // Bundled kinds are already prepared under this lease. External CLI inspection
+      // still needs the enabled config to resolve legacy runtime-only kinds.
+      const slotMetadata = cli && !isBundledManifestOwner(installedPlugin) ? undefined : metadata;
+      const slotResult = applySlotSelectionForPlugin(next, pluginId, slotMetadata);
       next = slotResult.config;
       slotWarnings.push(...slotResult.warnings);
     } else {

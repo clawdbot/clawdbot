@@ -67,6 +67,7 @@ import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-tu
 import type { PreparedQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import type { AgentHarnessIsolatedCompletionParamsV2 } from "../harness/types.js";
 import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js";
+import type { RootedExecutionRequest } from "../rooted-run-params.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { SessionManager } from "../sessions/index.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
@@ -103,6 +104,10 @@ export type RunCliAgentParams = {
   trigger?: EmbeddedRunTrigger;
   sessionFile: string;
   workspaceDir: string;
+  /** Host-owned task root; preparation must mediate all tools through its filesystem policy. */
+  rootedExecution?: RootedExecutionRequest;
+  /** Instruction workspace, separate from a host-owned task's file-tool root. */
+  bootstrapWorkspaceDir?: string;
   /** Trusted model/auth owner directory. Defaults to the session agent directory. */
   agentDir?: string;
   /** Task working directory for CLI execution. Defaults to workspaceDir. */

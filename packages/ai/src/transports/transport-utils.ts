@@ -89,22 +89,6 @@ export function isCodeModeModelVisibleToolName(
   return visibleToolNames.has(name);
 }
 
-function isGoogleGemini3Model(modelId: string, family: "flash" | "pro"): boolean {
-  const normalized = modelId.trim().toLowerCase();
-  const suffix = family === "pro" ? "pro" : "flash";
-  return new RegExp(
-    `(?:^|/)gemini-(?:3(?:\\.\\d+)?-${suffix}|${suffix}${family === "flash" ? "(?:-lite)?" : ""}-latest)(?:-|$)`,
-  ).test(normalized);
-}
-
-export function isGoogleGemini3ProModel(modelId: string): boolean {
-  return isGoogleGemini3Model(modelId, "pro");
-}
-
-export function isGoogleGemini3FlashModel(modelId: string): boolean {
-  return isGoogleGemini3Model(modelId, "flash");
-}
-
 async function readChunkWithIdleTimeout(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   timeoutMs: number,

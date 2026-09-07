@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { jsonSchemaValuesEqual } from "@openclaw/normalization-core/json-schema";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { replaceFileAtomic } from "../infra/replace-file.js";
 import { formatCwdRelativePathOrAbsolute as formatOutputPath } from "../infra/safe-cwd.js";
 import { getToolPluginMetadata, type ToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
 import {
@@ -328,8 +329,16 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
     return;
   }
 
-  writeJsonFile(packagePath, nextPackageManifest);
-  await writePluginBuildManifest(rootDir, manifest);
+  const realRootDir = fs.realpathSync(rootDir);
+  await replaceFileAtomic({
+    filePath: path.join(realRootDir, "package.json"),
+    content: `${JSON.stringify(nextPackageManifest, null, 2)}\n`,
+    preserveExistingMode: true,
+    dirMode: (await fs.promises.stat(realRootDir)).mode & 0o7777,
+    syncTempFile: true,
+    syncParentDir: true,
+  });
+  await writePluginBuildManifest(realRootDir, manifest);
   defaultRuntime.log(`Wrote ${formatOutputPath(manifestPath, PLUGIN_MANIFEST_FILENAME)}`);
   defaultRuntime.log(`Updated ${formatOutputPath(packagePath, "package.json")}`);
 }

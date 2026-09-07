@@ -709,6 +709,37 @@ describe("scripts/changed-lanes", () => {
     expectLanes(result.lanes, { tooling: true });
   });
 
+  it("keeps raw Git lookalikes broad without retargeting owner checks", () => {
+    const paths = [" scripts/changed-lanes.mts", "scripts/changed\nlanes.mts"];
+    const result = detectChangedLanes(paths);
+    const plan = createChangedCheckPlan(result);
+
+    expectLanes(result.lanes, { all: true, tooling: true });
+    expect(plan.commands.find((command) => command.name === "format changed files")).toEqual({
+      name: "format changed files",
+      args: ["format:check", "--no-error-on-unmatched-pattern", "--", ...paths],
+    });
+    expect(plan.commands.map((command) => command.args[0])).not.toContain(
+      "plugin-sdk:check-exports",
+    );
+  });
+
+  it("preserves POSIX backslashes in explicit paths", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const result = runRepoScript("scripts/changed-lanes.mjs", [
+      "--json",
+      "--",
+      String.raw`scripts\changed-lanes.mts`,
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(parseChangedLaneOutput(result.stdout).paths).toEqual([
+      String.raw`scripts\changed-lanes.mts`,
+    ]);
+  });
+
   it("falls back to a two-dot diff when a delegated checkout has no merge base", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-no-merge-base-");
     git(dir, ["init", "-q", "--initial-branch=main"]);
@@ -1107,12 +1138,12 @@ describe("scripts/changed-lanes", () => {
     expect(hasDeadcodeScannedSource(changedPaths)).toBe(expected);
   });
 
-  it("ignores the explicit path separator", () => {
-    const result = detectChangedLanes(["--", "scripts/test-live-acp-bind-docker.sh"]);
+  it("preserves an exact -- filename after the explicit path separator", () => {
+    const result = runRepoScript("scripts/changed-lanes.mjs", ["--json", "--", "--"]);
 
-    expect(result.paths).toEqual(["scripts/test-live-acp-bind-docker.sh"]);
-    expect(result.lanes.liveDockerTooling).toBe(true);
-    expect(result.lanes.all).toBe(false);
+    expect(result.status).toBe(0);
+    expect(parseChangedLaneOutput(result.stdout).paths).toEqual(["--"]);
+    expect(parseChangedLaneOutput(result.stdout).lanes.all).toBe(true);
   });
 
   it("routes a subagent-announce-only Docker diff through the live Docker lane", () => {
@@ -1893,19 +1924,20 @@ describe("scripts/changed-lanes", () => {
     git(dir, ["init", "-q", "--initial-branch=main"]);
     writeFileSync(path.join(dir, "README.md"), "initial\n", "utf8");
     commitAll(dir, "initial");
-    mkdirSync(path.join(dir, "src"), { recursive: true });
-    writeFileSync(path.join(dir, "src", "staged.ts"), "export const staged = 1;\n", "utf8");
-    git(dir, ["add", "src/staged.ts"]);
+    const stagedPath = process.platform === "win32" ? "src/staged file.ts" : " src/staged\nfile.ts";
+    writeRepoFile(dir, stagedPath, "export const staged = 1;\n");
+    git(dir, ["add", "--", stagedPath]);
 
     const args = buildChangedCheckCrabboxArgs(["--staged", "--timed"], { cwd: dir });
     expect(args.slice(args.indexOf("check:changed") + 1)).toEqual([
       "--timed",
+      "--paths-from-git",
       "--base",
       "HEAD",
       "--head",
       "HEAD",
       "--",
-      "src/staged.ts",
+      stagedPath,
     ]);
   });
 
@@ -2075,20 +2107,23 @@ describe("scripts/changed-lanes", () => {
 
   it.each([
     ...[
-      githubActivityHelper,
-      `./${githubActivityHelper}`,
-      githubActivityHelper.replaceAll("/", "\\"),
-    ].map((helperPath) => ({
+      { broad: false, helperPath: githubActivityHelper },
+      { broad: true, helperPath: `./${githubActivityHelper}` },
+      { broad: true, helperPath: githubActivityHelper.replaceAll("/", "\\") },
+    ].map(({ broad, helperPath }) => ({
+      broad,
       name: `routes hidden maintainer helper ${helperPath} to tooling instead of all lanes`,
       paths: [helperPath],
       excludesTests: true,
     })),
     {
+      broad: false,
       name: "routes gitignore changes to tooling instead of all lanes",
       paths: [".gitignore"],
       excludesTests: true,
     },
     {
+      broad: false,
       name: "routes root hygiene config changes to tooling instead of all lanes",
       paths: [
         ".dockerignore",
@@ -2112,11 +2147,13 @@ describe("scripts/changed-lanes", () => {
       excludesTests: true,
     },
     {
+      broad: false,
       name: "routes VS Code workspace settings to tooling instead of all lanes",
       paths: [".vscode/settings.json", ".vscode/extensions.json"],
       excludesTests: true,
     },
     {
+      broad: false,
       name: "routes legacy root sandbox Dockerfile moves to tooling instead of all lanes",
       paths: [
         "Dockerfile.sandbox",
@@ -2129,18 +2166,19 @@ describe("scripts/changed-lanes", () => {
       excludesTests: true,
     },
     {
+      broad: false,
       name: "routes legacy root asset deletions as tooling during root cleanup",
       paths: ["assets/avatar-placeholder.svg", "assets/chrome-extension/icons/icon128.png"],
       excludesTests: false,
     },
-  ])("$name", ({ paths, excludesTests }) => {
+  ])("$name", ({ paths, excludesTests, broad = false }) => {
     const result = detectChangedLanes(paths);
     const commands = createChangedCheckPlan(result).commands.map((command) => command.args[0]);
 
-    expectLanes(result.lanes, { tooling: true });
-    expect(result.extensionImpactFromCore).toBe(false);
-    expect(commands).toContain("lint:scripts");
-    expect(commands).not.toContain("tsgo:all");
+    expectLanes(result.lanes, broad ? { all: true } : { tooling: true });
+    expect(result.extensionImpactFromCore).toBe(broad);
+    expect(commands).toContain(broad ? "lint" : "lint:scripts");
+    expect(commands.includes("tsgo:all")).toBe(broad);
     if (excludesTests) {
       expect(commands).not.toContain("test");
     }
@@ -2790,11 +2828,8 @@ describe("scripts/changed-lanes", () => {
     }
   });
 
-  it.each([
-    "apps/macos/Tests/OpenClawIPCTests/MacNodeHostWorkerTests.swift",
-    "./apps/macos/Tests/OpenClawIPCTests/RemovedTests.swift",
-    "apps\\macos\\Tests\\OpenClawIPCTests\\Nested\\WorkerTests.swift",
-  ])("keeps Swift test-only changes out of local packaging tests: %s", (changedPath) => {
+  it("keeps exact Swift test-only changes out of local packaging tests", () => {
+    const changedPath = "apps/macos/Tests/OpenClawIPCTests/MacNodeHostWorkerTests.swift";
     const plan = createChangedCheckPlan(detectChangedLanes([changedPath]), {
       env: { PATH: "/usr/bin" },
       platform: "darwin",
@@ -2806,6 +2841,19 @@ describe("scripts/changed-lanes", () => {
       "native state schema version guard",
     );
     expect(plan.commands.map((command) => command.args[0])).not.toContain("test:macos:ci");
+  });
+
+  it.each([
+    "./apps/macos/Tests/OpenClawIPCTests/RemovedTests.swift",
+    String.raw`apps\macos\Tests\OpenClawIPCTests\Nested\WorkerTests.swift`,
+  ])("fails safe for noncanonical Swift path %s", (changedPath) => {
+    const result = detectChangedLanes([changedPath]);
+    const commands = createChangedCheckPlan(result).commands.map((command) => command.args[0]);
+
+    expectLanes(result.lanes, { all: true });
+    expect(result.extensionImpactFromCore).toBe(true);
+    expect(commands).toContain("lint");
+    expect(commands).not.toContain("lint:apps");
   });
 
   it("preserves the full changed gate alongside a Swift test change", () => {

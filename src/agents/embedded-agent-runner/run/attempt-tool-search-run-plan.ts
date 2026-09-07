@@ -63,6 +63,8 @@ function collectOpenClawCapabilityToolNames(
 export function buildToolSearchRunPlan(params: {
   visibleTools: CollectAllowedToolNamesParams["tools"];
   uncompactedTools: CollectAllowedToolNamesParams["tools"];
+  /** Registered catalog capabilities; this does not grant direct execution. */
+  catalogCapabilityTools?: CollectAllowedToolNamesParams["tools"];
   clientTools?: CollectAllowedToolNamesParams["clientTools"];
   clientToolsCataloged: boolean;
   catalogToolCount: number;
@@ -79,9 +81,10 @@ export function buildToolSearchRunPlan(params: {
     tools: params.uncompactedTools,
     clientTools: params.clientTools,
   });
-  const capabilityToolNames = collectOpenClawCapabilityToolNames(
-    params.deferredToolsCallable ? params.uncompactedTools : params.visibleTools,
-  );
+  const capabilityToolNames = collectOpenClawCapabilityToolNames([
+    ...(params.deferredToolsCallable ? params.uncompactedTools : params.visibleTools),
+    ...(params.catalogCapabilityTools ?? []),
+  ]);
   if (params.controlsEnabled) {
     // A control that was visible in the compacted prompt must remain allowed
     // during replay even when the uncompacted tool set would otherwise omit it.

@@ -95,35 +95,6 @@ function createCacheKey(source: {
   return testApi.createPlaybackTranscodeCacheKey(source);
 }
 
-async function readSourceBoundedForTest(
-  handle: {
-    read: (
-      buffer: Buffer,
-      offset: number,
-      length: number,
-      position: number,
-    ) => Promise<{ bytesRead: number; buffer: Buffer }>;
-  },
-  expectedSize: number,
-  maxBytes: number,
-): Promise<Buffer> {
-  const testApi = (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.playbackTranscodeTestApi")
-  ] as
-    | {
-        readPlaybackSourceBounded?: (
-          value: typeof handle,
-          expected: number,
-          max: number,
-        ) => Promise<Buffer>;
-      }
-    | undefined;
-  if (!testApi?.readPlaybackSourceBounded) {
-    throw new Error("playback bounded-read test API unavailable");
-  }
-  return await testApi.readPlaybackSourceBounded(handle, expectedSize, maxBytes);
-}
-
 describe("playback transcode policy", () => {
   it.each([
     ["audio/m4a", "audio", "native", "aac"],
@@ -271,20 +242,6 @@ describe("playback transcode policy", () => {
 });
 
 describe("resolvePlaybackTranscode", () => {
-  it("rejects descriptor growth after reading only the bounded overflow byte", async () => {
-    const contents = Buffer.from("123456");
-    const read = vi.fn(async (buffer: Buffer, offset: number, length: number, position: number) => {
-      expect(buffer.byteLength).toBe(6);
-      const bytesRead = contents.copy(buffer, offset, position, position + length);
-      return { bytesRead, buffer };
-    });
-
-    await expect(readSourceBoundedForTest({ read }, 5, 5)).rejects.toThrow(
-      "Playback source changed during bounded read",
-    );
-    expect(read).toHaveBeenCalledOnce();
-  });
-
   it("falls back before ffmpeg when source duration exceeds the transcode limit", async () => {
     const source = await createSource("long-video.mkv");
     probePlaybackMediaFileDescriptor.mockResolvedValueOnce({

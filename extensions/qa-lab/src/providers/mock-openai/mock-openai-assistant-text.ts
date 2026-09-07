@@ -127,7 +127,7 @@ export function readForkedContextCompletion(input: ResponsesInputItem[]) {
     /(?:^|\n)\d+\. qa-fork-context\nstatus: ([^\n]+)\nChild result[^\n]*\n<prompt-data>\n([\s\S]*?)\n<\/prompt-data>/.exec(
       current,
     );
-  if (settled && current.includes("sourceTool=subagent_announce")) {
+  if (settled && current.includes("sourceTool=subagent_settle")) {
     const result = settled[2];
     return settled[1] === "ok" &&
       result &&

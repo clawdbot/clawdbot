@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import type { MessageReceipt } from "../message/types.js";
 import {
+  createAcceptedChannelDeliveryResult,
   createChannelDeliveryResultFromReceipt,
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
@@ -11,6 +12,54 @@ import {
   hasVisibleChannelTurnDispatchFromReceipt as hasVisibleChannelTurnDispatch,
   resolveChannelTurnDispatchCounts,
 } from "./dispatch-result.js";
+
+describe("createAcceptedChannelDeliveryResult", () => {
+  it.each([true, false])(
+    "retains accepted prefixes and nested partial identities (receipt=%s)",
+    (withReceipt) => {
+      const nestedReceipt: MessageReceipt = {
+        primaryPlatformMessageId: "attachment",
+        platformMessageIds: ["attachment", "caption"],
+        parts: [
+          { platformMessageId: "attachment", kind: "media", index: 0, threadId: "native-thread" },
+        ],
+        sentAt: 123,
+      };
+      const result = createAcceptedChannelDeliveryResult({
+        results: [{ messageId: "prefix" }],
+        deliveryResults: [
+          {
+            visibleReplySent: true,
+            messageIds: withReceipt ? ["stale-legacy-id"] : ["attachment", "caption"],
+            ...(withReceipt ? { receipt: nestedReceipt } : {}),
+          },
+        ],
+        kind: "media",
+        content: "accepted prefix\naccepted attachment",
+      });
+
+      expect(result.messageIds).toEqual(["prefix", "attachment", "caption"]);
+      expect(result.content).toBe("accepted prefix\naccepted attachment");
+      expect(result.visibleReplySent).toBe(true);
+      expect(result).not.toHaveProperty("threadId");
+      expect(result.receipt.parts[0]?.platformMessageId).toBe("prefix");
+      if (withReceipt) {
+        expect(result.receipt.parts[1]).toEqual(nestedReceipt.parts[0]);
+      }
+    },
+  );
+
+  it("preserves identityless accepted delivery without inventing routing or text", () => {
+    const result = createAcceptedChannelDeliveryResult({});
+    expect(result).toMatchObject({
+      messageIds: [],
+      receipt: { platformMessageIds: [], parts: [] },
+      visibleReplySent: true,
+    });
+    expect(result).not.toHaveProperty("content");
+    expect(result).not.toHaveProperty("threadId");
+  });
+});
 
 describe("createChannelDeliveryResultFromReceipt", () => {
   it("keeps legacy messageIds while attaching the receipt", () => {

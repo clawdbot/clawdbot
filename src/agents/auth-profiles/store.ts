@@ -279,11 +279,6 @@ type ResolvedExternalCliOverlayOptions = {
   externalCliProfileIds?: Iterable<string>;
 };
 
-type ExternalCliSyncResult = {
-  store: AuthProfileStore;
-  cacheable: boolean;
-};
-
 let runtimeSnapshotPublisherForTest: ((publish: () => void) => void) | undefined;
 
 type RuntimeSnapshotPublication = {
@@ -1262,33 +1257,33 @@ export function createAuthProfileStoreRuntime(
     store: AuthProfileStore;
     agentDir?: string;
     options?: LoadAuthProfileStoreOptions;
-  }): ExternalCliSyncResult {
+  }): AuthProfileStore {
     if (
       params.options?.readOnly === true ||
       params.options?.syncExternalCli === false ||
       process.env.OPENCLAW_AUTH_STORE_READONLY === "1"
     ) {
-      return { store: params.store, cacheable: true };
+      return params.store;
     }
     const synced = syncPersistedExternalCliAuthProfiles(params.store, {
       agentDir: params.agentDir,
       ...resolveExternalCliOverlayOptions(params.options),
     });
     if (synced === params.store) {
-      return { store: params.store, cacheable: true };
+      return params.store;
     }
     const changedProfiles = Object.entries(synced.profiles).filter(([profileId, credential]) => {
       const previous = params.store.profiles[profileId];
       return !isDeepStrictEqual(previous, credential);
     });
     if (changedProfiles.length === 0) {
-      return { store: synced, cacheable: true };
+      return synced;
     }
 
     // External CLI sync writes only profiles that still match the loaded
     // baseline, avoiding overwrite of concurrent local auth changes.
     let publishRuntimeSnapshots: RuntimeSnapshotPublication | undefined;
-    let result: ExternalCliSyncResult;
+    let result: AuthProfileStore;
     try {
       result = runAuthProfileWriteTransaction(
         params.agentDir,
@@ -1327,7 +1322,7 @@ export function createAuthProfileStoreRuntime(
               owner,
             );
           }
-          return { store: latestStore, cacheable: true };
+          return latestStore;
         },
         { env: getScopedAuthProfileEnv() },
       );
@@ -1338,11 +1333,10 @@ export function createAuthProfileStoreRuntime(
           err,
         },
       );
-      return { store: params.store, cacheable: false };
+      return params.store;
     }
-    return publishRuntimeSnapshotsAfterCommit(publishRuntimeSnapshots)
-      ? result
-      : { store: result.store, cacheable: false };
+    publishRuntimeSnapshotsAfterCommit(publishRuntimeSnapshots);
+    return result;
   }
 
   function buildLocalAuthProfileStoreForSave(params: {
@@ -1442,22 +1436,6 @@ export function createAuthProfileStoreRuntime(
       params.options,
     );
     return stripRuntimeExternalProfileMetadata(mergeAuthProfileStores(persistedStore, localStore));
-  }
-
-  function buildRuntimeAuthProfileStoreForSave(params: {
-    owner: AuthProfileStoreOwner;
-    store: AuthProfileStore;
-    agentDir?: string;
-    options?: SaveAuthProfileStoreOptions;
-    persistedStores: PersistedAuthProfileStores;
-  }): AuthProfileStore {
-    return buildLocalAuthProfileStoreForSave({
-      ...params,
-      options: {
-        ...params.options,
-        filterExternalAuthProfiles: false,
-      },
-    });
   }
 
   /** Apply an auth store update inside the SQLite write lock; null only on lock contention. */
@@ -1604,7 +1582,7 @@ export function createAuthProfileStoreRuntime(
       agentDir: effectiveAgentDir,
       options: effectiveOptions,
     });
-    return applyScopedAuthReadThrough(markRuntimePersistedProfiles(synced.store));
+    return applyScopedAuthReadThrough(markRuntimePersistedProfiles(synced));
   }
 
   /** Loads the effective runtime store for an agent, including inherited main profiles. */
@@ -1929,11 +1907,11 @@ export function createAuthProfileStoreRuntime(
     );
     const suppliedRuntimeStore = publishFromSuppliedStore
       ? markRuntimePersistedProfiles(
-          buildRuntimeAuthProfileStoreForSave({
+          buildLocalAuthProfileStoreForSave({
             owner,
             store,
             agentDir: persistenceAgentDir,
-            options,
+            options: { ...options, filterExternalAuthProfiles: false },
             persistedStores,
           }),
           localStore,
