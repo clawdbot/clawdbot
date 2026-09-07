@@ -41,10 +41,19 @@ const loggedStrictToolDowngradeDiagnosticKeys = new Set<string>();
 export function convertResponsesToolPayload(
   tools: Tool[],
   options?: ConvertResponsesToolsOptions,
+  resolveStrict?: (
+    projection: OpenAIToolProjection,
+    setting: boolean | null | undefined,
+  ) => boolean | undefined,
 ): ConvertedResponsesTools {
   const projection = projectOpenAITools(tools);
-  const strictSetting = resolveResponsesStrictToolSetting(options);
-  const strict = resolveResponsesStrictToolFlag(projection, strictSetting, options?.model);
+  const strict = resolveStrict
+    ? resolveStrict(projection, options?.strict)
+    : resolveResponsesStrictToolFlag(
+        projection,
+        resolveResponsesStrictToolSetting(options),
+        options?.model,
+      );
   // Sort tools before request construction so prompt-cache bytes stay deterministic.
   const convertedTools = sortPromptCacheToolsByName(projection.tools).map((tool) => {
     const result: ResponsesFunctionTool = {
