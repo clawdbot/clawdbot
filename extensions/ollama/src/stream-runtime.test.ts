@@ -628,6 +628,43 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
       },
     );
   });
+
+  it("keeps native tool payloads stable when callers reorder the same catalog", async () => {
+    const tools = [
+      {
+        name: "zebra",
+        description: "Look up a record",
+        parameters: { type: "object", properties: { id: { type: "string" } } },
+      },
+      {
+        name: "alpha",
+        description: "Search records",
+        parameters: { type: "object", properties: { query: { type: "string" } } },
+      },
+    ];
+    const bodies: Record<string, unknown>[] = [];
+    for (const catalog of [tools, tools.toReversed()]) {
+      fetchWithSsrFGuardMock.mockClear();
+      await expectSuccessfulOllamaRequest(
+        {
+          baseUrl: "http://ollama-host:11434",
+          context: {
+            systemPrompt: "Use the available record tools.",
+            messages: [{ role: "user", content: "Find the requested record." }],
+            tools: catalog,
+          },
+        },
+        ({ body }) => {
+          bodies.push(body);
+        },
+      );
+    }
+    expect(bodies[0]).toEqual(bodies[1]);
+    expect(bodies[0]?.tools).toEqual(
+      tools.toReversed().map((tool) => ({ type: "function", function: tool })),
+    );
+    expect(tools.map((tool) => tool.name)).toEqual(["zebra", "alpha"]);
+  });
 });
 
 describe("convertToOllamaMessages", () => {
