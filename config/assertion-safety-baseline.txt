@@ -3317,7 +3317,7 @@ src/plugins/config-normalization-shared.ts	1
 src/plugins/config-schema.ts	6
 src/plugins/contracts/inventory/bundled-capability-metadata.ts	3
 src/plugins/contracts/registry.ts	1
-src/plugins/contracts/tts-contract-suites.ts	31
+src/plugins/contracts/tts-contract-suites.ts	19
 src/plugins/conversation-binding.ts	1
 src/plugins/current-plugin-metadata-snapshot.ts	1
 src/plugins/dashboard-capabilities.ts	1

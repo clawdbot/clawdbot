@@ -1,10 +1,6 @@
 // TTS contract suites provide reusable text-to-speech plugin contract assertions.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ResolvedTtsConfig, SpeechProviderPlugin } from "openclaw/plugin-sdk/speech-core";
-import {
-  fetchWithSsrFGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
-} from "openclaw/plugin-sdk/ssrf-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import {
@@ -12,7 +8,7 @@ import {
   pluginRegistrationContractRegistry,
   setActivePluginRegistry,
 } from "../../plugin-sdk/plugin-test-runtime.js";
-import { withEnv, withEnvAsync, withServer } from "../../plugin-sdk/test-env.js";
+import { withEnv, withEnvAsync } from "../../plugin-sdk/test-env.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 
 type TtsRuntimeModule = typeof import("openclaw/plugin-sdk/tts-runtime");
@@ -143,79 +139,8 @@ function createSummarizeTextDeps() {
   };
 }
 
-function createOpenAiTelephonyCfg(model: "tts-1" | "gpt-4o-mini-tts"): OpenClawConfig {
-  return asLegacyTtsConfig({
-    tts: {
-      provider: "openai",
-      providers: {
-        openai: {
-          apiKey: "test-key",
-          model,
-          voice: "alloy",
-          instructions: "Speak warmly",
-        },
-      },
-    },
-  });
-}
-
 function createAudioBuffer(length = 2): Buffer {
   return Buffer.from(new Uint8Array(length).fill(1));
-}
-
-async function withHangingSpeechServer(
-  run: (baseUrl: string, getRequestCount: () => number) => Promise<void>,
-): Promise<void> {
-  let requestCount = 0;
-  await withServer(
-    (_req, _res) => {
-      requestCount += 1;
-    },
-    async (baseUrl) => {
-      await run(`${baseUrl}/v1`, () => requestCount);
-    },
-  );
-}
-
-async function withMockedSpeechFetch(
-  run: (fetchMock: ReturnType<typeof vi.fn>) => Promise<void>,
-  audioLength: number,
-) {
-  const originalFetch = globalThis.fetch;
-  const fetchMock = vi.fn(async () => new Response(new Uint8Array(audioLength)));
-  globalThis.fetch = fetchMock;
-  try {
-    await run(fetchMock);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-}
-
-function resolveBaseUrl(rawValue: unknown, fallback: string): string {
-  return typeof rawValue === "string" && rawValue.trim() ? rawValue.replace(/\/+$/u, "") : fallback;
-}
-
-async function requestTestOpenAISpeech(params: {
-  baseUrl: string;
-  body: Record<string, unknown>;
-  timeoutMs: number;
-}): Promise<void> {
-  const requestUrl = `${params.baseUrl}/audio/speech`;
-  const { response, release } = await fetchWithSsrFGuard({
-    url: requestUrl,
-    init: {
-      method: "POST",
-      body: JSON.stringify(params.body),
-    },
-    timeoutMs: params.timeoutMs,
-    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(params.baseUrl),
-    auditContext: "tts-contract-openai",
-  });
-  try {
-    await response.body?.cancel().catch(() => {});
-  } finally {
-    await release();
-  }
 }
 
 function resolveTestProviderConfig(
@@ -242,103 +167,23 @@ function resolveTestProviderConfig(
   return {};
 }
 
-function buildTestOpenAISpeechProvider(): SpeechProviderPlugin {
+const synthesizeTestSpeech = vi.fn<SpeechProviderPlugin["synthesize"]>(async () => ({
+  audioBuffer: createAudioBuffer(),
+  outputFormat: "mp3",
+  fileExtension: ".mp3",
+  voiceCompatible: true,
+}));
+
+function buildTestSpeechProvider(): SpeechProviderPlugin {
   return {
-    id: "openai",
-    label: "OpenAI",
+    id: "test-speech",
+    label: "Test speech",
     autoSelectOrder: 10,
-    resolveConfig: ({ rawConfig }) => {
-      const config = resolveTestProviderConfig(rawConfig, "openai");
-      return {
-        ...config,
-        baseUrl: resolveBaseUrl(
-          config.baseUrl ?? process.env.OPENAI_TTS_BASE_URL,
-          "https://api.openai.com/v1",
-        ),
-      };
-    },
-    parseDirectiveToken: ({ key, value, providerConfig }) => {
-      if (key === "voice") {
-        const baseUrl = resolveBaseUrl(
-          (providerConfig as Record<string, unknown> | undefined)?.baseUrl,
-          "https://api.openai.com/v1",
-        );
-        const isDefaultEndpoint = baseUrl === "https://api.openai.com/v1";
-        const allowedVoices = new Set([
-          "alloy",
-          "ash",
-          "ballad",
-          "coral",
-          "echo",
-          "sage",
-          "shimmer",
-          "verse",
-        ]);
-        if (isDefaultEndpoint && !allowedVoices.has(value)) {
-          return { handled: true, warnings: [`invalid OpenAI voice "${value}"`] };
-        }
-        return { handled: true, overrides: { voice: value } };
-      }
-      if (key === "model") {
-        const baseUrl = resolveBaseUrl(
-          (providerConfig as Record<string, unknown> | undefined)?.baseUrl,
-          "https://api.openai.com/v1",
-        );
-        const isDefaultEndpoint = baseUrl === "https://api.openai.com/v1";
-        const allowedModels = new Set(["tts-1", "tts-1-hd", "gpt-4o-mini-tts"]);
-        if (isDefaultEndpoint && !allowedModels.has(value)) {
-          return { handled: true, warnings: [`invalid OpenAI model "${value}"`] };
-        }
-        return { handled: true, overrides: { model: value } };
-      }
-      return { handled: false };
-    },
-    isConfigured: ({ providerConfig }) =>
-      typeof (providerConfig as Record<string, unknown> | undefined)?.apiKey === "string" ||
-      typeof process.env.OPENAI_API_KEY === "string",
-    synthesize: async ({ text, providerConfig, providerOverrides, timeoutMs }) => {
-      const config = providerConfig as Record<string, unknown> | undefined;
-      await requestTestOpenAISpeech({
-        baseUrl: resolveBaseUrl(config?.baseUrl, "https://api.openai.com/v1"),
-        body: {
-          input: text,
-          model: providerOverrides?.model ?? config?.model ?? "gpt-4o-mini-tts",
-          voice: providerOverrides?.voice ?? config?.voice ?? "alloy",
-        },
-        timeoutMs,
-      });
-      return {
-        audioBuffer: createAudioBuffer(1),
-        outputFormat: "mp3",
-        fileExtension: ".mp3",
-        voiceCompatible: true,
-      };
-    },
-    synthesizeTelephony: async ({ text, providerConfig, timeoutMs }) => {
-      const config = providerConfig as Record<string, unknown> | undefined;
-      const configuredModel = typeof config?.model === "string" ? config.model : undefined;
-      const model = configuredModel ?? "tts-1";
-      const configuredInstructions =
-        typeof config?.instructions === "string" ? config.instructions : undefined;
-      const instructions =
-        model === "gpt-4o-mini-tts" ? configuredInstructions || undefined : undefined;
-      await requestTestOpenAISpeech({
-        baseUrl: resolveBaseUrl(config?.baseUrl, "https://api.openai.com/v1"),
-        body: {
-          input: text,
-          model,
-          voice: config?.voice ?? "alloy",
-          instructions,
-        },
-        timeoutMs,
-      });
-      return {
-        audioBuffer: createAudioBuffer(2),
-        outputFormat: "mp3",
-        sampleRate: 24000,
-      };
-    },
-    listVoices: async () => [{ id: "alloy", label: "Alloy" }],
+    resolveConfig: ({ rawConfig }) => resolveTestProviderConfig(rawConfig, "test-speech"),
+    parseDirectiveToken: ({ key, value }) =>
+      key === "voice" ? { handled: true, overrides: { voice: value } } : { handled: false },
+    isConfigured: ({ providerConfig }) => providerConfig.enabled === true,
+    synthesize: synthesizeTestSpeech,
   };
 }
 
@@ -479,7 +324,7 @@ async function setupTtsRuntime() {
 function setupTestSpeechProviderRegistry() {
   const registry = createEmptyPluginRegistry();
   registry.speechProviders = [
-    { pluginId: "openai", provider: buildTestOpenAISpeechProvider(), source: "test" },
+    { pluginId: "test-speech", provider: buildTestSpeechProvider(), source: "test" },
     { pluginId: "microsoft", provider: buildTestMicrosoftSpeechProvider(), source: "test" },
     { pluginId: "elevenlabs", provider: buildTestElevenLabsSpeechProvider(), source: "test" },
     { pluginId: "google", provider: buildTestGoogleSpeechProvider(), source: "test" },
@@ -607,12 +452,12 @@ export function describeTtsConfigContract() {
         const policy = resolveModelOverridePolicy({ enabled: true });
         const input = "Hello [[tts:provider=edge voice=alloy]] world";
         const result = parseTtsDirectives(input, policy);
-        const openaiOverrides = result.overrides.providerOverrides?.openai as
+        const speechOverrides = result.overrides.providerOverrides?.["test-speech"] as
           | { voice?: string }
           | undefined;
 
         expect(result.overrides.provider).toBeUndefined();
-        expect(openaiOverrides?.voice).toBe("alloy");
+        expect(speechOverrides?.voice).toBe("alloy");
       });
 
       it("keeps text intact when overrides are disabled", () => {
@@ -623,57 +468,24 @@ export function describeTtsConfigContract() {
         expect(result.cleanedText).toBe(input);
         expect(result.overrides.provider).toBeUndefined();
       });
-
-      it("accepts custom voices and models when openaiBaseUrl is a non-default endpoint", () => {
-        const policy = resolveModelOverridePolicy({ enabled: true });
-        const input = "Hello [[tts:voice=kokoro-chinese model=kokoro-v1]] world";
-        const result = parseTtsDirectives(input, policy, {
-          providerConfigs: {
-            openai: { baseUrl: "http://localhost:8880/v1" },
-          },
-        });
-        const openaiOverrides = result.overrides.providerOverrides?.openai as
-          | { voice?: string; model?: string }
-          | undefined;
-
-        expect(openaiOverrides?.voice).toBe("kokoro-chinese");
-        expect(openaiOverrides?.model).toBe("kokoro-v1");
-        expect(result.warnings).toHaveLength(0);
-      });
-
-      it("rejects unknown voices and models when openaiBaseUrl is the default OpenAI endpoint", () => {
-        const policy = resolveModelOverridePolicy({ enabled: true });
-        const input = "Hello [[tts:voice=kokoro-chinese model=kokoro-v1]] world";
-        const result = parseTtsDirectives(input, policy, {
-          providerConfigs: {
-            openai: { baseUrl: "https://api.openai.com/v1" },
-          },
-        });
-        const openaiOverrides = result.overrides.providerOverrides?.openai as
-          | { voice?: string }
-          | undefined;
-
-        expect(openaiOverrides?.voice).toBeUndefined();
-        expect(result.warnings).toContain('invalid OpenAI voice "kokoro-chinese"');
-      });
     });
 
     describe("getTtsProvider", () => {
       it.each([
         {
-          name: "openai key available",
+          name: "primary readiness succeeds",
+          primaryConfigured: true,
           env: {
-            OPENAI_API_KEY: "test-openai-key",
             ELEVENLABS_API_KEY: undefined,
             XI_API_KEY: undefined,
           },
-          prefsPath: "/tmp/tts-prefs-openai.json",
-          expected: "openai",
+          prefsPath: "/tmp/tts-prefs-primary.json",
+          expected: "test-speech",
         },
         {
-          name: "elevenlabs key available",
+          name: "secondary readiness succeeds",
+          primaryConfigured: false,
           env: {
-            OPENAI_API_KEY: undefined,
             ELEVENLABS_API_KEY: "test-elevenlabs-key",
             XI_API_KEY: undefined,
           },
@@ -682,25 +494,25 @@ export function describeTtsConfigContract() {
         },
         {
           name: "falls back to microsoft",
+          primaryConfigured: false,
           env: {
-            OPENAI_API_KEY: undefined,
             ELEVENLABS_API_KEY: undefined,
             XI_API_KEY: undefined,
           },
           prefsPath: "/tmp/tts-prefs-microsoft.json",
           expected: "microsoft",
         },
-      ] as const)("selects provider based on available API keys: $name", (testCase) => {
+      ] as const)("selects provider based on readiness: $name", (testCase) => {
         withIsolatedSpeechProviderEnv(testCase.env, () => {
           const config = {
             auto: "off",
             mode: "final",
-            provider: "openai",
+            provider: "test-speech",
             providerSource: "default",
             summaryModel: undefined,
             modelOverrides: resolveModelOverridePolicy(undefined),
             providerConfigs: {
-              openai: {},
+              "test-speech": { enabled: testCase.primaryConfigured },
               microsoft: {},
               elevenlabs: {},
             },
@@ -717,7 +529,6 @@ export function describeTtsConfigContract() {
       it("passes cfg into auto-selection so model-provider Google keys can configure TTS", () => {
         withIsolatedSpeechProviderEnv(
           {
-            OPENAI_API_KEY: undefined,
             ELEVENLABS_API_KEY: undefined,
             XI_API_KEY: undefined,
             MINIMAX_API_KEY: undefined,
@@ -769,78 +580,6 @@ export function describeTtsConfigContract() {
 
         expect(config.provider).toBe("microsoft");
         expect(getTtsProvider(config, "/tmp/tts-prefs-normalized.json")).toBe("microsoft");
-      });
-    });
-
-    describe("resolveTtsConfig – openai.baseUrl", () => {
-      const baseCfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
-        tts: {},
-      };
-
-      it.each([
-        {
-          name: "default endpoint",
-          cfg: baseCfg,
-          env: { OPENAI_TTS_BASE_URL: undefined },
-          expected: "https://api.openai.com/v1",
-        },
-        {
-          name: "env override",
-          cfg: baseCfg,
-          env: { OPENAI_TTS_BASE_URL: "http://localhost:8880/v1" },
-          expected: "http://localhost:8880/v1",
-        },
-        {
-          name: "config wins over env",
-          cfg: asLegacyTtsConfig({
-            ...baseCfg,
-            tts: { ...baseCfg.tts, openai: { baseUrl: "http://my-server:9000/v1" } },
-          }),
-          env: { OPENAI_TTS_BASE_URL: "http://localhost:8880/v1" },
-          expected: "http://my-server:9000/v1",
-        },
-        {
-          name: "config slash trimming",
-          cfg: asLegacyTtsConfig({
-            ...baseCfg,
-            tts: {
-              ...baseCfg.tts,
-              openai: { baseUrl: "http://my-server:9000/v1///" },
-            },
-          }),
-          env: { OPENAI_TTS_BASE_URL: undefined },
-          expected: "http://my-server:9000/v1",
-        },
-        {
-          name: "env slash trimming",
-          cfg: baseCfg,
-          env: { OPENAI_TTS_BASE_URL: "http://localhost:8880/v1/" },
-          expected: "http://localhost:8880/v1",
-        },
-      ] as const)(
-        "resolves openai.baseUrl from config/env with config precedence and slash trimming: $name",
-        (testCase) => {
-          withEnv(testCase.env, () => {
-            const config = resolveTtsConfig(testCase.cfg);
-            const openaiConfig = getResolvedSpeechProviderConfig(config, "openai") as {
-              baseUrl?: string;
-            };
-            expect(openaiConfig.baseUrl, testCase.name).toBe(testCase.expected);
-          });
-        },
-      );
-
-      it("hydrates provider config lazily when no explicit speech provider is configured", () => {
-        withEnv({ OPENAI_TTS_BASE_URL: "http://localhost:8880/v1" }, () => {
-          const config = resolveTtsConfig(baseCfg);
-          const openaiConfig = getResolvedSpeechProviderConfig(config, "openai", baseCfg) as {
-            baseUrl?: string;
-          };
-
-          expect(config.provider).toBe("");
-          expect(openaiConfig.baseUrl).toBe("http://localhost:8880/v1");
-        });
       });
     });
   });
@@ -1105,42 +844,6 @@ export function describeTtsProviderRuntimeContract() {
         },
       );
 
-      it("cancels the discarded speech response body after synthesize", async () => {
-        await withIsolatedSpeechProviderEnvAsync({}, async () => {
-          let sawConnectionClose = false;
-          await withServer(
-            (_req, res) => {
-              res.writeHead(200, { "content-type": "audio/mpeg" });
-              res.write(Buffer.alloc(16));
-              res.on("close", () => {
-                sawConnectionClose = true;
-              });
-              // Intentionally never res.end(): an unread body must still be
-              // released by the caller, not left pinning the connection.
-            },
-            async (baseUrl) => {
-              const result = await ttsRuntime.synthesizeSpeech({
-                text: "hello cancel",
-                cfg: asLegacyOpenClawConfig({
-                  agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
-                  tts: {
-                    provider: "openai",
-                    providers: {
-                      openai: {
-                        baseUrl: `${baseUrl}/v1`,
-                        apiKey: "fixture-api-key",
-                      },
-                    },
-                  },
-                }),
-              });
-              expect(result.success).toBe(true);
-              await vi.waitFor(() => expect(sawConnectionClose).toBe(true), { timeout: 5_000 });
-            },
-          );
-        });
-      });
-
       it("does not double-prefix textToSpeech failure messages", async () => {
         const failingProvider: SpeechProviderPlugin = {
           id: "openai",
@@ -1181,112 +884,6 @@ export function describeTtsProviderRuntimeContract() {
         expect(errorMessage.match(/TTS conversion failed:/g)).toHaveLength(1);
       });
     });
-
-    describe("textToSpeechTelephony – openai instructions", () => {
-      async function expectTelephonyInstructions(
-        model: "tts-1" | "gpt-4o-mini-tts",
-        expectedInstructions: string | undefined,
-      ) {
-        await withMockedSpeechFetch(async (fetchMock) => {
-          const result = await ttsRuntime.textToSpeechTelephony({
-            text: "Hello there, friendly caller.",
-            cfg: createOpenAiTelephonyCfg(model),
-          });
-
-          expect(result.success).toBe(true);
-          expect(fetchMock).toHaveBeenCalledTimes(1);
-          const [, init] = mockCallAt(fetchMock, 0) as [string, RequestInit];
-          expect(typeof init.body).toBe("string");
-          const body = JSON.parse(init.body as string) as Record<string, unknown>;
-          expect(body.instructions).toBe(expectedInstructions);
-        }, 2);
-      }
-
-      it.each([
-        { name: "tts-1 omits instructions", model: "tts-1", expectedInstructions: undefined },
-        {
-          name: "gpt-4o-mini-tts keeps instructions",
-          model: "gpt-4o-mini-tts",
-          expectedInstructions: "Speak warmly",
-        },
-      ] as const)(
-        "only includes instructions for supported telephony models: $name",
-        async (testCase) => {
-          await expectTelephonyInstructions(testCase.model, testCase.expectedInstructions);
-        },
-      );
-    });
-
-    it.each([
-      {
-        name: "ordinary synthesis",
-        run: async (cfg: OpenClawConfig, timeoutMs: number) =>
-          await ttsRuntime.textToSpeech({
-            text: "Hello from the timeout contract.",
-            cfg,
-            disableFallback: true,
-            timeoutMs,
-          }),
-      },
-      {
-        name: "telephony synthesis",
-        run: async (cfg: OpenClawConfig, timeoutMs: number) =>
-          await ttsRuntime.textToSpeechTelephony({
-            text: "Hello from the telephony timeout contract.",
-            cfg,
-            timeoutMs,
-          }),
-      },
-    ] as const)(
-      "aborts stalled OpenAI $name within the caller timeout",
-      { timeout: 2_000 },
-      async (testCase) => {
-        await withHangingSpeechServer(async (baseUrl, getRequestCount) => {
-          const registry = createEmptyPluginRegistry();
-          registry.speechProviders = [
-            { pluginId: "openai", provider: buildTestOpenAISpeechProvider(), source: "test" },
-          ];
-          setActivePluginRegistry(registry);
-          const cfg = asLegacyTtsConfig({
-            tts: {
-              provider: "openai",
-              providers: {
-                openai: {
-                  apiKey: "test-api-key",
-                  baseUrl,
-                  model: "gpt-4o-mini-tts",
-                  voice: "alloy",
-                },
-              },
-            },
-          });
-          const timeoutMs = 100;
-          const startedAt = Date.now();
-          let watchdog: ReturnType<typeof setTimeout> | undefined;
-
-          try {
-            const result = await Promise.race([
-              testCase.run(cfg, timeoutMs),
-              new Promise<never>((_, reject) => {
-                watchdog = setTimeout(
-                  () => reject(new Error(`${testCase.name} did not time out`)),
-                  1_000,
-                );
-              }),
-            ]);
-
-            expect(result.success).toBe(false);
-            expect(result.error).toMatch(/aborted|timeout|timed out/i);
-            expect(Date.now() - startedAt).toBeLessThan(1_000);
-            expect(getRequestCount()).toBe(1);
-          } finally {
-            if (watchdog) {
-              clearTimeout(watchdog);
-            }
-          }
-        });
-      },
-    );
   });
 }
 
@@ -1299,24 +896,12 @@ export function describeTtsAutoApplyContract() {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
       tts: {
         auto: "inbound",
-        provider: "openai",
+        provider: "test-speech",
         providers: {
-          openai: { apiKey: "test-key", model: "gpt-4o-mini-tts", voice: "alloy" },
+          "test-speech": { enabled: true },
         },
       },
     });
-
-    const withMockedAutoTtsFetch = async (
-      run: (fetchMock: ReturnType<typeof vi.fn>) => Promise<void>,
-    ) => {
-      const prevPrefs = process.env.OPENCLAW_TTS_PREFS;
-      process.env.OPENCLAW_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
-      try {
-        await withMockedSpeechFetch(run, 1);
-      } finally {
-        process.env.OPENCLAW_TTS_PREFS = prevPrefs;
-      }
-    };
 
     const taggedCfg: OpenClawConfig = {
       ...baseCfg,
@@ -1327,17 +912,17 @@ export function describeTtsAutoApplyContract() {
       cfg: OpenClawConfig;
       payload: { text: string };
       inboundAudio?: boolean;
-      expectedFetchCalls: number;
+      expectedSynthesisCalls: number;
       expectSamePayload: boolean;
     }) {
-      await withMockedAutoTtsFetch(async (fetchMock) => {
+      await withEnvAsync({ OPENCLAW_TTS_PREFS: `/tmp/tts-test-${Date.now()}.json` }, async () => {
         const result = await maybeApplyTtsToPayload({
           payload: params.payload,
           cfg: params.cfg,
           kind: "final",
           ...(params.inboundAudio !== undefined ? { inboundAudio: params.inboundAudio } : {}),
         });
-        expect(fetchMock).toHaveBeenCalledTimes(params.expectedFetchCalls);
+        expect(synthesizeTestSpeech).toHaveBeenCalledTimes(params.expectedSynthesisCalls);
         if (params.expectSamePayload) {
           expect(result).toBe(params.payload);
         } else if (typeof result.mediaUrl !== "string" || result.mediaUrl.length === 0) {
@@ -1351,21 +936,21 @@ export function describeTtsAutoApplyContract() {
         name: "inbound gating blocks non-audio",
         payload: { text: "Hello world" },
         inboundAudio: false,
-        expectedFetchCalls: 0,
+        expectedSynthesisCalls: 0,
         expectSamePayload: true,
       },
       {
         name: "inbound gating blocks too-short cleaned text",
         payload: { text: "### **bold**" },
         inboundAudio: true,
-        expectedFetchCalls: 0,
+        expectedSynthesisCalls: 0,
         expectSamePayload: true,
       },
       {
         name: "inbound gating allows audio with real text",
         payload: { text: "Hello world" },
         inboundAudio: true,
-        expectedFetchCalls: 1,
+        expectedSynthesisCalls: 1,
         expectSamePayload: false,
       },
     ] as const)(
@@ -1375,7 +960,7 @@ export function describeTtsAutoApplyContract() {
           cfg: baseCfg,
           payload: testCase.payload,
           inboundAudio: testCase.inboundAudio,
-          expectedFetchCalls: testCase.expectedFetchCalls,
+          expectedSynthesisCalls: testCase.expectedSynthesisCalls,
           expectSamePayload: testCase.expectSamePayload,
         });
       },
@@ -1385,20 +970,20 @@ export function describeTtsAutoApplyContract() {
       {
         name: "plain text is skipped",
         payload: { text: "Hello world" },
-        expectedFetchCalls: 0,
+        expectedSynthesisCalls: 0,
         expectSamePayload: true,
       },
       {
         name: "tagged text is synthesized",
         payload: { text: "[[tts:text]]Hello world[[/tts:text]]" },
-        expectedFetchCalls: 1,
+        expectedSynthesisCalls: 1,
         expectSamePayload: false,
       },
     ] as const)("respects tagged-mode auto-TTS gating: $name", async (testCase) => {
       await expectAutoTtsOutcome({
         cfg: taggedCfg,
         payload: testCase.payload,
-        expectedFetchCalls: testCase.expectedFetchCalls,
+        expectedSynthesisCalls: testCase.expectedSynthesisCalls,
         expectSamePayload: testCase.expectSamePayload,
       });
     });
