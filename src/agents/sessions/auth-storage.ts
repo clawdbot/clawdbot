@@ -17,20 +17,13 @@ import type {
   OAuthProviderId,
 } from "../../llm/utils/oauth/types.js";
 import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-runtime.errors.js";
-import {
-  AUTH_STORE_VERSION,
-  OAUTH_REFRESH_CALL_TIMEOUT_MS,
-  OAUTH_REFRESH_LOCK_OPTIONS,
-} from "../auth-profiles/constants.js";
+import { AUTH_STORE_VERSION, OAUTH_REFRESH_LOCK_OPTIONS } from "../auth-profiles/constants.js";
 import {
   assertAuthProfileMigrationReady,
   AuthProfileMigrationRequiredError,
   AuthProfileStoreUnreadableError,
 } from "../auth-profiles/legacy-source-diagnostic.js";
-import {
-  normalizeOAuthRefreshCredential,
-  refreshSerializedOAuthCredential,
-} from "../auth-profiles/oauth-refresh-fence.js";
+import { normalizeOAuthRefreshCredential } from "../auth-profiles/oauth-refresh-fence.js";
 import {
   isOAuthRefreshFence,
   isPendingOAuthRefreshFence,
@@ -52,7 +45,10 @@ import {
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { getAgentDir } from "../config.js";
 import {
-  canResolveAuthStoragePluginOAuthRefresh,
+  isAuthStorageOAuthRefreshFence,
+  refreshAuthStorageOAuthCredential,
+} from "./auth-storage-oauth-refresh.js";
+import {
   getAuthStorageOAuthProviderRegistry,
   loginAuthStorageOAuthProvider,
   resolveAuthStoragePluginOAuthCredential,
@@ -118,16 +114,6 @@ function assertDeprecatedAuthStoragePathAbsent(authPath: string | undefined): vo
   if (authPath && fs.existsSync(authPath)) {
     throw new AuthStorageLegacyPathMigrationRequiredError();
   }
-}
-
-function isAuthStorageOAuthRefreshFence(
-  provider: string,
-  credential: AuthCredential | undefined,
-): boolean {
-  return (
-    credential?.type === "oauth" &&
-    isOAuthRefreshFence(normalizeOAuthRefreshCredential(credential, provider))
-  );
 }
 
 export type AuthStatus = {
@@ -733,76 +719,21 @@ export class AuthStorage {
   private async refreshOAuthTokenWithLock(
     providerId: OAuthProviderId,
   ): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
-    const provider = getAuthStorageOAuthProviderRegistry(this).get(providerId);
-    const result = await refreshSerializedOAuthCredential({
-      backend: this.storage,
-      profileId: `${providerId}:default`,
-      label: `AuthStorage.refresh(${providerId})`,
-      timeoutMs: OAUTH_REFRESH_CALL_TIMEOUT_MS,
+    const result = await refreshAuthStorageOAuthCredential({
+      authStorage: this,
+      storage: this.storage,
+      providerId,
       parse: (current) => this.parseStorageData(current),
-      serialize: (data) => JSON.stringify(data, null, 2),
-      readCredential: (data) => {
-        const credential = data[providerId];
-        return normalizeOAuthRefreshCredential(
-          credential?.type === "oauth" ? credential : undefined,
-          providerId,
-        );
-      },
-      writeCredential: (data, credential) => ({ ...data, [providerId]: credential }),
-      canRefresh: async () =>
-        Boolean(provider) || (await canResolveAuthStoragePluginOAuthRefresh(providerId)),
       commit: (data) => {
         this.data = data;
         this.loadError = null;
-      },
-      refresh: async (credential, data) => {
-        const oauthCreds = Object.fromEntries(
-          Object.entries(data).filter((entry): entry is [string, OAuthCredential] => {
-            return entry[1].type === "oauth";
-          }),
-        );
-        const refreshed = provider
-          ? await getAuthStorageOAuthProviderRegistry(this).getApiKey(providerId, oauthCreds)
-          : await resolveAuthStoragePluginOAuthCredential(providerId, credential, true);
-        return refreshed
-          ? {
-              apiKey: refreshed.apiKey,
-              credential: {
-                ...credential,
-                ...refreshed.newCredentials,
-                type: "oauth",
-                provider: credential.provider,
-              },
-            }
-          : null;
-      },
-      resolve: async (credential) => {
-        if (provider) {
-          return { apiKey: provider.getApiKey(credential), credential };
-        }
-        const resolved = await resolveAuthStoragePluginOAuthCredential(
-          providerId,
-          credential,
-          false,
-        );
-        return resolved
-          ? {
-              apiKey: resolved.apiKey,
-              credential: {
-                ...credential,
-                ...resolved.newCredentials,
-                type: "oauth",
-                provider: credential.provider,
-              },
-            }
-          : null;
       },
     });
     if (!result) {
       this.reload();
       return null;
     }
-    return { apiKey: result.apiKey, newCredentials: result.credential };
+    return result;
   }
 
   /**
