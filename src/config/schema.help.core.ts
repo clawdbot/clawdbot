@@ -2,7 +2,7 @@
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
 import { CLOUD_WORKER_FIELD_HELP } from "./zod-schema.cloud-workers.js";
 import { DESKTOP_FIELD_HELP } from "./zod-schema.desktop.js";
-import { projectTelemetryFieldMetadata } from "./zod-schema.telemetry.js";
+import { TELEMETRY_FIELD_HELP } from "./zod-schema.telemetry.js";
 
 export const CORE_FIELD_HELP: Record<string, string> = {
   worktreeRoot:
@@ -48,8 +48,6 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "wizard.lastRunCommit": "Source commit used by the last development wizard run.",
   "wizard.lastRunCommand": "Command that invoked the last wizard run.",
   "wizard.lastRunMode": 'Whether the last wizard run targeted "local" or "remote" setup.',
-  "wizard.localModelLeanAutoModel":
-    "Model reference whose lean-mode setting remains owned by onboarding.",
   "wizard.securityAcknowledgedAt":
     "Timestamp of the setup security acknowledgement, committed with the target config.",
   "logging.audit":
@@ -88,7 +86,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Enable background auto-update for stable and beta package installs; extended-stable never auto-applies (default: false).",
   telemetry:
     "Explicit consent for anonymous feature statistics attached to the daily update check. Feature statistics are disabled by default and never include messages, credentials, or identifiers.",
-  ...projectTelemetryFieldMetadata("help"),
+  ...TELEMETRY_FIELD_HELP,
   cloudWorkers:
     "Opt-in cloud worker profiles for disposable remote environments. When this section is omitted or has no profiles, cloud worker creation remains unavailable and existing gateway/node status behavior is unchanged.",
   ...CLOUD_WORKER_FIELD_HELP,
@@ -108,9 +106,9 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.controlUi.enabled":
     "Enables serving the gateway Control UI from the gateway HTTP process when true. Keep enabled for local administration, and disable when an external control surface replaces it.",
   "gateway.cliAgents":
-    "Experimental Control UI discovery for external CLI session engines exposed by the Gateway session catalog. Keep disabled unless operators should be able to start those engines from the new-session model picker.",
+    "Experimental Control UI discovery for external CLI session engines exposed by the Gateway session catalog. Enabled by default; disable to prevent starting those engines from the new-session model picker.",
   "gateway.cliAgents.enabled":
-    "Shows catalog-backed CLI agents in the Control UI new-session model picker when true (default: false). Only catalogs that advertise session creation are listed, and the picker stays hidden when the Gateway does not advertise session catalog support.",
+    "Shows catalog-backed CLI agents in the Control UI new-session model picker when true (default: true). Set false to disable CLI agents and native CLI session creation. Only catalogs that advertise session creation are listed, and the picker stays hidden when the Gateway does not advertise session catalog support.",
   "gateway.terminal":
     "Operator terminal served to Control UI and mobile clients: a PTY-backed shell on the gateway host, restricted to admin-scope operator sessions. It starts in the target agent's workspace and is refused for fully-sandboxed agents (sandbox.mode 'all') rather than handing back an unconfined host shell.",
   "gateway.terminal.enabled":
@@ -132,11 +130,11 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.auth.trustedProxy":
     "Trusted-proxy auth header mapping for upstream identity providers that inject user claims. Use only with known proxy CIDRs and strict header allowlists to prevent spoofed identity headers.",
   "gateway.auth.trustedProxy.deviceAutoApprove":
-    "Optional policy for automatically approving new browser operator devices and same-key scope upgrades after trusted-proxy authentication. Grants are capped by deviceAutoApprove.scopes and the proxy's x-openclaw-scopes header when present.",
+    "Optional policy for automatically approving new browser and native UI operator devices and same-key scope upgrades after trusted-proxy authentication. Grants are capped by deviceAutoApprove.scopes and the proxy's x-openclaw-scopes header when present.",
   "gateway.auth.trustedProxy.deviceAutoApprove.enabled":
-    "Automatically approves new browser operator devices and same-key scope upgrades after the reverse proxy authenticates an allowed user. Default: false. Enable only when the proxy identity boundary is strong enough to replace manual device pairing.",
+    "Automatically approves new browser and native UI operator devices and same-key scope upgrades after the reverse proxy authenticates an allowed user. Default: false. Enable only when the proxy identity boundary is strong enough to replace manual device pairing.",
   "gateway.auth.trustedProxy.deviceAutoApprove.scopes":
-    "Maximum scopes granted to auto-approved browser devices. Defaults to operator.read, operator.write, operator.approvals, and operator.questions. Requested scopes are capped to this list; requests without scopes receive this list. When unset, auto-approval also adds operator.questions for older browser clients; an explicit list is never widened. Explicitly listing operator.admin lets every proxy-authenticated user auto-approve full admin and makes scope-less requests receive full admin automatically; it also triggers a critical security audit finding and Gateway startup warning.",
+    "Maximum scopes granted to auto-approved operator devices. Defaults to operator.read, operator.write, operator.approvals, and operator.questions. Requested scopes are capped to this list; requests without scopes receive this list. When unset, auto-approval also adds operator.questions for older UI clients; an explicit list is never widened. Explicitly listing operator.admin lets every proxy-authenticated user auto-approve full admin and makes scope-less requests receive full admin automatically; it also triggers a critical security audit finding and Gateway startup warning.",
   "gateway.roles":
     "Optional profile-bound operator roles for team Gateways. Each named role controls access to other people's sessions, sandbox isolation, session and run agents, and granted operator scopes; omitting this section preserves existing operator behavior.",
   "gateway.roles.default":

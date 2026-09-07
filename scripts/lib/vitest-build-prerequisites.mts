@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { matchesVitestCliSelection } from "../../test/vitest/vitest.pattern-file.ts";
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
 import { runManagedCommand } from "./managed-child-process.mts";
 import { resolveRepoRoot } from "./repo-root.mjs";
@@ -12,13 +11,17 @@ const VITEST_PRETEST_BUILD_MODES = ["private-qa", "runtime"] as const;
 export type VitestPretestBuildMode = (typeof VITEST_PRETEST_BUILD_MODES)[number];
 type SetupCommandRunner = (args: string[], env: NodeJS.ProcessEnv) => Promise<number>;
 
-type TestSelection = {
+export type VitestRuntimeTestSelection = {
   configs?: readonly string[];
   includePatterns?: readonly string[] | null;
-  cli?: { args: string[]; dir: string; env: NodeJS.ProcessEnv };
+  matchesFile?: (
+    file: string,
+    included: boolean,
+    includePatterns: readonly string[] | null | undefined,
+  ) => boolean;
 };
 
-// These process tests consume built runtime artifacts. Prepare their strongest
+// These tests consume built runtime artifacts. Prepare their strongest
 // prerequisite before admitting any workers: a child build invalidates dist
 // while unrelated workers may still be importing its public plugin facades.
 const runtimeConsumers = [
@@ -34,17 +37,34 @@ const runtimeConsumers = [
     mode: "private-qa",
     dir: "extensions",
   },
-  ...["src/cli/acp-cli-exit.process.test.ts", "src/cli/update-dry-run-state.process.test.ts"].map(
-    (file) => ({
-      file,
-      configs: ["test/vitest/vitest.cli-process.config.ts"],
-      mode: "runtime" as const,
-      dir: "",
-    }),
-  ),
+  ...[
+    "src/cli/acp-cli-exit.process.test.ts",
+    "src/cli/update-dry-run-state.process.test.ts",
+    "src/cli/update-cli/update-command-migrated.test.ts",
+    "src/cli/update-cli/update-command-rollback.test.ts",
+    "src/cli/update-cli/update-command-post-update-recovery.test.ts",
+    "src/cli/update-cli/update-command-post-update-repair.test.ts",
+    "src/cli/update-cli/update-command-service.integration.test.ts",
+  ].map((file) => ({
+    file,
+    configs: ["test/vitest/vitest.cli-process.config.ts"],
+    mode: "runtime" as const,
+    dir: "",
+  })),
+  ...[
+    "src/infra/update-candidate-canary.integration.test.ts",
+    "src/infra/update-managed-service-handoff-lifecycle.test.ts",
+  ].map((file) => ({
+    file,
+    configs: ["test/vitest/vitest.infra.config.ts"],
+    mode: "runtime" as const,
+    dir: "src",
+  })),
   ...[
     "src/commands/doctor-config-preflight.process.test.ts",
+    "src/commands/doctor-config-preflight.refusal.process.test.ts",
     "src/commands/doctor-config-preflight.v17-atomicity.process.test.ts",
+    "src/commands/doctor-plugin-install-config.process.test.ts",
   ].map((file) => ({
     file,
     configs: ["test/vitest/vitest.commands.config.ts"],
@@ -52,24 +72,35 @@ const runtimeConsumers = [
     dir: "src/commands",
   })),
   {
+    file: "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts",
+    configs: ["test/vitest/vitest.tooling.config.ts"],
+    mode: "private-qa",
+    dir: "",
+  },
+  {
     file: "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
     configs: ["test/vitest/vitest.tooling.config.ts"],
     mode: "runtime",
     dir: "",
   },
-  {
-    file: "src/gateway/server.config-patch.test.ts",
+  ...[
+    "src/gateway/server-sidecar-retention.test.ts",
+    "src/gateway/server.config-patch.test.ts",
+  ].map((file) => ({
+    file,
     configs: [
       "test/vitest/vitest.gateway-server.config.ts",
       "test/vitest/vitest.gateway.config.ts",
     ],
-    mode: "runtime",
+    mode: "runtime" as const,
     dir: "src/gateway",
-  },
+  })),
   ...[
     "src/gateway/gateway-active-memory.test.ts",
+    "src/gateway/gateway-auth-rewarm.test.ts",
     "src/gateway/gateway-concurrent-streams.test.ts",
     "src/gateway/gateway-cron-process-identity.windows.test.ts",
+    "src/gateway/gateway-route-model-reuse.test.ts",
   ].map((file) => ({
     file,
     configs: ["test/vitest/vitest.gateway-core.config.ts", "test/vitest/vitest.gateway.config.ts"],
@@ -90,16 +121,12 @@ function includesRuntimeConfig(configs: readonly string[] | undefined, config: s
   );
 }
 
-export function resolveVitestRuntimeCliSelections(
-  config: string,
-  args: string[],
-  env: NodeJS.ProcessEnv,
-): TestSelection[] {
+export function resolveVitestRuntimeConfigScopes(config: string) {
   return runtimeConsumers.flatMap(({ configs, dir }) => {
     // Preserve the matched project scope; broad roots must not apply another
     // consumer's directory to scoped exclusions.
     const selected = configs.filter((candidate) => includesRuntimeConfig([config], candidate));
-    return selected.length ? [{ configs: selected, cli: { args, dir, env } }] : [];
+    return selected.length ? [{ configs: selected, dir }] : [];
   });
 }
 
@@ -124,27 +151,31 @@ export function mergeVitestPretestBuildModes(
 }
 
 export function resolveVitestPretestBuildMode(
-  selections: readonly TestSelection[],
+  selections: readonly VitestRuntimeTestSelection[],
 ): VitestPretestBuildMode | undefined {
+  const preparedSelections = selections.map((selection) => {
+    const includedFiles = new Set<string>();
+    // Keep each pattern hot in Node's bounded glob cache across the small consumer list.
+    // Consumer-first traversal recompiles large include inventories for every file.
+    for (const pattern of selection.includePatterns ?? []) {
+      for (const { file } of runtimeConsumers) {
+        if (!includedFiles.has(file) && path.matchesGlob(file, pattern)) {
+          includedFiles.add(file);
+        }
+      }
+    }
+    return { ...selection, includedFiles };
+  });
   return mergeVitestPretestBuildModes(
     runtimeConsumers
       .filter(({ file, configs: consumerConfigs }) =>
-        selections.some(({ configs, includePatterns, cli }) => {
+        preparedSelections.some(({ configs, includePatterns, matchesFile, includedFiles }) => {
           const included = includePatterns
-            ? includePatterns.some((pattern) => path.matchesGlob(file, pattern))
+            ? includedFiles.has(file)
             : consumerConfigs.some((config) => includesRuntimeConfig(configs, config));
           // Only project the canonical consumers; config loading and test discovery
           // stay with Vitest. Include-file overrides still intersect emitted filters.
-          return cli
-            ? matchesVitestCliSelection(
-                file,
-                included ? [file] : [],
-                cli.args,
-                cli.dir,
-                cli.env,
-                includePatterns,
-              )
-            : included;
+          return matchesFile ? matchesFile(file, included, includePatterns) : included;
         }),
       )
       .map(({ mode }) => mode),
@@ -152,7 +183,7 @@ export function resolveVitestPretestBuildMode(
 }
 
 export async function prepareVitestRuntime(
-  selections: readonly TestSelection[],
+  selections: readonly VitestRuntimeTestSelection[],
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<number> {
   const mode = resolveVitestPretestBuildMode(selections);

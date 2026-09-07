@@ -24,11 +24,11 @@ export function formatStatusSummary(summary: GatewayStatusSummary) {
     lines.push(`${linkLabel}: ${linked ? "linked" : "not linked"}${authAge}`);
   }
 
-  const providerSummary = Array.isArray(summary.providerSummary) ? summary.providerSummary : [];
-  if (providerSummary.length > 0) {
+  const channelSummary = Array.isArray(summary.channelSummary) ? summary.channelSummary : [];
+  if (channelSummary.length > 0) {
     lines.push("");
     lines.push("System:");
-    for (const line of providerSummary) {
+    for (const line of channelSummary) {
       lines.push(`  ${line}`);
     }
   }

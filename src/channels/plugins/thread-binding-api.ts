@@ -4,7 +4,7 @@
  * Reads lightweight thread placement and inbound conversation hooks without full plugin loading.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
+import { loadOptionalBundledChannelPublicArtifact } from "./optional-public-artifact.js";
 
 type ThreadBindingPlacement = "current" | "child";
 
@@ -29,24 +29,11 @@ type ThreadBindingApi = {
   ) => ThreadBindingConversationRef | null;
 };
 
-const THREAD_BINDING_API_ARTIFACT_BASENAME = "thread-binding-api.js";
-const MISSING_PUBLIC_SURFACE_PREFIX = "Unable to resolve bundled plugin public surface ";
-
 function loadBundledChannelThreadBindingApi(channelId: string): ThreadBindingApi | undefined {
-  const cacheKey = channelId.trim();
-  try {
-    return loadBundledPluginPublicArtifactModuleSync<ThreadBindingApi>({
-      dirName: cacheKey,
-      artifactBasename: THREAD_BINDING_API_ARTIFACT_BASENAME,
-    });
-  } catch (error) {
-    // Missing artifacts are optional; broken artifacts should surface so
-    // bundled thread-binding contracts do not fail silently.
-    if (error instanceof Error && error.message.startsWith(MISSING_PUBLIC_SURFACE_PREFIX)) {
-      return undefined;
-    }
-    throw error;
-  }
+  return loadOptionalBundledChannelPublicArtifact({
+    channelId,
+    artifactBasename: "thread-binding-api.js",
+  });
 }
 
 function normalizeThreadBindingPlacement(value: unknown): ThreadBindingPlacement | undefined {

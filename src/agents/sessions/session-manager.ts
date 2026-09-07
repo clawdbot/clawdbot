@@ -15,13 +15,16 @@ import {
   readSessionTranscriptContextMessages,
   readSessionTranscriptModelContext,
   validateSessionTranscriptContextAdmission,
+  validateSessionTranscriptContextAnchor,
   validateSessionTranscriptContextVersion,
 } from "../../config/sessions/session-accessor.sqlite-model-context.js";
+import { assertCurrentSessionTranscriptHeader } from "../../config/sessions/session-entry-codec.js";
 import { readSessionTranscriptModelContextAsync } from "../../config/sessions/session-model-context-worker-runtime.js";
 import {
   resolveSessionTranscriptReadFence,
   withSessionContextAdmission,
 } from "../../config/sessions/session-transcript-read-fence.js";
+import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { Message } from "../../llm/types.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
@@ -133,16 +136,30 @@ export class SessionManager extends SessionManagerBranching {
     });
   }
 
+  /** Consumes a fresh bounded read as a detached branch, without copying its owned payloads. */
+  static openDetachedBounded(
+    target: SessionTranscriptRuntimeTarget,
+    options: Parameters<typeof SessionManager.openBounded>[1],
+  ): SessionManager {
+    const source = SessionManager.openBounded(target, options);
+    // Normalize opaque parents and retained cuts before discarding persistence and bounded state.
+    return SessionManager.fromOwnedEntries(
+      [source.getHeader(), ...source.getBranch()],
+      source.getCwd(),
+    );
+  }
+
   /** Detached model view: selected payloads plus lightweight ancestry, never raw replay evidence. */
   static openModelContext(
     target: SessionTranscriptRuntimeTarget,
     options: {
       cwd?: string;
       admission?: UserTurnTranscriptAdmissionReceipt;
+      through?: TranscriptEntryAnchor;
     } = {},
   ): SessionManager {
     const context = withSessionContextAdmission(target, options.admission, () =>
-      readSessionTranscriptModelContext(target),
+      readSessionTranscriptModelContext(target, options.through),
     );
     return SessionManager.fromModelContextEntries(context.events, options.cwd);
   }
@@ -154,21 +171,26 @@ export class SessionManager extends SessionManagerBranching {
       cwd?: string;
       admission?: UserTurnTranscriptAdmissionReceipt;
       signal?: AbortSignal;
+      through?: TranscriptEntryAnchor;
     } = {},
   ): Promise<SessionManager> {
     const readTarget = { ...target };
     const receipt = options.admission ?? resolveSessionTranscriptReadFence(readTarget);
     const admission = receipt ? { ...receipt } : undefined;
+    const through = options.through ? { ...options.through } : undefined;
     const context = await withSessionContextAdmission(readTarget, admission, () =>
-      readSessionTranscriptModelContextAsync(readTarget, admission, options.signal),
+      readSessionTranscriptModelContextAsync(readTarget, admission, options.signal, through),
     );
     options.signal?.throwIfAborted();
     // Even process-local reads yield here. Admitted history may exclude later
     // appends; unadmitted context must still match the snapshot being accepted.
     if (admission) {
       validateSessionTranscriptContextAdmission(readTarget, admission);
-    } else {
+    } else if (!through) {
       validateSessionTranscriptContextVersion(readTarget, context.version);
+    }
+    if (through) {
+      validateSessionTranscriptContextAnchor(readTarget, through);
     }
     return SessionManager.fromModelContextEntries(context.events, options.cwd);
   }
@@ -177,10 +199,8 @@ export class SessionManager extends SessionManagerBranching {
     // SAFETY: The transcript owner preserves the entry union; the constructor applies the normal codec.
     const entries = contextEntries as FileEntry[];
     const header = entries.find((entry) => entry.type === "session");
-    if (entries.length > 0 && (!header || (header.version ?? 1) < CURRENT_SESSION_VERSION)) {
-      throw new Error(
-        "Persisted legacy session transcripts require doctor/import migration before runtime use",
-      );
+    if (entries.length > 0) {
+      assertCurrentSessionTranscriptHeader(header);
     }
     return new SessionManager(cwd ?? header?.cwd ?? process.cwd(), undefined, entries);
   }
@@ -222,7 +242,14 @@ export class SessionManager extends SessionManagerBranching {
   }
 
   static fromEntries(entries: readonly unknown[], cwdOverride?: string): SessionManager {
-    const fileEntries = structuredClone(entries) as FileEntry[];
+    return SessionManager.fromOwnedEntries(structuredClone(entries), cwdOverride);
+  }
+
+  private static fromOwnedEntries(
+    entries: readonly unknown[],
+    cwdOverride?: string,
+  ): SessionManager {
+    const fileEntries = entries as FileEntry[];
     const header = fileEntries.find(
       (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
     );

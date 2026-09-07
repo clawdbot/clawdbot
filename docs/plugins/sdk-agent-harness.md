@@ -95,10 +95,10 @@ native session's model and connection.
 ### Bound native session ownership
 
 The optional `resolveSessionRuntimeOwnership({ config, agentId, sessionId,
-sessionKey, assertCurrent })` callback reports private binding ownership. Core
-calls it only on the exact pinned harness after validating the durable session
-identity. `sessionId` and `assertCurrent` are required; `config`, `agentId`, and
-`sessionKey` are optional. Return synchronously:
+sessionKey, storePath, readPreviousSessionId, assertCurrent })` callback reports
+private binding ownership. Core calls it only on the exact pinned harness after
+validating the durable session identity. `sessionId` and `assertCurrent` are
+required; the remaining parameters are optional. Return synchronously:
 
 - `{ model: "native", auth: "native" }` when the binding owns both model selection
   and authentication through its native connection.
@@ -124,6 +124,15 @@ Read the existing private binding synchronously. Call `assertCurrent()` before
 and after the read. Do not discover models, reclaim a generation, start a client,
 authenticate, or mutate the binding. The assertion expires when the callback
 returns. This ownership fact is neither execution authority nor credential readiness.
+
+If the current binding is absent, `readPreviousSessionId?.()` reads the latest
+predecessor for this exact physical session from the caller-selected store. It
+returns `undefined` when the row is missing or has been replaced. It takes no
+arguments and expires when the ownership callback returns. Use it only on a
+binding miss, rather than loading the general session runtime or carrying a
+lineage snapshot across awaited preparation; a current binding needs no lineage
+read. The predecessor identifies a binding to inspect, not permission to reclaim
+or execute it.
 
 The Codex implementation reports native model ownership from `preserveNativeModel`.
 It reports native auth only for the separate private supervision connection;
@@ -196,6 +205,13 @@ native harnesses:
 Harnesses may use the plan for decisions that need to match OpenClaw behavior,
 but treat it as host-owned attempt state: do not mutate it or use it to switch
 providers/models inside a turn.
+
+For model-visible reply policy, `buildHarnessVisibleReplyGuidance` from
+`openclaw/plugin-sdk/agent-harness-runtime` accepts the prepared delivery mode,
+actual message-tool availability, and resolved `requireExplicitMessageTarget`
+fact. Supply these facts for each turn. Harnesses with a separate static prompt
+can use the same seam's `buildUiPresentationPrompt` for stable UI guidance,
+leaving delivery and target instructions in late context.
 
 For auxiliary session control calls, `resolveSessionModelRef` from
 `openclaw/plugin-sdk/model-session-runtime` resolves the current model selection.
@@ -306,6 +322,10 @@ deadline controls, and one prepared `authorization`:
 - `owner: "harness"` contains the prepared runtime auth plan and a credential
   snapshot restricted to the single profile selected for that call. Core owns
   automatic fallback order and invokes the harness separately for each candidate.
+
+Each new isolated completion uses the configuration and agent/workspace directories
+of its admitted runtime generation. Explicit model, auth-profile, and runtime
+selections remain fixed while that generation is prepared.
 
 Host-authorized calls must use the supplied model and credential without substitution.
 Bundled host-authorized harnesses share one host-prepared completion helper that
@@ -494,6 +514,11 @@ enforce the assertion, leave V2 unsupported.
 
 The V1 `messageInjection`, queue options, `queueAgentHarnessMessage`, and
 `setActiveEmbeddedRun` signatures shipped in v2026.8.1 remain source-compatible.
+Pass the resolved agent ID as the fifth `setActiveEmbeddedRun` argument so raw
+`global` and `unknown` keys retain their owner. Legacy calls inside a matching
+live host binding inherit its validated agent; an ambient caller alone does not
+supply ownership. Outside that binding, omitted ownership uses the qualified
+session key or the configured default agent for session activity.
 Unscoped V1 injection retains its existing behavior. Source-bound controls
 require V2 and reject visibly before queue or I/O when only V1 is available;
 they never fall back to an unchecked V1 callback. Existing deprecation windows
@@ -697,6 +722,12 @@ binds the host-resolved run, sandbox, requester, route, and approval identity;
 plugins must not reconstruct those fields or retain the capability after the
 attempt returns. Calls made after attempt settlement fail closed.
 
+For native-history recovery, optional `prepareContextMedia({ message, maxChars })`
+reconstructs saved user attachments under that same host authority and current
+media policy. Include its returned text and images in the native context budget;
+do not append them as an unbounded suffix. See the
+[runtime media contract](/plugins/sdk-runtime) for limits and older-host behavior.
+
 When trajectory capture has a valid host-owned session target,
 `params.hostCapabilities.trajectory` provides closure-bound `recordEvent(...)`
 and `flush()` operations. The host adds session attribution, bounds and redacts
@@ -810,6 +841,18 @@ server names with `assignMcpCatalogSafeServerNames(...)`, and retain tools
 hidden only by a session denial in `sessionDeniedTools`. Core still applies the
 final OpenClaw tool policy and schema compatibility checks before exposing the
 rows.
+
+`SessionMcpRuntime` implementations used by materialized tool views should
+provide `joinCleanup()`. It waits for cleanup already requested from that exact
+runtime, including unpublished or retiring servers, and rejects if any owned
+cleanup failed or could not be confirmed. It must preserve that failure for
+later callers without closing transports still leased by another run. A fulfilled
+best-effort `dispose()` alone is not cleanup evidence.
+
+The method is optional for existing SDK implementations; automatic one-shot
+recovery treats a missing method as uncertain cleanup. A native facade that owns
+no transport may resolve immediately when its enclosing runtime separately owns
+and verifies the process lifetime.
 
 Harnesses that forward embedded attempt params should pass
 `skillWorkshopProposalOnly` through. Proposal-only skill-workshop runs are
@@ -1008,6 +1051,9 @@ Report facts from the execution boundary:
 
 - Pass the protocol call id when one exists, the canonical tool name, and the
   arguments that actually reached the tool after preparation or hook rewrites.
+- Pass the original host tool result or thrown error as `result`. Core reads
+  private effect provenance from that object; serialized fields cannot provide
+  this proof. Preserve internal result state when projecting a host result.
 - Set `executionStarted: false` when validation, approval, or another guard
   stopped the call before the tool implementation began. Once dispatch may
   have happened, report `true` conservatively.

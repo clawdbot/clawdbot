@@ -64,24 +64,27 @@ describe("worker placement dispatch reclaim", () => {
     if (provisioning?.state !== "provisioning") {
       throw new Error("expected in-flight provisioning owner");
     }
-    const reclaiming = coordinated.reclaim(REQUEST);
-    const outcome = reclaiming.catch((error: unknown) => error);
+    const outcome = coordinated.reclaim(REQUEST).catch((error: unknown) => error);
     const olderRecovery = coordinated.resumeProvisioning(provisioning, async () => {});
     // The environment service joins the pass already waiting behind reclaim.
     vi.mocked(harness.environments.reconcileOnce).mockImplementationOnce(async () => {
       await olderRecovery;
     });
     releaseProvision.resolve();
-    await dispatching;
-    expect(await outcome).toEqual(new Error("destroy pending"));
-    await olderRecovery;
-    expect(placementStore.get(REQUEST.sessionId)?.state).toBe("draining");
-    expect(placementStore.listPendingWorkspaceResults()).toEqual([
-      expect.objectContaining({ workspaceAcceptedAtMs: expect.any(Number) }),
-    ]);
-    expect(harness.log.filter((event) => event === "workspace:reconcile")).toHaveLength(1);
+    try {
+      await dispatching;
+      expect(await outcome).toEqual(new Error("destroy pending"));
+      await olderRecovery;
+      expect(placementStore.get(REQUEST.sessionId)?.state).toBe("draining");
+      expect(placementStore.listPendingWorkspaceResults()).toEqual([
+        expect.objectContaining({ workspaceAcceptedAtMs: expect.any(Number) }),
+      ]);
+      expect(harness.log.filter((event) => event === "workspace:reconcile")).toHaveLength(1);
 
-    expect(harness.environments.destroy).toHaveBeenCalledOnce();
+      expect(harness.environments.destroy).toHaveBeenCalledOnce();
+    } finally {
+      await Promise.allSettled([dispatching, outcome, olderRecovery]);
+    }
   });
 
   it("keeps the accepted placement draining when provider destruction is not proven", async () => {
@@ -91,13 +94,7 @@ describe("worker placement dispatch reclaim", () => {
     });
     await harness.service.dispatch(REQUEST);
 
-    await expect(
-      harness.service.reclaim({
-        sessionId: REQUEST.sessionId,
-        sessionKey: REQUEST.sessionKey,
-        agentId: REQUEST.agentId,
-      }),
-    ).rejects.toThrow("destroy pending");
+    await expect(harness.service.reclaim(REQUEST)).rejects.toThrow("destroy pending");
 
     expect(placementStore.listPendingWorkspaceResults()).toEqual([
       expect.objectContaining({ workspaceAcceptedAtMs: expect.any(Number) }),
@@ -820,7 +817,7 @@ describe("worker placement dispatch reclaim", () => {
         const placement = begin();
         return placement.state === "reclaimed"
           ? placement
-          : await reclaim("/gateway/workspace", placement, authorize);
+          : await reclaim({ kind: "local", path: "/gateway/workspace" }, placement, authorize);
       },
     });
     const active = await harness.service.dispatch(REQUEST);
@@ -1041,7 +1038,7 @@ describe("worker placement dispatch reclaim", () => {
             const placement = begin();
             return placement.state === "reclaimed"
               ? placement
-              : await reclaim(root, placement, authorize);
+              : await reclaim({ kind: "local", path: root }, placement, authorize);
           },
         });
       },

@@ -22,6 +22,35 @@ plugin supports.
   [Provider Plugins](/plugins/sdk-provider-plugins) for step-by-step guides.
 </Tip>
 
+## Tool policy vocabulary
+
+`openclaw/plugin-sdk/agent-harness-runtime` exposes core's synchronous policy
+primitives through `toolPolicy`:
+
+- `toolPolicy.expandToolGroups(list?)` normalizes tool aliases, drops blank entries, expands
+  core groups, and returns unique tool ids in first-seen order. Members of each
+  expanded group follow that group's catalog order.
+- `toolPolicy.createToolPolicyMatcher(policy?, writeAllowsApplyPatch = true)` returns a
+  matcher for tool names. Deny entries win, an empty allow list is unrestricted,
+  and `*` patterns and aliases use core normalization. Set the second argument
+  to `false` to disable the runtime compatibility where allowing `write` also
+  allows `apply_patch`.
+
+For conformance coverage, negate a matcher built with `{ deny: entries }`;
+this keeps an empty coverage list false and avoids allow-side compatibility.
+Prepare matchers for one synchronous operation; do not retain an authorization
+decision across awaited work.
+
+## Sandbox bind parsing
+
+`openclaw/plugin-sdk/agent-harness-runtime` exports
+`splitSandboxBindSpec(spec, options?)`. It returns raw `{ host, container, options }`
+segments, or `null` when no host/container separator exists. Windows host drive
+prefixes are always preserved. Pass `{ allowWindowsContainerPath: true }` to
+preserve drive prefixes in container paths too, as Policy does for its existing
+Windows bind grammar. The default keeps POSIX container parsing unchanged.
+This helper splits text; it does not validate or authorize a mount.
+
 ## Package entries
 
 Installed plugins point `package.json` `openclaw` fields at both source and
@@ -174,6 +203,27 @@ export default definePluginEntry({
   `onHost(host)` callback as each host settles; the returned host array remains
   required as the final compatibility snapshot.
 
+  If a host can finish after `list` returns a fail-soft snapshot, register its
+  bounded completion with the optional `waitUntil(completion: Promise<void>)`
+  hook before `list` settles. Include host mapping and the `onHost` call in that
+  promise. Use `publishSessionCatalogHost({ onHost, waitUntil }, pendingHost)`
+  from the same SDK entry point to publish the host and register the complete
+  callback chain. Registration after `list` settles is rejected. Providers that
+  do not register completion work finish publishing when their `list` settles.
+
+  The optional `signal: AbortSignal` belongs to the catalog operation or provider
+  lifetime. Pass it to cancellable work, including the top-level `signal` field
+  of `api.runtime.nodes.invoke(...)`. A requesting client disconnect only removes
+  that client's subscription; it does not cancel shared discovery. Retaining
+  completion does not extend native invocation or fail-soft response deadlines,
+  grant new authority, or permit starting work after the owner retires. Providers
+  remain responsible for bounded work that settles after cancellation.
+
+  Keep `onHost`, `waitUntil`, and `signal` separate from validated catalog query
+  objects and node command payloads. The request-owned `sessionEntries` snapshot
+  and `listNodes` hook still must not be retained past `list`; prepare any facts
+  needed by late host mapping before returning.
+
   Transcript items may include a `sender` with a qualified `SessionParticipant`
   identity and optional display label or avatar. Supply only source-known
   attribution; the viewer and the session adopter are not transcript authors.
@@ -308,6 +358,35 @@ export default definePluginEntry({
   node's Gateway declaration. OpenClaw evaluates it against the node-local
   startup config; command handlers should still validate availability when
   invoked.
+
+### Native provider factories
+
+`registerSpeechProvider`, `registerRealtimeTranscriptionProvider`, and
+`registerRealtimeVoiceProvider` accept either a complete provider descriptor or
+a synchronous factory receiving `PluginCapabilityCatalogContext`:
+
+```typescript
+register(api) {
+  api.registerRealtimeTranscriptionProvider((context) =>
+    buildRealtimeTranscriptionProvider(context),
+  );
+}
+```
+
+Use the same plugin-owned factory for full registration and an optional
+capability catalog. The host supplies native auth, request, and transport
+operations; constructing a descriptor should not load execution SDK barrels,
+read credentials, or start sessions. Keep that work in the descriptor's methods.
+Factories must return synchronously; a thrown error or promise fails registration.
+
+Full registration can bind its own broker or logger in the factory closure.
+Do not substitute a catalog-only descriptor for one that requires those bindings.
+Full plugin registration still owns harnesses, hooks, services, and lifecycle
+callbacks; catalog entries alone do not establish runtime readiness.
+
+Object registrations remain supported. Before publishing a plugin that uses
+factory arguments, set its `compat.pluginApi` floor to a host release that
+supports them; a lower `minHostVersion` does not override that API requirement.
 
 ### Computer Use providers
 
@@ -590,3 +669,21 @@ Use `openclaw plugins inspect <id>` to see a plugin's shape.
 - [Setup and Config](/plugins/sdk-setup) - manifest and setup entry loading
 - [Channel Plugins](/plugins/sdk-channel-plugins) - building the `ChannelPlugin` object
 - [Provider Plugins](/plugins/sdk-provider-plugins) - provider registration and hooks
+
+## MCP subprocess runtime
+
+**Import:** `mcpStdioRuntime` from `openclaw/plugin-sdk/agent-harness-runtime` using dynamic `import()` when opening the connection. Call `await mcpStdioRuntime.load()` to obtain the shared client factory, transport, startup deadline, and disposal helpers. The object loads those implementations lazily.
+
+```ts
+const { mcpStdioRuntime } = await import("openclaw/plugin-sdk/agent-harness-runtime");
+const { createMcpStdioClient, OpenClawStdioClientTransport, connectMcpClient, disposeMcpClient } =
+  await mcpStdioRuntime.load();
+```
+
+Use this seam when a plugin owns an MCP proxy subprocess. `createMcpStdioClient()` creates a client backed by the MCP SDK's request correlation and deadlines. Its `connect(transport)` attaches the transport; the caller then performs initialization with `request(method, params, timeoutMs)` and sends notifications with `notification(method, params)`. Requests return an object result. `close()` closes the connection, and `isTimeout(error)` identifies an MCP request-timeout error. Initialization policy stays with the plugin; the SDK's experimental task and server-handler APIs are not exposed. Client and message types can be inferred from the returned factory and transport members.
+
+`OpenClawStdioClientTransport` owns the launched subprocess and its descendants. It accepts `command`, optional `args`, `cwd`, `env`, `prepareDataDir`, and `stderr`. By default it merges the MCP SDK's default environment with `env` and uses the SDK's bounded JSON-RPC decoder. `exactEnv: true` uses only the supplied environment. A custom decoder implements `append`, `readMessage`, and `clear`; it must enforce byte bounds before buffering and validate each returned JSON-RPC message.
+
+`onexit` receives the root process's `{ code, signal }`. It is separate from cleanup confirmation: `onclose` retires the connection, while `close()` joins owned-process cleanup. `retire()` closes input and retires RPC admission immediately; `terminate()` additionally sends TERM. Each operation retains cleanup ownership, and its returned promise still joins cleanup. `forceClose()` requests KILL. These methods own only the spawned process tree, never a separately started service reached through its socket.
+
+`connectMcpClient({ client, transport, timeoutMs, signal? })` applies one startup deadline around the client's connection operation. Keep transport startup and initialization inside that operation. The client's `connect` callback receives the composed abort signal in its request options; observe it to retire caller admission immediately while cleanup finishes. Always dispose the owned session with `disposeMcpClient({ client, transport, transportType: "stdio", detachStderr? })`; its result is `"closed"` or `"uncertain"`. Report uncertain cleanup instead of treating it as confirmed shutdown. Keep this runtime out of plugin registration and paths that do not open MCP connections.

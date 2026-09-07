@@ -21,10 +21,9 @@ import {
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
 import { writePersistedAuthProfileStateRaw, writePersistedAuthProfileStoreRaw } from "./sqlite.js";
+import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
 import {
-  ensureAuthProfileStore,
   findPersistedAuthProfileCredential,
-  saveAuthProfileStore,
   withAuthProfileStoreAgentDir,
   withEnvOnlyAuthProfileStore,
 } from "./store.js";

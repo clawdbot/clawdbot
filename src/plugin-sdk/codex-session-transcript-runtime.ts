@@ -28,6 +28,7 @@ export { resolveSessionTranscriptReadFence as captureCodexSessionTranscriptReadA
 export { validateSessionTranscriptContextAdmission as validateCodexSessionTranscriptReadAdmission } from "../config/sessions/session-accessor.sqlite-model-context.js";
 export { validateSessionTranscriptContextVersion as validateCodexSessionTranscriptContextVersion } from "../config/sessions/session-accessor.sqlite-model-context.js";
 export type { SessionTranscriptContextVersion } from "../config/sessions/session-accessor.sqlite-model-context.js";
+export { SessionTranscriptReadFenceError };
 
 /** The native evidence consumer remains lazy inside one readonly transcript snapshot. */
 export function readCodexSessionContext<T>(

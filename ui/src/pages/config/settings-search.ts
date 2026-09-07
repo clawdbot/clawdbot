@@ -5,7 +5,10 @@ import {
   type SettingsSearchBlock,
 } from "../../app-navigation.ts";
 import { pathForMemoryTab } from "../../app-route-paths.ts";
-import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
+import type {
+  NativeDeviceSettingsCapability,
+  NativeDeviceSettingsSnapshot,
+} from "../../app/native-device-settings.ts";
 import { SECTION_META } from "../../components/config-form.meta.ts";
 import {
   matchesConfigSectionSearch,
@@ -29,14 +32,26 @@ type StaticSettingsBlock = SettingsSearchBlock & {
 const STATIC_SETTINGS_BLOCKS: readonly SettingsSearchTarget[] =
   Object.values(SETTINGS_SEARCH_TARGETS);
 
-function resolveStaticSettingsBlock(block: SettingsSearchTarget): StaticSettingsBlock {
+function resolveStaticSettingsBlock(
+  block: SettingsSearchTarget,
+  snapshot: NativeDeviceSettingsSnapshot | null,
+): StaticSettingsBlock {
   const label = t(block.labelKey);
+  const nativeKeys = snapshot
+    ? Object.entries(block.nativeSearchKeys ?? {})
+        .filter(([, available]) => available(snapshot))
+        .map(([key]) => key)
+    : [];
   return {
     routeId: block.routeId,
     ...(block.search === undefined ? {} : { search: block.search }),
     hash: block.hash,
     label,
-    searchText: [label, ...block.searchKeys.map((key) => t(key)), block.aliases ?? ""].join(" "),
+    searchText: [
+      label,
+      ...[...block.searchKeys, ...nativeKeys].map((key) => t(key)),
+      block.aliases ?? "",
+    ].join(" "),
   };
 }
 
@@ -47,6 +62,17 @@ const CURATED_ROUTE_VISIBLE_KEYS: Partial<Record<string, () => readonly string[]
   memory: memoryVisibleSchemaKeys,
   updates: () => ["channel", "checkOnStart", "auto"],
 };
+
+const preparedSectionsBySchema = new WeakMap<
+  JsonSchema,
+  {
+    hints: ConfigUiHints;
+    sections: Map<
+      string,
+      { schema: JsonSchema; tiers: ReturnType<typeof splitConfigSchemaByTier> }
+    >;
+  }
+>();
 
 function visibleSectionSchema(routeId: string, sectionSchema: JsonSchema): JsonSchema {
   const visibleKeys = CURATED_ROUTE_VISIBLE_KEYS[routeId];
@@ -82,13 +108,16 @@ export function findSettingsSearchBlocks(params: {
       ? STATIC_SETTINGS_BLOCKS.filter(
           (block) =>
             (params.identityAvailable || !block.requiresIdentity) &&
+            (params.nativeDeviceSettings || !block.requiresNativeDeviceSettings) &&
             isSettingsNavigationRouteVisible(
               block.routeId,
               params.canAdmin !== false,
               params.nativeDeviceSettings,
             ),
         )
-          .map(resolveStaticSettingsBlock)
+          .map((block) =>
+            resolveStaticSettingsBlock(block, params.nativeDeviceSettings?.snapshot ?? null),
+          )
           .filter((block) => settingsSearchTextMatches(block.searchText, criteria.text))
       : [];
   const schema =
@@ -97,6 +126,13 @@ export function findSettingsSearchBlocks(params: {
       : null;
   if (!schema || schemaType(schema) !== "object" || !schema.properties) {
     return matches;
+  }
+  let prepared = preparedSectionsBySchema.get(schema);
+  // Schema responses replace both objects. Keep only the current hint revision;
+  // draft values, query text, locale, and route visibility are evaluated below.
+  if (!prepared || prepared.hints !== params.uiHints) {
+    prepared = { hints: params.uiHints, sections: new Map() };
+    preparedSectionsBySchema.set(schema, prepared);
   }
   const value = params.value ?? {};
   for (const [key, rawSectionSchema] of Object.entries(schema.properties)) {
@@ -110,16 +146,24 @@ export function findSettingsSearchBlocks(params: {
     ) {
       continue;
     }
-    const sectionSchema =
-      key === "wizard"
-        ? setupVisibleSchema(rawSectionSchema)
-        : visibleSectionSchema(routeId, rawSectionSchema);
+    let section = prepared.sections.get(key);
+    if (!section) {
+      const sectionSchema =
+        key === "wizard"
+          ? setupVisibleSchema(rawSectionSchema)
+          : visibleSectionSchema(routeId, rawSectionSchema);
+      section = {
+        schema: sectionSchema,
+        tiers: splitConfigSchemaByTier({
+          schema: sectionSchema,
+          path: [key],
+          hints: params.uiHints,
+        }),
+      };
+      prepared.sections.set(key, section);
+    }
+    const { schema: sectionSchema, tiers: tierSplit } = section;
     const meta = SECTION_META[key];
-    const tierSplit = splitConfigSchemaByTier({
-      schema: sectionSchema,
-      path: [key],
-      hints: params.uiHints,
-    });
     const matchesTier = (tierSchema: JsonSchema | null) =>
       Boolean(
         tierSchema &&

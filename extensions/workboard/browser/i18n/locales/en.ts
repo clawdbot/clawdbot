@@ -10,7 +10,6 @@ export default {
   },
   sessionsView: {
     statusQueued: "Queued",
-    addToWorkboard: "Add to Workboard",
     openWorkboardCard: "Open Workboard card",
   },
   workboard: {

@@ -28,6 +28,7 @@ import type {
   PluginManifestSetupProviderAuthEvidence,
   PluginConfigUiHint,
 } from "./manifest-types.js";
+import { normalizeSetupPresentationHttpsUrl } from "./setup-presentation-url.js";
 
 export function normalizeManifestActivation(value: unknown): PluginManifestActivation | undefined {
   if (!isRecord(value)) {
@@ -182,12 +183,34 @@ export function normalizeManifestSetup(value: unknown): PluginManifestSetup | un
   const providers = normalizeManifestSetupProviders(value.providers);
   const cliBackends = normalizeTrimmedStringList(value.cliBackends);
   const configMigrations = normalizeTrimmedStringList(value.configMigrations);
+  const nativeSessionCatalog = isRecord(value.nativeSessionCatalog)
+    ? {
+        label: normalizeOptionalString(value.nativeSessionCatalog.label) ?? "",
+        description: normalizeOptionalString(value.nativeSessionCatalog.description),
+        nodeCommands: normalizeTrimmedStringList(value.nativeSessionCatalog.nodeCommands),
+        legacyDefaultEnabled: value.nativeSessionCatalog.legacyDefaultEnabled === true,
+      }
+    : undefined;
   const requiresRuntime =
     typeof value.requiresRuntime === "boolean" ? value.requiresRuntime : undefined;
   const setup = {
     ...(providers ? { providers } : {}),
     ...(cliBackends.length > 0 ? { cliBackends } : {}),
     ...(configMigrations.length > 0 ? { configMigrations } : {}),
+    ...(nativeSessionCatalog?.label
+      ? {
+          nativeSessionCatalog: {
+            label: nativeSessionCatalog.label,
+            ...(nativeSessionCatalog.legacyDefaultEnabled ? { legacyDefaultEnabled: true } : {}),
+            ...(nativeSessionCatalog.nodeCommands.length > 0
+              ? { nodeCommands: nativeSessionCatalog.nodeCommands }
+              : {}),
+            ...(nativeSessionCatalog.description
+              ? { description: nativeSessionCatalog.description }
+              : {}),
+          },
+        }
+      : {}),
     ...(requiresRuntime !== undefined ? { requiresRuntime } : {}),
   } satisfies PluginManifestSetup;
   return Object.keys(setup).length > 0 ? setup : undefined;
@@ -332,26 +355,6 @@ export function normalizeManifestControlUi(
   return ok({ entry, ...(styles.length > 0 ? { styles } : {}) });
 }
 
-function normalizeManifestHttpsUrl(value: unknown): string | undefined {
-  const normalized = normalizeOptionalString(value);
-  if (!normalized) {
-    return undefined;
-  }
-  try {
-    const url = new URL(normalized);
-    const canonical = url.toString();
-    return url.protocol === "https:" &&
-      url.hostname &&
-      !url.username &&
-      !url.password &&
-      canonical.length <= 2048
-      ? canonical
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 export function normalizeProviderAuthChoices(
   value: unknown,
 ): PluginManifestProviderAuthChoice[] | undefined {
@@ -371,8 +374,8 @@ export function normalizeProviderAuthChoices(
     }
     const choiceLabel = normalizeOptionalString(entry.choiceLabel) ?? "";
     const choiceHint = normalizeOptionalString(entry.choiceHint) ?? "";
-    const icon = normalizeManifestHttpsUrl(entry.icon);
-    const website = normalizeManifestHttpsUrl(entry.website);
+    const icon = normalizeSetupPresentationHttpsUrl(entry.icon);
+    const website = normalizeSetupPresentationHttpsUrl(entry.website);
     const assistantPriority =
       typeof entry.assistantPriority === "number" && Number.isFinite(entry.assistantPriority)
         ? entry.assistantPriority

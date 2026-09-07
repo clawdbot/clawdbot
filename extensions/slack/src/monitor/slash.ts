@@ -694,14 +694,18 @@ export function createSlackCommandHandler(params: {
           commandDefinition.args?.some(
             (arg) => typeof arg.choices === "function" && commandArgs?.values?.[arg.name] == null,
           );
-        const menuRoute = menuNeedsModelContext ? await resolveSlashRoute() : undefined;
-        const menuModelContext = menuRoute
-          ? resolveSlackCommandMenuModelContext({
-              cfg,
-              agentId: menuRoute.agentId,
-              sessionKey: menuRoute.sessionKey,
-            })
-          : {};
+        const menuRoute =
+          menuNeedsModelContext || commandDefinition.key === "verbose"
+            ? await resolveSlashRoute()
+            : undefined;
+        const menuModelContext =
+          menuNeedsModelContext && menuRoute
+            ? resolveSlackCommandMenuModelContext({
+                cfg,
+                agentId: menuRoute.agentId,
+                sessionKey: menuRoute.sessionKey,
+              })
+            : {};
         // Native /think must not wait on provider discovery; persisted rows retain its metadata.
         const menuModelCatalog =
           commandDefinition.key === "think" && menuNeedsModelContext
@@ -720,6 +724,7 @@ export function createSlackCommandHandler(params: {
           command: commandDefinition,
           args: commandArgs,
           cfg,
+          session: menuRoute,
           ...menuModelContext,
           ...(menuModelCatalog?.length ? { catalog: menuModelCatalog } : {}),
         });

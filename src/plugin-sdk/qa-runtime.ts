@@ -31,7 +31,7 @@ export async function closeQaRuntimeStores(tempRoot: string): Promise<void> {
   // Agent close releases leases through shared state. Keep that owner alive
   // until every scoped handle closes, or exit-time release can recreate the root.
   auth.closeAuthProfileReadPool({ kind: "root", rootPath: tempRoot });
-  agents.closeOpenClawAgentDatabases(tempRoot);
+  await agents.closeOpenClawAgentDatabasesAsync(tempRoot);
   state.closeOpenClawStateDatabaseByPath(
     paths.resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: path.join(tempRoot, "state") }),
   );

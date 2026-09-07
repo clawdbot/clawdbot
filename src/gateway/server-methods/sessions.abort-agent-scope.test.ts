@@ -75,6 +75,8 @@ vi.mock("../../agents/embedded-agent-runner/runs.js", async () => {
     isEmbeddedAgentRunInProgress: (...args: unknown[]) => isEmbeddedAgentRunInProgressMock(...args),
     resolveEmbeddedAgentRunProgressState: (...args: unknown[]) =>
       isEmbeddedAgentRunInProgressMock(...args) ? "running" : undefined,
+    resolveEmbeddedAgentSessionProgressState: (...args: unknown[]) =>
+      isEmbeddedAgentRunInProgressMock(...args) ? "running" : undefined,
   };
 });
 
@@ -92,62 +94,16 @@ import { sessionDeleteHandlers } from "./sessions-delete.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import { sessionReadHandlers } from "./sessions-read.js";
 import { sessionSubscriptionHandlers } from "./sessions-subscriptions.js";
-
-function createActiveRun(sessionKey: string, params: { agentId?: string } = {}) {
-  const now = Date.now();
-  return {
-    controller: new AbortController(),
-    sessionId: "sess-active",
-    sessionKey,
-    agentId: params.agentId,
-    startedAtMs: now,
-    expiresAtMs: now + 30_000,
-    kind: "chat-send" as const,
-  };
-}
-
-type ActiveRun = ReturnType<typeof createActiveRun>;
-type TestAgentConfig = { id: string; default?: boolean };
-
-function createDefaultAgents(): TestAgentConfig[] {
-  return [{ id: "main", default: true }, { id: "work" }];
-}
-
-function createContext(
-  options: {
-    activeRuns?: ReadonlyArray<readonly [string, ActiveRun]>;
-    agents?: TestAgentConfig[];
-    globalScope?: boolean;
-    extra?: Partial<GatewayRequestContext>;
-  } = {},
-): GatewayRequestContext {
-  const cfg = {
-    agents: { list: options.agents ?? createDefaultAgents() },
-    ...(options.globalScope ? { session: { scope: "global" as const } } : {}),
-  };
-  return {
-    chatAbortControllers: new Map(options.activeRuns ?? []),
-    getRuntimeConfig: () => cfg,
-    ...options.extra,
-  } as unknown as GatewayRequestContext;
-}
+import {
+  createActiveRun,
+  createBetaRunContext,
+  createGlobalWorkRunContext,
+  createContext,
+  type ActiveRun,
+} from "./sessions.abort-agent-scope.test-support.js";
 
 function createRespond(): RespondFn {
   return vi.fn() as unknown as RespondFn;
-}
-
-function createBetaRunContext(activeRun: ActiveRun): GatewayRequestContext {
-  return createContext({
-    activeRuns: [["run-beta", activeRun]],
-    agents: [{ id: "main", default: true }, { id: "beta" }],
-  });
-}
-
-function createGlobalWorkRunContext(activeRun: ActiveRun): GatewayRequestContext {
-  return createContext({
-    activeRuns: [["run-global", activeRun]],
-    globalScope: true,
-  });
 }
 
 const sessionHandlers = {
@@ -215,6 +171,29 @@ function expectSessionsListActiveRun(respond: RespondFn, hasActiveRun: boolean):
   );
 }
 
+function mockListedSession(row: {
+  key: string;
+  agentId: string;
+  sessionId: string;
+  hasActiveRun?: boolean;
+}): void {
+  loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+    targetsBySessionKey: new Map([
+      [
+        row.key,
+        {
+          agentId: row.agentId,
+          storeTarget: { agentId: row.agentId, storePath: "/tmp/openclaw-sessions.json" },
+        },
+      ],
+    ]),
+    durableTargets: [],
+    storePath: "/tmp/openclaw-sessions.json",
+    store: { [row.key]: { sessionId: row.sessionId, updatedAt: 1 } },
+  });
+  listSessionsFromStoreAsyncMock.mockResolvedValue({ sessions: [row] });
+}
+
 async function expectListedGlobalSessionActiveRun(params: {
   activeRun: ActiveRun;
   runId: string;
@@ -227,8 +206,11 @@ async function expectListedGlobalSessionActiveRun(params: {
     globalScope: true,
     extra: { loadGatewayModelCatalog: vi.fn().mockResolvedValue([]) },
   });
-  listSessionsFromStoreAsyncMock.mockResolvedValue({
-    sessions: [{ key: "global", agentId: params.agentId, hasActiveRun: false }],
+  mockListedSession({
+    key: "global",
+    agentId: params.agentId,
+    sessionId: `sess-${params.agentId}-global`,
+    hasActiveRun: false,
   });
   const respond = await callSessions(
     "sessions.list",
@@ -252,7 +234,7 @@ describe("sessions.abort agent scope", () => {
     listSessionsFromStoreAsyncMock.mockResolvedValue({ sessions: [] });
     loadCombinedSessionStoreForGatewayMock.mockReset();
     loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-      agentIdBySessionKey: new Map(),
+      targetsBySessionKey: new Map(),
       durableTargets: [],
       storePath: "/tmp/openclaw-sessions.json",
       store: {},
@@ -365,8 +347,10 @@ describe("sessions.abort agent scope", () => {
     const context = createContext({
       extra: { loadGatewayModelCatalog: vi.fn().mockResolvedValue([]) },
     });
-    listSessionsFromStoreAsyncMock.mockResolvedValue({
-      sessions: [{ key: "agent:main:openclaw-weixin:direct:user", sessionId: "sess-weixin" }],
+    mockListedSession({
+      key: "agent:main:openclaw-weixin:direct:user",
+      agentId: "main",
+      sessionId: "sess-weixin",
     });
     isEmbeddedAgentRunInProgressMock.mockImplementation(
       (sessionId: string) => sessionId === "sess-weixin",
@@ -378,7 +362,10 @@ describe("sessions.abort agent scope", () => {
       { context, reqId: "req-channel-active" },
     );
 
-    expect(isEmbeddedAgentRunInProgressMock).toHaveBeenCalledWith("sess-weixin");
+    expect(isEmbeddedAgentRunInProgressMock).toHaveBeenCalledWith(
+      "sess-weixin",
+      expect.objectContaining({ agentId: "main" }),
+    );
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
@@ -700,6 +687,46 @@ describe("sessions.abort agent scope", () => {
       undefined,
     );
   });
+
+  it.each([
+    { clearQueued: false, globalScope: false },
+    { clearQueued: true, globalScope: false },
+    { clearQueued: false, globalScope: true },
+  ])(
+    "applies MCP stop ownership (clearQueued=$clearQueued, global=$globalScope)",
+    async ({ clearQueued, globalScope }) => {
+      const { getOrCreateSessionMcpRuntime } =
+        await import("../../agents/agent-bundle-mcp-manager.test-support.js");
+      const { getSessionMcpRuntimeManagerForTesting } =
+        await import("../../agents/agent-bundle-mcp-manager-api.js");
+      const manager = getSessionMcpRuntimeManagerForTesting();
+      const sessionKey = globalScope ? "global" : "agent:main:idle-mcp";
+      mockChatSuccess(chatAbortMock, { ok: true, aborted: false, runIds: [] });
+      loadSessionEntryMock.mockImplementationOnce(() => ({
+        canonicalKey: sessionKey,
+        entry: { sessionId: "idle-mcp" },
+      }));
+      try {
+        const runtime = await getOrCreateSessionMcpRuntime({
+          sessionId: "idle-mcp",
+          sessionKey,
+          workspaceDir: "/workspace",
+          cfg: { mcp: { servers: {} } },
+          manifestRegistry: { plugins: [] },
+        });
+        await callSessions(
+          "sessions.abort",
+          { key: sessionKey, clearQueued, ...(globalScope ? { agentId: "work" } : {}) },
+          { context: createContext({ globalScope }) },
+        );
+        expect(manager.peekSession({ sessionId: "idle-mcp" })).toBe(
+          clearQueued || globalScope ? undefined : runtime,
+        );
+      } finally {
+        await manager.disposeAll();
+      }
+    },
+  );
 
   it("clears key-addressed queues without requiring a persisted session id", async () => {
     const sessionKey = "agent:main:openclaw-weixin:direct:queued-without-entry";

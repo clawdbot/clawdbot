@@ -218,6 +218,9 @@ export type CreatePluginRuntimeOptions = {
   hooks?: PluginRuntime["hooks"];
   subagent?: PluginRuntime["subagent"];
   nodes?: PluginRuntime["nodes"];
+  /** Native policy facades avoid re-evaluating SDK dependencies during registration. */
+  modelAuth?: PluginRuntime["modelAuth"];
+  modelConfig?: PluginRuntime["modelConfig"];
   allowGatewaySubagentBinding?: boolean;
 };
 

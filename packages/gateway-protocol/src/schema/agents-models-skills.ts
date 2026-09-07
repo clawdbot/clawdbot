@@ -810,6 +810,8 @@ const SkillProposalManifestEntrySchema = closedObject({
   createdAt: NonEmptyString,
   updatedAt: NonEmptyString,
   scanState: SkillProposalScanStateSchema,
+  revisionHash: Type.Optional(Sha256String),
+  degradedState: Type.Optional(Type.Literal("draft-missing")),
 });
 
 /** Lists skill-workshop proposals for the selected agent scope. */
@@ -822,6 +824,22 @@ export const SkillsProposalsListResultSchema = closedObject({
   schema: Type.Literal("openclaw.skill-workshop.proposals-manifest.v1"),
   updatedAt: NonEmptyString,
   proposals: Type.Array(SkillProposalManifestEntrySchema),
+  installedSkills: Type.Array(
+    closedObject({ name: NonEmptyString, skillKey: NonEmptyString, description: Type.String() }),
+  ),
+});
+
+/** Reads the current agent-owned Workshop skill, independently of its proposal history. */
+export const SkillsWorkshopReadParamsSchema = closedObject({
+  agentId: Type.Optional(NonEmptyString),
+  name: NonEmptyString,
+});
+
+export const SkillsWorkshopReadResultSchema = closedObject({
+  name: NonEmptyString,
+  skillKey: NonEmptyString,
+  description: Type.String(),
+  content: Type.String(),
 });
 
 /** Reads a proposal record plus editable draft/support content. */
@@ -1033,6 +1051,7 @@ const SkillCollectionReviewStatusSchema = closedObject({
 const SkillExperienceReviewStatusSchema = closedObject({
   attemptedAtMs: Type.Number(),
   outcome: Type.Union([
+    Type.Literal("completed"),
     Type.Literal("applied"),
     Type.Literal("proposed"),
     Type.Literal("nothing"),

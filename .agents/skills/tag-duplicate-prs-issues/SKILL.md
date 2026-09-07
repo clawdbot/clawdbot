@@ -22,14 +22,22 @@ Use the `prtags` skill from the `prtags` repo at `skills/prtags/SKILL.md` when i
 
 ### Install the CLIs
 
-Install `prtags` from its latest GitHub release.
+Install `prtags` from the pinned release below.
 Do not rely on an old local build unless the maintainer explicitly wants to test unreleased behavior.
 
 `prtags` CLI install path:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dutifuldev/prtags/main/scripts/install-prtags.sh | bash -s -- --bin-dir "$HOME/.local/bin"
+GOBIN="$HOME/.local/bin" go install github.com/dutifuldev/prtags/cmd/prtags@v0.1.2
 ```
+
+`prtags` lives outside the OpenClaw organization, so this install stays pinned to a reviewed
+version that the Go module proxy resolves and the public checksum database verifies. `GOBIN` keeps
+the installed executable in the same user-local directory as the previous installer, so an existing
+`$HOME/.local/bin` `PATH` continues to resolve the newly installed version.
+Do not install it by piping a remote script into a shell, and do not point the install at a branch:
+either one executes whatever that third party serves at run time, with the maintainer's own
+privileges. Moving to a newer `prtags` release is a reviewed change to this file, not a mid-task step.
 
 ### Authenticate prtags
 
@@ -51,11 +59,9 @@ Proceed with the normal steps until you actually need a tool or account state.
 As soon as you discover that `prtags` is missing or not logged in at the write step, stop immediately.
 Do not continue in a partial write mode after that point.
 
-If `prtags` is missing, ask the user to run:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/dutifuldev/prtags/main/scripts/install-prtags.sh | bash -s -- --bin-dir "$HOME/.local/bin"
-```
+If `prtags` is missing, ask the user to run the pinned install command from
+[Install the CLIs](#install-the-clis).
+Keep that section as the single source of the installed version; do not improvise another install path.
 
 If `prtags auth status` shows that the user is not logged in, ask the user to run:
 

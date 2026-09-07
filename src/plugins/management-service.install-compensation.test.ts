@@ -13,7 +13,7 @@ import {
   resolvePluginInstallTransactionRequest,
 } from "./install-transaction.js";
 import type { PluginInstallArtifactConsentHandler } from "./install-types.js";
-import type { ManagedPluginSourceInstallRequest } from "./management-service.js";
+import type { ManagedPluginSourceInstallRequest } from "./management-install.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 import { invokePluginArtifactInstallMock } from "./test-helpers/install-fixtures.js";
 
@@ -38,7 +38,7 @@ vi.mock("./install-persistence.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./install-persistence.js")>()),
   persistPluginInstall: (...args: unknown[]) => mocks.persist(...args),
 }));
-const { installManagedPluginSource } = await import("./management-service.js");
+const { installManagedPluginSource } = await import("./management-install.js");
 const snapshot = { config: {}, baseHash: "base-hash", writeOptions: {} };
 const acceptCapabilities: PluginCapabilityConsentHandler = async (review) => ({
   reviewToken: review.reviewToken,

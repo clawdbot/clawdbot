@@ -65,6 +65,7 @@ export function resolveChannelSessionInfo(
 
 type SessionWorktreeDisplayRow = {
   worktree?: { branch?: string; repoRoot?: string };
+  repository?: { url: string; branch: string };
   execNode?: string;
   execCwd?: string;
   spawnedWorkspaceDir?: string;
@@ -121,8 +122,12 @@ export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): stri
   // execNode is often a raw node id (long hex); never render it in full.
   const rawNode = normalizeOptionalString(row.execNode);
   const node = rawNode ? shortenOpaqueIdRuns(rawNode) : undefined;
-  const repoRoot = normalizeOptionalString(row.worktree?.repoRoot);
-  const rawBranch = normalizeOptionalString(row.worktree?.branch);
+  const repoRoot =
+    normalizeOptionalString(row.repository?.url.replace(/\.git$/u, "")) ??
+    normalizeOptionalString(row.worktree?.repoRoot);
+  const rawBranch =
+    normalizeOptionalString(row.repository?.branch) ??
+    normalizeOptionalString(row.worktree?.branch);
   const branch = rawBranch?.startsWith(WORKTREE_BRANCH_PREFIX)
     ? rawBranch.slice(WORKTREE_BRANCH_PREFIX.length)
     : rawBranch;
@@ -329,19 +334,10 @@ export function resolveSessionDisplayName(
 
 export function isCronSessionKey(key: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(key);
-  if (!normalized) {
-    return false;
-  }
-  if (normalized.startsWith("cron:")) {
-    return true;
-  }
-  if (!normalized.startsWith("agent:")) {
-    return false;
-  }
   const parts = normalized.split(":").filter(Boolean);
-  if (parts.length < 3) {
-    return false;
-  }
-  const rest = parts.slice(2).join(":");
-  return rest.startsWith("cron:");
+  // Display classification also accepts whitespace-only owners; routing rejects them.
+  return (
+    normalized.startsWith("cron:") ||
+    (normalized.startsWith("agent:") && parts.length >= 4 && parts[2] === "cron")
+  );
 }

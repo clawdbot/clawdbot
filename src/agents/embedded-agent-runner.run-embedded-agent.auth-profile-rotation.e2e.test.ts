@@ -1,18 +1,18 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 // End-to-end auth-profile rotation coverage for embedded runner retries.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { redactIdentifier } from "../logging/redact-identifier.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
 import {
   resolveInlineProviderApiKeyUsageId,
   type AuthProfileFailureReason,
 } from "./auth-profiles.js";
-import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store.js";
+import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
 import type { AgentHarness } from "./harness/types.js";
 import {
@@ -351,6 +351,8 @@ const makeErrorAttempt = (
     ...overrides,
   });
   return makeAttempt({
+    // Rotation-only fixtures disable retries; retry-budget cases override this.
+    providerRetryMaxRetries: 0,
     assistantTexts: [],
     lastAssistant: assistant,
     ...(opts?.currentAttempt ? { currentAttemptAssistant: assistant } : {}),
@@ -456,12 +458,11 @@ async function runAutoPinnedRotationCase(params: {
   runEmbeddedAttemptMock.mockReset();
   return withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
     await writeAuthStore(agentDir);
-    // Transient failures must exhaust three same-profile retries before rotating;
-    // credential/quota failures still rotate after the first failed attempt.
+    // Exhaust this provider's three-retry cap before rotating on transient failures.
     const failureCount = params.exhaustTransientRetries ? 4 : 1;
     for (let attempt = 0; attempt < failureCount; attempt += 1) {
-      runEmbeddedAttemptMock.mockResolvedValueOnce(
-        params.failureStage === "prompt"
+      runEmbeddedAttemptMock.mockResolvedValueOnce({
+        ...(params.failureStage === "prompt"
           ? makeAttempt({
               terminal: {
                 kind: "failed",
@@ -469,8 +470,9 @@ async function runAutoPinnedRotationCase(params: {
                 error: new Error(params.errorMessage),
               },
             })
-          : makeErrorAttempt({ errorMessage: params.errorMessage }),
-      );
+          : makeErrorAttempt({ errorMessage: params.errorMessage })),
+        providerRetryMaxRetries: 3,
+      });
     }
     mockSingleSuccessfulAttempt();
     await runAutoPinnedOpenAiTurn({
@@ -821,7 +823,7 @@ describe("runEmbeddedAgent auth profile rotation", () => {
             terminal: {
               kind: "failed",
               source: "prompt",
-              error: new Error("supported values are: low, medium"),
+              error: new Error("Unsupported reasoning.effort; supported values are: low, medium"),
             },
           }),
         )
@@ -919,9 +921,10 @@ describe("runEmbeddedAgent auth profile rotation", () => {
     }
   });
 
-  it("rotates for auto-pinned profiles across retryable stream failures", async () => {
+  it("rotates auto-pinned profiles on long-window rate limits after transient retries", async () => {
     await runAutoPinnedRotationCase({
-      errorMessage: "rate limit",
+      exhaustTransientRetries: true,
+      errorMessage: "429 Too Many Requests: subscription usage limit reached",
       sessionKey: "agent:test:auto",
       runId: "run:auto",
     });
@@ -1139,7 +1142,7 @@ describe("runEmbeddedAgent auth profile rotation", () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);
 
-      mockFailedThenSuccessfulAttempt("rate limit");
+      mockFailedThenSuccessfulAttempt("429 Too Many Requests: subscription usage limit reached");
 
       await runEmbeddedAgentInline({
         sessionId: "session:test",
@@ -1243,7 +1246,7 @@ describe("runEmbeddedAgent auth profile rotation", () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeOpenAiCodexAuthStore(agentDir, true);
       mockFailedThenSuccessfulAttemptForModel({
-        errorMessage: "rate limit",
+        errorMessage: "429 Too Many Requests: subscription usage limit reached",
         provider: "codex-cli",
         model: "gpt-5.4",
       });
@@ -1726,7 +1729,7 @@ describe("runEmbeddedAgent auth profile rotation", () => {
         agentDir,
       );
 
-      mockFailedThenSuccessfulAttempt("rate limit");
+      mockFailedThenSuccessfulAttempt("429 Too Many Requests: subscription usage limit reached");
       await runAutoPinnedOpenAiTurn({
         agentDir,
         workspaceDir,

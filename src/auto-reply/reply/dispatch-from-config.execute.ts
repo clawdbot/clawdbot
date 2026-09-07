@@ -4,6 +4,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { isAskUserPromptPending } from "../../agents/tools/ask-user-tool.js";
+import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -119,6 +120,10 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   },
                   onSessionMetadataChanges: notifySessionMetadataChanges,
                   onSessionPrepared: state.notePreparedSession,
+                  onRunVerbosityResolved: (settings) => {
+                    state.noteRunVerbosity(settings);
+                    params.replyOptions?.onRunVerbosityResolved?.(settings);
+                  },
                 } satisfies InternalReplyResolverOptions),
                 onObservedReplyDelivery: state.markObservedReplyDelivery,
                 typingPolicy: typing.typingPolicy,
@@ -213,51 +218,76 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     // Buffered commentary preceded this tool; land it before the summary.
                     await flushPendingCommentaryProgress();
                     const isFastModeAutoProgress = isFastModeAutoProgressPayload(payload);
-                    const isFastModeAutoProgressDelivery =
-                      isFastModeAutoProgress &&
-                      state.shouldDeliverFastModeAutoProgressDespiteSourceSuppression();
                     const isForcedToolProgress =
                       state.shouldDeliverForcedToolProgressDespiteSourceSuppression();
                     const forceToolResultProgress =
                       params.replyOptions?.forceToolResultProgress === true;
+                    const allowProgressCallbacksWhenSourceDeliverySuppressed =
+                      params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed ===
+                        true && ctx.InboundEventKind !== "room_event";
                     const durableToolResult = requiresDurableToolResultDelivery(payload);
                     const requiresDurableToolResult = forceToolResultProgress && durableToolResult;
+                    const shouldDeliverFastModeAutoProgress =
+                      isFastModeAutoProgress &&
+                      ((!state.suppressAutomaticSourceDelivery &&
+                        (forceToolResultProgress || state.shouldSendToolSummaries())) ||
+                        isForcedToolProgress ||
+                        state.shouldDeliverVerboseProgressDespiteSourceSuppression());
                     if (params.replyOptions?.suppressToolProgressMessages && !durableToolResult) {
                       return;
                     }
-                    const shouldForwardToolResultProgress = isFastModeAutoProgress
-                      ? shouldForwardProgressCallback({
-                          forwardWhenSourceDeliverySuppressed: true,
+                    const shouldForwardToolResultProgress = forceToolResultProgress
+                      ? !requiresDurableToolResult &&
+                        (isFastModeAutoProgress || !state.shouldEmitVerboseProgress()) &&
+                        shouldForwardProgressCallback({
+                          forwardWhenSourceDeliverySuppressed:
+                            allowProgressCallbacksWhenSourceDeliverySuppressed,
                         })
-                      : forceToolResultProgress
-                        ? !requiresDurableToolResult &&
-                          !state.shouldEmitVerboseProgress() &&
-                          shouldForwardProgressCallback({
-                            forwardWhenSourceDeliverySuppressed: true,
-                          })
-                        : state.shouldSendToolSummaries() && shouldForwardProgressCallback();
+                      : (state.shouldSendToolSummaries() ||
+                          (isFastModeAutoProgress &&
+                            params.replyOptions?.allowToolLifecycleWhenProgressHidden === true)) &&
+                        shouldForwardProgressCallback(
+                          isFastModeAutoProgress
+                            ? {
+                                forwardWhenSourceDeliverySuppressed:
+                                  allowProgressCallbacksWhenSourceDeliverySuppressed,
+                              }
+                            : undefined,
+                        );
                     const toolResultProgressCallback = shouldForwardToolResultProgress
                       ? onToolResultFromReplyOptions
                       : undefined;
+                    let toolResultProgressVisible = false;
                     if (toolResultProgressCallback) {
-                      await toolResultProgressCallback(payload);
+                      toolResultProgressVisible = (
+                        await settleProgressVisibilityCallbackResult(
+                          toolResultProgressCallback(payload),
+                        )
+                      ).visible;
                     }
                     if (isDispatchOperationAborted()) {
                       return;
                     }
                     if (
                       toolResultProgressCallback &&
-                      (isFastModeAutoProgress || forceToolResultProgress)
+                      forceToolResultProgress &&
+                      !isFastModeAutoProgress
                     ) {
                       return;
+                    }
+                    if (toolResultProgressCallback && isFastModeAutoProgress) {
+                      if (toolResultProgressVisible || !shouldDeliverFastModeAutoProgress) {
+                        return;
+                      }
                     }
                     if (state.sendPolicyDenied) {
                       return;
                     }
+                    const bypassToolSummarySuppression =
+                      isForcedToolProgress || shouldDeliverFastModeAutoProgress;
                     if (
                       state.shouldSuppressProgressDelivery() &&
-                      !isFastModeAutoProgressDelivery &&
-                      !isForcedToolProgress &&
+                      !bypassToolSummarySuppression &&
                       !hasAskUserPayload(payload)
                     ) {
                       return;
@@ -265,7 +295,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     const visibleToolPayload = preparePayload(
                       dispatcher,
                       "tool",
-                      isForcedToolProgress ? payload : resolveToolDeliveryPayload(payload),
+                      bypassToolSummarySuppression ? payload : resolveToolDeliveryPayload(payload),
                       state.progressState,
                     );
                     if (!visibleToolPayload) {
@@ -281,7 +311,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       accountId: replyRoute.accountId,
                     });
                     const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
-                    const deliveryPayload = isForcedToolProgress
+                    const deliveryPayload = bypassToolSummarySuppression
                       ? normalizedPayload
                       : resolveToolDeliveryPayload(normalizedPayload);
                     if (!deliveryPayload) {
@@ -292,8 +322,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     }
                     if (
                       state.shouldSuppressLateTextOnlyToolProgress(deliveryPayload) &&
-                      !isFastModeAutoProgressPayload(deliveryPayload) &&
-                      !isForcedToolProgress
+                      !bypassToolSummarySuppression
                     ) {
                       return;
                     }
@@ -302,8 +331,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     }
                     if (
                       shouldSuppressDefaultToolProgressMessages() &&
-                      !isFastModeAutoProgressPayload(deliveryPayload) &&
-                      !isForcedToolProgress
+                      !bypassToolSummarySuppression
                     ) {
                       if (!requiresDurableToolResultDelivery(deliveryPayload)) {
                         return;

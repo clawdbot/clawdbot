@@ -39,7 +39,7 @@ export function usePreparedCatalogWorkerFixtures() {
         retire();
       }
       retirements.clear();
-      resetPreparedModelRuntimeSnapshotsForTest();
+      await resetPreparedModelRuntimeSnapshotsForTest();
       try {
         await waitForWorkers();
       } finally {

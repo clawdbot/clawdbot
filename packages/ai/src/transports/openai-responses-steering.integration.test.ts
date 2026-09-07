@@ -236,6 +236,61 @@ afterEach(() => {
 });
 
 describe("Responses WebSocket steering handoff", () => {
+  it("keeps runtime context with its user through steering and the automatic successor", async () => {
+    const context: Context = {
+      messages: [
+        { role: "user", content: "original", timestamp: 0 },
+        {
+          role: "user",
+          content: "runtime context",
+          timestamp: 0,
+          runtimeContextCarrier: true,
+        },
+      ],
+    };
+    const ready = createDeferred<Parameters<NonNullable<StreamOptions["onActiveResponse"]>>[0]>();
+    const stream = createOpenAIResponsesTransportStreamFn();
+    const options = {
+      apiKey: "test-key",
+      sessionId: "runtime-context-steering",
+      transport: "websocket-cached" as const,
+    };
+    const first = (
+      await stream(model, context, {
+        ...options,
+        onActiveResponse: (control) => {
+          ready.resolve(control);
+        },
+      })
+    ).result();
+    await vi.waitFor(() => expect(sockets.instances).toHaveLength(1));
+    const socket = sockets.instances[0];
+    assert(socket);
+    socket.emit({ type: "response.created", response: { id: "resp_1" } });
+    const steeringUser = { role: "user" as const, content: "new requirement", timestamp: 1 };
+    const admission = (await ready.promise).steer([steeringUser]);
+    try {
+      await vi.waitFor(() => expect(socket.requests).toHaveLength(2));
+      expect(socket.requests[1]).toMatchObject({
+        type: "response.steer",
+        input: [{ role: "user", content: [{ type: "input_text", text: "new requirement" }] }],
+      });
+      socket.emit(accepted);
+      expect(await admission).toBe(true);
+    } finally {
+      socket.emit(completed("resp_1", [output("original answer")]));
+      await first;
+    }
+    context.messages.push(await first, steeringUser);
+    socket.emit({ type: "response.created", response: { id: "resp_2" } });
+    socket.emit(completed("resp_2", [output("steered answer", "msg_2")]));
+    const second = await (await stream(model, context, options)).result();
+    expect(second.stopReason).not.toBe("error");
+    expect(second.content).toMatchObject([{ type: "text", text: "steered answer" }]);
+    expect(socket.requests.filter((request) => request.type === "response.create")).toHaveLength(1);
+    expect(socket.streamCalls).toBe(1);
+  });
+
   it.each(["prune", "prepend"])(
     "handles %s payload projection against the active prefix",
     async (mode) => {

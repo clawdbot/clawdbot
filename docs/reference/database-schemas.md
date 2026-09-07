@@ -20,6 +20,26 @@ OpenClaw stores control-plane state in a global SQLite database and agent data i
 
 The task registry uses the global control-plane database. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
 
+### ACP replay accounting
+
+The shared `acp_replay_sessions` and `acp_replay_events` tables retain bridge
+replay history. Their `estimated_bytes` columns count the UTF-8 bytes of each
+persisted text field, plus 32 bytes per row. Session totals include their events.
+This is a retained-content estimate, not a limit on SQLite file, page, or WAL size.
+
+Older releases counted characters inconsistently, undercounting Unicode and
+allowing unchanged metadata writes to drift. The existing app-version upgrade
+repair and explicit shared-state schema repair rebuild all derived totals
+atomically, preserving event JSON text, identifiers, timestamps, and sequence.
+Repair does not prune history. The next ordinary session write applies the
+existing caps and eviction order, so corrected Unicode history may trim sooner
+and use transcript fallback when loaded.
+
+A current-app-version reopen skips this repair. Replacing code without changing
+the app version does not repair an already-open or current-version database;
+explicit schema repair remains the repair owner for that case. Accounting repair
+cannot recover history already evicted by an older writer. See [ACP CLI](/cli/acp).
+
 ### Meeting transcript tables
 
 Meeting captures use three `STRICT` tables in the shared
@@ -48,6 +68,17 @@ lookups.
 
 Reopening an occupancy-driven capture clears `stopped_at` without changing the
 primary key, so the same meeting retains its utterances.
+New transcript admissions record `sessionIdOrigin` (`generated` or `supplied`)
+in `metadata_json`. The store preserves that value, including its absence or
+invalidity in legacy rows, on later writes to the same primary key. Occupancy
+reopening requires an explicitly generated origin; an unknown origin starts a
+fresh capture and leaves the old record intact. The existing newest-candidate
+query and ten-minute window are unchanged.
+
+This adds no schema, index, version, or backfill. Doctor metadata restoration
+preserves an explicitly recorded origin and leaves unknown origins unknown.
+Older runtimes do not enforce this rule, so downgrading also removes the fixed-ID
+history protection. See the [accepted ID-origin decision](https://github.com/openclaw/openclaw/pull/130860).
 
 #### `meeting_transcript_utterances`
 
@@ -82,14 +113,49 @@ One current summary per capture. The primary key is
 These are existing feature-local tables. Occupancy episodes and model-backed
 notes do not change their schema or database version.
 
+### Update run ledger
+
+`update_runs` stores one durable record per update in the shared
+`state/openclaw.sqlite` database. `src/infra/update-run-ledger.ts` owns writes
+from the admitting Gateway, orchestrator CLI, and restarted Gateway. The table
+is additive at shared schema version 15: the canonical schema declares it and
+first use ensures it inside the same write transaction. Existing tables and the
+schema version stay unchanged; older readers ignore the new table.
+
+`run_id` is the UUID primary key. Rows retain creation/update timestamps,
+trigger, phase, status, reason, origin, target, before/after versions, steps,
+verification facts, repair attempts, confirmation/finish timestamps, and known
+downtime. Each JSON column has a 16 KiB hard limit with deterministic truncation
+and redaction. The ledger stores bounded diagnostic summaries, not raw logs or
+credentials. There is no automatic history deletion.
+
+The CLI and Gateway share WAL-backed transactions, including while the Gateway
+is stopped. The first terminal outcome wins; subsequent verification can enrich
+its observed facts without rewriting success, failure, skip, or rollback status.
+The restart sentinel carries `stats.runId` and remains the continuation owner;
+consuming it does not delete the run row. Chat, CLI, and status reports read that
+row. See [Run history and reports](/cli/update#run-history-and-reports).
+
+### Cloud repository workspaces
+
+Repository-only [cloud sessions](/gateway/cloud-workers#dispatching-a-session) use the first-use `session_repository_workspaces` table in the shared state database. The existing session entry carries only `repositoryWorkspaceId`; the shared row owns the canonical agent/session key, repository URL, requested ref, session branch, setup intent, pinned base commit and manifest, accepted checkpoint pointer, and revision. Session reset preserves this owner; a fork receives a distinct owner.
+
+`github_repository_publication_requests` records shared and personal publication against an immutable accepted checkpoint and the session's admitted lifecycle revision. Reset preserves the session ID and repository checkpoint but invalidates publication authorized before that reset. Personal requests also retain the selected profile and connection generation and require same-owner confirmation after an interrupted publication. Pending publication keeps its original source even after an explicit move materializes a Gateway worktree.
+
+Both tables are additive, lazily ensured on first use, and leave the numeric database schema version unchanged. That is not a compatibility promise for older cloud-session implementations: run a build that understands repository-only sessions when using this state. Existing local managed-worktree sessions keep their existing representation.
+
+Checkpoint Git artifacts live under `state/repository-workspaces/<workspace-id>.git`, next to the shared database. These are bare repositories containing complete file manifests, cumulative changed-file blobs, and publication snapshots; they are not working checkouts or a backup of upstream Git history. Restoring an entire checkout still requires access to the pinned upstream commit. Back up these artifacts together with the shared and per-agent databases.
+
+Accepted checkpoint history and publication source artifacts remain until explicit session deletion, including after Stop, archive, reset, or Gateway restart. There is no timed checkpoint expiry. Deletion retires publication requests and source ownership before removing their artifact repository; failed cleanup is reported. The managed-worktree idle cleanup and snapshot retention rules do not apply to these checkpoints.
+
 ## Versioning contract
 
-Each database records its schema in two places:
+Each database records its published schema in two places:
 
 - `PRAGMA user_version` is the SQLite schema version.
 - The primary `schema_meta` row records `role`, `agent_id`, `schema_version`, and `app_version`. `app_version` is the OpenClaw build that last wrote the schema metadata.
 
-OpenClaw applies forward-only migrations when it opens an older supported database. It refuses a database whose `user_version` is newer than the running build and reports a `newer schema version` error. The Gateway checks all registered databases before startup. `openclaw update` also refuses a package or source target whose declared schema support is older than an on-disk database. Target packages published before schema metadata was added cannot be preflighted.
+OpenClaw applies forward-only migrations when it opens an older supported database. It refuses a database whose `user_version` is newer than the running build and reports a `newer schema version` error. The Gateway checks all registered databases before startup. `openclaw update` also refuses a package or source target whose declared schema support is older than an on-disk database. Target packages published before schema metadata was added cannot be preflighted. Updates driven by the 2026.9.2 release line can temporarily defer publication of a shared-state schema version while the old updater finishes; see [Schema bumps and older updaters](#schema-bumps-and-older-updaters).
 
 When Gateway startup encounters a newer database schema, it exits with status 78 so the generated systemd service does not restart it repeatedly. On macOS, it also parks its managed LaunchAgent to stop `KeepAlive` retries. This applies to failures during CLI bootstrap as well as server startup and does not depend on the database-backed crash counter. Start the Gateway with a build that supports the existing schemas. The older install cannot repair them with `doctor --fix`; run Doctor from the compatible install if further migration is required, then restart through the service or deployment owner.
 
@@ -170,6 +236,81 @@ original result and a keyed request fingerprint, not a second raw request.
 There is no backfill or configuration switch. Downgrading preserves the table
 but disables the new structured controls; upgrading can read retained receipts.
 
+### Schema bumps and older updaters
+
+OpenClaw 2026.9.2 introduced the update ledger but reopens it with old code after
+running the target's Doctor, including a final read after recording its terminal
+outcome. The shared-state database runner lets this updater finish by applying
+migration content first and publishing the new schema version later. This rule
+applies to every writable open, including Doctor, the restarted Gateway, and
+other CLI processes.
+
+The runner records the applied content version in the existing
+`config_machine_state` key `state.schema.contentVersion`. While publication is
+deferred, new code uses that content version, and both `PRAGMA user_version` and
+`schema_meta.schema_version` retain the previous published version. Content and
+its marker commit together. Reopening skips migration steps already covered by
+the marker, including the schema-16 Skill Workshop rebuild; it does not infer
+completion from table shape or repeat the rebuild. This requires no new table,
+configuration option, or environment override.
+
+Current content is ready for readers even while its version is unpublished.
+Ordinary CLI commands can run alongside the Gateway throughout this window;
+publication alone does not trigger schema repair or require stopping the Gateway.
+
+A subsequent update can run during this window. Its migration verification and
+rollback checks compare applied content versions from private database snapshots.
+Publishing already-applied content is not another migration; applying new content
+still blocks rollback even when the published number has not changed. Managed
+service stop, activation, and Doctor maintenance keep their normal ownership rules.
+
+Publication waits until **every** update row whose `before.version` identifies
+the 2026.9.2 release line meets its applicable condition:
+
+- A terminal row's `finished_at_ms` is at least five minutes old.
+- A running row's `updated_at_ms` is more than 30 minutes old. The runner treats
+  that driver as abandoned for publication purposes; it does not rewrite the
+  run's outcome.
+
+A missing ledger or no affected rows permits immediate publication. Deadlines
+come from the rows' timestamps, never the observing process's start time. The
+new Gateway's ledger watcher schedules publication at the applicable deadline
+without jitter. Publication holds the Gateway lifecycle fence: the owning Gateway
+can publish, and a later writable open can publish when no Gateway owns the state
+directory. Other processes silently leave publication to that owner.
+Publication rereads the content marker and all affected rows inside one
+synchronous write transaction before advancing both published schema markers.
+A new or refreshed running row blocks publication again. Restarting the Gateway
+does not shorten or restart the grace period.
+
+The five-minute grace accommodates 2026.9.2's trailing ledger reads; that release
+records no driver process identity that would prove those reads have finished.
+An old CLI blocked for more than five minutes after committing its terminal row,
+for example on a stalled stdout pipe, can still fail its final render after
+publication. By then the package swap, any requested service restart, and terminal ledger
+outcome are complete. Downgrade protection for the 2026.9.2 line is delayed by the
+same grace, or by the 30-minute abandoned-driver bound. The retained version is
+not permission to run older code against migrated feature tables. Do not
+manually lower either version marker or delete the content marker.
+
+Update-time Doctor checks shared and registered agent databases before other
+repairs. A state-only migration proceeds with deferred publication and reports
+`schema content applied; version publication deferred until update run <id> finishes`.
+Publication still observes the five-minute grace after that run finishes.
+Doctor keeps the typed `update-schema-bump-unfenced` refusal when deferral cannot
+cover a pending agent-database migration, the required `config_machine_state`
+table is missing, or the state-content migration fails. A failed content
+transaction rolls back. The refusal includes the database versions, driving
+updater version, and [manual update commands](/install/updating#updating-from-2026.9.2-across-a-schema-bump).
+Package rollback cannot reverse a migration that already happened.
+
+The driver check requires a valid semantic version and includes 2026.9.2
+rebuilds. Earlier updaters, including 2026.9.1, have no ledger and keep normal
+publication behavior. Builds from 2026.9.3 onward, including prereleases, use
+transactional updates that fence old-process ledger access and let candidate
+code finish after migration; they also keep normal publication behavior.
+Same-schema repairs and ordinary Doctor runs remain available.
+
 ### Profile-owned skill library
 
 [Personal and team skills](/tools/skills#personal-skills-on-a-shared-gateway) use four first-use tables in the shared state database without changing its schema version: `skill_library_entries`, `skill_library_revisions`, `skill_library_events`, and `skill_library_uploads`. Ordinary workspace skills and unused-library discovery do not create these tables. Ownership, sharing, the current revision pointer, portable file manifests, and publication events are canonical SQLite data. Session selections remain in the existing per-agent session store; inherited cron selections remain in the existing private job record.
@@ -184,13 +325,17 @@ Older same-schema readers ignore the new tables but cannot provide managed-libra
 
 Personal GitHub connection state uses the existing `secret_store_entries` identity scope, with the canonical authenticated profile as `scope_id` and the fixed private name `github-connection`. It is not a generic identity-secret API or a profile preference. One bounded record owns selection, pending device authorization, and refresh recovery. Personal managed CLI credentials use a separate `credentials/github/personal/<opaque-profile-id>` directory, outside older system/agent cleanup roots.
 
-Personal publication uses the lazy, same-version `github_personal_publication_requests` table. It records the requesting profile, selected connection generation and account, immutable target/workspace snapshot, idempotency, and outcome; it contains no tokens. Reading status does not create the table. Existing system and agent requests remain in their original table and retain their existing lifecycle.
+Personal publication uses the lazy, same-version `github_personal_publication_requests` table. It records the requesting profile, selected connection generation and account, immutable target/workspace snapshot, idempotency, and outcome; it contains no tokens. Reading status does not create the table. Existing system and agent requests remain in their original table.
+
+Local shared and personal publication records use the first-use `github_publication_session_lifecycles` companion table to bind each request to its admitted session lifecycle revision. The key is the publication kind and request ID; the binding commits in the same transaction as the request. An explicit `NULL` records that the session had no revision at admission. A missing binding cannot authorize unfinished publication and is never filled from the current session. Terminal receipt history remains readable.
+
+The companion table leaves the numeric shared schema version, both existing local request-table definitions, and their receipt digests unchanged. Older schema validators treat those request tables as optional and reject additional columns even when nullable, so the lifecycle binding uses a separate table that older readers ignore.
 
 Older builds ignore both the personal request table and identity-scoped credential rows instead of executing a personal request as System. Re-upgrade still enforces original authorization expiry. Unfinished personal publication requires fresh confirmation by the same authenticated owner after a Gateway restart; remote-result reconciliation reuses the original request markers.
 
 Disconnect removes usable local credentials and retains a secret-free disconnected selection to fence stale work. Profile merges preserve target state, including an explicit disconnection; a source connection transfers only when the target has no state, with new selection authority. Credentials stranded by a profile merge performed on an older build require reconnect, not runtime adoption through aliases.
 
-Personal publication receipts remain for the logical session's lifetime. Archive/reset preserves receipts and invalidates incompatible unfinished work. Permanent session deletion fences execution and removes its personal receipts. There is no timed idempotency expiry, and deleting local state does not undo an already-created GitHub commit or pull request.
+Personal publication receipts remain for the logical session's lifetime. Archive/reset preserves receipts and invalidates incompatible unfinished work. An already-dispatched GitHub operation can still record its observed result, without gaining authority for another operation. Permanent session deletion fences execution and removes its personal receipts and lifecycle bindings. There is no timed idempotency expiry, and deleting local state does not undo an already-created GitHub commit or pull request.
 
 See the accepted [personal GitHub ownership and publication design](https://github.com/openclaw/openclaw/issues/133590) and the operator-facing [GitHub connections guide](/concepts/user-model#github-connections).
 
@@ -306,6 +451,33 @@ finish asynchronous planning first, then reread authoritative rows after write
 admission. Publish live session changes and other dependent effects only after
 the durable write succeeds. A future network-backed owner must preserve that
 ordering while awaiting its driver.
+
+Session reclamation keeps its deletion transaction on a worker connection.
+Archive publication and cascading deletion remain atomic. Before COMMIT, the
+worker publishes its authorization request in shared memory and waits for the
+parent's current owner check. Synchronous writers service that request at the shared
+SQLite transaction boundary between short lock-admission attempts, in the reclamation
+owner's captured async context. This includes session entries, delivery records, and
+first-use board and Goal schema transactions. Registration uses the open connection's
+native database location, so other connections and reopened handles share admission.
+Only admission is retried; transaction callbacks and mutations are never replayed.
+The original lock-admission deadline is retained. After granting approval,
+the parent synchronously joins transaction settlement before allowing owner retirement;
+that mandatory join cannot be abandoned at the append deadline.
+
+Periodic incremental vacuum uses the same write-admission boundary, so it can
+service reclamation approval before taking the writer lock. Its 512-page limit
+is unchanged; passive checkpoints remain outside the write transaction.
+
+Reclamation page maintenance uses a PASSIVE checkpoint and at most 512 pages of
+incremental vacuum per pass. PASSIVE does not wait for readers, but does not cap
+the number of WAL frames copied. Before pruning retained archives, disk-budget
+enforcement drains the initially observed free pages in units of at most 512,
+yields between units, and reacquires the database owner after each yield. It
+preserves physical checkpointing before measuring pressure, so unreclaimed pages
+do not cause unnecessary archive deletion. Full logical deletion with resumable
+physical cleanup remains a separate design; existing deletion visibility and rollback
+semantics are unchanged.
 
 ### Preserve the data and concurrency contracts
 
@@ -451,6 +623,34 @@ Normal admission remains bounded at 32 identities. Same-store alias repair sums 
 | 13      | State consolidation: cron jobs and subagent runs become JSON-canonical (113 projection columns, five unused indexes removed); installed_plugin_index and shared auth-profile singletons fold into config_machine_state; workspace_attestations merges into workspace_setup_state; gateway origin device tokens become canonical | Unreleased          |
 | 14      | Source-qualified cron creator capture; historical human job creators remain unknown                                                                                                                                                                                                                                             | Unreleased          |
 | 15      | Conversation bindings use exact target keys; redundant agent/session projections removed                                                                                                                                                                                                                                        | Unreleased          |
+| 16      | Skill Workshop ownership moves from workspace/provenance columns to per-agent directory containment                                                                                                                                                                                                                             | Unreleased          |
+
+### State schema 16
+
+Schema 16 removes `workspace_dir` and `claim_released_time` from
+`skill_workshop_proposals`. It also removes `workspace_dir` and
+`idx_skill_workshop_collection_reviews_workspace_time` from collection review
+history and adds `owner_agent_id` plus its owner/time index. Proposal rows remain intact. A proposal whose claim a
+collection review had released becomes `stale` with a status reason, so the
+skill path it once created stays user-owned and Doctor never relocates it.
+
+Skill Workshop ownership is now the physical
+`<state-dir>/agents/<agentId>/agent/workshop-skills` directory. Startup and `openclaw doctor --fix`
+drop the retired columns and index in the shared schema transaction. Both then
+run the same migration to relocate applied legacy Workshop creates to the
+inferred owner agent and retarget eligible pending creates. Conflicts and ambiguous ownership become
+stale proposals and leave the legacy directories unchanged. Review history rows
+map to a unique owner agent when possible; otherwise the schema migration discards them as
+cache-class state.
+
+Skill-only workspace relocation uses the existing `migration_runs` and
+`migration_sources` tables to save pre-move directory identity, file hashes,
+and the workspace attestation timestamp. After relocation, only matching
+attestation-only state is retired; setup state, path aliases, and newer
+attestations remain intact. Interrupted migrations reuse the saved pre-move
+facts rather than inferring them from an empty directory. Workspace reset
+removes pending workspace-scoped receipts. No additional schema version or
+table is required.
 
 ### State schema 15
 
@@ -488,13 +688,23 @@ The Gateway startup preflight reads schema headers only. `openclaw database pref
 
 Memory search and maintenance managers borrow the verified per-agent connection. Acquisition does not reopen or rescan a healthy shared handle. Native and transformed plugin modules share the same process-owned connection lifecycle, query cache, and commit observers. Nested synchronous writes use SQLite savepoints on that connection. A manager retains that exact connection against cache eviction until its work drains, then releases its borrow without closing the database. Explicit quarantine and disposal still revoke it. Full memory rebuilds use separate temporary shadow databases and publish their derived tables in one synchronous transaction. Read-only memory status keeps its separate diagnostic connection and does not create or migrate a missing database.
 
+If nested rollback or savepoint cleanup fails, the transaction owner preserves the original failure, discards staged state and post-commit observers, and closes the connection. Catching that failure cannot resume writes on the abandoned handle. A later operation must acquire a fresh connection through its database owner. Doctor plugin-state imports retain earlier committed batches; an aborted batch cannot commit its prefix. Ordinary row refusals that successfully roll back their savepoint still commit the successful prefix for resumable imports.
+
 The shared cache targets 64 handles, but live borrows, synchronous transactions, and incognito state are not evicted. After owners release them, the next new connection trims idle handles back to that target.
+
+Concurrent runs normally share the cached writer for an agent database on the main thread. Workers and diagnostics can open additional connections to the same file; the connection count is operation-dependent. Canonical agent connections set SQLite's busy timeout before use. A timeout cannot resolve a worker holding a write transaction while waiting for a blocked main thread: synchronous transcript appends do not join the asynchronous session write queue. Transaction callbacks must finish synchronously, and a competing writer must not depend on the main event loop to release its lock.
+
+Periodic agent maintenance uses passive WAL checkpoints and bounded incremental vacuum. Session reclamation keeps deletion on a separate worker write connection and uses a passive checkpoint and bounded vacuum after commit; long deletion transactions can still contend with other writers. Full compaction belongs to offline Doctor maintenance. Run errors naming the Gateway state database retain a safe SQLite diagnosis; see [storage failure troubleshooting](/gateway/troubleshooting#agent-run-failed-with-a-storage-error).
 
 Quarantine decisions live only in a dedicated `openclaw-quarantine.sqlite` store, so they survive damage to the databases being quarantined. Verification results are logged.
 
 Background verification errors retain the original name and message and append bounded Node `code` and SQLite `errcode` values from up to eight cause-chain nodes. These diagnostics do not change the verdict: I/O failures remain inconclusive, while proven corruption is reconfirmed by the database owner before quarantine. A generic `disk I/O error` (`errcode=10`) does not establish disk exhaustion.
 
 Agent database maintenance fences other writers with a 60-second lease in the shared state database. A dedicated worker renews that lease during synchronous integrity scans and migration phases. Maintenance still checks the exact persisted owner before mutations and commit, and stops if the heartbeat fails or ownership expires or changes. Finishing or cancelling maintenance stops renewal before releasing the lease; process death leaves at most the remaining lease duration.
+
+Maintenance schema admission runs its initial full-file integrity check in a read-only Worker when that check is outside a write transaction. The connection and maintenance lease remain held until the Worker exits. Schema changes, index repairs, and compaction retain their synchronous phases.
+
+Startup errors containing `state lease heartbeat did not become ready` include `phase=startup`, the settlement trigger (`timeout` or `message`), and the status observed before the parent marks failure. `status=starting` distinguishes readiness still pending from `status=lost`, where loss was already recorded. `elapsedMs` measures monotonic time since heartbeat startup began; `timeoutMs` is the startup wait budget, capped at five seconds or the remaining initial lease lifetime. These fields do not establish why startup stalled or ownership was lost.
 
 The heartbeat proves ownership, not migration progress. A live but stuck maintenance process can keep its lease; stop that process before retrying Doctor.
 

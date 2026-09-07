@@ -107,8 +107,10 @@ The Gateway keeps a trusted last-known-good copy after each successful startup,
 but startup and hot reload do not restore it automatically - only `openclaw doctor --fix`
 does. If `openclaw.json` remains invalid after eligible startup migrations (including
 plugin-local validation), Gateway startup fails. An invalid hot reload is skipped and
-the current runtime keeps the last accepted config. A rejected write is also saved as
-`<path>.rejected.<timestamp>` for inspection.
+the current runtime keeps the last accepted config. When a write is blocked as an
+accidental clobber, OpenClaw attempts to save the rejected payload as
+`<path>.rejected.<timestamp>` for inspection. The warning reports whether that save
+succeeded; if it failed, the active config still stays unchanged.
 The Gateway blocks writes that look like accidental clobbers - dropping the effective
 `gateway.mode` or shrinking the file by more than half - unless the write explicitly
 allows destructive changes. Mode checks resolve `$include` and environment references
@@ -252,7 +254,7 @@ skipped when a candidate contains a redacted secret placeholder such as `***` or
     - Omit `agents.entries.*.skills` to inherit the defaults.
     - Set `agents.entries.*.skills: []` for no skills.
     - See [Skills](/tools/skills), [Skills config](/tools/skills-config), and
-      the [Configuration Reference](/gateway/config-agents#agents-defaults-skills).
+      the [Configuration Reference](/gateway/config-agents/workspace-and-bootstrap#agents-defaults-skills).
 
   </Accordion>
 
@@ -275,7 +277,7 @@ skipped when a candidate contains a redacted secret placeholder such as `***` or
     ```
 
     - Use `channels.<provider>.healthMonitor.enabled` or `channels.<provider>.accounts.<id>.healthMonitor.enabled` to control auto-restarts for one channel or account.
-    - See [Health Checks](/gateway/health) for operational debugging and the [full reference](/gateway/configuration-reference#gateway) for all fields.
+    - See [Health Checks](/gateway/health) for operational debugging and the [full reference](/gateway/config-gateway#gateway) for all fields.
 
   </Accordion>
 
@@ -303,7 +305,7 @@ skipped when a candidate contains a redacted secret placeholder such as `***` or
     - `dmScope`: `main` (shared) | `per-peer` | `per-channel-peer` | `per-account-channel-peer`
     - `threadBindings`: global defaults for thread-bound session routing. Spawn with `sessions_spawn({ thread: true })` or `/acp spawn --thread auto`. Use `/session unbind`, `/agents`, `/session idle`, and `/session max-age` to detach, list, and tune bindings (Discord binds threads, Telegram binds topics/conversations).
     - See [Session Management](/concepts/session) for scoping, identity links, and send policy.
-    - See [full reference](/gateway/config-agents#session) for all fields.
+    - See [full reference](/gateway/config-agents/sessions#session) for all fields.
 
   </Accordion>
 
@@ -325,7 +327,7 @@ skipped when a candidate contains a redacted secret placeholder such as `***` or
 
     Build the image first - from a source checkout run `scripts/sandbox-setup.sh`, or from an npm install see the inline `docker build` command in [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup).
 
-    See [Sandboxing](/gateway/sandboxing) for the full guide and [full reference](/gateway/config-agents#agentsdefaultssandbox) for all options.
+    See [Sandboxing](/gateway/sandboxing) for the full guide and [full reference](/gateway/config-agents/sandbox#agentsdefaultssandbox) for all options.
 
   </Accordion>
 
@@ -460,7 +462,7 @@ skipped when a candidate contains a redacted secret placeholder such as `***` or
     - Keep hook sessions isolated unless durable context is intentional. Direct persistent hooks require an explicit, prefix-bounded request `sessionKey`; mapped persistent hooks require a stable mapping key or `hooks.defaultSessionKey`.
     - For hook-driven agents, prefer strong modern model tiers and strict tool policy (for example messaging-only plus sandboxing where possible).
 
-    See [full reference](/gateway/configuration-reference#hooks) for all mapping options and Gmail integration.
+    See [full reference](/gateway/config-hooks#hooks) for all mapping options and Gmail integration.
 
   </Accordion>
 
@@ -482,7 +484,7 @@ skipped when a candidate contains a redacted secret placeholder such as `***` or
     }
     ```
 
-    See [Multi-Agent](/concepts/multi-agent) and [full reference](/gateway/config-agents#multi-agent-routing) for binding rules and per-agent access profiles.
+    See [Multi-Agent](/concepts/multi-agent) and [full reference](/gateway/config-agents/entries-and-multi-agent#multi-agent-routing) for binding rules and per-agent access profiles.
 
   </Accordion>
 
@@ -505,12 +507,30 @@ skipped when a candidate contains a redacted secret placeholder such as `***` or
     - **Sibling keys**: merged after includes (override included values)
     - **Relative paths**: resolved relative to the including file
     - **Path format**: include paths must not contain null bytes and must be strictly shorter than 4096 characters before and after resolution
-    - **OpenClaw-owned writes**: when a write changes only one top-level section
-      backed by a single-file include such as `plugins: { $include: "./plugins.json5" }`,
-      OpenClaw updates that included file and leaves `openclaw.json` intact
-    - **Unsupported write-through**: root includes, include arrays, and includes
-      with sibling overrides fail closed for OpenClaw-owned writes instead of
-      flattening the config
+    - **OpenClaw-owned writes**: when every changed key is owned by one
+      single-file include at an object-key path, OpenClaw updates the deepest
+      owning include and leaves `openclaw.json` intact. This works for both
+      top-level sections such as `plugins: { $include: "./plugins.json5" }` and
+      nested object-map entries. Write-through only targets include files inside
+      the top-level config directory; includes admitted through
+      `OPENCLAW_INCLUDE_ROOTS` stay read-only for OpenClaw-owned writes.
+    - **Unsupported write-through**: root includes (every section of a config
+      whose root object authors `$include`), actual array-entry includes,
+      include arrays, sibling overrides, files shared by multiple logical paths,
+      changes spanning ownership boundaries,
+      any nested include beneath a merged owner, and any include whose own file
+      still authors a nested `$include` directive fail closed instead of
+      flattening the config. Numeric object keys are treated as map keys, not
+      array positions.
+      Include targets and contents are rechecked around persistence; a concurrent
+      edit to an intermediate include refuses the write or rolls back its unchanged leaf.
+    - **Doctor repairs**: `openclaw doctor --fix` writes through the same
+      boundary. A run whose candidate mixes a root-owned repair with an
+      include-owned repair is refused as a whole. That refused write leaves every
+      file unchanged (earlier writes in the same run stay saved), and Doctor names
+      the boundary to repair by hand before rerunning, plus the included file or
+      files when the root file authors that boundary's `$include` (an agent-roster
+      boundary is named without its file).
     - **Confinement**: `$include` paths must resolve under the directory holding
       `openclaw.json`. To share a tree across machines or users, set
       `OPENCLAW_INCLUDE_ROOTS` to a path-list (`:` on POSIX, `;` on Windows) of
@@ -565,9 +585,20 @@ The earlier `hot` and `restart` modes are retired; [`openclaw doctor --fix`](/cl
 
 ### What hot-applies vs what needs a restart
 
-Most fields hot-apply without downtime; some hot-applied sections restart just that
-subsystem (channel, cron, heartbeat) rather than the whole Gateway. In
-`hybrid` mode, Gateway-restart-required changes are handled automatically.
+Reload planning classifies each changed path as one of three outcomes:
+
+- **Gateway restart (`restart`)**: restart the Gateway process.
+- **Hot reload (`hot`)**: apply the change while keeping the Gateway process
+  running. This can include restarting the owning subsystem, such as a channel,
+  cron, or heartbeat.
+- **No reload action (`none`)**: update the runtime config snapshot without
+  scheduling a reload action for that path. Consumers that read the current
+  config can observe the new value on a later read.
+
+In `hybrid` mode, Gateway restarts happen automatically when required. The longest
+matching config prefix determines the outcome. Rules supplied by a plugin apply
+only while that plugin is loaded; a path that matches no rule defaults to a
+Gateway restart.
 
 By default, changing `agents.defaults.mediaMaxMb` restarts channel runtimes so their inherited
 attachment limits take effect together. Automatic reloads preserve manually
@@ -580,7 +611,7 @@ back to OpenClaw.
 
 | Category                  | Fields                                                                                                                                                                                                                                                             | Gateway restart needed?                |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------- |
-| Channels                  | `channels.*`, `web` (WhatsApp) - all built-in and plugin channels                                                                                                                                                                                                  | No (restarts that channel)             |
+| Channels                  | `channels.*`, `web` (WhatsApp)                                                                                                                                                                                                                                     | Depends on setting and loaded plugin   |
 | Agent & models            | `agents`, `models`, `auth.order`, `auth.profiles`, `broadcast`, `worktreeRoot`, `cloudWorkers.projectProfiles`                                                                                                                                                     | No                                     |
 | Automation                | `hooks`, `cron`, `agents.defaults.heartbeat`                                                                                                                                                                                                                       | No (reloads the owning subsystem)      |
 | Sessions & messages       | `session`, `messages`                                                                                                                                                                                                                                              | No                                     |
@@ -603,10 +634,28 @@ back to OpenClaw.
 | Gateway server            | Other `gateway.*` settings (port, bind, auth mode, roles, tailscale, TLS)                                                                                                                                                                                          | **Yes**                                |
 | Infrastructure            | Other `discovery` and `browser` settings, MCP Apps listener settings, `secrets.egressProxy`, `plugins.load`, `plugins.installs`                                                                                                                                    | **Yes**                                |
 
-Changes to `channels.defaults`, `channels.modelByChannel`, `messages.inbound`,
-`messages.ackReactionScope`, `commands`, `accessGroups`, `tts`, `surfaces`,
-`acp.stream`, and `diagnostics.flags` restart loaded channel runtimes to refresh shared policy. Manually stopped accounts stay
-stopped, and the Gateway keeps running.
+Channel plugins declare which settings restart their channel
+(`reload.configPrefixes`) and which need no reload action (`reload.noopPrefixes`).
+For example, with WhatsApp loaded, `channels.whatsapp.enabled` restarts the
+WhatsApp channel, while `channels.whatsapp.replyToMode` matches its broader
+no-action prefix.
+
+Changes to `channels.defaults`, `channels.modelByChannel`, `commands`,
+`accessGroups`, `tts`, `surfaces`, `acp.stream`, and `diagnostics.flags` refresh
+loaded channel runtimes that capture those policies. Manually stopped accounts
+stay stopped, and the Gateway keeps running.
+
+[Inbound debounce settings](/concepts/messages#inbound-debouncing) apply at the
+next inbound admission without reconnecting supported channels.
+`messages.ackReactionScope` applies to subsequent turns without reconnecting
+Discord, Matrix, Signal, Slack, Telegram, or WhatsApp. Other channel plugins
+refresh unless they declare that they read the policy live. Per-channel and
+per-account overrides still take precedence; admitted turns retain their policy.
+
+`diagnostics.enabled` updates diagnostic dispatch and heartbeat ownership live.
+With `diagnostics-otel` loaded, `diagnostics.otel` restarts only its exporter service,
+flushing the old generation before starting the new one. Externally preloaded
+OpenTelemetry providers retain their transport and shutdown ownership.
 
 Operation settings apply at their next use; they do not restart in-flight runs
 or recreate provisioned workers. Approval expiry changes affect newly issued
@@ -624,7 +673,7 @@ load failure keeps the previous handlers; events already running finish with
 their original handlers. Workspace changes reload directory hooks from the
 newly selected workspace. Reload does not replay `gateway:startup`.
 
-Under `gateway.controlUi`, the `enabled`, `environment`, `github`, `toolTitles`,
+Under `gateway.controlUi`, the `enabled`, `environment`, `github`,
 `sessionObserver`, `embedSandbox`, `allowExternalEmbedUrls`, and
 `automaticallyFetchFavicons` settings hot-apply. Reload open Control UI pages to
 pick up the environment label, CLI agent picker, embed preferences, and favicon
@@ -683,7 +732,6 @@ eligible for hot reload. Auth-mode changes still restart the Gateway.
 
 <Note>
 Changing `gateway.reload` or `gateway.remote` also does **not** trigger a restart.
-Individual plugins can declare their own restart-triggering config prefixes.
 </Note>
 
 Canvas enablement uses plugin hot reload. Current-protocol nodes whose hosted
@@ -698,6 +746,12 @@ Install, update, uninstall, and explicit plugin metadata refresh require a
 Gateway restart; `hybrid` schedules that restart, while `off` leaves it to you.
 Changing an agent's workspace also does not discover plugins in the new
 directory until restart. See [Plugin metadata snapshots](/plugins/architecture#plugin-metadata-snapshot-and-lookup-table).
+
+During channel or plugin hot reload, Gateway-hosted channel webhook routes return
+`503` with `Retry-After: 1` until replacement ingress registers. Senders must honor
+retry responses; this does not acknowledge delivery. Disabled or removed accounts,
+manual stops, and cancelled replacement lifetimes release those temporary routes.
+When replacement ingress reports ready, old paths it did not reclaim are removed.
 
 ### Reload planning
 
@@ -751,11 +805,22 @@ Both `config.apply` and `config.patch` accept `raw`, `baseHash`, `sessionKey`,
 config file already exists (a first write with no existing config skips the check).
 
 For hot-applied changes, these RPCs wait until the active Gateway applies the
-exact write. Channel or plugin reloads may defer for unrelated active work. If
+exact write. Channel or plugin reloads may defer for unrelated active work.
+Policy-only writes covered by a plugin's dynamic-read contract, such as Discord
+allowlists and DM/group policies, publish without a channel restart or drain
+wait. Writes that also contain restart-required settings remain one deferred
+transaction. If
 the file watcher takes over the same unapplied write during that wait, the RPC stays pending
 through replay; persistence alone is not an application acknowledgment. Shutdown,
 supersession by different content, or failed application returns `UNAVAILABLE`
 with recovery guidance. `config.set` acknowledges persistence only.
+
+`channels.status` reports active-work deferrals in `statusIssues`, alongside
+channel policy diagnostics shown in the Control UI and `openclaw channels status`.
+`channels.start` also returns a diagnostic when that channel's reload is deferred;
+manual stop/start continues to use the published runtime configuration. Wait for
+active work to finish and refresh status. These diagnostics describe deferred
+channel reloads, not every persisted-but-unapplied configuration state.
 
 Once a reload has committed, it finishes its model and channel work before a
 newer config is applied. If that work needs restart recovery, the RPC returns

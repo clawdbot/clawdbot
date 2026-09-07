@@ -44,8 +44,6 @@ const offeredSlotLabels = [
   "Discussion",
 ] as const;
 
-const emptyPanelActionLabels = [...offeredSlotLabels, "Dashboard"] as const;
-
 type OfferedSlotLabel = (typeof offeredSlotLabels)[number];
 
 const actionlessEmptyStateAllowlist = new Set<OfferedSlotLabel>([
@@ -383,7 +381,7 @@ async function readSlotColdOpenOutcome(
     expect(
       await choices.locator(".side-panel-type-option__label").allTextContents(),
       `${label} cold-open offered slots`,
-    ).toEqual(emptyPanelActionLabels);
+    ).toEqual(offeredSlotLabels);
     const held =
       label === "Discussion"
         ? await holdModuleResponse(page, /\/assets\/session-discussion-panel-[^/]+\.js$/u)
@@ -429,16 +427,18 @@ suite.define(() => {
       await waitForControlUiGatewayReady(page);
 
       const panel = page.locator(".sidebar-region__right-runtime .side-panel");
-      const sideHeader = panel.locator('[data-region-header="side"]');
-      await expect.poll(() => sideHeader.isVisible()).toBe(false);
+      const selector = panel.locator(".side-panel-empty--selector");
+      const toggle = page.locator(".chat-side-panel-toggle");
+      await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("false");
 
-      await page.locator(".chat-side-panel-toggle").click();
-      await panel.locator(".side-panel-empty--selector").waitFor();
+      await toggle.click();
+      await selector.waitFor();
       expect(await panel.locator("wa-tab").count()).toBe(0);
       expect(await page.locator(".chat-panel-swap").isVisible()).toBe(false);
 
-      await panel.getByRole("button", { name: "Close", exact: true }).click();
-      await expect.poll(() => sideHeader.isVisible()).toBe(false);
+      await toggle.click();
+      await selector.waitFor({ state: "hidden" });
+      expect(await toggle.getAttribute("aria-expanded")).toBe("false");
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -662,9 +662,7 @@ suite.define(() => {
     expect(await contentActions.locator("wa-dropdown").count()).toBe(0);
     const restingColor = await clearAction.evaluate((button) => getComputedStyle(button).color);
     for (const action of [
-      page
-        .locator('[data-region-header="main"]')
-        .getByRole("button", { name: "Focus", exact: true }),
+      page.locator(".chat-pane__header").getByRole("button", { name: "Focus", exact: true }),
       page
         .locator('[data-region-header="side"]')
         .getByRole("button", { name: "Close", exact: true }),

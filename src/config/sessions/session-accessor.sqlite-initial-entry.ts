@@ -81,7 +81,7 @@ export function ensureSessionEntrySync(
           try {
             initialWriter.recordCommitted(fence);
           } finally {
-            emitCommittedSessionIdentityDiff(previous, current);
+            emitCommittedSessionIdentityDiff(resolved.agentId, previous, current);
           }
         })
       ) {
@@ -90,7 +90,7 @@ export function ensureSessionEntrySync(
     }
   }, toDatabaseOptions(resolved));
   if (!initializing && (current.size !== previous.size || owned)) {
-    emitCommittedSessionIdentityDiff(previous, current);
+    emitCommittedSessionIdentityDiff(resolved.agentId, previous, current);
   }
   if (fencedScope.expectedWriterRunId !== undefined && !owned) {
     throw new SessionTranscriptWriterClaimReboundError();

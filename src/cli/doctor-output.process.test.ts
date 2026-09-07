@@ -3,95 +3,144 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  createBuiltRuntime,
+  createSourceRuntime,
+  runBuiltRuntime,
+  runSourceRuntime,
+} from "../commands/doctor-config-preflight.process.test-support.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { createUpdateRun } from "../infra/update-run-ledger.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { spawnNodeEvalSync } from "../test-utils/node-process.js";
+import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const runtimeDirs = createTempDirTracker();
+let doctorRuntime: ReturnType<typeof createDoctorRuntime> | undefined;
 
-function writeDoctorTestLoader(root: string): string {
-  const loaderPath = path.join(root, "doctor-test-loader.mjs");
-  fs.writeFileSync(
-    loaderPath,
-    `import { registerHooks } from "node:module";
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    if (specifier.endsWith("/doctor-ui.js")) {
-      return {
-        shortCircuit: true,
-        url: "data:text/javascript," + encodeURIComponent(
-          [
-            "export async function detectUiProtocolFreshnessIssues() { return []; }",
-            "export function uiProtocolFreshnessIssueToHealthFinding() { return {}; }",
-            "export function uiProtocolFreshnessIssueToRepairEffects() { return []; }",
-            "export async function maybeRepairUiProtocolFreshness() {}",
-          ].join("\\n"),
-        ),
-      };
-    }
-    return nextResolve(specifier, context);
-  },
+afterAll(() => {
+  doctorRuntime = undefined;
+  runtimeDirs.cleanup();
 });
-`,
-  );
-  return loaderPath;
+
+function createDoctorRuntime(root: string) {
+  const entryPath = fileURLToPath(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli));
+  const source = /\.[cm]?ts$/u.test(entryPath);
+  const runtimeRoot = source
+    ? createSourceRuntime(root)
+    : createBuiltRuntime(root, path.dirname(entryPath));
+  // Keep package discovery and real UI checks inside the fixture in both modes.
+  return (env: NodeJS.ProcessEnv, args: string[]) =>
+    source
+      ? runSourceRuntime(
+          runtimeRoot,
+          env,
+          [path.join(runtimeRoot, "src", "entry.ts"), ...args],
+          60_000,
+          4 * 1024 * 1024,
+        )
+      : runBuiltRuntime(runtimeRoot, env, args, 60_000, 4 * 1024 * 1024);
 }
 
 function runDoctor(params: {
   root: string;
   configPath: string;
-  loaderPath: string;
   repair?: boolean;
+  env?: NodeJS.ProcessEnv;
 }) {
-  const entryPath = fileURLToPath(new URL("../entry.ts", import.meta.url));
-  return spawnSync(
-    process.execPath,
+  // Only the immutable package is shared across cases; scenario state stays separate.
+  doctorRuntime ??= createDoctorRuntime(runtimeDirs.make("openclaw-doctor-runtime-"));
+  return doctorRuntime(
+    {
+      ...process.env,
+      HOME: params.root,
+      USERPROFILE: params.root,
+      NODE_DISABLE_COMPILE_CACHE: "1",
+      NODE_ENV: undefined,
+      OPENCLAW_CONFIG_PATH: params.configPath,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_HIDE_BANNER: "1",
+      OPENCLAW_HOME: undefined,
+      OPENCLAW_NO_RESPAWN: "1",
+      OPENCLAW_SKIP_CHANNELS: "1",
+      OPENCLAW_STATE_DIR: path.join(params.root, "state"),
+      OPENCLAW_TEST_FAST: "1",
+      VITEST: undefined,
+      VITEST_POOL_ID: undefined,
+      VITEST_WORKER_ID: undefined,
+      ...params.env,
+    },
     [
-      "--import",
-      "tsx",
-      "--import",
-      params.loaderPath,
-      entryPath,
       "doctor",
       ...(params.repair ? ["--fix"] : []),
       "--non-interactive",
       "--no-workspace-suggestions",
       "--no-color",
     ],
-    {
-      cwd: path.resolve("."),
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        HOME: params.root,
-        USERPROFILE: params.root,
-        NODE_DISABLE_COMPILE_CACHE: "1",
-        NODE_ENV: undefined,
-        OPENCLAW_CONFIG_PATH: params.configPath,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_HIDE_BANNER: "1",
-        OPENCLAW_HOME: undefined,
-        OPENCLAW_NO_RESPAWN: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_STATE_DIR: path.join(params.root, "state"),
-        OPENCLAW_TEST_FAST: "1",
-        VITEST: undefined,
-        VITEST_POOL_ID: undefined,
-        VITEST_WORKER_ID: undefined,
-      },
-      maxBuffer: 4 * 1024 * 1024,
-      timeout: 60_000,
-    },
   );
 }
 
 describe("Doctor report process output", () => {
+  it("refuses an unfenced schema bump without publication metadata before CLI debug capture can write state", () => {
+    const root = tempDirs.make("openclaw-doctor-update-schema-");
+    const configPath = path.join(root, "openclaw.json");
+    const env = { OPENCLAW_STATE_DIR: path.join(root, "state"), OPENCLAW_CONFIG_PATH: configPath };
+    fs.writeFileSync(configPath, "{}\n");
+    const shared = openOpenClawStateDatabase({ env }).path;
+    createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } }, { env });
+    closeOpenClawStateDatabaseForTest();
+    const legacy = new DatabaseSync(shared);
+    legacy.exec(
+      `PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}; UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}; DROP TABLE config_machine_state;`,
+    );
+    legacy.close();
+    const databaseBefore = fs.readFileSync(shared);
+    const sidecarsBefore = ["-wal", "-shm"].map((suffix) => fs.existsSync(`${shared}${suffix}`));
+    const configBefore = fs.readFileSync(configPath);
+
+    const result = runDoctor({
+      root,
+      configPath,
+      repair: true,
+      env: {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_DEBUG_PROXY_ENABLED: "1",
+        OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+      },
+    });
+    expect(result.error).toBeUndefined();
+    expect(
+      ["-wal", "-shm"].map((suffix) => fs.existsSync(`${shared}${suffix}`)),
+      result.stderr,
+    ).toEqual(sidecarsBefore);
+    expect(fs.readFileSync(shared).equals(databaseBefore), result.stderr).toBe(true);
+    const after = new DatabaseSync(shared, { readOnly: true });
+    try {
+      expect(after.prepare("PRAGMA user_version").get()?.user_version).toBe(
+        OPENCLAW_STATE_SCHEMA_VERSION - 1,
+      );
+    } finally {
+      after.close();
+    }
+    expect(fs.readFileSync(configPath)).toEqual(configBefore);
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(1);
+    expect(`${result.stderr}\n${result.stdout}`).toContain(
+      "Doctor refused update-time schema repair driven by OpenClaw 2026.9.2",
+    );
+  });
+
   it("reports deferred Doctor-only state after config refusal, then converges", () => {
     const root = tempDirs.make("openclaw-doctor-deferred-state-");
     const stateDir = path.join(root, "state");
@@ -100,7 +149,6 @@ describe("Doctor report process output", () => {
     const workspaceSource = path.join(workspaceDir, "openclaw-workspace-state.json");
     const tuiSource = path.join(stateDir, "tui", "last-session.json");
     const agentSource = path.join(stateDir, "agent", "auth.json");
-    const loaderPath = writeDoctorTestLoader(root);
     fs.mkdirSync(path.dirname(tuiSource), { recursive: true });
     fs.mkdirSync(workspaceDir, { recursive: true });
     const invalidConfig = {
@@ -134,7 +182,7 @@ describe("Doctor report process output", () => {
     const tuiBefore = fs.readFileSync(tuiSource);
     const agentBefore = fs.readFileSync(agentSource);
 
-    const refused = runDoctor({ root, configPath, loaderPath, repair: true });
+    const refused = runDoctor({ root, configPath, repair: true });
     const refusedOutput = `${refused.stderr}\n${refused.stdout}`;
 
     expect(refused.error, refusedOutput).toBeUndefined();
@@ -172,7 +220,7 @@ describe("Doctor report process output", () => {
         2,
       )}\n`,
     );
-    const repaired = runDoctor({ root, configPath, loaderPath, repair: true });
+    const repaired = runDoctor({ root, configPath, repair: true });
     const repairedOutput = `${repaired.stderr}\n${repaired.stdout}`;
     expect(repaired.error, repairedOutput).toBeUndefined();
     expect(repaired.signal, repairedOutput).toBeNull();
@@ -185,7 +233,7 @@ describe("Doctor report process output", () => {
     );
     expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).not.toHaveProperty("gatway");
 
-    const clean = runDoctor({ root, configPath, loaderPath, repair: true });
+    const clean = runDoctor({ root, configPath, repair: true });
     const cleanOutput = `${clean.stderr}\n${clean.stdout}`;
     expect(clean.error, cleanOutput).toBeUndefined();
     expect(clean.signal, cleanOutput).toBeNull();
@@ -199,13 +247,12 @@ describe("Doctor report process output", () => {
     const stateDir = path.join(root, "state");
     const configPath = path.join(root, "openclaw.json");
     const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
-    const loaderPath = writeDoctorTestLoader(root);
     const original = Buffer.from('{"agent:main:legacy":');
     fs.mkdirSync(path.dirname(storePath), { recursive: true });
     fs.writeFileSync(configPath, `${JSON.stringify({ heartbeat: { every: "30m" } })}\n`);
     fs.writeFileSync(storePath, original);
 
-    const result = runDoctor({ root, configPath, loaderPath, repair: true });
+    const result = runDoctor({ root, configPath, repair: true });
     const output = `${result.stderr}\n${result.stdout}`;
 
     expect(result.error, output).toBeUndefined();
@@ -228,7 +275,6 @@ describe("Doctor report process output", () => {
       );
       const stateDir = path.join(root, "state");
       const configPath = path.join(root, "openclaw.json");
-      const loaderPath = writeDoctorTestLoader(root);
       const env = { OPENCLAW_STATE_DIR: stateDir };
       fs.mkdirSync(stateDir, { recursive: true });
       fs.writeFileSync(
@@ -273,7 +319,7 @@ describe("Doctor report process output", () => {
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
 
-      const result = runDoctor({ root, configPath, loaderPath, repair });
+      const result = runDoctor({ root, configPath, repair });
       const output = `${result.stderr}\n${result.stdout}`;
       expect(result.error, output).toBeUndefined();
       expect(result.signal, output).toBeNull();

@@ -22,7 +22,8 @@ const SAME_TEXT = "same reply";
 const getGlobalHookRunnerMock = vi.hoisted(() => vi.fn());
 const createSlackDraftStreamMock = vi.fn();
 const deliverRepliesMock = vi.fn(
-  async () => undefined as { messageId?: string; channelId?: string } | undefined,
+  async (_params: { replies: ReplyPayload[] }) =>
+    undefined as { messageId?: string; channelId?: string } | undefined,
 );
 const finalizeSlackPreviewEditMock = vi.fn(async (_input: { blocks?: unknown }) => {});
 const normalizeSlackOutboundTextMock = vi.fn((value: string) => value.trim());
@@ -998,7 +999,8 @@ vi.mock("../replies.js", async (importOriginal) => ({
       mockedReplyThreadTsSequence ? mockedReplyThreadTsSequence.shift() : mockedReplyThreadTs,
     markSent: () => {},
   }),
-  deliverReplies: deliverRepliesMock,
+  deliverReplies: (params: Parameters<typeof import("../replies.js").deliverReplies>[0]) =>
+    deliverRepliesMock({ ...params, replies: params.replies.map((prepared) => prepared.payload) }),
   readSlackReplyBlocks: () => mockedSlackReplyBlocks,
   resolveSlackThreadTs: () => mockedReplyThreadTs,
 }));
@@ -4794,6 +4796,68 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(capturedReplyOptions?.commentaryProgressEnabled).toBeUndefined();
     expect(draftStream.update).toHaveBeenLastCalledWith("• Keeping the partial preview path");
   });
+
+  it.each(["partial", "block"] as const)(
+    "retracts and resumes Slack plans while retaining other %s progress",
+    async (mode) => {
+      const draftStream = createDraftStreamStub();
+      createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+      mockedSlackStreamingMode = mode;
+      mockedSlackDraftMode = mode === "block" ? "append" : "replace";
+      mockedDispatchSequence = [];
+      mockedReplyOptionEvents = [
+        { kind: "plan", phase: "update", steps: [{ step: "Inspect", status: "in_progress" }] },
+        { kind: "assistant_start" },
+        { kind: "plan", phase: "update", steps: [] },
+        {
+          kind: "checkpoint",
+          run: async () => {
+            expect(draftStream.clear).toHaveBeenCalledTimes(1);
+            expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+          },
+        },
+        { kind: "plan", phase: "update", steps: [{ step: "Resume", status: "in_progress" }] },
+        { kind: "assistant_start" },
+        {
+          kind: "item",
+          itemId: "card-rejected",
+          itemKind: "tool",
+          name: "progress_card",
+          phase: "end",
+          status: "blocked",
+        },
+        { kind: "assistant_start" },
+        { kind: "item", itemId: "independent", progressText: "Independent work" },
+        {
+          kind: "checkpoint",
+          run: async () => {
+            const text = draftUpdateTexts(draftStream).at(-1);
+            expect(text).toContain("Independent work");
+            expect(text).toContain("blocked");
+            expect(text).toContain("▸ Resume");
+          },
+        },
+        { kind: "assistant_start" },
+        { kind: "plan", phase: "update", steps: [] },
+        {
+          kind: "checkpoint",
+          run: async () => {
+            const text = draftUpdateTexts(draftStream).at(-1);
+            expect(text).toContain("Independent work");
+            expect(text).toContain("blocked");
+            expect(text).not.toContain("Resume");
+            expect(draftStream.clear).toHaveBeenCalledTimes(1);
+          },
+        },
+      ];
+
+      await dispatchPreparedSlackMessage(
+        createPreparedSlackMessage({
+          accountConfig: { streaming: { mode, progress: { label: false } } },
+        }),
+      );
+    },
+  );
 
   it("preserves Slack reasoning previews outside status-final mode", async () => {
     const draftStream = createDraftStreamStub();

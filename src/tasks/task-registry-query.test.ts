@@ -34,6 +34,54 @@ async function readTaskPage(params: Parameters<typeof listTaskRecordPage>[0]) {
 
 describe("listTaskRecordPage", () => {
   it.each([
+    { scope: "sparse", matching: 1 },
+    { scope: "dense", matching: 65 },
+  ])("keeps $scope session pages independent of unrelated task activity", async ({ matching }) => {
+    configureTaskSnapshot(
+      Array.from({ length: 65 }, (_, index): TaskRecord => ({
+        taskId: `task-${index}`,
+        runtime: "cli",
+        requesterSessionKey: index < matching ? "agent:main:requested" : "agent:main:unrelated",
+        ownerKey: index < matching ? "agent:main:requested" : "agent:main:unrelated",
+        scopeKind: "session",
+        task: "Scoped task page",
+        status: "running",
+        deliveryStatus: "pending",
+        notifyPolicy: "done_only",
+        createdAt: 1,
+        lastEventAt: 1,
+      })),
+    );
+    expect(getTaskById("task-0")).toBeDefined();
+    let mutations = 0;
+    const update = () => {
+      mutations += 1;
+      markTaskTerminalById({ taskId: "task-64", status: "succeeded", endedAt: mutations + 1 });
+      pending = setImmediate(update);
+    };
+    let pending = setImmediate(update);
+    try {
+      const page = await listTaskRecordPage({
+        offset: 0,
+        limit: 1,
+        sessionKey: "agent:main:requested",
+      });
+      if (matching === 1) {
+        expect(page.ok).toBe(true);
+        if (page.ok) {
+          expect(page.value.tasks.map((task) => task.taskId)).toEqual(["task-0"]);
+          expect(page.value.hasMore).toBe(false);
+        }
+      } else {
+        expect(page).toEqual({ ok: false, error: "registry_changed" });
+        expect(mutations).toBeGreaterThanOrEqual(3);
+      }
+    } finally {
+      clearImmediate(pending);
+    }
+  });
+
+  it.each([
     { count: 32, mutationTurn: 1, completes: true },
     { count: 64, mutationTurn: 2, completes: true },
     { count: 33, mutationTurn: 1, completes: false },
@@ -85,6 +133,94 @@ describe("listTaskRecordPage", () => {
       }
     },
   );
+
+  it.each([
+    { name: "stale cursor", continuation: true, mutate: true, failLater: false },
+    { name: "cursorless retry", continuation: false, mutate: true, failLater: false },
+    {
+      name: "stale cursor before a later failure",
+      continuation: true,
+      mutate: true,
+      failLater: true,
+    },
+    {
+      name: "valid cursor with a later failure",
+      continuation: true,
+      mutate: false,
+      failLater: true,
+    },
+  ])("handles yielded task pages with $name", async ({ continuation, mutate, failLater }) => {
+    const tasks = Array.from({ length: 1_024 }, (_, index): TaskRecord => ({
+      taskId: `task-${String(index).padStart(5, "0")}`,
+      runtime: "cli",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      task: "Task page interrupted by one completion",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "done_only",
+      createdAt: 1,
+      lastEventAt: 1_024 - index,
+    }));
+    configureTaskSnapshot(tasks);
+    const first = await readTaskPage({ offset: 0, limit: 25 });
+    const unchanged = await readTaskPage({
+      offset: 25,
+      limit: 25,
+      expectedRevision: first.revision,
+    });
+    expect(unchanged.tasks.map((task) => task.taskId)).toEqual(
+      tasks.slice(25, 50).map((task) => task.taskId),
+    );
+
+    let examined = 0;
+    let scheduled = false;
+    let mutation: TaskRecord | null | undefined;
+    const accessFailure = new Error("canonical-store collision in a later slice");
+    const pendingPage = listTaskRecordPage({
+      offset: continuation ? 25 : 0,
+      limit: 25,
+      ...(continuation ? { expectedRevision: first.revision } : {}),
+      prepareFilter: (batch) => {
+        examined += batch.length;
+        if (failLater && examined > 32) {
+          throw accessFailure;
+        }
+        if (mutate && !scheduled) {
+          scheduled = true;
+          // The ordinary completion runs only when this scan reaches its existing yield.
+          queueMicrotask(() => {
+            mutation = markTaskTerminalById({
+              taskId: "task-01023",
+              status: "succeeded",
+              endedAt: 2_000,
+            });
+          });
+        }
+        return () => true;
+      },
+    });
+    if (!mutate) {
+      await expect(pendingPage).rejects.toBe(accessFailure);
+      return;
+    }
+    const page = await pendingPage;
+    expect(mutation).toMatchObject({ taskId: "task-01023", status: "succeeded" });
+    if (continuation) {
+      expect(page).toEqual({ ok: false, error: "cursor_stale" });
+      expect(examined).toBe(32);
+    } else {
+      expect(page.ok).toBe(true);
+      if (page.ok) {
+        expect(page.value.tasks.map((task) => task.taskId)).toEqual([
+          "task-01023",
+          ...tasks.slice(0, 24).map((task) => task.taskId),
+        ]);
+        expect(page.value.revision).toBeGreaterThan(first.revision);
+      }
+    }
+  });
 
   it("keeps large page scans responsive and sorts only the selected window", async () => {
     const total = 10_000;

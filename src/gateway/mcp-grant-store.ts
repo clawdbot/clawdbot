@@ -8,6 +8,7 @@ import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
 import type { DelegationCapability } from "../agents/delegation-capability.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-defaults.js";
 import type { PreparedQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
+import type { PreparedRootedExecutionCapability } from "../agents/rooted-run-params.js";
 import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import type {
   SourceReplyDeliveryMode,
@@ -37,6 +38,8 @@ export type McpLoopbackRequestContext = {
   modelHasVision?: boolean;
   messageProvider?: string;
   clientCaps?: string[];
+  /** Host-selected pinned authoring capability; never sourced from MCP request headers. */
+  pinnedWidgetAuthoring?: boolean;
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string;
@@ -121,6 +124,7 @@ type StoredMcpLoopbackClientGrant = McpLoopbackClientGrant & {
   /** Original CLI policy, rebound only to this stored row's exact lifetime. */
   bindQuestionAnswerAuthority?: (assertActive: () => void) => PreparedQuestionAnswerAuthority;
   skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
+  rootedExecution?: PreparedRootedExecutionCapability;
   activeCaptureKey?: string;
   toolAuth?: McpLoopbackToolAuth;
 };
@@ -231,6 +235,7 @@ export function mintMcpLoopbackClientGrant(params: {
   admittedRunContext?: AdmittedRunContext;
   bindQuestionAnswerAuthority?: StoredMcpLoopbackClientGrant["bindQuestionAnswerAuthority"];
   skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
+  rootedExecution?: PreparedRootedExecutionCapability;
   toolAuth?: McpLoopbackToolAuth;
 }): McpLoopbackClientGrant {
   const sessionKey = params.context.sessionKey.trim();
@@ -250,6 +255,7 @@ export function mintMcpLoopbackClientGrant(params: {
     ...(params.skillLibraryAuthoring
       ? { skillLibraryAuthoring: params.skillLibraryAuthoring }
       : {}),
+    ...(params.rootedExecution ? { rootedExecution: params.rootedExecution } : {}),
     ...(params.toolAuth ? { toolAuth: structuredClone(params.toolAuth) } : {}),
   };
   clientGrantsByToken.set(grant.token, grant);
@@ -411,6 +417,7 @@ export function resolveMcpLoopbackClientGrant(params: {
       admittedRunContext: AdmittedRunContext;
       questionAnswerAuthority?: PreparedQuestionAnswerAuthority;
       skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
+      rootedExecution?: PreparedRootedExecutionCapability;
       isCurrent: () => boolean;
       toolAuth?: McpLoopbackToolAuth;
     }
@@ -448,6 +455,7 @@ export function resolveMcpLoopbackClientGrant(params: {
     questionAnswerAuthority,
     ...(grant.skillLibraryAuthoring ? { skillLibraryAuthoring: grant.skillLibraryAuthoring } : {}),
     isCurrent,
+    ...(grant.rootedExecution ? { rootedExecution: grant.rootedExecution } : {}),
     ...(grant.toolAuth ? { toolAuth: grant.toolAuth } : {}),
   };
 }

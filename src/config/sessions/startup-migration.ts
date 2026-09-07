@@ -1,17 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { formatDoctorStateRepairFailure } from "../../infra/state-repair-message.js";
 import { listOpenClawRegisteredAgentDatabases } from "../../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   isOpenClawAgentDatabaseOpen,
-  openOpenClawAgentDatabase,
+  withOpenClawAgentDatabaseAsync,
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import { resolveStateDir } from "../paths.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
+import { SessionStoreMigrationRequiredError } from "./migration-required.js";
 import { resolveSqliteReadScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import {
   isCanonicalSqliteSessionMainKeyCurrent,
@@ -26,6 +28,7 @@ export function assertSessionStoreMigrationComplete(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   targets?: readonly { storePath: string }[];
+  operation?: "doctor";
 }): void {
   const env = params.env ?? process.env;
   const targets = params.targets ?? resolveAllAgentSessionStoreTargetsSync(params.cfg, { env });
@@ -34,8 +37,13 @@ export function assertSessionStoreMigrationComplete(params: {
     ...targets.map((target) => target.storePath),
   ].find((storePath) => !storePath.endsWith(".sqlite") && fs.existsSync(storePath));
   if (legacyStore) {
-    throw new Error(
-      `Legacy session store requires migration: ${legacyStore}. Run "${formatCliCommand("openclaw doctor --fix", env)}" against the same state/config before starting OpenClaw.`,
+    throw new SessionStoreMigrationRequiredError(
+      params.operation === "doctor"
+        ? formatDoctorStateRepairFailure(
+            `Legacy session store requires migration at ${legacyStore}`,
+            "Repair the retained source using the migration report's named file and validation error, preserving the original history.",
+          )
+        : `Legacy session store requires migration: ${legacyStore}. Run "${formatCliCommand("openclaw doctor --fix", env)}" against the same state/config before starting OpenClaw.`,
     );
   }
 }
@@ -96,12 +104,14 @@ export async function runSessionStartupMigration(params: {
     let handedOff = false;
     try {
       try {
+        const mainKey = params.cfg.session?.mainKey;
         if (
           !registeredDatabases.has(`${options.agentId}\0${databasePath}`) ||
-          !isCanonicalSqliteSessionMainKeyCurrent(options, params.cfg.session?.mainKey)
+          !isCanonicalSqliteSessionMainKeyCurrent(options, mainKey)
         ) {
-          const database = openOpenClawAgentDatabase(options);
-          setCanonicalSqliteSessionMainKey(database, params.cfg.session?.mainKey);
+          await withOpenClawAgentDatabaseAsync(options, (database) =>
+            setCanonicalSqliteSessionMainKey(database, mainKey),
+          );
         }
         // Workspace metadata participates in claim matching. Preserve it during a
         // partial move so the next attempt can finish removing the source claim.

@@ -1,11 +1,31 @@
 import type { NativeDeviceSettingsSnapshot } from "../app/native-device-settings.ts";
 
-export function createNativeDeviceSettingsSnapshot(): NativeDeviceSettingsSnapshot {
+type MacDeviceSettingsSnapshot = NativeDeviceSettingsSnapshot & {
+  app: NonNullable<NativeDeviceSettingsSnapshot["app"]>;
+  capabilities: NonNullable<NativeDeviceSettingsSnapshot["capabilities"]>;
+  browser: NonNullable<NativeDeviceSettingsSnapshot["browser"]>;
+  voice: NativeDeviceSettingsSnapshot["voice"] &
+    Required<Pick<NativeDeviceSettingsSnapshot["voice"], "microphone" | "locale">>;
+  updates: NonNullable<NativeDeviceSettingsSnapshot["updates"]>;
+};
+
+export function createNativeDeviceSettingsSnapshot(): MacDeviceSettingsSnapshot {
   return {
     contract: 1,
     device: { platform: "macos", appVersion: "2026.9.3", appBuild: "42", profileName: null },
     app: {
       showDockIcon: true,
+      iconStyle: {
+        selectedId: "paper",
+        available: [
+          { id: "paper", name: "Original" },
+          { id: "heritage", name: "Heritage" },
+          { id: "clawmark", name: "Clawmark" },
+          { id: "origami", name: "Origami" },
+          { id: "pincer", name: "Pincer" },
+          { id: "openC", name: "Open C" },
+        ],
+      },
       iconAnimationsEnabled: true,
       launchAtLogin: false,
       launchAtLoginAvailable: true,
@@ -67,5 +87,48 @@ export function createNativeDeviceSettingsSnapshot(): NativeDeviceSettingsSnapsh
       },
     },
     updates: { available: true, automatic: true, unavailableReason: null },
+  };
+}
+
+export function createIosNativeDeviceSettingsSnapshot(): NativeDeviceSettingsSnapshot {
+  return {
+    contract: 1,
+    device: {
+      platform: "ios",
+      formFactor: "phone",
+      modelName: "iPhone",
+      appVersion: "2026.9.3",
+      appBuild: "42",
+      profileName: null,
+    },
+    app: { appearance: "system", notificationsEnabled: true },
+    capabilities: {
+      cameraEnabled: true,
+      keepAwakeEnabled: false,
+      healthSummaryAvailable: true,
+      healthSummaryEnabled: false,
+    },
+    permissions: {
+      entries: [
+        { id: "notifications", status: "granted" },
+        { id: "camera", status: "notDetermined" },
+        { id: "microphone", status: "granted" },
+        { id: "speechRecognition", status: "granted" },
+        { id: "location", status: "granted" },
+        { id: "contacts", status: "limited" },
+        { id: "calendars", status: "notDetermined" },
+        { id: "reminders", status: "denied" },
+        { id: "photos", status: "limited" },
+      ],
+      location: { mode: "whileUsing", precise: true, preciseEditable: false },
+    },
+    voice: {
+      supported: true,
+      wakeEnabled: false,
+      talkEnabled: true,
+      talkButtonEnabled: true,
+      talkBackgroundEnabled: false,
+      speakerphoneEnabled: false,
+    },
   };
 }

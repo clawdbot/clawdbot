@@ -70,9 +70,12 @@ function normalizeMockProviderId(providerId?: string): string {
 type SessionManagerMocks = {
   getSessionTarget: Mock<() => undefined>;
   getAppendParentId: Mock<() => string | null>;
+  getHeader: UnknownMock;
   getLeafId: Mock<() => string | null>;
   getLeafEntry: UnknownMock;
   getEntry: UnknownMock;
+  getEntries: UnknownMock;
+  getBranch: UnknownMock;
   getBoundaryCount: UnknownMock;
   branch: UnknownMock;
   resetLeaf: UnknownMock;
@@ -280,9 +283,12 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const sessionManager = {
     getSessionTarget: vi.fn(() => undefined),
     getAppendParentId: vi.fn<() => string | null>(() => null),
+    getHeader: vi.fn(() => ({ version: 3 })),
     getLeafId: vi.fn<() => string | null>(() => null),
     getLeafEntry: vi.fn(() => null),
     getEntry: vi.fn(() => undefined),
+    getEntries: vi.fn(() => []),
+    getBranch: vi.fn(() => []),
     getBoundaryCount: vi.fn(() => 0),
     branch: vi.fn(),
     resetLeaf: vi.fn(),
@@ -726,7 +732,7 @@ vi.mock("../../agent-tools.js", () => ({
 
 vi.mock("../../agent-bundle-mcp-tools.js", () => ({
   createBundleMcpToolRuntime: async () => undefined,
-  getOrCreateSessionMcpRuntime: async () => undefined,
+  acquireSessionMcpRuntime: async () => undefined,
   materializeBundleMcpToolsForRun: async () => undefined,
   retireSessionMcpRuntime: async () => true,
 }));
@@ -778,13 +784,6 @@ vi.mock("../../provider-stream.js", () => ({
   registerProviderStreamForModel: vi.fn(),
 }));
 
-vi.mock("../../owner-display.js", () => ({
-  resolveOwnerDisplaySetting: () => ({
-    ownerDisplay: undefined,
-    ownerDisplaySecret: undefined,
-  }),
-}));
-
 vi.mock("../../sandbox/runtime-status.js", () => ({
   resolveSandboxRuntimeStatus: () => ({
     agentId: "main",
@@ -811,7 +810,6 @@ vi.mock("../../transcript-policy.js", () => ({
 }));
 
 vi.mock("../cache-ttl.js", () => ({
-  readCacheTtlEntries: () => [],
   appendCacheTtlTimestamp: (
     sessionManager: { appendCustomEntry?: (customType: string, data: unknown) => void },
     data: unknown,
@@ -1142,9 +1140,12 @@ export function resetEmbeddedAttemptHarness(
   hoisted.trajectoryEvents.length = 0;
   hoisted.sessionManager.getSessionTarget.mockReset().mockReturnValue(undefined);
   hoisted.sessionManager.getAppendParentId.mockReset().mockReturnValue(null);
+  hoisted.sessionManager.getHeader.mockReset().mockReturnValue({ version: 3 });
   hoisted.sessionManager.getLeafId.mockReset().mockReturnValue(null);
   hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
   hoisted.sessionManager.getEntry.mockReset().mockReturnValue(undefined);
+  hoisted.sessionManager.getEntries.mockReset().mockReturnValue([]);
+  hoisted.sessionManager.getBranch.mockReset().mockReturnValue([]);
   hoisted.sessionManager.getBoundaryCount.mockReset().mockReturnValue(0);
   hoisted.sessionManager.branch.mockReset();
   hoisted.sessionManager.resetLeaf.mockReset();

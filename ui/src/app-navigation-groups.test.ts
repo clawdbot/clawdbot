@@ -17,7 +17,10 @@ import type { NativeDeviceSettingsCapability } from "./app/native-device-setting
 import { readGatewayOperatorAccess } from "./app/operator-access.ts";
 import { getStaticCommandPaletteCatalogItems } from "./components/command-palette-catalog-search.ts";
 import { findSettingsSearchBlocks } from "./pages/config/settings-search.ts";
-import { createNativeDeviceSettingsSnapshot } from "./test-helpers/native-device-settings.ts";
+import {
+  createIosNativeDeviceSettingsSnapshot,
+  createNativeDeviceSettingsSnapshot,
+} from "./test-helpers/native-device-settings.ts";
 
 const settingsGroups = visibleSettingsNavigationGroups(true);
 const settingsRoutes = settingsGroups.flatMap((group) => group.routes);
@@ -32,6 +35,11 @@ describe("sidebar entries", () => {
       openSystemSettings: () => undefined,
       openPanel: () => undefined,
       checkForUpdates: () => undefined,
+      installChromeExtension: async () => ({
+        nativeHostRegistered: false,
+        installRequested: false,
+        discoveredProfiles: 0,
+      }),
       refresh: () => undefined,
       dispose: () => undefined,
     };
@@ -74,6 +82,53 @@ describe("sidebar entries", () => {
     expect(
       visibleSettingsNavigationGroups(canAdmin, { ...capability, snapshot: null })[1]?.labelKey,
     ).toBe("nav.settingsGroupThisDevice");
+    const iosSnapshot = createIosNativeDeviceSettingsSnapshot();
+    iosSnapshot.voice.speakerphoneEnabled = false;
+    for (const [formFactor, labelKey] of [
+      ["phone", "nav.settingsGroupThisIPhone"],
+      ["pad", "nav.settingsGroupThisIPad"],
+      ["desktop", "nav.settingsGroupThisDevice"],
+      [undefined, "nav.settingsGroupThisDevice"],
+    ] as const) {
+      iosSnapshot.device.formFactor = formFactor;
+      expect(
+        visibleSettingsNavigationGroups(canAdmin, { ...capability, snapshot: iosSnapshot })[1]
+          ?.labelKey,
+      ).toBe(labelKey);
+    }
+    const iosCapability = { ...capability, snapshot: iosSnapshot };
+    for (const [query, routeId] of [
+      ["Health summaries", "device"],
+      ["Apple Watch", "device"],
+      ["Contacts", "device-permissions"],
+      ["Photos", "device-permissions"],
+      ["Use speakerphone", "talk"],
+      ["Talk in the background", "talk"],
+    ] as const) {
+      expect(search(query, iosCapability)).toContainEqual(expect.objectContaining({ routeId }));
+      expect(search(query, null)).toEqual([]);
+      expect(search(query, capability)).toEqual([]);
+      expect(search(query, { ...capability, snapshot: null })).toEqual([]);
+    }
+    for (const query of [
+      "Dock icon",
+      "Launch at login",
+      "Quick Chat",
+      "Cookie sync",
+      "computer presence",
+    ]) {
+      expect(search(query, capability)).not.toEqual([]);
+      expect(search(query, iosCapability)).toEqual([]);
+    }
+    const sparseIosSnapshot = createIosNativeDeviceSettingsSnapshot();
+    sparseIosSnapshot.capabilities!.healthSummaryAvailable = false;
+    delete sparseIosSnapshot.voice.speakerphoneEnabled;
+    sparseIosSnapshot.permissions.entries = sparseIosSnapshot.permissions.entries.filter(
+      (entry) => entry.id !== "contacts",
+    );
+    for (const query of ["Health summaries", "Use speakerphone", "Contacts"]) {
+      expect(search(query, { ...capability, snapshot: sparseIosSnapshot })).toEqual([]);
+    }
     for (const route of ["device", "device-permissions"] as const) {
       expect(isSettingsNavigationRouteVisible(route, canAdmin)).toBe(false);
       expect(isSettingsNavigationRouteVisible(route, canAdmin, capability)).toBe(true);

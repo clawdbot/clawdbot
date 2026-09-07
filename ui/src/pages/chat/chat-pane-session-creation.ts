@@ -1,3 +1,4 @@
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
@@ -8,7 +9,9 @@ import { resolveSessionCreateParams } from "../../lib/sessions/create.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
+  isSubagentSessionKey,
   resolveAgentIdFromSessionKey,
+  resolveUiSessionNavigationParentKey,
 } from "../../lib/sessions/session-key.ts";
 import { cloneChatAttachmentsForIndependentOwner } from "./attachment-payload-store.ts";
 import { clearChatHistory } from "./chat-history-actions.ts";
@@ -22,6 +25,7 @@ import {
 } from "./chat-pane-shared.ts";
 import { setChatError } from "./chat-send-queue-state.ts";
 import { canCreateChatSession } from "./chat-state-route.ts";
+import { resolveChatPaneParentSession } from "./components/chat-pane-header.ts";
 
 /** Creates or resets a conversation while guarding its asynchronous ownership. */
 export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentation {
@@ -33,9 +37,28 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     restartRecoveryTombstoned: boolean;
     selectedSessionArchived: boolean;
     selectedSessionId: string | undefined;
+    selectedSession: GatewaySessionRow | undefined;
     sessionKey: string;
     unarchiveAccess: SessionMethodAccess;
   }) {
+    if (params.selectedSession?.spawnedBy || isSubagentSessionKey(params.sessionKey)) {
+      const parentKey = resolveUiSessionNavigationParentKey(params.selectedSession);
+      const parent = resolveChatPaneParentSession(
+        params.selectedSession,
+        this.state?.sessionsResult?.sessions ?? [],
+      );
+      return {
+        kind: "composer-replacement" as const,
+        title: t("chat.subagentViewOnly"),
+        text: t("chat.subagentSessionDisabled", {
+          parent: parent?.title ?? t("chat.parentSession"),
+        }),
+        tone: "neutral" as const,
+        actionLabel: t("chat.openParentSession"),
+        disabledReason: parentKey ? undefined : t("chat.parentSessionUnavailable"),
+        onAction: () => parentKey && this.onPaneSessionChange?.(this.paneId, parentKey),
+      };
+    }
     if (params.catalogDisabledReason) {
       return undefined;
     }

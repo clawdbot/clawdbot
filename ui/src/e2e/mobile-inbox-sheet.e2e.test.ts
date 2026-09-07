@@ -1,6 +1,8 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -173,11 +175,10 @@ suite.define(() => {
             .shell--mobile-nav .sidebar-issues-panel__list-wrap { background: transparent; }
           `,
         });
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(artifactDir, `mobile-inbox-before-${theme}.png`),
-        });
+        await writeFile(
+          path.join(artifactDir, `mobile-inbox-before-${theme}.png`),
+          await takeControlUiViewportScreenshot(page, panel, [panel.getByRole("tab").first()]),
+        );
         const dismissShownBefore = await page
           .locator(".sidebar-issues-panel__dismiss-shown")
           .evaluate((element) => ({
@@ -186,11 +187,10 @@ suite.define(() => {
             lineHeight: getComputedStyle(element).lineHeight,
           }));
         await previousStyle.evaluate((element) => element.parentNode?.removeChild(element));
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(artifactDir, `mobile-inbox-after-${theme}.png`),
-        });
+        await writeFile(
+          path.join(artifactDir, `mobile-inbox-after-${theme}.png`),
+          await takeControlUiViewportScreenshot(page, panel, [panel.getByRole("tab").first()]),
+        );
         const dismissShownAfter = await page
           .locator(".sidebar-issues-panel__dismiss-shown")
           .evaluate((element) => ({

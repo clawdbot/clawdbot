@@ -51,7 +51,12 @@ suite.define(() => {
       await unreadRow.waitFor({ state: "visible", timeout: 10_000 });
       await unreadDot.waitFor({ state: "visible" });
       await captureUiProof(suite, page, "optimistic-read-before.png");
-      const listRequestsBefore = (await gateway.getRequests("sessions.list")).length;
+      // Swarm hydration also lists sessions, but never refreshes the sidebar roster.
+      const rosterRequests = async () =>
+        (await gateway.getRequests("sessions.list")).filter(
+          (request) => !requireRecord(request.params).spawnedBy,
+        );
+      const listRequestsBefore = (await rosterRequests()).length;
       const patchRequestsBefore = (await gateway.getRequests("sessions.patch")).length;
 
       await gateway.deferNext("sessions.patch", { key: unreadKey, unread: false });
@@ -62,8 +67,15 @@ suite.define(() => {
       patchHeld = true;
 
       await unreadDot.waitFor({ state: "hidden", timeout: 2_000 });
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("sessions.list")).map(
+            (request) => requireRecord(request.params).spawnedBy,
+          ),
+        )
+        .toContain(unreadKey);
       expect((await gateway.getRequests("sessions.patch")).length - patchRequestsBefore).toBe(1);
-      expect((await gateway.getRequests("sessions.list")).length - listRequestsBefore).toBe(0);
+      expect((await rosterRequests()).length - listRequestsBefore).toBe(0);
       await captureUiProof(suite, page, "optimistic-read-in-flight.png");
 
       await gateway.resolveDeferred("sessions.patch");
@@ -138,7 +150,7 @@ suite.define(() => {
           markedUnreadAt: marker,
         },
       });
-      await activeRow.locator(".session-run-spinner").waitFor();
+      await activeRow.locator(".sidebar-session-indicator .session-glyph__ring").waitFor();
       await expectRequestCountStable(gateway, "sessions.patch", 1);
       await captureUiProof(suite, page, "manual-unread-running.png");
 

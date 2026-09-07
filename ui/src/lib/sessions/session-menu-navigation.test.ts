@@ -61,14 +61,17 @@ afterEach(() => {
 });
 
 describe("session menu navigation actions", () => {
-  it("copies an exact session link with the stored face and deployment prefix", async () => {
+  it.each([
+    ["copy-session-link", "/control"],
+    ["copy-session-preview-link", "/control/share"],
+  ] as const)("copies %s with the stored face and deployment prefix", async (kind, basePath) => {
     const { params } = fixture();
-    await runSessionNavigationAction("copy-session-link", params);
+    await runSessionNavigationAction(kind, params);
     const copied = vi.mocked(copyToClipboard).mock.calls[0]?.[0];
     const url = new URL(copied!);
     expect(url.origin).toBe(window.location.origin);
     expect(url.pathname).toBe(
-      "/control/dashboard/research/dashboard/12345678-90ab-cdef-1234-567890abcdef",
+      `${basePath}/dashboard/research/dashboard/12345678-90ab-cdef-1234-567890abcdef`,
     );
     expect(url.search).toBe("");
     expect(url.hash).toBe("");
@@ -100,6 +103,27 @@ describe("session menu navigation actions", () => {
     await runSessionNavigationAction("copy-session-link", params);
     expect(copyToClipboard).toHaveBeenCalledWith(
       `${base}/dashboard/research/dashboard/12345678-90ab-cdef-1234-567890abcdef`,
+    );
+    await runSessionNavigationAction("copy-session-preview-link", params);
+    expect(copyToClipboard).toHaveBeenLastCalledWith(
+      `${base}/share/dashboard/research/dashboard/12345678-90ab-cdef-1234-567890abcdef`,
+    );
+  });
+
+  it("keeps the catalog target in preview links without copying connection credentials", async () => {
+    const { params } = fixture();
+    params.session = {
+      key: "agent:research:catalog:codex:dev%3Amac:thread%2F123",
+      sessionId: "catalog-session",
+    };
+    Object.assign(params.context.gateway.snapshot.hello!, {
+      controlUiUrl: "https://gateway.example.test/remote?token=secret#private",
+    });
+
+    await runSessionNavigationAction("copy-session-preview-link", params);
+
+    expect(copyToClipboard).toHaveBeenCalledWith(
+      "https://gateway.example.test/remote/share/chat/research?catalog=codex&host=dev%3Amac&thread=thread%2F123",
     );
   });
 

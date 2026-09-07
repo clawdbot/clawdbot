@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalRecord, expectDefined } from "@openclaw/normalization-core";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -65,6 +65,7 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { consumeCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { STALE_WORKER_BUILD_REASON } from "../worker-environments/admission.js";
 import { agentWaitHandler } from "./agent-wait.js";
 import { handleChatSend, handleTrustedInternalChatSend } from "./chat-send-handler.js";
@@ -128,6 +129,7 @@ const mockState = vi.hoisted(() => {
     emittedTranscriptUpdates: [] as TranscriptUpdate[],
     savedMediaResults: [] as Array<{ id?: string; path: string; contentType?: string }>,
     saveMediaError: null as Error | null,
+    steerDocumentRenderError: null as Error | null,
     savedMediaCalls: [] as Array<{ contentType?: string; subdir?: string; size: number }>,
     saveMediaWait: null as Promise<void> | null,
     activeSaveMediaCalls: 0,
@@ -233,6 +235,23 @@ const OFFLOAD_PNG_BASE64 =
 const TINY_JPEG_BASE64 =
   "/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAkGBxAQEBUQEBAVFRUVFRUVFRUVFRUVFRUVFRUXFhUVFRUYHSggGBolHRUVITEhJSkrLi4uFx8zODMsNygtLisBCgoKDg0OGhAQGi0fICUtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLf/AABEIAAEAAQMBEQACEQEDEQH/xAAXAAADAQAAAAAAAAAAAAAAAAAAAQMC/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAwDAQACEAMQAAAB6AAAAP/EABQQAQAAAAAAAAAAAAAAAAAAACD/2gAIAQEAAT8Af//EABQRAQAAAAAAAAAAAAAAAAAAACD/2gAIAQIBAT8Af//EABQRAQAAAAAAAAAAAAAAAAAAACD/2gAIAQMBAT8Af//Z";
 
+vi.mock("../../media-understanding/file-context.js", async () => {
+  const actual = await vi.importActual<typeof import("../../media-understanding/file-context.js")>(
+    "../../media-understanding/file-context.js",
+  );
+  return {
+    ...actual,
+    renderInboundDocumentContext: (
+      params: Parameters<typeof actual.renderInboundDocumentContext>[0],
+    ) => {
+      if (mockState.steerDocumentRenderError) {
+        return Promise.reject(mockState.steerDocumentRenderError);
+      }
+      return actual.renderInboundDocumentContext(params);
+    },
+  };
+});
+
 vi.mock("../session-utils.js", async () => {
   const original =
     await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
@@ -251,19 +270,21 @@ vi.mock("../session-utils.js", async () => {
           sessionFile: mockState.transcriptPath,
           ...mockState.sessionEntry,
         };
-    return {
-      ...(typeof mockState.sessionEntry.canonicalKey === "string" ? { canonicalKey } : {}),
-      cfg: {
-        ...mockState.config,
-        session: {
-          ...(mockState.config.session as Record<string, unknown> | undefined),
-          mainKey: mockState.mainSessionKey,
-        },
+    const cfg = {
+      ...mockState.config,
+      session: {
+        ...(mockState.config.session as Record<string, unknown> | undefined),
+        mainKey: mockState.mainSessionKey,
       },
+    };
+    return {
+      cfg,
+      agentId: resolveSessionStoreAgentId(cfg, rawKey, opts?.agentId),
       storePath: mockState.storePath,
       store: entry ? { [canonicalKey]: entry } : {},
       entry,
       canonicalKey,
+      storeKeys: [canonicalKey],
     };
   };
   return {
@@ -1354,13 +1375,12 @@ async function runNonStreamingChatSend(params: {
     return undefined;
   }
 
-  await waitForAssertion(() => {
-    expect(params.context.broadcast.mock.calls.length).toBe(1);
-  });
-
-  const chatCall = mockCallAt(params.context.broadcast, 0);
-  expect(chatCall?.[0]).toBe("chat");
-  return chatCall?.[1] as Record<string, any> | undefined;
+  const terminalCalls = () =>
+    params.context.broadcast.mock.calls.filter(
+      ([event, payload]) => event === "chat" && asOptionalRecord(payload)?.state !== "delta",
+    );
+  await waitForAssertion(() => expect(terminalCalls()).toHaveLength(1));
+  return asOptionalRecord(terminalCalls()[0]?.[1]);
 }
 
 async function expectUnpersistedAgentRunFinal(params: {
@@ -2236,6 +2256,133 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(readPersistedUserMessages()[0]?.["__openclaw"]).toMatchObject({
       steerTargetRunId: "active-run",
     });
+  });
+
+  it("hands steered document attachments to the active run as extracted file context", async () => {
+    const { send } = await createSqliteChatRequest("openclaw-chat-send-steer-document-");
+    mockState.hasMessageReceivedHooks = true;
+    // Under the suite fixture root so the suite cleanup removes it; a bare
+    // tmpdir entry would leak on every run.
+    const documentDir = fs.mkdtempSync(path.join(suiteFixtureRoot, "openclaw-steer-doc-"));
+    const documentPath = path.join(documentDir, "notes.txt");
+    fs.writeFileSync(documentPath, "steered document body");
+    setSavedMediaResults([documentPath, "text/plain"]);
+    const queueMessage = vi.fn(async (_text: string, options?: ReplyBackendQueueMessageOptions) => {
+      await options?.userTurnTranscriptRecorder?.persistApproved();
+    });
+    const operation = beginMessageInjectionOperation({
+      originatingLeafEntryId: null,
+      runId: "active-run",
+      supportsQueueMessageImages: true,
+      taskSuggestionDeliveryMode: "gateway",
+      queueMessage,
+    });
+
+    try {
+      await send({
+        idempotencyKey: "idem-steer-document",
+        requestParams: {
+          queueMode: "steer",
+          attachments: [
+            createFileAttachment(
+              "notes.txt",
+              "text/plain",
+              Buffer.from("steered document body", "utf8").toString("base64"),
+            ),
+          ],
+        },
+        client: {
+          connect: {
+            client: {
+              id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+              mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+              version: "dev",
+              platform: "web",
+            },
+            caps: [GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS],
+            scopes: ["operator.admin"],
+          },
+        },
+      });
+    } finally {
+      operation.complete();
+    }
+
+    expect(queueMessage).toHaveBeenCalledOnce();
+    const queueCall = vi.mocked(queueMessage).mock.calls[0];
+    if (!queueCall) {
+      throw new Error("expected queueMessage to receive the injected text");
+    }
+    const [injectedText] = queueCall;
+    // The active run never reaches reply dispatch, so the injection text must
+    // already carry the extracted document context.
+    expect(injectedText).toContain('<file name="notes.txt" mime="text/plain">');
+    expect(injectedText).toContain("steered document body");
+  });
+
+  it("keeps the raw steer when the lazy document render fails", async () => {
+    const { respond, send } = await createSqliteChatRequest("openclaw-chat-send-steer-doc-fail-");
+    mockState.hasMessageReceivedHooks = true;
+    const documentPath = path.join(suiteFixtureRoot, "openclaw-steer-doc-fail.txt");
+    fs.writeFileSync(documentPath, "steered document body");
+    setSavedMediaResults([documentPath, "text/plain"]);
+    mockState.steerDocumentRenderError = new Error("lazy media runtime unavailable");
+    const queueMessage = vi.fn(async (_text: string, options?: ReplyBackendQueueMessageOptions) => {
+      await options?.userTurnTranscriptRecorder?.persistApproved();
+    });
+    const operation = beginMessageInjectionOperation({
+      originatingLeafEntryId: null,
+      runId: "active-run",
+      supportsQueueMessageImages: true,
+      taskSuggestionDeliveryMode: "gateway",
+      queueMessage,
+    });
+
+    try {
+      await send({
+        idempotencyKey: "idem-steer-document-render-failure",
+        requestParams: {
+          queueMode: "steer",
+          attachments: [
+            createFileAttachment(
+              "notes.txt",
+              "text/plain",
+              Buffer.from("steered document body", "utf8").toString("base64"),
+            ),
+          ],
+        },
+        client: {
+          connect: {
+            client: {
+              id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+              mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+              version: "dev",
+              platform: "web",
+            },
+            caps: [GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS],
+            scopes: ["operator.admin"],
+          },
+        },
+      });
+    } finally {
+      operation.complete();
+      mockState.steerDocumentRenderError = null;
+    }
+
+    // A failed render must not abort a steerable message: normal reply
+    // dispatch proceeds with raw content on media-understanding failure, so
+    // the steer injection keeps the same contract.
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "started" }),
+      undefined,
+      expect.any(Object),
+    );
+    expect(queueMessage).toHaveBeenCalledOnce();
+    const [injectedText] = vi.mocked(queueMessage).mock.calls[0] ?? [];
+    expect(injectedText).toBeDefined();
+    expect(injectedText).not.toContain('<file name="notes.txt"');
+    expect(injectedText).toContain("hello");
   });
 
   it("hydrates and accepts reply injection before ACK without waiting for delivery", async () => {
@@ -3489,7 +3636,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
-  it("materializes each distinct assistant media row once", async () => {
+  it("materializes latest media payloads once in first-seen order", async () => {
     await withTranscriptFixtureState(
       "openclaw-chat-send-multiple-assistant-media-",
       async (fixtureDir) => {
@@ -3510,7 +3657,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           {
             kind: "block",
             payload: setReplyPayloadMetadata(
-              { text: "First image", mediaUrl: firstMediaUrl, mediaUrls: [firstMediaUrl] },
+              { text: "Draft first image", mediaUrl: firstMediaUrl, mediaUrls: [firstMediaUrl] },
               {
                 assistantMessageIndex: 1,
                 assistantTranscriptMediaUrls: [firstMediaUrl],
@@ -3524,6 +3671,16 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
               {
                 assistantMessageIndex: 2,
                 assistantTranscriptMediaUrls: [secondMediaUrl],
+              },
+            ),
+          },
+          {
+            kind: "final",
+            payload: setReplyPayloadMetadata(
+              { text: "First image", mediaUrl: firstMediaUrl, mediaUrls: [firstMediaUrl] },
+              {
+                assistantMessageIndex: 1,
+                assistantTranscriptMediaUrls: [firstMediaUrl],
               },
             ),
           },
@@ -3551,6 +3708,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           expect(JSON.stringify(content)).not.toContain("MEDIA:");
         }
         expect(JSON.stringify(messages)).not.toContain(":assistant-media");
+        const mediaMessageIds = readTranscriptJsonLines(mockState.transcriptPath)
+          .filter((entry) => asOptionalRecord(entry.message)?.role === "assistant")
+          .slice(1)
+          .map((entry) => entry.id);
+        expect(
+          mockState.emittedTranscriptUpdates
+            .filter((update) => mediaMessageIds.includes(update.messageId))
+            .map((update) => update.messageId),
+        ).toEqual(mediaMessageIds);
       },
     );
   });
@@ -4660,6 +4826,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(broadcastText).toContain("Trajectory exports can include");
     expect(broadcastText).toContain("through exec approval");
     expect(broadcastText).toContain("Approve once");
+    await waitForAssertion(() =>
+      expect(context.chatRunState.runs.has("idem-command-block")).toBe(false),
+    );
   });
 
   it("keeps slash-command block text when the final payload only adds media", async () => {

@@ -156,8 +156,13 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       closed: retired.closed,
       matchedSharedClient: retired.found,
     });
-    if (retired.closed) {
-      await state.client.closeAndWait({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 });
+    // Retained peers prevent retirement; preserve their client without treating
+    // missing close evidence as a completed one-shot cleanup.
+    const result = retired.closed
+      ? await state.client.closeAndWait({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 })
+      : undefined;
+    if (params.oneShotCliRun && result?.cleanup !== "closed") {
+      throw new Error("Codex one-shot client cleanup could not be confirmed");
     }
   };
   const releaseSandboxExecEnvironment = async () => {
@@ -173,7 +178,15 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       await releaseSandboxExecEnvironment();
       const ownedClient = state.releaseSharedClientLease ? state.client : undefined;
       releaseSharedClientLeaseOnce();
-      await ownedClient?.closeAndWait({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 });
+      if (ownedClient) {
+        const result = await ownedClient.closeAndWait({
+          exitTimeoutMs: 2_000,
+          forceKillDelayMs: 250,
+        });
+        if (params.oneShotCliRun && result.cleanup !== "closed") {
+          throw new Error("Codex isolated client cleanup could not be confirmed");
+        }
+      }
       return;
     }
     releaseSharedClientLeaseOnce();
@@ -273,6 +286,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
       signal: runAbortController.signal,
       hostCapabilities: params.hostCapabilities,
+      assertCurrent: connection.assertCurrent,
       onPreToolUseFailure: (failure) => {
         const projector = projectorRef.current;
         if (projector) {

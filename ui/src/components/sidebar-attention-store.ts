@@ -52,6 +52,7 @@ export class SidebarAttentionStoreController implements StoreController {
   private dismissed: SidebarAttentionDismissals = {};
   private loadGeneration = 0;
   private cronRefresh: { generation: number; requested: boolean } | null = null;
+  private cronRefreshNeeded = false;
   private modelAuthRefresh: { generation: number; requested: boolean } | null = null;
   private readonly stopGateway: () => void;
   private readonly stopEvents: () => void;
@@ -214,22 +215,40 @@ export class SidebarAttentionStoreController implements StoreController {
       this.reconcileDismissals(scope);
       this.onChange();
     };
+    // Deferring dispatch still invalidates the pending inventory: its stale
+    // response must not retire dismissals saved since the request began.
     if (this.cronRefresh?.generation === generation) {
       this.cronRefresh.requested = true;
-    } else {
+    }
+    this.cronRefreshNeeded = document.visibilityState === "hidden";
+    if (!this.cronRefreshNeeded && this.cronRefresh?.generation !== generation) {
       const refresh = { generation, requested: true };
       this.cronRefresh = refresh;
+      const canRefreshCron = () => current() && document.visibilityState !== "hidden";
       void (async () => {
         try {
           // One scope owns both reads. Events during either read request one
           // trailing inventory; retired scopes never drain queued network work.
           while (refresh.requested && current()) {
+            if (!canRefreshCron()) {
+              this.cronRefreshNeeded = true;
+              break;
+            }
             refresh.requested = false;
             const cron = createInitialCronState({ client, connected: true });
+            cron.canRefresh = canRefreshCron;
             cron.cronAgentId = agentScope.scopeId;
             await Promise.all([loadCronJobsPage(cron), loadCronStatus(cron)]);
+            while (
+              canRefreshCron() &&
+              cron.cronJobsHasMore &&
+              !cron.cronJobsError &&
+              !refresh.requested
+            ) {
+              await loadCronJobsPage(cron, { append: true });
+            }
             if (current()) {
-              if (!cron.cronJobsError) {
+              if (!cron.cronJobsError && !cron.cronJobsHasMore) {
                 this.cronJobs = cron.cronJobs;
               }
               if (!cron.cronError) {
@@ -246,6 +265,9 @@ export class SidebarAttentionStoreController implements StoreController {
                   !cron.cronError,
                 modelAuthAgentId: null,
               });
+              if (cron.cronJobsHasMore && !canRefreshCron()) {
+                this.cronRefreshNeeded = true;
+              }
             }
           }
         } finally {
@@ -343,11 +365,11 @@ export class SidebarAttentionStoreController implements StoreController {
     const loadedAtMs = this.sources.agentSelection.state.selectedId
       ? Math.min(this.cronLoadedAtMs, this.modelAuthLoadedAtMs)
       : this.cronLoadedAtMs;
-    if (
-      document.visibilityState === "visible" &&
-      Date.now() - loadedAtMs >= VISIBILITY_REFRESH_MIN_AGE_MS
-    ) {
-      this.load();
+    const stale = Date.now() - loadedAtMs >= VISIBILITY_REFRESH_MIN_AGE_MS;
+    if (document.visibilityState === "visible" && (this.cronRefreshNeeded || stale)) {
+      // Hidden cron events need an immediate catch-up even inside the freshness
+      // window, without refreshing independently current model authentication.
+      this.load(stale);
     }
   };
 
@@ -368,6 +390,16 @@ export class SidebarAttentionStoreController implements StoreController {
   }
 
   dismiss(dismissal: SidebarAttentionDismissal): void {
+    const run = this.sources.overlays.snapshot.updateRun;
+    if (
+      dismissal.kind === "updateAvailable" &&
+      run &&
+      run.status !== "running" &&
+      dismissal.signature === JSON.stringify(["run", run.runId])
+    ) {
+      this.sources.overlays.acknowledgeUpdateRun();
+      return;
+    }
     if (this.dismissedScope) {
       this.dismissed = dismissSidebarAttention(this.dismissedScope, dismissal);
       this.onChange();

@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, expect, vi } from "vitest";
+import { afterEach, beforeAll, expect, vi } from "vitest";
 import {
   fingerprintAuthProfileCredential,
   fingerprintOpaqueRuntimeOwner,
@@ -10,22 +10,23 @@ import {
 } from "../agents/execution-auth-binding.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { runSetupMemoryImportStep } from "../wizard/setup.memory-import.js";
+import { runSystemAgentTurnWithDeps as runSystemAgentTurnWithDepsImpl } from "./agent-turn.test-support.js";
 import {
   SystemAgentChatEngine as RuntimeSystemAgentChatEngine,
   type SystemAgentChatEngineOptions,
 } from "./chat-engine.js";
 import type { ChatWizardHostDependencies } from "./chat-wizard-host.js";
 import {
-  resolveSystemAgentConfiguredRouteFromConfig,
+  resolveSystemAgentConfiguredRouteFromConfig as resolveSystemAgentConfiguredRouteFromConfigImpl,
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
 import {
-  createSystemAgentVerifiedInferenceTestFixture,
-  installSystemAgentPluginMetadataTestSnapshot,
+  createSystemAgentVerifiedInferenceTestFixture as createSystemAgentVerifiedInferenceTestFixtureImpl,
+  createSystemAgentPluginMetadataTestSnapshot,
   type SystemAgentPluginMetadataTestSnapshot,
 } from "./system-agent.test-helpers.js";
 import {
-  createSystemAgentVerifiedInferenceBinding,
+  createSystemAgentVerifiedInferenceBinding as createSystemAgentVerifiedInferenceBindingImpl,
   type SystemAgentVerifiedInferenceBinding,
   type SystemAgentVerifiedInferenceDeps,
 } from "./verified-inference.js";
@@ -129,11 +130,33 @@ export let sharedVerifiedInference: SystemAgentVerifiedInferenceBinding | undefi
 let sharedVerifiedInferenceDeps: SystemAgentVerifiedInferenceDeps | undefined;
 let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 
+const resolveSystemAgentConfiguredRouteFromConfig: typeof resolveSystemAgentConfiguredRouteFromConfigImpl =
+  (...args) =>
+    pluginMetadataSnapshot!.run(
+      () => resolveSystemAgentConfiguredRouteFromConfigImpl(...args),
+      args[0],
+    );
+
+const createSystemAgentVerifiedInferenceTestFixture: typeof createSystemAgentVerifiedInferenceTestFixtureImpl =
+  (...args) =>
+    pluginMetadataSnapshot!.run(
+      () => createSystemAgentVerifiedInferenceTestFixtureImpl(...args),
+      args[0],
+    );
+
+const createSystemAgentVerifiedInferenceBinding: typeof createSystemAgentVerifiedInferenceBindingImpl =
+  (...args) =>
+    pluginMetadataSnapshot!.run(() => createSystemAgentVerifiedInferenceBindingImpl(...args));
+
+export const runSystemAgentTurnWithDeps: typeof runSystemAgentTurnWithDepsImpl = (...args) =>
+  pluginMetadataSnapshot!.run(() => runSystemAgentTurnWithDepsImpl(...args));
+
+export { createSystemAgentVerifiedInferenceTestFixture };
+
 export function useTempStateDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-engine-"));
   tempDirs.push(dir);
   vi.stubEnv("OPENCLAW_STATE_DIR", dir);
-  pluginMetadataSnapshot?.rebindForCurrentEnv();
   return dir;
 }
 
@@ -279,6 +302,40 @@ type TestSystemAgentChatEngineOptions = Omit<SystemAgentChatEngineOptions, "veri
 
 /** Every ordinary engine test starts from a real, live-gate-shaped authority grant. */
 export class SystemAgentChatEngine extends RuntimeSystemAgentChatEngine {
+  override answerWizard(...args: Parameters<RuntimeSystemAgentChatEngine["answerWizard"]>) {
+    return pluginMetadataSnapshot!.run(() => super.answerWizard(...args));
+  }
+
+  override cancelWizard(...args: Parameters<RuntimeSystemAgentChatEngine["cancelWizard"]>) {
+    return pluginMetadataSnapshot!.run(() => super.cancelWizard(...args));
+  }
+
+  override resolveOperatorApproval(
+    ...args: Parameters<RuntimeSystemAgentChatEngine["resolveOperatorApproval"]>
+  ) {
+    return pluginMetadataSnapshot!.run(() => super.resolveOperatorApproval(...args));
+  }
+
+  override loadOverview(...args: Parameters<RuntimeSystemAgentChatEngine["loadOverview"]>) {
+    return pluginMetadataSnapshot!.run(() => super.loadOverview(...args));
+  }
+
+  override planGreeting(...args: Parameters<RuntimeSystemAgentChatEngine["planGreeting"]>) {
+    return pluginMetadataSnapshot!.run(() => super.planGreeting(...args));
+  }
+
+  override seedHistory(...args: Parameters<RuntimeSystemAgentChatEngine["seedHistory"]>) {
+    return pluginMetadataSnapshot!.run(() => super.seedHistory(...args));
+  }
+
+  override propose(...args: Parameters<RuntimeSystemAgentChatEngine["propose"]>) {
+    return pluginMetadataSnapshot!.run(() => super.propose(...args));
+  }
+
+  override handle(...args: Parameters<RuntimeSystemAgentChatEngine["handle"]>) {
+    return pluginMetadataSnapshot!.run(() => super.handle(...args));
+  }
+
   constructor(opts: TestSystemAgentChatEngineOptions = {}) {
     const {
       runChannelSetupWizard,
@@ -337,7 +394,7 @@ export async function advanceGatewayWizardToToken(engine: SystemAgentChatEngine)
 }
 
 beforeAll(async () => {
-  pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot(
+  pluginMetadataSnapshot = createSystemAgentPluginMetadataTestSnapshot(
     sharedVerifiedInferenceConfig,
   );
   const fixture = await createSystemAgentVerifiedInferenceTestFixture(
@@ -351,13 +408,8 @@ beforeAll(async () => {
   );
 });
 
-afterAll(() => {
-  pluginMetadataSnapshot?.restore();
-});
-
 afterEach(() => {
   vi.unstubAllEnvs();
-  pluginMetadataSnapshot?.rebindForCurrentEnv();
   vi.clearAllMocks();
   mocks.readConfigFileSnapshot.mockResolvedValue(
     configSnapshot(structuredClone(sharedVerifiedInferenceConfig)) as never,
@@ -404,7 +456,6 @@ export { expectDefined } from "@openclaw/normalization-core";
 export { hashSystemAgentOperation } from "./operator-approval.js";
 export type { OpenClawConfig } from "../config/types.openclaw.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
-export { runSystemAgentTurnWithDeps } from "./agent-turn.test-support.js";
 export { classifySystemAgentApprovalText } from "./operator-approval.js";
 export { SystemAgentWizardAnswerError } from "./chat-engine.js";
 export type { SystemAgentChatEngineOptions } from "./chat-engine.js";

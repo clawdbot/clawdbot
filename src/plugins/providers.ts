@@ -6,7 +6,7 @@ import { compileSafeRegex } from "../security/safe-regex.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
-import type { PluginLoadOptions } from "./loader.js";
+import type { PluginLoadOptions } from "./loader-types.js";
 import {
   isActivatedManifestOwner,
   passesManifestOwnerBasePolicy,

@@ -3,6 +3,7 @@ import { Worker, type WorkerOptions } from "node:worker_threads";
 import { afterEach, expect, it } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { assertNoOpenClawAgentDatabaseLeases } from "../../state/openclaw-agent-db-lease.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -23,7 +24,10 @@ import {
   waitForSessionTranscriptIndexReconcile,
   waitForSessionTranscriptIndexReconcilesInStateDir,
 } from "./session-transcript-reconcile.js";
-import type { SessionTranscriptReconcileWorkerMessage } from "./session-transcript-reconcile.worker.js";
+import type {
+  SessionTranscriptReconcileWorkerInput,
+  SessionTranscriptReconcileWorkerMessage,
+} from "./session-transcript-reconcile.worker.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const databaseOptions = { agentId: "main" };
@@ -32,7 +36,7 @@ const scope = {
   sessionId: "native-exit-proof",
   sessionKey: "agent:main:native-exit-proof",
 };
-type ProjectionStage = "plan-start" | "active-chunk" | "fts-chunk" | "plan-finish";
+type ProjectionStage = "plan-start" | "active-chunk" | "fts-chunk" | "plan-finish" | "done";
 
 function createQueuedProjectionFence(stage: ProjectionStage, beforeRelease: () => void) {
   const release = createDeferred();
@@ -41,10 +45,13 @@ function createQueuedProjectionFence(stage: ProjectionStage, beforeRelease: () =
   let worker: Worker | undefined;
   let blocker: Promise<void> | undefined;
   let fenced = false;
+  const modes: SessionTranscriptReconcileWorkerInput["mode"][] = [];
   return {
+    modes,
     blocked: blocked.promise,
     release: release.resolve,
     createWorker(this: void, filename: string | URL, options: WorkerOptions): Worker {
+      modes.push((options.workerData as SessionTranscriptReconcileWorkerInput).mode);
       const created = new Worker(filename, options);
       worker = created;
       const post = created.postMessage.bind(created);
@@ -79,7 +86,11 @@ function createQueuedProjectionFence(stage: ProjectionStage, beforeRelease: () =
       await blocker;
       // On baseline failure, settlement can beat this handler; join it before fixture disposal.
       if (fenced) {
-        await withTestTimeout(acknowledged.promise, 5_000, "queued projection did not finish");
+        if (stage === "done") {
+          await runExclusiveSqliteSessionWrite(databaseOptions, async () => undefined);
+        } else {
+          await withTestTimeout(acknowledged.promise, 5_000, "queued projection did not finish");
+        }
       }
       await worker?.terminate();
     },
@@ -91,6 +102,7 @@ const cases = [
   { stage: "active-chunk", scheduled: false, replace: false },
   { stage: "fts-chunk", scheduled: false, replace: false },
   { stage: "plan-finish", scheduled: false, replace: false },
+  { stage: "done", scheduled: false, replace: false },
   { stage: "active-chunk", scheduled: true, replace: false },
   { stage: "active-chunk", scheduled: false, replace: true },
   { stage: "plan-finish", scheduled: false, replace: true },
@@ -184,6 +196,7 @@ it.each(cases)(
         }
         fence.release();
         const result = await outcome;
+        expect(fence.modes).toEqual(["disk", "release"]);
         await drain;
         if (!scheduled) {
           expect(result).toMatchObject({ status: "rejected" });
@@ -200,6 +213,9 @@ it.each(cases)(
         expect(readSessionTranscriptMessageEvents(scope).map((row) => row.event)).toEqual([
           expect.objectContaining({ id: replace ? "replacement" : "seed" }),
         ]);
+        await fence.cleanup();
+        closeOpenClawAgentDatabasesForTest();
+        expect(() => assertNoOpenClawAgentDatabaseLeases(databaseOptions.agentId)).not.toThrow();
       } finally {
         await fence.cleanup();
         await outcome;

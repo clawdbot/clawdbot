@@ -47,10 +47,12 @@ export {
   resolveRemoteEmbeddingBearerClient,
   resolveRemoteEmbeddingClient,
   runEmbeddingBatchGroups,
+  runEmbeddingBatches,
   sanitizeAndNormalizeEmbedding,
   sanitizeEmbeddingCacheHeaders,
   throwIfBatchCompletionError,
   throwIfBatchTerminalFailure,
+  waitForEmbeddingBatch,
   uploadBatchJsonlFile,
   withRemoteHttpResponse,
 } from "../../packages/memory-host-sdk/src/engine-embeddings.js";

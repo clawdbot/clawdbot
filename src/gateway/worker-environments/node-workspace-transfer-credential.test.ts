@@ -104,6 +104,7 @@ describe("node workspace credential revocation", () => {
                   direction: "upload",
                   token,
                   baseManifestRef: prepared.snapshot.manifestRef,
+                  referenceManifestRef: prepared.snapshot.manifestRef,
                 },
               },
               undefined,

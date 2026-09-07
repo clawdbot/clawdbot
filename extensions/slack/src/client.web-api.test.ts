@@ -1,6 +1,6 @@
 // Slack tests cover real Web API routing behavior.
 import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import type { AddressInfo, Socket } from "node:net";
 import { WebClient } from "@slack/web-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -143,6 +143,11 @@ async function startStalledHeadersSlackApiServer(requests: SlackApiRequest[]): P
     request.resume();
     request.socket.once("close", resolveSocketClosed);
   });
+  const sockets = new Set<Socket>();
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+  });
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve);
   });
@@ -150,8 +155,11 @@ async function startStalledHeadersSlackApiServer(requests: SlackApiRequest[]): P
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     close: async () => {
-      server.closeAllConnections();
-      await closeServer(server);
+      const closed = closeServer(server);
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await closed;
     },
     socketClosed,
   };

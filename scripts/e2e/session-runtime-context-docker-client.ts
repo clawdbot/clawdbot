@@ -60,25 +60,23 @@ function messageText(content: unknown): string {
 
 async function verifyRuntimeContextTranscriptShape() {
   const sessionManager = SessionManager.inMemory();
-  const effectivePrompt = [
-    "visible ask",
-    "",
-    "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-    "secret docker context",
-    "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-  ].join("\n");
+  const fragments = [{ kind: "conversation-data" as const, text: "secret docker context" }];
   const promptSubmission = resolveRuntimeContextPromptParts({
-    effectivePrompt,
+    effectivePrompt: "visible ask",
     transcriptPrompt: "visible ask",
+    fragments,
   });
 
   assert(promptSubmission.prompt === "visible ask", "visible prompt was not preserved");
   assert(
     promptSubmission.runtimeContext?.includes("secret docker context"),
-    "runtime context was not extracted",
+    "producer runtime context was not preserved",
   );
 
-  const runtimeContextMessage = buildRuntimeContextCustomMessage(promptSubmission.runtimeContext);
+  const runtimeContextMessage = buildRuntimeContextCustomMessage(
+    promptSubmission.runtimeContext,
+    fragments,
+  );
   assert(runtimeContextMessage, "runtime custom message was not built");
   sessionManager.appendMessage({
     role: "user",

@@ -12,6 +12,7 @@ import { getBeforeToolCallDiagnosticOptions } from "./before-tool-call-metadata.
 import { isCoreCodingSurfaceToolName } from "./core-tool-factory-descriptors.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { compactToolInputHint, compactToolOutputHint } from "./tool-schema-hints.js";
+import { disposeToolSearchSchedule } from "./tool-search-scheduling.js";
 import {
   TOOL_SEARCH_CONTROL_TOOL_NAMES,
   type CatalogSource,
@@ -45,6 +46,7 @@ function catalogEntriesFingerprint(entries: readonly ToolSearchCatalogEntry[]): 
         entry.name,
         entry.label ?? "",
         entry.description,
+        entry.directVisible === true,
         entry.source === "openclaw"
           ? stableStringify(entry.parameters)
           : untrustedSchemaFingerprint(entry.parameters),
@@ -319,6 +321,7 @@ export function clearToolSearchCatalog(params: {
       );
     }
     params.catalogRef.current = undefined;
+    disposeToolSearchSchedule(params.catalogRef);
     params.catalogRef.disposeObserver?.();
     params.catalogRef.onDispose?.forEach((dispose) => dispose());
     delete params.catalogRef.onChange;
@@ -473,8 +476,9 @@ export function applyToolCatalogCompaction(
       continue;
     }
     if (shouldCatalog(tool)) {
-      catalog.push(toCatalogEntry(tool, undefined, params.toolHookContext));
-      if (!params.isVisibleCatalogTool?.(tool)) {
+      const directVisible = params.isVisibleCatalogTool?.(tool) === true;
+      catalog.push({ ...toCatalogEntry(tool, undefined, params.toolHookContext), directVisible });
+      if (!directVisible) {
         continue;
       }
     }

@@ -8,7 +8,6 @@ import {
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
 import { isRouteId, isSessionRouteId } from "../app-route-paths.ts";
-import { resolveControlUiAuthToken } from "../app/control-ui-auth.ts";
 import { isNativeWebChromeHost } from "../app/native-web-chrome.ts";
 import { isHomePanelAvailable } from "../app/panel-availability.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
@@ -47,7 +46,6 @@ import { renderNewSessionLink } from "./new-session-link.ts";
 import { HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import {
   renderSessionAttentionIcon,
-  renderSessionRunSpinner,
   sessionAttentionSubtitle,
 } from "./session-attention-presentation.ts";
 import { renderSessionGlyph, renderSessionUnreadBadge } from "./session-glyph.ts";
@@ -106,13 +104,6 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
   });
   const cardName = normalizeAgentLabel(cardAgent ?? { id: cardAgentId }, cardIdentity);
   const gateway = host.sessionDataContext?.gateway;
-  const avatarAuthToken = gateway
-    ? resolveControlUiAuthToken({
-        hello: gateway.snapshot.hello,
-        settings: { token: gateway.connection.token },
-        password: gateway.connection.password,
-      })
-    : null;
   const avatarAuthReady = Boolean(
     gateway &&
     (gateway.snapshot.hello ||
@@ -131,7 +122,6 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
         .avatarUrl=${
           cardAgent ? resolveAgentAvatarUrl(cardAgent, cardIdentity) : cardIdentity?.avatar
         }
-        .authToken=${avatarAuthToken}
         .avatarAuthReady=${avatarAuthReady}
         .avatarText=${cardAvatarText}
         .environment=${host.sessionDataContext?.config?.current?.environment ?? null}
@@ -216,13 +206,13 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
     attentionLabel || (activeRunLabel && unreadLabel)
       ? [attentionLabel, activeRunLabel, unreadLabel].filter(Boolean).join(" · ")
       : "";
-  // Home keeps its page/attention glyph leading and shares trailing activity with session rows.
   const homeGlyph = renderSessionGlyph({
     content:
       attention.kind === "none"
         ? html`<span class="nav-item__icon" aria-hidden="true">${icons.home}</span>`
         : renderSessionAttentionIcon(attention),
-    running: false,
+    running,
+    queued,
     badge: unread && !running ? renderSessionUnreadBadge() : nothing,
   });
   return html`
@@ -256,9 +246,8 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
       }
       <span class="nav-item__text">${t("nav.home")}</span>
       ${
-        running || outboxAttentionCount > 0 || hasComposerDraft
+        outboxAttentionCount > 0 || hasComposerDraft
           ? html`<span class="nav-item__state sidebar-home-session-states">
-              ${running ? renderSessionRunSpinner(true, queued) : nothing}
               ${renderSessionRowBadges({
                 outboxAttentionCount,
                 hasComposerDraft,

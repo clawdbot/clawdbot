@@ -415,7 +415,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
         expect(originalEnv).toEqual(envBefore);
         expect(result.failedStep).toBeNull();
         expect(result.afterVersion).toBe("2.0.0");
-        expect(result.verifiedPackageRoot).toBe(newPackageRoot);
+        expect(result.activePackageRoot).toBe(newPackageRoot);
         expect(result.steps.map((step) => step.name)).toEqual([
           "global update",
           "pnpm package preinstall",
@@ -509,7 +509,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
 
         expect(result.failedStep).toBeNull();
         expect(result.afterVersion).toBe("1.0.0");
-        expect(result.verifiedPackageRoot).toBe(newPackageRoot);
+        expect(result.activePackageRoot).toBe(newPackageRoot);
         expect(runStep).toHaveBeenCalledOnce();
       },
     );

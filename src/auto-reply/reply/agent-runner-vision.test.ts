@@ -149,7 +149,7 @@ describe("ordinary reply model capability at cloud media admission", () => {
           images,
         },
         history: [],
-        localWorkspaceDir: root,
+        workspace: { kind: "local", path: root },
         remoteWorkspaceDir: "/worker",
         tunnel,
         isAuthorized: () => true,

@@ -44,6 +44,15 @@ export const overflowServerMiscCases = [
     expected: reason("timeout"),
   },
   {
+    id: "openai-completions-incomplete-terminal-stream",
+    source: "packages/ai/src/transports/openai-completions-stream.ts",
+    signal: {
+      provider: "opencode-go",
+      message: "Stream ended without finish_reason",
+    },
+    expected: reason("timeout"),
+  },
+  {
     id: "openai-responses-incomplete-terminal-stream",
     source: "packages/ai/src/transports/openai-responses-stream-internal.ts",
     signal: {

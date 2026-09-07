@@ -3,8 +3,11 @@ import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import {
+  selectedGitHubPublisher,
+  type GitHubPublicationView,
+} from "../../../lib/sessions/github-publication-controller.ts";
 import { generateUUID } from "../../../lib/uuid.ts";
-import { selectedGitHubPublisher, type GitHubPublicationView } from "../chat-github-publication.ts";
 
 function sourceLabel(source: string): string {
   return t(
@@ -17,6 +20,17 @@ function sourceLabel(source: string): string {
 }
 
 export function renderGitHubPublicationAction(publication: GitHubPublicationView) {
+  if (publication.result?.status === "published") {
+    return html`<a
+        class="chat-pr__create"
+        href=${publication.result.url}
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        ${t("chat.pullRequests.openPublishedPr")}
+      </a>
+      ${renderPublicationButton(publication)}`;
+  }
   if (publication.result || publication.locked) {
     return renderPublicationButton(publication);
   }
@@ -62,21 +76,11 @@ function syncPublicationExpanded(event: Event) {
 
 function renderPublicationButton(publication: GitHubPublicationView) {
   const { result, selection, busy } = publication;
-  if (result?.status === "published") {
-    return html`<a
-      class="chat-pr__create"
-      href=${result.url}
-      target="_blank"
-      rel="noopener noreferrer"
-    >
-      ${t("chat.pullRequests.openPublishedPr")}
-    </a>`;
-  }
   let action: { click: (() => void) | undefined; label: string; disabled: boolean };
-  if (result?.status === "failed") {
+  if (result?.status === "failed" || result?.status === "published") {
     action = {
       click: publication.onNewAction,
-      label: t("githubPublication.newAction"),
+      label: t(publication.canWrite ? "githubPublication.newAction" : "common.dismiss"),
       disabled: busy,
     };
   } else if (result?.status === "needs_confirmation") {

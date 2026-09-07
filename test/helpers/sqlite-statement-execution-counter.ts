@@ -13,10 +13,16 @@ export function trackSqliteStatementExecutions<Key extends string>(
   db: DatabaseSync,
   keys: readonly Key[],
   classify: (sql: string) => Key | null,
-): { counts: Record<Key, number>; rowCounts: Record<Key, number>; restore: () => void } {
+): {
+  counts: Record<Key, number>;
+  rowCounts: Record<Key, number>;
+  textBytes: Record<Key, number>;
+  restore: () => void;
+} {
   clearNodeSqliteKyselyCacheForDatabase(db);
   const counts = Object.fromEntries(keys.map((key) => [key, 0])) as Record<Key, number>;
   const rowCounts = Object.fromEntries(keys.map((key) => [key, 0])) as Record<Key, number>;
+  const textBytes = Object.fromEntries(keys.map((key) => [key, 0])) as Record<Key, number>;
   const originalPrepare = db.prepare.bind(db);
   const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((sqlText: string) => {
     const statement = originalPrepare(sqlText);
@@ -39,6 +45,11 @@ export function trackSqliteStatementExecutions<Key extends string>(
         return (function* () {
           for (const row of rows) {
             rowCounts[key] += 1;
+            for (const value of Object.values(row)) {
+              if (typeof value === "string") {
+                textBytes[key] += Buffer.byteLength(value);
+              }
+            }
             yield row;
           }
         })();
@@ -46,5 +57,13 @@ export function trackSqliteStatementExecutions<Key extends string>(
     }
     return statement;
   });
-  return { counts, rowCounts, restore: () => prepareSpy.mockRestore() };
+  return {
+    counts,
+    rowCounts,
+    textBytes,
+    restore: () => {
+      clearNodeSqliteKyselyCacheForDatabase(db);
+      prepareSpy.mockRestore();
+    },
+  };
 }

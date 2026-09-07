@@ -12,6 +12,7 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { isValidAgentHarnessSessionStoreEntry } from "../../sessions/agent-harness-session-key.js";
+import { shouldPreserveUnavailableSessionAuthProfileOverride } from "../../sessions/auth-profile-preservation.js";
 import {
   applyModelOverrideToSessionEntry,
   ModelSelectionLockedError,
@@ -30,11 +31,12 @@ import {
   hasSessionAutoModelFallbackProvenance,
   resolveAutoFallbackPrimaryProbe,
   resolveAgentConfig,
+  resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
 } from "../agent-scope.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "../auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "../auth-profiles/session-override.js";
-import { ensureAuthProfileStore } from "../auth-profiles/store.js";
+import { ensureAuthProfileStore } from "../auth-profiles/store-runtime.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { loadManifestModelCatalog } from "../model-catalog.js";
@@ -435,7 +437,13 @@ export async function resolveEmbeddedModelSelection(params: {
   const authProfileId = sessionEntryForAttempt?.authProfileOverride;
   if (sessionEntryForAttempt && authProfileId) {
     const entry = sessionEntryForAttempt;
-    const profile = ensureAuthProfileStore().profiles[authProfileId];
+    const agentDir = resolveAgentDir(params.cfg, params.sessionAgentId);
+    const store = ensureAuthProfileStore(agentDir, {
+      profileId: authProfileId,
+      config: params.cfg,
+      allowKeychainPrompt: false,
+    });
+    const profile = store.profiles[authProfileId];
     const validationHarnessPolicy = resolveAvailableAgentHarnessPolicy({
       provider: providerForAuthProfileValidation,
       modelId: model,
@@ -481,7 +489,16 @@ export async function resolveEmbeddedModelSelection(params: {
           credential: profile,
         }),
       );
-    if (!profileMatchesRuntime) {
+    const preserveUnavailableSelection = shouldPreserveUnavailableSessionAuthProfileOverride({
+      store,
+      cfg: params.cfg,
+      agentDir,
+      entry,
+      currentProvider: entry.providerOverride ?? defaultProvider,
+      provider: providerForAuthProfileValidation,
+      metadataSnapshot: params.pluginsEnabled ? params.manifestMetadataSnapshot : { plugins: [] },
+    });
+    if (!profileMatchesRuntime && !preserveUnavailableSelection) {
       if (hasExplicitRunOverride || autoFallbackPrimaryProbe) {
         sessionEntryForAttempt = {
           ...entry,

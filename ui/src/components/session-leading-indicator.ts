@@ -5,7 +5,6 @@ import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import {
   renderSessionAttentionIcon,
   renderSessionState,
-  sessionHasRunningWork,
 } from "./session-attention-presentation.ts";
 import { renderSessionGlyph, renderSessionUnreadBadge } from "./session-glyph.ts";
 import { resolveSessionIconGlyph } from "./session-icon-glyph-registry.ts";
@@ -32,14 +31,8 @@ function renderPersistentSessionIcon(icon: string) {
 }
 
 export function describeSessionTrailingState(session: SidebarRecentSession) {
-  const activityLabel = t(
-    session.hasActiveRun && session.status === "queued"
-      ? "sessionsView.statusQueued"
-      : "sessionsView.activeRun",
-  );
   return [
     session.forkSource ? t("sessionsView.forkedSession") : "",
-    sessionHasRunningWork(session) ? activityLabel : "",
     session.unread ? t("sessionsView.unread") : "",
   ]
     .filter(Boolean)
@@ -59,9 +52,11 @@ export function renderSessionLeadingState(
   renderedIdentities?: readonly SessionParticipantIdentity[];
 } {
   const { participants, participantCount } = session;
-  const running = sessionHasRunningWork(session);
+  // Only the row's own run rings its glyph; descendant activity is summarized by
+  // the collapsed child toggle and must never read as the parent's execution.
+  const running = session.hasActiveRun;
   const queued = session.hasActiveRun && session.status === "queued";
-  const trailingIndicator = session.isChild ? nothing : renderSessionState(session, false);
+  const trailingIndicator = session.isChild || running ? nothing : renderSessionState(session);
   // Transient attention always outranks the persistent decorative icon.
   if (session.isChild) {
     if (session.attention.kind !== "none") {
@@ -118,7 +113,8 @@ export function renderSessionLeadingState(
       running,
       leadingIndicator: renderSessionGlyph({
         content: renderSessionAttentionIcon(session.attention, true),
-        running: false,
+        running,
+        queued,
       }),
       trailingIndicator,
     };
@@ -128,7 +124,8 @@ export function renderSessionLeadingState(
       running,
       leadingIndicator: renderSessionGlyph({
         content: renderPersistentSessionIcon(session.icon),
-        running: false,
+        running,
+        queued,
       }),
       trailingIndicator,
     };
@@ -156,7 +153,8 @@ export function renderSessionLeadingState(
           .authReady=${avatarAuth?.authReady ?? false}
           .fallback=${ownerChip ?? nothing}
         ></openclaw-channel-avatar>`,
-        running: false,
+        running,
+        queued,
         circular: true,
       }),
       trailingIndicator,
@@ -167,7 +165,8 @@ export function renderSessionLeadingState(
       running,
       leadingIndicator: renderSessionGlyph({
         content: ownerChip,
-        running: false,
+        running,
+        queued,
         circular: true,
       }),
       trailingIndicator,
@@ -182,7 +181,7 @@ export function renderSessionLeadingState(
   }
   return {
     running,
-    leadingIndicator: nothing,
+    leadingIndicator: running ? renderSessionGlyph({ content: nothing, running, queued }) : nothing,
     trailingIndicator,
   };
 }

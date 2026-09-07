@@ -41,7 +41,7 @@ export async function normalizeBrowserScreenshot(
   const sideStart = maxDim > 0 ? Math.min(maxSide, maxDim) : maxSide;
   const sideGrid = buildImageResizeSideGrid(maxSide, sideStart);
 
-  let smallest: { buffer: Buffer; size: number } | null = null;
+  let smallestSize: number | undefined;
   let processorUnavailableError: unknown;
 
   for (const side of sideGrid) {
@@ -62,8 +62,8 @@ export async function normalizeBrowserScreenshot(
         throw err;
       }
 
-      if (!smallest || out.byteLength < smallest.size) {
-        smallest = { buffer: out, size: out.byteLength };
+      if (smallestSize === undefined || out.byteLength < smallestSize) {
+        smallestSize = out.byteLength;
       }
 
       if (out.byteLength <= maxBytes) {
@@ -79,8 +79,8 @@ export async function normalizeBrowserScreenshot(
     throw toErrorObject(processorUnavailableError, "Non-Error thrown");
   }
 
-  const best = smallest?.buffer ?? buffer;
+  const bestSize = smallestSize ?? buffer.byteLength;
   throw new Error(
-    `Browser screenshot could not be reduced below ${(maxBytes / (1024 * 1024)).toFixed(0)}MB (got ${(best.byteLength / (1024 * 1024)).toFixed(2)}MB)`,
+    `Browser screenshot could not be reduced below ${(maxBytes / (1024 * 1024)).toFixed(0)}MB (got ${(bestSize / (1024 * 1024)).toFixed(2)}MB)`,
   );
 }

@@ -47,6 +47,10 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "volcengine": "volcengine",
+      "volcengine-plan": "volcengine-coding-plan"
+    },
     "providers": {
       "volcengine": {
         "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",

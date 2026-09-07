@@ -10,6 +10,21 @@ const withinRoot = (root: string, file: string) => {
   return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 };
 
+function findAncestorInstall(root: string, real: string): string | undefined {
+  let ancestor = path.dirname(root);
+  while (true) {
+    const install = path.join(ancestor, "node_modules");
+    if (withinRoot(install, real)) {
+      return install;
+    }
+    const parent = path.dirname(ancestor);
+    if (parent === ancestor) {
+      return undefined;
+    }
+    ancestor = parent;
+  }
+}
+
 export function createDeclarationInputBoundary(cwd: string) {
   const declared = path.resolve(cwd);
   const prefixes = [declared, fs.realpathSync(declared)];
@@ -33,9 +48,12 @@ export function createDeclarationInputBoundary(cwd: string) {
       }
       const real = fs.realpathSync.native(existing);
       if (!withinRoot(root, absolute) || !withinRoot(root, real)) {
-        throw new Error(
-          `Declaration input escapes checkout: ${absolute} -> ${real}. Install declaration dependencies inside ${root}; shared installs and external symlinks are unsupported.`,
-        );
+        // Hermetic declaration inputs must not inherit an ancestor install's exposed packages.
+        const ancestorInstall = findAncestorInstall(root, real);
+        const diagnosis = ancestorInstall
+          ? `This checkout is nested inside another install at ${ancestorInstall}. Module resolution can read candidate manifests there even with a complete local install and a checkout-local final resolution. Repeating pnpm install will not isolate ancestor lookup. Provision a separate physical checkout outside ancestor node_modules installations, run pnpm install --frozen-lockfile there, and rerun declaration preparation and its dependent checks there. Do not modify the ancestor install or share its node_modules.`
+          : `Keep declaration dependencies and compiler files physically inside ${root}; shared installs and external symlinks are unsupported. Inspect the reported path and dependency links; this error alone does not establish a missing or undeclared dependency.`;
+        throw new Error(`Declaration input escapes checkout: ${absolute} -> ${real}. ${diagnosis}`);
       }
       return absolute;
     },
@@ -147,21 +165,14 @@ function acquireDeclarationSystem(inputs: ReturnType<typeof createDeclarationInp
   };
 }
 
-export function createDeclarationBoundaryHooks(
-  existing?: UserConfig["hooks"],
-): NonNullable<UserConfig["hooks"]> {
-  if (typeof existing === "function") {
-    return async (hooks) => {
+export function createDeclarationBoundaryHooks(existing?: UserConfig["hooks"]) {
+  return async (hooks: BuildContext["hooks"]) => {
+    if (typeof existing === "function") {
       await existing(hooks);
-      hooks.hook("build:prepare", prepareDeclarationBoundary);
-    };
-  }
-  return {
-    ...existing,
-    "build:prepare": async (context) => {
-      await existing?.["build:prepare"]?.(context);
-      prepareDeclarationBoundary(context);
-    },
+    } else if (existing) {
+      hooks.addHooks(existing);
+    }
+    hooks.hook("build:prepare", prepareDeclarationBoundary);
   };
 }
 
@@ -170,7 +181,12 @@ function prepareDeclarationBoundary({ options }: BuildContext) {
   if (!options.dts) {
     return;
   }
+  // tsdown omits cwd when constructing the declaration plugin. Its entry globs
+  // must match resolved source IDs, not an ambient cwd or Windows junction spelling.
+  const declarationCwd = fs.realpathSync(options.dts.cwd ?? options.cwd);
+  options.dts = { ...options.dts, cwd: declarationCwd };
   const boundary = createDeclarationBoundaryPlugin(options.cwd);
+  // Keep this ahead of inputOptions callback plugins at equal hook priority.
   options.plugins = [options.plugins, boundary];
   if (options.format !== "cjs") {
     return;

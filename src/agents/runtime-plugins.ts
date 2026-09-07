@@ -156,10 +156,8 @@ export async function withAgentPluginRegistry<T>(params: {
       ? { manifestRegistry: { plugins: [], diagnostics: [] } }
       : { metadataSnapshot: loadPluginMetadataSnapshot(params) }),
   });
+  // The resolver inherits request or configured scope; an empty override drops hook-only plugins.
   const pluginRegistry = loadAgentRuntimePluginRegistryHandle({
-    basePluginIds: requestPluginRegistry
-      ? listRuntimePluginIdsFromRegistry(requestPluginRegistry)
-      : [],
     config: params.config,
     env: context.env,
     metadataSnapshot: context.metadataSnapshot,

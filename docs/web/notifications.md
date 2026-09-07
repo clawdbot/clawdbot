@@ -26,7 +26,7 @@ The macOS app deliberately uses the native permission flow instead of browser pu
 
 ## Enable browser notifications
 
-The Control UI asks for notification permission automatically the first time you send a chat message, once per browser and origin. **Settings → Notifications** remains the manual path for enabling or repairing notifications, including after you deny the automatic prompt.
+The Control UI asks for notification permission automatically the first time you send a chat message, including from **New Session** or **Start in background**, once per browser and origin. **Settings → Notifications** remains the manual path for enabling or repairing notifications, including after you deny the automatic prompt.
 
 1. Open the Control UI in a browser that supports service workers, `PushManager`, and notifications.
 2. Make sure the Control UI is connected to the Gateway.
@@ -48,6 +48,8 @@ After subscribing, **Settings → Notifications** exposes two preference layers:
 Single-user Gateways use their durable owner profile for account defaults, so those preferences follow the owner across devices. Connections without a profile keep the controls but store preferences only with the current browser subscription. Preferences never grant access: every delivery still rechecks the paired device, current role and scopes, authenticated profile, and session visibility. Multi-user events without an authoritative session owner are suppressed instead of being broadcast to every operator.
 
 The default preserves the original behavior: approval request and resolution notifications are enabled, while newly added attention categories are opt-in. Quiet hours suppress matching sends rather than queueing stale alerts for later delivery.
+
+Selecting an attention notification opens its question, conversation, or automation run on the Gateway that produced it. **Agent finished** waits for completion; a parent waiting for child agents does not count as finished. Automation failures use **Scheduled task failures**, without also generating a **Background task failures** alert for the same run.
 
 The detail levels are:
 
@@ -110,6 +112,10 @@ Either the browser lacks the required Web Push APIs or the Control UI is not con
 
 A denied browser permission cannot be reopened from the page. Allow notifications for the Control UI origin in the browser's site settings, then reload Settings.
 
+### Permission is granted but the browser is not subscribed
+
+Browser permission and the Gateway subscription are separate. Select **Enable notifications** to register this browser, then enable the categories you want, such as **Someone mentions me**. Reloading or sending another message does not automatically subscribe a browser whose permission is already granted; this preserves an intentional unsubscribe.
+
 ### Service worker is not ready
 
 The Control UI waits up to 10 seconds for its service worker. If that times out right after an update, hard-refresh the page. If an old worker sticks around, clear site data for the dashboard origin and reconnect.
@@ -132,6 +138,6 @@ If the entry is in **Inbox → Mentions**, check this browser's subscription, **
 
 ## Related
 
-- [Control UI PWA and Web Push](/web/control-ui#pwa-install-and-web-push)
+- [Control UI PWA and Web Push](/web/control-ui/connect-and-pair#pwa-install-and-web-push)
 - [iOS push delivery](/platforms/ios)
 - [Node notification commands](/nodes)

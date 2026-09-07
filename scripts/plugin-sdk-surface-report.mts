@@ -159,7 +159,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // +1: shared ingress error factory projected through the deprecated message barrel.
   // +1: shared ingress retention defaults projected through the deprecated message barrel.
   // +1: WhatsApp ack-policy bridge counted via channel-message's wildcard re-export.
-  "channel-message": 132,
+  // Rendering helpers also flow through this shipped wildcard compatibility barrel.
+  "channel-message": 136,
   // +2: Slack progress-draft render bridge (function + mode type).
   "channel-outbound": 2,
   // +2: WhatsApp ack-policy bridge (function + mode type).
@@ -350,7 +351,17 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +4: observed session query, result, snapshot, and subscription contracts.
       // +2: browser-safe Date timestamp validation and UTF-16 truncation primitives.
       // +3: capability catalog descriptors, entry factories, and native host context.
-      4431,
+      // +2: canonical paragraph grouping and UTF-16 boundaries for channel-owned chunking.
+      // +1: retained runtime config reader preserves channel owner and scoped config identity.
+      // +1: shared session-catalog host publication with completion ownership.
+      // +1: provider-owned local-service reconciliation context.
+      // +7: card projection plus three rendering helpers on channel-outbound and its shipped barrel.
+      // +2: shared diff-stat rendering on channel-outbound and its shipped barrel.
+      // +1: shared static UI guidance, separate from per-turn harness delivery policy.
+      // +1: shared root/account DM policy refinement for channel schemas.
+      // -1: add one tool policy object and retire two unused deprecated mode exports.
+      // -1: one exec policy object replaces two deprecated comparator exports.
+      4445,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -471,7 +482,16 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: final callable-tool availability projection for native harnesses.
       // +4: defineFeatureContract, createFeatureClient, defineFeaturePlugin, defineControlUiPlugin.
       // +2: browser-safe Date timestamp validation and UTF-16 truncation primitives.
-      2616,
+      // +2: canonical paragraph grouping and UTF-16 boundaries for channel-owned chunking.
+      // +1: retained runtime config reader preserves channel owner and scoped config identity.
+      // +1: shared session-catalog host publication with completion ownership.
+      // +7: card projection plus three rendering helpers on channel-outbound and its shipped barrel.
+      // +2: shared diff-stat rendering on channel-outbound and its shipped barrel.
+      // +1: shared static UI guidance, separate from per-turn harness delivery policy.
+      // +1: shared root/account DM policy refinement for channel schemas.
+      // -2: retire the deprecated mode projection callables.
+      // -2: exec comparators are members of the shared policy object.
+      2627,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -490,7 +510,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       //     (voice-call/matrix runtime-doctor repair names, WhatsApp ack policy,
       //     Slack progress-draft render) so installed plugins survive upgrade (#124041 class).
       // -18: retire the expired August compatibility exports and messaging-targets subpath.
-      1134,
+      // +4: rendering helpers forwarded by the shipped channel-message wildcard.
+      1138,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

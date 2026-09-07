@@ -1,8 +1,10 @@
 // Settings proof uses real navigation and controls with synthetic Gateway accounts.
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, type Page } from "playwright/test";
 import { beforeEach, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -27,11 +29,12 @@ async function capture(page: Page, name: string) {
   if (!captureUiProof) {
     return;
   }
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(proofDir, name),
-  });
+  await writeFile(
+    path.join(proofDir, name),
+    await takeControlUiViewportScreenshot(page, page.locator(".settings-workspace"), [
+      page.locator(".settings-section").first(),
+    ]),
+  );
 }
 async function assertDeviceCodeCopy(page: Page, userCode: string) {
   const deviceCode = page.getByText(userCode, { exact: true });
@@ -147,7 +150,12 @@ suite.define(() => {
       await expect(section.locator('[data-github-connection="system"]')).toContainText(
         "@system-octocat",
       );
-      await expect(section).not.toContainText("@agent-octocat");
+      await expect(section.locator('[data-github-connection="system"]')).not.toContainText(
+        "@agent-octocat",
+      );
+      await expect(section.locator('[data-github-connection="agent"]')).toContainText(
+        "@agent-octocat",
+      );
       expect(await gateway.getRequests("users.github.status")).toHaveLength(0);
       await capture(page, "01-unidentified-system.png");
       await section.getByRole("button", { name: "Change System GitHub" }).click();
@@ -191,7 +199,8 @@ suite.define(() => {
       await expect(section.getByLabel("Fine-grained PAT", { exact: true })).toBeVisible();
       await expect(section.getByRole("button", { name: "Continue with GitHub" })).toHaveCount(0);
       await capture(page, "05-system-pat.png");
-      await page.goto(`${suite.server.baseUrl}settings/agents/main/tools`);
+      await section.getByRole("button", { name: "View agent account", exact: true }).click();
+      await expect(page).toHaveURL(/settings\/agents\/main\/tools$/);
       await expect(page.getByText("@agent-octocat", { exact: true })).toBeVisible();
       await expect(page.getByRole("button", { name: "Continue with GitHub" })).not.toBeVisible();
       await page.getByText("Advanced: agent GitHub override", { exact: true }).click();
@@ -215,6 +224,7 @@ suite.define(() => {
         "@system-octocat",
       );
       await expect(section.getByRole("button", { name: "Change System GitHub" })).toHaveCount(0);
+      await expect(section.locator('[data-github-connection="agent"]')).toHaveCount(0);
       expect(await gateway.getRequests("users.self")).toHaveLength(0);
       const configReads = (await gateway.getRequests("config.get")).length;
       const configWrites = (await gateway.getRequests("config.set")).length;
@@ -317,7 +327,7 @@ suite.define(() => {
       const section = page.locator("#settings-profile-github-connections");
       const signIn = page.locator("#settings-profile-identity");
       await expect(signIn).toContainText("@signin-octocat");
-      await section.getByRole("button", { name: "Connect GitHub", exact: true }).click();
+      await section.getByRole("button", { name: "Manage connections", exact: true }).click();
       await expect(section.getByRole("radio", { name: "For me", exact: true })).toBeChecked();
       await gateway.deferNext("users.github.authorize.start");
       await section.getByRole("button", { name: "Continue with GitHub" }).click();

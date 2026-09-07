@@ -219,6 +219,7 @@ export async function buildOpenrouterLiveProvider(params: {
   const requestConfig = resolveRequest();
   const endpoint = `${requestConfig.baseUrl}/models`;
   return await buildLiveModelProviderConfig({
+    discoveryMode: "strict",
     providerId: "openrouter",
     endpoint,
     providerConfig: {

@@ -407,15 +407,17 @@ export function createGatewayChatMetadataRuntime(params: {
   };
 
   const runRefresh = async (version: number) => {
-    assertOpen();
-    await params.beforeRefresh?.();
-    // Ownership can change during preparation; build completion checks it again after suspension.
     if (version !== refreshVersion) {
       return;
     }
-    for (;;) {
-      const epoch = invalidationEpoch;
-      try {
+    assertOpen();
+    try {
+      await params.beforeRefresh?.();
+      if (version !== refreshVersion) {
+        return;
+      }
+      for (;;) {
+        const epoch = invalidationEpoch;
         const facts = captureGenerationFacts(deps);
         if (current && generationFactsMatch(current.facts, facts)) {
           return;
@@ -432,15 +434,14 @@ export function createGatewayChatMetadataRuntime(params: {
           current = generation;
           return;
         }
-      } catch (error) {
-        // A superseded build may fail after replacement starts; only its current epoch may fail readers.
-        if (version !== refreshVersion) {
-          return;
-        }
-        if (epoch === invalidationEpoch) {
-          throw error;
-        }
       }
+    } catch (error) {
+      // Invalidation and stop revoke old preparation, including its failures.
+      // Only the current refresh may settle the replacement's readers.
+      if (version !== refreshVersion) {
+        return;
+      }
+      throw error;
     }
   };
 
@@ -460,8 +461,7 @@ export function createGatewayChatMetadataRuntime(params: {
             return;
           }
           pending = undefined;
-          // One worker can absorb later invalidations and publish their generation. Settle the
-          // replacement owned by what it actually committed, not by the epoch that scheduled it.
+          // Only the current generation may settle its replacement wait.
           if (current?.epoch !== invalidationEpoch) {
             return;
           }
@@ -693,6 +693,8 @@ export function createGatewayChatMetadataRuntime(params: {
       return;
     }
     invalidationEpoch += 1;
+    refreshVersion += 1;
+    pending = undefined;
     current = undefined;
     lastError = undefined;
     replacement ??= createMetadataReplacement();

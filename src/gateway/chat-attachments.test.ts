@@ -40,6 +40,7 @@ import {
 import {
   type ChatAttachment,
   discardPreparedInboundMedia,
+  type OffloadedRef,
   parseMessageWithAttachments,
   persistInboundImagesForTranscript,
   stripImageMediaMarkers,
@@ -166,24 +167,18 @@ describe("discardPreparedInboundMedia", () => {
     const error = new Error("unlink denied");
     deleteMediaBufferMock.mockRejectedValueOnce(error);
     const warn = vi.fn();
+    const prepared: OffloadedRef = {
+      mediaRef: "media://inbound/managed-id",
+      id: "managed-id",
+      path: "/external/user-owned.png",
+      kind: "image",
+      mimeType: "image/png",
+      label: "user-owned.png",
+      sizeBytes: 42,
+      sourceIndex: 0,
+    };
 
-    await expect(
-      discardPreparedInboundMedia(
-        [
-          {
-            mediaRef: "media://inbound/managed-id",
-            id: "managed-id",
-            path: "/external/user-owned.png",
-            kind: "image",
-            mimeType: "image/png",
-            label: "user-owned.png",
-            sizeBytes: 42,
-            sourceIndex: 0,
-          },
-        ],
-        { warn },
-      ),
-    ).resolves.toBeUndefined();
+    await expect(discardPreparedInboundMedia([prepared], { warn })).resolves.toBeUndefined();
 
     expect(deleteMediaBufferMock).toHaveBeenCalledOnce();
     expect(deleteMediaBufferMock).toHaveBeenCalledWith("managed-id", "inbound");

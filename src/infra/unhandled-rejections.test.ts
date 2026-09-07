@@ -116,6 +116,22 @@ describe("isTransientNetworkError", () => {
     expect(isTransientNetworkError(error)).toBe(true);
   });
 
+  it("returns true for marked provider WebSocket transport failures", () => {
+    expect(
+      isTransientNetworkError({ message: "WebSocket error", code: "ERR_WEBSOCKET_TRANSPORT" }),
+    ).toBe(true);
+  });
+
+  it("returns false for permanent provider WebSocket close failures", () => {
+    const permanentClose = Object.assign(
+      new Error("WebSocket closed 1008 policy violation: ECONNRESET"),
+      { code: "ERR_WEBSOCKET_NON_RETRYABLE_CLOSE" },
+    );
+    expect(isTransientNetworkError(new Error("socket hang up", { cause: permanentClose }))).toBe(
+      false,
+    );
+  });
+
   it("returns false for non-network fetch-failed wrappers from tools", () => {
     const error = new Error("Web fetch failed (404): Not Found");
     expect(isTransientNetworkError(error)).toBe(false);

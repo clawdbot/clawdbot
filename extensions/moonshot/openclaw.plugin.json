@@ -42,6 +42,9 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "moonshot": "moonshotai"
+    },
     "aliases": {
       "moonshotai": {
         "provider": "moonshot"

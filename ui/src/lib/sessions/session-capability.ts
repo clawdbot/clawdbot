@@ -22,10 +22,12 @@ import type {
   SessionWorkspaceListResult,
   SessionWorkspaceSetResult,
 } from "../../api/types.ts";
-import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
+import type { ApplicationGatewayPhase, ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import type { GatewayConnectionScope } from "../gateway-connection-lifecycle.ts";
 import type { SessionCreateOutcome, SessionCreateParams } from "./create.ts";
 import type { SessionGroupSettings } from "./custom-groups.ts";
+import type { GitHubPublicationPresentationBinding } from "./github-publication-controller.ts";
 import type { SessionArchivedFilter } from "./navigation.ts";
 import type { SessionPatchRoute } from "./patch.ts";
 import type {
@@ -125,10 +127,12 @@ export type SessionGateway = {
   readonly snapshot: {
     client: GatewayBrowserClient | null;
     phase: ApplicationGatewayPhase;
+    restartPending?: boolean;
+    suspensionPhase?: ApplicationGatewaySnapshot["suspensionPhase"];
     hello: GatewayHelloOk | null;
     assistantAgentId?: string | null;
     sessionKey?: string;
-    selfUser?: { readonly id: string } | null;
+    selfUser?: AuthenticatedUser | null;
   };
   subscribe: (listener: (snapshot: SessionGateway["snapshot"]) => void) => () => void;
   subscribeEvents: (listener: (event: GatewayEventFrame) => void) => () => void;
@@ -148,7 +152,14 @@ export type SessionCreateReconciliation = "blocking" | "background";
 export type SessionMessageSubscription = GatewaySessionMessageSubscription;
 export type SessionArchiveVisibility = "pending" | "archived";
 
+export type GitHubPublicationBinding = GitHubPublicationPresentationBinding & {
+  matches: (row: GatewaySessionRow) => boolean;
+};
+
 export type SessionCapability = {
+  readonly githubPublication: {
+    attach: (row: GatewaySessionRow, changed: () => void) => GitHubPublicationBinding | null;
+  };
   readonly state: SessionState;
   /** Advances only when a canonical sessions.list result is published. */
   readonly canonicalListRevision: number;

@@ -99,7 +99,11 @@ function workerResume(
         kind: "resume",
         snapshot: waiting.snapshot,
         config,
-        settledRequests,
+        settledRequests: settledRequests.map(({ id, ok, value }) => ({
+          id,
+          ok,
+          json: JSON.stringify(value),
+        })),
       },
       10_000,
     )
@@ -416,13 +420,74 @@ describe("Code Mode swarm guest", () => {
     const { apiFiles: files } = createCodeModeNamespaceRuntime();
 
     expect(files.map((file) => file.path)).toEqual(["agents.d.ts"]);
-    expect(files[0]?.content).toContain("Promise.all");
-    expect(files[0]?.content).toContain("while (!ready)");
+    expect(files[0]?.content).toContain("Promise.allSettled");
     expect(files[0]?.content).toContain("schema: AgentJsonSchema");
   });
 });
 
 describe("Code Mode swarm host bridge", () => {
+  it.each([
+    { ordinaryCount: 0, afterSwarm: false },
+    { ordinaryCount: 144, afterSwarm: false },
+    { ordinaryCount: 145, afterSwarm: false },
+    { ordinaryCount: 145, afterSwarm: true },
+  ])(
+    "isolates the ordinary quota for 65 phase-tagged collectors: $ordinaryCount calls, afterSwarm=$afterSwarm",
+    async ({ ordinaryCount, afterSwarm }) => {
+      const harness = createSwarmHarness();
+      const toolsConfig = (harness.config as { tools: Record<string, unknown> }).tools;
+      toolsConfig.swarm = { enabled: true, maxChildrenPerGroup: 100 };
+      const progress = fakeTool("progress", "Ordinary queue probe");
+      applyCodeModeCatalog({
+        ...harness.ctx,
+        tools: [...harness.tools, harness.spawnTool, progress],
+      });
+      swarmMocks.spawnSubagentDirect.mockImplementation(async (input: SpawnSubagentParams) => ({
+        status: "accepted",
+        runId: input.task,
+        childSessionKey: "agent:main:subagent:" + input.task,
+      }));
+      swarmMocks.waitForCollectorCompletion.mockImplementation(
+        async ({ runId }: { runId: string }) => ({
+          runId,
+          status: "done",
+          result: runId,
+        }),
+      );
+      const result = await runSwarmCode(
+        harness,
+        'const collectors = Array.from({ length: 65 }, (_, i) => agents.run("collector-" + i, { phase: "Research" }));' +
+          (afterSwarm ? "await Promise.all(collectors);" : "") +
+          "await Promise.all(Array.from({ length: " +
+          ordinaryCount +
+          " }, (_, i) => progress({ value: String(i) })));" +
+          "return await Promise.all(collectors);",
+      );
+      if (ordinaryCount > 144) {
+        expect(result).toMatchObject({
+          status: "failed",
+          code: "invalid_input",
+          error: expect.stringContaining("ordinary requests queued"),
+        });
+        expect(progress.execute).not.toHaveBeenCalled();
+        expect(harness.spawnTool.execute).toHaveBeenCalledTimes(afterSwarm ? 65 : 0);
+        expect(swarmMocks.emitSessionLifecycleEvent).toHaveBeenCalledTimes(afterSwarm ? 65 : 0);
+        expect(swarmMocks.waitForCollectorCompletion).toHaveBeenCalledTimes(afterSwarm ? 65 : 0);
+        expect(testing.activeRuns.size).toBe(0);
+        return;
+      }
+      expect(result).toMatchObject({
+        status: "completed",
+        value: Array.from({ length: 65 }, (_, i) => "collector-" + i),
+      });
+      expect(harness.spawnTool.execute).toHaveBeenCalledTimes(65);
+      expect(swarmMocks.emitSessionLifecycleEvent).toHaveBeenCalledTimes(65);
+      expect(swarmMocks.waitForCollectorCompletion).toHaveBeenCalledTimes(65);
+      expect(progress.execute).toHaveBeenCalledTimes(ordinaryCount);
+      expect(testing.activeRuns.size).toBe(0);
+    },
+  );
+
   it.each(["missing", "execution-denied"] as const)(
     "joins collectors without exposing raw collection with a %s reader",
     async (reader) => {

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
@@ -10,11 +11,12 @@ import {
   loadPreparedGatewayModelCatalogSnapshot,
 } from "../gateway/server-model-catalog.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { unregisterResolvedAgentDir } from "./agent-dir-registry.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope-config.js";
 import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "./auth-profiles/constants.js";
 import { getRuntimeExternalCliProfileIds } from "./auth-profiles/runtime-external-profile-references.js";
-import { saveAuthProfileStore } from "./auth-profiles/store.js";
+import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
 import { createPreparedModelCatalogWorker } from "./prepared-model-catalog-worker.js";
 import {
@@ -445,6 +447,12 @@ describe("prepared model catalog worker boundary", () => {
       const catalog = await fixture.snapshot.loadFullModelCatalog?.({ refresh: true });
       const fullAuth = getPreparedModelFullCatalogAuth(catalog!);
 
+      expect(fullAuth?.credentials?.[DISCOVERED_HARNESS_ID]).toEqual({
+        type: "api_key",
+        key: "discovered-native-login-not-real",
+      });
+      expect(catalog).not.toHaveProperty("credentials");
+
       if (asyncSyntheticAuth) {
         expect(
           fs
@@ -466,33 +474,58 @@ describe("prepared model catalog worker boundary", () => {
     },
   );
 
-  it("aborts and joins parent auth preparation before retiring a superseded catalog", async () => {
-    const fixture = await createStaticSnapshot(0, {}, { asyncSyntheticAuth: true });
-    const hold = path.join(fixture.root, "synthetic-auth-hold");
-    const started = path.join(fixture.root, "synthetic-auth-owner.txt");
-    const cancelled = path.join(fixture.root, "synthetic-auth-cancel.txt");
-    fs.rmSync(started, { force: true });
-    fs.writeFileSync(hold, "");
-    let settled = false;
-    const catalog = fixture.snapshot.loadFullModelCatalog!().finally(() => {
-      settled = true;
-    });
-    void catalog.catch(() => {});
-    try {
-      await waitForMarker(started);
-      fixture.supersede();
-      await waitForMarker(cancelled);
-      expect(settled).toBe(false);
-      fs.rmSync(hold);
-      await expect(catalog).rejects.toThrow("superseded");
-      expect(fs.readFileSync(cancelled, "utf8")).toBe("abort\njoined\n");
-      await waitForWorkers();
-    } finally {
-      fs.rmSync(hold, { force: true });
-      fixture.supersede();
-      await Promise.allSettled([catalog]);
-    }
-  });
+  it.each([
+    { retirement: "superseded", request: "catalog" },
+    { retirement: "process close", request: "catalog" },
+    { retirement: "process close", request: "auth" },
+  ])(
+    "aborts and joins parent $request preparation before $retirement completes",
+    async ({ retirement, request }) => {
+      const fixture = await createStaticSnapshot(0, {}, { asyncSyntheticAuth: true });
+      await loadPreparedModelRuntimeAuth(fixture.snapshot, { providerIds: [] });
+      const hold = path.join(fixture.root, "synthetic-auth-hold");
+      const started = path.join(fixture.root, "synthetic-auth-owner.txt");
+      const cancelled = path.join(fixture.root, "synthetic-auth-cancel.txt");
+      fs.rmSync(started, { force: true });
+      fs.writeFileSync(hold, "");
+      let settled = false;
+      const catalog = (
+        request === "auth"
+          ? loadPreparedModelRuntimeAuth(fixture.snapshot, { providerIds: [] })
+          : fixture.snapshot.loadFullModelCatalog!()
+      ).finally(() => {
+        settled = true;
+      });
+      void catalog.catch(() => {});
+      let closing: Promise<void> | undefined;
+      try {
+        await waitForMarker(started);
+        if (retirement === "process close") {
+          let closed = false;
+          closing = drainGlobalSingletonLifecycleState("close").then(() => {
+            closed = true;
+          });
+          await nextTurn();
+          expect(closed).toBe(false);
+        } else {
+          fixture.supersede();
+        }
+        await waitForMarker(cancelled);
+        expect(settled).toBe(false);
+        fs.rmSync(hold);
+        await expect(catalog).rejects.toThrow(
+          retirement === "superseded" ? "superseded" : "closed",
+        );
+        await closing;
+        expect(fs.readFileSync(cancelled, "utf8")).toBe("abort\njoined\n");
+        await waitForWorkers();
+      } finally {
+        fs.rmSync(hold, { force: true });
+        fixture.supersede();
+        await Promise.allSettled([catalog, closing]);
+      }
+    },
+  );
 
   it("refreshes durable auth before provider hooks decide catalog membership", async () => {
     const fixture = await createStaticSnapshot(0);
@@ -981,7 +1014,7 @@ describe("prepared model catalog worker boundary", () => {
       pluginMetadataSnapshot: fixture.pluginMetadataSnapshot,
       isCurrent: fixture.isCurrent,
     });
-    const catalog = await worker.loadCatalog();
+    const { modelCatalog: catalog } = await worker.loadCatalog();
 
     expect(catalog.entries).toContainEqual(
       expect.objectContaining({

@@ -60,6 +60,17 @@ them with `listMessageReceiptPlatformIds(...)` or
 `resolveMessageReceiptPrimaryId(...)` instead of keeping parallel `messageIds`
 fields.
 
+For turn adapters that aggregate confirmed visible sends, use
+`createAcceptedChannelDeliveryResult(...)` from
+`openclaw/plugin-sdk/channel-inbound`. It combines native `results` followed by
+logical `deliveryResults`, including a partial-delivery error's accepted subset.
+A logical result's receipt takes precedence over its legacy message IDs.
+The result carries a receipt, `messageIds` (including an empty array), and
+`visibleReplySent: true`; routing fields stay in the receipt. Optional `content`
+is passed through, and `kind` and `replyToId` use the receipt builder's rules.
+Keep acceptance side effects, content joining,
+suppression, and whether an identityless outcome needs a receipt in the adapter.
+
 Channel actions and adapter capabilities come from the selected plugin
 registration. An omitted `actions`, `message`, or `outbound` surface is not
 filled from another plugin with the same channel ID. Prepared delivery handlers
@@ -271,6 +282,25 @@ if the process dies or persistence fails after the effect succeeds but before
 the claim commits, or if the record expires while its ingress row is still
 pending.
 
+#### Dynamic policy publication
+
+Use `reload.noopPrefixes` only for fields whose consumers read the committed
+runtime config without replacing a channel resource. These writes still publish
+the validated runtime snapshot; “noop” means no component restart. A `*` path
+segment matches one nonempty config key, for example
+`channels.example.accounts.*.allowFrom`. Deeper boundaries take precedence;
+at the same depth, an exact path takes precedence over a wildcard.
+
+Bind `createRuntimeConfigReader` when the account starts, and derive a coherent
+policy snapshot at each new admission. Keep resolved-name caches with that
+account owner and recheck the current revision after asynchronous resolution.
+Do not retain startup-only allowlists in another message or interaction path.
+
+Keep credentials, transport settings, and account lifecycle changes on the
+restart path. Do not declare an entire `accounts` subtree dynamic merely to cover
+its policy fields. Writes containing both dynamic policy and restart-required
+settings retain the existing atomic reload and drain behavior.
+
 #### Account-scoped restart contract
 
 Channel config changes restart the whole channel by default. A multi-account
@@ -284,6 +314,22 @@ The scoped path applies only to changes under
 fields, `accounts.default`, removed or unresolvable accounts, and mixed changes
 that can affect inheritance are promoted to a whole-channel restart. Plugins
 that do not opt in always use the whole-channel path.
+
+The Gateway retains the admitted account's `cfg`, resolved `account`, and owning
+`stopAccount` hook through teardown, including failed-stop retries. Cleanup must
+use that context even when the published config removes the account or a new
+plugin registration replaces it.
+
+Finish status updates inside `stopAccount` before its promise settles. The Gateway ignores
+writes through a retained stop callback after that attempt finishes or times out.
+Terminal startup status retires previous webhook handoffs even when the account
+promise stays pending until abort; it does not revoke the current task's ability
+to register ingress and explicitly report ready after recovery.
+
+Account-count-dependent policy needs whole-channel reloads. For example, Telegram
+changes how an empty account `groups` map inherits defaults between single- and
+multi-account configurations. Synology Chat also validates inherited and duplicate
+webhook paths across accounts. These plugins do not opt into account-only reloads.
 
 For channels using the durable ingress drain, the account monitor's stop path
 must first settle all accepted transport admissions, then dispose and await its
@@ -474,6 +520,14 @@ metadata. Replacing either starts fresh target metadata, so a new session cannot
 inherit the previous plugin owner, agent, or label. Keep conversation transport
 details and explicit lifecycle settings separate from target metadata.
 
+Use `resolveThreadBindingLifecycle(...)` from
+`openclaw/plugin-sdk/thread-bindings-session-runtime` for standard idle and
+maximum-age expiration. Plugins with a different legacy timestamp contract can
+pass prepared `inactivityExpiresAt` and `maxAgeExpiresAt` values to
+`resolveThreadBindingExpiry(...)` on the same subpath. It selects the earlier
+deadline and its reason, preferring idle expiration on ties; omitted deadlines
+are disabled. The plugin still owns timestamp validation and duration defaults.
+
 Preserve opaque plugin ownership metadata when projecting binding records.
 Plugin-owned targets do not require an OpenClaw agent id; use
 `isPluginOwnedSessionBindingRecord(...)` from
@@ -582,6 +636,38 @@ do not treat the recorded approval alone as proof that the change completed.
 
 Other approval helpers:
 
+- Use `settleApprovalReaction` from
+  `openclaw/plugin-sdk/approval-reaction-runtime` for explicitly authorized
+  reaction decisions. It checks the supplied approvers and actor authorization,
+  loads the Gateway resolver lazily, and calls `clearTarget` for every terminal
+  result (including a losing click) or approval-not-found error. Keep transport
+  identity, route checks, cleanup, and result logging in the plugin. Other errors
+  propagate with the binding intact; the channel must hand them to its durable
+  ingress or poller for replay. `readApprovalReactionTargetRecord` validates the
+  shared persisted fields; transport-specific route and author fields still need
+  their own validation.
+- Use `formatChannelApprovalResolvedLabel` and
+  `buildSystemAgentApprovalResolvedText` from
+  `openclaw/plugin-sdk/approval-runtime` for terminal presentation.
+  Rich labels preserve application-status precedence; prose preserves denial
+  precedence, because a denied system change can also report `not-applied`.
+  Both prioritize cancellation. Pass a decision formatter for transport-specific
+  label spelling, and prepare any bounded operation summary before building prose.
+  Use `formatApprovalDecisionLabel` for a recorded decision without implying
+  application completion.
+- Approval account lookup helpers `resolveApprovalRequestAccountId` and
+  `resolveApprovalRequestChannelAccountId` use `approval-native-runtime`. Their
+  duplicate `approval-runtime` exports and its unused
+  `matchesApprovalRequestSessionFilter` export have been retired. The core
+  implementations are unchanged.
+- Use `createNativeApprovalControlRegistry` from
+  `openclaw/plugin-sdk/approval-runtime` for process-local native card
+  tokens. Each instance owns a 1,024-binding FIFO registry and holds its claim
+  through Gateway resolution and the terminal card update. Missing approvals
+  retire their tokens; other failures release the claim for retry. Plugins
+  validate native event scope and authorize the actor before calling `settle`,
+  retain their lookup-expiry policy through `releaseClaimOnLookupExpiry`, and
+  use `onComplete` for transport-owned cleanup such as manual-prompt suppression.
 - Use `createNativeApprovalChannelRouteGates` from
   `openclaw/plugin-sdk/approval-native-runtime` when a channel supports both
   session-origin native delivery and explicit approval forwarding targets. The
@@ -591,6 +677,8 @@ Other approval helpers:
   lookup, transport-enabled check, target normalization, and turn-source
   target resolution. Do not use it to create core-owned channel policy
   defaults; pass the channel's documented default mode explicitly.
+  The unused `createChannelApprovalForwardingEvaluator` export has been retired;
+  this route-gate helper remains the supported routing path.
 - `createNativeApprovalMessagingTargetResolvers` centralizes channel matching
   and `{ to, accountId, threadId }` normalization for messaging transports
   whose native approval target is a channel-owned normalized destination.
@@ -715,6 +803,14 @@ only: it defaults DMs to `pairing` and groups to `allowlist`. Do not apply
 those defaults to account entries or remove them from the root; the former
 shadows operator settings and the latter can leave group access open.
 This replaces `buildCommonChannelAccountShape` and its defaulting flags.
+
+Use `refineChannelDmPolicy({ channelId, value, ctx })` from the same subpath
+to validate the root policy against `allowFrom`. Pass `accountId` to validate
+one account with root-policy and allowlist inheritance, including explicit
+empty-array overrides. The helper emits the standard root/account error paths
+and messages for `open` and `allowlist` policies. Keep account iteration,
+disabled-account filtering, and ordering relative to other refinements in the
+channel, since those rules differ between plugins.
 
 Use `mergeAccountConfig` or `resolveMergedAccountConfig` through the existing
 `openclaw/plugin-sdk/account-helpers` export for runtime inheritance. Their

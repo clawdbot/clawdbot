@@ -12,6 +12,7 @@ import {
   abortReplyRunBySessionId,
   expireStaleReplyRunBySessionId,
   forceClearReplyOperation,
+  hasCommittedReplyOperationOutcome,
   hasReplyOperationExecutionStarted,
   isReplyRunEvidenceStaleBySessionId,
   isReplyRunActiveForSessionId,
@@ -34,7 +35,10 @@ import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../infra/agent-events.js";
-import { getActiveAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
+import {
+  getActiveAgentRunDelegatedAuthority,
+  getAgentRunContext,
+} from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   getDiagnosticSessionActivitySnapshot,
@@ -47,6 +51,7 @@ import {
 import { logMessageQueuedWithBacklogPolicy } from "../../logging/diagnostic-runtime.js";
 import { diagnosticLogger as diag, logSessionStateChange } from "../../logging/diagnostic.js";
 import { hasPromptImageInput } from "../../media/prompt-image-input.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { QuestionAnswerUnconfirmedError } from "../harness/gateway-question-dispatch.js";
 import { resolveSessionPlacementForcedTerminalSettlement } from "../session-placement-forced-terminal-settlement.js";
@@ -966,13 +971,40 @@ export function isEmbeddedAgentRunActive(sessionId: string): boolean {
   return active;
 }
 
-/**
- * Returns whether a registry-owned run is still doing user-visible work.
- * Terminal reply operations and aborted handles retain their lane for cleanup,
- * but must not keep session activity projections in the running state.
- */
+/** Operational progress includes maintenance, including permission changes and cancellation. */
 export function resolveEmbeddedAgentRunProgressState(
   sessionId: string,
+): "queued" | "running" | undefined {
+  return resolveEmbeddedRunProgressState(sessionId, "operational");
+}
+
+type SessionProgressOwner = { agentId?: string; defaultAgentId?: string };
+
+function matchesSessionProgressOwner(
+  owner: SessionProgressOwner,
+  recorded: { agentId?: string; sessionKey?: string },
+): boolean {
+  const requestedAgentId = owner.agentId ?? owner.defaultAgentId;
+  const recordedAgentId =
+    recorded.agentId ?? parseAgentSessionKey(recorded.sessionKey)?.agentId ?? owner.defaultAgentId;
+  return Boolean(
+    requestedAgentId &&
+    recordedAgentId &&
+    normalizeAgentId(requestedAgentId) === normalizeAgentId(recordedAgentId),
+  );
+}
+
+/** Session presentation uses the retained run owner, even after its context is released. */
+export function resolveEmbeddedAgentSessionProgressState(
+  sessionId: string,
+  owner: SessionProgressOwner,
+): "queued" | "running" | undefined {
+  return resolveEmbeddedRunProgressState(sessionId, owner);
+}
+
+function resolveEmbeddedRunProgressState(
+  sessionId: string,
+  scope: "operational" | SessionProgressOwner,
 ): "queued" | "running" | undefined {
   const replyOperation = resolveActiveReplyOperationForSessionId(sessionId);
   const replyPhase = replyOperation?.phase;
@@ -980,8 +1012,21 @@ export function resolveEmbeddedAgentRunProgressState(
     replyPhase !== undefined &&
     replyPhase !== "completed" &&
     replyPhase !== "failed" &&
-    replyPhase !== "aborted";
-  const handleInProgress = isEmbeddedRunHandleInProgress(ACTIVE_EMBEDDED_RUNS.get(sessionId));
+    replyPhase !== "aborted" &&
+    (scope === "operational" ||
+      (replyOperation &&
+        matchesSessionProgressOwner(scope, {
+          agentId: replyOperation.agentId,
+          sessionKey: replyOperation.key,
+        })));
+  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  const registration = handle && ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle);
+  const handleInProgress =
+    isEmbeddedRunHandleInProgress(handle) &&
+    (scope === "operational" ||
+      (registration &&
+        registration.projectSessionActive !== false &&
+        matchesSessionProgressOwner(scope, registration)));
   // Reply operations and embedded handles are independent lifecycle owners.
   // A retained terminal owner must not hide a newer live owner for the session.
   if (
@@ -1000,12 +1045,19 @@ export function isEmbeddedAgentRunInProgress(sessionId: string): boolean {
   return resolveEmbeddedAgentRunProgressState(sessionId) !== undefined;
 }
 
-export function resolveEmbeddedReplyActivity(
-  sessionId: string,
-): Pick<ReplyOperation, "phase" | "lastActivityAtMs"> | undefined {
+export type EmbeddedReplyActivity = Pick<ReplyOperation, "phase" | "lastActivityAtMs"> & {
+  /** Terminal outcome committed; only delivery/finalization remains. */
+  terminalOutcomeCommitted: boolean;
+};
+
+export function resolveEmbeddedReplyActivity(sessionId: string): EmbeddedReplyActivity | undefined {
   const operation = resolveActiveReplyOperationForSessionId(sessionId);
   return operation
-    ? { phase: operation.phase, lastActivityAtMs: operation.lastActivityAtMs }
+    ? {
+        phase: operation.phase,
+        lastActivityAtMs: operation.lastActivityAtMs,
+        terminalOutcomeCommitted: hasCommittedReplyOperationOutcome(operation),
+      }
     : undefined;
 }
 
@@ -1248,6 +1300,13 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
     ? ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(embeddedRunHandle)?.agentId
     : undefined;
   const replyOperation = resolveActiveReplyOperationForSessionId(params.sessionId);
+  if (
+    params.reason === "stuck_recovery" &&
+    replyOperation &&
+    hasCommittedReplyOperationOutcome(replyOperation)
+  ) {
+    return { aborted: false, drained: false, forceCleared: false };
+  }
   let releaseStaleExpiryBarrier: (() => void) | undefined;
   const staleExpiryBarrier =
     params.reason === "stuck_recovery"
@@ -1488,10 +1547,16 @@ export function setActiveEmbeddedRun(
   // The dispatch scope carries the admitted instance across both core and
   // plugin attempts. A handle's public runId alone cannot confer wait authority.
   const operationalRunInstance = caller?.operationalRunInstance;
+  const runContext = handle.runId ? getAgentRunContext(handle.runId) : undefined;
   ACTIVE_EMBEDDED_RUN_REGISTRATIONS.set(handle, {
+    projectSessionActive:
+      runContext?.lifecycleGeneration === incomingLifecycleGeneration
+        ? runContext.projectSessionActive
+        : undefined,
     toolAuthority,
     sessionId,
-    agentId,
+    // Legacy SDK callers may omit this; a matching live binding proves the captured owner.
+    agentId: agentId ?? (toolAuthority ? caller?.agentId : undefined),
     ...(sessionKey ? { sessionKey } : {}),
     delegatedAuthority:
       operationalRunInstance?.runId === handle.runId && operationalRunInstance

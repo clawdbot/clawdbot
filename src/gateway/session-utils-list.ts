@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -14,6 +15,7 @@ import {
 import { shouldKeepSubagentRunChildLink } from "../agents/subagents/registry/subagent-run-liveness.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { SessionEntry } from "../config/sessions.js";
+import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-gateway.js";
 import { MAX_SESSION_PARTICIPANTS } from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPinnedActivePluginRegistryWorkspaceDir } from "../plugins/runtime-workspace-state.js";
@@ -36,7 +38,6 @@ import {
   resolveSessionListProfileReference,
 } from "./session-identity-projection.js";
 import { type SessionEntryPair, sortAndLimitSessionEntries } from "./session-list-order.js";
-import { resolveSessionStoreAgentId } from "./session-store-key.js";
 import { readSessionTitleFieldsFromTranscriptBatch as readScopedSessionTitleFieldsFromTranscriptBatch } from "./session-transcript-title-reader.js";
 import type {
   SessionActorProfileIdentity,
@@ -74,12 +75,21 @@ const SESSIONS_LIST_ROW_CONTEXT_THRESHOLD = 10;
 const SESSIONS_LIST_DEFAULT_LIMIT = 100;
 const SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS = 100;
 
+type SessionSelectionScope =
+  | { opts: SessionsListParams; targetsBySessionKey: GatewayStoredSessionTargets }
+  | {
+      opts: Omit<SessionsListParams, "search"> & { search?: never };
+      targetsBySessionKey?: never;
+    };
+
 type ListSessionsFromStoreParams = {
   cfg: OpenClawConfig;
   durableStorePath?: string;
   entryFilter?: (key: string, entry: SessionEntry) => boolean;
   storePath: string;
   store: Record<string, SessionEntry>;
+  // Sentinels retain the first projected store's owner; their raw key cannot recover it.
+  targetsBySessionKey: GatewayStoredSessionTargets;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   opts: SessionsListParams;
   involvingActorId?: string;
@@ -130,6 +140,7 @@ function resolveSessionsListWindowLimit(limit: number | undefined, offset: numbe
 function filterSessionEntries(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
+  targetsBySessionKey?: GatewayStoredSessionTargets;
   opts: SessionsListParams;
   now: number;
   userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
@@ -203,16 +214,18 @@ function filterSessionEntries(params: {
   const selectedProfileId = profileReference?.value;
 
   const candidateEntries = visibleEntries.filter(([key, entry]) => {
+    const target = params.targetsBySessionKey?.get(key);
+    const storeKey = target?.storeKey ?? key;
     if (
       isCronRunSessionKey(key) ||
-      (!includeGlobal && key === "global") ||
-      (!includeUnknown && key === "unknown")
+      (!includeGlobal && storeKey === "global") ||
+      (!includeUnknown && storeKey === "unknown")
     ) {
       return false;
     }
-    if (agentId && key !== "global") {
-      const parsed = parseAgentSessionKey(key);
-      if (!parsed || normalizeAgentId(parsed.agentId) !== agentId) {
+    if (agentId && storeKey !== "global") {
+      const ownerAgentId = target?.storeKey ? target.agentId : parseAgentSessionKey(key)?.agentId;
+      if (!ownerAgentId || normalizeAgentId(ownerAgentId) !== agentId) {
         return false;
       }
     }
@@ -220,7 +233,7 @@ function filterSessionEntries(params: {
       return false;
     }
     if (spawnedBy) {
-      if (key === "unknown" || key === "global") {
+      if (storeKey === "unknown" || storeKey === "global") {
         return false;
       }
       const filterRowContext = resolveSessionListRowContext(params);
@@ -272,7 +285,7 @@ function filterSessionEntries(params: {
         search,
         now,
         visibleEntries: candidateEntries,
-        agentId: agentId || undefined,
+        targetsBySessionKey: expectDefined(params.targetsBySessionKey, "search row owners"),
         getRowContext: params.getRowContext,
         projectActiveRun: params.projectActiveRun,
       })
@@ -366,6 +379,7 @@ function isPhantomAgentStoreListEntry(key: string, entry: SessionEntry | undefin
 function selectSessionEntries(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
+  targetsBySessionKey?: GatewayStoredSessionTargets;
   opts: SessionsListParams;
   now: number;
   getRowContext?: SessionListRowContextProvider;
@@ -435,6 +449,7 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
   const selection = selectSessionEntries({
     cfg,
     store,
+    targetsBySessionKey: params.targetsBySessionKey,
     opts,
     now,
     entryFilter,
@@ -463,7 +478,11 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
   const storePath = hasIncognito ? params.storePath : (params.durableStorePath ?? params.storePath);
   const storeChildSessionsByKey = buildStoreChildSessionIndex({
     store,
-    keys: selection.entries.map(([key]) => key),
+    keys: [
+      ...new Set(
+        selection.entries.map(([key]) => params.targetsBySessionKey.get(key)?.storeKey ?? key),
+      ),
+    ],
     now,
     subagentRuns: usePreparedChildReads ? sharedRowContext?.subagentRuns : undefined,
     excludedChildKeys: filteredSessionKeys,
@@ -472,7 +491,7 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
   populateSessionListAcpMetadata({
     cfg,
     entries: selection.entries,
-    opts,
+    targetsBySessionKey: params.targetsBySessionKey,
     rowContext: sharedRowContext,
   });
   return {
@@ -532,7 +551,7 @@ function buildSessionsListResult(
   };
 }
 
-export function resolveSessionsListDefaultsAgentId(
+function resolveSessionsListDefaultsAgentId(
   cfg: OpenClawConfig,
   requestedAgentId?: string,
 ): string {
@@ -541,15 +560,16 @@ export function resolveSessionsListDefaultsAgentId(
     : normalizeAgentId(tryResolveLegacyCompatibilityAgentId(cfg) ?? LEGACY_IMPLICIT_AGENT_ID);
 }
 
-export function filterAndSortSessionEntries(params: {
-  cfg: OpenClawConfig;
-  entryFilter?: (key: string, entry: SessionEntry) => boolean;
-  store: Record<string, SessionEntry>;
-  opts: SessionsListParams;
-  now: number;
-  getRowContext?: SessionListRowContextProvider;
-  involvingActorId?: string;
-}): [string, SessionEntry][] {
+export function filterAndSortSessionEntries(
+  params: {
+    cfg: OpenClawConfig;
+    entryFilter?: (key: string, entry: SessionEntry) => boolean;
+    store: Record<string, SessionEntry>;
+    now: number;
+    getRowContext?: SessionListRowContextProvider;
+    involvingActorId?: string;
+  } & SessionSelectionScope,
+): [string, SessionEntry][] {
   return selectSessionEntries({
     ...params,
     restrictProfileReferences: params.entryFilter !== undefined,
@@ -558,7 +578,7 @@ export function filterAndSortSessionEntries(params: {
 
 /** Projects lightweight list rows while sharing the event loop with other requests. */
 export async function listSessionsFromStoreAsync(
-  params: ListSessionsFromStoreParams,
+  params: ListSessionsFromStoreParams & { workStartedAt?: number },
 ): Promise<SessionsListResult> {
   // Pin the active plugin-registry workspace dir for the duration of this
   // call so per-row metadata lookups use a stable memo key. Without this pin,
@@ -566,8 +586,8 @@ export async function listSessionsFromStoreAsync(
   // between rows, the memo never hits, and each row triggers a full
   // loadPluginMetadataSnapshot scan (~100 ms).
   return withPinnedActivePluginRegistryWorkspaceDir(async () => {
-    let workStartedAt = performance.now();
-    const { cfg, store, opts } = params;
+    let workStartedAt = params.workStartedAt ?? performance.now();
+    const { cfg, store, targetsBySessionKey } = params;
     const list = prepareSessionList(params);
     const sessions: GatewaySessionRow[] = [];
     const transcriptScopes = list.entries
@@ -576,36 +596,35 @@ export async function listSessionsFromStoreAsync(
         if (!entry.sessionId || (!list.includeDerivedTitles && !list.includeLastMessage)) {
           return [];
         }
-        const parsed = parseAgentSessionKey(key);
-        const agentId = normalizeAgentId(
-          parsed?.agentId ?? opts.agentId ?? resolveSessionStoreAgentId(cfg, key),
-        );
+        const target = expectDefined(targetsBySessionKey.get(key), "transcript row target");
         return [
           {
-            agentId,
+            ...target.storeTarget,
             sessionEntry: entry,
             sessionId: entry.sessionId,
-            sessionKey: key,
-            storePath: list.storePath,
+            sessionKey: target.storeKey ?? key,
           },
         ];
       });
     const transcriptFields = readScopedSessionTitleFieldsFromTranscriptBatch(transcriptScopes);
+    // Consume synchronous sharing facts and capture transcripts before yielding.
+    // Loading and preparation can spend the budget even for zero or one row.
+    if (performance.now() - workStartedAt >= SESSIONS_LIST_YIELD_INTERVAL_MS) {
+      await yieldToEventLoop();
+      workStartedAt = performance.now();
+    }
     let transcriptFieldIndex = 0;
     for (let i = 0; i < list.entries.length; i++) {
       const [key, entry] = expectDefined(list.entries[i], "entries entry at i");
+      const target = expectDefined(targetsBySessionKey.get(key), "session row owner");
       const includeTranscriptFields = i < list.transcriptFieldRows;
-      const rowAgentId =
-        !parseAgentSessionKey(key) && typeof opts.agentId === "string"
-          ? normalizeAgentId(opts.agentId)
-          : undefined;
       const row = buildGatewaySessionRow({
         cfg,
-        storePath: list.storePath,
+        storePath: target.storeKey ? target.storeTarget.storePath : list.storePath,
         store,
-        key,
+        key: target.storeKey ?? key,
         entry,
-        agentId: rowAgentId,
+        agentId: target.agentId,
         modelCatalog: params.modelCatalog,
         now: list.now,
         includeDerivedTitles: false,
@@ -616,6 +635,7 @@ export async function listSessionsFromStoreAsync(
         skipTranscriptUsageFallback: true,
         lightweightListRow: true,
       });
+      row.key = key;
       if (
         entry?.sessionId &&
         includeTranscriptFields &&
@@ -638,9 +658,7 @@ export async function listSessionsFromStoreAsync(
         i + 1 < list.entries.length &&
         performance.now() - workStartedAt >= SESSIONS_LIST_YIELD_INTERVAL_MS
       ) {
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await yieldToEventLoop();
         // Waiting behind other work is not projection work; start the next budget on resume.
         workStartedAt = performance.now();
       }
