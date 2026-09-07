@@ -146,6 +146,37 @@ const WRITE_BINDING = {
   anchorInode: "2",
 } as const;
 
+function mockDirFetchArchive(
+  invokeNode: ReturnType<typeof createCtx>["invokeNode"],
+  root: string,
+  entries: Record<string, string>,
+) {
+  const tarBase64 = tarEntries(entries);
+  invokeNode
+    .mockResolvedValueOnce({
+      ok: true,
+      payload: {
+        ok: true,
+        binding: EXISTING_BINDING,
+        path: root,
+        entries: ["ok.txt"],
+        fileCount: 1,
+        preflightOnly: true,
+      },
+    })
+    .mockResolvedValueOnce({
+      ok: true,
+      payload: {
+        ok: true,
+        binding: EXISTING_BINDING,
+        path: root,
+        tarBase64,
+        ...archiveMetadata(tarBase64),
+        fileCount: Object.keys(entries).length,
+      },
+    });
+}
+
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {
     expect(record[key]).toEqual(value);
@@ -625,7 +656,7 @@ describe("file-transfer node invoke policy", () => {
     expectResultFields(result, { ok: false, code: "PATH_POLICY_DENIED" });
     expect(
       requireRecord(requireRecord(result, "policy result").details, "result details").path,
-    ).toBe("/home/me/.ssh/id_rsa");
+    ).toBe("/home/me/.ssh");
     expect(invokeNode).toHaveBeenCalledTimes(1);
     expectRecordFields(requireInvokeParams(invokeNode, 0), {
       path: "/home/me",
@@ -982,10 +1013,84 @@ describe("file-transfer node invoke policy", () => {
       expectResultFields(result, { ok: false, code: "PATH_POLICY_DENIED" });
       expect(
         requireRecord(requireRecord(result, "policy result").details, "result details").path,
-      ).toBe("/home/me/.ssh/id_rsa");
+      ).toBe("/home/me/.ssh");
       expect(invokeNode).toHaveBeenCalledTimes(2);
     },
   );
+
+  it.each([
+    { root: "/home/me", deniedPath: "/home/me/private" },
+    { root: "C:\\transfer", deniedPath: "C:\\transfer\\private" },
+  ])(
+    "rejects final dir.fetch archives with a denied implicit parent directory ($root)",
+    async ({ root, deniedPath }) => {
+      const policy = createFileTransferNodeInvokePolicy();
+      const approvals = {
+        request: vi.fn(async () => ({ id: "approval-1", decision: "allow-always" as const })),
+      };
+      const { ctx, invokeNode } = createCtx({
+        command: "dir.fetch",
+        params: { path: root },
+        pluginConfig: { nodes: { "node-1": { ask: "always", denyPaths: [deniedPath] } } },
+        approvals,
+      });
+      // The untrusted final response has no directory headers; preflight remains enabled.
+      mockDirFetchArchive(invokeNode, root, { "private/nested/value.txt": "value" });
+      vi.mocked(appendFileTransferAudit).mockClear();
+
+      const result = await policy.handle(ctx);
+
+      expect(invokeNode).toHaveBeenCalledTimes(2);
+      expect(requireInvokeParams(invokeNode, 0).preflightOnly).toBe(true);
+      expect(approvals.request).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({
+        ok: false,
+        code: "PATH_POLICY_DENIED",
+        details: { path: deniedPath },
+      });
+      expect(appendFileTransferAudit).not.toHaveBeenCalledWith(
+        expect.objectContaining({ decision: "allowed" }),
+      );
+      expect(persistLiteralGrant).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    {
+      name: "counts implicit parents toward the descendant cap",
+      leaves: 2501,
+      sharedParents: false,
+      allowed: false,
+    },
+    {
+      name: "counts shared parents once at the descendant cap",
+      leaves: 4998,
+      sharedParents: true,
+      allowed: true,
+    },
+  ])("$name", async ({ leaves, sharedParents, allowed }) => {
+    const entries = Object.fromEntries(
+      Array.from({ length: leaves }, (_, index) => [
+        sharedParents ? `parent/nested/file-${index}` : `dir-${index}/file`,
+        "",
+      ]),
+    );
+    const { ctx, invokeNode } = createCtx({
+      command: "dir.fetch",
+      params: { path: "/home/me" },
+      pluginConfig: { nodes: { "node-1": { allowReadPaths: ["/home/me", "/home/me/**"] } } },
+    });
+    mockDirFetchArchive(invokeNode, "/home/me", entries);
+
+    const result = await createFileTransferNodeInvokePolicy().handle(ctx);
+
+    expect(invokeNode).toHaveBeenCalledTimes(2);
+    if (allowed) {
+      expect(result).toMatchObject({ ok: true });
+    } else {
+      expect(result).toMatchObject({ ok: false, code: "ARCHIVE_ENTRIES_TOO_MANY" });
+    }
+  });
 
   testUnlessWindows("rejects oversized final dir.fetch archive entry lists", async () => {
     const policy = createFileTransferNodeInvokePolicy();

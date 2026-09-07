@@ -7,7 +7,8 @@ import { gzipSync } from "node:zlib";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import * as tar from "tar";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { DIR_FETCH_HARD_MAX_BYTES, FILE_TRANSFER_SUBDIR } from "./descriptors.js";
+import { DIR_FETCH_HARD_MAX_BYTES } from "../shared/dir-fetch-limits.js";
+import { FILE_TRANSFER_SUBDIR } from "./descriptors.js";
 
 const appendFileTransferAudit = vi.fn(async () => undefined);
 const saveMediaBuffer = vi.fn<() => Promise<{ path: string }>>();
@@ -50,17 +51,13 @@ afterAll(() => {
 
 async function createTarBuffer(params: {
   entries: string[];
-  noPax?: boolean;
   setup: (sourceDir: string) => Promise<void>;
 }): Promise<Buffer> {
   const sourceDir = path.join(tmpRoot, `source-${randomUUID()}`);
   await fs.mkdir(sourceDir, { recursive: true });
   await params.setup(sourceDir);
   const chunks: Buffer[] = [];
-  for await (const chunk of tar.c(
-    { cwd: sourceDir, gzip: true, portable: true, noPax: params.noPax },
-    params.entries,
-  )) {
+  for await (const chunk of tar.c({ cwd: sourceDir, gzip: true, portable: true }, params.entries)) {
     chunks.push(Buffer.from(chunk));
   }
   return Buffer.concat(chunks);
@@ -262,9 +259,6 @@ describe("dir.fetch archive extraction", () => {
     const relPaths = [...names, "z-image.png", "z-image.jpg"];
     const tarBuffer = await createTarBuffer({
       entries: ["."],
-      // These UTF-8 names fit USTAR's 100-byte field. fs-safe rejects non-ASCII
-      // PAX paths; use the supported raw-name format, then verify every saved name.
-      noPax: true,
       setup: async (sourceDir) => {
         await Promise.all(
           relPaths.map((relPath) => fs.writeFile(path.join(sourceDir, relPath), relPath)),
