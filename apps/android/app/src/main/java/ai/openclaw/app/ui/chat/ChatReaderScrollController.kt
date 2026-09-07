@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui.chat
 
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.gestures.stopScroll
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.lazy.LazyListState
@@ -23,6 +24,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -94,6 +96,15 @@ internal data class ChatReaderScrollController(
   val jumpToLatest: () -> Unit,
   val navigation: ChatReaderNavigation,
   val nestedScrollConnection: NestedScrollConnection,
+)
+
+private data class ChatReaderViewport(
+  val scrolling: Boolean,
+  val index: Int,
+  val offset: Int,
+  val size: IntSize,
+  val itemKey: Any?,
+  val itemSize: Int,
 )
 
 internal class ChatReaderNavigation(
@@ -261,17 +272,26 @@ internal fun rememberChatReaderScrollController(
   }
 
   LaunchedEffect(sessionKey) {
+    var previousViewport: ChatReaderViewport? = null
     snapshotFlow {
       if (navigation.isNavigating) {
         null
       } else {
-        Triple(
+        val layout = listState.layoutInfo
+        val index = listState.firstVisibleItemIndex
+        val item = layout.visibleItemsInfo.firstOrNull { it.index == index }
+        ChatReaderViewport(
           listState.isScrollInProgress,
-          listState.firstVisibleItemIndex,
+          index,
           listState.firstVisibleItemScrollOffset,
+          layout.viewportSize,
+          item?.key,
+          item?.size ?: 0,
         )
       }
     }.collect { viewport ->
+      val previous = previousViewport
+      previousViewport = viewport
       if (!readerState.initialized || viewport == null) return@collect
       val (scrolling, index, offset) = viewport
       if (scrolling) {
@@ -280,6 +300,16 @@ internal fun rememberChatReaderScrollController(
       } else if (isUserScrolling) {
         isUserScrolling = false
         readerState = readerState.onViewportChanged(index, offset, currentTimeline, targetTolerancePx)
+      } else if (readerState.followTarget == null && previous != null && previous.size == viewport.size &&
+        viewport.itemKey != null && previous.itemKey == viewport.itemKey
+      ) {
+        // Reverse layout anchors this item's end; retain its reading origin as it
+        // grows. Other rows must not move that anchor. The navigation owner lets a
+        // new drag, jump, or session cancel the correction normally.
+        val growth = viewport.itemSize - previous.itemSize
+        if (growth != 0) {
+          navigation.launch(this, automatic = true) { listState.scrollBy(growth.toFloat()) }.join()
+        }
       }
     }
   }

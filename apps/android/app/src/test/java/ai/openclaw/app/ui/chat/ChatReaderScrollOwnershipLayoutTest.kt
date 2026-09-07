@@ -3,6 +3,7 @@ package ai.openclaw.app.ui.chat
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.ui.design.ClawDesignTheme
+import ai.openclaw.app.ui.design.ClawTheme
 import android.app.Application
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -27,17 +28,23 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.MotionDurationScale
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasScrollToIndexAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeWithVelocity
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.currentCoroutineContext
 import org.junit.Assert.assertEquals
@@ -48,6 +55,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
+import org.robolectric.config.ConfigurationRegistry
 
 /** Reader-owner animation proof; the app's separate code-reading test owns real nested dragging. */
 @RunWith(RobolectricTestRunner::class)
@@ -123,6 +132,107 @@ class ChatReaderScrollOwnershipLayoutTest {
       composeRule.mainClock.autoAdvance = originalAutoAdvance
       composeRule.waitForIdle()
     }
+  }
+
+  @Test
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun pausedStreamingGrowthPreservesVisibleGlyphsAndJumpResumesFollowing() {
+    showReader(initialStreamingLines = 24)
+    composeRule.waitForIdle()
+    assertEquals(GraphicsMode.Mode.NATIVE, ConfigurationRegistry.get(GraphicsMode.Mode::class.java))
+    val transcript = composeRule.onNode(hasScrollToIndexAction()).assertIsDisplayed()
+    val dragDistance = with(composeRule.density) { 80.dp.toPx() }
+    transcript.performTouchInput {
+      swipeWithVelocity(center, center + Offset(0f, dragDistance), endVelocity = 0f)
+    }
+    composeRule.waitForIdle()
+    assertFalse(viewport().scrolling)
+    assertTrue("Manual departure must leave newer content below the viewport", reader.showJumpToLatest)
+
+    val before = renderedStream()
+    val clip = transcript.fetchSemanticsNode().boundsInRoot
+    val marker = (1..24).map { "S%03d".format(it) }.first { inside(clip, markerBounds(before, it)) }
+    val reading = markerBounds(before, marker)
+    assertTrue(inside(before.first.boundsInRoot, reading))
+    assertFalse("The reply's ending must be below the paused viewport", inside(clip, endingBounds(before)))
+    val origin = before.first.positionInRoot
+    val height = before.second.size.height
+
+    click("Append stream")
+    composeRule.waitForIdle()
+    val after = renderedStream()
+    assertEquals(streamText(48), after.second.layoutInput.text.text)
+    assertTrue("The same streaming text layout must actually grow", after.second.size.height > height)
+    val afterGlyphs = markerBounds(after, marker)
+    println("READER_GROWTH marker=$marker before=$reading after=$afterGlyphs origin=$origin next=${after.first.positionInRoot}")
+    assertEquals("Paused growth must preserve the visible glyph's vertical position", reading.top, afterGlyphs.top, 1f)
+    assertTrue("The reading glyphs must remain inside the clipped viewport", inside(clip, afterGlyphs))
+    assertEquals("The same paragraph origin must stay anchored", origin.y, after.first.positionInRoot.y, 1f)
+    assertTrue(reader.showJumpToLatest)
+
+    click("Jump to latest")
+    composeRule.waitForIdle()
+    assertTrue("An explicit Jump must reveal the new ending", inside(clip, endingBounds(renderedStream())))
+    assertFalse(reader.showJumpToLatest)
+    click("Append stream")
+    composeRule.waitForIdle()
+    assertEquals(
+      streamText(72),
+      renderedStream()
+        .second.layoutInput.text.text,
+    )
+    assertTrue("Growth after Jump must keep following the ending", inside(clip, endingBounds(renderedStream())))
+  }
+
+  @Test
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun streamingGrowthAtLiveEdgeKeepsEndingGlyphsVisible() {
+    showReader(initialStreamingLines = 24)
+    composeRule.waitForIdle()
+    val clip = composeRule.onNode(hasScrollToIndexAction()).fetchSemanticsNode().boundsInRoot
+    assertTrue(inside(clip, endingBounds(renderedStream())))
+    click("Append stream")
+    composeRule.waitForIdle()
+    val after = renderedStream()
+    assertEquals(streamText(48), after.second.layoutInput.text.text)
+    assertTrue("Following must reveal the actual ending after measured growth", inside(clip, endingBounds(after)))
+    assertFalse(reader.showJumpToLatest)
+  }
+
+  @Test
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun growthOfAnOlderVisibleRowDoesNotMoveTheSelectedStreamingAnchor() {
+    showReader(initialStreamingLines = 8, growEarlierRow = true)
+    composeRule.waitForIdle()
+    val transcript = composeRule.onNode(hasScrollToIndexAction()).assertIsDisplayed()
+    val dragDistance = with(composeRule.density) { 80.dp.toPx() }
+    transcript.performTouchInput {
+      swipeWithVelocity(center, center + Offset(0f, dragDistance), endVelocity = 0f)
+    }
+    composeRule.waitForIdle()
+    assertTrue(reader.showJumpToLatest)
+    assertFalse(viewport().scrolling)
+    val beforeLayout = reader.listState.layoutInfo
+    assertEquals("stream", beforeLayout.visibleItemsInfo.single { it.index == reader.listState.firstVisibleItemIndex }.key)
+    val older = beforeLayout.visibleItemsInfo.single { it.key == "message:assistant 59" }
+    val before = renderedStream()
+    val clip = transcript.fetchSemanticsNode().boundsInRoot
+    val reading = markerBounds(before, "S001")
+    assertTrue("The selected stream's reading glyphs must be visible before unrelated growth", inside(clip, reading))
+    val origin = before.first.positionInRoot
+
+    click("Grow earlier row")
+    composeRule.waitForIdle()
+    val afterLayout = reader.listState.layoutInfo
+    assertTrue("The same-key older row must actually grow", afterLayout.visibleItemsInfo.single { it.key == older.key }.size > older.size)
+    val after = renderedStream()
+    assertEquals(streamText(8), after.second.layoutInput.text.text)
+    assertEquals("The selected stream itself did not change height", before.second.size.height, after.second.size.height)
+    val afterGlyphs = markerBounds(after, "S001")
+    println("READER_OTHER_ROW_GROWTH before=$reading after=$afterGlyphs origin=$origin next=${after.first.positionInRoot}")
+    assertEquals("Growth above the selected row must not move its reading glyphs", reading.top, afterGlyphs.top, 1f)
+    assertTrue(inside(clip, afterGlyphs))
+    assertEquals(origin.y, after.first.positionInRoot.y, 1f)
   }
 
   @Test
@@ -249,14 +359,17 @@ class ChatReaderScrollOwnershipLayoutTest {
   private fun showReader(
     initialHistoryLoading: Boolean = false,
     readLatestOnNavigation: Boolean = false,
+    initialStreamingLines: Int? = null,
+    growEarlierRow: Boolean = false,
   ) {
     val initialMessages = listOf(message("old user", "user", 1)) + (0 until 60).map { message("assistant $it", "assistant", it + 2) }
     composeRule.setContent {
       ClawDesignTheme {
         var messages by remember { mutableStateOf(initialMessages) }
         var historyLoading by remember { mutableStateOf(initialHistoryLoading) }
+        var streamingLines by remember { mutableStateOf(initialStreamingLines) }
         val scope = rememberCoroutineScope()
-        val timeline = remember(messages) { buildChatTimeline(messages, 0, emptyList(), null) }
+        val timeline = remember(messages, streamingLines) { buildChatTimeline(messages, if (streamingLines == null) 0 else 1, emptyList(), streamingLines?.let(::streamText)) }
         val current = rememberChatReaderScrollController("animation-owner", timeline, historyLoading = historyLoading)
         SideEffect { reader = current }
         LaunchedEffect(Unit) { observedScale = currentCoroutineContext()[MotionDurationScale]?.scaleFactor }
@@ -282,6 +395,15 @@ class ChatReaderScrollOwnershipLayoutTest {
             if (readLatestOnNavigation) {
               TextButton(onClick = { messages = messages + message("assistant ${messages.count { it.role == "assistant" }}", "assistant", messages.size + 1) }) { Text("Append assistant") }
             }
+            if (streamingLines != null) {
+              TextButton(onClick = {
+                if (growEarlierRow) {
+                  messages = messages.map { if (it.id == "assistant 59") it.copy(content = listOf(ChatMessageContent(type = "text", text = "assistant 59\nMore context\nStill more context"))) else it }
+                } else {
+                  streamingLines = checkNotNull(streamingLines) + 24
+                }
+              }) { Text(if (growEarlierRow) "Grow earlier row" else "Append stream") }
+            }
             TextButton(onClick = { historyLoading = !historyLoading }) { Text("Loading: $historyLoading") }
             Text("User turns: ${messages.count { it.role == "user" }}")
             LazyColumn(
@@ -290,14 +412,39 @@ class ChatReaderScrollOwnershipLayoutTest {
               modifier = Modifier.fillMaxWidth().height(480.dp).nestedScroll(current.nestedScrollConnection),
             ) {
               items(timeline.items, key = ::chatTimelineItemKey) { item ->
-                val message = (item as ChatTimelineItem.Message).message
-                Box(Modifier.fillMaxWidth().height(64.dp)) {
-                  Text(
-                    message.content
-                      .single()
-                      .text
-                      .orEmpty(),
-                  )
+                when (item) {
+                  is ChatTimelineItem.StreamingAssistant -> {
+                    // Unlike the fixed-height fixture siblings, this is the app's genuinely growing renderer.
+                    ChatMarkdown(text = item.text, textColor = ClawTheme.colors.text, isStreaming = true, bodyStyle = ClawTheme.type.body)
+                  }
+
+                  ChatTimelineItem.Thinking -> {
+                    Text("Working")
+                  }
+
+                  is ChatTimelineItem.Message -> {
+                    if (growEarlierRow && item.message.id == "assistant 59") {
+                      Text(
+                        item.message.content
+                          .single()
+                          .text
+                          .orEmpty(),
+                      )
+                    } else {
+                      Box(Modifier.fillMaxWidth().height(64.dp)) {
+                        Text(
+                          item.message.content
+                            .single()
+                            .text
+                            .orEmpty(),
+                        )
+                      }
+                    }
+                  }
+
+                  else -> {
+                    error("Unexpected ownership fixture item: $item")
+                  }
                 }
               }
             }
@@ -306,6 +453,41 @@ class ChatReaderScrollOwnershipLayoutTest {
       }
     }
   }
+
+  private fun streamText(lines: Int): String = (1..lines).joinToString("\n") { "S%03d Synthetic reader text describes ordinary objects without tools or provider execution.".format(it) }
+
+  private fun renderedStream(): Pair<SemanticsNode, TextLayoutResult> {
+    val target = composeRule.onNode(hasText("S001 Synthetic", substring = true), useUnmergedTree = true).assertIsDisplayed()
+    val layouts = mutableListOf<TextLayoutResult>()
+    target.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action -> assertTrue(action(layouts)) }
+    return target.fetchSemanticsNode() to layouts.single()
+  }
+
+  private fun markerBounds(
+    rendered: Pair<SemanticsNode, TextLayoutResult>,
+    marker: String,
+  ): Rect {
+    val (node, layout) = rendered
+    val start =
+      layout.layoutInput.text.text
+        .indexOf(marker)
+    assertTrue("Rendered text must retain $marker", start >= 0)
+    val glyphs = marker.indices.map { layout.getBoundingBox(start + it).translate(node.positionInRoot) }
+    assertTrue("Glyph geometry must be finite and positive", glyphs.all { it.left.isFinite() && it.top.isFinite() && it.width > 0f && it.height > 0f })
+    return Rect(glyphs.minOf { it.left }, glyphs.minOf { it.top }, glyphs.maxOf { it.right }, glyphs.maxOf { it.bottom })
+  }
+
+  private fun endingBounds(rendered: Pair<SemanticsNode, TextLayoutResult>): Rect {
+    val (node, layout) = rendered
+    val glyph = layout.getBoundingBox(layout.layoutInput.text.length - 1).translate(node.positionInRoot)
+    assertTrue("The ending glyph needs finite positive geometry", glyph.left.isFinite() && glyph.top.isFinite() && glyph.width > 0f && glyph.height > 0f)
+    return glyph
+  }
+
+  private fun inside(
+    clip: Rect,
+    glyph: Rect,
+  ): Boolean = clip.contains(glyph.topLeft) && clip.contains(glyph.bottomRight - Offset(0.01f, 0.01f))
 
   private fun message(
     text: String,
