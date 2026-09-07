@@ -9,7 +9,7 @@ import {
   shouldShowInsecureContextHint,
 } from "../lib/connection-hints.ts";
 
-export type LoginFailureKind =
+type LoginFailureKind =
   | "auth-required"
   | "auth-failed"
   | "trusted-proxy"
@@ -29,12 +29,12 @@ export type LoginFailureKind =
  * Gateway host or in the browser, so the explanation leads and the form folds
  * away into a one-line connection summary.
  */
-export type LoginFailurePlacement = "form" | "status";
+type LoginFailurePlacement = "form" | "status";
 
 /** Pending is an expected wait, not a fault; the palette follows that distinction. */
 export type LoginFailureTone = "pending" | "warn" | "danger";
 
-export type LoginFormField = "url" | "credential";
+type LoginFormField = "url" | "credential";
 
 export type CredentialMode = "token" | "password";
 
