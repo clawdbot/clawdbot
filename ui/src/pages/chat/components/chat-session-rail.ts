@@ -20,6 +20,12 @@ import {
   storeChatObserverDisplayPreference,
 } from "../chat-observer-display.ts";
 import type { ChatSessionCompanionThread } from "../chat-session-companion.ts";
+import {
+  adjustTextareaHeight,
+  disconnectTextareaOverflowObserver,
+  observeTextareaOverflow,
+  scheduleTextareaHeightAdjustment,
+} from "./chat-composer-dom.ts";
 
 export type SessionRailMode = "hidden" | "pill" | "expanded";
 
@@ -244,6 +250,18 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   private renderedMode: SessionRailMode = "hidden";
   private reportedMode: SessionRailMode | null = null;
   private terminalAgeReference = Date.now();
+  private composerTextarea: HTMLTextAreaElement | null = null;
+  private readonly textareaRef = (element?: Element) => {
+    const next = element instanceof HTMLTextAreaElement ? element : null;
+    if (this.composerTextarea && this.composerTextarea !== next) {
+      disconnectTextareaOverflowObserver(this.composerTextarea);
+    }
+    this.composerTextarea = next;
+    if (next) {
+      observeTextareaOverflow(next);
+      scheduleTextareaHeightAdjustment(next);
+    }
+  };
 
   override disconnectedCallback() {
     this.stopClock();
@@ -533,6 +551,13 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   }
 
   override render() {
+    // Re-measure programmatic draft changes (send clear, prefill, session switch).
+    if (
+      this.composerTextarea?.isConnected &&
+      this.composerTextarea.value !== this.companion.draft
+    ) {
+      scheduleTextareaHeightAdjustment(this.composerTextarea);
+    }
     const input = this.input();
     const mode = this.embedded ? "expanded" : this.railState.mode(input);
     this.renderedMode = mode;
@@ -671,9 +696,10 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
         >
           <div class="agent-chat__composer-input-row">
             <label class="agent-chat__composer-combobox chat-session-rail__prompt">
-              <input
+              <textarea
+                ${ref(this.textareaRef)}
                 class="chat-session-rail__input"
-                type="text"
+                rows="1"
                 maxlength="400"
                 autocomplete="off"
                 aria-label=${t("chat.rail.askLabel")}
@@ -685,9 +711,22 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
                 }
                 ?disabled=${!this.connected || this.companion.pendingQuestion !== null}
                 @input=${(event: InputEvent) => {
-                  this.onDraftChange?.((event.currentTarget as HTMLInputElement).value);
+                  const target = event.currentTarget as HTMLTextAreaElement;
+                  this.onDraftChange?.(target.value);
+                  adjustTextareaHeight(target);
                 }}
-              />
+                @keydown=${(event: KeyboardEvent) => {
+                  if (
+                    event.key === "Enter" &&
+                    !event.shiftKey &&
+                    !event.isComposing &&
+                    event.keyCode !== 229
+                  ) {
+                    event.preventDefault();
+                    this.submit();
+                  }
+                }}
+              ></textarea>
             </label>
           </div>
           <div class="agent-chat__composer-footer">

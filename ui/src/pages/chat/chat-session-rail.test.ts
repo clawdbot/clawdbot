@@ -513,6 +513,29 @@ describe("ChatSessionRailElement", () => {
     expect(element.querySelector(".chat-session-rail__timestamp")?.textContent).toContain("as of");
   });
 
+  it.each([{ shiftKey: true }, { isComposing: true }, { keyCode: 229 }])(
+    "does not send Enter while inserting a newline or composing: %j",
+    async (modifiers) => {
+      const onSubmit = vi.fn();
+      const element = await mount({ onSubmit });
+      element.companion = { ...element.companion, draft: "First paragraph.\nSecond paragraph." };
+      await element.updateComplete;
+      const input = element.querySelector("textarea")!;
+      const event = new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+        ...modifiers,
+      });
+      input.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+      expect(onSubmit).not.toHaveBeenCalled();
+
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      expect(onSubmit).toHaveBeenCalledExactlyOnceWith("First paragraph.\nSecond paragraph.");
+    },
+  );
+
   it("renders one pending state and retries a retryable failure", async () => {
     const onSubmit = vi.fn();
     const element = await mount({

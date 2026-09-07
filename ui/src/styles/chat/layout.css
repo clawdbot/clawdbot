@@ -2419,10 +2419,8 @@ button.chat-pr__diff {
    the loudest thing in the panel. Two regions either way — a lower floor is
    still the editor above its action row. */
 .chat-session-rail__composer.agent-chat__input {
-  /* No floor at all: the panel's prompt is a single line and its action row
-     carries one control, so a floor would only buy dead air between the two and
-     leave the send looking stranded at the bottom of an empty box. The two
-     regions still stack; they simply sit as close as their own content allows. */
+  /* Start compact for short questions; the shared textarea sizing grows the
+     editor for wrapped lines and paragraphs, then scrolls at its height cap. */
   --chat-composer-min-height: auto;
   --chat-composer-editor-inset-block: 4px;
 
