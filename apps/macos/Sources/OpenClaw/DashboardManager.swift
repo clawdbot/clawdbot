@@ -45,6 +45,7 @@ final class DashboardManager {
     }
 
     @ObservationIgnored private var controller: DashboardWindowController?
+    @ObservationIgnored let alertPresenter = DashboardAlertPresenter()
     @ObservationIgnored private var mainTarget: DashboardGatewayTarget
     @ObservationIgnored private let selection: MacGatewaySelectionPreferences
     @ObservationIgnored private var pendingInitialSelection: String?
@@ -561,6 +562,8 @@ final class DashboardManager {
     }
 
     func close() {
+        // Pending gateway alerts end before their host windows close; termination cleanup runs through here.
+        self.alertPresenter.dismissAll()
         self.windowLifetime &+= 1
         self.gatewaySnapshotGeneration &+= 1
         self.endpointGeneration &+= 1
@@ -773,7 +776,7 @@ final class DashboardManager {
                 current.pendingGatewaySwitch = nil
                 _ = current.takePendingNativeActions()
                 guard !(error is CancellationError) else { return }
-                Self.showGatewayError(error, message: String(localized: "Could Not Switch Gateway"))
+                self.presentGatewayError(error, title: String(localized: "Could Not Switch Gateway"), over: window)
             }
         }
     }
@@ -854,7 +857,7 @@ final class DashboardManager {
                 if opensMain {
                     self.showFailure(error)
                 } else {
-                    Self.showGatewayError(error, message: String(localized: "Could Not Open Gateway Window"))
+                    self.presentGatewayError(error, title: String(localized: "Could Not Open Gateway Window"))
                 }
             }
         }
@@ -1271,7 +1274,10 @@ extension DashboardManager {
             Task { await self.refreshGatewaySnapshots() }
         } catch {
             guard isCurrent() else { return }
-            Self.showGatewayError(error, message: String(localized: "Could Not Open Background Session"))
+            self.presentGatewayError(
+                error,
+                title: String(localized: "Could Not Open Background Session"),
+                over: currentController()?.window)
         }
     }
 
@@ -1483,12 +1489,8 @@ extension DashboardManager {
                 let alert = DashboardWindowController.makeGatewaySetupAlert(title: title, message: message)
                 return alert.runModal() == .alertFirstButtonReturn
             },
-            presentError: { title, message in
-                let alert = NSAlert()
-                alert.messageText = title
-                alert.informativeText = message
-                alert.alertStyle = .warning
-                alert.runModal()
+            presentError: { [weak self] title, message in
+                self?.presentGatewayError(title: title, message: message)
             },
             openConnectionSettings: {
                 AppNavigationActions.openConnection()
