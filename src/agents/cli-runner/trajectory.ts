@@ -13,6 +13,11 @@ import type { ClaudeCliRunDiagnosticLifecycle } from "./run-diagnostics.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 export type CliTrajectoryRecorder = ReturnType<typeof createTrajectoryRuntimeRecorder>;
+type PreparedCliRunner = (
+  context: PreparedCliRunContext,
+  diagnosticLifecycle?: ClaudeCliRunDiagnosticLifecycle,
+  recorder?: CliTrajectoryRecorder,
+) => Promise<EmbeddedAgentRunResult>;
 
 export function recordCliTrajectoryEvent(
   recorder: CliTrajectoryRecorder,
@@ -151,14 +156,14 @@ async function withCliRunTrajectory(
 
 export async function settlePreparedCliRunWithTrajectory(
   context: PreparedCliRunContext,
-  diagnosticLifecycle?: ClaudeCliRunDiagnosticLifecycle,
+  diagnosticLifecycle: ClaudeCliRunDiagnosticLifecycle | undefined,
+  runPrepared: PreparedCliRunner,
 ): Promise<EmbeddedAgentRunResult> {
-  const { runPreparedCliAgent } = await import("../cli-runner.js");
   return await withCliRunTrajectory(context, (trajectoryRecorder) =>
     settlePreparedCliRun({
       context,
       diagnosticLifecycle,
-      run: async () => await runPreparedCliAgent(context, diagnosticLifecycle, trajectoryRecorder),
+      run: async () => await runPrepared(context, diagnosticLifecycle, trajectoryRecorder),
     }),
   );
 }

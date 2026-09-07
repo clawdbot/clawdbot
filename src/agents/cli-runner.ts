@@ -236,8 +236,8 @@ async function runCliAgentInternal(
     await settleCliPreparationError(error, params);
     throw error;
   }
-  const { settlePreparedCliRunWithTrajectory } = await import("./cli-runner/trajectory.js");
-  return await settlePreparedCliRunWithTrajectory(context, diagnosticLifecycle);
+  const { settlePreparedCliRunWithTrajectory: settle } = await import("./cli-runner/trajectory.js");
+  return await settle(context, diagnosticLifecycle, runPreparedCliAgent);
 }
 
 /** Runs an already-prepared CLI agent context through hooks and execution. */
