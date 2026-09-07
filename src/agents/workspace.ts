@@ -972,6 +972,8 @@ async function ensureGitRepo(
 export async function ensureAgentWorkspace(params?: {
   dir?: string;
   ensureBootstrapFiles?: boolean;
+  /** Creation-time role content; existing workspace files are still preserved. */
+  templates?: Partial<Record<"AGENTS.md" | "SOUL.md" | "IDENTITY.md", string>>;
   /** Guard each new mutation after async preparation; admitted effects may settle. */
   beforePersistentApply?: () => void;
   /**
@@ -1130,9 +1132,13 @@ export async function ensureAgentWorkspace(params?: {
     }
   }
 
-  const agentsTemplate = await loadTemplate(DEFAULT_AGENTS_FILENAME);
-  const soulTemplate = await loadTemplate(DEFAULT_SOUL_FILENAME);
-  const identityTemplate = await loadTemplate(DEFAULT_IDENTITY_FILENAME);
+  const agentsTemplate =
+    params?.templates?.[DEFAULT_AGENTS_FILENAME] ?? (await loadTemplate(DEFAULT_AGENTS_FILENAME));
+  const soulTemplate =
+    params?.templates?.[DEFAULT_SOUL_FILENAME] ?? (await loadTemplate(DEFAULT_SOUL_FILENAME));
+  const identityTemplate =
+    params?.templates?.[DEFAULT_IDENTITY_FILENAME] ??
+    (await loadTemplate(DEFAULT_IDENTITY_FILENAME));
   const userTemplate = await loadTemplate(DEFAULT_USER_FILENAME);
   // Template and filesystem checks above are async. Another process may have
   // completed setup while they ran, so optional-file policy needs fresh state.

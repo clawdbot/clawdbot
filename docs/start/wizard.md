@@ -93,7 +93,7 @@ conversationally. Docs: [Web tools](/tools/web).
 Fresh local interactive onboarding offers **Quick start** and **Custom setup**
 after a one-line pointer to the [security guide](/gateway/security). Quick start
 records the security acknowledgment; Custom setup shows the full security note
-and asks for confirmation. Quick start uses the default agent name `main` and
+and asks for confirmation. By default, Quick start uses the agent name `main` and
 full access, leaves telemetry consent unset, and skips memory import and app
 recommendations. Custom setup keeps the telemetry choice, agent name, access mode,
 and optional setup prompts. Both lanes require an explicit provider choice before
@@ -138,6 +138,41 @@ model first. Select it for a verification and repair pass. A failed check never
 replaces the configured model automatically; onboarding waits for your next choice. Run `openclaw channels add` or `openclaw configure` for
 later non-inference additions; use `openclaw onboard` for provider or auth route
 changes.
+
+## Choose one agent or a team
+
+When guided onboarding creates the first agent, choose **One agent** (the
+default) or **A small team: a coordinator plus specialists**. The team choice
+uses the same preset as `openclaw agents team create`: a coordinator, researcher,
+writer, and reviewer with separate workspaces, completed identities, and written
+role contracts. The coordinator delegates suitable tasks and verifies specialist
+results before reporting to you.
+
+Select the team directly in an interactive or non-interactive run with `--team`:
+
+```bash
+openclaw onboard --team
+openclaw onboard --non-interactive --team --accept-risk
+```
+
+The usual non-interactive provider and Gateway options still apply. Onboarding
+targets the coordinator explicitly for chat. It sets
+`agents.defaults.systemAgent.agentId` to the coordinator only when no ambient
+owner is configured; an existing owner is preserved and reported. A team does
+not introduce a universal default agent or change global delegation or tool
+policy. To address it later, use an explicit target:
+
+```bash
+openclaw agent --agent coordinator --message "Research a topic and prepare a draft."
+```
+
+`--team` is for local first-agent setup. It cannot be combined with remote,
+classic, or import onboarding. If an agent roster already exists, use
+`openclaw agents team create` instead.
+
+See [Team preset](/concepts/multi-agent#team-preset) for the delegation config and
+[`agents team create`](/cli/agents#agents-team-create) to add a namespaced team
+to an existing installation.
 
 ## Classic wizard setup modes
 
@@ -270,7 +305,7 @@ Notes:
 - Default workspace: `~/.openclaw/workspace-<agentId>` (or under
   `agents.defaults.workspace` if that is set).
 - Add `bindings` to route inbound messages to this agent (onboarding can do this for you).
-- Non-interactive flags: `--model`, `--agent-dir`, `--bind`, `--non-interactive`.
+- Non-interactive flags: `--role`, `--model`, `--agent-dir`, `--bind`, `--non-interactive`. With `--role`, `--workspace` can be omitted. See [Role templates](/cli/agents#role-templates).
 
 ## Full reference
 

@@ -6,20 +6,36 @@ export async function promptFirstOnboardingAgent(
   requestedName: string | undefined,
   prompter: WizardPrompter,
   nonInteractive = false,
+  options?: { team?: boolean; offerTeam?: boolean },
 ): Promise<FirstOnboardingAgent | undefined> {
   if (hasAuthoredRoster) {
     return undefined;
   }
+  const createTeam =
+    options?.team ??
+    (options?.offerTeam === true &&
+      !requestedName &&
+      (await prompter.select({
+        message: "What would you like to create?",
+        initialValue: "one",
+        options: [
+          { value: "one", label: "One agent" },
+          { value: "team", label: "A small team: a coordinator plus specialists" },
+        ],
+      })) === "team");
+  const defaultName = createTeam ? "coordinator" : "main";
   const name =
     requestedName ??
     (nonInteractive
-      ? "main"
+      ? defaultName
       : await prompter.text({
-          message: "What should we call your first agent?",
-          initialValue: "main",
+          message: createTeam
+            ? "What should we call your coordinator?"
+            : "What should we call your first agent?",
+          initialValue: defaultName,
           validate: validateFirstOnboardingAgentName,
         }));
-  return { name };
+  return { name, ...(createTeam ? { team: true } : {}) };
 }
 
 export async function showSessionMigrationWarnings(

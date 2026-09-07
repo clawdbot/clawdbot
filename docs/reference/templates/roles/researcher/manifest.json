@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "role": "researcher",
+  "title": "Researcher",
+  "summary": "Find reliable evidence, compare sources, and return a cited research brief.",
+  "identity": {
+    "name": "Researcher",
+    "emoji": "🔎",
+    "theme": "curious, evidence-led research"
+  },
+  "subagents": {
+    "allowAgents": []
+  },
+  "files": [
+    "AGENTS.md",
+    "SOUL.md",
+    "IDENTITY.md"
+  ]
+}

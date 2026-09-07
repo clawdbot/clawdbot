@@ -4,8 +4,8 @@
  * It validates global setup flags, performs optional reset handling, and then
  * routes to interactive or non-interactive onboarding.
  */
+import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
-import { formatInvalidPortOption } from "../cli/error-format.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -20,6 +20,7 @@ import {
 } from "../plugins/provider-auth-choices.js";
 import { normalizeTokenProviderInput } from "../plugins/provider-auth-input.js";
 import { resolveProviderInstallCatalogEntries } from "../plugins/provider-install-catalog.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
@@ -28,7 +29,6 @@ import { withSetupMigrationTargetLock } from "../wizard/setup.migration-snapshot
 import { resolveLegacyOnboardAuthChoice } from "./auth-choice-legacy.js";
 import { formatAuthChoiceChoicesForCli } from "./auth-choice-options.js";
 import { GENERIC_PROVIDER_AUTH_CHOICES } from "./auth-choice-options.static.js";
-import { isGatewayDaemonRuntime } from "./daemon-runtime.js";
 import { resolveOnboardingSetupTarget } from "./onboard-agent-target.js";
 import {
   applyCustomApiConfig,
@@ -44,14 +44,12 @@ import { runNonInteractiveSetup } from "./onboard-non-interactive.js";
 import { resolveNonInteractiveApiKey as resolveNonInteractiveCredential } from "./onboard-non-interactive/api-keys.js";
 import { inferAuthChoiceFromFlags } from "./onboard-non-interactive/local/auth-choice-inference.js";
 import { applyNonInteractiveGatewayConfig } from "./onboard-non-interactive/local/gateway-config.js";
-import { rejectOnboardingOption as rejectOption } from "./onboard-options.js";
-import { validateGatewayWebSocketUrl } from "./onboard-remote.js";
 import {
-  isNodeManagerChoice,
-  isOnboardFlow,
-  type OnboardOptions,
-  type ResetScope,
-} from "./onboard-types.js";
+  rejectOnboardingOption as rejectOption,
+  validateOnboardingChoiceOptions,
+} from "./onboard-options.js";
+import { validateGatewayWebSocketUrl } from "./onboard-remote.js";
+import type { OnboardOptions, ResetScope } from "./onboard-types.js";
 
 const VALID_RESET_SCOPES = new Set<ResetScope>(["config", "config+creds+sessions", "full"]);
 
@@ -133,43 +131,8 @@ function validatePreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv): bo
       }
     }
   }
-  const choiceValidations: Array<readonly [string, string | undefined, readonly string[]]> = [
-    ["--gateway-bind", opts.gatewayBind, ["loopback", "tailnet", "lan", "auto", "custom"]],
-    ["--gateway-auth", opts.gatewayAuth, ["token", "password"]],
-    ["--tailscale", opts.tailscale, ["off", "serve", "funnel"]],
-    [
-      "--custom-compatibility",
-      opts.customCompatibility,
-      ["openai", "openai-responses", "anthropic"],
-    ],
-  ];
-  for (const [flag, value, allowed] of choiceValidations) {
-    if (value !== undefined && !allowed.includes(value)) {
-      return rejectOption(
-        opts,
-        runtime,
-        `Invalid ${flag} ${JSON.stringify(value)}. Use ${allowed.map((choice) => JSON.stringify(choice)).join(", ")}.`,
-      );
-    }
-  }
-  if (opts.flow !== undefined && !isOnboardFlow(opts.flow)) {
-    return rejectOption(
-      opts,
-      runtime,
-      'Invalid --flow. Use "quickstart", "advanced", "manual", or "import".',
-    );
-  }
-  if (opts.daemonRuntime !== undefined && !isGatewayDaemonRuntime(opts.daemonRuntime)) {
-    return rejectOption(opts, runtime, 'Invalid --daemon-runtime. Use "node" or "bun".');
-  }
-  if (opts.nodeManager !== undefined && !isNodeManagerChoice(opts.nodeManager)) {
-    return rejectOption(opts, runtime, 'Invalid --node-manager. Use "npm", "pnpm", or "bun".');
-  }
-  if (
-    opts.gatewayPort !== undefined &&
-    (!Number.isFinite(opts.gatewayPort) || opts.gatewayPort <= 0 || opts.gatewayPort > 65_535)
-  ) {
-    return rejectOption(opts, runtime, formatInvalidPortOption("--gateway-port"));
+  if (!validateOnboardingChoiceOptions(opts, runtime)) {
+    return false;
   }
   if (opts.gatewayTokenRefEnv !== undefined) {
     const gatewayTokenRefEnv = opts.gatewayTokenRefEnv.trim();
@@ -342,8 +305,16 @@ async function validateResetAuthChoice(params: {
   }
   const target = resolveOnboardingSetupTarget(
     params.baseConfig,
-    params.opts.agentName
-      ? { name: params.opts.agentName, workspaceDir: params.workspaceDir }
+    params.opts.agentName || params.opts.team
+      ? {
+          name: params.opts.agentName ?? "coordinator",
+          workspaceDir: params.opts.team
+            ? path.join(
+                params.workspaceDir,
+                normalizeAgentId(params.opts.agentName ?? "coordinator"),
+              )
+            : params.workspaceDir,
+        }
       : undefined,
   );
   if (authChoice === "custom-api-key") {
@@ -508,6 +479,7 @@ const GUIDED_SAFE_ONBOARD_KEYS = new Set([
   "resetScope",
   "nonInteractive",
   "agentName",
+  "team",
   "tui",
   "skipUi",
   "suppressGatewayTokenOutput",
@@ -565,6 +537,21 @@ export async function setupWizardCommand(
     }
   }
   if (!validatePreflightOptions(normalizedOpts, runtime)) {
+    return;
+  }
+  if (
+    normalizedOpts.team &&
+    (normalizedOpts.mode === "remote" ||
+      normalizedOpts.importFrom ||
+      normalizedOpts.importSource ||
+      normalizedOpts.flow === "import" ||
+      (!normalizedOpts.nonInteractive && wantsClassicInteractiveSetup(normalizedOpts)))
+  ) {
+    rejectOption(
+      normalizedOpts,
+      runtime,
+      "--team supports local guided or non-interactive onboarding. Remove classic, remote, or import options.",
+    );
     return;
   }
   if (normalizedOpts.classic && normalizedOpts.nonInteractive) {

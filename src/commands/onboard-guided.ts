@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isUnconfiguredConfigSource } from "../cli/fresh-install-config.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withConsoleSubsystemsSuppressed } from "../logging/console.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
 // Guided onboarding verifies the selected AI connection before persisting its route.
@@ -12,6 +14,7 @@ import type { SetupInferenceDetection } from "../system-agent/setup-inference.js
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import { resolveOnboardingAgentTarget } from "./onboard-agent-target.js";
 import type { runBrowserHatchHandoff } from "./onboard-browser-handoff.js";
 import { promptFirstOnboardingAgent, showSessionMigrationWarnings } from "./onboard-first-agent.js";
 import { requestGuidedOnboardingConsent } from "./onboard-guided-consent.js";
@@ -62,8 +65,8 @@ export type GuidedAccessMode = "full" | "guarded";
 
 type GuidedOnboardingHandoff =
   | { workspace: string; next: "browser" }
-  | { workspace: string; next: "foreground-gateway" }
-  | { workspace: string; next: "hatch"; local: boolean }
+  | { workspace: string; next: "foreground-gateway"; agentId?: string }
+  | { workspace: string; next: "hatch"; local: boolean; agentId?: string }
   | { workspace: string; next: "chat"; agentName?: string };
 
 async function openSystemAgentChat(
@@ -152,12 +155,19 @@ async function runGuidedOnboardingFlow(
   const { config: acknowledgedConfig, securityAcknowledgedAt: onboardingSecurityAcknowledgedAt } =
     consent;
   const hasAuthoredRoster = hasResolvedRosterBeforeMigrations(snapshot);
+  if (opts.team && hasAuthoredRoster) {
+    throw new Error(
+      "An agent roster already exists. Use `openclaw agents team create` to add a team.",
+    );
+  }
   const firstAgent = await promptFirstOnboardingAgent(
     hasAuthoredRoster,
     opts.agentName,
     prompter,
     quickstart,
+    { team: opts.team, offerTeam: opts.nonInteractive !== true },
   );
+  const coordinatorId = firstAgent?.team ? normalizeAgentId(firstAgent.name) : undefined;
 
   // Reset removes config but keeps SQLite. Only the original, pre-acknowledgement
   // snapshot distinguishes a new installation from an interrupted previous run.
@@ -239,6 +249,8 @@ async function runGuidedOnboardingFlow(
       acknowledgedConfig.agents?.defaults?.workspace?.trim() ||
       onboardHelpers.DEFAULT_WORKSPACE,
   );
+
+  const conversationWorkspace = coordinatorId ? path.join(workspace, coordinatorId) : workspace;
 
   const activateInference =
     deps.activate ?? (await import("../system-agent/setup-inference.js")).activateSetupInference;
@@ -425,9 +437,18 @@ async function runGuidedOnboardingFlow(
       const runMemoryImport =
         deps.runSetupMemoryImportStep ??
         (await import("../wizard/setup.memory-import.js")).runSetupMemoryImportStep;
-      await runMemoryImport({ config: persistedConfig, prompter, runtime });
+      await runMemoryImport({
+        config: persistedConfig,
+        prompter,
+        runtime,
+        ...(coordinatorId ? { agentId: coordinatorId } : {}),
+      });
     }
-    return { workspace, next: "chat", ...(firstAgent ? { agentName: firstAgent.name } : {}) };
+    return {
+      workspace: conversationWorkspace,
+      next: "chat",
+      ...(firstAgent ? { agentName: firstAgent.name } : {}),
+    };
   }
 
   // Setup apply installs and restarts the machine-level Gateway service.
@@ -561,12 +582,19 @@ async function runGuidedOnboardingFlow(
       if (skippedInference) {
         throw error;
       }
-      return { workspace, next: "chat", ...(firstAgent ? { agentName: firstAgent.name } : {}) };
+      return {
+        workspace: conversationWorkspace,
+        next: "chat",
+        ...(firstAgent ? { agentName: firstAgent.name } : {}),
+      };
     }
   }
+  const agentWorkspace = coordinatorId
+    ? resolveOnboardingAgentTarget(persistedConfig, coordinatorId).workspaceDir
+    : appliedWorkspace;
   if (skippedInference) {
     await prompter.note(
-      t("wizard.guided.nextStepsWithoutAi", { workspace: appliedWorkspace }),
+      t("wizard.guided.nextStepsWithoutAi", { workspace: agentWorkspace }),
       t("wizard.guided.nextStepsTitle"),
     );
     await prompter.outro(t("wizard.guided.setupDone"));
@@ -578,7 +606,12 @@ async function runGuidedOnboardingFlow(
     const runMemoryImport =
       deps.runSetupMemoryImportStep ??
       (await import("../wizard/setup.memory-import.js")).runSetupMemoryImportStep;
-    await runMemoryImport({ config: persistedConfig, prompter, runtime });
+    await runMemoryImport({
+      config: persistedConfig,
+      prompter,
+      runtime,
+      ...(coordinatorId ? { agentId: coordinatorId } : {}),
+    });
     const runAppRecommendations =
       deps.runAppRecommendations ??
       (await import("../wizard/setup.app-recommendations.js")).setupAppRecommendations;
@@ -586,7 +619,7 @@ async function runGuidedOnboardingFlow(
       config: persistedConfig,
       prompter,
       runtime,
-      workspaceDir: workspace,
+      workspaceDir: agentWorkspace,
       modelRouteVerified: true,
     });
     const recommendedConfig = recommendationOutcome.config;
@@ -599,14 +632,20 @@ async function runGuidedOnboardingFlow(
     }
     recommendationOutcome.commitResult();
   }
-  const hatchWorkspace = alreadyConfigured
-    ? resolveUserPath(
-        existingConfig.agents?.defaults?.workspace?.trim() || onboardHelpers.DEFAULT_WORKSPACE,
-      )
-    : appliedWorkspace;
+  const hatchWorkspace = coordinatorId
+    ? agentWorkspace
+    : alreadyConfigured
+      ? resolveUserPath(
+          existingConfig.agents?.defaults?.workspace?.trim() || onboardHelpers.DEFAULT_WORKSPACE,
+        )
+      : appliedWorkspace;
   if (quickstart && !gatewayExternallyManaged) {
     await prompter.outro(t("wizard.guided.setupDone"));
-    return { workspace: hatchWorkspace, next: "foreground-gateway" };
+    return {
+      workspace: hatchWorkspace,
+      next: "foreground-gateway",
+      ...(coordinatorId ? { agentId: coordinatorId } : {}),
+    };
   }
   if (opts.skipUi === true) {
     await prompter.outro(t("wizard.guided.complete"));
@@ -619,6 +658,7 @@ async function runGuidedOnboardingFlow(
     const handoff = await runBrowserHandoff({
       config: persistedConfig,
       prompter,
+      ...(coordinatorId ? { agentId: coordinatorId } : {}),
       ...(opts.suppressGatewayTokenOutput ? { suppressTokenOutput: true } : {}),
     });
     if (handoff.handedOff) {
@@ -630,7 +670,12 @@ async function runGuidedOnboardingFlow(
   await prompter.outro(t("wizard.guided.hatchingNow"));
   // The TUI opens the configured default agent/workspace; on a configured
   // rerun that is the persisted default, not the --workspace probe context.
-  return { workspace: hatchWorkspace, next: "hatch", local: alreadyConfigured };
+  return {
+    workspace: hatchWorkspace,
+    next: "hatch",
+    local: alreadyConfigured,
+    ...(coordinatorId ? { agentId: coordinatorId } : {}),
+  };
 }
 
 async function persistAccessMode(mode: GuidedAccessMode): Promise<void> {
@@ -645,14 +690,13 @@ async function persistAccessMode(mode: GuidedAccessMode): Promise<void> {
   });
 }
 
-async function launchHatchTui(workspace: string, local: boolean): Promise<void> {
-  const [{ launchTuiCli }, { DEFAULT_BOOTSTRAP_FILENAME }, { restoreTerminalState }, fs, path] =
+async function launchHatchTui(workspace: string, local: boolean, agentId?: string): Promise<void> {
+  const [{ launchTuiCli }, { DEFAULT_BOOTSTRAP_FILENAME }, { restoreTerminalState }, fs] =
     await Promise.all([
       import("../tui/tui-launch.js"),
       import("../agents/workspace.js"),
       import("../../packages/terminal-core/src/restore.js"),
       import("node:fs"),
-      import("node:path"),
     ]);
   const hasBootstrap = fs.existsSync(path.join(workspace, DEFAULT_BOOTSTRAP_FILENAME));
   restoreTerminalState("guided hatch tui", { resumeStdinIfPaused: false });
@@ -663,6 +707,7 @@ async function launchHatchTui(workspace: string, local: boolean): Promise<void> 
     await launchTuiCli({
       ...(local ? { local: true } : {}),
       deliver: false,
+      ...(agentId ? { session: `agent:${agentId}:main` } : {}),
       // Seed the first-run hatch only when the workspace bootstrap exists;
       // re-runs against an established agent open a plain chat instead.
       ...(hasBootstrap ? { message: t("wizard.finalize.bootstrapHatchMessage") } : {}),
@@ -696,6 +741,7 @@ export async function runGuidedOnboarding(
       (await import("./onboard-quickstart-host.js")).runQuickstartForegroundGateway;
     await runForegroundGateway({
       runtime,
+      ...(handoff.agentId ? { agentId: handoff.agentId } : {}),
       ...(opts.suppressGatewayTokenOutput ? { suppressTokenOutput: true } : {}),
     });
     return;
@@ -706,7 +752,7 @@ export async function runGuidedOnboarding(
     if (deps.launchHatchTui) {
       await deps.launchHatchTui(handoff.workspace);
     } else {
-      await launchHatchTui(handoff.workspace, handoff.local);
+      await launchHatchTui(handoff.workspace, handoff.local, handoff.agentId);
     }
     return;
   }

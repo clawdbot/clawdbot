@@ -1,7 +1,8 @@
 ---
-summary: "CLI reference for `openclaw agents` (list/add/delete/bindings/bind/unbind/set identity)"
+summary: "CLI reference for `openclaw agents` (roles, teams, workspaces, routing, and identity)"
 read_when:
   - You want multiple isolated agents (workspaces + routing + auth)
+  - You want to create an agent from a role or set up a coordinated team
 title: "Agents"
 ---
 
@@ -23,6 +24,8 @@ openclaw agents list --bindings
 openclaw agents add work --workspace ~/.openclaw/workspace-work
 openclaw agents add work --workspace ~/.openclaw/workspace-work --bind telegram:*
 openclaw agents add ops --workspace ~/.openclaw/workspace-ops --bind telegram:ops --non-interactive
+openclaw agents add research --role researcher --non-interactive
+openclaw agents team create --non-interactive
 openclaw agents bindings
 openclaw agents bind --agent work --bind telegram:ops
 openclaw agents unbind --agent work --bind telegram:ops
@@ -43,12 +46,70 @@ and unreadable local images also fall back to the workspace avatar.
 
 ### `agents add [name]`
 
-Options: `--workspace <dir>`, `--model <id>`, `--agent-dir <dir>`, `--bind <channel[:accountId]>` (repeatable), `--non-interactive`, `--json`.
+Options: `--role <role>`, `--workspace <dir>`, `--model <id>`, `--agent-dir <dir>`, `--bind <channel[:accountId]>` (repeatable), `--non-interactive`, `--json`.
 
-- The automation flags `--workspace`, `--model`, `--agent-dir`, `--bind`, and `--non-interactive` select the non-interactive path. Non-interactive mode requires both an agent name and `--workspace`.
+- The automation flags `--workspace`, `--model`, `--agent-dir`, `--bind`, and `--non-interactive` select the non-interactive path. Non-interactive mode requires an agent name and, unless `--role` is supplied, `--workspace`.
 - `--json` alone keeps the guided wizard interactive. Prompts and status are written to stderr, and stdout contains one JSON summary after setup completes.
+- Non-interactive `--json` reports normalized agent IDs in the summary without extra stdout status messages.
 - `main` is an ordinary agent id. Recreating it after another agent owns the installation can require `openclaw doctor --fix` to repair legacy session or shared-auth ownership first.
 - Interactive mode offers optional auth copying. When the fleet has no default agent, choose a source agent or **Skip copying auth profiles** (the default). Selecting a source still requires confirmation before copying. Only portable static credentials (`api_key` and static `token` profiles) are copied unless a credential opts out with `copyToAgents: false`; OAuth refresh-token profiles are not copied unless a provider opts in with `copyToAgents: true`. Without a copy, OAuth stays available through the shared auth base. If the source agent has its own local OAuth profile, sign in separately for the new agent.
+
+#### Role templates
+
+`--role` works in interactive and non-interactive creation, including `--json`.
+Available roles:
+
+| Role          | Purpose                                                                  |
+| ------------- | ------------------------------------------------------------------------ |
+| `coordinator` | Delegate bounded tasks to matching specialists and verify their results. |
+| `researcher`  | Gather evidence and return a cited research brief.                       |
+| `writer`      | Turn a brief and source material into a usable draft.                    |
+| `reviewer`    | Check artifacts against requirements and return actionable findings.     |
+
+A role seeds `AGENTS.md`, `SOUL.md`, and a complete `IDENTITY.md`; `USER.md`
+still uses the standard template. Existing workspace files are preserved. The
+role's name, emoji, and theme are saved in agent config, and new role workspaces
+skip the identity ceremony: no `BOOTSTRAP.md` is created. A manifest's `skills`
+allowlist applies only when present; the bundled roles leave skills unchanged.
+Role delegation settings are also applied. Standalone coordinators target the
+standard specialist ids; use the team command to create and wire all four agents.
+Unknown roles are rejected with the available role names. A workspace with an
+unfinished bootstrap cannot adopt a role; complete its bootstrap or choose a
+new workspace.
+
+### `agents team create`
+
+Options: `--preset <name>` (default and only bundled preset: `team`),
+`--coordinator <id>` (default: `coordinator`), `--prefix <p>`,
+`--workspace-root <dir>`, `--non-interactive`, `--json`.
+
+Creates a coordinator plus `researcher`, `writer`, and `reviewer` from the role
+templates. Each workspace lives at `<workspace-root>/<agentId>`; the default
+root is the installation's default workspace directory. `--prefix editorial`
+namespaces every id, producing `editorial-coordinator`, `editorial-researcher`,
+`editorial-writer`, and `editorial-reviewer`. It also prefixes a custom
+`--coordinator` id. If any resulting id exists, the command reports the conflicts
+and adds no agents.
+
+Existing agents remain in place, including an implicit `main` on an already
+configured installation.
+
+```bash
+openclaw agents team create --prefix editorial --workspace-root ~/agents --non-interactive --json
+openclaw agent --agent editorial-coordinator --message "Research this topic and draft a brief."
+```
+
+The coordinator's `subagents.allowAgents` names the three specialist ids and
+`delegationMode` is `"prefer"`. Specialists receive `subagents.allowAgents: []`
+and instructions to return results without further delegation. This does not
+change global delegation defaults or tool policy. See [Team preset](/concepts/multi-agent#team-preset).
+
+The coordinator is an explicit chat target, not a universal default agent. If
+`agents.defaults.systemAgent.agentId` is unset, team creation sets it to the
+coordinator for ambient system work. An existing ambient owner is preserved and
+reported. Channel routing still needs bindings to the intended agent.
+With `--json`, the summary includes `coordinatorId`, the created `agents` and
+their paths, `ambientOwnerId`, and a `note` when another ambient owner is retained.
 
 ### `agents bindings`
 

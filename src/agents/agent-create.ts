@@ -26,6 +26,7 @@ import { resolveUserPath } from "../utils.js";
 import { claimCompletedAgentDeletion } from "./agent-lifecycle-registry.js";
 import { toAgentEntriesRecord } from "./agent-scope-config.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope.js";
+import { loadAgentTemplate } from "./agent-templates.js";
 import { resolveSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import {
   createAgentIdentityConfig,
@@ -36,7 +37,7 @@ import { DEFAULT_IDENTITY_FILENAME, ensureAgentWorkspace } from "./workspace.js"
 
 const BOOTSTRAP_AGENT_ID = "main";
 
-type CreateAgentSuccess = {
+export type CreateAgentSuccess = {
   status: "created" | "existing";
   agentId: string;
   name: string;
@@ -56,6 +57,7 @@ type CreateError = {
     | "already-exists"
     | "deletion-pending"
     | "invalid-bindings"
+    | "unfinished-bootstrap"
     | "legacy-session-migration-required"
     | "shared-auth-store-owned-by-main"
     | "unsafe-identity-file";
@@ -70,6 +72,7 @@ type ConfigCommitRollback = () => void | Promise<void>;
 
 type CreateAgentParams = {
   name?: string;
+  role?: string;
   entry?: CreateAgentEntry;
   /** Internal authorization for onboarding to materialize the sole implicit `main` agent. */
   bootstrapMain?: boolean;
@@ -97,6 +100,7 @@ type CreateAgentParams = {
 
 class DuplicateAgentError extends Error {}
 class InvalidAgentBindingsError extends Error {}
+class UnfinishedRoleBootstrapError extends Error {}
 
 function createError(
   reason: CreateError["reason"],
@@ -250,9 +254,11 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
   const agentId = validation.agentId;
   const isBootstrapMain = agentId === BOOTSTRAP_AGENT_ID && params.bootstrapMain === true;
 
+  const template = params.role ? await loadAgentTemplate(params.role) : undefined;
   const safeName = sanitizeAgentIdentityLine(rawName);
   const model = normalizeOptionalString(params.model);
-  const identity = params.entry?.identity ??
+  const identity = template?.manifest.identity ??
+    params.entry?.identity ??
     createAgentIdentityConfig({
       name: safeName,
       emoji: params.emoji,
@@ -385,12 +391,14 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
                   identity,
                 })
               : creationBase;
-          if (params.entry) {
-            const { default: _retiredDefault, ...stagedEntry } = params.entry;
+          if (params.entry || template) {
+            const { default: _retiredDefault, ...stagedEntry } = params.entry ?? {};
             const list = listAgentEntries(nextConfig);
             const index = findAgentEntryIndex(list, agentId);
             list[index] = {
               ...list[index],
+              ...(template?.manifest.skills ? { skills: template.manifest.skills } : {}),
+              ...(template?.manifest.subagents ? { subagents: template.manifest.subagents } : {}),
               ...stagedEntry,
               id: agentId,
               name: safeName,
@@ -422,16 +430,23 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
 
           // The outer lock makes this result-bearing transform single-attempt: setup
           // finishes before the final entry becomes visible to readers or delete flows.
-          const skipBootstrap = params.skipBootstrap ?? nextConfig.agents?.defaults?.skipBootstrap;
+          const skipBootstrap = template
+            ? false
+            : (params.skipBootstrap ?? nextConfig.agents?.defaults?.skipBootstrap);
           params.beforePersistentApply?.();
           const workspace = await ensureAgentWorkspace({
             dir: workspaceDir,
             beforePersistentApply: params.beforePersistentApply,
             ensureBootstrapFiles: !skipBootstrap,
-            skipOptionalBootstrapFiles:
-              params.skipOptionalBootstrapFiles ??
-              nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
+            ...(template ? { templates: template.files } : {}),
+            skipOptionalBootstrapFiles: template
+              ? []
+              : (params.skipOptionalBootstrapFiles ??
+                nextConfig.agents?.defaults?.skipOptionalBootstrapFiles),
           });
+          if (template && workspace.bootstrapPending) {
+            throw new UnfinishedRoleBootstrapError();
+          }
           if (workspace.dir !== workspaceDir) {
             const entries = listAgentEntries(nextConfig);
             const entryIndex = findAgentEntryIndex(entries, agentId);
@@ -453,7 +468,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           await fs.mkdir(resolveSessionTranscriptsDirForAgent(agentId), { recursive: true });
           // A creation-time name is config, not proof that the fresh workspace hatched.
           // Keep IDENTITY.md templated until BOOTSTRAP completes its first-turn ceremony.
-          if (!workspace.bootstrapPending && !skipBootstrap) {
+          if (!template && !workspace.bootstrapPending && !skipBootstrap) {
             await writeIdentityFile({
               workspaceDir: workspace.dir,
               identity,
@@ -520,6 +535,13 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
     }
     if (error instanceof InvalidAgentBindingsError) {
       return createError("invalid-bindings", error.message, agentId);
+    }
+    if (error instanceof UnfinishedRoleBootstrapError) {
+      return createError(
+        "unfinished-bootstrap",
+        "The workspace has an unfinished bootstrap. Complete it first or choose a new workspace for this role.",
+        agentId,
+      );
     }
     if (error instanceof FsSafeError) {
       return createError(

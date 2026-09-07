@@ -239,6 +239,7 @@ export async function resolveOnboardCommandOptions(
   return {
     workspace: readStringValue(opts.workspace),
     agentName: readStringValue(opts.agentName),
+    team: opts.team === true ? true : undefined,
     nonInteractive: Boolean(opts.nonInteractive),
     acceptRisk: Boolean(opts.acceptRisk),
     classic: Boolean(opts.classic),
@@ -289,7 +290,8 @@ export function registerOnboardCommand(program: Command): void {
       "--workspace <dir>",
       "Workspace proposal for guided setup; persisted by classic/non-interactive setup",
     )
-    .option("--agent-name <name>", "Name for the first agent (default: main)")
+    .option("--agent-name <name>", "Name for the first agent (or team coordinator)")
+    .option("--team", "Create a coordinator with researcher, writer, and reviewer specialists")
     .option(
       "--reset",
       "Reset config + credentials + sessions before running onboard (workspace only with --reset-scope full)",

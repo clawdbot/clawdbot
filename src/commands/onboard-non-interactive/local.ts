@@ -4,6 +4,7 @@
  * This entrypoint applies config changes, optionally installs the gateway
  * daemon, verifies health, and emits machine-readable setup output.
  */
+import path from "node:path";
 import { listAgentEntries } from "../../agents/agent-scope-config.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { resolveGatewayPort } from "../../config/config.js";
@@ -12,6 +13,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewayAuthToken } from "../../gateway/auth-token-resolution.js";
 import { resolveConfiguredSecretInputWithFallback } from "../../gateway/resolve-configured-secret-input-string.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { ExitError, type RuntimeEnv } from "../../runtime.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../daemon-runtime.js";
 import { resolveGatewayStartupTiming } from "../gateway-startup-timing.js";
@@ -160,6 +162,15 @@ export async function runNonInteractiveLocalSetup(params: {
   });
   // Injected main is not authored membership; legacy workspace state still owns its guard.
   const hasAuthoredRoster = listAgentEntries(sourceConfigBeforeMigrations).length > 0;
+  if (opts.team && hasAuthoredRoster) {
+    rejectOnboardingOption(
+      opts,
+      runtime,
+      "An agent roster already exists. Use `openclaw agents team create` to add a team.",
+    );
+    return;
+  }
+  const firstAgentName = opts.agentName ?? (opts.team ? "coordinator" : "main");
   const workspaceConflict = resolveOnboardingWorkspaceConflict(
     sourceConfigBeforeMigrations,
     requestedWorkspaceDir,
@@ -188,7 +199,14 @@ export async function runNonInteractiveLocalSetup(params: {
   // that requested owner before first-agent creation is allowed to write.
   const authTarget = resolveOnboardingSetupTarget(
     nextConfig,
-    opts.agentName && !hasAuthoredRoster ? { name: opts.agentName, workspaceDir } : undefined,
+    !hasAuthoredRoster && (opts.agentName || opts.team)
+      ? {
+          name: firstAgentName,
+          workspaceDir: opts.team
+            ? path.join(workspaceDir, normalizeAgentId(firstAgentName))
+            : workspaceDir,
+        }
+      : undefined,
   );
 
   const inferredAuthChoice = opts.authChoice
@@ -252,7 +270,7 @@ export async function runNonInteractiveLocalSetup(params: {
     config: nextConfig,
     workspace: workspaceDir,
     baseConfig,
-    firstAgent: { name: opts.agentName ?? "main" },
+    firstAgent: { name: firstAgentName, ...(opts.team ? { team: true } : {}) },
     expectedConfigHash: baseHash ?? null,
   });
   for (const warning of created.sessionMigrationWarnings ?? []) {

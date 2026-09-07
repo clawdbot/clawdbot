@@ -723,26 +723,17 @@ describe("setupWizardCommand", () => {
   });
 
   it("rejects conflicting gateway token inputs before reset", async () => {
-    const previous = process.env.OPENCLAW_GATEWAY_TOKEN;
-    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "env-token");
     const runtime = makeRuntime();
 
-    try {
-      await setupWizardCommand(
-        {
-          reset: true,
-          gatewayToken: "plaintext-token",
-          gatewayTokenRefEnv: "OPENCLAW_GATEWAY_TOKEN",
-        },
-        runtime,
-      );
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      } else {
-        process.env.OPENCLAW_GATEWAY_TOKEN = previous;
-      }
-    }
+    await setupWizardCommand(
+      {
+        reset: true,
+        gatewayToken: "plaintext-token",
+        gatewayTokenRefEnv: "OPENCLAW_GATEWAY_TOKEN",
+      },
+      runtime,
+    );
 
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("Use either --gateway-token or --gateway-token-ref-env"),
@@ -960,6 +951,7 @@ describe("setupWizardCommand", () => {
 
   it.each([
     ["--agent-name", { agentName: "robby" }],
+    ["--team", { team: true }],
     ["--tui", { tui: true }],
     ["--skip-ui", { skipUi: true }],
     ["--suppress-gateway-token-output", { suppressGatewayTokenOutput: true }],
