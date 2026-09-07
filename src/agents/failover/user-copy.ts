@@ -18,6 +18,7 @@ import {
   isPeriodicUsageLimitErrorMessage,
   isProviderCompletedErrorFinishReasonMessage,
 } from "./classify.js";
+import { splitFailoverAggregateLegs } from "./message-patterns.js";
 import {
   classifyProviderRequestFacets,
   type ProviderRequestFacet,
@@ -122,28 +123,6 @@ function extractProviderRateLimitMessage(raw: string): string | undefined {
     return undefined;
   }
   return `⚠️ ${trimmed}`;
-}
-
-/** `All models failed (3): provider/model: text | provider/model: text` */
-const FAILOVER_AGGREGATE_PREFIX_RE = /^all(?: [\w-]+)? models failed \(\d+\):\s*/i;
-const FAILOVER_AGGREGATE_LEG_SPLIT_RE = /\s\|\s|;\s(?=\S+\/\S+:\s)/;
-/** `anthropic/claude-opus-5: You've hit your session limit` */
-const FAILOVER_LEG_ROUTE_PREFIX_RE = /^\S+\/\S+:\s+/;
-
-/**
- * A chain summary concatenates every leg, so it outgrows the length guard that keeps
- * provider text bounded, and a hint the provider did give is thrown away. Read the legs
- * individually, preferring the first, which is the route the user actually chose.
- */
-function splitFailoverAggregateLegs(raw: string): string[] {
-  const withoutPrefix = raw.trim().replace(FAILOVER_AGGREGATE_PREFIX_RE, "");
-  if (withoutPrefix === raw.trim()) {
-    return [];
-  }
-  return withoutPrefix
-    .split(FAILOVER_AGGREGATE_LEG_SPLIT_RE)
-    .map((leg) => leg.trim().replace(FAILOVER_LEG_ROUTE_PREFIX_RE, "").trim())
-    .filter(Boolean);
 }
 
 function renderRateLimitBaseCopy(context: FailoverUserCopyContext): string {
