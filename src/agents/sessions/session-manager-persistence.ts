@@ -266,19 +266,22 @@ export class SessionManagerPersistence extends SessionManagerCore {
     const removedParentById = new Map(
       removedEntries.map((entry) => [entry.id, entry.parentId] as const),
     );
+    const removedEntryIds = new Set(removableEntryIds);
+    for (let index = removeStart; index < prepared.fileEntries.length; index += 1) {
+      const entry = prepared.fileEntries[index];
+      if (
+        isIndexedSessionEntry(entry) &&
+        entry.type === "label" &&
+        removedEntryIds.has(entry.targetId)
+      ) {
+        removedEntryIds.add(entry.id);
+        removedParentById.set(entry.id, entry.parentId);
+      }
+    }
     for (let index = prepared.fileEntries.length - 1; index >= removeStart; index -= 1) {
       const entry = prepared.fileEntries[index];
-      if (!isIndexedSessionEntry(entry)) {
+      if (!isIndexedSessionEntry(entry) || !removedEntryIds.has(entry.id)) {
         continue;
-      }
-      const removeEntry =
-        removableEntryIds.has(entry.id) ||
-        (entry.type === "label" && removedParentById.has(entry.targetId));
-      if (!removeEntry) {
-        continue;
-      }
-      if (entry.type === "label") {
-        removedParentById.set(entry.id, entry.parentId);
       }
       shiftOpaqueIndexesAfterRemoval(index, 1);
       prepared.fileEntries.splice(index, 1);
@@ -478,7 +481,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
     if (entry.type !== "message") {
       let committedMutationAt: number | null | undefined;
       let effectiveParentId = entry.parentId;
-      requireTranscriptEventAppend(
+      this.transcriptVersion = requireTranscriptEventAppend(
         appendTranscriptEventSnapshotSync(scope, entry, {
           ...(options?.appendIntent === "active-branch"
             ? { appendIntent: options.appendIntent }

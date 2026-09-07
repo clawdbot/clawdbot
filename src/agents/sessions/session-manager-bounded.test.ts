@@ -267,8 +267,9 @@ it("adopts a fenced assistant when another append commits before its reload", as
       ) {
         expect(
           appendTranscriptMessageSync(scope, {
-            eventId: "post-commit-assistant",
-            message: buildAssistantMessage("later"),
+            appendIntent: "active-branch",
+            eventId: "post-commit-user",
+            message: { role: "user", content: "later", timestamp: 3 },
             now: 3,
           }).ok,
         ).toBe(true);
@@ -277,12 +278,8 @@ it("adopts a fenced assistant when another append commits before its reload", as
 
       const replyId = fenced.appendMessage(buildAssistantMessage("reply"));
 
-      expect(fenced.getBranch().map((entry) => entry.id)).toEqual([
-        admission.entryId,
-        replyId,
-        "post-commit-assistant",
-      ]);
-      expect(fenced.getEntry(replyId)).toBeDefined();
+      expect(fenced.getBranch().map((entry) => entry.id)).toEqual([admission.entryId, replyId]);
+      expect(fenced.getBranch().some((entry) => entry.id === "post-commit-user")).toBe(false);
     },
   );
 });

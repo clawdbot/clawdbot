@@ -207,6 +207,8 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
       boundedContextIncomplete: this.boundedContextIncomplete,
       boundedContextLimits: this.boundedContextLimits,
       persistedBoundaryCount: this.persistedBoundaryCount,
+      persistedSuffixStartSeq: this.persistedSuffixStartSeq,
+      transcriptMutationAt: this.transcriptMutationAt,
       leafId: this.leafId,
       appendParentId: this.appendParentId,
       appendMode: this.appendMode,
@@ -222,16 +224,19 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     }
   }
 
-  /** Reloads a committed append without applying the current turn's read fence. */
+  /** Reloads a committed append without adopting a later user turn. */
   protected reloadPersistedTranscriptAfterAppend(
     expectedMutationAt: number | null,
     expectedEntryId: string,
+    admittedUserId: string,
   ): void {
     if (!this.persistenceTarget) {
       return;
     }
     const runtimeCwd = this.cwd;
     const target = this.persistenceTarget;
+    const previousView = structuredClone(this.captureTranscriptView());
+    let reloaded = false;
     try {
       if (this.boundedContextLimits) {
         const bounded = readSessionTranscriptBoundedActiveContextCore(target, {
@@ -251,6 +256,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
         this.persistedSuffixStartSeq = bounded.persistedSuffixStartSeq;
         this.transcriptMutationAt = bounded.transcriptMutationAt;
         this.setLoadedSessionTarget(target, entries, bounded);
+        reloaded = true;
       } else {
         const inspected = inspectTranscriptEventsSync(target);
         // SAFETY: SQLite transcript readers return the same persisted entry union used by SessionManager.
@@ -262,8 +268,31 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
           throw new Error("SQLite transcript changed before adopting the committed append");
         }
         this.transcriptMutationAt = inspected.snapshot.transcriptUpdatedAt;
-        this.setLoadedSessionTarget(target, entries);
+        this.setLoadedSessionTarget(target, entries, undefined, {
+          generation: inspected.snapshot.generation,
+          rawSeq: inspected.snapshot.lastSeq,
+          updatedAt: inspected.snapshot.transcriptUpdatedAt,
+        });
+        reloaded = true;
       }
+      const activeBranch = this.getBranch();
+      const admittedUserIndex = activeBranch.findIndex((entry) => entry.id === admittedUserId);
+      const activeBranchHasNewerUser =
+        admittedUserIndex < 0 ||
+        activeBranch
+          .slice(admittedUserIndex + 1)
+          .some((entry) => entry.type === "message" && entry.message.role === "user");
+      if (activeBranchHasNewerUser) {
+        this.adoptSelectedTranscriptPath(
+          expectedEntryId,
+          [...this.byId].map(([id, entry]) => [id, entry.parentId]),
+        );
+      }
+    } catch (error) {
+      if (reloaded) {
+        Object.assign(this, previousView);
+      }
+      throw error;
     } finally {
       this.cwd = runtimeCwd;
     }

@@ -205,6 +205,26 @@ describe("SessionManager persistence compatibility", () => {
     });
   });
 
+  it("keeps the transcript version current after a metadata append", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-metadata-version-");
+    const scope = {
+      agentId: "main",
+      sessionId: "metadata-version",
+      sessionKey: "agent:main:metadata-version",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const user = await appendTranscriptMessage(scope, {
+      eventId: "user",
+      message: { role: "user", content: "question" },
+    });
+    const manager = SessionManager.open(scope, dir);
+    const modelChangeId = manager.appendModelChange("openai", "gpt-5.6");
+
+    expect(manager.removeTrailingEntries((entry) => entry.id === modelChangeId)).toBe(1);
+    expect(manager.getLeafId()).toBe(user.messageId);
+  });
+
   it("removes an active tail followed by a later inactive raw row", async () => {
     const dir = tempDirs.make("openclaw-session-manager-later-inactive-row-");
     const scope = {
@@ -312,10 +332,18 @@ describe("SessionManager persistence compatibility", () => {
         label: "retry",
       },
       {
-        type: "custom",
-        id: "plugin-state",
+        type: "label",
+        id: "nested-temporary-label",
         parentId: "temporary-label",
         timestamp: new Date(4).toISOString(),
+        targetId: "temporary-label",
+        label: "nested retry",
+      },
+      {
+        type: "custom",
+        id: "plugin-state",
+        parentId: "nested-temporary-label",
+        timestamp: new Date(5).toISOString(),
         customType: "plugin-state",
         data: { enabled: true },
       },
@@ -323,7 +351,7 @@ describe("SessionManager persistence compatibility", () => {
         type: "session_info",
         id: "session-info",
         parentId: "plugin-state",
-        timestamp: new Date(5).toISOString(),
+        timestamp: new Date(6).toISOString(),
         name: "kept session",
       },
       {
