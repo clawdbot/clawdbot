@@ -338,6 +338,21 @@ describe("filesystem tool output contracts", () => {
     });
   });
 
+  it.each([0, -1, 0.5])(
+    "honors normalized explicit limit %s without automatic paging",
+    async (limit) => {
+      await fs.writeFile(path.join(tmpDir, "limited.txt"), "alpha\nbeta\ngamma");
+      const tool = createOpenClawReadTool(createReadTool(tmpDir) as unknown as AnyAgentTool);
+      const result = await tool.execute("normalized-limit", { path: "limited.txt", limit });
+      expectContract(tool, result.details);
+      expect(result.details).toMatchObject({
+        kind: "truncated",
+        content: "alpha",
+        continuation: { kind: "line", offset: 2, limit: 1 },
+      });
+    },
+  );
+
   it("validates edit changed and no-op results", async () => {
     const filePath = path.join(tmpDir, "edit.txt");
     await fs.writeFile(filePath, "before\n", "utf8");

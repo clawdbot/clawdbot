@@ -53,6 +53,7 @@ import {
   type ReadToolDetails,
   type ReadToolTruncationDetails,
 } from "./sessions/tools/index.js";
+import { normalizePositiveLimit } from "./sessions/tools/limits.js";
 import { expandOsHomePrefix, resolveToCwd } from "./sessions/tools/path-utils.js";
 import {
   createBoundedReadTextPage,
@@ -62,7 +63,7 @@ import {
   ReadToolContinuationSchema,
   type ReadToolContinuation,
 } from "./sessions/tools/tool-contracts.js";
-import { DEFAULT_MAX_BYTES } from "./sessions/tools/truncate.js";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "./sessions/tools/truncate.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 import {
   resolveToolResultBudget,
@@ -323,14 +324,17 @@ async function executeReadWithAdaptivePaging(params: {
   modelBudget?: ToolResultBudget;
 }): Promise<AgentToolResult<unknown>> {
   const userLimit = params.args.limit;
-  const hasExplicitLimit =
-    typeof userLimit === "number" && Number.isFinite(userLimit) && userLimit > 0;
+  // Presence owns the slice: the native reader clamps non-positive limits to
+  // one line, which must not become permission to follow additional pages.
+  const hasExplicitLimit = typeof userLimit === "number";
   const offsetRaw = params.args.offset;
   const initialOffset =
     typeof offsetRaw === "number" && Number.isFinite(offsetRaw) && offsetRaw > 0
       ? Math.floor(offsetRaw)
       : 1;
-  const initialLimit = hasExplicitLimit ? { limit: Math.max(1, Math.floor(userLimit)) } : {};
+  const initialLimit = hasExplicitLimit
+    ? { limit: normalizePositiveLimit(userLimit, DEFAULT_MAX_LINES) }
+    : {};
   let next: ReadToolContinuation =
     typeof params.args.cursor === "number"
       ? { kind: "cursor", offset: initialOffset, cursor: params.args.cursor, ...initialLimit }
