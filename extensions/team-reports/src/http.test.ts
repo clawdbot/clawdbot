@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { createServer, request, type IncomingHttpHeaders, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTeamReportsHttpHandler } from "./http.js";
 import { describePeriod } from "./periods.js";
@@ -143,6 +144,7 @@ beforeAll(async () => {
   const handler = createTeamReportsHttpHandler({
     basePath: "/reports",
     displayTimezone: "UTC",
+    assetsDir: fileURLToPath(new URL("../assets", import.meta.url)),
     getStore,
     status: () => ({ running: false, lastRun: "fixture-run" }),
     health: () => ({ running: false, warnings: 1 }),

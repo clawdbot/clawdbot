@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { join } from "node:path";
 import { TLSSocket } from "node:tls";
 import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
 import { DAY_MS, describePeriod } from "./periods.js";
@@ -19,6 +20,8 @@ import type { Period, Person, PersonReport } from "./types.js";
 type TeamReportsHttpOptions = {
   basePath: string;
   displayTimezone: string;
+  /** The plugin's shipped `assets` directory; the dist bundle flattens `src/`, so callers resolve it from the plugin root. */
+  assetsDir: string;
   getStore: () => TeamReportsStore | undefined;
   status: () => unknown;
   health: () => TeamReportsHealth;
@@ -28,10 +31,10 @@ type TeamReportsHttpOptions = {
 
 const assets = new Map<string, Buffer>();
 
-function readAsset(name: "crab.avif" | "icon.png"): Buffer {
+function readAsset(assetsDir: string, name: "crab.avif" | "icon.png"): Buffer {
   let asset = assets.get(name);
   if (!asset) {
-    asset = readFileSync(new URL(`../assets/${name}`, import.meta.url));
+    asset = readFileSync(join(assetsDir, name));
     assets.set(name, asset);
   }
   return asset;
@@ -155,9 +158,14 @@ export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
       if (route.segments.length !== 2 || (key !== "crab.avif" && key !== "icon.png")) {
         return notFound();
       }
-      return send(200, key === "crab.avif" ? "image/avif" : "image/png", readAsset(key), {
-        "Cache-Control": "private, max-age=86400",
-      });
+      return send(
+        200,
+        key === "crab.avif" ? "image/avif" : "image/png",
+        readAsset(options.assetsDir, key),
+        {
+          "Cache-Control": "private, max-age=86400",
+        },
+      );
     }
     const store = options.getStore();
     if (!store) {
