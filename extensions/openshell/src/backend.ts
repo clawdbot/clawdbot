@@ -273,9 +273,30 @@ export function createOpenShellSandboxBackendManager(params: {
         configLabelMatch: entry.image === configuredSource,
       };
     },
-    async removeRuntime({ entry, config }) {
+    async removeRuntime({ entry }) {
+      const metadata = entry.cleanupMetadata;
+      const command = metadata?.command?.trim();
+      const gateway = metadata?.gateway?.trim();
+      const gatewayEndpoint = metadata?.gatewayEndpoint?.trim();
+      const workspace = metadata?.workspace?.trim();
+      if (
+        metadata?.locatorVersion !== "1" ||
+        !command ||
+        (!gateway && !gatewayEndpoint) ||
+        !workspace
+      ) {
+        throw new Error(
+          `OpenShell sandbox runtime ${entry.containerName} has no authoritative cleanup locator; remove it manually after selecting its original gateway and workspace.`,
+        );
+      }
+      const recordedConfig = resolveOpenShellPluginConfig({
+        command,
+        ...(gateway ? { gateway } : {}),
+        ...(gatewayEndpoint ? { gatewayEndpoint } : {}),
+        workspace,
+      });
       const execContext: OpenShellExecContext = {
-        config: resolveOpenShellPluginConfigFromConfig(config, params.pluginConfig),
+        config: recordedConfig,
         sandboxName: entry.containerName,
       };
       const result = await runOpenShellCli({
@@ -349,6 +370,15 @@ class OpenShellSandboxBackendImpl {
       mode: this.params.execContext.config.mode,
       configLabel: this.params.execContext.config.from,
       configLabelKind: "Source",
+      cleanupMetadata: {
+        locatorVersion: "1",
+        command: this.params.execContext.config.command,
+        gateway: this.params.execContext.config.gateway ?? "",
+        gatewayEndpoint: this.params.execContext.config.gatewayEndpoint ?? "",
+        workspace:
+          this.params.execContext.config.workspace ??
+          (process.env.OPENSHELL_WORKSPACE?.trim() || "default"),
+      },
       workdirValidation: "backend",
       validateWorkdir: async (workdir) => await this.validateWorkdir(workdir),
       workdirRoots: [this.params.remoteWorkspaceDir, this.params.remoteAgentWorkspaceDir],

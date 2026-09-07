@@ -6,7 +6,7 @@
  */
 /** Request shape consumed by browser route handlers. */
 export type BrowserRequest = {
-  params: Record<string, string>;
+  params: Record<string, string | string[]>;
   query: Record<string, unknown>;
   body?: unknown;
   /**
@@ -25,7 +25,10 @@ export type BrowserResponse = {
 };
 
 /** Async route handler signature shared by HTTP and in-process dispatch. */
-type BrowserRouteHandler = (req: BrowserRequest, res: BrowserResponse) => void | Promise<void>;
+export type BrowserRouteHandler = (
+  req: BrowserRequest,
+  res: BrowserResponse,
+) => void | Promise<void>;
 
 /** Minimal registrar interface implemented by HTTP and test dispatchers. */
 export type BrowserRouteRegistrar = {

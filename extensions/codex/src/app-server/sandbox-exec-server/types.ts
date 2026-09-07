@@ -84,6 +84,7 @@ export type ManagedProcess = {
   tty: boolean;
   pipeStdin: boolean;
   terminationRequested: boolean;
+  abortController: AbortController;
   child: SandboxChildOwner | null;
   startPromise?: Promise<void>;
   evictionTimer?: ReturnType<typeof setTimeout>;

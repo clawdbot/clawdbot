@@ -25,8 +25,15 @@ import { resolveSandboxDockerUser } from "./docker-user.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { hashTextSha256 } from "./hash.js";
 import { toSandboxProvisioningError } from "./provisioning-error.js";
-import { readRegisteredSandboxRuntimeIds, updateRegistry } from "./registry.js";
+import {
+  readRegisteredSandboxRuntimeIds,
+  readRegistryEntry,
+  resolveSandboxRegistryLifecycleId,
+  updateRegistry,
+} from "./registry.js";
+import { coordinateSandboxBackendHandle } from "./runtime-activity.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
+import { withSandboxScopeLock } from "./scope-lock.js";
 import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
 import type { SandboxContext, SandboxIsolationSubject, SandboxWorkspaceInfo } from "./types.js";
@@ -287,34 +294,6 @@ async function resolveProvisionedSandboxContext(
   });
   const resolvedCfg = docker === cfg.docker ? cfg : { ...cfg, docker };
 
-  const backendFactory = requireSandboxBackendFactory(resolvedCfg.backend);
-  const registeredRuntimeIds = await readRegisteredSandboxRuntimeIds({
-    backendId: resolvedCfg.backend,
-    scopeKey,
-  });
-  const backend = await backendFactory({
-    sessionKey: rawSessionKey,
-    scopeKey,
-    ...(registeredRuntimeIds.length > 0 ? { registeredRuntimeIds } : {}),
-    workspaceDir,
-    agentWorkspaceDir,
-    skillsWorkspaceDir,
-    cfg: resolvedCfg,
-    ...(params.requireCurrentConfig !== undefined
-      ? { requireCurrentConfig: params.requireCurrentConfig }
-      : {}),
-  });
-  await updateRegistry({
-    containerName: backend.runtimeId,
-    backendId: backend.id,
-    runtimeLabel: backend.runtimeLabel,
-    sessionKey: scopeKey,
-    createdAtMs: Date.now(),
-    lastUsedAtMs: Date.now(),
-    image: backend.configLabel ?? resolvedCfg.docker.image,
-    configLabelKind: backend.configLabelKind ?? "Image",
-  });
-
   const resolvedBrowserConfig = resolvedCfg.browser.enabled
     ? resolveBrowserConfig(params.config?.browser, params.config)
     : undefined;
@@ -338,22 +317,63 @@ async function resolveProvisionedSandboxContext(
         return browserAuth;
       })()
     : undefined;
-  if (resolvedCfg.browser.enabled && backend.capabilities?.browser !== true) {
-    throw new Error(`Sandbox backend "${backend.id}" does not support browser sandboxes yet.`);
-  }
-  const browser =
-    resolvedCfg.browser.enabled && backend.capabilities?.browser === true
-      ? await ensureSandboxBrowser({
-          scopeKey,
-          workspaceDir,
-          agentWorkspaceDir,
-          skillsWorkspaceDir,
-          cfg: resolvedCfg,
-          evaluateEnabled,
-          bridgeAuth,
-          ssrfPolicy: resolvedBrowserConfig?.ssrfPolicy,
-        })
-      : null;
+
+  const backendFactory = requireSandboxBackendFactory(resolvedCfg.backend);
+  const { backend, browser } = await withSandboxScopeLock(scopeKey, async () => {
+    const registeredRuntimeIds = await readRegisteredSandboxRuntimeIds({
+      backendId: resolvedCfg.backend,
+      scopeKey,
+    });
+    const rawBackend = await backendFactory({
+      sessionKey: rawSessionKey,
+      scopeKey,
+      ...(registeredRuntimeIds.length > 0 ? { registeredRuntimeIds } : {}),
+      workspaceDir,
+      agentWorkspaceDir,
+      skillsWorkspaceDir,
+      cfg: resolvedCfg,
+      ...(params.requireCurrentConfig !== undefined
+        ? { requireCurrentConfig: params.requireCurrentConfig }
+        : {}),
+    });
+    const registered = await updateRegistry({
+      containerName: rawBackend.runtimeId,
+      backendId: rawBackend.id,
+      runtimeLabel: rawBackend.runtimeLabel,
+      sessionKey: scopeKey,
+      createdAtMs: Date.now(),
+      lastUsedAtMs: Date.now(),
+      image: rawBackend.configLabel ?? resolvedCfg.docker.image,
+      configLabelKind: rawBackend.configLabelKind ?? "Image",
+      cleanupMetadata: rawBackend.cleanupMetadata,
+    });
+    const lifecycleId = resolveSandboxRegistryLifecycleId(registered);
+    const coordinatedBackend = coordinateSandboxBackendHandle(rawBackend, async () => {
+      const current = await readRegistryEntry(rawBackend.runtimeId);
+      if (!current || resolveSandboxRegistryLifecycleId(current) !== lifecycleId) {
+        throw new Error("Sandbox runtime was recycled before the operation started.");
+      }
+    });
+    if (resolvedCfg.browser.enabled && coordinatedBackend.capabilities?.browser !== true) {
+      throw new Error(
+        `Sandbox backend "${coordinatedBackend.id}" does not support browser sandboxes yet.`,
+      );
+    }
+    const sandboxBrowser =
+      resolvedCfg.browser.enabled && coordinatedBackend.capabilities?.browser === true
+        ? await ensureSandboxBrowser({
+            scopeKey,
+            workspaceDir,
+            agentWorkspaceDir,
+            skillsWorkspaceDir,
+            cfg: resolvedCfg,
+            evaluateEnabled,
+            bridgeAuth,
+            ssrfPolicy: resolvedBrowserConfig?.ssrfPolicy,
+          })
+        : null;
+    return { backend: coordinatedBackend, browser: sandboxBrowser };
+  });
 
   const sandboxContext: SandboxContext = {
     enabled: true,

@@ -137,6 +137,18 @@ function resetOpenShellBackendMocks() {
   );
 }
 
+function createOpenShellCleanupMetadata(
+  config = resolveOpenShellPluginConfig({ command: "/usr/local/bin/openshell", gateway: "lab" }),
+) {
+  return {
+    locatorVersion: "1",
+    command: config.command,
+    gateway: config.gateway ?? "",
+    gatewayEndpoint: config.gatewayEndpoint ?? "",
+    workspace: config.workspace ?? "default",
+  };
+}
+
 describe("openshell cli helpers", () => {
   const originalEnv = { ...process.env };
 
@@ -575,7 +587,7 @@ describe("openshell backend manager", () => {
     },
   );
 
-  it("removes runtimes using the current OpenShell control-plane configuration", async () => {
+  it("removes runtimes using their recorded OpenShell control plane", async () => {
     cliMocks.runOpenShellCli.mockResolvedValue({
       code: 0,
       stdout: "",
@@ -589,25 +601,16 @@ describe("openshell backend manager", () => {
       }),
     });
 
-    await manager.removeRuntime({
-      entry: createOpenShellRuntimeEntryFixture("openclaw-session-5678"),
-      config: {},
-    });
-
     const expectedConfig = resolveOpenShellPluginConfig({
       command: "/usr/local/bin/openshell",
       gateway: "lab",
+      workspace: "default",
     });
-    expect(cliMocks.runOpenShellCli).toHaveBeenCalledWith({
-      context: {
-        sandboxName: "openclaw-session-5678",
-        config: expectedConfig,
-      },
-      args: ["sandbox", "delete", "openclaw-session-5678"],
-    });
-
     await manager.removeRuntime({
-      entry: createOpenShellRuntimeEntryFixture("openclaw-session-5678"),
+      entry: {
+        ...createOpenShellRuntimeEntryFixture("openclaw-session-5678"),
+        cleanupMetadata: createOpenShellCleanupMetadata(),
+      },
       config: {
         plugins: {
           entries: {
@@ -627,14 +630,35 @@ describe("openshell backend manager", () => {
     expect(cliMocks.runOpenShellCli).toHaveBeenLastCalledWith({
       context: {
         sandboxName: "openclaw-session-5678",
-        config: resolveOpenShellPluginConfig({
-          command: "/opt/openshell/bin/openshell",
-          gateway: "research",
-          workspace: "team-1",
-        }),
+        config: expectedConfig,
       },
       args: ["sandbox", "delete", "openclaw-session-5678"],
     });
+  });
+
+  it("refuses to delete an OpenShell runtime without an authoritative locator", async () => {
+    const manager = createOpenShellSandboxBackendManager({
+      pluginConfig: resolveOpenShellPluginConfig({ command: "openshell" }),
+    });
+
+    await expect(
+      manager.removeRuntime({
+        entry: createOpenShellRuntimeEntryFixture("openclaw-session-legacy"),
+        config: {},
+      }),
+    ).rejects.toThrow("has no authoritative cleanup locator");
+    await expect(
+      manager.removeRuntime({
+        entry: {
+          ...createOpenShellRuntimeEntryFixture("openclaw-session-ambient"),
+          cleanupMetadata: createOpenShellCleanupMetadata(
+            resolveOpenShellPluginConfig({ command: "openshell" }),
+          ),
+        },
+        config: {},
+      }),
+    ).rejects.toThrow("has no authoritative cleanup locator");
+    expect(cliMocks.runOpenShellCli).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -653,7 +677,10 @@ describe("openshell backend manager", () => {
 
     await expect(
       manager.removeRuntime({
-        entry: createOpenShellRuntimeEntryFixture("openclaw-session-5678"),
+        entry: {
+          ...createOpenShellRuntimeEntryFixture("openclaw-session-5678"),
+          cleanupMetadata: createOpenShellCleanupMetadata(),
+        },
         config: {},
       }),
     ).rejects.toThrow(expected);

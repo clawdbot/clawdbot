@@ -95,18 +95,22 @@ export const sshSandboxBackendManager: SandboxBackendManager = {
   async removeRuntime({ entry, config, agentId }) {
     const effectiveAgentId = agentId ?? resolveSandboxAgentId(entry.sessionKey);
     const cfg = resolveSandboxConfigForAgent(config, effectiveAgentId);
-    if (cfg.backend !== "ssh" || !cfg.ssh.target) {
-      return;
+    const target = entry.cleanupMetadata?.target?.trim();
+    const workspaceRoot = entry.cleanupMetadata?.workspaceRoot?.trim();
+    if (entry.cleanupMetadata?.locatorVersion !== "1" || !target || !workspaceRoot) {
+      throw new Error(
+        `SSH sandbox runtime ${entry.containerName} has no authoritative cleanup locator; remove the recorded runtime manually after verifying its original target.`,
+      );
     }
     assertSshSandboxSecretOwnerAvailable({
       config,
       scope: cfg.scope,
       agentId: effectiveAgentId,
     });
-    const runtimePaths = resolveSshRuntimePaths(cfg.ssh.workspaceRoot, entry.sessionKey);
+    const runtimePaths = resolveSshRuntimePaths(workspaceRoot, entry.sessionKey);
     const session = await createSshSandboxSessionFromSettings({
       ...cfg.ssh,
-      target: cfg.ssh.target,
+      target,
     });
     try {
       const result = await runSshSandboxCommand({
@@ -193,6 +197,11 @@ class SshSandboxBackendImpl {
       env: this.params.createParams.cfg.docker.env,
       configLabel: this.params.target,
       configLabelKind: "Target",
+      cleanupMetadata: {
+        locatorVersion: "1",
+        target: this.params.target,
+        workspaceRoot: this.params.createParams.cfg.ssh.workspaceRoot,
+      },
       workdirValidation: "backend",
       validateWorkdir: async (workdir) => await this.validateWorkdir(workdir),
       discardPreparedWorkdir: (workdir) => this.discardPreparedWorkdir(workdir),

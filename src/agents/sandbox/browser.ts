@@ -54,7 +54,18 @@ import {
   NOVNC_PASSWORD_ENV_KEY,
   issueNoVncObserverToken,
 } from "./novnc-auth.js";
-import { readBrowserRegistry, updateBrowserRegistry } from "./registry.js";
+import {
+  readBrowserRegistryEntry,
+  removeBrowserRegistryEntry,
+  resolveSandboxBrowserRegistryLifecycleId,
+  updateBrowserRegistry,
+} from "./registry.js";
+import {
+  activateSandboxRuntimeActivity,
+  resolveSandboxRuntimeActivityKey,
+  tryAcquireSandboxRuntimeActivity,
+  tryWithSandboxRuntimeMutations,
+} from "./runtime-activity.js";
 import { buildSandboxContainerName, resolveSandboxAgentId, slugifySessionKey } from "./shared.js";
 import { isToolAllowed } from "./tool-policy.js";
 import type { SandboxBrowserContext, SandboxConfig } from "./types.js";
@@ -268,6 +279,7 @@ async function ensureSandboxBrowserContainer(
   params: EnsureSandboxBrowserParams,
   containerName: string,
 ): Promise<SandboxBrowserContext> {
+  const activityKey = resolveSandboxRuntimeActivityKey("docker", containerName);
   let existing = BROWSER_BRIDGES.get(params.scopeKey);
   const stopExistingForContainer = async () => {
     await stopCachedBrowserBridgesForContainer(containerName);
@@ -315,6 +327,7 @@ async function ensureSandboxBrowserContainer(
   let running = state.running;
   let currentHash: string | null = null;
   let hashMismatch = false;
+  const registryEntry = await readBrowserRegistryEntry(containerName);
   const noVncEnabled = isNoVncEnabled(params.cfg.browser);
   let noVncPassword: string | undefined;
   let cdpAuthToken: string | undefined;
@@ -330,16 +343,28 @@ async function ensureSandboxBrowserContainer(
       defaultRuntime.log(
         `Removing stale sandbox browser container ${containerName} because it lacks the current CDP relay auth contract; it will be recreated.`,
       );
-      await stopExistingForContainer();
-      await execDocker(["rm", "-f", containerName], { allowFailure: true });
+      const removal = await tryWithSandboxRuntimeMutations([activityKey], async (lifecycle) => {
+        await stopExistingForContainer();
+        const result = await execDocker(["rm", "-f", containerName], { allowFailure: true });
+        if (result.code !== 0) {
+          throw new Error(
+            `Failed to remove stale sandbox browser ${containerName}: ${result.stderr.trim()}`,
+          );
+        }
+        await removeBrowserRegistryEntry(containerName);
+        lifecycle.retire();
+      });
+      if (!removal.acquired) {
+        throw new Error(
+          `Sandbox browser ${containerName} is active and lacks the current authentication contract; retry after its requests finish.`,
+        );
+      }
       hasContainer = false;
       running = false;
     }
   }
 
   if (hasContainer) {
-    const registry = await readBrowserRegistry();
-    const registryEntry = registry.entries.find((entry) => entry.containerName === containerName);
     currentHash = await readDockerContainerLabel(containerName, "openclaw.configHash");
     hashMismatch = !currentHash || currentHash !== expectedHash;
     if (!currentHash) {
@@ -365,14 +390,41 @@ async function ensureSandboxBrowserContainer(
           `Sandbox browser config changed for ${containerName} (recently used). Recreate to apply: ${hint}`,
         );
       } else {
-        await stopExistingForContainer();
-        await execDocker(["rm", "-f", containerName], { allowFailure: true });
-        hasContainer = false;
-        running = false;
+        const removal = await tryWithSandboxRuntimeMutations([activityKey], async (lifecycle) => {
+          await stopExistingForContainer();
+          const result = await execDocker(["rm", "-f", containerName], { allowFailure: true });
+          if (result.code !== 0) {
+            throw new Error(
+              `Failed to remove stale sandbox browser ${containerName}: ${result.stderr.trim()}`,
+            );
+          }
+          await removeBrowserRegistryEntry(containerName);
+          lifecycle.retire();
+        });
+        if (removal.acquired) {
+          hasContainer = false;
+          running = false;
+        } else {
+          defaultRuntime.log(
+            `Retaining sandbox browser ${containerName} with its previous configuration because it is active.`,
+          );
+        }
       }
     }
   }
 
+  if (!hasContainer && registryEntry) {
+    const retirement = await tryWithSandboxRuntimeMutations([activityKey], async (lifecycle) => {
+      await stopExistingForContainer();
+      await removeBrowserRegistryEntry(containerName);
+      lifecycle.retire();
+    });
+    if (!retirement.acquired) {
+      throw new Error(
+        `Sandbox browser ${containerName} is missing while prior activity is still settling; retry after it finishes.`,
+      );
+    }
+  }
   if (!hasContainer) {
     if (noVncEnabled) {
       noVncPassword = generateNoVncPassword();
@@ -511,6 +563,24 @@ async function ensureSandboxBrowserContainer(
 
   const bridge = canReuse ? (existing?.bridge ?? null) : null;
 
+  const registered = await updateBrowserRegistry({
+    containerName,
+    sessionKey: params.scopeKey,
+    createdAtMs: now,
+    lastUsedAtMs: now,
+    image: browserImage,
+    configHash: hashMismatch && running ? (currentHash ?? undefined) : expectedHash,
+    cdpPort: mappedCdp,
+    noVncPort: mappedNoVnc ?? undefined,
+  });
+  const browserLifecycleId = resolveSandboxBrowserRegistryLifecycleId(registered);
+  const assertBrowserCurrent = async () => {
+    const current = await readBrowserRegistryEntry(containerName);
+    if (!current || resolveSandboxBrowserRegistryLifecycleId(current) !== browserLifecycleId) {
+      throw new Error("Sandbox browser was recycled before the request started.");
+    }
+  };
+  const bridgeActivityGeneration = activateSandboxRuntimeActivity(activityKey);
   const ensureBridge = async () => {
     if (bridge) {
       return bridge;
@@ -547,6 +617,12 @@ async function ensureSandboxBrowserContainer(
       }),
       authToken: desiredAuthToken,
       authPassword: desiredAuthPassword,
+      acquireRequestActivity: () =>
+        tryAcquireSandboxRuntimeActivity(
+          activityKey,
+          bridgeActivityGeneration,
+          assertBrowserCurrent,
+        ),
       onEnsureAttachTarget,
       resolveSandboxNoVncToken: consumeNoVncObserverToken,
     });
@@ -561,17 +637,6 @@ async function ensureSandboxBrowserContainer(
       authPassword: desiredAuthPassword,
     });
   }
-
-  await updateBrowserRegistry({
-    containerName,
-    sessionKey: params.scopeKey,
-    createdAtMs: now,
-    lastUsedAtMs: now,
-    image: browserImage,
-    configHash: hashMismatch && running ? (currentHash ?? undefined) : expectedHash,
-    cdpPort: mappedCdp,
-    noVncPort: mappedNoVnc ?? undefined,
-  });
 
   const noVncUrl =
     mappedNoVnc && noVncEnabled

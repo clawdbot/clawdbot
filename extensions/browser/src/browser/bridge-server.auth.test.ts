@@ -1,5 +1,5 @@
 // Browser tests cover bridge server.auth plugin behavior.
-import { createServer } from "node:http";
+import { createServer, request } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "./bridge-server.js";
@@ -86,6 +86,82 @@ describe("startBrowserBridgeServer auth", () => {
       { authPassword: "secret-password" },
       { "x-openclaw-password": "secret-password" },
     );
+  });
+
+  it("releases admitted requests and rejects new work during runtime recycling", async () => {
+    const release = vi.fn(async () => {});
+    const acquireRequestActivity = vi
+      .fn<() => Promise<{ release(): Promise<void> } | null>>()
+      .mockResolvedValueOnce({ release })
+      .mockResolvedValueOnce(null);
+    const bridge = await startBrowserBridgeServer({
+      resolved: buildResolvedConfig(),
+      authToken: "secret-token",
+      acquireRequestActivity,
+    });
+    servers.push({ stop: () => stopBrowserBridgeServer(bridge.server) });
+
+    const headers = { Authorization: "Bearer secret-token" };
+    expect((await fetch(`${bridge.baseUrl}/?profile=missing`, { headers })).status).toBe(404);
+    expect(release).toHaveBeenCalledOnce();
+    expect((await fetch(`${bridge.baseUrl}/?profile=missing`, { headers })).status).toBe(503);
+    expect(acquireRequestActivity).toHaveBeenCalledTimes(2);
+  });
+
+  it("releases activity acquired after the client disconnects", async () => {
+    const admission = deferred();
+    const release = vi.fn(async () => {});
+    const acquireRequestActivity = vi.fn(async () => {
+      await admission.promise;
+      return { release };
+    });
+    const bridge = await startBrowserBridgeServer({
+      resolved: buildResolvedConfig(),
+      authToken: "secret-token",
+      acquireRequestActivity,
+    });
+    servers.push({ stop: () => stopBrowserBridgeServer(bridge.server) });
+
+    const pending = request(`${bridge.baseUrl}/?profile=missing`, {
+      headers: { Authorization: "Bearer secret-token" },
+    });
+    pending.on("error", () => {});
+    pending.end();
+    await vi.waitFor(() => expect(acquireRequestActivity).toHaveBeenCalledOnce());
+    pending.destroy();
+    admission.resolve();
+
+    await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
+  });
+
+  it("holds activity until a disconnected route settles", async () => {
+    const attachStarted = deferred();
+    const releaseAttach = deferred();
+    const release = vi.fn(async () => {});
+    const bridge = await startBrowserBridgeServer({
+      resolved: buildResolvedConfig(),
+      authToken: "secret-token",
+      acquireRequestActivity: async () => ({ release }),
+      onEnsureAttachTarget: async () => {
+        attachStarted.resolve();
+        await releaseAttach.promise;
+      },
+    });
+    servers.push({ stop: () => stopBrowserBridgeServer(bridge.server) });
+
+    const abort = new AbortController();
+    const pending = fetch(`${bridge.baseUrl}/start`, {
+      method: "POST",
+      headers: { Authorization: "Bearer secret-token" },
+      signal: abort.signal,
+    });
+    await attachStarted.promise;
+    abort.abort();
+    await expect(pending).rejects.toThrow();
+    expect(release).not.toHaveBeenCalled();
+
+    releaseAttach.resolve();
+    await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
   });
 
   it("requires auth params", async () => {

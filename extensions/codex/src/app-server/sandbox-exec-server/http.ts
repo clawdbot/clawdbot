@@ -50,10 +50,11 @@ export async function httpRequest(
   if (request.streamResponse) {
     return await runStreamingSandboxHttpRequest(execServer, notifications, requestId, request);
   }
-  const result = await runSandboxHttpRequest(execServer, {
-    ...request,
-    streamResponse: false,
-  });
+  const result = await runSandboxHttpRequest(
+    execServer,
+    { ...request, streamResponse: false },
+    notifications.signal,
+  );
   return result;
 }
 
@@ -89,11 +90,13 @@ function assertSandboxHttpRequestTargetAllowed(url: string): void {
 async function runSandboxHttpRequest(
   execServer: OpenClawExecServer,
   params: SandboxHttpRequest,
+  signal: AbortSignal,
 ): Promise<JsonObject & { status: number; headers: HttpHeader[]; bodyBase64: string }> {
   const result = await execServer.backend.runShellCommand({
     script: SANDBOX_HTTP_REQUEST_SCRIPT,
     stdin: JSON.stringify(params),
     allowFailure: true,
+    signal,
   });
   if (result.code !== 0) {
     const stderr = result.stderr.toString("utf8").trim();
@@ -127,6 +130,7 @@ async function runStreamingSandboxHttpRequest(
     workdir: execServer.sandbox.containerWorkdir,
     env: remoteExec.env,
     usePty: false,
+    signal: notifications.signal,
   });
   const lifecycle = { failed: false };
   const owner = await spawnSandboxChild({
