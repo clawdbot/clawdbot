@@ -307,29 +307,33 @@ export function bootstrapApplication(): ApplicationRuntime {
   );
   const theme = createApplicationTheme(settings, gateway);
   const nativeChatDrafts = createNativeChatDrafts();
-  const nativeLinkRouting = startNativeLinkRouting({
-    canPresentBrowserPanel: () => {
-      const shell = document.querySelector<HTMLElement & { routeState: ShellRouteState }>(
-        "openclaw-app-shell",
-      );
-      return shell?.isConnected === true && !isSettingsTakeover(shell.routeState.routeId);
-    },
-    onNativeUpdateDeclined: () => {
-      const snapshot = overlays.snapshot;
-      const campaign = snapshot.updateSchedule?.campaign;
-      const busy =
-        snapshot.updateRunning ||
-        snapshot.updateReconciliationPending ||
-        campaign?.state === "applying";
-      if ((snapshot.updateAvailable || campaign) && !busy && !snapshot.controlUiRefreshRequired) {
-        void overlays.runUpdate();
-      }
-    },
-    shouldOpenInControlUiBrowser: () =>
-      loadSettings().openLinksInControlUiBrowser === true &&
-      isBrowserPanelAvailable(gateway.snapshot) &&
-      document.querySelector("openclaw-app-shell")?.isConnected === true,
-  });
+  const startNativeLinks = async () => {
+    const routing = await startNativeLinkRouting({
+      signal: startupLifecycle.signal,
+      canPresentBrowserPanel: () => {
+        const shell = document.querySelector<HTMLElement & { routeState: ShellRouteState }>(
+          "openclaw-app-shell",
+        );
+        return shell?.isConnected === true && !isSettingsTakeover(shell.routeState.routeId);
+      },
+      onNativeUpdateDeclined: () => {
+        const snapshot = overlays.snapshot;
+        const campaign = snapshot.updateSchedule?.campaign;
+        const busy =
+          snapshot.updateRunning ||
+          snapshot.updateReconciliationPending ||
+          campaign?.state === "applying";
+        if ((snapshot.updateAvailable || campaign) && !busy && !snapshot.controlUiRefreshRequired) {
+          void overlays.runUpdate();
+        }
+      },
+      shouldOpenInControlUiBrowser: () =>
+        loadSettings().openLinksInControlUiBrowser === true &&
+        isBrowserPanelAvailable(gateway.snapshot) &&
+        document.querySelector("openclaw-app-shell")?.isConnected === true,
+    });
+    return () => routing.dispose();
+  };
   let nativeDeviceSettings: ApplicationContext["nativeDeviceSettings"] = null;
   let nativeNotifications: ApplicationContext["nativeNotifications"] = null;
   const webPush = createWebPushCapability(gateway, { connectionBootstrap });
@@ -533,6 +537,7 @@ export function bootstrapApplication(): ApplicationRuntime {
         startupLifecycle.addDisposer(stopRouter);
       }
       const steps: StartupStep[] = [
+        startNativeLinks,
         () => {
           gateway.start();
           return () => gateway.stop();
@@ -671,7 +676,6 @@ export function bootstrapApplication(): ApplicationRuntime {
       overlays.dispose();
       theme.dispose();
       nativeChatDrafts.dispose();
-      nativeLinkRouting.dispose();
       webPush.dispose();
       chatSubmissions.clear();
       chatAttachmentHandoff.dispose();

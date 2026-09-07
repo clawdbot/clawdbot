@@ -318,7 +318,7 @@ describe("native Browser panel ownership", () => {
     panel.available = true;
     panel.remoteAvailable = false;
     document.body.append(panel);
-    const routing = startNativeLinkRouting({ shouldOpenInControlUiBrowser: () => false });
+    const routing = await startNativeLinkRouting({ shouldOpenInControlUiBrowser: () => false });
     const link = document.createElement("a");
     link.href = "https://example.test/article";
     document.body.append(link);

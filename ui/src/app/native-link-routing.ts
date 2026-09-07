@@ -1,5 +1,8 @@
 import { promoteToPopoverTopLayer } from "../components/menu-surface.ts";
-import { NativeLinkMenu, type NativeLinkMenuAction } from "../components/native-link-menu.ts";
+import type {
+  NativeLinkMenu,
+  NativeLinkMenuAction,
+} from "../components/native-link-menu.runtime.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   type BrowserPanelToggleDetail,
@@ -42,6 +45,7 @@ type NativeLinkRouting = {
 };
 
 type NativeLinkRoutingOptions = {
+  signal?: AbortSignal;
   onNativeUpdateDeclined?: () => void;
   shouldOpenInControlUiBrowser?: () => boolean;
   canPresentBrowserPanel?: () => boolean;
@@ -158,8 +162,10 @@ function shouldHandleControlUiBrowserActivation(event: MouseEvent): boolean {
   );
 }
 
-export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): NativeLinkRouting {
-  if (typeof window === "undefined" || typeof document === "undefined") {
+export async function startNativeLinkRouting(
+  options: NativeLinkRoutingOptions = {},
+): Promise<NativeLinkRouting> {
+  if (options.signal?.aborted || typeof window === "undefined" || typeof document === "undefined") {
     return { dispose() {} };
   }
   const postMessage = getNativeLinkPoster();
@@ -169,6 +175,13 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
     !options.shouldOpenInControlUiBrowser &&
     !options.onNativeUpdateDeclined
   ) {
+    return { dispose() {} };
+  }
+  if (postMessage) {
+    await import("../components/native-link-menu.runtime.ts");
+  }
+  // Startup may stop while the native-only menu module is loading.
+  if (options.signal?.aborted) {
     return { dispose() {} };
   }
 

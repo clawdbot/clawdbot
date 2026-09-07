@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flattenTranslations } from "../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { i18n } from "../i18n/index.ts";
 import { de } from "../i18n/locales/de.ts";
-import { NativeLinkMenu, type NativeLinkMenuAction } from "./native-link-menu.ts";
+import { NativeLinkMenu, type NativeLinkMenuAction } from "./native-link-menu.runtime.ts";
 import "./tooltip.ts";
 
 const NATIVE_LINK_MENU_ELEMENT_NAME = `test-openclaw-native-link-menu-${crypto.randomUUID()}`;
