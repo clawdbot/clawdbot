@@ -1,0 +1,264 @@
+import {
+  hasNativeBrowserBridge,
+  postNativeBrowserMessage,
+  readNativeBrowserState,
+  subscribeNativeBrowserState,
+  type NativeBrowserMessage,
+  type NativeBrowserState,
+  type NativeBrowserTab,
+} from "../../app/native-browser-bridge.ts";
+import { readBrowserInspectedNode, type BrowserPanelTab } from "./browser-client.ts";
+import type { BrowserPanelController } from "./browser-panel-controller.ts";
+import { BrowserPanelNativePresentation } from "./browser-panel-native-presentation.ts";
+import {
+  browserPanelNormalizedPoint,
+  browserPanelRemotePoint,
+  loadBrowserPanelImage,
+} from "./browser-panel-surface.ts";
+
+const presenters = new Set<BrowserPanelNativeController>();
+const popupScopes = new Map<string, string>();
+
+/** Window-owned native state is shared by every session's panel instance. */
+export class BrowserPanelNativeController {
+  readonly presentation: BrowserPanelNativePresentation;
+  private nativeTabs: NativeBrowserTab[] = [];
+  private unsubscribeState?: () => void;
+  private revision = -1;
+  private pendingActivation: string | null = null;
+  private captureGeneration = 0;
+  private inspectionGeneration = 0;
+
+  constructor(private readonly controller: BrowserPanelController) {
+    this.presentation = new BrowserPanelNativePresentation(controller);
+  }
+
+  get activeTab(): NativeBrowserTab | undefined {
+    return this.nativeTabs.find((tab) => tab.id === this.controller.activeTargetId);
+  }
+
+  get tabs(): BrowserPanelTab[] {
+    return this.nativeTabs.map((tab) => ({ ...tab, targetId: tab.id, kind: "native" }));
+  }
+
+  connect(): void {
+    if (!hasNativeBrowserBridge() || this.unsubscribeState) {
+      return;
+    }
+    presenters.add(this);
+    this.revision = -1;
+    const initial = readNativeBrowserState();
+    if (initial) {
+      this.acceptState(initial, false);
+    }
+    this.unsubscribeState = subscribeNativeBrowserState((state) => this.acceptState(state, true));
+    this.presentation.connect();
+  }
+
+  disconnect(): void {
+    if (!this.unsubscribeState) {
+      return;
+    }
+    this.unsubscribeState();
+    this.unsubscribeState = undefined;
+    presenters.delete(this);
+    this.pendingActivation = null;
+    this.cancelCapture();
+    this.presentation.disconnect();
+  }
+
+  mergeRemoteTabs(tabs: BrowserPanelTab[]): BrowserPanelTab[] {
+    return [...this.tabs, ...tabs.filter((tab) => tab.kind !== "native")];
+  }
+
+  private acceptState(state: NativeBrowserState, activatePopups: boolean): void {
+    if (state.revision <= this.revision) {
+      return;
+    }
+    const previous = new Set(this.nativeTabs.map((tab) => tab.id));
+    const activeBefore = this.activeTab;
+    this.revision = state.revision;
+    this.nativeTabs = state.tabs;
+    this.controller.setState("tabs", this.mergeRemoteTabs(this.controller.tabs));
+    for (const id of popupScopes.keys()) {
+      if (!state.tabs.some((tab) => tab.id === id)) {
+        popupScopes.delete(id);
+      }
+    }
+    for (const tab of state.tabs) {
+      if (tab.id === this.pendingActivation) {
+        this.pendingActivation = null;
+        void this.controller.selectTab(tab.id);
+      } else if (activatePopups && tab.openedBy === "native" && !previous.has(tab.id)) {
+        if (!popupScopes.has(tab.id)) {
+          const eligible = [...presenters];
+          const owner =
+            eligible
+              .filter((presenter) => presenter.presentation.presentedTabId === tab.openerTabId)
+              .sort((a, b) => b.presentation.lastPresented - a.presentation.lastPresented)[0] ??
+            eligible
+              .filter((presenter) => presenter.presentation.lastPresented > 0)
+              .sort((a, b) => b.presentation.lastPresented - a.presentation.lastPresented)[0];
+          if (owner) {
+            popupScopes.set(tab.id, owner.presentation.scope);
+          }
+        }
+        if (popupScopes.get(tab.id) === this.presentation.scope) {
+          void this.controller.selectTab(tab.id);
+        }
+      }
+    }
+    if (activeBefore && !this.activeTab) {
+      const next = this.controller.tabs[0];
+      this.controller.setState("activeTargetId", null);
+      this.controller.setState("view", null);
+      this.controller.exitCaptureModes();
+      if (next) {
+        void this.controller.selectTab(next.id);
+      }
+    } else if (!this.controller.activeTargetId && this.nativeTabs[0]) {
+      void this.controller.selectTab(this.nativeTabs[0].id);
+    }
+    if (this.activeTab) {
+      this.controller.syncUrlDraft(this.activeTab.url);
+      if (this.controller.mode === "interact") {
+        this.controller.setState("loading", this.activeTab.loading);
+      }
+    }
+    this.presentation.update();
+  }
+
+  async send(request: NativeBrowserMessage): Promise<boolean> {
+    const reply = await postNativeBrowserMessage(request);
+    if (reply && !reply.ok) {
+      this.controller.reportError(reply.error);
+    }
+    return reply?.ok === true;
+  }
+
+  async open(url: string, newTab: boolean): Promise<void> {
+    this.controller.setState("errorText", null);
+    this.controller.setState("pendingNewTab", false);
+    if (!newTab && this.activeTab) {
+      this.controller.exitCaptureModes();
+      await this.send({ type: "navigate", tabId: this.activeTab.id, url });
+      return;
+    }
+    const tabId = `mac-${crypto.randomUUID()}`;
+    this.pendingActivation = tabId;
+    const opened = await this.send({ type: "open", tabId, url, activate: true });
+    if (!opened && this.pendingActivation === tabId) {
+      this.pendingActivation = null;
+    }
+  }
+
+  async beginNewTab(): Promise<void> {
+    await this.open("about:blank", true);
+    await this.controller.host.updateComplete;
+    if (this.controller.host.isConnected && this.controller.host.browserPanelIsOpen()) {
+      this.controller.setState("urlDraft", "");
+      this.controller.host.renderRoot.querySelector<HTMLInputElement>(".bp-url")?.focus();
+    }
+  }
+
+  cancelCapture(): void {
+    this.captureGeneration += 1;
+    this.inspectionGeneration += 1;
+  }
+
+  async capture(mode: "annotate" | "inspect"): Promise<void> {
+    const tab = this.activeTab;
+    if (!tab) {
+      return;
+    }
+    const generation = ++this.captureGeneration;
+    this.controller.setState("loading", true);
+    const current = () =>
+      generation === this.captureGeneration &&
+      this.controller.host.isConnected &&
+      this.controller.host.browserPanelIsOpen() &&
+      this.activeTab?.id === tab.id &&
+      this.activeTab.url === tab.url;
+    try {
+      const reply = await postNativeBrowserMessage({ type: "snapshot", tabId: tab.id });
+      if (!current()) {
+        return;
+      }
+      if (
+        !reply?.ok ||
+        typeof reply.dataUrl !== "string" ||
+        typeof reply.cssWidth !== "number" ||
+        typeof reply.cssHeight !== "number"
+      ) {
+        if (reply && !reply.ok) {
+          this.controller.reportError(reply.error);
+        }
+        return;
+      }
+      const image = await loadBrowserPanelImage(reply.dataUrl);
+      if (!current()) {
+        return;
+      }
+      this.controller.setState("view", {
+        kind: "native",
+        targetId: tab.id,
+        dataUrl: reply.dataUrl,
+        image,
+        url: tab.url,
+        metrics: {
+          cssWidth: reply.cssWidth,
+          cssHeight: reply.cssHeight,
+          title: tab.title,
+          url: tab.url,
+        },
+      });
+      this.controller.setState("mode", mode);
+      this.presentation.hide();
+    } catch (error) {
+      if (current()) {
+        this.controller.reportError(error);
+      }
+    } finally {
+      if (current()) {
+        this.controller.setState("loading", false);
+      }
+    }
+  }
+
+  inspect(event: PointerEvent): void {
+    const tab = this.activeTab;
+    const stage = this.controller.host.renderRoot.querySelector<HTMLElement>(".bp-stage");
+    const point = browserPanelRemotePoint(stage, event, this.controller.view);
+    const normalized = browserPanelNormalizedPoint(stage, event);
+    if (!tab || !point || !normalized || this.controller.mode !== "inspect") {
+      return;
+    }
+    const generation = ++this.inspectionGeneration;
+    const current = () =>
+      generation === this.inspectionGeneration &&
+      this.controller.host.isConnected &&
+      this.controller.host.browserPanelIsOpen() &&
+      this.activeTab?.id === tab.id &&
+      this.controller.mode === "inspect";
+    this.controller.setState("inspectPointer", normalized);
+    this.controller.setState("inspected", null);
+    this.controller.pendingInput.queueInspection(120, current, () => {
+      void postNativeBrowserMessage({
+        type: "inspect",
+        tabId: tab.id,
+        x: point.x,
+        y: point.y,
+      }).then((reply) => {
+        if (!current()) {
+          return;
+        }
+        if (reply && !reply.ok) {
+          this.controller.reportError(reply.error);
+        } else if (reply?.ok && "node" in reply) {
+          this.controller.setState("inspected", readBrowserInspectedNode(reply.node));
+          this.controller.paintOverlay();
+        }
+      });
+    });
+  }
+}

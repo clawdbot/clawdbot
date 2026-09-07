@@ -10,8 +10,9 @@ import {
   externalHttpLinkFromEvent,
   shouldHandleNavigationClick,
 } from "../lib/navigation-click.ts";
+import { hasNativeBrowserBridge } from "./native-browser-bridge.ts";
 
-type NativeLinkTarget = "inline" | "external";
+type NativeLinkTarget = "external";
 
 type NativeLinkMessage = {
   type: "open-link";
@@ -126,6 +127,26 @@ function postNativeLink(
   }
 }
 
+export function postNativeExternalLink(url: string): boolean {
+  const poster = getNativeLinkPoster();
+  if (!poster) {
+    return false;
+  }
+  try {
+    return postNativeLink(poster, new URL(url), "external");
+  } catch {
+    return false;
+  }
+}
+
+function openBrowserPanel(url: URL): void {
+  window.dispatchEvent(
+    new CustomEvent<BrowserPanelToggleDetail>(BROWSER_PANEL_TOGGLE_EVENT, {
+      detail: { open: true, url: url.href, ...(hasNativeBrowserBridge() ? { native: true } : {}) },
+    }),
+  );
+}
+
 function shouldHandleControlUiBrowserActivation(event: MouseEvent): boolean {
   return (
     !event.defaultPrevented &&
@@ -141,7 +162,12 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
     return { dispose() {} };
   }
   const postMessage = getNativeLinkPoster();
-  if (!postMessage && !options.shouldOpenInControlUiBrowser && !options.onNativeUpdateDeclined) {
+  if (
+    !postMessage &&
+    !hasNativeBrowserBridge() &&
+    !options.shouldOpenInControlUiBrowser &&
+    !options.onNativeUpdateDeclined
+  ) {
     return { dispose() {} };
   }
 
@@ -183,6 +209,10 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
         void copyToClipboard(url.href);
         return;
       }
+      if (action === "inline") {
+        openBrowserPanel(url);
+        return;
+      }
       postNativeLink(nativePostMessage, url, action);
     };
     menu = nextMenu;
@@ -194,14 +224,12 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
     const webLink = externalHttpLinkFromEvent(event);
     if (
       webLink &&
-      shouldHandleControlUiBrowserActivation(event) &&
-      options.shouldOpenInControlUiBrowser?.()
+      (hasNativeBrowserBridge()
+        ? shouldHandleNavigationClick(event)
+        : shouldHandleControlUiBrowserActivation(event)) &&
+      (hasNativeBrowserBridge() || options.shouldOpenInControlUiBrowser?.())
     ) {
-      window.dispatchEvent(
-        new CustomEvent<BrowserPanelToggleDetail>(BROWSER_PANEL_TOGGLE_EVENT, {
-          detail: { open: true, url: webLink.url.href },
-        }),
-      );
+      openBrowserPanel(webLink.url);
       closeMenu();
       event.preventDefault();
       return;
@@ -210,9 +238,7 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
       return;
     }
     const appLink = trustedExternalAppUrl(event);
-    const link = appLink ?? webLink;
-    const target = appLink ? "external" : "inline";
-    if (!link || !postNativeLink(postMessage, link.url, target)) {
+    if (!appLink || !postNativeLink(postMessage, appLink.url, "external")) {
       return;
     }
     closeMenu();

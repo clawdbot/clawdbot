@@ -2,6 +2,7 @@
 
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { showToast } from "../lib/toast.ts";
 import {
   getRenderedModalDialog,
@@ -9,6 +10,10 @@ import {
   nextFrame,
 } from "../test-helpers/modal-dialog.ts";
 import { OpenClawModalDialog } from "./modal-dialog.ts";
+
+vi.mock("../app/native-browser-bridge.ts", () => ({
+  hasNativeBrowserBridge: () => true,
+}));
 
 let container: HTMLDivElement;
 let restoreDialogPolyfill: () => void;
@@ -69,6 +74,39 @@ describe("openclaw-modal-dialog", () => {
 
     modal.remove();
     expect(document.openClawModalLayers?.has(modal)).toBe(false);
+  });
+
+  it("occludes native tabs through nested dialogs, closing animations, and removal", async () => {
+    const changes = vi.fn();
+    const unsubscribe = subscribeNativeOverlayOcclusion(changes);
+    try {
+      const { modal, webAwesomeDialog } = await renderModal();
+      const nested = document.createElement("openclaw-modal-dialog");
+      modal.append(nested);
+      await getRenderedModalDialog(modal);
+      expect(changes.mock.calls).toEqual([[false], [true]]);
+
+      nested.remove();
+      expect(changes.mock.calls).toEqual([[false], [true]]);
+      modal.hide();
+      await modal.updateComplete;
+      // The platform view must stay hidden until the dialog leaves the top layer.
+      expect(changes.mock.calls).toEqual([[false], [true]]);
+      webAwesomeDialog.dispatchEvent(new Event("wa-after-hide"));
+      expect(changes.mock.calls).toEqual([[false], [true], [false]]);
+      await modal.updateComplete;
+      modal.show();
+      await modal.updateComplete;
+      expect(changes).toHaveBeenLastCalledWith(true);
+      modal.remove();
+      expect(changes).toHaveBeenLastCalledWith(false);
+      container.append(modal);
+      expect(changes).toHaveBeenLastCalledWith(true);
+      modal.remove();
+      expect(changes).toHaveBeenLastCalledWith(false);
+    } finally {
+      unsubscribe();
+    }
   });
 
   it("focuses the dialog container first", async () => {

@@ -7,6 +7,7 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import browserInspectScript from "../../../../apps/macos/Sources/OpenClaw/Resources/BrowserInspect.js?raw";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import { buildAssistantMediaUrl } from "../../app/assistant-media.ts";
 import { t } from "../../i18n/index.ts";
@@ -18,6 +19,7 @@ const BROWSER_REQUEST_METHOD = "browser.request";
 const BROWSER_SCREENSHOT_FETCH_TIMEOUT_MS = 30_000;
 
 export type BrowserPanelTab = {
+  kind: "remote" | "native";
   /**
    * Stable panel handle: the plugin's per-profile tab alias (`t1`, a label)
    * when present, else the raw CDP target id. Raw target ids are volatile
@@ -112,6 +114,7 @@ function normalizeTab(value: unknown): BrowserPanelTab | null {
   }
   const tabId = stringOrEmpty(record?.tabId);
   return {
+    kind: "remote",
     id: tabId || targetId,
     targetId,
     title: stringOrEmpty(record?.title),
@@ -352,28 +355,14 @@ export async function inspectBrowserElementAt(
   const result = asRecord(
     await evaluateInBrowser(client, {
       targetId: params.targetId,
-      fn: `() => {
-        const el = document.elementFromPoint(${x}, ${y});
-        if (!el) return null;
-        const rect = el.getBoundingClientRect();
-        const label = el.getAttribute("aria-label") || el.getAttribute("alt") || el.getAttribute("title") || "";
-        const text = (el.textContent || "").replace(/\\s+/g, " ").trim();
-        const nameSource = label || text;
-        const nameLimit = 120;
-        // This serialized page function cannot call imported helpers; back up only when the cap splits a surrogate pair.
-        const nameEnd = (nameSource.codePointAt(nameLimit - 1) || 0) > 0xffff ? nameLimit - 1 : nameLimit;
-        return {
-          tag: el.tagName.toLowerCase(),
-          id: el.id || "",
-          classes: Array.from(el.classList).slice(0, 6),
-          role: el.getAttribute("role") || "",
-          name: nameSource.slice(0, nameEnd),
-          rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-          focusable: typeof el.tabIndex === "number" && el.tabIndex >= 0,
-        };
-      }`,
+      fn: `() => { ${browserInspectScript}\nreturn openclawInspectBrowserElement(${x}, ${y}); }`,
     }),
   );
+  return readBrowserInspectedNode(result);
+}
+
+export function readBrowserInspectedNode(value: unknown): BrowserInspectedNode | null {
+  const result = asRecord(value);
   if (!result) {
     return null;
   }

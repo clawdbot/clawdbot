@@ -12,6 +12,7 @@ import type {
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "../app/context.ts";
+import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { CommandPalette } from "./command-palette.ts";
@@ -20,6 +21,10 @@ import {
   DESKTOP_PANEL_TOGGLE_EVENT,
   type DesktopPanelToggleDetail,
 } from "./panel-toggle-contract.ts";
+
+vi.mock("../app/native-browser-bridge.ts", () => ({
+  hasNativeBrowserBridge: () => true,
+}));
 
 type CustodianPanelToggleDetail = { open?: boolean };
 
@@ -172,6 +177,36 @@ describe("CommandPalette lifecycle", () => {
     }
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("hides native browser overlays while the palette is open and releases on close or disconnect", async () => {
+    const { gateway } = createGateway(true);
+    const { palette } = await mountPalette(
+      createContext(
+        gateway,
+        vi.fn(async () => null),
+      ),
+    );
+    const changes = vi.fn();
+    const unsubscribe = subscribeNativeOverlayOcclusion(changes);
+    try {
+      palette.openPalette();
+      await palette.updateComplete;
+      await palette.querySelector("openclaw-modal-dialog")?.updateComplete;
+      expect(changes.mock.calls).toEqual([[false], [true]]);
+
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await palette.updateComplete;
+      expect(changes).toHaveBeenLastCalledWith(false);
+      palette.openPalette();
+      await palette.updateComplete;
+      await palette.querySelector("openclaw-modal-dialog")?.updateComplete;
+      expect(changes).toHaveBeenLastCalledWith(true);
+      palette.remove();
+      expect(changes).toHaveBeenLastCalledWith(false);
+    } finally {
+      unsubscribe();
+    }
   });
 
   it("closes and clears its query before a retained element reconnects", async () => {

@@ -615,7 +615,7 @@ extension DashboardWindowSmokeTests {
         #expect(controller._testLinkBrowserHistoryIsEmpty)
         #expect(controller._testLinkBrowserDelegatesAreInstalled)
         #expect(controller._testLinkBrowserWebViewIsInstalled)
-        #expect(controller._testLinkBrowserNavigationObservationCount == 4)
+        #expect(controller._testLinkBrowserNavigationObservationCount == 5)
         #expect(controller._testLinkBrowserDataStore === controller._testDashboardDataStore)
         controller._testLinkBrowserOpenInNewTab(urlA)
         #expect(controller._testLinkBrowserTabCount == 2)

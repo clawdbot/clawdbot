@@ -3,84 +3,6 @@ import Foundation
 import WebKit
 
 @MainActor
-private final class DashboardLinkBrowserTab {
-    /// WebKit preserves one WKNavigation identity across a redirect chain.
-    /// A different identity means the opened-link alias is no longer current.
-    private enum RequestAliasPhase {
-        case awaitingNavigation
-        case loading(AnyObject)
-        case retained
-        case retired
-    }
-
-    let id = UUID()
-    let webView: WKWebView
-    let requestedURL: URL
-    var representedURL: URL?
-    var title: String?
-    var observations: [NSKeyValueObservation] = []
-    private var requestAliasPhase: RequestAliasPhase = .awaitingNavigation
-
-    init(webView: WKWebView, requestedURL: URL) {
-        self.webView = webView
-        self.requestedURL = requestedURL
-        self.representedURL = requestedURL
-    }
-
-    var requestedURLAlias: URL? {
-        if case .retired = self.requestAliasPhase {
-            nil
-        } else {
-            self.requestedURL
-        }
-    }
-
-    func startNavigation(_ navigation: AnyObject) {
-        switch self.requestAliasPhase {
-        case .awaitingNavigation:
-            self.requestAliasPhase = .loading(navigation)
-        case let .loading(initial) where initial !== navigation:
-            self.requestAliasPhase = .retired
-        case .retained:
-            self.requestAliasPhase = .retired
-        case .loading, .retired:
-            break
-        }
-    }
-
-    func updateRepresentedURL(_ url: URL?) {
-        // Initial redirects keep the opened link reusable. Once that chain
-        // finishes, a distinct navigation retires the now-stale alias.
-        if case .retained = self.requestAliasPhase, let url, url != self.representedURL {
-            self.requestAliasPhase = .retired
-        }
-        self.representedURL = url
-    }
-
-    func finishNavigation(_ navigation: AnyObject?, at url: URL?, title: String?) {
-        self.updateRepresentedURL(url)
-        self.title = title
-        guard let navigation else { return }
-        switch self.requestAliasPhase {
-        case .awaitingNavigation:
-            self.requestAliasPhase = .retained
-        case let .loading(initial) where initial === navigation:
-            self.requestAliasPhase = .retained
-        case .loading:
-            self.requestAliasPhase = .retired
-        case .retained, .retired:
-            break
-        }
-    }
-
-    func failNavigation() {
-        // A failed initial chain has no reusable page. Retire its alias so
-        // opening the original link again starts a fresh load.
-        self.requestAliasPhase = .retired
-    }
-}
-
-@MainActor
 final class DashboardLinkBrowserView: NSView {
     var activeWebView: WKWebView? {
         self.activeTab?.webView
@@ -102,7 +24,7 @@ final class DashboardLinkBrowserView: NSView {
     var onOpenExternal: ((URL) -> Void)?
 
     private let websiteDataStore: WKWebsiteDataStore
-    private var tabs: [DashboardLinkBrowserTab] = []
+    private var tabs: [DashboardBrowserTab] = []
     private var activeTabID: UUID?
     private let toolbar = NSVisualEffectView()
     private let tabBar = DashboardLinkBrowserTabBar()
@@ -127,7 +49,7 @@ final class DashboardLinkBrowserView: NSView {
         return label
     }()
 
-    private var activeTab: DashboardLinkBrowserTab? {
+    private var activeTab: DashboardBrowserTab? {
         guard let activeTabID else { return nil }
         return self.tabs.first { $0.id == activeTabID }
     }
@@ -181,7 +103,7 @@ final class DashboardLinkBrowserView: NSView {
         guard let index = self.tabs.firstIndex(where: { $0.id == id }) else { return }
         let wasActive = self.activeTabID == id
         let tab = self.tabs.remove(at: index)
-        self.dispose(tab)
+        tab.dispose()
         self.tabBar.removeTab(id: id)
         self.updateTabBarVisibility()
 
@@ -202,7 +124,7 @@ final class DashboardLinkBrowserView: NSView {
         guard let keptTab = self.tabs.first(where: { $0.id == id }) else { return }
         let removedTabs = self.tabs.filter { $0.id != id }
         for tab in removedTabs {
-            self.dispose(tab)
+            tab.dispose()
             self.tabBar.removeTab(id: tab.id)
         }
         self.tabs = [keptTab]
@@ -222,7 +144,7 @@ final class DashboardLinkBrowserView: NSView {
         self.tabs.removeAll()
         self.activeTabID = nil
         for tab in tabs {
-            self.dispose(tab)
+            tab.dispose()
             self.tabBar.removeTab(id: tab.id)
         }
         self.tabBar.setActiveTab(id: nil)
@@ -284,39 +206,19 @@ final class DashboardLinkBrowserView: NSView {
         return self.contextMenu(for: self.tabs[index])
     }
 
-    private static func makeWebView(websiteDataStore: WKWebsiteDataStore) -> WKWebView {
-        // Every tab shares persisted browser sessions, but never inherits the
-        // dashboard's auth scripts, user scripts, or privileged message handler.
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = websiteDataStore
-        configuration.preferences.isElementFullscreenEnabled = true
-        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
-        configuration.preferences.tabFocusesLinks = true
-        let webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.setValue(true, forKey: "drawsBackground")
-        return webView
-    }
-
-    private func makeTab(requestedURL: URL) -> DashboardLinkBrowserTab {
-        let webView = Self.makeWebView(websiteDataStore: self.websiteDataStore)
-        webView.navigationDelegate = self.webViewNavigationDelegate
-        webView.uiDelegate = self.webViewUIDelegate
-        let tab = DashboardLinkBrowserTab(webView: webView, requestedURL: requestedURL)
-        self.installWebView(webView)
-        self.observeNavigationState(for: tab)
+    private func makeTab(requestedURL: URL) -> DashboardBrowserTab {
+        let tab = DashboardBrowserTab(websiteDataStore: self.websiteDataStore, requestedURL: requestedURL)
+        tab.webView.navigationDelegate = self.webViewNavigationDelegate
+        tab.webView.uiDelegate = self.webViewUIDelegate
+        self.installWebView(tab.webView)
+        tab.observeNavigationState { [weak self, weak tab] in
+            guard let self, let tab else { return }
+            self.refreshTab(tab)
+        }
         return tab
     }
 
-    private func dispose(_ tab: DashboardLinkBrowserTab) {
-        tab.observations.forEach { $0.invalidate() }
-        tab.observations.removeAll()
-        tab.webView.navigationDelegate = nil
-        tab.webView.uiDelegate = nil
-        tab.webView.stopLoading()
-        tab.webView.removeFromSuperview()
-    }
-
-    private func tab(owning webView: WKWebView) -> DashboardLinkBrowserTab? {
+    private func tab(owning webView: WKWebView) -> DashboardBrowserTab? {
         self.tabs.first { $0.webView === webView }
     }
 
@@ -333,7 +235,7 @@ final class DashboardLinkBrowserView: NSView {
         }
     }
 
-    private func refreshTab(_ tab: DashboardLinkBrowserTab) {
+    private func refreshTab(_ tab: DashboardBrowserTab) {
         self.tabBar.updateTab(
             id: tab.id,
             title: self.displayTitle(for: tab),
@@ -343,7 +245,7 @@ final class DashboardLinkBrowserView: NSView {
         }
     }
 
-    private func displayTitle(for tab: DashboardLinkBrowserTab) -> String {
+    private func displayTitle(for tab: DashboardBrowserTab) -> String {
         if let title = tab.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
             return title
         }
@@ -362,39 +264,6 @@ final class DashboardLinkBrowserView: NSView {
         self.closeButton.target = self
         self.closeButton.action = #selector(self.close)
         self.tabBar.delegate = self
-    }
-
-    private func observeNavigationState(for tab: DashboardLinkBrowserTab) {
-        let webView = tab.webView
-        // WebKit updates these properties after some navigation delegate callbacks.
-        // KVO also catches same-document SPA URL changes that skip didFinish.
-        tab.observations = [
-            webView.observe(\.canGoBack, options: [.new]) { [weak self, weak tab] _, _ in
-                Task { @MainActor in
-                    guard let self, let tab else { return }
-                    self.refreshTab(tab)
-                }
-            },
-            webView.observe(\.canGoForward, options: [.new]) { [weak self, weak tab] _, _ in
-                Task { @MainActor in
-                    guard let self, let tab else { return }
-                    self.refreshTab(tab)
-                }
-            },
-            webView.observe(\.url, options: [.new]) { [weak self, weak webView] _, _ in
-                Task { @MainActor in
-                    guard let self, let webView else { return }
-                    self.navigationURLDidChange(for: webView)
-                }
-            },
-            webView.observe(\.title, options: [.new]) { [weak self, weak tab, weak webView] _, _ in
-                Task { @MainActor in
-                    guard let self, let tab, let webView else { return }
-                    tab.title = webView.title
-                    self.refreshTab(tab)
-                }
-            },
-        ]
     }
 
     private func buildView() {
@@ -473,7 +342,7 @@ final class DashboardLinkBrowserView: NSView {
         ])
     }
 
-    private func contextMenu(for tab: DashboardLinkBrowserTab) -> NSMenu {
+    private func contextMenu(for tab: DashboardBrowserTab) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
         let externalURL = tab.representedURL.flatMap(Self.httpURL)
@@ -519,7 +388,7 @@ final class DashboardLinkBrowserView: NSView {
         return item
     }
 
-    private func tab(for menuItem: NSMenuItem) -> DashboardLinkBrowserTab? {
+    private func tab(for menuItem: NSMenuItem) -> DashboardBrowserTab? {
         guard let id = menuItem.representedObject as? UUID else { return nil }
         return self.tabs.first { $0.id == id }
     }
