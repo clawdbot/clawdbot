@@ -11363,7 +11363,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
   it.each<{
     label: string;
     changedPath: string;
-    eventName?: "pull_request" | "workflow_dispatch";
+    eventName?: "pull_request" | "push" | "workflow_dispatch";
     releaseGate?: boolean;
     legacyOutput?: boolean;
     selectedJobs: string[];
