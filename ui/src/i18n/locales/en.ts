@@ -4,6 +4,7 @@ import type { TranslationMap } from "../lib/types.ts";
 import * as agentEn from "./en-agents.ts";
 
 export const en: TranslationMap & {
+  chat: TranslationMap & { bookmarks: TranslationMap };
   configPage: TranslationMap;
   connection: TranslationMap;
   configView: TranslationMap;
@@ -83,6 +84,7 @@ export const en: TranslationMap & {
     resizeSplitView: "Resize split view",
     delete: "Delete",
     remove: "Remove",
+    rename: "Rename",
     dismiss: "Dismiss",
     dismissAndDontShowAgain: "Dismiss and don't show again",
     unselect: "Unselect",
@@ -4614,6 +4616,7 @@ export const en: TranslationMap & {
   // Login copy lives in the lazy en-login catalog; the anchor keeps its merge target.
   login: {},
   chat: {
+    bookmarks: { title: "Bookmarks" },
     modelAccounts: {
       label: "Account for this chat",
       automatic: "Automatic (new-chat default)",

@@ -72,6 +72,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) forkFromLastCompleted = false;
   @property({ attribute: false }) archiveAllowed = false;
   @property({ attribute: false }) deleteAllowed = false;
+  @property({ attribute: false }) onOpenBookmarks?: () => void;
   @property({ attribute: false }) onOpen: () => void = () => {};
   @property({ attribute: false }) onOpenCommandPalette: () => void = () => {};
   @property({ attribute: false }) onSettingsChange: (patch: Partial<UiSettings>) => void = () => {};
@@ -136,6 +137,10 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
         this.sharing?.onOpen();
       }
       this.managementActions.focusCurrentView();
+      return;
+    }
+    if (value === "open-bookmarks") {
+      this.onOpenBookmarks?.();
       return;
     }
     if (value === "open-command-palette") {
@@ -319,6 +324,16 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
                 <span class="session-menu__text">${t("chat.openCommandPalette")}</span>
               </wa-dropdown-item>
               <div class="session-menu__separator" role="separator"></div>`
+          : nothing
+      }
+      ${
+        this.onOpenBookmarks
+          ? html`<wa-dropdown-item class="session-menu__item" value="open-bookmarks">
+              <span slot="icon" class="session-menu__icon" aria-hidden="true"
+                >${icons.bookmark}</span
+              >
+              <span class="session-menu__text">${t("chat.bookmarks.title")}</span>
+            </wa-dropdown-item>`
           : nothing
       }
       ${this.renderQuickActions("panels", this.panelActions)}

@@ -44,11 +44,24 @@ suite.define(() => {
           const rail = page.locator(".chat-position-rail");
           const markers = rail.locator(".chat-position-rail__marker");
           const preview = rail.locator(".chat-position-rail__preview-copy");
+          const track = rail.locator(".chat-position-rail__track");
+          const trackOpacity = () => track.evaluate((element) => getComputedStyle(element).opacity);
           await markers.first().waitFor();
           await expect.poll(() => markers.count()).toBe(10);
           expect(await preview.count()).toBe(0);
           expect(await rail.locator('[role="status"]').count()).toBe(0);
           await captureUiProof(suite, page, "chat-position-rail", "idle.png");
+          await expect.poll(trackOpacity).toBe("0");
+          // Enter the continuous gutter, between markers, without hitting a dot.
+          await track.hover({ position: { x: 20, y: 3 } });
+          await expect.poll(trackOpacity).toBe("1");
+          expect(await preview.count()).toBe(0);
+          await track.hover({ position: { x: 20, y: (await track.boundingBox())!.height - 3 } });
+          await expect.poll(trackOpacity).toBe("1");
+          expect(await preview.count()).toBe(0);
+          await captureUiProof(suite, page, "chat-position-rail", "edge-hover.png");
+          await page.mouse.move(600, 100);
+          await expect.poll(trackOpacity).toBe("0");
 
           const currentMarkerIndex = () =>
             markers.evaluateAll((items) =>
@@ -58,14 +71,21 @@ suite.define(() => {
             element.scrollTop = element.scrollHeight;
           });
           await expect.poll(currentMarkerIndex).toBe(9);
-          await transcript.evaluate((element) => {
-            element.scrollTop = Math.round((element.scrollHeight - element.clientHeight) / 2);
-          });
+          await transcript.hover();
+          await page.mouse.wheel(
+            0,
+            -Math.round(
+              await transcript.evaluate(
+                (element) => (element.scrollHeight - element.clientHeight) / 2,
+              ),
+            ),
+          );
           await expect.poll(currentMarkerIndex).toBeGreaterThan(0);
           await expect.poll(currentMarkerIndex).toBeLessThan(9);
-          await transcript.evaluate((element) => {
-            element.scrollTop = 0;
-          });
+          await page.mouse.wheel(
+            0,
+            -(await transcript.evaluate((element) => element.scrollHeight)),
+          );
           await expect.poll(currentMarkerIndex).toBe(0);
 
           const composer = page.locator(".agent-chat__composer-combobox textarea");
@@ -95,6 +115,15 @@ suite.define(() => {
               targetHeight: marker.getBoundingClientRect().height,
             };
           });
+          await expect.poll(trackOpacity).toBe("1");
+          const hoveredMarker = await markers.nth(4).boundingBox();
+          const hoveredTick = await markers
+            .nth(4)
+            .locator(".chat-position-rail__tick")
+            .boundingBox();
+          expect(hoveredTick!.x + hoveredTick!.width).toBeLessThan(
+            hoveredMarker!.x + hoveredMarker!.width / 2,
+          );
           expect(hoveredAppearance.opacity).toBe("1");
           expect(hoveredAppearance.background).not.toBe("rgba(0, 0, 0, 0)");
           expect(hoveredAppearance.ring).not.toBe("none");
@@ -105,6 +134,7 @@ suite.define(() => {
 
           const previewBounds = await preview.boundingBox();
           expect(previewBounds).not.toBeNull();
+          expect(previewBounds!.x + previewBounds!.width).toBeLessThan(hoveredMarker!.x);
           await page.mouse.move(
             previewBounds!.x + previewBounds!.width / 2,
             previewBounds!.y + previewBounds!.height / 2,
@@ -123,7 +153,13 @@ suite.define(() => {
           await expect.poll(() => preview.textContent()).toContain("Transcript checkpoint 32");
           await page.mouse.move(600, 100);
           await expect.poll(() => preview.count()).toBe(0);
+          await expect.poll(trackOpacity).toBe("0");
           await markers.nth(5).focus();
+          await expect.poll(trackOpacity).toBe("1");
+          await page.keyboard.press("Shift+Tab");
+          await expect.poll(trackOpacity).toBe("0");
+          await page.keyboard.press("Tab");
+          await expect.poll(trackOpacity).toBe("1");
           await expect.poll(() => preview.textContent()).toContain("Transcript checkpoint 39");
           await markers.nth(5).press("ArrowDown");
           await expect
@@ -157,6 +193,19 @@ suite.define(() => {
           await markers.first().press("End");
           await markers.last().press("Enter");
           await expect.poll(currentMarkerIndex).toBe(9);
+
+          // Mouse activation must not latch the rail open after leaving the edge.
+          await markers.last().click();
+          await page.mouse.move(600, 100);
+          await expect.poll(trackOpacity).toBe("0");
+          await preview.waitFor({ state: "hidden" });
+          await captureUiProof(suite, page, "chat-position-rail", "pointer-exit.png");
+          await track.hover({ position: { x: 20, y: 3 } });
+          await expect.poll(trackOpacity).toBe("1");
+          await preview.waitFor({ state: "hidden" });
+          await page.mouse.move(600, 100);
+          await page.keyboard.press("ArrowDown");
+          await expect.poll(trackOpacity).toBe("1");
 
           // Pane-local width matters even inside an otherwise wide desktop.
           await transcript.evaluate((element) => {
@@ -239,9 +288,73 @@ suite.define(() => {
           await transcript.evaluate((element) =>
             element.style.removeProperty("--chat-thread-max-width"),
           );
+          // A shifted reading column must reserve the rail's actual (right) gutter,
+          // not a spacious left gutter that would allow markers over the text.
+          for (const columnAtLeft of [false, true]) {
+            await transcript.evaluate(
+              (element, { alignLeft, eventName }) => {
+                const inner = element.querySelector<HTMLElement>(".chat-thread-inner")!;
+                inner.style.marginLeft = alignLeft ? "32px" : "auto";
+                inner.style.marginRight = alignLeft ? "auto" : "32px";
+                element.dispatchEvent(
+                  new CustomEvent(eventName, {
+                    bubbles: true,
+                    detail: { widthChanged: false },
+                  }),
+                );
+              },
+              { alignLeft: columnAtLeft, eventName: SIDEBAR_GEOMETRY_COMMIT_EVENT },
+            );
+            await markers.first().waitFor({ state: columnAtLeft ? "visible" : "hidden" });
+          }
+          await page.evaluate(() => {
+            document.documentElement.dir = "rtl";
+          });
+          await markers.first().waitFor({ state: "visible" });
+          await expect
+            .poll(() =>
+              markers.first().evaluate((marker) => {
+                const inner = marker.closest(".chat-thread")!.querySelector(".chat-thread-inner")!;
+                return marker.getBoundingClientRect().left - inner.getBoundingClientRect().right;
+              }),
+            )
+            .toBeGreaterThanOrEqual(8);
+          expect(
+            await rail.locator(".chat-position-rail__track").evaluate((element) => ({
+              right: getComputedStyle(element).borderRightWidth,
+              left: getComputedStyle(element).borderLeftWidth,
+            })),
+          ).toEqual({ right: "0px", left: "1px" });
           expect(pageErrors).toEqual([]);
         },
       );
     },
   );
+  it("keeps the rail usable on a wide screen without mouse hover", async () => {
+    await suite.withPage(
+      { hasTouch: true, viewport: { width: 1440, height: 900 }, serviceWorkers: "block" },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          historyMessages: [0, 1].map((index) => ({
+            role: index === 0 ? "user" : "assistant",
+            content: "Touch checkpoint " + index,
+            timestamp: Date.UTC(2026, 8, 7, 12, index),
+            __openclaw: { id: "touch-rail-" + index, seq: index + 1 },
+          })),
+        });
+        await page.goto(suite.server.baseUrl + "chat");
+        const rail = page.locator(".chat-position-rail");
+        await rail.locator(".chat-position-rail__marker").first().waitFor();
+        expect(await page.evaluate(() => matchMedia("(hover: hover)").matches)).toBe(false);
+        expect(
+          await rail
+            .locator(".chat-position-rail__track")
+            .evaluate((element) => getComputedStyle(element).opacity),
+        ).toBe("1");
+        await rail.locator(".chat-position-rail__marker").first().tap();
+        await rail.locator(".chat-position-rail__preview").waitFor({ state: "hidden" });
+        await page.locator('.chat-bubble[data-entry-id="touch-rail-0"]').waitFor();
+      },
+    );
+  });
 });

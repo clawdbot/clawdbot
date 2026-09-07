@@ -105,7 +105,7 @@ export class PositionRailGutterController implements ReactiveController {
     const right =
       viewport.getBoundingClientRect().left + viewport.clientLeft + viewport.clientWidth;
     const gutter = right - inner.getBoundingClientRect().right;
-    // The rail's marker/tick footprint reaches 69px from the client edge;
+    // The rail's marker/tick footprint reaches 69px from the right client edge;
     // reserve 80px including breathing room (see message-layout.css).
     viewport.toggleAttribute("data-position-rail-gutter", gutter >= 80);
   }

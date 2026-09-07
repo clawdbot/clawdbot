@@ -2514,5 +2514,9 @@
   {
     "source": "Automation troubleshooting",
     "target": "自动化故障排查"
+  },
+  {
+    "source": "Named message bookmarks",
+    "target": "命名消息书签"
   }
 ]

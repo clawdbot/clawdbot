@@ -27,6 +27,7 @@ import type {
 import { buildCompanionQuestionPrefill } from "../../../lib/chat/companion-question.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
+import type { ChatBookmarkAccess } from "../chat-bookmarks.ts";
 import type { TurnRecapWatch } from "../chat-progress.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
@@ -47,6 +48,8 @@ import { handleChatSelectionPointerUp, removeChatSelectionPopup } from "./chat-s
 import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
 
 export type ChatThreadState = {
+  /** A navigation reveal is local to this presentation, never a saved view preference. */
+  bookmarkReveal?: { messageId: string; showToolCalls: boolean; persistCommentary: boolean };
   turnRecapWatch: TurnRecapWatch | null;
   searchOpen: boolean;
   searchQuery: string;
@@ -150,6 +153,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   onSend: () => void;
   onSetReply?: (target: MessageReplyTarget) => void;
   replyMessageAccess?: ReplyMessageAccess;
+  bookmarkAccess?: ChatBookmarkAccess;
   onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
   onForkMessage?: (entryId: string) => Promise<void> | void;
   onFocusComposer?: () => void;
@@ -213,8 +217,9 @@ export function resetTranscriptSession(paneId: string, owner?: ParentNode): void
   owner?.querySelectorAll<HTMLElement>(".chat-thread").forEach(releaseMarkdownTables);
   const state = transcriptStates.get(paneId);
   if (state) {
-    // Search input belongs to the outgoing transcript. Other fields are pane
-    // preferences or dependency memos and invalidate themselves on new props.
+    // Search and source reveals belong to the outgoing transcript. Other fields
+    // are pane preferences or dependency memos and invalidate on new props.
+    state.bookmarkReveal = undefined;
     state.searchOpen = false;
     state.searchQuery = "";
     state.searchFocusPending = false;
@@ -313,6 +318,7 @@ export function toggleTranscriptSearch(
     return;
   }
 
+  state.bookmarkReveal = undefined;
   state.searchOpen = true;
   state.searchFocusPending = true;
   const returnFocusTarget = triggerEvent?.target;

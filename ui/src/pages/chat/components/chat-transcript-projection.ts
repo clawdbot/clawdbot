@@ -83,6 +83,7 @@ export function projectChatTranscript(
   transcript: ChatTranscriptSession,
 ): ChatTranscriptProjection {
   const state = getTranscriptState(props.paneId);
+  const revealMessageId = state.bookmarkReveal?.messageId;
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const displayStream = props.stream ?? null;
   const sessionHost = props.sessionHost ?? null;
@@ -137,6 +138,7 @@ export function projectChatTranscript(
     pendingInputs: props.pendingInputs,
     showToolCalls: props.showToolCalls,
     persistCommentary: props.persistCommentary,
+    revealMessageId,
     runWorking: Boolean(props.runWorking),
     runActive: Boolean(props.runActive),
     questionPrompts: props.questionPrompts,
@@ -276,6 +278,7 @@ export function projectChatTranscript(
   const resolveReplyPreview = createReplyPreviewResolver(loadedReplySources, props);
   const sharedMessageRenderOptions = {
     presented: props.presented,
+    bookmarkAccess: props.bookmarkAccess,
     onReply: props.onSetReply
       ? (target) => state.transcriptRenderContext.onSetReply?.(target)
       : undefined,
@@ -442,7 +445,11 @@ export function projectChatTranscript(
         streamOptions: streamGroupOptions,
         renderGroupOptions,
         isWorkExpanded: (key) => expandedToolCards.get(key) ?? false,
-        onToggleWork: toggleToolCardExpanded,
+        revealMessageId,
+        onToggleWork: (key, expanded) => {
+          state.bookmarkReveal = undefined;
+          toggleToolCardExpanded(key, expanded);
+        },
         turnRecap: turnRecapByGroupKey.get(item.key),
       });
     }
@@ -687,6 +694,10 @@ export function projectChatTranscript(
     props.queuedMessageAction?.id,
     props.queuedMessageAction?.label,
     props.queuedMessageAction?.onAction,
+    revealMessageId,
+    props.bookmarkAccess?.revision ?? 0,
+    Boolean(props.bookmarkAccess?.toggle),
+    Boolean(props.bookmarkAccess?.edit),
     props.replyMessageAccess?.revision ?? 0,
     props.replyMessageAccess?.navigationId ?? "",
     turnRecap === null ? "" : `${turnRecap.runtimeMs}:${turnRecap.outputTokens ?? ""}`,

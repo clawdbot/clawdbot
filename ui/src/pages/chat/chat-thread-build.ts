@@ -52,6 +52,7 @@ import {
   insertionIndexesForBounds,
   type ChatProjection,
   messageMatchesSearchQuery,
+  persistedMessageEntryId,
   queuedSendThreadMessage,
   rawMessageTimestamp,
   insertChatItemsByTimestamp,
@@ -96,6 +97,8 @@ export type BuildChatItemsProps = {
   pendingInputs?: ChatPendingInputsPage["items"];
   showToolCalls: boolean;
   persistCommentary?: boolean;
+  /** Only this persisted source may bypass the commentary display preference. */
+  revealMessageId?: string;
   /** True while the agent is visibly working (isChatRunWorking). */
   runWorking?: boolean;
   /** True while the current session has an abortable live run. */
@@ -134,7 +137,10 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     props.messages.filter(
       (message) =>
         !isAssistantHeartbeatAckForDisplay(message) &&
-        (props.persistCommentary !== false || !isKeyedAssistantStreamFallbackMessage(message)),
+        (props.persistCommentary !== false ||
+          (props.revealMessageId !== undefined &&
+            persistedMessageEntryId(message) === props.revealMessageId) ||
+          !isKeyedAssistantStreamFallbackMessage(message)),
     ),
   );
   const searchFiltering = props.searchOpen === true && Boolean(props.searchQuery?.trim());

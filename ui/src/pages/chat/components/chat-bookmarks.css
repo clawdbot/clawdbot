@@ -1,0 +1,151 @@
+.chat-bookmarks-dialog {
+  width: min(560px, calc(100vw - 32px));
+}
+
+.chat-bookmarks-dialog > .field + .field {
+  margin-top: 12px;
+}
+
+.chat-bookmarks-dialog input:not([type="checkbox"]) {
+  --focus-ring: inset 0 0 0 2px var(--ring);
+}
+
+.chat-bookmarks-dialog__list {
+  list-style: none;
+  padding: 0;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.chat-bookmarks-dialog__item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-block: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.chat-bookmarks-dialog__source {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  text-align: start;
+}
+
+.chat-bookmark-name {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  max-width: 18em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-bookmark-btn[aria-pressed="true"],
+.chat-bookmark-name:hover {
+  color: var(--accent);
+}
+
+.chat-position-rail__bookmark {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  color: var(--accent);
+  background: var(--panel);
+}
+
+.chat-position-rail__bookmark svg {
+  width: 16px;
+  height: 16px;
+  transform: scaleX(-1);
+}
+
+.chat-position-rail__marker--selected .chat-position-rail__bookmark {
+  color: var(--text);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 50%;
+}
+.chat-bookmarks-dialog--history {
+  display: flex;
+  flex-direction: column;
+  max-height: min(90dvh, calc(100dvh - 48px));
+  overflow: hidden;
+}
+.chat-bookmarks-dialog__history-toolbar,
+.chat-bookmarks-dialog__history-title,
+.chat-bookmarks-dialog__message-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.chat-bookmarks-dialog__history-toolbar .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.chat-bookmarks-dialog__history-toolbar svg {
+  width: 16px;
+  height: 16px;
+}
+.chat-bookmarks-dialog__history-title h2 {
+  overflow-wrap: anywhere;
+  min-width: 0;
+  margin-block: 12px 6px;
+}
+.chat-bookmarks-dialog__readonly {
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 7px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.chat-bookmarks-dialog__history-notice {
+  flex-shrink: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.chat-bookmarks-dialog__history-body {
+  min-height: 0;
+  overflow: auto;
+}
+.chat-bookmarks-dialog__history-message {
+  margin-block: 10px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow-wrap: anywhere;
+}
+.chat-bookmarks-dialog__history-message--target {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+}
+.chat-bookmarks-dialog__message-label {
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.chat-bookmarks-dialog__history-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex-shrink: 0;
+  justify-content: space-between;
+  margin-top: 12px;
+}

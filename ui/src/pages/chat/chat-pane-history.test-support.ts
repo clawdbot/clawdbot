@@ -4,6 +4,7 @@ import type { SessionCatalogTranscriptItem } from "../../../../packages/gateway-
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import type { ChatBookmarkAccess, ChatBookmarks } from "./chat-bookmarks.ts";
 import "./chat-pane.ts";
 import {
   createInitializationContext,
@@ -41,6 +42,11 @@ export type TestChatPane = HTMLElement & {
   state: ChatPageHost;
   connectedClient: GatewayBrowserClient | null;
   connectionGeneration: number;
+  paneId: string;
+  presentationId: string;
+  syncBookmarks: () => ChatBookmarkAccess | undefined;
+  readonly bookmarks: ChatBookmarks;
+  renderBookmarksDialog: () => unknown;
   sessionKey: string;
   catalogItemMessage: (item: SessionCatalogTranscriptItem) => Record<string, unknown> | null;
   handleTranscriptScroll: (event: Event) => void;

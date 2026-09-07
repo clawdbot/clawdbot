@@ -34,6 +34,8 @@ export type ArtifactDownloadResolver = (params: {
 }) => Promise<{ url: string; expiresAt?: string } | null>;
 
 export type ImageRenderOptions = {
+  /** Passive readers must not offer or dispatch media-policy grants. */
+  allowPermissionRequests?: boolean;
   sessionKey?: string;
   agentId?: string;
   policyKey?: string;

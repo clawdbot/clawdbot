@@ -604,6 +604,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       sessionMenuAction:
         row && this.state
           ? html`<openclaw-chat-header-session-menu
+              .onOpenBookmarks=${this.bookmarks.scope ? () => this.bookmarks.show() : undefined}
               .session=${{
                 label:
                   normalizeOptionalString(row.label) ??
@@ -689,7 +690,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       onClosePane: this.onClosePane,
     });
     const continueCommand = this.currentContinueInTerminalCommand(row);
-    return html`${header}${
+    return html`${header}${this.renderBookmarksDialog()}${
       continueCommand
         ? renderContinueInTerminalDialog({
             command: continueCommand,

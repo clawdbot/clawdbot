@@ -118,7 +118,6 @@ export function mergeUserPreferences(
     return;
   }
   const db = getNodeSqliteKysely<UserPreferencesDatabase>(database);
-  const targetKeys = readPreferenceKeys(database, targetProfileId);
   const rows = executeSqliteQuerySync(
     database,
     db
@@ -127,13 +126,9 @@ export function mergeUserPreferences(
       .where("profile_id", "=", sourceProfileId)
       .orderBy("pref_key", "asc"),
   ).rows;
+  // Consolidation retains existing data even above the new-key quota.
+  // Conflicts preserve the target; truncating here would lose source preferences.
   for (const row of rows) {
-    if (targetKeys.has(row.pref_key)) {
-      continue;
-    }
-    if (targetKeys.size >= USER_PREFS_PROFILE_KEY_LIMIT) {
-      break;
-    }
     executeSqliteQuerySync(
       database,
       db
@@ -141,7 +136,6 @@ export function mergeUserPreferences(
         .values({ ...row, profile_id: targetProfileId })
         .onConflict((conflict) => conflict.columns(["profile_id", "pref_key"]).doNothing()),
     );
-    targetKeys.add(row.pref_key);
   }
   executeSqliteQuerySync(
     database,
@@ -219,7 +213,11 @@ export function setUserPreferences(
       const nextKeys = new Set(currentKeys);
       deletionKeys.forEach((key) => nextKeys.delete(key));
       serialized.forEach((entry) => nextKeys.add(entry.prefKey));
-      if (serialized.length > 0 && nextKeys.size > USER_PREFS_PROFILE_KEY_LIMIT) {
+      // Over-quota merges remain editable; only additions need free capacity.
+      if (
+        nextKeys.size > USER_PREFS_PROFILE_KEY_LIMIT &&
+        serialized.some((entry) => !currentKeys.has(entry.prefKey))
+      ) {
         return err({
           code: "profile-key-limit",
           limit: USER_PREFS_PROFILE_KEY_LIMIT,

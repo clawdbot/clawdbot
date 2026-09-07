@@ -176,7 +176,10 @@ class MessageImageResourceDirective extends AsyncDirective {
         reason,
         path: isLocalAssistantAttachmentSource(image.url) ? image.url : undefined,
         onAllow:
-          !decodeFailed && availability.status === "unavailable" && availability.canAllow
+          options?.allowPermissionRequests !== false &&
+          !decodeFailed &&
+          availability.status === "unavailable" &&
+          availability.canAllow
             ? () => retryAssistantAttachmentAvailability(image.url, subscriptionOptions, true)
             : undefined,
         onRetry:

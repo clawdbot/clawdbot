@@ -186,7 +186,7 @@ suite.define(() => {
     }
   });
 
-  it("stacks follow-up suggestions without obscuring the composer", async () => {
+  it("stacks follow-up suggestions without obscuring the composer or position rail", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -201,6 +201,12 @@ suite.define(() => {
         "taskSuggestions.accept",
         "taskSuggestions.dismiss",
       ],
+      historyMessages: [0, 1].map((index) => ({
+        role: index === 0 ? "user" : "assistant",
+        content: "Rail checkpoint " + index,
+        timestamp: Date.UTC(2026, 8, 7, 12, index),
+        __openclaw: { id: "suggestion-rail-" + index, seq: index + 1 },
+      })),
       methodResponses: {
         "taskSuggestions.list": {
           suggestions: Array.from({ length: 12 }, (_, index) => ({
@@ -223,6 +229,31 @@ suite.define(() => {
       await tray.waitFor({ state: "visible", timeout: 10_000 });
       expect(await tray.locator(".task-suggestion:visible").count()).toBe(1);
       expect(await tray.getByText("1 / 12", { exact: true }).count()).toBe(1);
+      const marker = page.locator(".chat-position-rail__marker").first();
+      await marker.waitFor();
+      expect(
+        await marker.evaluate((element) => {
+          const box = element.getBoundingClientRect();
+          return element.contains(
+            document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2),
+          );
+        }),
+      ).toBe(true);
+      await marker.hover();
+      const preview = page.locator(".chat-position-rail__preview");
+      await preview.waitFor();
+      expect(
+        await preview.evaluate((element) => {
+          const box = element.getBoundingClientRect();
+          return element.contains(
+            document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2),
+          );
+        }),
+      ).toBe(true);
+      await captureUiProof(suite, page, "task-suggestions", "right-rail-coexistence.png");
+      await marker.click();
+      await page.mouse.move(600, 650);
+      await preview.waitFor({ state: "hidden" });
       await tray.getByRole("button", { name: "Next suggested task" }).click();
       expect(await tray.getByText("2 / 12", { exact: true }).count()).toBe(1);
 

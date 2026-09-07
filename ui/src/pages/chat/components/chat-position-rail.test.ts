@@ -168,7 +168,11 @@ describe("conversation position rail", () => {
       transcript.hostConnected();
       expect(markers()).toHaveLength(10);
       expect(preview()).toBeUndefined();
-      markers()[4]!.focus();
+      markers()[5]!.focus();
+      markers()[5]!.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true }),
+      );
+      expect(document.activeElement).toBe(markers()[4]);
       expect(preview()).toContain("Checkpoint 5");
       markers()[2]!.dispatchEvent(new Event("pointerenter"));
       expect(preview()).toContain("Checkpoint 2");
@@ -189,7 +193,10 @@ describe("conversation position rail", () => {
         new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
       );
       expect(preview()).toBeUndefined();
-      markers()[0]!.focus();
+      focused!.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Home", bubbles: true, cancelable: true }),
+      );
+      expect(document.activeElement).toBe(markers()[0]);
       expect(preview()).toBeDefined();
       render(nothing, container);
       const escapeAfterRemoval = new KeyboardEvent("keydown", {

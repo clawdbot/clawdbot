@@ -328,7 +328,9 @@ function resolveAttachmentSource(
       reason:
         assistantAvailability.status === "unavailable" ? assistantAvailability.reason : undefined,
       onAllow:
-        assistantAvailability.status === "unavailable" && assistantAvailability.canAllow
+        options.allowPermissionRequests !== false &&
+        assistantAvailability.status === "unavailable" &&
+        assistantAvailability.canAllow
           ? () => retryAssistantAttachmentAvailability(attachment.url, options, true)
           : undefined,
       onRetry:

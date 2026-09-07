@@ -5,11 +5,16 @@ import { directive } from "lit/directive.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { styleMap } from "lit/directives/style-map.js";
+import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerBookmarksEnglish } from "../../../i18n/locales/en-bookmarks.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
+import type { ChatBookmark, ChatBookmarkAccess } from "../chat-bookmarks.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { resolveMessageReplyText } from "./chat-message-markdown.ts";
 import type { ChatTranscriptSession } from "./chat-transcript-session.ts";
+
+registerBookmarksEnglish();
 
 const MAX_POSITION_MARKERS = 10;
 const PREVIEW_LENGTH = 140;
@@ -74,10 +79,14 @@ class ChatPositionRailDirective extends AsyncDirective {
 
   render({
     messages,
+    sourceMessages = messages,
+    bookmarkAccess,
     transcript,
     requestUpdate,
   }: {
     messages: readonly unknown[];
+    sourceMessages?: readonly unknown[];
+    bookmarkAccess?: ChatBookmarkAccess;
     transcript: ChatTranscriptSession;
     requestUpdate: () => void;
   }) {
@@ -86,28 +95,30 @@ class ChatPositionRailDirective extends AsyncDirective {
       this.session = transcript;
       this.interaction = initialInteraction();
     }
-    const candidates = messages.flatMap((message) => {
+    const bookmarkedIds = new Set(bookmarkAccess?.bookmarks.map((item) => item.messageId));
+    const landmarkIds = new Set(messages.map(persistedMessageEntryId));
+    const sources = bookmarkAccess?.bookmarks.length ? sourceMessages : messages;
+    const candidates = sources.flatMap((message) => {
       const id = persistedMessageEntryId(message);
-      return id ? [{ id, message }] : [];
+      return id && (landmarkIds.has(id) || bookmarkedIds.has(id)) ? [{ id, message }] : [];
     });
+    const candidateIndexes = new Map(candidates.map((candidate, index) => [candidate.id, index]));
     const count = Math.min(candidates.length, MAX_POSITION_MARKERS);
-    if (count < 2) {
+    if (count === 0 || (count < 2 && !bookmarkAccess?.bookmarks.length)) {
       this.disconnected();
       return nothing;
     }
     const interaction = this.interaction;
-    if (!candidates.some((candidate) => candidate.id === interaction.focusedId)) {
+    if (!candidateIndexes.has(interaction.focusedId ?? "")) {
       interaction.focusedId = null;
     }
-    if (!candidates.some((candidate) => candidate.id === interaction.hoveredId)) {
+    if (!candidateIndexes.has(interaction.hoveredId ?? "")) {
       interaction.hoveredId = null;
     }
     const indexes = Array.from({ length: count }, (_, index) =>
-      Math.round((index * (candidates.length - 1)) / (count - 1)),
+      count === 1 ? 0 : Math.round((index * (candidates.length - 1)) / (count - 1)),
     );
-    const focusedIndex = candidates.findIndex(
-      (candidate) => candidate.id === interaction.focusedId,
-    );
+    const focusedIndex = candidateIndexes.get(interaction.focusedId ?? "") ?? -1;
     if (focusedIndex >= 0 && !indexes.includes(focusedIndex)) {
       // Appends/prepends can change the sample. Keep the focused DOM node while
       // retaining both endpoints and the same bounded number of landmarks.
@@ -122,21 +133,56 @@ class ChatPositionRailDirective extends AsyncDirective {
       indexes[replacement] = focusedIndex;
       indexes.sort((left, right) => left - right);
     }
+    // Keep hit targets disjoint and bounded. Nearby bookmarks share a landmark;
+    // its tooltip names the group, and successive activations cycle its sources.
+    const bookmarkBuckets: ChatBookmark[][] = indexes.map(() => []);
+    for (const bookmark of bookmarkAccess?.bookmarks ?? []) {
+      const candidateIndex = candidateIndexes.get(bookmark.messageId) ?? -1;
+      // Older, not-yet-loaded sources share the first landmark and use the
+      // same fenced pagination path as the native bookmark dialog.
+      let bucket = 0;
+      for (let index = 1; index < indexes.length; index++) {
+        if (
+          Math.abs(indexes[index]! - candidateIndex) < Math.abs(indexes[bucket]! - candidateIndex)
+        ) {
+          bucket = index;
+        }
+      }
+      bookmarkBuckets[bucket]!.push(bookmark);
+    }
     // Resolve previews only for the bounded set of visible landmarks.
     const markers = indexes.map((candidateIndex, index) => {
       const candidate = candidates[candidateIndex]!;
       const role = normalizeMessage(candidate.message).role;
+      const bookmarks = bookmarkBuckets[index]!;
+      const firstBookmark = bookmarks[0];
+      const previewMessage = firstBookmark
+        ? candidates[candidateIndexes.get(firstBookmark.messageId) ?? -1]?.message
+        : candidate.message;
+      // A saved point may share a nearby sample. Never preview that other message.
+      // Dense groups keep bounded copy while the library exposes every name.
+      const preview =
+        bookmarks.length > 1
+          ? bookmarks
+              .slice(0, 2)
+              .map((item) => item.name)
+              .join(" · ") + (bookmarks.length > 2 ? " · …" : "")
+          : previewMessage === undefined
+            ? (firstBookmark?.name ?? "")
+            : resolveMessageReplyText(previewMessage);
       return {
         id: candidate.id,
-        label: t(
-          role === "user"
-            ? "chat.thread.positionUserMessage"
-            : "chat.thread.positionAssistantMessage",
-        ),
-        preview: truncateUtf16Safe(
-          resolveMessageReplyText(candidate.message).replace(/\s+/g, " ").trim(),
-          PREVIEW_LENGTH,
-        ),
+        bookmarks,
+        label:
+          (bookmarks.length > 1
+            ? t("chat.bookmarks.nearby", { count: String(bookmarks.length) })
+            : firstBookmark?.name) ||
+          t(
+            role === "user"
+              ? "chat.thread.positionUserMessage"
+              : "chat.thread.positionAssistantMessage",
+          ),
+        preview: truncateUtf16Safe(preview.replace(/\s+/g, " ").trim(), PREVIEW_LENGTH),
         position: `${((index + 0.5) / count) * 100}%`,
       };
     });
@@ -176,6 +222,7 @@ class ChatPositionRailDirective extends AsyncDirective {
     return html`
       <aside
         class="chat-position-rail"
+        ?data-keyboard-focus=${interaction.focusedId !== null}
         aria-label=${t("chat.thread.positionRail")}
         @pointerleave=${() => {
           interaction.hoveredId = null;
@@ -193,7 +240,7 @@ class ChatPositionRailDirective extends AsyncDirective {
                   : Math.max(0, 1 - Math.abs(index - previewIndex) / PROXIMITY_RADIUS);
               return html`
                 <button
-                  class="chat-position-rail__marker ${marker.id === activeMarker.id ? "chat-position-rail__marker--current" : ""}"
+                  class="chat-position-rail__marker ${marker.id === activeMarker.id ? "chat-position-rail__marker--current" : ""} ${marker.bookmarks.length ? "chat-position-rail__marker--bookmark" : ""} ${marker.bookmarks.some((item) => item.id === bookmarkAccess?.selectedId) ? "chat-position-rail__marker--selected" : ""}"
                   style=${styleMap({
                     "--chat-position-marker": marker.position,
                     "--chat-position-proximity-opacity": String(0.18 + 0.72 * proximity),
@@ -203,15 +250,24 @@ class ChatPositionRailDirective extends AsyncDirective {
                   data-position-marker-id=${marker.id}
                   tabindex=${marker.id === rovingMarker.id ? "0" : "-1"}
                   aria-label=${t("chat.thread.positionMarker", { position: String(index + 1), count: String(count), label: marker.label })}
-                  aria-description=${`${marker.preview}. ${t("chat.thread.positionMarkerHint")}`}
+                  aria-description=${marker.bookmarks.length > 1 ? t("chat.bookmarks.collision", { count: String(marker.bookmarks.length) }) : `${marker.preview}. ${t("chat.thread.positionMarkerHint")}`}
                   aria-current=${marker.id === activeMarker.id ? "true" : "false"}
                   @pointerenter=${() => {
                     interaction.hoveredId = marker.id;
                     interaction.dismissed = false;
                     requestUpdate();
                   }}
-                  @focus=${() => {
-                    interaction.focusedId = marker.id;
+                  @pointerdown=${() => {
+                    // Reusing the keyboard-focused button does not emit another focus event.
+                    interaction.focusedId = null;
+                    requestUpdate();
+                  }}
+                  @focus=${(event: FocusEvent) => {
+                    interaction.focusedId =
+                      event.currentTarget instanceof HTMLButtonElement &&
+                      event.currentTarget.matches(":focus-visible")
+                        ? marker.id
+                        : null;
                     interaction.rovingId = marker.id;
                     interaction.dismissed = false;
                     requestUpdate();
@@ -227,11 +283,31 @@ class ChatPositionRailDirective extends AsyncDirective {
                       )
                     ) {
                       moveFocus(event, index);
+                      interaction.focusedId = interaction.rovingId;
+                      interaction.dismissed = false;
+                      requestUpdate();
                     }
                   }}
-                  @click=${() => transcript.revealMessage(marker.id)}
+                  @click=${() => {
+                    if (marker.bookmarks.length && bookmarkAccess) {
+                      const selected = marker.bookmarks.findIndex(
+                        (item) => item.id === bookmarkAccess.selectedId,
+                      );
+                      bookmarkAccess.open(
+                        marker.bookmarks[(selected + 1) % marker.bookmarks.length]!,
+                      );
+                    } else {
+                      transcript.revealMessage(marker.id);
+                    }
+                  }}
                 >
-                  <span class="chat-position-rail__dot" aria-hidden="true"></span>
+                  ${
+                    marker.bookmarks.length
+                      ? html`<span class="chat-position-rail__bookmark" aria-hidden="true"
+                          >${icons.claw}</span
+                        >`
+                      : html`<span class="chat-position-rail__dot" aria-hidden="true"></span>`
+                  }
                   <span class="chat-position-rail__tick" aria-hidden="true"></span>
                 </button>
               `;

@@ -147,6 +147,8 @@ function renderTranscriptShell(
       >
       ${renderChatPositionRail({
         messages: projection.positionMessages,
+        bookmarkAccess: props.bookmarkAccess,
+        sourceMessages: props.messages,
         transcript,
         requestUpdate: props.onRequestUpdate ?? (() => {}),
       })}
