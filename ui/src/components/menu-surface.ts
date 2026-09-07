@@ -1,4 +1,4 @@
-import { hasNativeBrowserBridge } from "../app/native-browser-bridge.ts";
+import { hasNativeBrowserBridge } from "../app/native-browser-host.ts";
 import { acquireNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 
 const occludingSurfaces = new WeakSet<HTMLElement>();

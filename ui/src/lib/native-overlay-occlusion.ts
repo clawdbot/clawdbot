@@ -1,4 +1,4 @@
-import { hasNativeBrowserBridge } from "../app/native-browser-bridge.ts";
+import { hasNativeBrowserBridge } from "../app/native-browser-host.ts";
 
 const listeners = new Set<(occluded: boolean) => void>();
 let activeOverlays = 0;

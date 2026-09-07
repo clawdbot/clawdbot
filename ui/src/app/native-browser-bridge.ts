@@ -18,6 +18,9 @@
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { BrowserInspectedNode } from "../components/browser/browser-client.ts";
+import { hasNativeBrowserBridge } from "./native-browser-host.ts";
+
+export { hasNativeBrowserBridge } from "./native-browser-host.ts";
 
 export type NativeBrowserTab = {
   id: string;
@@ -70,9 +73,6 @@ function nativeWindow(): NativeBrowserWindow | undefined {
 }
 function handler() {
   return nativeWindow()?.webkit?.messageHandlers?.openclawBrowser;
-}
-export function hasNativeBrowserBridge(): boolean {
-  return typeof handler()?.postMessage === "function";
 }
 function nonempty(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.trim() === value;

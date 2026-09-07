@@ -22,7 +22,7 @@ import {
   type DesktopPanelToggleDetail,
 } from "./panel-toggle-contract.ts";
 
-vi.mock("../app/native-browser-bridge.ts", () => ({
+vi.mock("../app/native-browser-host.ts", () => ({
   hasNativeBrowserBridge: () => true,
 }));
 

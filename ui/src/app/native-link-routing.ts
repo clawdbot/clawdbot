@@ -10,7 +10,7 @@ import {
   externalHttpLinkFromEvent,
   shouldHandleNavigationClick,
 } from "../lib/navigation-click.ts";
-import { hasNativeBrowserBridge } from "./native-browser-bridge.ts";
+import { hasNativeBrowserBridge } from "./native-browser-host.ts";
 
 type NativeLinkTarget = "external";
 

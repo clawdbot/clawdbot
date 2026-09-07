@@ -5,7 +5,7 @@ import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion
 import { promoteToPopoverTopLayer } from "./menu-surface.ts";
 
 const bridge = vi.hoisted(() => ({ available: false }));
-vi.mock("../app/native-browser-bridge.ts", () => ({
+vi.mock("../app/native-browser-host.ts", () => ({
   hasNativeBrowserBridge: () => bridge.available,
 }));
 

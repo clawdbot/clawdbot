@@ -7,7 +7,7 @@ import {
 } from "./native-overlay-occlusion.ts";
 
 const bridge = vi.hoisted(() => ({ available: true }));
-vi.mock("../app/native-browser-bridge.ts", () => ({
+vi.mock("../app/native-browser-host.ts", () => ({
   hasNativeBrowserBridge: () => bridge.available,
 }));
 

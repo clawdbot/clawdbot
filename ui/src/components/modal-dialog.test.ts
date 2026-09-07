@@ -11,7 +11,7 @@ import {
 } from "../test-helpers/modal-dialog.ts";
 import { OpenClawModalDialog } from "./modal-dialog.ts";
 
-vi.mock("../app/native-browser-bridge.ts", () => ({
+vi.mock("../app/native-browser-host.ts", () => ({
   hasNativeBrowserBridge: () => true,
 }));
 

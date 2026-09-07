@@ -1,6 +1,6 @@
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import type { ApplicationContext } from "./context.ts";
-import { hasNativeBrowserBridge } from "./native-browser-bridge.ts";
+import { hasNativeBrowserBridge } from "./native-browser-host.ts";
 import { hasOperatorAdminAccess } from "./operator-access.ts";
 
 type GatewaySnapshot = Pick<ApplicationContext["gateway"]["snapshot"], "phase" | "hello">;
