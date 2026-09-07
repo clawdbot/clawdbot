@@ -296,11 +296,23 @@ describe("xai provider plugin", () => {
       subscription: true,
       resolves: true,
     },
+    {
+      route: "equivalent Grok proxy URL",
+      baseUrl: "https://CLI-CHAT-PROXY.GROK.COM:443/v1/",
+      subscription: true,
+      resolves: true,
+    },
     { route: "native API", baseUrl: "https://api.x.ai/v1", subscription: false, resolves: true },
     { route: "default API", baseUrl: undefined, subscription: false, resolves: true },
     {
       route: "unavailable Grok token",
       baseUrl: "https://cli-chat-proxy.grok.com/v1",
+      subscription: true,
+      resolves: false,
+    },
+    {
+      route: "unavailable token at an equivalent Grok proxy URL",
+      baseUrl: "https://CLI-CHAT-PROXY.GROK.COM:443/v1/",
       subscription: true,
       resolves: false,
     },
@@ -356,11 +368,14 @@ describe("xai provider plugin", () => {
       : "https://api.x.ai/v1";
     expect(result.provider.baseUrl).toBe(expectedBaseUrl);
     expect(result.provider.auth).toBe(subscription ? "token" : undefined);
-    expect(fetchMock.mock.calls.map(([url]) => url).toSorted()).toEqual(
+    const requestedUrls = fetchMock.mock.calls.map(([input]) =>
+      typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+    );
+    expect(requestedUrls.toSorted((left, right) => left.localeCompare(right))).toEqual(
       (subscription
         ? [`${expectedBaseUrl}/models`, `${expectedBaseUrl}/settings`]
         : [`${expectedBaseUrl}/models`]
-      ).toSorted(),
+      ).toSorted((left, right) => left.localeCompare(right)),
     );
     for (const [, init] of fetchMock.mock.calls) {
       expect(new Headers(init?.headers).get("Authorization")).toBe(`Bearer ${apiKey}`);

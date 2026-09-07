@@ -11,7 +11,7 @@ import {
 import { asOptionalRecord, filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { XAI_BASE_URL } from "./model-definitions.js";
 import { resolveXaiOAuthAutoModelId } from "./model-id.js";
-import { XAI_GROK_OAUTH_BASE_URL } from "./provider-catalog.js";
+import { isXaiGrokProxyBaseUrl } from "./provider-catalog.js";
 import { isXaiProviderId } from "./provider-id.js";
 
 const XAI_FAST_MODEL_IDS = new Map<string, string>([
@@ -33,7 +33,11 @@ function createXaiGrokOAuthHeadersWrapper(
   const underlying = baseStreamFn ?? streamSimple;
   const normalizedClientVersion = clientVersion?.trim();
   return (model, context, options) => {
-    if (!normalizedClientVersion || !isXaiEndpoint(model, XAI_GROK_OAUTH_BASE_URL)) {
+    if (
+      !normalizedClientVersion ||
+      !isXaiProviderId(model.provider) ||
+      !isXaiGrokProxyBaseUrl(model.baseUrl)
+    ) {
       return underlying(model, context, options);
     }
     // Keep the selected alias stable through auth materialization; resolve only on the wire.

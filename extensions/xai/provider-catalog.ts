@@ -38,6 +38,17 @@ const XAI_UNKNOWN_MODEL_COST = {
   cacheWrite: 0,
 } satisfies ModelDefinitionConfig["cost"];
 
+export function isXaiGrokProxyBaseUrl(baseUrl: string | undefined): boolean {
+  if (!baseUrl) {
+    return false;
+  }
+  try {
+    return new URL(baseUrl).href.replace(/\/+$/u, "") === XAI_GROK_OAUTH_BASE_URL;
+  } catch {
+    return false;
+  }
+}
+
 export function buildXaiProvider(
   api: ModelProviderConfig["api"] = "openai-responses",
 ): ModelProviderConfig {

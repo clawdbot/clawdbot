@@ -26,7 +26,7 @@ import {
   buildLiveXaiOAuthProvider,
   buildLiveXaiProvider,
   buildXaiProvider,
-  XAI_GROK_OAUTH_BASE_URL,
+  isXaiGrokProxyBaseUrl,
 } from "./provider-catalog.js";
 import { isXaiProviderId } from "./provider-id.js";
 import {
@@ -224,8 +224,7 @@ export default defineSingleProviderPluginEntry({
         // Static token storage does not distinguish subscription tokens from Console API tokens.
         const subscriptionToken =
           (runtimeAuth?.mode === "token" || auth.mode === "token") &&
-          ctx.config.models?.providers?.[PROVIDER_ID]?.baseUrl?.trim().replace(/\/+$/u, "") ===
-            XAI_GROK_OAUTH_BASE_URL;
+          isXaiGrokProxyBaseUrl(ctx.config.models?.providers?.[PROVIDER_ID]?.baseUrl);
         if (subscriptionToken && (!runtimeAuth?.apiKey || runtimeAuth.mode !== "token")) {
           return {
             providers: {},
