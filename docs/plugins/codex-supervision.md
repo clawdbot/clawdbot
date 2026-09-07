@@ -13,6 +13,14 @@ shows non-archived Codex CLI, VS Code, Atlas, and ChatGPT source sessions from
 the Gateway computer and opted-in paired computers in the normal sessions
 sidebar and Chat pane.
 
+On a multi-identity Gateway, the authenticated Gateway owner can list, search,
+and read native Gateway-local Codex threads that have not been adopted into an
+OpenClaw session. This owner-local access is read-only; it does not grant
+continuation, archive, or terminal authority. Ordinary profiles and unprofiled
+operators do not gain access, and paired-node catalogs keep their existing
+visibility rules. Adopted sessions retain creator and sharing checks, including
+draft and incognito privacy. Existing administrator access is unchanged.
+
 Supported actions depend on the source host and its capabilities:
 
 - A stored or idle local session can create a model-locked OpenClaw Chat from

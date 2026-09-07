@@ -19,7 +19,7 @@ import { resolveSessionSharingRole, resolveSessionSharingTarget } from "../sessi
 import { createSessionCatalogRequestEntrySnapshot } from "./session-catalog-entry-snapshot.js";
 import type { GatewayClient } from "./types.js";
 
-type SessionCatalogVisibility = { cacheKey: string } & (
+type SessionCatalogVisibility = { cacheKey: string; gatewayOwner: boolean } & (
   | { kind: "unrestricted" }
   | { kind: "restricted-unprofiled" }
   | { kind: "restricted-owner"; isCreator: ReturnType<typeof prepareSessionCreatorProfile> }
@@ -39,26 +39,29 @@ export function resolveSessionCatalogVisibility(
   const multipleIdentities = hasMultipleSessionSharingIdentities();
   const attachedProfileId = client?.authenticatedUserProfile?.profileId;
   const profileId = attachedProfileId === GATEWAY_OWNER_PROFILE_ID ? undefined : attachedProfileId;
+  const gatewayOwner = attachedProfileId === GATEWAY_OWNER_PROFILE_ID;
   const others = admin ? undefined : operatorSessionCap(client, config);
+  const unrestricted = admin || (!multipleIdentities && !others);
   const profileAliases = profileId ? readUserProfileAliases(profileId) : undefined;
   const cacheKey = JSON.stringify({
     admin,
+    gatewayOwner: !unrestricted && gatewayOwner,
     multipleIdentities,
     profileId: profileId ?? null,
     profileAliases: profileAliases ? [...profileAliases].toSorted() : [],
     others: others ?? null,
   });
-  if (admin || (!multipleIdentities && !others)) {
-    return { cacheKey, kind: "unrestricted" };
+  if (unrestricted) {
+    return { cacheKey, gatewayOwner, kind: "unrestricted" };
   }
   if (!profileId) {
-    return { cacheKey, kind: "restricted-unprofiled" };
+    return { cacheKey, gatewayOwner, kind: "restricted-unprofiled" };
   }
   // The cache key and this synchronous publication use the same identity facts.
   const isCreator = prepareSessionCreatorProfile(profileId, profileAliases);
   return others && others !== "none"
-    ? { cacheKey, kind: "restricted-shared", others, isCreator }
-    : { cacheKey, kind: "restricted-owner", isCreator };
+    ? { cacheKey, gatewayOwner, kind: "restricted-shared", others, isCreator }
+    : { cacheKey, gatewayOwner, kind: "restricted-owner", isCreator };
 }
 
 function visibleCatalogSessionEntry(params: {
@@ -81,26 +84,72 @@ function visibleCatalogSessionEntry(params: {
     : undefined;
 }
 
+function canReadOwnerLocalCatalog(
+  visibility: SessionCatalogVisibility,
+  audience: SessionCatalogProvider["audience"],
+): boolean {
+  return (
+    visibility.gatewayOwner &&
+    typeof audience === "object" &&
+    audience.kind === "gateway-owner-local"
+  );
+}
+
+function prepareOwnerLocalVisibility(params: {
+  host: SessionCatalogHost;
+  visibility: SessionCatalogVisibility;
+  audience?: SessionCatalogProvider["audience"];
+  requestEntries: ReturnType<typeof createSessionCatalogRequestEntrySnapshot>;
+}): (session: SessionCatalogSession | undefined) => boolean {
+  const { audience } = params;
+  if (
+    !canReadOwnerLocalCatalog(params.visibility, audience) ||
+    typeof audience !== "object" ||
+    params.host.kind !== "gateway" ||
+    params.host.nodeId
+  ) {
+    return () => false;
+  }
+  const isCurrentlyNative = audience.prepareVisibility({
+    host: params.host,
+    sessionEntries: params.requestEntries.sessionEntries,
+  });
+  return (session) =>
+    session !== undefined &&
+    !session.sessionKey &&
+    !session.createdActor &&
+    isCurrentlyNative(session);
+}
+
 export function filterSessionCatalogHost(
   host: SessionCatalogHost,
   visibility: SessionCatalogVisibility,
   params: {
     audience?: SessionCatalogProvider["audience"];
     requestEntries: ReturnType<typeof createSessionCatalogRequestEntrySnapshot>;
+    sourceHost: SessionCatalogHost;
   },
 ): SessionCatalogHost {
   if (visibility.kind === "unrestricted" || params.audience === "gateway-operators") {
     return host;
   }
-  if (visibility.kind === "restricted-unprofiled") {
-    return { ...host, sessions: [] };
-  }
+  const isOwnerLocalVisible = prepareOwnerLocalVisibility({
+    ...params,
+    host: params.sourceHost,
+    visibility,
+  });
   return {
     ...host,
-    sessions: host.sessions.filter((session) => {
-      // No sessionKey means the provider cannot link this host-owned CLI row to an adopted
-      // OpenClaw session. Keep it private from non-admin callers on multi-identity Gateways.
-      return visibleCatalogSessionEntry({ ...params, session, visibility }) !== undefined;
+    sessions: host.sessions.flatMap((session, index) => {
+      // Projection can remove stale adoption identity. Only an originally native row may
+      // use the owner-local exception; missing or replaced adopted entries stay private.
+      if (isOwnerLocalVisible(params.sourceHost.sessions[index])) {
+        return [{ ...session, canContinue: false, canArchive: false, canOpenTerminal: false }];
+      }
+      return visibility.kind !== "restricted-unprofiled" &&
+        visibleCatalogSessionEntry({ ...params, session, visibility }) !== undefined
+        ? [session]
+        : [];
     }),
   };
 }
@@ -123,7 +172,11 @@ export async function isSessionCatalogThreadVisible(params: {
   if (visibility.kind === "unrestricted") {
     return true;
   }
-  if (visibility.kind === "restricted-unprofiled" && params.audience !== "gateway-operators") {
+  if (
+    visibility.kind === "restricted-unprofiled" &&
+    params.audience !== "gateway-operators" &&
+    !(params.access === "read" && canReadOwnerLocalCatalog(visibility, params.audience))
+  ) {
     return false;
   }
   const planningEntries = createSessionCatalogRequestEntrySnapshot({
@@ -153,7 +206,11 @@ export async function isSessionCatalogThreadVisible(params: {
     if (visibility.kind === "unrestricted") {
       return true;
     }
-    if (visibility.kind === "restricted-unprofiled" && params.audience !== "gateway-operators") {
+    if (
+      visibility.kind === "restricted-unprofiled" &&
+      params.audience !== "gateway-operators" &&
+      !(params.access === "read" && canReadOwnerLocalCatalog(visibility, params.audience))
+    ) {
       return false;
     }
     const requestEntries = createSessionCatalogRequestEntrySnapshot({
@@ -163,15 +220,24 @@ export async function isSessionCatalogThreadVisible(params: {
     const instances = new Map();
     planningEntries.captureHostInstances(host, instances);
     const projected = requestEntries.projectHostSessions(host, instances);
-    const session = projected.sessions.find(
+    const sessionIndex = projected.sessions.findIndex(
       (candidate) =>
         candidate.threadId === params.threadId &&
         (!params.sourceHomeId || candidate.sourceHomeId === params.sourceHomeId),
     );
+    const session = projected.sessions[sessionIndex];
     if (session) {
       // Gateway-hosted catalogs already live inside this Gateway's trust domain.
       // Method scopes and creation policy remain the read/mutation authority.
       if (params.audience === "gateway-operators") {
+        return true;
+      }
+      if (
+        params.access === "read" &&
+        prepareOwnerLocalVisibility({ ...params, host, visibility, requestEntries })(
+          host.sessions[sessionIndex],
+        )
+      ) {
         return true;
       }
       if (visibility.kind === "restricted-unprofiled") {

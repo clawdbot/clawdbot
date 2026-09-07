@@ -238,6 +238,21 @@ export default definePluginEntry({
   policy checks, rollback, and untrusted-content wrapping. The provider supplies
   transcript text through `read(...)`; it must not write the destination session.
 
+  Native catalogs may instead declare
+  `audience: { kind: "gateway-owner-local", prepareVisibility }`. The synchronous
+  `prepareVisibility({ host, sessionEntries })` callback returns a predicate that
+  accepts only rows with no current adoption, including pending adoption claims.
+  Core supplies fresh canonical session entries for each host delivery and
+  post-enumeration read check; neither entries nor predicates may be retained.
+  Provider enumeration and cached row metadata are not current adoption proof.
+  On a restricted Gateway, this lets the authenticated Gateway owner list, search,
+  and read unadopted rows only on hosts with `kind: "gateway"` and no `nodeId`.
+  It grants no access to ordinary profiles or unprofiled operators, no
+  paired-node exception, and no additional mutation authority. Adopted rows
+  retain creator, sharing, draft, and incognito checks. Core keeps this owner
+  identity separate in visibility caches and presents these native rows as
+  read-only. Existing administrator and single-identity policies still apply.
+
   Native source titles are presentation, not unique session labels. When adopting
   a new source, pass its title as `displayName` to the owner-authorized
   [session creator](/plugins/sdk-runtime); the host bounds and stores that snapshot

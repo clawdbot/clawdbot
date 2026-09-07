@@ -33,6 +33,7 @@ import type {
   CodexSessionCatalogControlFactory,
   CodexSessionCatalogHost,
 } from "./session-catalog-types.js";
+import { codexOwnerLocalAudience } from "./session-catalog-visibility.js";
 import * as upstream from "./session-upstream-activity.js";
 import {
   codexUpstreamContinueResult,
@@ -195,6 +196,7 @@ function registerCodexSessionCatalog(params: {
   const provider: SessionCatalogProvider = {
     id: "codex",
     label: "Codex",
+    audience: codexOwnerLocalAudience,
     supportsProcessHomeIsolation: true,
     resolveCreateSession: ({ agentId }) =>
       resolveCodexCatalogCreateSession(

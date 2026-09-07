@@ -7,7 +7,6 @@ import {
   sessionCatalogAdoptedSourceKey,
   type SessionCatalogEntrySnapshot,
 } from "openclaw/plugin-sdk/session-catalog";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexThread } from "./app-server/protocol.js";
 import {
   reclaimCurrentCodexSessionGeneration,
@@ -32,6 +31,10 @@ import {
   requireBoundThread,
 } from "./session-catalog-parsing.js";
 import type { CodexSessionCatalogControl } from "./session-catalog-types.js";
+import {
+  readCodexSupervisionMarker,
+  type CodexSupervisionMarker,
+} from "./session-catalog-visibility.js";
 import {
   codexLastTerminalTurnId,
   codexUpstreamBaseline,
@@ -73,28 +76,6 @@ export function isAdoptionSessionKeyForThread(
   sourceHomeId?: string,
 ): boolean {
   return adoptionSessionKeyRest(sessionKey) === adoptionSessionKey(threadId, sourceHomeId);
-}
-
-type CodexSupervisionMarker = { sourceThreadId: string; sourceHomeId?: string };
-
-function readCodexSupervisionMarker(entry: {
-  pluginExtensions?: Record<string, unknown>;
-}): CodexSupervisionMarker | undefined {
-  const codex = isRecord(entry.pluginExtensions?.codex) ? entry.pluginExtensions.codex : undefined;
-  const marker = codex && isRecord(codex.supervision) ? codex.supervision : undefined;
-  const sourceThreadId = marker?.sourceThreadId;
-  const sourceHomeId = marker?.sourceHomeId;
-  if (
-    typeof sourceThreadId !== "string" ||
-    !sourceThreadId.trim() ||
-    (sourceHomeId !== undefined && (typeof sourceHomeId !== "string" || !sourceHomeId.trim()))
-  ) {
-    return undefined;
-  }
-  return {
-    sourceThreadId: sourceThreadId.trim(),
-    ...(typeof sourceHomeId === "string" ? { sourceHomeId: sourceHomeId.trim() } : {}),
-  };
 }
 
 export async function listAdoptedSessionEntries(params: {

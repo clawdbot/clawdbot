@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type {
   SessionCatalogHost,
+  SessionCatalogSession,
   SessionCatalogShareRoute,
   SessionsCatalogArchiveParams,
   SessionsCatalogContinueParams,
@@ -184,8 +185,24 @@ type SessionCatalogCreateParams = {
 export type SessionCatalogProvider = {
   id: string;
   label: string;
-  /** Provider rows are Gateway-hosted artifacts visible to authenticated operators. */
-  audience?: "gateway-operators";
+  /**
+   * gateway-operators shares rows with authenticated operators. gateway-owner-local permits
+   * only the authenticated Gateway owner to list/read unadopted Gateway-local rows; it
+   * does not grant mutation authority or bypass adopted-session or paired-node privacy.
+   */
+  audience?:
+    | "gateway-operators"
+    | {
+        kind: "gateway-owner-local";
+        /**
+         * Prove current native ownership from the supplied canonical entries, including pending
+         * adoptions. Called synchronously for each delivery/read; do not retain entries or predicate.
+         */
+        prepareVisibility: (params: {
+          host: SessionCatalogHost;
+          sessionEntries: SessionCatalogEntrySnapshot;
+        }) => (session: SessionCatalogSession) => boolean;
+      };
   /** Closed plugin-owned route contract; invalid or colliding declarations are not projected. */
   shareRoute?: SessionCatalogShareRoute;
   /** Declares that every HOME-sensitive action honors the host isolation policy. */

@@ -394,6 +394,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
                   (provider) => provider.id === catalog.id,
                 )?.audience,
                 requestEntries,
+                sourceHost: host,
               },
             ),
           ),
