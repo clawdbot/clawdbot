@@ -385,10 +385,10 @@ function run(command: string, args: readonly string[], options: RunOptions = {})
     let stdout = { text: "", truncatedChars: 0 };
     let stderr = { text: "", truncatedChars: 0 };
     if (options.capture) {
-      child.stdout?.on("data", (chunk: Buffer) => {
+      child.stdout?.setEncoding("utf8").on("data", (chunk: string) => {
         stdout = appendBoundedTail(stdout, chunk, COMMAND_STDOUT_CAPTURE_MAX_CHARS);
       });
-      child.stderr?.on("data", (chunk: Buffer) => {
+      child.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
         stderr = appendBoundedTail(stderr, chunk, COMMAND_STDERR_CAPTURE_MAX_CHARS);
       });
     }

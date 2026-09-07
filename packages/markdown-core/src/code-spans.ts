@@ -1,4 +1,3 @@
-// Markdown Core module implements code spans behavior.
 import { scanFenceSpans, type FenceScanState, type FenceSpan } from "./fences.js";
 
 /** Incremental inline-code scanner state carried across chunk boundaries. */

@@ -408,7 +408,7 @@ describe("Hermes migration file and skill items", () => {
     expect(
       await fs.readFile(path.join(workspaceDir, "skills", "ship-it", "SKILL.md"), "utf8"),
     ).toBe("# Ship It\n");
-    await expect(fs.access(path.join(reportDir, "summary.md"))).resolves.toBeUndefined();
+    await fs.access(path.join(reportDir, "summary.md"));
     expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).toContain(
       "Imported from Hermes",
     );
@@ -537,9 +537,7 @@ describe("Hermes migration file and skill items", () => {
         "utf8",
       ),
     ).toBe("{}\n");
-    await expect(
-      fs.access(path.join(reportDir, "archive", "retaindb_queue.db")),
-    ).resolves.toBeUndefined();
+    await fs.access(path.join(reportDir, "archive", "retaindb_queue.db"));
     await expectPathMissing(path.join(reportDir, "archive", "auth.json"));
     await expectPathMissing(path.join(workspaceDir, "logs", "session.log"));
   });

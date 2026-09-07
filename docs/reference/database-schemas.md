@@ -20,6 +20,22 @@ OpenClaw stores control-plane state in a global SQLite database and agent data i
 
 The task registry uses the global control-plane database. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
 
+### Mentions Inbox
+
+The [mentions Inbox](/concepts/multi-user#temporary-mentions-inbox) uses existing
+`config_machine_state` rows in `state/openclaw.sqlite`.
+`notifications.mentions.source.*` records retain typed source identities,
+recipients, mention identifiers, expiry times, and dismissal bookkeeping;
+`notifications.mentions.head` records the revision and sequence. Writes use the
+existing table and primary key, with no new tables, columns, indexes, or schema
+version change.
+
+Retention remains seven days from creation, capped at 100 entries per profile,
+10,000 entries globally, and 10,000 source identities for duplicate suppression.
+Restarts preserve retained entries, dismissals, and their original expiry times.
+Loading stored state does not replay browser notifications or scan transcripts
+to reconstruct old mentions.
+
 ### ACP replay accounting
 
 The shared `acp_replay_sessions` and `acp_replay_events` tables retain bridge
@@ -453,6 +469,12 @@ the durable write succeeds. A future network-backed owner must preserve that
 ordering while awaiting its driver.
 
 Session reclamation keeps its deletion transaction on a worker connection.
+The worker opens its database under the session writer, then releases that writer
+while full integrity and foreign-key checks run on the same connection. Unrelated
+session writes can continue during those checks. It reacquires the writer and
+revalidates current authority before index repair, schema work, or deletion.
+The connection and lease remain owned throughout admission; refusal unwinds that
+owner, and final writer admission remains held until the worker exits.
 Archive publication and cascading deletion remain atomic. Before COMMIT, the
 worker publishes its authorization request in shared memory and waits for the
 parent's current owner check. Synchronous writers service that request at the shared

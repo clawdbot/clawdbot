@@ -389,6 +389,7 @@ export function createSessionMcpRuntime(
     }
   };
   sessionMcpRuntimeOwners.set(runtime, {
+    hasServers: () => owned.size > 0,
     isCurrent: () => !invalidated,
     replace: (nextParams) => createSessionMcpRuntime(nextParams, owned),
     async reload({ cfg, manifestRegistry, reloadPlugins }) {

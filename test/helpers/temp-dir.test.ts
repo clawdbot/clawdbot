@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveNativeFixtureShortPath } from "../scripts/native-boundary-fixture.js";
 import {
   cleanupTempDirs,
   createTempDirTracker,
@@ -106,14 +107,33 @@ describe("temp-dir test helpers", () => {
   it("creates default temp dirs under the canonical system temp path", () => {
     const dir = makeTempDir(tempDirs, "openclaw-temp-dir-canonical-");
 
-    expect(dir.startsWith(`${fs.realpathSync(os.tmpdir())}${path.sep}`)).toBe(true);
+    expect(dir.startsWith(`${fs.realpathSync.native(os.tmpdir())}${path.sep}`)).toBe(true);
   });
+
+  it.skipIf(process.platform !== "win32")(
+    "expands short names in default temp roots",
+    ({ skip }) => {
+      const root = makeTempDir(tempDirs, "openclaw-temp-dir-short-name-");
+      const shortRoot = resolveNativeFixtureShortPath(root);
+      if (!shortRoot) {
+        skip();
+        return;
+      }
+      const tmpdir = vi.spyOn(os, "tmpdir").mockReturnValue(shortRoot);
+      try {
+        const dir = makeTempDir(tempDirs, "child-");
+        expect(path.dirname(dir)).toBe(fs.realpathSync.native(root));
+      } finally {
+        tmpdir.mockRestore();
+      }
+    },
+  );
 
   it("caches canonical system temp roots by their raw path", () => {
     const firstRoot = makeTempDir(tempDirs, "openclaw-temp-dir-cache-first-");
     const secondRoot = makeTempDir(tempDirs, "openclaw-temp-dir-cache-second-");
     const tmpdir = vi.spyOn(os, "tmpdir");
-    const realpath = vi.spyOn(fs, "realpathSync");
+    const realpath = vi.spyOn(fs.realpathSync, "native");
     realpath.mockClear();
 
     tmpdir.mockReturnValue(firstRoot);

@@ -409,12 +409,35 @@ inbound context. When a plugin must authorize local media reads, import
 
 ### Native payload shaping
 
+Set `outbound.sendPayloadGroupsMedia: true` only when the payload sender owns
+multi-attachment grouping. Core then preserves a multi-media list for that
+sender when its durable payload and reconciliation capabilities permit it.
+Without this explicit opt-in, ordinary attachments keep per-item delivery.
+
+Grouped senders must check the outbound context's `signal` before each physical
+send and after awaited preparation, and retain the platform-dispatch and
+current-owner callbacks at each send boundary. Declaring general payload
+support alone does not opt a plugin into this responsibility.
+
 If your channel needs provider-specific shaping for `message(action="send")`,
 prefer `actions.prepareSendPayload(...)`. Put native cards, blocks, embeds, or
 other durable data under `payload.channelData.<channel>` and let core send
 through the outbound/message adapter. Use `actions.handleAction(...)` for send
 only as a compatibility fallback for payloads that cannot be serialized and
 retried.
+
+For send actions, preserve the trusted context's `onPlatformSendDispatch`,
+`assertDirectAdapterHandoff`, and `skipQueue` when calling
+`sendDurableMessageBatch(...)`. These fields come from the host, not action
+arguments. Await the dispatch callback before each physical send, then call
+the synchronous assertion after preparation or throttling waits and immediately
+before platform I/O. A closed owner must stop every remaining send.
+
+`skipQueue: true` keeps sends tied to a live run out of replayable recovery.
+The separate `deliveryRetryOwner` field controls who handles failed delivery;
+it does not extend the run's authority. Operator sends retain normal durable
+queueing. Do not serialize either authority callback or expose these fields in
+the model-facing action schema.
 
 ### Session conversation grammar
 

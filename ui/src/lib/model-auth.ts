@@ -3,7 +3,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveUsageProviderId } from "../../../src/infra/provider-usage.shared.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ModelAuthStatusProvider, ModelAuthStatusResult } from "../api/types.ts";
-import { getModelAuthRequestState } from "./model-auth-request-state.ts";
+import { authReads } from "./model-auth-request-state.ts";
 
 const EMPTY_AUTH_STATUS: ModelAuthStatusResult = { ts: 0, providers: [] };
 /** Map credential-runtime aliases onto the provider card/attention identity. */
@@ -80,7 +80,11 @@ export async function loadModelAuthStatus(
   if (opts.signal && !opts.refresh) {
     return await request(opts.signal);
   }
-  const state = getModelAuthRequestState(client);
+  let state = authReads.get(client);
+  if (!state) {
+    state = { pending: new Map(), refreshes: 0 };
+    authReads.set(client, state);
+  }
   if (opts.refresh) {
     // Explicit refresh can change shared auth without a config event. Keep every
     // refresh independent, and suspend ordinary sharing until all refreshes settle.

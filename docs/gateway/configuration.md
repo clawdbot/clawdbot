@@ -723,6 +723,15 @@ from LAN advertisements and any configured wide-area DNS-SD zone. `off` stops
 LAN advertisements while configured wide-area discovery remains enabled. The
 Bonjour plugin must already be enabled, and environment overrides still apply.
 
+The Gateway accepts its configured secret whether the client sends it as a token or a password; `gateway.auth.mode` still decides which config value is the secret.
+
+Local onboarding generates a Gateway secret by default (`gateway.auth.mode: "token"`)
+without asking you to choose an auth mechanism. Existing password-mode configs
+are preserved. To choose your own password explicitly, use
+`openclaw onboard --gateway-password <value>` or `--gateway-auth password`.
+Remote onboarding asks for one Gateway secret and stores it as `gateway.remote.token`.
+See [Onboard](/cli/onboard) for storage choices and connecting without a shared secret.
+
 Token and password rotation hot-applies only when the effective auth mode stays
 the same. Existing clients using the old shared credential must reconnect with
 the new credential; independently paired device-token clients remain connected.

@@ -17,6 +17,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { createOpenClawStateSchemaEnsurer } from "../state/openclaw-state-feature-schema.js";
 
 type ExecutionDecisionDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -46,36 +47,11 @@ const EXECUTION_DECISION_FACT_PRUNE_BATCH_ROWS = 1_024;
 const EXECUTION_DECISION_FACT_SUMMARY_MAX_ROWS = 128;
 const EXECUTION_DECISION_SELECTOR_PREFIX = "decision-fact:";
 
-const ensuredDatabases = new WeakSet<DatabaseSync>();
-
-// Keep this feature-local DDL byte-for-byte aligned with the canonical schema.
-const EXECUTION_DECISION_FACT_SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS execution_decision_facts (
-  receipt_id TEXT NOT NULL PRIMARY KEY CHECK (length(receipt_id) BETWEEN 1 AND 256),
-  context_id TEXT NOT NULL CHECK (length(context_id) BETWEEN 1 AND 256),
-  execution_id TEXT NOT NULL CHECK (length(execution_id) BETWEEN 1 AND 256),
-  run_id TEXT NOT NULL CHECK (length(run_id) BETWEEN 1 AND 256),
-  action_id TEXT CHECK (action_id IS NULL OR length(action_id) BETWEEN 1 AND 256),
-  action_family TEXT NOT NULL CHECK (length(action_family) BETWEEN 1 AND 256),
-  decision_outcome TEXT NOT NULL CHECK (
-    decision_outcome IN ('allowed', 'denied', 'not-applicable', 'unknown')
-  ),
-  coverage_state TEXT NOT NULL CHECK (
-    coverage_state IN ('enforced', 'attribution-only', 'unattributed', 'unknown', 'unsupported')
-  ),
-  reason_code TEXT NOT NULL CHECK (length(reason_code) BETWEEN 1 AND 256),
-  owner TEXT NOT NULL CHECK (length(owner) BETWEEN 1 AND 256),
-  source_ref TEXT NOT NULL CHECK (length(source_ref) BETWEEN 1 AND 256),
-  occurred_at INTEGER NOT NULL CHECK (occurred_at >= 0),
-  receipt_bytes INTEGER NOT NULL CHECK (receipt_bytes BETWEEN 1 AND 16384),
-  receipt_json TEXT NOT NULL CHECK (length(receipt_json) > 0),
-  UNIQUE (occurred_at, receipt_id)
-) STRICT;
-CREATE INDEX IF NOT EXISTS execution_decision_facts_context_occurred_idx
-  ON execution_decision_facts (context_id, occurred_at, receipt_id);
-CREATE INDEX IF NOT EXISTS execution_decision_facts_run_occurred_idx
-  ON execution_decision_facts (run_id, occurred_at, receipt_id);
-`;
+const ensureExecutionDecisionFactSchema = createOpenClawStateSchemaEnsurer({
+  table: "execution_decision_facts",
+  endMarker: "  ON execution_decision_facts (run_id, occurred_at, receipt_id);\n",
+  operationLabel: "audit.execution-decision.schema.ensure",
+});
 
 type ExecutionDecisionFactOptions = OpenClawStateDatabaseOptions & {
   now?: number;
@@ -84,22 +60,6 @@ type ExecutionDecisionFactOptions = OpenClawStateDatabaseOptions & {
 
 function decisionDb(db: DatabaseSync) {
   return getNodeSqliteKysely<ExecutionDecisionDatabase>(db);
-}
-
-function ensureExecutionDecisionFactSchema(options: OpenClawStateDatabaseOptions = {}): void {
-  const database = openOpenClawStateDatabase(options);
-  if (ensuredDatabases.has(database.db)) {
-    return;
-  }
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      // sqlite-allow-raw -- feature-local additive schema DDL; fact rows use Kysely.
-      db.exec(EXECUTION_DECISION_FACT_SCHEMA_SQL);
-    },
-    options,
-    { operationLabel: "audit.execution-decision.schema.ensure" },
-  );
-  ensuredDatabases.add(database.db);
 }
 
 function parseDecisionRow(row: ExecutionDecisionRow): DecisionReceiptV1 {

@@ -180,6 +180,11 @@ machine. It can attach to an existing loopback RFB server, or supervise a
 headless TigerVNC/XFCE desktop on Linux. It is a Labs feature and is off by
 default.
 
+Observer tokens and observer connections are bound to the Gateway connection
+that requested them. Ending or revoking that connection refuses unused tokens
+and closes its observers with `4006 authority_revoked`. Internal callers without
+a Gateway connection keep TTL-only tokens.
+
 ```json5
 {
   desktop: {

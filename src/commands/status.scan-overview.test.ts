@@ -145,6 +145,12 @@ describe("collectStatusScanOverview", () => {
     mocks.callGateway.mockImplementation(async ({ method }: { method?: string }) =>
       method === "status"
         ? {
+            secretEgressProxy: {
+              state: "degraded",
+              caExpiresAt: "2036-09-01T00:00:00.000Z",
+              failedCertificates: 1,
+              message: "Check OpenSSL, then retry.",
+            },
             degradedSecretOwners: [],
             degradedPlugins: [],
             startupMigrationWarning: "Retained legacy state; run openclaw doctor --fix.",
@@ -163,6 +169,9 @@ describe("collectStatusScanOverview", () => {
       useGatewayCallOverridesForChannelsStatus: true,
     });
 
+    expect(result.runtimeDegradation?.secretEgressProxy?.message).toBe(
+      "Check OpenSSL, then retry.",
+    );
     expect(mocks.readCommandConfigSnapshot).toHaveBeenCalledOnce();
     expect(mocks.callGateway).toHaveBeenCalledTimes(2);
     const channelsRequest = gatewayRequest("channels.status");

@@ -3,9 +3,8 @@ const NODE_RELEASE_VERSION_RE =
   /^v?((?:0|[1-9]\d*))\.((?:0|[1-9]\d*))\.((?:0|[1-9]\d*))(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
 
 const NODE_RELEASE_FLOORS = [
-  { major: 22, minor: 22, patch: 3 },
-  { major: 24, minor: 15, patch: 0 },
-  { major: 25, minor: 9, patch: 0 },
+  { major: 24, minor: 16, patch: 0 },
+  { major: 26, minor: 1, patch: 0 },
 ];
 const HIGHEST_RELEASE_FLOOR = NODE_RELEASE_FLOORS[NODE_RELEASE_FLOORS.length - 1];
 
@@ -47,7 +46,7 @@ export function isNodeVersionAtLeast(version, minimum) {
   return version.patch >= minimum.patch;
 }
 
-/** Checks OpenClaw's supported release lines. Node 23 remains unsupported. */
+/** Checks OpenClaw's supported release lines. Older Node lines with lossy SQLite TEXT reads are unsupported. */
 export function isSupportedOpenClawNodeVersion(value) {
   const version = parseNodeReleaseVersion(value);
   if (!version) {

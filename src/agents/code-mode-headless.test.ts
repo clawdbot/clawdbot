@@ -94,6 +94,7 @@ describe("headless Code Mode", () => {
           const retained = new Uint8Array(16 * 1024 * 1024);
           retained[0] = 7;
           text("accepted inline");
+          await yield_control();
           await headless_snapshot_fresh({});
           return retained[0];`,
       }),

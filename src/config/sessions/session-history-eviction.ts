@@ -548,11 +548,11 @@ async function enforceSessionHistoryMaintenanceSerialized(
         const committedArchives = await runExclusiveSqliteSessionReclamation(async () => {
           const materialized = await materializeSessionStateDeletePlans([plan]);
           const diagnostics: SqliteSessionReclamationDiagnostics = {};
-          return await runExclusiveSqliteSessionWrite(
+          const reclamationPlan = await runExclusiveSqliteSessionWrite(
             resolved,
             async () => {
               const database = openOpenClawAgentDatabase(databaseOptions);
-              const reclamationPlan = createHistoryEvictionReclamationPlan({
+              return createHistoryEvictionReclamationPlan({
                 databaseOptions,
                 diskBudget: { preserveRecentMs: params.maintenance.preserveRecentMs },
                 materializedPlans: materialized,
@@ -564,23 +564,23 @@ async function enforceSessionHistoryMaintenanceSerialized(
                 }),
                 sessionId,
               });
-              const reclaimed = await runSqliteSessionReclamation({
-                diagnostics,
-                forceInProcess: false,
-                plan: reclamationPlan,
-              });
-              if (reclaimed.kind !== reclamationPlan.kind) {
-                throw new Error(
-                  `SQLite session reclamation returned ${reclaimed.kind} for ${reclamationPlan.kind}`,
-                );
-              }
-              if (!reclaimed.value.deleted) {
-                return null;
-              }
-              return reclaimed.value.archivedTranscripts;
             },
             diagnostics,
           );
+          const reclaimed = await runSqliteSessionReclamation({
+            diagnostics,
+            forceInProcess: false,
+            plan: reclamationPlan,
+          });
+          if (reclaimed.kind !== reclamationPlan.kind) {
+            throw new Error(
+              `SQLite session reclamation returned ${reclaimed.kind} for ${reclamationPlan.kind}`,
+            );
+          }
+          if (!reclaimed.value.deleted) {
+            return null;
+          }
+          return reclaimed.value.archivedTranscripts;
         });
         if (!committedArchives) {
           return null;

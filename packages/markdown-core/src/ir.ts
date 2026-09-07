@@ -1,4 +1,3 @@
-// Markdown Core module implements ir behavior.
 import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 import MarkdownIt, {
   type MarkdownIt as MarkdownItParser,

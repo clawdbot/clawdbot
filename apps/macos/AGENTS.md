@@ -5,6 +5,7 @@
 - Connection tabs: Connection, Gateways, Debug only while the developer toggle is enabled.
 - Device-local settings reach the web only through `openclawDeviceSettings`.
 - Canonical bridge contract: `ui/src/app/native-device-settings.ts`; keep wire keys and types aligned.
+- Native browser tabs reach the web only through `openclawBrowser`; canonical contract: `ui/src/app/native-browser-bridge.ts`; keep wire keys aligned.
 - Bridge mutations use existing native owners; never write `openclaw.json`.
 - Preserve `AppLaunchPresentationPolicy` and `--background-only` startup behavior.
 - Build app: `swift build --package-path apps/macos --build-system native --product OpenClaw`.

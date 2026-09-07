@@ -1,173 +1,139 @@
 import { DAY_MS } from "../periods.js";
-import type { PersonDay, PeriodListEntry } from "../store.js";
-import type { Period, Person, ReportDocument, SummaryDocument } from "../types.js";
+import type { TeamReportsHealth } from "../scheduler.js";
+import type { PeriodListEntry } from "../store.js";
+import type { Period, ReportDocument, SummaryDocument } from "../types.js";
+import { deltaMarkup, sparklineSvg } from "./charts.js";
 import {
-  countDescription,
-  escapeHtml,
-  ITEM_LABELS,
-  memberSummary,
-  safeExternalUrl,
-} from "./shared.js";
-import { REPORT_STYLES } from "./styles.js";
+  banner,
+  formatWindow,
+  href,
+  isOpen,
+  openPeriodStatus,
+  periodTitle,
+  relativeTime,
+  shell,
+  sourceBanners,
+  type PageContext,
+} from "./page.js";
+import { escapeHtml } from "./shared.js";
 
-export type PageContext = {
-  basePath: string;
-  nonce: string;
-  absoluteUrl: string;
-  displayTimezone: string;
-};
+export { renderPeoplePage, renderPersonPage } from "./people.js";
+export { renderReportPage } from "./report.js";
+export type { PageContext } from "./page.js";
 export type PeriodIndex = Record<Period, PeriodListEntry[]>;
-type TrendDay = { key: string; github: number; discord: number };
+type OverviewOptions = {
+  orgs: string[];
+  latest?: { report: ReportDocument; summary: SummaryDocument | null };
+  health: TeamReportsHealth;
+};
+const PERIODS: Period[] = ["day", "week", "month"];
+const SERIES_LENGTH = { day: 28, week: 12, month: 6 };
+const combined = (entry: PeriodListEntry) => entry.githubTotal + entry.discordMessages;
+const number = (value: number) => value.toLocaleString("en-US");
 
-function href(basePath: string, ...segments: string[]): string {
-  return `${basePath}/${segments.map(encodeURIComponent).join("/")}/`;
+function completenessBadge(ctx: PageContext, entry: PeriodListEntry): string {
+  if (entry.status !== "partial") {
+    return "";
+  }
+  if ((ctx.nowMs ?? Date.now()) >= entry.untilMs) {
+    return '<span class="oc-badge oc-badge-warning partial-report-badge">Incomplete</span>';
+  }
+  return entry.period === "day" && isOpen(ctx, entry) && entry.generatedAtMs < entry.untilMs
+    ? '<span class="oc-badge oc-badge-info partial-report-badge">Intraday</span>'
+    : "";
 }
 
-function date(value: number, timezone: string): string {
-  return new Intl.DateTimeFormat("en-US", {
-    dateStyle: "medium",
-    timeStyle: "short",
-    timeZone: timezone,
-  }).format(value);
+function quickTrend(ctx: PageContext, index: PeriodIndex, entry: PeriodListEntry): string {
+  const ascending = index[entry.period]
+    .filter((candidate) => candidate.key <= entry.key)
+    .toSorted((a, b) => a.key.localeCompare(b.key));
+  const values = ascending.slice(-SERIES_LENGTH[entry.period]).map(combined);
+  const previous = ascending.at(-2);
+  let comparison = previous ? combined(previous) : undefined;
+  let label = `prev ${entry.period}`;
+  if (
+    previous &&
+    entry.period !== "day" &&
+    isOpen(ctx, entry) &&
+    entry.generatedAtMs < entry.untilMs
+  ) {
+    // Compare an aggregate's own snapshot against equally many prior stored days.
+    const elapsedDays = Math.max(1, Math.ceil((entry.generatedAtMs - entry.sinceMs) / DAY_MS));
+    const priorDays = index.day
+      .filter((day) => day.sinceMs >= previous.sinceMs && day.sinceMs < previous.untilMs)
+      .toSorted((a, b) => a.key.localeCompare(b.key))
+      .slice(0, elapsedDays);
+    if (priorDays.length === elapsedDays) {
+      comparison = priorDays.reduce((sum, day) => sum + combined(day), 0);
+      label += " to date";
+    }
+  }
+  return `<span class="quick-trend">${deltaMarkup(combined(entry), comparison, label)}${sparklineSvg(values, `Combined activity, last ${values.length} ${entry.period}s`)}</span>`;
 }
-
-function externalLink(url: string, label: string): string {
-  const safe = safeExternalUrl(url);
-  return safe
-    ? `<a href="${escapeHtml(safe)}" target="_blank" rel="noopener">${escapeHtml(label)}</a>`
-    : escapeHtml(label);
+function quickCard(ctx: PageContext, index: PeriodIndex, period: Period): string {
+  const entry = index[period][0];
+  if (!entry) {
+    return `<section class="quick-card oc-card"><span class="oc-eyebrow">${period}</span><span class="quick-title">No ${period} reports yet</span><p class="oc-empty">Generate a report to see activity.</p></section>`;
+  }
+  const open = isOpen(ctx, entry);
+  return `<a class="quick-card oc-card oc-card-interactive${entry.status === "partial" ? " partial" : ""}" href="${escapeHtml(href(ctx.basePath, period, entry.key))}"><span class="oc-eyebrow">${open && period === "day" ? "today" : period}</span><span class="quick-title">${escapeHtml(periodTitle(entry))} ${completenessBadge(ctx, entry)}</span><span class="quick-meta">${escapeHtml(formatWindow(entry))}<br>${entry.activeMembers}/${entry.memberCount} active · ${number(entry.githubTotal)} GitHub · ${number(entry.discordMessages)} Discord</span>${openPeriodStatus(ctx, entry)}${quickTrend(ctx, index, entry)}</a>`;
 }
-
-function markdownBlocks(value: string): string {
-  return value
-    .split(/\n\s*\n/)
-    .map((block) => {
-      const lines = block.split("\n");
-      const inline = (line: string) =>
-        escapeHtml(line).replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-      if (lines.every((line) => /^\s*[-*] /.test(line))) {
-        return `<ul>${lines.map((line) => `<li>${inline(line.replace(/^\s*[-*] /, ""))}</li>`).join("")}</ul>`;
-      }
-      return `<p>${lines.map(inline).join("<br>")}</p>`;
+function history(ctx: PageContext, entries: PeriodListEntry[], period: Period): string {
+  const visible = period === "day" ? 7 : 12;
+  const slots = period === "month" ? 6 : 12;
+  const ascending = entries.toSorted((a, b) => a.key.localeCompare(b.key));
+  const rows = entries
+    .map((entry, index) => {
+      const position = ascending.findIndex((candidate) => candidate.key === entry.key);
+      const window = ascending.slice(Math.max(0, position - slots + 1), position + 1);
+      const values = [...Array<number>(slots - window.length).fill(0), ...window.map(combined)];
+      const trend =
+        window.length >= 2 ? sparklineSvg(values, `Combined activity through ${entry.key}`) : "";
+      const subline =
+        period === "day"
+          ? new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "UTC" }).format(
+              entry.sinceMs,
+            )
+          : formatWindow(entry);
+      return `<a class="row" href="${escapeHtml(href(ctx.basePath, period, entry.key))}"${index >= visible ? " data-extra hidden" : ""}><span><span class="row-title-line"><span class="title">${escapeHtml(periodTitle(entry))}</span>${completenessBadge(ctx, entry)}</span><br><span class="date">${escapeHtml(subline)}</span></span><span class="row-trend" aria-hidden="true">${trend}</span><span class="stats"><strong>${entry.activeMembers}/${entry.memberCount}</strong> active<br>${number(entry.githubTotal)} GitHub / ${number(entry.discordMessages)} Discord</span></a>`;
     })
     .join("");
+  return `<section class="oc-section" id="${period}"><div class="oc-section-header"><div><div class="oc-eyebrow">${period}</div><h2>${period[0]?.toUpperCase()}${period.slice(1)} History</h2></div>${entries.length > visible ? `<button class="toggle oc-action oc-action-ghost js-only" type="button" data-toggle="${period}" aria-expanded="false">Show all ${entries.length}</button>` : ""}</div><div class="list" data-list="${period}">${rows || `<p class="oc-empty">No ${period} reports yet.</p>`}</div></section>`;
 }
-
-function shell(ctx: PageContext, title: string, body: string): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(title)} · Team Reports</title><style nonce="${escapeHtml(ctx.nonce)}">${REPORT_STYLES}</style></head><body><header><nav aria-label="Main"><a class="brand" href="${escapeHtml(ctx.basePath)}/">Team Reports</a><a href="${escapeHtml(ctx.basePath)}/people/">People</a><a href="${escapeHtml(ctx.basePath)}/latest/">Latest closed day</a></nav><a href="${escapeHtml(ctx.absoluteUrl)}" target="_blank" rel="noopener">Open in a new window</a></header><main>${body}</main><footer>Report windows use UTC. Generation times are shown in ${escapeHtml(ctx.displayTimezone)}. Links may not open inside the Control UI frame.</footer></body></html>`;
+function homeMetric(label: string, value: string | number): string {
+  return `<div class="oc-summary-metric"><div class="oc-summary-metric-copy"><small>${escapeHtml(label)}</small><strong>${value}</strong></div></div>`;
 }
-
-function renderTrend(days: TrendDay[]): string {
-  if (days.length === 0) {
-    return '<p class="muted">No stored daily activity yet.</p>';
-  }
-  const maximum = Math.max(1, ...days.flatMap((day) => [day.github, day.discord]));
-  const timestamps = days.map((day) => Date.parse(`${day.key}T00:00:00Z`));
-  const startMs = timestamps[0] ?? 0;
-  const spanMs = Math.max(DAY_MS, (timestamps.at(-1) ?? startMs) - startMs);
-  const x = (index: number) => 42 + (((timestamps[index] ?? startMs) - startMs) / spanMs) * 696;
-  const y = (value: number) => 152 - (value / maximum) * 128;
-  const line = (kind: "github" | "discord") => {
-    const path = days
-      .map((day, index) => {
-        const previous = timestamps[index - 1];
-        const connected = previous !== undefined && (timestamps[index] ?? 0) - previous === DAY_MS;
-        return `${connected ? "L" : "M"}${x(index).toFixed(1)},${y(day[kind]).toFixed(1)}`;
-      })
-      .join(" ");
-    return `<path class="${kind}-line" d="${path}"/>${days.map((day, index) => `<circle class="${kind}-line" cx="${x(index).toFixed(1)}" cy="${y(day[kind]).toFixed(1)}" r="2"/>`).join("")}`;
-  };
-  return `<div class="chart"><svg viewBox="0 0 780 185" role="img" aria-label="Daily GitHub events and Discord messages; shared scale zero to ${maximum}"><title>GitHub events and Discord messages per stored day</title><line class="chart-axis" x1="42" y1="152" x2="738" y2="152"/><text class="chart-label" x="4" y="28">${maximum}</text><text class="chart-label" x="20" y="156">0</text>${line("github")}${line("discord")}<text class="chart-label" x="42" y="178">${escapeHtml(days[0]?.key ?? "")}</text><text class="chart-label" x="738" y="178" text-anchor="end">${escapeHtml(days.at(-1)?.key ?? "")}</text></svg><div class="legend"><span class="github-key">GitHub events</span><span class="discord-key">Discord messages</span></div></div>`;
-}
-
-function history(ctx: PageContext, entries: PeriodListEntry[]): string {
-  if (entries.length === 0) {
-    return '<p class="muted">No reports generated yet.</p>';
-  }
-  return `<ul>${entries.map((entry) => `<li><a href="${escapeHtml(href(ctx.basePath, entry.period, entry.key))}">${escapeHtml(entry.key)}</a> <span class="badge">${entry.status}</span></li>`).join("")}</ul>`;
-}
-
 export function renderIndexPage(
   ctx: PageContext,
   index: PeriodIndex,
-  days: ReportDocument[],
+  options: OverviewOptions,
 ): string {
-  const periods: Period[] = ["day", "week", "month"];
-  const cards = periods
-    .map((period) => {
-      const entry = index[period][0];
-      return `<section class="card"><h3>Latest ${period}</h3>${entry ? `<a href="${escapeHtml(href(ctx.basePath, period, entry.key))}">${escapeHtml(entry.key)}</a> <span class="badge">${entry.status}</span><p class="muted">Generated ${escapeHtml(date(entry.generatedAtMs, ctx.displayTimezone))}</p>` : "<p>No reports yet.</p>"}</section>`;
-    })
-    .join("");
+  const days = index.day.toSorted((a, b) => a.key.localeCompare(b.key));
+  const latestDay = index.day[0];
+  const generated = Math.max(
+    0,
+    ...PERIODS.flatMap((period) => index[period].map((entry) => entry.generatedAtMs)),
+  );
+  const orgs = options.orgs.join(", ");
+  const dateline =
+    days.length >= 2
+      ? `<section class="home-dateline" aria-label="Activity dateline"><div class="oc-eyebrow">dateline</div>${sparklineSvg(days.map(combined), `Combined GitHub and Discord activity across ${days.length} report days`, true)}<div class="home-dateline-scale"><span>${escapeHtml(days[0]?.key ?? "")}</span><span>${days.length} report days</span><span>${escapeHtml(days.at(-1)?.key ?? "")}</span></div></section>`
+      : "";
+  const open = PERIODS.filter((period) => index[period][0] && isOpen(ctx, index[period][0]));
+  const openBanner = open.length
+    ? banner(
+        "info",
+        `<strong class="oc-banner-title">Open reporting windows</strong><p>The current UTC ${open.join(", ")} ${open.length === 1 ? "remains" : "remain"} open. ${open.length === 1 ? "Its total is a snapshot" : "Their totals are snapshots"} and update as new activity arrives.</p>`,
+      )
+    : "";
+  const health = options.health;
+  const lastRun = health.lastRun
+    ? `<span class="oc-badge oc-badge-${health.lastRun.status === "ok" ? "success" : "warning"}">${health.lastRun.status}</span> ${relativeTime(ctx, health.lastRun.finishedAtMs)}`
+    : "—";
   return shell(
     ctx,
     "Overview",
-    `<h1>Team activity</h1><p class="muted">GitHub contributions and Discord discussion, by day, week, and month.</p><div class="cards">${cards}</div><h2>Daily activity · last 28 days</h2>${renderTrend(days.map((day) => ({ key: day.period.key, github: day.totals.github.total, discord: day.totals.discord.messages })))}<p class="muted">Only stored days are shown. Missing days are not counted as zero activity.</p><h2>Report history</h2><div class="cards">${periods.map((period) => `<section class="card"><h3>${period === "day" ? "Days" : period === "week" ? "Weeks" : "Months"}</h3>${history(ctx, index[period])}</section>`).join("")}</div><p><a href="${escapeHtml(ctx.basePath)}/index.json">Machine-readable index</a> · <a href="${escapeHtml(ctx.basePath)}/status">Generation status</a></p>`,
-  );
-}
-
-export function renderReportPage(
-  ctx: PageContext,
-  report: ReportDocument,
-  summary: SummaryDocument | null,
-): string {
-  const path = href(ctx.basePath, report.period.period, report.period.key);
-  const warnings = [...report.sources.github.warnings, ...(report.sources.discord?.warnings ?? [])];
-  if (!report.sources.github.ok || report.sources.github.stale) {
-    warnings.unshift("GitHub coverage is incomplete. Counts may be lower than actual activity.");
-  }
-  if (report.sources.discord && (!report.sources.discord.ok || report.sources.discord.stale)) {
-    warnings.push("Discord coverage is incomplete. Counts may be lower than actual activity.");
-  }
-  if (report.truncated) {
-    warnings.push("Item lists were truncated; aggregate counts are preserved.");
-  }
-  const summaryNotices = (summary?.warnings ?? [])
-    .map((warning) => `<p class="notice">${escapeHtml(warning)}</p>`)
-    .join("");
-  const notices = `${report.status === "partial" ? '<p class="notice">This period is still open. Activity and summaries may change as new reports are generated.</p>' : ""}${!summary || summary.source === "fallback" ? '<p class="notice">Deterministic summary: model summaries are disabled, pending, or unavailable.</p>' : ""}${warnings.length ? `<section class="notice"><h2>Coverage notes</h2><ul>${warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}</ul></section>` : ""}`;
-  const members = report.members
-    .map(
-      (member) =>
-        `<article><h3><a href="${escapeHtml(href(ctx.basePath, "people", member.login))}">${escapeHtml(member.display)}</a> <small>@${escapeHtml(member.login)}</small></h3>${
-          [member.affiliation, member.roleLabel ?? member.roleGroup].filter(Boolean).length
-            ? `<p class="muted">${[member.affiliation, member.roleLabel ?? member.roleGroup]
-                .filter((value): value is string => Boolean(value))
-                .map(escapeHtml)
-                .join(" · ")}</p>`
-            : ""
-        }<p>${escapeHtml(memberSummary(member))}</p><p class="details">${escapeHtml(countDescription(member.github))} · ${member.discord.total} Discord messages</p>${member.areas.length ? `<p class="details">Areas: ${member.areas.map(escapeHtml).join(", ")}</p>` : ""}${member.access.length ? `<p class="details">Access: ${member.access.map(escapeHtml).join(", ")}</p>` : ""}${member.github.items.length ? `<details><summary>${member.github.items.length} GitHub items</summary><ul>${member.github.items.map((item) => `<li><span class="muted">${ITEM_LABELS[item.kind]} · ${escapeHtml(item.repo)}</span> — ${externalLink(item.url, item.title)}</li>`).join("")}</ul></details>` : ""}${member.discord.excerpts.length ? `<details><summary>Discord excerpts</summary>${member.discord.excerpts.map((excerpt) => `<blockquote><small>#${escapeHtml(excerpt.channel)} · ${escapeHtml(date(excerpt.atMs, ctx.displayTimezone))}</small><br>${escapeHtml(excerpt.excerpt)}</blockquote>`).join("")}</details>` : ""}</article>`,
-    )
-    .join("");
-  const other = report.otherActors.length
-    ? `<h2>Other GitHub actors</h2><p class="muted">Activity by accounts outside the current roster.</p><ul>${report.otherActors.map((actor) => `<li>${escapeHtml(actor.login)}: ${actor.github.total} GitHub events</li>`).join("")}</ul>`
-    : "";
-  const unmatched = report.unmatchedDiscord.length
-    ? `<h2>Unmatched Discord authors</h2><p class="muted">These messages count toward Discord totals. No message content is included.</p><ul>${report.unmatchedDiscord.map((actor) => `<li>${escapeHtml(actor.authorId)}: ${actor.messages} messages</li>`).join("")}</ul>`
-    : "";
-  return shell(
-    ctx,
-    report.period.title,
-    `<h1>${escapeHtml(report.period.title)} <span class="badge">${report.status}</span></h1><p class="muted">${escapeHtml(report.orgs.join(", "))} · Generated ${escapeHtml(date(report.generatedAtMs, ctx.displayTimezone))}</p><p class="details">UTC window: ${escapeHtml(new Date(report.period.sinceMs).toISOString())} – ${escapeHtml(new Date(report.period.untilMs).toISOString())} (exclusive)</p><p><a href="${escapeHtml(path)}report.md">Markdown</a> · <a href="${escapeHtml(path)}data.json">JSON</a></p>${notices}<div class="cards"><div class="card"><strong>${report.totals.github.total}</strong>GitHub events</div><div class="card"><strong>${report.totals.discord.messages}</strong>Discord messages</div><div class="card"><strong>${report.activeMembers} / ${report.memberCount}</strong>Active members</div></div>${summary ? `<section><h2>Summary</h2>${summaryNotices}${markdownBlocks(summary.globalSummary)}<h2>Highlights</h2><ul>${summary.highlights.map((highlight) => `<li>${escapeHtml(highlight)}</li>`).join("")}</ul></section>` : ""}<h2>Members</h2>${members || "<p>No members are configured for this period.</p>"}${other}${unmatched}`,
-  );
-}
-
-export function renderPeoplePage(ctx: PageContext, people: Person[]): string {
-  return shell(
-    ctx,
-    "People",
-    `<h1>People</h1><p class="muted">Current roster and archived members with retained history.</p><div class="table-wrap"><table><thead><tr><th>Person</th><th>Role</th><th>Status</th></tr></thead><tbody>${people.map((person) => `<tr><td><a href="${escapeHtml(href(ctx.basePath, "people", person.github[0] ?? ""))}">${escapeHtml(person.display ?? person.github[0] ?? "")}</a>${person.affiliation ? `<br><small>${escapeHtml(person.affiliation)}</small>` : ""}</td><td>${escapeHtml(person.roleLabel ?? person.roleGroup ?? "—")}</td><td>${person.status === "archived" ? "Archived" : "Active"}</td></tr>`).join("")}</tbody></table></div>`,
-  );
-}
-
-export function renderPersonPage(ctx: PageContext, person: Person, days: PersonDay[]): string {
-  const login = person.github[0] ?? "";
-  const trend = days
-    .toSorted((a, b) => a.dayKey.localeCompare(b.dayKey))
-    .map((day) => ({ key: day.dayKey, github: day.githubTotal, discord: day.discordMessages }));
-  return shell(
-    ctx,
-    person.display ?? login,
-    `<h1>${escapeHtml(person.display ?? login)} <small>@${escapeHtml(login)}</small></h1>${person.status === "archived" ? `<p class="notice">Archived${person.archivedAt ? ` on ${escapeHtml(person.archivedAt)}` : ""}. Historical reports remain available.</p>` : ""}${person.affiliation ? `<p>${escapeHtml(person.affiliation)}</p>` : ""}${person.github.length > 1 ? `<p class="muted">Aliases: ${person.github.slice(1).map(escapeHtml).join(", ")}</p>` : ""}<h2>Daily activity</h2>${renderTrend(trend)}<h2>Last 28 days with retained history</h2>${days.length ? `<div class="table-wrap"><table><thead><tr><th>UTC day</th><th class="number">GitHub events</th><th class="number">Commits</th><th class="number">PRs merged</th><th class="number">Discord messages</th></tr></thead><tbody>${days.map((day) => `<tr><td><a href="${escapeHtml(href(ctx.basePath, "day", day.dayKey))}">${escapeHtml(day.dayKey)}</a></td><td class="number">${day.githubTotal}</td><td class="number">${day.commits}</td><td class="number">${day.prsMerged}</td><td class="number">${day.discordMessages}</td></tr>`).join("")}</tbody></table></div>` : "<p>No stored daily reports for this person yet.</p>"}`,
+    `<div class="home-grid" aria-label="Report overview"><section class="oc-brand-banner home-banner" data-asset="crab" data-anchor="top" data-effect="fade" data-size="hero"><div class="oc-brand-banner-art" aria-hidden="true"><img src="${escapeHtml(ctx.basePath)}/assets/crab.avif" alt="" draggable="false"></div><div class="oc-brand-banner-content"><p class="oc-eyebrow">${escapeHtml(orgs)} · team</p><h1>Team Reports</h1><p>Daily, weekly, and monthly GitHub and Discord activity for ${escapeHtml(orgs)}. Access is enforced by the Gateway; history is stored by the plugin.</p></div><div class="home-banner-stamp">generated ${generated ? relativeTime(ctx, generated) : "—"}</div></section>${dateline}${openBanner}${options.latest ? sourceBanners(options.latest.report, options.latest.summary) : ""}${PERIODS.map((period) => quickCard(ctx, index, period)).join("")}<section class="home-card people-teaser oc-card"><div class="home-card-top"><div><div class="oc-eyebrow">people</div><h2>People Archive</h2><p>Activity timelines and repository history by team member.</p></div><div class="home-actions-row"><a class="panel-link oc-action" href="${escapeHtml(ctx.basePath)}/people/">Open people archive <span aria-hidden="true">→</span></a></div></div><div class="oc-summary-strip">${homeMetric("People", latestDay?.memberCount ?? 0)}${homeMetric("Active today", latestDay?.activeMembers ?? 0)}${homeMetric("Report days", days.length)}</div></section><section class="home-card generation-panel oc-card"><div class="home-card-top"><div><div class="oc-eyebrow">runs</div><h2>Generation Status</h2><p>Scheduler and source health.</p></div><div class="home-actions-row"><a class="panel-link oc-action" href="${escapeHtml(ctx.basePath)}/status">Open status JSON <span aria-hidden="true">→</span></a></div></div><div class="oc-summary-strip">${homeMetric("Last run", lastRun)}${homeMetric("Next due", health.nextDueMs === undefined ? "—" : relativeTime(ctx, health.nextDueMs))}${homeMetric("Source warnings", health.warnings)}</div></section></div><div class="grid">${PERIODS.map((period) => history(ctx, index[period], period)).join("")}</div>`,
+    "home",
   );
 }

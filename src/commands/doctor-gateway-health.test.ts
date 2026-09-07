@@ -358,6 +358,30 @@ describe("checkGatewayHealth", () => {
     );
   });
 
+  it("reports broken egress certificates even when Gateway RPC is healthy", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        secretEgressProxy: {
+          state: "degraded",
+          caExpiresAt: "2026-09-01T00:00:00.000Z",
+          failedCertificates: 0,
+          message: "Check the system clock, then restart the Gateway.",
+        },
+      })
+      .mockResolvedValue({});
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    expect(await checkGatewayHealth({ runtime: runtime as never, cfg })).toMatchObject({
+      healthOk: true,
+      authenticated: true,
+    });
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Secret egress proxy: Check the system clock, then restart the Gateway.",
+      ),
+      "Secret runtime degradation",
+    );
+  });
+
   it("lists every degraded SecretRef owner reported by Gateway status", async () => {
     callGateway
       .mockResolvedValueOnce({

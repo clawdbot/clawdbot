@@ -1,5 +1,6 @@
 // Shared sessions.changed broadcaster for gateway RPC and chat-command mutations.
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import { hasSessionChangeReceivers } from "../session-change-receivers.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import {
@@ -146,11 +147,19 @@ export function flushPendingSessionsChangedEvents(context?: object): void {
   }
 }
 
-export function emitSessionsChanged(context: SessionChangeContext, payload: SessionChangedPayload) {
+export function emitSessionsChanged(
+  context: SessionChangeContext,
+  payload: SessionChangedPayload,
+  options: { accessChanged?: boolean } = {},
+) {
   // This counter is the sessions.list projection fence: every mutation advances it
   // synchronously, before event coalescing, so work started on an older value is never
   // joined or cached by a request that begins after the mutation.
   sessionsMutationVersions.set(context, readSessionsMutationVersion(context) + 1);
+  // Only a committed producer may certify unchanged access; unknown changes stay conservative.
+  if (options.accessChanged !== false) {
+    bumpGatewayAccessRevision();
+  }
   invalidateSessionSharingSnapshot(payload.sessionKey);
   // Inbox subscriptions are independent of session-list subscriptions, including a closed sidebar.
   context.mentionInbox?.invalidate();

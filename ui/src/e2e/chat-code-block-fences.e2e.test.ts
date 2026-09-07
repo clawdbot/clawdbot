@@ -76,6 +76,79 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
     await server?.close();
   });
 
+  it("preserves indented code from history through streaming and copying", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        { role: "user", content: "    *user literal*", timestamp: 1000 },
+        { role: "assistant", content: "    *assistant literal*", timestamp: 2000 },
+      ],
+    });
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: async (text: string) => {
+            document.documentElement.dataset.copiedCode = text;
+          },
+        },
+      });
+    });
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.locator(".chat-group.assistant .chat-text").waitFor();
+      if (captureProof) {
+        await page.screenshot({
+          path: path.join(artifactDir, `${proofStage}-indented-history.png`),
+        });
+      }
+      expect(await page.locator(".chat-group.user pre code").textContent()).toBe(
+        "*user literal*\n",
+      );
+      expect(await page.locator(".chat-group.assistant pre code").textContent()).toBe(
+        "*assistant literal*\n",
+      );
+      await page
+        .locator(".agent-chat__composer-combobox textarea")
+        .fill("Show an indented example");
+      await page.getByRole("button", { name: "Send message" }).click();
+      const request = await gateway.waitForRequest("chat.send");
+      const runId = requireString(requireRecord(request.params).idempotencyKey, "run id");
+      const first = "    *first";
+      const second = `${first}\n\n    second`;
+      for (const text of [first, second]) {
+        await gateway.emitGatewayEvent("chat", {
+          message: { role: "assistant", content: [{ type: "text", text }] },
+          runId,
+          sessionKey: "main",
+          state: "delta",
+        });
+        const code = page.locator(".chat-bubble.streaming pre code");
+        await expect
+          .poll(() => code.allTextContents())
+          .toEqual([text.replace(/^ {4}/gm, "") + "\n"]);
+      }
+      await page.locator(".chat-bubble.streaming .code-block-copy").click();
+      expect(await page.locator("html").getAttribute("data-copied-code")).toBe("*first\n\nsecond");
+      if (captureProof) {
+        await page.screenshot({
+          path: path.join(artifactDir, `${proofStage}-indented-stream.png`),
+        });
+      }
+      await gateway.emitChatFinal({ runId, text: second });
+      await expect
+        .poll(() => page.locator(".chat-group.assistant pre code").allTextContents())
+        .toContain("*first\n\nsecond\n");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("highlights a streamed code fence only after its closing marker arrives", async () => {
     const context = await browser.newContext({
       locale: "en-US",
@@ -134,7 +207,7 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
     }
   });
 
-  it("releases code-block observations when navigation removes the final transcript", async () => {
+  it("releases hidden transcript observations and resumes them on the retained code", async () => {
     const context = await browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -196,6 +269,7 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
     try {
       await page.goto(`${server.baseUrl}chat`);
       await expect.poll(async () => (await observations()).connected).toBe(2);
+      const code = await page.locator(".chat-thread code").elementHandle();
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.locator(".sidebar-identity-card").click();
       await sidebar
@@ -204,10 +278,22 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
         .click();
       await page.locator('.settings-sidebar__item[href="/logs"]').click();
       await page.locator("openclaw-logs-page").waitFor({ state: "visible" });
-      expect(await page.locator("openclaw-chat-pane").count()).toBe(0);
+      await page.locator("openclaw-chat-pane").waitFor({ state: "hidden" });
+      expect(await code?.evaluate((element) => element.isConnected)).toBe(true);
       // A page reload would discard the probe too and cannot prove in-app teardown.
       expect((await observations()).observed).toBeGreaterThanOrEqual(2);
+      await expect.poll(async () => (await observations()).connected).toBe(0);
       await expect.poll(async () => (await observations()).detached).toBe(0);
+      await page.goBack();
+      await page.goBack();
+      await page.locator(".chat-thread code").waitFor({ state: "visible" });
+      expect(
+        await page
+          .locator(".chat-thread code")
+          .evaluate((element, previous) => element === previous, code),
+      ).toBe(true);
+      await expect.poll(async () => (await observations()).connected).toBe(2);
+      expect((await observations()).detached).toBe(0);
     } finally {
       await context.close();
     }

@@ -1043,6 +1043,7 @@ describe("grouped chat rendering", () => {
       codeBlockChrome: "none",
       codeBlockInteraction: "static",
       fileLinks: true,
+      githubRepo: null,
       interactiveImages: false,
       linkFavicons: false,
       sessionLinks: true,
@@ -1174,13 +1175,19 @@ describe("grouped chat rendering", () => {
     const container = document.createElement("div");
     const markdownContent = "```bash\necho ok\n```";
 
-    renderAssistantMessage(container, createAssistantMessage(markdownContent, { timestamp: 1000 }));
+    const githubRepo = { owner: "openclaw", repo: "openclaw" };
+    renderAssistantMessage(
+      container,
+      createAssistantMessage(markdownContent, { timestamp: 1000 }),
+      { githubRepo },
+    );
 
     expect(markdownRenderMock).toHaveBeenCalledWith(markdownContent, {
       assistantTranscriptRoleHeaders: true,
       codeBlockChrome: "copy",
       codeBlockInteraction: "interactive",
       fileLinks: true,
+      githubRepo,
       interactiveImages: false,
       linkFavicons: false,
       sessionLinks: true,
@@ -1727,6 +1734,7 @@ describe("grouped chat rendering", () => {
         codeBlockChrome: "copy",
         codeBlockInteraction: "interactive",
         fileLinks: true,
+        githubRepo: null,
         interactiveImages: false,
         linkFavicons: false,
         sessionLinks: true,

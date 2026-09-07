@@ -364,12 +364,11 @@ export async function verifySetupInferenceConfig(params: {
           executionRoute: configuredRoute,
           deps,
         });
-      } catch {
+      } catch (error) {
         return {
           ok: false,
           status: "unavailable",
-          error:
-            "Could not bind the configured inference plugin runtime. Refresh or reinstall the plugin and retry.",
+          error: `Could not bind the configured inference plugin runtime. Refresh or reinstall the plugin and retry. (${await redactSetupInferenceError(error)})`,
         };
       }
     }
@@ -438,12 +437,11 @@ export async function verifySetupInferenceConfig(params: {
             deps,
           });
           params.onVerifiedExecution?.(test.auth, binding);
-        } catch {
+        } catch (error) {
           return {
             ok: false,
             status: "auth",
-            error:
-              "The verified inference owner changed before validation completed. Retry the inference check.",
+            error: await redactSetupInferenceError(error),
             ...(authProfiles ? { authProfiles } : {}),
           };
         }

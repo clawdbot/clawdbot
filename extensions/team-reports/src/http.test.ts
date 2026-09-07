@@ -3,13 +3,14 @@ import fs from "node:fs";
 import { createServer, request, type IncomingHttpHeaders, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTeamReportsHttpHandler } from "./http.js";
 import { describePeriod } from "./periods.js";
 import { renderMarkdown } from "./render/markdown.js";
 import { githubCounts } from "./reports.fixtures.js";
 import { createTeamReportsStore, type TeamReportsStore } from "./store.js";
-import type { Period, ReportDocument, SummaryDocument } from "./types.js";
+import type { Period, Person, ReportDocument, SummaryDocument } from "./types.js";
 
 const runtimeScopeMock = vi.hoisted(() => vi.fn());
 vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
@@ -17,7 +18,15 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
 }));
 
 const maliciousTitle = '<script>alert("report")</script>';
+const hostileLogin = 'bad"><img src=x onerror=alert(1)>';
+const hostileDisplay = '"Quoted <Name>';
 const counts = githubCounts(1);
+const avatarPeople: Person[] = [
+  { github: ["invalid.login", "invalid-alias"], display: "Fallback Name" },
+  { github: [hostileLogin, "hostile-alias"], display: hostileDisplay },
+  { github: ["safe-login"], display: hostileDisplay },
+  { github: ["a".repeat(40), "long-login-alias"], display: "Long Login" },
+];
 
 function report(period: Period, key: string, partial = false): ReportDocument {
   const descriptor = describePeriod(period, key);
@@ -53,7 +62,7 @@ function report(period: Period, key: string, partial = false): ReportDocument {
         discord: { total: 0, channels: {}, excerpts: [] },
       },
     ],
-    otherActors: [],
+    otherActors: [{ login: "bob", github: counts }],
     unmatchedDiscord: [],
     sources: { github: { ok: true, warnings: ["Fixture coverage warning"], stats: {} } },
   };
@@ -74,11 +83,13 @@ let store: TeamReportsStore;
 let server: Server;
 let port: number;
 let available = true;
+let currentOrgs = ["configured-example"];
 const getStore = vi.fn(() => (available ? store : undefined));
 
 beforeEach(() => {
   runtimeScopeMock.mockReturnValue({ client: { connect: { scopes: ["operator.read"] } } });
   getStore.mockClear();
+  currentOrgs = ["configured-example"];
 });
 
 function fetchPath(
@@ -107,7 +118,22 @@ function fetchPath(
 beforeAll(async () => {
   directory = fs.mkdtempSync(path.join(os.tmpdir(), "team-reports-http-"));
   store = createTeamReportsStore({ stateDir: directory });
+  const avatarReport = report("day", "2026-08-19");
+  avatarReport.members = avatarPeople.map((person) => ({
+    login: person.github[0] ?? "",
+    display: person.display ?? "",
+    aliases: person.github.slice(1),
+    access: [],
+    areas: [],
+    github: { ...counts, items: [] },
+    discord: { total: 0, channels: {}, excerpts: [] },
+  }));
+  avatarReport.memberCount = avatarPeople.length;
+  avatarReport.activeMembers = avatarPeople.length;
+  avatarReport.totals.github = githubCounts(avatarPeople.length);
+  avatarReport.otherActors.push({ login: hostileLogin, github: counts });
   for (const document of [
+    avatarReport,
     report("day", "2026-08-20"),
     report("day", "2026-08-21", true),
     report("week", "2026-W34"),
@@ -118,15 +144,20 @@ beforeAll(async () => {
   const handler = createTeamReportsHttpHandler({
     basePath: "/reports",
     displayTimezone: "UTC",
+    assetsDir: fileURLToPath(new URL("../assets", import.meta.url)),
     getStore,
     status: () => ({ running: false, lastRun: "fixture-run" }),
+    health: () => ({ running: false, warnings: 1 }),
+    orgs: () => currentOrgs,
     people: () => [
       {
         github: ["alice", "alice-alias"],
         display: "Alice",
         status: "archived",
         archivedAt: "2026-08-22",
+        discordUserId: "1234567890",
       },
+      ...avatarPeople,
     ],
   });
   server = createServer(handler);
@@ -158,6 +189,8 @@ describe("Team Reports HTTP responses", () => {
       runtimeScopeMock.mockReturnValue(scopes ? { client: { connect: { scopes } } } : undefined);
       for (const url of [
         "/reports/",
+        "/reports/assets/crab.avif",
+        "/reports/assets/icon.png",
         "/reports/status",
         "/reports/index.json",
         "/reports/latest/",
@@ -205,7 +238,7 @@ describe("Team Reports HTTP responses", () => {
     },
   );
 
-  it("serves no-script escaped HTML with nonce-based CSP and safe navigation", async () => {
+  it("serves escaped HTML with one nonce-authorized script and safe navigation", async () => {
     const response = await fetchPath("/reports/day/2026-08-20/", "GET", {
       "x-forwarded-proto": "https",
     });
@@ -216,22 +249,137 @@ describe("Team Reports HTTP responses", () => {
     expect(response.headers["referrer-policy"]).toBe("no-referrer");
     expect(response.headers["x-frame-options"]).toBeUndefined();
     const csp = response.headers["content-security-policy"];
-    expect(csp).toContain("default-src 'none'");
     const nonce = typeof csp === "string" ? /style-src 'nonce-([^']+)'/.exec(csp)?.[1] : undefined;
     expect(nonce).toBeTruthy();
+    expect(csp).toBe(
+      `default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; img-src 'self' https://avatars.githubusercontent.com data:; base-uri 'none'; form-action 'none'`,
+    );
     expect(response.body).toContain(`<style nonce="${nonce}">`);
     expect(response.body).toContain("&lt;script&gt;alert(&quot;report&quot;)&lt;/script&gt;");
-    expect(response.body).not.toContain("<script>");
+    expect(response.body.match(/<script\b/g)).toHaveLength(1);
+    expect(response.body).toContain(`<script nonce="${nonce}">`);
     expect(response.body).not.toContain('href="javascript:');
     expect(response.body).toContain(
-      `href="https://127.0.0.1:${port}/reports/day/2026-08-20/" target="_blank" rel="noopener">Open in a new window`,
+      `href="https://127.0.0.1:${port}/reports/day/2026-08-20/" target="_blank" rel="noopener" data-report-open-window aria-label="Open in a new window"`,
     );
     expect(response.body).toContain('href="/reports/people/alice/"');
     expect(response.body).toContain("Deterministic summary");
     expect(response.body).toContain("Fixture coverage warning");
-    expect(response.body).toContain(
-      '<p class="notice">Model summary unavailable: completion failed</p>',
+    expect(response.body).toContain("Model summary unavailable: completion failed");
+    expect(response.body).toContain("GitHub coverage is incomplete");
+  });
+
+  it.each([
+    { url: "/reports/day/2026-08-20/", login: "alice", size: 40, variant: "md" },
+    { url: "/reports/day/2026-08-20/", login: "bob", size: 20, variant: "xs" },
+    { url: "/reports/people/", login: "alice", size: 36, variant: "sm" },
+    { url: "/reports/people/alice-alias/", login: "alice", size: 72, variant: "xl" },
+  ])(
+    "renders a $size px GitHub avatar for $login on $url",
+    async ({ url, login, size, variant }) => {
+      const response = await fetchPath(url);
+      expect(response.status).toBe(200);
+      const avatars = response.body.match(/<span class="oc-avatar\b[^>]*>[\s\S]*?<\/span>/g) ?? [];
+      const avatar = avatars.find((markup) =>
+        markup.includes(`src="https://avatars.githubusercontent.com/${login}?s=${size}"`),
+      );
+      expect(avatar).toContain(`class="oc-avatar oc-avatar-${variant}"`);
+      expect(avatar).toMatch(/data-initials="[^"]+"/);
+      for (const attribute of [
+        `width="${size}"`,
+        `height="${size}"`,
+        'alt=""',
+        'loading="lazy"',
+        'decoding="async"',
+        'referrerpolicy="no-referrer"',
+      ]) {
+        expect(avatar).toContain(attribute);
+      }
+      expect(response.body).not.toContain("avatars.githubusercontent.com/alice-alias");
+      expect(response.body).not.toContain("avatars.githubusercontent.com/Alice");
+      expect(response.body).not.toContain("avatars.githubusercontent.com/1234567890");
+    },
+  );
+
+  it.each([
+    { url: "/reports/day/2026-08-19/", initials: ["FN", "LL", "&quot;&lt;"] },
+    { url: "/reports/people/", initials: ["FN", "LL", "&quot;&lt;"] },
+    { url: "/reports/people/invalid-alias/", initials: ["FN"] },
+    { url: "/reports/people/long-login-alias/", initials: ["LL"] },
+    { url: "/reports/people/hostile-alias/", initials: ["&quot;&lt;"] },
+  ])(
+    "keeps unsafe avatar identities escaped and falls back to initials on $url",
+    async ({ url, initials }) => {
+      const response = await fetchPath(url);
+      expect(response.status).toBe(200);
+      const avatars = response.body.match(/<span class="oc-avatar\b[^>]*>[\s\S]*?<\/span>/g) ?? [];
+      for (const value of initials) {
+        const fallback = avatars.find(
+          (avatar) => avatar.includes(`data-initials="${value}"`) && !avatar.includes("<img"),
+        );
+        expect(fallback).toBeDefined();
+      }
+      expect(response.body).not.toContain("avatars.githubusercontent.com/invalid.login");
+      expect(response.body).not.toContain(`avatars.githubusercontent.com/${"a".repeat(40)}`);
+      expect(response.body).not.toContain("avatars.githubusercontent.com/bad");
+      expect(response.body).not.toContain(hostileLogin);
+      expect(response.body).not.toContain(hostileDisplay);
+      expect(response.body).not.toContain("<img src=x");
+      if (!url.includes("invalid-alias") && !url.includes("long-login-alias")) {
+        expect(response.body).toContain("bad&quot;&gt;&lt;img src=x onerror=alert(1)&gt;");
+        expect(response.body).toContain("&quot;Quoted &lt;Name&gt;");
+        expect(response.body).toContain('data-initials="&quot;&lt;"');
+      }
+    },
+  );
+
+  it("uses the GitHub login for an avatar even when the display name is hostile", async () => {
+    const response = await fetchPath("/reports/people/safe-login/");
+    expect(response.status).toBe(200);
+    expect(response.body).toContain('src="https://avatars.githubusercontent.com/safe-login?s=72"');
+    expect(response.body).toContain('data-initials="&quot;&lt;"');
+    expect(response.body).toContain("&quot;Quoted &lt;Name&gt;");
+    expect(response.body).not.toContain(hostileDisplay);
+  });
+
+  it("serves dark and light semantic tokens with CSS-only avatar initials", async () => {
+    const response = await fetchPath("/reports/");
+    const styles = /<style nonce="[^"]+">([\s\S]*?)<\/style>/.exec(response.body)?.[1];
+    expect(styles).toMatch(/color-scheme:\s*dark/);
+    expect(styles).toMatch(/html\[data-theme="light"\]\s*\{[^}]*color-scheme:\s*light/);
+    expect(styles).toMatch(
+      /@media\s*\(prefers-color-scheme:\s*light\)\s*\{[^}]*color-scheme:\s*light/,
     );
+    for (const token of [
+      "bg-page",
+      "text-primary",
+      "accent-primary",
+      "accent-secondary",
+      "status-warning-fg",
+    ]) {
+      expect(styles?.match(new RegExp(`--oc-${token}:`, "g"))?.length).toBeGreaterThanOrEqual(3);
+    }
+    expect(styles).toMatch(/\.oc-avatar::before\s*\{[^}]*content:\s*attr\(data-initials\)/);
+    expect(styles).not.toMatch(/@import|@font-face/);
+  });
+
+  it.each([
+    ["crab.avif", "image/avif"],
+    ["icon.png", "image/png"],
+  ])("serves authenticated %s bytes with private caching and HEAD", async (asset, contentType) => {
+    const get = await fetchPath(`/reports/assets/${asset}`);
+    const head = await fetchPath(`/reports/assets/${asset}`, "HEAD");
+    for (const response of [get, head]) {
+      expect(response.status).toBe(200);
+      expect(response.headers["content-type"]).toBe(contentType);
+      expect(response.headers["cache-control"]).toBe("private, max-age=86400");
+      expect(Number(response.headers["content-length"])).toBe(
+        fs.statSync(new URL(`../assets/${asset}`, import.meta.url)).size,
+      );
+    }
+    expect(get.body.length).toBeGreaterThan(0);
+    expect(head.body).toBe("");
+    expect(head.headers["content-length"]).toBe(get.headers["content-length"]);
   });
 
   it("supports HEAD without a body and rejects writes", async () => {
@@ -246,6 +394,8 @@ describe("Team Reports HTTP responses", () => {
   });
 
   it.each([
+    "/reports/assets/unknown.png",
+    "/reports/assets/crab.avif/extra",
     "/reports/missing/",
     "/reports/day/2026-02-30/",
     "/reports/week/2026-W54/",
@@ -288,20 +438,41 @@ describe("Team Reports HTTP responses", () => {
   it("renders stored trends, history, archived people, index, and status", async () => {
     const index = await fetchPath("/reports/");
     expect(index.status).toBe(200);
-    expect(index.body).toContain('<svg viewBox="0 0 780 185"');
+    expect(index.body).toContain('aria-label="Activity dateline"');
     expect(index.body).toContain('href="/reports/week/2026-W34/"');
     const people = await fetchPath("/reports/people/");
-    expect(people.body).toContain("Archived");
+    expect(people.body).toContain("Member Activity Timelines");
+    expect(people.body).toMatch(/class="oc-badge oc-badge-neutral">Archived<\/span>/);
     const person = await fetchPath("/reports/people/alice-alias/");
     expect(person.status).toBe(200);
     expect(person.body).toContain("Archived on 2026-08-22");
-    expect(person.body).toContain('href="/reports/day/2026-08-20/"');
+    expect(person.body).toContain('href="/reports/day/2026-08-20/?person=alice"');
     const machineIndex = await fetchPath("/reports/index.json");
     expect(JSON.parse(machineIndex.body)).toMatchObject({
       latest: { day: "2026-08-21", week: "2026-W34", month: "2026-08" },
     });
     const status = await fetchPath("/reports/status");
     expect(JSON.parse(status.body)).toEqual({ running: false, lastRun: "fixture-run" });
+  });
+
+  it("reads current overview organizations and prefers the displayed report's organizations", async () => {
+    const emptyStore = createTeamReportsStore({ stateDir: path.join(directory, "empty") });
+    try {
+      for (const name of ["first-organization", "new <organization>"]) {
+        currentOrgs = [name];
+        getStore.mockReturnValueOnce(emptyStore);
+        const response = await fetchPath("/reports/");
+        expect(response.status).toBe(200);
+        expect(response.body).toContain(
+          name.replaceAll("<", "&lt;").replaceAll(">", "&gt;") + " · team",
+        );
+      }
+      const stored = await fetchPath("/reports/");
+      expect(stored.body).toContain("example · team");
+      expect(stored.body).not.toContain("new &lt;organization&gt; · team");
+    } finally {
+      emptyStore.close();
+    }
   });
 
   it("reports unavailable service state without touching a closed store", async () => {

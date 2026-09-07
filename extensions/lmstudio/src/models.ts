@@ -543,9 +543,13 @@ export function mapLmstudioWireEntry(entry: LmstudioModelWire): LmstudioModelBas
   const advertisedContextWindow = asPositiveSafeInteger(entry.max_context_length) ?? null;
   const contextWindow = advertisedContextWindow ?? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW;
   // ModelDefinitionConfig keeps the native maximum in contextWindow. Runtime
-  // budgeting and preload prefer contextTokens, so cap that to the loaded instance.
+  // budgeting reads contextTokens, so it must reflect what the server actually
+  // serves: a loaded instance is authoritative for its own context, while an
+  // unloaded model is budgeted at the length JIT loading will request — the
+  // same clamp ensureLmstudioModelLoaded applies when it triggers the load.
   const effectiveContextWindow = loadedContextWindow ?? contextWindow;
-  const contextTokens = Math.min(effectiveContextWindow, LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH);
+  const contextTokens =
+    loadedContextWindow ?? Math.min(contextWindow, LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH);
   const rawDisplayName = entry.display_name?.trim();
   const reasoningCompat = resolveLmstudioReasoningCompat(entry);
   const trainedForToolUse = entry.capabilities?.trained_for_tool_use;

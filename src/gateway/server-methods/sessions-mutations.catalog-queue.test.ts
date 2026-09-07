@@ -31,8 +31,8 @@ import { sessionMutationHandlers } from "./sessions-mutations.js";
 import { sessionLog } from "./sessions-shared.js";
 import type { GatewayRequestContext } from "./types.js";
 
-afterEach(() => {
-  resetPreparedModelRuntimeSnapshotsForTest();
+afterEach(async () => {
+  await resetPreparedModelRuntimeSnapshotsForTest();
   closeOpenClawAgentDatabasesForTest();
 });
 

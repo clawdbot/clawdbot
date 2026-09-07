@@ -660,10 +660,10 @@ describe("Code Mode catalog and model-visible surface", () => {
     });
 
     const description = compacted.tools[0]?.description ?? "";
-    // Base tool guidance always stays; MCP/API and namespace guidance drop out so
-    // the model never probes an empty virtual API surface.
+    // Native declarations remain available without advertising absent MCP namespaces.
     expect(description).toContain("`catalog.search(query)`");
-    expect(description).not.toContain("API.list");
+    expect(description).toContain("API.list");
+    expect(description).toContain("tools/");
     expect(description).not.toContain("MCP tools are available only through");
     expect(description).not.toContain("MCP namespace globals");
   });

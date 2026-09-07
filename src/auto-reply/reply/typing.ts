@@ -92,13 +92,6 @@ export function createTypingController(params: {
     return `${Math.round(ms / 1000)}s`;
   };
 
-  const resetCycle = () => {
-    started = false;
-    active = false;
-    runComplete = false;
-    dispatchIdle = false;
-  };
-
   const cleanup = () => {
     if (sealed) {
       return;
@@ -117,7 +110,6 @@ export function createTypingController(params: {
     if (active) {
       onCleanup?.();
     }
-    resetCycle();
     sealed = true;
   };
 

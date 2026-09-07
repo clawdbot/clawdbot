@@ -7,16 +7,7 @@ type ModelAuthRequestState = {
 };
 
 // Startup invalidation must not load auth presentation or provider helpers.
-const authReads = new WeakMap<GatewayBrowserClient, ModelAuthRequestState>();
-
-export function getModelAuthRequestState(client: GatewayBrowserClient): ModelAuthRequestState {
-  let state = authReads.get(client);
-  if (!state) {
-    state = { pending: new Map(), refreshes: 0 };
-    authReads.set(client, state);
-  }
-  return state;
-}
+export const authReads = new WeakMap<GatewayBrowserClient, ModelAuthRequestState>();
 
 /** Retire sharing eligibility without cancelling existing consumers' own reads. */
 export function invalidateModelAuthStatusRequests(client: GatewayBrowserClient): void {
