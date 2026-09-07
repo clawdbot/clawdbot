@@ -246,7 +246,9 @@ describe("asynchronous canonical admission", () => {
         stdio: ["ignore", "ignore", "ignore", "ipc"],
       },
     );
-    const closed = new Promise<void>((resolve) => worker.once("close", () => resolve()));
+    const closed = new Promise<void>((resolve) => {
+      worker.once("close", () => resolve());
+    });
     let committed = false;
     const completed = new Promise<integrityWorker.SqliteIntegrityWorkerResult>(
       (resolve, reject) => {
