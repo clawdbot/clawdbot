@@ -1,5 +1,7 @@
+import { isDeepStrictEqual } from "node:util";
 import { reopenPackageUpdateTransaction } from "../../infra/package-update-recovery.js";
 import { createUpdateRecoveryPackageHooks } from "../../infra/update-run-recovery-package.js";
+import { createUpdateRecoveryCheckpointReplay } from "../../infra/update-run-recovery-replay.js";
 import { commitUpdateRecoveryTerminal } from "../../infra/update-run-recovery-terminal.js";
 import {
   assertExactUpdateRecoveryClaim,
@@ -9,12 +11,28 @@ import {
   type UpdateRecoveryRecord,
 } from "../../infra/update-run-recovery.js";
 import type { UpdateServingReceipt } from "../../infra/update-serving-verification-receipt.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
 
 /** Live executor context only. Never serialize it into worker options or a descriptor. */
 export type UpdateCommandRecovery = Parameters<typeof createUpdateRecoveryPackageHooks>[0] & {
   /** Rechecks final lifecycle readiness, not merely stored proof or a claim ID. */
   assertReady: () => void;
+  /**
+   * Executor-owned PUBLICATION interval with live lease rebinding, not capture
+   * exclusion. No default: the capture-only owner must never be adapted here.
+   * Runtime callbacks and the interval fence are supplied only while held.
+   */
+  checkpointReplay?: {
+    withPublication<T>(
+      operation: (
+        access: Omit<
+          Parameters<typeof createUpdateRecoveryCheckpointReplay>[0],
+          "expected" | "database"
+        >,
+      ) => Promise<T>,
+    ): Promise<T>;
+  };
 };
 
 export class UpdateCommandRecoveryPendingError extends Error {
@@ -72,6 +90,90 @@ export function persistUpdateCommandServingReceipt(
   recovery.onRecord(next);
   assertUpdateCommandRecovery(opts, next);
   return next;
+}
+
+/**
+ * Failure-path consumer of the sealed-plan driver. The admitted environment,
+ * never supplied database options, selects the canonical DB. Inspection occurs
+ * in the driver before any writable reopen/claim, including absent canonical DB.
+ * This does not settle the generic restore effect, package roles, or serving proof.
+ */
+export async function replayUpdateCommandRecovery(opts: UpdateCommandOptions) {
+  const recovery = opts.recovery;
+  const run = opts.run;
+  if (!recovery || !run) {
+    throw new UpdateCommandRecoveryPendingError("Replay requires its admitted recovery executor.");
+  }
+  const expected = recovery.getRecord();
+  if (
+    expected.runId !== run.runId ||
+    !expected.checkpoint ||
+    resolveOpenClawStateSqlitePath(run.env) !==
+      resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: expected.checkpoint.binding.stateDir })
+  ) {
+    throw new UpdateCommandRecoveryPendingError("Replay does not match the admitted state root.");
+  }
+  if (expected.terminal || !expected.primaryFailure) {
+    throw new UpdateCommandRecoveryPendingError("Replay requires an unresolved update failure.");
+  }
+  const publication = recovery.checkpointReplay;
+  if (!publication) {
+    throw new UpdateCommandRecoveryPendingError(
+      "Live publication and lease rebinding are unavailable.",
+    );
+  }
+  if (!expected.restore?.planSha256 || expected.restore.phase === "preparing") {
+    return { status: "preparing" as const, record: expected };
+  }
+  let entered = false;
+  let completed:
+    | Awaited<ReturnType<ReturnType<typeof createUpdateRecoveryCheckpointReplay>["replay"]>>
+    | undefined;
+  const result = await publication.withPublication(async (access) => {
+    if (entered) {
+      throw new UpdateCommandRecoveryPendingError("Publication may enter replay only once.");
+    }
+    entered = true;
+    const fence = {
+      assertCurrent() {
+        if (
+          recovery.fence.assertCurrent() !== undefined ||
+          access.fence.assertCurrent() !== undefined
+        ) {
+          throw new UpdateCommandRecoveryPendingError(
+            "Replay authority must complete synchronously.",
+          );
+        }
+      },
+    };
+    fence.assertCurrent();
+    const driver = createUpdateRecoveryCheckpointReplay({
+      ...access,
+      expected,
+      database: { env: run.env },
+      fence,
+    });
+    try {
+      completed = await driver.replay();
+      fence.assertCurrent();
+      return completed;
+    } finally {
+      // This is returned durable evidence, not authority. Even when the wrapper
+      // later loses its lease, never leave the executor pointing at an old claim.
+      if (!isDeepStrictEqual(driver.record, expected)) {
+        recovery.onRecord(driver.record);
+      }
+    }
+  });
+  // An inner verified result is unusable unless the actual outer owner settled.
+  // A wrapper that skipped the operation cannot manufacture restoration success.
+  if (!completed || result !== completed) {
+    throw new UpdateCommandRecoveryPendingError("Publication did not return its replay outcome.");
+  }
+  if (recovery.fence.assertCurrent() !== undefined) {
+    throw new UpdateCommandRecoveryPendingError("Recovery authority did not survive publication.");
+  }
+  return result;
 }
 
 /**

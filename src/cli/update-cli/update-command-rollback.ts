@@ -12,6 +12,7 @@ import {
 } from "../../infra/update-candidate-state.js";
 import { NativePackageRollbackError } from "../../infra/update-native-package-stage.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
+import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -19,6 +20,7 @@ import { confirmGatewayReachable } from "../daemon-cli/restart-health-probe.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { readPackageUpdateIdentity } from "./update-command-package.js";
+import { replayUpdateCommandRecovery } from "./update-command-recovery.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
 import {
@@ -62,10 +64,73 @@ export async function rollbackFailedUpdate(params: {
   rolledBack: boolean;
   stoppedForRollback?: PreManagedServiceStop;
   verifiedAtMs?: number;
+  checkpointReplay?: "preparing" | "unavailable" | "conflict" | "verified";
+  pendingRecoveryReason?: string;
 }> {
   const { preManagedServiceStop: before, packageTransaction, opts } = params;
-  let result = params.result;
   const env = before?.serviceEnv ?? opts.run?.env ?? process.env;
+  if (!opts.recovery) {
+    try {
+      // A lost live context (including the same run ID) is not permission to
+      // fall back to legacy rollback, even when publication removed the main DB.
+      await assertUpdateRecoveryAdmission({ env });
+      // Service authority and diagnostic history can select distinct state
+      // roots. Neither may contain pending recovery before legacy mutation.
+      if (
+        opts.run &&
+        resolveOpenClawStateSqlitePath(opts.run.env) !== resolveOpenClawStateSqlitePath(env)
+      ) {
+        await assertUpdateRecoveryAdmission({ env: opts.run.env });
+      }
+    } catch (error) {
+      return {
+        result: {
+          ...params.result,
+          status: "error",
+          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+        },
+        rolledBack: false,
+        pendingRecoveryReason: formatErrorMessage(error),
+      };
+    }
+  }
+  if (opts.recovery) {
+    // Never enter legacy rollback/diagnostic writes with operational recovery.
+    // In particular, loadUpdateRecovery here would open a missing canonical DB
+    // before the replay driver has reconciled its displaced publication family.
+    const pending = {
+      ...params.result,
+      status: "error" as const,
+      recovery: {
+        serviceRestartSafe: false as const,
+        reason: "runtime-verification-failed" as const,
+      },
+    };
+    try {
+      if (params.previousRoot !== opts.recovery.getRecord().from.root) {
+        throw new Error("Retained package root differs from the admitted recovery runtime.");
+      }
+      const replay = await replayUpdateCommandRecovery(opts);
+      return {
+        result: pending,
+        rolledBack: false,
+        checkpointReplay: replay.status,
+        pendingRecoveryReason:
+          replay.status === "verified"
+            ? "Checkpoint restored; package/native restoration and fresh previous-boot proof remain required."
+            : `Checkpoint recovery remains ${replay.status}.`,
+      };
+    } catch (error) {
+      // A publication error may follow effects. Preserve the primary failure,
+      // pending record and artifacts; never call legacy stop/restart or cleanup.
+      return {
+        result: pending,
+        rolledBack: false,
+        pendingRecoveryReason: formatErrorMessage(error),
+      };
+    }
+  }
+  let result = params.result;
   const recoveryEnv = { ...env, [ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV]: "1" };
   const port = before?.stopped
     ? await resolveUpdatedGatewayRestartPort({ config: params.config, serviceEnv: env })
