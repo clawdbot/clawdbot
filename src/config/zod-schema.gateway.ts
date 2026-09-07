@@ -208,7 +208,10 @@ export const GatewayConfigSchema = z
           .string()
           .optional()
           .refine((v) => v === undefined || v.trim().length > 0, "keyPath must not be blank"),
-        caPath: z.string().optional(),
+        caPath: z
+          .string()
+          .optional()
+          .refine((v) => v === undefined || v.trim().length > 0, "caPath must not be blank"),
       })
       .optional(),
     http: z
