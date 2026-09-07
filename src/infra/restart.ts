@@ -33,6 +33,11 @@ const LAUNCHCTL_ALREADY_LOADED_EXIT_CODE = 37;
 
 const restartLog = createSubsystemLogger("restart");
 
+// Control-flow deadlines (SIGUSR1 grace, deferral caps, restart cooldown) run on
+// the monotonic clock: a wall-clock step (NTP correction, VM suspend/resume)
+// would otherwise extend authorization grace or fire/skip deferral timeouts.
+const monotonicNow = () => performance.now();
+
 let sigusr1AuthorizedCount = 0;
 let sigusr1AuthorizedUntil = 0;
 let sigusr1ExternalAllowed = false;
@@ -42,7 +47,10 @@ let emittedRestartToken = 0;
 let consumedRestartToken = 0;
 let emittedRestartReason: string | undefined;
 let emittedRestartIntent: GatewayRestartIntent | undefined;
-let lastRestartEmittedAt = 0;
+// null marks "never emitted": a 0 sentinel would collide with the monotonic
+// clock origin and impose a phantom cooldown during the first RESTART_COOLDOWN_MS
+// of process life.
+let lastRestartEmittedAt: number | null = null;
 let pendingRestartTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingRestartDueAt = 0;
 let pendingRestartReason: string | undefined;
@@ -136,7 +144,7 @@ function clearGatewayRestartTransientState(): void {
   consumedRestartToken = 0;
   emittedRestartReason = undefined;
   emittedRestartIntent = undefined;
-  lastRestartEmittedAt = 0;
+  lastRestartEmittedAt = null;
   clearActiveDeferralPolls();
   clearPendingScheduledRestart();
   clearPendingRestartSignalAdmission();
@@ -235,7 +243,7 @@ function emitGatewayRestart(reasonOverride?: string, intent?: GatewayRestartInte
     rollBackGatewayRestartEmission();
     return false;
   }
-  lastRestartEmittedAt = Date.now();
+  lastRestartEmittedAt = monotonicNow();
   return true;
 }
 
@@ -283,7 +291,7 @@ export function requestGatewayRestartWithSignalAdmission(
   return { status: hadUnconsumedRestartSignal ? "coalesced" : "failed" };
 }
 
-function resetSigusr1AuthorizationIfExpired(now = Date.now()) {
+function resetSigusr1AuthorizationIfExpired(now = monotonicNow()) {
   if (sigusr1AuthorizedCount <= 0 || now <= sigusr1AuthorizedUntil) {
     return;
   }
@@ -300,7 +308,7 @@ export function isGatewaySigusr1RestartExternallyAllowed() {
 }
 
 function authorizeGatewaySigusr1Restart() {
-  const expiresAt = Date.now() + SIGUSR1_AUTH_GRACE_MS;
+  const expiresAt = monotonicNow() + SIGUSR1_AUTH_GRACE_MS;
   sigusr1AuthorizedCount += 1;
   if (expiresAt > sigusr1AuthorizedUntil) {
     sigusr1AuthorizedUntil = expiresAt;
@@ -713,7 +721,7 @@ export function deferGatewayRestartUntilIdle(opts: {
     stopPoll();
   };
   const handle = { cancel };
-  const startedAt = Date.now();
+  const startedAt = monotonicNow();
   let nextStillPendingAt = startedAt + DEFAULT_DEFERRAL_STILL_PENDING_WARN_MS;
   const attemptEmission = (params: {
     intent?: GatewayRestartIntent;
@@ -775,10 +783,10 @@ export function deferGatewayRestartUntilIdle(opts: {
       attemptEmission({ notifyReady: true });
       return;
     }
-    const elapsedMs = Date.now() - startedAt;
-    if (Date.now() >= nextStillPendingAt) {
+    const elapsedMs = monotonicNow() - startedAt;
+    if (monotonicNow() >= nextStillPendingAt) {
       opts.hooks?.onStillPending?.(current, elapsedMs);
-      nextStillPendingAt = Date.now() + DEFAULT_DEFERRAL_STILL_PENDING_WARN_MS;
+      nextStillPendingAt = monotonicNow() + DEFAULT_DEFERRAL_STILL_PENDING_WARN_MS;
     }
     if (maxWaitMs !== undefined && elapsedMs >= maxWaitMs) {
       stopPoll();
@@ -997,9 +1005,9 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       : process.platform === "win32"
         ? "supervisor"
         : "signal";
-  const nowMs = Date.now();
+  const nowMs = monotonicNow();
   const cooldownMsApplied =
-    opts?.skipCooldown === true
+    opts?.skipCooldown === true || lastRestartEmittedAt === null
       ? 0
       : Math.max(0, lastRestartEmittedAt + RESTART_COOLDOWN_MS - nowMs);
   const restartResultBase = {
