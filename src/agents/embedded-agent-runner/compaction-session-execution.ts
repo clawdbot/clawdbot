@@ -44,11 +44,11 @@ import { type AgentSession, estimateTokens, SessionManager } from "../sessions/i
 import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
 import { createAgentSessionForEmbeddedRunner } from "../sessions/sdk.js";
 import { setSessionModelUsageSink } from "../sessions/session-model-usage.js";
-import { normalizeUsage, type UsageLike } from "../usage.js";
 import { resolveCompactionFailure } from "./compact-reasons.js";
 import { compactionCheckpointStore, persistCompactionCheckpoint } from "./compaction-checkpoint.js";
 import {
   containsRealConversationMessages,
+  createCompactionUsageRecorder,
   normalizeObservedTokenCount,
   resolveCompactionProviderStream,
   summarizeCompactionMessages,
@@ -80,7 +80,6 @@ import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js
 import { applySystemPromptToSession } from "./system-prompt.js";
 import { collectRegisteredToolNames, toSessionToolAllowlist } from "./tool-name-allowlist.js";
 import { splitSdkTools } from "./tool-split.js";
-import type { EmbeddedAgentCompactResult } from "./types.js";
 import { mapThinkingLevel } from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
 
@@ -171,16 +170,9 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             sessionTarget,
           });
       compactionSessionManager = sessionManager;
-      const summaryUsage: NonNullable<EmbeddedAgentCompactResult["summaryUsage"]> = [];
-      const recordUsage = (usage: UsageLike, path?: (typeof summaryUsage)[number]["path"]) => {
-        const normalized = normalizeUsage(usage);
-        if (normalized) {
-          accountingRecorder?.recordUsage?.(normalized);
-          if (path) {
-            summaryUsage.push({ path, usage: normalized });
-          }
-        }
-      };
+      const { summaryUsage, recordUsage } = createCompactionUsageRecorder((usage) =>
+        accountingRecorder?.recordUsage?.(usage),
+      );
       setSessionModelUsageSink(sessionManager, recordUsage);
       const settingsManager = createPreparedEmbeddedAgentSettingsManager({
         cwd: effectiveCwd,

@@ -14,7 +14,11 @@ export type AgentCoreStreamRuntimeDeps = Pick<AgentCoreRuntimeDeps, "streamSimpl
 /** Runtime dependency subset required by summarization helpers. */
 export type AgentCoreCompletionRuntimeDeps = Pick<AgentCoreRuntimeDeps, "completeSimple"> & {
   /** Internal host sink for usage from auxiliary model completions. */
-  internalUsageSink?: (usage: Usage, path?: "foreground-prefix" | "serialized") => void;
+  internalUsageSink?: (
+    usage: Usage,
+    path?: "foreground-prefix" | "serialized",
+    reason?: string,
+  ) => void;
 };
 
 function missingRuntimeDep(name: keyof AgentCoreRuntimeDeps): Error {

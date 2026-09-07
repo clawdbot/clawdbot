@@ -133,9 +133,12 @@ async function summarizeChunks(params: CompactionSummaryParams): Promise<string>
     params.summarizationInstructions,
   );
   for (const [completedChunks, chunk] of chunks.entries()) {
+    let ineligibleReason: string | undefined = chunks.length === 1 ? undefined : "multiple-chunks";
     const foreground =
       chunks.length === 1
-        ? await resolveCompactionPrefix(params.foregroundPrefix, chunk)
+        ? await resolveCompactionPrefix(params.foregroundPrefix, chunk, (reason) => {
+            ineligibleReason = reason;
+          })
         : undefined;
     try {
       summary = await retryAsync(
@@ -151,7 +154,7 @@ async function summarizeChunks(params: CompactionSummaryParams): Promise<string>
             summary,
             params.thinkingLevel,
             params.streamFn,
-            params.usageSink,
+            (usage, path, reason) => params.usageSink?.(usage, path, ineligibleReason ?? reason),
             params.summaryPrompt,
             foreground,
           ),

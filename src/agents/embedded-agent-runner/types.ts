@@ -293,6 +293,7 @@ export type EmbeddedAgentCompactResult = {
   /** Completed built-in summary requests, including rejected prefix attempts. */
   summaryUsage?: Array<{
     path: "foreground-prefix" | "serialized";
+    reason?: string;
     usage: NormalizedUsage;
   }>;
   reason?: string;

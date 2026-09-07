@@ -24,6 +24,7 @@ const model: Model = {
 describe("compaction summary format propagation", () => {
   it.each([
     { mode: "native", api: "anthropic-messages", maxChunkTokens: 10_000, reuse: true },
+    { mode: "prefix-error", api: "anthropic-messages", maxChunkTokens: 10_000, reuse: true },
     { mode: "serialized", api: "anthropic-messages", maxChunkTokens: 10_000, reuse: false },
     { mode: "different-model", api: "anthropic-messages", maxChunkTokens: 10_000, reuse: false },
     { mode: "chunks", api: "anthropic-messages", maxChunkTokens: 200, reuse: false },
@@ -52,6 +53,7 @@ describe("compaction summary format propagation", () => {
         tools: [],
       };
       const requests: Parameters<StreamFn>[1][] = [];
+      const diagnostics: Array<{ path?: string; reason?: string }> = [];
       const snapshot = captureCompactionPrefix(
         foregroundModel,
         {
@@ -72,6 +74,9 @@ describe("compaction summary format propagation", () => {
         "## Decisions\nKeep the canary decision.\n## Exact identifiers\nreceipt_90210";
       const streamFn: StreamFn = (_model, context) => {
         requests.push(context);
+        if (mode === "prefix-error" && context.systemPrompt === foreground.systemPrompt) {
+          throw new Error("Synthetic provider request failure");
+        }
         const stream = createAssistantMessageEventStream();
         stream.push({
           type: "done",
@@ -100,8 +105,23 @@ describe("compaction summary format propagation", () => {
           requiredHeadings: ["## Decisions", "## Exact identifiers"],
         },
         streamFn,
+        usageSink: (_usage, path, reason) => diagnostics.push({ path, reason }),
       });
       expect(result).toBe(summary);
+      const expectedReason: Record<string, string> = {
+        serialized: "no-snapshot",
+        "different-model": "model-route-changed",
+        "appended-history": "history-longer:messages=4:digests=3",
+        "changed-history": "digest-mismatch:index=0:role=user",
+        "prefix-error": "prefix-request-failed",
+      };
+      if (expectedReason[mode]) {
+        expect(diagnostics).toEqual([{ path: "serialized", reason: expectedReason[mode] }]);
+      } else if (reuse) {
+        expect(diagnostics).toEqual([{ path: "foreground-prefix", reason: undefined }]);
+      } else {
+        expect(diagnostics.every(({ path, reason }) => path === "serialized" && reason)).toBe(true);
+      }
       expect(requests.some((request) => request.systemPrompt === foreground.systemPrompt)).toBe(
         reuse,
       );
@@ -111,7 +131,7 @@ describe("compaction summary format propagation", () => {
         expect(JSON.stringify(request)).toContain("Preserve all opaque identifiers exactly");
       }
       if (reuse) {
-        expect(requests).toHaveLength(1);
+        expect(requests).toHaveLength(mode === "prefix-error" ? 2 : 1);
         expect(requests[0]?.messages.slice(0, -1)).toEqual(foreground.messages);
       }
     },

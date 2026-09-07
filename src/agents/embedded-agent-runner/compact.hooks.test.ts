@@ -2165,6 +2165,14 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
             expectedPaths.map((path, index) => ({
               path,
               usage: recordUsage.mock.calls[index]?.[0],
+              ...(path === "serialized"
+                ? {
+                    reason:
+                      scenario === "conversational-prefix"
+                        ? "prefix-response-rejected"
+                        : "no-snapshot",
+                  }
+                : {}),
             })),
           );
           for (const [index, path] of expectedPaths.entries()) {

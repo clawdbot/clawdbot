@@ -1156,8 +1156,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         messages: messagesToSummarize,
         headers: authResult.headers,
       });
-      const usageSink: SessionModelUsageSink = (usage, requestPath) =>
-        recordSessionModelUsage(ctx.sessionManager, usage, requestPath);
+      const usageSink: SessionModelUsageSink = (usage, requestPath, reason) =>
+        recordSessionModelUsage(ctx.sessionManager, usage, requestPath, reason);
       const llmSummaryParams = {
         model,
         apiKey: authResult.apiKey ?? "",

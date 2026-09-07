@@ -21,6 +21,7 @@ import {
   type CompactionRequestBudget,
 } from "../../sessions/compaction/request-budget.js";
 import { releasePendingAgentSteeringItems } from "../../subagents/registry/subagent-registry.js";
+import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { log } from "../logger.js";
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
@@ -268,6 +269,21 @@ export async function runEmbeddedAttemptPromptPhase(
         activeSession.agent.streamFn = googlePromptCacheStreamFn;
       }
       const { onModelRequest } = preparedStreamRuntime.cache;
+      const replayPolicy = sessionRuntime.transcriptPolicy;
+      const toolCallIds =
+        replayPolicy.sanitizeToolCallIds && replayPolicy.toolCallIdMode
+          ? {
+              mode: replayPolicy.toolCallIdMode,
+              preserveNativeAnthropicToolUseIds: replayPolicy.preserveNativeAnthropicToolUseIds,
+              duplicateToolCallIdStyle: replayPolicy.duplicateToolCallIdStyle,
+              preserveReplaySafeThinkingToolCallIds: shouldAllowProviderOwnedThinkingReplay({
+                modelApi: attempt.model.api,
+                provider: attempt.model.provider,
+                policy: replayPolicy,
+              }),
+              allowedToolNames: [...prepared.toolCatalog.toolSearchRunPlan.replayAllowedToolNames],
+            }
+          : undefined;
       {
         const streamFn = activeSession.agent.streamFn;
         activeSession.agent.streamFn = (model, context, options) => {
@@ -277,6 +293,7 @@ export async function runEmbeddedAttemptPromptPhase(
               timezone: boundaryTimezone,
               includeTimestamp: includeBoundaryTimestamp,
               appendOnlyRuntimeContext,
+              toolCallIds,
             });
             setCompactionSafeguardRuntime(sessionManager, {
               ...getCompactionSafeguardRuntime(sessionManager),

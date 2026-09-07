@@ -1399,18 +1399,17 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
         );
         expect(compacted.compactionUsage.length).toBeGreaterThan(0);
         expect(summaryUsage).toHaveLength(compacted.compactionUsage.length);
-        for (const [index, { path: requestPath, usage }] of summaryUsage.entries()) {
+        for (const [index, { path: requestPath, usage, reason }] of summaryUsage.entries()) {
           logLiveCache(
-            `anthropic compaction request=${index + 1} path=${requestPath} cacheRead=${usage.cacheRead ?? 0} input=${usage.input ?? 0}`,
+            `anthropic compaction request=${index + 1} path=${requestPath} reason=${reason ?? "eligible"} cacheRead=${usage.cacheRead ?? 0} input=${usage.input ?? 0}`,
           );
           expect(usage).toEqual(compacted.compactionUsage[index]);
         }
         // Rejected prefix attempts remain billable; the final request identifies
         // whether this compaction produced its summary through prefix reuse.
         const finalSummaryRequest = summaryUsage.at(-1);
-        if (finalSummaryRequest?.path === "foreground-prefix") {
-          expect(finalSummaryRequest.usage.cacheRead ?? 0).toBeGreaterThan(0);
-        }
+        expect(finalSummaryRequest?.path).toBe("foreground-prefix");
+        expect(finalSummaryRequest?.usage.cacheRead ?? 0).toBeGreaterThan(0);
 
         const followup = await runEmbeddedCacheProbe({
           ...fixture,

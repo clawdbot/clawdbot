@@ -737,6 +737,7 @@ async function runSummarizationCompletion(params: {
     params.signal,
     params.thinkingLevel,
   );
+  let fallbackReason: string | undefined;
   const complete = async (
     context: Context,
     rejectTools = false,
@@ -768,6 +769,7 @@ async function runSummarizationCompletion(params: {
     params.runtime?.internalUsageSink?.(
       response.usage,
       rejectTools ? "foreground-prefix" : "serialized",
+      rejectTools ? undefined : fallbackReason,
     );
     if (response.stopReason === "aborted") {
       return err(
@@ -825,23 +827,31 @@ async function runSummarizationCompletion(params: {
     timestamp: Date.now(),
   });
   const { foreground, model } = params;
-  if (
-    foreground &&
-    params.requiredHeadings?.length &&
-    (model.api === "anthropic-messages" || model.api === "openai-responses") &&
-    foreground.model.id === model.id &&
-    foreground.model.provider === model.provider &&
-    foreground.model.api === model.api &&
-    foreground.model.baseUrl === model.baseUrl &&
-    // The host already verified this exact summary source against the cached prefix.
-    (params.messages === foreground.sourceMessages ||
-      JSON.stringify(messages) ===
-        JSON.stringify(
-          foreground.sourceMessages
-            ? convertToLlm(foreground.sourceMessages)
-            : foreground.context.messages,
-        ))
+  if (!foreground) {
+    fallbackReason = "no-foreground-prefix";
+  } else if (!params.requiredHeadings?.length) {
+    fallbackReason = "missing-heading-contract";
+  } else if (model.api !== "anthropic-messages" && model.api !== "openai-responses") {
+    fallbackReason = "unsupported-api";
+  } else if (
+    foreground.model.id !== model.id ||
+    foreground.model.provider !== model.provider ||
+    foreground.model.api !== model.api ||
+    foreground.model.baseUrl !== model.baseUrl
   ) {
+    fallbackReason = "model-route-changed";
+  } else if (
+    params.messages !== foreground.sourceMessages &&
+    JSON.stringify(messages) !==
+      JSON.stringify(
+        foreground.sourceMessages
+          ? convertToLlm(foreground.sourceMessages)
+          : foreground.context.messages,
+      )
+  ) {
+    fallbackReason = "summary-source-changed";
+  }
+  if (foreground && !fallbackReason) {
     if (params.signal?.aborted) {
       return err(new CompactionError("aborted", `${params.errorLabel} aborted`));
     }
@@ -859,8 +869,10 @@ async function runSummarizationCompletion(params: {
       if (result.ok && !params.signal?.aborted) {
         return result;
       }
+      fallbackReason = "prefix-response-rejected";
     } catch {
-      // Native history can be rejected independently of the serialized summary request.
+      // Never include provider exception text: it may contain request bodies or credentials.
+      fallbackReason = "prefix-request-failed";
     }
     if (params.signal?.aborted) {
       return err(new CompactionError("aborted", `${params.errorLabel} aborted`));

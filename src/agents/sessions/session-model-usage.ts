@@ -13,8 +13,9 @@ export function recordSessionModelUsage(
   sessionManager: unknown,
   usage: Usage,
   path?: Parameters<SessionModelUsageSink>[1],
+  reason?: string,
 ): void {
-  sinkBySessionManager.get(sessionManager)?.(usage, path);
+  sinkBySessionManager.get(sessionManager)?.(usage, path, reason);
 }
 
 /** Sets the active accounting owner for auxiliary model usage. */

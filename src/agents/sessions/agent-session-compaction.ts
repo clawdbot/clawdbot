@@ -6,14 +6,9 @@ import type { AssistantMessage } from "../../llm/types.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
 import { resolveCompactionInstructions } from "../agent-hooks/compaction-instructions.js";
 import { getCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
-import {
-  buildSummaryChunksWithWorker,
-  computeAdaptiveChunkRatioWithWorker,
-} from "../compaction-planning-worker.js";
-import { SAFETY_MARGIN, SUMMARIZATION_OVERHEAD_TOKENS } from "../compaction-planning.js";
+import { SAFETY_MARGIN } from "../compaction-planning.js";
 import { resolveCompactionPrefix } from "../compaction-prefix.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import {
   calculateContextTokens,
   buildSessionContext,
@@ -363,31 +358,19 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       const coreInstructions = [focusInstructions, unresolvedRequestInstructions]
         .filter(Boolean)
         .join("\n\n");
-      let foreground = preparation.isSplitTurn
+      let ineligibleReason: string | undefined = preparation.isSplitTurn ? "split-turn" : undefined;
+      const foreground = preparation.isSplitTurn
         ? undefined
         : await resolveCompactionPrefix(
             getCompactionSafeguardRuntime(this.sessionManager)?.foregroundPrefix,
             preparation.messagesToSummarize,
+            (reason) => {
+              ineligibleReason = reason;
+            },
           );
-      if (foreground) {
-        const contextWindow = model.contextWindow ?? DEFAULT_CONTEXT_TOKENS;
-        const ratio = await computeAdaptiveChunkRatioWithWorker({
-          messages: preparation.messagesToSummarize,
-          contextWindow,
-          signal: options.signal,
-        });
-        const chunks = await buildSummaryChunksWithWorker({
-          messages: preparation.messagesToSummarize,
-          maxChunkTokens: Math.max(
-            1,
-            Math.floor(contextWindow * ratio) - SUMMARIZATION_OVERHEAD_TOKENS,
-          ),
-          signal: options.signal,
-        });
-        if (chunks.length !== 1) {
-          foreground = undefined;
-        }
-      }
+      // Core emits one history-summary request. Only the safeguard owns chunk
+      // planning; estimating hypothetical chunks here rejects otherwise reusable
+      // prefixes when the caller supplies a small compaction target budget.
       const runCoreCompaction = () =>
         compact(
           preparation,
@@ -398,8 +381,8 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
           options.signal,
           this.thinkingLevel,
           this.agent.streamFn,
-          createCompactionRuntime((usage, path) =>
-            recordSessionModelUsage(this.sessionManager, usage, path),
+          createCompactionRuntime((usage, path, reason) =>
+            recordSessionModelUsage(this.sessionManager, usage, path, ineligibleReason ?? reason),
           ),
           foreground,
         );
