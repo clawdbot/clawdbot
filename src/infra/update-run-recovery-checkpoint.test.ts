@@ -1,10 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { inspectCheckpointFile } from "./update-checkpoint-files.js";
 import {
@@ -24,6 +27,7 @@ import {
   type UpdateRecoveryNativeFacts,
 } from "./update-run-recovery-native.js";
 import { setupNativeManagerFixture } from "./update-run-recovery-native.test-support.js";
+import { createUpdateRecoveryCheckpointReplay } from "./update-run-recovery-replay.js";
 import {
   beginUpdateRecovery,
   prepareUpdateRecoveryHandoff,
@@ -41,6 +45,7 @@ import {
 
 const dirs = createTempDirTracker();
 afterEach(() => {
+  vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
   dirs.cleanup();
 });
@@ -52,7 +57,10 @@ function family(file: string) {
     fs.existsSync(entry) ? fileHash(entry) : null,
   );
 }
-async function fixture(withService = false) {
+async function fixture(
+  withService = false,
+  phase: "unprepared" | "preparing" | "sealed" = "sealed",
+) {
   const root = fs.realpathSync(dirs.make("recovery-checkpoint-adapter-"));
   await buildCheckpointReaderRuntime(root);
   const options = { env: { HOME: root, OPENCLAW_STATE_DIR: root } };
@@ -65,7 +73,8 @@ async function fixture(withService = false) {
     },
   };
   const run = createUpdateRun({ trigger: "cli" }, options);
-  const runtime = { root, nodePath: process.execPath, version: "1.0.0", buildId: null };
+  const installed = await buildCheckpointReaderRuntime(root);
+  const runtime = { ...installed.runtime, buildId: null };
   let record = beginUpdateRecovery(
     { runId: run.runId, from: runtime, to: runtime },
     fence,
@@ -173,7 +182,9 @@ async function fixture(withService = false) {
   if (prepared.status !== "ready") {
     throw new Error("fixture could not prepare");
   }
-  await adapter.seal(prepared.planRef);
+  if (phase === "sealed") {
+    await adapter.seal(prepared.planRef);
+  }
   const plan = await reopenUpdateCheckpointRestorePlan(prepared.planRef, access);
   const shared = plan.plan.resources[0];
   if (!shared) {
@@ -195,6 +206,7 @@ async function fixture(withService = false) {
     adapter,
     adapterParams,
     prepared,
+    unprepared: record,
     apply,
     displacedPath,
     loseFence() {
@@ -778,5 +790,227 @@ describe("early native manager recovery", () => {
       ).toThrow();
       expect(loadUpdateRecovery(record.runId, f.options)).toEqual(record);
     }
+  });
+});
+
+function replayDriver(f: Awaited<ReturnType<typeof fixture>>, expected = f.adapter.record) {
+  const writes: number[] = [];
+  let closes = 0;
+  const prepareCanonicalWrite = async (record: UpdateRecoveryRecord) => {
+    // This same-runtime fixture uses the actual executing Node and a real
+    // retained canonical preflight CLI. No invented subprocess verdict.
+    expect(fs.existsSync(f.file)).toBe(true);
+    expect(fs.existsSync(f.displacedPath)).toBe(true);
+    expect(record.from.nodePath).toBe(process.execPath);
+    const opened = openOpenClawStateDatabase(f.options);
+    expect(opened.path).toBe(f.file);
+    expect(opened.db.isOpen).toBe(true);
+    writes.push(record.revision);
+    closeOpenClawStateDatabaseForTest();
+  };
+  const closeCanonicalDatabase = async () => {
+    closes++;
+    closeOpenClawStateDatabaseForTest();
+  };
+  const params = { ...f.adapterParams, expected, prepareCanonicalWrite, closeCanonicalDatabase };
+  return {
+    params,
+    driver: createUpdateRecoveryCheckpointReplay(params),
+    writes,
+    closes: () => closes,
+  };
+}
+
+describe("sealed checkpoint replay driver", () => {
+  it("publishes shared state before runtime/claim writes, then restores files without settling history", async () => {
+    const f = await fixture(true);
+    const r = replayDriver(f);
+    const originalClaim = f.adapter.record.claimId;
+    const result = await r.driver.replay();
+    expect(result.status).toBe("verified");
+    expect(result.record.claimId).not.toBe(originalClaim);
+    expect(result.record.restore).toMatchObject({ phase: "observed", resourceCursor: 2 });
+    expect(result.record.effects.at(-1)?.state).toBe("intent");
+    expect(result.record.terminal).toBeUndefined();
+    expect(fs.readFileSync(f.configPath, "utf8")).toBe("original");
+    expect(fs.readFileSync(path.join(f.root, "service.env"), "utf8")).toBe("original");
+    expect(getUpdateRun(result.record.runId, f.options)?.status).toBe("running");
+    closeOpenClawStateDatabaseForTest();
+    const displaced = family(f.displacedPath);
+    const canonical = family(f.file);
+    expect(r.writes.length).toBeGreaterThan(0);
+    expect(r.closes()).toBe(r.writes.length);
+    await expect(r.driver.replay()).rejects.toThrow();
+    const repeat = replayDriver(f, result.record);
+    expect((await repeat.driver.replay()).status).toBe("verified");
+    expect(repeat.writes).toEqual([]);
+    expect(family(f.file)).toEqual(canonical);
+    expect(family(f.displacedPath)).toEqual(displaced);
+  });
+
+  it.each(["displacement", "publication"] as const)(
+    "resumes a real interrupted %s without opening missing/shared state before reconciliation",
+    async (boundary) => {
+      const f = await fixture();
+      const r = replayDriver(f);
+      const rename = fs.renameSync;
+      const replacement = path.join(path.dirname(f.displacedPath), "replacement");
+      const crash = vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+        rename(from, to);
+        if (
+          (boundary === "displacement" && String(from) === f.file) ||
+          (boundary === "publication" && String(from) === replacement)
+        ) {
+          throw new Error("simulated process loss after rename");
+        }
+      });
+      await expect(r.driver.replay()).rejects.toThrow("simulated process loss");
+      crash.mockRestore();
+      expect(r.writes).toEqual([]);
+      expect(fs.existsSync(f.file)).toBe(boundary === "publication");
+      const displaced = family(f.displacedPath);
+      const sealedPlan = fileHash(f.prepared.planRef.planPath);
+      // An exact old row is evidence only. The driver reopens the record-bound
+      // plan, validates both roles and publishes before any current-claim write.
+      const evidence = loadUpdateRecovery(r.driver.record.runId, {
+        path: boundary === "displacement" ? f.displacedPath : f.file,
+      })!;
+      const fresh = replayDriver(f, evidence);
+      const result = await fresh.driver.replay();
+      expect(result.status).toBe("verified");
+      expect(fs.readFileSync(f.configPath, "utf8")).toBe("original");
+      expect(fileHash(f.prepared.planRef.planPath)).toBe(sealedPlan);
+      expect(family(f.displacedPath)).toEqual(displaced);
+      expect(result.record.claimId).not.toBe(evidence.claimId);
+    },
+  );
+
+  it("leaves preparing and unprepared records unpublished without blessing an existing plan", async () => {
+    const f = await fixture(false, "preparing");
+    const canonical = family(f.file);
+    const plan = fileHash(f.prepared.planRef.planPath);
+    for (const expected of [f.unprepared, f.adapter.record]) {
+      const r = replayDriver(f, expected);
+      expect(await r.driver.replay()).toEqual({ status: "preparing", record: expected });
+      expect(r.writes).toEqual([]);
+      expect(r.closes()).toBe(0);
+    }
+    expect(family(f.file)).toEqual(canonical);
+    expect(fileHash(f.prepared.planRef.planPath)).toBe(plan);
+    expect(fs.existsSync(f.displacedPath)).toBe(false);
+  });
+
+  it("retains pending intent on unavailable even when read-only inspection reports after", async () => {
+    const f = await fixture();
+    expect((await f.apply(f.adapter.record)).status).toBe("applied");
+    expect((await f.adapter.inspect()).observations[0]?.observed).toBe("after");
+    fs.renameSync(path.join(f.root, "dist"), path.join(f.root, "retained-unavailable"));
+    const r = replayDriver(f);
+    const before = family(f.file);
+    const displaced = family(f.displacedPath);
+    const result = await r.driver.replay();
+    expect(result).toMatchObject({
+      status: "unavailable",
+      result: { status: "unavailable", observed: "after", reason: "previous-runtime-unavailable" },
+      record: {
+        revision: f.adapter.record.revision,
+        restore: { phase: "intent", resourceCursor: 0 },
+      },
+    });
+    expect(r.writes).toEqual([]);
+    expect(family(f.file)).toEqual(before);
+    expect(family(f.displacedPath)).toEqual(displaced);
+  });
+
+  it("preserves newer file data and refuses a stale current claim without runtime writes", async () => {
+    const f = await fixture();
+    fs.writeFileSync(f.configPath, "newer operator bytes");
+    const r = replayDriver(f);
+    const before = family(f.file);
+    expect((await r.driver.replay()).status).toBe("conflict");
+    expect(r.writes).toEqual([]);
+    expect(fs.readFileSync(f.configPath, "utf8")).toBe("newer operator bytes");
+    expect(family(f.file)).toEqual(before);
+  });
+
+  it("reconciles a changed canonical claim read-only rather than adopting it", async () => {
+    const f = await fixture();
+    const expected = f.adapter.record;
+    await f.apply(expected);
+    const claimed = claimUpdateRecovery(expected, f.adapterParams.fence, f.options);
+    closeOpenClawStateDatabaseForTest();
+    const before = family(f.file);
+    const r = replayDriver(f, expected);
+    expect((await r.driver.replay()).status).toBe("conflict");
+    expect(r.writes).toEqual([]);
+    expect(family(f.file)).toEqual(before);
+    expect(loadUpdateRecovery(expected.runId, f.options)?.claimId).toBe(claimed.claimId);
+  });
+
+  it("keeps a published intent pending and closes owner handles if runtime reopening fails", async () => {
+    const f = await fixture();
+    const r = replayDriver(f);
+    const failed = createUpdateRecoveryCheckpointReplay({
+      ...r.params,
+      prepareCanonicalWrite: async () => {
+        throw new Error("runtime not ready");
+      },
+    });
+    await expect(failed.replay()).rejects.toThrow("runtime not ready");
+    expect(r.closes()).toBe(1);
+    expect(fs.existsSync(f.displacedPath)).toBe(true);
+    expect(loadUpdateRecovery(failed.record.runId, f.options)).toEqual(f.adapter.record);
+    const resumed = replayDriver(f, failed.record);
+    expect((await resumed.driver.replay()).status).toBe("verified");
+  });
+
+  it("rejects overlapping drivers before repeated effects and releases the lock after completion", async () => {
+    const f = await fixture();
+    const r = replayDriver(f);
+    let reached!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const first = createUpdateRecoveryCheckpointReplay({
+      ...r.params,
+      prepareCanonicalWrite: async (record) => {
+        await r.params.prepareCanonicalWrite(record);
+        reached();
+        await barrier;
+      },
+    });
+    const running = first.replay();
+    await entered;
+    try {
+      const second = replayDriver(f);
+      await expect(first.replay()).rejects.toThrow();
+      await expect(second.driver.replay()).rejects.toThrow();
+      expect(second.writes).toEqual([]);
+    } finally {
+      release();
+    }
+    const result = await running;
+    expect(result.status).toBe("verified");
+    expect((await replayDriver(f, result.record).driver.replay()).status).toBe("verified");
+  });
+
+  it("does not record observed progress when runtime preparation loses exclusion after publication", async () => {
+    const f = await fixture();
+    const r = replayDriver(f);
+    const driver = createUpdateRecoveryCheckpointReplay({
+      ...r.params,
+      prepareCanonicalWrite: async (record) => {
+        await r.params.prepareCanonicalWrite(record);
+        f.loseFence();
+      },
+    });
+    await expect(driver.replay()).rejects.toThrow("lost exclusion");
+    expect(r.closes()).toBe(1);
+    expect(loadUpdateRecovery(driver.record.runId, f.options)).toEqual(f.adapter.record);
+    expect(driver.record.restore?.phase).toBe("intent");
   });
 });

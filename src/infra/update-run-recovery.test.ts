@@ -13,6 +13,8 @@ import {
   getUpdateRun,
   recordUpdateRunStep,
 } from "./update-run-ledger.js";
+import { defineUpdateRecoveryArtifactTests } from "./update-run-recovery-after-image.test-support.js";
+import { defineUpdateRecoveryPackageTests } from "./update-run-recovery-package.test-support.js";
 import {
   acceptUpdateRecoveryHandoff,
   assertNoPendingUpdateRecovery,
@@ -137,12 +139,12 @@ function snapshot(root: string) {
       };
     });
 }
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-  tempDirs.cleanup();
-});
 
 describe("durable update recovery", () => {
+  afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
+    tempDirs.cleanup();
+  });
   it("pins source paths at admission instead of deriving them from a later checkpoint", () => {
     const fixture = setup();
     const { options, run, from, to } = fixture;
@@ -673,3 +675,6 @@ describe("durable update recovery", () => {
     ).toBe('{"revision":1}');
   });
 });
+
+defineUpdateRecoveryArtifactTests();
+defineUpdateRecoveryPackageTests();
