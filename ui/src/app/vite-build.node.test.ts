@@ -39,7 +39,7 @@ describe("Control UI Vite build", () => {
     captureLogs("silent");
     await fs.writeFile(
       path.join(root, "index.html"),
-      '<button>Load</button><script type="module" src="./main.js"></script>',
+      '<script>globalThis.fixtureBooted = true;</script><button>Load</button><script type="module" src="./main.js"></script>',
     );
     await fs.writeFile(
       path.join(root, "main.js"),
@@ -233,6 +233,17 @@ describe("Control UI Vite build", () => {
       expect(/const EMBEDDED_CACHE_VERSION = "([^"]+)"/u.exec(worker)?.[1]).toBe(buildInfo.buildId);
     }
     expect(cacheIds[0]).not.toBe(cacheIds[1]);
+  });
+
+  it("carries the Cloudflare Rocket Loader bypass on every emitted script tag", async () => {
+    await build(config);
+
+    const html = await fs.readFile(path.join(outDir, "index.html"), "utf8");
+    const scriptTags = html.match(/<script\b[^>]*>/gu) ?? [];
+    expect(scriptTags.length).toBeGreaterThan(0);
+    for (const tag of scriptTags) {
+      expect(tag).toMatch(/^<script data-cfasync="false"(?:\s|>)/u);
+    }
   });
 
   it("fails when a completed build emits outside the required assets directory", async () => {

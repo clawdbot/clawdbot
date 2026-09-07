@@ -22,8 +22,9 @@ struct RuntimeLocalizationSourceGuardTests {
             (LegacyContentState(statusText: "Disconnected", isDisconnected: true), .disconnected, nil),
             (LegacyContentState(statusText: "Idle", isIdle: true), .idle, nil),
             (LegacyContentState(statusText: "Reconnecting...", isConnecting: true), .reconnecting, nil),
-            (LegacyContentState(statusText: "Ansluter igen...", isConnecting: true), .reconnecting, nil),
+            (LegacyContentState(statusText: "Connecting...", isConnecting: true), .connecting, nil),
             (LegacyContentState(statusText: "Approval needed"), .approvalNeeded, nil),
+            (LegacyContentState(statusText: "Action required"), .actionRequired, nil),
             (LegacyContentState(statusText: "Backend supplied attention"), .attention, "Backend supplied attention"),
             (
                 LegacyContentState(statusText: "Backend supplied connection detail", isConnecting: true),

@@ -19,9 +19,6 @@ import { recoverStore } from "./main-session-restart-recovery-store.js";
 
 const sessionKey = "agent:main:main";
 const unusedGatewayRuntime: GatewayRecoveryRuntime = {
-  abortAgent: async () => {
-    throw new Error("terminal residue must not abort");
-  },
   dispatchAgent: async () => {
     throw new Error("terminal residue must not dispatch");
   },

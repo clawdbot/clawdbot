@@ -356,6 +356,151 @@ suite.define(() => {
     );
   });
 
+  it("announces after /clear, dedupes reconnects, and notices a missed reset", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1440 },
+      },
+      async ({ page }) => {
+        const sessionId = "observer-background-session";
+        const readyText = "The session is ready to clear.";
+        const roster = sessionsListResponse();
+        for (const row of roster.sessions) {
+          if (row.key === backgroundSessionKey) {
+            Object.assign(row, { sessionId });
+          }
+        }
+        const gateway = await installMockGateway(page, {
+          deferredMethods: ["sessions.reset"],
+          historyMessages: [
+            {
+              content: [{ type: "text", text: readyText }],
+              role: "assistant",
+              timestamp: baseTime,
+            },
+          ],
+          methodResponses: { "sessions.list": roster },
+          sessionKey: selectedSessionKey,
+        });
+        const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
+        const waitForPane = async (sessionKey: string) => {
+          await expect
+            .poll(() => new URL(page.url()).pathname)
+            .toBe(controlUiSessionPath(sessionKey));
+          await expect
+            .poll(() =>
+              pane.evaluate((element, key) => {
+                const state = (
+                  element as HTMLElement & {
+                    state?: { sessionKey: string; connected: boolean; chatLoading: boolean };
+                  }
+                ).state;
+                return state?.sessionKey === key && state.connected && !state.chatLoading;
+              }, sessionKey),
+            )
+            .toBe(true);
+          await pane.evaluate(async (element) => {
+            await (element as HTMLElement & { updateComplete: Promise<unknown> }).updateComplete;
+          });
+        };
+
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, selectedSessionKey));
+        await waitForPane(selectedSessionKey);
+        await pane.getByText(readyText, { exact: true }).waitFor({ state: "visible" });
+
+        const beforeResetDigest = {
+          ...observerDigest({
+            sessionKey: backgroundSessionKey,
+            health: "stuck",
+            headline: "Background work needs attention before clear",
+            revision: 10,
+          }),
+          sessionId,
+          lifecycleRevision: "before-clear",
+        };
+        const beforeReset = await emitObserverAndReadToast(page, beforeResetDigest, "open");
+        expect(beforeReset.visible).toBe(true);
+        expect(beforeReset.actionable).toBe(true);
+        expect(beforeReset.message).toContain(beforeResetDigest.headline);
+        await waitForPane(backgroundSessionKey);
+        await pane.getByText(readyText, { exact: true }).waitFor({ state: "visible" });
+
+        const historyBefore = await gateway.getRequests("chat.history", {
+          sessionKey: backgroundSessionKey,
+        });
+        const textarea = pane.locator(".agent-chat__composer-combobox textarea");
+        await textarea.fill("/clear");
+        await expect
+          .poll(() =>
+            pane.evaluate(
+              (element) =>
+                (element as HTMLElement & { state: { chatMessage: string } }).state.chatMessage,
+            ),
+          )
+          .toBe("/clear");
+        await textarea.press("Escape");
+        await textarea.press("Enter");
+        const reset = await gateway.waitForRequest("sessions.reset");
+        expect(reset.params).toMatchObject({ key: backgroundSessionKey });
+        expect(await gateway.getRequests("sessions.reset")).toHaveLength(1);
+        await gateway.setHistoryMessages([]);
+        await gateway.resolveDeferred("sessions.reset", { ok: true });
+        await gateway.waitForRequest("chat.history", {
+          after: historyBefore.length,
+          match: { sessionKey: backgroundSessionKey },
+        });
+        await pane.getByText(readyText, { exact: true }).waitFor({ state: "hidden" });
+        await waitForPane(backgroundSessionKey);
+
+        await page.locator("a.nav-item--home").click();
+        await waitForPane(selectedSessionKey);
+        const afterResetDigest = {
+          ...observerDigest({
+            sessionKey: backgroundSessionKey,
+            health: "stuck",
+            headline: "Background work needs attention after clear",
+            revision: 1,
+          }),
+          sessionId,
+          lifecycleRevision: "after-clear",
+          runId: "observer-run-after-clear",
+        };
+        const afterReset = await emitObserverAndReadToast(page, afterResetDigest, "dismiss");
+        expect(afterReset.visible).toBe(true);
+        expect(afterReset.actionable).toBe(true);
+        expect(afterReset.message).toContain(afterResetDigest.headline);
+
+        const connectBefore = (await gateway.getRequests("connect")).length;
+        await gateway.closeLatest(1012, "observer notice reconnect");
+        await gateway.waitForRequest("connect", { after: connectBefore });
+        await waitForPane(selectedSessionKey);
+        const replay = await emitObserverAndReadToast(page, { ...afterResetDigest });
+        expect(replay.visible).toBe(false);
+        const continued = await emitObserverAndReadToast(page, {
+          ...afterResetDigest,
+          revision: 2,
+          updatedAt: baseTime + 12,
+        });
+        expect(continued.visible).toBe(false);
+
+        // The browser receives no reset notification before this new lifecycle digest.
+        const missedResetDigest = {
+          ...afterResetDigest,
+          lifecycleRevision: "after-missed-clear",
+          runId: "observer-run-after-missed-clear",
+          revision: 3,
+          updatedAt: baseTime + 13,
+        };
+        const missedReset = await emitObserverAndReadToast(page, missedResetDigest, "dismiss");
+        expect(missedReset.visible).toBe(true);
+        expect(missedReset.actionable).toBe(true);
+        expect(await gateway.getRequests("sessions.reset")).toHaveLength(1);
+      },
+    );
+  });
+
   it.each([
     {
       name: "suppresses the configured selected-agent foreground alias",
@@ -452,16 +597,23 @@ suite.define(() => {
             },
           },
           sessionKey: "global",
+          sessionScope: "global",
         });
 
-        const globalRouteKey = "agent:work:global";
-        const response = await page.goto(controlUiSessionUrl(suite.server.baseUrl, globalRouteKey));
+        const response = await page.goto(
+          controlUiSessionUrl(suite.server.baseUrl, "agent:work:main"),
+        );
         expect(response?.status()).toBe(200);
         await page
           .getByText("Configured global foreground is ready.")
           .waitFor({ state: "visible" });
-        expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(globalRouteKey));
+        expect(new URL(page.url()).pathname).toBe("/chat/work");
         expect(await gateway.getRequests("connect")).toHaveLength(1);
+        expect(await gateway.getRequests("chat.startup")).toEqual([
+          expect.objectContaining({
+            params: expect.objectContaining({ sessionKey: "agent:work:primary", agentId: "work" }),
+          }),
+        ]);
 
         const headline = `Configured-global observer notice for ${testCase.sessionKey}`;
         const digest = observerDigest({

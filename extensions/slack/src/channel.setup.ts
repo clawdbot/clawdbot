@@ -1,4 +1,3 @@
-// Slack plugin module implements channel.setup behavior.
 import { isSlackSetupAccountConfigured } from "./account-configured.js";
 import type { ResolvedSlackAccount } from "./accounts.js";
 import type { ChannelPlugin } from "./channel-api.js";
@@ -42,7 +41,10 @@ export const slackSetupPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   streaming: {
     blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
   },
-  reload: { configPrefixes: ["channels.slack"] },
+  reload: {
+    configPrefixes: ["channels.slack"],
+    noopPrefixes: ["messages.inbound", "messages.ackReactionScope"],
+  },
   configSchema: SlackChannelConfigSchema,
   config: {
     ...slackBaseConfigAdapter,

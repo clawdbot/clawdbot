@@ -1,6 +1,6 @@
-import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-harness-registration";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { jsonResult, readStringParam, type AnyAgentTool } from "openclaw/plugin-sdk/core";
+import type { AnyAgentTool } from "openclaw/plugin-sdk/core";
 /**
  * Compatibility tools for the retired Codex Supervisor plugin.
  *
@@ -10,20 +10,22 @@ import { jsonResult, readStringParam, type AnyAgentTool } from "openclaw/plugin-
  * handlers before it starts or resumes the harness-owned Codex thread.
  */
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { readStringParam } from "openclaw/plugin-sdk/param-readers";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
+import { resolveCodexAppServerFallbackApiKeyCacheKey } from "./app-server/auth-cache-key.js";
+import type { createCodexAuthProfileSelection } from "./app-server/auth-profile-selection.js";
+import type {
+  CodexAppServerStartOptions,
+  CodexSupervisionEndpoint,
+} from "./app-server/config-contracts.js";
 import {
-  resolveCodexAppServerAuthProfileIdForAgent,
-  resolveCodexAppServerFallbackApiKeyCacheKey,
-} from "./app-server/auth-bridge.js";
-import {
-  assertCodexAppServerConnectionSecurity,
   codexAppServerStartOptionsKey,
-  readCodexPluginConfig,
-  resolveCodexSupervisionAppServerRuntimeOptions,
-  type CodexAppServerStartOptions,
-  type CodexSupervisionEndpoint,
-} from "./app-server/config.js";
+  type createCodexAppServerConfig,
+} from "./app-server/config-options.js";
+import { readCodexPluginConfig } from "./app-server/config-parsing.js";
+import { assertCodexAppServerConnectionSecurity } from "./app-server/config-security.js";
 import { requestCodexAppServerJson } from "./app-server/request.js";
 
 /** Legacy endpoint env retained for the shipped Supervisor tool contract. */
@@ -147,6 +149,12 @@ type EndpointRequest = <T = unknown>(
 
 type CodexSupervisionToolsOptions = {
   getPluginConfig: () => unknown;
+  resolveAuthProfileId: ReturnType<
+    typeof createCodexAuthProfileSelection
+  >["resolveCodexAppServerAuthProfileIdForAgent"];
+  resolveRuntimeOptions: ReturnType<
+    typeof createCodexAppServerConfig
+  >["resolveCodexSupervisionAppServerRuntimeOptions"];
   getRuntimeConfig?: () => OpenClawConfig | undefined;
   /** Trusted owner bit supplied by the plugin tool context. */
   senderIsOwner: boolean;
@@ -353,6 +361,8 @@ function resolveEndpoints(
   pluginConfig: unknown,
   env: NodeJS.ProcessEnv,
   runtimeConfig: OpenClawConfig | undefined,
+  resolveAuthProfileId: CodexSupervisionToolsOptions["resolveAuthProfileId"],
+  resolveRuntimeOptions: CodexSupervisionToolsOptions["resolveRuntimeOptions"],
 ): ResolvedSupervisionEndpoint[] {
   const configured = readCodexPluginConfig(pluginConfig).supervision?.endpoints;
   const endpoints = configured?.length ? configured : readLegacyEnvEndpoints(env);
@@ -367,6 +377,8 @@ function resolveEndpoints(
         pluginConfig,
         env,
         runtimeConfig,
+        resolveAuthProfileId,
+        resolveRuntimeOptions,
       }),
     };
     if (endpoint.label !== undefined) {
@@ -383,9 +395,10 @@ function resolveEndpointStartOptions(params: {
   endpoint: NormalizedSupervisionEndpoint;
   pluginConfig: unknown;
   env: NodeJS.ProcessEnv;
+  resolveRuntimeOptions: CodexSupervisionToolsOptions["resolveRuntimeOptions"];
   validateSecurity?: boolean;
 }): CodexAppServerStartOptions {
-  const base = resolveCodexSupervisionAppServerRuntimeOptions({
+  const base = params.resolveRuntimeOptions({
     pluginConfig: params.pluginConfig,
     env: params.env,
   }).start;
@@ -430,6 +443,8 @@ function supervisionEndpointConnectionKey(params: {
   pluginConfig: unknown;
   env: NodeJS.ProcessEnv;
   runtimeConfig: OpenClawConfig | undefined;
+  resolveAuthProfileId: CodexSupervisionToolsOptions["resolveAuthProfileId"];
+  resolveRuntimeOptions: CodexSupervisionToolsOptions["resolveRuntimeOptions"];
 }): string {
   // Endpoint probes report unsafe connections as unhealthy; the actual request path still
   // validates security before connecting, while this path only fingerprints live ownership.
@@ -439,7 +454,7 @@ function supervisionEndpointConnectionKey(params: {
   const agentDir = usesNativeAuth ? undefined : resolveDefaultAgentDir(params.runtimeConfig ?? {});
   const authProfileId = usesNativeAuth
     ? undefined
-    : resolveCodexAppServerAuthProfileIdForAgent({
+    : params.resolveAuthProfileId({
         agentDir,
         config: params.runtimeConfig,
       });
@@ -464,12 +479,13 @@ function createCanonicalEndpointRequest(options: CodexSupervisionToolsOptions): 
   ) => {
     const pluginConfig = options.getPluginConfig();
     const env = options.env ?? process.env;
-    const runtime = resolveCodexSupervisionAppServerRuntimeOptions({ pluginConfig, env });
+    const runtime = options.resolveRuntimeOptions({ pluginConfig, env });
     const config = options.getRuntimeConfig?.();
     const startOptions = resolveEndpointStartOptions({
       endpoint,
       pluginConfig,
       env,
+      resolveRuntimeOptions: options.resolveRuntimeOptions,
     });
     return await requestCodexAppServerJson<T>({
       method,
@@ -842,6 +858,7 @@ function endpointResult(
   endpoint: ResolvedSupervisionEndpoint,
   pluginConfig: unknown,
   env: NodeJS.ProcessEnv,
+  resolveRuntimeOptions: CodexSupervisionToolsOptions["resolveRuntimeOptions"],
 ): Record<string, unknown> {
   const configured = endpoint.configured;
   if (
@@ -862,7 +879,7 @@ function endpointResult(
       url: redactEndpointUrl(configured.url),
     };
   }
-  const start = resolveCodexSupervisionAppServerRuntimeOptions({ pluginConfig, env }).start;
+  const start = resolveRuntimeOptions({ pluginConfig, env }).start;
   return {
     id: endpoint.id,
     transport: start.transport === "stdio" ? "stdio-proxy" : "websocket",
@@ -970,6 +987,8 @@ function requireLiveToolPolicy(
       pluginConfig,
       options.env ?? process.env,
       options.getRuntimeConfig?.(),
+      options.resolveAuthProfileId,
+      options.resolveRuntimeOptions,
     ),
   };
 }
@@ -1065,7 +1084,12 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
         return jsonResult({
           summary: `codex endpoints: ${health.filter((entry) => entry.ok).length}/${health.length} ok`,
           endpoints: endpoints.map((endpoint) =>
-            endpointResult(endpoint, pluginConfig, options.env ?? process.env),
+            endpointResult(
+              endpoint,
+              pluginConfig,
+              options.env ?? process.env,
+              options.resolveRuntimeOptions,
+            ),
           ),
           health,
         });

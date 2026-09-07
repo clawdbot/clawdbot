@@ -42,6 +42,7 @@ describeLive("OpenAI Responses live", () => {
       const result = await streamOpenAIResponses(liveModel(), context, {
         apiKey: OPENAI_KEY,
         maxTokens: 256,
+        temperature: 0.5,
       }).result();
 
       expect(result.errorMessage).toBeUndefined();

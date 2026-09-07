@@ -1,6 +1,6 @@
 // Owns atomic delivery-queue ownership changes across namespace versions.
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import type { DeliveryQueueDatabase } from "./delivery-queue-sqlite-bound.js";
 import {
   completeDeliveryQueueEntryInDatabase,
   deleteDeliveryQueueEntryInDatabase,
@@ -13,9 +13,6 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-
-type DeliveryQueueDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
-type QueueStatus = "pending" | "failed" | "completed";
 
 /** Atomically publishes one staged owner only when retired namespaces do not own its id. */
 export function commitStagedDeliveryQueueEntryOnceAcrossNamespaces(params: {
@@ -153,7 +150,7 @@ export function replacePendingDeliveryQueueEntry(params: {
           .select(["entry_json", "status"])
           .where("queue_name", "=", params.queueName)
           .where("id", "=", params.expectedEntry.id),
-      ) as { entry_json: string; status: QueueStatus } | undefined;
+      );
       if (
         !source ||
         source.status !== "pending" ||
@@ -195,7 +192,7 @@ export function completePendingDeliveryQueueEntry(params: {
           .select(["entry_json", "status"])
           .where("queue_name", "=", params.queueName)
           .where("id", "=", params.expectedEntry.id),
-      ) as { entry_json: string; status: QueueStatus } | undefined;
+      );
       if (
         !source ||
         source.status !== "pending" ||
@@ -232,7 +229,7 @@ export function movePendingDeliveryQueueEntryNamespace(
           .select(["entry_json", "status"])
           .where("queue_name", "=", params.sourceQueueName)
           .where("id", "=", params.expectedSourceEntry.id),
-      ) as { entry_json: string; status: QueueStatus } | undefined;
+      );
       if (
         !source ||
         source.status !== "pending" ||

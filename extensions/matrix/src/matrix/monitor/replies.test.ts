@@ -96,11 +96,14 @@ describe("deliverMatrixReplies", () => {
     setMatrixRuntime(runtimeStub);
   });
 
-  const offModeReplyCases: Array<{
+  const providerReplyCases: Array<{
     name: string;
     reply: Parameters<typeof deliverMatrixReplies>[0]["replies"][number];
     expectedReplyToId?: string;
     threadId?: string;
+    replyToMode?: "off" | "first";
+    hasRepliedRef?: { value: boolean };
+    expectedFallback?: boolean;
   }> = [
     {
       name: "an explicit reply tag",
@@ -129,12 +132,37 @@ describe("deliverMatrixReplies", () => {
       reply: { text: "hello" },
       expectedReplyToId: "$ambient",
       threadId: "$thread",
+      expectedFallback: true,
+    },
+    {
+      name: "a thread fallback after the first reply was consumed",
+      reply: { text: "hello" },
+      expectedReplyToId: "$ambient",
+      threadId: "$thread",
+      replyToMode: "first",
+      hasRepliedRef: { value: true },
+      expectedFallback: true,
+    },
+    {
+      name: "an explicit thread reply after the first reply was consumed",
+      reply: { text: "hello", replyToId: "$chosen", replyToTag: true },
+      expectedReplyToId: "$chosen",
+      threadId: "$thread",
+      replyToMode: "first",
+      hasRepliedRef: { value: true },
     },
   ];
 
-  it.each(offModeReplyCases)(
-    "encodes the actual Matrix provider reply relation for $name when replyToMode=off",
-    async ({ reply, expectedReplyToId, threadId }) => {
+  it.each(providerReplyCases)(
+    "encodes the actual Matrix provider reply relation for $name",
+    async ({
+      reply,
+      expectedReplyToId,
+      threadId,
+      replyToMode = "off",
+      hasRepliedRef,
+      expectedFallback = false,
+    }) => {
       const actualSend = await vi.importActual<typeof import("../send.js")>("../send.js");
       sendMessageMatrixMock.mockImplementation(actualSend.sendMessageMatrix);
       const sendMessage = vi.fn(
@@ -153,18 +181,20 @@ describe("deliverMatrixReplies", () => {
         roomId: "!room:example.org",
         client,
         runtime: runtimeEnv,
-        replyToMode: "off",
+        replyToMode,
         replyToId: "$ambient",
         threadId,
+        hasRepliedRef,
       });
 
       expect(result.visibleReplySent).toBe(true);
       expect(sendMessage).toHaveBeenCalledOnce();
       const content = sendMessage.mock.calls[0]?.[1];
       const relation = content?.["m.relates_to"] as
-        | { "m.in_reply_to"?: { event_id?: string }; event_id?: string }
+        | { "m.in_reply_to"?: { event_id?: string }; event_id?: string; is_falling_back?: boolean }
         | undefined;
       expect(relation?.["m.in_reply_to"]?.event_id).toBe(expectedReplyToId);
+      expect(relation?.is_falling_back === true).toBe(expectedFallback);
       if (threadId) {
         expect(relation?.event_id).toBe(threadId);
       }
@@ -254,25 +284,6 @@ describe("deliverMatrixReplies", () => {
       suppression: { reason: "no_visible_result" },
     });
     expect(sendMessageMatrixMock).not.toHaveBeenCalled();
-  });
-
-  it("preserves native thread fallback after the first reply has been consumed", async () => {
-    const hasRepliedRef = { value: true };
-
-    await deliverMatrixReplies({
-      cfg,
-      replies: [{ text: "thread follow-up" }],
-      roomId: "room:3",
-      client: {} as MatrixClient,
-      runtime: runtimeEnv,
-      replyToMode: "first",
-      replyToId: "reply-thread",
-      threadId: "thread-77",
-      hasRepliedRef,
-    });
-
-    expect(sendOptions(0).replyToId).toBe("reply-thread");
-    expect(sendOptions(0).threadId).toBe("thread-77");
   });
 
   it("keeps replyToId on every reply when replyToMode=all", async () => {

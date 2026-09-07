@@ -1,121 +1,142 @@
 /** Tests LSP server spawning with Windows shim and sanitized env handling. */
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import type { sanitizeHostExecEnv } from "../infra/host-env-security.js";
+import {
+  materializeWindowsSpawnProgram,
+  resolveWindowsSpawnProgram,
+  type WindowsSpawnProgram,
+} from "../plugin-sdk/windows-spawn.js";
+import { createOwnedStdioProcess } from "../process/owned-stdio.js";
+import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { spawnLspServerProcess } from "./agent-bundle-lsp-process.js";
-import type { StdioMcpServerLaunchConfig } from "./mcp-stdio.js";
 
-const resolveWindowsSpawnProgramMock = vi.fn();
-const materializeWindowsSpawnProgramMock = vi.fn();
-const sanitizeHostExecEnvMock = vi.fn();
-const spawnMock = vi.fn();
+const resolveWindowsSpawnProgramMock = vi.fn<typeof resolveWindowsSpawnProgram>();
+const sanitizeHostExecEnvMock = vi.fn<typeof sanitizeHostExecEnv>();
+const spawnMock = vi.fn<typeof createOwnedStdioProcess>();
+const { spawnWithFallbackMock } = vi.hoisted(() => ({ spawnWithFallbackMock: vi.fn() }));
 
-function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`Expected ${label} to be called`);
-  }
-  return call;
-}
-
-function spawnServer(config: StdioMcpServerLaunchConfig): void {
-  try {
-    spawnLspServerProcess(config, {
-      resolveWindowsSpawnProgram: resolveWindowsSpawnProgramMock,
-      materializeWindowsSpawnProgram: materializeWindowsSpawnProgramMock,
-      sanitizeHostExecEnv: sanitizeHostExecEnvMock,
-      spawn: spawnMock,
-    });
-  } catch {
-    // The injected spawn deliberately stops after argument capture.
-  }
-}
+vi.mock("../process/spawn-utils.js", () => ({ spawnWithFallback: spawnWithFallbackMock }));
 
 describe("spawnLspServerProcess Windows .cmd shim handling", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    spawnMock.mockImplementation(() => {
-      throw new Error("stop after spawn");
-    });
+    spawnMock.mockRejectedValue(new Error("stop after spawn"));
+    spawnWithFallbackMock.mockRejectedValue(new Error("captured Windows spawn"));
   });
 
-  it("calls sanitizeHostExecEnv with baseEnv/overrides, not a flat merged object", async () => {
-    const configEnv = { MY_TOKEN: "secret", TOOL_PATH: "/custom" };
-    const sanitizedEnv = { PATH: "/usr/bin", MY_TOKEN: "secret", TOOL_PATH: "/custom" };
+  const directProgram: WindowsSpawnProgram = {
+    command: "typescript-language-server",
+    leadingArgv: [],
+    resolution: "direct",
+    shell: false,
+    windowsHide: true,
+  };
 
+  it.each<{
+    name: string;
+    configEnv?: Record<string, string>;
+    sanitizedEnv: Record<string, string>;
+    program: WindowsSpawnProgram;
+    expectedArgv: string[];
+  }>([
+    {
+      name: "calls sanitizeHostExecEnv with baseEnv/overrides, not a flat merged object",
+      configEnv: { MY_TOKEN: "secret", TOOL_PATH: "/custom" },
+      sanitizedEnv: { PATH: "/usr/bin", MY_TOKEN: "secret", TOOL_PATH: "/custom" },
+      program: directProgram,
+      expectedArgv: ["typescript-language-server", "--stdio"],
+    },
+    {
+      name: "passes sanitized env to resolveWindowsSpawnProgram",
+      sanitizedEnv: { PATH: "C:\\Windows;C:\\nodejs", PATHEXT: ".COM;.EXE;.BAT;.CMD" },
+      program: directProgram,
+      expectedArgv: ["typescript-language-server", "--stdio"],
+    },
+    {
+      name: "passes materialized invocation to spawn with the sanitized env",
+      sanitizedEnv: { PATH: "/usr/bin" },
+      program: {
+        command: "cmd.exe",
+        leadingArgv: ["/c", "typescript-language-server.cmd"],
+        resolution: "shell-fallback",
+        shell: true,
+        windowsHide: true,
+      },
+      expectedArgv: ["cmd.exe", "/c", "typescript-language-server.cmd", "--stdio"],
+    },
+  ])("$name", async ({ configEnv, sanitizedEnv, program, expectedArgv }) => {
     sanitizeHostExecEnvMock.mockReturnValue(sanitizedEnv);
-    resolveWindowsSpawnProgramMock.mockReturnValue({ resolvedCommand: "tls", isShim: false });
-    materializeWindowsSpawnProgramMock.mockReturnValue({
-      command: "typescript-language-server",
-      argv: ["--stdio"],
-      shell: false,
-      windowsHide: true,
-    });
+    resolveWindowsSpawnProgramMock.mockReturnValue(program);
 
-    spawnServer({
-      command: "typescript-language-server",
-      args: ["--stdio"],
-      env: configEnv,
-    });
+    await expect(
+      spawnLspServerProcess(
+        {
+          command: "typescript-language-server",
+          args: ["--stdio"],
+          ...(configEnv ? { env: configEnv } : {}),
+        },
+        {
+          resolveWindowsSpawnProgram: resolveWindowsSpawnProgramMock,
+          materializeWindowsSpawnProgram,
+          sanitizeHostExecEnv: sanitizeHostExecEnvMock,
+          spawn: spawnMock,
+        },
+      ),
+    ).rejects.toThrow("stop after spawn");
 
-    // Must use structured params so config.env entries are not dropped
-    const sanitizeParams = firstMockCall(sanitizeHostExecEnvMock, "host env sanitization")[0] as
-      | { baseEnv?: NodeJS.ProcessEnv; overrides?: Record<string, string> }
-      | undefined;
+    const sanitizeParams = sanitizeHostExecEnvMock.mock.calls[0]?.[0];
     expect(sanitizeParams?.baseEnv).toBe(process.env);
-    expect(sanitizeParams?.overrides).toStrictEqual(configEnv);
-  });
-
-  it("passes sanitized env to resolveWindowsSpawnProgram", async () => {
-    const sanitizedEnv = { PATH: "C:\\Windows;C:\\nodejs", PATHEXT: ".COM;.EXE;.BAT;.CMD" };
-
-    sanitizeHostExecEnvMock.mockReturnValue(sanitizedEnv);
-    resolveWindowsSpawnProgramMock.mockReturnValue({ resolvedCommand: "tls", isShim: false });
-    materializeWindowsSpawnProgramMock.mockReturnValue({
-      command: "typescript-language-server",
-      argv: ["--stdio"],
-      shell: false,
-      windowsHide: true,
-    });
-
-    spawnServer({ command: "typescript-language-server", args: ["--stdio"] });
-
-    const resolveParams = firstMockCall(
-      resolveWindowsSpawnProgramMock,
-      "Windows spawn resolution",
-    )[0] as { env?: Record<string, string>; allowShellFallback?: boolean } | undefined;
+    if (configEnv) {
+      expect(sanitizeParams?.overrides).toStrictEqual(configEnv);
+    }
+    const resolveParams = resolveWindowsSpawnProgramMock.mock.calls[0]?.[0];
     expect(resolveParams?.env).toBe(sanitizedEnv);
     expect(resolveParams?.allowShellFallback).toBe(true);
+    expect(spawnMock).toHaveBeenCalledExactlyOnceWith({
+      argv: expectedArgv,
+      env: sanitizedEnv,
+      exactEnv: true,
+      cwd: undefined,
+      ...(program.shell ? { windowsShell: true } : {}),
+    });
   });
 
-  it("passes materialized invocation to spawn with the sanitized env", async () => {
-    const sanitizedEnv = { PATH: "/usr/bin" };
-
+  it("preserves the shipped Windows shell fallback through the owned adapter", async () => {
+    const sanitizedEnv = { PATH: "", PATHEXT: ".EXE;.CMD;.BAT" };
     sanitizeHostExecEnvMock.mockReturnValue(sanitizedEnv);
-    resolveWindowsSpawnProgramMock.mockReturnValue({ resolvedCommand: "tls", isShim: true });
-    materializeWindowsSpawnProgramMock.mockReturnValue({
-      command: "cmd.exe",
-      argv: ["/c", "typescript-language-server.cmd", "--stdio"],
-      shell: true,
-      windowsHide: true,
-    });
 
-    spawnServer({ command: "typescript-language-server", args: ["--stdio"] });
+    await expect(
+      withMockedWindowsPlatform(() =>
+        spawnLspServerProcess(
+          {
+            command: "C:\\Program Files\\language-server.cmd",
+            args: ["--stdio", "two words", "%LSP_ARGUMENT%", "echo ready & exit /b"],
+          },
+          {
+            sanitizeHostExecEnv: sanitizeHostExecEnvMock,
+            resolveWindowsSpawnProgram,
+            materializeWindowsSpawnProgram,
+            spawn: createOwnedStdioProcess,
+          },
+        ),
+      ),
+    ).rejects.toThrow("captured Windows spawn");
 
-    const spawnCall = firstMockCall(spawnMock, "child process spawn");
-    expect(spawnCall?.[0]).toBe("cmd.exe");
-    expect(spawnCall?.[1]).toEqual(["/c", "typescript-language-server.cmd", "--stdio"]);
-    const spawnOptions = spawnCall?.[2] as
-      | {
-          env?: Record<string, string>;
-          stdio?: string[];
-          detached?: boolean;
-          shell?: boolean;
-          windowsHide?: boolean;
-        }
-      | undefined;
-    expect(spawnOptions?.env).toBe(sanitizedEnv);
-    expect(spawnOptions?.stdio).toEqual(["pipe", "pipe", "pipe"]);
-    expect(spawnOptions?.detached).toBe(process.platform !== "win32");
-    expect(spawnOptions?.shell).toBe(true);
-    expect(spawnOptions?.windowsHide).toBe(true);
+    expect(spawnWithFallbackMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        argv: [
+          "C:\\Program Files\\language-server.cmd",
+          "--stdio",
+          "two words",
+          "%LSP_ARGUMENT%",
+          "echo ready & exit /b",
+        ],
+        options: expect.objectContaining({
+          env: sanitizedEnv,
+          shell: true,
+          windowsHide: true,
+        }),
+      }),
+    );
   });
 });

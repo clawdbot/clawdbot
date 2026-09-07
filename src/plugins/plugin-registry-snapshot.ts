@@ -435,7 +435,10 @@ export function loadPluginRegistrySnapshotWithMetadata(
     });
   } else if (
     params.config &&
-    persistedIndex.policyHash !== resolveInstalledPluginIndexPolicyHash(params.config, params.env)
+    persistedIndex.policyHash !==
+      resolveInstalledPluginIndexPolicyHash(params.config, params.env, {
+        artifactPreservingReadOnly: params.artifactPreservingReadOnly,
+      })
   ) {
     diagnostics.push({
       level: "warn",

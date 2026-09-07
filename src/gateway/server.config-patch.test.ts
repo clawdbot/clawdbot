@@ -1,41 +1,67 @@
 // Config patch tests cover control-UI config edits, secret-ref writes, auth
-// profile persistence, rate limiting, and session store side effects.
+// profile persistence, and rate limiting through a real Gateway owner.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withTestTimeout } from "../../test/helpers/promise.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { resetGatewayRestartStateForInProcessRestart } from "../infra/restart.js";
+import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   activateSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
   prepareSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { deleteTestEnvValue, withEnvAsync } from "../test-utils/env.js";
-import {
-  connectOk,
-  installGatewayTestHooks,
-  rpcReq,
-  startServerWithClient,
-  testState,
-  writeSessionStore,
-} from "./test-helpers.js";
-
-installGatewayTestHooks({ scope: "suite" });
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { getFreePort } from "../test-utils/ports.js";
+import { GatewayClient, GatewayClientRequestError } from "./client.js";
+import { invalidateConfigGetResponseCache } from "./config-get-response.js";
+import { startGatewayServerCore } from "./server-start.js";
 
 const CONFIG_SECRETREF_RPC_TIMEOUT_MS = 20_000;
+const GATEWAY_TOKEN = "config-rpc-synthetic-token";
 
-let startedServer: Awaited<ReturnType<typeof startServerWithClient>> | null = null;
-let sharedTempRoot: string;
+let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
+let server: Awaited<ReturnType<typeof startGatewayServerCore>> | undefined;
+let client: GatewayClient | undefined;
 let rateLimitEpochMs = Date.now();
+const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
 
-function requireWs(): Awaited<ReturnType<typeof startServerWithClient>>["ws"] {
-  if (!startedServer) {
-    throw new Error("gateway test server not started");
+function requireClient(): GatewayClient {
+  if (!client) {
+    throw new Error("gateway test client not started");
   }
-  return startedServer.ws;
+  return client;
+}
+
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Gateway test RPC helper lets callers ascribe response payload shape.
+async function rpcReq<T extends Record<string, unknown>>(
+  gatewayClient: GatewayClient,
+  method: string,
+  params?: unknown,
+  timeoutMs = 10_000,
+): Promise<{
+  ok: boolean;
+  payload?: T;
+  error?: { message?: string; code?: string; details?: unknown };
+}> {
+  try {
+    return { ok: true, payload: await gatewayClient.request<T>(method, params, { timeoutMs }) };
+  } catch (error) {
+    if (!(error instanceof GatewayClientRequestError)) {
+      throw error;
+    }
+    return {
+      ok: false,
+      error: { message: error.message, code: error.code, details: error.details },
+    };
+  }
 }
 
 function requireConfigObject(value: unknown, label: string): Record<string, unknown> {
@@ -45,25 +71,80 @@ function requireConfigObject(value: unknown, label: string): Record<string, unkn
   return value as Record<string, unknown>;
 }
 
-beforeAll(async () => {
-  sharedTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-config-"));
-  startedServer = await startServerWithClient(undefined, { controlUiEnabled: true });
-  await connectOk(requireWs());
-});
+async function startConfigRpcGateway() {
+  state = await createOpenClawTestState({
+    label: "config-rpc",
+    env: {
+      OPENCLAW_GATEWAY_TOKEN: undefined,
+      OPENCLAW_GATEWAY_PASSWORD: undefined,
+      OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
+      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+      OPENCLAW_SKIP_CANVAS_HOST: "1",
+      OPENCLAW_SKIP_CHANNELS: "1",
+      OPENCLAW_SKIP_CRON: "1",
+      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+      OPENCLAW_SKIP_PROVIDERS: "1",
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve(import.meta.dirname, "../../dist/extensions"),
+    },
+  });
+  setLoggerOverride({ level: "silent", consoleLevel: "silent" });
+  await state.writeConfig({ agents: { entries: { main: {} } } });
+  hotReloadRecovery.mockClear();
+  const port = await getFreePort();
+  server = await startGatewayServerCore(port, {
+    auth: { mode: "token", token: GATEWAY_TOKEN },
+    controlUiEnabled: true,
+    hotReloadRecovery,
+  });
+  const connected = createDeferredCore();
+  client = new GatewayClient({
+    url: `ws://127.0.0.1:${port}`,
+    token: GATEWAY_TOKEN,
+    clientName: "gateway-client",
+    clientVersion: "1.0.0",
+    platform: "test",
+    mode: "backend",
+    deviceIdentity: null,
+    scopes: ["operator.admin"],
+    hostDeps: {
+      loadDeviceAuthToken: () => null,
+      storeDeviceAuthToken: () => {},
+      clearDeviceAuthToken: () => {},
+    },
+    onHelloOk: () => connected.resolve(),
+    onConnectError: (error) => connected.reject(error),
+    onClose: (code, reason) => connected.reject(new Error(`closed ${code}: ${reason}`)),
+  });
+  client.start();
+  await withTestTimeout(connected.promise, 10_000, "gateway connect timeout");
+  await server.startupSettled;
+}
 
-afterAll(async () => {
-  vi.restoreAllMocks();
-  if (!startedServer) {
-    return;
-  }
-  startedServer.ws.close();
-  await startedServer.server.close();
-  startedServer = null;
-  await fs.rm(sharedTempRoot, { recursive: true, force: true });
-});
+async function stopConfigRpcGateway() {
+  // This core fixture has no run loop. Retire direct RPC restart timers before
+  // teardown and after its owners drain so they cannot reach the next case.
+  await runQaGatewayFixture(
+    async () => resetGatewayRestartStateForInProcessRestart(),
+    async () => {
+      await client?.stopAndWait();
+      client = undefined;
+    },
+    async () => {
+      await server?.close();
+      server = undefined;
+    },
+    () => resetGatewayRestartStateForInProcessRestart(),
+    () => state?.cleanup(),
+    () => resetLogger(),
+    () => clearPluginMetadataLifecycleCaches(),
+    () => vi.restoreAllMocks(),
+    () => expect(hotReloadRecovery).not.toHaveBeenCalled(),
+  );
+}
 
 async function resetTempDir(name: string): Promise<string> {
-  const dir = path.join(sharedTempRoot, name);
+  const dir = state.path("fixtures", name);
   await fs.rm(dir, { recursive: true, force: true });
   await fs.mkdir(dir, { recursive: true });
   return dir;
@@ -77,18 +158,18 @@ async function writeJsonFile(filePath: string, value: unknown) {
 async function getConfigHash() {
   const current = await rpcReq<{
     hash?: string;
-  }>(requireWs(), "config.get", {});
+  }>(requireClient(), "config.get", {});
   expect(current.ok).toBe(true);
   expect(typeof current.payload?.hash).toBe("string");
   return String(current.payload?.hash);
 }
 
 async function sendConfigApply(params: { raw: unknown; baseHash?: string }, timeoutMs?: number) {
-  return await rpcReq(requireWs(), "config.apply", params, timeoutMs);
+  return await rpcReq(requireClient(), "config.apply", params, timeoutMs);
 }
 
 async function sendConfigSet(params: { raw: string; baseHash?: string }, timeoutMs?: number) {
-  return await rpcReq(requireWs(), "config.set", params, timeoutMs);
+  return await rpcReq(requireClient(), "config.set", params, timeoutMs);
 }
 
 function configRawPayload(config: unknown, baseHash?: string) {
@@ -115,7 +196,8 @@ async function getCurrentConfigObject() {
     hash?: string;
     path?: string;
     config?: Record<string, unknown>;
-  }>(requireWs(), "config.get", {});
+    sourceConfig?: Record<string, unknown>;
+  }>(requireClient(), "config.get", {});
   expect(current.ok).toBe(true);
   expect(typeof current.payload?.hash).toBe("string");
   expect(typeof current.payload?.path).toBe("string");
@@ -124,7 +206,8 @@ async function getCurrentConfigObject() {
     path: String(current.payload?.path),
     raw: current.payload?.raw,
     valid: current.payload?.valid,
-    config: requireConfigObject(current.payload?.config, "current config"),
+    config: requireConfigObject(current.payload?.sourceConfig, "editable source config"),
+    runtimeConfig: requireConfigObject(current.payload?.config, "runtime config"),
   };
 }
 
@@ -145,12 +228,6 @@ function makeRouteBinding(index: number) {
       },
     },
   };
-}
-
-async function expectSchemaLookupInvalid(pathValue: unknown) {
-  const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.schema.lookup", { pathValue });
-  expect(res.ok).toBe(false);
-  expect(res.error?.message ?? "").toContain("invalid config.schema.lookup params");
 }
 
 async function writeUnresolvedAuthProfileTokenRef(missingEnvVar: string) {
@@ -177,12 +254,18 @@ async function writeUnresolvedAuthProfileTokenRef(missingEnvVar: string) {
   );
 }
 
-beforeEach(() => {
-  rateLimitEpochMs += 60_000;
-  vi.spyOn(Date, "now").mockReturnValue(rateLimitEpochMs);
-});
+function installConfigWriteGatewayHooks() {
+  beforeEach(startConfigRpcGateway);
+  beforeEach(() => {
+    rateLimitEpochMs += 60_000;
+    vi.spyOn(Date, "now").mockReturnValue(rateLimitEpochMs);
+  });
+  afterEach(stopConfigRpcGateway);
+}
 
 describe("gateway config methods", () => {
+  installConfigWriteGatewayHooks();
+
   it("reloads owners independently and reports a changed unresolved owner as cold", async () => {
     const original = await getCurrentConfigObject();
     const secretFile = path.join(await resetTempDir("owner-reload"), "secrets.json");
@@ -213,7 +296,7 @@ describe("gateway config methods", () => {
 
     try {
       const seed = await rpcReq<{ degradedSecretOwners?: unknown[] }>(
-        requireWs(),
+        requireClient(),
         "config.patch",
         {
           raw: JSON.stringify(providerConfig),
@@ -221,13 +304,13 @@ describe("gateway config methods", () => {
         },
         CONFIG_SECRETREF_RPC_TIMEOUT_MS,
       );
-      expect(seed.ok).toBe(true);
+      expect(seed.ok, seed.error?.message).toBe(true);
       expect(seed.payload?.degradedSecretOwners).toBeUndefined();
 
       await writeJsonFile(secretFile, { second: "second-new" });
       await fs.chmod(secretFile, 0o600);
       const reload = await rpcReq<{ warningCount?: number }>(
-        requireWs(),
+        requireClient(),
         "secrets.reload",
         {},
         CONFIG_SECRETREF_RPC_TIMEOUT_MS,
@@ -244,7 +327,7 @@ describe("gateway config methods", () => {
       const cold = await rpcReq<{
         degradedSecretOwners?: Array<{ ownerId?: string; state?: string }>;
       }>(
-        requireWs(),
+        requireClient(),
         "config.patch",
         {
           raw: JSON.stringify({
@@ -286,7 +369,7 @@ describe("gateway config methods", () => {
       hash?: string;
       configRevisionHash?: string;
       appliedConfigHash?: string | null;
-    }>(requireWs(), "config.get", {});
+    }>(requireClient(), "config.get", {});
 
     expect(current.ok).toBe(true);
     expect(current.payload).toHaveProperty("configRevisionHash");
@@ -341,11 +424,11 @@ describe("gateway config methods", () => {
       path?: string;
       hash?: string;
       config?: Record<string, unknown>;
-    }>(requireWs(), "config.set", {
+    }>(requireClient(), "config.set", {
       ...configRawPayload(current.config, current.hash),
     });
 
-    expect(res.ok).toBe(true);
+    expect(res.ok, res.error?.message).toBe(true);
     expect(res.payload?.path).toBe(createConfigIO().configPath);
     requireConfigObject(res.payload?.config, "updated config");
     expect(res.payload?.hash).toBe(await getConfigHash());
@@ -358,7 +441,6 @@ describe("gateway config methods", () => {
   ])(
     "keeps redacted hook secrets with their owner when config.set $change",
     async ({ ids, unidentifiedFirst }) => {
-      const { resetConfigRuntimeState } = await import("../config/config.js");
       const original = await getCurrentConfigObject();
       const configured = structuredClone(original.config);
       configured.hooks = {
@@ -374,7 +456,7 @@ describe("gateway config methods", () => {
 
       try {
         await writeJsonFile(original.path, configured);
-        resetConfigRuntimeState();
+        invalidateConfigGetResponseCache();
         const current = await getCurrentConfigObject();
         const visibleHooks = requireConfigObject(current.config.hooks, "redacted hooks config");
         const visibleMappings = visibleHooks.mappings as Array<{
@@ -406,7 +488,7 @@ describe("gateway config methods", () => {
         );
       } finally {
         await restoreConfigFileForTest(original);
-        resetConfigRuntimeState();
+        invalidateConfigGetResponseCache();
       }
     },
   );
@@ -417,11 +499,7 @@ describe("gateway config methods", () => {
   ])(
     "rejects config.set when $source drops an agent entry without changing disk",
     async ({ legacyDuplicate }) => {
-      const config = await import("../config/config.js");
-      const { resetConfigRuntimeState } = config;
-      const { invalidateConfigGetResponseCache } = await import("./config-get-response.js");
       const original = await getCurrentConfigObject();
-      const spies: Array<{ mockRestore: () => void }> = [];
       const includedGateway = { mode: "local", reload: { mode: "off" } };
       const includeRaw = `${JSON.stringify(includedGateway, null, 3)}\n`;
       let includePath: string | undefined;
@@ -439,20 +517,6 @@ describe("gateway config methods", () => {
       try {
         if (legacyDuplicate) {
           const configIo = await import("../config/io.js");
-          const actualIo =
-            await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
-          // The shared fixture normally substitutes config IO. This row needs actual
-          // invalid snapshots, include ownership, lock-time CAS, and the atomic writer.
-          spies.push(
-            vi
-              .spyOn(config, "readConfigFileSnapshot")
-              .mockImplementation(actualIo.readConfigFileSnapshot),
-            vi
-              .spyOn(configIo, "readConfigFileSnapshotForWrite")
-              .mockImplementation(actualIo.readConfigFileSnapshotForWrite),
-            vi.spyOn(configIo, "createConfigIO").mockImplementation(actualIo.createConfigIO),
-            vi.spyOn(configIo, "writeConfigFile").mockImplementation(actualIo.writeConfigFile),
-          );
           const fixtureIncludePath = path.join(
             path.dirname(original.path),
             "retention-gateway.json",
@@ -470,18 +534,14 @@ describe("gateway config methods", () => {
             plugins: { enabled: false },
           };
           await writeJsonFile(original.path, rosterConfig);
-          const snapshot = await actualIo.readConfigFileSnapshot();
+          const snapshot = await configIo.readConfigFileSnapshot();
           expect(snapshot.valid).toBe(false);
           expect(snapshot.parsed).toEqual(rosterConfig);
           expect(snapshot.sourceConfig.gateway).toEqual(includedGateway);
         } else {
           await writeJsonFile(original.path, rosterConfig);
         }
-        resetConfigRuntimeState();
-        // Read a cold public revision for the exact malformed file, not an earlier cache hit.
-        if (legacyDuplicate) {
-          invalidateConfigGetResponseCache();
-        }
+        invalidateConfigGetResponseCache();
         const current = await getCurrentConfigObject();
         const staleConfig = legacyDuplicate
           ? {
@@ -523,21 +583,16 @@ describe("gateway config methods", () => {
           expect(res.error?.message ?? "").toContain("openclaw agents delete");
         }
       } finally {
-        for (const spy of spies.toReversed()) {
-          spy.mockRestore();
-        }
         await restoreConfigFileForTest(original);
         if (includePath) {
           await fs.rm(includePath, { force: true });
-          invalidateConfigGetResponseCache();
         }
-        resetConfigRuntimeState();
+        invalidateConfigGetResponseCache();
       }
     },
   );
 
   it("accepts config.set when the submitted roster keeps every agent entry", async () => {
-    const { resetConfigRuntimeState } = await import("../config/config.js");
     const original = await getCurrentConfigObject();
     const rosterConfig = structuredClone(original.config);
     const agents = requireConfigObject(rosterConfig.agents ?? {}, "agents config");
@@ -553,7 +608,7 @@ describe("gateway config methods", () => {
 
     try {
       await writeJsonFile(original.path, rosterConfig);
-      resetConfigRuntimeState();
+      invalidateConfigGetResponseCache();
       const current = await getCurrentConfigObject();
       const submittedConfig = structuredClone(current.config);
       const submittedAgents = requireConfigObject(
@@ -571,14 +626,14 @@ describe("gateway config methods", () => {
       const res = await sendConfigSet(configRawPayload(submittedConfig, current.hash));
 
       expect(res.error).toBeUndefined();
-      expect(res.ok).toBe(true);
+      expect(res.ok, res.error?.message).toBe(true);
       const persisted = JSON.parse(await fs.readFile(original.path, "utf-8")) as {
         agents?: { entries?: Record<string, unknown> };
       };
       expect(Object.keys(persisted.agents?.entries ?? {}).toSorted()).toEqual(["main", "worker"]);
     } finally {
       await restoreConfigFileForTest(original);
-      resetConfigRuntimeState();
+      invalidateConfigGetResponseCache();
     }
   });
 
@@ -594,17 +649,22 @@ describe("gateway config methods", () => {
     const res = await rpcReq<{
       ok?: boolean;
       config?: Record<string, unknown>;
-    }>(requireWs(), "config.set", {
+      hash?: string;
+    }>(requireClient(), "config.set", {
       ...configRawPayload(nextConfig, current.hash),
     });
     expect(res.error).toBeUndefined();
-    expect(res.ok).toBe(true);
+    expect(res.ok, res.error?.message).toBe(true);
 
     const after = await rpcReq<{
       config?: Record<string, unknown>;
-    }>(requireWs(), "config.get", {});
+      sourceConfig?: Record<string, unknown>;
+      hash?: string;
+    }>(requireClient(), "config.get", {});
     expect(after.ok).toBe(true);
-    expect(res.payload?.config).toEqual(after.payload?.config);
+    expect(res.payload?.config).toEqual(after.payload?.sourceConfig);
+    expect(res.payload?.hash).toBe(after.payload?.hash);
+    expect(after.payload?.hash).not.toBe(current.hash);
     expect(
       ((after.payload?.config?.ui as Record<string, unknown>)?.prefs as Record<string, unknown>)
         ?.locale,
@@ -613,7 +673,7 @@ describe("gateway config methods", () => {
   });
 
   it("accepts runtime-shaped config.set when bundled provider baseUrl was only defaulted", async () => {
-    const { createConfigIO, resetConfigRuntimeState } = await import("../config/config.js");
+    const { createConfigIO } = await import("../config/config.js");
     const configPath = createConfigIO().configPath;
     try {
       await writeJsonFile(configPath, {
@@ -625,10 +685,10 @@ describe("gateway config methods", () => {
           },
         },
       });
-      resetConfigRuntimeState();
+      invalidateConfigGetResponseCache();
 
       const current = await getCurrentConfigObject();
-      const nextConfig = structuredClone(current.config);
+      const nextConfig = structuredClone(current.runtimeConfig);
       const providers = ((nextConfig.models as Record<string, unknown>).providers ?? {}) as Record<
         string,
         Record<string, unknown>
@@ -643,23 +703,23 @@ describe("gateway config methods", () => {
       const res = await rpcReq<{
         ok?: boolean;
         error?: { message?: string };
-      }>(requireWs(), "config.set", {
+      }>(requireClient(), "config.set", {
         ...configRawPayload(nextConfig, current.hash),
       });
 
       expect(res.error).toBeUndefined();
-      expect(res.ok).toBe(true);
+      expect(res.ok, res.error?.message).toBe(true);
       const persisted = await fs.readFile(configPath, "utf-8");
       expect(persisted).toContain('"port": 19002');
       expect(persisted).not.toContain('"baseUrl"');
     } finally {
       await fs.rm(configPath, { force: true });
-      resetConfigRuntimeState();
+      invalidateConfigGetResponseCache();
     }
   });
 
   it("accepts config.patch when bundled provider baseUrl was only defaulted", async () => {
-    const { createConfigIO, resetConfigRuntimeState } = await import("../config/config.js");
+    const { createConfigIO } = await import("../config/config.js");
     const configPath = createConfigIO().configPath;
     try {
       await writeJsonFile(configPath, {
@@ -671,32 +731,32 @@ describe("gateway config methods", () => {
           },
         },
       });
-      resetConfigRuntimeState();
+      invalidateConfigGetResponseCache();
 
       const current = await getCurrentConfigObject();
 
       const res = await rpcReq<{
         ok?: boolean;
         error?: { message?: string };
-      }>(requireWs(), "config.patch", {
+      }>(requireClient(), "config.patch", {
         raw: JSON.stringify({ gateway: { port: 19003 } }),
         baseHash: current.hash,
       });
 
       expect(res.error).toBeUndefined();
-      expect(res.ok).toBe(true);
+      expect(res.ok, res.error?.message).toBe(true);
       const persisted = await fs.readFile(configPath, "utf-8");
       expect(persisted).toContain('"port": 19003');
       expect(persisted).not.toContain('"baseUrl"');
       expect(persisted).not.toContain('"models": []');
     } finally {
       await fs.rm(configPath, { force: true });
-      resetConfigRuntimeState();
+      invalidateConfigGetResponseCache();
     }
   });
 
   it("preserves authored empty bundled provider models during config.patch", async () => {
-    const { createConfigIO, resetConfigRuntimeState } = await import("../config/config.js");
+    const { createConfigIO } = await import("../config/config.js");
     const configPath = createConfigIO().configPath;
     try {
       await writeJsonFile(configPath, {
@@ -709,20 +769,20 @@ describe("gateway config methods", () => {
           },
         },
       });
-      resetConfigRuntimeState();
+      invalidateConfigGetResponseCache();
 
       const current = await getCurrentConfigObject();
 
       const res = await rpcReq<{
         ok?: boolean;
         error?: { message?: string };
-      }>(requireWs(), "config.patch", {
+      }>(requireClient(), "config.patch", {
         raw: JSON.stringify({ gateway: { port: 19004 } }),
         baseHash: current.hash,
       });
 
       expect(res.error).toBeUndefined();
-      expect(res.ok).toBe(true);
+      expect(res.ok, res.error?.message).toBe(true);
       const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
         models?: { providers?: { openai?: { baseUrl?: unknown; models?: unknown } } };
       };
@@ -730,7 +790,7 @@ describe("gateway config methods", () => {
       expect(persisted.models?.providers?.openai?.models).toEqual([]);
     } finally {
       await fs.rm(configPath, { force: true });
-      resetConfigRuntimeState();
+      invalidateConfigGetResponseCache();
     }
   });
 
@@ -740,18 +800,10 @@ describe("gateway config methods", () => {
       await withEnvAsync(
         {
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-          OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve(import.meta.dirname, "../../extensions"),
+          OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve(import.meta.dirname, "../../dist/extensions"),
         },
         async () => {
-          const { resetConfigRuntimeState } = await import("../config/config.js");
           const configIo = await import("../config/io.js");
-          const actualIo =
-            await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
-          // The shared server fixture composes snapshots without catalog materialization.
-          // Exercise the real read/write owner so runtime defaults can reach the RPC merge.
-          const snapshotRead = vi
-            .spyOn(configIo, "readConfigFileSnapshotForWrite")
-            .mockImplementation(actualIo.readConfigFileSnapshotForWrite);
           const original = await getCurrentConfigObject();
           const textModel = {
             id: "gpt-5.6-luna",
@@ -767,8 +819,8 @@ describe("gateway config methods", () => {
                 },
               },
             });
-            resetConfigRuntimeState();
-            const before = await actualIo.readConfigFileSnapshot();
+            invalidateConfigGetResponseCache();
+            const before = await configIo.readConfigFileSnapshot();
             expect(before.issues).toEqual([]);
             const runtimeModel = before.config.models?.providers?.openai?.models[0];
             expect(runtimeModel?.contextTokens).toBeGreaterThan(0);
@@ -779,22 +831,21 @@ describe("gateway config methods", () => {
               name: "Image model",
               baseUrl: "http://127.0.0.1:44080/v1",
             };
-            const res = await rpcReq(requireWs(), "config.patch", {
+            const res = await rpcReq(requireClient(), "config.patch", {
               raw: JSON.stringify({ models: { providers: { openai: { models: [imageModel] } } } }),
               baseHash: await getConfigHash(),
             });
             expect(res.error).toBeUndefined();
-            expect(res.ok).toBe(true);
+            expect(res.ok, res.error?.message).toBe(true);
             const persisted = JSON.parse(await fs.readFile(original.path, "utf-8"));
             expect(persisted.models.providers.openai.models).toEqual([textModel, imageModel]);
 
-            const after = await actualIo.readConfigFileSnapshot();
+            const after = await configIo.readConfigFileSnapshot();
             expect(after.valid).toBe(true);
             expect(after.config.models?.providers?.openai?.models[0]).toEqual(runtimeModel);
           } finally {
-            snapshotRead.mockRestore();
             await restoreConfigFileForTest(original);
-            resetConfigRuntimeState();
+            invalidateConfigGetResponseCache();
           }
         },
       );
@@ -802,7 +853,7 @@ describe("gateway config methods", () => {
   );
 
   it("redacts browser cdpUrl credentials from config.get responses", async () => {
-    const { createConfigIO, resetConfigRuntimeState } = await import("../config/config.js");
+    const { createConfigIO } = await import("../config/config.js");
     const configPath = createConfigIO().configPath;
     try {
       await writeJsonFile(configPath, {
@@ -818,7 +869,7 @@ describe("gateway config methods", () => {
           },
         },
       });
-      resetConfigRuntimeState();
+      invalidateConfigGetResponseCache();
 
       const after = await rpcReq<{
         raw?: string | null;
@@ -828,7 +879,7 @@ describe("gateway config methods", () => {
             profiles?: Record<string, { cdpUrl?: string }>;
           };
         };
-      }>(requireWs(), "config.get", {});
+      }>(requireClient(), "config.get", {});
       expect(after.ok).toBe(true);
       expect(after.payload?.config?.browser?.cdpUrl).toBe("__OPENCLAW_REDACTED__");
       expect(after.payload?.config?.browser?.profiles?.remote?.cdpUrl).toBe(
@@ -844,7 +895,7 @@ describe("gateway config methods", () => {
       }
     } finally {
       await fs.rm(configPath, { force: true });
-      resetConfigRuntimeState();
+      invalidateConfigGetResponseCache();
     }
   });
 
@@ -853,7 +904,7 @@ describe("gateway config methods", () => {
     const profileNames = ["constructor", "prototype"] as const;
 
     try {
-      const create = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+      const create = await rpcReq<{ ok?: boolean }>(requireClient(), "config.patch", {
         raw: JSON.stringify({
           browser: {
             profiles: Object.fromEntries(
@@ -883,7 +934,7 @@ describe("gateway config methods", () => {
       }
       expect(({} as Record<string, unknown>).polluted).toBeUndefined();
 
-      const remove = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+      const remove = await rpcReq<{ ok?: boolean }>(requireClient(), "config.patch", {
         raw: JSON.stringify({
           browser: { profiles: { constructor: null, prototype: null } },
         }),
@@ -909,7 +960,7 @@ describe("gateway config methods", () => {
     try {
       const results = await Promise.all(
         names.map((name, index) =>
-          rpcReq<{ ok?: boolean; error?: { message?: string } }>(requireWs(), "config.patch", {
+          rpcReq<{ ok?: boolean; error?: { message?: string } }>(requireClient(), "config.patch", {
             raw: JSON.stringify({
               mcp: {
                 servers: {
@@ -945,12 +996,12 @@ describe("gateway config methods", () => {
     const current = await getCurrentConfigObject();
 
     const res = await rpcReq<{ ok?: boolean; error?: { message?: string } }>(
-      requireWs(),
+      requireClient(),
       "config.set",
       configRawPayload(current.config, current.hash),
     );
 
-    expect(res.ok).toBe(true);
+    expect(res.ok, res.error?.message).toBe(true);
     expect(res.error).toBeUndefined();
   });
 
@@ -960,7 +1011,7 @@ describe("gateway config methods", () => {
       error?: {
         message?: string;
       };
-    }>(requireWs(), "config.set", {
+    }>(requireClient(), "config.set", {
       raw: JSON.stringify({ gateway: { bind: 123 } }),
       baseHash: await getConfigHash(),
     });
@@ -980,91 +1031,11 @@ describe("gateway config methods", () => {
     expect(error?.details?.issues?.[0]?.path).toBe("gateway.bind");
   });
 
-  it("returns a path-scoped config schema lookup", async () => {
-    const res = await rpcReq<{
-      path: string;
-      hintPath?: string;
-      children?: Array<{ key: string; path: string; required: boolean; hintPath?: string }>;
-      schema?: { properties?: unknown };
-    }>(requireWs(), "config.schema.lookup", {
-      path: "gateway.auth",
-    });
-
-    expect(res.ok).toBe(true);
-    expect(res.payload?.path).toBe("gateway.auth");
-    expect(res.payload?.hintPath).toBe("gateway.auth");
-    const tokenChild = res.payload?.children?.find((child) => child.key === "token");
-    expect(tokenChild?.key).toBe("token");
-    expect(tokenChild?.path).toBe("gateway.auth.token");
-    expect(tokenChild?.hintPath).toBe("gateway.auth.token");
-    expect(res.payload?.schema?.properties).toBeUndefined();
-  });
-
-  it("returns consistent help and reload metadata for plugin enablement", async () => {
-    const res = await rpcReq<{
-      path: string;
-      schema?: { description?: string };
-      reloadKind?: string;
-      hintPath?: string;
-      hint?: { help?: string };
-    }>(requireWs(), "config.schema.lookup", {
-      path: "plugins.entries.sample-plugin.enabled",
-    });
-
-    expect(res.ok).toBe(true);
-    expect(res.payload).toMatchObject({
-      path: "plugins.entries.sample-plugin.enabled",
-      reloadKind: "hot",
-      hintPath: "plugins.entries.*.enabled",
-    });
-    const description = res.payload?.schema?.description;
-    expect(description).toMatch(/default hybrid reload mode/i);
-    expect(description).toMatch(/hot-reload the plugin runtime/i);
-    expect(description).not.toMatch(/restart required/i);
-    expect(res.payload?.hint?.help).toBe(description);
-  });
-
-  it("rejects config.schema.lookup when the path is missing", async () => {
-    const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.schema.lookup", {
-      path: "gateway.notReal.path",
-    });
-
-    expect(res.ok).toBe(false);
-    expect(res.error?.message).toBe("config schema path not found");
-  });
-
-  it.each([
-    { name: "rejects config.schema.lookup when the path is only whitespace", pathLocal: "   " },
-    {
-      name: "rejects config.schema.lookup when the path exceeds the protocol limit",
-      pathLocal: `gateway.${"a".repeat(1020)}`,
-    },
-    {
-      name: "rejects config.schema.lookup when the path contains invalid characters",
-      pathLocal: "gateway.auth\nspoof",
-    },
-    {
-      name: "rejects config.schema.lookup when the path is not a string",
-      pathLocal: 42,
-    },
-  ])("$name", async ({ pathLocal }) => {
-    await expectSchemaLookupInvalid(pathLocal);
-  });
-
-  it("rejects prototype-chain config.schema.lookup paths without reflecting them", async () => {
-    const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.schema.lookup", {
-      path: "constructor",
-    });
-
-    expect(res.ok).toBe(false);
-    expect(res.error?.message).toBe("config schema path not found");
-  });
-
   it("returns noop for config.patch when config is unchanged", async () => {
     const current = await rpcReq<{
       config?: Record<string, unknown>;
       hash?: string;
-    }>(requireWs(), "config.get", {});
+    }>(requireClient(), "config.get", {});
     expect(current.ok).toBe(true);
 
     // Patch with the same config — no actual changes
@@ -1072,15 +1043,15 @@ describe("gateway config methods", () => {
       ok?: boolean;
       noop?: boolean;
       config?: Record<string, unknown>;
-    }>(requireWs(), "config.patch", {
+    }>(requireClient(), "config.patch", {
       raw: JSON.stringify(current.payload?.config ?? {}),
       baseHash: current.payload?.hash,
     });
 
-    expect(res.ok).toBe(true);
+    expect(res.ok, res.error?.message).toBe(true);
     expect(res.payload?.noop).toBe(true);
     // Config hash should not change (no file write)
-    const after = await rpcReq<{ hash?: string }>(requireWs(), "config.get", {});
+    const after = await rpcReq<{ hash?: string }>(requireClient(), "config.get", {});
     expect(after.payload?.hash).toBe(current.payload?.hash);
   });
 
@@ -1089,12 +1060,12 @@ describe("gateway config methods", () => {
     const image = `openclaw-settlement-${rateLimitEpochMs}:test`;
 
     try {
-      const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+      const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.patch", {
         raw: JSON.stringify({ agents: { defaults: { sandbox: { docker: { image } } } } }),
         baseHash: original.hash,
       });
 
-      expect(res.ok).toBe(true);
+      expect(res.ok, res.error?.message).toBe(true);
       expect(getRuntimeConfig().agents?.defaults?.sandbox?.docker?.image).toBe(image);
     } finally {
       await restoreConfigFileForTest(original);
@@ -1102,7 +1073,7 @@ describe("gateway config methods", () => {
   });
 
   it("accepts messages.groupChat.historyLimit: 0 through config.patch", async () => {
-    const { createConfigIO, resetConfigRuntimeState } = await import("../config/config.js");
+    const { createConfigIO } = await import("../config/config.js");
     const configPath = createConfigIO().configPath;
     let previousConfig: string | null = null;
     try {
@@ -1119,21 +1090,21 @@ describe("gateway config methods", () => {
         `${JSON.stringify({ messages: { groupChat: { historyLimit: 1 } } }, null, 2)}\n`,
         "utf-8",
       );
-      resetConfigRuntimeState();
+      invalidateConfigGetResponseCache();
 
-      const current = await rpcReq<{ hash?: string }>(requireWs(), "config.get", {});
+      const current = await rpcReq<{ hash?: string }>(requireClient(), "config.get", {});
       expect(current.ok).toBe(true);
       expect(typeof current.payload?.hash).toBe("string");
 
       const res = await rpcReq<{
         config?: { messages?: { groupChat?: { historyLimit?: number } } };
-      }>(requireWs(), "config.patch", {
+      }>(requireClient(), "config.patch", {
         raw: JSON.stringify({ messages: { groupChat: { historyLimit: 0 } } }),
         baseHash: current.payload?.hash,
       });
 
       expect(res.error).toBeUndefined();
-      expect(res.ok).toBe(true);
+      expect(res.ok, res.error?.message).toBe(true);
       expect(res.payload?.config?.messages?.groupChat?.historyLimit).toBe(0);
     } finally {
       if (previousConfig === null) {
@@ -1141,12 +1112,12 @@ describe("gateway config methods", () => {
       } else {
         await fs.writeFile(configPath, previousConfig, "utf-8");
       }
-      resetConfigRuntimeState();
+      invalidateConfigGetResponseCache();
     }
   });
 
   it("rejects config.patch when raw is null", async () => {
-    const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+    const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.patch", {
       raw: "null",
       baseHash: await getConfigHash(),
     });
@@ -1159,11 +1130,11 @@ describe("gateway config methods", () => {
     const bindings = [0, 1, 2].map(makeRouteBinding);
     const seededConfig = { ...original.config, bindings };
     const seed = await sendConfigApply(configRawPayload(seededConfig, original.hash));
-    expect(seed.ok).toBe(true);
+    expect(seed.ok, seed.error?.message).toBe(true);
 
     try {
       const before = await getCurrentConfigObject();
-      const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+      const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.patch", {
         raw: JSON.stringify({ bindings: [bindings[0]] }),
         baseHash: before.hash,
       });
@@ -1185,11 +1156,11 @@ describe("gateway config methods", () => {
     const bindings = [0, 1].map(makeRouteBinding);
     const seededConfig = { ...original.config, bindings };
     const seed = await sendConfigApply(configRawPayload(seededConfig, original.hash));
-    expect(seed.ok).toBe(true);
+    expect(seed.ok, seed.error?.message).toBe(true);
 
     try {
       const before = await getCurrentConfigObject();
-      const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+      const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.patch", {
         raw: JSON.stringify({ bindings: [bindings[1], makeRouteBinding(2)] }),
         baseHash: before.hash,
       });
@@ -1211,17 +1182,17 @@ describe("gateway config methods", () => {
     const bindings = [0, 1].map(makeRouteBinding);
     const seededConfig = { ...original.config, bindings };
     const seed = await sendConfigApply(configRawPayload(seededConfig, original.hash));
-    expect(seed.ok).toBe(true);
+    expect(seed.ok, seed.error?.message).toBe(true);
 
     try {
       const before = await getCurrentConfigObject();
       const nextBindings = [...bindings, makeRouteBinding(2)];
-      const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+      const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.patch", {
         raw: JSON.stringify({ bindings: nextBindings }),
         baseHash: before.hash,
       });
 
-      expect(res.ok).toBe(true);
+      expect(res.ok, res.error?.message).toBe(true);
       const after = await getCurrentConfigObject();
       expect(after.config.bindings).toEqual(nextBindings);
     } finally {
@@ -1234,18 +1205,18 @@ describe("gateway config methods", () => {
     const bindings = [0, 1, 2].map(makeRouteBinding);
     const seededConfig = { ...original.config, bindings };
     const seed = await sendConfigApply(configRawPayload(seededConfig, original.hash));
-    expect(seed.ok).toBe(true);
+    expect(seed.ok, seed.error?.message).toBe(true);
 
     try {
       const before = await getCurrentConfigObject();
       const replacement = [bindings[0]];
-      const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+      const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.patch", {
         raw: JSON.stringify({ bindings: replacement }),
         baseHash: before.hash,
         replacePaths: ["bindings"],
       });
 
-      expect(res.ok).toBe(true);
+      expect(res.ok, res.error?.message).toBe(true);
       const after = await getCurrentConfigObject();
       expect(after.config.bindings).toEqual(replacement);
     } finally {
@@ -1277,11 +1248,11 @@ describe("gateway config methods", () => {
     const seed = await sendConfigApply(
       configRawPayload({ ...original.config, channels: { ...channels, discord } }, original.hash),
     );
-    expect(seed.ok).toBe(true);
+    expect(seed.ok, seed.error?.message).toBe(true);
 
     try {
       const before = await getCurrentConfigObject();
-      const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+      const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.patch", {
         raw: JSON.stringify({
           channels: {
             discord: {
@@ -1293,7 +1264,7 @@ describe("gateway config methods", () => {
         replacePaths: ["channels.discord.guilds.123.channels.general.users"],
       });
 
-      expect(res.ok).toBe(true);
+      expect(res.ok, res.error?.message).toBe(true);
       const after = await getCurrentConfigObject();
       const afterChannels = requireConfigObject(after.config.channels, "channels");
       expect(
@@ -1321,12 +1292,12 @@ describe("gateway config methods", () => {
     const seed = await sendConfigApply(
       configRawPayload({ ...original.config, agents }, original.hash),
     );
-    expect(seed.ok).toBe(true);
+    expect(seed.ok, seed.error?.message).toBe(true);
 
     try {
       const before = await getCurrentConfigObject();
       const beforeEntries = (before.config.agents as { entries?: Record<string, unknown> }).entries;
-      const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+      const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.patch", {
         raw: JSON.stringify({ agents: { entries: { main: { skills: ["alpha"] } } } }),
         baseHash: before.hash,
       });
@@ -1358,12 +1329,12 @@ describe("gateway config methods", () => {
     const seed = await sendConfigApply(
       configRawPayload({ ...original.config, agents }, original.hash),
     );
-    expect(seed.ok).toBe(true);
+    expect(seed.ok, seed.error?.message).toBe(true);
 
     try {
       const before = await getCurrentConfigObject();
       const beforeEntries = (before.config.agents as { entries?: Record<string, unknown> }).entries;
-      const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+      const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.patch", {
         raw: JSON.stringify({ agents: { entries: { main: { skills: ["alpha"] } } } }),
         baseHash: before.hash,
         replacePaths: ["agents"],
@@ -1393,11 +1364,11 @@ describe("gateway config methods", () => {
     const seed = await sendConfigApply(
       configRawPayload({ ...original.config, agents }, original.hash),
     );
-    expect(seed.ok).toBe(true);
+    expect(seed.ok, seed.error?.message).toBe(true);
 
     try {
       const before = await getCurrentConfigObject();
-      const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+      const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.patch", {
         raw: JSON.stringify({ agents: null }),
         baseHash: before.hash,
       });
@@ -1428,11 +1399,11 @@ describe("gateway config methods", () => {
     const seed = await sendConfigApply(
       configRawPayload({ ...original.config, agents }, original.hash),
     );
-    expect(seed.ok).toBe(true);
+    expect(seed.ok, seed.error?.message).toBe(true);
 
     try {
       const before = await getCurrentConfigObject();
-      const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+      const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.patch", {
         raw: JSON.stringify({ agents: { entries: { main: { subagents: null } } } }),
         baseHash: before.hash,
       });
@@ -1461,18 +1432,18 @@ describe("gateway config methods", () => {
     const seed = await sendConfigApply(
       configRawPayload({ ...original.config, agents }, original.hash),
     );
-    expect(seed.ok).toBe(true);
+    expect(seed.ok, seed.error?.message).toBe(true);
 
     try {
       const before = await getCurrentConfigObject();
       const beforeEntries = (before.config.agents as { entries?: Record<string, unknown> }).entries;
-      const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+      const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.patch", {
         raw: JSON.stringify({ agents: { entries: { main: { skills: ["alpha"] } } } }),
         baseHash: before.hash,
         replacePaths: ["agents.entries.main.skills"],
       });
 
-      expect(res.ok).toBe(true);
+      expect(res.ok, res.error?.message).toBe(true);
       const after = await getCurrentConfigObject();
       expect((after.config.agents as { entries?: Record<string, unknown> }).entries).toEqual({
         ...beforeEntries,
@@ -1491,7 +1462,7 @@ describe("gateway config methods", () => {
     deleteTestEnvValue(missingEnvVar);
     const beforeHash = await getConfigHash();
     const res = await rpcReq<{ ok?: boolean; error?: { message?: string } }>(
-      requireWs(),
+      requireClient(),
       "config.patch",
       {
         raw: JSON.stringify({
@@ -1518,6 +1489,8 @@ describe("gateway config methods", () => {
 });
 
 describe("gateway config.apply", () => {
+  installConfigWriteGatewayHooks();
+
   it("rejects config.apply when SecretRef resolution fails", async () => {
     const missingEnvVar = `OPENCLAW_MISSING_SECRETREF_APPLY_${Date.now()}`;
     deleteTestEnvValue(missingEnvVar);
@@ -1534,7 +1507,7 @@ describe("gateway config.apply", () => {
     const after = await rpcReq<{
       hash?: string;
       raw?: string | null;
-    }>(requireWs(), "config.get", {});
+    }>(requireClient(), "config.get", {});
     expect(after.ok).toBe(true);
     expect(after.payload?.hash).toBe(current.hash);
     expect(after.payload?.raw).toBe(current.raw);
@@ -1547,7 +1520,7 @@ describe("gateway config.apply", () => {
     const current = await getCurrentConfigObject();
 
     const res = await sendConfigApply(configRawPayload(current.config, current.hash));
-    expect(res.ok).toBe(true);
+    expect(res.ok, res.error?.message).toBe(true);
     expect(res.error).toBeUndefined();
   });
 
@@ -1569,104 +1542,94 @@ describe("gateway config.apply", () => {
   });
 });
 
-describe("gateway server sessions", () => {
-  it("filters sessions by agentId", async () => {
-    const dir = await resetTempDir("agents");
-    testState.sessionConfig = {
-      store: path.join(dir, "{agentId}", "sessions.json"),
-    };
-    testState.agentsConfig = {
-      list: [{ id: "home", default: true }, { id: "work" }],
-    };
-    const homeDir = path.join(dir, "home");
-    const workDir = path.join(dir, "work");
-    await fs.mkdir(homeDir, { recursive: true });
-    await fs.mkdir(workDir, { recursive: true });
-    await writeSessionStore({
-      storePath: path.join(homeDir, "sessions.json"),
-      agentId: "home",
-      entries: {
-        main: {
-          sessionId: "sess-home-main",
-          updatedAt: Date.now(),
-        },
-        "discord:group:dev": {
-          sessionId: "sess-home-group",
-          updatedAt: Date.now() - 1000,
-        },
-      },
-    });
-    await writeSessionStore({
-      storePath: path.join(workDir, "sessions.json"),
-      agentId: "work",
-      entries: {
-        main: {
-          sessionId: "sess-work-main",
-          updatedAt: Date.now(),
-        },
-      },
+describe("gateway config schema lookup", () => {
+  // Schema lookups leave config and runtime owners unchanged between cases.
+  beforeAll(startConfigRpcGateway);
+  afterAll(stopConfigRpcGateway);
+
+  it("returns a path-scoped config schema lookup", async () => {
+    const res = await rpcReq<{
+      path: string;
+      hintPath?: string;
+      children?: Array<{ key: string; path: string; required: boolean; hintPath?: string }>;
+      schema?: { properties?: unknown };
+    }>(requireClient(), "config.schema.lookup", {
+      path: "gateway.auth",
     });
 
-    const homeSessions = await rpcReq<{
-      sessions: Array<{ key: string }>;
-    }>(requireWs(), "sessions.list", {
-      includeGlobal: false,
-      includeUnknown: false,
-      agentId: "home",
-    });
-    expect(homeSessions.ok).toBe(true);
-    expect(homeSessions.payload?.sessions.map((s) => s.key).toSorted()).toEqual([
-      "agent:home:discord:group:dev",
-      "agent:home:main",
-    ]);
-
-    const workSessions = await rpcReq<{
-      sessions: Array<{ key: string }>;
-    }>(requireWs(), "sessions.list", {
-      includeGlobal: false,
-      includeUnknown: false,
-      agentId: "work",
-    });
-    expect(workSessions.ok).toBe(true);
-    expect(workSessions.payload?.sessions.map((s) => s.key)).toEqual(["agent:work:main"]);
+    expect(res.ok, res.error?.message).toBe(true);
+    expect(res.payload?.path).toBe("gateway.auth");
+    expect(res.payload?.hintPath).toBe("gateway.auth");
+    const tokenChild = res.payload?.children?.find((child) => child.key === "token");
+    expect(tokenChild?.key).toBe("token");
+    expect(tokenChild?.path).toBe("gateway.auth.token");
+    expect(tokenChild?.hintPath).toBe("gateway.auth.token");
+    expect(res.payload?.schema?.properties).toBeUndefined();
   });
 
-  it("resolves and patches main alias to default agent main key", async () => {
-    const dir = await resetTempDir("main-alias");
-    const storePath = path.join(dir, "sessions.json");
-    testState.sessionStorePath = storePath;
-    testState.agentsConfig = { list: [{ id: "ops", default: true }] };
-    testState.sessionConfig = { mainKey: "work" };
-
-    await writeSessionStore({
-      storePath,
-      agentId: "ops",
-      mainKey: "work",
-      entries: {
-        main: {
-          sessionId: "sess-ops-main",
-          updatedAt: Date.now(),
-        },
-      },
+  it("returns consistent help and reload metadata for plugin enablement", async () => {
+    const res = await rpcReq<{
+      path: string;
+      schema?: { description?: string };
+      reloadKind?: string;
+      hintPath?: string;
+      hint?: { help?: string };
+    }>(requireClient(), "config.schema.lookup", {
+      path: "plugins.entries.sample-plugin.enabled",
     });
 
-    const resolved = await rpcReq<{ ok: true; key: string }>(requireWs(), "sessions.resolve", {
-      key: "main",
+    expect(res.ok, res.error?.message).toBe(true);
+    expect(res.payload).toMatchObject({
+      path: "plugins.entries.sample-plugin.enabled",
+      reloadKind: "hot",
+      hintPath: "plugins.entries.*.enabled",
     });
-    expect(resolved.ok).toBe(true);
-    expect(resolved.payload?.key).toBe("agent:ops:work");
+    const description = res.payload?.schema?.description;
+    expect(description).toMatch(/default hybrid reload mode/i);
+    expect(description).toMatch(/hot-reload the plugin runtime/i);
+    expect(description).not.toMatch(/restart required/i);
+    expect(res.payload?.hint?.help).toBe(description);
+  });
 
-    const patched = await rpcReq<{ ok: true; key: string }>(requireWs(), "sessions.patch", {
-      key: "main",
-      thinkingLevel: "medium",
+  it("rejects config.schema.lookup when the path is missing", async () => {
+    const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.schema.lookup", {
+      path: "gateway.notReal.path",
     });
-    expect(patched.ok).toBe(true);
-    expect(patched.payload?.key).toBe("agent:ops:work");
 
-    expect(
-      loadSessionEntry({ agentId: "ops", sessionKey: "agent:ops:work", storePath })?.thinkingLevel,
-    ).toBe("medium");
-    expect(loadSessionEntry({ agentId: "ops", sessionKey: "main", storePath })).toBeUndefined();
+    expect(res.ok).toBe(false);
+    expect(res.error?.message).toBe("config schema path not found");
+  });
+
+  it.each([
+    { name: "rejects config.schema.lookup when the path is only whitespace", pathLocal: "   " },
+    {
+      name: "rejects config.schema.lookup when the path exceeds the protocol limit",
+      pathLocal: `gateway.${"a".repeat(1020)}`,
+    },
+    {
+      name: "rejects config.schema.lookup when the path contains invalid characters",
+      pathLocal: "gateway.auth\nspoof",
+    },
+    {
+      name: "rejects config.schema.lookup when the path is not a string",
+      pathLocal: 42,
+    },
+  ])("$name", async ({ pathLocal }) => {
+    const res = await rpcReq(requireClient(), "config.schema.lookup", { path: pathLocal });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("invalid config.schema.lookup params: at /path:"),
+    });
+  });
+
+  it("rejects prototype-chain config.schema.lookup paths without reflecting them", async () => {
+    const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.schema.lookup", {
+      path: "constructor",
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.error?.message).toBe("config schema path not found");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

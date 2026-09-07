@@ -1,8 +1,10 @@
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { QuestionRecord } from "@openclaw/gateway-protocol";
 import { beforeEach, expect, it } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -71,6 +73,7 @@ async function captureState(
   page: import("playwright").Page,
   home: import("playwright").Locator,
   name: string,
+  surface = page.locator(".shell"),
 ): Promise<number> {
   await page.evaluate(
     () =>
@@ -79,11 +82,11 @@ async function captureState(
       }),
   );
   if (captureUiProof) {
-    await page.screenshot({
-      animations: "disabled",
-      fullPage: true,
-      path: path.join(proofDir, `${name}.png`),
-    });
+    await mkdir(proofDir, { recursive: true });
+    await writeFile(
+      path.join(proofDir, `${name}.png`),
+      await takeControlUiViewportScreenshot(page, surface, [home]),
+    );
   }
   return home.locator("[data-session-attention]").count();
 }
@@ -153,7 +156,12 @@ suite.define(() => {
     } satisfies QuestionRecord;
     await gateway.emitGatewayEvent("question.requested", question);
     await page.getByText("Should the run continue?", { exact: true }).waitFor();
-    observed.question = await captureState(page, home, "02-question-attention");
+    observed.question = await captureState(
+      page,
+      home,
+      "02-question-attention",
+      page.locator(".chat-question-panel"),
+    );
 
     await gateway.emitGatewayEvent("question.resolved", {
       id: question.id,

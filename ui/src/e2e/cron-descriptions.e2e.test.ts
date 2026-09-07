@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -49,11 +50,15 @@ function durationResponses(jobs: unknown[]) {
   };
 }
 
-async function captureDurationProof(page: Page, name: string, observed: unknown) {
+async function captureDurationProof(page: Page, name: string, observed: unknown, content: Locator) {
   if (!captureDurationProofEnabled) {
     return;
   }
-  await page.screenshot({ path: path.join(suite.artifactDir, `${name}.png`), fullPage: true });
+  await content.scrollIntoViewIfNeeded();
+  await fs.writeFile(
+    path.join(suite.artifactDir, `${name}.png`),
+    await takeControlUiViewportScreenshot(page, page.locator(".cron-page"), [content]),
+  );
   await fs.writeFile(
     path.join(suite.artifactDir, `${name}.json`),
     `${JSON.stringify(observed, null, 2)}\n`,
@@ -187,7 +192,12 @@ suite.define(() => {
         const rows = await page
           .locator(".cron-table__schedule .cron-table__cell-value")
           .allTextContents();
-        await captureDurationProof(page, "interval-list", { rows, jobs });
+        await captureDurationProof(
+          page,
+          "interval-list",
+          { rows, jobs },
+          page.locator(`[data-test-id="cron-row-${cases[0].id}"]`),
+        );
         const observed: Array<{
           id: string;
           row: string | undefined;
@@ -204,11 +214,16 @@ suite.define(() => {
           await subtitle.waitFor();
           const detail = (await subtitle.textContent())?.trim();
           observed.push({ id: job.id, row: rowText, detail });
-          await captureDurationProof(page, job.id, {
-            everyMs: job.schedule.everyMs,
-            row: rowText,
-            detail,
-          });
+          await captureDurationProof(
+            page,
+            job.id,
+            {
+              everyMs: job.schedule.everyMs,
+              row: rowText,
+              detail,
+            },
+            subtitle,
+          );
           await page.locator('[data-test-id="cron-back"]').click();
           await row.waitFor();
         }
@@ -243,17 +258,27 @@ suite.define(() => {
         await page.locator("details.cron-advanced > summary").click();
         const amount = page.locator("#cron-stagger-amount");
         const loadedStagger = await amount.inputValue();
-        await captureDurationProof(page, "stagger-loaded", {
-          loadedStagger,
-          schedule: job.schedule,
-        });
+        await captureDurationProof(
+          page,
+          "stagger-loaded",
+          {
+            loadedStagger,
+            schedule: job.schedule,
+          },
+          amount,
+        );
         await page.locator("#cron-cron-expr").fill("*/5 * * * *");
         const previousUpdates = (await gateway.getRequests("cron.update")).length;
         await gateway.deferNext("cron.update");
         await page.locator('[data-test-id="cron-submit"]').click();
         const request = await gateway.waitForRequest("cron.update", { after: previousUpdates });
         const patch = requireDurationRecord(requireDurationRecord(request.params).patch);
-        await captureDurationProof(page, "stagger-submitted", { loadedStagger, request });
+        await captureDurationProof(
+          page,
+          "stagger-submitted",
+          { loadedStagger, request },
+          page.locator('[data-test-id="cron-submit"]'),
+        );
         // Echo the actual wire patch, so a lossy submission cannot become a correct fixture response.
         const updatedJob = { ...job, ...patch, configRevision: "precise-stagger-updated" };
         const previousLists = (await gateway.getRequests("cron.list")).length;
@@ -264,11 +289,16 @@ suite.define(() => {
           .poll(() => page.locator('[data-test-id="cron-submit"]').isDisabled())
           .toBe(false);
         const reloadedStagger = await amount.inputValue();
-        await captureDurationProof(page, "stagger-readback", {
-          loadedStagger,
-          request,
-          reloadedStagger,
-        });
+        await captureDurationProof(
+          page,
+          "stagger-readback",
+          {
+            loadedStagger,
+            request,
+            reloadedStagger,
+          },
+          amount,
+        );
         expect({ loadedStagger, request: request.params, reloadedStagger }).toMatchObject({
           loadedStagger: "1.001",
           request: {

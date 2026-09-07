@@ -2,6 +2,9 @@
 import fs from "node:fs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { ensureAuthProfileStore, resolveAuthProfileOrder } from "openclaw/plugin-sdk/provider-auth";
+import { resolveProviderIdForAuth } from "openclaw/plugin-sdk/provider-auth-aliases";
 import { describe, expect, it, vi } from "vitest";
 import openAIPlugin from "../openai/index.js";
 import { createCodexAppServerAgentHarness } from "./harness.js";
@@ -25,11 +28,14 @@ const explicitAgentConfig = {
   },
 } as OpenClawConfig;
 
+const modelAuth = { ensureAuthProfileStore, resolveAuthProfileOrder, resolveProviderIdForAuth };
+
 function createCodexTestRuntime(
   current?: () => unknown,
   stateStore = createCodexTestBindingStateStore(),
 ) {
   return {
+    modelAuth,
     ...(current ? { config: { current } } : {}),
     state: {
       openSyncKeyedStore: () => stateStore,
@@ -81,7 +87,7 @@ describe("codex plugin", () => {
           source: "test",
           config: explicitAgentConfig,
           pluginConfig: {},
-          runtime: { state: { openSyncKeyedStore } } as never,
+          runtime: { modelAuth, state: { openSyncKeyedStore } } as never,
         }),
       ),
     ).not.toThrow();
@@ -348,7 +354,7 @@ describe("codex plugin", () => {
         name: "OpenAI Provider",
         source: "test",
         config: {},
-        runtime: {} as never,
+        runtime: createCapturedPluginRegistration({ id: "openai" }).api.runtime,
         registerProvider,
       }),
     );
@@ -811,127 +817,6 @@ describe("codex plugin", () => {
       { agentId: "worker", sessionId: "keyless-1" },
     );
     expect(bindingStore.read(keyless)).toBeUndefined();
-  });
-
-  it("adopts compaction successors before delayed lifecycle cleanup", async () => {
-    const stateStore = createCodexTestBindingStateStore();
-    const bindingStore = createCodexAppServerBindingStore(stateStore);
-    const on = vi.fn();
-    plugin.register(
-      createTestPluginApi({
-        id: "codex",
-        name: "Codex",
-        source: "test",
-        config: {},
-        pluginConfig: {},
-        runtime: createCodexTestRuntime(undefined, stateStore),
-        registerAgentHarness: vi.fn(),
-        registerCommand: vi.fn(),
-        registerMediaUnderstandingProvider: vi.fn(),
-        registerMigrationProvider: vi.fn(),
-        registerProvider: vi.fn(),
-        on,
-      }),
-    );
-    const afterCompaction = on.mock.calls.find(([name]) => name === "after_compaction")?.[1] as
-      | ((
-          event: { previousSessionId?: string },
-          ctx: { agentId?: string; sessionId?: string; sessionKey?: string },
-        ) => Promise<void>)
-      | undefined;
-    const sessionEnd = on.mock.calls.find(([name]) => name === "session_end")?.[1] as
-      | ((
-          event: { sessionId: string; sessionKey?: string; reason?: string },
-          ctx: { agentId?: string; sessionId: string; sessionKey?: string },
-        ) => Promise<void>)
-      | undefined;
-    if (!afterCompaction || !sessionEnd) {
-      throw new Error("missing Codex compaction lifecycle hooks");
-    }
-    const sessionKey = "agent:worker:telegram:chat-1";
-    const previous = sessionBindingIdentity({
-      agentId: "worker",
-      sessionId: "session-1",
-      sessionKey,
-    });
-    const successor = sessionBindingIdentity({
-      agentId: "worker",
-      sessionId: "session-2",
-      sessionKey,
-    });
-    const newest = sessionBindingIdentity({
-      agentId: "worker",
-      sessionId: "session-3",
-      sessionKey,
-    });
-    await bindingStore.mutate(previous, {
-      kind: "set",
-      binding: { threadId: "thread-1", cwd: "/repo" },
-    });
-
-    await afterCompaction(
-      { previousSessionId: "session-1" },
-      { agentId: "worker", sessionId: "session-2", sessionKey },
-    );
-    expect(bindingStore.read(previous)).toBeUndefined();
-    expect(bindingStore.read(successor)).toMatchObject({ threadId: "thread-1" });
-
-    await afterCompaction(
-      { previousSessionId: "session-2" },
-      { agentId: "worker", sessionId: "session-3", sessionKey },
-    );
-    await afterCompaction(
-      { previousSessionId: "session-1" },
-      { agentId: "worker", sessionId: "session-2", sessionKey },
-    );
-    expect(bindingStore.read(successor)).toBeUndefined();
-    expect(bindingStore.read(newest)).toMatchObject({ threadId: "thread-1" });
-
-    await sessionEnd(
-      { sessionId: "session-1", sessionKey, reason: "reset" },
-      { agentId: "worker", sessionId: "session-1", sessionKey },
-    );
-    await sessionEnd(
-      { sessionId: "session-2", sessionKey, reason: "compaction" },
-      { agentId: "worker", sessionId: "session-2", sessionKey },
-    );
-    expect(bindingStore.read(newest)).toMatchObject({ threadId: "thread-1" });
-    expect(stateStore.entries()).toHaveLength(1);
-  });
-
-  it("ignores compaction for a session without a Codex binding", async () => {
-    const warn = vi.fn();
-    const on = vi.fn();
-    plugin.register(
-      createTestPluginApi({
-        id: "codex",
-        name: "Codex",
-        source: "test",
-        config: {},
-        pluginConfig: {},
-        logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
-        runtime: createCodexTestRuntime(),
-        registerAgentHarness: vi.fn(),
-        registerCommand: vi.fn(),
-        registerMediaUnderstandingProvider: vi.fn(),
-        registerMigrationProvider: vi.fn(),
-        registerProvider: vi.fn(),
-        on,
-      }),
-    );
-    const afterCompaction = on.mock.calls.find(([name]) => name === "after_compaction")?.[1] as
-      | ((event: object, ctx: { sessionId?: string; sessionKey?: string }) => Promise<void>)
-      | undefined;
-    if (!afterCompaction) {
-      throw new Error("missing Codex after_compaction hook");
-    }
-
-    await afterCompaction(
-      { previousSessionId: "session-1" },
-      { sessionId: "session-2", sessionKey: "agent:main:main" },
-    );
-
-    expect(warn).not.toHaveBeenCalled();
   });
 
   it("enables the native hook relay for public Codex app-server attempts", async () => {

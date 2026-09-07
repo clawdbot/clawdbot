@@ -351,6 +351,10 @@ export async function executeSystemAgentOperation(
       });
     case "plugin-install":
       return await executePluginInstall(operation, runtime, opts);
+    case "plugin-activate-artifact": {
+      const { executePluginArtifactActivation } = await import("./plugin-artifact.js");
+      return await executePluginArtifactActivation(operation, runtime, opts);
+    }
     case "plugin-uninstall": {
       if (await isPluginBackingDefaultInferenceRoute(operation.pluginId)) {
         const message = [

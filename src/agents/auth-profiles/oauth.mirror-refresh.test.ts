@@ -25,7 +25,7 @@ import {
 import { resolveApiKeyForProfile } from "./oauth.js";
 import { resetOAuthRefreshQueuesForTest } from "./oauth.test-support.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
-import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
+import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 const {

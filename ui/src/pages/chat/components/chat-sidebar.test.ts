@@ -167,6 +167,60 @@ describe("file sidebar editor locality", () => {
 });
 
 describe("markdown sidebar", () => {
+  it.each([
+    { kind: "markdown", trailingNewline: false },
+    { kind: "file", trailingNewline: true },
+  ] as const)("keeps nested code literal when viewing raw $kind text", async (testCase) => {
+    const source =
+      ["Intro", "", "```ts", "const x = 1;", "```", "", "**literal after**"].join("\n") +
+      (testCase.trailingNewline ? "\n" : "");
+    const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: unknown;
+      ensureFileEditor: () => Promise<void>;
+      updateComplete: Promise<unknown>;
+    };
+    const editorLoad =
+      testCase.kind === "file" ? vi.spyOn(panel, "ensureFileEditor").mockResolvedValue() : null;
+    panel.content =
+      testCase.kind === "markdown"
+        ? { kind: "markdown", content: "Rendered summary", rawText: source }
+        : { kind: "file", path: "notes.md", name: "notes.md", language: "md", content: source };
+    document.body.append(panel);
+    const schedule = vi.spyOn(globalThis, "setTimeout");
+    try {
+      await panel.updateComplete;
+      const rawButton = Array.from(panel.querySelectorAll<HTMLButtonElement>("button")).find(
+        (button) => button.textContent?.trim() === "View Raw Text",
+      );
+      expect(rawButton).toBeDefined();
+      rawButton!.click();
+      await panel.updateComplete;
+
+      const reader = panel.querySelector(".sidebar-markdown-reader");
+      const copyButton = reader?.querySelector<HTMLButtonElement>(".code-block-copy");
+      expect(copyButton).toBeInstanceOf(HTMLButtonElement);
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+      copyButton!.click();
+      await vi.waitFor(() => expect(copyButton!.getAttribute("aria-label")).toBe("Copied!"));
+      expect(writeText).toHaveBeenCalledOnce();
+
+      expect.soft(reader?.querySelectorAll("pre code")).toHaveLength(1);
+      expect.soft(reader?.querySelector("pre code")?.textContent).toBe(`${source}\n`);
+      expect.soft(reader?.querySelector("strong")).toBeNull();
+      expect.soft(writeText).toHaveBeenCalledWith(source);
+    } finally {
+      for (const [index, [, delay]] of schedule.mock.calls.entries()) {
+        if (delay === 1_500) {
+          globalThis.clearTimeout(schedule.mock.results[index]?.value);
+        }
+      }
+      schedule.mockRestore();
+      editorLoad?.mockRestore();
+      panel.remove();
+    }
+  });
+
   it("opens workspace files from markdown preview clicks", async () => {
     const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
       content: unknown;

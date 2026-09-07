@@ -280,4 +280,29 @@ describe("writePrivateSecretFileAtomic", () => {
       }),
     ).rejects.toThrow("must not be a symlink");
   });
+
+  it("rejects a symlinked root without chmodding its destination", async () => {
+    const dir = await createTempDir();
+    const targetDir = await createTempDir();
+    if (process.platform !== "win32") {
+      await fsPromises.chmod(targetDir, 0o777);
+    }
+    const rootLink = path.join(dir, "root-link");
+    await fsPromises.symlink(targetDir, rootLink);
+
+    await expect(
+      writePrivateSecretFileAtomic({
+        rootDir: rootLink,
+        filePath: path.join(rootLink, "auth.json"),
+        content: '{"ok":true}\n',
+      }),
+    ).rejects.toThrow("must not be a symlink");
+
+    if (process.platform !== "win32") {
+      // The tightening wrapper must never resolve-and-chmod a symlinked root;
+      // the destination's permissions stay exactly as they were.
+      const targetStat = await fsPromises.stat(targetDir);
+      expect(targetStat.mode & 0o777).toBe(0o777);
+    }
+  });
 });

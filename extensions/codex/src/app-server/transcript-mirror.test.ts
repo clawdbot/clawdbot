@@ -2077,8 +2077,104 @@ describe("mirrorCodexAppServerTranscript", () => {
     expect(mirrorOutcome.terminalAnchor?.entryId).toBe(terminalEvent?.id);
   });
 
-  describe("projected reasoning persistence", () => {
+  describe("projected transcript persistence", () => {
     registerCodexEventProjectorTestLifecycle();
+
+    it.each([true, false])(
+      "keeps failed attempt diagnostics without taking deferred run ownership (deferred: %s)",
+      async (deferTerminalLifecycle) => {
+        const target = await createSqliteMirrorTarget("openclaw-codex-mirror-retry-owner-");
+        const params: EmbeddedRunAttemptParams = {
+          ...(await createProjectorParams()),
+          ...target,
+          sessionTarget: target,
+          workspaceDir: path.dirname(target.storePath),
+          suppressNextUserMessagePersistence: true,
+          deferTerminalLifecycle,
+        };
+        const finalRunId = deferTerminalLifecycle ? params.runId : "run-2";
+        const attempts = [
+          { turnId: "turn-1", runId: params.runId, failed: true, text: "The file is ready." },
+          {
+            turnId: "turn-2",
+            runId: finalRunId,
+            failed: false,
+            text: "The action completed once.",
+          },
+        ];
+        for (const attempt of attempts) {
+          const attemptParams = { ...params, runId: attempt.runId };
+          const projector = new CodexAppServerEventProjector(
+            attemptParams,
+            "thread-1",
+            attempt.turnId,
+          );
+          await projector.handleNotification({
+            method: "turn/completed",
+            params: {
+              threadId: "thread-1",
+              turn: {
+                id: attempt.turnId,
+                status: attempt.failed ? "failed" : "completed",
+                items: [
+                  { type: "agentMessage", id: `answer-${attempt.turnId}`, text: attempt.text },
+                ],
+                error: attempt.failed
+                  ? { message: "Rate limit reached", codexErrorInfo: "rateLimitExceeded" }
+                  : null,
+              },
+            },
+          });
+          await mirrorTranscriptBestEffort({
+            params: attemptParams,
+            result: projector.buildResult(buildEmptyToolTelemetry()),
+            agentId: target.agentId,
+            sessionKey: target.sessionKey,
+            notifyUserMessagePersisted: () => undefined,
+            cwd: params.workspaceDir,
+            threadId: "thread-1",
+            turnId: attempt.turnId,
+          });
+        }
+
+        const messages = await readCodexMirroredSessionHistoryMessages({
+          ...params,
+          sessionFile: target.bogusSessionFile,
+        });
+        expect(messages).toHaveLength(2);
+        expect(messages).toMatchObject([
+          {
+            content: [{ type: "text", text: "The file is ready." }],
+            stopReason: "error",
+            errorMessage: expect.stringContaining("Rate limit reached"),
+            __openclaw: { mirrorIdentity: "turn-1:assistant", runId: params.runId },
+          },
+          {
+            content: [{ type: "text", text: "The action completed once." }],
+            stopReason: "stop",
+            __openclaw: {
+              mirrorIdentity: "turn-2:assistant",
+              runId: finalRunId,
+              runTerminal: true,
+            },
+          },
+        ]);
+        if (deferTerminalLifecycle) {
+          expect(messages?.[0]).not.toHaveProperty("__openclaw.runTerminal");
+          expect(
+            publishSessionTranscriptUpdateByIdentityMock.mock.calls[0]?.[0].update,
+          ).not.toHaveProperty("runId");
+        } else {
+          expect(messages?.[0]).toHaveProperty("__openclaw.runTerminal", true);
+          expect(
+            publishSessionTranscriptUpdateByIdentityMock.mock.calls[0]?.[0].update,
+          ).toHaveProperty("runId", params.runId);
+        }
+        expect(
+          publishSessionTranscriptUpdateByIdentityMock.mock.calls[1]?.[0].update,
+        ).toHaveProperty("runId", finalRunId);
+      },
+    );
 
     it("preserves reasoning as nonterminal thinking beside the final answer in SQLite", async () => {
       const target = await createSqliteMirrorTarget("openclaw-codex-mirror-reasoning-");

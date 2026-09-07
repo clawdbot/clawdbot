@@ -23,7 +23,7 @@ import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
 async function expectPathExists(targetPath: string): Promise<void> {
-  await expect(fs.access(targetPath)).resolves.toBeUndefined();
+  await fs.access(targetPath);
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {

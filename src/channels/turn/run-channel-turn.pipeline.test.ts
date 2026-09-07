@@ -6,7 +6,7 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { noteDispatchProcessedOutcome } from "../../auto-reply/reply/dispatch-processed-outcome.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
-import { getReplySystemEventSessionKey } from "../../auto-reply/reply/system-event-session-key.js";
+import { getReplySystemEventContext } from "../../auto-reply/reply/system-event-session-key.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -315,7 +315,9 @@ describe("channel turn pipeline", () => {
     const { channel, routeSessionKey, dispatchSessionKey } = scenario;
     const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async (params) => {
       expect(params.ctx).not.toHaveProperty("SystemEventSessionKey");
-      expect(getReplySystemEventSessionKey({ ...params.replyOptions })).toBe(routeSessionKey);
+      expect(getReplySystemEventContext({ ...params.replyOptions })?.sessionKey).toBe(
+        routeSessionKey,
+      );
       await params.dispatcherOptions.deliver({ text: "reply" }, { kind: "final" });
       return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
     }) as DispatchReplyWithBufferedBlockDispatcher;

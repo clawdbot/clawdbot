@@ -331,18 +331,11 @@ export function composeThinkingAndContent(params: {
   contentText?: string;
   showThinking?: boolean;
 }) {
-  const thinkingText = params.thinkingText?.trim() ?? "";
+  const thinkingText = params.showThinking ? (params.thinkingText?.trim() ?? "") : "";
   const contentText = params.contentText?.trim() ?? "";
-  const parts: string[] = [];
-
-  if (params.showThinking && thinkingText) {
-    parts.push(`[thinking]\n${thinkingText}`);
-  }
-  if (contentText) {
-    parts.push(contentText);
-  }
-
-  return parts.join("\n\n").trim();
+  return thinkingText
+    ? `[thinking]\n${thinkingText}${contentText ? `\n\n${contentText}` : ""}`
+    : contentText;
 }
 
 type TuiAttachmentKind = "image" | "audio" | "video" | "file" | "media";
@@ -654,7 +647,8 @@ export function extractTextFromMessage(
   if (record.role === "assistant") {
     const contentText = extractAssistantRenderableContent(record);
     return composeThinkingAndContent({
-      thinkingText: extractThinkingFromMessage(record),
+      // History is stateless; the stream assembler retains hidden thinking for later toggles.
+      thinkingText: opts?.includeThinking ? extractThinkingFromMessage(record) : "",
       contentText:
         opts?.includeAttachments !== false
           ? formatTuiAssistantContent(record, contentText)

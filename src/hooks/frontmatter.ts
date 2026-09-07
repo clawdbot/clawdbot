@@ -82,6 +82,6 @@ export function resolveHookInvocationPolicy(
 }
 
 /** Resolve the config key for a hook, honoring metadata hookKey overrides. */
-export function resolveHookKey(hookName: string, entry?: HookEntry): string {
+export function resolveHookKey(hookName: string, entry?: Pick<HookEntry, "metadata">): string {
   return entry?.metadata?.hookKey ?? hookName;
 }

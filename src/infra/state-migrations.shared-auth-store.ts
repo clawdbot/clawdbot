@@ -7,6 +7,7 @@ import { isDeepStrictEqual } from "node:util";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  inspectSharedAuthStoreOwnership,
   noteCommittedSharedAuthStoreOwnership,
   resolveSharedAuthStoreOwnership,
   SHARED_AUTH_STORE_STATE_KEY,
@@ -472,19 +473,22 @@ export function detectSharedAuthStoreMigration(params: {
   stateDir: string;
   env?: NodeJS.ProcessEnv;
   doctorOnlyStateMigrations?: boolean;
+  artifactPreservingReadOnly?: boolean;
 }): SharedAuthStoreMigrationDetection {
   const env = { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir };
   const sourcePath = path.join(resolveSharedMainAuthAgentDir(env), "openclaw-agent.sqlite");
   if (params.doctorOnlyStateMigrations !== true) {
     return { sourcePath, hasLegacy: false };
   }
-  const ownership = resolveSharedAuthStoreOwnership(env);
+  const ownership = params.artifactPreservingReadOnly
+    ? inspectSharedAuthStoreOwnership(env)
+    : resolveSharedAuthStoreOwnership(env);
   const hasLegacy =
-    ownership.location === "legacy-main" || hasPendingSharedAuthCleanup(env, sourcePath);
+    ownership.location === "legacy-main" || hasPendingSharedAuthCleanup(env, sourcePath, params);
   if (hasLegacy) {
     // Once shared ownership moves, main-agent rows are ordinary per-agent overrides.
     // Only the ownership marker or a pending receipt authorizes inspecting them as migration input.
-    inspectSharedAuthLegacyRowsReadOnly(sourcePath);
+    inspectSharedAuthLegacyRowsReadOnly(sourcePath, params);
   }
   return { sourcePath, hasLegacy };
 }

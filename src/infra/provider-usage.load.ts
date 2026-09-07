@@ -6,6 +6,7 @@ import {
   resolveProviderUsageSnapshotWithPlugin,
   type ProviderUsagePluginDescriptor,
 } from "../plugins/provider-runtime.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { formatErrorMessage } from "./errors.js";
 import { resolveFetch } from "./fetch.js";
 import { resolveProxyFetchFromEnv } from "./net/proxy-fetch.js";
@@ -135,8 +136,9 @@ export async function loadProviderUsageSummary(
   const getAuthStore = () =>
     (authStore ??= ensureAuthProfileStore(opts.agentDir, { allowKeychainPrompt: false }));
   const tasks = descriptors.map(({ provider }) => {
+    // The response deadline does not end the auth/fetch producer's lifetime.
     return raceUsageTimeout(
-      (async () => {
+      trackAsyncWork(async () => {
         let authError: unknown;
         const auth =
           opts.auth?.find((candidate) => candidate.provider === provider) ??
@@ -169,7 +171,7 @@ export async function loadProviderUsageSummary(
           timeoutMs,
           fetchFn,
         });
-      })(),
+      }),
       timeoutMs,
       failureSnapshot(provider, "Timeout"),
     ).catch((error: unknown) => {

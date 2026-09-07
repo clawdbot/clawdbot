@@ -52,7 +52,14 @@ export function resolveCodexPromptError(
   // Native retry exhaustion is not a permanent model/configuration failure.
   // Preserve the provider facts before terminal projection drops the native envelope.
   const info = source.codexErrorInfo;
-  let status = info === "serverOverloaded" ? 503 : info === "internalServerError" ? 500 : undefined;
+  let status =
+    info === "rateLimitExceeded"
+      ? 429
+      : info === "serverOverloaded"
+        ? 503
+        : info === "internalServerError"
+          ? 500
+          : undefined;
   if (isJsonObject(info)) {
     for (const variant of [
       "httpConnectionFailed",

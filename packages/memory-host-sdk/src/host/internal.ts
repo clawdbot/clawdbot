@@ -64,7 +64,7 @@ export type MemoryChunk = {
 };
 
 // Persisted with index metadata so boundary changes rebuild unchanged files.
-export const MEMORY_CHUNKING_VERSION = 3;
+export const MEMORY_CHUNKING_VERSION = 4;
 
 type MultimodalMemoryChunk = {
   chunk: MemoryChunk;
@@ -548,14 +548,23 @@ export function splitCuratedMarkdownEntries(content: string): CuratedMarkdownEnt
   return entries;
 }
 
+/** Takes the trailing slice of text within the weighted char budget, without splitting surrogate pairs. */
+function takeTailByEstimatedChars(text: string, budget: number): string {
+  const chars = Array.from(text);
+  let acc = 0;
+  let start = chars.length;
+  while (start > 0 && acc + estimateStringChars(chars[start - 1] ?? "") <= budget) {
+    acc += estimateStringChars(chars[start - 1] ?? "");
+    start -= 1;
+  }
+  return chars.slice(start).join("");
+}
+
 export function chunkMarkdown(
   content: string,
   chunking: { tokens: number; overlap: number; perEntry?: boolean },
 ): MemoryChunk[] {
   const lines = content.split("\n");
-  if (lines.length === 0) {
-    return [];
-  }
   const maxChars = Math.max(32, chunking.tokens * CHARS_PER_TOKEN_ESTIMATE);
   const overlapChars = Math.max(0, chunking.overlap * CHARS_PER_TOKEN_ESTIMATE);
   const chunks: MemoryChunk[] = [];
@@ -589,8 +598,8 @@ export function chunkMarkdown(
     });
   };
 
-  const carryOverlap = () => {
-    if (overlapChars <= 0 || current.length === 0) {
+  const carryOverlap = (window: number) => {
+    if (window <= 0 || current.length === 0) {
       current = [];
       currentChars = 0;
       return;
@@ -602,14 +611,37 @@ export function chunkMarkdown(
       if (!entry) {
         continue;
       }
-      acc += estimateStringChars(entry.line) + 1;
+      const entrySize = estimateStringChars(entry.line) + 1;
+      const remaining = window - acc;
+      if (entrySize > remaining) {
+        // A segment wider than the remaining window keeps only its trailing
+        // slice, measured in the same weighted units as the budget.
+        const tail = kept.length === 0 ? takeTailByEstimatedChars(entry.line, remaining - 1) : "";
+        if (tail.length > 0) {
+          kept.unshift({ line: tail, lineNo: entry.lineNo });
+          acc += estimateStringChars(tail) + 1;
+        }
+        break;
+      }
+      acc += entrySize;
       kept.unshift(entry);
-      if (acc >= overlapChars) {
+      if (acc >= window) {
         break;
       }
     }
     current = kept;
     currentChars = acc;
+  };
+
+  const appendSegment = (segment: string, lineNo: number, chars: number) => {
+    const lineSize = chars + 1;
+    if (currentChars + lineSize > maxChars && current.length > 0) {
+      flush();
+      // Carry and the incoming segment share one budget, including line separators.
+      carryOverlap(Math.min(overlapChars, Math.max(0, maxChars - lineSize)));
+    }
+    current.push({ line: segment, lineNo });
+    currentChars += lineSize;
   };
 
   const finishEntry = (entryEndLine: number) => {
@@ -638,41 +670,34 @@ export function chunkMarkdown(
       entryStartLine = curatedEntry.kind === "entry" ? lineNo : undefined;
       entryFirstChunk = chunks.length;
     }
-    const segments: string[] = [];
     if (line.length === 0) {
-      segments.push("");
+      appendSegment("", lineNo, 0);
     } else {
-      // First pass: slice at maxChars (preserves original behaviour for Latin).
-      // Second pass: if a segment's *weighted* size still exceeds the budget
-      // (happens for CJK-heavy text where 1 char ≈ 1 token), re-split it at
-      // chunking.tokens so the chunk stays within the token budget.
       for (let start = 0; start < line.length;) {
         const coarse = truncateUtf16Safe(line.slice(start), maxChars);
-        if (estimateStringChars(coarse) > maxChars) {
-          const fineStep = Math.max(1, chunking.tokens);
-          for (let j = 0; j < coarse.length;) {
-            let end = Math.min(j + fineStep, coarse.length);
-            const lastCodeUnit = coarse.charCodeAt(end - 1);
-            if (lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff && end < coarse.length) {
-              end += 1;
+        const coarseChars = estimateStringChars(coarse);
+        if (coarseChars > maxChars) {
+          // Rare and supplementary ideographs can cost several tokens each.
+          // Split by the estimator's units while keeping every code point intact.
+          let partStart = 0;
+          let partEnd = 0;
+          let partChars = 0;
+          for (const character of coarse) {
+            const chars = estimateStringChars(character);
+            if (partChars + chars > maxChars) {
+              appendSegment(coarse.slice(partStart, partEnd), lineNo, partChars);
+              partStart = partEnd;
+              partChars = 0;
             }
-            segments.push(coarse.slice(j, end));
-            j = end;
+            partEnd += character.length;
+            partChars += chars;
           }
+          appendSegment(coarse.slice(partStart), lineNo, partChars);
         } else {
-          segments.push(coarse);
+          appendSegment(coarse, lineNo, coarseChars);
         }
         start += coarse.length;
       }
-    }
-    for (const segment of segments) {
-      const lineSize = estimateStringChars(segment) + 1;
-      if (currentChars + lineSize > maxChars && current.length > 0) {
-        flush();
-        carryOverlap();
-      }
-      current.push({ line: segment, lineNo });
-      currentChars += lineSize;
     }
   }
   flush();

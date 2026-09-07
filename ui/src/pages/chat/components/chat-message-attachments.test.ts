@@ -130,7 +130,6 @@ describe("attachment sidebar source ownership", () => {
         render(
           renderAssistantAttachments([attachment], {
             authToken: "test-token",
-            localMediaPreviewRoots: ["/tmp/openclaw"],
             onRequestUpdate: rerender,
           }),
           container,
@@ -711,7 +710,6 @@ describe("attachment sidebar source ownership", () => {
     subscribers.add(sidebarUpdate);
     const runtime = {
       connectionEpoch: 1,
-      localMediaPreviewRoots: [],
       resolveArtifactDownload,
     };
     expect(sidebarContent?.resolveSource?.(sidebarUpdate, runtime)?.src).toBe(firstTicket);
@@ -763,14 +761,12 @@ describe("attachment sidebar source ownership", () => {
     expect(
       sidebarContent?.resolveSource?.(sidebarUpdate, {
         connectionEpoch: 1,
-        localMediaPreviewRoots: [],
         resolveArtifactDownload: firstResolver,
       })?.src,
     ).toBe(firstTicket);
     expect(
       sidebarContent?.resolveSource?.(sidebarUpdate, {
         connectionEpoch: 2,
-        localMediaPreviewRoots: [],
         resolveArtifactDownload: secondResolver,
       }),
     ).toBeNull();
@@ -779,7 +775,6 @@ describe("attachment sidebar source ownership", () => {
     expect(
       sidebarContent?.resolveSource?.(sidebarUpdate, {
         connectionEpoch: 2,
-        localMediaPreviewRoots: [],
         resolveArtifactDownload: secondResolver,
       })?.src,
     ).toBe(secondTicket);
@@ -1002,7 +997,6 @@ describe("attachment sidebar source ownership", () => {
           ],
           {
             authToken: "token-A",
-            localMediaPreviewRoots: ["/tmp/openclaw"],
             onRequestUpdate: transcriptUpdate,
           },
           (content) => {
@@ -1027,7 +1021,6 @@ describe("attachment sidebar source ownership", () => {
           onRequestUpdate: () => void,
           runtime: {
             authToken?: string | null;
-            localMediaPreviewRoots: readonly string[];
             resourceBasePath?: string;
           },
         ) => { src: string; authToken?: string | null } | null)
@@ -1036,7 +1029,6 @@ describe("attachment sidebar source ownership", () => {
     expect(
       resolveSource?.(sidebarUpdate, {
         authToken: "token-B",
-        localMediaPreviewRoots: ["/tmp/openclaw"],
       }),
     ).toBeNull();
     await flushAttachmentResolution();
@@ -1044,7 +1036,6 @@ describe("attachment sidebar source ownership", () => {
     expect(
       resolveSource?.(sidebarUpdate, {
         authToken: "token-B",
-        localMediaPreviewRoots: ["/tmp/openclaw"],
       }),
     ).toEqual(
       expect.objectContaining({

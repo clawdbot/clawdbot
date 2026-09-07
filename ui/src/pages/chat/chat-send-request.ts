@@ -30,7 +30,7 @@ export async function requestChatSend(
   },
 ): Promise<ChatSendAck> {
   const routing = resolveChatSendRouting(state, params);
-  const sessionId = params.intent ? params.sessionId : routing.sessionId;
+  const sessionId = params.sessionId ?? (params.intent ? undefined : routing.sessionId);
   const controlUiReconnectResume = Boolean(
     !params.intent && sessionId && state.reconnectResumeSessionId === sessionId,
   );

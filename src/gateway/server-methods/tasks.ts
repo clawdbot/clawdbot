@@ -22,7 +22,10 @@ import { getTaskById, listTaskRecordPage } from "../../tasks/runtime-internal.js
 import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { canAccessTaskRequesterSession } from "../task-session-access.js";
+import {
+  canAccessTaskRequesterSession,
+  prepareTaskSessionReadFilter,
+} from "../task-session-access.js";
 import { mapTaskSummary } from "./task-summary.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -194,8 +197,8 @@ export const tasksHandlers: GatewayRequestHandlers = {
     }
     // Selection stays inside the registry so ordering applies before pagination
     // and only the bounded wire page pays for defensive record cloning.
-    const canReadTask = (task: Readonly<TaskRecord>) =>
-      canAccessTaskRequesterSession({ cfg, client, task });
+    const prepareFilter = (tasks: readonly Readonly<TaskRecord>[]) =>
+      prepareTaskSessionReadFilter({ cfg, client }, tasks);
     const pageParams = {
       offset: cursor?.offset ?? 0,
       limit,
@@ -205,7 +208,7 @@ export const tasksHandlers: GatewayRequestHandlers = {
       sessionKey,
       sessionAgentId,
       cfg,
-      filter: canReadTask,
+      prepareFilter,
       sortBy: params.sortBy,
     };
     // Page scans yield to active task updates. Restart the complete selection
@@ -231,7 +234,7 @@ export const tasksHandlers: GatewayRequestHandlers = {
       // Recheck selected rows in the final synchronous response turn as well.
       if (
         accessRevision !== readGatewayAccessRevision() ||
-        page.tasks.some((task) => !canReadTask(task))
+        !page.tasks.every(prepareFilter(page.tasks))
       ) {
         if (cursor) {
           invalidTaskListCursor(respond);

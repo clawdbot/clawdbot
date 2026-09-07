@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { createSessionCapability } from "./index.ts";
+import { createTestSessionCapability } from "./session-capability.test-support.ts";
 
 function sessionsResult(sessions: SessionsListResult["sessions"], ts: number): SessionsListResult {
   return {
@@ -72,7 +72,7 @@ describe("session swarm activity", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway, emitEvent } = createGatewayHarness(client);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
     const note = (kind: "phase" | "log", text: string) => ({
       sessionKey: parentKey,
       reason: "swarm-note",

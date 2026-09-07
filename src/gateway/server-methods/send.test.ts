@@ -36,6 +36,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
 import {
   mintMessageActionTurnCapability,
@@ -1463,16 +1464,15 @@ describe("gateway send mirroring", () => {
   );
 
   it.each([
-    ["queue-owned retry", true],
-    ["ordinary failure", false],
-  ])("reports structured details for %s", async (_label, recoveryOwnedRetry) => {
+    ["queue-owned retry", "held"],
+    ["released queue", "released"],
+    ["ordinary failure", undefined],
+  ] as const)("reports structured details for %s", async (_label, queueCustody) => {
     const dispatchError = new OutboundDeliveryError("connect ECONNREFUSED", {
       cause: new Error("connect ECONNREFUSED"),
       stage: "platform_send",
     });
-    if (recoveryOwnedRetry) {
-      dispatchError.recoveryOwnedRetry = true;
-    }
+    dispatchError.queueCustody = queueCustody;
     mocks.dispatchChannelMessageAction.mockRejectedValueOnce(dispatchError);
 
     const { respond } = await runMessageActionRequest(
@@ -1480,14 +1480,14 @@ describe("gateway send mirroring", () => {
         channel: "slack",
         action: "send",
         params: { channelId: "C1", message: "hi" },
-        idempotencyKey: `idem-queued-detail-${recoveryOwnedRetry}`,
+        idempotencyKey: `idem-queued-detail-${queueCustody}`,
       },
       directCliClient(),
     );
 
     const error = firstRespondCall(respond)[2];
     expect(error).toMatchObject({ code: ErrorCodes.UNAVAILABLE });
-    if (recoveryOwnedRetry) {
+    if (queueCustody === "held") {
       expect(error?.details).toEqual({
         code: GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED,
       });
@@ -3645,6 +3645,8 @@ describe("gateway send mirroring", () => {
   });
 
   it("keeps a diverted terminal send fail closed instead of claiming a source reply", async () => {
+    // Group policy needs the loaded fixture's conversation grammar.
+    setActivePluginRegistry(createSessionConversationTestRegistry());
     mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
       jsonResult({ ok: true, result: { messageId: "tg-diverted", receipt: {} } }),
     );

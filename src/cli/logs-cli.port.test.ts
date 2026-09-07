@@ -25,6 +25,7 @@ async function withLogsGateway(
   run: (fixture: {
     port: string;
     requests: string[];
+    tailParams: Array<Record<string, unknown>>;
     stdout: string[];
     stderr: string[];
   }) => Promise<void>,
@@ -48,6 +49,7 @@ async function withLogsGateway(
       });
       const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
       const requests: string[] = [];
+      const tailParams: Array<Record<string, unknown>> = [];
       server.on("connection", (socket) => {
         sendMinimalGatewayConnectChallenge(socket);
         socket.on("message", (data) => {
@@ -56,6 +58,9 @@ async function withLogsGateway(
             return;
           }
           requests.push(frame.method);
+          if (frame.method === "logs.tail") {
+            tailParams.push(frame.params ?? {});
+          }
           if (frame.method === "connect") {
             sendMinimalGatewayResponse(
               socket,
@@ -102,7 +107,7 @@ async function withLogsGateway(
         throw new ExitError(code);
       });
       try {
-        await run({ port, requests, stdout, stderr });
+        await run({ port, requests, tailParams, stdout, stderr });
       } finally {
         await closeMinimalGatewayServer(server);
       }
@@ -125,6 +130,44 @@ describe("logs local port selection", () => {
       });
     },
   );
+
+  it.each(["--limit", "--max-bytes", "--interval"])(
+    "rejects an explicitly empty numeric %s before contacting Gateway",
+    async (flag) => {
+      await withLogsGateway({}, async ({ port, requests }) => {
+        await expect(
+          runLogs(["--port", port, flag, "", "--json", "--timeout", "1500"]),
+        ).rejects.toThrow(`${flag} must be a positive integer.`);
+        expect(requests).toEqual([]);
+      });
+    },
+  );
+
+  it("preserves omitted defaults and forwards valid numeric limits to Gateway", async () => {
+    await withLogsGateway({}, async ({ port, requests, tailParams }) => {
+      await runLogs(["--port", port, "--json", "--timeout", "1500"]);
+      await expect(
+        runLogs([
+          "--port",
+          port,
+          "--limit",
+          "7",
+          "--max-bytes",
+          "4096",
+          "--interval",
+          "2",
+          "--json",
+          "--timeout",
+          "1500",
+        ]),
+      ).resolves.toBeUndefined();
+      expect(requests).toEqual(["connect", "logs.tail", "connect", "logs.tail"]);
+      expect(tailParams).toEqual([
+        { limit: 200, maxBytes: 250_000 },
+        { limit: 7, maxBytes: 4096 },
+      ]);
+    });
+  });
 
   it.each(["text", "json"])(
     "reports the rejection reason and selected port when the RPC fails in %s mode",

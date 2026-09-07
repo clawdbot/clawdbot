@@ -1,5 +1,6 @@
-/** Combined session MCP runtime facade for static + requester partitions. */
+/** Combined session MCP runtime facade for server and requester partitions. */
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { getSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
 import type {
   McpCatalogTool,
@@ -8,13 +9,7 @@ import type {
   McpToolCatalogDiagnostic,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
-
-const COMBINED_SESSION_MCP_RUNTIME = Symbol.for("openclaw.combinedSessionMcpRuntime");
-
-type CombinedSessionMcpRuntime = SessionMcpRuntime & {
-  [COMBINED_SESSION_MCP_RUNTIME]: true;
-  managedParts: readonly SessionMcpRuntime[];
-};
+import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 
 function compareCatalogTools(left: McpCatalogTool, right: McpCatalogTool): number {
   return (
@@ -24,10 +19,21 @@ function compareCatalogTools(left: McpCatalogTool, right: McpCatalogTool): numbe
   );
 }
 
-export function isCombinedSessionMcpRuntime(
-  runtime: SessionMcpRuntime,
-): runtime is CombinedSessionMcpRuntime {
-  return (runtime as CombinedSessionMcpRuntime)[COMBINED_SESSION_MCP_RUNTIME] !== undefined;
+async function loadCurrentCatalog(part: SessionMcpRuntime): Promise<McpToolCatalog> {
+  if (part.retiredCatalog) {
+    return part.retiredCatalog;
+  }
+  try {
+    const catalog = await part.getCatalog();
+    return part.retiredCatalog ?? catalog;
+  } catch (error) {
+    // Revocation can close a transport while discovery awaits it. Preserve the
+    // owner's recorded outcome without suppressing failures from live siblings.
+    if (part.retiredCatalog) {
+      return part.retiredCatalog;
+    }
+    throw error;
+  }
 }
 
 /**
@@ -78,16 +84,21 @@ export function createCombinedSessionMcpRuntime(params: {
   workspaceDir: string;
   agentDir?: string;
   parts: readonly SessionMcpRuntime[];
+  serverOwners?: Map<string, SessionMcpRuntime>;
 }): SessionMcpRuntime {
-  if (params.parts.length === 1) {
+  if (params.parts.length === 1 && !params.serverOwners) {
     return params.parts[0]!;
   }
   const parts = params.parts;
-  let lastUsedAt = Math.max(...parts.map((part) => part.lastUsedAt));
+  // Empty partitions still own run/view leases; populated ones carry reused server leases.
+  let activeLeases = 0;
+  let disposal: Promise<void> | undefined;
+  let cleanupFailure: PromiseRejectedResult | undefined;
+  let lastUsedAt = Math.max(Date.now(), ...parts.map((part) => part.lastUsedAt));
   let cachedCatalog: McpToolCatalog | null = null;
   let mergedSourceCatalogs: ReadonlyArray<McpToolCatalog> | null = null;
   let catalogInFlight: Promise<McpToolCatalog> | undefined;
-  const serverOwner = new Map<string, SessionMcpRuntime>();
+  const serverOwner = params.serverOwners ?? new Map<string, SessionMcpRuntime>();
   const requesterConnect = parts.find((part) => part.requesterConnect)?.requesterConnect;
 
   const rememberServerOwners = (catalog: McpToolCatalog, owner: SessionMcpRuntime) => {
@@ -102,7 +113,10 @@ export function createCombinedSessionMcpRuntime(params: {
   const cachedCatalogIsCurrent = (): boolean =>
     cachedCatalog !== null &&
     mergedSourceCatalogs !== null &&
-    parts.every((part, index) => part.peekCatalog() === mergedSourceCatalogs?.[index]);
+    parts.every(
+      (part, index) =>
+        (part.retiredCatalog ?? part.peekCatalog()) === mergedSourceCatalogs?.[index],
+    );
 
   const loadCatalog = async (): Promise<McpToolCatalog> => {
     if (cachedCatalog && !cachedCatalog.diagnostics?.length && cachedCatalogIsCurrent()) {
@@ -112,16 +126,42 @@ export function createCombinedSessionMcpRuntime(params: {
       return catalogInFlight;
     }
     const inFlight = (async () => {
-      const catalogs = await Promise.all(parts.map((part) => part.getCatalog()));
+      let loaded: Array<{ catalog: McpToolCatalog; cached: boolean } | undefined> = [];
+      // Replay once when a completed catalog invalidates while siblings await I/O.
+      // A child returning an uncached result already exhausted its own replay budget.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const { results, firstError, hasError } = await runTasksWithConcurrency({
+          tasks: parts.map((part, index) => async () => {
+            const previous = loaded[index];
+            if (previous && (!previous.cached || part.retiredCatalog || part.peekCatalog())) {
+              return previous;
+            }
+            const catalog = await loadCurrentCatalog(part);
+            return { catalog, cached: part.peekCatalog() !== null };
+          }),
+          limit: 6,
+          errorMode: "continue",
+        });
+        if (hasError) {
+          throw firstError;
+        }
+        loaded = results;
+      }
+      // An owner can retire after its discovery finishes while a sibling still awaits I/O.
+      const catalogs = parts.map(
+        (part, index) => part.retiredCatalog ?? part.peekCatalog() ?? loaded[index]!.catalog,
+      );
       if (
         cachedCatalog &&
         mergedSourceCatalogs?.every((source, index) => source === catalogs[index])
       ) {
         return cachedCatalog;
       }
-      serverOwner.clear();
-      for (let index = 0; index < parts.length; index += 1) {
-        rememberServerOwners(catalogs[index]!, parts[index]!);
+      if (!params.serverOwners) {
+        serverOwner.clear();
+        for (let index = 0; index < parts.length; index += 1) {
+          rememberServerOwners(catalogs[index]!, parts[index]!);
+        }
       }
       mergedSourceCatalogs = catalogs;
       cachedCatalog = mergeMcpToolCatalogs(catalogs);
@@ -152,9 +192,7 @@ export function createCombinedSessionMcpRuntime(params: {
     throw new Error(`bundle-mcp server "${serverName}" is not connected`);
   };
 
-  const combined: CombinedSessionMcpRuntime = {
-    [COMBINED_SESSION_MCP_RUNTIME]: true,
-    managedParts: parts,
+  return {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
@@ -166,14 +204,18 @@ export function createCombinedSessionMcpRuntime(params: {
       return serverOwner.get(serverName)?.requesterScope !== undefined;
     },
     mcpAppsEnabled: parts.some((part) => part.mcpAppsEnabled === true),
-    createdAt: Math.min(...parts.map((part) => part.createdAt)),
+    createdAt: Math.min(Date.now(), ...parts.map((part) => part.createdAt)),
     get lastUsedAt() {
       return lastUsedAt;
     },
     get activeLeases() {
-      return parts.reduce((sum, part) => sum + (part.activeLeases ?? 0), 0);
+      return Math.max(
+        activeLeases,
+        parts.reduce((sum, part) => sum + (part.activeLeases ?? 0), 0),
+      );
     },
     acquireLease() {
+      activeLeases += 1;
       const releases = parts.map((part) => part.acquireLease?.());
       let released = false;
       return () => {
@@ -181,6 +223,7 @@ export function createCombinedSessionMcpRuntime(params: {
           return;
         }
         released = true;
+        activeLeases -= 1;
         for (const release of releases) {
           release?.();
         }
@@ -191,7 +234,7 @@ export function createCombinedSessionMcpRuntime(params: {
       if (cachedCatalog && cachedCatalogIsCurrent()) {
         return cachedCatalog;
       }
-      const peeked = parts.map((part) => part.peekCatalog());
+      const peeked = parts.map((part) => part.retiredCatalog ?? part.peekCatalog());
       if (peeked.some((catalog) => catalog === null)) {
         return null;
       }
@@ -251,9 +294,34 @@ export function createCombinedSessionMcpRuntime(params: {
       }
       return await owner.getPrompt(serverName, name, args);
     },
+    async joinCleanup() {
+      await disposal;
+      const outcomes = await Promise.allSettled(
+        parts.map(async (part) => {
+          if (!part.joinCleanup) {
+            throw new Error("MCP runtime does not expose cleanup ownership");
+          }
+          await part.joinCleanup();
+        }),
+      );
+      cleanupFailure ??= outcomes.find((outcome) => outcome.status === "rejected");
+      if (cleanupFailure) {
+        recordAgentCleanupFailure();
+        throw cleanupFailure.reason;
+      }
+    },
     async dispose() {
-      await Promise.allSettled(parts.map((part) => part.dispose()));
+      // SDK parts may throw without retaining their own failure. The facade owns
+      // that result across callers while Gateway disposal stays best effort.
+      disposal ??= Promise.allSettled(parts.map(async (part) => await part.dispose())).then(
+        (outcomes) => {
+          cleanupFailure ??= outcomes.find((outcome) => outcome.status === "rejected");
+        },
+      );
+      await disposal;
+      if (cleanupFailure) {
+        recordAgentCleanupFailure();
+      }
     },
   };
-  return combined;
 }

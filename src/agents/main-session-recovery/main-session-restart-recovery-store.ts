@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   type InternalSessionEntry as SessionEntry,
@@ -14,17 +13,13 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
-import { resolveGatewaySessionStoreTarget } from "../../gateway/session-utils.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { findDeliveryIntentOwner } from "../../infra/outbound/delivery-queue-storage.js";
-import {
-  LEGACY_IMPLICIT_AGENT_ID,
-  resolveAgentIdFromSessionKey,
-} from "../../routing/session-key.js";
 import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
 } from "../embedded-agent-runner/active-run-projections.js";
+import { resolveExecDefaults } from "../exec-defaults.js";
 import {
   getMainSessionRecoveryRetryCount,
   isMainRestartRecoveryAggregateTerminalOnly,
@@ -43,6 +38,7 @@ import {
   reconcileInterruptedCompletionReport,
 } from "./main-session-restart-recovery-checkpoint.js";
 import { tombstoneMainRestartRecoveryWithNotice } from "./main-session-restart-recovery-failure.js";
+import { readMainSessionReplaySafeCheckpoint } from "./main-session-restart-recovery-replay-safety.js";
 import {
   hasReplaySafeCodeModeCheckpointInCurrentTurn,
   resolveMainSessionResumePolicy,
@@ -56,6 +52,7 @@ import {
   normalizeStringSet,
   resolveRestartRecoveryTerminalClientRunId,
 } from "./main-session-restart-recovery-shared.js";
+import { resolveRestartRecoveryDispatchTarget } from "./main-session-restart-recovery-target.js";
 
 function pendingFinalRecoveryAction(
   pending: NonNullable<SessionEntry["pendingFinalDelivery"]>,
@@ -188,34 +185,6 @@ export function loadExpectedRestartRecoveryTarget(params: {
     isMainRestartRecoveryCandidate(entry, params.expected.sessionKey)
     ? entry
     : undefined;
-}
-
-function resolveRestartRecoveryDispatchTarget(params: {
-  cfg?: OpenClawConfig;
-  sessionKey: string;
-  storePath: string;
-}): { agentId: string; sessionKey: string } | undefined {
-  if (!params.cfg) {
-    return {
-      agentId: resolveAgentIdFromSessionKey(params.sessionKey, LEGACY_IMPLICIT_AGENT_ID),
-      sessionKey: params.sessionKey,
-    };
-  }
-  try {
-    const target = resolveGatewaySessionStoreTarget({
-      cfg: params.cfg,
-      key: params.sessionKey,
-    });
-    return !params.cfg.session?.store ||
-      path.resolve(target.storePath) === path.resolve(params.storePath)
-      ? { agentId: target.agentId, sessionKey: target.canonicalKey }
-      : undefined;
-  } catch (err) {
-    mainSessionRecoveryLog.warn(
-      `failed to resolve recovery store for ${params.sessionKey}: ${String(err)}`,
-    );
-    return undefined;
-  }
 }
 
 export async function recoverStore(params: {
@@ -530,22 +499,37 @@ export async function recoverStore(params: {
       continue;
     }
 
+    const execPolicy = resolveExecDefaults({
+      cfg: params.cfg,
+      agentId,
+      sessionKey: dispatchSessionKey,
+      sessionEntry: entry,
+    });
+    const fullAccess =
+      execPolicy.mode === "full" &&
+      execPolicy.security === "full" &&
+      execPolicy.ask === "off" &&
+      entry.restartRecoveryDeliveryMediaUrls === undefined &&
+      entry.restartRecoveryDisableMessageTool !== true &&
+      entry.restartRecoverySuppressTextDelivery !== true;
+    let replaySafeCheckpoint = false;
     let messages: unknown[];
     try {
-      messages = await readSessionMessagesAsync(
-        {
-          agentId,
-          sessionEntry: entry,
-          sessionId: entry.sessionId,
-          sessionKey,
-          storePath: params.storePath,
-        },
-        {
-          mode: "recent",
-          maxMessages: 20,
-          maxBytes: 256 * 1024,
-        },
-      );
+      const transcriptScope = {
+        agentId,
+        sessionEntry: entry,
+        sessionId: entry.sessionId,
+        sessionKey,
+        storePath: params.storePath,
+      };
+      messages = await readSessionMessagesAsync(transcriptScope, {
+        mode: "recent",
+        maxMessages: 20,
+        maxBytes: 256 * 1024,
+      });
+      if (fullAccess && !entry.pendingFinalDelivery) {
+        replaySafeCheckpoint = await readMainSessionReplaySafeCheckpoint(transcriptScope);
+      }
     } catch (err) {
       if (stopped()) {
         return result;
@@ -608,13 +592,16 @@ export async function recoverStore(params: {
       continue;
     }
 
+    const retainedSafeTools =
+      replaySafeCheckpoint || (entry.restartRecoveryForceSafeTools === true && !fullAccess);
     const resumePolicy = resolveMainSessionResumePolicy(
       messages,
-      entry.restartRecoveryForceSafeTools === true,
+      retainedSafeTools,
       expectedRecoverySourceRunId,
       entry.restartRecoveryBeforeAgentReplyState,
       entry.restartRecoveryDeliveryReceiptState,
       entry.restartRecoveryDeliveryToolCallId,
+      fullAccess && !retainedSafeTools,
     );
     if (resumePolicy.action === "complete") {
       if (stopped()) {
@@ -646,8 +633,7 @@ export async function recoverStore(params: {
     }
 
     await resumeCurrent({
-      forceRestartSafeTools:
-        entry.restartRecoveryForceSafeTools === true || resumePolicy.forceRestartSafeTools,
+      forceRestartSafeTools: retainedSafeTools || resumePolicy.forceRestartSafeTools,
       forceCodeModeTools: resumePolicy.forceCodeModeTools === true,
     });
   }

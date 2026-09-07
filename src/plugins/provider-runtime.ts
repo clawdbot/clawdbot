@@ -30,9 +30,7 @@ import type {
 } from "./plugin-metadata-snapshot.types.js";
 import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
 import {
-  prepareProviderExtraParams,
   resolveProviderAuthProfileId,
-  resolveProviderExtraParamsForTransport,
   resolveProviderFollowupFallbackRoute,
   ensureProviderRuntimePluginHandle,
   resolveLoadedProviderRuntimePlugin,
@@ -41,7 +39,6 @@ import {
   resolveProviderRuntimePlugin,
   wrapProviderSimpleCompletionStreamFn,
   type ProviderRuntimePluginHandle,
-  wrapProviderStreamFn,
 } from "./provider-hook-runtime.js";
 import {
   resolveBundledProviderPolicySurface,
@@ -150,13 +147,10 @@ function hasConfiguredModelProvider(params: {
 }
 
 export {
-  prepareProviderExtraParams,
   resolveProviderAuthProfileId,
-  resolveProviderExtraParamsForTransport,
   resolveProviderFollowupFallbackRoute,
   resolveProviderRuntimePlugin,
   wrapProviderSimpleCompletionStreamFn,
-  wrapProviderStreamFn,
 };
 
 function resolveProviderPluginsForCatalogHooks(params: {
@@ -292,6 +286,15 @@ export async function prepareProviderDynamicModel(params: {
   context: ProviderPrepareDynamicModelContext;
 }): Promise<ProviderRuntimeModel | void> {
   return resolveProviderRuntimePlugin(params)?.prepareDynamicModel?.(params.context);
+}
+
+export function providerOwnsDynamicModelPreparation(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  return resolveProviderRuntimePlugin(params)?.prepareDynamicModel !== undefined;
 }
 
 export function shouldPreferProviderRuntimeResolvedModel(params: {
@@ -566,13 +569,17 @@ export function resolveProviderStreamFn(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  runtimeHandle?: ProviderRuntimePluginHandle;
   allowRuntimePluginLoad?: boolean;
   context: ProviderCreateStreamFnContext;
 }) {
+  // Transport families may explicitly ask for a different fallback owner.
   const plugin =
-    params.allowRuntimePluginLoad === false
-      ? resolveLoadedProviderRuntimePlugin(params)
-      : resolveProviderRuntimePlugin(params);
+    params.runtimeHandle?.provider === params.provider
+      ? ensureProviderRuntimePluginHandle(params).plugin
+      : params.allowRuntimePluginLoad === false
+        ? resolveLoadedProviderRuntimePlugin(params)
+        : resolveProviderRuntimePlugin(params);
   return plugin?.createStreamFn?.(params.context) ?? undefined;
 }
 

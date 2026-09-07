@@ -67,6 +67,55 @@ describe("recovery cancellation through the public run owner", () => {
     session = undefined;
   });
 
+  it("fences retired foreground budget observers across physical retries", async () => {
+    const workspaceDir = tempDirs.make("openclaw-request-budget-retry-");
+    const sessionManager = SessionManager.inMemory(workspaceDir);
+    const firstBudget = {
+      contextWindow: 32_768,
+      reserveTokens: 8_192,
+      fixedTokens: 4_000,
+      pendingTokens: 100,
+    };
+    const retryBudget = { ...firstBudget, fixedTokens: 4_100, pendingTokens: 0 };
+    const observed =
+      vi.fn<NonNullable<EmbeddedRunAttemptInternalParams["onCompactionRequestBudget"]>>();
+    let retiredObserver: EmbeddedRunAttemptInternalParams["onCompactionRequestBudget"];
+    type BudgetObservedAttempt = Parameters<typeof mockedRunEmbeddedAttempt>[0] &
+      Pick<EmbeddedRunAttemptInternalParams, "onCompactionRequestBudget">;
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attempt: BudgetObservedAttempt) => {
+      retiredObserver = attempt.onCompactionRequestBudget;
+      retiredObserver?.(firstBudget);
+      return makeAttemptResult({ promptError: makeOverflowError(), assistantTexts: [] });
+    });
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({ summary: "Prior work", tokensAfter: 40 }),
+    );
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attempt: BudgetObservedAttempt) => {
+      attempt.onCompactionRequestBudget?.(retryBudget);
+      retiredObserver?.(firstBudget);
+      return makeAttemptResult({ assistantTexts: ["Done."] });
+    });
+
+    await runEmbeddedAgent({
+      ...createOverflowRunParams({ workspaceDir }),
+      provider: "anthropic",
+      model: "test-model",
+      sessionId: sessionManager.getSessionId(),
+      sessionManager,
+      sessionPersistence: "detached",
+      onCompactionRequestBudget: observed,
+    });
+    retiredObserver?.(firstBudget);
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(observed.mock.calls.map(([budget]) => budget)).toEqual([
+      undefined,
+      firstBudget,
+      undefined,
+      retryBudget,
+    ]);
+  });
+
   describe.each(["caller", "subscription"] as const)("%s accounting owner", (owner) => {
     it.each([
       { kind: "overflow", committed: false },

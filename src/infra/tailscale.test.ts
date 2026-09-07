@@ -1,4 +1,4 @@
-import { existsSync, symlinkSync, watch } from "node:fs";
+import { symlinkSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 // Covers Tailscale whois, Serve, and Funnel helpers.
@@ -55,7 +55,6 @@ describe("tailscale helpers", () => {
   beforeEach(() => {
     envSnapshot = captureEnv([
       "OPENCLAW_TEST_TAILSCALE_BINARY",
-      "OPENCLAW_TEST_TAILSCALE_FIXTURE_MARKER",
       "OPENCLAW_TEST_TAILSCALE_SUDO_FIXTURE_MODE",
       "NODE_ENV",
       "PATH",
@@ -292,31 +291,14 @@ describe("tailscale helpers", () => {
   it.runIf(process.platform !== "win32")(
     "preserves route diagnostics when startup readiness times out",
     async () => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const fixture = fileURLToPath(
         new URL("../../test/fixtures/tailscale-foreground-fixture.mjs", import.meta.url),
       );
-      const fixtureDir = tempDirs.make("openclaw-tailscale-fixture-");
-      const marker = path.join(fixtureDir, "started");
       process.env.OPENCLAW_TEST_TAILSCALE_BINARY = fixture;
-      process.env.OPENCLAW_TEST_TAILSCALE_FIXTURE_MARKER = marker;
 
-      const markerWritten = new Promise<void>((resolve) => {
-        const watcher = watch(fixtureDir, (_event, filename) => {
-          if (`${filename}` === "started") {
-            watcher.close();
-            resolve();
-          }
-        });
-      });
-      const claimPromise = claimTailscaleRoute("funnel", 18790, 18790, vi.fn());
-      void claimPromise.catch(() => undefined);
-      await markerWritten;
-      expect(existsSync(marker)).toBe(true);
-
-      await vi.advanceTimersToNextTimerAsync();
-
-      await expect(claimPromise).rejects.toThrow("Funnel is not enabled on your tailnet.");
+      await expect(claimTailscaleRoute("funnel", 18790, 18790, vi.fn())).rejects.toThrow(
+        "Funnel is not enabled on your tailnet.",
+      );
     },
   );
 

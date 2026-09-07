@@ -1,6 +1,10 @@
 import Foundation
 
 public enum DashboardRouteMap {
+    public static let settingsPath = "/settings"
+    public static let deviceSettingsPath = "/settings/device"
+    public static let devicePermissionsSettingsPath = "/settings/device/permissions"
+    public static let updatesSettingsPath = "/settings/updates"
     public static let channelsSettingsPath = "/settings/channels"
     public static let talkSettingsPath = "/settings/talk"
     public static let skillsPagePath = "/skills"

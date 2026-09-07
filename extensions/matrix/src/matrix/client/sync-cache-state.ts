@@ -45,7 +45,7 @@ export type MatrixSyncCacheRecord = MatrixSyncCacheMeta | MatrixSyncCacheChunk;
 
 type MatrixSyncCacheAsyncStore = Pick<
   PluginStateKeyedStore<MatrixSyncCacheRecord>,
-  "delete" | "entries" | "lookup" | "register"
+  "delete" | "entries" | "lookup" | "lookupMany" | "register"
 >;
 
 function normalizeRoomsData(value: unknown): IRooms | null {
@@ -135,9 +135,21 @@ export function readPersistedStoreFromSyncStore(
   if (!isSyncCacheMeta(meta)) {
     return null;
   }
+  // Preserve the published host floor where lookupMany is not yet available.
+  const records = store.lookupMany?.(
+    Array.from({ length: meta.chunkCount }, (_, index) =>
+      chunkKey(stateKey, meta.generation, index),
+    ),
+  );
   const chunks: string[] = [];
   for (let index = 0; index < meta.chunkCount; index += 1) {
-    const chunk = store.lookup(chunkKey(stateKey, meta.generation, index));
+    const result = records?.[index];
+    if (result && !result.ok) {
+      throw result.error;
+    }
+    const chunk = records
+      ? result?.value
+      : store.lookup(chunkKey(stateKey, meta.generation, index));
     if (!isSyncCacheChunk(chunk) || chunk.index !== index) {
       return normalizePersistedStore({
         version: MATRIX_SYNC_CACHE_VERSION,
@@ -298,16 +310,27 @@ export async function readLegacyMatrixSyncCacheState(
 
 export async function hasMatrixSyncCacheStateInStore(params: {
   storageRootDir: string;
-  store: Pick<PluginStateKeyedStore<MatrixSyncCacheRecord>, "lookup">;
+  store: Pick<PluginStateKeyedStore<MatrixSyncCacheRecord>, "lookup" | "lookupMany">;
 }): Promise<boolean> {
   const stateKey = SYNC_CACHE_STATE_KEY;
   const meta = await params.store.lookup(metaKey(stateKey));
   if (!isSyncCacheMeta(meta) || meta.chunkCount <= 0) {
     return false;
   }
+  const records = await params.store.lookupMany?.(
+    Array.from({ length: meta.chunkCount }, (_, index) =>
+      chunkKey(stateKey, meta.generation, index),
+    ),
+  );
   const chunks: string[] = [];
   for (let index = 0; index < meta.chunkCount; index += 1) {
-    const chunk = await params.store.lookup(chunkKey(stateKey, meta.generation, index));
+    const result = records?.[index];
+    if (result && !result.ok) {
+      throw result.error;
+    }
+    const chunk = records
+      ? result?.value
+      : await params.store.lookup(chunkKey(stateKey, meta.generation, index));
     if (!isSyncCacheChunk(chunk) || chunk.index !== index) {
       return false;
     }

@@ -1,5 +1,6 @@
 {
   "id": "xai",
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "doctorContract": {
     "configRepair": true
   },

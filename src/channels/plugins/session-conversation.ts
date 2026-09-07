@@ -79,10 +79,10 @@ function normalizeResolvedChannel(channel: string): string {
   );
 }
 
-function getMessagingAdapter(channel: string) {
+function getLoadedSessionChannelPlugin(channel: string) {
   const normalizedChannel = normalizeResolvedChannel(channel);
   try {
-    return getLoadedChannelPlugin(normalizedChannel)?.messaging;
+    return getLoadedChannelPlugin(normalizedChannel);
   } catch {
     return undefined;
   }
@@ -200,7 +200,8 @@ function resolveSessionConversationResolution(params: {
     return null;
   }
 
-  const messaging = getMessagingAdapter(params.channel);
+  const channelPlugin = getLoadedSessionChannelPlugin(params.channel);
+  const messaging = channelPlugin?.messaging;
   const pluginResolved = normalizeSessionConversationResolution(
     messaging?.resolveSessionConversation?.({
       kind: params.kind,
@@ -209,10 +210,10 @@ function resolveSessionConversationResolution(params: {
   );
   const shouldTryBundledFallback =
     params.bundledFallback !== false &&
-    !messaging &&
+    !channelPlugin &&
     shouldProbeBundledSessionConversationFallback(rawId);
-  // Prefer loaded plugin messaging hooks. Bundled public artifacts are only a
-  // lightweight fallback before registry bootstrap; generic parsing is last.
+  // Loaded plugins own their grammar even when they omit messaging. Only absent
+  // registrations may borrow a pre-bootstrap artifact before generic parsing.
   const resolved =
     pluginResolved ??
     (shouldTryBundledFallback

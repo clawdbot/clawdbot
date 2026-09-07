@@ -1,6 +1,7 @@
 // Covers send validation for target/channel mismatches, configured channel
 // availability, and explicit target requirements.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelOutboundContext } from "../../channels/plugins/outbound.types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -365,6 +366,47 @@ describe("message body alias normalization", () => {
     });
 
     expect(result.kind).toBe("send");
+  });
+
+  it.each([
+    { name: "canonical message", body: { message: "    indented body" } },
+    { name: "reasoning tag alias", body: { text: "<think>private</think>    indented body" } },
+    {
+      name: "mixed reasoning preamble alias",
+      body: { text: "<think>private</think>\nThinking\n_summary_\n    indented body" },
+    },
+    {
+      name: "blank earlier alias",
+      body: { SendMessage: " \n\t ", content: "    indented body", text: "not selected" },
+    },
+    { name: "caption fallback", body: { message: "", caption: "    indented body" } },
+  ])("delivers code indentation through $name", async ({ body }) => {
+    const sentText: string[] = [];
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "workspace",
+          source: "test",
+          plugin: {
+            ...workspaceTestPlugin,
+            outbound: {
+              ...workspaceTestPlugin.outbound,
+              sendText: async (ctx: ChannelOutboundContext) => {
+                sentText.push(ctx.text);
+                return { channel: "workspace", messageId: "body-whitespace" };
+              },
+            },
+          },
+        },
+      ]),
+    );
+    const result = await runMessageAction({
+      cfg: workspaceConfig,
+      action: "send",
+      params: { channel: "workspace", target: "#C12345678", ...body },
+    });
+    expect(result.kind).toBe("send");
+    expect(sentText).toEqual(["    indented body"]);
   });
 
   it("does not overwrite an explicit message with an alias", async () => {

@@ -3,9 +3,12 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
+import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import type { ResolvedGatewayAuth } from "../auth.js";
+import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { MAX_BUFFERED_BYTES } from "../server-constants.js";
+import { GatewayClientRegistry } from "./client-registry.js";
 import {
   attachGatewayWsForTest,
   createGatewayWsTestLogger,
@@ -213,6 +216,55 @@ describe("attachGatewayWsConnectionHandler", () => {
     expect(handlerParams.pluginNodeCapabilities).toEqual([{ surface: "canvas", ttlMs: 1234 }]);
   });
 
+  it.each([
+    { capability: "documents", accepted: false },
+    { capability: "browser", accepted: true },
+  ])(
+    "rechecks $capability node registration after hosted capabilities change",
+    async ({ capability, accepted }) => {
+      let surfaces: PluginNodeCapabilitySurface[] = [];
+      const { passed, socket, clients } = await connectTestWs({
+        options: { getPluginNodeCapabilities: () => surfaces },
+      });
+      const handler = passed as {
+        setClient: (client: unknown) => boolean;
+        send: (frame: unknown) => { kind: string };
+        pluginNodeCapabilities: PluginNodeCapabilitySurface[];
+      };
+      expect(handler.pluginNodeCapabilities).toEqual([]);
+      surfaces = [{ surface: "documents", scopeKey: "publisher:documents" }];
+      const node = {
+        socket,
+        connect: {
+          role: "node",
+          minProtocol: PROTOCOL_VERSION,
+          maxProtocol: PROTOCOL_VERSION,
+          caps: [capability],
+          client: { id: "openclaw-macos", mode: "node" },
+        },
+        connId: "pending-node",
+        usesSharedGatewayAuth: false,
+      };
+
+      try {
+        expect(handler.setClient(node)).toBe(accepted);
+        if (accepted) {
+          expect(clients).toEqual(new Set([node]));
+          expect(socket.close).not.toHaveBeenCalled();
+        } else {
+          expect(node).toMatchObject({ invalidated: true });
+          expect(clients.size).toBe(0);
+          expect(socket.close).toHaveBeenCalledExactlyOnceWith(1012, "node capabilities changed");
+          expect(handler.send({ type: "res", id: "stale-connect", ok: true })).toEqual({
+            kind: "unavailable",
+          });
+        }
+      } finally {
+        socket.emit("close", 1000, Buffer.from("done"));
+      }
+    },
+  );
+
   it("prefers forwarded host over bind host for generic plugin surface URLs", async () => {
     const { passed } = await connectTestWs({
       host: "10.0.0.2:18789",
@@ -287,11 +339,12 @@ describe("attachGatewayWsConnectionHandler", () => {
     expect(socket.ping).toHaveBeenCalledOnce();
   });
 
-  it("runs connection-owned Talk cleanup when a gateway connection closes", async () => {
+  it("ends delivery subscriptions before connection-owned Talk cleanup", async () => {
     const { passed, socket } = await connectTestWs();
     const handlerParams = passed as {
       connId: string;
       setClient: (client: unknown) => boolean;
+      getClient: () => GatewayWsClient | null;
     };
     expect(
       handlerParams.setClient({
@@ -299,11 +352,20 @@ describe("attachGatewayWsConnectionHandler", () => {
         connect: { client: { id: "openclaw-control-ui", mode: "webchat" } },
         connId: handlerParams.connId,
         usesSharedGatewayAuth: false,
+        connectionSignal: AbortSignal.abort(),
       }),
     ).toBe(true);
 
+    const signal = handlerParams.getClient()?.connectionSignal;
+    expect(signal?.aborted).toBe(false);
+    const closeOrder: string[] = [];
+    signal?.addEventListener("abort", () => closeOrder.push("subscription-ended"));
+    cleanupTalkConnectionMock.mockImplementation(() => closeOrder.push("talk-cleanup"));
+
     socket.emit("close", 1000, Buffer.from("done"));
 
+    expect(signal?.aborted).toBe(true);
+    expect(closeOrder).toEqual(["subscription-ended", "talk-cleanup"]);
     expect(cleanupTalkConnectionMock).toHaveBeenCalledOnce();
     expect(cleanupTalkConnectionMock).toHaveBeenCalledWith(
       handlerParams.connId,
@@ -428,6 +490,7 @@ describe("attachGatewayWsConnectionHandler", () => {
       const handlerParams = passed as {
         send: (frame: unknown) => { kind: string };
         setClient: (client: unknown) => boolean;
+        getClient: () => GatewayWsClient | null;
       };
       handlerParams.setClient({
         socket,
@@ -435,6 +498,8 @@ describe("attachGatewayWsConnectionHandler", () => {
         connId: "closing-client",
         usesSharedGatewayAuth: false,
       });
+      const signal = handlerParams.getClient()?.connectionSignal;
+      expect(signal?.aborted).toBe(false);
       socket.send.mockClear();
       socket.readyState = readyState;
 
@@ -443,6 +508,7 @@ describe("attachGatewayWsConnectionHandler", () => {
       });
       expect(socket.send).not.toHaveBeenCalled();
       expect(clients.size).toBe(0);
+      expect(signal?.aborted).toBe(true);
     },
   );
 
@@ -505,7 +571,7 @@ describe("attachGatewayWsConnectionHandler", () => {
   it("keeps a closing node discoverable throughout pending lifecycle dispatch and fanout", async () => {
     const unregister = vi.fn(() => "draining-node");
     const get = vi.fn(() => undefined);
-    const clients = new Set<GatewayWsClient>();
+    const clients = new GatewayClientRegistry();
     const socket = createGatewayWsTestSocket();
     const { passed } = await connectTestWs({
       clients,
@@ -549,6 +615,9 @@ describe("attachGatewayWsConnectionHandler", () => {
       usesSharedGatewayAuth: false,
     };
     expect(handler.setClient(nodeClient)).toBe(true);
+    expect(nodeClient.connectionSignal?.aborted).toBe(false);
+    const subscriptionEnded = vi.fn();
+    nodeClient.connectionSignal?.addEventListener("abort", subscriptionEnded);
     const healthySocket = createGatewayWsTestSocket();
     clients.add({
       socket: healthySocket as unknown as GatewayWsClient["socket"],
@@ -568,6 +637,8 @@ describe("attachGatewayWsConnectionHandler", () => {
       kind: "unavailable",
     });
     expect(clients.has(nodeClient)).toBe(true);
+    expect(nodeClient.connectionSignal?.aborted).toBe(true);
+    expect(subscriptionEnded).toHaveBeenCalledOnce();
     const broadcaster = createGatewayBroadcaster({ clients });
     broadcaster.broadcast("tick", { source: "before-node-close" });
 
@@ -590,6 +661,7 @@ describe("attachGatewayWsConnectionHandler", () => {
     await dispatch;
     await vi.waitFor(() => expect(unregister).toHaveBeenCalledOnce());
     expect(clients.has(nodeClient)).toBe(false);
+    expect(subscriptionEnded).toHaveBeenCalledOnce();
   });
 
   it("distinguishes serialization failure from unavailable transports", async () => {

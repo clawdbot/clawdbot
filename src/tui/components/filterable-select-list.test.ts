@@ -193,7 +193,26 @@ describe("FilterableSelectList", () => {
     }
     expect(rendered).not.toContain("fv-end\r\nمرحبا\tשלום");
 
+    // Text removed from display remains part of the original search fields.
+    list.handleInput("\x1b");
+    typeInput(list, "filter-title");
+    expect(list.getSelectedItem()).toMatchObject({ searchText: "raw-filter-target" });
     list.handleInput("\r");
     expect(selectedValue).toBe(rawValue);
+  });
+
+  it("reads changed row fields when the picker is reopened", () => {
+    const item = { value: "session", label: "Before", searchText: "old-name" };
+    const first = new FilterableSelectList([item], 5, mockTheme);
+    typeInput(first, "old-name");
+    expect(first.getSelectedItem()?.value).toBe("session");
+
+    item.label = "After";
+    item.searchText = "new-name";
+    const reopened = new FilterableSelectList([item], 5, mockTheme);
+    typeInput(reopened, "new-name");
+
+    expect(reopened.getSelectedItem()).toMatchObject(item);
+    expect(reopened.render(80).join("\n")).toContain("After");
   });
 });

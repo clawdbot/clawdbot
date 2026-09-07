@@ -101,19 +101,15 @@ export async function collectSourceFileContents(params: SourceScanParams) {
       )
     )
       .flat()
-      .toSorted((left, right) =>
-        normalizeRepoPath(params.repoRoot, left).localeCompare(
-          normalizeRepoPath(params.repoRoot, right),
-        ),
-      );
+      .map((filePath) => ({ filePath, relativeFile: normalizeRepoPath(params.repoRoot, filePath) }))
+      .toSorted((left, right) => left.relativeFile.localeCompare(right.relativeFile));
 
     const readFile = params.readFile ?? fs.readFile;
     const statFile = params.statFile ?? fs.stat;
     const maxFileBytes = normalizeMaxFileBytes(params.maxFileBytes);
     return await pMap(
       files,
-      async (filePath) => {
-        const relativeFile = normalizeRepoPath(params.repoRoot, filePath);
+      async ({ filePath, relativeFile }) => {
         const stat = await statFile(filePath);
         assertSourceFileWithinLimit(relativeFile, stat.size, maxFileBytes);
         const content = await readFile(filePath, "utf8");

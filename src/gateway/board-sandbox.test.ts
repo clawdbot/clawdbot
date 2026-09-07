@@ -67,7 +67,7 @@ describe("board widget sandbox CSP", () => {
     );
   });
 
-  it("adds the best-effort descendant-frame guard only for board documents", () => {
+  it("adds the requested descendant-frame guard before resetting document port offers", () => {
     const proxy = buildSandboxHostProxyHtml({ blockDescendantFrames: true });
     const genericProxy = buildSandboxHostProxyHtml();
 
@@ -79,7 +79,7 @@ describe("board widget sandbox CSP", () => {
     expect(proxy).toContain('lock(globalThis,\\"open\\",undefined)');
     const guardedHtmlIndex = proxy.indexOf("const guardedHtml = guardDocument(params.html)");
     expect(guardedHtmlIndex).toBeGreaterThan(-1);
-    expect(proxy.indexOf("widgetBridgePortOffered = false", guardedHtmlIndex)).toBeGreaterThan(
+    expect(proxy.indexOf("widgetPortsOffered.clear()", guardedHtmlIndex)).toBeGreaterThan(
       guardedHtmlIndex,
     );
     expect(proxy).toContain("const apply=Reflect.apply");

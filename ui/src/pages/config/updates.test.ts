@@ -2,8 +2,10 @@
 
 import { render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { projectUpdateStatusResponse } from "../../app/update-overlay-helpers.ts";
+import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { i18n } from "../../i18n/index.ts";
+import { createNativeDeviceSettingsSnapshot } from "../../test-helpers/native-device-settings.ts";
+import { createUpdateRunFixture } from "../../test-helpers/update-run.ts";
 import { renderUpdates } from "./updates.ts";
 
 type UpdatesViewProps = Parameters<typeof renderUpdates>[0];
@@ -30,13 +32,18 @@ function createProps(overrides: Partial<UpdatesViewProps> = {}): UpdatesViewProp
       channel: "stable",
     },
     statusBanner: null,
-    recordedAttempt: null,
+    run: null,
+    connected: true,
     configBusy: false,
     canAdmin: true,
     canUpdate: true,
     canCheckStatus: true,
     canHoldUpdate: true,
+    canReport: true,
     updateBusy: false,
+    reportableUpdateFailureId: null,
+    updateFailureReportBusy: false,
+    updateFailureReportNotice: null,
     nowMs: 1_000,
     onChannelChange: vi.fn(),
     onUpdateChecksChange: vi.fn(),
@@ -44,6 +51,7 @@ function createProps(overrides: Partial<UpdatesViewProps> = {}): UpdatesViewProp
     onUpdateNow: vi.fn(),
     onHoldUpdate: vi.fn(async () => true),
     onCheckStatus: vi.fn(async () => undefined),
+    onReportFailure: vi.fn(async () => undefined),
     ...overrides,
   };
 }
@@ -76,6 +84,41 @@ beforeEach(async () => {
 });
 
 describe("renderUpdates", () => {
+  it("keeps Mac updater controls native and available independently of Gateway admin access", () => {
+    const nativeDeviceSettings = {
+      snapshot: createNativeDeviceSettingsSnapshot(),
+      subscribe: () => () => undefined,
+      set: vi.fn(),
+      requestPermission: vi.fn(),
+      openSystemSettings: vi.fn(),
+      openPanel: vi.fn(),
+      checkForUpdates: vi.fn(),
+      installChromeExtension: vi.fn(),
+      refresh: vi.fn(),
+      dispose: vi.fn(),
+    } satisfies NativeDeviceSettingsCapability;
+    const props = createProps({ nativeDeviceSettings, canAdmin: false, configBusy: true });
+    render(renderUpdates(props), container);
+    expect(container.textContent).toContain("This Mac");
+    expect(row("App version").textContent).toContain("2026.9.3 (build 42)");
+    const automatic = row("Check for updates automatically").querySelector<
+      HTMLElement & { checked: boolean }
+    >("wa-switch")!;
+    expect(automatic.hasAttribute("disabled")).toBe(false);
+    automatic.checked = false;
+    automatic.dispatchEvent(new Event("change"));
+    expect(nativeDeviceSettings.set).toHaveBeenCalledWith("updates.automatic", false);
+    row("Check for Updates…").querySelector("button")?.click();
+    expect(nativeDeviceSettings.checkForUpdates).toHaveBeenCalledOnce();
+    nativeDeviceSettings.snapshot!.updates.available = false;
+    nativeDeviceSettings.snapshot!.updates.unavailableReason = "Updater is not bundled";
+    render(renderUpdates(props), container);
+    expect(row("App updates unavailable").textContent).toContain("Updater is not bundled");
+    expect(container.textContent).not.toContain("Check for updates automatically");
+    render(renderUpdates(createProps()), container);
+    expect(container.textContent).not.toContain("This Mac");
+  });
+
   it("renders build facts, policy controls, status, and the shared update action", () => {
     const onChannelChange = vi.fn();
     const onAutomaticUpdatesChange = vi.fn();
@@ -490,74 +533,174 @@ describe("renderUpdates", () => {
     expect(row("Status").querySelector(".settings-status--danger")).not.toBeNull();
   });
 
-  it.each([
-    {
-      label: "a failed build with no recorded after identity",
-      status: "error",
-      stats: {
-        mode: "git",
-        reason: "build-failed",
-        before: { sha: "0123456789abcdef" },
-        steps: [{ name: "build", log: { exitCode: 1, stderrTail: "Type check failed" } }],
-      },
-      before: "0123456789ab",
-      after: "Unknown",
-    },
-    {
-      label: "a skipped update that leaves the installed version unchanged",
-      status: "skipped",
-      stats: {
-        mode: "npm",
-        reason: "managed-service-handoff-unavailable",
-        before: { version: "2026.8.1" },
-        after: { version: "2026.8.1" },
-      },
-      before: "v2026.8.1",
-      after: "v2026.8.1",
-    },
-  ])(
-    "renders recorded identities and recovery actions for $label",
-    ({ status, stats, before, after }) => {
+  it.each(["succeeded", "failed", "skipped"] as const)(
+    "renders the durable %s report and only offers recovery for unsuccessful runs",
+    async (status) => {
       const onUpdateNow = vi.fn();
       const onCheckStatus = vi.fn(async () => undefined);
-      const projected = projectUpdateStatusResponse(
-        { sentinel: { kind: "update", status, ts: 500, stats } },
-        { updateStatusBanner: null, recordedUpdateAttempt: null, heldUpdateCampaignId: null },
-      );
       render(
         renderUpdates(
           createProps({
-            recordedAttempt: projected.recordedUpdateAttempt,
-            statusBanner: projected.updateStatusBanner,
+            run: createUpdateRunFixture({
+              phase: "finished",
+              status,
+              finishedAtMs: 10,
+              reason: status === "failed" ? "build-failed" : null,
+              after: { version: "2026.9.2" },
+              steps: [
+                {
+                  step: "build",
+                  status: status === "failed" ? "failed" : "completed",
+                  detail: "Build output",
+                },
+              ],
+            }),
             onUpdateNow,
             onCheckStatus,
           }),
         ),
         container,
       );
-
-      expect(row("Reason code").textContent).toContain(stats.reason);
-      expect(row("Before update").textContent).toContain(before);
-      expect(row("After attempt").textContent).toContain(after);
-      expect(row("After attempt").textContent).not.toContain("v2026.8.2");
-      expect(row("Attempt install type").textContent).toContain(stats.mode);
-      if (status === "error") {
-        expect(row("Failure details").textContent).toContain("Type check failed");
+      document.body.append(container);
+      try {
+        const view = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+          "openclaw-update-run-view",
+        )!;
+        await view.updateComplete;
+        expect(view.querySelector(".update-run-view__report")?.textContent).toContain(
+          status === "succeeded" ? "OpenClaw updated to 2026.9.2" : `OpenClaw update ${status}`,
+        );
+        if (status !== "succeeded") {
+          const recovery = row("Recovery");
+          recovery.querySelector<HTMLButtonElement>("button")?.click();
+          recovery.querySelectorAll<HTMLButtonElement>("button")[1]?.click();
+          expect(onCheckStatus).toHaveBeenCalledOnce();
+          expect(onUpdateNow).toHaveBeenCalledOnce();
+          expect(row("CLI fallback").querySelector("code")?.textContent).toBe("openclaw triage");
+        } else {
+          expect(container.textContent).not.toContain("Retry update");
+        }
+      } finally {
+        container.remove();
       }
-      const recovery = row("Recovery");
-      recovery.querySelector<HTMLButtonElement>("button")?.click();
-      recovery.querySelectorAll<HTMLButtonElement>("button")[1]?.click();
-      expect(onCheckStatus).toHaveBeenCalledOnce();
-      expect(onUpdateNow).toHaveBeenCalledOnce();
-      expect(
-        container.querySelector<HTMLAnchorElement>("a[href*='update-troubleshooting']"),
-      ).not.toBeNull();
-      const cliFallback = row("CLI fallback");
-      expect(cliFallback.textContent).toContain("on the Gateway host");
-      expect(cliFallback.textContent).toContain("local coding agent");
-      expect(cliFallback.querySelector("code")?.textContent?.trim()).toBe("openclaw triage");
     },
   );
+
+  it("keeps retry and report as separate actions for one final failure", () => {
+    const onReportFailure = vi.fn(async () => undefined);
+    const run = createUpdateRunFixture({
+      status: "failed",
+      phase: "finished",
+      reason: "build-failed",
+    });
+    render(
+      renderUpdates(
+        createProps({
+          run,
+          reportableUpdateFailureId: run.runId,
+          onReportFailure,
+        }),
+      ),
+      container,
+    );
+
+    const actions = [...row("Recovery").querySelectorAll<HTMLButtonElement>("button")];
+    expect(actions.map((button) => button.textContent?.trim())).toEqual([
+      "Check status",
+      "Retry update",
+      "Report update failure",
+    ]);
+    actions[2]?.click();
+    expect(onReportFailure).toHaveBeenCalledExactlyOnceWith(run.runId);
+  });
+
+  it("renders a prefilled issue without exposing a server-local path", () => {
+    const run = createUpdateRunFixture({
+      status: "failed",
+      phase: "finished",
+      reason: "build-failed",
+    });
+    render(
+      renderUpdates(
+        createProps({
+          run,
+          reportableUpdateFailureId: run.runId,
+          updateFailureReportNotice: {
+            attemptId: run.runId,
+            result: {
+              status: "fallback",
+              fallbackUrl: "https://github.com/openclaw/openclaw/issues/new?title=update",
+              message: "gh is not authenticated",
+            },
+          },
+        }),
+      ),
+      container,
+    );
+
+    const report = row("Failure report");
+    expect(report.textContent).toContain("GitHub CLI submission was unavailable");
+    expect(report.textContent).not.toContain("/private/report.md");
+    expect(report.querySelector("a")?.getAttribute("href")).toContain("issues/new");
+  });
+
+  it("renders an ambiguous submission as pending without a replay link", () => {
+    const run = createUpdateRunFixture({
+      status: "failed",
+      phase: "finished",
+      reason: "build-failed",
+    });
+    render(
+      renderUpdates(
+        createProps({
+          run,
+          reportableUpdateFailureId: run.runId,
+          updateFailureReportNotice: {
+            attemptId: run.runId,
+            result: {
+              status: "pending",
+              message: "GitHub issue submission may have completed.",
+            },
+          },
+        }),
+      ),
+      container,
+    );
+
+    const report = row("Failure report");
+    expect(report.textContent).toContain("may have completed");
+    expect(report.querySelector("a")).toBeNull();
+  });
+
+  it("renders a definitely unstarted report as retryable rather than ambiguous", () => {
+    const run = createUpdateRunFixture({
+      status: "failed",
+      phase: "finished",
+      reason: "build-failed",
+    });
+    render(
+      renderUpdates(
+        createProps({
+          run,
+          reportableUpdateFailureId: run.runId,
+          updateFailureReportNotice: {
+            attemptId: run.runId,
+            result: {
+              status: "retryable",
+              message: "No issue submission was started; retry this action later.",
+            },
+          },
+        }),
+      ),
+      container,
+    );
+
+    const report = row("Failure report");
+    expect(report.textContent).toContain("No GitHub issue submission was started");
+    expect(report.textContent).toContain("retry this action later");
+    expect(report.textContent).not.toContain("may have completed");
+    expect(report.querySelector("a")).toBeNull();
+  });
 
   it("keeps read-only facts visible while locking controls for non-admins", () => {
     render(

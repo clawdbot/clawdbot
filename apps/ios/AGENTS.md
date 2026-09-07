@@ -29,7 +29,7 @@ Root rules still apply. This file adds the iOS release guardrails.
 ## App Store Releases
 
 - Agent-driven App Store uploads must use only `pnpm ios:release:upload`.
-- Release preparation belongs to `scripts/mobile-release-version.ts`. Run its `--prepare` phase, capture `pnpm ios:release:plan -- --json`, run its `--finalize` phase, review and commit all five cutter outputs, then run `pnpm ios:release:upload` without release arguments.
+- Release preparation belongs to `scripts/mobile-release-version.ts`. Run its `--prepare` phase, capture `pnpm ios:release:plan -- --json`, run its `--finalize` phase, review all five cutter outputs, commit only the outputs whose bytes changed, then run `pnpm ios:release:upload` without release arguments.
 - The planner derives the gateway version from `apps/mobile/version.json`, reuses the one editable App Store revision for that gateway, retries an unreleased revision found in App Store Connect build-upload history, and allocates the next revision only after released history. Historical exact gateway versions consume revision zero.
 - Build allocation uses App Store Connect `buildUploads`, including awaiting, processing, failed, and complete uploads. Every Apple-visible attempt consumes its build number; retries increment the build within the same App Store revision.
 - Only one iOS release uploader may run at a time. Multiple active App Store versions, locked/in-review state, a different active gateway, unknown upload state, or revision exhaustion must fail closed for human resolution.

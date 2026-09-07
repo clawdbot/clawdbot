@@ -124,7 +124,7 @@ struct DashboardResponse {
 }
 
 pub fn status(cli: &OpenClawCli) -> Result<GatewaySnapshot, String> {
-    let (value, _) = cli
+    let value = cli
         .json::<DaemonStatus, _, _>(["gateway", "status", "--json"])
         .map_err(|error| error.to_string())?;
     let installed = value.service.command.is_some() || value.service.loaded;
@@ -136,14 +136,14 @@ pub fn status(cli: &OpenClawCli) -> Result<GatewaySnapshot, String> {
         .unwrap_or("stopped");
     let running = runtime_status == "running";
     let reachable = value.rpc.as_ref().is_some_and(|rpc| rpc.ok);
-    let phase = if reachable {
-        "connected"
+    let (phase, status) = if reachable {
+        ("connected", "Connected")
     } else if !installed {
-        "notInstalled"
+        ("notInstalled", "Not installed")
     } else if running {
-        "reconnecting"
+        ("reconnecting", "Unavailable")
     } else {
-        "stopped"
+        ("stopped", "Stopped")
     };
     let detail = value
         .rpc
@@ -164,22 +164,12 @@ pub fn status(cli: &OpenClawCli) -> Result<GatewaySnapshot, String> {
             }
         })
         .or_else(|| (!running).then(|| format!("Gateway service is {runtime_status}.")));
-    let status = if reachable {
-        "Connected".to_string()
-    } else if !installed {
-        "Not installed".to_string()
-    } else if running {
-        "Unavailable".to_string()
-    } else {
-        "Stopped".to_string()
-    };
-
     Ok(GatewaySnapshot {
         phase,
         installed,
         running,
         reachable,
-        status,
+        status: status.to_string(),
         detail,
     })
 }
@@ -229,21 +219,20 @@ pub fn act(cli: &OpenClawCli, action: GatewayAction) -> Result<GatewaySnapshot, 
 pub fn dashboard(cli: &OpenClawCli, snapshot: GatewaySnapshot) -> Result<ReadyGateway, String> {
     // CLIs released before `dashboard --json` reject the flag without JSON output;
     // surface an upgrade path instead of a raw parse error.
-    let (response, output) =
-        match cli.json::<DashboardResponse, _, _>(["dashboard", "--json", "--no-open"]) {
-            Ok(result) => result,
-            // Older CLIs reject the app's own --json flag (prose on stdout, or a nonzero
-            // exit naming the flag); both mean the same missing integration, not a failure
-            // the user can repair in place.
-            Err(crate::cli::CliError::InvalidJson(_)) => {
-                return Err(unsupported_dashboard_integration());
-            }
-            Err(crate::cli::CliError::CommandFailed(message)) if message.contains("\"--json\"") => {
-                return Err(unsupported_dashboard_integration());
-            }
-            Err(error) => return Err(error.to_string()),
-        };
-    if response.ok && output.status.success() {
+    let response = match cli.json::<DashboardResponse, _, _>(["dashboard", "--json", "--no-open"]) {
+        Ok(result) => result,
+        // Older CLIs reject the app's own --json flag (prose on stdout, or a nonzero
+        // exit naming the flag); both mean the same missing integration, not a failure
+        // the user can repair in place.
+        Err(crate::cli::CliError::InvalidJson(_)) => {
+            return Err(unsupported_dashboard_integration());
+        }
+        Err(crate::cli::CliError::CommandFailed(message)) if message.contains("\"--json\"") => {
+            return Err(unsupported_dashboard_integration());
+        }
+        Err(error) => return Err(error.to_string()),
+    };
+    if response.ok {
         // The browser owns the one-time pairing grant; Quick Chat keeps the
         // legacy URL's shared credential and must never consume that grant.
         let shared_auth_url = response
@@ -323,10 +312,16 @@ mod dashboard_tests {
 }
 
 fn run_service_command(cli: &OpenClawCli, action: &str) -> Result<(), String> {
-    let (response, output) = cli
-        .json::<CommandResponse, _, _>(["gateway", action, "--json"])
+    // A native Stop click supplies operator consent. Restart's --force would
+    // instead bypass draining and must remain unset.
+    let response = cli
+        .json::<CommandResponse, _, _>(
+            ["gateway", action, "--json"]
+                .into_iter()
+                .chain((action == "stop").then_some("--force")),
+        )
         .map_err(|error| error.to_string())?;
-    if response.ok && output.status.success() {
+    if response.ok {
         return Ok(());
     }
     Err(response

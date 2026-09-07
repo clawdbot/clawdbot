@@ -72,6 +72,43 @@ afterEach(() => {
 });
 
 describe("OpenClaw native shell", () => {
+  it("reports readiness only while the native command listener owner is connected", () => {
+    const shell = document.createElement("openclaw-app-shell") as HTMLElement & {
+      connectedCallback(): void;
+      disconnectedCallback(): void;
+      nativeHistoryState: { canGoBack: boolean; canGoForward: boolean };
+    };
+    const nativeWindow = window as Window & { __OPENCLAW_NATIVE_COMMANDS_READY__?: boolean };
+    const states: boolean[] = [];
+    const recordState = () =>
+      states.push(nativeWindow["__OPENCLAW_NATIVE_COMMANDS_READY__"] === true);
+    window.addEventListener("openclaw:native-commands-state", recordState);
+    try {
+      shell.connectedCallback();
+      window.dispatchEvent(
+        new CustomEvent("openclaw:native-history-state", {
+          detail: { canGoBack: true, canGoForward: false },
+        }),
+      );
+      expect(shell.nativeHistoryState.canGoBack).toBe(true);
+      expect(states).toEqual([true]);
+
+      shell.disconnectedCallback();
+      shell.nativeHistoryState = { canGoBack: false, canGoForward: false };
+      window.dispatchEvent(
+        new CustomEvent("openclaw:native-history-state", {
+          detail: { canGoBack: true, canGoForward: false },
+        }),
+      );
+      expect(shell.nativeHistoryState.canGoBack).toBe(false);
+      expect(states).toEqual([true, false]);
+    } finally {
+      shell.disconnectedCallback();
+      window.removeEventListener("openclaw:native-commands-state", recordState);
+      Reflect.deleteProperty(nativeWindow, "__OPENCLAW_NATIVE_COMMANDS_READY__");
+    }
+  });
+
   it("opens Settings with Shift-Command-Comma", () => {
     const navigate = vi.fn();
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState;

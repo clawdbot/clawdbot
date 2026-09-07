@@ -189,11 +189,14 @@ describe("session placement recovery", () => {
         },
       });
       expect(pauseSessionPlacementRecovery(retained, "later failure", true)).toMatchObject({
-        message: retained.message,
-        messageId: retained.messageId,
-        phase: "paused",
-        reason: "not-sent",
-        error: expect.stringContaining("Keep this page open"),
+        persisted: false,
+        recovery: {
+          message: retained.message,
+          messageId: retained.messageId,
+          phase: "paused",
+          reason: "not-sent",
+          error: expect.stringContaining("Keep this page open"),
+        },
       });
       expect(
         readSessionPlacementRecovery(
@@ -204,6 +207,50 @@ describe("session placement recovery", () => {
       ).toEqual(alreadyPaused ? retained : null);
     },
   );
+
+  it.each([false, true])(
+    "keeps bounded pause errors on UTF-16 boundaries (persistent=%s)",
+    (persistent) => {
+      const error = `${"x".repeat(4095)}🤖`;
+      const paused = pauseSessionPlacementRecovery(recovery, error, persistent);
+
+      expect(paused.recovery.error).toBe("x".repeat(4095));
+      expect(paused.persisted).toBe(persistent);
+      expect(
+        readSessionPlacementRecovery(
+          recovery.gatewayUrl,
+          recovery.recoveryScope,
+          recovery.sessionKey,
+        ),
+      ).toEqual(persistent ? paused.recovery : null);
+    },
+  );
+
+  it("keeps storage-failure guidance on UTF-16 boundaries", () => {
+    const prefix = "Recovery could not be saved in this tab. Keep this page open.\n";
+    const error = `${"x".repeat(4095 - prefix.length)}🤖`;
+    expect(writeSessionPlacementRecovery(recovery)).toBe(true);
+    const storage = sessionStorage;
+    vi.stubGlobal("sessionStorage", {
+      getItem: storage.getItem.bind(storage),
+      removeItem: storage.removeItem.bind(storage),
+      setItem: () => {
+        throw new DOMException("quota exceeded", "QuotaExceededError");
+      },
+    });
+
+    const paused = pauseSessionPlacementRecovery(recovery, error, true);
+
+    expect(paused.recovery.error).toBe(`${prefix}${"x".repeat(4095 - prefix.length)}`);
+    expect(paused.persisted).toBe(false);
+    expect(
+      readSessionPlacementRecovery(
+        recovery.gatewayUrl,
+        recovery.recoveryScope,
+        recovery.sessionKey,
+      ),
+    ).toBeNull();
+  });
 
   it("migrates only exact framed rows under a new scope", () => {
     const sourceScope = recovery.recoveryScope;
@@ -365,7 +412,10 @@ describe("session placement recovery", () => {
     ).toEqual(attachmentRecovery);
   });
 
-  it("requires matching create parameters for a creating recovery", () => {
+  it.each([
+    { projectId: "openclaw", worktree: true as const },
+    { repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release/next" } },
+  ])("requires matching create parameters for a creating recovery: %j", (workspace) => {
     const creating = {
       ...recovery,
       phase: "creating" as const,
@@ -374,7 +424,6 @@ describe("session placement recovery", () => {
         agentId: "cloud",
         message: "" as const,
         category: "Client work",
-        projectId: "openclaw",
         thinkingLevel: "high",
         toolOverrides: {
           mcpServers: { github: false },
@@ -382,7 +431,7 @@ describe("session placement recovery", () => {
           webSearch: false,
         },
         visibility: "draft" as const,
-        worktree: true as const,
+        ...workspace,
       },
     };
     expect(writeSessionPlacementRecovery(creating)).toBe(true);
@@ -411,6 +460,19 @@ describe("session placement recovery", () => {
     { name: "an empty project id", value: { projectId: "" } },
     { name: "a non-string project id", value: { projectId: 42 } },
     { name: "a project id with a cwd", value: { projectId: "openclaw", cwd: "/tmp/repo" } },
+    {
+      name: "a repository with a Gateway worktree",
+      value: { repository: { url: "https://github.com/openclaw/openclaw.git" } },
+    },
+    { name: "an invalid repository", value: { worktree: undefined, repository: { url: "" } } },
+    {
+      name: "a repository with a local path",
+      value: {
+        worktree: undefined,
+        repository: { url: "https://github.com/openclaw/openclaw.git" },
+        cwd: "/gateway/repo",
+      },
+    },
     {
       name: "a project id with an exec node",
       value: { projectId: "openclaw", execNode: "macbook" },

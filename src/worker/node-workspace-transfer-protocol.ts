@@ -1,3 +1,12 @@
+import { createHash } from "node:crypto";
+
+export const NODE_WORKSPACE_EMPTY_MANIFEST = JSON.stringify({
+  version: 1,
+  baseCommit: null,
+  entries: [],
+});
+export const NODE_WORKSPACE_EMPTY_MANIFEST_REF = `sha256:${createHash("sha256").update(NODE_WORKSPACE_EMPTY_MANIFEST).digest("hex")}`;
+
 export const NODE_WORKSPACE_TRANSFER_PATH = "/__openclaw__/worker-transfer/v1";
 export const NODE_WORKSPACE_TRANSFER_ERROR_CODE = "WORKSPACE_TRANSFER_FAILED";
 
@@ -42,11 +51,17 @@ export type NodeWorkerWorkspaceTransferInput =
       seedKey?: string;
       /** Install attachment files only; never replace or delete workspace entries. */
       attachments?: true;
+      /** Restore only the checkpoint delta onto its independently cloned Git base. */
+      checkpointBaseManifestRef?: string;
     }
   | {
       direction: "upload";
       token: string;
       baseManifestRef: string;
+      /** Last accepted raw manifest; independent of the cumulative repository base. */
+      referenceManifestRef: string;
+      /** Capture normalized publication artifacts under this pinned repository base. */
+      publicationBaseCommit?: string;
     };
 
 function nodeWorkspaceTransferEnvironmentPath(environmentId: string): string {

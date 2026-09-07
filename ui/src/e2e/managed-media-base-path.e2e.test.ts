@@ -1,8 +1,9 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
@@ -87,7 +88,10 @@ describe("Control UI managed media under a UI base path", () => {
       await image.waitFor({ state: "attached", timeout: 10_000 });
       await expect.poll(() => requests.length).toBeGreaterThan(0);
       if (proofDir) {
-        await page.screenshot({ path: path.join(proofDir, "state.png"), fullPage: true });
+        await writeFile(
+          path.join(proofDir, "state.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [image]),
+        );
       }
 
       const naturalWidth = await image.evaluate((node) =>

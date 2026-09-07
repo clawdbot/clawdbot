@@ -43,6 +43,7 @@ describe("tool-catalog", () => {
   it("includes code execution, web tools, and progress_card in the coding profile policy", () => {
     const policy = requireCoreToolProfilePolicy("coding");
     expect(policy.allow).toEqual([
+      "ls",
       "read",
       "write",
       "edit",

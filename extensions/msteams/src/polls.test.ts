@@ -131,7 +131,7 @@ describe("state poll store", () => {
 
     const store = createMSTeamsPollStoreState({ stateDir });
     await expect(store.getPoll("poll-legacy")).resolves.toBeNull();
-    await expect(fs.promises.access(filePath)).resolves.toBeUndefined();
+    await fs.promises.access(filePath);
 
     await store.createPoll({
       id: "poll-new",
@@ -142,9 +142,7 @@ describe("state poll store", () => {
       votes: {},
     });
     await expect(store.getPoll("poll-new")).resolves.toMatchObject({ id: "poll-new" });
-    await expect(
-      fs.promises.access(path.join(stateDir, "state", "openclaw.sqlite")),
-    ).resolves.toBeUndefined();
+    await fs.promises.access(path.join(stateDir, "state", "openclaw.sqlite"));
   });
 
   it("hashes external poll ids before using plugin-state keys", async () => {

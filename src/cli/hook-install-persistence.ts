@@ -7,7 +7,7 @@ import type { PackageDirInstallTransaction } from "../infra/install-package-dir.
 import type { ConfigSnapshotForInstallPersist } from "../plugins/install-persistence.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { enableInternalHookEntries, logHookPackRestartHint } from "./plugins-command-helpers.js";
+import { enableInternalHookEntries } from "./plugins-command-helpers.js";
 
 export async function persistHookPackInstall(params: {
   snapshot: ConfigSnapshotForInstallPersist;
@@ -54,7 +54,9 @@ export async function persistHookPackInstall(params: {
     }
     await transaction.commit();
     runtime.log(params.successMessage ?? `Installed hook pack: ${params.hookPackId}`);
-    logHookPackRestartHint(runtime);
+    runtime.log(
+      "Hook install/link config can activate immediately in hybrid mode; code-only updates and reload mode off need a Gateway restart.",
+    );
     return next;
   });
 }

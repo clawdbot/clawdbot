@@ -8,6 +8,7 @@ describe("opencode provider policy public artifact", () => {
       resolveThinkingProfile({
         provider: "opencode",
         modelId: "claude-opus-4-7",
+        compat: { supportedReasoningEfforts: ["low"] },
       }),
     ).toEqual({
       levels: [

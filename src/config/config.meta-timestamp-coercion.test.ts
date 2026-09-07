@@ -1,6 +1,6 @@
 // Verifies config metadata timestamp coercion behavior.
 import { describe, expect, it } from "vitest";
-import { validateConfigObject } from "./validation.js";
+import { validateConfigObject } from "./validation-core.js";
 
 describe("config metadata", () => {
   it("rejects retired lastTouchedAt config metadata", () => {

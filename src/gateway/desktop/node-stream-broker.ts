@@ -40,7 +40,6 @@ type TicketEntry = {
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
   redeemed: boolean;
-  settled: boolean;
   socket?: Duplex;
   ws?: WebSocket;
   stopKeepalive?: () => void;
@@ -172,10 +171,9 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
 
   const rejectTicket = (ticket: string, error: Error): void => {
     const entry = remove(ticket);
-    if (!entry || entry.settled) {
+    if (!entry) {
       return;
     }
-    entry.settled = true;
     entry.reject(error);
     entry.stopKeepalive?.();
     entry.closeTrigger ??= "attach-rejected";
@@ -189,11 +187,10 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
     metadata: NodeDesktopStreamMetadata | undefined,
   ): void => {
     const entry = remove(ticket);
-    if (!entry || entry.settled) {
+    if (!entry) {
       stream.destroy();
       return;
     }
-    entry.settled = true;
     entry.resolve(stream, metadata);
   };
 
@@ -230,7 +227,6 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
       reject,
       timer,
       redeemed: false,
-      settled: false,
     });
     return {
       ticket,
@@ -314,20 +310,17 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
     } catch {
       current = false;
     }
-    if (entry.settled) {
-      return true;
-    }
-    if (!current) {
-      socket.off("error", onSocketError);
-      socket.off("end", onSocketClose);
-      socket.off("close", onSocketClose);
-      writeUnauthorized(socket);
-      rejectTicket(ticket, new Error(`node ${kind} stream ticket binding is stale`));
+    if (tickets.get(ticket) !== entry) {
       return true;
     }
     socket.off("error", onSocketError);
     socket.off("end", onSocketClose);
     socket.off("close", onSocketClose);
+    if (!current) {
+      writeUnauthorized(socket);
+      rejectTicket(ticket, new Error(`node ${kind} stream ticket binding is stale`));
+      return true;
+    }
     try {
       wss.handleUpgrade(req, socket, head, (ws) => {
         entry.socket = undefined;

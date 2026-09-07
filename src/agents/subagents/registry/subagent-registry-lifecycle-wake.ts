@@ -21,6 +21,7 @@ import type {
 } from "./subagent-registry-lifecycle-context.js";
 import {
   buildSafeLifecycleErrorMeta,
+  clearSubagentPendingDelivery,
   markRequesterSettleWakePending,
   maskLifecycleIdentifier,
   safeSetSubagentTaskDeliveryStatus,
@@ -106,7 +107,7 @@ const completeRequesterSettleWakeBatch = (
   }
   const requesterSessionKeys = new Set(entries.map((entry) => entry.requesterSessionKey));
   const previousStates = entries.map((entry) => ({
-    delivery: structuredClone(entry.delivery),
+    delivery: outcome?.delivered ? entry.delivery : structuredClone(entry.delivery),
     requesterSettleWake: structuredClone(entry.requesterSettleWake),
     retireAfterRequesterTurn: entry.retireAfterRequesterTurn,
     suppressCompletionDelivery: entry.suppressCompletionDelivery,
@@ -114,6 +115,11 @@ const completeRequesterSettleWakeBatch = (
   const settledDeliveries: SubagentRunRecord[] = [];
   for (const entry of entries) {
     const { runId } = entry;
+    if (outcome?.delivered && entry.expectsCompletionMessage === true) {
+      // Replace the receipt owner even if an older multipart send already committed a chunk.
+      // Its retained guard must stay closed after this wake is cleared.
+      entry.delivery = { ...ensureDeliveryState(entry) };
+    }
     if (
       outcome &&
       entry.expectsCompletionMessage === true &&
@@ -126,7 +132,7 @@ const completeRequesterSettleWakeBatch = (
         delivery.disposition = "delivered";
         delivery.deliveredAt = deliveredAt;
         delivery.announcedAt = deliveredAt;
-        delivery.lastError = undefined;
+        clearSubagentPendingDelivery(entry);
         delivery.lastDropReason = undefined;
       } else {
         const error = outcome.error ?? outcome.reason ?? "requester settle wake failed";
@@ -411,17 +417,6 @@ export function completeCleanupBookkeeping(
 ): void {
   const params = context.options;
   const suppressSessionEffects = shouldSuppressSubagentRecoverySessionEffects(cleanupParams.entry);
-  const runCleanupTail = (label: string, run: () => Promise<unknown>) => {
-    // These best-effort tails can outlive the durable registry transition,
-    // but they still mutate session-owned resources and must block snapshots.
-    void runWithGatewayIndependentRootWorkAdmission(run, "subagents:lifecycle-cleanup").catch(
-      (error: unknown) => {
-        defaultRuntime.log(
-          `[warn] subagent ${label} failed (${cleanupParams.runId}): ${String(error)}`,
-        );
-      },
-    );
-  };
   const scheduleCleanupTails = (options: {
     allowRetiredRow: boolean;
     isDeleteCleanup: boolean;
@@ -439,20 +434,27 @@ export function completeCleanupBookkeeping(
         !shouldSuppressSubagentRecoverySessionEffects(cleanupParams.entry)
       );
     };
-    if (postBookkeepingEffectsAllowed() && !cleanupParams.preserveTranscript) {
-      runCleanupTail("session cleanup", async () => {
-        if (!postBookkeepingEffectsAllowed()) {
-          return;
+    const runCleanupTail = (label: string, run: () => Promise<unknown>) => {
+      // Admission can wait beyond retirement or replacement. Recheck ownership
+      // inside the independent root; surviving tails must still block snapshots.
+      void runWithGatewayIndependentRootWorkAdmission(async () => {
+        if (postBookkeepingEffectsAllowed()) {
+          await run();
         }
-        await removeInternalSessionEffectsSession(cleanupParams.entry.execution.transcriptTarget);
+      }, "subagents:lifecycle-cleanup").catch((error: unknown) => {
+        defaultRuntime.log(
+          `[warn] subagent ${label} failed (${cleanupParams.runId}): ${String(error)}`,
+        );
       });
+    };
+    if (postBookkeepingEffectsAllowed() && !cleanupParams.preserveTranscript) {
+      runCleanupTail("session cleanup", () =>
+        removeInternalSessionEffectsSession(cleanupParams.entry.execution.transcriptTarget),
+      );
     }
     if (postBookkeepingEffectsAllowed() && cleanupParams.entry.spawnMode !== "session") {
-      runCleanupTail("bundle MCP cleanup", async () => {
-        if (!postBookkeepingEffectsAllowed()) {
-          return;
-        }
-        await retireSessionMcpRuntimeForSessionKey({
+      runCleanupTail("bundle MCP cleanup", () =>
+        retireSessionMcpRuntimeForSessionKey({
           sessionKey: cleanupParams.entry.childSessionKey,
           reason: "subagent-run-cleanup",
           preserveActiveLeases: true,
@@ -467,19 +469,16 @@ export function completeCleanupBookkeeping(
               ),
             });
           },
-        });
-      });
+        }),
+      );
     }
     if (
       !cleanupParams.provisionalKill &&
       postBookkeepingEffectsAllowed() &&
       (options.isDeleteCleanup || !cleanupParams.entry.collect)
     ) {
-      runCleanupTail("context-engine cleanup", async () => {
-        if (!postBookkeepingEffectsAllowed()) {
-          return;
-        }
-        await params.notifyContextEngineSubagentEnded(
+      runCleanupTail("context-engine cleanup", () =>
+        params.notifyContextEngineSubagentEnded(
           {
             childSessionKey: cleanupParams.entry.childSessionKey,
             reason: options.isDeleteCleanup ? "deleted" : "completed",
@@ -487,8 +486,8 @@ export function completeCleanupBookkeeping(
             workspaceDir: cleanupParams.entry.workspaceDir,
           },
           { isCurrent: postBookkeepingEffectsAllowed },
-        );
-      });
+        ),
+      );
     }
   };
   if (cleanupParams.provisionalKill) {

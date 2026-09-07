@@ -213,16 +213,10 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
         let locs = locations
         Task { @MainActor in
             // Resolve all one-shot requests first so overlapping callers share this update.
-            let continuations = Array(self.locationRequestContinuations.values) + [self.locationContinuation]
-                .compactMap(\.self)
-            self.locationRequestContinuations.removeAll()
-            self.locationContinuation = nil
-            for continuation in continuations {
-                if let latest = locs.last {
-                    continuation.resume(returning: latest)
-                } else {
-                    continuation.resume(throwing: Error.unavailable)
-                }
+            if let latest = locs.last {
+                self.completeLocationRequests(with: .success(latest))
+            } else {
+                self.completeLocationRequests(with: .failure(Error.unavailable))
             }
             // Don't return — also forward to significant-change consumers below.
             if let callback = self.significantLocationCallback, let latest = locs.last {
@@ -234,13 +228,7 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Swift.Error) {
         let err = error
         Task { @MainActor in
-            let continuations = Array(self.locationRequestContinuations.values) + [self.locationContinuation]
-                .compactMap(\.self)
-            self.locationRequestContinuations.removeAll()
-            self.locationContinuation = nil
-            for continuation in continuations {
-                continuation.resume(throwing: err)
-            }
+            self.completeLocationRequests(with: .failure(err))
         }
     }
 }

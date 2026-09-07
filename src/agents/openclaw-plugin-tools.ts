@@ -4,6 +4,7 @@
  * This module builds runtime plugin tools from config/options, delivery context,
  * auth profiles, and the current runtime config snapshot.
  */
+import { getRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveMessageActionTurnCapability,
@@ -200,19 +201,21 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     return [];
   }
 
-  const resolveCurrentRuntimeConfig = () => {
-    // Re-resolve on demand so auth/profile lookups see the active runtime config
-    // while tests can still inject a fixed resolvedConfig.
-    return resolveAgentRuntimeToolConfig(params.resolvedConfig ?? params.options?.config);
-  };
+  const inputConfig = params.resolvedConfig ?? params.options?.config;
+  const availabilityConfig = resolveAgentRuntimeToolConfig(inputConfig);
+  // Bind ownership before reload replaces the source snapshot. Explicit run
+  // overrides stay isolated; runtime-owned contexts follow later publications.
+  const followsRuntimeConfig =
+    inputConfig === undefined || availabilityConfig === getRuntimeConfigSnapshot();
+  const resolveCurrentRuntimeConfig = () =>
+    followsRuntimeConfig ? resolveAgentRuntimeToolConfig() : availabilityConfig;
   const pluginToolInputs = resolveOpenClawPluginToolInputs({
     options: params.options,
     resolvedConfig: params.resolvedConfig,
-    runtimeConfig: resolveCurrentRuntimeConfig(),
+    runtimeConfig: availabilityConfig,
     getRuntimeConfig: resolveCurrentRuntimeConfig,
   });
   const authProfileStore = params.options?.authProfileStore;
-  const availabilityConfig = resolveCurrentRuntimeConfig();
   const delivery = createPluginToolDelivery({
     options: params.options,
     context: pluginToolInputs.context,

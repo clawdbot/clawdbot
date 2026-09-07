@@ -241,6 +241,8 @@ export type CliBackendPromptContext = {
 /** Exact prepared local process facts consumed by a plugin-owned execution transport. */
 export type CliBackendExecuteContext = {
   command: string;
+  /** Preserve a verified invocation name when command resolves through a PATH shim. */
+  argv0?: string;
   args: readonly string[];
   cwd: string;
   env: Record<string, string>;

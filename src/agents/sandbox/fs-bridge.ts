@@ -6,6 +6,7 @@
 import fs from "node:fs";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { readFileDescriptorBoundedSync } from "../../infra/boundary-file-read.js";
+import { parseDirectoryEntries, type DirectoryEntry } from "../../infra/directory-entries.js";
 import type {
   SandboxBackendCommandResult,
   SandboxFsBridgeContext,
@@ -15,6 +16,7 @@ import {
   buildPinnedCreatePlan,
   buildPinnedCopyPlan,
   buildPinnedMkdirpPlan,
+  buildPinnedReadDirectoryPlan,
   buildPinnedRemovePlan,
   buildPinnedRenamePlan,
   buildPinnedWritePlan,
@@ -82,6 +84,25 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   }): Promise<Buffer> {
     const target = this.resolveResolvedPath(params);
     return this.readPinnedFile(target, params.maxBytes);
+  }
+
+  async readDirectory(params: {
+    filePath: string;
+    cwd?: string;
+    signal?: AbortSignal;
+  }): Promise<DirectoryEntry[]> {
+    const target = this.resolveResolvedPath(params);
+    const result = await this.runCheckedCommand({
+      ...buildPinnedReadDirectoryPlan({
+        check: { target, options: { action: "list directories", allowedType: "directory" } },
+        pinned: await this.pathGuard.resolveAnchoredPinnedDirectoryEntry(
+          target,
+          "list directories",
+        ),
+      }),
+      signal: params.signal,
+    });
+    return parseDirectoryEntries(result.stdout.toString("utf8"));
   }
 
   async copyFile(params: {

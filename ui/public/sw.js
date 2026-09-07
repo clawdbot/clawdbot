@@ -12,8 +12,9 @@ const CACHE_VERSION =
     : URL_CACHE_VERSION) || "dev";
 const CACHE_NAME = `${CACHE_PREFIX}${CACHE_VERSION}`;
 const CONTROL_CACHE_LIMIT = 3;
-const CLIENT_VERSION_TIMEOUT_MS = 1_000;
 
+// Older pages reload directly and cannot acquire new config-draft guards. Keep
+// their root/chat announcement contract; current pages also reconcile on resume.
 function isControlUiChatClient(url) {
   const clientUrl = new URL(url);
   const scopeUrl = new URL(self.registration.scope);
@@ -27,46 +28,13 @@ function isControlUiChatClient(url) {
   );
 }
 
-async function markClientReload(client) {
-  const cache = await caches.open(CACHE_NAME);
-  const guardUrl = new URL(".__openclaw__/service-worker-reload", self.registration.scope);
-  guardUrl.searchParams.set("client", client.id);
-  const guardRequest = new Request(guardUrl);
-  if (await cache.match(guardRequest)) {
-    return null;
+// A resumed/BFCache document may have missed activation entirely. Build identity
+// belongs to the running worker, not its potentially old sw.js?v= registration URL.
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "sw-version-probe") {
+    event.ports[0]?.postMessage({ type: "sw-updated", version: CACHE_VERSION });
   }
-  // Persist before navigation so repeated activation of the same build cannot
-  // loop a document that keeps receiving stale HTML.
-  await cache.put(guardRequest, new Response(CACHE_VERSION));
-  return { cache, guardRequest };
-}
-
-async function navigateSuspendedClient(client) {
-  const reloadClaim = await markClientReload(client);
-  if (!reloadClaim) {
-    return;
-  }
-  // Navigation can stay pending for the lifetime of a suspended document, so
-  // it must not keep the replacement service worker's activation alive.
-  void client.navigate(client.url).catch(() => {
-    // A suspended WebKit document can reject navigation. Release ownership so
-    // the next activation can retry instead of stranding this build forever.
-    void reloadClaim.cache.delete(reloadClaim.guardRequest).catch(() => undefined);
-  });
-}
-
-function readClientVersion(client) {
-  return new Promise((resolve) => {
-    const channel = new MessageChannel();
-    const timeout = setTimeout(() => resolve(null), CLIENT_VERSION_TIMEOUT_MS);
-    channel.port1.addEventListener("message", (event) => {
-      clearTimeout(timeout);
-      resolve(typeof event.data?.version === "string" ? event.data.version : null);
-    });
-    channel.port1.start();
-    client.postMessage({ type: "sw-version-probe", version: CACHE_VERSION }, [channel.port2]);
-  });
-}
+});
 
 // Minimal app-shell files to precache.
 const PRECACHE_URLS = ["./"];
@@ -94,28 +62,17 @@ self.addEventListener("activate", (event) => {
           controlKeys.filter((key) => !retained.has(key)).map((key) => caches.delete(key)),
         ),
       ]);
-      // A suspended mobile page can miss a one-shot update message. Current
-      // documents answer the probe; only stale or suspended chat documents reload.
+      // Queue the announcement without waiting for suspended pages or navigating
+      // around their unsaved-work guards. Resumed pages also query our identity.
       const windowClients = await self.clients.matchAll({
         type: "window",
         includeUncontrolled: true,
       });
-
-      await Promise.allSettled(
-        windowClients
-          .filter((client) => isControlUiChatClient(client.url))
-          .map(async (client) => {
-            const clientVersion = await readClientVersion(client);
-            if (clientVersion === CACHE_VERSION) {
-              return;
-            }
-            if (clientVersion !== null) {
-              client.postMessage({ type: "sw-updated", version: CACHE_VERSION }, []);
-              return;
-            }
-            await navigateSuspendedClient(client);
-          }),
-      );
+      for (const client of windowClients) {
+        if (isControlUiChatClient(client.url)) {
+          client.postMessage({ type: "sw-updated", version: CACHE_VERSION }, []);
+        }
+      }
     })(),
   );
 });

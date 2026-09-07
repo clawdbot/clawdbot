@@ -259,9 +259,9 @@ async function listAllTools(
   return { tools: normalized.tools, metadata: normalized.metadata };
 }
 
-function disposeNodeHostMcpSession(session: NodeHostMcpSession): Promise<void> {
+async function disposeNodeHostMcpSession(session: NodeHostMcpSession): Promise<void> {
   session.abortController.abort(new Error("node host MCP session retired"));
-  return disposeMcpClient(session);
+  await disposeMcpClient(session);
 }
 
 /** Starts process-lifetime MCP server state for the node host. */

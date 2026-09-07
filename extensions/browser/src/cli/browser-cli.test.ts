@@ -34,6 +34,7 @@ describe("Browser CLI import boundary", () => {
       "path",
       "install",
       "status",
+      "uninstall-store",
       "uninstall-host",
       "pair",
       "cdp",

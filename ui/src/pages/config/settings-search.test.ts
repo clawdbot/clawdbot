@@ -8,6 +8,36 @@ afterEach(async () => {
 });
 
 describe("findSettingsSearchBlocks", () => {
+  it("finds the meeting library separately from its Communications capture settings", () => {
+    const search = (query: string) =>
+      findSettingsSearchBlocks({ query, schema: null, value: {}, uiHints: {} });
+    expect(search("meeting notes")).toContainEqual(
+      expect.objectContaining({ routeId: "meetings" }),
+    );
+    expect(search("meeting capture")).toContainEqual(
+      expect.objectContaining({
+        routeId: "communications",
+        search: "?section=transcripts",
+        hash: "#settings-communications-meeting-capture",
+      }),
+    );
+    const matches = findSettingsSearchBlocks({
+      query: "autoStart",
+      schema: {
+        type: "object",
+        properties: {
+          transcripts: {
+            type: "object",
+            properties: { autoStart: { type: "array", title: "autoStart" } },
+          },
+        },
+      },
+      value: {},
+      uiHints: {},
+    });
+    expect(matches.some((entry) => entry.routeId === "advanced")).toBe(false);
+    expect(matches.some((entry) => entry.routeId === "communications")).toBe(true);
+  });
   it("loads Settings English only when cold search opens, before the config page", async () => {
     // The ordinary imports above exercise warm search. This module graph starts
     // at the runtime barrel, without importing a page or priming its catalogs.
@@ -34,6 +64,8 @@ describe("findSettingsSearchBlocks", () => {
       "updates.page.intro",
       "updates.channel.stable",
       "updates.installKind.git",
+      "modelProviders.title",
+      "modelProviders.defaults.utilityHelpPurpose",
     ];
     try {
       for (const key of lazyKeys) {
@@ -70,6 +102,10 @@ describe("findSettingsSearchBlocks", () => {
       expect(find("check for updates")).toEqual([
         expect.objectContaining({ routeId: "updates", label: "Updates" }),
       ]);
+      expect(runtime.t("modelProviders.title")).toBe("Configured providers");
+      expect(runtime.t("modelProviders.modelsAvailable", { available: "2", count: "3" })).toBe(
+        "2 of 3 models available",
+      );
       expect(runtime.t("settings.missing.key")).toBe("settings.missing.key");
       await runtime.i18n.setLocale("en");
       expect(find("collapse task progress")).toEqual([
@@ -154,30 +190,27 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
-  it.each(["localModelLeanAutoModel", "securityAcknowledgedAt"])(
-    "does not offer machine-owned %s in search",
-    (key) => {
-      expect(
-        findSettingsSearchBlocks({
-          query: "internal bookkeeping",
-          schema: {
-            type: "object",
-            properties: {
-              wizard: {
-                type: "object",
-                properties: {
-                  [key]: { type: "string", title: "Internal Bookkeeping" },
-                  accessMode: { type: "string" },
-                },
+  it.each(["securityAcknowledgedAt"])("does not offer machine-owned %s in search", (key) => {
+    expect(
+      findSettingsSearchBlocks({
+        query: "internal bookkeeping",
+        schema: {
+          type: "object",
+          properties: {
+            wizard: {
+              type: "object",
+              properties: {
+                [key]: { type: "string", title: "Internal Bookkeeping" },
+                accessMode: { type: "string" },
               },
             },
           },
-          value: { wizard: { [key]: "internal bookkeeping" } },
-          uiHints: {},
-        }),
-      ).toEqual([]);
-    },
-  );
+        },
+        value: { wizard: { [key]: "internal bookkeeping" } },
+        uiHints: {},
+      }),
+    ).toEqual([]);
+  });
 
   it("matches schema sections to their owning settings page", () => {
     const matches = findSettingsSearchBlocks({
@@ -253,6 +286,60 @@ describe("findSettingsSearchBlocks", () => {
         hash: "#config-section-memory",
       }),
     ]);
+  });
+
+  it("refreshes prepared schema tiers while searching current draft keys and access", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        mcp: {
+          type: "object",
+          properties: {
+            servers: {
+              type: "object",
+              additionalProperties: {
+                type: "object",
+                properties: { command: { type: "string" } },
+              },
+            },
+          },
+        },
+      },
+    };
+    const servers: Record<string, { command: string }> = {};
+    const params = {
+      query: "zephyr",
+      schema,
+      value: { mcp: { servers } },
+      uiHints: { "mcp.servers.*.command": { advanced: false } },
+    };
+    expect(findSettingsSearchBlocks(params)).toEqual([]);
+    servers.zephyr = { command: "node" };
+    const common = {
+      routeId: "mcp",
+      label: "MCP",
+      search: "?section=mcp",
+      hash: "#config-section-mcp",
+    };
+    expect(findSettingsSearchBlocks(params)).toEqual([common]);
+    expect(findSettingsSearchBlocks({ ...params, canAdmin: false })).toEqual([]);
+    expect(findSettingsSearchBlocks(params)).toEqual([common]);
+    expect(findSettingsSearchBlocks({ ...params, uiHints: {} })).toEqual([
+      { ...common, search: "?section=mcp&advanced=1" },
+    ]);
+    expect(findSettingsSearchBlocks(params)).toEqual([common]);
+    expect(
+      findSettingsSearchBlocks({
+        ...params,
+        schema: {
+          type: "object",
+          properties: { mcp: { type: "object", properties: { endpoint: { type: "string" } } } },
+        },
+      }),
+    ).toEqual([]);
+    expect(findSettingsSearchBlocks(params)).toEqual([common]);
+    delete servers.zephyr;
+    expect(findSettingsSearchBlocks(params)).toEqual([]);
   });
 
   it("finds existing update checks and channel controls on the curated Updates page", () => {
@@ -419,6 +506,14 @@ describe("findSettingsSearchBlocks", () => {
     });
 
     expect(matches).toEqual([
+      {
+        routeId: "communications",
+        label: "Meeting capture",
+        search: "?section=transcripts",
+        hash: "#settings-communications-meeting-capture",
+        searchText:
+          "Meeting capture Choose which sources can save meeting notes on this Gateway. Auto-start sources recording transcription meetings autoStart",
+      },
       {
         routeId: "ai-agents",
         label: "Tools",

@@ -231,7 +231,6 @@ export async function updatePluginsAfterCoreUpdate(params: {
 
   const cohort = await convergePluginReleaseCohort({
     config: withPluginInstallRecords(params.configSnapshot.sourceConfig, pluginInstallRecords),
-    installRecords: pluginInstallRecords,
     channel: pluginUpdateChannel,
     coreVersion: coreVersion ?? undefined,
     timeoutMs: params.timeoutMs,

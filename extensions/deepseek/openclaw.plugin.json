@@ -23,6 +23,9 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "deepseek": "deepseek"
+    },
     "providers": {
       "deepseek": {
         "baseUrl": "https://api.deepseek.com",

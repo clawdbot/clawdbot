@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createInstallGitCommitFixtureScript } from "./install-git-fixtures.js";
@@ -29,6 +30,7 @@ import {
 import { linkPnpmBootstrapShellTools } from "./test-helpers.js";
 
 const SCRIPT_PATH = "scripts/install-cli.sh";
+const nodeExecutable = requireNodeTool("node");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function runInstallCliShell(script: string, env: NodeJS.ProcessEnv = {}) {
@@ -51,7 +53,7 @@ function linkRequiredShellTools(bin: string) {
 function linkNodeExecutable(nodeDir: string) {
   const bin = join(nodeDir, "bin");
   mkdirSync(bin, { recursive: true });
-  symlinkSync(process.execPath, join(bin, "node"));
+  symlinkSync(nodeExecutable, join(bin, "node"));
 }
 
 function writeInstalledOpenClawEntry(nodeDir: string) {
@@ -905,7 +907,7 @@ describe("install-cli.sh", () => {
       mkdirSync(join(repo, ".git"), { recursive: true });
       mkdirSync(join(repo, "dist"), { recursive: true });
       mkdirSync(otherRoot, { recursive: true });
-      symlinkSync(process.execPath, join(nodeDir, "bin", "node"));
+      symlinkSync(nodeExecutable, join(nodeDir, "bin", "node"));
       symlinkSync("node-v24.19.0", join(prefix, "tools", "node"));
       writeFileSync(
         join(nodeDir, "bin", "npm"),
@@ -1334,7 +1336,7 @@ HOOK
       writeFileSync(join(repo, "pnpm-lock.yaml"), "unchanged lock\n");
       writeFileSync(join(outer, "package.json"), '{"packageManager":"yarn@4.5.0"}');
       linkPnpmBootstrapShellTools(bin);
-      symlinkSync(process.execPath, join(bin, "node"));
+      symlinkSync(nodeExecutable, join(bin, "node"));
       const executable = (name: string, body: string) => {
         writeFileSync(join(bin, name), `#!/bin/bash\nset -eu\n${body}\n`);
         chmodSync(join(bin, name), 0o755);
@@ -1716,13 +1718,13 @@ HOOK
 
     mkdirSync(badBin, { recursive: true });
     mkdirSync(goodBin, { recursive: true });
-    symlinkSync(process.execPath, badNode);
+    symlinkSync(nodeExecutable, badNode);
     writeFileSync(
       goodNode,
       [
         "#!/bin/bash",
         'printf "%s\\n" "$*" >> "$GOOD_NODE_LOG"',
-        `exec ${JSON.stringify(process.execPath)} "$@"`,
+        `exec ${JSON.stringify(nodeExecutable)} "$@"`,
         "",
       ].join("\n"),
     );
@@ -2081,7 +2083,7 @@ HOOK
       const result = runInstallCliShell(
         [
           `source ${JSON.stringify(SCRIPT_PATH)}`,
-          `node_bin() { printf '%s\n' ${JSON.stringify(process.execPath)}; }`,
+          `node_bin() { printf '%s\n' ${JSON.stringify(nodeExecutable)}; }`,
           `result="$(npm_lifecycle_allow_arg ${JSON.stringify(npm)} openclaw@latest)"`,
           `printf '%s' "$result"`,
         ].join("\n"),
@@ -2092,7 +2094,7 @@ HOOK
       const tool = runInstallCliShell(
         [
           `source ${JSON.stringify(SCRIPT_PATH)}`,
-          `node_bin() { printf '%s\\n' ${JSON.stringify(process.execPath)}; }`,
+          `node_bin() { printf '%s\\n' ${JSON.stringify(nodeExecutable)}; }`,
           `npm_lifecycle_allow_arg ${JSON.stringify(npm)} pnpm@12.0.0 "$PWD" pnpm@12.0.0`,
         ].join("\n"),
         { NPM_FAKE_VERSION: version },
@@ -2115,7 +2117,7 @@ HOOK
         const result = runInstallCliShell(
           [
             `source ${JSON.stringify(SCRIPT_PATH)}`,
-            `node_bin() { printf '%s\n' ${JSON.stringify(process.execPath)}; }`,
+            `node_bin() { printf '%s\n' ${JSON.stringify(nodeExecutable)}; }`,
             `npm_lifecycle_allow_arg ${JSON.stringify(npm)} openclaw@latest`,
           ].join("\n"),
           { NPM_FAKE_ARGS: args, NPM_FAKE_VERSION: version },
@@ -2146,7 +2148,7 @@ HOOK
       const result = runInstallCliShell(
         [
           `source ${JSON.stringify(SCRIPT_PATH)}`,
-          `node_bin() { printf '%s\n' ${JSON.stringify(process.execPath)}; }`,
+          `node_bin() { printf '%s\n' ${JSON.stringify(nodeExecutable)}; }`,
           `npm_lifecycle_allow_arg ${JSON.stringify(npm)} ${JSON.stringify(spec)}`,
         ].join("\n"),
         { NPM_FAKE_VERSION: "12.0.0" },
@@ -2173,7 +2175,7 @@ HOOK
         const result = runInstallCliShell(
           [
             `source ${JSON.stringify(SCRIPT_PATH)}`,
-            `node_bin() { printf '%s\\n' ${JSON.stringify(process.execPath)}; }`,
+            `node_bin() { printf '%s\\n' ${JSON.stringify(nodeExecutable)}; }`,
             `cd ${JSON.stringify(commandCwd)}`,
             `npm_lifecycle_allow_arg ${JSON.stringify(npm)} ${JSON.stringify(spec)} "$PWD"`,
           ].join("\n"),
@@ -2201,7 +2203,7 @@ HOOK
         const result = runInstallCliShell(
           [
             `source ${JSON.stringify(SCRIPT_PATH)}`,
-            `node_bin() { printf '%s\\n' ${JSON.stringify(process.execPath)}; }`,
+            `node_bin() { printf '%s\\n' ${JSON.stringify(nodeExecutable)}; }`,
             `cd ${JSON.stringify(tmp)}`,
             `npm_lifecycle_allow_arg ${JSON.stringify(npm)} ${JSON.stringify(join(tmp, "candidate.tgz"))} "$PWD"`,
           ].join("\n"),
@@ -2231,7 +2233,7 @@ HOOK
       const result = runInstallCliShell(
         [
           `source ${JSON.stringify(SCRIPT_PATH)}`,
-          `node_bin() { printf '%s\\n' ${JSON.stringify(process.execPath)}; }`,
+          `node_bin() { printf '%s\\n' ${JSON.stringify(nodeExecutable)}; }`,
           `cd ${JSON.stringify(commandCwd)}`,
           `npm_lifecycle_allow_arg ${JSON.stringify(npm)} ${JSON.stringify(candidate)} "$PWD"`,
         ].join("\n"),

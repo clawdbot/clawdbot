@@ -1,8 +1,15 @@
+import fs from "node:fs";
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
 import { NODE_DEVICE_APPS_COMMAND } from "../infra/node-commands.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import type { NodeHostClient } from "./client.js";
+import type { SkillBinsProvider } from "./invoke.js";
 import { listRegisteredNodeHostCapsAndCommands } from "./plugin-node-host.js";
 import { prepareNodeHostRuntime } from "./runtime.js";
 
@@ -87,17 +94,170 @@ beforeEach(() => {
   mocks.initializeWorkerSupervisor.mockResolvedValue(undefined);
 });
 
-async function startRuntime() {
+function createNodeHostClient(request: () => Promise<unknown>): NodeHostClient {
+  return {
+    async request<T>() {
+      return (await request()) as T;
+    },
+  };
+}
+
+async function startRuntime(
+  client: NodeHostClient = createNodeHostClient(async () => ({ bins: [] })),
+) {
   const prepared = await prepareNodeHostRuntime({
     config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true } } },
     env: { PATH: "/usr/bin" },
     enableAgentRuns: true,
     enableWorkerRuns: true,
   });
-  return prepared.start({
-    client: { request: vi.fn(async () => ({ bins: [] })) } as unknown as NodeHostClient,
+  return prepared.start({ client });
+}
+
+type SkillBinsResponse = { bins: string[] };
+type SkillBinsFixture = {
+  requests: Array<ReturnType<typeof createDeferred<SkillBinsResponse>>>;
+  observed: Map<string, SkillBinTrustEntry[]>;
+  expected: SkillBinTrustEntry[];
+  response: SkillBinsResponse;
+  invoke: (id: string) => Promise<void>;
+  expire: () => void;
+  disconnect: () => void;
+};
+
+async function withSkillBinsRuntime(run: (fixture: SkillBinsFixture) => Promise<void>) {
+  await withEnvAsync({ PATH: path.dirname(process.execPath) }, async () => {
+    const requests: SkillBinsFixture["requests"] = [];
+    const observed = new Map<string, SkillBinTrustEntry[]>();
+    const invokes: Promise<void>[] = [];
+    const name = path.basename(process.execPath);
+    const response = { bins: [name] };
+    const now = Date.now;
+    let elapsed = 0;
+    const runtime = await startRuntime(
+      createNodeHostClient(() => {
+        const request = createDeferred<SkillBinsResponse>();
+        requests.push(request);
+        return request.promise;
+      }),
+    );
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
+    mocks.handleInvoke.mockImplementation(async (...args: unknown[]) => {
+      const request = args[0] as typeof frame;
+      const provider = args[2] as SkillBinsProvider;
+      observed.set(request.id, await provider.current());
+    });
+    try {
+      await run({
+        requests,
+        observed,
+        expected: [{ name, resolvedPath: fs.realpathSync(process.execPath) }],
+        response,
+        invoke: (id) => {
+          const pending = runtime.invoke({ ...frame, id, command: "system.run" });
+          invokes.push(pending);
+          return pending;
+        },
+        expire: () => {
+          elapsed += 90_001;
+        },
+        disconnect: () => runtime.cancelAll(),
+      });
+    } finally {
+      runtime.cancelAll();
+      for (const request of requests) {
+        request.resolve({ bins: [] });
+      }
+      await Promise.allSettled(invokes);
+      try {
+        await runtime.close();
+      } finally {
+        mocks.handleInvoke.mockReset();
+        clock.mockRestore();
+      }
+    }
   });
 }
+
+async function primeSkillBins(fixture: SkillBinsFixture) {
+  const pending = fixture.invoke("prime");
+  await vi.waitFor(() => expect(fixture.requests).toHaveLength(1));
+  expectDefined(fixture.requests[0], "initial skill refresh").resolve(fixture.response);
+  await pending;
+  expect(fixture.observed.get("prime")).toEqual(fixture.expected);
+  fixture.expire();
+}
+
+describe("node-host skill-bin cache", () => {
+  it.each(["cold", "expired"])(
+    "shares a %s refresh and returns resolved binaries",
+    async (phase) => {
+      await withSkillBinsRuntime(async (fixture) => {
+        if (phase === "expired") {
+          await primeSkillBins(fixture);
+        }
+        const requestCount = fixture.requests.length + 1;
+        const first = fixture.invoke("first");
+        const second = fixture.invoke("second");
+        await vi.waitFor(() => expect(fixture.requests).toHaveLength(requestCount));
+        expectDefined(fixture.requests[requestCount - 1], "shared skill refresh").resolve(
+          fixture.response,
+        );
+        await Promise.all([first, second]);
+        await fixture.invoke("warm");
+        for (const id of ["first", "second", "warm"]) {
+          expect(fixture.observed.get(id)).toEqual(fixture.expected);
+        }
+        expect(fixture.requests).toHaveLength(requestCount);
+      });
+    },
+  );
+
+  it.each(["cold", "expired"])("shares a failed %s refresh and permits retry", async (phase) => {
+    await withSkillBinsRuntime(async (fixture) => {
+      if (phase === "expired") {
+        await primeSkillBins(fixture);
+      }
+      const requestCount = fixture.requests.length + 1;
+      const first = fixture.invoke("first");
+      const second = fixture.invoke("second");
+      await vi.waitFor(() => expect(fixture.requests).toHaveLength(requestCount));
+      expectDefined(fixture.requests[requestCount - 1], "failed skill refresh").reject(
+        new Error("Gateway unavailable"),
+      );
+      await Promise.all([first, second]);
+      for (const id of ["first", "second"]) {
+        expect(fixture.observed.get(id)).toEqual(phase === "expired" ? fixture.expected : []);
+      }
+      const retry = fixture.invoke("retry");
+      await vi.waitFor(() => expect(fixture.requests).toHaveLength(requestCount + 1));
+      expectDefined(fixture.requests[requestCount], "retried skill refresh").resolve(
+        fixture.response,
+      );
+      await retry;
+      expect(fixture.observed.get("retry")).toEqual(fixture.expected);
+    });
+  });
+
+  it("keeps pending old-connection results out of the replacement cache", async () => {
+    await withSkillBinsRuntime(async (fixture) => {
+      const old = fixture.invoke("old");
+      await vi.waitFor(() => expect(fixture.requests).toHaveLength(1));
+      fixture.disconnect();
+      const replacement = fixture.invoke("replacement");
+      await vi.waitFor(() => expect(fixture.requests).toHaveLength(2));
+      expectDefined(fixture.requests[0], "retired connection refresh").resolve(fixture.response);
+      await old;
+      expect(fixture.observed.has("replacement")).toBe(false);
+      expectDefined(fixture.requests[1], "replacement connection refresh").resolve({ bins: [] });
+      await replacement;
+      await fixture.invoke("replacement-warm");
+      expect(fixture.observed.get("replacement")).toEqual([]);
+      expect(fixture.observed.get("replacement-warm")).toEqual([]);
+      expect(fixture.requests).toHaveLength(2);
+    });
+  });
+});
 
 function holdInvoke(onCommand?: (io: OpenClawPluginNodeHostCommandIo) => void) {
   let io: OpenClawPluginNodeHostCommandIo | undefined;

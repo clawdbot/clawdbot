@@ -101,16 +101,13 @@ function pruneAuditRecords(params: {
   )
     .orderBy("sequence", "asc")
     .limit(overflow);
-  const rows = executeSqliteQuerySync(params.database, candidates).rows;
-  for (const row of rows) {
-    executeSqliteQuerySync(
-      params.database,
-      getAuditRecordKysely(params.database)
-        .deleteFrom("diagnostic_events")
-        .where("scope", "=", params.scope)
-        .where("event_key", "=", row.event_key),
-    );
-  }
+  executeSqliteQuerySync(
+    params.database,
+    getAuditRecordKysely(params.database)
+      .deleteFrom("diagnostic_events")
+      .where("scope", "=", params.scope)
+      .where("event_key", "in", candidates),
+  );
 }
 
 /** Opens one bounded audit-record scope in the shared state database. */

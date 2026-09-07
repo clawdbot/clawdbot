@@ -136,6 +136,10 @@ export type GatewayControlUiConfig = {
   enabled?: boolean;
   /** Optional base path prefix for the Control UI (e.g. "/openclaw"). */
   basePath?: string;
+  experimental?: {
+    /** Allow native UI from user-installed plugins (default false; bundled UI stays available). */
+    customPlugins?: boolean;
+  };
   /** Optional filesystem root for Control UI assets (defaults to dist/control-ui). */
   root?: string;
   /** Optional visual label and named color distinguishing this Gateway environment. */
@@ -144,12 +148,6 @@ export type GatewayControlUiConfig = {
   communityInvite?: boolean;
   /** Optional service credential used only for Control UI GitHub previews and discovery. */
   github?: { token?: SecretInput };
-  /**
-   * Opt-in AI purpose titles for tool calls in Control UI chat (default false).
-   * When enabled, chat.toolTitles generates short titles through standard
-   * utility-model routing and caches them per agent.
-   */
-  toolTitles?: boolean;
   /** Produce utility-model session status digests for subscribed Control UI clients (default true). */
   sessionObserver?: boolean;
   /**
@@ -209,7 +207,7 @@ export type GatewayTrustedProxyConfig = {
    */
   allowLoopback?: boolean;
   /**
-   * Automatically approve new browser devices and same-key scope upgrades after
+   * Automatically approve new browser/native UI operator devices and same-key scope upgrades after
    * trusted-proxy authentication. Disabled by default; configured scopes cap grants.
    */
   deviceAutoApprove?: {
@@ -323,7 +321,7 @@ export type GatewayTerminalConfig = {
 
 /** Labs-gated external CLI session targets in the Control UI. */
 export type GatewayCliAgentsConfig = {
-  /** Show catalog-backed CLI agents in the new-session model picker. Default: false. */
+  /** Show catalog-backed CLI agents in the new-session model picker. Default: true. */
   enabled?: boolean;
 };
 

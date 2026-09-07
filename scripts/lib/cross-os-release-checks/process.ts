@@ -6,7 +6,7 @@ import {
   statSync,
   type WriteStream,
 } from "node:fs";
-import { createServer, type Server } from "node:http";
+import { createServer } from "node:http";
 import {
   createConnection as createNetConnection,
   createServer as createNetServer,
@@ -554,7 +554,6 @@ export async function startStaticFileServer(params: {
     url: `http://127.0.0.1:${port}/${fileName}`,
     close: () => {
       closePromise ??= new Promise<void>((resolvePromise, rejectPromise) => {
-        closeStaticFileServerConnections(server, sockets);
         server.close((error) => {
           void (async () => {
             const closeLogError = await finishStaticFileServerLog(logStream, logStreamError).catch(
@@ -575,20 +574,13 @@ export async function startStaticFileServer(params: {
             resolvePromise();
           })();
         });
-        closeStaticFileServerConnections(server, sockets);
+        for (const socket of sockets) {
+          socket.destroy();
+        }
       });
       return closePromise;
     },
   };
-}
-
-function closeStaticFileServerConnections(server: Server, sockets: Set<Socket>) {
-  for (const socket of sockets) {
-    socket.destroy();
-  }
-  if (typeof server.closeAllConnections === "function") {
-    server.closeAllConnections();
-  }
 }
 
 function finishStaticFileServerLog(logStream: WriteStream, pendingError: Error | null) {

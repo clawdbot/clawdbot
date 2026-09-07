@@ -101,7 +101,11 @@ function buildOpenAIThinkingProfile(params: {
       manifest.modelCatalog.providers.openai.models.find((model) => model.id === modelId)?.compat
         ?.supportedReasoningEfforts ??
       [];
-    return { levels: buildCodexLevels(efforts) };
+    // Ultra is runtime orchestration; the Platform's scalar effort list stops at Max.
+    // Preserve narrower account capabilities while exposing the supported runtime mode.
+    const supportsUltra =
+      ["openclaw", "codex", "auto"].includes(agentRuntime) && efforts.includes("max");
+    return { levels: buildCodexLevels(supportsUltra ? [...efforts, "ultra"] : efforts) };
   }
   const resolvedCodexEfforts =
     params.api === undefined || params.api === "openai-chatgpt-responses"

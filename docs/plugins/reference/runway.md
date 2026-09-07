@@ -2,10 +2,13 @@
 summary: "Adds video generation provider support."
 read_when:
   - You are installing, configuring, or auditing the runway plugin
-title: "Runway plugin"
+title: "Runway plugin reference"
 ---
 
-# Runway plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 Adds video generation provider support.
 
@@ -16,7 +19,7 @@ Adds video generation provider support.
 
 ## Surface
 
-contracts: `videoGenerationProviders`
+- Contracts: `videoGenerationProviders`
 
 ## Related docs
 

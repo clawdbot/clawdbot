@@ -12,7 +12,7 @@ import {
   readInstalledPackageVersion,
 } from "../infra/package-update-utils.js";
 import type { InstallSafetyOverrides } from "../plugins/install-security-scan.types.js";
-import { resolvePluginInstallTransactionSink } from "../plugins/install-transaction.js";
+import { resolvePluginInstallTransactionRequest } from "../plugins/install-transaction.js";
 import type { PluginLifecycleLeaseContext } from "../plugins/plugin-lifecycle-lease.js";
 import { stageHookInstall } from "./install-record-transaction.js";
 import {
@@ -96,13 +96,14 @@ export async function updateNpmInstalledHookPacks(params: {
   onIntegrityDrift?: (params: HookPackUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
 }): Promise<HookPackUpdateSummary> {
   const logger = params.logger ?? {};
+  const transactionRequest = resolvePluginInstallTransactionRequest(params);
   // The caller owns the config commit and settles every staged payload/record together.
   const persistence = params.dryRun
     ? undefined
     : {
         lease: expectDefined(params.lease, "hook update lifecycle lease"),
         transactions: expectDefined(
-          resolvePluginInstallTransactionSink(params),
+          transactionRequest?.transactionSink,
           "hook update transaction sink",
         ),
       };
@@ -166,24 +167,27 @@ export async function updateNpmInstalledHookPacks(params: {
     }
     const currentVersion = await readInstalledPackageVersion(installPath);
     const result = await installHooksFromNpmSpec(
-      requestDeferredPackageDirInstall({
-        config: params.config,
-        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-        onInstallPolicyWarning: params.onInstallPolicyWarning,
-        spec: effectiveSpec,
-        mode: "update",
-        dryRun: params.dryRun,
-        beforePersistentApply,
-        expectedHookPackId: hookId,
-        expectedIntegrity,
-        onIntegrityDrift: createHookPackUpdateIntegrityDriftHandler({
-          hookId,
-          dryRun: Boolean(params.dryRun),
+      requestDeferredPackageDirInstall(
+        {
+          config: params.config,
+          dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+          onInstallPolicyWarning: params.onInstallPolicyWarning,
+          spec: effectiveSpec,
+          mode: "update",
+          dryRun: params.dryRun,
+          beforePersistentApply,
+          expectedHookPackId: hookId,
+          expectedIntegrity,
+          onIntegrityDrift: createHookPackUpdateIntegrityDriftHandler({
+            hookId,
+            dryRun: Boolean(params.dryRun),
+            logger,
+            onIntegrityDrift: params.onIntegrityDrift,
+          }),
           logger,
-          onIntegrityDrift: params.onIntegrityDrift,
-        }),
-        logger,
-      }),
+        },
+        transactionRequest?.assertOwned,
+      ),
     );
 
     if (!result.ok) {

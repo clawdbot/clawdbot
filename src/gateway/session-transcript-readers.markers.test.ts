@@ -11,6 +11,7 @@ import {
   readSessionMessageByIdAsync,
   readSessionMessageCountAsync,
   readSessionMessagesAsync,
+  readSessionMessagesMatchingIdAsync,
   readSessionMessagesPageWithStatsAsync,
   visitSessionMessagesAsync,
   type SessionTranscriptReadScope,
@@ -193,6 +194,7 @@ describe("session transcript reader marker projection", () => {
         messageId: id,
         maxMessages: 10,
       });
+      expect(await readSessionMessagesMatchingIdAsync(scope, id)).toEqual([full[index]]);
       expect(messageIds(page.messages)).toEqual([id]);
       expect(page.totalMessages).toBe(fixture.expectedIds.length);
       expect(byId).toMatchObject({ found: true, seq: index + 1 });
@@ -217,6 +219,7 @@ describe("session transcript reader marker projection", () => {
     for (const { id } of fixture.events.filter(
       (event) => !fixture.expectedIds.includes(event.id),
     )) {
+      expect(await readSessionMessagesMatchingIdAsync(scope, id)).toEqual([]);
       expect(await readSessionMessageByIdAsync(scope, id)).toMatchObject({ found: false });
       expect(
         await readSessionMessagesAroundIdWithStatsAsync(scope, { messageId: id, maxMessages: 10 }),

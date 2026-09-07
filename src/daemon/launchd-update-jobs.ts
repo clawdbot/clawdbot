@@ -260,8 +260,6 @@ export async function disableCurrentOpenClawUpdateLaunchdJob(
     env,
     // Detached handoffs preserve the configured label, so only launchd-backed
     // current-process identity may turn the ambient marker into proof.
-    trustCurrentEnvMarker: isCurrentProcessLaunchdServiceLabel(candidate.label, env, {
-      allowConfiguredLabelFallback: false,
-    }),
+    trustCurrentEnvMarker: isCurrentProcessLaunchdServiceLabel(candidate.label, env),
   });
 }

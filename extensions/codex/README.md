@@ -34,4 +34,6 @@ For a supervised branch, Codex App Server selects the snapshot fork's model and 
 
 The visible-history mirror keeps at most 200 user or assistant messages, 512 KiB total, and 64 KiB per message. Image inputs become `[Image attachment]`; image data and local paths are not copied.
 
+When settled-turn recovery rejects history, the `codex settled-turn finalization context capture failed` warning includes a stable `reason`, such as `item_limit`, `byte_limit`, `field_limit`, `unsupported_user_image`, or `snapshot_invalidated`. Unknown failures use `history_read_failed`. The warning excludes transcript content and exception text. Rejected history remains unavailable for finalization, and completed actions are never replayed.
+
 See the [Codex harness](https://docs.openclaw.ai/plugins/codex-harness) and [Codex supervision](https://docs.openclaw.ai/plugins/codex-supervision) guides.

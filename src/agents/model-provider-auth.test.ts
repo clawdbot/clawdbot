@@ -63,6 +63,7 @@ const modelAuthAvailabilityMocks = vi.hoisted(() => {
     evaluateModelAuth,
     createModelAuthAvailabilityResolver: vi.fn((_params: unknown) => ({
       evaluateModelAuth,
+      evaluateRuntimeModelAuth: evaluateModelAuth,
       resolveProviderAuthAvailability: vi.fn(() => false),
       hasSyntheticAuth: vi.fn(() => false),
     })),

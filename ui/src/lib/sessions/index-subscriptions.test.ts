@@ -6,7 +6,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { createSessionCapability } from "./index.ts";
+import { createTestSessionCapability } from "./session-capability.test-support.ts";
 import { createSessionScopedOperations } from "./session-scoped-operations.ts";
 
 const subscriptionRequestOptions = { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS };
@@ -42,7 +42,7 @@ describe("createSessionCapability message subscriptions", () => {
       throw new Error(`Unexpected request: ${method}`);
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const sessions = createSessionCapability(createGateway(client));
+    const sessions = createTestSessionCapability(createGateway(client));
     const subscription = await sessions.subscribeMessages("agent:main:main");
 
     await expect(sessions.unsubscribeMessages(subscription)).rejects.toThrow(
@@ -76,8 +76,8 @@ describe("createSessionCapability message subscriptions", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const gateway = createGateway(client);
-    const first = createSessionCapability(gateway);
-    const second = createSessionCapability(gateway);
+    const first = createTestSessionCapability(gateway);
+    const second = createTestSessionCapability(gateway);
 
     const [firstLease, secondLease] = await Promise.all([
       first.subscribeMessages("main"),
@@ -116,7 +116,7 @@ describe("createSessionCapability message subscriptions", () => {
       throw new Error(`Unexpected request: ${method}`);
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const sessions = createSessionCapability(createGateway(client));
+    const sessions = createTestSessionCapability(createGateway(client));
 
     const plain = await sessions.subscribeMessages("main");
     const approval = await sessions.subscribeMessages("main", { includeApprovals: true });
@@ -165,7 +165,7 @@ describe("createSessionCapability message subscriptions", () => {
         throw new Error(`Unexpected request: ${method}`);
       });
       const client = { request } as unknown as GatewayBrowserClient;
-      const sessions = createSessionCapability(createGateway(client));
+      const sessions = createTestSessionCapability(createGateway(client));
 
       const keyFor = (agentId: string) =>
         keyForm === "global" ? "global" : `agent:${agentId}:main`;
@@ -223,8 +223,8 @@ describe("createSessionCapability message subscriptions", () => {
     const forceReconnect = vi.fn();
     const client = { request, forceReconnect } as unknown as GatewayBrowserClient;
     const gateway = createGateway(client);
-    const sessions = createSessionCapability(gateway);
-    const anotherOwner = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
+    const anotherOwner = createTestSessionCapability(gateway);
 
     const failures = await Promise.allSettled([
       sessions.subscribeMessages("main", { includeApprovals: true }),
@@ -260,7 +260,7 @@ describe("createSessionCapability message subscriptions", () => {
     });
     const forceReconnect = vi.fn();
     const client = { request, forceReconnect } as unknown as GatewayBrowserClient;
-    const sessions = createSessionCapability(createGateway(client));
+    const sessions = createTestSessionCapability(createGateway(client));
 
     await expect(sessions.subscribeMessages("main")).rejects.toBe(timeout);
     expect(request).toHaveBeenCalledTimes(2);
@@ -294,7 +294,7 @@ describe("createSessionCapability message subscriptions", () => {
         isCurrent: () => current,
       },
       agentId: () => null,
-      refreshReplacement: async () => undefined,
+      refreshReplacement: async () => null,
     });
     const failure = operations.subscribeMessages("main").catch((error: unknown) => error);
 

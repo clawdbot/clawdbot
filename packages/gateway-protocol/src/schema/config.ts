@@ -3,6 +3,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { UpdateRunRecordSchema } from "./update-runs.js";
 
 /**
  * Gateway config and update protocol schemas.
@@ -164,6 +165,8 @@ export const UpdateScheduleStateSchema = closedObject({
 export const UpdateStatusResultSchema = closedObject({
   sentinel: Type.Unknown(),
   updateAvailable: Type.Union([UpdateAvailableSchema, Type.Null()]),
+  activeRun: Type.Optional(UpdateRunRecordSchema),
+  lastRun: Type.Optional(UpdateRunRecordSchema),
   effectiveChannel: Type.Optional(
     Type.Union([
       Type.Literal("stable"),
@@ -210,6 +213,56 @@ export const UpdateRunParamsSchema = closedObject({
     }),
   ),
 });
+
+/** Explicit two-step request for previewing or submitting one failed update report. */
+export const UpdateReportParamsSchema = Type.Union([
+  closedObject({
+    action: Type.Literal("preview"),
+    attemptId: Type.String({ minLength: 1, maxLength: 256 }),
+  }),
+  closedObject({
+    action: Type.Literal("submit"),
+    attemptId: Type.String({ minLength: 1, maxLength: 256 }),
+    previewDigest: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+  }),
+]);
+
+const UpdateReportUrlSchema = Type.String({ minLength: 1, maxLength: 16_384 });
+
+/** Result of a consent-gated update failure report action. */
+export const UpdateReportResultSchema = Type.Union([
+  closedObject({
+    status: Type.Literal("ready"),
+    attemptId: Type.String({ minLength: 1, maxLength: 256 }),
+    body: Type.String({ maxLength: 16_000 }),
+    previewDigest: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+    title: Type.String({ minLength: 1, maxLength: 200 }),
+  }),
+  closedObject({
+    status: Type.Literal("created"),
+    message: Type.Optional(Type.String({ maxLength: 512 })),
+    url: UpdateReportUrlSchema,
+  }),
+  closedObject({
+    status: Type.Literal("fallback"),
+    fallbackUrl: UpdateReportUrlSchema,
+    message: Type.String({ maxLength: 512 }),
+  }),
+  closedObject({
+    status: Type.Literal("pending"),
+    message: Type.String({ maxLength: 512 }),
+  }),
+  closedObject({
+    status: Type.Literal("retryable"),
+    message: Type.String({ maxLength: 512 }),
+  }),
+  closedObject({
+    status: Type.Literal("duplicate"),
+    fallbackUrl: Type.Optional(UpdateReportUrlSchema),
+    message: Type.String({ maxLength: 512 }),
+    url: Type.Optional(UpdateReportUrlSchema),
+  }),
+]);
 
 /** UI metadata attached to config schema paths. */
 const ConfigUiHintSchema = closedObject({
@@ -277,3 +330,5 @@ export type UpdateStatusResult = Static<typeof UpdateStatusResultSchema>;
 export type UpdateHoldParams = Static<typeof UpdateHoldParamsSchema>;
 export type UpdateHoldResult = Static<typeof UpdateHoldResultSchema>;
 export type UpdateRunParams = Static<typeof UpdateRunParamsSchema>;
+export type UpdateReportParams = Static<typeof UpdateReportParamsSchema>;
+export type UpdateReportResult = Static<typeof UpdateReportResultSchema>;

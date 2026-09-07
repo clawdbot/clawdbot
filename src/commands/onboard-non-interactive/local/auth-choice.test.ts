@@ -26,7 +26,11 @@ vi.mock("../api-keys.js", () => ({
   resolveNonInteractiveApiKey,
 }));
 
-const resolveManifestDeprecatedProviderAuthChoice = vi.hoisted(() => vi.fn(() => undefined));
+const resolveManifestDeprecatedProviderAuthChoice = vi.hoisted(() =>
+  vi.fn<
+    typeof import("../../../plugins/provider-auth-choices.js").resolveManifestDeprecatedProviderAuthChoice
+  >(() => undefined),
+);
 const resolveManifestProviderAuthChoices = vi.hoisted(() => vi.fn(() => []));
 vi.mock("../../../plugins/provider-auth-choices.js", () => ({
   resolveManifestDeprecatedProviderAuthChoice,
@@ -645,5 +649,86 @@ describe("applyNonInteractiveAuthChoice", () => {
     expect(result?.models?.providers?.["custom-models-custom-local"]?.models?.[0]?.input).toEqual([
       "text",
     ]);
+  });
+
+  it.each([
+    {
+      name: "warns before dispatching a manifest replacement",
+      authChoice: "claude-cli",
+      hasReplacement: true,
+      expectedError: undefined,
+    },
+    {
+      name: "keeps direct oauth as an unknown choice",
+      authChoice: "oauth",
+      hasReplacement: true,
+      expectedError:
+        'Unknown --auth-choice "oauth". Valid choices: custom-api-key, skip, demo-provider-api-key.',
+    },
+    {
+      name: "rejects the original alias when replacement metadata is missing",
+      authChoice: "claude-cli",
+      hasReplacement: false,
+      expectedError:
+        'Unknown --auth-choice "claude-cli". Valid choices: custom-api-key, skip, demo-provider-api-key.',
+    },
+  ])("$name", async ({ authChoice, hasReplacement, expectedError }) => {
+    const runtime = createRuntime();
+    const nextConfig: OpenClawConfig = { agents: { defaults: {} } };
+    const resolvedConfig: OpenClawConfig = { agents: { defaults: { workspace: "/tmp/resolved" } } };
+    const warning = 'Auth choice "claude-cli" is deprecated; using Fixture Provider setup instead.';
+    resolveManifestDeprecatedProviderAuthChoice.mockImplementation((choice, scope) =>
+      hasReplacement &&
+      choice === "claude-cli" &&
+      scope?.config === nextConfig &&
+      scope.workspaceDir === target.workspaceDir &&
+      scope.env === process.env
+        ? {
+            pluginId: "fixture-provider",
+            providerId: "fixture-provider",
+            methodId: "api-key",
+            choiceId: "demo-provider-api-key",
+            choiceLabel: "  Fixture Provider  ",
+            deprecatedChoiceIds: ["claude-cli"],
+          }
+        : undefined,
+    );
+    if (!expectedError) {
+      applyNonInteractivePluginProviderChoice.mockResolvedValueOnce(resolvedConfig as never);
+    }
+
+    const result = await applyNonInteractiveAuthChoice({
+      nextConfig,
+      authChoice,
+      opts: {},
+      runtime: runtime as never,
+      baseConfig: nextConfig,
+      target,
+    });
+
+    expect(writeWizardConfigFile).not.toHaveBeenCalled();
+    expect(resolveNonInteractiveApiKey).not.toHaveBeenCalled();
+    if (expectedError) {
+      expect(result).toBeNull();
+      expect(runtime.error).toHaveBeenCalledExactlyOnceWith(expectedError);
+      expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+      expect(runtime.log).not.toHaveBeenCalled();
+      expect(applyNonInteractivePluginProviderChoice).not.toHaveBeenCalled();
+      return;
+    }
+
+    expect(result).toBe(resolvedConfig);
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledExactlyOnceWith(warning);
+    expect(applyNonInteractivePluginProviderChoice).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ authChoice: "demo-provider-api-key", nextConfig, target }),
+    );
+    const warningOrder = runtime.log.mock.invocationCallOrder[0];
+    const dispatchOrder = applyNonInteractivePluginProviderChoice.mock.invocationCallOrder[0];
+    if (warningOrder === undefined || dispatchOrder === undefined) {
+      throw new Error("Expected legacy warning and plugin dispatch");
+    }
+    expect(warningOrder).toBeLessThan(dispatchOrder);
   });
 });

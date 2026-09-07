@@ -429,6 +429,50 @@ describe("google video generation provider", () => {
     ).rejects.toThrow("Google generated video download exceeds 1 bytes");
   });
 
+  it.each([
+    { name: "JSON error", contentType: "application/json", body: '{"error":"denied"}' },
+    { name: "problem JSON", contentType: "application/problem+json", body: '{"title":"denied"}' },
+    { name: "HTML", contentType: "text/html; charset=utf-8", body: "<html>sign in</html>" },
+    { name: "empty video", contentType: "video/mp4", body: "" },
+  ])("rejects a successful $name direct video uri response", async ({ contentType, body }) => {
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
+    });
+    generateVideosMock.mockResolvedValue({
+      done: true,
+      response: {
+        generatedVideos: [
+          {
+            video: {
+              uri: "https://generativelanguage.googleapis.com/v1beta/files/generated-video:download?alt=media",
+              mimeType: "video/mp4",
+            },
+          },
+        ],
+      },
+    });
+    const fetchMock = vi.fn(async () => {
+      return new Response(body, {
+        status: 200,
+        statusText: "OK",
+        headers: { "content-type": contentType },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      buildGoogleVideoGenerationProvider().generateVideo({
+        provider: "google",
+        model: "veo-3.1-fast-generate-preview",
+        prompt: "A tiny robot watering a windowsill garden",
+        cfg: {},
+        durationSeconds: 3,
+      }),
+    ).rejects.toThrow("Google generated video download: malformed video response");
+  });
+
   it("cancels each captured failed video download without waiting for its cloned stream", async () => {
     vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "google-key",

@@ -26,27 +26,50 @@ import {
 import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { readTaskTranscript, type TaskDetailHost } from "./components/chat-task-detail-state.ts";
-import { openSlot } from "./sidebar-layout.ts";
+import {
+  isSidebarSlotVisible,
+  openSlot,
+  promoteSidebarPanel,
+  sidebarMainPanel,
+} from "./sidebar-layout.ts";
 
 describe("chat pane retained presentation lifecycle", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it.each([false, true])(
-    "restores sidebar tabs without opening a compact=%s presentation",
+    "restores dormant sidebar tabs for compact=%s without replacing saved task preferences",
     (compact) => {
       vi.stubGlobal("localStorage", createStorageMock());
       const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
       const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-      const layout = openSlot({ columns: [] }, "workspace");
+      const layout = promoteSidebarPanel(
+        openSlot(openSlot({ columns: [] }, "workspace"), "companion"),
+        "companion",
+      );
       patchSettings({ sidebarSessionLayouts: { [state.sessionKey]: layout } });
-      (pane as TestChatPane & { compact: boolean }).compact = compact;
+      const presentation = pane as TestChatPane & {
+        compact: boolean;
+        selectedSessionRailMode: (sessionKey: string) => "expanded" | "hidden";
+      };
+      presentation.compact = compact;
       pane.connectedClient = null;
 
       pane.applyGatewaySnapshot({ ...pane.context.gateway.snapshot, phase: "reconnecting" });
 
-      expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("workspace");
+      expect(state.sidebarLayout.columns[0]?.panels).toEqual(layout.columns[0]?.panels);
+      expect(sidebarMainPanel(state.sidebarLayout)?.slot).toBe(
+        compact ? "conversation" : "companion",
+      );
       expect(state.sidebarLayout.open).toBe(!compact);
-      expect(loadSettings().sidebarSessionLayouts?.[state.sessionKey]?.open).toBe(true);
+      expect(isSidebarSlotVisible(state.sidebarLayout, "companion")).toBe(!compact);
+      expect(presentation.selectedSessionRailMode(state.sessionKey)).toBe(
+        compact ? "hidden" : "expanded",
+      );
+      expect(isSidebarSlotVisible(state.sidebarLayout, "conversation")).toBe(true);
+      expect(loadSettings().sidebarSessionLayouts?.[state.sessionKey]).toMatchObject(layout);
+      expect(isSidebarSlotVisible(openSlot(state.sidebarLayout, "workspace"), "workspace")).toBe(
+        true,
+      );
     },
   );
 

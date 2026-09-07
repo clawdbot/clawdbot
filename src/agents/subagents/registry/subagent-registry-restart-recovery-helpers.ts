@@ -28,6 +28,14 @@ export function isRestartRecoveryLifecycleCurrent(
   );
 }
 
+export function isRetiredSubagentExecution(entry: SubagentRunRecord): boolean {
+  return (
+    (entry.execution.status === "running" || entry.execution.status === "interrupted") &&
+    typeof entry.execution.lifecycleGeneration === "string" &&
+    !agentEvents.isAgentEventLifecycleGenerationCurrent(entry.execution.lifecycleGeneration)
+  );
+}
+
 export function buildRestartRecoveryResumeMessage(task: string, lastHumanMessage?: string): string {
   const boundContext = (text: string) =>
     text.length > 2_000 ? `${truncateUtf16Safe(text, 2_000)}...` : text;

@@ -251,6 +251,7 @@ describe("unit-fast vitest lane", () => {
 
   it("keeps untracked tests in their planned fast lane and execution include list", () => {
     const cwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-untracked-")));
+    const mockHelper = "src/hooks/mock-helper.test.ts";
     const pure = "src/hooks/pure.test.ts";
     const stateful = "src/hooks/stateful.test.ts";
     const quoted = "src/hooks/quoted-[é].test.ts";
@@ -273,9 +274,19 @@ describe("unit-fast vitest lane", () => {
         path.join(cwd, "src/hooks/stateful.test-support.ts"),
         'import { vi } from "vitest"; export const check = vi.fn();',
       );
+      fs.writeFileSync(
+        path.join(cwd, mockHelper),
+        'import { it } from "vitest"; import { check } from "./mock-helper.test-mocks.js"; it("helper", check);',
+      );
+      fs.writeFileSync(
+        path.join(cwd, "src/hooks/mock-helper.test-mocks.ts"),
+        'import { vi } from "vitest"; export const check = vi.fn();',
+      );
       expect(spawnSync("git", ["init"], { cwd }).status).toBe(0);
       expect(
-        spawnSync("git", ["ls-files", "--error-unmatch", "--", pure, stateful], { cwd }).status,
+        spawnSync("git", ["ls-files", "--error-unmatch", "--", mockHelper, pure, stateful], {
+          cwd,
+        }).status,
       ).toBe(1);
       // Fresh process: discovery snapshots must be taken after the fixture exists.
       const result = spawnNodeEvalSync(
@@ -287,7 +298,7 @@ describe("unit-fast vitest lane", () => {
         const { createUnitFastIsolatedVitestConfig } = await import(${moduleUrl("test/vitest/vitest.unit-fast-isolated.config.ts")});
         const { createScopedVitestConfig } = await import(${moduleUrl("test/vitest/vitest.scoped-config.ts")});
         const fs = await import("node:fs");
-        const specs = createVitestRunSpecs(${JSON.stringify([pure, stateful])}, { baseEnv: {} });
+        const specs = createVitestRunSpecs(${JSON.stringify([mockHelper, pure, stateful])}, { baseEnv: {} });
         const factories = {
           "test/vitest/vitest.unit-fast.config.ts": createUnitFastVitestConfig,
           "test/vitest/vitest.unit-fast-isolated.config.ts": createUnitFastIsolatedVitestConfig,
@@ -314,13 +325,16 @@ describe("unit-fast vitest lane", () => {
       );
       expect(result.status, result.stderr).toBe(0);
       expect(JSON.parse(result.stdout)).toEqual({
-        inventory: [pure, quoted, stateful],
-        isolated: [stateful],
+        inventory: [mockHelper, pure, quoted, stateful],
+        isolated: [mockHelper, stateful],
         runs: [
           { config: "test/vitest/vitest.unit-fast.config.ts", include: [pure] },
-          { config: "test/vitest/vitest.unit-fast-isolated.config.ts", include: [stateful] },
+          {
+            config: "test/vitest/vitest.unit-fast-isolated.config.ts",
+            include: [mockHelper, stateful],
+          },
         ],
-        excluded: [pure, quoted, stateful],
+        excluded: [mockHelper, pure, quoted, stateful],
         ignored: null,
         literalMembership: true,
       });
@@ -403,6 +417,7 @@ describe("unit-fast vitest lane", () => {
     for (const file of [
       "src/agents/agent-command.compaction-rotation.test.ts",
       "src/agents/agent-command.embedded-maintenance.test.ts",
+      "src/agents/prepared-model-runtime.scoped-refresh.test.ts",
     ]) {
       expect(isUnitFastTestFile(file), file).toBe(false);
       expect(resolveUnitFastTestIncludePattern(file), file).toBeNull();
@@ -483,11 +498,11 @@ describe("unit-fast vitest lane", () => {
       "src/acp/translator.error-kind.test.ts",
       "src/agents/auth-profiles/oauth-refresh-error.test.ts",
       "src/agents/embedded-agent-runner/model.provider-hooks.timeout.test.ts",
-      "src/agents/prepared-model-runtime.scoped-refresh.test.ts",
       "src/agents/tools/computer-tool.context.test.ts",
       "src/agents/tools/computer-tool.schema.test.ts",
       "src/agents/tools/computer-tool.v2.test.ts",
       "src/auto-reply/reply/agent-runner-execution-runtime.test.ts",
+      "src/infra/provider-usage.test.ts",
     ];
     for (const file of files) {
       const analysis = unitFastAnalysis.find((entry) => entry.file === file);

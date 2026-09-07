@@ -527,18 +527,18 @@ internal fun appendChatDictationTranscript(
 
 internal fun chatComposerSendEnabled(
   voiceNoteState: VoiceNoteRecorderState,
-  pendingRunCount: Int,
+  talkActive: Boolean,
   hasContent: Boolean,
   shareStaging: Boolean,
   sendInFlight: Boolean = false,
   dictationActive: Boolean = false,
   modelUnavailable: Boolean = false,
 ): Boolean =
-  !shareStaging &&
+  !talkActive &&
+    !shareStaging &&
     !sendInFlight &&
     !dictationActive &&
     !modelUnavailable &&
     voiceNoteState !is VoiceNoteRecorderState.Recording &&
     voiceNoteState !is VoiceNoteRecorderState.Preparing &&
-    pendingRunCount == 0 &&
     hasContent

@@ -441,7 +441,23 @@ vi.mock("matrix-js-sdk/lib/matrix.js", async () => {
 
 const { encodeRecoveryKey } = await import("matrix-js-sdk/lib/crypto-api/recovery-key.js");
 const { DecryptionFailureCode } = await import("matrix-js-sdk/lib/crypto-api/index.js");
-const { MatrixClient } = await import("./sdk.js");
+const { MatrixClient: BaseMatrixClient } = await import("./sdk.js");
+const startedClients = new Set<InstanceType<typeof BaseMatrixClient>>();
+
+class MatrixClient extends BaseMatrixClient {
+  protected override registerBridge(): void {
+    super.registerBridge();
+    startedClients.add(this);
+  }
+}
+
+async function stopStartedClients(): Promise<void> {
+  const clients = [...startedClients];
+  startedClients.clear();
+  // Retire the client owner before mocks or state disappear; its periodic
+  // persistence must not run against the next test's runtime or deleted home.
+  await Promise.all(clients.map((client) => client.stopWithoutPersist()));
+}
 
 function makeCryptoApi(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -490,7 +506,8 @@ describe("MatrixClient request hardening", () => {
     clearTestUndiciRuntimeDepsOverride();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await stopStartedClients();
     vi.useRealTimers();
     vi.unstubAllGlobals();
     clearTestUndiciRuntimeDepsOverride();
@@ -1287,6 +1304,34 @@ describe("MatrixClient request hardening", () => {
     });
   });
 
+  it("awaits untyped relation decryption before projecting effective content", async () => {
+    const client = new MatrixClient("https://matrix.example.org", "token");
+    const encrypted = makeMatrixEvent({ type: "m.room.encrypted", content: {} });
+    const gate = createDeferred<void>();
+    matrixJsClient.relations.mockResolvedValue({ events: [encrypted], nextBatch: null });
+    matrixJsClient.decryptEventIfNeeded = vi.fn<(event: FakeMatrixEvent) => Promise<void>>(
+      async (event) => {
+        await gate.promise;
+        event.markDecrypted({
+          type: "m.poll.response",
+          content: { "m.poll.response": { answers: ["a1"] } },
+        });
+      },
+    );
+    let finished = false;
+    const result = client.getRelations("!room:example.org", "$poll", "m.reference").then((page) => {
+      finished = true;
+      return page;
+    });
+    await Promise.resolve();
+    expect(matrixJsClient.decryptEventIfNeeded).toHaveBeenCalledWith(encrypted);
+    expect(finished).toBe(false);
+    gate.resolve();
+    const page = await result;
+    expect(page.events[0]?.type).toBe("m.poll.response");
+    expect(page.events[0]?.content).toEqual({ "m.poll.response": { answers: ["a1"] } });
+  });
+
   it("blocks cross-protocol redirects when absolute endpoints are allowed", async () => {
     const fetchMock = vi.fn(async () => {
       return new Response("", {
@@ -1876,7 +1921,8 @@ describe("MatrixClient event bridge", () => {
     lastCreateClientOpts = null;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await stopStartedClients();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -2650,7 +2696,8 @@ describe("MatrixClient crypto bootstrapping", () => {
     lastCreateClientOpts = null;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await stopStartedClients();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });

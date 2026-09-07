@@ -59,6 +59,7 @@ export type PluginUiMetadata = {
   id: string;
   name?: string;
   description?: string;
+  configSecretInputPaths?: readonly string[];
   configUiHints?: Record<
     string,
     Pick<
@@ -249,6 +250,11 @@ function applyMetadataHints(
     };
 
     mergeRelativeHints(`${basePath}.config`, plugin.configUiHints);
+    // Manifest paths remain authoritative when local $refs hide secret leaves.
+    for (const relPath of plugin.configSecretInputPaths ?? []) {
+      const key = `${basePath}.config.${relPath}`;
+      next[key] = { ...next[key], sensitive: true };
+    }
   }
 
   for (const channel of channels) {
@@ -374,6 +380,7 @@ function buildMergedSchemaCacheKey(params: {
       name: plugin.name,
       description: plugin.description,
       configSchema: plugin.configSchema ?? null,
+      configSecretInputPaths: plugin.configSecretInputPaths ?? null,
       configUiHints: plugin.configUiHints ?? null,
     }))
     .toSorted((a, b) => a.id.localeCompare(b.id));

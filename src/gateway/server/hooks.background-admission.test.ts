@@ -5,7 +5,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveHooksConfig } from "../hooks.js";
 
@@ -88,6 +88,10 @@ async function post(
 }
 
 describe("hook background admission", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("admits slow fan-out items past the bounded deadline instead of canceling them", async () => {
     mocks.getRuntimeConfig.mockReturnValue(config);
     // Execution starts well after the 20ms bounded admission deadline,
@@ -136,5 +140,214 @@ describe("hook background admission", () => {
     // The canceled run must not proceed after the 503.
     await delay(80);
     expect(sawAbort).toBe(true);
+  });
+
+  it.each([
+    { deliverySuppressionReason: "empty", replyDisposition: "empty" },
+    { deliverySuppressionReason: "silent", replyDisposition: "silent" },
+    { deliverySuppressionReason: "heartbeat", replyDisposition: "empty" },
+    { deliverySuppressionReason: "channel_transform", replyDisposition: "visible" },
+  ] as const)(
+    "returns the $deliverySuppressionReason terminal suppression reason to an explicit waiter",
+    async ({ deliverySuppressionReason, replyDisposition }) => {
+      mocks.getRuntimeConfig.mockReturnValue(config);
+      mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
+        async (params: { onExecutionStarted?: () => void }) => {
+          params.onExecutionStarted?.();
+          return {
+            status: "ok" as const,
+            delivered: false,
+            deliveryAttempted: true,
+            deliverySuppressionReason,
+            replyDisposition,
+            outputText: "private output",
+            summary: "private summary",
+            sessionId: "private-session",
+            sessionKey: "private-session-key",
+          };
+        },
+      );
+      const handler = createHandler(100);
+
+      const response = await post(handler, "/hooks/agent", {
+        message: "Direct",
+        name: "Observed",
+        waitForCompletion: true,
+      });
+
+      expect(response.res.statusCode).toBe(200);
+      expect(JSON.parse(response.body())).toEqual({
+        ok: true,
+        runId: expect.any(String),
+        completion: {
+          status: "ok",
+          replyDisposition,
+          delivered: false,
+          deliveryAttempted: true,
+          deliverySuppressionReason,
+        },
+      });
+    },
+  );
+
+  it("returns categorical delivery failure without private run data", async () => {
+    mocks.getRuntimeConfig.mockReturnValue(config);
+    const secret = "fake-secret-value-that-must-not-leak";
+    mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
+      async (params: { onExecutionStarted?: () => void }) => {
+        params.onExecutionStarted?.();
+        return {
+          status: "ok" as const,
+          replyDisposition: "visible" as const,
+          delivered: false,
+          deliveryAttempted: true,
+          deliveryError: `line\nAuthorization: Bearer ${secret}\n${"x".repeat(600)} tail`,
+          outputText: "private output",
+          summary: "private summary",
+          sessionId: "private-session",
+          sessionKey: "private-session-key",
+        };
+      },
+    );
+    const handler = createHandler(100);
+
+    const response = await post(handler, "/hooks/agent", {
+      message: "Direct",
+      name: "Observed",
+      waitForCompletion: true,
+    });
+
+    const body = JSON.parse(response.body()) as {
+      completion: { deliveryError: string };
+    };
+    expect(response.res.statusCode).toBe(200);
+    expect(body).toMatchObject({
+      completion: {
+        status: "ok",
+        replyDisposition: "visible",
+        delivered: false,
+        deliveryAttempted: true,
+        deliveryError: "delivery-failed",
+      },
+    });
+    expect(JSON.stringify(body)).not.toMatch(
+      /Authorization|fake-secret-value|private output|private summary|private-session|x{20}/,
+    );
+  });
+
+  it("preserves an attempted delivery with unknown acknowledgment", async () => {
+    mocks.getRuntimeConfig.mockReturnValue(config);
+    mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
+      async (params: { onExecutionStarted?: () => void }) => {
+        params.onExecutionStarted?.();
+        return {
+          status: "ok" as const,
+          replyDisposition: "empty" as const,
+          delivered: false,
+          deliveryAttempted: true,
+        };
+      },
+    );
+    const handler = createHandler(100);
+
+    const response = await post(handler, "/hooks/agent", {
+      message: "Direct",
+      name: "Observed",
+      waitForCompletion: true,
+    });
+
+    expect(JSON.parse(response.body())).toEqual({
+      ok: true,
+      runId: expect.any(String),
+      completion: {
+        status: "ok",
+        replyDisposition: "empty",
+        delivered: false,
+        deliveryAttempted: true,
+      },
+    });
+  });
+
+  it("settles an admitted waiter when the isolated runner throws", async () => {
+    mocks.getRuntimeConfig.mockReturnValue(config);
+    mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
+      async (params: { onExecutionStarted?: () => void }) => {
+        params.onExecutionStarted?.();
+        throw new Error("private execution diagnostic");
+      },
+    );
+    const handler = createHandler(100);
+
+    const response = await post(handler, "/hooks/agent", {
+      message: "Direct",
+      name: "Observed",
+      waitForCompletion: true,
+    });
+
+    expect(response.res.statusCode).toBe(200);
+    expect(JSON.parse(response.body())).toEqual({
+      ok: true,
+      runId: expect.any(String),
+      completion: { status: "error", replyDisposition: "empty" },
+    });
+  });
+
+  it.each([
+    {
+      name: "verified message-tool delivery",
+      result: {
+        status: "ok" as const,
+        replyDisposition: "silent" as const,
+        delivered: true,
+        deliveryAttempted: true,
+      },
+    },
+    {
+      name: "silent model reply",
+      result: {
+        status: "ok" as const,
+        replyDisposition: "silent" as const,
+        delivered: false,
+        deliveryAttempted: false,
+      },
+    },
+    {
+      name: "private visible model reply",
+      result: {
+        status: "ok" as const,
+        replyDisposition: "visible" as const,
+        delivered: false,
+        deliveryAttempted: false,
+        outputText: "private visible final",
+      },
+    },
+  ])("returns bounded evidence for deliver:false + $name", async ({ result }) => {
+    mocks.getRuntimeConfig.mockReturnValue(config);
+    mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
+      async (params: { onExecutionStarted?: () => void }) => {
+        params.onExecutionStarted?.();
+        return result;
+      },
+    );
+    const handler = createHandler(100);
+
+    const response = await post(handler, "/hooks/agent", {
+      message: "Direct",
+      name: "Observed",
+      deliver: false,
+      waitForCompletion: true,
+    });
+
+    expect(response.res.statusCode).toBe(200);
+    const body = JSON.parse(response.body()) as {
+      completion: Record<string, unknown>;
+    };
+    expect(body.completion).toMatchObject({
+      status: result.status,
+      replyDisposition: result.replyDisposition,
+      delivered: result.delivered,
+      deliveryAttempted: result.deliveryAttempted,
+    });
+    expect(JSON.stringify(body)).not.toContain("private visible final");
   });
 });

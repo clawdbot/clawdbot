@@ -137,12 +137,63 @@ it.for(["rows", "static list"])(
       expect((await request("sessions.describe", { key: row.key })).payload).toMatchObject({
         session: row,
       });
+      expect((await request("sessions.resolve", { reference: { key: row.key } })).payload).toEqual({
+        ok: true,
+        key: row.key,
+        agentId: "ops",
+      });
     }
     expect((await request("sessions.list")).payload).toMatchObject({
       sessions: expectedRows,
     });
   },
 );
+
+it("resolves canonical short references and starts the matching transcript", async ({
+  connect,
+}) => {
+  const first = {
+    key: "agent:ops:thread:12345678-aaaa-4000-8000-000000000001",
+    displayName: "First",
+    boardFace: "dashboard",
+  };
+  const second = {
+    key: "agent:ops:thread:12345678-bbbb-4000-8000-000000000002",
+    displayName: "Second",
+  };
+  const otherAgent = {
+    key: "agent:other:thread:12345678-bbbb-4000-8000-000000000003",
+    displayName: "Other agent",
+  };
+  const messages = [{ role: "assistant", content: "Second transcript" }];
+  const { request } = await connect({
+    sessions: [first, second, otherAgent],
+    sessionTranscripts: { [second.key]: { messages } },
+  });
+  expect(
+    (await request("sessions.resolve", { shortId: "12345678", agentId: "ops" })).payload,
+  ).toEqual({
+    ok: false,
+    candidates: [
+      { key: first.key, agentId: "ops", displayName: "First", boardFace: "dashboard" },
+      { key: second.key, agentId: "ops", displayName: "Second" },
+    ],
+  });
+  expect(
+    (await request("chat.startup", { shortId: "12345678b", agentId: "ops" })).payload,
+  ).toMatchObject({
+    resolution: { ok: true, key: second.key, agentId: "ops", displayName: "Second" },
+    messages,
+  });
+  await request("sessions.patch", { key: first.key, boardFace: "chat" });
+  expect((await request("sessions.resolve", { reference: { key: first.key } })).payload).toEqual({
+    ok: true,
+    key: first.key,
+    agentId: "ops",
+    displayName: "First",
+    boardFace: "chat",
+  });
+});
 
 it("returns a missing descriptor without materializing an unseeded session", async ({
   connect,
@@ -156,6 +207,9 @@ it("returns a missing descriptor without materializing an unseeded session", asy
 
   expect((await request("sessions.describe", { key: missingKey })).payload).toEqual({
     session: null,
+  });
+  expect((await request("sessions.resolve", { reference: { key: missingKey } })).payload).toEqual({
+    ok: false,
   });
   expect((await request("sessions.list")).payload.sessions).toEqual([
     expect.objectContaining(notes),
@@ -193,6 +247,9 @@ it.for(["cases", "sequence"])(
     expect((await request("sessions.list")).payload.sessions).toEqual([row]);
     // Wire-only list responses do not declare a canonical stored row for describe.
     expect((await request("sessions.describe", { key: row.key })).payload.session).toBeNull();
+    expect((await request("sessions.resolve", { reference: { key: row.key } })).payload).toEqual({
+      ok: false,
+    });
   },
 );
 

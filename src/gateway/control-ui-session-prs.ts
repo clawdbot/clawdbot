@@ -10,8 +10,8 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { runGit } from "../agents/worktrees/git.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import type {
   ControlUiSessionBranch,
   ControlUiSessionPullRequest,
@@ -23,17 +23,21 @@ import {
   GITHUB_API_ORIGIN,
   resolveGitHubApiCredentialScope,
 } from "./control-ui-github-api.js";
+import { createSessionPullRequestCache } from "./control-ui-session-pr-cache.js";
 import {
   gitOutput,
   resolveBranchLanding,
   type MergedPullHead,
 } from "./control-ui-session-prs-landing.js";
 import {
+  releaseSessionPullRequestBranchFacts,
+  releaseSessionPullRequestLocalGitCache,
   resolveCachedGitContext,
   resolveCachedSessionBranchFacts,
   type SessionPullRequestGitContext,
   type SessionPullRequestLocalGitDeps,
 } from "./control-ui-session-prs-local-git.js";
+import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { resolveGitHubForkParent } from "./github-repository-target.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
@@ -42,7 +46,6 @@ const SUCCESS_CACHE_MS = 90_000;
 // showing the last-known chips with the stale warning during this window.
 const RATE_LIMIT_CACHE_MS = 5 * 60_000;
 const FAILURE_CACHE_MS = 30_000;
-const CACHE_LIMIT = 100;
 const MAX_PULL_REQUESTS = 3;
 
 export type ControlUiSessionPullRequestsParams = {
@@ -84,7 +87,7 @@ type CacheEntry = {
   lastGood?: { pullRequests: ControlUiSessionPullRequest[]; mergedHeads: MergedPullHead[] };
 };
 
-const branchCache = new Map<string, CacheEntry>();
+const branchCache = createSessionPullRequestCache<CacheEntry>();
 
 type LoadSessionPullRequestDeps = SessionPullRequestLocalGitDeps & {
   fetchImpl?: typeof fetch;
@@ -94,10 +97,10 @@ type LoadSessionPullRequestDeps = SessionPullRequestLocalGitDeps & {
   ) => Promise<SessionPullRequestGitContext | null>;
 };
 
-/** Resolves the checkout root without spawning Git. */
-function resolveSessionPullRequestGitRoot(
+/** Resolve the recorded source before considering a Gateway workspace default. */
+function resolveSessionPullRequestSource(
   params: ControlUiSessionPullRequestsParams,
-): string | null {
+): string | SessionPullRequestGitContext | null {
   const { cfg, entry, storePath, canonicalKey } = loadGatewaySessionEntryReadOnly(
     params.sessionKey,
     {
@@ -116,6 +119,14 @@ function resolveSessionPullRequestGitRoot(
       parseAgentSessionKey(params.sessionKey)?.agentId ??
       resolveDefaultAgentId(cfg),
   );
+  if (entry.repositoryWorkspaceId) {
+    const repository = getSessionRepositoryWorkspaceStore().get(entry.repositoryWorkspaceId);
+    if (!repository || repository.agentId !== agentId || repository.sessionKey !== canonicalKey) {
+      return null;
+    }
+    const remote = parseGitHubRemoteUrl(repository.url);
+    return remote ? { ...remote, branch: repository.branch } : null;
+  }
   const root =
     normalizeOptionalString(entry.spawnedCwd) ??
     normalizeOptionalString(entry.spawnedWorkspaceDir) ??
@@ -134,13 +145,14 @@ async function resolveSessionPullRequestGitContext(
   params: ControlUiSessionPullRequestsParams,
   deps: LoadSessionPullRequestDeps,
 ): Promise<SessionPullRequestGitContext | null> {
-  const root = deps.resolveGitRoot
+  const source = deps.resolveGitRoot
     ? await deps.resolveGitRoot(params)
-    : resolveSessionPullRequestGitRoot(params);
-  if (!root) {
-    return null;
+    : resolveSessionPullRequestSource(params);
+  if (typeof source !== "string") {
+    releaseSessionPullRequestLocalGitCache(deps.cacheSignal);
+    return source;
   }
-  return resolveCachedGitContext(root, deps, params.refresh === true);
+  return resolveCachedGitContext(source, deps, params.refresh === true);
 }
 
 // git push's own "create a pull request" hint URL; GitHub resolves the base
@@ -277,7 +289,8 @@ async function resolveSessionBranch(
 ): Promise<ControlUiSessionBranch | undefined> {
   const root = context.root;
   if (!root) {
-    // Stubbed test contexts without a root skip the local-git gates.
+    // Repository-only sessions have no local checkout to inspect. Their recorded
+    // source still exposes publication; the broker validates the accepted checkpoint.
     return {
       owner: context.owner,
       repo: context.repo,
@@ -309,6 +322,7 @@ async function resolveSessionBranch(
       return !creatable && !(stats && stats.changedFiles > 0) ? undefined : { creatable, stats };
     },
     refresh,
+    deps.cacheSignal,
   );
   if (!facts) {
     return undefined;
@@ -601,10 +615,19 @@ export async function loadControlUiSessionPullRequests(
   params: ControlUiSessionPullRequestsParams,
   deps: LoadSessionPullRequestDeps = {},
 ): Promise<ControlUiSessionPullRequests> {
-  const context = deps.resolveGitContext
-    ? await deps.resolveGitContext(params)
-    : await resolveSessionPullRequestGitContext(params, deps);
+  let context: SessionPullRequestGitContext | null;
+  try {
+    context = deps.resolveGitContext
+      ? await deps.resolveGitContext(params)
+      : await resolveSessionPullRequestGitContext(params, deps);
+  } catch (error) {
+    releaseSessionPullRequestLocalGitCache(deps.cacheSignal);
+    branchCache.release(deps.cacheSignal);
+    throw error;
+  }
   if (!context) {
+    releaseSessionPullRequestBranchFacts(deps.cacheSignal);
+    branchCache.release(deps.cacheSignal);
     return { pullRequests: [], rateLimited: false };
   }
   // Normal polling reuses local Git facts across a poll cycle; forced
@@ -613,7 +636,10 @@ export async function loadControlUiSessionPullRequests(
     context,
     deps,
     params.refresh === true,
-  );
+  ).catch((error: unknown) => {
+    releaseSessionPullRequestBranchFacts(deps.cacheSignal);
+    throw error;
+  });
   const branch = await resolveSessionBranch(context, mergedHeads, deps, params.refresh === true);
   return branch ? { ...snapshot, branch } : snapshot;
 }
@@ -642,12 +668,18 @@ async function cachedBranchPullRequests(
   deps: LoadSessionPullRequestDeps,
   refresh: boolean,
 ): Promise<BranchPullRequestsSnapshot> {
-  const { token, cacheScope } = resolveGitHubApiCredentialScope();
+  let identity: ReturnType<typeof resolveGitHubApiCredentialScope>;
+  try {
+    identity = resolveGitHubApiCredentialScope();
+  } catch (error) {
+    branchCache.release(deps.cacheSignal);
+    throw error;
+  }
+  const { token, cacheScope } = identity;
   const key = `${context.owner.toLowerCase()}/${context.repo.toLowerCase()}#${context.branch}\0${cacheScope}`;
-  const cached = branchCache.get(key);
+  const cached = branchCache.get(key, deps.cacheSignal);
   if (cached && cached.expiresAt > Date.now()) {
-    branchCache.delete(key);
-    branchCache.set(key, cached);
+    branchCache.set(key, cached, deps.cacheSignal);
     if (!refresh || cached.refreshMode === "forced") {
       return cached.promise;
     }
@@ -675,8 +707,6 @@ async function cachedBranchPullRequests(
   const promise = trackBranchRefresh(entry, refresh ? "forced" : "normal", () =>
     refreshBranchPullRequests(context, deps.fetchImpl ?? fetch, entry, token),
   );
-  branchCache.delete(key);
-  branchCache.set(key, entry);
-  pruneMapToMaxSize(branchCache, CACHE_LIMIT);
+  branchCache.set(key, entry, deps.cacheSignal);
   return promise;
 }

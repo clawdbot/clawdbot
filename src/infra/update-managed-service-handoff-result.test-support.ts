@@ -16,6 +16,37 @@ export function registerManagedTerminalResultTests(
   expect: typeof import("vitest").expect,
   tempDirs: Set<string>,
 ): void {
+  itUnix.each(["ready", "unready"] as const)(
+    "finishes a cancelled handoff ledger when recovery is %s without a Gateway boot",
+    async (gatewayHealth) => {
+      const { run } = await runManagedServiceManagerBoundary("systemd", {
+        ledger: true,
+        cancelAfterPark: true,
+        gatewayHealth,
+      });
+      expect(run).toMatchObject({
+        phase: "finished",
+        status: gatewayHealth === "ready" ? "skipped" : "failed",
+        reason:
+          gatewayHealth === "ready"
+            ? "managed-service-handoff-cancelled"
+            : "managed-service-handoff-restore-failed",
+        verification: { serviceRunning: true, runningVersion: "1.0.0", versionMatch: true },
+      });
+      expect(run?.verification.booted).toBeUndefined();
+      expect(run?.downtimeMs).toEqual(gatewayHealth === "ready" ? expect.any(Number) : null);
+      expect(run?.steps).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            step: "service-stop",
+            status: "completed",
+            startedAtMs: expect.any(Number),
+          }),
+        ]),
+      );
+    },
+  );
+
   itUnix.each(
     (["systemd", "launchd"] as const).flatMap((kind) =>
       (["git", "npm"] as const).flatMap((mode) =>
@@ -140,31 +171,101 @@ export function registerManagedRecoveryOutcomeTests(
 ): void {
   itUnix.each(
     (["systemd", "launchd"] as const).flatMap((kind) =>
-      [false, true].map((contradictory) => ({ kind, contradictory })),
+      (["ready", "exited", "throw"] as const).map((gatewayHealth) => ({ kind, gatewayHealth })),
     ),
   )(
-    "keeps $kind parked on unsafe exit 79 (contradictory stdout=$contradictory)",
-    async ({ kind, contradictory }) => {
+    "restores the verified previous $kind generation after updater exit 79 (health=$gatewayHealth)",
+    async ({ kind, gatewayHealth }) => {
+      const { run, state, log } = await runManagedServiceManagerBoundary(kind, {
+        ledger: true,
+        rollbackRestoration: true,
+        updaterExitCode: 79,
+        helperExitCode: gatewayHealth === "ready" ? 1 : 79,
+        gatewayHealth,
+        updaterResult: {
+          status: "error",
+          mode: "npm",
+          reason: "restart-unhealthy",
+          before: { version: "1.0.0" },
+          after: { version: "1.0.0" },
+          recovery: { serviceRestartSafe: true, packageRollbackVerified: true, version: "1.0.0" },
+        },
+      });
+      expect(state).toMatchObject({
+        restored: true,
+        healthProbeCount: 1,
+        expectedVersion: "1.0.0",
+        recoveryAllowance: "1",
+        triageObservedRestored: true,
+      });
+      expect(state.triageRecoveryAllowance).toBeUndefined();
+      expect(run, log).toMatchObject({
+        status: gatewayHealth === "ready" ? "rolled-back" : "failed",
+        reason:
+          gatewayHealth === "ready"
+            ? "restart-unhealthy"
+            : "managed-service-handoff-restore-failed",
+        after: { version: "1.0.0" },
+        verification: {
+          serviceRunning: gatewayHealth !== "exited",
+        },
+        downtimeMs: gatewayHealth === "ready" ? expect.any(Number) : null,
+      });
+      expect(run?.verification.runningVersion).toBe(
+        gatewayHealth === "throw" ? undefined : "1.0.0",
+      );
+      expect(run?.verification.versionMatch).toBe(gatewayHealth === "throw" ? undefined : true);
+      expect(run?.verification.pid).toBe(gatewayHealth === "exited" ? undefined : process.pid);
+      expect(run?.verification.readyz).toBeUndefined();
+      expect(run?.verification.inferenceProbe).toBeUndefined();
+      expect(run?.verification.settled).toBe(
+        gatewayHealth === "throw" ? undefined : gatewayHealth === "ready",
+      );
+      expect(run?.verification.channelsReady).toBe(
+        gatewayHealth === "throw" ? undefined : gatewayHealth === "ready",
+      );
+      expect(run?.verification.pluginErrors).toEqual(gatewayHealth === "throw" ? undefined : []);
+      expect(log).not.toContain("keep the gateway stopped");
+    },
+  );
+
+  itUnix.each(
+    (["systemd", "launchd"] as const).flatMap((kind) =>
+      (["none", "stdout-only", "ledger-only"] as const).map((proof) => ({ kind, proof })),
+    ),
+  )(
+    "keeps $kind parked on unsafe exit 79 without a complete recovery verdict (proof=$proof)",
+    async ({ kind, proof }) => {
       const { commands, sentinel, state } = await runManagedServiceManagerBoundary(kind, {
         updaterExitCode: 79,
-        recordedFailure: contradictory
-          ? {
-              error: "Diagnostic restart safety must not override the direct updater outcome",
-              result: {
+        ledger: proof === "ledger-only",
+        rollbackRestoration: proof === "ledger-only",
+        recordedFailure:
+          proof === "stdout-only"
+            ? {
+                error: "Diagnostic restart safety must not override the direct updater outcome",
+                result: {
+                  status: "error",
+                  mode: "npm",
+                  recovery: { serviceRestartSafe: true },
+                  steps: [],
+                },
+              }
+            : undefined,
+        updaterResult:
+          proof === "stdout-only"
+            ? {
                 status: "error",
                 mode: "npm",
-                recovery: { serviceRestartSafe: true },
-                steps: [],
-              },
-            }
-          : undefined,
-        updaterResult: contradictory
-          ? {
-              status: "error",
-              mode: "npm",
-              recovery: { serviceRestartSafe: true, version: "1.0.0" },
-            }
-          : undefined,
+                before: { version: "1.0.0" },
+                after: { version: "1.0.0" },
+                recovery: {
+                  serviceRestartSafe: true,
+                  packageRollbackVerified: true,
+                  version: "1.0.0",
+                },
+              }
+            : undefined,
       });
 
       expect(state.parked).toBe(true);

@@ -3,7 +3,12 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 // lanes, with per-member reservations. Split out of command-queue.ts to keep
 // that file within its size budget; the queue supplies its own `drainLane` so
 // this module never has to import the queue runtime.
-import { getQueueState, normalizeLane, peekLaneQueue } from "./command-queue.state.js";
+import {
+  getQueueState,
+  normalizeLane,
+  peekLaneQueue,
+  type LaneGroupState,
+} from "./command-queue.state.js";
 import type { CommandLaneBlockReason, CommandLaneSnapshot } from "./command-queue.types.js";
 import { CommandLane } from "./lanes.js";
 
@@ -25,13 +30,6 @@ export type CommandLaneGroupSpec = {
    * siblings while its owner cannot claim it.
    */
   reservations?: Readonly<Record<string, number>>;
-};
-
-export type LaneGroupState = {
-  group: string;
-  budget: number;
-  members: Set<string>;
-  reservations: Map<string, number>;
 };
 
 /** Shared across fresh module instances so one group cannot re-enter its arbiter. */
@@ -73,29 +71,8 @@ function assertGroupEligibleLane(lane: string): void {
   }
 }
 
-/** Group registry, keyed by group id and by member lane name. */
-export function getGroupRegistry(): {
-  groups: Map<string, LaneGroupState>;
-  groupByLane: Map<string, string>;
-} {
-  const state: ReturnType<typeof getQueueState> & {
-    laneGroups?: Map<string, LaneGroupState>;
-    laneGroupByLane?: Map<string, string>;
-  } = getQueueState();
-  // Migration: an older singleton (pre-upgrade, inherited via globalThis after
-  // a SIGUSR1 in-process restart) has neither field. Active counts are derived,
-  // so a late-initialized registry cannot desynchronize from lane state.
-  if (!state.laneGroups) {
-    state.laneGroups = new Map<string, LaneGroupState>();
-  }
-  if (!state.laneGroupByLane) {
-    state.laneGroupByLane = new Map<string, string>();
-  }
-  return { groups: state.laneGroups, groupByLane: state.laneGroupByLane };
-}
-
 export function getLaneGroup(lane: string): LaneGroupState | undefined {
-  const { groups, groupByLane } = getGroupRegistry();
+  const { laneGroups: groups, laneGroupByLane: groupByLane } = getQueueState();
   const groupId = groupByLane.get(lane);
   return groupId ? groups.get(groupId) : undefined;
 }
@@ -202,7 +179,7 @@ export function validateCommandLaneGroupSpec(
 
 /** Install a validated group, detaching its members from any previous owner. */
 export function installCommandLaneGroup(next: LaneGroupState): void {
-  const { groups, groupByLane } = getGroupRegistry();
+  const { laneGroups: groups, laneGroupByLane: groupByLane } = getQueueState();
   const previous = groups.get(next.group);
   if (previous) {
     for (const member of previous.members) {
@@ -275,7 +252,7 @@ export function drainCommandLaneGroup(lane: string, drainLane: BoundedDrainLaneF
   }
   DRAINING_GROUPS.add(group);
   try {
-    while (getGroupRegistry().groups.get(group.group) === group) {
+    while (getQueueState().laneGroups.get(group.group) === group) {
       const selectedLane = resolveNextGroupLane(group);
       if (!selectedLane || drainLane(selectedLane, 1) === 0) {
         return;

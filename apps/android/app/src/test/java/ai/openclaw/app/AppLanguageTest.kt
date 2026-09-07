@@ -12,6 +12,7 @@ import ai.openclaw.app.ui.formatApprovalDuration
 import ai.openclaw.app.ui.formatCronWake
 import ai.openclaw.app.ui.formatUsageUpdated
 import ai.openclaw.app.ui.skillWorkshopStatusLabel
+import android.content.res.Configuration
 import android.os.Build
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.os.LocaleListCompat
@@ -26,6 +27,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.xmlpull.v1.XmlPullParser
+import java.util.Locale
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -164,7 +166,14 @@ class AppLanguageTest {
         "Android $androidRelease (SDK ${Build.VERSION.SDK_INT})",
         NodePresenceAliveBeacon.androidPlatformMetadata(),
       )
-      assertEquals("Connexion…", gatewayConnectionStatusForDisplay("Connecting…"))
+      val frenchContext =
+        activity.get().createConfigurationContext(
+          Configuration(activity.get().resources.configuration).apply { setLocale(Locale.FRENCH) },
+        )
+      assertEquals(
+        frenchContext.getString(R.string.native_72021eb70e91b4d5),
+        gatewayConnectionStatusForDisplay("Connecting…"),
+      )
       assertEquals(
         "Impossible de charger les approbations.",
         gatewayExecApprovalTextForDisplay("Could not load approvals."),

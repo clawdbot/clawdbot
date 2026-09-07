@@ -180,7 +180,11 @@ export default function createApplicationPlacementStartupRuntime(
     recovery: SessionPlacementRecovery,
     error: string,
   ) => {
-    const paused = pauseSessionPlacementRecovery(recovery, error, entry.persistRecovery);
+    const { recovery: paused } = pauseSessionPlacementRecovery(
+      recovery,
+      error,
+      entry.persistRecovery,
+    );
     entry.work = { kind: "paused", recovery: paused };
     publish();
   };
@@ -388,7 +392,7 @@ export default function createApplicationPlacementStartupRuntime(
       if (!entry || !isCurrent(entry)) {
         return;
       }
-      const recovery = pauseSessionPlacementRecovery(
+      const { recovery } = pauseSessionPlacementRecovery(
         entry.work.recovery,
         error,
         entry.persistRecovery,

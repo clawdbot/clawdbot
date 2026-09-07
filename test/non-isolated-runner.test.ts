@@ -418,6 +418,7 @@ async function assertCompletion(
   });
   const project = {
     name: "non-isolated-runner",
+    namePrefix: "",
     root: expected.root,
     config: `${expected.root}/vitest.config.ts`,
     pool: "forks",

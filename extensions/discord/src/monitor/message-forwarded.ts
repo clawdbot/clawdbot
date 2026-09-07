@@ -52,7 +52,8 @@ export function resolveDiscordMessageStickers(message: Message): APIStickerItem[
 }
 
 export function resolveDiscordSnapshotStickers(snapshot: DiscordSnapshotMessage): APIStickerItem[] {
-  return normalizeDiscordStickerItems(snapshot.stickers ?? snapshot.sticker_items);
+  const stickers = normalizeDiscordStickerItems(snapshot.stickers);
+  return stickers.length > 0 ? stickers : normalizeDiscordStickerItems(snapshot.sticker_items);
 }
 
 export function hasDiscordMessageStickers(message: Message): boolean {

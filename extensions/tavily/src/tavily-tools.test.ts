@@ -47,7 +47,6 @@ describe("tavily tools", () => {
   let createTavilyContractWebSearchProvider: typeof import("../web-search-contract-api.js").createTavilyWebSearchProvider;
   let createTavilySearchTool: typeof import("./tavily-search-tool.js").createTavilySearchTool;
   let createTavilyExtractTool: typeof import("./tavily-extract-tool.js").createTavilyExtractTool;
-  let tavilyClientTesting: typeof import("./tavily-client.js").testing;
   let tavilyPlugin: typeof import("../index.js").default;
 
   beforeAll(async () => {
@@ -56,8 +55,6 @@ describe("tavily tools", () => {
       await import("../web-search-contract-api.js"));
     ({ createTavilySearchTool } = await import("./tavily-search-tool.js"));
     ({ createTavilyExtractTool } = await import("./tavily-extract-tool.js"));
-    ({ testing: tavilyClientTesting } =
-      await vi.importActual<typeof import("./tavily-client.js")>("./tavily-client.js"));
     ({ default: tavilyPlugin } = await import("../index.js"));
   });
 
@@ -506,23 +503,5 @@ describe("tavily tools", () => {
     expect(resolveTavilyExtractTimeoutSeconds(0.5)).toBe(1);
     expect(resolveTavilySearchTimeoutSeconds(0)).toBe(30);
     expect(resolveTavilyExtractTimeoutSeconds(Number.NaN)).toBe(60);
-  });
-
-  it("appends endpoints to reverse-proxy base urls", () => {
-    expect(tavilyClientTesting.resolveEndpoint("https://proxy.example/api/tavily", "/search")).toBe(
-      "https://proxy.example/api/tavily/search",
-    );
-    expect(
-      tavilyClientTesting.resolveEndpoint("https://proxy.example/api/tavily/", "/extract"),
-    ).toBe("https://proxy.example/api/tavily/extract");
-  });
-
-  it("falls back to the default host for invalid base urls", () => {
-    expect(tavilyClientTesting.resolveEndpoint("not a url", "/search")).toBe(
-      "https://api.tavily.com/search",
-    );
-    expect(tavilyClientTesting.resolveEndpoint("", "/extract")).toBe(
-      "https://api.tavily.com/extract",
-    );
   });
 });

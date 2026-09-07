@@ -1258,45 +1258,31 @@ describe("skill mutations", () => {
     });
   });
 
-  it("shows ClawHub trust warnings from failed skill install error details", async () => {
+  it.each([
+    [
+      "shows ClawHub trust warnings from failed skill install error details",
+      "ClawHub blocked this release; install was not started.",
+      { warning: "BLOCKED - ClawHub flagged this release as malicious" },
+    ],
+    [
+      "shows a ClawHub trust error without an acknowledgement retry",
+      "ClawHub requires acknowledgement before installing.",
+      {
+        clawhubTrustCode: "clawhub_risk_acknowledgement_required",
+        version: "1.2.3",
+        warning: "REVIEW REQUIRED - ClawHub found suspicious behavior.",
+      },
+    ],
+  ] as const)("%s", async (_name, message, details) => {
     const { state, request } = createState();
-    const error = new Error("ClawHub blocked this release; install was not started.") as Error & {
-      details?: unknown;
-    };
-    error.details = {
-      warning: "BLOCKED - ClawHub flagged this release as malicious",
-    };
-    request.mockRejectedValue(error);
+    request.mockRejectedValue(Object.assign(new Error(message), { details }));
 
     await installFromClawHub(state, "github");
 
+    expect(request).toHaveBeenCalledOnce();
     expect(state.clawhubInstallMessage).toEqual({
       kind: "error",
-      text:
-        "ClawHub blocked this release; install was not started.\n\n" +
-        "BLOCKED - ClawHub flagged this release as malicious",
-    });
-  });
-
-  it("shows a ClawHub trust error without an acknowledgement retry", async () => {
-    const { state, request } = createState();
-    const error = new Error("ClawHub requires acknowledgement before installing.") as Error & {
-      details?: unknown;
-    };
-    error.details = {
-      clawhubTrustCode: "clawhub_risk_acknowledgement_required",
-      version: "1.2.3",
-      warning: "REVIEW REQUIRED - ClawHub found suspicious behavior.",
-    };
-    request.mockRejectedValue(error);
-
-    await installFromClawHub(state, "github");
-
-    expect(state.clawhubInstallMessage).toEqual({
-      kind: "error",
-      text:
-        "ClawHub requires acknowledgement before installing.\n\n" +
-        "REVIEW REQUIRED - ClawHub found suspicious behavior.",
+      text: `${message}\n\n${details.warning}`,
     });
   });
 

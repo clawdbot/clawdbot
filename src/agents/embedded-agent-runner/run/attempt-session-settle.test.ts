@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { createEmbeddedAttemptSessionSettleTracker } from "./attempt-session-settle.js";
 
@@ -11,6 +12,19 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 }
 
 describe("createEmbeddedAttemptSessionSettleTracker", () => {
+  it("preserves a teardown failure raised outside the caller async context", async () => {
+    const tracker = createEmbeddedAttemptSessionSettleTracker({
+      abort: async () => {
+        throw new Error("native abort failed");
+      },
+    });
+    await expect(tracker.abortActiveSession()).rejects.toThrow("native abort failed");
+    const cleanupScope = createAgentCleanupScope();
+    await cleanupScope.run(async () => {
+      await tracker.buildAbortSettlePromise();
+    });
+    expect(cleanupScope.outcome).toBe("uncertain");
+  });
   it("waits for both prompt and abort settlement during cleanup", async () => {
     const prompt = deferred();
     const abort = deferred();

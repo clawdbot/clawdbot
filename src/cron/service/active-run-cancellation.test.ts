@@ -15,6 +15,32 @@ import { resetActiveCronTaskRunsForTests } from "./active-run-cancellation.test-
 const CRON_TASK_RUN_SETTLEMENT_TRACKING_MAX_MS = 60_000;
 
 describe("cron task cancellation tracking", () => {
+  it("keeps a removed agent's unsettled core visible after cancellation and restart retirement", async () => {
+    vi.useFakeTimers();
+    resetActiveCronTaskRunsForTests();
+    const removed = createDeferred();
+    const survivor = createDeferred();
+    const controller = new AbortController();
+    trackActiveCronTaskRunSettlement(removed.promise, controller.signal, "removed");
+    trackActiveCronTaskRunSettlement(survivor.promise, undefined, "survivor");
+    try {
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(CRON_TASK_RUN_SETTLEMENT_TRACKING_MAX_MS + 1);
+      retireActiveCronTaskRunTracking();
+      expect(getSuspensionVisibleCronTaskRunCount({ agentId: "removed" })).toBe(1);
+      removed.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(getSuspensionVisibleCronTaskRunCount({ agentId: "removed" })).toBe(0);
+      expect(getSuspensionVisibleCronTaskRunCount({ agentId: "survivor" })).toBe(1);
+    } finally {
+      removed.resolve();
+      survivor.resolve();
+      await Promise.allSettled([removed.promise, survivor.promise]);
+      vi.useRealTimers();
+      resetActiveCronTaskRunsForTests();
+    }
+  });
+
   it("consumes a removal request made before the run controller binds", () => {
     const marker = markCronJobActive("removed-before-controller");
     const controller = new AbortController();

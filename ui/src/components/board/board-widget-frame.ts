@@ -1,4 +1,4 @@
-import { html, type TemplateResult } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
@@ -9,6 +9,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isLoopbackHostname } from "../../lib/gateway-locality.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { installWidgetThemeObserver, postWidgetTheme } from "../../lib/widget-theme.ts";
+import { renderPanelLoadingSkeleton } from "../panel-loading-skeleton.ts";
 import { resolveGatewayHttpOrigin, resolveSandboxHostUrl } from "../sandbox-host.ts";
 
 // Keep in sync with the identical literal in chat widget-card.ts: a shared
@@ -52,6 +53,7 @@ type FrameRefresh = (name: string) => Promise<void>;
 
 type BoardWidgetFrameLifecycleHost = {
   active: () => boolean;
+  bridgeEnabled?: () => boolean;
   connected: () => boolean;
   context: () => ApplicationContext | undefined;
   refreshFrame: () => FrameRefresh | undefined;
@@ -146,6 +148,8 @@ export class BoardWidgetFrameLifecycle {
   private visibilityListening = false;
   private sandboxOrigin = "";
   private sandboxHost: BoardWidgetSandboxHost | null = null;
+  private contentVisible = false;
+  private revealFrame = 0;
   private readonly ticketRefresh = new BoardWidgetTicketRefresh(
     () => this.host.widget()?.viewTicket,
     () => this.host.active() && !documentHidden(),
@@ -166,6 +170,7 @@ export class BoardWidgetFrameLifecycle {
   }
 
   disconnect(): void {
+    this.resetPresentation();
     this.stopWork();
     if (this.messageListening) {
       window.removeEventListener("message", this.handleWindowMessage);
@@ -242,8 +247,15 @@ export class BoardWidgetFrameLifecycle {
       // Never grant popups: host.open handles user-clicked links so ungranted
       // widgets cannot escape network containment through navigation.
       return html`
+        ${
+          this.contentVisible
+            ? nothing
+            : renderPanelLoadingSkeleton("discussion", t("common.loading"), false, true)
+        }
         <iframe
           class="board-widget__frame"
+          style=${this.contentVisible ? "" : "opacity: 0"}
+          ?inert=${!this.contentVisible}
           sandbox="allow-scripts allow-same-origin allow-forms"
           referrerpolicy="origin"
           loading="eager"
@@ -293,11 +305,33 @@ export class BoardWidgetFrameLifecycle {
   }
 
   private resetFailures(notify = true): void {
+    this.resetPresentation();
     this.frameProbeGeneration += 1;
     this.frameFailureKey = "";
     this.frameRefreshAttempts = 0;
     this.setError("", notify);
     this.sandboxHost?.reset();
+  }
+
+  private resetPresentation(): void {
+    window.cancelAnimationFrame(this.revealFrame);
+    this.revealFrame = 0;
+    this.contentVisible = false;
+  }
+
+  private revealContent(): void {
+    if (this.contentVisible || this.revealFrame) {
+      return;
+    }
+    // Apply the reported height before revealing the cross-origin frame; its
+    // compositor needs a paint opportunity at the final size to avoid a white flash.
+    this.revealFrame = window.requestAnimationFrame(() => {
+      this.revealFrame = window.requestAnimationFrame(() => {
+        this.revealFrame = 0;
+        this.contentVisible = true;
+        this.host.requestUpdate();
+      });
+    });
   }
 
   private refreshFailedFrame(widget: BoardWidget): void {
@@ -412,6 +446,7 @@ export class BoardWidgetFrameLifecycle {
     return {
       frame,
       widget,
+      bridgeEnabled: this.host.bridgeEnabled?.() ?? true,
       sandboxOrigin: this.sandboxOrigin,
       sandboxUrl: frame.src,
       sourceOrigin: resolveGatewayHttpOrigin(
@@ -429,9 +464,15 @@ export class BoardWidgetFrameLifecycle {
       onUnauthorized: (currentWidget) => this.refreshFailedFrame(currentWidget),
       onReadyTimeout: () => this.refreshFailedFrame(widget),
       onLoaded: () => {
+        this.resetPresentation();
         this.frameFailureKey = "";
         this.frameRefreshAttempts = 0;
+        this.setError("", false);
+        this.host.requestUpdate();
+      },
+      onRendered: () => {
         this.setError("");
+        this.revealContent();
       },
       onError: (error) => {
         this.setError(formatUiError(error));

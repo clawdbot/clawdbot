@@ -13,6 +13,7 @@ import { estimateToolResultTextChars } from "./tool-result-text-budget.js";
 
 export const TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE = 2;
 const IMAGE_CHAR_ESTIMATE = 8_000;
+export const TOOL_IMAGE_CHARS = IMAGE_CHAR_ESTIMATE * TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE;
 
 export type MessageCharEstimateCache = WeakMap<AgentMessage, number>;
 
@@ -85,7 +86,7 @@ function estimateToolResultContentChars(content: unknown[]): number {
         minimumRawWeight: TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
       });
     } else if (isImageBlock(block)) {
-      chars += IMAGE_CHAR_ESTIMATE * TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE;
+      chars += TOOL_IMAGE_CHARS;
     } else {
       chars += estimateUnknownChars(block) * TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE;
     }

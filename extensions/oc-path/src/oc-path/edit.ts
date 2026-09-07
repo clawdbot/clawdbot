@@ -41,7 +41,7 @@ export function setMdOcPath(ast: MdAst, path: OcPath, newValue: string): MdEditR
     const newEntry: FrontmatterEntry = { ...existing, value: newValue };
     const newFm = ast.frontmatter.slice();
     newFm[idx] = newEntry;
-    return finalize({ ...ast, frontmatter: newFm });
+    return { ok: true, ast: rebuildMdRaw({ ...ast, frontmatter: newFm }) };
   }
 
   if (path.section === undefined || path.item === undefined || path.field === undefined) {
@@ -84,7 +84,7 @@ export function setMdOcPath(ast: MdAst, path: OcPath, newValue: string): MdEditR
   };
   const newBlocks = ast.blocks.slice();
   newBlocks[blockIdx] = newBlock;
-  return finalize({ ...ast, blocks: newBlocks });
+  return { ok: true, ast: rebuildMdRaw({ ...ast, blocks: newBlocks }) };
 }
 
 // In-place substitution on `bodyText` so round-trip emit reflects the
@@ -105,7 +105,8 @@ function rebuildBlockBody(block: AstBlock, newItems: readonly AstItem[]): string
       continue;
     }
     const re = new RegExp(`^(\\s*-\\s*${escapeRegex(oldItem.kv.key)}\\s*:\\s*).*$`, "m");
-    body = body.replace(re, `$1${newItem.kv.value}`);
+    const newValue = newItem.kv.value;
+    body = body.replace(re, (_match, prefix: string) => `${prefix}${newValue}`);
   }
   return body;
 }
@@ -114,7 +115,7 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function finalize(ast: MdAst): MdEditResult {
+export function rebuildMdRaw(ast: MdAst): MdAst {
   const parts: string[] = [];
   if (ast.frontmatter.length > 0) {
     parts.push("---");
@@ -138,5 +139,5 @@ function finalize(ast: MdAst): MdEditResult {
       parts.push(block.bodyText);
     }
   }
-  return { ok: true, ast: { ...ast, raw: parts.join("\n") } };
+  return { ...ast, raw: parts.join("\n") };
 }

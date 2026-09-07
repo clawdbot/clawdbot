@@ -9,7 +9,6 @@ import { finalizeEvent, SimplePool, type Event } from "nostr-tools";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { NostrProfile } from "./config-schema.js";
 import { profileToContent } from "./nostr-profile-core.js";
-import { publishNostrEventToRelay } from "./relay-publish.js";
 
 // ============================================================================
 // Types
@@ -98,7 +97,7 @@ async function publishProfileEvent(
         timer = setTimeout(() => reject(new Error("timeout")), RELAY_PUBLISH_TIMEOUT_MS);
       });
 
-      await Promise.race([publishNostrEventToRelay(pool, relay, event), timeoutPromise]);
+      await Promise.race([pool.publish([relay], event)[0], timeoutPromise]);
 
       successes.push(relay);
     } catch (err) {

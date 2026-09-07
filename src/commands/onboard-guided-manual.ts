@@ -9,19 +9,10 @@ import type {
 } from "../system-agent/setup-inference.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { CORE_AUTH_CHOICE_OPTIONS, type AuthChoiceGroup } from "./auth-choice-options.static.js";
+import type { AuthChoiceGroup } from "./auth-choice-options.static.js";
 
 type ActivateSetupInference =
   typeof import("../system-agent/setup-inference.js").activateSetupInference;
-
-export type SetupCandidateFailure = {
-  label: string;
-  result: Extract<ActivateSetupInferenceResult, { ok: false }>;
-};
-
-type CandidateAttempt =
-  | { kind: "success"; result: Extract<ActivateSetupInferenceResult, { ok: true }> }
-  | { kind: "failure" };
 
 const SETUP_FAILURE_REASON_KEYS: Record<SetupInferenceFailureStatus, string> = {
   auth: "wizard.guided.failureAuth",
@@ -33,109 +24,35 @@ const SETUP_FAILURE_REASON_KEYS: Record<SetupInferenceFailureStatus, string> = {
   unknown: "wizard.guided.failureUnknown",
 };
 
-function setupFailureReason(status: SetupInferenceFailureStatus): string {
-  return t(SETUP_FAILURE_REASON_KEYS[status]);
-}
-
-export function formatSetupCandidateFailure(failure: SetupCandidateFailure): string {
-  return t("wizard.guided.testFailure", {
-    label: failure.label,
-    reason: setupFailureReason(failure.result.status),
-    detail: failure.result.error,
-  });
-}
-
 async function noteActivationFailure(params: {
   prompter: WizardPrompter;
   label: string;
   result: Extract<ActivateSetupInferenceResult, { ok: false }>;
 }): Promise<void> {
   await params.prompter.note(
-    formatSetupCandidateFailure({ label: params.label, result: params.result }),
+    t("wizard.guided.testFailure", {
+      label: params.label,
+      reason: t(SETUP_FAILURE_REASON_KEYS[params.result.status]),
+      detail: params.result.error,
+    }),
     t("wizard.guided.aiAccessTitle"),
   );
 }
 
-export async function tryCandidate(params: {
-  candidate: SetupInferenceCandidate;
-  workspace: string;
-  runtime: RuntimeEnv;
-  prompter: WizardPrompter;
-  activate: ActivateSetupInference;
-  /** Auto-ladder failures collect into one quiet summary; manual retries stay loud. */
-  collectFailure?: (failure: SetupCandidateFailure) => void;
-}): Promise<CandidateAttempt> {
-  // Quiet automatic attempts omit the prompter; interactive activation owns
-  // its progress so two Clack spinners never write over the same terminal row.
-  const progress = params.collectFailure
-    ? params.prompter.progress(
-        t("wizard.guided.testingCandidate", {
-          label: params.candidate.label,
-          modelRef: params.candidate.modelRef,
-        }),
-      )
-    : undefined;
-  let result: ActivateSetupInferenceResult | undefined;
-  try {
-    result = await withConsoleSubsystemsSuppressed(() =>
-      params.activate({
-        kind: params.candidate.kind,
-        modelRef: params.candidate.modelRef,
-        workspace: params.workspace,
-        surface: "cli",
-        runtime: params.runtime,
-        ...(params.collectFailure ? {} : { prompter: params.prompter }),
-      }),
-    );
-  } finally {
-    progress?.stop(result?.ok ? t("wizard.guided.testPassed") : t("wizard.guided.testFailed"));
-  }
-  if (result.ok) {
-    return { kind: "success", result };
-  }
-  if (params.collectFailure) {
-    params.collectFailure({ label: params.candidate.label, result });
-  } else {
-    await noteActivationFailure({
-      prompter: params.prompter,
-      label: params.candidate.label,
-      result,
-    });
-  }
-  return { kind: "failure" };
-}
-
 export async function runManualStage(params: {
   detection: SetupInferenceDetection;
-  autoAttemptedKinds: ReadonlySet<SetupInferenceCandidate["kind"]>;
   config: OpenClawConfig;
   workspace: string;
   runtime: RuntimeEnv;
   prompter: WizardPrompter;
   activate: ActivateSetupInference;
-  /** A working route is already persisted; skipping keeps it instead of exiting AI-less. */
-  hasActiveRoute?: boolean;
 }): Promise<string[] | null> {
-  const interactiveOptions = [
-    ...params.detection.authOptions,
-    ...(params.detection.prepareOptions ?? []),
-    ...CORE_AUTH_CHOICE_OPTIONS.map((option) => ({ id: option.value, label: option.label })),
-  ];
-  const allowedChoices = new Set([
-    ...params.detection.manualProviders.map((provider) => provider.id),
-    ...interactiveOptions.map((option) => option.id),
-  ]);
   const detectedOptions = params.detection.candidates.map((candidate) => ({
     value: `candidate:${candidate.kind}`,
-    label: t(
-      params.autoAttemptedKinds.has(candidate.kind)
-        ? "wizard.guided.retryCandidate"
-        : "wizard.guided.tryCandidate",
-      {
-        label: candidate.label,
-        detail: candidate.detail,
-      },
-    ),
+    label: t("wizard.guided.tryCandidate", {
+      label: candidate.label,
+      detail: candidate.detail,
+    }),
   }));
   const additionalGroups: AuthChoiceGroup[] = detectedOptions.length
     ? [
@@ -148,103 +65,33 @@ export async function runManualStage(params: {
         },
       ]
     : [];
-  const [
-    { ensureAuthProfileStore },
-    { detectAvailableSetupProviderIds },
-    { promptAuthChoiceGrouped },
-  ] = await Promise.all([
-    import("../agents/auth-profiles.runtime.js"),
-    import("../plugins/provider-setup-availability.js"),
-    import("./auth-choice-prompt.js"),
-  ]);
-  const store = ensureAuthProfileStore(undefined, { allowKeychainPrompt: false });
-  const detectedProviderIds = await detectAvailableSetupProviderIds({
-    config: params.config,
-    workspaceDir: params.workspace,
-  });
+  const { promptAuthChoiceGrouped } = await import("./auth-choice-prompt.js");
   while (true) {
     const choice = await promptAuthChoiceGrouped({
       prompter: params.prompter,
-      store,
       includeSkip: true,
       assistantVisibleOnly: false,
-      allowedChoices,
       additionalGroups,
       config: params.config,
       workspaceDir: params.workspace,
-      detectedProviderIds,
     });
 
     if (choice === "skip") {
-      if (params.hasActiveRoute) {
-        await params.prompter.note(
-          t("wizard.guided.keepingCurrent"),
-          t("wizard.guided.aiAccessTitle"),
-        );
-        return null;
-      }
-      await params.prompter.note(
-        t("wizard.guided.nextStepsWithoutAi", { workspace: params.workspace }),
-        t("wizard.guided.nextStepsTitle"),
-      );
       return null;
     }
+    let candidate: SetupInferenceCandidate | undefined;
     if (choice.startsWith("candidate:")) {
       const kind = choice.slice("candidate:".length);
-      const candidate = params.detection.candidates.find((item) => item.kind === kind);
+      candidate = params.detection.candidates.find((item) => item.kind === kind);
       if (!candidate) {
         continue;
       }
-      const attempt = await tryCandidate({
-        candidate,
-        workspace: params.workspace,
-        runtime: params.runtime,
-        prompter: params.prompter,
-        activate: params.activate,
-      });
-      if (attempt.kind === "success") {
-        return activationLines(attempt.result);
-      }
-      continue;
     }
 
-    const providerAuthOption = interactiveOptions.find((item) => item.id === choice);
-    if (providerAuthOption) {
-      const result = await withConsoleSubsystemsSuppressed(() =>
-        params.activate({
-          kind: "provider-auth",
-          authChoice: providerAuthOption.id,
-          workspace: params.workspace,
-          surface: "cli",
-          runtime: params.runtime,
-          prompter: params.prompter,
-        }),
-      );
-      if (result.ok) {
-        return activationLines(result);
-      }
-      await noteActivationFailure({
-        prompter: params.prompter,
-        label: providerAuthOption.label,
-        result,
-      });
-      continue;
-    }
-
-    const provider = params.detection.manualProviders.find((item) => item.id === choice);
-    if (!provider) {
-      continue;
-    }
-    const apiKey = await params.prompter.text({
-      message: t("wizard.guided.apiKeyPrompt", { label: provider.label }),
-      sensitive: true,
-      validate: (value) => (value.trim() ? undefined : t("common.required")),
-    });
     const result = await withConsoleSubsystemsSuppressed(() =>
       params.activate({
-        kind: "api-key",
-        authChoice: provider.id,
-        apiKey,
+        kind: candidate?.kind ?? "provider-auth",
+        ...(candidate ? { modelRef: candidate.modelRef } : { authChoice: choice }),
         workspace: params.workspace,
         surface: "cli",
         runtime: params.runtime,
@@ -254,13 +101,21 @@ export async function runManualStage(params: {
     if (result.ok) {
       return activationLines(result);
     }
-    await noteActivationFailure({ prompter: params.prompter, label: provider.label, result });
+    await noteActivationFailure({
+      prompter: params.prompter,
+      label: candidate?.label ?? choice,
+      result,
+    });
+    if (candidate?.kind === "existing-model") {
+      await params.prompter.note(
+        t("wizard.guided.existingModelKept"),
+        t("wizard.guided.aiAccessTitle"),
+      );
+    }
   }
 }
 
-export function activationLines(
-  result: Extract<ActivateSetupInferenceResult, { ok: true }>,
-): string[] {
+function activationLines(result: Extract<ActivateSetupInferenceResult, { ok: true }>): string[] {
   return [
     ...result.lines,
     t("wizard.guided.repliedIn", { seconds: (result.latencyMs / 1000).toFixed(1) }),

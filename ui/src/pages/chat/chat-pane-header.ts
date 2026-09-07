@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing } from "lit";
 import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-resource-routes.js";
+import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type { GatewaySessionRow, SessionVisibility } from "../../api/types.ts";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { isNativeLocalGateway } from "../../app/native-editor-locality.runtime.ts";
@@ -57,14 +58,18 @@ import {
 import { renderChatPanePlacement } from "./components/chat-pane-placement.ts";
 import {
   canManageChatSessionSharing,
+  renderChatSessionPublicIndicator,
   renderChatSessionSharing,
 } from "./components/chat-session-sharing.ts";
 import type { SessionWorkspaceProps } from "./components/chat-session-workspace.ts";
+import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
 import { renderContinueInTerminalDialog } from "./components/continue-in-terminal-dialog.ts";
 import { hasDirectSessionRun } from "./run-lifecycle.ts";
 import {
+  ensureSidebarConversation,
   promoteSidebarPanel,
   setSidebarDock,
+  setSidebarExpanded,
   sidebarActivePanel,
   sidebarDock,
   sidebarMainPanel,
@@ -98,19 +103,50 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     };
   }
 
-  private renderPanelLayoutActions(layout: SidebarLayout | undefined) {
-    if (!layout?.open || layout.expanded) {
+  private renderPanelLayoutActions(
+    layout: SidebarLayout | undefined,
+    definitions: SidebarPanelDefinition[],
+  ) {
+    if (!layout) {
       return nothing;
     }
     const side = sidebarActivePanel(layout);
-    const definitions = sidebarPanelDefinitions();
     const mainSlot = sidebarMainPanel(layout)?.slot ?? "conversation";
-    const swapLabel = t("chat.sidePanel.swap", {
-      main: definitions.find((definition) => definition.slot === mainSlot)!.label,
-      side: side ? definitions.find((definition) => definition.slot === side.slot)!.label : "",
-    });
+    const mainDefinition = definitions.find((definition) => definition.slot === mainSlot);
+    const sideDefinition = definitions.find((definition) => definition.slot === side?.slot);
+    const split = layout.open === true && !layout.expanded;
+    const focusLabel = t(layout.expanded ? "chat.sidePanel.restore" : "chat.sidePanel.expand");
+    const swapLabel =
+      mainDefinition && sideDefinition
+        ? t("chat.sidePanel.swap", { main: mainDefinition.label, side: sideDefinition.label })
+        : "";
     return html`${
-      side
+      mainDefinition?.headerAction
+        ? html`<span class="side-panel__action-group side-panel__action-group--content"
+            >${mainDefinition.headerAction}</span
+          >`
+        : nothing
+    }
+    ${
+      split || layout.expanded
+        ? html`<openclaw-tooltip .content=${focusLabel}>
+            <button
+              class="btn btn--ghost btn--icon chat-icon-btn chat-panel-focus"
+              type="button"
+              aria-pressed=${String(layout.expanded === true)}
+              aria-label=${focusLabel}
+              @click=${() =>
+                this.state?.updateSidebarLayout(
+                  setSidebarExpanded(ensureSidebarConversation(layout), layout.expanded !== true),
+                )}
+            >
+              ${layout.expanded ? icons.minimize : icons.maximize}
+            </button>
+          </openclaw-tooltip>`
+        : nothing
+    }
+    ${
+      split && side && swapLabel
         ? html`<openclaw-tooltip .content=${swapLabel}>
             <button
               class="btn btn--ghost btn--icon chat-icon-btn chat-panel-swap"
@@ -124,7 +160,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         : nothing
     }
     ${
-      this.narrow
+      this.narrow || !split
         ? nothing
         : html`<wa-dropdown
             class="chat-panel-layout-menu"
@@ -172,7 +208,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     workspaceGit: boolean,
     placementStartupStatus: ApplicationPlacementStartupStatus | null | undefined,
     sidebarLayout?: SidebarLayout,
+    panelDefinitions = sidebarPanelDefinitions(),
   ) {
+    this.syncSelectedSessionSharing(row);
     const workspace = resolveSessionWorkspace({
       session: row,
       agentWorkspace: row?.worktree ? undefined : agentWorkspace,
@@ -186,6 +224,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     // in-flight lookups racing a dispatch can never surface a wrong branch.
     const rowRemote = Boolean(row?.execNode) || isCloudWorkerPlacementState(row?.placement?.state);
     const branch =
+      row?.repository?.branch ||
       row?.worktree?.branch ||
       (rowRemote || !workspace.root ? null : this.headerBranches.get(workspace.root)?.value) ||
       null;
@@ -228,6 +267,10 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     });
     const sharingVisibilityAccess = readSessionMethodAccess(sharingSnapshot, {
       method: "session.visibility.set",
+      requiredScope: "operator.write",
+    });
+    const publicShareAccess = readSessionMethodAccess(sharingSnapshot, {
+      method: "session.publicShare.set",
       requiredScope: "operator.write",
     });
     const sharingMemberAddAccess = readSessionMethodAccess(sharingSnapshot, {
@@ -471,6 +514,15 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
             memberRemoveDisabledReason: sharingMemberRemoveAccess.allowed
               ? undefined
               : sharingMemberRemoveAccess.reason,
+            publicShareDisabledReason:
+              !row.sessionId || isIncognitoSessionKey(row.key)
+                ? t("chat.sessionSharing.publicUnavailable")
+                : publicShareAccess.allowed
+                  ? undefined
+                  : publicShareAccess.reason,
+            onPublicShareChange: (enabled: boolean) =>
+              void this.setSessionPublicShare(row, enabled),
+            onCopyPublicLink: () => void this.copySessionPublicLink(row),
             ownerViewing,
             personActivity,
             showOwner: showOwnerChip,
@@ -507,8 +559,11 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       copiedAction: this.headerCopiedAction,
       renameDisabledReason,
       actionsDisabled: this.state?.connected !== true,
-      panelActions: html`${browserPanelAction}${backgroundTasksAction}${sidePanelAction}`,
-      panelLayoutActions: this.renderPanelLayoutActions(currentLayout),
+      panelActions: html`${browserPanelAction}${backgroundTasksAction}`,
+      panelLayoutActions: html`${this.renderPanelLayoutActions(
+        currentLayout,
+        panelDefinitions,
+      )}${sidePanelAction}`,
       discussionAction: nothing,
       diffAction: nothing,
       backgroundTasksAction: nothing,
@@ -530,6 +585,8 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         (!this.narrow || !canManageChatSessionSharing(sharing.session))
           ? renderChatSessionSharing(sharing)
           : nothing,
+      publicAccessIndicator:
+        this.narrow && sharing ? renderChatSessionPublicIndicator(sharing) : nothing,
       placementControl: renderChatPanePlacement({
         session: row,
         placementStartupStatus,

@@ -384,16 +384,18 @@ export function createOpenAIResponsesWebSocketStream(params: {
   }
   let prepared: Omit<ReturnType<typeof resolveResponsesContinuationRequest>, "continuationStatus"> &
     Pick<OpenAIResponsesWebSocketStream, "continuationStatus">;
+  const resumedSteering = lease.steeringContinuation;
+  const steeringMode = resumedSteering
+    ? resumedSteering.requiresInput
+      ? "required-input"
+      : "automatic"
+    : undefined;
   try {
     const continuation = lease.entry?.continuation;
     if (continuation && lease.entry) {
       // Consume before dispatch so incomplete/error terminals cannot reuse stale state.
       lease.entry.continuation = undefined;
-      prepared = resolveResponsesContinuationRequest(continuation, fullRequest, {
-        // Accepted steering is already queued before our next input. Its continuation
-        // inherits effort; a new update here would be recorded before a user it never preceded.
-        allowNewReasoningUpdate: !lease.steeringContinuation,
-      });
+      prepared = resolveResponsesContinuationRequest(continuation, fullRequest, steeringMode);
     } else {
       prepared = {
         request: fullRequest,
@@ -413,7 +415,6 @@ export function createOpenAIResponsesWebSocketStream(params: {
   let terminalReceived = false;
   let released = false;
   let retainIterator = false;
-  const resumedSteering = lease.steeringContinuation;
   let deferredInput = false;
   let inputReplay: ResponsesInputReplay | undefined;
   if (resumedSteering) {

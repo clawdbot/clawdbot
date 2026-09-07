@@ -4,7 +4,7 @@ import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js"
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { OpenClawPluginNodeInvokePolicyContext } from "../plugins/types.js";
-import { ExecApprovalManager } from "./exec-approval-manager.js";
+import { createTestApprovalManager } from "./exec-approval-manager.test-support.js";
 import {
   applyPluginNodeInvokePolicy,
   type PluginNodeInvokePrivateTransport,
@@ -38,8 +38,10 @@ describe("private node policy transport", () => {
   beforeEach(resetPluginRuntimeStateForTest);
   afterEach(resetPluginRuntimeStateForTest);
 
-  it("uses the registered risk and approval policy without advertising the private capability", async () => {
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+  it("uses the registered risk and approval policy without advertising the private capability", async (testContext) => {
+    const manager = createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
+      approvalKind: "plugin",
+    });
     const reviewer = createOperatorClient();
     const handle = vi.fn(async (policyContext: OpenClawPluginNodeInvokePolicyContext) => {
       expect(policyContext.risk).toEqual({ level: "high", family: "fixture_mutation" });

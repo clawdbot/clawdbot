@@ -162,7 +162,10 @@ describe("worker turn launcher reclaimed placement", () => {
           throw new Error("unexpected workspace sync");
         }),
         reconcileWorkspace: vi.fn(async (request) => {
-          request.journal.commit(MANIFEST_REF);
+          if (request.source.kind !== "local") {
+            throw new Error("expected a local workspace source");
+          }
+          request.source.journal.commit(MANIFEST_REF);
           return {
             manifestRef: MANIFEST_REF,
             changed: false,
@@ -380,10 +383,10 @@ describe("worker turn launcher reclaimed placement", () => {
     const provider = createWorkerSessionTurnPlacementProvider({
       environments,
       placements,
-      resolveWorkspacePath: async () => {
+      resolveWorkspace: async () => {
         workspaceResolutionStarted.resolve();
         await resumeWorkspaceResolution.promise;
-        return root;
+        return { kind: "local", path: root };
       },
     });
     const uninstallPlacement = installSessionPlacementAdmissionProvider(provider);

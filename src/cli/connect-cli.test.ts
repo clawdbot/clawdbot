@@ -178,7 +178,8 @@ describe("connect cli", () => {
   it.skipIf(process.platform === "win32")(
     "rejects a socket target without removing it",
     async () => {
-      const root = tempDirs.make("openclaw-connect-target-socket-");
+      // Keep the Unix socket below Darwin's path limit even under a long test TMPDIR.
+      const root = tempDirs.make("openclaw-connect-target-socket-", "/tmp");
       const targetFile = path.join(root, "setup-code.sock");
       const server = net.createServer();
       await new Promise<void>((resolve, reject) => {

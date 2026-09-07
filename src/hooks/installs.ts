@@ -1,7 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // Hook install record helpers read and write installed hook metadata.
 import type { HookInstallRecord } from "../config/types.hooks.js";
-import { readConfigMachineState, updateConfigMachineState } from "../state/config-machine-state.js";
+import { updateConfigMachineState } from "../state/config-machine-state-write.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 
 /** Install record plus its canonical hook pack id. */

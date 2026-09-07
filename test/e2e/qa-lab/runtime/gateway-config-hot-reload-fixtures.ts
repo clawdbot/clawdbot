@@ -30,6 +30,7 @@ export type HotReloadConnection = {
   bootId: string;
   closes: number;
   hellos: number;
+  pluginSurfaceUrls: Record<string, string>;
   events: Array<{ event: string; payload?: unknown }>;
 };
 
@@ -37,6 +38,8 @@ export async function connectHotReloadClient(
   gateway: HotReloadGateway,
   options: {
     identity?: DeviceIdentity;
+    caps?: string[];
+    commands?: string[];
     onEvent?: (event: { event: string; payload?: unknown }) => void;
   } = {},
 ): Promise<HotReloadConnection> {
@@ -69,8 +72,8 @@ export async function connectHotReloadClient(
       platform: node ? "iOS" : process.platform,
       mode: node ? "node" : "backend",
       scopes: node ? [] : ["operator.admin", "operator.read", "operator.write", "operator.pairing"],
-      caps: node ? ["browser"] : undefined,
-      commands: node ? ["browser.proxy"] : undefined,
+      caps: node ? (options.caps ?? ["browser"]) : undefined,
+      commands: node ? (options.commands ?? ["browser.proxy"]) : undefined,
       onHelloOk: (hello) => {
         if (!hello.server.bootId) {
           finish(new Error("Gateway hello omitted bootId"));
@@ -78,6 +81,7 @@ export async function connectHotReloadClient(
         }
         connection.hellos += 1;
         connection.bootId = hello.server.bootId;
+        connection.pluginSurfaceUrls = hello.pluginSurfaceUrls ?? {};
         finish();
       },
       onConnectError: (error) => finish(error),
@@ -90,7 +94,14 @@ export async function connectHotReloadClient(
         options.onEvent?.(event);
       },
     });
-    const connection: HotReloadConnection = { client, bootId: "", closes: 0, hellos: 0, events };
+    const connection: HotReloadConnection = {
+      client,
+      bootId: "",
+      closes: 0,
+      hellos: 0,
+      pluginSurfaceUrls: {},
+      events,
+    };
     const timeout = setTimeout(() => finish(new Error("Gateway connection timed out")), 20_000);
     timeout.unref();
     connection.client.start();
@@ -102,7 +113,6 @@ export async function startHotReloadUpstreams(mockBaseUrl: string) {
   const githubRequests: number[] = [];
   const relayRequests: Array<{ route: string; signed: boolean }> = [];
   let faviconRequests = 0;
-  let toolTitleRequests = 0;
   let relayDelayMs = 0;
   const server = createServer((req, res) => {
     void (async () => {
@@ -143,7 +153,7 @@ export async function startHotReloadUpstreams(mockBaseUrl: string) {
       if (url.pathname === "/widget") {
         res.setHeader("content-type", "text/html");
         res.end(
-          '<!doctype html><title>Hot reload widget</title><p id="proof">Synthetic embedded page</p><script>document.body.dataset.scriptRan="yes"</script>',
+          '<!doctype html><title>Hot reload widget</title><p id="proof">Synthetic embedded page</p><button>Hot reload action</button><script>document.body.dataset.scriptRan="yes"</script>',
         );
         return;
       }
@@ -166,24 +176,7 @@ export async function startHotReloadUpstreams(mockBaseUrl: string) {
       for await (const chunk of req) {
         chunks.push(Buffer.from(chunk));
       }
-      let body = Buffer.concat(chunks).toString("utf8");
-      if (body.includes("HOT_RELOAD_TOOL_TITLE")) {
-        toolTitleRequests += 1;
-        const request = JSON.parse(body) as Record<string, unknown>;
-        request.input = [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: 'Reply exactly `{"titles":{"0":"Reviewed project notes"}}`',
-              },
-            ],
-          },
-        ];
-        delete request.instructions;
-        body = JSON.stringify(request);
-      }
+      const body = Buffer.concat(chunks).toString("utf8");
       const upstream = await fetch(`${mockBaseUrl}${url.pathname}${url.search}`, {
         method: req.method,
         headers: { "content-type": "application/json" },
@@ -210,9 +203,6 @@ export async function startHotReloadUpstreams(mockBaseUrl: string) {
     relayRequests,
     get faviconRequests() {
       return faviconRequests;
-    },
-    get toolTitleRequests() {
-      return toolTitleRequests;
     },
     setRelayDelay(ms: number) {
       relayDelayMs = ms;

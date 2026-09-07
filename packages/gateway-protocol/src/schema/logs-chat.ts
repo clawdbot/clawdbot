@@ -37,6 +37,7 @@ export const ChatHistoryParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   cursor: Type.Optional(Type.String()),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: CHAT_HISTORY_MAX_ENTRIES })),
+  maxBytes: Type.Optional(Type.Integer({ minimum: 1024 })),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),
   pendingBefore: Type.Optional(Type.Integer({ minimum: 1 })),
   inputRunIds: Type.Optional(
@@ -50,6 +51,18 @@ export const ChatHistoryParamsSchema = closedObject({
   sessionId: Type.Optional(NonEmptyString),
   maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 500_000 })),
 });
+
+/** Resolve a short chat link and fetch its first page under the same discovery policy. */
+export const ChatStartupParamsSchema = Type.Union([
+  ChatHistoryParamsSchema,
+  closedObject({
+    shortId: NonEmptyString,
+    slugHint: Type.Optional(NonEmptyString),
+    agentId: NonEmptyString,
+    limit: ChatHistoryParamsSchema.properties.limit,
+    maxBytes: ChatHistoryParamsSchema.properties.maxBytes,
+  }),
+]);
 
 /** Accepted input awaiting a turn, separate from canonical model history. */
 export const ChatPendingInputsPageSchema = closedObject({
@@ -311,11 +324,18 @@ export const ChatRunStartupPhaseSchema = Type.Union([
   Type.Literal("starting_model"),
 ]);
 
-/** Non-terminal run status emitted before assistant or tool activity becomes visible. */
+/** Transient working status; only the run owner publishes terminal failures. */
 export const ChatStatusEventSchema = closedObject({
   ...ChatEventBaseSchema,
   state: Type.Literal("status"),
   phase: ChatRunStartupPhaseSchema,
+  retry: Type.Optional(
+    closedObject({
+      attempt: Type.Integer({ minimum: 1, maximum: 10 }),
+      maxAttempts: Type.Integer({ minimum: 1, maximum: 10 }),
+      reason: Type.Literal("rate_limit"),
+    }),
+  ),
 });
 
 /** Incremental assistant output event; `replace` marks full-content refresh deltas. */
@@ -418,6 +438,7 @@ export const ChatEventSchema = Type.Union([
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
 export type ChatHistoryParams = Static<typeof ChatHistoryParamsSchema>;
+export type ChatStartupParams = Static<typeof ChatStartupParamsSchema>;
 export type ChatHistoryDeltaResult = Static<typeof ChatHistoryDeltaResultSchema>;
 export type ChatHistoryResetResult = Static<typeof ChatHistoryResetResultSchema>;
 export type ChatHistoryCursorResult = Static<typeof ChatHistoryCursorResultSchema>;

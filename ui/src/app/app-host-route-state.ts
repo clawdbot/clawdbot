@@ -5,6 +5,7 @@ import { selectRenderedRouteMatch } from "./router-outlet.ts";
 
 export type ShellRouteState = {
   routeId?: RouteId;
+  routeFailed?: boolean;
   location?: RouteLocation;
   committedRouteId?: RouteId;
   committedLocation?: RouteLocation;
@@ -28,7 +29,13 @@ export function selectShellRouteState(routerState: RouterState<RouteId>): ShellR
     ? sessionKeyFromRouteData(committedMatch.routeId, committedMatch.data)
     : undefined;
   return {
-    ...(match ? { routeId: match.routeId, location: match.location } : {}),
+    ...(match
+      ? {
+          routeId: match.routeId,
+          location: match.location,
+          routeFailed: match.status === "error" || match.status === "notFound",
+        }
+      : {}),
     ...(committedMatch
       ? { committedRouteId: committedMatch.routeId, committedLocation: committedMatch.location }
       : {}),

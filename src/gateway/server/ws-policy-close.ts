@@ -13,6 +13,9 @@ const policyMethods = new Set([
   "secrets.reload",
   "secrets.store.set",
   "secrets.store.delete",
+  "device.pair.remove",
+  "device.token.rotate",
+  "device.token.revoke",
 ]);
 type PolicyResponse = { readonly pending: boolean; hold: () => void; finish: () => void };
 type PolicyClientState = { pending: number; close?: () => void };

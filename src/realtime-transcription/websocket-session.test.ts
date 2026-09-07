@@ -494,18 +494,21 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     session.close();
   });
 
-  it("delivers graceful provider finals and sends the close signal only once", async () => {
+  it("delivers graceful provider finals before natural close and finalizes only once", async () => {
     const finalizedFrames: unknown[] = [];
     const transcripts: string[] = [];
+    const closed = createDeferred();
     let providerSocket: WebSocket | undefined;
     const server = await createRealtimeServer({
       onConnection: (socket) => {
         providerSocket = socket;
+        socket.once("close", () => closed.resolve());
       },
       onText: (payload) => {
         finalizedFrames.push(payload);
         if (finalizedFrames.length === 1) {
           providerSocket?.send(JSON.stringify({ text: "final provider transcript" }));
+          providerSocket?.close(1000, "finished");
         }
       },
     });
@@ -532,8 +535,8 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     session.close();
     session.close();
 
-    await vi.waitFor(() => expect(transcripts).toEqual(["final provider transcript"]));
-    await delay(20);
+    await withTestTimeout(closed.promise, 1_000, "Graceful provider close not received");
+    expect(transcripts).toEqual(["final provider transcript"]);
     expect(finalizedFrames).toEqual([{ type: "finalize" }]);
   });
 

@@ -15,6 +15,8 @@ import type { SlackThreadStarter } from "../thread.js";
 type SlackResolvedMessageContent = {
   rawBody: string;
   effectiveDirectMedia: SlackMediaResult[] | null;
+  commandSourceText: string;
+  mentionStripPatterns: string[];
 };
 
 const SLACK_MENTION_RESOLUTION_CONCURRENCY = 4;
@@ -191,6 +193,8 @@ export async function resolveSlackMessageContent(params: {
   const renderedMessageText = renderSlackUserMentions(textParts[0], renderedMentions);
   const renderedAttachmentText = renderSlackUserMentions(textParts[1], renderedMentions);
   const renderedBotAttachmentText = renderSlackUserMentions(textParts[2], renderedMentions);
+  const commandSourceText =
+    renderSlackUserMentions(normalizeOptionalString(params.message.text), renderedMentions) ?? "";
 
   const body =
     [renderedMessageText, renderedAttachmentText, renderedBotAttachmentText, mediaPlaceholder]
@@ -201,5 +205,10 @@ export async function resolveSlackMessageContent(params: {
     files: attachmentContent?.files,
     unavailableMediaCount: attachmentContent?.unavailableMediaCount ?? 0,
   });
-  return rawBody ? { rawBody, effectiveDirectMedia } : null;
+  const mentionStripPatterns = [...renderedMentions.values()].flatMap((rendered) =>
+    rendered ? [rendered] : [],
+  );
+  return rawBody
+    ? { rawBody, effectiveDirectMedia, commandSourceText, mentionStripPatterns }
+    : null;
 }

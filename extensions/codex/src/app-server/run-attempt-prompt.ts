@@ -5,6 +5,8 @@ import {
   formatErrorMessage,
   resolveAgentHarnessBeforePromptBuildResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { ImageContent } from "openclaw/plugin-sdk/llm";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildCodexSystemPromptReport,
   prependCodexOpenClawPromptContext,
@@ -14,6 +16,7 @@ import {
 } from "./attempt-context.js";
 import {
   fitCodexProjectedContextForTurnStart,
+  CodexContextAttachmentError,
   projectContextEngineAssemblyForCodex,
   type CodexProjectedContextRange,
 } from "./context-engine-projection.js";
@@ -76,13 +79,55 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     sandbox,
   } = connection;
   const { toolBridge } = attemptTools;
-  const applyFreshThreadContinuityProjection = () => {
-    const projection = projectContextEngineAssemblyForCodex({
+  let contextImages: ImageContent[] = [];
+  const currentUserTurnIdempotencyKey = params.userTurnTranscriptRecorder?.message?.idempotencyKey;
+  const assertProjectionCurrent = () => {
+    params.hostCapabilities.assertActive();
+    connection.assertCurrent();
+    connection.runAbortController.signal.throwIfAborted();
+  };
+  const prepareFileContext: NonNullable<
+    Parameters<typeof projectContextEngineAssemblyForCodex>[0]["prepareFileContext"]
+  > = async (message, maxChars) => {
+    // Older hosts retain ordinary text history, but cannot claim restored attachments.
+    const prepare = params.hostCapabilities.prepareContextMedia;
+    if (!prepare) {
+      const media = asOptionalRecord(Reflect.get(message, "__openclaw"))?.media;
+      if (
+        (Array.isArray(media) && media.length) ||
+        (message.role === "user" &&
+          Array.isArray(message.content) &&
+          message.content.some((part) => part.type === "image"))
+      ) {
+        throw new CodexContextAttachmentError(
+          "Saved attachments require a newer OpenClaw host. Update the Gateway and Codex plugin together, then retry.",
+        );
+      }
+      return { images: [] };
+    }
+    try {
+      const files = await prepare({ message, maxChars });
+      assertProjectionCurrent();
+      return files;
+    } catch (error) {
+      assertProjectionCurrent();
+      throw new CodexContextAttachmentError(
+        "Saved attachment preparation failed. Retry the request after checking the attachment source.",
+        { cause: error },
+      );
+    }
+  };
+  const applyFreshThreadContinuityProjection = async () => {
+    const projection = await projectContextEngineAssemblyForCodex({
       assembledMessages: historyState.messages,
       originalHistoryMessages: historyState.messages,
       prompt: params.prompt,
       maxRenderedContextChars: codexContinuityProjectionMaxChars,
+      prepareFileContext,
+      currentUserTurnIdempotencyKey,
     });
+    assertProjectionCurrent();
+    contextImages = projection.images ?? [];
     promptState.promptText = projection.promptText;
     promptState.promptContextRange = projection.promptContextRange;
     promptState.prePromptMessageCount = projection.prePromptMessageCount;
@@ -123,14 +168,6 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     const contextEngineProjection = readContextEngineThreadBootstrapProjection(
       assembled.contextProjection,
     );
-    const projection = projectContextEngineAssemblyForCodex({
-      assembledMessages: assembled.messages,
-      originalHistoryMessages: historyState.messages,
-      prompt: params.prompt,
-      systemPromptAddition: assembled.systemPromptAddition,
-      maxRenderedContextChars: codexContextProjectionMaxChars,
-      toolPayloadMode: contextEngineProjection ? "preserve" : "elide",
-    });
     const projectionDecision = contextEngineProjection
       ? resolveContextEngineBootstrapProjectionDecision({
           startupBinding: decisionStartupBinding,
@@ -143,6 +180,18 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
           legacyDynamicToolsFingerprint: codexLegacyDynamicToolsFingerprint(toolBridge.specs),
         })
       : { project: true, reason: "per-turn-projection" };
+    const projection = await projectContextEngineAssemblyForCodex({
+      assembledMessages: assembled.messages,
+      originalHistoryMessages: historyState.messages,
+      prompt: params.prompt,
+      systemPromptAddition: assembled.systemPromptAddition,
+      maxRenderedContextChars: codexContextProjectionMaxChars,
+      toolPayloadMode: contextEngineProjection ? "preserve" : "elide",
+      ...(projectionDecision.project ? { prepareFileContext } : {}),
+      currentUserTurnIdempotencyKey,
+    });
+    assertProjectionCurrent();
+    contextImages = projectionDecision.project ? (projection.images ?? []) : [];
     const decisionBinding = decisionStartupBinding;
     embeddedAgentLog.info("codex app-server context-engine projection decision", {
       sessionId: params.sessionId,
@@ -179,6 +228,10 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         runtime.nativeToolSurfaceEnabled ? mutable.startupBinding : undefined,
       );
     } catch (assembleErr) {
+      if (assembleErr instanceof CodexContextAttachmentError) {
+        throw assembleErr;
+      }
+      assertProjectionCurrent();
       embeddedAgentLog.warn("context engine assemble failed; using Codex baseline prompt", {
         error: formatErrorMessage(assembleErr),
       });
@@ -207,7 +260,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
           flattenCodexDynamicToolFunctions(toolBridge.availableSpecs)
             .map((tool) => tool.name)
             .filter(isNonEmptyString),
-        assertActive: params.hostCapabilities.assertActive,
+        assertActive: connection.assertCurrent,
       },
     });
     return result;
@@ -363,26 +416,30 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       );
     });
   };
-  const applyResumeStaleBindingContinuityProjection = (
+  const applyResumeStaleBindingContinuityProjection = async (
     binding: NonNullable<typeof mutable.startupBinding>,
   ) => {
     const newerVisibleMessages = selectNewerVisibleHistoryAfterBinding(binding);
     if (newerVisibleMessages.length === 0) {
       return false;
     }
-    const projection = projectContextEngineAssemblyForCodex({
+    const projection = await projectContextEngineAssemblyForCodex({
       assembledMessages: newerVisibleMessages,
       originalHistoryMessages: historyState.messages,
       prompt: params.prompt,
       maxRenderedContextChars: codexContinuityProjectionMaxChars,
+      prepareFileContext,
+      currentUserTurnIdempotencyKey,
     });
+    assertProjectionCurrent();
+    contextImages = projection.images ?? [];
     promptState.promptText = projection.promptText;
     promptState.promptContextRange = projection.promptContextRange;
     promptState.prePromptMessageCount = projection.prePromptMessageCount;
     promptState.noEngineContinuityProjectionApplied = true;
     return true;
   };
-  const precomputeNoContextEngineStaleBindingProjection = () => {
+  const precomputeNoContextEngineStaleBindingProjection = async () => {
     promptState.precomputedStaleBindingContinuityProjectionApplied = false;
     promptState.staleBindingContinuityForcedFreshStart = false;
     const binding = mutable.startupBinding;
@@ -393,11 +450,11 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       promptState.inactiveThreadBootstrapBindingForcedFreshStart = true;
       return false;
     }
-    const projected = applyResumeStaleBindingContinuityProjection(binding);
+    const projected = await applyResumeStaleBindingContinuityProjection(binding);
     promptState.precomputedStaleBindingContinuityProjectionApplied = projected;
     return projected;
   };
-  const applyNoContextEngineContinuityProjection = (
+  const applyNoContextEngineContinuityProjection = async (
     action: "started" | "resumed" | "forked",
     binding?: NonNullable<typeof mutable.startupBinding>,
   ) => {
@@ -425,12 +482,12 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       return applyResumeStaleBindingContinuityProjection(binding);
     }
     if (action === "started") {
-      applyFreshThreadContinuityProjection();
+      await applyFreshThreadContinuityProjection();
       return true;
     }
     return false;
   };
-  if (precomputeNoContextEngineStaleBindingProjection()) {
+  if (await precomputeNoContextEngineStaleBindingProjection()) {
     await rebuildCodexPromptBuildFromCurrentProjection();
   }
   const rotateStartupBindingForProjectedTurn = async () => {
@@ -441,6 +498,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     const previousThreadId = binding.threadId;
     const hadInactiveThreadBootstrapBinding = isInactiveThreadBootstrapBinding(binding);
     const startupBindingResolution = await rotateOversizedCodexAppServerStartupBinding({
+      assertCurrent: connection.assertCurrent,
       binding,
       bindingStore,
       identity: bindingIdentity,
@@ -465,13 +523,17 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       promptState.precomputedStaleBindingContinuityProjectionApplied &&
       !promptState.inactiveThreadBootstrapBindingForcedFreshStart;
     if (promptState.staleBindingContinuityForcedFreshStart) {
-      applyFreshThreadContinuityProjection();
+      await applyFreshThreadContinuityProjection();
     }
     if (activeContextEngine) {
       promptState.contextEngineProjection = undefined;
       try {
         await applyActiveContextEngineProjection(undefined);
       } catch (assembleErr) {
+        if (assembleErr instanceof CodexContextAttachmentError) {
+          throw assembleErr;
+        }
+        assertProjectionCurrent();
         embeddedAgentLog.warn("context engine assemble failed; using Codex baseline prompt", {
           error: formatErrorMessage(assembleErr),
         });
@@ -498,6 +560,9 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   });
   return {
     context,
+    get contextImages() {
+      return contextImages;
+    },
     codexModelInputHistoryMessages,
     turnState,
     buildRenderedCodexDeveloperInstructions,

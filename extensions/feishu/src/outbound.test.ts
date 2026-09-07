@@ -3583,19 +3583,13 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
     expectFeishuResult(result, "text_msg");
   });
 
-  // Regression for #112244 (fourteenth-review P1): the direct `send` action
-  // stamps the propagation marker on channelData.feishu before routing an
-  // attachment through sendPayload. The document-comment sendPayload branch
-  // preserves the marker (so the fallback helper requests propagation), but a
-  // comment target must NOT throw on the strength of that marker alone: the
-  // comment-target media-link fallback renders the media URL as a visible
-  // clickable link, which is established main behavior and NOT the silent
-  // text-only `ok:true` drop issue #112244 removes. Propagation is reserved for
-  // actual media-upload failures (the `sendMediaFeishu` catch), which a comment
-  // target never reaches because it never uploads. With the marker set, the
-  // comment target still renders the visible media-link fallback and returns a
-  // success receipt — the same outcome as the marker-absent case below.
-  it("renders the visible media-link fallback on a document-comment target even when the propagation marker is set", async () => {
+  it.each([
+    [
+      "renders the visible media-link fallback on a document-comment target even when the propagation marker is set",
+      true,
+    ],
+    ["still degrades a comment attachment to text when the propagation marker is absent", false],
+  ] as const)("%s", async (_name, propagate) => {
     const result = await feishuOutbound.sendPayload?.({
       cfg: emptyConfig,
       to: "comment:docx:doxcn123:7623358762119646411",
@@ -3604,37 +3598,19 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
       payload: {
         text: "see attachment",
         mediaUrl: "https://example.com/pipeline.png",
-        channelData: {
-          feishu: { [FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER]: true },
-        },
+        ...(propagate
+          ? {
+              channelData: {
+                feishu: { [FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER]: true },
+              },
+            }
+          : {}),
       },
     });
 
-    // The media URL is delivered as a visible comment text link (not a silent
-    // text-only ok), and a success receipt is returned — comment targets keep
-    // their established media-link fallback regardless of the propagation flag.
     expect(commentThreadParams()?.content).toBe("https://example.com/pipeline.png");
     expectFeishuResult(result, "reply_msg");
-    // No media upload is attempted for a comment target.
     expect(sendMediaFeishuMock).not.toHaveBeenCalled();
-  });
-
-  it("still degrades a comment attachment to text when the propagation marker is absent", async () => {
-    const result = await feishuOutbound.sendPayload?.({
-      cfg: emptyConfig,
-      to: "comment:docx:doxcn123:7623358762119646411",
-      text: "see attachment",
-      accountId: "main",
-      payload: {
-        text: "see attachment",
-        mediaUrl: "https://example.com/pipeline.png",
-      },
-    });
-
-    // Default comment behavior is unchanged: the media link is rendered as a
-    // fallback text comment and a success receipt is returned.
-    expect(commentThreadParams()?.content).toBe("https://example.com/pipeline.png");
-    expectFeishuResult(result, "reply_msg");
   });
 });
 
@@ -3680,6 +3656,130 @@ describe("feishuOutbound.sendMedia renderMode", () => {
     expect(sendMessageCall()?.text).toBe("caption");
     expect(sendMessageCall()?.replyToMessageId).toBe("om_thread_1");
     expect(sendMessageCall()?.accountId).toBe("main");
+  });
+});
+
+describe("feishuOutbound table-limit routing", () => {
+  beforeEach(() => {
+    resetOutboundMocks();
+  });
+
+  function makeTableText(count: number): string {
+    return Array.from({ length: count }, (_, i) => `| a${i} | b${i} |\n| - | - |\n| 1 | 2 |`).join(
+      "\n\n",
+    );
+  }
+
+  it("routes 5 markdown tables to structured card when renderMode=auto", async () => {
+    const text = makeTableText(5);
+    await sendText({ cfg: emptyConfig, to: "chat_1", text, accountId: "main" });
+
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(expect.objectContaining({ text }));
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to post mode for 6 markdown tables when renderMode=auto", async () => {
+    const text = makeTableText(6);
+    await sendText({ cfg: emptyConfig, to: "chat_1", text, accountId: "main" });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalled();
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to post mode for 6 tables even with explicit renderMode=card", async () => {
+    const text = makeTableText(6);
+    await sendText({ cfg: cardRenderConfig, to: "chat_1", text, accountId: "main" });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalled();
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("excludes tables inside code blocks from the table count", async () => {
+    const text = "```\n| a | b |\n| - | - |\n| 1 | 2 |\n```\n\n" + makeTableText(5);
+    await sendText({ cfg: emptyConfig, to: "chat_1", text, accountId: "main" });
+
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(expect.objectContaining({ text }));
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to post mode for 6 pipeless GFM tables", async () => {
+    const text = Array.from({ length: 6 }, (_, i) => `a${i} | b${i}\n--- | ---\n1 | 2`).join(
+      "\n\n",
+    );
+    await sendText({ cfg: emptyConfig, to: "chat_1", text, accountId: "main" });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalled();
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("feishuOutbound presentation card table-limit", () => {
+  beforeEach(() => {
+    resetOutboundMocks();
+  });
+
+  function makeTableText(count: number): string {
+    return Array.from({ length: count }, (_, i) => `| a${i} | b${i} |\n| - | - |\n| 1 | 2 |`).join(
+      "\n\n",
+    );
+  }
+
+  function makeActionPresentation(): MessagePresentation {
+    return {
+      title: "Confirm",
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [{ label: "Confirm", action: { type: "command", command: "/ok" } }],
+        },
+      ],
+    };
+  }
+
+  it("refuses the presentation card and falls back to post mode for 6 markdown tables", async () => {
+    const text = makeTableText(6);
+    await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text,
+      accountId: "main",
+      payload: { text, presentation: makeActionPresentation() },
+    });
+
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).toHaveBeenCalled();
+    expect(sendMessageCall()?.text).toContain("```");
+  });
+
+  it("still builds the presentation card for 5 markdown tables", async () => {
+    const text = makeTableText(5);
+    await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text,
+      accountId: "main",
+      payload: { text, presentation: makeActionPresentation() },
+    });
+
+    expect(sendCardFeishuMock).toHaveBeenCalled();
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses the card when a presentation text block embeds 6 tables", async () => {
+    const presentation: MessagePresentation = {
+      title: "Report",
+      blocks: [{ type: "text", text: makeTableText(6) }],
+    };
+    await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "",
+      accountId: "main",
+      payload: { text: "", presentation },
+    });
+
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).toHaveBeenCalled();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -191,6 +191,7 @@ function resolveSkillBinTrustEntries(bins: string[], pathEnv: string): SkillBinT
 class SkillBinsCache implements SkillBinsProvider {
   private bins: SkillBinTrustEntry[] = [];
   private lastRefresh = 0;
+  private refreshInFlight: Promise<void> | undefined;
   private readonly ttlMs = 90_000;
 
   constructor(
@@ -200,7 +201,16 @@ class SkillBinsCache implements SkillBinsProvider {
 
   async current(force = false): Promise<SkillBinTrustEntry[]> {
     if (force || Date.now() - this.lastRefresh > this.ttlMs) {
-      await this.refresh();
+      const refresh = this.refreshInFlight ?? this.refresh();
+      this.refreshInFlight = refresh;
+      try {
+        await refresh;
+      } finally {
+        // An older waiter must not clear a newer retry's in-flight promise.
+        if (this.refreshInFlight === refresh) {
+          this.refreshInFlight = undefined;
+        }
+      }
     }
     return this.bins;
   }

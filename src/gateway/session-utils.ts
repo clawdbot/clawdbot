@@ -1,12 +1,8 @@
-export {
-  resolveSessionHistoryTranscriptPathAsync,
-  resolveSessionTranscriptCandidates,
-} from "./session-utils.fs.js";
+export { resolveSessionTranscriptCandidates } from "./session-utils.fs.js";
 export { resolveSessionStoreKey } from "./session-store-key.js";
 export type {
   GatewaySessionRow,
   SessionsListResult,
-  SessionsPatchResult,
   SessionsPreviewEntry,
   SessionsPreviewResult,
 } from "./session-utils.types.js";
@@ -31,4 +27,3 @@ export { loadGatewaySessionLifecycleSnapshot } from "./session-utils-search.js";
 export { buildGatewaySessionInfo } from "./session-utils-search.js";
 export { filterAndSortSessionEntries } from "./session-utils-list.js";
 export { listSessionsFromStoreAsync } from "./session-utils-list.js";
-export { resolveSessionsListDefaultsAgentId } from "./session-utils-list.js";

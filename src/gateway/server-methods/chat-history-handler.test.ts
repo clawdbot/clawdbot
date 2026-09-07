@@ -7,6 +7,7 @@ import {
   appendTranscriptMessage,
   bindSessionPendingInputSources,
   stageSessionPendingInput,
+  patchSessionEntryCore,
   updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -21,6 +22,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { connectChatMetadataAccount } from "./chat-metadata-runtime.test-support.js";
+import { identifiedClient } from "./sessions-read-cache.test-support.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
 function createPersonalMetadataFixture() {
@@ -88,8 +90,52 @@ function createPersonalMetadataFixture() {
 }
 
 describe("chat history model selection defaults", () => {
+  it("keeps a stored literal global conversation separate from main in per-sender scope", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const cfg = {
+        session: { scope: "per-sender" },
+        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+      } satisfies OpenClawConfig;
+      await state.writeConfig(cfg);
+      for (const agentId of ["ops", "research"]) {
+        await upsertSessionEntryCore(
+          { agentId, sessionKey: "global" },
+          { sessionId: `global-${agentId}`, updatedAt: 1 },
+        );
+      }
+      await upsertSessionEntryCore(
+        { agentId: "research", sessionKey: "agent:research:main" },
+        { sessionId: "main-research", updatedAt: 1 },
+      );
+      const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+      const client = identifiedClient("literal-global-operator");
+      client.connect.scopes = ["operator.admin"];
+      for (const [sessionKey, sessionId] of [
+        ["global", "global-research"],
+        ["agent:research:main", "main-research"],
+      ]) {
+        const respond = vi.fn<RespondFn>();
+        await expectDefined(
+          chatHistoryHandlers["chat.history"],
+          "history handler",
+        )({
+          params: { sessionKey, agentId: "research" },
+          context,
+          req: { type: "req", id: "literal-global", method: "chat.history" },
+          client,
+          isWebchatConnect: () => false,
+          respond,
+        });
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ sessionKey, sessionId }),
+        );
+      }
+    });
+  });
+
   it.each(["chat.history", "chat.startup"] as const)(
-    "%s projects the non-primary agent's resolved selection target",
+    "%s keeps selection session-only for an agent with an explicit default",
     async (method) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const cfg = {
@@ -128,7 +174,118 @@ describe("chat history model selection defaults", () => {
         });
 
         const response = expectDefined(asOptionalRecord(result), "history response");
-        expect(response.defaults).toMatchObject({ modelSelectionTarget: "agent" });
+        expect(response.defaults).toMatchObject({ modelSelectionTarget: "session" });
+      });
+    },
+  );
+});
+
+describe("chat history sharing projection", () => {
+  it.each(["chat.history", "chat.startup"] as const)(
+    "%s carries current caller sharing controls on sessionInfo",
+    async (method) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const scope = { agentId: "main", sessionKey: "agent:main:sharing-history" };
+        await upsertSessionEntryCore(scope, {
+          sessionId: "sharing-history",
+          updatedAt: Date.now(),
+          visibility: "read-only",
+          createdActor: { type: "human", source: "profile", id: "owner" },
+        });
+        for (const role of ["owner", "admin", "viewer"] as const) {
+          const client = identifiedClient(role);
+          if (role === "admin") {
+            client.connect.scopes = ["operator.admin"];
+          }
+          const respond = vi.fn<RespondFn>();
+          await expectDefined(
+            chatHistoryHandlers[method],
+            "history handler",
+          )({
+            params: scope,
+            client,
+            context: createDirectChatContext(),
+            respond,
+            req: { type: "req", id: "sharing-history", method },
+            isWebchatConnect: () => false,
+          });
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({
+              sessionInfo: expect.objectContaining({
+                sessionId: "sharing-history",
+                sharingRole: role,
+                visibility: "read-only",
+              }),
+            }),
+          );
+        }
+      });
+    },
+  );
+
+  it.each(["chat.history", "chat.startup"] as const)(
+    "%s refreshes sharing after startup work and rejects a replaced session",
+    async (method) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const scope = { agentId: "main", sessionKey: "agent:main:sharing-history-race" };
+        await upsertSessionEntryCore(scope, {
+          sessionId: "sharing-history-race",
+          updatedAt: Date.now(),
+          visibility: "shared",
+          createdActor: { type: "human", source: "profile", id: "owner" },
+        });
+        const client = identifiedClient("viewer");
+        client.connect.scopes = ["operator.admin"];
+        const readChatStartupProjection = vi.fn(async () => {
+          client.connect.scopes = ["operator.read", "operator.write"];
+          await patchSessionEntryCore(scope, () => ({ visibility: "read-only" }));
+          return undefined;
+        });
+        const context = createDirectChatContext({ readChatStartupProjection });
+        const call = async () => {
+          const respond = vi.fn<RespondFn>();
+          await expectDefined(
+            chatHistoryHandlers[method],
+            "history handler",
+          )({
+            params: scope,
+            client,
+            context,
+            respond,
+            req: { type: "req", id: "sharing-history-race", method },
+            isWebchatConnect: () => false,
+          });
+          return respond;
+        };
+        expect(await call()).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            sessionInfo: expect.objectContaining({
+              sharingRole: "viewer",
+              visibility: "read-only",
+            }),
+          }),
+        );
+        readChatStartupProjection.mockImplementationOnce(async () => {
+          await patchSessionEntryCore(scope, () => ({ visibility: "draft" }));
+          return undefined;
+        });
+        expect(await call()).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "INVALID_REQUEST" }),
+        );
+        await patchSessionEntryCore(scope, () => ({ visibility: "read-only" }));
+        readChatStartupProjection.mockImplementationOnce(async () => {
+          await patchSessionEntryCore(scope, () => ({ sessionId: "replacement-history" }));
+          return undefined;
+        });
+        expect(await call()).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
+        );
       });
     },
   );

@@ -1,19 +1,11 @@
 import SwiftUI
 
-enum SettingsLayout {
-    static let sidebarWidth: CGFloat = 250
-    static let detailHorizontalPadding: CGFloat = 22
-    static let detailVerticalPadding: CGFloat = 18
-    static let nestedSidebarWidth: CGFloat = 260
-    static let detailBottomPadding: CGFloat = 16
-}
-
 extension View {
     func settingsDetailContent() -> some View {
         self
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 4)
-            .padding(.bottom, SettingsLayout.detailBottomPadding)
+            .padding(.bottom, 16)
     }
 }
 
@@ -23,10 +15,6 @@ enum SettingsTextValue: ExpressibleByStringLiteral {
 
     init(stringLiteral value: String) {
         self = .localized(LocalizedStringKey(value))
-    }
-
-    static func localized(_ value: String) -> Self {
-        .localized(LocalizedStringKey(value))
     }
 
     var text: Text {
@@ -133,27 +121,6 @@ struct SettingsCardRow<Content: View>: View {
                 Divider()
                     .padding(.leading, 14)
             }
-        }
-    }
-}
-
-struct SettingsCardToggleRow: View {
-    let title: SettingsTextValue
-    let subtitle: SettingsTextValue?
-    @Binding var binding: Bool
-    var showsDivider = true
-
-    var body: some View {
-        SettingsCardRow(
-            title: self.title,
-            subtitle: self.subtitle,
-            showsDivider: self.showsDivider)
-        {
-            Toggle(isOn: self.$binding) {
-                self.title.text
-            }
-            .labelsHidden()
-            .toggleStyle(.switch)
         }
     }
 }

@@ -25,6 +25,12 @@ export type NativeI18nSite = {
   path: string;
 };
 
+type NativeInterpolation = {
+  start: number;
+  end: number;
+  value: string;
+};
+
 type Candidate = NativeI18nSite & {
   line: number;
   source: string;
@@ -282,7 +288,7 @@ export function isConditionalBranchIdentifier(source: string): boolean {
   return true;
 }
 
-function isTranslatableCandidate(source: string, kind: string): boolean {
+function isTranslatableCandidate(source: string, kind: string, literalSource: string): boolean {
   if (BUILD_SETTING_RE.test(source)) {
     BUILD_SETTING_RE.lastIndex = 0;
     return false;
@@ -292,7 +298,13 @@ function isTranslatableCandidate(source: string, kind: string): boolean {
     return false;
   }
   const isDirectUiText = kind.startsWith("ui-") || kind.startsWith("resource-");
-  if (!isDirectUiText && (/^[a-z0-9_.:/$-]+$/u.test(source) || /^[A-Z0-9_.:/$-]+$/u.test(source))) {
+  // Interpolation variables are not copy. Require a literal identifier separator
+  // before filtering their surroundings so compact prose such as "\(hours)h" remains.
+  const identifierSource = /[.:/_-]/u.test(literalSource) ? literalSource : source;
+  if (
+    !isDirectUiText &&
+    (/^[a-z0-9_.:/$-]+$/u.test(identifierSource) || /^[A-Z0-9_.:/$-]+$/u.test(identifierSource))
+  ) {
     return false;
   }
   if (kind === "conditional-branch" && isConditionalBranchIdentifier(source)) {
@@ -307,7 +319,7 @@ function isTranslatableCandidate(source: string, kind: string): boolean {
 function hasQuotedConditionalSwiftInterpolation(source: string): boolean {
   return (
     extractSwiftInterpolations(source)?.some(
-      (interpolation) =>
+      ({ value: interpolation }) =>
         /\?\s*"((?:\\.|[^"\\])*)"\s*:\s*"((?:\\.|[^"\\])*)"/u.test(interpolation) ||
         /\bif\b[\s\S]*"((?:\\.|[^"\\])*)"[\s\S]*\belse\b[\s\S]*"((?:\\.|[^"\\])*)"/u.test(
           interpolation,
@@ -316,8 +328,8 @@ function hasQuotedConditionalSwiftInterpolation(source: string): boolean {
   );
 }
 
-function extractSwiftInterpolations(source: string): string[] | null {
-  const values: string[] = [];
+function extractSwiftInterpolations(source: string): NativeInterpolation[] | null {
+  const values: NativeInterpolation[] = [];
   for (let index = 0; index < source.length; index += 1) {
     if (source[index] !== "\\" || source[index + 1] !== "(") {
       continue;
@@ -339,7 +351,7 @@ function extractSwiftInterpolations(source: string): string[] | null {
       } else if (!quoted && character === ")") {
         depth -= 1;
         if (depth === 0) {
-          values.push(source.slice(start, index + 1));
+          values.push({ start, end: index + 1, value: source.slice(start, index + 1) });
           break;
         }
       }
@@ -351,8 +363,12 @@ function extractSwiftInterpolations(source: string): string[] | null {
   return values;
 }
 
-function extractKotlinInterpolations(source: string): string[] | null {
-  const values = [...source.matchAll(/\$[A-Za-z_][A-Za-z0-9_]*/gu)].map((match) => match[0]);
+function extractKotlinInterpolations(source: string): NativeInterpolation[] | null {
+  const values = [...source.matchAll(/\$[A-Za-z_][A-Za-z0-9_]*/gu)].map((match) => ({
+    start: match.index,
+    end: match.index + match[0].length,
+    value: match[0],
+  }));
   for (let index = 0; index < source.length; index += 1) {
     if (source[index] !== "$" || source[index + 1] !== "{") {
       continue;
@@ -365,7 +381,7 @@ function extractKotlinInterpolations(source: string): string[] | null {
       } else if (source[index] === "}") {
         depth -= 1;
         if (depth === 0) {
-          values.push(source.slice(start, index + 1));
+          values.push({ start, end: index + 1, value: source.slice(start, index + 1) });
           break;
         }
       }
@@ -713,8 +729,12 @@ function enclosingCallName(source: string, offset: number): string | null {
 }
 
 function structuralTokenSignature(source: string): string {
-  const swift = extractSwiftInterpolations(source)?.toSorted();
-  const kotlin = extractKotlinInterpolations(source)?.toSorted();
+  const swift = extractSwiftInterpolations(source)
+    ?.map(({ value }) => value)
+    .toSorted();
+  const kotlin = extractKotlinInterpolations(source)
+    ?.map(({ value }) => value)
+    .toSorted();
   const nativeFormat = [...source.matchAll(NATIVE_FORMAT_RE)].map((match) => match[0]).toSorted();
   const buildSettings = (source.match(BUILD_SETTING_RE) ?? []).toSorted();
   const lineBreaks = (source.match(/\n/gu) ?? []).length;
@@ -745,17 +765,19 @@ function addCandidate(
   line: number,
 ) {
   const normalized = normalizeSource(decodeLiteral(source, kind));
-  if (!normalized.trim() || !/\p{L}/u.test(normalized)) {
+  if (normalized.length > 500 || !normalized.trim() || !/\p{L}/u.test(normalized)) {
     return;
   }
-  if (!isTranslatableCandidate(normalized, kind)) {
+  const swift = extractSwiftInterpolations(normalized);
+  const kotlin = extractKotlinInterpolations(normalized);
+  if (swift === null || kotlin === null) {
     return;
   }
-  if (
-    normalized.length > 500 ||
-    extractSwiftInterpolations(normalized) === null ||
-    extractKotlinInterpolations(normalized) === null
-  ) {
+  const literalSource = normalized.split("");
+  for (const { start, end } of surface === "apple" ? swift : kotlin) {
+    literalSource.fill("$", start, end);
+  }
+  if (!isTranslatableCandidate(normalized, kind, literalSource.join(""))) {
     return;
   }
   entries.push({ kind, line, path: repoPath, source: normalized, surface });

@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
-import { createSessionCapability } from "./index.ts";
+import { createTestSessionCapability } from "./session-capability.test-support.ts";
 
 describe("gateway-owned sidebar section order", () => {
   it("sends and publishes the order", async () => {
@@ -35,7 +35,7 @@ describe("gateway-owned sidebar section order", () => {
       throw new Error(`Unexpected request: ${method}`);
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const sessions = createSessionCapability({
+    const sessions = createTestSessionCapability({
       snapshot: {
         client,
         phase: "connected",
