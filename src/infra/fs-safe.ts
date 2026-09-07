@@ -3,6 +3,7 @@ import "./fs-safe-defaults.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { ensureDirectoryWithinRoot, findExistingAncestor } from "@openclaw/fs-safe/advanced";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { writeExternalFileWithinRoot as writeExternalFileWithinRootBase } from "@openclaw/fs-safe/output";
 import {
   root as fsSafeRoot,
@@ -12,7 +13,8 @@ import {
 } from "@openclaw/fs-safe/root";
 import { writeOwnedTempFile } from "./owned-temp-file.js";
 
-export { FsSafeError, type FsSafeErrorCode } from "@openclaw/fs-safe/errors";
+export { FsSafeError };
+export type { FsSafeErrorCode } from "@openclaw/fs-safe/errors";
 export {
   assertAbsolutePathInput,
   canonicalPathFromExistingAncestor,
@@ -64,8 +66,65 @@ export { withTimeout } from "@openclaw/fs-safe/advanced";
 // new Root.walk capability core-only until a dedicated plugin contract is approved.
 export type Root = Omit<FsSafeRoot, "walk">;
 
+const PINNED_WRITE_CATCH_ALL_MESSAGE = "path is not a regular file under root";
+
+const PINNED_WRITE_ERRNO_MESSAGES = new Map<string, string>([
+  ["EACCES", "permission denied"],
+  ["ENOSPC", "no space left on device"],
+  ["EPERM", "permission denied"],
+  ["EROFS", "read-only filesystem"],
+]);
+
+function nodeErrnoCode(error: unknown): string | undefined {
+  if (!(error instanceof Error)) {
+    return undefined;
+  }
+  const code = (error as NodeJS.ErrnoException).code;
+  return typeof code === "string" ? code : undefined;
+}
+
+// fs-safe collapses every unrecognized pinned-write failure into one fixed path
+// assertion, so an EACCES on an ordinary in-root file reads as a path problem and
+// sends callers hunting for symlinks (#115920). Name the errno fs-safe already kept
+// on `cause`; keep the FsSafeError code because callers branch on `invalid-path`.
+function describePinnedWriteError(error: unknown): FsSafeError | undefined {
+  if (!(error instanceof FsSafeError) || error.message !== PINNED_WRITE_CATCH_ALL_MESSAGE) {
+    return undefined;
+  }
+  const errno = nodeErrnoCode(error.cause);
+  if (!errno) {
+    return undefined;
+  }
+  const described = PINNED_WRITE_ERRNO_MESSAGES.get(errno) ?? PINNED_WRITE_CATCH_ALL_MESSAGE;
+  return new FsSafeError(error.code, `${described} (${errno})`, {
+    cause: error.cause,
+    details: error.details,
+  });
+}
+
+async function runPinnedWrite(write: () => Promise<void>): Promise<void> {
+  try {
+    await write();
+  } catch (error) {
+    const described = describePinnedWriteError(error);
+    if (described) {
+      throw described;
+    }
+    throw error;
+  }
+}
+
 export async function root(rootDir: string, defaults?: RootDefaults): Promise<Root> {
-  return await fsSafeRoot(rootDir, defaults);
+  const created = await fsSafeRoot(rootDir, defaults);
+  // writeJson/createJson dispatch through `this.write`/`this.create`, so overriding
+  // the two write entry points on the prototype chain covers the JSON forms too.
+  const overrides: Pick<FsSafeRoot, "create" | "write"> = {
+    create: async (relativePath, data, options) =>
+      await runPinnedWrite(async () => await created.create(relativePath, data, options)),
+    write: async (relativePath, data, options) =>
+      await runPinnedWrite(async () => await created.write(relativePath, data, options)),
+  };
+  return Object.create(created, Object.getOwnPropertyDescriptors(overrides)) as Root;
 }
 
 export type ExternalFileWriteOptions = {
@@ -155,7 +214,9 @@ export async function writeFileWithinRoot(params: {
   encoding?: BufferEncoding;
   mkdir?: boolean;
 }): Promise<void> {
-  const fsRoot = await fsSafeRoot(params.rootDir);
+  // Public Plugin SDK entry point: take the wrapped root so SDK callers get the
+  // same errno-bearing write failure as `root(...).write(...)`.
+  const fsRoot = await root(params.rootDir);
   await fsRoot.write(params.relativePath, params.data, {
     encoding: params.encoding,
     mkdir: params.mkdir,
