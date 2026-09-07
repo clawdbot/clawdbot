@@ -3,6 +3,7 @@
 // server standing in for the Telegram Bot API. Observes actual TCP sockets.
 import { createServer, type Server } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 let sendMessageTelegram: typeof import("./send.js").sendMessageTelegram;
@@ -14,9 +15,7 @@ describe("telegram transport cache eviction over real sockets", () => {
   const liveSockets = new Set<Socket>();
   const requestSockets = new Map<string, Socket>();
   let sendMessageCalls = 0;
-  let slowMode = false;
-  let slowRequestReceived: () => void = () => {};
-  let releaseSlowResponse: (() => void) | undefined;
+  let slowResponse: ReturnType<typeof createDeferred<() => void>> | undefined;
 
   beforeAll(async () => {
     server = createServer((req, res) => {
@@ -29,11 +28,10 @@ describe("telegram transport cache eviction over real sockets", () => {
         if (url.includes("/sendMessage")) {
           requestSockets.set(url, req.socket);
           sendMessageCalls += 1;
-          if (slowMode) {
-            slowRequestReceived();
-            releaseSlowResponse = () => {
+          if (slowResponse) {
+            slowResponse.resolve(() => {
               respond({ message_id: sendMessageCalls, chat: { id: 123 } });
-            };
+            });
             return;
           }
           respond({ message_id: sendMessageCalls, chat: { id: 123 } });
@@ -115,26 +113,19 @@ describe("telegram transport cache eviction over real sockets", () => {
     expect(liveSockets.has(peerSocket)).toBe(false);
 
     // Put acct-0 (the oldest cache entry) mid-flight on its replacement socket.
-    slowMode = true;
-    const inFlight = new Promise<void>((resolve) => {
-      slowRequestReceived = resolve;
-    });
+    const inFlight = createDeferred<() => void>();
+    slowResponse = inFlight;
     const slowSend = send(0, "slow");
-    await inFlight;
-    slowMode = false;
+    const releaseResponse = await inFlight.promise;
+    slowResponse = undefined;
     const activeSocket = socketForAccount(0);
 
-    const releaseResponse = releaseSlowResponse;
-    if (!releaseResponse) {
-      throw new Error("slow Telegram response was not captured");
-    }
     try {
       expect(activeSocket).not.toBe(peerSocket);
       // New cache key retires acct-0, but its exact socket must survive the lease.
       await send(64, "evictor");
       expect(liveSockets.has(activeSocket)).toBe(true);
     } finally {
-      releaseSlowResponse = undefined;
       releaseResponse();
       await slowSend.catch(() => undefined);
     }
@@ -156,18 +147,12 @@ describe("telegram transport cache eviction over real sockets", () => {
     expect(requestSockets.size).toBe(ACCOUNTS);
 
     const idleBeforeReset = await send(7, "idle before reset");
-    slowMode = true;
-    const resetInFlight = new Promise<void>((resolve) => {
-      slowRequestReceived = resolve;
-    });
+    const resetInFlight = createDeferred<() => void>();
+    slowResponse = resetInFlight;
     const resetSend = send(6, "active during reset");
-    await resetInFlight;
-    slowMode = false;
+    const releaseResetResponse = await resetInFlight.promise;
+    slowResponse = undefined;
     const activeBeforeReset = socketForAccount(6);
-    const releaseResetResponse = releaseSlowResponse;
-    if (!releaseResetResponse) {
-      throw new Error("active reset response was not captured");
-    }
     try {
       resetTelegramClientOptionsCacheForTests();
       expect(liveSockets.has(activeBeforeReset)).toBe(true);
@@ -175,7 +160,6 @@ describe("telegram transport cache eviction over real sockets", () => {
         timeout: 3000,
       });
     } finally {
-      releaseSlowResponse = undefined;
       releaseResetResponse();
       await resetSend.catch(() => undefined);
     }

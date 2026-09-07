@@ -291,7 +291,7 @@ export function createTelegramPreparedSender(config: {
       fail(firstRejectedError, start, params.tracking.partialDeliveryResult?.());
     }
     if (parts.length === start && firstSilentSkipError !== undefined) {
-      throw firstSilentSkipError;
+      fail(firstSilentSkipError, start);
     }
     return parts.slice(start);
   };

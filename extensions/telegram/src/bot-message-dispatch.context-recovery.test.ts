@@ -176,11 +176,12 @@ describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
     deliverReplies.mockResolvedValue({ delivered: true });
 
     const bot = createBot();
+    const sendMessage = vi.spyOn(bot.api, "sendMessage");
     await dispatchWithContext({
       context: createContext({ threadSpec: { scope: "none" } }),
       bot,
     });
-    expect(bot.api.sendMessage).toHaveBeenCalledWith(
+    expect(sendMessage).toHaveBeenCalledWith(
       123,
       "Heading",
       expect.objectContaining({ parse_mode: "HTML" }),

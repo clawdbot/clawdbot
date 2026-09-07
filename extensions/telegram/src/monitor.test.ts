@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { monitorTelegramProvider } from "./monitor.js";
 import type { MonitorTelegramOpts } from "./monitor.types.js";
@@ -128,7 +129,7 @@ describe("monitorTelegramProvider", () => {
   });
 
   it("refuses a second live monitor for the same token", async () => {
-    const started = Promise.withResolvers<void>();
+    const started = createDeferred<void>();
     mocks.runSession.mockImplementation((options) => {
       started.resolve();
       return keepSessionRunning(options);
@@ -142,7 +143,7 @@ describe("monitorTelegramProvider", () => {
   });
 
   it("allows separate tokens and releases the first token after shutdown", async () => {
-    const started = Promise.withResolvers<void>();
+    const started = createDeferred<void>();
     mocks.runSession.mockImplementation((options) => {
       if (mocks.sessions.length === 2) {
         started.resolve();
