@@ -998,6 +998,9 @@ describe("openshell fs bridges", () => {
       const { bridge } = await createMirrorFsBridgeFixture(workspace.dir);
 
       expect(() => bridge.resolvePath({ filePath })).toThrow("Sandbox path escapes allowed mounts");
+      await expect(bridge.readDirectory({ filePath })).rejects.toThrow(
+        "Sandbox path escapes allowed mounts",
+      );
     },
   );
 
@@ -1580,16 +1583,26 @@ describe("openshell fs bridges", () => {
     await expect(bridge.readFile({ filePath: "subdir/secret.txt" })).rejects.toThrow(
       "Sandbox boundary checks failed",
     );
+    await expect(bridge.readDirectory({ filePath: "subdir" })).rejects.toThrow(
+      "Sandbox path escapes allowed mounts",
+    );
   });
 
-  it("reads regular files through the shared safe fs root", async () => {
+  it("reads regular files and directories through the shared safe fs root", async () => {
     await using workspace = await createOpenShellTestWorkspace("fs");
     const workspaceDir = workspace.dir;
-    await fs.mkdir(path.join(workspaceDir, "subdir"), { recursive: true });
+    await fs.mkdir(path.join(workspaceDir, "subdir", "nested"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "subdir", "secret.txt"), "inside", "utf8");
 
     const { bridge } = await createMirrorFsBridgeFixture(workspaceDir);
 
+    await expect(bridge.readDirectory({ filePath: "." })).resolves.toEqual([
+      { name: "subdir", isDirectory: true },
+    ]);
+    await expect(bridge.readDirectory({ filePath: ".", cwd: "/sandbox/subdir" })).resolves.toEqual([
+      { name: "nested", isDirectory: true },
+      { name: "secret.txt", isDirectory: false },
+    ]);
     await expect(bridge.readFile({ filePath: "subdir/secret.txt" })).resolves.toEqual(
       Buffer.from("inside"),
     );
@@ -1621,6 +1634,7 @@ describe("openshell fs bridges", () => {
       await fs.mkdir(path.dirname(skillFile), { recursive: true });
       await fs.mkdir(path.dirname(shadowFile), { recursive: true });
       await fs.writeFile(skillFile, "# Demo\nmaterialized\n", "utf8");
+      await fs.writeFile(path.join(path.dirname(skillFile), "examples.md"), "examples", "utf8");
       await fs.writeFile(shadowFile, "# Demo\nworkspace shadow\n", "utf8");
 
       const backend = createMirrorBackendMock();
@@ -1638,6 +1652,12 @@ describe("openshell fs bridges", () => {
       const { createOpenShellFsBridge } = await import("./fs-bridge.js");
       const bridge = createOpenShellFsBridge({ sandbox, backend });
 
+      await expect(
+        bridge.readDirectory({ filePath: "/sandbox/.openclaw/sandbox-skills/skills/demo" }),
+      ).resolves.toEqual([
+        { name: "SKILL.md", isDirectory: false },
+        { name: "examples.md", isDirectory: false },
+      ]);
       await expect(
         bridge.readFile({
           filePath: "/sandbox/.openclaw/sandbox-skills/skills/demo/SKILL.md",
@@ -1729,6 +1749,9 @@ describe("openshell fs bridges", () => {
     const resolved = bridge.resolvePath({ filePath: "/agent/note.txt" });
     expect(resolved.hostPath).toBe(path.join(agentWorkspaceDir, "note.txt"));
     expect(await bridge.readFile({ filePath: "/agent/note.txt" })).toEqual(Buffer.from("agent"));
+    await expect(bridge.readDirectory({ filePath: "/agent" })).resolves.toEqual([
+      { name: "note.txt", isDirectory: false },
+    ]);
   });
 
   it.each([

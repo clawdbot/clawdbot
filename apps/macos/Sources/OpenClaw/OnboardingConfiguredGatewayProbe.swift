@@ -84,7 +84,6 @@ final class OnboardingConfiguredGatewayProbe {
         onElapsed: @escaping @MainActor () -> Void)
     {
         self.pendingActivationDeadlineTask?.cancel()
-        let generation = self.generation
         let delay = max(0, deadline.timeIntervalSinceNow)
         self.pendingActivationDeadlineTask = Task { @MainActor [weak self] in
             do {
@@ -92,7 +91,7 @@ final class OnboardingConfiguredGatewayProbe {
             } catch {
                 return
             }
-            guard let self, self.generation == generation else { return }
+            guard let self, !Task.isCancelled else { return }
             self.pendingActivationDeadlineTask = nil
             onElapsed()
         }

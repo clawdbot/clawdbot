@@ -366,8 +366,10 @@ export function sanitizeBinaryOutput(
 }
 
 /** Keep one ANSI parser per process stream so control sequences can span callbacks. */
-export function createStreamingBinaryOutputSanitizer(): (text: string) => string {
-  const ansiStripper = new AnsiSequenceStripper();
+export function createStreamingBinaryOutputSanitizer(
+  onCsi?: (sequence: string) => void,
+): (text: string) => string {
+  const ansiStripper = new AnsiSequenceStripper(onCsi);
   return (text) => sanitizeStrippedBinaryOutput(ansiStripper.write(text));
 }
 

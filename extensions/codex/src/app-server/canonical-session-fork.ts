@@ -16,7 +16,7 @@ import {
   type CodexAppServerLiveThreadOwnership,
 } from "./client-runtime.js";
 import { parseCodexNativeToolCatalog } from "./native-tool-catalog.js";
-import { attestCodexPluginThreadApps } from "./plugin-thread-attestation.js";
+import { checkCodexThreadAppAvailability } from "./plugin-thread-attestation.js";
 import { assertCodexThreadForkResponse } from "./protocol-validators.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { CodexAppServerScopedRequestRejectedError } from "./request.js";
@@ -259,7 +259,7 @@ export async function forkCanonicalCodexSession(params: {
           }
           await snapshot.assertUnchanged();
           assertCurrent();
-          await attestCodexPluginThreadApps({
+          await checkCodexThreadAppAvailability({
             client: context.client,
             threadId: freshThreadId,
             appIds: prepared.provisionalAppIds,

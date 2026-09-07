@@ -21,7 +21,7 @@ try {
   // Exercise the update lifecycle's root-ownership boundary from the installed package.
   let ownsRoot;
   const bundles = (await fs.readdir("/app/dist"))
-    .filter((file) => /^update-command-service-.*\.js$/.test(file))
+    .filter((file) => /^update-command-service-.*\.m?js$/.test(file))
     .toSorted();
   for (const file of bundles) {
     const module = await import(pathToFileURL(`/app/dist/${file}`).href);

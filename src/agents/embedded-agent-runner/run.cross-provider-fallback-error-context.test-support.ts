@@ -2,7 +2,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
-import { makeModelFallbackCfg } from "../test-helpers/model-fallback-config-fixture.js";
+import { createModelFallbackConfig } from "../test-helpers/model-fallback-config-fixture.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   MockedFailoverError,
@@ -79,16 +79,10 @@ function expectDeepseekAssistant(value: unknown) {
 }
 
 function makeCrossProviderFallbackConfig() {
-  return makeModelFallbackCfg({
-    agents: {
-      defaults: {
-        model: {
-          primary: "openai/gpt-5.4",
-          fallbacks: ["deepseek/deepseek-chat", "google/gemini-2.5-flash"],
-        },
-      },
-    },
-  });
+  return createModelFallbackConfig("openai/gpt-5.4", [
+    "deepseek/deepseek-chat",
+    "google/gemini-2.5-flash",
+  ]);
 }
 
 function useCrossProviderAuthFixture() {
@@ -235,7 +229,7 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
     const promise = runCompactionRemovedFallbackAttempt(state);
 
     await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
-    await expect(promise).rejects.toThrow("⚠️ anthropic/test-model request failed.");
+    await expect(promise).rejects.toThrow("⚠️ Agent run failed (model: anthropic/test-model).");
     expect(mockedIsFailoverAssistantError).toHaveBeenCalledTimes(2);
     expect(getLastFormattedAssistant()).toMatchObject({
       provider: "anthropic",

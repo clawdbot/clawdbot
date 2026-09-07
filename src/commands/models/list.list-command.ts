@@ -76,7 +76,7 @@ export async function modelsListCommand(
     { resolveAgentWorkspaceDir },
     { resolveDefaultAgentWorkspaceDir },
   ] = await Promise.all([
-    import("../../agents/auth-profiles/store.js"),
+    import("../../agents/auth-profiles/store-runtime.js"),
     import("../../agents/agent-scope.js"),
     import("../../agents/workspace.js"),
   ]);

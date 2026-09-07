@@ -51,7 +51,7 @@ describe("RFB attachments", () => {
     await expect(accepted).resolves.toBeUndefined();
   });
 
-  it("does not claim a stream that closed before observer redemption", async () => {
+  it.each([false, true])("claims only its source's live stream (closed: %s)", async (closed) => {
     const registry = createDesktopSessionRegistry();
     await registry.acquire({
       sourceKey: "node:one",
@@ -60,6 +60,7 @@ describe("RFB attachments", () => {
         attachment: { kind: "tcp", host: "127.0.0.1", port: 5900 },
       }),
     });
+    await registry.activate({ sourceKey: "node:two", ownerEpoch: 1 });
     const stream = new PassThrough();
     const reservation = registry.reserveObserver("node:one", 1);
     if (!reservation) {
@@ -74,14 +75,28 @@ describe("RFB attachments", () => {
     if (!attachment) {
       throw new Error("expected stream attachment");
     }
-    const closed = new Promise<void>((resolve) => {
-      stream.once("close", () => resolve());
-    });
-    stream.destroy();
-    await closed;
+    try {
+      expect(registry.hasPendingStream("node:one", attachment)).toBe(true);
+      expect(registry.hasPendingStream("node:two", attachment)).toBe(false);
+      expect(registry.claimStream("node:two", attachment)).toBeUndefined();
+      expect(stream.destroyed).toBe(false);
+      expect(registry.hasPendingStream("node:one", attachment)).toBe(true);
 
-    expect(registry.claimStream(attachment)).toBeUndefined();
-    await registry.stopAll();
+      if (closed) {
+        const streamClosed = new Promise<void>((resolve) => {
+          stream.once("close", () => resolve());
+        });
+        stream.destroy();
+        await streamClosed;
+      }
+
+      expect(registry.claimStream("node:one", attachment)).toBe(closed ? undefined : stream);
+      expect(registry.hasPendingStream("node:one", attachment)).toBe(false);
+      expect(registry.claimStream("node:one", attachment)).toBeUndefined();
+    } finally {
+      stream.destroy();
+      await registry.stopAll();
+    }
   });
 
   it.each(["acquire", "activate"] as const)("refreshes idle cleanup after %s", async (method) => {

@@ -8,6 +8,8 @@ import {
   summarizeUpdateRunResponse,
 } from "../../gateway/update-run-summary.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { getUpdateRun } from "../../infra/update-run-ledger.js";
+import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { commandReply, defineGatewayControlCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 
@@ -34,24 +36,30 @@ export const handleUpdateCommand: CommandHandler = defineGatewayControlCommand(
         },
       );
       const summary = summarizeUpdateRunResponse(response);
-      if (summary.ok) {
-        const versions =
-          summary.before && summary.after
-            ? ` (${summary.before.version} → ${summary.after.version})`
-            : "";
-        return commandReply(
-          `⬆️ Updating OpenClaw${versions}. Back in a few minutes; I'll confirm here.`,
+      // The Gateway sends the acknowledgement before handing off its process;
+      // its durable notice owner also delivers completion and failure reports.
+      if (summary.ackDelivered || summary.ackQueued) {
+        return { shouldContinue: false };
+      }
+      if (summary.ok && summary.acknowledgement) {
+        return commandReply(summary.acknowledgement);
+      }
+      const run = summary.runId ? getUpdateRun(summary.runId) : undefined;
+      if (!run) {
+        throw new Error(
+          summary.message ??
+            summary.reason ??
+            "Update run unavailable; run openclaw update status to inspect the outcome.",
         );
       }
-      const message = (summary.message ?? summary.handoff?.message)?.replaceAll("\n", " ");
       const command = summary.handoff?.command;
-      const manualCommand =
-        command && !message?.includes(command) ? `Run manually: ${command}` : "";
-      return commandReply(
-        [`⚠️ Update did not start: ${summary.reason ?? summary.status}.`, message, manualCommand]
-          .filter(Boolean)
-          .join(" "),
-      );
+      const message = summary.message ?? summary.handoff?.message;
+      const nextAction = summary.ok
+        ? undefined
+        : [message, command && !message?.includes(command) ? `Run manually: ${command}` : undefined]
+            .filter(Boolean)
+            .join("\n");
+      return commandReply(renderUpdateRunReport(run, nextAction ? { nextAction } : {}).markdown);
     } catch (err) {
       return commandReply(`⚠️ Update request failed: ${formatErrorMessage(err)}`);
     }

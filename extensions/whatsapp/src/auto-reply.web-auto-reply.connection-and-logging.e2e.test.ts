@@ -825,40 +825,46 @@ describe("web auto-reply connection", () => {
     scenario.assertAfterRun?.(context);
   });
 
-  it("passes the global inbound debounce into the live listener", async () => {
-    const capture = createWebListenerFactoryCapture();
+  it.each([undefined, 75])(
+    "keeps live debounce config and explicit transport override (%s)",
+    async (debounceMs) => {
+      const capture = createWebListenerFactoryCapture();
 
-    setLoadConfigMock({
-      messages: {
-        inbound: {
-          debounceMs: 250,
+      setLoadConfigMock({
+        messages: {
+          inbound: {
+            debounceMs: 250,
+          },
         },
-      },
-      channels: {
-        whatsapp: {
-          accounts: {
-            work: {
-              authDir: "/tmp/work",
+        channels: {
+          whatsapp: {
+            accounts: {
+              work: {
+                authDir: "/tmp/work",
+              },
             },
           },
         },
-      },
-    } as OpenClawConfig);
-    await monitorWebChannel(
-      false,
-      capture.listenerFactory as never,
-      false,
-      async () => ({ text: "ok" }),
-      undefined,
-      undefined,
-      {
-        accountId: "work",
-      },
-    );
+      } as OpenClawConfig);
+      await monitorWebChannel(
+        false,
+        capture.listenerFactory as never,
+        false,
+        async () => ({ text: "ok" }),
+        undefined,
+        undefined,
+        {
+          accountId: "work",
+          debounceMs,
+        },
+      );
 
-    resetLoadConfigMock();
-    expect(capture.getLastOptions()?.debounceMs).toBe(250);
-  });
+      resetLoadConfigMock();
+      expect(capture.getLastOptions()?.debounceMs).toBe(debounceMs);
+      expect(capture.getLastOptions()?.cfg.messages?.inbound?.debounceMs).toBe(250);
+      expect(capture.getLastOptions()?.loadConfig).toEqual(expect.any(Function));
+    },
+  );
 
   it("raises the process listener budget before opening the web listener", async () => {
     const originalMax = process.getMaxListeners();

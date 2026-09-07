@@ -114,7 +114,7 @@ describe("installed plugin index install-record persistence", () => {
 
           expect(
             prepare.mock.calls.filter(([sql]) =>
-              /SELECT\s+value_json\s+FROM\s+config_machine_state\s+WHERE\s+state_key\s*=/i.test(
+              /SELECT\s+"?value_json"?\s+FROM\s+"?config_machine_state"?\s+WHERE\s+"?state_key"?\s*=/i.test(
                 sql,
               ),
             ),

@@ -6,6 +6,7 @@ import type {
   Model,
 } from "@openclaw/llm-core";
 import { describe, expect, it, vi } from "vitest";
+import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import { bindModelLlmRuntime } from "./model-runtime-binding.js";
 import { stream, streamSimple } from "./stream.js";
 import { createAssistantMessageEventStream } from "./utils/event-stream.js";
@@ -33,14 +34,7 @@ describe("LLM synchronous stream transport host", () => {
       api: model.api,
       provider: model.provider,
       model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createZeroUsageFixture(),
       stopReason: "stop",
       timestamp: Date.now(),
     } satisfies AssistantMessage;
@@ -73,5 +67,17 @@ describe("LLM synchronous stream transport host", () => {
       message,
     ]);
     expect(providerStream).toHaveBeenCalledTimes(2);
+
+    providerStream.mockImplementation(() => {
+      throw Object.assign(new Error("private native detail"), {
+        code: "ERR_SQLITE_ERROR",
+        errcode: 5,
+      });
+    });
+    await expect(stream(boundModel, { messages: [] }).result()).resolves.toMatchObject({
+      stopReason: "error",
+      errorCode: "SQLITE_BUSY",
+      errorMessage: "private native detail",
+    });
   });
 });

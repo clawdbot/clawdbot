@@ -56,6 +56,7 @@ describe("Web Awesome control ownership", () => {
       "pages/chat/components/chat-composer-slash-menu.ts",
       "pages/chat/components/chat-model-picker-options.ts",
       "pages/chat/components/chat-model-picker.ts",
+      "pages/new-session/place-browser.ts",
     ]);
   });
 

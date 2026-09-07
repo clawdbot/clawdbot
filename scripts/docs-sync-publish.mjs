@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import { renderDocsHeadingMap } from "./docs-list.js";
 import { requireOptionArgument } from "./lib/arg-utils.runtime.mjs";
 import { repairMintlifyAccordionIndentation } from "./lib/mintlify-accordion.mjs";
@@ -13,6 +14,7 @@ import { resolveRepoRoot } from "./lib/repo-root.mjs";
 const ROOT = resolveRepoRoot(import.meta.url);
 const SOURCE_DOCS_DIR = path.join(ROOT, "docs");
 const SOURCE_CONFIG_PATH = path.join(SOURCE_DOCS_DIR, "docs.json");
+const SLUGIFY_PACKAGE = "@sindresorhus/slugify";
 const INTERNAL_DOCS_DIRS = ["internal"];
 const DEFAULT_CLAWHUB_SOURCE_REPO = "openclaw/clawhub";
 const CLAWHUB_DOCS_TARGET_DIR = "clawhub";
@@ -857,12 +859,84 @@ function writeSyncMetadata(targetRoot, args, sources) {
   writeJson(path.join(targetRoot, ".openclaw-sync", "source.json"), metadata);
 }
 
+function sourceSlugifyVersion() {
+  const version = readJson(path.join(ROOT, "package.json")).devDependencies[SLUGIFY_PACKAGE];
+  if (typeof version !== "string" || !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) {
+    throw new Error("docs sync requires an exact source slugify version");
+  }
+  return version;
+}
+
+function readPublishDependencies(targetRoot) {
+  return {
+    packageJson: readJson(path.join(targetRoot, "package.json")),
+    packageLock: readJson(path.join(targetRoot, "package-lock.json")),
+  };
+}
+
+function matchesSlugifyVersion({ packageJson, packageLock }, version) {
+  return (
+    packageJson.devDependencies?.[SLUGIFY_PACKAGE] === version &&
+    packageLock.lockfileVersion === 3 &&
+    packageLock.packages?.[""]?.devDependencies?.[SLUGIFY_PACKAGE] === version &&
+    packageLock.packages?.[`node_modules/${SLUGIFY_PACKAGE}`]?.version === version
+  );
+}
+
+/** Checks sync output here and against fresh publisher main after the workflow rebases. */
+export function validateDocsSyncDependencies(targetRoot, baseline) {
+  const current = readPublishDependencies(targetRoot);
+  const version = sourceSlugifyVersion();
+  if (!matchesSlugifyVersion(current, version)) {
+    throw new Error(`docs sync publisher manifest and lock must both pin slugify ${version}`);
+  }
+  // Only this dependency's declaration and resolved row belong to source sync.
+  // Compare objects, not JSON formatting; never absorb unrelated npm or rebase churn.
+  const expected = structuredClone(baseline);
+  expected.packageJson.devDependencies[SLUGIFY_PACKAGE] = version;
+  expected.packageLock.packages[""].devDependencies[SLUGIFY_PACKAGE] = version;
+  const slugifyPath = `node_modules/${SLUGIFY_PACKAGE}`;
+  expected.packageLock.packages[slugifyPath] = current.packageLock.packages[slugifyPath];
+  if (!isDeepStrictEqual(current, expected)) {
+    throw new Error(
+      "docs sync changed unrelated publisher dependencies; reconcile the lock before retrying",
+    );
+  }
+  for (const entry of SYNC_SUPPORT_FILES) {
+    const copied = fs.readFileSync(path.join(targetRoot, entry.target));
+    if (!fs.readFileSync(entry.source).equals(copied)) {
+      throw new Error(`docs sync support file differs from source: ${entry.target}`);
+    }
+  }
+}
+
 function syncSupportFiles(targetRoot) {
+  const baseline = readPublishDependencies(targetRoot);
+  const version = sourceSlugifyVersion();
+  if (!matchesSlugifyVersion(baseline, version)) {
+    // Generate the lock from the publisher's existing graph, without installing
+    // packages. Parser, manifest and lock are committed together by the workflow.
+    run(
+      "npm",
+      [
+        "install",
+        "--package-lock-only",
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund",
+        "--save-dev",
+        "--save-exact",
+        `${SLUGIFY_PACKAGE}@${version}`,
+      ],
+      { cwd: targetRoot, timeout: 120_000 },
+    );
+  }
   for (const entry of SYNC_SUPPORT_FILES) {
     const targetPath = path.join(targetRoot, entry.target);
     ensureDir(path.dirname(targetPath));
     fs.copyFileSync(entry.source, targetPath);
   }
+  validateDocsSyncDependencies(targetRoot, baseline);
 }
 
 function main() {

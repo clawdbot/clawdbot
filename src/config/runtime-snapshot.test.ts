@@ -8,6 +8,7 @@ import {
   setConfigResolutionFacts,
 } from "./resolution-facts.js";
 import {
+  createRuntimeConfigReader,
   finalizeRuntimeSnapshotWrite,
   getRuntimeConfigAppliedHash,
   hashRuntimeConfigValue,
@@ -141,7 +142,7 @@ describe("runtime snapshot state", () => {
   });
 
   it.each([false, true])(
-    "selects only matching runtime sources (resolution facts: %s)",
+    "selects and retains only matching runtime sources (resolution facts: %s)",
     (withFacts) => {
       const sourceConfig = createProviderConfigFixture();
       if (withFacts) {
@@ -154,6 +155,8 @@ describe("runtime snapshot state", () => {
           updatePlan: true,
         },
       };
+
+      const readUnbound = createRuntimeConfigReader(scopedResolvedConfig);
 
       expect(
         selectApplicableRuntimeConfig({
@@ -184,6 +187,16 @@ describe("runtime snapshot state", () => {
           runtimeSourceConfig: sourceConfig,
         }),
       ).toBe(foreignConfig);
+      setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+      const readRuntime = createRuntimeConfigReader(cloneConfigWithResolutionFacts(sourceConfig));
+      const readScoped = createRuntimeConfigReader(scopedResolvedConfig);
+      const readForeign = createRuntimeConfigReader(foreignConfig);
+      const nextConfig = { ...runtimeConfig, messages: { ackReactionScope: "all" as const } };
+      setRuntimeConfigSnapshot(nextConfig, nextConfig);
+      expect(readRuntime()).toBe(nextConfig);
+      expect(readScoped()).toBe(scopedResolvedConfig);
+      expect(readForeign()).toBe(foreignConfig);
+      expect(readUnbound()).toBe(scopedResolvedConfig);
     },
   );
 

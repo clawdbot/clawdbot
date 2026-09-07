@@ -2,16 +2,12 @@ import type { ExecApprovalsFile } from "./exec-approvals-core.js";
 import { updateExecApprovalsSync } from "./exec-approvals-store.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 // Detects and removes generated exec grants that predate cwd-bound authorization.
-import { isCwdBoundHashedArgPattern } from "./exec-command-resolution.js";
+import { classifyExecAllowlistScope } from "./exec-command-resolution.js";
 
 function isObsoleteGeneratedEntry(entry: ExecAllowlistEntry): boolean {
-  const pattern = entry.pattern.trim();
-  return (
-    entry.source === "allow-always" &&
-    !pattern.startsWith("=command:") &&
-    !pattern.startsWith("=node-command:") &&
-    !isCwdBoundHashedArgPattern(entry.argPattern)
-  );
+  // Doctor owns only the grants allow-always wrote. A manual entry that is
+  // inactive (a hand-written legacy hash) stays for the operator to delete.
+  return entry.source === "allow-always" && classifyExecAllowlistScope(entry) === "inactive";
 }
 
 export function countObsoleteGeneratedExecApprovals(file: ExecApprovalsFile): number {

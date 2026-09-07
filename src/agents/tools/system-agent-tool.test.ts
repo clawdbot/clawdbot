@@ -10,6 +10,7 @@ import {
 } from "./system-agent-tool.js";
 
 const mocks = vi.hoisted(() => ({
+  preparePluginArtifact: vi.fn(),
   executeSystemAgentOperation: vi.fn(
     async (_op: unknown, runtime: { log: (m: string) => void }) => {
       runtime.log("op-output");
@@ -25,6 +26,10 @@ const mocks = vi.hoisted(() => ({
     sourceConfig: {},
     issues: [],
   })),
+}));
+
+vi.mock("../../system-agent/plugin-artifact.js", () => ({
+  prepareSystemAgentPluginArtifact: mocks.preparePluginArtifact,
 }));
 
 vi.mock("../../system-agent/operations.js", async (importOriginal) => ({
@@ -144,6 +149,76 @@ describe("openclaw tool", () => {
     });
   });
 
+  it("preserves an allowed gateway credential reference as an exact proposal", async () => {
+    const proposalRef: NonNullable<SystemAgentToolOptions["proposalRef"]> = {};
+    const result = await createSystemAgentTool({ surface: "gateway", proposalRef }).execute(
+      "gateway-reference",
+      { action: "config_set_ref", path: "gateway.auth.token", envVar: "GATEWAY_TOKEN" },
+    );
+    expect(toolText(result)).toContain("needs-approval");
+    expect(proposalRef.operation).toEqual({
+      kind: "config-set-ref",
+      path: "gateway.auth.token",
+      source: "env",
+      id: "GATEWAY_TOKEN",
+    });
+    expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+  });
+
+  it("does not stage a config proposal after its validation was cancelled", async () => {
+    const proposalRef: NonNullable<SystemAgentToolOptions["proposalRef"]> = {};
+    const controller = new AbortController();
+    const pending = createSystemAgentTool({ surface: "gateway", proposalRef }).execute(
+      "cancelled-proposal",
+      { action: "config_set", path: "gateway.port", value: "19001" },
+      controller.signal,
+    );
+    controller.abort(new Error("Setup cancelled"));
+    await expect(pending).rejects.toThrow("Setup cancelled");
+    expect(proposalRef).toEqual({});
+  });
+
+  it("preserves a different proposal staged while config validation yields", async () => {
+    const proposalRef: NonNullable<SystemAgentToolOptions["proposalRef"]> = {};
+    const pending = createSystemAgentTool({ surface: "gateway", proposalRef }).execute(
+      "racing-proposal",
+      { action: "config_set", path: "gateway.port", value: "19001" },
+    );
+    const prior = { kind: "gateway-restart" as const };
+    proposalRef.operation = prior;
+    proposalRef.current = hashSystemAgentOperation(prior);
+    expect(toolText(await pending)).toContain("proposal-conflict");
+    expect(proposalRef.operation).toEqual(prior);
+  });
+
+  it.each([false, true])(
+    "preserves a proposal across rejected validation in-process and in the CLI mirror (approved=%s)",
+    async (approved) => {
+      const operation = {
+        kind: "config-set" as const,
+        path: "auth.profiles.invalid",
+        value: "true",
+      };
+      const original = { current: hashSystemAgentOperation(operation), operation };
+      const proposalRef = { ...original };
+      const args = { action: "config_set", path: operation.path, value: operation.value, approved };
+      let failure: unknown;
+      try {
+        await createSystemAgentTool({ surface: "cli", approvalArmed: true, proposalRef }).execute(
+          "rejected-validation",
+          args,
+        );
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(Error);
+      expect(proposalRef).toEqual(original);
+      expect(
+        resolveSystemAgentProposalTransition({ args, resultText: String(failure) }),
+      ).toBeNull();
+    },
+  );
+
   it("rejects arbitrary plugin installs before creating an approval proposal", async () => {
     const proposalRef: { current?: string } = {};
     const tool = createSystemAgentTool({ surface: "cli", proposalRef });
@@ -157,6 +232,81 @@ describe("openclaw tool", () => {
     ).rejects.toThrow(/trusted shell/);
     expect(proposalRef.current).toBeUndefined();
     expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+  });
+
+  it("finishes the exact artifact review before proposing and hands approved bytes to the host", async () => {
+    const args = {
+      action: "plugin_activate_artifact",
+      path: "/tmp/authored-plugin.tgz",
+      sha256: "a".repeat(64),
+    };
+    const operation = {
+      kind: "plugin-activate-artifact" as const,
+      path: args.path,
+      sha256: args.sha256,
+    };
+    const proposalRef: NonNullable<SystemAgentToolOptions["proposalRef"]> = {};
+    let finishReview!: (value: unknown) => void;
+    let beginReview!: () => void;
+    const started = new Promise<void>((resolve) => {
+      beginReview = resolve;
+    });
+    const review = new Promise<unknown>((resolve) => {
+      finishReview = resolve;
+    });
+    mocks.preparePluginArtifact.mockImplementationOnce(async () => {
+      beginReview();
+      return await review;
+    });
+    const pending = createSystemAgentTool({
+      surface: "gateway",
+      operatorApprovalOnly: true,
+      proposalRef,
+    }).execute("artifact", args);
+    await started;
+    expect(proposalRef.current).toBeUndefined();
+    finishReview({ pluginId: "authored-plugin", nativeControlUi: true, sha256: args.sha256 });
+    const result = await pending;
+    expect(toolText(result)).toContain("Reviewed plugin artifact");
+    expect(toolText(result)).toContain("requesting session's permission policy");
+    expect(resolveSystemAgentProposalTransition({ args, resultText: toolText(result) })).toEqual({
+      proposal: hashSystemAgentOperation(operation),
+      operation,
+    });
+    const directiveRef: NonNullable<SystemAgentToolOptions["directiveRef"]> = {};
+    await createSystemAgentTool({
+      surface: "gateway",
+      approvalArmed: true,
+      proposalRef,
+      directiveRef,
+    }).execute("approved-artifact", { ...args, approved: true });
+    expect(directiveRef.current).toEqual({ kind: "approved-operation", operation });
+    expect(proposalRef.current).toBeUndefined();
+    expect(mocks.preparePluginArtifact).toHaveBeenCalledOnce();
+    expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+  });
+
+  it("does not propose a failed artifact review or overwrite another proposal after review", async () => {
+    const args = {
+      action: "plugin_activate_artifact",
+      path: "/tmp/authored-plugin.tgz",
+      sha256: "b".repeat(64),
+    };
+    const proposalRef: NonNullable<SystemAgentToolOptions["proposalRef"]> = {};
+    const tool = createSystemAgentTool({ surface: "gateway", proposalRef });
+    mocks.preparePluginArtifact.mockRejectedValueOnce(new Error("SHA256 does not match"));
+    await expect(tool.execute("invalid-artifact", args)).rejects.toThrow("SHA256 does not match");
+    expect(proposalRef.current).toBeUndefined();
+    const prior = hashSystemAgentOperation({ kind: "gateway-restart" });
+    mocks.preparePluginArtifact.mockImplementationOnce(async () => {
+      proposalRef.current = prior;
+      proposalRef.operation = { kind: "gateway-restart" };
+      return { pluginId: "authored-plugin" };
+    });
+    expect(toolText(await tool.execute("racing-artifact", args))).toContain(
+      `proposal-conflict:${prior}`,
+    );
+    expect(proposalRef.operation).toEqual({ kind: "gateway-restart" });
   });
 
   it("defers an approved mutation to the host after the full proposal handshake", async () => {
@@ -612,9 +762,12 @@ describe("openclaw tool", () => {
         resultText: "approval-mismatch: this call is not the operation the user approved.",
       }),
     ).toEqual({ proposal: undefined });
-    // An executed mutation consumes it.
+    // Only the admitted host directive consumes it; generic failures are not admission.
     expect(
-      resolveSystemAgentProposalTransition({ args, resultText: "Default model updated." }),
+      resolveSystemAgentProposalTransition({
+        args: { ...args, approved: true },
+        resultText: "directive:approved-operation: the host will apply this action.",
+      }),
     ).toEqual({ proposal: undefined });
     // A rejected second proposal must not overwrite the mirrored first
     // operation: the host keeps proposalRef untouched on a null transition.

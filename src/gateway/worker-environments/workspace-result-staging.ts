@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { runBestEffortCleanup } from "../../infra/non-fatal-cleanup.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandBuffered, runCommandWithTimeout } from "../../process/exec.js";
-import type { WorkerWorkspaceReconcileRequest } from "./tunnel-contract.js";
+import type { WorkerLocalWorkspaceReconcileRequest } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
 import {
   activeWorkspaceHashContext,
@@ -178,7 +178,16 @@ export async function hasWorkerWorkspaceResultRef(params: {
     throw error;
   }
   if (!(await hasGitAdminPath(root))) {
-    return false;
+    const bare = await runCommandWithTimeout(
+      gitCommand(root, ["rev-parse", "--is-bare-repository"]),
+      {
+        timeoutMs: PATCH_TIMEOUT_MS,
+        maxOutputBytes: 1024,
+      },
+    );
+    if (bare.termination !== "exit" || bare.code !== 0 || bare.stdout.trim() !== "true") {
+      return false;
+    }
   }
   const result = await runCommandWithTimeout(
     gitCommand(root, [
@@ -323,6 +332,8 @@ async function stageWorkerWorkspaceResult(params: {
 }
 
 type LoadedStagedWorkerWorkspace = {
+  baseManifestRaw: string;
+  currentManifestRaw: string;
   baseManifestRef: string;
   currentManifestRef: string;
   base: WorkerWorkspaceManifest;
@@ -420,6 +431,8 @@ async function loadStagedWorkerWorkspace(
     }
   }
   return {
+    baseManifestRaw: baseRaw,
+    currentManifestRaw: currentRaw,
     baseManifestRef,
     currentManifestRef,
     base,
@@ -451,6 +464,65 @@ async function materializeStagedEntry(params: {
   }
 }
 
+export async function readStagedWorkerWorkspaceResult(root: string, stagedResultRef: string) {
+  const { objectsByPath, ...snapshot } = await loadStagedWorkerWorkspace(root, stagedResultRef);
+  const readEntry = async (entry: WorkerWorkspaceManifestEntry): Promise<Buffer> => {
+    const object = objectsByPath.get(entry.path);
+    if (!object) {
+      throw new Error(`Cloud workspace result has no payload for ${entry.path}`);
+    }
+    const content = await readGitBlob({
+      root,
+      objectId: object.objectId,
+      maxBytes: MAX_RECONCILIATION_FILE_BYTES,
+    });
+    const matches =
+      entry.type === "symlink"
+        ? content.toString("utf8") === entry.target
+        : content.byteLength === entry.size &&
+          createHash("sha256").update(content).digest("hex") === entry.sha256;
+    if (!matches) {
+      throw new Error(`Cloud workspace staged result payload is invalid: ${entry.path}`);
+    }
+    return content;
+  };
+  return { ...snapshot, readEntry };
+}
+
+export async function withStagedWorkerWorkspaceResult<T>(
+  params: { root: string; stagedResultRef: string },
+  use: (
+    snapshot: Awaited<ReturnType<typeof readStagedWorkerWorkspaceResult>> & { stagingRoot: string },
+  ) => Promise<T>,
+): Promise<T> {
+  const snapshot = await readStagedWorkerWorkspaceResult(params.root, params.stagedResultRef);
+  return await withMaterializedWorkerWorkspaceResult(snapshot, use);
+}
+
+async function withMaterializedWorkerWorkspaceResult<T>(
+  snapshot: Awaited<ReturnType<typeof readStagedWorkerWorkspaceResult>>,
+  use: (
+    snapshot: Awaited<ReturnType<typeof readStagedWorkerWorkspaceResult>> & { stagingRoot: string },
+  ) => Promise<T>,
+): Promise<T> {
+  const stagingRoot = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-checkpoint-payload-"),
+  );
+  try {
+    for (const entry of snapshot.changedEntries) {
+      const content = await snapshot.readEntry(entry);
+      await materializeStagedEntry({ root: stagingRoot, entry, content });
+    }
+    return await use({ ...snapshot, stagingRoot });
+  } finally {
+    await runBestEffortCleanup({
+      cleanup: () => fs.rm(stagingRoot, { recursive: true, force: true }),
+      onError: (error) =>
+        workspaceLog.warn(`worker workspace staging cleanup failed: ${boundedWorkerError(error)}`),
+    });
+  }
+}
+
 export async function applyStagedWorkerWorkspaceResult(params: {
   root: string;
   stagedResultRef: string;
@@ -472,7 +544,7 @@ async function applyStagedWorkerWorkspaceResultWithMemo(
   params: Parameters<typeof applyStagedWorkerWorkspaceResult>[0],
 ): Promise<WorkerWorkspaceApplyResult & { changed: boolean }> {
   const root = await fs.realpath(params.root);
-  const staged = await loadStagedWorkerWorkspace(root, params.stagedResultRef);
+  const staged = await readStagedWorkerWorkspaceResult(root, params.stagedResultRef);
   if (params.alreadyAccepted || staged.baseManifestRef !== params.expectedBaseManifestRef) {
     // An acceptance marker proves the mutations already ran even when omitted
     // local nodes left the manifest ref unchanged. Re-snapshot; never replay.
@@ -493,24 +565,7 @@ async function applyStagedWorkerWorkspaceResultWithMemo(
       changed: staged.changed,
     };
   }
-  const stagingRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-staged-result-"));
-  try {
-    for (const entry of staged.changedEntries) {
-      const object = staged.objectsByPath.get(entry.path)!;
-      const content = await readGitBlob({
-        root,
-        objectId: object.objectId,
-        maxBytes: MAX_RECONCILIATION_FILE_BYTES,
-      });
-      if (entry.type === "symlink") {
-        if (content.toString("utf8") !== entry.target) {
-          throw new Error(`Cloud workspace staged result tree is invalid: ${entry.path}`);
-        }
-        await materializeStagedEntry({ root: stagingRoot, entry });
-      } else {
-        await materializeStagedEntry({ root: stagingRoot, entry, content });
-      }
-    }
+  return await withMaterializedWorkerWorkspaceResult(staged, async ({ stagingRoot }) => {
     const applied = await applyStagedWorkerWorkspace({
       root,
       stagingRoot,
@@ -522,17 +577,11 @@ async function applyStagedWorkerWorkspaceResultWithMemo(
       publishAcceptedManifest: params.publishAcceptedManifest,
     });
     return { ...applied, changed: staged.changed };
-  } finally {
-    await runBestEffortCleanup({
-      cleanup: () => fs.rm(stagingRoot, { recursive: true, force: true }),
-      onError: (error) =>
-        workspaceLog.warn(`worker workspace staging cleanup failed: ${boundedWorkerError(error)}`),
-    });
-  }
+  });
 }
 
 async function prepareRequestedWorkerWorkspaceResult(params: {
-  request: WorkerWorkspaceReconcileRequest;
+  request: WorkerLocalWorkspaceReconcileRequest;
   stagingRoot: string;
   currentManifestRef: string;
   baseManifestRaw: string;

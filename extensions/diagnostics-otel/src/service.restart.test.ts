@@ -161,79 +161,82 @@ function captureOtelDiagnostics(): string[] {
   return messages;
 }
 
-test("flushes each private generation and leaves global providers untouched", async () => {
-  const receiverA = startLocalOtlpReceiver();
-  const receiverB = startLocalOtlpReceiver();
-  const portA = await receiverA.listen();
-  const portB = await receiverB.listen();
-  releaseOtelGlobals();
-  const globalProviders = {
-    logs: registeredOtelLogs(),
-    metrics: registeredOtelGlobals()?.metrics,
-    trace: registeredOtelGlobals()?.trace,
-  };
-  const serviceA = createDiagnosticsOtelService();
-  const serviceB = createDiagnosticsOtelService();
-  const ctxA = createOtelContext(`http://127.0.0.1:${portA}`, {
-    traces: true,
-    metrics: true,
-    logs: true,
-  });
-  const ctxB = createOtelContext(`http://127.0.0.1:${portB}`, {
-    traces: true,
-    metrics: true,
-    logs: true,
-  });
-  ctxA.config.diagnostics!.otel!.flushIntervalMs = 60_000;
-  ctxB.config.diagnostics!.otel!.flushIntervalMs = 60_000;
+test.each(["replacement instance", "retained instance"])(
+  "flushes each private generation with a %s and leaves global providers untouched",
+  async (mode) => {
+    const receiverA = startLocalOtlpReceiver();
+    const receiverB = startLocalOtlpReceiver();
+    const portA = await receiverA.listen();
+    const portB = await receiverB.listen();
+    releaseOtelGlobals();
+    const globalProviders = {
+      logs: registeredOtelLogs(),
+      metrics: registeredOtelGlobals()?.metrics,
+      trace: registeredOtelGlobals()?.trace,
+    };
+    const serviceA = createDiagnosticsOtelService();
+    const serviceB = mode === "retained instance" ? serviceA : createDiagnosticsOtelService();
+    const ctxA = createOtelContext(`http://127.0.0.1:${portA}`, {
+      traces: true,
+      metrics: true,
+      logs: true,
+    });
+    const ctxB = createOtelContext(`http://127.0.0.1:${portB}`, {
+      traces: true,
+      metrics: true,
+      logs: true,
+    });
+    ctxA.config.diagnostics!.otel!.flushIntervalMs = 60_000;
+    ctxB.config.diagnostics!.otel!.flushIntervalMs = 60_000;
 
-  try {
-    expect(serviceA).not.toBe(serviceB);
-    await serviceA.start(ctxA);
-    const traceA = await emitRealSdkSignals("generation-a");
-    await serviceA.stop?.(ctxA);
-    const aRequestsAfterStop = receiverA.capturedRequests.length;
+    try {
+      await serviceA.start(ctxA);
+      const traceA = await emitRealSdkSignals("generation-a");
+      await serviceA.stop?.(ctxA);
+      const aRequestsAfterStop = receiverA.capturedRequests.length;
 
-    expect(new Set(receiverA.capturedRequests.map((request) => request.signal))).toEqual(
-      new Set(["traces", "metrics", "logs"]),
-    );
-    expect(receiverA.capturedMetrics.length).toBeGreaterThan(0);
-    assertCorrelatedGeneration(receiverA.capturedSpans, receiverA.capturedLogRecords, traceA);
-    expect(registeredOtelGlobals()?.trace).toBe(globalProviders.trace);
-    expect(registeredOtelGlobals()?.metrics).toBe(globalProviders.metrics);
-    expect(registeredOtelLogs()).toBe(globalProviders.logs);
+      expect(new Set(receiverA.capturedRequests.map((request) => request.signal))).toEqual(
+        new Set(["traces", "metrics", "logs"]),
+      );
+      expect(receiverA.capturedMetrics.length).toBeGreaterThan(0);
+      assertCorrelatedGeneration(receiverA.capturedSpans, receiverA.capturedLogRecords, traceA);
+      expect(registeredOtelGlobals()?.trace).toBe(globalProviders.trace);
+      expect(registeredOtelGlobals()?.metrics).toBe(globalProviders.metrics);
+      expect(registeredOtelLogs()).toBe(globalProviders.logs);
 
-    await emitRealSdkSignals("after-a-stop");
-    await waitForDiagnosticEventsDrained();
-    await sleep(50);
-    expect(receiverA.capturedRequests).toHaveLength(aRequestsAfterStop);
+      await emitRealSdkSignals("after-a-stop");
+      await waitForDiagnosticEventsDrained();
+      await sleep(50);
+      expect(receiverA.capturedRequests).toHaveLength(aRequestsAfterStop);
 
-    await serviceB.start(ctxB);
-    const traceB = await emitRealSdkSignals("generation-b");
-    await serviceB.stop?.(ctxB);
-    const bRequestsAfterStop = receiverB.capturedRequests.length;
+      await serviceB.start(ctxB);
+      const traceB = await emitRealSdkSignals("generation-b");
+      await serviceB.stop?.(ctxB);
+      const bRequestsAfterStop = receiverB.capturedRequests.length;
 
-    expect(receiverA.capturedRequests).toHaveLength(aRequestsAfterStop);
-    expect(new Set(receiverB.capturedRequests.map((request) => request.signal))).toEqual(
-      new Set(["traces", "metrics", "logs"]),
-    );
-    expect(receiverB.capturedMetrics.length).toBeGreaterThan(0);
-    assertCorrelatedGeneration(receiverB.capturedSpans, receiverB.capturedLogRecords, traceB);
-    expect(registeredOtelGlobals()?.trace).toBe(globalProviders.trace);
-    expect(registeredOtelGlobals()?.metrics).toBe(globalProviders.metrics);
-    expect(registeredOtelLogs()).toBe(globalProviders.logs);
+      expect(receiverA.capturedRequests).toHaveLength(aRequestsAfterStop);
+      expect(new Set(receiverB.capturedRequests.map((request) => request.signal))).toEqual(
+        new Set(["traces", "metrics", "logs"]),
+      );
+      expect(receiverB.capturedMetrics.length).toBeGreaterThan(0);
+      assertCorrelatedGeneration(receiverB.capturedSpans, receiverB.capturedLogRecords, traceB);
+      expect(registeredOtelGlobals()?.trace).toBe(globalProviders.trace);
+      expect(registeredOtelGlobals()?.metrics).toBe(globalProviders.metrics);
+      expect(registeredOtelLogs()).toBe(globalProviders.logs);
 
-    await emitRealSdkSignals("after-b-stop");
-    await waitForDiagnosticEventsDrained();
-    await sleep(50);
-    expect(receiverB.capturedRequests).toHaveLength(bRequestsAfterStop);
-  } finally {
-    await serviceA.stop?.(ctxA);
-    await serviceB.stop?.(ctxB);
-    await receiverA.close();
-    await receiverB.close();
-  }
-}, 30_000);
+      await emitRealSdkSignals("after-b-stop");
+      await waitForDiagnosticEventsDrained();
+      await sleep(50);
+      expect(receiverB.capturedRequests).toHaveLength(bRequestsAfterStop);
+    } finally {
+      await serviceA.stop?.(ctxA);
+      await serviceB.stop?.(ctxB);
+      await receiverA.close();
+      await receiverB.close();
+    }
+  },
+  30_000,
+);
 
 test("keeps preloaded host providers live and owned by the host after plugin stop", async () => {
   releaseOtelGlobals();

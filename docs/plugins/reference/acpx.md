@@ -2,21 +2,24 @@
 summary: "OpenClaw ACP runtime backend with plugin-owned session and transport management."
 read_when:
   - You are installing, configuring, or auditing the acpx plugin
-title: "ACPx plugin"
+title: "ACPx plugin reference"
 ---
 
-# ACPx plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
 ## Distribution
 
 - Package: `@openclaw/acpx`
-- Install route: npm; ClawHub
+- Install route: npm or ClawHub
 
 ## Surface
 
-skills
+- Skills
 
 <!-- openclaw-plugin-reference:manual-start -->
 

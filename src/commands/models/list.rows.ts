@@ -11,9 +11,11 @@ import {
   modelKey,
   normalizeConfiguredProviderCatalogModelId,
 } from "../../agents/model-ref-shared.js";
-import { modelCatalogLogicalKey } from "../../agents/model-selection-shared.js";
 import { shouldSuppressBuiltInModelCore } from "../../agents/model-suppression.js";
-import { openAIModelCatalogRoutePolicy } from "../../agents/openai-model-routes.js";
+import {
+  openAIModelCatalogRoutePolicy,
+  resolveModelCatalogIdentityKey,
+} from "../../agents/openai-model-routes.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ModelRegistry } from "../../llm/model-registry.js";
@@ -65,16 +67,12 @@ function matchesRowFilter(
 
 type ModelCatalogLogicalRouteIndex = ReadonlyMap<string, readonly ModelCatalogEntry[]>;
 
-function resolveCatalogLogicalKey(model: Pick<ModelCatalogEntry, "provider" | "id">): string {
-  return openAIModelCatalogRoutePolicy.resolveIdentity(model)?.key ?? modelCatalogLogicalKey(model);
-}
-
 function createModelCatalogLogicalRouteIndex(
   catalog: readonly ModelCatalogEntry[],
 ): ModelCatalogLogicalRouteIndex {
   const index = new Map<string, ModelCatalogEntry[]>();
   for (const entry of catalog) {
-    const key = resolveCatalogLogicalKey(entry);
+    const key = resolveModelCatalogIdentityKey(entry);
     const variants = index.get(key) ?? [];
     variants.push(entry);
     index.set(key, variants);
@@ -86,7 +84,7 @@ function resolveCatalogLogicalRoutes(
   model: Pick<ModelCatalogEntry, "provider" | "id">,
   routeIndex: ModelCatalogLogicalRouteIndex | undefined,
 ): readonly ModelCatalogEntry[] | undefined {
-  return routeIndex?.get(resolveCatalogLogicalKey(model));
+  return routeIndex?.get(resolveModelCatalogIdentityKey(model));
 }
 
 function toModelAuthRef(
@@ -566,11 +564,12 @@ export async function appendPreparedModelCatalogRows(params: {
   const routeVariants = [...catalogSnapshot.routeVariants];
   const seenRouteVariants = new Set(
     routeVariants.map(
-      (entry) => `${resolveCatalogLogicalKey(entry)}\0${entry.api ?? ""}\0${entry.baseUrl ?? ""}`,
+      (entry) =>
+        `${resolveModelCatalogIdentityKey(entry)}\0${entry.api ?? ""}\0${entry.baseUrl ?? ""}`,
     ),
   );
   for (const entry of staticEntries) {
-    const routeKey = `${resolveCatalogLogicalKey(entry)}\0${entry.api ?? ""}\0${entry.baseUrl ?? ""}`;
+    const routeKey = `${resolveModelCatalogIdentityKey(entry)}\0${entry.api ?? ""}\0${entry.baseUrl ?? ""}`;
     if (!seenRouteVariants.has(routeKey)) {
       routeVariants.push(entry);
       seenRouteVariants.add(routeKey);

@@ -274,6 +274,22 @@ describe("WizardSession", () => {
     expect(session.signal.aborted).toBe(true);
   });
 
+  test("returns cancellation when progress is retired before a waiting next resumes", async () => {
+    const proceed = createDeferredCore();
+    const session = new WizardSession(async (prompter, _signal, owner) => {
+      await proceed.promise;
+      prompter.progress("Starting the test");
+      owner.cancel();
+    });
+    const pending = session.next();
+    proceed.resolve();
+    try {
+      await expect(pending).resolves.toMatchObject({ done: true, status: "cancelled" });
+    } finally {
+      await session.whenSettled();
+    }
+  });
+
   test.each(["before prompting", "while pending"])(
     "retires a manual prompt aborted %s without cancelling the wizard",
     async (when) => {

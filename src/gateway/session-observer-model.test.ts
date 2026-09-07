@@ -139,6 +139,59 @@ describe("defaultPersistDigest tri-state contract", () => {
       expect(loadSessionEntryReadOnly({ sessionKey, agentId })?.observerDigest?.revision).toBe(0);
     });
   });
+
+  it.each([
+    ["default", undefined],
+    ["default", "lifecycle-a"],
+    ["configured", undefined],
+    ["configured", "lifecycle-a"],
+  ] as const)(
+    "%s store rejects lifecycle %s after reset keeps the session id",
+    async (store, lifecycleRevision) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (fixture) => {
+        const sessionKey = "agent:main:persist-digest-reset";
+        const sessionId = "sess-1";
+        const scope = {
+          sessionKey,
+          agentId,
+          ...(store === "configured"
+            ? { storePath: fixture.path("observer-sessions", "sessions.json") }
+            : {}),
+        };
+        await upsertSessionEntryCore(scope, {
+          sessionId,
+          lifecycleRevision: "lifecycle-b",
+          updatedAt: 1,
+        });
+        const before = readSessionObserverDigestVersion();
+        const previousDigest = {
+          ...makeDigest(sessionKey, 10),
+          sessionId,
+          lifecycleRevision,
+        };
+
+        expect(await defaultPersistDigest({ ...scope, sessionId, digest: previousDigest })).toBe(
+          false,
+        );
+        expect(readSessionObserverDigestVersion()).toBe(before);
+        expect(loadSessionEntryReadOnly(scope)?.observerDigest).toBeUndefined();
+
+        const currentDigest = {
+          ...makeDigest(sessionKey, 1),
+          sessionId,
+          lifecycleRevision: "lifecycle-b",
+        };
+        expect(await defaultPersistDigest({ ...scope, sessionId, digest: currentDigest })).toBe(
+          true,
+        );
+        expect(readSessionObserverDigestVersion()).toBe(before + 1);
+        expect(loadSessionEntryReadOnly(scope)?.observerDigest).toEqual(currentDigest);
+        if (store === "configured") {
+          expect(loadSessionEntryReadOnly({ sessionKey, agentId })).toBeUndefined();
+        }
+      });
+    },
+  );
 });
 
 describe("session observer digest fence", () => {
@@ -198,7 +251,7 @@ describe("session observer digest fence", () => {
             terminalHealth: "done",
           },
         },
-        readSession: () => undefined,
+        readSession: () => loadSessionEntryReadOnly({ sessionKey, agentId }),
         persistDigest: defaultPersistDigest,
         now: () => 1,
       });

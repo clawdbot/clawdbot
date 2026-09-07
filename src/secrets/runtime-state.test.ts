@@ -16,7 +16,7 @@ import { testing as runtimeSnapshotsTesting } from "../agents/auth-profiles/runt
 import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
-} from "../agents/auth-profiles/store.js";
+} from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   createConfigResolutionFacts,

@@ -179,6 +179,9 @@ export async function runMediaUnderstandingFile(
   const decisionBase = {
     capability: params.capability,
     attachments: [],
+    attachmentProcessing: Object.fromEntries(
+      attachments.map(({ index }) => [index, "omitted" as const]),
+    ),
     ...(params.capability === "image" ? { nativeVisionActive: false } : {}),
   };
   if (attachments.length === 0) {

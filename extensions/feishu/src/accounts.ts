@@ -116,7 +116,8 @@ function resolveFeishuBaseCredentials(
   return {
     appId,
     appSecret,
-    domain: cfg?.domain ?? "feishu",
+    // SDK and streaming clients must receive the same scheme-normalized destination.
+    domain: cfg?.domain?.replace(/^https:/i, "https:") ?? "feishu",
   };
 }
 

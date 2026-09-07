@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   parseSidebarEntry,
   serializeSidebarEntry,
@@ -193,11 +192,11 @@ export class SessionOrganizerController {
     this.host.requestUpdate();
   }
 
-  startSidebarWorkboardDrag(event: DragEvent, boardId: string) {
+  startSidebarPluginDrag(event: DragEvent, key: string) {
     if (!event.dataTransfer) {
       return;
     }
-    const entry = serializeSidebarEntry({ type: "workboard", boardId });
+    const entry = serializeSidebarEntry({ type: "plugin", key });
     writeSidebarRouteDragData(event.dataTransfer, entry);
     this.draggingSidebarEntry = entry;
     this.host.requestUpdate();
@@ -246,7 +245,7 @@ export class SessionOrganizerController {
       return serializeSidebarEntry(routeEntry);
     }
     const dynamicEntry = parseSidebarEntry(route);
-    if (dynamicEntry?.type === "workboard") {
+    if (dynamicEntry?.type === "plugin") {
       return serializeSidebarEntry(dynamicEntry);
     }
     const sessionKey = readSessionDragData(dataTransfer);
@@ -369,7 +368,7 @@ export class SessionOrganizerController {
     const entry =
       routeEntry?.type === "route"
         ? routeEntry
-        : dynamicEntry?.type === "workboard"
+        : dynamicEntry?.type === "plugin"
           ? dynamicEntry
           : null;
     if (entry) {
@@ -402,24 +401,12 @@ export class SessionOrganizerController {
   }
 
   async renameSession(session: SidebarRecentSession): Promise<void> {
-    const showInputDialog = await this.loadInputDialog();
-    const nextLabel =
-      (await showInputDialog?.({
-        title: t("sessionsView.renameSessionPrompt"),
-        // The stored label, not the resolved display name: pre-filling the
-        // derived string persists it on submit and it then outranks every
-        // later derivation. Matches the Sessions page rename.
-        defaultValue: normalizeOptionalString(session.userLabel) ?? "",
-      })) ?? null;
-    if (nextLabel === null) {
-      return;
-    }
     const scope = this.host.sessionData.beginSessionMutation();
     if (!scope) {
       return;
     }
     const operations = await this.loadOperations(scope);
-    await operations?.renameSession(this.host, session, nextLabel, scope);
+    await operations?.renameSession(this.host, session, scope);
   }
 
   async createSessionGroup(sessions: readonly SidebarRecentSession[] = []): Promise<void> {

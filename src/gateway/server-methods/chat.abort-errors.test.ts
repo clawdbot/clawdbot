@@ -469,14 +469,6 @@ it.each(["exact native new", "cascade native new", "RPC reset", "RPC delete"])(
     const entered = createDeferred();
     const release = createDeferred();
     const native = boundary.endsWith("native new");
-    const childAdmission = native
-      ? await beginSessionWorkAdmission({
-          scope: childStore,
-          identities: [childKey, "incarnation-child"],
-          assertAllowed: () => {},
-          onInterrupt: () => entered.resolve(),
-        })
-      : undefined;
     let writer: Promise<unknown> | undefined;
     const childHandle = createEmbeddedRunHandle({
       abort: () => {
@@ -490,9 +482,7 @@ it.each(["exact native new", "cascade native new", "RPC reset", "RPC delete"])(
         );
       },
     });
-    if (!native) {
-      setActiveEmbeddedRun("incarnation-child", childHandle, childKey);
-    }
+    setActiveEmbeddedRun("incarnation-child", childHandle, childKey);
     const parentAdmission = await beginSessionWorkAdmission({
       scope: storePath,
       identities: [sessionKey, sessionId],
@@ -537,11 +527,10 @@ it.each(["exact native new", "cascade native new", "RPC reset", "RPC delete"])(
       ]);
       expect(parent.controller.signal.aborted).toBe(true);
       expect(context.chatAbortControllers.has("parent")).toBe(false);
-      if (!native) {
-        expect(getSubagentRunByChildSessionKey(childKey)?.endedReason).toBe("subagent-killed");
-        // Runtime is already quiescent; only its canonical marker write remains pending.
-        clearActiveEmbeddedRun("incarnation-child", childHandle, childKey);
-      }
+      expect(getSubagentRunByChildSessionKey(childKey)?.endedReason).toBe("subagent-killed");
+      // Explicit reset drains children, including native /new. Keep the original
+      // abort pending on its marker writer, not on work the reset must stop.
+      clearActiveEmbeddedRun("incarnation-child", childHandle, childKey);
       if (native) {
         const reset = await initSessionState({
           cfg,
@@ -596,7 +585,6 @@ it.each(["exact native new", "cascade native new", "RPC reset", "RPC delete"])(
           events.findLast((event) => asOptionalRecord(event)?.type === "reset"),
         ).not.toHaveProperty("firstKeptEntryId");
       }
-      childAdmission?.release();
       release.resolve();
       await writer;
       const response = await abort;
@@ -611,7 +599,6 @@ it.each(["exact native new", "cascade native new", "RPC reset", "RPC delete"])(
         expect(transcriptRows()).toEqual({ nodes: 0, windows: 0 });
       }
     } finally {
-      childAdmission?.release();
       parentAdmission.release();
       operation.complete();
       release.resolve();

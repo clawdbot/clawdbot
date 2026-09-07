@@ -264,14 +264,22 @@ struct AppStateRemoteConfigTests {
             await state._testAwaitGatewayConfigSync()
 
             remote["token"] = "new-token"
-            #expect(OpenClawConfigFile.saveDict(["gateway": ["mode": "remote", "remote": remote]]))
+            var externalRoot = OpenClawConfigFile.loadDict()
+            var externalGateway = externalRoot["gateway"] as? [String: Any] ?? [:]
+            externalGateway["remote"] = remote
+            externalRoot["gateway"] = externalGateway
+            #expect(OpenClawConfigFile.saveDict(externalRoot))
             state._testApplyConfigFromDisk()
             #expect(state.remoteUrl == "wss://")
             #expect(state.remoteToken == "new-token")
             #expect(state.gatewayConfigConflict == nil)
 
             remote["url"] = "wss://external.example.test"
-            #expect(OpenClawConfigFile.saveDict(["gateway": ["mode": "remote", "remote": remote]]))
+            externalRoot = OpenClawConfigFile.loadDict()
+            externalGateway = externalRoot["gateway"] as? [String: Any] ?? [:]
+            externalGateway["remote"] = remote
+            externalRoot["gateway"] = externalGateway
+            #expect(OpenClawConfigFile.saveDict(externalRoot))
             state._testApplyConfigFromDisk()
             #expect(state.remoteUrl == "wss://")
             #expect(state._testConflictedGatewayConfigFields == ["gateway.remote.url"])

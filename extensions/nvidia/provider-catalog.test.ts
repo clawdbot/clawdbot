@@ -6,7 +6,6 @@ import {
   buildLiveNvidiaProvider,
   buildNvidiaProvider,
   buildSelectableNvidiaProvider,
-  buildSelectableLiveNvidiaProvider,
 } from "./provider-catalog.js";
 
 const NVIDIA_FEATURED_MODELS_URL =
@@ -214,41 +213,36 @@ describe("nvidia provider catalog", () => {
     ]);
   });
 
-  it("uses known live models when the featured feed fails", async () => {
+  it("rejects an incomplete acquisition when the featured feed fails", async () => {
     mockInventoryAndFeatured({
       ids: ["nvidia/nemotron-3-ultra-550b-a55b"],
       featured: [],
       featuredStatus: 503,
     });
 
-    const provider = await buildSelectableLiveNvidiaProvider();
-
-    expect(provider.models).toMatchObject([
-      {
-        id: "nvidia/nemotron-3-ultra-550b-a55b",
-        reasoning: true,
-        params: { chat_template_kwargs: { enable_thinking: false, force_nonempty_content: true } },
-      },
-    ]);
-    expect(provider.models).toHaveLength(1);
+    await expect(buildLiveNvidiaProvider()).rejects.toThrow("HTTP 503");
   });
 
-  it("does not turn an empty authoritative inventory into a bundled fallback", async () => {
-    mockInventoryAndFeatured({
-      ids: [],
-      featured: [
-        {
-          model: "z-ai/glm-5.2",
-          "model-name": "Stale featured model",
-          context: 202752,
-          "max-output": 8192,
-        },
-      ],
-    });
+  it.each([200, 503])(
+    "keeps empty inventory authoritative with featured HTTP %s",
+    async (featuredStatus) => {
+      mockInventoryAndFeatured({
+        ids: [],
+        featuredStatus,
+        featured: [
+          {
+            model: "z-ai/glm-5.2",
+            "model-name": "Stale featured model",
+            context: 202752,
+            "max-output": 8192,
+          },
+        ],
+      });
 
-    expect((await buildLiveNvidiaProvider()).models).toEqual([]);
-    expect((await buildSelectableLiveNvidiaProvider()).models).toEqual([]);
-  });
+      expect((await buildLiveNvidiaProvider()).models).toEqual([]);
+      expect((await buildLiveNvidiaProvider()).models).toEqual([]);
+    },
+  );
 
   it("does not treat featured rows as fresh inventory when model discovery fails", async () => {
     mockInventoryAndFeatured({
@@ -259,10 +253,7 @@ describe("nvidia provider catalog", () => {
       ],
     });
 
-    expect((await buildLiveNvidiaProvider()).models.map((model) => model.id)).toEqual(
-      EXPECTED_SELECTABLE_MODELS.map((model) => model.id),
-    );
-    expect((await buildSelectableLiveNvidiaProvider()).models).toEqual([]);
+    await expect(buildLiveNvidiaProvider()).rejects.toThrow("HTTP 503");
   });
 
   it("builds the bundled NVIDIA provider defaults", () => {
@@ -418,42 +409,6 @@ describe("nvidia provider catalog", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("falls back to the bundled catalog when live discovery is unavailable", async () => {
-    mockFeaturedCatalogResponse({ error: "unavailable" }, 503);
-
-    const provider = await buildLiveNvidiaProvider();
-
-    expect(provider.models.map((model) => model.id)).toEqual(
-      EXPECTED_SELECTABLE_MODELS.map((model) => model.id),
-    );
-  });
-
-  it("uses only selectable live catalog rows when the featured catalog returns models", async () => {
-    mockFeaturedCatalogResponse({
-      "featured-models": [
-        {
-          model: "z-ai/glm-5.2",
-          "model-name": "GLM 5.2",
-          context: 202752,
-          "max-output": 8192,
-        },
-        {
-          model: "nemotron-3-super-120b-a12b",
-          "model-name": "Nemotron 3 Super 120B",
-          context: 262144,
-          "max-output": 8192,
-        },
-      ],
-    });
-
-    const provider = await buildSelectableLiveNvidiaProvider();
-
-    expect(provider.models.map((model) => model.id)).toEqual([
-      "z-ai/glm-5.2",
-      "nvidia/nemotron-3-super-120b-a12b",
-    ]);
-  });
-
   it("restores bundled legacy models when NVIDIA republishes them in its featured catalog", async () => {
     mockFeaturedCatalogResponse({
       "featured-models": [
@@ -473,14 +428,12 @@ describe("nvidia provider catalog", () => {
     });
 
     const live = await buildLiveNvidiaProvider();
-    const selectableLive = await buildSelectableLiveNvidiaProvider();
     const republishedIds = [
       "minimaxai/minimax-m3",
       ...EXPECTED_DEPRECATED_MODELS.map((model) => model.id),
     ];
 
     expect(live.models.map((model) => model.id)).toEqual(republishedIds);
-    expect(selectableLive.models.map((model) => model.id)).toEqual(republishedIds);
   });
 
   it("maps a republished Qwen model from NVIDIA's current featured catalog", async () => {
@@ -520,14 +473,6 @@ describe("nvidia provider catalog", () => {
       { id: "deepseek-ai/deepseek-v4-pro", contextWindow: 262_144, maxTokens: 16_384 },
       { id: "qwen/qwen3.5-397b-a17b", contextWindow: 262_144, maxTokens: 16_384 },
     ]);
-  });
-
-  it("returns no selectable live rows when live discovery is unavailable", async () => {
-    mockFeaturedCatalogResponse({ error: "unavailable" }, 503);
-
-    const provider = await buildSelectableLiveNvidiaProvider();
-
-    expect(provider.models.map((model) => model.id)).toEqual([]);
   });
 
   it("ignores malformed featured catalog rows and keeps valid entries", async () => {
@@ -603,12 +548,8 @@ describe("nvidia provider catalog", () => {
       ],
     });
 
-    const first = await buildLiveNvidiaProvider();
+    await expect(buildLiveNvidiaProvider()).rejects.toThrow("no usable model metadata");
     const second = await buildLiveNvidiaProvider();
-
-    expect(first.models).toMatchObject([
-      { id: "z-ai/glm-5.2", name: "GLM 5.2", contextWindow: 202752 },
-    ]);
     expect(second.models).toMatchObject([
       { id: "z-ai/glm-5.2", name: "Updated GLM 5.2", contextWindow: 262144 },
     ]);

@@ -1,5 +1,5 @@
 // Docker E2E Plan tests cover docker e2e plan script behavior.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -139,6 +139,54 @@ function bundledPluginSweepLane(index: number): ReturnType<typeof summarizeLane>
 
 describe("scripts/lib/docker-e2e-plan", () => {
   it.each([
+    ["catalog", "docker-package-install", {}, 0, ""],
+    ["missing package", "docker-package-install", { needsPackage: false }, 1, "package Docker"],
+    [
+      "package-only reused image",
+      "docker-package-install",
+      { command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:package-install" },
+      1,
+      "must force a local image build",
+    ],
+    [
+      "source reused image",
+      "docker-selected-plugins",
+      { command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:selected-plugins" },
+      1,
+      "must force a local image build",
+    ],
+    ["unapproved live package", "live-models", { needsPackage: true }, 1, "must not require"],
+    [
+      "shared package image",
+      "docker-package-install",
+      {
+        e2eImageKind: "bare",
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:package-install",
+      },
+      0,
+      "",
+    ],
+  ] as const)("validates Docker boundary ownership: %s", (_label, name, overrides, exit, error) => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "./scripts/tsx.mjs",
+        "--input-type=module",
+        "-e",
+        `import { mainLanes } from './scripts/lib/docker-e2e-scenarios.mts';
+Object.assign(mainLanes.find(lane => lane.name === ${JSON.stringify(name)}), ${JSON.stringify(overrides)});
+await import('./scripts/check-docker-e2e-boundaries.mts');`,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(exit);
+    if (error) {
+      expect(result.stderr).toContain(error);
+    }
+  });
+
+  it.each([
     ["codex-media-path", ["@openclaw/codex"]],
     ["live-mcp-code-mode-gateway", ["@openclaw/codex"]],
     ["release-typed-onboarding", ["@openclaw/codex"]],
@@ -159,6 +207,16 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(findLaneByName("plugin-binding-command-escape")?.name).toBe(
       "plugin-binding-command-escape",
     );
+  });
+
+  it("runs Fleet host proof only when explicitly selected", () => {
+    expect(planFor().lanes.map((lane) => lane.name)).not.toContain("fleet-cache");
+    const selected = planFor({ selectedLaneNames: ["fleet-cache"] });
+    expect(selected.lanes.map((lane) => lane.name)).toEqual(["fleet-cache"]);
+    expect(selected.needs.package).toBe(true);
+    expect(selected.needs.e2eImage).toBe(false);
+    expect(selected.needs.prepublishPluginRegistry).toBe(false);
+    expect(findLaneByName("fleet-cache")?.name).toBe("fleet-cache");
   });
 
   it("plans the package-backed sandbox browser sidecar lane", () => {
@@ -330,8 +388,8 @@ describe("scripts/lib/docker-e2e-plan", () => {
         weight: 3,
       },
       {
-        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:package-install",
-        imageKind: "bare",
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=0 pnpm test:docker:package-install",
+        imageKind: undefined,
         live: false,
         name: "docker-package-install",
         resources: ["docker", "npm"],
@@ -347,6 +405,12 @@ describe("scripts/lib/docker-e2e-plan", () => {
       liveImage: false,
       package: true,
       prepublishPluginRegistry: false,
+    });
+    expect(planFor({ selectedLaneNames: ["docker-package-install"] }).needs).toMatchObject({
+      package: true,
+      bareImage: false,
+      functionalImage: false,
+      e2eImage: false,
     });
   });
 

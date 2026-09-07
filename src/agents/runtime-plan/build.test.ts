@@ -4,7 +4,6 @@ import { createParameterFreeTool } from "openclaw/plugin-sdk/agent-runtime-test-
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState } from "../../config/config.js";
 import {
-  prepareProviderExtraParams,
   resolveProviderFollowupFallbackRoute,
   resolveProviderRuntimePluginHandle,
   type ProviderRuntimePluginHandle,
@@ -26,14 +25,12 @@ vi.mock("../../plugins/provider-hook-runtime.js", () => ({
   ensureProviderRuntimePluginHandle: vi.fn(
     (params) => params.runtimeHandle ?? { provider: "openai" },
   ),
-  prepareProviderExtraParams: vi.fn(() => undefined),
+  getModelProviderRuntimePluginHandle: () => undefined,
   resolveProviderAuthProfileId: vi.fn(() => undefined),
-  resolveProviderExtraParamsForTransport: vi.fn(() => undefined),
   resolveProviderFollowupFallbackRoute: vi.fn(() => undefined),
   resolveProviderPluginsForHooks: vi.fn(() => []),
   resolveProviderRuntimePlugin: vi.fn(() => undefined),
   resolveProviderRuntimePluginHandle: vi.fn(() => ({ provider: "openai" })),
-  wrapProviderStreamFn: vi.fn(() => undefined),
 }));
 
 const gpt54Model = {
@@ -94,9 +91,19 @@ describe("AgentRuntimePlan", () => {
   it("defers default transport extra params until they are read", () => {
     // Extra params are lazy so plan construction stays cheap and provider hooks
     // only run if a transport path actually needs them.
-    const prepareProviderExtraParamsMock = vi.mocked(prepareProviderExtraParams);
-    prepareProviderExtraParamsMock.mockClear();
-
+    const prepareProviderExtraParamsMock = vi.fn(() => undefined);
+    const providerRuntimeHandle = {
+      provider: "openai",
+      modelId: gpt54Model.id,
+      workspaceDir: "/tmp/openclaw-runtime-plan",
+      prepared: true,
+      plugin: {
+        id: "openai",
+        label: "OpenAI",
+        auth: [],
+        prepareExtraParams: prepareProviderExtraParamsMock,
+      },
+    } satisfies ProviderRuntimePluginHandle & { modelId: string; prepared: true };
     const plan = buildAgentRuntimePlan({
       provider: "openai",
       modelId: "gpt-5.4",
@@ -104,6 +111,7 @@ describe("AgentRuntimePlan", () => {
       config: {},
       workspaceDir: "/tmp/openclaw-runtime-plan",
       model: gpt54Model,
+      providerRuntimeHandle,
     });
 
     expect(prepareProviderExtraParamsMock).not.toHaveBeenCalled();
@@ -114,6 +122,37 @@ describe("AgentRuntimePlan", () => {
     expect(prepareProviderExtraParamsMock).toHaveBeenCalledTimes(1);
     void plan.transport.extraParams;
     expect(prepareProviderExtraParamsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps prepared extra params within their provider generation and attempt", () => {
+    const config = { agents: { defaults: { params: { temperature: 0.1 } } } };
+    const buildPlan = (owner: string) => {
+      const providerRuntimeHandle = {
+        provider: "fixture-provider",
+        modelId: "fixture-model",
+        prepared: true,
+        plugin: {
+          id: "fixture-provider",
+          label: "Fixture",
+          auth: [],
+          prepareExtraParams: ({ extraParams }) => ({ ...extraParams, owner }),
+        },
+      } satisfies ProviderRuntimePluginHandle & { modelId: string; prepared: true };
+      return buildAgentRuntimePlan({
+        config,
+        provider: "fixture-provider",
+        modelId: "fixture-model",
+        providerRuntimeHandle,
+      });
+    };
+    const first = buildPlan("first");
+    expect(first.transport.extraParams).toEqual({ temperature: 0.1, owner: "first" });
+    const replacement = buildPlan("replacement");
+    expect(replacement.transport.extraParams).toEqual({ temperature: 0.1, owner: "replacement" });
+    config.agents.defaults.params.temperature = 0.7;
+    const updated = buildPlan("updated");
+    expect(updated.transport.extraParams).toEqual({ temperature: 0.7, owner: "updated" });
+    expect(first.transport.extraParams).toEqual({ temperature: 0.1, owner: "first" });
   });
 
   it("records resolved model, auth, transport, tool, delivery, and observability policy", () => {

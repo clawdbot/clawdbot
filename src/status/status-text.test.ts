@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -406,6 +407,7 @@ describe("buildStatusText thinking facts", () => {
 });
 
 describe("buildStatusText prepared context windows", () => {
+  afterEach(() => cliBackendsTesting.resetDepsForTest());
   const catalog = [
     {
       provider: "deepseek",
@@ -518,6 +520,18 @@ describe("buildStatusText prepared context windows", () => {
   });
 
   it("keeps Anthropic authored caps below the prepared Claude CLI window", async () => {
+    // Supply runtime alias metadata while exercising the authored context cap.
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          pluginId: "anthropic",
+          config: { command: "claude" },
+          bundleMcp: true,
+        },
+      ],
+    });
     const parts = await renderPreparedStatus({
       provider: "anthropic",
       model: "claude-haiku-4-5",

@@ -12,6 +12,27 @@ type SqliteIntegrityChecks = {
   integrityCheck: "ok";
 };
 
+export type SqliteIntegrityOperation<T> = Generator<
+  { database: DatabaseSync; databaseLabel: string },
+  T,
+  void
+>;
+
+/** Run the same admission steps synchronously when the caller cannot yield. */
+export function runSqliteIntegrityOperationSync<T>(operation: SqliteIntegrityOperation<T>): T {
+  let step = operation.next();
+  while (!step.done) {
+    try {
+      assertSqliteIntegrity(step.value.database, step.value.databaseLabel);
+    } catch (error) {
+      step = operation.throw(error);
+      continue;
+    }
+    step = operation.next();
+  }
+  return step.value;
+}
+
 type UnboundSqliteIntegrityConfirmation =
   | { status: "failed"; error: Error; terminal: boolean }
   | { status: "healthy" };

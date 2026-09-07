@@ -9,6 +9,7 @@ import type {
   UsageSummary,
 } from "../../infra/provider-usage.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { formatForLog } from "../ws-log.js";
 import {
   clearProviderUsageRuntimeSnapshot,
@@ -145,45 +146,48 @@ function scheduleProviderUsageRefresh(params: {
     return active.promise;
   }
   const publishGeneration = cacheGeneration;
-  const promise = loadProviderUsageSummary({
-    providers: params.providerIds,
-    agentDir: params.agentDir,
-    authStore: params.authStore,
-    config: params.configRef,
-    timeoutMs: PROVIDER_USAGE_TIMEOUT_MS,
-  })
-    .then((freshUsage) => {
-      const usage = retainLastGoodOnTimeout(freshUsage, params.lastGood);
-      if (
-        publishGeneration === cacheGeneration &&
-        usageRefreshByAgentId.get(params.agentId) === refresh
-      ) {
-        usageCacheByAgentId.set(params.agentId, {
-          agentDir: params.agentDir,
-          configRef: params.configRef,
-          credentialKey: params.credentialKey,
-          providerKey: params.providerKey,
-          refreshedAt: Date.now(),
-          summary: usage,
-          usageByProvider: mapProviderUsage(usage),
-        });
-      }
-      return usage;
+  // SWR replies and invalidation must retain publication and finalization ownership.
+  const promise = trackAsyncWork(() =>
+    loadProviderUsageSummary({
+      providers: params.providerIds,
+      agentDir: params.agentDir,
+      authStore: params.authStore,
+      config: params.configRef,
+      timeoutMs: PROVIDER_USAGE_TIMEOUT_MS,
     })
-    .catch((err: unknown) => {
-      // Usage is auxiliary and stale data remains valid. A failed refresh
-      // publishes nothing, so a capable client keeps seeing the incomplete
-      // marker and reports it once its retry budget is spent.
-      log.debug(
-        `usage refresh failed: providers=${params.providerIds.join(",")} error=${formatForLog(err)}`,
-      );
-      throw err;
-    })
-    .finally(() => {
-      if (usageRefreshByAgentId.get(params.agentId) === refresh) {
-        usageRefreshByAgentId.delete(params.agentId);
-      }
-    });
+      .then((freshUsage) => {
+        const usage = retainLastGoodOnTimeout(freshUsage, params.lastGood);
+        if (
+          publishGeneration === cacheGeneration &&
+          usageRefreshByAgentId.get(params.agentId) === refresh
+        ) {
+          usageCacheByAgentId.set(params.agentId, {
+            agentDir: params.agentDir,
+            configRef: params.configRef,
+            credentialKey: params.credentialKey,
+            providerKey: params.providerKey,
+            refreshedAt: Date.now(),
+            summary: usage,
+            usageByProvider: mapProviderUsage(usage),
+          });
+        }
+        return usage;
+      })
+      .catch((err: unknown) => {
+        // Usage is auxiliary and stale data remains valid. A failed refresh
+        // publishes nothing, so a capable client keeps seeing the incomplete
+        // marker and reports it once its retry budget is spent.
+        log.debug(
+          `usage refresh failed: providers=${params.providerIds.join(",")} error=${formatForLog(err)}`,
+        );
+        throw err;
+      })
+      .finally(() => {
+        if (usageRefreshByAgentId.get(params.agentId) === refresh) {
+          usageRefreshByAgentId.delete(params.agentId);
+        }
+      }),
+  );
   const refresh: ProviderUsageRefresh = {
     agentDir: params.agentDir,
     configRef: params.configRef,

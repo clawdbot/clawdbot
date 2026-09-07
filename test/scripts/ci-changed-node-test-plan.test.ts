@@ -74,6 +74,12 @@ it.each([
   [["scripts/e2e/lib/mcp-code-mode-probe-server.ts"], ["mcp-code-mode-gateway"]],
   [["scripts/e2e/lib/mcp-code-mode/scenario.sh"], ["mcp-code-mode-gateway"]],
   [["scripts/e2e/update-channel-switch-docker.sh"], ["update-channel-switch"]],
+  [["scripts/e2e/fleet-cache-docker.sh"], ["fleet-cache"]],
+  [["scripts/e2e/lib/fleet-cache/assert-cell.mjs"], ["fleet-cache"]],
+  [["scripts/e2e/lib/fleet-cache/podman-control.sh"], ["fleet-cache"]],
+  [["scripts/e2e/lib/fleet-cache/prepare-podman-storage.mjs"], ["fleet-cache"]],
+  [["scripts\\e2e\\lib\\fleet-cache\\probe-podman-cell.mjs"], ["fleet-cache"]],
+  [["scripts/e2e/lib/fleet-cache-unrelated/probe.mjs"], []],
   [["scripts/e2e/lib/update-channel-switch/assertions.mjs"], ["update-channel-switch"]],
   [
     [
@@ -103,14 +109,35 @@ it.each([
 });
 
 describe("CI changed Node test plan", () => {
-  it("leaves native Chromium tests to checks-ui while retaining changed Node-driven tests", () => {
+  it("leaves dedicated UI tests to their owners while retaining changed Node-driven tests", () => {
     const browser = "ui/src/components/markdown-mermaid.runtime.browser.test.ts";
     const node = "ui/src/components/form-controls.browser.test.ts";
-    const shards = createChangedNodeTestShards([browser, node]);
+    const uiE2e = [
+      "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
+      "ui/src/e2e/settings-layout.e2e.test.ts",
+    ];
+    const changedPaths = [browser, node, ...uiE2e];
+    const shards = createChangedNodeTestShards(changedPaths);
     expect(shards).not.toBeNull();
-    const targets = shards?.flatMap((shard) => shard.targets ?? []);
+    const targets = shards?.flatMap((shard) => shard.targets ?? []) ?? [];
     expect(targets).toContain(node);
     expect(targets).not.toContain(browser);
+    expect(targets).toEqual(expect.arrayContaining(uiE2e));
+    expect(createChangedNodeTestShards(changedPaths, { dedicatedUiE2e: false })).toEqual(shards);
+
+    const dedicated = createChangedNodeTestShards(changedPaths, { dedicatedUiE2e: true });
+    expect(dedicated).not.toBeNull();
+    expect(dedicated?.flatMap((shard) => shard.targets ?? [])).toEqual(
+      targets.filter((target) => !uiE2e.includes(target)),
+    );
+    expect(dedicated?.filter((shard) => !shard.targets)).toEqual(
+      shards?.filter((shard) => !shard.targets),
+    );
+    // Core E2E still requires full-suite metadata; UI ownership cannot absorb it.
+    for (const paths of [["src/gateway/gateway.test.ts"], [...changedPaths, "src/deleted.ts"]]) {
+      expect(createChangedNodeTestShards(paths)).toBeNull();
+      expect(createChangedNodeTestShards(paths, { dedicatedUiE2e: true })).toBeNull();
+    }
   });
   it.each([
     "extensions/copilot/index.ts",
@@ -852,6 +879,33 @@ describe("CI changed Node test plan", () => {
         runner: "blacksmith-8vcpu-ubuntu-2404",
         shardName: "changed-extensions-config",
       },
+    ]);
+  });
+
+  it.each([
+    "src/gateway/server-sidecar-retention.test.ts",
+    "src/infra/update-candidate-canary.integration.test.ts",
+    "src/cli/update-cli/update-command-migrated.test.ts",
+  ])("prepares runtime artifacts for changed fixture %s", (target) => {
+    const shards = createChangedNodeTestShards([target]);
+    expect(shards).not.toBeNull();
+    const owners = shards?.filter((shard) => shard.targets?.includes(target));
+    expect(owners).toHaveLength(1);
+    expect(owners?.[0]).toMatchObject({
+      configs: [],
+      targets: [target],
+      pretestBuildMode: "runtime",
+    });
+  });
+
+  it("retains compact metadata for the ordinary tooling delivery-cache smoke", () => {
+    const target = "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts";
+    expect(createChangedNodeTestShards([target])).toBeNull();
+    expect(buildVitestRunPlans([target])).toEqual([
+      expect.objectContaining({
+        config: "test/vitest/vitest.tooling.config.ts",
+        includePatterns: [target],
+      }),
     ]);
   });
 

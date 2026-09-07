@@ -616,7 +616,7 @@ describe("dispatchReplyFromConfig", () => {
           sessionId: "new-session",
           storePath: "/tmp/rotated-sessions.json",
         });
-        return { text: "✅ New session started." };
+        return { text: "✅ New session started.", isStatusNotice: true };
       },
     });
     await settleReplyDispatcher({ dispatcher });

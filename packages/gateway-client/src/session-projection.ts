@@ -2,6 +2,10 @@
 
 import { asNullableRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  isSessionProjectionErrorMessage,
+  readSessionMessageDisplayContent,
+} from "./session-projection-message-content.js";
+import {
   normalizeSessionProjectionRunId,
   readAssistantStreamSegmentIdentity,
   readSessionMessageIdentity,
@@ -9,7 +13,11 @@ import {
   type SessionMessageEnvelope,
   type SessionMessageIdentity,
 } from "./session-projection-message-identity.js";
-import { reduceSessionProjectionRunEventImpl } from "./session-projection-run-event.js";
+export {
+  reduceSessionProjectionRunEvent,
+  type SessionProjectionGatewayRunEvent,
+  type SessionProjectionRunTransition,
+} from "./session-projection-run-event.js";
 
 export {
   normalizeSessionProjectionRunId,
@@ -17,6 +25,7 @@ export {
   readSessionMessageIdentity,
   readSessionMessageSequence,
 } from "./session-projection-message-identity.js";
+export { isSessionProjectionErrorMessage } from "./session-projection-message-content.js";
 export type {
   SessionMessageEnvelope,
   SessionMessageIdentity,
@@ -44,23 +53,13 @@ export type SessionProjectionRunStatus =
 
 export type SessionProjectionRun = {
   runId: string;
+  seq?: number;
   status: SessionProjectionRunStatus;
   message?: unknown;
   acceptedFinalMessageIdentities?: readonly string[];
   stopReason?: string;
   errorKind?: string;
   errorMessage?: string;
-};
-
-export type SessionProjectionGatewayRunEvent = {
-  state?: unknown;
-  yielded?: unknown;
-} & Partial<Record<"runId" | "message" | "stopReason" | "errorKind" | "errorMessage", unknown>>;
-
-export type SessionProjectionRunTransition = {
-  projection: SessionProjectionState;
-  previousRun: SessionProjectionRun | undefined;
-  currentRun: SessionProjectionRun | undefined;
 };
 
 export type SessionProjectionEntry = {
@@ -113,7 +112,7 @@ export type SessionProjectionEvent = ScopedSessionProjectionEvent &
         previousRunId?: string;
       }
     | { type: "sendFailed"; runId: string }
-    | { type: "runDelta"; runId: string; message?: unknown }
+    | { type: "runDelta"; runId: string; seq?: number; message?: unknown }
     | (Omit<SessionProjectionRun, "acceptedFinalMessageIdentities"> & {
         type: "runTerminal";
         status: Exclude<SessionProjectionRunStatus, "streaming">;
@@ -459,31 +458,13 @@ export function reconcileSessionProjectionSnapshot(
 }
 
 function hasDisplayableSessionMessage(message: unknown): boolean {
-  if (typeof message === "string") {
-    return message.trim().length > 0;
-  }
-  const record = readRecord(message);
-  if (!record) {
-    return false;
-  }
-  const displayableBlocks =
-    Array.isArray(record.content) &&
-    record.content.some((block) => {
-      const entry = readRecord(block);
-      return entry
-        ? entry.type !== "text" || readNonemptyString(entry.text) !== null
-        : typeof block === "string" && block.trim().length > 0;
-    });
-  const media = readRecord(record["__openclaw"])?.media;
-  return Boolean(
-    (typeof record.content === "string" && record.content.trim()) ||
-    displayableBlocks ||
-    (Array.isArray(media) && media.length > 0),
-  );
+  const { text, hasNonText } = readSessionMessageDisplayContent(message);
+  return Boolean(text) || hasNonText;
 }
 
-function readSessionProjectionFinalMessageIdentity(message: unknown): string | null {
-  if (!hasDisplayableSessionMessage(message)) {
+export function readSessionProjectionFinalMessageIdentity(message: unknown): string | null {
+  const display = readSessionMessageDisplayContent(message);
+  if (!display.text && !display.hasNonText) {
     return null;
   }
   const identity = readSessionMessageIdentity(message);
@@ -510,6 +491,7 @@ function readSessionProjectionFinalMessageIdentity(message: unknown): string | n
             metadata?.externalId ?? null,
           ]
         : null,
+      ...(display.usesFallbackText ? [record?.text] : []),
     ])}`;
   } catch {
     return null;
@@ -550,14 +532,26 @@ function updateRun(
   incoming: SessionProjectionRun,
 ): SessionProjectionState {
   const incomingErrorMessage = readNonemptyString(incoming.errorMessage);
-  const normalizedIncoming = { ...incoming };
+  const incomingSeq =
+    typeof incoming.seq === "number" && Number.isSafeInteger(incoming.seq) && incoming.seq >= 0
+      ? incoming.seq
+      : undefined;
+  const normalizedIncoming = { ...incoming, seq: incomingSeq };
   if (incomingErrorMessage) {
     normalizedIncoming.errorMessage = incomingErrorMessage;
   } else {
     delete normalizedIncoming.errorMessage;
   }
   const current = state.runs[incoming.runId];
-  if (current && current.status !== "streaming") {
+  // Only newer run-event order can distinguish resumed output from buffered stale deltas.
+  const resumesErrorProjection =
+    current?.status === "error" &&
+    incoming.status === "streaming" &&
+    current.seq !== undefined &&
+    incomingSeq !== undefined &&
+    incomingSeq > current.seq &&
+    isSessionProjectionErrorMessage(current.message, current.errorMessage);
+  if (current && current.status !== "streaming" && !resumesErrorProjection) {
     const incomingFinalIdentity = readSessionProjectionFinalMessageIdentity(incoming.message);
     const incomingIsFinal = incoming.status === "completed" || incoming.status === "yielded";
     const canRecoverFinal =
@@ -572,7 +566,12 @@ function updateRun(
     const recoverMessage = acceptFinal && !hasDisplayableSessionMessage(current.message);
     const recoverError =
       readNonemptyString(current.errorMessage) === null && incomingErrorMessage !== null;
-    if (!acceptFinal && !recoverError) {
+    const updateTerminalSequence =
+      incoming.status !== "streaming" &&
+      (incomingSeq === undefined
+        ? current.seq !== undefined
+        : current.seq === undefined || incomingSeq > current.seq);
+    if (!acceptFinal && !recoverError && !updateTerminalSequence) {
       return state;
     }
     const firstFinalIdentity = readSessionProjectionFinalMessageIdentity(current.message);
@@ -584,6 +583,7 @@ function updateRun(
         ...state.runs,
         [incoming.runId]: {
           ...current,
+          ...(updateTerminalSequence ? { seq: incomingSeq } : {}),
           ...(recoverMessage ? { message: incoming.message } : {}),
           ...(acceptFinal && incomingFinalIdentity
             ? {
@@ -603,6 +603,20 @@ function updateRun(
       },
     };
   }
+  const resumedState = resumesErrorProjection
+    ? withEntries(
+        state,
+        state.entries.filter(
+          (entry) =>
+            !(
+              (entry.identity?.runId === incoming.runId || entry.message === current.message) &&
+              (readRecord(entry.message)?.stopReason === "error" ||
+                entry.message === current.message) &&
+              isSessionProjectionErrorMessage(entry.message, current.errorMessage)
+            ),
+        ),
+      )
+    : state;
   // Completing a previously active run moves it behind older completed diagnostics.
   const previousRuns =
     current && current.status === "streaming" && incoming.status !== "streaming"
@@ -613,16 +627,18 @@ function updateRun(
       ? readSessionProjectionFinalMessageIdentity(incoming.message)
       : null;
   return {
-    ...state,
+    ...resumedState,
     runs: retainSessionProjectionRuns({
       ...previousRuns,
       [incoming.runId]: {
-        ...current,
+        ...(resumesErrorProjection ? {} : current),
         ...normalizedIncoming,
         ...(acceptedFinalIdentity
           ? { acceptedFinalMessageIdentities: [acceptedFinalIdentity] }
           : {}),
-        ...(incoming.message === undefined && current?.message !== undefined
+        ...(!resumesErrorProjection &&
+        incoming.message === undefined &&
+        current?.message !== undefined
           ? { message: current.message }
           : {}),
       },
@@ -713,12 +729,14 @@ export function reduceSessionProjection(
     case "runDelta":
       return updateRun(state, {
         runId: event.runId,
+        seq: event.seq,
         status: "streaming",
         ...(event.message === undefined ? {} : { message: event.message }),
       });
     case "runTerminal":
       return updateRun(state, {
         runId: event.runId,
+        seq: event.seq,
         status: event.status,
         ...(event.message === undefined ? {} : { message: event.message }),
         ...(event.stopReason === undefined ? {} : { stopReason: event.stopReason }),
@@ -733,13 +751,4 @@ export function reduceSessionProjection(
     default:
       return state;
   }
-}
-
-/** Normalizes Gateway run envelopes once for every browser and terminal adapter. */
-export function reduceSessionProjectionRunEvent(
-  projection: SessionProjectionState,
-  event: SessionProjectionGatewayRunEvent,
-  scope: SessionProjectionScope = {},
-): SessionProjectionRunTransition | null {
-  return reduceSessionProjectionRunEventImpl(projection, event, scope);
 }

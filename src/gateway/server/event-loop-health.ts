@@ -1,5 +1,11 @@
 // Event-loop health monitor samples delay, utilization, and CPU pressure for gateway readiness snapshots.
-import { monitorEventLoopDelay, performance } from "node:perf_hooks";
+import { createHistogram, performance, type RecordableHistogram } from "node:perf_hooks";
+import { hasInternalDiagnosticEventInterest } from "../../infra/diagnostic-event-listener-presence.js";
+import {
+  areDiagnosticsEnabledForProcess,
+  emitInternalDiagnosticEvent,
+} from "../../infra/diagnostic-events.js";
+import { runWithDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 
 const EVENT_LOOP_MONITOR_RESOLUTION_MS = 20;
 const EVENT_LOOP_DELAY_WARN_MS = 1_000;
@@ -10,9 +16,7 @@ const PERSISTENT_DEGRADATION_WARN_AFTER_MS = 60_000;
 const LOAD_DEGRADATION_DELAY_COEVIDENCE_MS = 25;
 const SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS = 1_000;
 
-type EventLoopDelayMonitor = ReturnType<typeof monitorEventLoopDelay>;
 type EventLoopUtilization = ReturnType<typeof performance.eventLoopUtilization>;
-type CpuUsage = ReturnType<typeof process.cpuUsage>;
 
 type GatewayEventLoopHealthReason = "event_loop_delay" | "event_loop_utilization" | "cpu";
 
@@ -36,13 +40,10 @@ type GatewayEventLoopHealthMonitor = {
 
 type EventLoopUtilizationReader = typeof performance.eventLoopUtilization;
 
-type EventLoopDelayMonitorFactory = (resolutionMs: number) => EventLoopDelayMonitor;
-
 type GatewayEventLoopHealthMonitorDeps = {
   now?: () => number;
   cpuUsage?: typeof process.cpuUsage;
   eventLoopUtilization?: EventLoopUtilizationReader;
-  createDelayMonitor?: EventLoopDelayMonitorFactory;
 };
 
 type GatewayEventLoopHealthMetrics = Pick<
@@ -102,39 +103,40 @@ export function createGatewayEventLoopHealthMonitor(
   const readCpuUsage = deps.cpuUsage ?? process.cpuUsage.bind(process);
   const readEventLoopUtilization =
     deps.eventLoopUtilization ?? performance.eventLoopUtilization.bind(performance);
-  const createDelayMonitor =
-    deps.createDelayMonitor ??
-    ((resolutionMs: number) => monitorEventLoopDelay({ resolution: resolutionMs }));
-  let monitor: EventLoopDelayMonitor | null = null;
-  let lastWallAt: number | null = nowMs();
-  let lastCpuUsage: CpuUsage | null = readCpuUsage();
-  let lastEventLoopUtilization: EventLoopUtilization | null = readEventLoopUtilization();
+  let histogram: RecordableHistogram | null = null;
+  let lastSampleAt = nowMs();
+  let lastWallAt = lastSampleAt;
+  let lastCpuUsage = readCpuUsage();
+  let lastEventLoopUtilization: EventLoopUtilization = readEventLoopUtilization();
   let lastSnapshot: GatewayEventLoopHealth | undefined;
   let firstDegradedAtMs: number | null = null;
 
   try {
-    monitor = createDelayMonitor(EVENT_LOOP_MONITOR_RESOLUTION_MS);
-    monitor.enable();
-    monitor.reset();
+    // Match Node's interval delay histogram range and precision.
+    histogram = createHistogram({ lowest: 1_000n, highest: 2n ** 63n - 1n, figures: 3 });
   } catch {
-    monitor = null;
+    histogram = null;
   }
 
-  const snapshot = (): GatewayEventLoopHealth | undefined => {
-    if (!monitor || !lastCpuUsage || !lastEventLoopUtilization || lastWallAt === null) {
-      return undefined;
+  const sample = () => {
+    if (!histogram) {
+      return;
     }
 
     const now = nowMs();
+    // A window reset must not erase the pending sample's monotonic anchor.
+    // Native interval histograms reset that anchor before an overdue callback runs.
+    histogram.record(BigInt(Math.max(1, Math.round((now - lastSampleAt) * 1_000_000))));
+    lastSampleAt = now;
     const intervalMs = Math.max(1, now - lastWallAt);
-    const delayP99Ms = nanosecondsToMilliseconds(monitor.percentile(99));
-    const delayMaxMs = nanosecondsToMilliseconds(monitor.max);
-    const hasDelayWarning =
-      delayP99Ms >= EVENT_LOOP_DELAY_WARN_MS || delayMaxMs >= EVENT_LOOP_DELAY_WARN_MS;
-
-    if (!hasDelayWarning && intervalMs < SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS) {
-      return lastSnapshot;
+    const delayMaxMs = nanosecondsToMilliseconds(histogram.max);
+    if (
+      delayMaxMs < EVENT_LOOP_DELAY_WARN_MS &&
+      intervalMs < SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS
+    ) {
+      return;
     }
+    const delayP99Ms = nanosecondsToMilliseconds(histogram.percentile(99));
 
     const cpuUsage = readCpuUsage(lastCpuUsage);
     const currentEventLoopUtilization = readEventLoopUtilization();
@@ -169,18 +171,30 @@ export function createGatewayEventLoopHealthMonitor(
       cpuCoreRatio,
     };
 
-    monitor.reset();
+    histogram.reset();
     lastWallAt = now;
     lastCpuUsage = readCpuUsage();
     lastEventLoopUtilization = currentEventLoopUtilization;
     lastSnapshot = health;
 
-    return health;
+    // Publish once at the sampling owner; readers never reset or commit observations.
+    if (
+      areDiagnosticsEnabledForProcess() &&
+      hasInternalDiagnosticEventInterest("gateway.event_loop.sample")
+    ) {
+      runWithDiagnosticTraceContext(undefined, () =>
+        emitInternalDiagnosticEvent({ type: "gateway.event_loop.sample", intervalMs, delayMaxMs }),
+      );
+    }
   };
 
+  const timer = histogram ? setInterval(sample, EVENT_LOOP_MONITOR_RESOLUTION_MS) : undefined;
+  timer?.unref();
+
   const reset = () => {
-    monitor?.reset();
-    lastWallAt = nowMs();
+    histogram?.reset();
+    lastSampleAt = nowMs();
+    lastWallAt = lastSampleAt;
     lastCpuUsage = readCpuUsage();
     lastEventLoopUtilization = readEventLoopUtilization();
     lastSnapshot = undefined;
@@ -188,11 +202,10 @@ export function createGatewayEventLoopHealthMonitor(
   };
 
   return {
-    snapshot,
-    // The diagnostic heartbeat is the timer owner. This filtered pull keeps
-    // persistence policy with the monitor without adding another gateway loop.
+    snapshot: () => lastSnapshot,
+    // The heartbeat consumes the sampler's snapshot without advancing its window.
     persistentDegradationSnapshot: () => {
-      const current = snapshot();
+      const current = lastSnapshot;
       return current?.degradedSinceMs != null &&
         current.degradedSinceMs >= PERSISTENT_DEGRADATION_WARN_AFTER_MS
         ? current
@@ -200,11 +213,8 @@ export function createGatewayEventLoopHealthMonitor(
     },
     reset,
     stop: () => {
-      monitor?.disable();
-      monitor = null;
-      lastWallAt = null;
-      lastCpuUsage = null;
-      lastEventLoopUtilization = null;
+      clearInterval(timer);
+      histogram = null;
       lastSnapshot = undefined;
       firstDegradedAtMs = null;
     },

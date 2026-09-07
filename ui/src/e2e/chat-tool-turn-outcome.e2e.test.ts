@@ -1,7 +1,12 @@
 // Control UI E2E tests cover autonomous tool-turn outcome rendering.
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import {
+  takeControlUiElementScreenshot,
+  takeControlUiViewportScreenshot,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 
 let artifactDir: string | undefined;
 beforeEach(() => {
@@ -32,7 +37,12 @@ async function captureToolActivityProof(page: import("playwright").Page, name: s
   if (!artifactDir) {
     return;
   }
-  await page.screenshot({ path: path.join(artifactDir, `${name}.png`), fullPage: true });
+  await writeFile(
+    path.join(artifactDir, `${name}.png`),
+    await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+      page.locator(".chat-main"),
+    ]),
+  );
 }
 
 async function captureFactrowProof(
@@ -214,9 +224,12 @@ suite.define(() => {
       expect(await rawPanel.isHidden()).toBe(true);
 
       if (artifactDir) {
-        await page.locator(".chat-main").screenshot({
-          path: path.join(artifactDir, `tool-detail-layout-${name}.png`),
-        });
+        await writeFile(
+          path.join(artifactDir, `tool-detail-layout-${name}.png`),
+          await takeControlUiElementScreenshot(page, page.locator(".chat-main"), [
+            toolRows.first(),
+          ]),
+        );
         const video = page.video();
         await context.close();
         await video?.saveAs(path.join(artifactDir, `tool-detail-layout-${name}.webm`));

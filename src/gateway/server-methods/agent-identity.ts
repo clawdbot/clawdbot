@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -16,6 +17,7 @@ export const agentIdentityGetHandler: GatewayRequestHandlers["agent.identity.get
   params,
   respond,
   context,
+  client,
 }) => {
   if (!assertValidParams(params, validateAgentIdentityParams, "agent.identity.get", respond)) {
     return;
@@ -51,7 +53,14 @@ export const agentIdentityGetHandler: GatewayRequestHandlers["agent.identity.get
     agentId = resolved.agentId;
   }
   const identity = resolveAssistantIdentity({ cfg, agentId });
-  const avatarProjection = resolveGatewayAssistantAvatar({ cfg, identity });
+  const avatarProjection = resolveGatewayAssistantAvatar({
+    cfg,
+    identity,
+    httpBasePath:
+      client?.connect.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI
+        ? (cfg.gateway?.controlUi?.basePath ?? "")
+        : undefined,
+  });
   const avatarResolution = avatarProjection.resolution;
   respond(
     true,

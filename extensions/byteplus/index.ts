@@ -26,6 +26,7 @@ export default defineSingleProviderPluginEntry({
         ensureModelAllowlistEntry({ cfg, modelRef: BYTEPLUS_DEFAULT_MODEL_REF }),
     },
     ...buildOpenAICompatibleProviderFamilyCatalog({
+      discoveryMode: "strict",
       credentialProviderId: PROVIDER_ID,
       entries: BYTEPLUS_PROVIDER_CATALOG.entries,
       staticCatalog: BYTEPLUS_PROVIDER_CATALOG.staticCatalog,

@@ -75,22 +75,41 @@ function createAncestryFixture(options: {
   const root = mkdtempSync(join(tmpdir(), "openclaw-release-ancestry-"));
   const origin = join(root, "origin.git");
   fixtureGit(root, ["init", "--quiet", "--bare", origin]);
-  const tree = fixtureGit(root, [`--git-dir=${origin}`, "mktree"], "");
-  const sourceRoot = fixtureCommit(origin, tree, undefined, "source root");
-  const targetRoot = options.related
-    ? sourceRoot
-    : fixtureCommit(origin, tree, undefined, "target root");
+  const commits: string[] = [];
+  const sourceRef = "refs/heads/release-source";
+  const targetRef = "refs/heads/main";
+  const commit = (ref: string, parent: number | undefined, label: string) => {
+    const mark = commits.length + 1;
+    const message = `${label}\n`;
+    commits.push(`commit ${ref}
+mark :${mark}
+committer fixture <fixture@example.invalid> ${mark} +0000
+data ${Buffer.byteLength(message)}
+${message}${parent ? `from :${parent}\n` : ""}
+`);
+    return mark;
+  };
+  const sourceRoot = commit(sourceRef, undefined, "source root");
+  const targetRoot = options.related ? sourceRoot : commit(targetRef, undefined, "target root");
   let source = sourceRoot;
   for (let index = 0; index < options.sourceDistance; index++) {
-    source = fixtureCommit(origin, tree, source, `source ${String(index)}`);
+    source = commit(sourceRef, source, `source ${String(index)}`);
   }
   let target = targetRoot;
   for (let index = 0; index < options.targetDistance; index++) {
-    target = fixtureCommit(origin, tree, target, `target ${String(index)}`);
+    target = commit(targetRef, target, `target ${String(index)}`);
   }
-  fixtureGit(root, [`--git-dir=${origin}`, "update-ref", "refs/heads/release-source", source]);
-  fixtureGit(root, [`--git-dir=${origin}`, "update-ref", "refs/heads/main", target]);
-  return { origin, root, source, target };
+  fixtureGit(
+    origin,
+    ["fast-import", "--quiet"],
+    `${commits.join("")}reset ${sourceRef}\nfrom :${source}\n\nreset ${targetRef}\nfrom :${target}\n\n`,
+  );
+  return {
+    origin,
+    root,
+    source: fixtureGit(origin, ["rev-parse", sourceRef]),
+    target: fixtureGit(origin, ["rev-parse", targetRef]),
+  };
 }
 
 function createProvisionalMergeBaseFixture(): AncestryFixture & { base: string } {
@@ -439,18 +458,22 @@ releasePolicyIt("returns 124 when the release ancestry total budget is exhausted
   expect(report.commands).toEqual([]);
 });
 
-// Protect the one-source distribution contract independently of the generator's formatter.
+// Ask Bash to decode the source independently of the generator and fixture codec.
 it("keeps exactly one byte-identical generated CI owner", () => {
   const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
   const source = readFileSync(".github/actions/git-owner/owner.py", "utf8");
-  const bodies = [...workflow.matchAll(/run_owner <<'PYTHON'\n([\s\S]*?) {10}PYTHON\n/gu)];
-  expect(bodies).toHaveLength(1);
-  const body = bodies[0]?.[1]
-    ?.split("\n")
-    .slice(1)
-    .map((line) => line.slice(10))
-    .join("\n");
-  expect(body).toBe(source);
+  const projections = [
+    ...workflow.matchAll(/^ {10}run_owner '[\s\S]*?^ {10}# End generated CI Git owner\.$/gmu),
+  ];
+  expect(projections).toHaveLength(1);
+  for (const [projection] of projections) {
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-e"], {
+      encoding: "utf8",
+      input: "run_owner() { printf '%s' \"$1\"; }\n" + projection.replace(/^ {10}/gmu, ""),
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe(source);
+  }
 });
 
 it("binds read-only checkout authentication only to the workflow repository", () => {

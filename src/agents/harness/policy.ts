@@ -8,7 +8,10 @@ import {
   type EmbeddedAgentRuntime,
   normalizeOptionalAgentRuntimeId,
 } from "../agent-runtime-id.js";
-import { resolveModelRuntimePolicy } from "../model-runtime-policy.js";
+import {
+  resolveModelRuntimePolicy,
+  type AgentRuntimePolicyScope,
+} from "../model-runtime-policy.js";
 import { resolveOpenAIImplicitAgentRuntime } from "../openai-routing.js";
 
 /**
@@ -21,24 +24,18 @@ export type AgentHarnessPolicy = {
 };
 
 /** Resolves model/provider/runtime config into the canonical harness runtime id. */
-export function resolveAgentHarnessPolicy(params: {
-  provider?: string;
-  modelId?: string;
-  modelApi?: string | null;
-  modelBaseUrl?: unknown;
-  requestTransportOverrides?: ProviderRouteOverridePresence;
-  config?: OpenClawConfig;
-  agentId?: string;
-  sessionKey?: string;
-  env?: NodeJS.ProcessEnv;
-}): AgentHarnessPolicy {
-  const configured = resolveModelRuntimePolicy({
-    config: params.config,
-    provider: params.provider,
-    modelId: params.modelId,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  });
+export function resolveAgentHarnessPolicy(
+  params: {
+    provider?: string;
+    modelId?: string;
+    modelApi?: string | null;
+    modelBaseUrl?: unknown;
+    requestTransportOverrides?: ProviderRouteOverridePresence;
+    config?: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+  } & AgentRuntimePolicyScope,
+): AgentHarnessPolicy {
+  const configured = resolveModelRuntimePolicy(params);
   const configuredRuntime = normalizeOptionalAgentRuntimeId(configured.policy?.id);
   const runtime =
     configuredRuntime && configuredRuntime !== "default"
@@ -54,15 +51,9 @@ export function resolveAgentHarnessPolicy(params: {
     };
   }
   const openAIImplicitRuntime = resolveOpenAIImplicitAgentRuntime({
-    provider: params.provider,
-    modelId: params.modelId,
+    ...params,
     api: params.modelApi,
     baseUrl: params.modelBaseUrl,
-    config: params.config,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    env: params.env,
-    requestTransportOverrides: params.requestTransportOverrides,
   });
   if (openAIImplicitRuntime) {
     return { runtime: openAIImplicitRuntime, runtimeSource };

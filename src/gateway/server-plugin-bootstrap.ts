@@ -55,7 +55,7 @@ type GatewayPluginBootstrapParams = {
 // plugin ids/source hints without exposing internal diagnostic objects.
 function logGatewayPluginDiagnostics(params: {
   diagnostics: PluginRegistry["diagnostics"];
-  log: Pick<GatewayPluginBootstrapLog, "error" | "info">;
+  log: Pick<GatewayPluginBootstrapLog, "error" | "warn">;
 }) {
   for (const diag of params.diagnostics) {
     const degradedPlugin = diag.pluginId ? findActiveDegradedPlugin(diag.pluginId) : undefined;
@@ -80,7 +80,8 @@ function logGatewayPluginDiagnostics(params: {
     if (diag.level === "error") {
       params.log.error(message);
     } else {
-      params.log.info(message);
+      // `PluginDiagnostic.level` is only "warn" | "error": this branch is every warn diagnostic.
+      params.log.warn(message);
     }
   }
 }

@@ -71,7 +71,7 @@ export const DIR_LIST_TOOL_DESCRIPTOR: FileTransferToolDescriptor = {
   label: "Directory List",
   name: "dir_list",
   description:
-    "Retrieve a structured directory listing from a paired node, not the local workspace. Returns file and subdirectory metadata (name, path, size, mimeType, isDir, mtime) without transferring file content. Use this to discover remote paths before requesting file content. Pagination is offset-based; pass nextPageToken from the previous result. Requires operator opt-in: gateway.nodes.commands.allow must include 'dir.list', and file-transfer policy must authorize the path through allowReadPaths or a remembered exact approval. Without policy configured, every call is denied.",
+    "Retrieve a directory listing from a paired node, not the local workspace. Text is limited to 8192 UTF-8 bytes and shows complete names, isDir and sizes under the canonical path when representable; full returned metadata stays in structured details. Use this to discover remote paths before requesting file content. For text pagination, pass the text's nextPageToken as pageToken with the same node and path; it resumes after the last displayed entry and may differ from the structured token. An unrepresentable first entry reports that pagination cannot advance. Requires operator opt-in: gateway.nodes.commands.allow must include 'dir.list', and file-transfer policy must authorize the path through allowReadPaths or a remembered exact approval. Without policy configured, every call is denied.",
   parameters: DirListToolSchema,
 };
 
@@ -95,7 +95,7 @@ export const DIR_FETCH_TOOL_DESCRIPTOR: FileTransferToolDescriptor = {
   label: "Directory Fetch",
   name: "dir_fetch",
   description:
-    "Retrieve a whole directory tree, including dotfiles, from a paired node as a gzipped tarball. Unpack it on the gateway and return a manifest of saved paths. A denied descendant rejects the whole transfer. The unpacked files live on the gateway; use their localPath for follow-up operations. Rejects trees larger than 16 MB compressed. Requires operator opt-in: gateway.nodes.commands.allow must include 'dir.fetch', and file-transfer policy must authorize the path through allowReadPaths or a remembered exact approval.",
+    "Retrieve a whole directory tree, including dotfiles, from a paired node as a gzipped tarball. Unpack it on the gateway. Text is limited to 8192 UTF-8 bytes and shows rootDir, total fileCount and a prefix of complete saved relPath and size records when representable; full files and media metadata stay in structured details. Use rootDir plus relPath for local follow-up operations. Omitted files remain saved under rootDir; inspect them with available local file or directory capabilities. There is no fetch pagination. A denied descendant rejects the whole transfer. Rejects trees larger than 16 MB compressed. Requires operator opt-in: gateway.nodes.commands.allow must include 'dir.fetch', and file-transfer policy must authorize the path through allowReadPaths or a remembered exact approval.",
   parameters: DirFetchToolSchema,
 };
 

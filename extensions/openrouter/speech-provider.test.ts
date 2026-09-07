@@ -1,4 +1,5 @@
 // Openrouter tests cover speech provider plugin behavior.
+import { requireFirstPostJsonRecordRequest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildOpenRouterSpeechProvider } from "./speech-provider.js";
 
@@ -20,30 +21,6 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({
   postJsonRequest: postJsonRequestMock,
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
 }));
-
-function requireOpenRouterConfigRequest(): Record<string, unknown> {
-  const [call] = resolveProviderHttpRequestConfigMock.mock.calls;
-  if (!call) {
-    throw new Error("expected OpenRouter speech config request");
-  }
-  const [request] = call;
-  if (!request || typeof request !== "object" || Array.isArray(request)) {
-    throw new Error("expected OpenRouter speech config request");
-  }
-  return request;
-}
-
-function requireOpenRouterPostRequest(): Record<string, unknown> {
-  const [call] = postJsonRequestMock.mock.calls;
-  if (!call) {
-    throw new Error("expected OpenRouter speech request");
-  }
-  const [request] = call;
-  if (!request || typeof request !== "object" || Array.isArray(request)) {
-    throw new Error("expected OpenRouter speech request");
-  }
-  return request as Record<string, unknown>;
-}
 
 function requireHeaders(value: unknown): Headers {
   if (!(value instanceof Headers)) {
@@ -137,7 +114,7 @@ describe("openrouter speech provider", () => {
     });
 
     expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledOnce();
-    expect(requireOpenRouterConfigRequest()).toEqual({
+    expect(resolveProviderHttpRequestConfigMock.mock.calls[0]?.[0]).toEqual({
       baseUrl: "https://openrouter.ai/api/v1",
       defaultBaseUrl: "https://openrouter.ai/api/v1",
       allowPrivateNetwork: false,
@@ -152,7 +129,10 @@ describe("openrouter speech provider", () => {
       transport: "http",
     });
     expect(postJsonRequestMock).toHaveBeenCalledOnce();
-    const request = requireOpenRouterPostRequest();
+    const request = requireFirstPostJsonRecordRequest(
+      postJsonRequestMock,
+      "OpenRouter speech request",
+    );
     const headers = requireHeaders(request.headers);
     expect(Object.fromEntries(headers.entries())).toEqual({
       authorization: "Bearer sk-openrouter",
@@ -205,7 +185,10 @@ describe("openrouter speech provider", () => {
       timeoutMs: 5000,
     });
 
-    const request = requireOpenRouterPostRequest();
+    const request = requireFirstPostJsonRecordRequest(
+      postJsonRequestMock,
+      "OpenRouter speech request",
+    );
     expect(request.url).toBe("https://private.example.invalid/router/v1/audio/speech");
     expect(requireHeaders(request.headers).get("authorization")).toBe(
       "Bearer synthetic-private-proxy-key",
@@ -235,7 +218,10 @@ describe("openrouter speech provider", () => {
       timeoutMs: 5000,
     });
 
-    const request = requireOpenRouterPostRequest();
+    const request = requireFirstPostJsonRecordRequest(
+      postJsonRequestMock,
+      "OpenRouter speech request",
+    );
     expect(request.url).toBe("https://speech-proxy.example.invalid/router/v1/audio/speech");
     expect(requireHeaders(request.headers).get("authorization")).toBe(
       "Bearer synthetic-private-proxy-key",

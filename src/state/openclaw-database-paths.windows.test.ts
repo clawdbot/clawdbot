@@ -111,7 +111,7 @@ describe("OpenClaw database paths on Windows", () => {
         },
       });
       expect(
-        preflightOpenClawDatabaseSchemas({
+        await preflightOpenClawDatabaseSchemas({
           env,
           supportedVersions: {
             state: OPENCLAW_STATE_SCHEMA_VERSION,

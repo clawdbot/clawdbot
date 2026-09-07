@@ -22,7 +22,37 @@ vi.mock("../../tts/tts-synthesis.js", () => {
   throw new Error("Speech synthesis is unavailable");
 });
 
+vi.mock("../../plugins/install.js", () => {
+  throw new Error("Plugin inventory must not load source installers");
+});
+
 describe("lazy core handler families", () => {
+  it.each([
+    { method: "plugins.list", params: { unexpected: true } },
+    { method: "plugins.inspect", params: { pluginId: 42 } },
+    { method: "plugins.search", params: { query: 42 } },
+  ])("validates $method without importing plugin installers", async ({ method, params }) => {
+    const { coreGatewayHandlers } = await import("../server-methods.js");
+    const respond = vi.fn();
+    await expectDefined(
+      coreGatewayHandlers[method],
+      "plugin metadata lazy handler",
+    )({
+      req: { type: "req", id: "plugin-metadata-family", method },
+      params,
+      respond,
+      context: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+  });
+
   it.each([
     {
       name: "paired client",

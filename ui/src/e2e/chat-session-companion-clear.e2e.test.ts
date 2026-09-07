@@ -1,7 +1,9 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -107,10 +109,10 @@ suite.define(() => {
       await alert.waitFor({ state: "visible" });
       await companion.getByText(answer, { exact: true }).waitFor();
       if (artifactDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "reset-failure.png"),
-        });
+        await writeFile(
+          path.join(artifactDir, "reset-failure.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [alert, companion]),
+        );
       }
 
       await alert.getByRole("button", { name: "Dismiss error" }).click();
@@ -123,10 +125,10 @@ suite.define(() => {
       await expect.poll(() => companion.getByText(answer, { exact: true }).count()).toBe(0);
       expect(await page.getByRole("alert").count()).toBe(0);
       if (artifactDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "reset-success.png"),
-        });
+        await writeFile(
+          path.join(artifactDir, "reset-success.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [clearButton]),
+        );
       }
     });
   });
@@ -146,10 +148,12 @@ suite.define(() => {
       const visiblePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
       expect(await visiblePane.getByRole("alert").filter({ hasText: resetError }).count()).toBe(0);
       if (artifactDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "stale-reset-error-suppressed.png"),
-        });
+        await writeFile(
+          path.join(artifactDir, "stale-reset-error-suppressed.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            visiblePane.locator(".agent-chat__composer-combobox textarea"),
+          ]),
+        );
       }
 
       await navigateToControlUiSession(page, initiatingSessionKey);
@@ -162,10 +166,12 @@ suite.define(() => {
         .getByText(answer, { exact: true })
         .waitFor();
       if (artifactDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "initiating-thread-preserved.png"),
-        });
+        await writeFile(
+          path.join(artifactDir, "initiating-thread-preserved.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            initiatingPane.locator("openclaw-chat-session-rail").getByText(answer, { exact: true }),
+          ]),
+        );
       }
     });
   });

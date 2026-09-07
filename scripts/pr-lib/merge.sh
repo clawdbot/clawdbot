@@ -342,13 +342,16 @@ snapshot_merge_body() {
 
 prepare_squash_merge_body() {
   local pr="$1" captured="${2:-}" source_head="${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}"
-  local source_trailers
+  local source_trailers author_emails
   # GraphQL publication can collapse local fixups. Preserve their reviewed
   # trailers, excluding main's ancestry, rather than inspecting current HEAD.
   source_trailers=$(git -c trailer.separators=: -c trailer.co-authored-by.key=Co-authored-by log --reverse \
     --no-show-signature --no-notes --no-color --no-decorate --encoding=UTF-8 \
     --format='%(trailers:key=Co-authored-by,only,unfold)' "$PR_MAIN_SHA..$source_head") || return 1
-  [ -n "$source_trailers" ] || [ -n "$captured" ] || return 0
+  # A merge commit can reflect whoever refreshed the branch, not a contributor.
+  # Preview credit must be backed by a published non-merge commit or explicit trailer.
+  author_emails=$(git log --no-merges --reverse --format='%ae' "$PR_MAIN_SHA..$PREP_HEAD_SHA") ||
+    return 1
 
   local repo_nwo preview
   repo_nwo=$(gh repo view --json nameWithOwner --jq .nameWithOwner) || return 1
@@ -357,17 +360,31 @@ prepare_squash_merge_body() {
     -f owner="${repo_nwo%/*}" -f name="${repo_nwo#*/}" -F number="$pr") || return 1
   if ! printf '%s\n' "$preview" | jq -e --arg head "$PREP_HEAD_SHA" '
     .data.repository.pullRequest | .headRefOid == $head and
-      (.viewerMergeBodyText | type == "string") and .isMergeQueueEnabled == false
+      (.viewerMergeBodyText | type == "string") and (.isMergeQueueEnabled | type == "boolean")
   ' >/dev/null; then
-    echo "Cannot preserve squash credit: require a current-head message from a non-queue PR. Refresh prepare evidence and check the merge queue policy." >&2
+    echo "Cannot preserve squash credit: require a current-head preview. Refresh prepare evidence and check the merge queue policy." >&2
+    return 1
+  fi
+
+  local queue_enabled
+  queue_enabled=$(printf '%s\n' "$preview" | jq -r '.data.repository.pullRequest.isMergeQueueEnabled') || return 1
+  if [ "$queue_enabled" = true ] && { [ -n "$source_trailers" ] || [ -n "$captured" ]; }; then
+    echo "Cannot preserve squash credit: body overrides require a non-queue PR." >&2
     return 1
   fi
 
   local body_file
   body_file=$(mktemp .local/merge-body.XXXXXX) || return 1
-  printf '%s\n' "$preview" | jq -c --arg source "$source_trailers" --arg captured "$captured" '
-    {preview:.data.repository.pullRequest.viewerMergeBodyText,source:$source,captured:$captured}
+  printf '%s\n' "$preview" | jq -c \
+    --arg source "$source_trailers" --arg authors "$author_emails" --arg captured "$captured" \
+    --argjson queue "$queue_enabled" '
+    {preview:.data.repository.pullRequest.viewerMergeBodyText,source:$source,authors:$authors,captured:$captured,queue:$queue}
   ' | node "${BASH_SOURCE[0]%/*}/merge-body.mjs" compose > "$body_file" || return 1
+  # Queue admission cannot accept an override, but its preview still needs validation.
+  if [ "$queue_enabled" = true ]; then
+    rm -f "$body_file" || return 1
+    return 0
+  fi
   printf '%s\n' "$body_file"
 }
 

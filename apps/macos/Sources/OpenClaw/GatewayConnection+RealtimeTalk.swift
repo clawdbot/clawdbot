@@ -4,6 +4,29 @@ import OpenClawKit
 import OpenClawProtocol
 
 extension GatewayConnection {
+    // MARK: - VoiceWake
+
+    func voiceWakeSetTriggers(_ triggers: [String]) async {
+        do {
+            try await self.requestVoid(
+                method: .voicewakeSet,
+                params: ["triggers": AnyCodable(triggers)],
+                timeoutMs: 10000)
+        } catch {
+            // Best-effort only.
+        }
+    }
+
+    func talkMode(enabled: Bool, phase: String? = nil) async {
+        var params: [String: AnyCodable] = ["enabled": AnyCodable(enabled)]
+        if let phase {
+            params["phase"] = AnyCodable(phase)
+        }
+        // Phase broadcasts report UI state; a failed notification must not start
+        // the Gateway or restart its tunnel. Talk startup owns that recovery.
+        _ = try? await self.request(method: Method.talkMode.rawValue, params: params, retryTransportFailures: false)
+    }
+
     struct RealtimeTalkBootstrap: @unchecked Sendable {
         let transport: RealtimeTalkRelayTransport
         let configSnapshot: ConfigSnapshot

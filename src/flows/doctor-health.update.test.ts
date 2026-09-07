@@ -63,6 +63,18 @@ vi.mock("../cli/daemon-cli/restart-health.js", async (importOriginal) => ({
   renderRestartDiagnostics: () => ["synthetic readiness failure"],
 }));
 
+vi.mock("../infra/update-candidate-state.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/update-candidate-state.js")>();
+  return {
+    ...actual,
+    // This flow controls update outcomes without installing an artifact. Keep the
+    // real child-process schema read, but resolve its worker from source on both sides.
+    readUpdateStateSchemaVersions: (
+      params: Parameters<typeof actual.readUpdateStateSchemaVersions>[0],
+    ) => actual.readUpdateStateSchemaVersions({ ...params, root: undefined }),
+  };
+});
+
 vi.mock("../infra/update-runner.js", () => ({
   runGatewayUpdate: mocks.runGatewayUpdate,
 }));
@@ -108,6 +120,8 @@ describe("runDoctorHealthFlow update outcomes", () => {
   afterEach(() => vi.unstubAllEnvs());
 
   beforeEach(() => {
+    // Exercise only the isolated fixture manager, independent of the host policy.
+    vi.stubEnv("OPENCLAW_SERVICE_REPAIR_POLICY", undefined);
     mocks.offerUpdate.mockReset().mockResolvedValue({ updated: false });
     mocks.runGatewayUpdate.mockReset();
     mocks.triageCommand.mockReset().mockResolvedValue(undefined);
@@ -131,10 +145,9 @@ describe("runDoctorHealthFlow update outcomes", () => {
         typeof import("../commands/doctor-update.js")
       >("../commands/doctor-update.js");
       mocks.offerUpdate.mockImplementation(maybeOfferUpdateBeforeDoctor);
-      const serviceMaintenance =
-        await import("../cli/update-cli/update-command-service-maintenance.js");
+      const serviceRecovery = await import("../cli/update-cli/update-command-service-recovery.js");
       const recoverService = vi.spyOn(
-        serviceMaintenance,
+        serviceRecovery,
         "maybeRestartServiceAfterFailedMutableUpdate",
       );
       const serviceCommands = await import("../cli/update-cli/update-command-service-command.js");
@@ -167,7 +180,7 @@ describe("runDoctorHealthFlow update outcomes", () => {
           const restart = vi.fn();
           restartUpdatedInstall.mockImplementation(async () => {
             running = true;
-            return true;
+            return "accepted";
           });
           mocks.service.mockReturnValue({
             readCommand: async () => ({

@@ -742,6 +742,11 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
         "codex-cli": { sessionId: "codex-session" },
       },
       claudeCliSessionId: "claude-session",
+      inputTokens: 60,
+      outputTokens: 10,
+      cacheRead: 40,
+      cacheWrite: 10,
+      estimatedCostUsd: 0.02,
       contextBudgetStatus: {
         schemaVersion: 1,
         source: "pre-prompt-estimate",
@@ -962,6 +967,11 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
         cliSessionBindings?: unknown;
         cliSessionIds?: unknown;
         claudeCliSessionId?: string;
+        inputTokens?: number;
+        outputTokens?: number;
+        cacheRead?: number;
+        cacheWrite?: number;
+        estimatedCostUsd?: number;
         contextBudgetStatus?: unknown;
         totalTokens?: number;
         totalTokensFresh?: boolean;
@@ -972,6 +982,11 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   expect(storedEntry?.cliSessionBindings).toBeUndefined();
   expect(storedEntry?.cliSessionIds).toBeUndefined();
   expect(storedEntry?.claudeCliSessionId).toBeUndefined();
+  expect(storedEntry?.inputTokens).toBeUndefined();
+  expect(storedEntry?.outputTokens).toBeUndefined();
+  expect(storedEntry?.cacheRead).toBeUndefined();
+  expect(storedEntry?.cacheWrite).toBeUndefined();
+  expect(storedEntry?.estimatedCostUsd).toBeUndefined();
   expect(storedEntry?.contextBudgetStatus).toBeUndefined();
   expect(storedEntry?.totalTokens).toBe(80);
   expect(storedEntry?.totalTokensFresh).toBe(true);

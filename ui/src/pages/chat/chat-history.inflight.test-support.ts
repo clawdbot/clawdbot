@@ -15,7 +15,7 @@ export function createState(result: ChatHistoryResult): TestState {
     sessionKey: "main",
   });
   const sessions: TestSessions = {
-    refreshReplacement: vi.fn(async () => undefined),
+    refreshReplacement: vi.fn(async () => null),
     reconcileRunTerminal: vi.fn(),
   };
   return {

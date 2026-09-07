@@ -76,8 +76,8 @@ describe("gateway lock state directory", () => {
         expect(lock.stateLockPath).toBe(stateLockPath);
         expect(path.dirname(lock.lockPath)).toBe(lockDir);
         expect(path.basename(lock.lockPath)).toMatch(/^gateway\.[0-9a-f]{8}\.lock$/u);
-        await expect(fs.access(`${lock.lockPath}.sqlite`)).resolves.toBeUndefined();
-        await expect(fs.access(`${lock.stateLockPath}.sqlite`)).resolves.toBeUndefined();
+        await fs.access(`${lock.lockPath}.sqlite`);
+        await fs.access(`${lock.stateLockPath}.sqlite`);
       } finally {
         await lock.release();
       }

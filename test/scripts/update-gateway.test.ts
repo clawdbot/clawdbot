@@ -19,6 +19,7 @@ describe("source-server updater bootstrap", () => {
   it.each(
     [
       "success",
+      "explicit-declarations",
       "missing",
       "enable-failure",
       "install-failure",
@@ -131,6 +132,7 @@ assert.deepEqual(JSON.parse(fs.readFileSync('package.json', 'utf8')), { private:
 assert.equal(fs.readFileSync('pnpm-workspace.yaml', 'utf8').trim(), 'packages: []');
 assert.deepEqual(fs.readdirSync('.').sort(), ['package.json', 'pnpm-workspace.yaml']);
 assert.equal(fs.readFileSync(process.env.TARGET + '/.git/HEAD', 'utf8'), 'b'.repeat(40));
+assert.equal(process.env.OPENCLAW_UPDATE_IN_PROGRESS, undefined);
 NODE
         echo probe >> "$FIXTURE/steps"
         # A later remote-ref move must not change the probed commit's mutation target.
@@ -141,11 +143,14 @@ NODE
       fi
       [[ "$PWD" == "$TARGET" ]]
       [[ "$SCENARIO" != probe-failure ]] || exit 42
-      node - <<'NODE'
+      node - "$1" <<'NODE'
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const expected = process.env.SCENARIO === 'local-pin' ? 'pnpm@11.15.1' : process.env.TARGET_PIN;
 assert.equal(JSON.parse(fs.readFileSync('package.json', 'utf8')).packageManager, expected);
+const building = ['build', 'nested'].includes(process.argv[2]);
+assert.equal(process.env.OPENCLAW_UPDATE_IN_PROGRESS, building ? '1' : undefined, 'update runtime context must be scoped to the build and its children');
+assert.equal(process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD, process.env.SCENARIO === 'explicit-declarations' ? '0' : undefined, 'the caller owns the declaration override');
 NODE
       case "$1" in
         install) [[ "$2" == --frozen-lockfile ]]; echo install >> "$FIXTURE/steps"; [[ "$SCENARIO" != install-failure ]] || exit 42 ;;
@@ -185,8 +190,9 @@ NODE
           npm_config_workspace_dir: root,
           PNPM_CONFIG_LOCKFILE_DIR: root,
           pnpm_config_lockfile_dir: root,
+          OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: scenario === "explicit-declarations" ? "0" : undefined,
           OPENCLAW_UPDATE_RESTART_CMD:
-            '[[ "$COREPACK_ENABLE_DOWNLOAD_PROMPT" == 1 && "$PATH" == "$FIXTURE/bin" && "$NPM_CONFIG_WORKSPACE_DIR" == "$FIXTURE" && "$npm_config_workspace_dir" == "$FIXTURE" && "$PNPM_CONFIG_LOCKFILE_DIR" == "$FIXTURE" && "$pnpm_config_lockfile_dir" == "$FIXTURE" ]] && echo restart >> "$FIXTURE/steps"',
+            '[[ "$COREPACK_ENABLE_DOWNLOAD_PROMPT" == 1 && "$PATH" == "$FIXTURE/bin" && "$NPM_CONFIG_WORKSPACE_DIR" == "$FIXTURE" && "$npm_config_workspace_dir" == "$FIXTURE" && "$PNPM_CONFIG_LOCKFILE_DIR" == "$FIXTURE" && "$pnpm_config_lockfile_dir" == "$FIXTURE" && "${OPENCLAW_UPDATE_IN_PROGRESS+x}" != x ]] && echo restart >> "$FIXTURE/steps"',
         },
       });
       const preflightFailure = [
@@ -211,7 +217,9 @@ NODE
         expect(lines("git-calls")).toContain(`show ${targetSha}:package.json`);
         expect(result.stdout + result.stderr).toContain("no checkout update or restart");
       }
-      const succeeded = ["success", "hash-pin", "local-pin"].includes(scenario);
+      const succeeded = ["success", "explicit-declarations", "hash-pin", "local-pin"].includes(
+        scenario,
+      );
       expect(result.status, result.stdout + result.stderr).toBe(
         succeeded
           ? 0

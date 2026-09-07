@@ -82,3 +82,105 @@ export async function resolveCompletedBatchResult(params: {
   }
   return completed;
 }
+
+/**
+ * Share compatible status transitions while callers retain the canonical
+ * deadline and transport owners; only a supplied backoff policy retries reads.
+ */
+export async function waitForEmbeddingBatch<TStatus extends EmbeddingBatchStatus>(params: {
+  provider: string;
+  batchId: string;
+  wait: boolean;
+  pollIntervalMs: number;
+  timeoutMs: number;
+  debug?: (message: string, data?: Record<string, unknown>) => void;
+  initial?: TStatus;
+  fetchStatus: (signal: AbortSignal) => Promise<TStatus>;
+  resolveTimeoutMs: () => number;
+  waitForPoll: (delayMs: number) => Promise<void>;
+  readError: (errorFileId: string) => Promise<string | undefined>;
+  backoff?: {
+    maxDelayMs: number;
+    shouldRetry: (error: unknown) => boolean;
+    formatError: (error: unknown) => string;
+    formatProgress: (status: TStatus) => string;
+  };
+}): Promise<BatchCompletionResult> {
+  const label = `${params.provider} batch ${params.batchId}`;
+  const backoff = params.backoff;
+  const maxDelayMs = backoff
+    ? Math.max(params.pollIntervalMs, Math.min(params.timeoutMs, backoff.maxDelayMs))
+    : params.pollIntervalMs;
+  let nextPollDelayMs = params.pollIntervalMs;
+  const nextDelayMs = () => {
+    const delay = nextPollDelayMs;
+    nextPollDelayMs = Math.min(maxDelayMs, delay * 2);
+    return delay;
+  };
+  let current: TStatus | undefined = params.initial;
+  while (true) {
+    let status: TStatus;
+    let statusSignal: AbortSignal | undefined;
+    try {
+      if (current) {
+        status = current;
+      } else {
+        statusSignal = AbortSignal.timeout(params.resolveTimeoutMs());
+        status = await params.fetchStatus(statusSignal);
+      }
+    } catch (error) {
+      if (statusSignal?.aborted) {
+        throw new Error(`${label} timed out after ${params.timeoutMs}ms`, { cause: error });
+      }
+      if (!params.wait || !backoff?.shouldRetry(error)) {
+        throw error;
+      }
+      const delayMs = nextDelayMs();
+      params.debug?.(
+        `${label} status check failed: ${backoff.formatError(error)}; waiting up to ${delayMs}ms`,
+      );
+      try {
+        await params.waitForPoll(delayMs);
+        params.resolveTimeoutMs();
+      } catch {
+        throw new Error(`${label} timed out after ${params.timeoutMs}ms`, { cause: error });
+      }
+      current = undefined;
+      continue;
+    }
+    const state = status.status ?? "unknown";
+    await throwIfBatchCompletionError({
+      provider: params.provider,
+      status: { ...status, id: params.batchId },
+      readError: params.readError,
+    });
+    if (state === "completed") {
+      return resolveBatchCompletionFromStatus({
+        provider: params.provider,
+        batchId: params.batchId,
+        status,
+      });
+    }
+    await throwIfBatchTerminalFailure({
+      provider: params.provider,
+      status: { ...status, id: params.batchId },
+      readError: params.readError,
+    });
+    if (!params.wait) {
+      throw new Error(`${label} still ${state}; wait disabled`);
+    }
+    // Fixed polling resolves remaining time before logging; backoff logs its
+    // requested delay and lets the shared wait clamp it afterward.
+    const waitMs = backoff
+      ? nextDelayMs()
+      : Math.min(params.pollIntervalMs, params.resolveTimeoutMs());
+    params.debug?.(
+      backoff
+        ? `${label} ${state}${backoff.formatProgress(status)}; waiting up to ${waitMs}ms`
+        : `${label} ${state}; waiting ${waitMs}ms`,
+    );
+    await params.waitForPoll(waitMs);
+    params.resolveTimeoutMs();
+    current = undefined;
+  }
+}

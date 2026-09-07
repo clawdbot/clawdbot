@@ -166,4 +166,140 @@ describe("webhooks cli", () => {
       expect.objectContaining({ tailscale: undefined }),
     );
   });
+
+  const omittedCommonOptions = {
+    topic: undefined,
+    subscription: undefined,
+    label: undefined,
+    hookUrl: undefined,
+    hookToken: undefined,
+    pushToken: undefined,
+    bind: undefined,
+    port: undefined,
+    path: undefined,
+    includeBody: undefined,
+    maxBytes: undefined,
+    renewEveryMinutes: undefined,
+    tailscale: undefined,
+    tailscalePath: undefined,
+    tailscaleTarget: undefined,
+  };
+  const explicitCommonArgs = [
+    "--topic",
+    " projects/fixture/topics/custom ",
+    "--subscription",
+    " custom-subscription ",
+    "--label",
+    " CUSTOM ",
+    "--hook-url",
+    " https://fixture.invalid/hooks/gmail ",
+    "--hook-token",
+    " fixture-hook ",
+    "--push-token",
+    " fixture-push ",
+    "--bind",
+    " 127.0.0.2 ",
+    "--port",
+    "9807",
+    "--path",
+    " /custom-push ",
+    "--include-body",
+    "--max-bytes",
+    "54321",
+    "--renew-minutes",
+    "29",
+    "--tailscale",
+    " serve ",
+    "--tailscale-path",
+    " /public-gmail ",
+    "--tailscale-target",
+    " http://127.0.0.3:8789 ",
+  ];
+  const explicitCommonOptions = {
+    topic: "projects/fixture/topics/custom",
+    subscription: "custom-subscription",
+    label: "CUSTOM",
+    hookUrl: "https://fixture.invalid/hooks/gmail",
+    hookToken: "fixture-hook",
+    pushToken: "fixture-push",
+    bind: "127.0.0.2",
+    port: 9807,
+    path: "/custom-push",
+    includeBody: true,
+    maxBytes: 54321,
+    renewEveryMinutes: 29,
+    tailscale: "serve",
+    tailscalePath: "/public-gmail",
+    tailscaleTarget: "http://127.0.0.3:8789",
+  };
+
+  it.each([
+    {
+      name: "setup defaults",
+      command: "setup",
+      args: ["--account", "fixture@example.invalid"],
+      expected: {
+        ...omittedCommonOptions,
+        account: "fixture@example.invalid",
+        project: undefined,
+        topic: "gog-gmail-watch",
+        subscription: "gog-gmail-watch-push",
+        label: "INBOX",
+        bind: "127.0.0.1",
+        port: 8788,
+        path: "/gmail-pubsub",
+        includeBody: true,
+        maxBytes: 20_000,
+        renewEveryMinutes: 720,
+        tailscale: "funnel",
+        pushEndpoint: undefined,
+        json: false,
+      },
+    },
+    {
+      name: "run omissions",
+      command: "run",
+      args: [],
+      expected: { account: undefined, ...omittedCommonOptions },
+    },
+    {
+      name: "setup explicit options",
+      command: "setup",
+      args: [
+        "--account",
+        " fixture@example.invalid ",
+        "--project",
+        " fixture-project ",
+        "--push-endpoint",
+        " https://fixture.invalid/push ",
+        "--json",
+        ...explicitCommonArgs,
+      ],
+      expected: {
+        account: "fixture@example.invalid",
+        project: "fixture-project",
+        ...explicitCommonOptions,
+        pushEndpoint: "https://fixture.invalid/push",
+        json: true,
+      },
+    },
+    {
+      name: "run explicit options",
+      command: "run",
+      args: ["--account", " fixture@example.invalid ", ...explicitCommonArgs],
+      expected: { account: "fixture@example.invalid", ...explicitCommonOptions },
+    },
+  ])("passes $name to the Gmail command owner", async ({ command, args, expected }) => {
+    const program = createProgram();
+
+    await program.parseAsync(["webhooks", "gmail", command, ...args], { from: "user" });
+
+    const runner = command === "setup" ? mocks.runGmailSetup : mocks.runGmailService;
+    expect(runner).toHaveBeenCalledOnce();
+    const actual = runner.mock.calls[0]?.[0];
+    for (const key of Object.keys(expected)) {
+      expect(Object.hasOwn(actual, key), key).toBe(true);
+    }
+    expect(actual).toStrictEqual(expected);
+  });
 });

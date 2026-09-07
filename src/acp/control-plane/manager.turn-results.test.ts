@@ -1159,8 +1159,12 @@ describe("AcpSessionManager turn results", () => {
     });
   });
 
-  it("fails immediately when startTurn events fail before terminal result settles", async () => {
+  it("cancels a failed startTurn event stream before surfacing its error", async () => {
     const runtimeState = createRuntime();
+    const result = createDeferred<{ status: "cancelled" }>();
+    const cancel = vi.fn(async () => {
+      result.resolve({ status: "cancelled" });
+    });
     const closeStream = vi.fn(async () => {});
     runtimeState.runtime.startTurn = vi.fn((input) => ({
       requestId: input.requestId,
@@ -1168,8 +1172,8 @@ describe("AcpSessionManager turn results", () => {
         yield { type: "text_delta" as const, stream: "output" as const, text: "partial" };
         throw new AcpRuntimeError("ACP_TURN_FAILED", "event stream disconnected");
       })(),
-      result: new Promise<never>(() => {}),
-      cancel: vi.fn(async () => {}),
+      result: result.promise,
+      cancel,
       closeStream,
     }));
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
@@ -1196,6 +1200,7 @@ describe("AcpSessionManager turn results", () => {
       code: "ACP_TURN_FAILED",
       message: "event stream disconnected",
     });
+    expect(cancel).toHaveBeenCalledOnce();
     expect(closeStream).toHaveBeenCalledWith({ reason: "turn-events-error" });
   });
 

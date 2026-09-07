@@ -1,0 +1,178 @@
+title: Telegram progress keeps commentary with quiet and detailed tool activity
+
+scenario:
+  id: telegram-progress-tool-visibility
+  surface: channels
+  coverage:
+    primary:
+      - channels.streaming-final-reply
+  objective: Keep authored commentary visible while hiding ordinary tool rows by default and showing them when toolProgress is explicitly enabled.
+  successCriteria:
+    - The Telegram Test Server user observes authored commentary before a separate final reply in both cases.
+    - Once the full commentary appears, every subsequent progress revision retains it.
+    - No observed message or edit in the default case contains an exec row or its command marker.
+    - The detailed case includes an exec row on the same progress message as commentary.
+    - Each case crosses the mock provider boundary twice with one correlated exec result and delivers its final marker exactly once.
+  docsRefs:
+    - docs/channels/telegram.md
+    - docs/concepts/streaming.md
+  codeRefs:
+    - src/channels/progress-draft-compositor.ts
+    - extensions/telegram/src/bot-message-dispatch-progress.ts
+    - extensions/telegram/src/bot-message-dispatch-delivery.ts
+  execution:
+    kind: flow
+    channel: telegram
+    providerMode: mock-openai
+    timeoutMs: 240000
+    retryCount: 0
+    suiteIsolation: isolated
+    isolationReason: Restarts the ephemeral gateway between omitted and explicitly enabled toolProgress configurations.
+    transportPolicy:
+      directMessageOnly: true
+    summary: Run the existing commentary and exec fixture through the real Telegram Test Server userbot, retaining every observed message and edit. The serve driver does not expose deletions, so this scenario does not prove draft deletion.
+    config:
+      conversationId: telegram-progress-tool-visibility
+      senderId: qa-progress-operator
+      cases:
+        - name: quiet
+        - name: detailed
+          toolProgress: true
+
+flow:
+  steps:
+    - name: verifies Telegram Test Server credentials
+      actions:
+        - set: credentialDoctor
+          value:
+            expr: |-
+              (async () => {
+                const scripts = path.join(env.repoRoot, '.agents/skills/telegram-e2e-userbot/scripts');
+                const { runTelegramTestDoctor } = await qaImport(path.join(scripts, 'telegram-test-doctor.mjs'));
+                const { runCommand } = await qaImport(path.join(scripts, 'run-mock-sut-user-e2e.mjs'));
+                return runTelegramTestDoctor({
+                  // The package harness runs the same TDLib driver with python3; its image has no uv.
+                  runCommandImpl: (_command, args, options) => runCommand('python3', args.slice(1), options),
+                });
+              })()
+        - assert:
+            expr: credentialDoctor.ok === true
+            message: the Telegram credential doctor must pass before sending test messages
+      detailsExpr: JSON.stringify(credentialDoctor)
+    - name: preserves commentary and final delivery across quiet and detailed progress
+      actions:
+        - assert:
+            expr: env.providerMode === "mock-openai" && transport.id === "telegram"
+            message: this proof requires the mock provider and Telegram Test Server userbot
+        - set: proofs
+          value: []
+        - forEach:
+            items: { ref: config.cases }
+            item: fixture
+            actions:
+              - call: env.gateway.restartAfterStateMutation
+                args:
+                  - lambda:
+                      async: true
+                      params: [ctx]
+                      expr: |-
+                        (async () => {
+                          const cfg = JSON.parse(await fs.readFile(ctx.configPath, "utf8"));
+                          const telegram = cfg.channels.telegram.accounts?.[transport.accountId] ?? cfg.channels.telegram;
+                          telegram.streaming = {
+                            mode: "progress",
+                            progress: {
+                              commentary: true,
+                              ...(fixture.toolProgress === true ? { toolProgress: true } : {}),
+                            },
+                          };
+                          await fs.writeFile(ctx.configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
+                        })()
+              - call: waitForGatewayHealthy
+                args: [{ ref: env }, 60000]
+              - call: waitForTransportReady
+                args: [{ ref: env }, 60000]
+              - resetTransport: true
+              - set: suffix
+                value:
+                  expr: randomUUID().slice(0, 8).toUpperCase()
+              # These synthetic markers select the existing channel-independent provider fixture.
+              - set: commentaryMarker
+                value:
+                  expr: "`SLACK-QA-COMMENTARY-${suffix}`"
+              - set: toolMarker
+                value:
+                  expr: "`SLACK-QA-TOOL-${suffix}`"
+              - set: finalMarker
+                value:
+                  expr: "`SLACK-QA-COMMENTARY-DONE-${suffix}`"
+              - set: execCommand
+                value:
+                  expr: "`grep '${toolMarker}' /dev/null || sleep 5`"
+              - set: requestCursor
+                value:
+                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+              - set: startCursor
+                value:
+                  expr: state.getSnapshot().cursor
+              - sendInbound:
+                  conversation:
+                    id: { ref: config.conversationId }
+                    kind: direct
+                  senderId: { ref: config.senderId }
+                  senderName: QA Progress Operator
+                  text:
+                    expr: "`First say ${commentaryMarker} as commentary. Then use exec exactly once to run: ${execCommand}. After the tool completes, reply with only ${finalMarker}.`"
+              - waitForOutboundSequence:
+                  sinceCursor: { ref: startCursor }
+                  finalTextIncludes: { ref: finalMarker }
+                  finalSettleMs: 1500
+                  minimumPreviewEvents: 1
+                  timeoutMs: 90000
+              - set: requests
+                value:
+                  expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursor}`)"
+              - assert:
+                  expr: requests.length === 2 && requests.every((request) => request.outcome === "success")
+                  message: each turn must cross the provider boundary exactly twice without a retry or error
+              - assert:
+                  expr: requests[0].plannedToolName === "exec" && requests[0].plannedToolArgs?.command === execCommand && requests[0].plannedToolCallId && requests[1].toolOutputCallId === requests[0].plannedToolCallId && !requests[1].plannedToolName && !requests[1].toolOutputStructuredError
+                  message: the provider must request the fixture exec once and consume its matching successful result
+              - set: turnEvents
+                value:
+                  expr: "state.getSnapshot().events.filter((event) => event.cursor > startCursor && ['outbound-message', 'message-edited'].includes(event.kind) && event.message?.accountId === transport.accountId)"
+              - set: finalEvents
+                value:
+                  expr: turnEvents.filter((event) => event.message.text.includes(finalMarker))
+              - assert:
+                  expr: finalEvents.length === 1 && finalEvents[0].kind === "outbound-message" && finalEvents[0].message.text.trim() === finalMarker
+                  message: the final marker must arrive once as a separate complete reply
+              - set: progressEvents
+                value:
+                  expr: turnEvents.filter((event) => event.message.id !== finalEvents[0].message.id)
+              - assert:
+                  expr: progressEvents.length > 0 && progressEvents.every((event) => event.cursor < finalEvents[0].cursor) && new Set(progressEvents.map((event) => event.message.id)).size === 1
+                  message: one progress message must settle before the separate final reply
+              - set: firstCommentaryIndex
+                value:
+                  expr: progressEvents.findIndex((event) => event.message.text.includes(commentaryMarker))
+              - assert:
+                  expr: firstCommentaryIndex >= 0 && progressEvents.slice(firstCommentaryIndex).every((event) => event.message.text.includes(commentaryMarker))
+                  message: authored commentary must remain visible from its first complete preview through final delivery
+              - set: toolEvents
+                value:
+                  expr: "turnEvents.filter((event) => /🛠️|\\b(?:Exec|Bash)\\b/u.test(event.message.text) || event.message.text.includes(toolMarker))"
+              - if:
+                  expr: fixture.toolProgress === true
+                  then:
+                    - assert:
+                        expr: toolEvents.some((event) => event.message.id === progressEvents[0].message.id && event.message.text.includes(commentaryMarker))
+                        message: explicitly enabled tool progress must show an exec row on the commentary draft
+                  else:
+                    - assert:
+                        expr: toolEvents.length === 0
+                        message: omitted toolProgress must hide exec rows and command markers throughout every observed message and edit
+              - set: proofs
+                value:
+                  expr: "proofs.concat([{ case: fixture.name, toolProgress: fixture.toolProgress === true ? true : 'omitted', providerRequests: requests.length, correlatedExecResult: true, finalMarkerCount: finalEvents.length, observedEvents: turnEvents.map((event) => ({ kind: event.kind, message: event.message.id === finalEvents[0].message.id ? 'final' : 'progress', text: event.message.text })), toolRowEvents: toolEvents.length, noProgressAfterFinal: true }])"
+      detailsExpr: "JSON.stringify({ verdict: 'PASS', scenario: scenario.id, transport: 'Telegram Test Server TDLib userbot', deletionObservation: 'unsupported by serve driver', cases: proofs })"

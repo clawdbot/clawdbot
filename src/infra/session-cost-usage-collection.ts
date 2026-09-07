@@ -133,9 +133,9 @@ function listUsageCountedSqliteTranscriptStats(
 ): UsageCostTranscriptFile[] {
   const storePath = params.storePath;
   const files: UsageCostTranscriptFile[] = [];
-  // This scan reads transcript identity/timestamps only; clone:false avoids
-  // cloning every current entry before the history projection and SQL rollups.
-  for (const instance of listSessionTranscriptInstances({ agentId, storePath, clone: false })) {
+  // Usage needs transcript identity/timestamps, not saved prompt snapshots.
+  const instances = listSessionTranscriptInstances({ agentId, storePath, projection: "list" });
+  for (const instance of instances) {
     const marker = { agentId, sessionId: instance.sessionId, storePath };
     const mtimeMs = instance.updatedAtMs;
     if (params.minMtimeMs !== undefined && mtimeMs < params.minMtimeMs) {

@@ -2,7 +2,7 @@
   "id": "active-memory",
   "doctorContract": {
     "configRepair": true,
-    "stateMigrations": true
+    "stateMigrations": [{ "id": "active-memory-session-toggles-json-to-plugin-state" }]
   },
   "activation": {
     "onStartup": true

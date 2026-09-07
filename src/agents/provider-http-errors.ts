@@ -274,6 +274,10 @@ async function extractProviderErrorInfo(
     if (error instanceof ProviderErrorBodyTimeout) {
       throw error.timeoutError;
     }
+    // Fetch keeps its request deadline active while the response body is consumed.
+    if (error instanceof Error && error.name === "TimeoutError") {
+      throw error;
+    }
     return undefined;
   });
   const rawRequestId = extractProviderRequestId(response);

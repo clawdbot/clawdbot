@@ -27,6 +27,8 @@ function extractCronAgentDefaultsOverride(agentConfigOverride?: ResolvedAgentCon
     model: overrideModel,
     sandbox: _agentSandboxOverride,
     memory: _agentMemoryOverride,
+    models: _agentModelsOverride,
+    params: _agentParamsOverride,
     ...agentOverrideRest
   } = agentConfigOverride ?? {};
   return {
@@ -61,8 +63,8 @@ export function resolveCronAgentConfig(params: {
   const { overrideModel, definedOverrides } = extractCronAgentDefaultsOverride(
     params.agentConfigOverride,
   );
-  // Keep nested configs owned by agent-aware resolvers out of this flattened snapshot.
-  // Copying partial sandbox or memory objects into defaults destroys their global fields.
+  // Agent-aware resolvers merge these scopes themselves. Flattening partial maps
+  // erases inherited sandbox, memory, model-runtime and request-parameter settings.
   const agentDefaults = mergeCronAgentModelOverride({
     defaults: Object.assign({}, runtimeConfig.agents?.defaults, definedOverrides),
     overrideModel,

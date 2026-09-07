@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCompactionCheckpoint, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { createSessionCapability } from "../../lib/sessions/index.ts";
+import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { page as sessionsRoute, type SessionsRouteData } from "./route.ts";
 import {
@@ -70,7 +70,7 @@ describe("sessions page managed roster", () => {
         return task.promise;
       });
       const { gateway } = createGateway({ request } as unknown as GatewayBrowserClient);
-      const sessions = createSessionCapability(gateway);
+      const sessions = createTestSessionCapability(gateway);
       const page = await createRenderedPage(
         createContext(gateway, sessions),
         result("agent:main:initial"),
@@ -140,7 +140,7 @@ describe("sessions page managed roster", () => {
       return result(params?.offset ?? 0);
     });
     const { gateway } = createGateway({ request } as unknown as GatewayBrowserClient);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
     const page = await createRenderedPage(createContext(gateway, sessions), result(0));
     try {
       const input = page.querySelector<HTMLInputElement>(".sessions-toolbar__search input")!;
@@ -205,7 +205,7 @@ describe("sessions page managed roster", () => {
       if (ordering === "startup") {
         mutableGateway.emit({ phase: "connecting" });
       }
-      const sessions = createSessionCapability(mutableGateway.gateway);
+      const sessions = createTestSessionCapability(mutableGateway.gateway);
       const context = createContext(mutableGateway.gateway, sessions);
       context.runtimeConfig.ensureLoaded = () => config.promise;
       const pendingRoute = sessionsRoute.loader!(context, {

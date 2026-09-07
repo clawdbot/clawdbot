@@ -43,6 +43,12 @@ export type DevicesProps = {
    *  device the operator just clicked, without rederiving the label precedence. */
   onDeviceRotate: (device: { id: string; name: string }, role: string, scopes?: string[]) => void;
   onDeviceRevoke: (deviceId: string, role: string) => void;
+  /**
+   * Opens the alias editor for one paired device. `operatorLabel` is the alias
+   * currently stored for it, undefined while the device still shows its
+   * self-reported name.
+   */
+  onDeviceRename: (device: { id: string; name: string; operatorLabel?: string }) => void;
   onNodeApprove: (requestId: string) => void;
   onNodeReject: (requestId: string) => void;
   onInventoryRemove: (entry: InventoryRemovalRequest) => void;

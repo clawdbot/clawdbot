@@ -8,8 +8,8 @@ import type {
   ProviderReplaySessionEntry,
   ProviderSanitizeReplayHistoryContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
+  createCapturedPluginRegistration,
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -17,7 +17,6 @@ import { createCapturedThinkingConfigStream } from "openclaw/plugin-sdk/provider
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
-  RealtimeVoiceProviderPlugin,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
@@ -72,13 +71,10 @@ function createLazyRealtimeBridge(
   onReady?: () => void,
   onClose?: (reason: "completed" | "error") => void,
 ) {
-  let realtimeProvider: RealtimeVoiceProviderPlugin | undefined;
-  googlePlugin.register(
-    createTestPluginApi({
-      registerRealtimeVoiceProvider(provider) {
-        realtimeProvider = provider;
-      },
-    }),
+  const captured = createCapturedPluginRegistration({ id: "google" });
+  googlePlugin.register(captured.api);
+  const realtimeProvider = captured.realtimeVoiceProviders.find(
+    (provider) => provider.id === "google",
   );
   const bridge = realtimeProvider?.createBridge({
     providerConfig: { apiKey: "gemini-key" },

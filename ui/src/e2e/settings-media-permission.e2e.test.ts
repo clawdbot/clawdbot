@@ -194,11 +194,14 @@ suite.define(() => {
             )
             .toBe(2);
           const picker = () => page.locator(`select[data-settings-${kind}]`);
+          const proofSurface = page.locator(".shell");
           await picker().click();
           await page.keyboard.press("Escape");
           expect(new URL(page.url()).pathname).toBe("/settings/appearance");
           await captureSettingsSidebarUiProof(suite, sidebar, "appearance-sidebar.png");
-          await captureSidebarUiProof(suite, page, "appearance-pending.png");
+          await captureSidebarUiProof(suite, page, "appearance-pending.png", proofSurface, [
+            picker(),
+          ]);
           const target = kind === "microphone" ? 1 : 2;
           const other = target === 1 ? 2 : 1;
           await settle(page, other);
@@ -251,7 +254,14 @@ suite.define(() => {
           record.probesAfterSettlement = (await events(page)).filter(
             (row) => row.type === "probe",
           ).length;
-          await captureSidebarUiProof(suite, page, "settled-surface.png");
+          const settledContent = page.locator(
+            transition === "disconnect"
+              ? ".new-session-page__message"
+              : "openclaw-config-page .content-header--settings .page-title",
+          );
+          await captureSidebarUiProof(suite, page, "settled-surface.png", proofSurface, [
+            settledContent,
+          ]);
           if (transition !== "stay") {
             if (transition === "disconnect") {
               await page.keyboard.press("Control+Shift+,");
@@ -270,7 +280,9 @@ suite.define(() => {
           }
           record.finalEvents = await events(page);
           record.finalRoute = new URL(page.url()).pathname;
-          await captureSidebarUiProof(suite, page, "fresh-gesture-result.png");
+          await captureSidebarUiProof(suite, page, "fresh-gesture-result.png", proofSurface, [
+            picker(),
+          ]);
           const rows = await events(page);
           const probes = rows.filter((row) => row.type === "probe");
           const pointers = rows.filter((row) => row.type === "pointer");

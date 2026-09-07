@@ -1,6 +1,7 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -602,14 +603,15 @@ suite.define(() => {
           .poll(async () => (await sessionLabels.allTextContents()).toSorted())
           .toEqual(["Research Review", "Team Planning"]);
         if (recordVisuals) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(
+          await writeFile(
+            path.join(
               path.join(suite.artifactDir, "usage-filter-repair"),
               "01-provider-alternatives.png",
             ),
-          });
+            await takeControlUiViewportScreenshot(page, providerFilter.locator('[part="menu"]'), [
+              providerFilter.locator('wa-dropdown-item[value="option:openai"]'),
+            ]),
+          );
         }
 
         const query = page.locator(".usage-query-input");
@@ -632,14 +634,13 @@ suite.define(() => {
         await query.press("Enter");
         await expect.poll(() => sessionLabels.allTextContents()).toEqual(["Team Planning"]);
         if (recordVisuals) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(
+          await writeFile(
+            path.join(
               path.join(suite.artifactDir, "usage-filter-repair"),
               "02-quoted-session-label.png",
             ),
-          });
+            await takeControlUiViewportScreenshot(page, page.locator(".usage-page"), [query]),
+          );
         }
       },
     );

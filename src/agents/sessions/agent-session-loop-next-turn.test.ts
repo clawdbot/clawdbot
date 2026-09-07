@@ -7,11 +7,15 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { buildTimestampPrefix } from "../../gateway/server-methods/agent-timestamp.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { normalizeMessagesForLlmBoundary } from "../embedded-agent-runner/run/attempt-llm-boundary.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
+import { createUserTranscriptContextRegistry } from "../embedded-agent-runner/run/attempt-user-transcript-context-registry.js";
 import type { AgentTool } from "../runtime/index.js";
+import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -490,6 +494,80 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     expect(session.getSteeringMessages()).toEqual([]);
     expect(session.pendingMessageCount).toBe(0);
   });
+
+  it.each([false, true])(
+    "keeps accepted steering bytes stable across transcript persistence (image: %s)",
+    async (withImage) => {
+      const { session, sessionManager } = await createTestSession();
+      const admittedAt = 1717570800000;
+      const queuedAt = admittedAt + 120_000;
+      const image = { type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" };
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "Visible transcript prompt",
+          timestamp: admittedAt,
+          sender: { id: "alice-id", name: "Alice" },
+        },
+        target: createTestUserTurnTranscriptTarget(),
+      });
+      const queued = vi.spyOn(session.agent, "steer");
+      const clock = vi.spyOn(Date, "now").mockReturnValue(queuedAt);
+      try {
+        await session.steer("Expanded runtime prompt", withImage ? [image] : undefined, recorder);
+      } finally {
+        clock.mockRestore();
+      }
+      const message = queued.mock.calls[0]?.[0];
+      if (!message || message.role !== "user") {
+        throw new Error("expected queued user message");
+      }
+      const registry = createUserTranscriptContextRegistry();
+      const project = () =>
+        normalizeMessagesForLlmBoundary([message], {
+          timezone: "UTC",
+          userTranscriptContexts: registry.list(),
+        });
+      const accepted = project();
+      const guard = guardSessionManager(sessionManager, {
+        onUserMessagePersisted: (persisted, runtime) => {
+          if (runtime) {
+            registry.record(runtime, persisted);
+          }
+        },
+      });
+      const entryId = guard.appendMessage(message);
+      const acceptedContent = accepted[0]?.role === "user" ? accepted[0].content : undefined;
+      const firstBlock = Array.isArray(acceptedContent) ? acceptedContent[0] : undefined;
+      const acceptedText =
+        typeof acceptedContent === "string"
+          ? acceptedContent
+          : firstBlock?.type === "text"
+            ? firstBlock.text
+            : undefined;
+
+      expect(project()).toEqual(accepted);
+      expect(acceptedText).toContain('"name":"Alice"');
+      expect(acceptedText).toContain(
+        buildTimestampPrefix(new Date(admittedAt), { timezone: "UTC" }),
+      );
+      expect(acceptedText).toContain("Expanded runtime prompt");
+      expect(acceptedText).not.toContain("Visible transcript prompt");
+      expect(message.timestamp).toBe(admittedAt);
+      expect(message.content).toEqual([
+        { type: "text", text: "Expanded runtime prompt" },
+        ...(withImage ? [image] : []),
+      ]);
+      expect(guard.getEntry(entryId)).toMatchObject({
+        message: {
+          timestamp: admittedAt,
+          content: withImage ? message.content : "Visible transcript prompt",
+        },
+      });
+      if (withImage) {
+        expect(acceptedContent).toContainEqual(image);
+      }
+    },
+  );
 
   it.each([
     {

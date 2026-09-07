@@ -1,0 +1,21 @@
+[package]
+name = "openclaw-watch-rtc"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+getrandom = "=0.4.3"
+str0m = { version = "=0.23.1", default-features = false, features = ["rust-crypto"] }
+
+[dev-dependencies]
+fastrand = "=2.5.0"
+
+[profile.release]
+opt-level = 2
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"

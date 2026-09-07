@@ -4,6 +4,9 @@ import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delet
 import type { SessionResetBoundaryRequest } from "./session-reset-boundary-event.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
+/** Reset is an append: an empty transcript needs the caller's workspace for its header. */
+export type SessionResetBoundaryWrite = SessionResetBoundaryRequest & { cwd: string };
+
 export type SessionLifecycleArtifactCleanupParams = {
   agentId?: string;
   storePath: string;
@@ -62,7 +65,7 @@ export type ResetSessionEntryLifecycleParams = {
     primaryKey: string;
   }) => Promise<SessionEntry> | SessionEntry;
   /** Atomically append this boundary with the reset entry mutation. */
-  resetBoundary?: SessionResetBoundaryRequest;
+  resetBoundary?: SessionResetBoundaryWrite;
   /** Explicit store target for SQLite session ownership. */
   storePath: string;
   /** Canonical key plus aliases that identify the logical entry. */
@@ -151,7 +154,7 @@ export type SessionEntryLifecycleUpsert = {
   requiresRemovalSessionKey?: string;
   /** Authoritative route observation for this write; omitted writes preserve valid evidence. */
   routeContext?: ConversationRouteContext | null;
-  resetBoundary?: SessionResetBoundaryRequest;
+  resetBoundary?: SessionResetBoundaryWrite;
 } & (
   | {
       entry: SessionEntry;
@@ -187,6 +190,7 @@ export type SessionEntryLifecycleMutationResult = {
 
 export type DeletedAgentSessionEntryPurgeParams = {
   cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   agentId: string;
   storeAgentId: string;
   storePath: string;

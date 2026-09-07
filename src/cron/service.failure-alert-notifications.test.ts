@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HeartbeatRunOptions } from "../infra/heartbeat-runner-execution.js";
-import { resolveHeartbeatRunPrompt } from "../infra/heartbeat-runner-prompt.js";
+import {
+  resolveHeartbeatPreflight,
+  resolveHeartbeatRunPrompt,
+} from "../infra/heartbeat-runner-prompt.js";
 import { startHeartbeatRunner } from "../infra/heartbeat-runner-scheduler.js";
-import { resolveHeartbeatWakePayloadFlags } from "../infra/heartbeat-wake-policy.js";
 import { requestHeartbeat as requestHeartbeatWake } from "../infra/heartbeat-wake.js";
 import {
   drainSystemEvents,
@@ -84,22 +86,14 @@ describe("CronService failure notification delivery", () => {
     const observed: Array<{ prompt: string; deliveryContext?: DeliveryContext }> = [];
     const runOnce = vi.fn(async (options: HeartbeatRunOptions) => {
       const pendingEventEntries = peekSystemEventEntries(options.sessionKey ?? "");
-      const preflight = {
-        ...resolveHeartbeatWakePayloadFlags(options),
-        session: {
-          sessionKey: testCase.sessionKey,
-          storePath: "/tmp/cron-failure-alert-notification-proof.json",
-          suppressOriginatingContext: false,
-          entry: undefined,
-        },
-        pendingEventEntries,
-        turnSourceDeliveryContext: pendingEventEntries[0]?.deliveryContext,
-        hasTaggedCronEvents: pendingEventEntries.some((event) =>
-          event.contextKey?.startsWith("cron:"),
-        ),
-        shouldInspectPendingEvents: true,
-        authoritativeScheduledTick: false,
-      };
+      const preflight = await resolveHeartbeatPreflight({
+        cfg,
+        agentId: testCase.agentId,
+        sessionKey: options.sessionKey,
+        heartbeat: options.heartbeat,
+        source: options.source,
+        reason: options.reason,
+      });
       observed.push({
         prompt: resolveHeartbeatRunPrompt({
           cfg,

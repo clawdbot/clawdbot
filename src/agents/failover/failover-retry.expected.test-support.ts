@@ -4,6 +4,7 @@ export const failoverRetryExpectations = {
   "anthropic-incomplete-terminal-stream": true,
   "google-incomplete-terminal-stream": true,
   "mistral-incomplete-terminal-stream": true,
+  "openai-completions-incomplete-terminal-stream": true,
   "openai-responses-incomplete-terminal-stream": true,
   "proxy-incomplete-terminal-stream": true,
   "billing-context-input-length-model-limit": false,

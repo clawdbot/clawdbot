@@ -19,7 +19,21 @@ describe("OpenAI thinking route provenance", () => {
     (runtime) => {
       expect(
         resolveUnifiedOpenAIThinkingProfile("gpt-6-astra", runtime).levels.map((level) => level.id),
-      ).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
+      ).toEqual(["off", "low", "medium", "high", "xhigh", "max", "ultra"]);
+    },
+  );
+
+  it.each(["openclaw", "codex", "auto"])(
+    "retains Astra Ultra with scalar API metadata on the %s runtime",
+    (runtime) => {
+      expect(
+        resolveUnifiedOpenAIThinkingProfile(
+          "gpt-6-astra",
+          runtime,
+          { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+          "openai-responses",
+        ).levels.map((level) => level.id),
+      ).toContain("ultra");
     },
   );
 

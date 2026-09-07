@@ -12,6 +12,10 @@ import { isPluginEnabledByDefaultForPlatform } from "../plugins/default-enableme
 import { resolveManifestCommandAliasOwnerInRegistry } from "../plugins/manifest-command-aliases.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
+  isNativeSessionCatalogOptOutOnly,
+  shippedNativeSessionCatalogs,
+} from "../plugins/native-session-catalog-config.js";
+import {
   getOfficialExternalPluginCatalogEntry,
   resolveOfficialExternalPluginInstallSources,
 } from "../plugins/official-external-plugin-catalog.js";
@@ -285,11 +289,16 @@ export function validateExplicitPluginConfig(params: {
 
   const pluginsConfig = config.plugins;
   const entries = pluginsConfig?.entries;
+  // Normalized entries gain optional keys, so inspect the original disable marker shape.
+  const hasIntentionalDisableMarker = (pluginId: string) =>
+    isExplicitPluginDisableMarker(entries?.[pluginId]) && !isRetiredPluginId(pluginId);
   if (entries && isRecord(entries)) {
-    for (const [pluginId, entry] of Object.entries(entries)) {
-      const intentionalDisableMarker =
-        isExplicitPluginDisableMarker(entry) && !isRetiredPluginId(pluginId);
-      if (!knownIds.has(pluginId) && !intentionalDisableMarker) {
+    for (const pluginId of Object.keys(entries)) {
+      if (
+        !knownIds.has(pluginId) &&
+        !hasIntentionalDisableMarker(pluginId) &&
+        !isNativeSessionCatalogOptOutOnly(pluginId, entries[pluginId])
+      ) {
         // Keep gateway startup resilient when plugins are removed/renamed across upgrades.
         pushMissingPluginIssue(`plugins.entries.${pluginId}`, pluginId, { warnOnly: true });
       }
@@ -310,7 +319,7 @@ export function validateExplicitPluginConfig(params: {
           `"${pluginId}" is not a plugin — it is a command provided by the "${commandAlias.pluginId}" plugin. ` +
           `Use "${commandAlias.pluginId}" in plugins.allow instead.`,
       });
-    } else {
+    } else if (!hasIntentionalDisableMarker(pluginId)) {
       pushMissingPluginIssue("plugins.allow", pluginId, { warnOnly: true });
     }
   }
@@ -402,7 +411,27 @@ export function validateExplicitPluginConfig(params: {
             });
           }
         } else if (shouldReplacePluginConfig) {
-          params.replacePluginEntryConfig(pluginId, result.value as Record<string, unknown>);
+          let nextValue = result.value as Record<string, unknown>;
+          const nativeCatalog =
+            record.setup?.nativeSessionCatalog ??
+            shippedNativeSessionCatalogs.find((catalog) => catalog.pluginId === pluginId);
+          const authoredCatalog =
+            isRecord(entry?.config) && isRecord(entry.config.sessionCatalog)
+              ? entry.config.sessionCatalog
+              : undefined;
+          if (
+            nativeCatalog &&
+            isRecord(nextValue.sessionCatalog) &&
+            Object.hasOwn(nextValue.sessionCatalog, "enabled") &&
+            !Object.hasOwn(authoredCatalog ?? {}, "enabled")
+          ) {
+            // Plugin-local defaults remain intact. Root runtime config must not
+            // mistake a schema default for an authored discovery preference.
+            const sessionCatalog = { ...nextValue.sessionCatalog };
+            delete sessionCatalog.enabled;
+            nextValue = { ...nextValue, sessionCatalog };
+          }
+          params.replacePluginEntryConfig(pluginId, nextValue);
         }
       } else if (record.format === "bundle") {
         // Compatible bundles currently expose no native OpenClaw config schema.

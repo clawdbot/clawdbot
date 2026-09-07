@@ -140,6 +140,125 @@ describe("manifest model suppression", () => {
     ).toBeUndefined();
   });
 
+  it("preserves ordered same-model rules and current route conditions", () => {
+    const config = {
+      models: {
+        providers: {
+          fixture: {
+            api: "openai-completions" as const,
+            baseUrl: "https://first.example/v1",
+            models: [],
+          },
+        },
+      },
+    };
+    mocks.loadPluginMetadataSnapshot.mockReturnValue(
+      createMetadataSnapshot([
+        {
+          id: "z-fallback",
+          providers: ["fixture"],
+          modelCatalog: {
+            suppressions: [{ provider: "fixture", model: "model", reason: "Fallback." }],
+          },
+        },
+        {
+          id: "a-conditional",
+          providers: ["fixture"],
+          modelCatalog: {
+            suppressions: [
+              {
+                provider: "fixture",
+                model: "model",
+                reason: "First route.",
+                when: {
+                  baseUrlHosts: ["FIRST.EXAMPLE.", "shared.example"],
+                  providerConfigApiIn: ["OPENAI-COMPLETIONS"],
+                },
+              },
+              {
+                provider: "fixture",
+                model: "model",
+                reason: "Second route.",
+                retirement: { replacedBy: "successor" },
+                when: { baseUrlHosts: ["second.example", "shared.example"] },
+              },
+            ],
+          },
+        },
+      ]),
+    );
+    const resolver = buildManifestBuiltInModelSuppressionResolver({ config });
+    const input = { provider: "fixture", id: "model" };
+
+    expect(resolver({ ...input, baseUrl: "https://shared.example/v1" })).toEqual({
+      suppress: true,
+      errorMessage: "Unknown model: fixture/model. First route.",
+    });
+    expect(resolver({ ...input, baseUrl: "https://second.example/v1" })).toMatchObject({
+      retirement: { replacedBy: "successor" },
+    });
+    for (const baseUrl of ["https://other.example/v1", "invalid endpoint"]) {
+      expect(resolver({ ...input, baseUrl })?.errorMessage).toBe(
+        "Unknown model: fixture/model. Fallback.",
+      );
+    }
+    expect(
+      resolver({ ...input, baseUrl: "https://shared.example/v1", unconditionalOnly: true })
+        ?.errorMessage,
+    ).toBe("Unknown model: fixture/model. Fallback.");
+    expect(resolver(input)?.errorMessage).toBe("Unknown model: fixture/model. First route.");
+    config.models.providers.fixture.baseUrl = "https://second.example/v1";
+    expect(resolver(input)).toEqual({
+      suppress: true,
+      errorMessage: "Unknown model: fixture/model. Fallback.",
+    });
+  });
+
+  it.each([undefined, "current-model"])(
+    "preserves explicit retirement and successor %s only on the selected endpoint",
+    (replacedBy) => {
+      const modelCatalog = normalizeModelCatalog(
+        {
+          suppressions: [
+            {
+              provider: "fixture",
+              model: "old-model",
+              reason: "This subscription model has retired.",
+              retirement: replacedBy ? { replacedBy } : {},
+              when: { baseUrlHosts: ["subscription.example"] },
+            },
+          ],
+        },
+        { ownedProviders: new Set(["fixture"]) },
+      );
+      mocks.loadPluginMetadataSnapshot.mockReturnValue(
+        createMetadataSnapshot([{ id: "fixture", providers: ["fixture"], modelCatalog }]),
+      );
+      const resolver = buildManifestBuiltInModelSuppressionResolver({ env: process.env });
+      const retired = resolver({
+        provider: "fixture",
+        id: "old-model",
+        baseUrl: "https://subscription.example/v1",
+      });
+      expect(retired).toMatchObject({
+        suppress: true,
+        retirement: replacedBy ? { replacedBy } : {},
+      });
+      expect(retired?.errorMessage).toContain("openclaw doctor --fix");
+      expect(resolver({ provider: "fixture", id: "old-model" })).toBeUndefined();
+      expect(
+        resolver({ provider: "fixture", id: "old-model", baseUrl: "https://api.example/v1" }),
+      ).toBeUndefined();
+      expect(
+        resolver({
+          provider: "fixture",
+          id: "current-model",
+          baseUrl: "https://subscription.example/v1",
+        }),
+      ).toBeUndefined();
+    },
+  );
+
   it("reuses planned manifest suppressions inside a resolver instance", () => {
     const config = { plugins: { entries: { openai: { enabled: true } } } };
 
@@ -161,6 +280,37 @@ describe("manifest model suppression", () => {
       }),
     ).toBeUndefined();
     expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the OpenAI API route available while retiring the ChatGPT route", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(
+        new URL("../../extensions/openai/openclaw.plugin.json", import.meta.url),
+        "utf8",
+      ),
+    );
+    mocks.loadPluginMetadataSnapshot.mockReturnValue(createMetadataSnapshot([manifest]));
+    const resolver = buildManifestBuiltInModelSuppressionResolver({ env: process.env });
+    const input = { provider: "openai", id: "gpt-5.4" };
+    expect(resolver({ ...input, baseUrl: "https://chatgpt.com/backend-api" })).toMatchObject({
+      retirement: { replacedBy: "gpt-5.6-terra" },
+    });
+    for (const baseUrl of [undefined, "https://api.openai.com/v1", "https://proxy.example/v1"]) {
+      expect(resolver({ ...input, baseUrl })).toBeUndefined();
+    }
+  });
+
+  it.each([
+    "subscription.example",
+    { baseUrlHosts: [] },
+    { baseUrlHosts: 42 },
+    { baseUrlHosts: ["subscription.example"], providerConfigApiIn: false },
+  ])("does not broaden malformed retirement scope %# into a global rule", (when) => {
+    const catalog = normalizeModelCatalog(
+      { suppressions: [{ provider: "fixture", model: "old", retirement: {}, when }] },
+      { ownedProviders: new Set(["fixture"]) },
+    );
+    expect(catalog?.suppressions).toBeUndefined();
   });
 
   it("matches conditional suppressions by base URL host", () => {

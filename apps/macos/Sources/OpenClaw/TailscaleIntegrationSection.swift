@@ -134,7 +134,7 @@ struct TailscaleIntegrationSection: View {
                 await self.loadConfig()
             }
             guard !Task.isCancelled else { return }
-            // Cached settings panes stay mounted; only the active pane owns polling.
+            // Connection tabs stay mounted; only the active tab owns polling.
             repeat {
                 await self.tailscaleService.checkTailscaleStatus()
             } while await SimpleTaskSupport.waitForNextOperation(interval: 5)

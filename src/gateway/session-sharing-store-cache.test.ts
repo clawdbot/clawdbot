@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as sessionsConfig from "../config/sessions.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { setCanonicalSqliteSessionMainKey } from "../config/sessions/session-canonical-key.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   listOpenClawAgentDatabasesForTest,
@@ -14,6 +15,7 @@ import {
   resolveSessionMutationAuthorization,
 } from "./session-sharing.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
+import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils-store-lookup.js";
 import { canAccessTaskRequesterSession } from "./task-session-access.js";
 
 afterEach(() => {
@@ -46,6 +48,105 @@ function identifiedClient(userId: string): GatewayClient {
 }
 
 describe("session mutation authorization store caches", () => {
+  it.each([
+    { key: "agent:research:main", agentId: undefined, expectedAgent: "research" },
+    { key: "global", agentId: "research", expectedAgent: "research" },
+    { key: "global", agentId: undefined, expectedAgent: "ops" },
+    { key: "agent:research:ordinary", agentId: undefined, expectedAgent: "research" },
+    { key: "agent:research:ordinary", agentId: " ", expectedAgent: "research" },
+    { key: "agent:main:main", agentId: " ", expectedAgent: "ops" },
+  ])("preserves the requested owner for $key with explicit agent $agentId", async (target) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const cfg: OpenClawConfig = {
+        session: { scope: "global" },
+        agents: { entries: { ops: { default: true }, research: {} } },
+      };
+      await state.writeConfig(cfg);
+      for (const agentId of ["ops", "research"]) {
+        await sessionAccessor.upsertSessionEntryCore(
+          { agentId, sessionKey: "global" },
+          { sessionId: `global-${agentId}`, updatedAt: 1 },
+        );
+      }
+      await sessionAccessor.upsertSessionEntryCore(
+        { agentId: "research", sessionKey: "agent:research:ordinary" },
+        { sessionId: "ordinary-research", updatedAt: 1 },
+      );
+      const resolved = resolveGatewaySessionStoreTargetWithStore({
+        cfg,
+        key: target.key,
+        agentId: target.agentId,
+        readOnly: true,
+        exactRead: true,
+      });
+      const canonicalKey = target.key.endsWith(":ordinary") ? target.key : "global";
+      expect(resolved).toMatchObject({
+        agentId: target.expectedAgent,
+        canonicalKey,
+        store: {
+          [canonicalKey]: {
+            sessionId: `${canonicalKey === "global" ? "global" : "ordinary"}-${target.expectedAgent}`,
+          },
+        },
+      });
+    });
+  });
+
+  it.each(["research", "ops"])(
+    "checks %s participation in the selected global publication",
+    async (viewer) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const cfg: OpenClawConfig = {
+          session: { scope: "global" },
+          agents: { entries: { ops: { default: true }, research: {} } },
+        };
+        await state.writeConfig(cfg);
+        for (const agentId of ["ops", "research"]) {
+          await sessionAccessor.upsertSessionEntryCore(
+            { agentId, sessionKey: "global" },
+            {
+              sessionId: `global-${agentId}`,
+              updatedAt: 1,
+              visibility: "draft",
+              createdActor: { type: "human", source: "profile", id: `${agentId}@example.test` },
+            },
+          );
+        }
+        const context = { chatAbortControllers: new Map(), getRuntimeConfig: () => cfg } as never;
+        const client = identifiedClient(`${viewer}@example.test`);
+        const scoped = resolveSessionMutationAuthorization({
+          client,
+          method: "sessions.github.publish",
+          requestParams: { sessionKey: "global", agentId: "research" },
+          context,
+        });
+        if (viewer === "research") {
+          expect(scoped.error).toBeNull();
+        } else {
+          expect(scoped.error).toMatchObject({
+            details: { code: "SESSION_PARTICIPATION_REQUIRED" },
+          });
+        }
+        const alias = resolveSessionMutationAuthorization({
+          client,
+          method: "sessions.github.publish",
+          requestParams: { sessionKey: "agent:research:main" },
+          context,
+        });
+        if (viewer === "research") {
+          expect(alias.error).toBeNull();
+          expect(alias.authorization).toBeDefined();
+          expect(() => alias.authorization?.assertCurrent()).not.toThrow();
+        } else {
+          expect(alias.error).toMatchObject({
+            details: { code: "SESSION_PARTICIPATION_REQUIRED" },
+          });
+          expect(alias.authorization).toBeUndefined();
+        }
+      });
+    },
+  );
+
   it.each(["warm", "cold canonical", "cold main alias"] as const)(
     "bounds task visibility reads and rereads changed access with %s stores",
     async (mode) => {

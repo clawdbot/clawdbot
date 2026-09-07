@@ -1,15 +1,10 @@
 // Msteams plugin module implements reply stream controller behavior.
 import {
   type AgentPlanStep,
-  createChannelProgressDraftGate,
+  createChannelProgressDraftCompositor,
   type ChannelProgressDraftLine,
-  formatChannelProgressDraftText,
   isChannelProgressDraftWorkToolName,
-  mergeChannelProgressDraftLine,
-  normalizeChannelProgressDraftLineIdentity,
   resolveChannelPreviewStreamMode,
-  resolveChannelProgressDraftMaxLines,
-  resolveChannelStreamingPreviewToolProgress,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -60,7 +55,7 @@ function isStreamCancelledError(err: unknown): boolean {
  * Streaming is enabled for personal (DM) conversations only; group/channel
  * messages fall through to block delivery.
  *
- * Streaming modes (resolved from `cfg.channels.msteams.streaming.preview`):
+ * Streaming modes (resolved from `cfg.channels.msteams.streaming.mode`):
  * - "partial" (default): per-token streaming via `stream.emit(text)`. Each
  *   chunk goes onto the live preview card in Teams.
  * - "progress": no per-token streaming; the preview card carries an
@@ -82,7 +77,6 @@ export function createTeamsReplyStreamController(params: {
    * "Thinking..." flavor across reconnects. Typically `${accountId}:${convId}`.
    */
   progressSeed?: string;
-  random?: () => number;
 }) {
   const isPersonal = normalizeOptionalLowercaseString(params.conversationType) === "personal";
   const streamMode = resolveChannelPreviewStreamMode(params.msteamsConfig, "partial");
@@ -90,10 +84,6 @@ export function createTeamsReplyStreamController(params: {
     params.allowProviderPreview &&
     isPersonal &&
     (streamMode === "partial" || streamMode === "progress");
-  const shouldStreamPreviewToolProgress =
-    streamMode === "progress" &&
-    resolveChannelStreamingPreviewToolProgress(params.msteamsConfig, true, streamMode);
-
   const stream = shouldUseNativeStream ? params.context.stream : undefined;
 
   let tokensEmitted = false;
@@ -107,10 +97,6 @@ export function createTeamsReplyStreamController(params: {
   // the user gets the full reply instead of a truncated streamed prefix.
   // Matches the pre-migration `TeamsHttpStream.hasContent → false` recovery.
   let streamFailed = false;
-  let lastInformativeText = "";
-  let progressLines: Array<string | ChannelProgressDraftLine> = [];
-  let latestPlan: AgentPlanStep[] | undefined;
-  let latestPlanExplanation: string | undefined;
   let pendingFinalPayload: Maybe<ReplyPayload>;
   // openclaw's reply pipeline calls onPartialReply with the cumulative text on
   // each chunk, but the SDK's HttpStream appends each emit() to its internal
@@ -246,51 +232,28 @@ export function createTeamsReplyStreamController(params: {
     return payloads;
   };
 
-  /**
-   * Render the current informative status line into the streaming card. Pulls
-   * the rotating "Thinking..." label from msteams config (or the plugin-sdk
-   * default) and prepends collected tool-progress lines when configured.
-   */
-  const renderInformativeUpdate = (): void => {
-    // A late gate timer must not touch the stream once the final text is
-    // queued: the SDK resets its stream id on close, so an update after that
-    // would post a fresh stale "working" card below the final answer.
-    if (!stream || wasCanceled() || streamFinalizationPending) {
-      return;
-    }
-    const informativeText = formatChannelProgressDraftText({
-      entry: params.msteamsConfig,
-      lines: shouldStreamPreviewToolProgress ? progressLines : [],
-      seed: params.progressSeed,
-      bullet: "-",
-      narration: latestPlanExplanation,
-      plan: latestPlan,
-    });
-    // Empty render after a cleared plan intentionally keeps the previous
-    // card: Teams streams cannot delete or blank an update mid-stream, and
-    // the final answer settles the card at turn end. Default label configs
-    // re-render immediately, so this only lingers with `label: false`.
-    if (!informativeText || informativeText === lastInformativeText) {
-      return;
-    }
-    lastInformativeText = informativeText;
-    try {
-      stream.update(informativeText);
-    } catch (err) {
-      if (isStreamCancelledError(err)) {
-        canceledLocally = true;
-        return;
+  // Teams cannot delete an empty interim card; final delivery settles it.
+  const progressDraft = createChannelProgressDraftCompositor({
+    entry: params.msteamsConfig,
+    mode: streamMode,
+    active: Boolean(stream) && streamMode === "progress",
+    seed: params.progressSeed ?? "msteams",
+    update: (text) => {
+      if (!stream || wasCanceled() || streamFinalizationPending) {
+        return false;
       }
-      params.log?.debug?.(`stream informative update failed: ${coerceErrorMessage(err)}`);
-    }
-  };
-
-  // Gate informative updates so they only start firing once meaningful work
-  // has begun (avoids flickering "Thinking..." before the first real tool
-  // call). The gate is shape-agnostic — it calls `onStart` once the initial
-  // work delay elapses.
-  const progressDraftGate = createChannelProgressDraftGate({
-    onStart: renderInformativeUpdate,
+      try {
+        stream.update(text.replace(/^• /gmu, "- "));
+        return true;
+      } catch (err) {
+        if (isStreamCancelledError(err)) {
+          canceledLocally = true;
+        } else {
+          params.log?.debug?.(`stream informative update failed: ${coerceErrorMessage(err)}`);
+        }
+        return false;
+      }
+    },
   });
 
   return {
@@ -375,81 +338,40 @@ export function createTeamsReplyStreamController(params: {
       }
     },
 
-    /**
-     * Note that the agent is working — bumps the progress-draft gate so the
-     * informative status starts (or refreshes) on the next render. Called
-     * from the reply-dispatcher's typing callbacks.
-     */
     async noteProgressWork(options?: { toolName?: string }): Promise<void> {
-      if (!stream || streamMode !== "progress") {
-        return;
-      }
-      // Filter out non-work tool names (e.g. internal scheduling helpers) so
-      // the user only sees lines for tools that actually represent work.
       if (
         options?.toolName !== undefined &&
         !isChannelProgressDraftWorkToolName(options.toolName)
       ) {
         return;
       }
-      const hadStarted = progressDraftGate.hasStarted;
-      const progressActive = await progressDraftGate.noteWork();
-      // If the gate was already started, the call above is a no-op — refresh
-      // the informative line manually so the latest progress lines render.
-      if ((hadStarted || progressActive) && progressDraftGate.hasStarted) {
-        renderInformativeUpdate();
-      }
+      await progressDraft.noteActivity();
     },
 
-    /**
-     * Append a tool-progress line (e.g. a tool name being invoked) into the
-     * preview card's informative status. Only takes effect in "progress" mode
-     * with `streaming.previewToolProgress` enabled in config.
-     */
     async pushProgressLine(
       line?: string | ChannelProgressDraftLine,
       options?: { toolName?: string },
     ): Promise<void> {
-      if (!stream || streamMode !== "progress") {
-        return;
-      }
-      if (
-        options?.toolName !== undefined &&
-        !isChannelProgressDraftWorkToolName(options.toolName)
-      ) {
-        return;
-      }
-      if (shouldStreamPreviewToolProgress) {
-        const normalized = normalizeChannelProgressDraftLineIdentity(line);
-        if (normalized) {
-          const progressLine: string | ChannelProgressDraftLine =
-            typeof line === "object" && line !== undefined ? line : normalized;
-          progressLines = mergeChannelProgressDraftLine(progressLines, progressLine, {
-            maxLines: resolveChannelProgressDraftMaxLines(params.msteamsConfig),
-          });
-        }
-      }
-      const hadStarted = progressDraftGate.hasStarted;
-      const progressActive = await progressDraftGate.noteWork();
-      if ((hadStarted || progressActive) && progressDraftGate.hasStarted) {
-        renderInformativeUpdate();
-      }
+      await progressDraft.pushToolProgress(line, options);
+    },
+
+    async pushReasoningProgress(text?: string, options?: { snapshot?: boolean }): Promise<void> {
+      await progressDraft.pushReasoningProgress(text, options);
+    },
+
+    resetReasoningProgress: () => progressDraft.resetReasoningProgress(),
+
+    async pushApprovalEvent(
+      payload: Parameters<typeof progressDraft.pushApprovalEvent>[0],
+    ): Promise<void> {
+      await progressDraft.pushApprovalEvent(payload);
     },
 
     async pushPlanProgress(
       steps?: AgentPlanStep[],
       options?: { explanation?: string },
     ): Promise<void> {
-      if (!stream || streamMode !== "progress" || streamFinalizationPending) {
-        return;
-      }
-      latestPlan = steps?.length ? steps.map((entry) => ({ ...entry })) : undefined;
-      latestPlanExplanation = options?.explanation?.replace(/\s+/g, " ").trim() || undefined;
-      const hadStarted = progressDraftGate.hasStarted;
-      await progressDraftGate.startNow();
-      if (hadStarted && progressDraftGate.hasStarted) {
-        renderInformativeUpdate();
-      }
+      await progressDraft.pushPlanProgress(steps, options);
     },
 
     preparePayload(payload: ReplyPayload): Maybe<ReplyPayload> {
@@ -462,6 +384,9 @@ export function createTeamsReplyStreamController(params: {
       // the explicit cancel intent.
       if (wasCanceled()) {
         return undefined;
+      }
+      if (payload.text) {
+        progressDraft.markFinalReplyStarted();
       }
       if (replacementSettlementPending) {
         if (!replacementFinalPending) {
@@ -563,9 +488,8 @@ export function createTeamsReplyStreamController(params: {
     },
 
     async finalize(): Promise<MSTeamsNativeDeliveryFinalization> {
-      // The delay gate may still hold a pending start timer for fast turns;
-      // stop it before closing so it cannot fire against the closed stream.
-      progressDraftGate.cancel();
+      // The SDK reopens closed streams on update; retire progress before close.
+      progressDraft.markFinalReplyStarted();
       if (!stream || !nativeDispatchStarted) {
         releaseStreamChunkSubscription();
         return { visibleReplySent: false };

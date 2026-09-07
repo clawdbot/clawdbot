@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isCronSelfRemovalCurrent, type CronActiveJobMarker } from "../active-jobs.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import {
   activateCronRunReceiptInDatabase,
@@ -103,11 +104,14 @@ export function cronRunReceiptOwnerMutationHooks(params: {
 export function assertServiceCronRunReceiptCurrent(
   state: CronServiceState,
   handle: CronRunReceiptHandle,
+  activeJobMarker?: CronActiveJobMarker,
 ): void {
   assertCronRunReceiptCurrent({
     handle,
     resolveAgentId: resolveAgentId(state),
     isAgentAvailable: state.deps.isAgentAvailable,
+    allowMissingJob:
+      activeJobMarker?.jobId === handle.jobId && isCronSelfRemovalCurrent(activeJobMarker),
   });
 }
 
@@ -135,7 +139,7 @@ function logReceiptFinishError(
 function finishReceiptAfterCommit(
   state: CronServiceState,
   terminal: Parameters<typeof finishCronRunReceipt>[0],
-): void {
+): undefined {
   try {
     finishCronRunReceipt(terminal);
   } catch (error) {

@@ -178,6 +178,7 @@ export async function applySystemAgentSetup(
 
   let snapshot = await readSetupConfigFileSnapshot();
   let snapshotConfig = requireValidSystemAgentSetupSnapshot(snapshot);
+  assertCommitPreconditions?.(snapshotConfig.sourceConfig);
   const configHashBefore = resolveConfigSnapshotHash(snapshot);
   const startedWithoutAuthoredRoster = !hasResolvedRosterBeforeMigrations(snapshot);
   const onboardingSourceConfig =
@@ -284,6 +285,7 @@ export async function applySystemAgentSetup(
     }
     snapshot = await readSetupConfigFileSnapshot();
     snapshotConfig = requireValidSystemAgentSetupSnapshot(snapshot);
+    assertCommitPreconditions?.(snapshotConfig.sourceConfig);
     if ((resolveConfigSnapshotHash(snapshot) ?? null) !== created.configHash) {
       throw new Error("OpenClaw config changed after first-agent creation. Retry setup.");
     }
@@ -621,7 +623,9 @@ export async function applySystemAgentSetup(
         } else if (gateway.reason === "external") {
           lines.push(`Gateway: ${formatExternalSupervisorActionRequired("start the gateway")}`);
         } else if (params.installDaemon === false) {
-          lines.push("Gateway: will run in the foreground.");
+          lines.push(
+            "Gateway: service installation skipped. Run `openclaw gateway run` to start it in the foreground.",
+          );
         } else {
           lines.push(
             "Gateway: service install skipped — say `start gateway` when you want it running.",

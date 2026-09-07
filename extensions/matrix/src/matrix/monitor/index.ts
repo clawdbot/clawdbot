@@ -31,7 +31,6 @@ import { resolveConfiguredMatrixBotUserIds } from "../accounts.js";
 import {
   acquireSharedMatrixClient,
   backfillMatrixAuthDeviceIdAfterStartup,
-  isBunRuntime,
   resolveMatrixAuth,
   resolveMatrixAuthContext,
   type SharedMatrixClientLease,
@@ -84,7 +83,8 @@ function resolveMatrixPreviewToolProgress(streaming: MatrixStreamingInput): bool
     return true;
   }
   if (resolveMatrixStreamingMode(streaming) === "progress") {
-    return streaming.progress?.toolProgress ?? streaming.preview?.toolProgress ?? true;
+    // Progress drafts are quiet unless the operator opts into the tool log.
+    return streaming.progress?.toolProgress ?? streaming.preview?.toolProgress ?? false;
   }
   return streaming.preview?.toolProgress ?? true;
 }
@@ -101,9 +101,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   // Fast-cancel callers should not pay the full Matrix startup/import cost.
   if (opts.abortSignal?.aborted) {
     return;
-  }
-  if (isBunRuntime()) {
-    throw new Error("Matrix provider requires Node (bun runtime not supported)");
   }
   const core = getMatrixRuntime();
   let cfg = core.config.current() as CoreConfig;

@@ -78,6 +78,7 @@ type WorkboardLifecycleMatchHandler = (input: {
 }) => Promise<void>;
 
 type WorkboardLifecycleService = OpenClawPluginService & {
+  stop: () => void;
   onGatewayStart: () => void;
   onGatewayStop: () => void;
 };
@@ -482,37 +483,39 @@ export function createWorkboardLifecycleService(params: {
       let begun = false;
       const reconcile = async () => {
         try {
-          let cards = await params.store.list();
-          if (generation !== owner) {
-            return;
-          }
-          if (cards.some((card) => needsWorkboardLifecycleReconciliation(card))) {
-            try {
-              const snapshot = await params.readSessions({
-                includeUnknown: cards.some(
-                  (card) => !card.metadata?.archivedAt && cardSessionKey(card) === "unknown",
-                ),
-              });
-              if (generation !== owner) {
-                return;
-              }
-              await syncWorkboardLifecycleSessions({
-                store: params.store,
-                cards,
-                ...snapshot,
-                now: params.now?.() ?? Date.now(),
-              });
-              if (generation !== owner) {
-                return;
-              }
-              cards = await params.store.list();
-            } catch (error) {
-              ctx.logger.warn(`workboard lifecycle sync failed: ${String(error)}`);
+          await params.store.runOperation(async () => {
+            let cards = await params.store.list();
+            if (generation !== owner) {
+              return;
             }
-          }
-          if (generation === owner) {
-            await cleanupWorktrees(cards, (message) => ctx.logger.warn(message));
-          }
+            if (cards.some((card) => needsWorkboardLifecycleReconciliation(card))) {
+              try {
+                const snapshot = await params.readSessions({
+                  includeUnknown: cards.some(
+                    (card) => !card.metadata?.archivedAt && cardSessionKey(card) === "unknown",
+                  ),
+                });
+                if (generation !== owner) {
+                  return;
+                }
+                await syncWorkboardLifecycleSessions({
+                  store: params.store,
+                  cards,
+                  ...snapshot,
+                  now: params.now?.() ?? Date.now(),
+                });
+                if (generation !== owner) {
+                  return;
+                }
+                cards = await params.store.list();
+              } catch (error) {
+                ctx.logger.warn(`workboard lifecycle sync failed: ${String(error)}`);
+              }
+            }
+            if (generation === owner) {
+              await cleanupWorktrees(cards, (message) => ctx.logger.warn(message));
+            }
+          });
         } catch (error) {
           ctx.logger.warn(`workboard lifecycle recovery failed: ${String(error)}`);
         } finally {

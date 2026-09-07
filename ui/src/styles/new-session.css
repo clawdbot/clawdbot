@@ -981,6 +981,10 @@ wa-popover.new-session-page__project-popover::part(body) {
   background: var(--bg-hover);
 }
 
+.new-session-page__browser-entry--active {
+  background: var(--bg-hover);
+}
+
 .new-session-page__browser-entry:disabled {
   color: var(--muted);
   cursor: not-allowed;

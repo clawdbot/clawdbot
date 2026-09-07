@@ -6,6 +6,41 @@
   "enabledByDefault": true,
   "providers": ["huggingface"],
   "modelCatalog": {
+    "providers": {
+      "huggingface": {
+        "baseUrl": "https://router.huggingface.co/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "deepseek-ai/DeepSeek-R1",
+            "name": "DeepSeek R1",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 131072,
+            "maxTokens": 8192,
+            "cost": { "input": 3, "output": 7, "cacheRead": 3, "cacheWrite": 3 }
+          },
+          {
+            "id": "deepseek-ai/DeepSeek-V3.1",
+            "name": "DeepSeek V3.1",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 131072,
+            "maxTokens": 8192,
+            "cost": { "input": 0.6, "output": 1.25, "cacheRead": 0.6, "cacheWrite": 0.6 }
+          },
+          {
+            "id": "openai/gpt-oss-120b",
+            "name": "GPT-OSS 120B",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 131072,
+            "maxTokens": 8192,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          }
+        ]
+      }
+    },
     "discovery": {
       "huggingface": "refreshable"
     }

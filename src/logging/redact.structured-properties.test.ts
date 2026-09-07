@@ -2,6 +2,19 @@ import { describe, expect, it } from "vitest";
 import { redactModelVisibleSecrets, redactSecrets } from "./redact.js";
 
 describe.each([redactSecrets, redactModelVisibleSecrets])("%s structured properties", (redact) => {
+  it("redacts public share capabilities without treating ordinary ids as secrets", () => {
+    const shareId = "a".repeat(48);
+    expect(
+      redact({
+        publicShare: { id: shareId, sessionId: "session-1", createdAt: 1 },
+        ordinary: { id: shareId },
+      }),
+    ).toEqual({
+      publicShare: { id: "aaaaaa…aaaa", sessionId: "session-1", createdAt: 1 },
+      ordinary: { id: shareId },
+    });
+  });
+
   it("preserves JSON prototype-named fields as redacted own data", () => {
     const input = JSON.parse(
       '{"__proto__":{"label":"root","token":"fixture-value"},"nested":{"__proto__":null},"items":[{"__proto__":"ordinary"},{"__proto__":123}]}',

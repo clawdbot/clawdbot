@@ -21,6 +21,7 @@ let swabbleTriggersKey = "openclaw.swabbleTriggers"
 let voiceWakeTriggerChimeKey = "openclaw.voiceWakeTriggerChime"
 let voiceWakeSendChimeKey = "openclaw.voiceWakeSendChime"
 let showDockIconKey = "openclaw.showDockIcon"
+let appIconStyleKey = "openclaw.appIconStyle"
 let defaultVoiceWakeTriggers = ["openclaw"]
 let voiceWakeMaxWords = 32
 let voiceWakeMaxWordLength = 64
@@ -77,7 +78,6 @@ let cliValidatedVersionKey = "openclaw.cliValidatedVersion"
 let macNodeIdentityProfileKey = "openclaw.macNodeIdentityProfile"
 let heartbeatsEnabledKey = "openclaw.heartbeatsEnabled"
 let debugPaneEnabledKey = "openclaw.debugPaneEnabled"
-let nativeSettingsPanesEnabledKey = "openclaw.nativeSettingsPanesEnabled"
 let debugFileLogEnabledKey = "openclaw.debug.fileLogEnabled"
 let appLogLevelKey = "openclaw.debug.appLogLevel"
 let voiceWakeSupported: Bool = ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26

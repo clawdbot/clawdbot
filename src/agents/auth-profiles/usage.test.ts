@@ -35,8 +35,11 @@ const storeMocks = vi.hoisted(() => ({
 }));
 const fetchMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./store.js", () => ({
+vi.mock("./store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./store.js")>()),
   resolvePersistedAuthProfileOwnerAgentDir: storeMocks.resolvePersistedAuthProfileOwnerAgentDir,
+}));
+vi.mock("./store-runtime.js", () => ({
   updateAuthProfileStoreWithLock: storeMocks.updateAuthProfileStoreWithLock,
   saveAuthProfileStore: storeMocks.saveAuthProfileStore,
 }));
@@ -142,6 +145,56 @@ describe("resolveProfileUnusableUntil", () => {
     const stats = { blockedUntil: 300, blockedModel: "model-a", blockedScope: "model" as const };
     expect(resolveProfileUnusableUntil(stats, "model-a")).toBe(300);
     expect(resolveProfileUnusableUntil(stats, "model-b")).toBeNull();
+  });
+});
+
+describe("account-wide auth profile cooldowns", () => {
+  it("ignores windows scoped to one model", () => {
+    expect(
+      resolveProfileUnusableUntil(
+        {
+          blockedUntil: 300,
+          blockedModel: "model-a",
+          blockedScope: "model",
+          cooldownUntil: 400,
+          cooldownReason: "rate_limit",
+          cooldownModel: "model-a",
+        },
+        null,
+      ),
+    ).toBeNull();
+  });
+
+  it("keeps profile-wide and disabled windows", () => {
+    expect(
+      resolveProfileUnusableUntil(
+        {
+          blockedUntil: 300,
+          cooldownUntil: 400,
+          cooldownReason: "rate_limit",
+          disabledUntil: 500,
+        },
+        null,
+      ),
+    ).toBe(500);
+  });
+
+  it("distinguishes model-scoped and profile-wide cooldowns", () => {
+    const now = Date.now();
+    const store = makeStore({
+      "openai:api-key": {
+        cooldownUntil: now + 60_000,
+        cooldownReason: "rate_limit",
+        cooldownModel: "gpt-5.5",
+      },
+      "anthropic:default": {
+        cooldownUntil: now + 60_000,
+        cooldownReason: "rate_limit",
+      },
+    });
+
+    expect(isProfileInCooldown(store, "openai:api-key", now, null)).toBe(false);
+    expect(isProfileInCooldown(store, "anthropic:default", now, null)).toBe(true);
   });
 });
 
@@ -1029,8 +1082,8 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
         lastFailureAt: now - 60_000,
       }),
       // errorCount resets, billing count resets to 1 →
-      // calculateDisabledLaneBackoffMs(1, 5h, 24h) = 5h
-      expectedUntil: (now: number) => now + 5 * 60 * 60 * 1000,
+      // calculateDisabledLaneBackoffMs(1, 10m, 24h) = 10m (#135835)
+      expectedUntil: (now: number) => now + 10 * 60 * 1000,
       readUntil: (stats: WindowStats | undefined) => stats?.disabledUntil,
     },
     {

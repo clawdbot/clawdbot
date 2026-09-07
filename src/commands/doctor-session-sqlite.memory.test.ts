@@ -35,6 +35,8 @@ beforeAll(async () => {
     // preserve function/class names used by runtime dispatch and diagnostics.
     minify: true,
     keepNames: true,
+    // Preserve lazy imports so unrelated runtime modules do not consume the child heap.
+    splitting: true,
     outdir: outDir,
     external: Object.entries(packageJson.dependencies)
       .filter(([, version]) => !version.startsWith("workspace:"))

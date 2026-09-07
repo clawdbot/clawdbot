@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - docs/**
+      - package.json
       - scripts/docs-list.js
       - scripts/docs-sync-publish.mjs
       - scripts/check-docs-mdx.mjs
@@ -137,6 +138,22 @@ jobs:
           def invalid_json_constant(value):
               raise json.JSONDecodeError("Invalid JSON constant", value, 0)
 
+          def validate_publisher_dependencies():
+              baseline = {}
+              for key, filename in (("packageJson", "package.json"), ("packageLock", "package-lock.json")):
+                  with tempfile.TemporaryFile() as output:
+                      run_git(publish, "show", f"refs/remotes/origin/main:{filename}", stdout=output)
+                      output.seek(0)
+                      baseline[key] = json.loads(output.read().decode("utf-8"),
+                                                 parse_constant=invalid_json_constant)
+              subprocess.run([
+                  "node", "--input-type=module", "-e",
+                  "import fs from 'node:fs'; "
+                  "import { validateDocsSyncDependencies } from './scripts/docs-sync-publish.mjs'; "
+                  "validateDocsSyncDependencies(process.argv[1], JSON.parse(fs.readFileSync(0, 'utf8')));",
+                  publish,
+              ], cwd=workspace, input=json.dumps(baseline), text=True, check=True)
+
           def remote_source_sha():
               try:
                   with tempfile.TemporaryFile() as output:
@@ -162,7 +179,7 @@ jobs:
               raise SystemExit(0)
 
           try:
-              run_git(publish, "diff", "--quiet", "--", "docs", ".openclaw-sync")
+              run_git(publish, "diff", "--quiet", "--", "docs", ".openclaw-sync", "package.json", "package-lock.json")
           except GitFailure:
               pass
           else:
@@ -178,13 +195,14 @@ jobs:
 
           run_git(publish, "config", "user.name", "openclaw-docs-sync[bot]", reclaim_locks=True)
           run_git(publish, "config", "user.email", "openclaw-docs-sync[bot]@users.noreply.github.com", reclaim_locks=True)
-          run_git(publish, "add", "docs", ".openclaw-sync", reclaim_locks=True)
+          run_git(publish, "add", "docs", ".openclaw-sync", "package.json", "package-lock.json", reclaim_locks=True)
           run_git(publish, "commit", "-m", f"chore(sync): mirror docs from {os.environ['GITHUB_REPOSITORY']}@{source_sha}", reclaim_locks=True)
           for attempt in range(1, 6):
               try:
                   run_git(publish, "fetch", "origin", "main:refs/remotes/origin/main", timeout=120, reclaim_locks=True)
                   skip_stale_source()
                   run_git(publish, "rebase", "-X", "theirs", "origin/main", reclaim_locks=True)
+                  validate_publisher_dependencies()
                   run_git(publish, "push", "origin", "HEAD:main", reclaim_locks=True)
                   raise SystemExit(0)
               except (GitFailure, FetchTimeout):

@@ -114,6 +114,7 @@ describe("gateway connection state", () => {
     state.broadcastToConnIds("tick", { ts: 1 }, new Set(["target"]));
 
     expect(target.send).toHaveBeenCalledTimes(1);
+    expect(state.getBufferedAmount("target")).toBe(0);
     expect(reads.count).toBe(0);
 
     target.socket.readyState = WebSocket.CLOSING;
@@ -122,7 +123,7 @@ describe("gateway connection state", () => {
     expect(target.send).toHaveBeenCalledTimes(1);
 
     reads.count = 0;
-    expect(state.getBufferedAmount("target")).toBe(0);
+    expect(state.getBufferedAmount("target")).toBeUndefined();
     expect(state.isConnectionActive("target")).toBe(true);
     expect(reads.count).toBe(0);
 

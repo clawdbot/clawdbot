@@ -20,7 +20,7 @@ type EmbeddingProviderResult = {
   runtime?: MemoryEmbeddingProviderRuntime;
 };
 
-export type DreamingArtifactsAuditIssue = {
+type DreamingArtifactsAuditIssue = {
   severity: "warn" | "error";
   code:
     | "dreaming-session-corpus-unreadable"
@@ -42,7 +42,7 @@ export type DreamingArtifactsAuditSummary = {
   issues: DreamingArtifactsAuditIssue[];
 };
 
-export type ShortTermAuditIssue = {
+type ShortTermAuditIssue = {
   severity: "warn" | "error";
   code:
     | "recall-store-unreadable"
@@ -71,7 +71,7 @@ export type ShortTermAuditSummary = {
   issues: ShortTermAuditIssue[];
 };
 
-export type RepairShortTermPromotionArtifactsResult = {
+type RepairShortTermPromotionArtifactsResult = {
   changed: boolean;
   removedInvalidEntries: number;
   removedDanglingEntries?: number;
@@ -139,7 +139,7 @@ type GroundedRemPreviewResult = {
   files: GroundedRemFilePreview[];
 };
 
-export type ShortTermDreamingStatsEntry = {
+type ShortTermDreamingStatsEntry = {
   key: string;
   path: string;
   startLine: number;
@@ -156,7 +156,7 @@ export type ShortTermDreamingStatsEntry = {
   lastRecalledAt?: string;
 };
 
-export type ShortTermDreamingStats = {
+type ShortTermDreamingStats = {
   shortTermCount: number;
   recallSignalCount: number;
   dailySignalCount: number;
@@ -202,7 +202,7 @@ type ApiFacadeModule = {
   }) => Promise<{ dreamsPath: string; removed: number }>;
 };
 
-export type RepairDreamingArtifactsResult = {
+type RepairDreamingArtifactsResult = {
   changed: boolean;
   archiveDir?: string;
   archivedDreamsDiary: boolean;

@@ -120,7 +120,7 @@ type GatewayHttpConnectAuthorizer = (
   params: Parameters<typeof authorizeHttpGatewayConnect>[0],
 ) => Promise<GatewayAuthResult>;
 
-export type AuthorizedControlUiReadRequest = {
+export type AuthorizedControlUiReadRequest = AuthenticatedHttpUserProfile & {
   authMethod: NonNullable<GatewayAuthResult["method"]>;
   operatorScopes: string[];
 };
@@ -352,7 +352,7 @@ export async function authorizeControlUiReadRequestOrReply(
       sendMissingScopeForbidden(params.res, scopeAuth.missingScope);
       return null;
     }
-    return { authMethod, operatorScopes };
+    return { authMethod, operatorScopes, ...authenticatedProfile };
   };
 
   if (!canUseDeviceTokenFallback || !params.rateLimiter) {

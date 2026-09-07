@@ -32,6 +32,7 @@ import {
   type RoleRefMap,
 } from "./pw-role-snapshot.js";
 import { connectBrowser, pageTargetInfo } from "./pw-session-connection.js";
+import type { RoleRefs } from "./pw-session-contracts.js";
 import {
   assertPageNavigationCompletedSafely,
   closeBlockedNavigationTarget,
@@ -51,7 +52,7 @@ import {
 import { runPageEmulationTransition, setViewportSizeOnPage } from "./pw-tools-core.state.js";
 import { appendSnapshotUrls, type SnapshotUrlEntry } from "./snapshot-urls.js";
 
-type StoredSnapshotRef = RoleRefMap[string] & { backendDOMNodeId?: number };
+type StoredSnapshotRef = RoleRefs[string] & { backendDOMNodeId?: number };
 
 function resolveBoundedTimeoutMs(
   timeoutMs: number | undefined,
@@ -80,7 +81,7 @@ async function collectSnapshotUrls(page: Page): Promise<SnapshotUrlEntry[]> {
     .evaluate(() => {
       const seen = new Set<string>();
       const out: SnapshotUrlEntry[] = [];
-      for (const anchor of Array.from(document.querySelectorAll("a[href]"))) {
+      for (const anchor of document.querySelectorAll("a[href]")) {
         const href = anchor instanceof HTMLAnchorElement ? anchor.href : "";
         if (!href || seen.has(href)) {
           continue;
@@ -160,13 +161,15 @@ export async function storeSnapshotRefsViaPlaywright(opts: {
       targetId: opts.targetId,
     }));
   ensurePageState(page);
+  const backendRefs: { ref: string; backendDOMNodeId: number }[] = [];
+  for (const [ref, info] of Object.entries(sourceRefs)) {
+    if (typeof info.backendDOMNodeId === "number") {
+      backendRefs.push({ ref, backendDOMNodeId: info.backendDOMNodeId });
+    }
+  }
   const markedRefs = await markBackendDomRefsOnPage({
     page,
-    refs: Object.entries(sourceRefs).flatMap(([ref, info]) =>
-      typeof info.backendDOMNodeId === "number"
-        ? [{ ref, backendDOMNodeId: info.backendDOMNodeId }]
-        : [],
-    ),
+    refs: backendRefs,
   });
   if (
     opts.expectedDocumentIdentity &&
@@ -176,9 +179,11 @@ export async function storeSnapshotRefsViaPlaywright(opts: {
   }
   const refs: RoleRefMap = Object.fromEntries(
     Object.entries(sourceRefs).map(([ref, info]) => {
-      const storedInfo = { ...info };
-      delete storedInfo.backendDOMNodeId;
-      return [ref, { ...storedInfo, ...(markedRefs.has(ref) ? { domMarker: true } : {}) }];
+      const { backendDOMNodeId: _backendDOMNodeId, ...storedInfo } = info;
+      if (markedRefs.has(ref)) {
+        storedInfo.domMarker = true;
+      }
+      return [ref, storedInfo];
     }),
   );
   storeRoleRefsForTarget({

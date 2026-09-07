@@ -35,6 +35,7 @@ import { retryAsync } from "../retry.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import { prepareOutboundPayloadBatch } from "./deliver-prepare.js";
 import { countPhysicalOutboundSends, PlatformMessageNotDispatchedError } from "./deliver-types.js";
+import { createOutboundPayloadPlan, projectOutboundPayloadPlanForOutbound } from "./payloads.js";
 import { createUnmodifiedPreparedOutboundBatch } from "./prepared-batch.js";
 
 type AppendAssistantTranscript =
@@ -1098,7 +1099,7 @@ describe("deliverOutboundPayloads", () => {
         },
         onDeliveryAttempt: async () => {},
       }),
-    ).rejects.toMatchObject({ retryable: false });
+    ).rejects.toMatchObject({ cause: { retryable: false }, queueCustody: "released" });
     expect(messageSendText).not.toHaveBeenCalled();
   });
 
@@ -2081,7 +2082,7 @@ describe("deliverOutboundPayloads", () => {
           queuePolicy: "required",
           deliveryRetryOwner: "caller",
         }),
-      ).rejects.toThrow(code);
+      ).rejects.toMatchObject({ message: expect.stringContaining(code), queueCustody: "released" });
 
       expect(queueMocks.moveToFailed).toHaveBeenCalledWith(
         "mock-queue-id",
@@ -2121,6 +2122,22 @@ describe("deliverOutboundPayloads", () => {
     );
     expect(queueMocks.failDeliveryBeforePlatformSend).not.toHaveBeenCalled();
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+  });
+
+  it("retains custody when caller-owned retirement fails", async () => {
+    queueMocks.moveToFailed.mockRejectedValueOnce(new Error("claim was replaced"));
+    const sendMatrix = vi
+      .fn()
+      .mockRejectedValueOnce(createNetworkError("connect refused", "ECONNREFUSED", "connect"));
+
+    await expect(
+      deliverMatrix({
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+        deliveryRetryOwner: "caller",
+      }),
+    ).rejects.toMatchObject({ message: "connect refused", queueCustody: "held" });
+    expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
   });
 
   it("keeps a reporting-only caller's entry recoverable after a proven pre-connect failure", async () => {
@@ -3344,6 +3361,54 @@ describe("deliverOutboundPayloads", () => {
       undefined,
       { replyToId: "hooked-reply" },
     );
+  });
+
+  it("leaves projected Gateway reset status notices unchanged for banner hooks", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "reply_payload_sending",
+    );
+    hookMocks.runner.runReplyPayloadSending.mockImplementation(async (event) => {
+      const payload = (event as { payload: { text?: string; isStatusNotice?: boolean } }).payload;
+      if (payload.isStatusNotice) {
+        return { payload };
+      }
+      return {
+        payload: {
+          ...payload,
+          text: `${payload.text ?? ""}\n⏳ session too long, try /new`,
+        },
+      };
+    });
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "ack",
+      roomId: "!room",
+    });
+    const projected = projectOutboundPayloadPlanForOutbound(
+      createOutboundPayloadPlan([{ text: "✅ New session started.", isStatusNotice: true }]),
+    );
+
+    await deliverMatrix({
+      to: "!room",
+      payloads: projected,
+      deps: { matrix: sendText },
+      replyPayloadSendingHook: {
+        kind: "final",
+        channel: "matrix",
+        context: { channelId: "matrix", conversationId: "!room" },
+      },
+    });
+
+    expect(hookMocks.runner.runReplyPayloadSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          text: "✅ New session started.",
+          isStatusNotice: true,
+        }),
+      }),
+      expect.anything(),
+    );
+    expect(requireMatrixSendCall(sendText)[1]).toBe("✅ New session started.");
   });
 
   it("strips internal runtime scaffolding before adapter payload normalization copies text", async () => {
@@ -5275,16 +5340,44 @@ describe("deliverOutboundPayloads", () => {
     });
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
 
-    const results = await deliverMatrix({
-      payloads: [{ text: "hi" }],
-      deps: { matrix: sendMatrix },
-    });
-
-    expect(results).toStrictEqual([]);
+    await expect(
+      deliverMatrix({
+        payloads: [{ text: "hi" }],
+        deps: { matrix: sendMatrix },
+      }),
+    ).rejects.toMatchObject({ queueCustody: "held" });
     expect(sendMatrix).not.toHaveBeenCalled();
     expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
   });
+
+  it.each(["intent observer", "claim acquisition", "lease startup"])(
+    "preserves admitted custody when %s fails before execution",
+    async (boundary) => {
+      const failure = new Error(`${boundary} failed`);
+      if (boundary === "claim acquisition") {
+        queueMocks.withActiveDeliveryClaim.mockRejectedValueOnce(failure);
+      }
+      if (boundary === "lease startup") {
+        queueMocks.renewDeliveryPlatformSendLease.mockRejectedValueOnce(failure);
+      }
+      const sendMatrix = vi.fn();
+      await expect(
+        deliverMatrix({
+          deps: { matrix: sendMatrix },
+          onDeliveryIntent: () => {
+            if (boundary === "intent observer") {
+              throw failure;
+            }
+          },
+        }),
+      ).rejects.toMatchObject({ queueCustody: "held" });
+      expect(queueMocks.enqueueDelivery).toHaveBeenCalledOnce();
+      expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
+      expect(queueMocks.moveToFailed).not.toHaveBeenCalled();
+      expect(sendMatrix).not.toHaveBeenCalled();
+    },
+  );
 
   it("emits a terminal failure without queueing when preparation is aborted", async () => {
     hookMocks.runner.hasHooks.mockImplementation((name?: string) => name === "message_sent");

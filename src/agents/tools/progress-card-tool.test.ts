@@ -118,4 +118,19 @@ describe("progress_card tool", () => {
     });
     expect(callGateway).not.toHaveBeenCalled();
   });
+
+  it("keeps the bound global owner when model arguments name another session", async () => {
+    const callGateway = vi.fn().mockResolvedValue({ card: null });
+    const options = { agentSessionKey: "global", agentId: "research", callGateway };
+    const tool = createProgressCardTool(options);
+
+    await tool.execute("call-owner", { sessionKey: "agent:main:main", agentId: "main" });
+
+    expect(callGateway).toHaveBeenCalledWith("progressCard.put", {
+      sessionKey: "global",
+      agentId: "research",
+    });
+    expect(tool.parameters).not.toHaveProperty("properties.agentId");
+    expect(tool.parameters).not.toHaveProperty("properties.sessionKey");
+  });
 });

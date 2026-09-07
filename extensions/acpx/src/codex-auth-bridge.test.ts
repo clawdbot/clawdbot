@@ -11,6 +11,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_CODEX_CONFIG_ARG } from "./codex-adapter.js";
 import { prepareAcpxCodexAuthConfig } from "./codex-auth-bridge.js";
+import { splitCommandParts, type AcpxAgentCommand } from "./command-line.js";
 import { resolveAcpxPluginConfig } from "./config.js";
 import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
 
@@ -28,10 +29,6 @@ beforeEach(async () => {
     prefix: "openclaw-acpx-codex-auth-",
   });
 });
-
-function quoteArg(value: string): string {
-  return JSON.stringify(value);
-}
 
 function restoreEnv(name: keyof typeof previousEnv): void {
   const value = previousEnv[name];
@@ -63,14 +60,18 @@ function generatedClaudePaths(stateDir: string): {
   };
 }
 
-function expectCodexWrapperCommand(command: string | undefined, wrapperPath: string): void {
-  expect(command).toContain(quoteArg(process.execPath));
-  expect(command).toContain(quoteArg(wrapperPath));
+function expectCodexWrapperCommand(
+  command: AcpxAgentCommand | undefined,
+  wrapperPath: string,
+): void {
+  expect(command).toEqual(expect.arrayContaining([process.execPath, wrapperPath]));
 }
 
-function expectClaudeWrapperCommand(command: string | undefined, wrapperPath: string): void {
-  expect(command).toContain(quoteArg(process.execPath));
-  expect(command).toContain(quoteArg(wrapperPath));
+function expectClaudeWrapperCommand(
+  command: AcpxAgentCommand | undefined,
+  wrapperPath: string,
+): void {
+  expect(command).toEqual(expect.arrayContaining([process.execPath, wrapperPath]));
 }
 
 function expectWrapperToContainPathSuffix(wrapper: string, pathSuffix: string[]): void {
@@ -860,7 +861,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
       resolveInstalledClaudeAcpBinPath: async () => path.join(root, "claude-agent-acp.js"),
     });
 
-    expect(resolved.agents.claude).toBe("node ./custom-claude-wrapper.mjs --flag");
+    expect(resolved.agents.claude).toEqual(["node", "./custom-claude-wrapper.mjs", "--flag"]);
   });
 
   it("does not normalize custom Claude commands that only mention the package name", async () => {
@@ -885,6 +886,6 @@ describe("prepareAcpxCodexAuthConfig", () => {
       resolveInstalledClaudeAcpBinPath: async () => path.join(root, "claude-agent-acp.js"),
     });
 
-    expect(resolved.agents.claude).toBe(command);
+    expect(resolved.agents.claude).toEqual(splitCommandParts(command));
   });
 });

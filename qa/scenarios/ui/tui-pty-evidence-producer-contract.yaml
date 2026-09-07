@@ -31,4 +31,4 @@ scenario:
       tuiPtyCases:
         - coverageId: tui.message-composition
           testFile: src/tui/tui-pty-harness.e2e.test.ts
-          testNamePattern: ^TUI PTY harness drives the real TUI terminal loop through typed and fragmented Unicode input$
+          testNamePattern: ^TUI PTY harness > drives the real TUI terminal loop through typed and fragmented Unicode input$

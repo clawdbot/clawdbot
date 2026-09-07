@@ -23,9 +23,14 @@ export function getPlaywrightUserAgent() { return getUserAgent(); }`;
 const UNDICI_REQUIRE_BOOTSTRAP = [
   'import { createRequire } from "node:module";',
   "const requireUndici = createRequire(import.meta.url);\n",
-  'return requireUndici("undici") as typeof import("undici");',
+  'return requireUndici("undici/index.js") as typeof import("undici");',
 ] as const;
-const WORKER_UNDICI_IMPORT = 'import * as bundledUndici from "undici";';
+const WORKER_UNDICI_IMPORT = 'import * as bundledUndici from "undici/index.js";';
+const WS_REQUIRE_BOOTSTRAP = `require(
+  path.join(path.dirname(require.resolve("ws/package.json")), "index.js"),
+)`;
+const WS_DYNAMIC_IMPORT =
+  'pathToFileURL(path.join(path.dirname(require.resolve("ws/package.json")), "wrapper.mjs")).href';
 
 export function resolveWorkerDeployGeneratorInputs(rootDir = process.cwd()) {
   const playwrightRoot = fs.realpathSync(path.resolve(rootDir, "node_modules/playwright-core"));
@@ -47,6 +52,14 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
   );
   const undiciDispatcherOptionsPath = fs.realpathSync(
     path.resolve("src/infra/net/undici-dispatcher-options.ts"),
+  );
+  const websocketRuntimePaths = new Set(
+    ["packages/gateway-client/src/websocket.ts", "src/gateway/server-runtime-state.ts"].map(
+      (source) => fs.realpathSync(path.resolve(source)),
+    ),
+  );
+  const transcriptionWebsocketPath = fs.realpathSync(
+    path.resolve("src/realtime-transcription/websocket-session.ts"),
   );
   const [packageJsonPath, browsersJsonPath] = resolveWorkerDeployGeneratorInputs(rootDir);
   const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
@@ -77,6 +90,20 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
       }
       if (resolvedId === playwrightRuntimePath) {
         return WORKER_PLAYWRIGHT_RUNTIME;
+      }
+      // Installed ws paths avoid Bun's adapter; portable Node workers must bundle
+      // that same transport instead of resolving a missing package at runtime.
+      if (websocketRuntimePaths.has(resolvedId)) {
+        if (!code.includes(WS_REQUIRE_BOOTSTRAP)) {
+          this.error("ws bootstrap changed; update the worker deploy transform");
+        }
+        return `import * as bundledWebSocket from "ws";\n${code.replace(WS_REQUIRE_BOOTSTRAP, "bundledWebSocket")}`;
+      }
+      if (resolvedId === transcriptionWebsocketPath) {
+        if (!code.includes(WS_DYNAMIC_IMPORT)) {
+          this.error("ws dynamic bootstrap changed; update the worker deploy transform");
+        }
+        return code.replace(WS_DYNAMIC_IMPORT, '"ws"');
       }
       if (resolvedId === undiciDispatcherOptionsPath) {
         if (UNDICI_REQUIRE_BOOTSTRAP.some((fragment) => !code.includes(fragment))) {

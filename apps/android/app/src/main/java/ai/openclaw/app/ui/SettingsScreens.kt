@@ -48,7 +48,6 @@ import ai.openclaw.app.photoReadPermissionsForRequest
 import ai.openclaw.app.reconcileRestoredAction
 import ai.openclaw.app.setAppLanguage
 import ai.openclaw.app.ui.design.ClawAgentAvatar
-import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconBadge
 import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawListPanel
@@ -98,6 +97,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -177,35 +177,6 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import java.text.DateFormat
 import java.util.Date
-
-/**
- * Detail routes reachable from the Android settings home surface.
- */
-internal enum class SettingsRoute {
-  Home,
-  Profile,
-  Voice,
-  Agents,
-  ProvidersModels,
-  Approvals,
-  CronJobs,
-  Usage,
-  Skills,
-  SkillWorkshop,
-  SystemAgent,
-  NodesDevices,
-  Channels,
-  Dreaming,
-  Terminal,
-  Desktop,
-  Notifications,
-  PhoneCapabilities,
-  Gateway,
-  Appearance,
-  Health,
-  About,
-  Licenses,
-}
 
 /**
  * Dispatches a selected settings route to its detail screen without changing navigation ownership.
@@ -358,7 +329,7 @@ private fun CronJobsSettingsScreen(
     Text(
       text = nativeString("Open an automation to inspect its configuration and run history. Admin-scoped connections can also run, edit, enable, disable, or delete it."),
       style = ClawTheme.type.caption,
-      color = ClawTheme.colors.textSubtle,
+      color = ClawTheme.colors.textMuted,
     )
     cronErrorText?.let { errorText ->
       ClawPanel {
@@ -400,7 +371,7 @@ private fun CronSummaryStrip(rows: List<SettingsMetric>) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xs)) {
       rows.forEach { row ->
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-          Text(text = row.title, style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 1)
+          Text(text = row.title, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1)
           Text(text = row.value, style = ClawTheme.type.label, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
       }
@@ -622,13 +593,10 @@ private fun ApprovalsSettingsScreen(
   onBack: () -> Unit,
 ) {
   val isConnected by viewModel.isConnected.collectAsState()
-  val execApprovals by viewModel.execApprovals.collectAsState()
-  val execApprovalsRefreshing by viewModel.execApprovalsRefreshing.collectAsState()
-  val execApprovalsErrorText by viewModel.execApprovalsErrorText.collectAsState()
-  val execApprovalsNotice by viewModel.execApprovalsNotice.collectAsState()
+  val inbox by viewModel.execApprovalInbox.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
-  val issueCount = execApprovals.count { it.errorText != null } + pendingToolCalls.count { it.isError == true }
+  val issueCount = inbox.approvals.count { it.errorText != null } + pendingToolCalls.count { it.isError == true }
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
@@ -640,26 +608,26 @@ private fun ApprovalsSettingsScreen(
     SettingsMetricPanel(
       rows =
         listOf(
-          SettingsMetric(nativeString("Gateway Pending"), execApprovals.size.toString()),
+          SettingsMetric(nativeString("Gateway Pending"), inbox.approvals.size.toString()),
           SettingsMetric(nativeString("Thread Activity"), pendingToolCalls.size.toString()),
           SettingsMetric(nativeString("Issues"), issueCount.toString()),
           SettingsMetric(nativeString("Active Runs"), pendingRunCount.toString()),
         ),
     )
     ClawSecondaryButton(
-      text = if (execApprovalsRefreshing) nativeString("Refreshing") else nativeString("Refresh"),
+      text = if (inbox.refreshing) nativeString("Refreshing") else nativeString("Refresh"),
       onClick = viewModel::refreshExecApprovals,
-      enabled = isConnected && !execApprovalsRefreshing,
+      enabled = isConnected && !inbox.refreshing,
       modifier = Modifier.fillMaxWidth(),
     )
-    if (execApprovalsErrorText != null) {
+    inbox.errorText?.let { errorText ->
       ClawPanel {
-        Text(text = gatewayExecApprovalTextForDisplay(execApprovalsErrorText ?: ""), style = ClawTheme.type.body, color = ClawTheme.colors.warning)
+        Text(text = gatewayExecApprovalTextForDisplay(errorText), style = ClawTheme.type.body, color = ClawTheme.colors.warning)
       }
     }
-    // Terminal outcomes always retire their card first, so the notice renders as a
-    // standalone banner above the list; it stays visible until the user dismisses it.
-    execApprovalsNotice?.let { notice ->
+    // The inbox publishes terminal notices with their cards retired in the same snapshot.
+    // Keep the banner independent of remaining cards until the user dismisses it.
+    inbox.notice?.let { notice ->
       ExecApprovalNotice(notice = notice, onDismiss = { viewModel.dismissExecApprovalsNotice(notice) })
     }
     if (!isConnected) {
@@ -669,7 +637,7 @@ private fun ApprovalsSettingsScreen(
           Text(text = nativeString("Connect the gateway to load approval requests in the app."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
       }
-    } else if (execApprovals.isEmpty()) {
+    } else if (inbox.approvals.isEmpty()) {
       ClawPanel {
         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
           Text(text = nativeString("No gateway approvals."), style = ClawTheme.type.section, color = ClawTheme.colors.text)
@@ -678,7 +646,7 @@ private fun ApprovalsSettingsScreen(
       }
     } else {
       ExecApprovalsPanel(
-        approvals = execApprovals,
+        approvals = inbox.approvals,
         onResolve = viewModel::resolveExecApproval,
       )
     }
@@ -1010,39 +978,38 @@ private fun VoiceSetupActionRow(
     contentColor = ClawTheme.colors.text,
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
-    Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = ClawTheme.spacing.xs, vertical = ClawTheme.spacing.xxs),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
-    ) {
-      Surface(
-        modifier = Modifier.size(ClawTheme.spacing.iconSlot),
-        shape = CircleShape,
-        color = ClawTheme.colors.canvas,
-        contentColor = ClawTheme.colors.text,
-        border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
-      ) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(ClawTheme.spacing.icon))
+    ClawListItem(
+      title = title,
+      subtitle = subtitle,
+      modifier = Modifier.padding(horizontal = ClawTheme.spacing.xs),
+      leading = {
+        Surface(
+          modifier = Modifier.size(ClawTheme.spacing.iconSlot),
+          shape = CircleShape,
+          color = ClawTheme.colors.canvas,
+          contentColor = ClawTheme.colors.text,
+          border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
+        ) {
+          Box(contentAlignment = Alignment.Center) {
+            Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(ClawTheme.spacing.icon))
+          }
         }
-      }
-      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(text = title, style = ClawTheme.type.section, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(text = subtitle, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-      }
-      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
-        Box(
-          modifier =
-            Modifier
-              .size(6.dp)
-              .background(if (ready) ClawTheme.colors.success else ClawTheme.colors.textSubtle, CircleShape),
-        )
-        Text(text = statusText, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted, maxLines = 1)
-        if (onClick != null) {
-          Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, modifier = Modifier.size(16.dp), tint = ClawTheme.colors.textMuted)
+      },
+      trailing = {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
+          Box(
+            modifier =
+              Modifier
+                .size(6.dp)
+                .background(if (ready) ClawTheme.colors.success else ClawTheme.colors.textSubtle, CircleShape),
+          )
+          Text(text = statusText, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+          if (onClick != null) {
+            Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, modifier = Modifier.size(16.dp), tint = ClawTheme.colors.textMuted)
+          }
         }
-      }
-    }
+      },
+    )
   }
 }
 
@@ -1857,7 +1824,11 @@ private fun GatewaySettingsScreen(
         }
       }
     }
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    FlowRow(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
       ClawPrimaryButton(text = nativeString("Reconnect"), onClick = viewModel::refreshGatewayConnection, modifier = Modifier.weight(1f))
       ClawSecondaryButton(text = nativeString("Disconnect"), onClick = viewModel::disconnect, modifier = Modifier.weight(1f))
     }
@@ -1880,8 +1851,6 @@ private fun GatewaySettingsScreen(
           text = nativeString("Scan or paste a setup code to add another gateway."),
           style = ClawTheme.type.body,
           color = ClawTheme.colors.textMuted,
-          maxLines = 2,
-          overflow = TextOverflow.Ellipsis,
         )
         ClawSecondaryButton(text = nativeString("Scan QR"), onClick = viewModel::pairNewGateway, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.QrCode2)
         ClawTextField(value = setupCode, onValueChange = { setupCode = it }, placeholder = nativeString("Setup code"), secret = true)
@@ -2259,7 +2228,13 @@ private fun AppLanguageRow(
 
 private fun appLanguageTitle(language: AppLanguage): String = if (language == AppLanguage.System) nativeString("System") else language.displayName
 
-internal fun appearanceThemeSummary(mode: AppearanceThemeMode): String = nativeString(mode.displayLabel)
+// Literal lookups keep every mode visible to the phone localization extractor.
+internal fun appearanceThemeSummary(mode: AppearanceThemeMode): String =
+  when (mode) {
+    AppearanceThemeMode.System -> nativeString("System")
+    AppearanceThemeMode.Dark -> nativeString("Dark")
+    AppearanceThemeMode.Light -> nativeString("Light")
+  }
 
 internal fun appearanceThemeOptions(): List<String> = AppearanceThemeMode.entries.map(::appearanceThemeSummary)
 
@@ -2665,7 +2640,7 @@ private fun ExecApprovalCard(
       approval.warningText?.let { warningText ->
         Text(text = warningText, style = ClawTheme.type.body, color = ClawTheme.colors.warning)
       }
-      Text(text = execApprovalMetadata(approval), style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 2, overflow = TextOverflow.Ellipsis)
+      Text(text = execApprovalMetadata(approval), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
       approval.errorText?.let { errorText ->
         Text(text = gatewayExecApprovalTextForDisplay(errorText), style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
       }
@@ -2744,7 +2719,7 @@ private fun ExecApprovalNotice(
         Text(
           text = nativeString("Approval \${notice.approvalId}", notice.approvalId),
           style = ClawTheme.type.caption,
-          color = ClawTheme.colors.textSubtle,
+          color = ClawTheme.colors.textMuted,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
@@ -2764,7 +2739,7 @@ private fun SessionToolCallsPanel(toolCalls: List<ChatPendingToolCall>) {
 @Composable
 private fun ApprovalListRow(toolCall: ChatPendingToolCall) {
   val hasIssue = toolCall.isError == true
-  ClawDetailRow(
+  ClawListItem(
     title = approvalActionName(toolCall.name),
     subtitle = approvalSubtitle(toolCall, hasIssue),
     leading = { ClawIconBadge(icon = Icons.Default.Lock) },
@@ -2797,7 +2772,7 @@ internal fun usageRefreshVisible(
 @Composable
 private fun UsageProviderListRow(provider: GatewayUsageProviderSummary) {
   val hasIssue = provider.error != null
-  ClawDetailRow(
+  ClawListItem(
     title = provider.displayName,
     subtitle = usageProviderSubtitle(provider),
     leading = { ClawTextBadge(text = provider.displayName.uppercaseFirstGraphemeOrNull() ?: "U") },
@@ -2810,7 +2785,7 @@ private fun CronJobListRow(
   job: GatewayCronJobSummary,
   onClick: () -> Unit,
 ) {
-  ClawDetailRow(
+  ClawListItem(
     title = job.name,
     subtitle = cronJobSubtitle(job),
     modifier = Modifier.clickable(onClickLabel = nativeString("Open automation detail"), onClick = onClick),
@@ -2910,7 +2885,7 @@ private fun CronJobFieldsPanel(rows: List<SettingsMetric>) {
           Modifier
             .fillMaxWidth()
             .heightIn(min = 46.dp)
-            .clickable(onClickLabel = nativeString("Copy \${row.title}", row.title)) { copyCronDetailValue(context, row.title, row.value) }
+            .clickable(onClickLabel = nativeString("Copy \${row.title}", row.title)) { copySettingsDetailValue(context, row.title, row.value) }
             .padding(vertical = 6.dp)
         } else {
           Modifier
@@ -2943,13 +2918,13 @@ private fun CronJobFieldsPanel(rows: List<SettingsMetric>) {
   }
 }
 
-private fun copyCronDetailValue(
+private fun copySettingsDetailValue(
   context: Context,
   title: String,
   value: String,
 ) {
   val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return
-  clipboard.setPrimaryClip(ClipData.newPlainText("OpenClaw automation $title", value))
+  clipboard.setPrimaryClip(ClipData.newPlainText("OpenClaw $title", value))
   Toast.makeText(context, nativeString("\$title copied", title), Toast.LENGTH_SHORT).show()
 }
 
@@ -2986,7 +2961,7 @@ private fun AgentListRow(
   agent: GatewayAgentSummary,
   isDefault: Boolean,
 ) {
-  ClawDetailRow(
+  ClawListItem(
     title = agent.name?.takeIf { it.isNotBlank() } ?: agent.id,
     subtitle = if (isDefault) nativeString("Default assistant") else nativeString("Ready"),
     leading = {
@@ -3372,33 +3347,33 @@ private fun SettingsToggleListRow(row: SettingsToggleRow) {
   }
 }
 
-/**
- * Reusable metric panel for settings screens with compact title/value rows.
- */
+/** These diagnostics have no detail view, so their rows must show complete values. */
 @Composable
 internal fun SettingsMetricPanel(rows: List<SettingsMetric>) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = ClawTheme.spacing.xs, vertical = 4.dp)) {
-    ClawSeparatedColumn(items = rows) { row ->
-      Row(modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp).padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
-        Text(
-          text = row.title,
-          style = ClawTheme.type.body,
-          color = ClawTheme.colors.text,
-          modifier = Modifier.weight(0.9f),
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-        Text(
-          text = row.value,
-          style = ClawTheme.type.caption,
-          color = ClawTheme.colors.textMuted,
-          modifier = Modifier.weight(1.1f),
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-          textAlign = TextAlign.End,
-        )
+  val context = LocalContext.current
+  ClawListPanel(items = rows) { row ->
+    val rowModifier =
+      if (row.copyable) {
+        Modifier.clickable(onClickLabel = nativeString("Copy \${row.title}", row.title)) {
+          copySettingsDetailValue(context, row.title, row.value)
+        }
+      } else {
+        Modifier
       }
-    }
+    ClawListItem(
+      title = row.title,
+      subtitle = row.value,
+      metadata = nativeString("Tap to copy").takeIf { row.copyable },
+      modifier = rowModifier,
+      trailing =
+        if (row.copyable) {
+          {
+            Icon(imageVector = Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp), tint = ClawTheme.colors.text)
+          }
+        } else {
+          null
+        },
+    )
   }
 }
 

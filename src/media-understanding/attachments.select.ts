@@ -16,24 +16,15 @@ function orderAttachments(
 ): MediaAttachment[] {
   // Ordering is stable and non-mutating so downstream decisions can still cite
   // original attachment indexes.
-  const list = Array.isArray(attachments) ? attachments.filter(isAttachmentRecord) : [];
-  if (!prefer || prefer === "first") {
-    return list;
-  }
   if (prefer === "last") {
-    return [...list].toReversed();
+    return attachments.toReversed();
   }
-  if (prefer === "path") {
-    const withPath = list.filter((item) => item.path);
-    const withoutPath = list.filter((item) => !item.path);
-    return [...withPath, ...withoutPath];
+  if (prefer === "path" || prefer === "url") {
+    const preferred = attachments.filter((item) => item[prefer]);
+    const remaining = attachments.filter((item) => !item[prefer]);
+    return [...preferred, ...remaining];
   }
-  if (prefer === "url") {
-    const withUrl = list.filter((item) => item.url);
-    const withoutUrl = list.filter((item) => !item.url);
-    return [...withUrl, ...withoutUrl];
-  }
-  return list;
+  return attachments;
 }
 
 function isAttachmentRecord(value: unknown): value is MediaAttachment {

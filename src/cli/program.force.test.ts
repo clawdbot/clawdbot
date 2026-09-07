@@ -58,7 +58,7 @@ describe("gateway --force helpers", () => {
     expect(execFileSyncMock).toHaveBeenCalledWith(
       expect.stringContaining("lsof"),
       ["-nP", "-iTCP:18789", "-sTCP:LISTEN", "-FpFc"],
-      { encoding: "utf-8", killSignal: "SIGKILL", timeout: 10_000 },
+      { env: expect.any(Object), encoding: "utf-8", killSignal: "SIGKILL", timeout: 10_000 },
     );
     expect(parsed).toEqual<PortProcess[]>([
       { pid: 123, command: "node" },
@@ -365,6 +365,7 @@ describe("gateway --force helpers", () => {
     );
     expect(termCall?.[1]).toEqual(["-k", "-TERM", "18789/tcp"]);
     expect(termCall?.[2]).toEqual({
+      env: expect.any(Object),
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "pipe"],
       killSignal: "SIGKILL",
@@ -551,6 +552,7 @@ describe("gateway --force helpers (Windows netstat path)", () => {
       getWindowsSystem32ExePath("netstat.exe"),
       ["-ano"],
       {
+        env: expect.any(Object),
         encoding: "utf-8",
         killSignal: "SIGKILL",
         timeout: 10_000,

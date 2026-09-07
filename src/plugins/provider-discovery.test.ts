@@ -189,6 +189,53 @@ describe("runProviderCatalog", () => {
     ]);
   });
 
+  it("preserves provider-owned profile outcomes after multiple auth probes", async () => {
+    const outcomes: Array<{ profileId?: string; status: string }> = [];
+    const provider: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      auth: [],
+      catalog: {
+        run: async (ctx) => {
+          ctx.resolveProviderAuth("openai");
+          ctx.resolveProviderAuth("openai");
+          return {
+            providers: {},
+            outcomes: [
+              {
+                provider: "openai",
+                profileId: "openai:profile-b",
+                status: "ready",
+              },
+            ],
+          };
+        },
+      },
+    };
+    let authCall = 0;
+
+    await runProviderCatalog({
+      provider,
+      config: {},
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+      resolveProviderAuth: () => {
+        authCall += 1;
+        return {
+          apiKey: `selected-key-${authCall}`,
+          mode: "api_key",
+          profileId: `openai:profile-${authCall === 1 ? "a" : "b"}`,
+          source: "profile",
+        };
+      },
+      reportCatalogOutcome: (outcome) => outcomes.push(outcome),
+    });
+
+    expect(outcomes).toEqual([
+      { provider: "openai", profileId: "openai:profile-b", status: "ready" },
+    ]);
+  });
+
   it.each([
     { providerIds: ["OPENAI"], expected: ["openai"] },
     { providerIds: ["azure-openai"], expected: ["azure-openai"] },

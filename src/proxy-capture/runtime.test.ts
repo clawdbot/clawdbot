@@ -1,6 +1,7 @@
 // Proxy capture runtime tests cover session creation and capture lifecycle.
+import fs from "node:fs";
 import { Headers as UndiciHeaders } from "undici";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import type { DebugProxySettings } from "./env.js";
@@ -104,6 +105,83 @@ describe("debug proxy runtime", () => {
     calls.length = 0;
     resetSecretRedactionRegistryForTest();
     fetchTarget.fetch = async () => new Response("{}", { status: 200 });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    ["initialization", () => initializeDebugProxyCapture("test", undefined, deps)],
+    ["finalization", () => finalizeDebugProxyCapture(undefined, deps)],
+    [
+      "HTTP exchange",
+      () =>
+        captureHttpExchange(
+          { url: "https://example.test", method: "GET", response: new Response(null) },
+          undefined,
+          deps,
+        ),
+    ],
+    [
+      "WebSocket frame",
+      () =>
+        captureWsEvent(
+          {
+            url: "wss://example.test",
+            direction: "outbound",
+            kind: "ws-frame",
+            flowId: "disabled-capture",
+            payload: "{}",
+          },
+          undefined,
+          deps,
+        ),
+    ],
+  ] as const)("does not discover capture paths for disabled %s", (_name, capture) => {
+    // Exercise production path discovery rather than the test-only state-dir shortcut.
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+    vi.stubEnv("OPENCLAW_STATE_DIR", undefined);
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", undefined);
+    const existsSync = vi.spyOn(fs, "existsSync");
+    const originalFetch = fetchTarget.fetch;
+
+    capture();
+
+    expect(existsSync).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+    expect(events).toEqual([]);
+    expect(fetchTarget.fetch).toBe(originalFetch);
+  });
+
+  it("observes environment changes while explicit capture settings remain authoritative", () => {
+    const frame = {
+      url: "wss://example.test",
+      direction: "outbound",
+      kind: "ws-frame",
+      flowId: "capture-toggle",
+      payload: "{}",
+    } as const;
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_SESSION_ID", "ambient-capture");
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "0");
+    captureWsEvent(frame, undefined, deps);
+    expect(events).toEqual([]);
+
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "1");
+    captureWsEvent(frame, undefined, deps);
+    expect(events.map((event) => event.sessionId)).toEqual(["ambient-capture"]);
+    captureWsEvent(frame, { ...settings, enabled: false }, deps);
+    expect(events).toHaveLength(1);
+
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "0");
+    captureWsEvent(frame, undefined, deps);
+    expect(events).toHaveLength(1);
+    captureWsEvent(frame, settings, deps);
+    expect(events.map((event) => event.sessionId)).toEqual([
+      "ambient-capture",
+      "runtime-test-session",
+    ]);
   });
 
   it("captures ambient global fetch calls when debug proxy mode is enabled", async () => {

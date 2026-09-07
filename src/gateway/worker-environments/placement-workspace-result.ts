@@ -1,5 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import {
+  ensureRepositoryWorkspacePendingResultSchema,
+  hasRepositoryWorkspacePendingResultSchema,
+} from "../../state/openclaw-state-db-schema-additive.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   isCurrentPlacementTurnClaim,
@@ -14,7 +18,7 @@ import { clearWorkerWorkspaceReconciliation } from "./placement-workspace-journa
 
 type WorkspaceResultDatabase = Pick<
   StateDatabase,
-  "worker_session_placements" | "worker_workspace_pending_results"
+  "worker_session_placements" | "worker_workspace_pending_results" | "session_repository_workspaces"
 >;
 
 const query = (db: DatabaseSync) => getNodeSqliteKysely<WorkspaceResultDatabase>(db);
@@ -30,6 +34,7 @@ export type WorkerWorkspacePendingResult = {
   recoveryRequestedAtMs: number | null;
   workspaceAcceptedAtMs: number | null;
   stagedResultRef: string | null;
+  repositoryWorkspaceId?: string;
 };
 
 function matchesWorkspaceResultGeneration(
@@ -273,19 +278,28 @@ export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime
             "workspace_accepted_at_ms",
             "staged_result_ref",
           ])
+          .$if(hasRepositoryWorkspacePendingResultSchema(db), (builder) =>
+            builder.select("repository_workspace_id"),
+          )
           .orderBy("session_id"),
-      ).rows.map((row) => ({
-        sessionId: row.session_id,
-        environmentId: row.environment_id,
-        ownerEpoch: row.owner_epoch,
-        placementGeneration: row.placement_generation,
-        claimId: row.claim_id,
-        runId: row.run_id,
-        gatewayInstanceId: row.gateway_instance_id,
-        recoveryRequestedAtMs: row.recovery_requested_at_ms,
-        workspaceAcceptedAtMs: row.workspace_accepted_at_ms,
-        stagedResultRef: row.staged_result_ref,
-      }));
+      ).rows.map((row) => {
+        const result: WorkerWorkspacePendingResult = {
+          sessionId: row.session_id,
+          environmentId: row.environment_id,
+          ownerEpoch: row.owner_epoch,
+          placementGeneration: row.placement_generation,
+          claimId: row.claim_id,
+          runId: row.run_id,
+          gatewayInstanceId: row.gateway_instance_id,
+          recoveryRequestedAtMs: row.recovery_requested_at_ms,
+          workspaceAcceptedAtMs: row.workspace_accepted_at_ms,
+          stagedResultRef: row.staged_result_ref,
+        };
+        if (row.repository_workspace_id) {
+          result.repositoryWorkspaceId = row.repository_workspace_id;
+        }
+        return result;
+      });
     },
 
     markWorkspaceResultPending(claim: WorkerSessionTurnClaim): void {
@@ -294,23 +308,59 @@ export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime
       });
     },
 
-    recordStagedWorkspaceResult(claim: WorkerSessionTurnClaim, stagedResultRef: string): void {
+    recordStagedWorkspaceResult(
+      claim: WorkerSessionTurnClaim,
+      stagedResultRef: string,
+      repositoryWorkspaceId?: string,
+    ): void {
       if (!/^refs\/openclaw\/worker-results\/[A-Za-z0-9-]+$/u.test(stagedResultRef)) {
         throw new Error("Worker workspace staged result reference is invalid");
       }
+      if (repositoryWorkspaceId !== undefined && !/^[a-f0-9-]{36}$/u.test(repositoryWorkspaceId)) {
+        throw new Error("Worker workspace result repository identity is invalid");
+      }
       write((db) => {
+        if (repositoryWorkspaceId !== undefined) {
+          ensureRepositoryWorkspacePendingResultSchema(db);
+        }
         const pending = assertPendingClaim(db, claim);
         if (pending.workspace_accepted_at_ms !== null) {
           throw new Error(`Cannot restage accepted worker workspace result for ${claim.sessionId}`);
         }
-        if (pending.staged_result_ref && pending.staged_result_ref !== stagedResultRef) {
+        if (
+          pending.staged_result_ref &&
+          (pending.staged_result_ref !== stagedResultRef ||
+            (pending.repository_workspace_id ?? undefined) !== repositoryWorkspaceId)
+        ) {
           throw new Error(`Worker workspace result ref changed for ${claim.sessionId}`);
+        }
+        if (repositoryWorkspaceId !== undefined) {
+          const placement = getRequired(db, claim.sessionId);
+          const repository = executeSqliteQuerySync(
+            db,
+            query(db)
+              .selectFrom("session_repository_workspaces")
+              .select(["agent_id", "session_key"])
+              .where("workspace_id", "=", repositoryWorkspaceId),
+          ).rows[0];
+          if (
+            !repository ||
+            repository.agent_id !== placement.agentId ||
+            repository.session_key !== placement.sessionKey
+          ) {
+            throw new Error(
+              `Worker workspace result repository owner changed for ${claim.sessionId}`,
+            );
+          }
         }
         const result = executeSqliteQuerySync(
           db,
           query(db)
             .updateTable("worker_workspace_pending_results")
-            .set({ staged_result_ref: stagedResultRef })
+            .set({
+              staged_result_ref: stagedResultRef,
+              ...(repositoryWorkspaceId ? { repository_workspace_id: repositoryWorkspaceId } : {}),
+            })
             .where("session_id", "=", claim.sessionId)
             .where("claim_id", "=", claim.claimId)
             .where("run_id", "=", claim.runId),

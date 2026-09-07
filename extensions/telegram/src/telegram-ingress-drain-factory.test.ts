@@ -1,9 +1,8 @@
 /** Verifies callback admission and the grammY terminal outcome handoff. */
-import { once } from "node:events";
-import { createServer, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
+import type { ServerResponse } from "node:http";
 import { Api } from "grammy";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ensureTelegramMessageProcessingResult,
@@ -87,92 +86,89 @@ describe("Telegram transport ingress outcome handoff", () => {
         response.writeHead(200, { "content-type": "application/json" });
         response.end(JSON.stringify({ ok: true, result: true }));
       };
-      const server = createServer((request, response) => {
-        let body = "";
-        request.setEncoding("utf8");
-        request.on("data", (chunk: string) => {
-          body += chunk;
-        });
-        request.on("end", () => {
-          const payload = JSON.parse(body) as { callback_query_id: string };
-          requestIds.push(payload.callback_query_id);
-          if (rejectNewAnswer && requestIds.length === 1) {
-            response.writeHead(503, { "content-type": "application/json" });
-            response.end(
-              JSON.stringify({ ok: false, error_code: 503, description: "ACK unavailable" }),
-            );
-            return;
-          }
-          pendingResponses.push(response);
-          pendingAnswer.resolve();
-          if (releaseAnswers) {
-            sendAnswer(response);
-          }
-        });
-      });
-      server.listen(0, "127.0.0.1");
-      await once(server, "listening");
-      const address = server.address() as AddressInfo;
-      const api = new Api("1000000:test-token", { apiRoot: `http://127.0.0.1:${address.port}` });
-      const bot = {
-        handleUpdate: vi.fn(async () => {}),
-        api: {
-          answerCallbackQuery: (id: string) => {
-            const answer = api.answerCallbackQuery(id);
-            answerRequests.push(answer);
-            return answer;
-          },
+      await withServer(
+        (request, response) => {
+          let body = "";
+          request.setEncoding("utf8");
+          request.on("data", (chunk: string) => {
+            body += chunk;
+          });
+          request.on("end", () => {
+            const payload = JSON.parse(body) as { callback_query_id: string };
+            requestIds.push(payload.callback_query_id);
+            if (rejectNewAnswer && requestIds.length === 1) {
+              response.writeHead(503, { "content-type": "application/json" });
+              response.end(
+                JSON.stringify({ ok: false, error_code: 503, description: "ACK unavailable" }),
+              );
+              return;
+            }
+            pendingResponses.push(response);
+            pendingAnswer.resolve();
+            if (releaseAnswers) {
+              sendAnswer(response);
+            }
+          });
         },
-      };
-      createTelegramTransportIngressMonitor({
-        spoolDir: "/tmp/telegram-ingress-proof",
-        bot,
-        cfg: {},
-        accountId: "default",
-      });
-      const monitor = mocks.createTelegramIngressMonitor.mock.calls[0]?.[0] as CapturedMonitor;
-      const update = { update_id: 125, callback_query: { id: callbackId } };
-      try {
-        if (rejectNewAnswer) {
-          await monitor.onDurableAdmission(update, { isNew: true });
-          const initialAnswers = await Promise.allSettled(answerRequests);
-          expect(initialAnswers).toMatchObject([{ status: "rejected" }]);
-        }
-        if (startNewPending) {
-          await monitor.onDurableAdmission(update, { isNew: true });
-          await pendingAnswer.promise;
-          if (consumePending) {
-            expect(takeTelegramCallbackQueryAdmissionAnswer(bot, callbackId)).toBeDefined();
+        async (baseUrl) => {
+          const api = new Api("1000000:test-token", { apiRoot: baseUrl });
+          const bot = {
+            handleUpdate: vi.fn(async () => {}),
+            api: {
+              answerCallbackQuery: (id: string) => {
+                const answer = api.answerCallbackQuery(id);
+                answerRequests.push(answer);
+                return answer;
+              },
+            },
+          };
+          createTelegramTransportIngressMonitor({
+            spoolDir: "/tmp/telegram-ingress-proof",
+            bot,
+            cfg: {},
+            accountId: "default",
+          });
+          const monitor = mocks.createTelegramIngressMonitor.mock.calls[0]?.[0] as CapturedMonitor;
+          const update = { update_id: 125, callback_query: { id: callbackId } };
+          try {
+            if (rejectNewAnswer) {
+              await monitor.onDurableAdmission(update, { isNew: true });
+              const initialAnswers = await Promise.allSettled(answerRequests);
+              expect(initialAnswers).toMatchObject([{ status: "rejected" }]);
+            }
+            if (startNewPending) {
+              await monitor.onDurableAdmission(update, { isNew: true });
+              await pendingAnswer.promise;
+              if (consumePending) {
+                expect(takeTelegramCallbackQueryAdmissionAnswer(bot, callbackId)).toBeDefined();
+              }
+            }
+            await monitor.onDurableAdmission(update, { isNew: false });
+            await pendingAnswer.promise;
+            await monitor.onDurableAdmission(update, { isNew: false });
+            releaseAnswers = true;
+            for (const response of pendingResponses) {
+              sendAnswer(response);
+            }
+            await Promise.allSettled(answerRequests);
+            expect(requestIds).toEqual(Array.from({ length: expectedRequests }, () => callbackId));
+            expect(bot.handleUpdate).not.toHaveBeenCalled();
+            if (startNewPending && !consumePending) {
+              expect(takeTelegramCallbackQueryAdmissionAnswer(bot, callbackId)).toBeDefined();
+            }
+            // Tombstones never dispatch; their settled answers must not remain per bot.
+            expect(takeTelegramCallbackQueryAdmissionAnswer(bot, callbackId)).toBeUndefined();
+          } finally {
+            releaseAnswers = true;
+            for (const response of pendingResponses) {
+              if (!response.writableEnded) {
+                sendAnswer(response);
+              }
+            }
+            await Promise.allSettled(answerRequests);
           }
-        }
-        await monitor.onDurableAdmission(update, { isNew: false });
-        await pendingAnswer.promise;
-        await monitor.onDurableAdmission(update, { isNew: false });
-        releaseAnswers = true;
-        for (const response of pendingResponses) {
-          sendAnswer(response);
-        }
-        await Promise.allSettled(answerRequests);
-        expect(requestIds).toEqual(Array.from({ length: expectedRequests }, () => callbackId));
-        expect(bot.handleUpdate).not.toHaveBeenCalled();
-        if (startNewPending && !consumePending) {
-          expect(takeTelegramCallbackQueryAdmissionAnswer(bot, callbackId)).toBeDefined();
-        }
-        // Tombstones never dispatch; their settled answers must not remain per bot.
-        expect(takeTelegramCallbackQueryAdmissionAnswer(bot, callbackId)).toBeUndefined();
-      } finally {
-        releaseAnswers = true;
-        for (const response of pendingResponses) {
-          if (!response.writableEnded) {
-            sendAnswer(response);
-          }
-        }
-        await Promise.allSettled(answerRequests);
-        server.closeAllConnections();
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
-      }
+        },
+      );
     },
   );
 

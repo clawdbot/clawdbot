@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store.js";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createProviderApiKeyAuthMethod } from "./provider-api-key-auth.js";

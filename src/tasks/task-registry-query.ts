@@ -37,6 +37,7 @@ import {
   type TaskRegistryDeliveryRuntime,
   type TaskRegistryGlobalWithRuntimeOverrides,
 } from "./task-registry-state.js";
+import { getTaskRegistryProcessState } from "./task-registry.process-state.js";
 import { getTaskRegistryStore, resetTaskRegistryRuntimeForTests } from "./task-registry.store.js";
 import type { TaskRecord, TaskStatus } from "./task-registry.types.js";
 import { resolveTaskSessionAgentId } from "./task-session-identity.js";
@@ -159,7 +160,9 @@ export async function listTaskRecordPage(params: {
   sessionKey?: string;
   sessionAgentId?: string;
   cfg?: OpenClawConfig;
-  filter?: (task: Readonly<TaskRecord>) => boolean;
+  prepareFilter?: (
+    tasks: readonly Readonly<TaskRecord>[],
+  ) => (task: Readonly<TaskRecord>) => boolean;
   sortBy?: "updatedAt" | "endedAt";
 }): Promise<
   Result<
@@ -181,45 +184,58 @@ export async function listTaskRecordPage(params: {
     if (params.expectedRevision !== undefined && params.expectedRevision !== revision) {
       return err("cursor_stale");
     }
-    const scanLimit = tasks.size;
+    // Session pages scan only related candidates; exact owner/agent checks still run below.
+    const source = sessionKey ? taskIdsByRelatedSessionKey.get(sessionKey) : tasks;
+    const scanLimit = source?.size ?? 0;
     const window: TaskRecord[] = [];
     let matchingCount = 0;
     let heapReady = false;
     let scannedCount = 0;
-    for (const task of tasks.values()) {
-      if (scannedCount >= scanLimit) {
-        break;
-      }
-      scannedCount += 1;
-      // Yield large scans in small deterministic slices so task history cannot
-      // monopolize the Gateway event loop while other requests are waiting.
-      if (scannedCount % 32 === 0) {
+    const iterator = source?.keys() ?? [].values();
+    let current = iterator.next();
+    while (!current.done && scannedCount < scanLimit) {
+      // Yield only when another batch exists; completed pages keep their revision.
+      if (scannedCount > 0) {
         await yieldToEventLoop();
       }
-      if (
-        (statuses && !statuses.has(task.status)) ||
-        !taskMatchesAgent(task, agentId, params.cfg) ||
-        !taskMatchesRelatedSession(task, sessionKey, params.sessionAgentId, params.cfg) ||
-        (params.filter && !params.filter(task))
-      ) {
-        continue;
+      const batch: TaskRecord[] = [];
+      while (!current.done && batch.length < 32 && scannedCount < scanLimit) {
+        const task = tasks.get(current.value);
+        if (task) {
+          batch.push(task);
+        }
+        scannedCount += 1;
+        current = iterator.next();
       }
-      matchingCount += 1;
-      if (windowSize <= 0) {
-        continue;
-      }
-      if (window.length < windowSize) {
-        window.push(task);
-        continue;
-      }
-      if (!heapReady) {
-        heapifyWorstTaskFirst(window, compare);
-        heapReady = true;
-      }
-      const cutoff = window[0];
-      if (cutoff && compare(task, cutoff) < 0) {
-        window[0] = task;
-        siftWorstTaskDown(window, 0, compare);
+      const candidates = batch.filter(
+        (task) =>
+          (!statuses || statuses.has(task.status)) &&
+          taskMatchesAgent(task, agentId, params.cfg) &&
+          taskMatchesRelatedSession(task, sessionKey, params.sessionAgentId, params.cfg),
+      );
+      // Prepared metadata belongs to this synchronous slice, never the next await.
+      const filter = params.prepareFilter?.(candidates);
+      for (const task of candidates) {
+        if (filter && !filter(task)) {
+          continue;
+        }
+        matchingCount += 1;
+        if (windowSize <= 0) {
+          continue;
+        }
+        if (window.length < windowSize) {
+          window.push(task);
+          continue;
+        }
+        if (!heapReady) {
+          heapifyWorstTaskFirst(window, compare);
+          heapReady = true;
+        }
+        const cutoff = window[0];
+        if (cutoff && compare(task, cutoff) < 0) {
+          window[0] = task;
+          siftWorstTaskDown(window, 0, compare);
+        }
       }
     }
     if (revision !== readTaskRegistryRevision()) {
@@ -436,6 +452,7 @@ export function deleteTaskRecordById(taskId: string): boolean {
 }
 
 export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
+  getTaskRegistryProcessState().runOwners.clear();
   clearTaskRegistryMemory();
   resetTaskRegistryRestoreState();
   resetTaskRegistryRuntimeForTests();

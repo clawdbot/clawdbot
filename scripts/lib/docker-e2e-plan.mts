@@ -10,6 +10,7 @@ import {
   BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS,
   DEFAULT_LIVE_RETRIES,
   allReleasePathLanes,
+  fleetCacheLane,
   mainLanes,
   normalizeReleaseProfile,
   publicInstallerLanes,
@@ -475,7 +476,7 @@ export function lanesNeedE2eImageKind(
 }
 
 export function lanesNeedOpenClawPackage(poolLanes: DockerE2eLane[]): boolean {
-  return poolLanes.some((poolLane) => poolLane.e2eImageKind);
+  return poolLanes.some((poolLane) => poolLane.needsPackage || poolLane.e2eImageKind);
 }
 
 export function findLaneByName(name: string): DockerE2eLane | undefined {
@@ -484,6 +485,7 @@ export function findLaneByName(name: string): DockerE2eLane | undefined {
       [
         ...allReleasePathLanes({ includeOpenWebUI: true }),
         ...publicInstallerLanes,
+        fleetCacheLane,
         ...mainLanes,
         ...tailLanes,
       ],
@@ -661,6 +663,7 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
       releaseProfile: "full",
     }),
     ...publicInstallerLanes,
+    fleetCacheLane,
     ...retriedMainLanes,
     ...retriedTailLanes,
   ]);

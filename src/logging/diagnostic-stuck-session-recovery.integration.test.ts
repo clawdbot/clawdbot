@@ -1,5 +1,6 @@
 // Stuck session recovery integration tests cover end-to-end recovery diagnostics.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import {
   clearActiveEmbeddedRun,
@@ -20,6 +21,9 @@ import {
 import { enqueueCommandInLane, getQueueSize, resetCommandLane } from "../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
 import {
+  beginDiagnosticBackendActivity,
+  closeDiagnosticEmbeddedRunOwner,
+  createDiagnosticEmbeddedRunOwner,
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticArgumentChurnObservation,
   markDiagnosticEmbeddedRunStarted,
@@ -54,6 +58,103 @@ describe("stuck session recovery integration", () => {
     resetCommandQueueStateForTest();
     resetDiagnosticStateForTest();
     resetDiagnosticEventsForTest();
+  });
+
+  it("keeps queued work behind a live backend allowance and recovers once after expiry", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse("2026-08-04T03:00:00Z"));
+    const sessionKey = "agent:main:backend-allowance";
+    const sessionId = "backend-allowance-session";
+    const lane = resolveEmbeddedSessionLane(sessionKey);
+    const events: DiagnosticEventPayload[] = [];
+    const unsubscribe = onDiagnosticEvent((event) => events.push(event));
+    startDiagnosticHeartbeat(
+      { diagnostics: { enabled: true } },
+      {
+        recoverStuckSession: recoverStuckDiagnosticSession,
+        testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 60_000 },
+      },
+    );
+    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+    operation.setPhase("running");
+    const entered = createDeferred();
+    const release = createDeferred();
+    const owner = createDiagnosticEmbeddedRunOwner({ sessionKey, sessionId, runId: sessionId });
+    const abort = vi.fn<() => void>();
+    const handle = {
+      runId: sessionId,
+      diagnosticOwner: owner,
+      closeDiagnostics: () => closeDiagnosticEmbeddedRunOwner(owner),
+      queueMessage: async () => {},
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort,
+    };
+    abort.mockImplementation(() => {
+      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+      operation.complete();
+      release.resolve();
+    });
+    setActiveEmbeddedRun(sessionId, handle, sessionKey);
+    const backend = beginDiagnosticBackendActivity({
+      owner,
+      noOutputTimeoutMs: 180_000,
+      assertCurrent: () => {},
+    });
+    const active = enqueueCommandInLane(
+      lane,
+      async () => {
+        entered.resolve();
+        await release.promise;
+      },
+      { warnAfterMs: Number.MAX_SAFE_INTEGER },
+    );
+    const deliver = vi.fn(async () => "delivered");
+    const queued = enqueueCommandInLane(lane, deliver, {
+      warnAfterMs: Number.MAX_SAFE_INTEGER,
+    });
+    logMessageQueuedWithBacklogPolicy({ sessionId, sessionKey, source: "test" }, true);
+    try {
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(120_000);
+
+      // The queued-work entry point must respect the same allowance as heartbeat recovery.
+      await expect(
+        recoverStuckDiagnosticSession({
+          sessionId,
+          sessionKey,
+          ageMs: 120_000,
+          queueDepth: 1,
+          staleActiveProgressAbortMs: 60_000,
+        }),
+      ).resolves.toMatchObject({ status: "skipped" });
+      expect(abort).not.toHaveBeenCalled();
+      expect(deliver).not.toHaveBeenCalled();
+      expect(getQueueSize(lane)).toBe(2);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      await active;
+      await expect(queued).resolves.toBe("delivered");
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(abort).toHaveBeenCalledOnce();
+      expect(deliver).toHaveBeenCalledOnce();
+      expect(getQueueSize(lane)).toBe(0);
+      expect(events.filter((event) => event.type === "session.recovery.requested")).toHaveLength(1);
+      expect(
+        getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey })
+          .activeBackendLivenessDeadlineAtMs,
+      ).toBeUndefined();
+    } finally {
+      backend.close();
+      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+      operation.complete();
+      release.resolve();
+      await Promise.allSettled([active, queued]);
+      unsubscribe();
+      resetDiagnosticStateForTest();
+      vi.useRealTimers();
+    }
   });
 
   it("recovers repeated paid-call-shaped activity once without duplicate queued delivery", async () => {
@@ -572,6 +673,67 @@ describe("stuck session recovery integration", () => {
       expect(getQueueSize(lane)).toBe(0);
     } finally {
       await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves committed reply finalization to its existing lease before releasing queued work", async () => {
+    vi.useFakeTimers();
+    const sessionKey = "agent:main:committed-finalization";
+    const sessionId = "committed-finalization-session";
+    const lane = resolveEmbeddedSessionLane(sessionKey);
+    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+    operation.setPhase("running");
+    const entered = createDeferred();
+    const release = createDeferred();
+    let ownerCleared = false;
+    runAfterReplyOperationClear(operation, () => {
+      ownerCleared = true;
+    });
+    operation.abortSignal.addEventListener("abort", () => release.resolve(), { once: true });
+    const active = enqueueCommandInLane(
+      lane,
+      async () => {
+        entered.resolve();
+        await release.promise;
+      },
+      { warnAfterMs: Number.MAX_SAFE_INTEGER },
+    );
+    const deliver = vi.fn(async () => {
+      expect(ownerCleared).toBe(true);
+      return "delivered";
+    });
+    const queued = enqueueCommandInLane(lane, deliver, {
+      warnAfterMs: Number.MAX_SAFE_INTEGER,
+    });
+    try {
+      await entered.promise;
+      operation.freezeAbort();
+
+      await expect(
+        recoverStuckDiagnosticSession({
+          sessionId,
+          sessionKey,
+          ageMs: 720_000,
+          queueDepth: 1,
+          allowActiveAbort: true,
+        }),
+      ).resolves.toMatchObject({ status: "skipped", action: "keep_lane" });
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(operation.result).toBeNull();
+      expect(operation.abortSignal.aborted).toBe(false);
+      expect(deliver).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      await active;
+      await expect(queued).resolves.toBe("delivered");
+      expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
+      expect(operation.staleExpiryReason).toBe("finalization_stalled");
+      expect(deliver).toHaveBeenCalledOnce();
+    } finally {
+      operation.complete();
+      release.resolve();
+      await Promise.allSettled([active, queued]);
       vi.useRealTimers();
     }
   });

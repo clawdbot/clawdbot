@@ -61,12 +61,12 @@ var alwaysProtectedProductNames = []string{
 }
 
 var contextualProtectedProductNames = []string{
-	"Render", "Matrix", "Raft", "Chutes", "fal", "Fal", "Fireworks", "Inferrs", "Meta", "Runway", "Synthetic", "Upstash Box", "Lobster", "Mantis", "Tokenjuice",
+	"Render", "Matrix", "Raft", "Chutes", "fal", "Fal", "Fireworks", "Meta", "Runway", "Synthetic", "Upstash Box", "Lobster", "Mantis", "Tokenjuice",
 }
 
 func protectedProductNameRule() string {
 	contextualDisplay := []string{
-		"Render", "Matrix", "Raft", "Chutes", "fal (title: Fal)", "Fireworks", "Inferrs", "Meta", "Runway", "Synthetic", "Upstash Box", "Lobster", "Mantis", "Tokenjuice",
+		"Render", "Matrix", "Raft", "Chutes", "fal (title: Fal)", "Fireworks", "Meta", "Runway", "Synthetic", "Upstash Box", "Lobster", "Mantis", "Tokenjuice",
 	}
 	return fmt.Sprintf(
 		"- Keep product names in English: %s. When they name the documented product, provider, protocol, integration, runtime, or plugin, also preserve ambiguous names exactly: %s. Translate the same words normally when the source clearly uses them as ordinary prose instead of a name.",

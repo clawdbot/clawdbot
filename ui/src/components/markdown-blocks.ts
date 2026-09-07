@@ -81,7 +81,7 @@ class MarkdownBlocksDirective extends AsyncDirective {
         () => {
           for (const block of root.querySelectorAll(".markdown-mermaid")) {
             block.classList.remove("markdown-mermaid");
-            block.prepend(t("chat.mermaid.error"));
+            block.prepend(t("chat.mermaid.rendererError"));
           }
         },
       );

@@ -13,6 +13,7 @@ import {
   type UsageDailyBucket,
 } from "../../infra/session-cost-usage.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
 import { listGatewayAgentsBasic } from "../agent-list.js";
 import { mergeUsageCacheStatus, runUsageAgentTasks } from "./usage-session-loading.js";
@@ -70,34 +71,37 @@ async function loadUsageResultCached<T extends object>(params: {
   }
 
   const entry: UsageCacheEntry<T> = cached ?? { configRef };
-  const inFlight = params
-    .load()
-    .then((value) => {
-      if (cache.get(cacheKey) !== entry) {
+  // Stale responses and cache eviction do not release the initiating owner's work.
+  const inFlight = trackAsyncWork(() =>
+    params
+      .load()
+      .then((value) => {
+        if (cache.get(cacheKey) !== entry) {
+          return value;
+        }
+        if (params.isComplete?.(value) ?? true) {
+          entry.value = value;
+          entry.updatedAt = Date.now();
+        } else if (!entry.value) {
+          // Partial snapshots serve cold callers without masking the next refresh.
+          entry.value = value;
+          delete entry.updatedAt;
+        }
         return value;
-      }
-      if (params.isComplete?.(value) ?? true) {
-        entry.value = value;
-        entry.updatedAt = Date.now();
-      } else if (!entry.value) {
-        // Partial snapshots serve cold callers without masking the next refresh.
-        entry.value = value;
-        delete entry.updatedAt;
-      }
-      return value;
-    })
-    .catch((error: unknown) => {
-      if (entry.value) {
-        return entry.value;
-      }
-      throw error;
-    })
-    .finally(() => {
-      const current = cache.get(cacheKey);
-      if (current === entry && current.inFlight === inFlight) {
-        current.inFlight = undefined;
-      }
-    });
+      })
+      .catch((error: unknown) => {
+        if (entry.value) {
+          return entry.value;
+        }
+        throw error;
+      })
+      .finally(() => {
+        const current = cache.get(cacheKey);
+        if (current === entry && current.inFlight === inFlight) {
+          current.inFlight = undefined;
+        }
+      }),
+  );
 
   entry.inFlight = inFlight;
   setUsageCache(cache, cacheKey, entry);

@@ -1,8 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { mergeSessionCostSummaryInto } from "../../infra/session-cost-usage-rollup.js";
-import { createEmptyCostUsageTotals } from "../../infra/session-cost-usage-totals.js";
+import { createSessionCostSummaryAccumulator } from "../../infra/session-cost-usage-rollup.js";
 import {
   discoverAllSessions,
   loadSessionCostSummariesFromCache,
@@ -142,21 +141,25 @@ export async function loadUsageSessionSummaries(params: {
   );
   for (const { agentSessions, loaded } of agentLoads) {
     cacheStatus = mergeUsageCacheStatus(cacheStatus, loaded.cacheStatus);
+    let usage: ReturnType<typeof createSessionCostSummaryAccumulator> | undefined;
     for (const [index, summary] of loaded.summaries.entries()) {
-      if (!summary) {
-        continue;
-      }
       const session = expectDefined(agentSessions[index], "agent sessions entry at index");
-      const merged = expectDefined(
-        mergedEntries[session.entryIndex],
-        "merged entries entry at session.entry index",
-      );
-      const usage: SessionCostSummary =
-        usageByEntryIndex[session.entryIndex] ?? createEmptyCostUsageTotals();
-      usage.sessionId = merged.sessionId;
-      usage.sessionFile = merged.sessionFile;
-      mergeSessionCostSummaryInto(usage, summary);
-      usageByEntryIndex[session.entryIndex] = usage;
+      if (summary) {
+        const merged = expectDefined(
+          mergedEntries[session.entryIndex],
+          "merged entries entry at session.entry index",
+        );
+        usage ??= createSessionCostSummaryAccumulator({
+          sessionId: merged.sessionId,
+          sessionFile: merged.sessionFile,
+        });
+        usage.add(summary);
+      }
+      // Construction above keeps each family's instances contiguous within its agent batch.
+      if (usage && agentSessions[index + 1]?.entryIndex !== session.entryIndex) {
+        usageByEntryIndex[session.entryIndex] = usage.finish();
+        usage = undefined;
+      }
     }
   }
 

@@ -18,7 +18,7 @@ import {
   loadPersistedSharedAuthProfileStore,
 } from "../../../agents/auth-profiles/persisted.js";
 import { resolveSharedMainAuthAgentDir } from "../../../agents/auth-profiles/shared-main-dir.js";
-import { updateAuthProfileStoreWithLock } from "../../../agents/auth-profiles/store.js";
+import { updateAuthProfileStoreWithLock } from "../../../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore, OAuthCredential } from "../../../agents/auth-profiles/types.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";

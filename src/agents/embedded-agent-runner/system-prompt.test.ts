@@ -6,6 +6,7 @@ import {
   registerTestMemoryPromptBuilder,
 } from "../../plugins/memory-state.test-fixtures.js";
 import type { AgentSession } from "../sessions/index.js";
+import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
 import { applySystemPromptToSession, buildEmbeddedSystemPrompt } from "./system-prompt.js";
 
 vi.mock("../../tts/tts-settings.js", () => ({
@@ -13,6 +14,38 @@ vi.mock("../../tts/tts-settings.js", () => ({
   resolveModelOverridePolicy: vi.fn(),
   setTtsMachinePrefsPathResolver: vi.fn(),
 }));
+
+function fixedEmbeddedPromptInputs(): Parameters<typeof buildEmbeddedSystemPrompt>[0] {
+  return {
+    workspaceDir: "/tmp/openclaw-prompt-agent",
+    runtimeCwd: "/tmp/openclaw-prompt-project",
+    reasoningTagHint: true,
+    runtimeInfo: {
+      host: "fixture-host",
+      os: "linux",
+      arch: "arm64",
+      node: "v24.14.0",
+      model: "fixture-model",
+      provider: "fixture-provider",
+      channel: "discord",
+      chatType: "direct",
+    },
+    tools: ["read", "exec", "process", "message", "sessions_spawn"].map(createStubTool),
+    capabilityToolNames: ["tool_search", "web_search"],
+    userTimezone: "UTC",
+    userDate: "2026-01-05",
+    ownerNumbers: ["fixture-owner"],
+    modelAliasLines: ["- direct-alias: fixture/direct"],
+    ttsHint: "Fixture direct TTS hint.",
+    skillsPrompt: "<available_skills>Fixture skill guidance.</available_skills>",
+    contextFiles: [{ path: "AGENTS.md", content: "Fixture project guidance." }],
+    extraSystemPrompt: "Fixture turn context.",
+    promptContribution: {
+      stablePrefix: "Fixture stable provider guidance.",
+      dynamicSuffix: "Fixture dynamic provider guidance.",
+    },
+  };
+}
 
 describe("applySystemPromptToSession", () => {
   it("applies the trimmed prompt through the session base prompt setter", () => {
@@ -350,5 +383,117 @@ describe("buildEmbeddedSystemPrompt", () => {
     expect(restrictedPrompt).not.toContain("Active exec sessions:");
     expect(restrictedPrompt).not.toContain("process log");
     expect(restrictedPrompt).not.toContain("process list");
+  });
+
+  it.each([
+    {
+      name: "runtime agent fallback",
+      selector: {},
+      runtime: { agentId: "strict" },
+      restricted: true,
+    },
+    {
+      name: "undefined agent fallback",
+      selector: { agentId: undefined },
+      runtime: { agentId: "strict" },
+      restricted: true,
+    },
+    {
+      name: "explicit loose agent",
+      selector: { agentId: "loose" },
+      runtime: { agentId: "strict" },
+      restricted: false,
+    },
+    {
+      name: "explicit strict agent",
+      selector: { agentId: "strict" },
+      runtime: { agentId: "loose" },
+      restricted: true,
+    },
+    {
+      name: "loose runtime agent",
+      selector: {},
+      runtime: { agentId: "loose" },
+      restricted: false,
+    },
+    { name: "no agent identity", selector: {}, runtime: {}, restricted: false },
+  ])("resolves embedded prompt policy for $name", ({ name, selector, runtime, restricted }) => {
+    const inputs = fixedEmbeddedPromptInputs();
+    const prompt = buildEmbeddedSystemPrompt({
+      ...inputs,
+      ...selector,
+      runtimeInfo: { ...inputs.runtimeInfo, ...runtime },
+      config: {
+        tools: { fs: { workspaceOnly: false } },
+        agents: {
+          entries: {
+            strict: { tools: { fs: { workspaceOnly: true } } },
+            loose: { tools: { fs: { workspaceOnly: false } } },
+          },
+        },
+      },
+    });
+    expect(prompt.includes("tools.fs.workspaceOnly ON"), name).toBe(restricted);
+    expect(prompt).toContain("Fixture stable provider guidance.");
+    expect(prompt).toContain("Fixture dynamic provider guidance.");
+  });
+
+  it.each(["full", "minimal", "none"] as const)(
+    "preserves the fixed embedded prompt in %s mode",
+    (promptMode) => {
+      const prompt = buildEmbeddedSystemPrompt({ ...fixedEmbeddedPromptInputs(), promptMode });
+      expect(prompt).toContain("You are a personal assistant running inside OpenClaw.");
+      if (promptMode === "none") {
+        expect(prompt).not.toContain("Fixture");
+        expect(prompt).not.toContain("## Tooling");
+      } else {
+        expect(prompt).toContain("Fixture stable provider guidance.");
+        expect(prompt).toContain("Fixture project guidance.");
+        expect(prompt).toContain("Working directory: /tmp/openclaw-prompt-project");
+      }
+      expect(prompt.includes("- direct-alias: fixture/direct")).toBe(promptMode === "full");
+    },
+  );
+
+  it.each([
+    { name: "absent config", configInput: {}, directHint: true },
+    { name: "empty config", configInput: { config: {} }, directHint: false },
+    {
+      name: "populated config",
+      configInput: {
+        config: {
+          agents: { defaults: { models: { "fixture/configured": { alias: "configured-alias" } } } },
+        },
+      },
+      directHint: false,
+    },
+  ])("preserves absent optional fields with $name", ({ name, configInput, directHint }) => {
+    const inputs = { ...fixedEmbeddedPromptInputs(), ...configInput };
+    const prompt = buildEmbeddedSystemPrompt(inputs);
+    const explicitUndefined = buildEmbeddedSystemPrompt({
+      ...inputs,
+      reactionGuidance: undefined,
+      workspaceNotes: undefined,
+      silentReplyPromptMode: undefined,
+      sourceReplyDeliveryMode: undefined,
+      nativeCommandNames: undefined,
+      nativeCommandGuidanceLines: undefined,
+      messageToolHints: undefined,
+      toolSchemaDirectoryPrompt: undefined,
+      sandboxInfo: undefined,
+      bootstrapMode: undefined,
+      bootstrapTruncationNotice: undefined,
+      includeMemorySection: undefined,
+      preparedMemoryPrompt: undefined,
+      preparedWatchedSessions: undefined,
+      projectMemoryBootstrap: undefined,
+      activeProjectKeys: undefined,
+    });
+    expect(explicitUndefined).toBe(prompt);
+    expect(prompt.includes("- direct-alias: fixture/direct")).toBe(directHint);
+    expect(prompt.includes("Fixture direct TTS hint.")).toBe(directHint);
+    expect(prompt.includes("- configured-alias: fixture/configured")).toBe(
+      name === "populated config",
+    );
   });
 });

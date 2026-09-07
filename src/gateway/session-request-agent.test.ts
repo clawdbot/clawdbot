@@ -35,6 +35,34 @@ describe("requested session agent ownership", () => {
     expect(resolveRequestedSessionAgentId(fixedStoreConfig("retired"), "global").ok).toBe(false);
   });
 
+  it.each(["main", "primary"])(
+    "validates fixed ownership after the explicit %s alias becomes global",
+    (alias) => {
+      const key = `agent:research:${alias}`;
+      const cfg = fixedStoreConfig("ops");
+      cfg.session = { ...cfg.session, scope: "global", mainKey: "primary" };
+      for (const owner of ["ops", "retired"]) {
+        cfg.agents!.defaults!.sessionStore!.agentId = owner;
+        expect.soft(resolveRequestedSessionAgentId(cfg, key, "research")).toMatchObject({
+          ok: false,
+          error: { code: "INVALID_REQUEST" },
+        });
+      }
+      expect(resolveRequestedSessionAgentId(cfg, key)).toEqual({ ok: true, agentId: "research" });
+      cfg.agents!.defaults!.sessionStore!.agentId = "research";
+      expect(resolveRequestedSessionAgentId(cfg, key, "research")).toEqual({
+        ok: true,
+        agentId: "research",
+      });
+      cfg.session.store = "/synthetic/{agentId}/sessions.sqlite";
+      cfg.agents!.defaults!.sessionStore!.agentId = "ops";
+      expect(resolveRequestedSessionAgentId(cfg, key, "research")).toEqual({
+        ok: true,
+        agentId: "research",
+      });
+    },
+  );
+
   it("uses a legacy compatibility owner for a bare key", () => {
     const cfg: OpenClawConfig = {
       agents: { entries: { ops: { default: true }, research: {} } },

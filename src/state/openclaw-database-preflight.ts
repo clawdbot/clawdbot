@@ -1,4 +1,4 @@
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -8,7 +8,9 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
+import { hasNodeErrorCode } from "../infra/path-guards.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
+import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.js";
 import {
   collectSqliteSchemaIssues,
   type SqliteSchemaIssue,
@@ -21,6 +23,7 @@ import {
 import { discoverAgentDatabaseMigrationTargets } from "../infra/state-migrations.media-persistence-targets.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { assertOpenClawAgentDatabaseForMaintenance } from "./openclaw-agent-db-maintenance.js";
+import { isPersistentOpenClawAgentDatabasePath } from "./openclaw-agent-db-registry.js";
 import type { OpenClawSchemaVersions } from "./openclaw-schema-versions.js";
 import {
   OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
@@ -119,7 +122,7 @@ export class OpenClawDatabaseSchemaPreflightError extends SqliteSchemaVersionErr
 }
 
 /** Verify persisted runtime schemas before certifying repair or accepting restart. */
-export function assertOpenClawDatabasesReady(
+export async function assertOpenClawDatabasesReady(
   options: {
     env: NodeJS.ProcessEnv;
   } & (
@@ -129,8 +132,8 @@ export function assertOpenClawDatabasesReady(
       }
     | { operation: "gateway-restart" }
   ),
-): void {
-  const schemas = preflightOpenClawDatabaseSchemas({
+): Promise<void> {
+  const schemas = await preflightOpenClawDatabaseSchemas({
     env: options.env,
     supportedVersions: {
       state: OPENCLAW_STATE_SCHEMA_VERSION,
@@ -323,8 +326,9 @@ export async function preflightOpenClawStateDatabasePath(
 }
 
 /** Read schema headers and optionally verify current schema shape without repairing it. */
-export function preflightOpenClawDatabaseSchemas(options: {
+export async function preflightOpenClawDatabaseSchemas(options: {
   env: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
   supportedVersions: OpenClawSchemaVersions;
   verifyCurrentSchemaShape?: boolean;
   configuredAgentDatabaseTargets?:
@@ -333,14 +337,40 @@ export function preflightOpenClawDatabaseSchemas(options: {
         registeredDatabases: readonly { agentId: string; path: string }[],
       ) => readonly { agentId: string; path: string }[]);
   configuredAgentDatabaseCandidatePaths?: readonly string[];
-}): OpenClawDatabaseSchemaPreflight {
+}): Promise<OpenClawDatabaseSchemaPreflight> {
+  options.signal?.throwIfAborted();
   const result: OpenClawDatabaseSchemaPreflight = { incompatible: [], indeterminate: [] };
   const statePath = path.resolve(resolveOpenClawStateSqlitePath(options.env));
   let registeredDatabases: ReturnType<typeof readRegisteredAgentDatabases> = [];
   let stateDatabase: DatabaseSync | undefined;
+  let stateSnapshot: Awaited<ReturnType<typeof prepareSqliteReadOnlyLocation>> | undefined;
+  const inspectCandidatePresence = (
+    databasePath: string,
+  ): { status: "present" | "absent" } | { status: "indeterminate"; reason: string } => {
+    try {
+      statSync(databasePath);
+      return { status: "present" };
+    } catch (error) {
+      return hasNodeErrorCode(error, "ENOENT")
+        ? { status: "absent" }
+        : { status: "indeterminate", reason: formatErrorMessage(error) };
+    }
+  };
+  const statePresence = inspectCandidatePresence(statePath);
+  if (statePresence.status === "indeterminate") {
+    result.indeterminate.push({ kind: "state", path: statePath, reason: statePresence.reason });
+    return result;
+  }
   try {
-    if (existsSync(statePath)) {
-      stateDatabase = openNodeSqliteDatabase(statePath, {
+    if (statePresence.status === "present") {
+      // Even a read-only source connection can create WAL/SHM. The copy worker
+      // preserves source artifacts and cannot release this process's writer locks.
+      stateSnapshot = await prepareSqliteReadOnlyLocation(realpathSync.native(statePath), {
+        preserveSourceArtifacts: true,
+        signal: options.signal,
+      });
+      options.signal?.throwIfAborted();
+      stateDatabase = openNodeSqliteDatabase(stateSnapshot.location, {
         readOnly: true,
       });
       stateDatabase.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
@@ -382,6 +412,11 @@ export function preflightOpenClawDatabaseSchemas(options: {
       }
     }
   } catch (error) {
+    // Accepted stop must not turn cancellation or failed cleanup into a
+    // warn-and-continue result that launches the remaining startup runtime.
+    if (options.signal?.aborted) {
+      throw error;
+    }
     result.indeterminate.push({
       kind: "state",
       path: statePath,
@@ -389,9 +424,13 @@ export function preflightOpenClawDatabaseSchemas(options: {
     });
     return result;
   } finally {
-    if (stateDatabase) {
-      clearNodeSqliteKyselyCacheForDatabase(stateDatabase);
-      stateDatabase.close();
+    try {
+      if (stateDatabase) {
+        clearNodeSqliteKyselyCacheForDatabase(stateDatabase);
+        stateDatabase.close();
+      }
+    } finally {
+      stateSnapshot?.cleanup();
     }
   }
   let agentTargets = registeredDatabases;
@@ -416,24 +455,49 @@ export function preflightOpenClawDatabaseSchemas(options: {
   // Check its version without promoting it into an owned migration target.
   const inspectionTargets: Array<{ agentId?: string; path: string }> = [
     ...agentTargets,
+    // Migration discovery intentionally declines ownership of foreign registry
+    // paths. Preflight remains read-only, so preserve their downgrade guard.
+    ...(options.configuredAgentDatabaseTargets !== undefined
+      ? registeredDatabases.filter((database) =>
+          isPersistentOpenClawAgentDatabasePath(database.path, options.env),
+        )
+      : []),
     ...(options.configuredAgentDatabaseCandidatePaths ?? []).map((candidatePath) => ({
       path: candidatePath,
     })),
   ];
   const inspectedAgentPaths = new Set<string>();
+  const inspectedAgentTargets = new Set<string>();
   for (const row of inspectionTargets) {
     const agentPath = row.path;
-    if (!existsSync(agentPath)) {
+    const presence = inspectCandidatePresence(agentPath);
+    if (presence.status === "absent") {
+      continue;
+    }
+    if (presence.status === "indeterminate") {
+      result.indeterminate.push({ kind: "agent", path: agentPath, reason: presence.reason });
       continue;
     }
     let agentDatabase: DatabaseSync | undefined;
+    let agentSnapshot: Awaited<ReturnType<typeof prepareSqliteReadOnlyLocation>> | undefined;
     try {
-      const realAgentPath = realpathSync(agentPath);
-      if (row.agentId === undefined && inspectedAgentPaths.has(realAgentPath)) {
+      // Preserve SQLite's filesystem traversal through symlink/.. locators.
+      const realAgentPath = realpathSync.native(agentPath);
+      const inspectionKey = `${realAgentPath}\0${row.agentId ?? ""}`;
+      if (
+        inspectedAgentTargets.has(inspectionKey) ||
+        (row.agentId === undefined && inspectedAgentPaths.has(realAgentPath))
+      ) {
         continue;
       }
       inspectedAgentPaths.add(realAgentPath);
-      agentDatabase = openNodeSqliteDatabase(agentPath, {
+      inspectedAgentTargets.add(inspectionKey);
+      agentSnapshot = await prepareSqliteReadOnlyLocation(realAgentPath, {
+        preserveSourceArtifacts: true,
+        signal: options.signal,
+      });
+      options.signal?.throwIfAborted();
+      agentDatabase = openNodeSqliteDatabase(agentSnapshot.location, {
         readOnly: true,
       });
       agentDatabase.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
@@ -459,13 +523,20 @@ export function preflightOpenClawDatabaseSchemas(options: {
         ...(writerAppVersion ? { writerAppVersion } : {}),
       });
     } catch (error) {
+      if (options.signal?.aborted) {
+        throw error;
+      }
       result.indeterminate.push({
         kind: "agent",
         path: agentPath,
         reason: formatErrorMessage(error),
       });
     } finally {
-      agentDatabase?.close();
+      try {
+        agentDatabase?.close();
+      } finally {
+        agentSnapshot?.cleanup();
+      }
     }
   }
   return result;

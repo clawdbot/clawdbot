@@ -6,6 +6,7 @@ import {
   listRuntimePluginIdsFromRegistry,
   registryMatchesManifestPluginIds,
 } from "./active-runtime-registry.js";
+import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
 import { clearPluginLoaderCache } from "./loader.test-fixtures.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -155,7 +156,7 @@ describe("getLoadedRuntimePluginRegistry", () => {
     expect(listRuntimePluginIdsFromRegistry(bundleRegistry)).toContain("bundle");
   });
 
-  it("falls through to containment reuse when scoped load options miss the exact cache key", () => {
+  it("reuses scoped loaded owners when load options differ from the active registry", () => {
     const registry = createRegistryWithPlugin("demo");
     setActivePluginRegistry(registry, "gateway-root-key", "default", "/tmp/ws");
 
@@ -192,6 +193,26 @@ describe("getLoadedRuntimePluginRegistry", () => {
         workspaceDir: "/tmp/ws",
         requiredPluginIds: ["demo"],
       }),
+    ).toBeUndefined();
+  });
+
+  it("honors the requested workspace when scoped load options match the active key", () => {
+    const registry = createRegistryWithPlugin("demo");
+    const loadOptions = {
+      config: {},
+      installRecords: {},
+      workspaceDir: "/tmp/owner-workspace",
+      onlyPluginIds: ["demo"],
+    };
+    setActivePluginRegistry(
+      registry,
+      resolvePluginLoadCacheContext(loadOptions).cacheKey,
+      "default",
+      loadOptions.workspaceDir,
+    );
+
+    expect(
+      getLoadedRuntimePluginRegistry({ loadOptions, workspaceDir: "/tmp/request-workspace" }),
     ).toBeUndefined();
   });
 

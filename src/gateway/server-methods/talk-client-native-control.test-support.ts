@@ -20,6 +20,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { createDiagnosticEmbeddedRunOwner } from "../../logging/diagnostic-run-activity.js";
 import { loadBundledPluginPublicSurface } from "../../plugin-sdk/test-helpers/public-surface-loader.js";
+import { resolveCapabilityProviderRegistration } from "../../plugins/capability-catalog.js";
+import { resolvePluginCapabilityCatalogContext } from "../../plugins/loader-runtime-load.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -182,6 +184,12 @@ export async function withNativePlugin(
         plugins: { allow: ["openai"], entries: { openai: { enabled: true } } },
       };
       const registry = createEmptyPluginRegistry();
+      // Native factory binding must retain the fixture's synthetic auth, not resolve operator credentials.
+      const capabilityCatalogContext = {
+        ...resolvePluginCapabilityCatalogContext(),
+        isProviderAuthProfileConfigured: nativeUpstream.authConfigured,
+        resolveProviderAuthProfileApiKey: nativeUpstream.resolveAuth,
+      };
       const previousRegistry = captureActivePluginRegistrySnapshot();
       const routes: HttpRoute[] = [];
       const lifecycles: PluginLifecycle[] = [];
@@ -213,7 +221,11 @@ export async function withNativePlugin(
             registrationMode: "full",
             config,
             runtime: createPluginRuntimeMock({ config: { current: () => config } }),
-            registerRealtimeVoiceProvider: (provider) => {
+            registerRealtimeVoiceProvider: (entry) => {
+              const provider = resolveCapabilityProviderRegistration(
+                entry,
+                () => capabilityCatalogContext,
+              );
               registry.realtimeVoiceProviders.push({
                 pluginId: "openai",
                 source: "test",

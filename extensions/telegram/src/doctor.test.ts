@@ -674,27 +674,47 @@ describe("telegram doctor", () => {
     ]);
   });
 
-  it("warns when selected quote replies can suppress Telegram tool-progress preview", async () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          replyToMode: "first",
+  it.each([
+    [undefined, "progress"],
+    ["progress", "progress"],
+    ["partial", "preview"],
+    ["block", "preview"],
+  ] as const)(
+    "gives actionable selected-quote tool-progress advice for mode %s",
+    async (mode, toolProgressSection) => {
+      const streaming = {
+        mode,
+        progress: { toolProgress: true },
+        preview: { toolProgress: true },
+      };
+      const cfg = {
+        channels: {
+          telegram: {
+            replyToMode: "first",
+            streaming,
+          },
         },
-      },
-    } as unknown as OpenClawConfig;
+      } satisfies OpenClawConfig;
 
-    const warnings = await collectPreviewWarnings(cfg);
-    expect(warnings[0]).toContain("selected quote replies");
-    expect(warnings[0]).toContain('"Working" tool-progress preview');
-    expect(warnings[0]).toContain("Current-message replies without selected quote text");
-    expect(warnings[1]).toContain("streaming.preview.toolProgress: false");
-  });
+      const warnings = await collectPreviewWarnings(cfg);
+      expect(warnings[0]).toContain("selected quote replies");
+      expect(warnings[0]).toContain('"Working" tool-progress preview');
+      expect(warnings[0]).toContain("Current-message replies without selected quote text");
+      expect(warnings[1]).toContain(`streaming.${toolProgressSection}.toolProgress: false`);
+
+      streaming[toolProgressSection].toolProgress = false;
+      expect((await collectPreviewWarnings(cfg)).join("\n")).not.toContain(
+        "selected quote replies",
+      );
+    },
+  );
 
   it("warns for the implicit default Telegram account when accounts is empty", async () => {
     const cfg = {
       channels: {
         telegram: {
           replyToMode: "all",
+          streaming: { progress: { toolProgress: true } },
           accounts: {},
         },
       },
@@ -711,6 +731,7 @@ describe("telegram doctor", () => {
       channels: {
         telegram: {
           replyToMode: "batched",
+          streaming: { progress: { toolProgress: true } },
           accounts: {
             work: {},
             quiet: {

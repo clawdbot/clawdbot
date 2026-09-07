@@ -11,6 +11,7 @@ import {
 } from "./current-plugin-metadata-snapshot.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
+import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import {
   loadPluginManifestRegistryForInstalledIndex,
@@ -31,10 +32,8 @@ import {
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
 import { buildPluginMetadataProviderFacts } from "./plugin-metadata-provider-facts.js";
-import {
-  adoptCurrentPluginMetadataSnapshotIfAbsentRuntime,
-  registerPluginMetadataSnapshotReaders,
-} from "./plugin-metadata-snapshot.runtime.js";
+import { registerPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot-readers.js";
+import { adoptCurrentPluginMetadataSnapshotIfAbsentRuntime } from "./plugin-metadata-snapshot.runtime.js";
 import type {
   LoadPluginMetadataSnapshotParams,
   PluginMetadataSnapshot,
@@ -578,6 +577,10 @@ function loadPluginMetadataSnapshotImpl(
   // index so every manifest and scope follows the same immutable graph.
   const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
     index,
+    registryPath: resolveInstalledPluginIndexStorePath({
+      env: params.env,
+      stateDir: params.stateDir,
+    }),
     ...(registryResult.manifestRegistry
       ? { manifestRegistry: registryResult.manifestRegistry }
       : {}),
@@ -627,4 +630,7 @@ function loadPluginMetadataSnapshotImpl(
 // Light bridges (plugin-metadata-snapshot.runtime.ts) serve loads through this
 // instance whenever the metadata system is loaded; the require fallback only
 // covers cold processes.
-registerPluginMetadataSnapshotReaders({ resolvePluginMetadataSnapshot });
+registerPluginMetadataSnapshotReaders({
+  resolvePluginMetadataSnapshot,
+  loadPluginMetadataSnapshot,
+});

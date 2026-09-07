@@ -512,55 +512,37 @@ export function listStagedChangedPaths(cwd = process.cwd()) {
 function classifyPackageJsonChangeFromGit(params: PackageJsonGitParams) {
   try {
     const { before, after } = readPackageJsonBeforeAfter(params);
-    if (isLiveDockerPackageScriptOnlyChange(before, after)) {
-      return "liveDockerTooling";
-    }
-    return isPackageScriptOnlyChange(before, after) ? "tooling" : null;
+    return classifyPackageJsonScriptChange(before, after);
   } catch {
     return null;
   }
 }
 
-/**
- * Checks whether package scripts changed only live Docker script entries.
- * @internal Directly tested script implementation detail.
- */
-export function isLiveDockerPackageScriptOnlyChange(before: string, after: string): boolean {
+function classifyPackageJsonScriptChange(
+  before: string,
+  after: string,
+): "liveDockerTooling" | "tooling" | null {
   const beforePackage = parsePackageJson(before);
   const afterPackage = parsePackageJson(after);
   if (!beforePackage || !afterPackage) {
-    return false;
+    return null;
   }
-  const beforeAllowed = extractLiveDockerPackageScripts(beforePackage);
-  const afterAllowed = extractLiveDockerPackageScripts(afterPackage);
-  const beforeStripped = stripLiveDockerPackageScripts(beforePackage);
-  const afterStripped = stripLiveDockerPackageScripts(afterPackage);
-
-  return (
-    stableStringify(beforeStripped) === stableStringify(afterStripped) &&
-    stableStringify(beforeAllowed) !== stableStringify(afterAllowed)
-  );
-}
-
-/**
- * Checks whether package.json changes are limited to scripts.
- * @internal Directly tested script implementation detail.
- */
-export function isPackageScriptOnlyChange(before: string, after: string): boolean {
-  const beforePackage = parsePackageJson(before);
-  const afterPackage = parsePackageJson(after);
-  if (!beforePackage || !afterPackage) {
-    return false;
+  const { scripts: beforeScripts, ...beforeMetadata } = beforePackage;
+  const { scripts: afterScripts, ...afterMetadata } = afterPackage;
+  if (
+    stableStringify(beforeMetadata) !== stableStringify(afterMetadata) ||
+    stableStringify(isRecord(beforeScripts) ? beforeScripts : {}) ===
+      stableStringify(isRecord(afterScripts) ? afterScripts : {})
+  ) {
+    return null;
   }
-  const beforeScripts = extractPackageScripts(beforePackage);
-  const afterScripts = extractPackageScripts(afterPackage);
-  const beforeStripped = stripPackageScripts(beforePackage);
-  const afterStripped = stripPackageScripts(afterPackage);
-
-  return (
-    stableStringify(beforeStripped) === stableStringify(afterStripped) &&
-    stableStringify(beforeScripts) !== stableStringify(afterScripts)
-  );
+  // Coercing missing/non-record scripts to {} must not grant the narrower live-Docker lane.
+  return isRecord(beforeScripts) &&
+    isRecord(afterScripts) &&
+    stableStringify(withoutLiveDockerScripts(beforeScripts)) ===
+      stableStringify(withoutLiveDockerScripts(afterScripts))
+    ? "liveDockerTooling"
+    : "tooling";
 }
 
 function parsePackageJson(value: string) {
@@ -596,39 +578,10 @@ function readGitText(ref: string, filePath: string) {
   });
 }
 
-function extractLiveDockerPackageScripts(packageJson: Record<string, unknown>) {
-  const scripts = packageJson.scripts;
-  if (!isRecord(scripts)) {
-    return {};
-  }
+function withoutLiveDockerScripts(scripts: Record<string, unknown>) {
   return Object.fromEntries(
-    Object.entries(scripts).filter(([name]) => LIVE_DOCKER_PACKAGE_SCRIPT_RE.test(name)),
+    Object.entries(scripts).filter(([name]) => !LIVE_DOCKER_PACKAGE_SCRIPT_RE.test(name)),
   );
-}
-
-function stripLiveDockerPackageScripts(packageJson: Record<string, unknown>) {
-  const clone = structuredClone(packageJson);
-  const scripts = clone.scripts;
-  if (!isRecord(scripts)) {
-    return clone;
-  }
-  for (const name of Object.keys(scripts)) {
-    if (LIVE_DOCKER_PACKAGE_SCRIPT_RE.test(name)) {
-      delete scripts[name];
-    }
-  }
-  return clone;
-}
-
-function extractPackageScripts(packageJson: Record<string, unknown>) {
-  const scripts = packageJson.scripts;
-  return isRecord(scripts) ? scripts : {};
-}
-
-function stripPackageScripts(packageJson: Record<string, unknown>) {
-  const clone = structuredClone(packageJson);
-  delete clone.scripts;
-  return clone;
 }
 
 /**
