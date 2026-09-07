@@ -78,6 +78,7 @@ async function setupAcceptedRecovery(persistedPhase: "attempted" | "consumed" = 
       notifyContextEngineSubagentEnded: async () => {},
       completeCleanupBookkeeping: noop,
       completeSubagentRun: async () => {},
+      reportSubagentWaitExpiry: async () => {},
       resolveSubagentTask: () => ({ lookup: "available", task: getTaskById(task.taskId) }),
     });
   const manager = createManager();

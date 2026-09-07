@@ -897,6 +897,22 @@ describe("buildChildCompletionFindings", () => {
 });
 
 describe("applySubagentWaitOutcome", () => {
+  it.each([
+    { endedAt: undefined, prior: undefined, expected: "still-running" },
+    { endedAt: 150, prior: undefined, expected: "exited" },
+    { endedAt: undefined, prior: "exited", expected: "exited" },
+    { endedAt: undefined, prior: "killed", expected: "killed" },
+  ] as const)(
+    "preserves stop evidence (endedAt=$endedAt, prior=$prior)",
+    ({ endedAt, prior, expected }) => {
+      const applied = applySubagentWaitOutcome({
+        wait: { status: "timeout", endedAt },
+        outcome: prior ? { status: "timeout", disposition: prior } : undefined,
+      });
+      expect(applied.outcome).toMatchObject({ status: "timeout", disposition: expected });
+    },
+  );
+
   it("treats blocked ok wait snapshots as errors", () => {
     const applied = applySubagentWaitOutcome({
       wait: {
@@ -952,8 +968,11 @@ describe("applySubagentWaitOutcome", () => {
       outcome: undefined,
     });
 
+    // A provider hard timeout is the run's own budget firing, so unlike a bare
+    // wait timeout it does prove the child stopped.
     expect(applied.outcome).toEqual({
       status: "timeout",
+      disposition: "exited",
       startedAt: 100,
       endedAt: 150,
       elapsedMs: 50,
@@ -976,6 +995,7 @@ describe("applySubagentWaitOutcome", () => {
       expect(applied.outcome).toEqual({
         status: "error",
         error: "subagent run terminated",
+        disposition: "killed",
         startedAt: 100,
         endedAt: 150,
         elapsedMs: 50,
@@ -997,6 +1017,7 @@ describe("applySubagentWaitOutcome", () => {
     expect(applied.outcome).toEqual({
       status: "error",
       error: "subagent run terminated",
+      disposition: "killed",
       startedAt: 100,
       endedAt: 150,
       elapsedMs: 50,
@@ -1024,6 +1045,7 @@ describe("applySubagentWaitOutcome", () => {
       expect(applied.outcome).toEqual({
         status: "error",
         error: "subagent run terminated",
+        disposition: "killed",
         startedAt: 100,
         endedAt: 150,
         elapsedMs: 50,
@@ -1046,6 +1068,7 @@ describe("applySubagentWaitOutcome", () => {
     expect(applied.outcome).toEqual({
       status: "timeout",
       error: "model returned an unrecoverable tool-call sequence",
+      disposition: "exited",
       startedAt: 100,
       endedAt: 150,
       elapsedMs: 50,
@@ -1064,6 +1087,7 @@ describe("applySubagentWaitOutcome", () => {
 
     expect(applied.outcome).toEqual({
       status: "timeout",
+      disposition: "exited",
       startedAt: 100,
       endedAt: 150,
       elapsedMs: 50,
@@ -1083,6 +1107,7 @@ describe("applySubagentWaitOutcome", () => {
 
     expect(applied.outcome).toEqual({
       status: "timeout",
+      disposition: "exited",
       startedAt: 100,
       endedAt: 150,
       elapsedMs: 50,

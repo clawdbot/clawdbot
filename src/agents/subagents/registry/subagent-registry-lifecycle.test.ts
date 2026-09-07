@@ -3932,6 +3932,59 @@ describe("subagent registry lifecycle hardening", () => {
     expect(persist).toHaveBeenCalled();
   });
 
+  it("re-announces when a live child's own completion supersedes a wait-expiry publication", async () => {
+    // A wait-expiry publication reported the waiter, not the run. Fencing the
+    // run behind it discarded the child's real ending, so the parent's last
+    // word stayed "still running" for a child that had finished 15m earlier.
+    const entry = createRunEntry({
+      runTimeoutSeconds: 3,
+      startedAt: 2_000,
+      endedAt: 5_000,
+      outcome: { status: "timeout", disposition: "still-running" },
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      cleanupHandled: true,
+      cleanupCompletedAt: 5_000,
+      delivery: { status: "delivered", announcedAt: 5_000, deliveredAt: 5_000 },
+    });
+    const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
+    const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });
+
+    await completeRun(controller, entry, {
+      endedAt: 6_500,
+      outcome: { status: "ok" },
+      triggerCleanup: true,
+    });
+
+    expect(runSubagentAnnounceFlow).toHaveBeenCalled();
+    // The superseding publication carries no still-running marker, so the event
+    // reads as an ended child.
+    expect(entry.execution.outcome?.disposition).toBeUndefined();
+  });
+
+  it("does not re-announce when a second wait also expires on the same live child", async () => {
+    const entry = createRunEntry({
+      runTimeoutSeconds: 3,
+      startedAt: 2_000,
+      endedAt: 5_000,
+      outcome: { status: "timeout", disposition: "still-running" },
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      cleanupHandled: true,
+      cleanupCompletedAt: 5_000,
+      delivery: { status: "delivered", announcedAt: 5_000, deliveredAt: 5_000 },
+    });
+    const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
+    const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });
+
+    await completeRun(controller, entry, {
+      endedAt: 6_500,
+      outcome: { status: "timeout", disposition: "still-running" },
+      triggerCleanup: true,
+    });
+
+    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    expect(entry.delivery?.status).toBe("delivered");
+  });
+
   it("emits ended hook while retrying cleanup after completion was already delivered", async () => {
     const entry = createRunEntry({
       delivery: { status: "delivered", announcedAt: 3_500, deliveredAt: 3_500 },

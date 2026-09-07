@@ -20,6 +20,7 @@ import {
   hasGeneratedMediaCompletionEvent,
   type AgentInternalEventSource,
   type AgentInternalEventStatus,
+  type AgentRunDisposition,
 } from "./internal-event-contract.js";
 import {
   escapeInternalRuntimeContextDelimiters,
@@ -38,6 +39,8 @@ type AgentTaskCompletionInternalEvent = {
   taskLabel: string;
   status: AgentInternalEventStatus;
   statusLabel: string;
+  /** Set by producers that own a child run; absent for sources without one. */
+  disposition?: AgentRunDisposition;
   result: string;
   modelRouteChange?: string;
   attachments?: AgentGeneratedAttachment[];
@@ -207,9 +210,13 @@ function formatTaskCompletionEvent(
     `type: ${announceType}`,
     `task: ${taskLabel}`,
     `status: ${statusLabel}`,
-    "",
-    result,
   );
+  if (event.disposition) {
+    // A machine-readable liveness fact, so a parent never has to infer it from
+    // the status prose (or from journal lines and a worktree reflog).
+    lines.push(`disposition: ${event.disposition}`);
+  }
+  lines.push("", result);
   if (modelRouteChange) {
     lines.push("", modelRouteChange);
   }

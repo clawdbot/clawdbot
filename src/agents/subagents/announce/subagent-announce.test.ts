@@ -240,7 +240,11 @@ function requireAgentCall() {
 describe("subagent wait outcome timing", () => {
   it.each([
     { wait: { status: "ok" }, expected: { status: "ok" } },
-    { wait: { status: "timeout" }, expected: { status: "timeout" } },
+    // The caller supplies a known terminal endedAt below, even for a bare wait.
+    {
+      wait: { status: "timeout" },
+      expected: { status: "timeout", disposition: "exited" },
+    },
     {
       wait: { status: "error", error: "boom" },
       expected: { status: "error", error: "boom" },
