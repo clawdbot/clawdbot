@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { TUI_PTY_FALLBACK_FIXTURE } from "./tui-fallback-fixture-test-support.js";
 import { TUI_PTY_ASSISTANT_FIXTURE_SCRIPT } from "./tui-pty-assistant-fixture-test-support.js";
 import { TUI_PTY_GAP_HISTORY_FIXTURE_SCRIPT } from "./tui-pty-gap-fixture-test-support.js";
 import {
@@ -97,6 +98,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
       const safeThinkingLabel = process.env.OPENCLAW_TUI_PTY_SAFE_THINKING_LABEL;
       const liveReplyHistory: unknown[] = [];
       let liveReplySequence = 0;
+      ${TUI_PTY_FALLBACK_FIXTURE.variables}
       const thinkingLevels = [
         ...(thinkingLabel ? [{ id: "fixture-thinking", label: thinkingLabel }] : []),
         ...(safeThinkingLabel ? [{ id: "fixture-thinking-safe", label: safeThinkingLabel }] : []),
@@ -209,6 +211,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           record("sendChat", opts);
           const runId = opts.runId ?? "run-pty-fixture";
           ${TUI_PTY_RECONNECT_FIXTURE.sendChat}
+          ${TUI_PTY_FALLBACK_FIXTURE.sendChat}
           if (opts.message.startsWith("live reply dedupe proof: ")) {
             const reply = opts.message.endsWith("first") ? "TUI_LIVE_FIRST" : "TUI_LIVE_SECOND";
             const userSequence = ++liveReplySequence;
@@ -582,6 +585,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
 
         async getGatewayStatus() {
           record("getGatewayStatus");
+          ${TUI_PTY_FALLBACK_FIXTURE.getGatewayStatus}
           this.reconnectSessionSubscription();
           this.emitDisconnect();
           return gatewayStatus;

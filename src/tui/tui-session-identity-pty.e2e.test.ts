@@ -74,6 +74,53 @@ afterEach(async () => {
   await disposeActiveTuiFixtures();
 });
 
+it("refreshes the footer only for an accepted fallback destination without reloading history", async () => {
+  const fixture = await startTuiFixture({
+    env: { OPENCLAW_TUI_PTY_MODEL: "gpt-4o" },
+  });
+  try {
+    await fixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+    await fixture.run.write("fallback footer proof\r", { delay: false });
+    const before = await waitForSynchronizedFrameRows(
+      fixture.run,
+      (rows) => rows.some((row) => row.includes("FALLBACK_RUN_ACTIVE")),
+      STARTUP_TIMEOUT_MS,
+    );
+    const refreshCalls = (entries: FixtureLogEntry[]) =>
+      entries.filter((entry) => entry.method === "loadHistory" || entry.method === "listSessions");
+    const initialRefreshes = refreshCalls(await readFixtureLog(fixture.logPath));
+    expect(before.find((row) => row.includes("| session main (Main) |"))).toContain("gpt-4o");
+
+    for (const step of [1, 2, 3]) {
+      await fixture.run.write("/gateway-status\r", { delay: false });
+      const rows = await waitForSynchronizedFrameRows(
+        fixture.run,
+        (frame) => frame.some((row) => row.includes(`FALLBACK_EVENT_DELIVERED_${step}`)),
+        STARTUP_TIMEOUT_MS,
+      );
+      const entries = await readFixtureLog(fixture.logPath);
+      const refreshes = refreshCalls(entries);
+      console.info(
+        "[behavior-evidence] tui-fallback-footer",
+        JSON.stringify({
+          step,
+          before,
+          rows,
+          event: entries.findLast((entry) => entry.method === "fallbackEvent"),
+          initialRefreshes,
+          refreshes,
+        }),
+      );
+      expect(refreshes).toEqual(initialRefreshes);
+      const footer = rows.find((row) => row.includes("| session main (Main) |"));
+      expect(footer).toContain(step === 3 ? "claude-sonnet-4" : "gpt-4o");
+      expect(footer).not.toContain(step === 3 ? "gpt-4o" : "claude-sonnet-4");
+    }
+  } finally {
+    await fixture.cleanup();
+  }
+}, 65_000);
+
 it("submits provider-specific thinking labels with one Enter", async () => {
   const fixture = await startTuiFixture({
     env: {

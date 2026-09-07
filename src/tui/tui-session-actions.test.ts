@@ -1539,6 +1539,7 @@ describe("tui session actions", () => {
           tui,
           state,
           setActivityStatus,
+          updateFooter: vi.fn(),
           loadHistory: () => loadSelectedHistory(),
           streamingWatchdogMs: 100,
         });
@@ -2265,6 +2266,7 @@ describe("tui session actions", () => {
         btw,
         state,
         setActivityStatus,
+        updateFooter: vi.fn(),
         loadHistory: () => {
           const history = actions.loadHistory();
           histories.push(history);

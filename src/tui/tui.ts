@@ -1510,6 +1510,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     state,
     localMode: isLocalMode,
     setActivityStatus,
+    updateFooter,
     refreshSessionInfo,
     loadHistory,
     noteLocalRunId: localRunIds.note,
