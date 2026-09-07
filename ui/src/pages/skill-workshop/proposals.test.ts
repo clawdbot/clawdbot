@@ -105,6 +105,7 @@ function manifest(status: SkillWorkshopProposal["status"] = "pending") {
         createdAt: ISO_NOW,
         updatedAt: ISO_NOW,
         scanState: "clean",
+        revisionHash: REVISION_HASH,
       },
     ],
   };
@@ -371,17 +372,22 @@ describe("Skill Workshop proposal RPCs", () => {
 
   it("lists proposals with the selected agent id and carries it into the initial inspect", async () => {
     const { state, context, request } = createFixture();
+    const inspected = createDeferred<ReturnType<typeof inspectResult>>();
     request.mockImplementation(async (method: string) => {
       if (method === "skills.proposals.list") {
         return manifest();
       }
       if (method === "skills.proposals.inspect") {
-        return inspectResult();
+        return inspected.promise;
       }
       return {};
     });
 
-    await loadSkillWorkshopProposals(state, context);
+    const loading = loadSkillWorkshopProposals(state, context);
+    await vi.waitFor(() => expect(state.skillWorkshopInspectingKey).toBe("proposal-1"));
+    expect(state.skillWorkshopProposals[0]?.revisionHash).toBeNull();
+    inspected.resolve(inspectResult());
+    await loading;
 
     expect(request).toHaveBeenNthCalledWith(1, "skills.proposals.list", {
       agentId: "research",
@@ -391,6 +397,7 @@ describe("Skill Workshop proposal RPCs", () => {
       proposalId: "proposal-1",
     });
     expect(state.skillWorkshopProposals[0]?.kind).toBe("create");
+    expect(state.skillWorkshopProposals[0]?.revisionHash).toBe(REVISION_HASH);
   });
 
   it("reports a failed inspect for a selection retained across refresh", async () => {
@@ -424,6 +431,98 @@ describe("Skill Workshop proposal RPCs", () => {
       ["skills.proposals.inspect", { agentId: "research", proposalId: "proposal-1" }],
     ]);
   });
+
+  it.each(["create", "update"] as const)(
+    "keeps a missing %s draft dismissible beside a usable suggestion",
+    async (kind) => {
+      const missing = {
+        ...manifest().proposals[0],
+        kind,
+        degradedState: "draft-missing",
+        revisionHash: REVISION_HASH,
+      };
+      const valid = { ...manifest().proposals[0], id: "proposal-2" };
+      let status: SkillWorkshopProposal["status"] = "pending";
+      const { state, context, request } = createFixture(
+        {
+          skillWorkshopAgentId: "research",
+          skillWorkshopSelectedKey: "proposal-1",
+          skillWorkshopProposals: [proposal({ body: "Previously available draft." })],
+          skillWorkshopRevisionDraft: "Revise this suggestion.",
+        },
+        {},
+        [
+          "skills.proposals.list",
+          "skills.proposals.inspect",
+          "skills.proposals.apply",
+          "skills.proposals.evaluate",
+          "skills.proposals.requestRevision",
+          "skills.proposals.reject",
+        ],
+      );
+      const validInspect = inspectResult();
+      request.mockImplementation(async (method, payload) => {
+        if (method === "skills.proposals.list") {
+          return { ...manifest(), proposals: [{ ...missing, status }, valid] };
+        }
+        if (method === "skills.proposals.inspect") {
+          expect(payload).toEqual({ agentId: "research", proposalId: "proposal-2" });
+          return {
+            ...validInspect,
+            record: { ...validInspect.record, id: "proposal-2" },
+          };
+        }
+        if (method === "skills.proposals.reject") {
+          expect(payload).toEqual({
+            agentId: "research",
+            proposalId: "proposal-1",
+            expectedRevisionHash: REVISION_HASH,
+          });
+          status = "rejected";
+          return {};
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+
+      await loadSkillWorkshopProposals(state, context);
+      expect(state.skillWorkshopProposals[0]).toMatchObject({
+        degradedState: "draft-missing",
+        revisionHash: REVISION_HASH,
+        body: "",
+        bodyLoaded: false,
+      });
+      expect(state.skillWorkshopError).toBeNull();
+
+      await selectSkillWorkshopProposal(state, context, "proposal-2");
+      expect(state.skillWorkshopSelectedKey).toBe("proposal-2");
+      expect(state.skillWorkshopProposals[1]?.body).toBe(validInspect.content);
+      await selectSkillWorkshopProposal(state, context, "proposal-1");
+      expect(state.skillWorkshopSelectedKey).toBe("proposal-1");
+
+      await runSkillWorkshopLifecycleAction(state, context, "apply", proposalDecision());
+      await expect(runSkillWorkshopEvaluation(state, context, "proposal-1")).resolves.toBe(false);
+      const sendRevision = vi.fn();
+      await expect(
+        requestSkillWorkshopRevision(state, context, "proposal-1", sendRevision),
+      ).resolves.toBeNull();
+      expect(sendRevision).not.toHaveBeenCalled();
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "skills.proposals.list",
+        "skills.proposals.inspect",
+      ]);
+
+      try {
+        await runSkillWorkshopLifecycleAction(state, context, "reject", proposalDecision());
+        expect(state.skillWorkshopError).toBeNull();
+        expect(state.skillWorkshopActionNotice?.label).toBe("Rejected");
+        expect(state.skillWorkshopProposals[0]?.status).toBe("rejected");
+        expect(state.skillWorkshopSelectedKey).toBe("proposal-2");
+        expect(state.skillWorkshopProposals[1]?.body).toBe(validInspect.content);
+      } finally {
+        clearNoticeTimer(state);
+      }
+    },
+  );
 
   it("preserves capped support-file size formatting through the shared helper", async () => {
     const { state, context, request } = createFixture();
@@ -509,10 +608,10 @@ describe("Skill Workshop proposal RPCs", () => {
       expect(request).toHaveBeenNthCalledWith(2, "skills.proposals.list", {
         agentId: "reviewer",
       });
-      expect(request).toHaveBeenNthCalledWith(3, "skills.proposals.inspect", {
-        agentId: "reviewer",
-        proposalId: "proposal-1",
-      });
+      expect(request.mock.calls.map(([calledMethod]) => calledMethod)).toEqual([
+        method,
+        "skills.proposals.list",
+      ]);
     },
   );
 

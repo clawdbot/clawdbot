@@ -607,5 +607,6 @@ function manifestEntryFromRecord(record: SkillProposalRecord): SkillProposalMani
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
     scanState: record.scan.state,
+    revisionHash: hashSkillProposalRevision(record),
   };
 }

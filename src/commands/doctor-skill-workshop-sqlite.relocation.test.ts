@@ -163,6 +163,8 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
     await expect(readSkillProposalRecord(update.id, { env: testState.env })).resolves.toMatchObject(
       {
         status: "pending",
+        createdAt: update.createdAt,
+        updatedAt: update.updatedAt,
         target: {
           skillDir: path.dirname(workshopSkillFile),
           skillFile: workshopSkillFile,

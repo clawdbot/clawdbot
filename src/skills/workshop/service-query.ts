@@ -40,7 +40,7 @@ export async function listSkillProposals(
   const missingDrafts = new Set<string>();
   // The agent collection lease bounds concurrent manifest reconciliation.
   for (const proposal of manifest.proposals) {
-    if (proposal.kind !== "create" || proposal.status !== "pending") {
+    if (proposal.status !== "pending") {
       continue;
     }
     let read: SkillProposalReadResult | null;
