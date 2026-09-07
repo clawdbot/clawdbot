@@ -2,6 +2,7 @@
 // user-visible prompt while preserving model-only hook additions.
 import { describe, expect, it } from "vitest";
 import { stripInternalMetadataForDisplay } from "../../../auto-reply/reply/display-text-sanitize.js";
+import type { Context, UserMessage } from "../../../llm/types.js";
 import {
   extractInternalRuntimeContext,
   hasInternalRuntimeContext,
@@ -11,6 +12,7 @@ import {
   buildCurrentInboundPrompt,
   buildRuntimeContextCustomMessage,
   resolveRuntimeContextPromptParts,
+  prependRuntimeContextForModel,
 } from "./runtime-context-prompt.js";
 
 function withModelPromptBuildContext(params: {
@@ -648,5 +650,53 @@ describe("runtime context prompt submission", () => {
         "Visible answer\n\nMore answer",
       );
     }
+  });
+});
+
+describe("per-request runtime instructions", () => {
+  it.each([false, true])("preserves carrier position and parts (array=%s)", (arrayContent) => {
+    const body =
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nCurrent facts\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+    const image = { type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" };
+    const carrier: UserMessage = {
+      role: "user",
+      timestamp: 2,
+      runtimeContextCarrier: true,
+      content: arrayContent ? [{ type: "text", text: body }, image] : body,
+    };
+    const messages: Context["messages"] = [
+      { role: "user", content: "Question", timestamp: 1 },
+      carrier,
+      { role: "user", content: "Steering", timestamp: 3 },
+    ];
+    const nested =
+      "Date B\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nRuntime event\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+    const projected = prependRuntimeContextForModel(messages, nested);
+    const expected = `<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n${nested}\n\nCurrent facts\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>`;
+    expect(projected).toEqual([
+      messages[0],
+      { ...carrier, content: arrayContent ? [{ type: "text", text: expected }, image] : expected },
+      messages[2],
+    ]);
+    expect(stripInternalRuntimeContext(expected)).toBe("");
+    expect(messages[1]).toBe(carrier);
+    expect(carrier.content).toEqual(arrayContent ? [{ type: "text", text: body }, image] : body);
+    expect(prependRuntimeContextForModel(messages, nested)).toEqual(projected);
+  });
+
+  it("creates a transient carrier when the current turn has no other facts", () => {
+    const messages: Context["messages"] = [{ role: "user", content: "Question", timestamp: 1 }];
+    expect(prependRuntimeContextForModel(messages, "Date A")).toEqual([
+      messages[0],
+      {
+        role: "user",
+        timestamp: 1,
+        runtimeContextCarrier: true,
+        content:
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nDate A\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      },
+    ]);
+    expect(messages).toHaveLength(1);
+    expect(prependRuntimeContextForModel(messages, "")).toBe(messages);
   });
 });
