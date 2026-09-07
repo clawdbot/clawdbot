@@ -509,11 +509,14 @@ const expectedVersion = String(process.env.UPDATE_EXPECT_VERSION || "");
 const baselineVersion = String(process.env.UPDATE_BASELINE_VERSION || "");
 const expectedUrl = String(process.env.UPDATE_TAG_URL || "");
 const expectedOutcome = process.env.UPDATE_EXPECT_OUTCOME || "applied";
+const allowLegacySameVersionApply =
+  process.env.OPENCLAW_INSTALL_ALLOW_LEGACY_SAME_VERSION_APPLY === "1";
 if (!["applied", "already-current"].includes(expectedOutcome)) {
   throw new Error(`unknown expected update outcome ${expectedOutcome}`);
 }
 const noOp = expectedOutcome === "already-current";
-const expectedStatus = noOp ? "skipped" : "ok";
+const legacySameVersionApply = noOp && allowLegacySameVersionApply && payload.status === "ok";
+const expectedStatus = noOp && !legacySameVersionApply ? "skipped" : "ok";
 if (payload.status !== expectedStatus) {
   throw new Error(`expected update status ${expectedStatus}, got ${JSON.stringify(payload.status)}`);
 }
@@ -527,7 +530,7 @@ if ((payload.after?.version ?? null) !== expectedVersion) {
     `expected after.version ${expectedVersion}, got ${JSON.stringify(payload.after?.version)}`,
   );
 }
-if (noOp ? payload.reason !== "already-current" : payload.reason != null) {
+if (noOp && !legacySameVersionApply ? payload.reason !== "already-current" : payload.reason != null) {
   throw new Error(`unexpected update reason ${JSON.stringify(payload.reason)}`);
 }
 const steps = Array.isArray(payload.steps) ? payload.steps : [];
@@ -541,7 +544,7 @@ if (Number(updateStep.exitCode ?? 1) !== 0) {
 if (typeof updateStep.command !== "string" || !updateStep.command.includes(expectedUrl)) {
   throw new Error(`global update step missing expected tgz URL: ${JSON.stringify(updateStep)}`);
 }
-if (noOp) {
+if (noOp && !legacySameVersionApply) {
   if (baselineVersion !== expectedVersion || typeof payload.before?.buildId !== "string" ||
       !payload.before.buildId || payload.after?.buildId !== payload.before.buildId) {
     throw new Error("already-current update changed or omitted installed build identity");
@@ -551,6 +554,9 @@ if (noOp) {
   }
   console.log("Verified already-current no-op: package staged, installed build unchanged, no activation");
   process.exit(0);
+}
+if (legacySameVersionApply && baselineVersion !== expectedVersion) {
+  throw new Error("legacy same-version update changed the installed version");
 }
 const doctorStep = steps.find((step) => step?.name === "openclaw doctor");
 // Every baseline that passes verify_installed_cli implements this contract;

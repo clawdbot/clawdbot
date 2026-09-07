@@ -2046,6 +2046,37 @@ run_update_smoke
     expect(result.status, result.stderr).toBe(expectedExit);
   });
 
+  it("accepts legacy same-version apply only with the frozen-target compatibility flag", () => {
+    const url = "http://candidate.invalid/openclaw.tgz";
+    const payload = {
+      status: "ok",
+      before: { version: "2026.7.33" },
+      after: { version: "2026.7.33" },
+      steps: [
+        { name: "global update", exitCode: 0, command: `npm install ${url}` },
+        { name: "global install swap", exitCode: 0 },
+        { name: "openclaw doctor", exitCode: 0 },
+      ],
+    };
+    const run = (allowLegacy: boolean) =>
+      spawnSync(process.execPath, ["-"], {
+        encoding: "utf8",
+        input: extractInstallSmokeUpdateJsonParser(),
+        env: {
+          ...process.env,
+          UPDATE_JSON: JSON.stringify(payload),
+          UPDATE_EXPECT_VERSION: "2026.7.33",
+          UPDATE_BASELINE_VERSION: "2026.7.33",
+          UPDATE_TAG_URL: url,
+          UPDATE_EXPECT_OUTCOME: "already-current",
+          ...(allowLegacy ? { OPENCLAW_INSTALL_ALLOW_LEGACY_SAME_VERSION_APPLY: "1" } : {}),
+        },
+      });
+
+    expect(run(false).status).toBe(1);
+    expect(run(true).status).toBe(0);
+  });
+
   it.each([
     ["successful", { name: "openclaw doctor", exitCode: 0 }],
     [
@@ -2132,6 +2163,7 @@ run_update_smoke
 
     expect(script).toContain("SMOKE_RUNNER_ENV_ARGS=()");
     for (const envName of [
+      "OPENCLAW_INSTALL_ALLOW_LEGACY_SAME_VERSION_APPLY",
       "OPENCLAW_INSTALL_ALLOW_LEGACY_UPDATE_WARNING",
       "OPENCLAW_INSTALL_SELF_UPDATE_WARNING_FIXED_VERSION",
       "OPENCLAW_INSTALL_SMOKE_COMMAND_TIMEOUT",
@@ -2938,6 +2970,12 @@ node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.pa
           "${{ runner.temp }}/install-smoke-candidate-payload",
         OPENCLAW_INSTALL_SMOKE_GROUP: testCase.group,
       });
+      if (testCase.consumerName === "installer_smoke_update") {
+        expect(run.env).toMatchObject({
+          OPENCLAW_INSTALL_ALLOW_LEGACY_SAME_VERSION_APPLY:
+            "${{ inputs.allow_frozen_target_scenario_omissions && '1' || '0' }}",
+        });
+      }
       expect(run.run).toBe("bash .release-harness/scripts/test-install-sh-docker.sh");
     }
 
