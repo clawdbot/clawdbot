@@ -710,7 +710,7 @@ extensions/mattermost/src/mattermost/interactions.ts	4
 extensions/mattermost/src/mattermost/model-picker.ts	1
 extensions/mattermost/src/mattermost/monitor-reactions.ts	2
 extensions/mattermost/src/mattermost/monitor-slash.ts	1
-extensions/mattermost/src/mattermost/monitor-websocket.ts	2
+extensions/mattermost/src/mattermost/monitor-websocket.ts	1
 extensions/mattermost/src/mattermost/monitor.ts	1
 extensions/mattermost/src/mattermost/slash-commands.ts	1
 extensions/mattermost/src/mattermost/slash-state.ts	5
