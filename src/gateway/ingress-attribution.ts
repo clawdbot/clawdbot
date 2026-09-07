@@ -1,5 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { createDedupeCache } from "../infra/dedupe.js";
 import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import {
   hasForwardedRequestHeaders,
@@ -12,6 +13,11 @@ import {
 export const PROXY_ATTRIBUTION_REQUIRED_REASON = "proxy_attribution_required";
 export const PROXY_ATTRIBUTION_GUIDANCE =
   "Configure gateway.trustedProxies narrowly and make the proxy overwrite or safely rebuild forwarded client headers.";
+// Surface a small fleet's distinct peers while capping hostile unique-source log growth.
+// Each source waits out its own window before warning again, so long-lived Gateways keep
+// reporting later incidents without one noisy peer spending the whole budget.
+const UNATTRIBUTABLE_PROXY_WARNING_WINDOW_MS = 5 * 60_000;
+const UNATTRIBUTABLE_PROXY_WARNING_MAX_SOURCES = 16;
 
 export type GatewayTailscaleIngressMode = "serve" | "funnel";
 
@@ -271,16 +277,34 @@ export type GatewayUnattributableProxyReporter = (
   attribution: Extract<GatewayIngressAttribution, { kind: "unattributable-proxy" }>,
 ) => void;
 
-/** Emits one actionable warning per runtime without attacker-controlled log growth. */
+/** Emits bounded, per-source warnings so one rejected peer cannot hide every later peer. */
 export function createGatewayUnattributableProxyReporter(log: {
   warn: (message: string) => void;
 }): GatewayUnattributableProxyReporter {
-  let emitted = false;
+  const reportedSources = createDedupeCache({
+    ttlMs: UNATTRIBUTABLE_PROXY_WARNING_WINDOW_MS,
+    maxSize: UNATTRIBUTABLE_PROXY_WARNING_MAX_SOURCES,
+  });
+  let windowStartedAt = Date.now();
+  let emittedInWindow = 0;
   return (attribution) => {
-    if (emitted) {
+    const now = Date.now();
+    // The aggregate budget refills on its own schedule. Source suppression is left to the
+    // cache's TTL so a peer warned just before a refill still waits out its own window.
+    if (now < windowStartedAt || now - windowStartedAt >= UNATTRIBUTABLE_PROXY_WARNING_WINDOW_MS) {
+      windowStartedAt = now;
+      emittedInWindow = 0;
+    }
+    if (
+      emittedInWindow >= UNATTRIBUTABLE_PROXY_WARNING_MAX_SOURCES ||
+      // Peek rather than check: continued traffic from a suppressed peer must not keep
+      // refreshing its record, or a persistent source would never be reported again.
+      reportedSources.peek(attribution.remoteAddress, now)
+    ) {
       return;
     }
-    emitted = true;
+    reportedSources.check(attribution.remoteAddress, now);
+    emittedInWindow += 1;
     log.warn(
       `gateway: observed unattributable proxy-shaped traffic from ${attribution.remoteAddress}; Gateway-authenticated routes reject it, while plugin-authenticated routes ignore forwarded claims. ${attribution.guidance}`,
     );
