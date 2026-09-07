@@ -28,9 +28,10 @@ The protected cache warmer has two platform rows: the existing Linux workload an
 
 The published-upgrade PR/main tripwire reuses the reserved `docker-seed-e2e` job,
 so the retained peak envelope stays `4 × 144 + 21 × 200 = 4,776` registrations.
-Removing push path exclusions admits docs-only main tips into the same two
-non-canceling parity slots; the bound still includes both active runs and both
-coalesced successors. It does not assume that every pushed commit starts a run.
+Docs-only main tips remain excluded by the `**/*.md` and `docs/**` push filters.
+Admitted main pushes retain the same two non-canceling parity slots; the bound
+includes both active runs and both coalesced successors. It does not assume
+that every pushed commit starts a run.
 The weekly Update Migration dispatch uses one targeted Docker group per
 supported baseline for native operator state and keeps synthetic cleanup on
 the candidate-relative predecessor. If that predecessor is outside the

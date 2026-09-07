@@ -6,8 +6,10 @@ read_when:
   - You want the order jobs run in and what blocks what
 ---
 
-OpenClaw CI runs on pushes to `main` (Markdown and `docs/**` paths are ignored
-at the trigger), on every non-draft pull request, and on manual dispatch.
+OpenClaw CI runs on pushes to `main` that change a path outside `**/*.md` and
+`docs/**`, on every non-draft pull request, and on manual dispatch. Docs-only
+main pushes skip CI; mixed docs and code pushes still run it. Pull-request docs
+scoping is unchanged.
 Canonical `main` pushes use a two-slot pipeline keyed by run-number parity, so
 at most two integration runs overlap. Each slot is non-canceling and keeps one
 coalesced pending tip: a new merge replaces that slot's older pending run
@@ -72,8 +74,22 @@ the job's uploaded artifacts.
 | `openclaw-performance`           | Separate workflow: daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.6 live lanes                                                                                                                                                                             | Scheduled and manual dispatch                          |
 | `docs-external-links`            | Separate workflow: Docs External Link Audit checks external documentation links with lychee and uploads a report; it reports findings without failing, so it never blocks a pull request                                                                                                                 | Scheduled and manual dispatch                          |
 
-The rare path-triggered `docker-seed-e2e` job selects only the executable
-owners of changed E2E helpers and runs them through one scheduler invocation.
+The `docker-seed-e2e` job selects the executable owners of changed E2E helpers
+and the published-upgrade regression gate through one scheduler invocation.
+The published lane runs `legacy-operator-state` against only `openclaw@latest`
+on affected PRs and every canonical `main` push that runs CI. Docs-only pushes
+are excluded at the workflow trigger; mixed docs and code pushes select the lane.
+It uses `auto-auth`: successful upgrades must replace the running managed
+Gateway through the baseline updater itself. The narrow unfenced-updater
+refusal case instead proves that the restored baseline Gateway can start.
+PR selection includes `src/cli/update-cli/**`, `src/infra/update-*`,
+`src/infra/package-update-*`, `src/plugins/update.ts`, `src/plugins/update-*`,
+`src/commands/doctor*`, `src/commands/doctor/**`, all `src/state/**`, and
+`package.json` (including its packaged schema-version metadata). It also includes
+`scripts/e2e/upgrade-survivor*`, `scripts/e2e/lib/upgrade-survivor/**`, the survivor
+policy and baseline resolver, the Docker planner/catalog, and this gate's CI
+workflow and changed-lane planner. Tests independently pin both state and agent
+schema-version constant owners to the published lane.
 Trusted same-repository pull requests request one 32-vCPU Blacksmith runner with
 main and tail parallelism set to 3. The weighted scheduler still admits only one
 weight-three MCP lane at a time; the larger host supplies package-build and

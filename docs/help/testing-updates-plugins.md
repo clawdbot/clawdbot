@@ -318,7 +318,8 @@ fixture; it does not automatically enable frozen-target scenario omissions.
 See [release qualification](/ci/release-validation#suite-profiles) for the exact
 boundary. The candidate remains the selected package-under-test tarball. The per-PR
 `docker-seed-e2e` tripwire stays limited to `latest` and `legacy-operator-state`
-and also runs on every canonical `main` push.
+and also runs on every canonical `main` push that runs CI. Docs-only pushes
+matching `**/*.md` and `docs/**` skip CI; mixed docs and code pushes still run it.
 
 For manual historical coverage, `last-stable-4` selects four recent stable
 npm-published releases. Exact versions, `all-since-2026.4.23`, and
