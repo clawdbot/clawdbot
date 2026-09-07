@@ -1,5 +1,6 @@
 import type {
   WorkboardBoardSummary,
+  WorkboardAttachment,
   WorkboardCard,
   WorkboardPriority,
   WorkboardStatus,
@@ -9,7 +10,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { TaskSummary } from "../tasks/task-summary.ts";
 
 export * from "@openclaw/workboard-contract";
-export type { WorkboardBoardSummary } from "@openclaw/workboard-contract";
+export type { WorkboardAttachment, WorkboardBoardSummary } from "@openclaw/workboard-contract";
 
 type WorkboardLifecycleState =
   | "unlinked"
@@ -31,6 +32,26 @@ export type WorkboardLifecycle = {
 };
 
 export type WorkboardTaskSummary = TaskSummary;
+
+export type WorkboardStagedAttachmentPreview =
+  | { kind: "image"; dataUrl: string }
+  | { kind: "pdf"; dataUrl: string }
+  | { kind: "text"; text: string }
+  | { kind: "unavailable" };
+
+export type WorkboardStagedAttachment = {
+  id: string;
+  file: File;
+  fileName: string;
+  byteSize: number;
+  mimeType?: string;
+  preview?: WorkboardStagedAttachmentPreview;
+};
+
+export type WorkboardAttachmentPreview = {
+  attachment: WorkboardAttachment;
+  contentBase64: string;
+};
 
 type WorkboardDependencyParent = {
   id: string;
@@ -127,6 +148,11 @@ export type WorkboardUiState = {
   draftSessionKey: string;
   draftTemplateId: WorkboardTemplateId | "";
   draftCommentBody: string;
+  draftAttachments: WorkboardStagedAttachment[];
+  attachmentPreview: WorkboardAttachmentPreview | null;
+  attachmentPreviewRequestId: number;
+  attachmentPreviewTrigger: HTMLButtonElement | null;
+  attachmentBusyIds: Set<string>;
   detailCardId: string | null;
   detailCommentBody: string;
   busyCardIds: Set<string>;

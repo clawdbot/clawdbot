@@ -344,6 +344,11 @@ function createDefaultState(): WorkboardUiState {
     draftSessionKey: "",
     draftTemplateId: "",
     draftCommentBody: "",
+    draftAttachments: [],
+    attachmentPreview: null,
+    attachmentPreviewRequestId: 0,
+    attachmentPreviewTrigger: null,
+    attachmentBusyIds: new Set(),
     detailCardId: null,
     detailCommentBody: "",
     busyCardIds: new Set(),
@@ -372,7 +377,12 @@ export function workboardMutationsReady(state: WorkboardUiState): boolean {
 }
 
 export function workboardHasActiveWrites(state: WorkboardUiState): boolean {
-  return Boolean(state.draftSaving || state.busyCardIds.size || state.capturingSessionKeys.size);
+  return Boolean(
+    state.draftSaving ||
+    state.busyCardIds.size ||
+    state.attachmentBusyIds.size ||
+    state.capturingSessionKeys.size,
+  );
 }
 
 function workboardHasActiveLoad(host: WorkboardHost): boolean {

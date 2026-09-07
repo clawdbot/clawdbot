@@ -1125,6 +1125,224 @@ describe("renderWorkboard", () => {
     expect(state.editingCardId).toBe("card-1");
   });
 
+  it("restores focus to the inspect control when closing an attachment preview", async () => {
+    const { state, container, renderView } = createWorkboardView({
+      client: createWorkboardTestClient({
+        "workboard.cards.attachments.get": { contentBase64: "aGk=" },
+      }),
+    });
+    document.body.append(container);
+    const attachment = {
+      id: "attachment-1",
+      cardId: "card-1",
+      createdAt: 2,
+      fileName: "note.txt",
+      byteSize: 2,
+      mimeType: "text/plain",
+    };
+    const card = createWorkboardCard({ metadata: { attachments: [attachment] } });
+    state.detailCardId = card.id;
+    state.cards = [card];
+    try {
+      renderView();
+
+      const inspect = buttonByText(container, "Inspect note.txt");
+      expect(inspect).not.toBeNull();
+      if (!inspect) {
+        return;
+      }
+      inspect.click();
+      await waitForFast(() => {
+        expect(state.attachmentPreview?.attachment.id).toBe(attachment.id);
+      });
+      renderView();
+      inspect.focus();
+      buttonByLabel(container, "Close attachment preview")?.click();
+
+      expect(state.attachmentPreview).toBeNull();
+      expect(document.activeElement).toBe(inspect);
+    } finally {
+      container.remove();
+    }
+  });
+
+  it("restores focus to a surviving attachment action after deletion", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    const first = {
+      id: "attachment-1",
+      cardId: "card-1",
+      createdAt: 2,
+      fileName: "first.txt",
+      byteSize: 2,
+      mimeType: "text/plain",
+    };
+    const second = {
+      id: "attachment-2",
+      cardId: "card-1",
+      createdAt: 3,
+      fileName: "second.txt",
+      byteSize: 2,
+      mimeType: "text/plain",
+    };
+    const card = createWorkboardCard({ metadata: { attachments: [first, second] } });
+    const updated = createWorkboardCard({
+      id: card.id,
+      metadata: { attachments: [second] },
+    });
+    state.detailCardId = card.id;
+    state.cards = [card];
+    const client = createWorkboardTestClient({
+      "workboard.cards.attachments.delete": { card: updated },
+    });
+    const container = document.createElement("div");
+    const props = createWorkboardRenderProps(host, {
+      client,
+      onRequestUpdate: () => renderInto(container, props),
+    });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    document.body.append(container);
+    try {
+      renderInto(container, props);
+      const deleteButton = buttonByText(container, "Delete first.txt");
+      expect(deleteButton).not.toBeNull();
+      deleteButton?.click();
+
+      await waitForFast(() => {
+        expect(document.activeElement).toBe(buttonByText(container, "Inspect second.txt"));
+      });
+    } finally {
+      confirm.mockRestore();
+      container.remove();
+    }
+  });
+
+  it("does not steal focus after deletion if the operator moved to another control", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    const first = {
+      id: "attachment-1",
+      cardId: "card-1",
+      createdAt: 2,
+      fileName: "first.txt",
+      byteSize: 2,
+      mimeType: "text/plain",
+    };
+    const second = {
+      id: "attachment-2",
+      cardId: "card-1",
+      createdAt: 3,
+      fileName: "second.txt",
+      byteSize: 2,
+      mimeType: "text/plain",
+    };
+    const card = createWorkboardCard({ metadata: { attachments: [first, second] } });
+    const updated = createWorkboardCard({
+      id: card.id,
+      metadata: { attachments: [second] },
+    });
+    state.detailCardId = card.id;
+    state.cards = [card];
+    const pending = createDeferred<{ card: typeof updated }>();
+    const client = createWorkboardTestClient(() => pending.promise);
+    const container = document.createElement("div");
+    const props = createWorkboardRenderProps(host, {
+      client,
+      onRequestUpdate: () => renderInto(container, props),
+    });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    document.body.append(container);
+    try {
+      renderInto(container, props);
+      expectDefined(buttonByText(container, "Delete first.txt"), "delete first attachment").click();
+      const download = expectDefined(
+        buttonByText(container, "Download second.txt"),
+        "download second attachment",
+      );
+      download.focus();
+      expect(document.activeElement).toBe(download);
+
+      pending.resolve({ card: updated });
+      await waitForFast(() => expect(state.attachmentBusyIds.size).toBe(0));
+      expect(document.activeElement).toBe(
+        expectDefined(buttonByText(container, "Download second.txt"), "download second attachment"),
+      );
+    } finally {
+      confirm.mockRestore();
+      container.remove();
+    }
+  });
+
+  it("restores focus to Add files after removing the final staged attachment", async () => {
+    const { state, container, renderView } = createWorkboardView();
+    state.draftOpen = true;
+    state.draftTitle = "Focus removal";
+    state.draftAttachments = [
+      {
+        id: "staged-1",
+        file: new File(["hi"], "only.txt", { type: "text/plain" }),
+        fileName: "only.txt",
+        byteSize: 2,
+        mimeType: "text/plain",
+      },
+    ];
+    document.body.append(container);
+    try {
+      renderView();
+      const remove = buttonByLabel(container, "Remove only.txt");
+      const addFiles = container.querySelector<HTMLInputElement>(".workboard-attachments__input");
+      expect(remove).not.toBeNull();
+      expect(addFiles).not.toBeNull();
+      if (!remove || !addFiles) {
+        return;
+      }
+      remove.focus();
+      remove.click();
+      renderView();
+
+      await waitForFast(() => expect(document.activeElement).toBe(addFiles));
+    } finally {
+      container.remove();
+    }
+  });
+
+  it("keeps draft focus and cancellation available after staged removal", () => {
+    const card = createWorkboardCard({ title: "Focus-safe draft" });
+    const staged = {
+      id: "staged-ambiguous-focus",
+      file: new File(["hi"], "pending.txt", { type: "text/plain" }),
+      fileName: "pending.txt",
+      byteSize: 2,
+      mimeType: "text/plain",
+    };
+    const { state, container, renderView } = createWorkboardView();
+    state.cards = [card];
+    state.draftOpen = true;
+    state.editingCardId = card.id;
+    state.editingCardBase = card;
+    state.draftTitle = card.title;
+    state.draftAttachments = [staged];
+    document.body.append(container);
+    try {
+      renderView();
+      const title = expectDefined(
+        container.querySelector<HTMLInputElement>(".workboard-draft__title"),
+        "draft title",
+      );
+      title.focus();
+      expect(buttonByLabel(container, "Cancel")?.disabled).toBe(false);
+      expectDefined(
+        buttonByLabel(container, "Remove pending.txt"),
+        "remove staged attachment",
+      ).click();
+      expect(document.activeElement).toBe(title);
+    } finally {
+      container.remove();
+    }
+  });
+
   it("passes dialog labels and cancellation back to the plugin draft owner", () => {
     const { host, state } = createLoadedWorkboardState();
     state.draftOpen = true;
