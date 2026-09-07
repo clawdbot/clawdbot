@@ -380,26 +380,37 @@ describe("checkpoint to recovery claim/progress adapter", () => {
   });
 });
 
-async function nativeFixture(platform: "darwin" | "win32" = "win32", enabled = true) {
+async function nativeFixture(
+  platform: "darwin" | "win32" | "linux" = "win32",
+  enabled = true,
+  scope: "user" | "system" = "user",
+) {
   return setupNativeManagerFixture(
     fs.realpathSync(dirs.make("recovery-native-")),
     platform,
     enabled,
+    scope,
   );
 }
 
 describe("early native manager recovery", () => {
   it.each([
-    { platform: "win32", enabled: true },
-    { platform: "darwin", enabled: true },
-    { platform: "win32", enabled: false },
-    { platform: "darwin", enabled: false },
+    { platform: "win32", enabled: true, scope: "user" },
+    { platform: "darwin", enabled: true, scope: "user" },
+    { platform: "win32", enabled: false, scope: "user" },
+    { platform: "darwin", enabled: false, scope: "user" },
+    { platform: "linux", enabled: true, scope: "user" },
+    { platform: "linux", enabled: false, scope: "user" },
+    { platform: "linux", enabled: true, scope: "system" },
+    { platform: "linux", enabled: false, scope: "system" },
   ] as const)(
-    "preserves original $platform enabled=$enabled state through ambiguous mutation, handoff, reclaim and exact replay",
-    async ({ platform, enabled }) => {
-      const f = await nativeFixture(platform, enabled);
+    "preserves original $platform scope=$scope enabled=$enabled state through ambiguous mutation, handoff, reclaim and exact replay",
+    async ({ platform, enabled, scope }) => {
+      const f = await nativeFixture(platform, enabled, scope);
       let record = await f.bind();
       const original = record.nativeManager!.original;
+      expect(record.nativeManager!.identity).toEqual(f.identity);
+      expect(original).toEqual(f.original); // Enable policy is independent of actual load state.
       const suppressed = { ...original, enabled: false };
       const effectId = randomUUID();
       record = (

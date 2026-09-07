@@ -18,6 +18,23 @@ const binding = {
 export const RecoveryNativeIdentitySchema = z.discriminatedUnion("platform", [
   z.strictObject({ ...binding, platform: z.literal("win32"), taskName: text }),
   z.strictObject({ ...binding, platform: z.literal("darwin"), domain: text, label: text }),
+  // Scope and the daemon-observed user-manager UID are identity, not defaults
+  // derived from the updater process or enable policy. System scope has no UID.
+  z.discriminatedUnion("scope", [
+    z.strictObject({
+      ...binding,
+      platform: z.literal("linux"),
+      scope: z.literal("user"),
+      unitName: text,
+      uid: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    }),
+    z.strictObject({
+      ...binding,
+      platform: z.literal("linux"),
+      scope: z.literal("system"),
+      unitName: text,
+    }),
+  ]),
 ]);
 export const RecoveryNativeFactsSchema = z
   .strictObject({

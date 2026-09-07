@@ -10,8 +10,9 @@ import { bindUpdateRecoveryPreimages } from "./update-run-recovery-preimage.js";
 import { beginUpdateRecovery } from "./update-run-recovery.js";
 export async function setupNativeManagerFixture(
   root: string,
-  platform: "darwin" | "win32",
+  platform: "darwin" | "win32" | "linux",
   enabled: boolean,
+  scope: "user" | "system" = "user",
 ) {
   const options = { env: { HOME: root, OPENCLAW_STATE_DIR: root, OPENCLAW_PROFILE: "isolated" } };
   const fence = { assertCurrent() {} };
@@ -50,7 +51,11 @@ export async function setupNativeManagerFixture(
   const identity: UpdateRecoveryNativeIdentity =
     platform === "win32"
       ? { ...common, platform, taskName: "\\OpenClaw-isolated" }
-      : { ...common, platform, domain: "gui/501", label: "ai.openclaw.isolated" };
+      : platform === "darwin"
+        ? { ...common, platform, domain: "gui/501", label: "ai.openclaw.isolated" }
+        : scope === "user"
+          ? { ...common, platform, scope, unitName: "openclaw-isolated.service", uid: 0 }
+          : { ...common, platform, scope, unitName: "openclaw-isolated.service" };
   let facts: UpdateRecoveryNativeFacts = {
     exists: true,
     enabled,

@@ -14,6 +14,13 @@ import {
   recordUpdateRunStep,
 } from "./update-run-ledger.js";
 import { defineUpdateRecoveryArtifactTests } from "./update-run-recovery-after-image.test-support.js";
+import { RecoveryNativeIdentitySchema } from "./update-run-recovery-native-schema.js";
+import {
+  recordUpdateRecoveryNativeIntent,
+  recordUpdateRecoveryNativeObservation,
+  type UpdateRecoveryNativeIdentity,
+} from "./update-run-recovery-native.js";
+import { setupNativeManagerFixture } from "./update-run-recovery-native.test-support.js";
 import { defineUpdateRecoveryPackageTests } from "./update-run-recovery-package.test-support.js";
 import {
   acceptUpdateRecoveryHandoff,
@@ -678,3 +685,85 @@ describe("durable update recovery", () => {
 
 defineUpdateRecoveryArtifactTests();
 defineUpdateRecoveryPackageTests();
+
+describe("systemd native identity binding", () => {
+  afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
+    tempDirs.cleanup();
+  });
+  it.each(["scope", "uid", "unit", "unit-space"] as const)(
+    "rejects a different systemd %s during pending readback without advancing its record",
+    async (field) => {
+      const f = await setupNativeManagerFixture(
+        fs.realpathSync(tempDirs.make("recovery-systemd-")),
+        "linux",
+        true,
+      );
+      let record = await f.bind();
+      if (f.identity.platform !== "linux" || f.identity.scope !== "user") {
+        throw new Error("Expected user-manager fixture");
+      }
+      const target = { ...f.original, stopped: true };
+      const effectId = randomUUID();
+      record = (
+        await recordUpdateRecoveryNativeIntent(
+          record,
+          { effectId, action: "stop", target, observe: f.observe },
+          f.fence,
+          f.options,
+        )
+      ).record;
+      const { uid: _uid, ...system } = f.identity;
+      const identity: UpdateRecoveryNativeIdentity =
+        field === "scope"
+          ? { ...system, scope: "system" }
+          : field === "uid"
+            ? { ...f.identity, uid: 1001 }
+            : {
+                ...f.identity,
+                unitName: f.identity.unitName + (field === "unit" ? "-other" : " "),
+              };
+      f.setFacts(target);
+      await expect(
+        recordUpdateRecoveryNativeObservation(
+          record,
+          effectId,
+          async () => ({ identity, facts: target }),
+          f.fence,
+          f.options,
+        ),
+      ).rejects.toThrow();
+      expect(loadUpdateRecovery(record.runId, f.options)).toEqual(record);
+      const observed = await recordUpdateRecoveryNativeObservation(
+        record,
+        effectId,
+        f.observe,
+        f.fence,
+        f.options,
+      );
+      expect(observed.status).toBe("after");
+      expect(observed.record.nativeManager!.effects.at(-1)?.state).toBe("observed");
+    },
+  );
+
+  it("requires an explicit numeric user-manager UID and rejects one on system scope", async () => {
+    const f = await setupNativeManagerFixture(
+      fs.realpathSync(tempDirs.make("recovery-systemd-")),
+      "linux",
+      true,
+    );
+    if (f.identity.platform !== "linux" || f.identity.scope !== "user") {
+      throw new Error("Expected user-manager fixture");
+    }
+    const { uid: _uid, ...withoutUid } = f.identity;
+    for (const uid of [undefined, null, "0", -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(RecoveryNativeIdentitySchema.safeParse({ ...withoutUid, uid }).success).toBe(false);
+    }
+    expect(RecoveryNativeIdentitySchema.safeParse({ ...f.identity, scope: "system" }).success).toBe(
+      false,
+    );
+    expect(RecoveryNativeIdentitySchema.safeParse({ ...withoutUid, scope: "system" }).success).toBe(
+      true,
+    );
+  });
+});
