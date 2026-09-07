@@ -1,5 +1,5 @@
 /**
- * Durable top-level requester settle wake delivery.
+ * Durable requester settle wake delivery.
  *
  * Lifecycle owns the persisted outbox state on retained subagent run rows;
  * this module selects a drained wave and delivers its synthesized wake.
@@ -76,9 +76,9 @@ function buildRequesterSettleWakeMessage(params: {
   return [
     "[Subagent Context] Every subagent spawned from this session has now settled — none are still running or awaiting completion delivery.",
     "[Subagent Context] Do not keep waiting or call sessions_yield again for this batch; no further completion events will arrive.",
-    "[Subagent Context] Review the completion results and send your consolidated final answer to the user now.",
+    "[Subagent Context] Child settlement ends this batch, not necessarily the original user request. Review the results against the requested outcome and continue any remaining in-scope work before replying.",
     params.requireVisibleReply
-      ? "[Subagent Context] Child completion delivery is internal; the original user request still requires your visible final answer."
+      ? "[Subagent Context] Child completion delivery is internal; the original user request still requires your visible final answer only after the requested outcome is complete or genuinely blocked."
       : `[Subagent Context] Reply ONLY: ${SILENT_REPLY_TOKEN} only if you already delivered the consolidated final answer for this batch.`,
     ...(params.modelRouteChange
       ? [
@@ -178,7 +178,7 @@ function readSharedBatchState(batch: readonly SubagentRunRecord[]): RequesterSet
 }
 
 /**
- * Wakes a registry-less top-level requester once its last spawned child
+ * Wakes a top-level or explicitly yielded nested requester once its last child
  * reaches terminal settle. Durable state transitions happen synchronously
  * through lifecycle-owned callbacks before and after every async delivery.
  */
@@ -332,15 +332,18 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
   const requesterYieldedAfterDelivery =
     selectedState.afterRequesterYield === true ||
     (selectedState.requesterYieldBatch === true && selectedState.rearmGeneration !== undefined);
+  const requesterDepth = getSubagentDepthFromSessionStore(requesterSessionKey, {
+    cfg,
+    agentId: requesterAgentId,
+  });
+  // Explicit yield transfers continuation to this batch at every depth.
+  // Ordinary nested waves remain owned by the descendant-settle path.
   if (
     requiredSettled.length === 0 ||
     (requiredSettled.length < 2 &&
       !hasUndeliveredRequiredCompletion &&
       !requesterYieldedAfterDelivery) ||
-    getSubagentDepthFromSessionStore(requesterSessionKey, {
-      cfg,
-      agentId: requesterAgentId,
-    }) >= 1
+    (!requesterYieldedAfterDelivery && requesterDepth >= 1)
   ) {
     completeBatch(settledBatch, selectedState.rearmGeneration);
     return false;
@@ -475,9 +478,9 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
         requesterOrigin: requesterSessionOrigin,
         directOrigin,
         sourceSessionKey: currentSettledEntry.childSessionKey,
-        sourceTool: "subagent_announce",
+        sourceTool: "subagent_settle",
         targetRequesterSessionKey: requesterSessionKey,
-        requesterIsSubagent: false,
+        requesterIsSubagent: requesterDepth >= 1,
         expectsCompletionMessage: false,
         requireDirectDelivery: true,
         ...(requesterYieldedAfterDelivery ? { requireVisibleReply: true } : {}),

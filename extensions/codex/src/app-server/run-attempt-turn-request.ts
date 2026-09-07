@@ -8,6 +8,7 @@ import {
   utf8JsonByteLength,
 } from "./attempt-diagnostics.js";
 import { assertCodexSessionRuntimeOwnership } from "./binding-connection.js";
+import { prepareCodexWorkspaceReferences } from "./client-runtime.js";
 import { isCodexAppServerIndeterminateRequestCancellationError } from "./client.js";
 import { resolveCodexExplicitSkillInputs } from "./explicit-skill-input.js";
 import { assertCodexTurnStartResponse } from "./protocol-validators.js";
@@ -18,8 +19,10 @@ import {
   withCodexAppServerFastModeServiceTier,
 } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
+import { joinPresentSections } from "./run-attempt-state.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { buildTurnStartParams } from "./thread-lifecycle.js";
+import { recordCodexTrajectoryContext } from "./trajectory.js";
 import { buildCodexUserPromptMessage } from "./transcript-mirror.js";
 
 export async function prepareCodexAttemptTurnRequest(
@@ -98,6 +101,15 @@ export async function prepareCodexAttemptTurnRequest(
     error.name = "AbortError";
     throw error;
   };
+  const prepareWorkspaceReferences = () => {
+    const references = prepareCodexWorkspaceReferences(
+      resourceState.client,
+      resourceState.thread.threadId,
+      workspaceBootstrapContext.promptContext,
+    );
+    prompt.refreshWorkspaceReferences(references.include);
+    return references;
+  };
   const startCodexTurn = async (): Promise<CodexTurnStartResponse> => {
     const activeTurnRoute = (await ensureCurrentThreadRoute()) as {
       armTurn(): void;
@@ -114,27 +126,49 @@ export async function prepareCodexAttemptTurnRequest(
       runtimeParams,
     );
     connection.mutable.pluginAppServer = turnAppServer;
-    const turnStartParams = buildTurnStartParams(runtimeParams, {
-      threadId: resourceState.thread.threadId,
-      cwd: resourceState.codexExecutionCwd,
-      appServer: turnAppServer,
-      promptText: turnState.codexTurnPromptText,
-      explicitSkillInputs,
-      sandboxPolicy: resourceState.codexSandboxPolicy,
-      environmentSelection: resourceState.codexEnvironmentSelection,
-      clearInheritedServiceTier: resourceState.thread.clearInheritedServiceTier,
-      ...(usesSupervisionConnection
-        ? {}
-        : { model: resourceState.thread.model, modelProvider: resourceState.thread.modelProvider }),
-      turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
-      skillsCollaborationInstructions: context.skillsCollaborationInstructions,
-      memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
-      preserveNativeTurnSettings: usesSupervisionConnection,
-      sessionStatusAvailable: toolBridge.availableTools.some(
-        (tool) => tool.name === "session_status",
-      ),
-    });
+    const references = prepareWorkspaceReferences();
+    const turnStartParams = buildTurnStartParams(
+      {
+        ...runtimeParams,
+        images: [...prompt.contextImages, ...(runtimeParams.images ?? [])],
+      },
+      {
+        threadId: resourceState.thread.threadId,
+        cwd: resourceState.codexExecutionCwd,
+        appServer: turnAppServer,
+        promptText: turnState.codexTurnPromptText,
+        explicitSkillInputs,
+        sandboxPolicy: resourceState.codexSandboxPolicy,
+        environmentSelection: resourceState.codexEnvironmentSelection,
+        clearInheritedServiceTier: resourceState.thread.clearInheritedServiceTier,
+        ...(usesSupervisionConnection
+          ? {}
+          : {
+              model: resourceState.thread.model,
+              modelProvider: resourceState.thread.modelProvider,
+            }),
+        turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
+        skillsCollaborationInstructions: context.skillsCollaborationInstructions,
+        memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
+        preserveNativeTurnSettings: usesSupervisionConnection,
+        messageToolAvailable: toolBridge.availableTools.some((tool) => tool.name === "message"),
+        requireExplicitMessageTarget: attemptTools.requireExplicitMessageTarget,
+        sessionStatusAvailable: toolBridge.availableTools.some(
+          (tool) => tool.name === "session_status",
+        ),
+      },
+    );
     codexModelCallDiagnostics.setRequestPayloadBytes(utf8JsonByteLength(turnStartParams));
+    recordCodexTrajectoryContext(resources.trajectoryRecorder, {
+      attempt: params,
+      cwd: connection.effectiveCwd,
+      developerInstructions: joinPresentSections(
+        buildRenderedCodexDeveloperInstructions(),
+        attemptTools.configuredMcp?.diagnosticNotice,
+      ),
+      prompt: turnState.codexTurnPromptText,
+      tools: toolBridge.availableSpecs,
+    });
     state.latestStartupErrorNotification = undefined;
     state.rateLimitsRevisionBeforeLastTurnStart = readCodexRateLimitsRevision(resourceState.client);
     activeTurnRoute.armTurn();
@@ -155,9 +189,12 @@ export async function prepareCodexAttemptTurnRequest(
         await resourceState.client.request("turn/start", turnStartParams, {
           timeoutMs: params.timeoutMs,
           signal: runAbortController.signal,
+          assertCurrent: connection.assertCurrent,
         }),
       );
       acceptedTurnId = startedTurn.turn.id;
+      connection.assertCurrent();
+      references.accepted();
       throwIfTurnStartAcceptedAfterAbort();
       return startedTurn;
     } catch (error) {
@@ -206,6 +243,7 @@ export async function prepareCodexAttemptTurnRequest(
       );
     }
   }
+  prepareWorkspaceReferences();
   const buildLlmInputEvent = () => ({
     runId: params.runId,
     sessionId: params.sessionId,
@@ -218,7 +256,7 @@ export async function prepareCodexAttemptTurnRequest(
     systemPrompt: buildRenderedCodexDeveloperInstructions(),
     prompt: turnState.codexTurnPromptText,
     historyMessages: prompt.codexModelInputHistoryMessages,
-    imagesCount: params.images?.length ?? 0,
+    imagesCount: prompt.contextImages.length + (params.images?.length ?? 0),
     tools,
   });
   return { codexModelCallDiagnostics, startCodexTurn, buildLlmInputEvent };

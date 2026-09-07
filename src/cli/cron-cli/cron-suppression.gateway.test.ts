@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isRich, theme } from "../../../packages/terminal-core/src/theme.js";
+import { resolveCronDeliveryPlan } from "../../cron/delivery-plan.js";
 import { dispatchCronDelivery } from "../../cron/isolated-agent/delivery-dispatch.js";
 import { CronService, type CronEvent } from "../../cron/service.js";
 import { createNoopLogger } from "../../cron/service.test-harness.js";
@@ -146,6 +147,7 @@ describe("cron CLI delivery suppression readback", () => {
                     error: new Error("fixture delivery route unavailable"),
                   }
                 : { ok: true, mode: "explicit", channel: "telegram", to: "123" },
+            deliveryPlan: resolveCronDeliveryPlan(job),
             deliveryRequested: phase !== "not-requested",
             undeliveredRunStatus: "ok",
             spawnOnlyHandoff: false,

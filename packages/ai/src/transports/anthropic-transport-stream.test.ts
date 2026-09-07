@@ -11,6 +11,7 @@ import {
   getAiTransportHost,
   type AiInlineContentBlock,
 } from "../host.js";
+import { createZeroUsage } from "../usage.test-support.js";
 import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { createCompactionCapture } from "./anthropic-compaction-replay.js";
 import { resolveCompactionReplayPressure } from "./provider-compaction-replay.js";
@@ -313,14 +314,7 @@ function makeSonnet5PrefillContext(): AnthropicStreamContext {
         api: "anthropic-messages",
         provider: "anthropic",
         model: "claude-sonnet-5",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsage(),
         stopReason: "stop",
         timestamp: 1,
       },
@@ -692,14 +686,7 @@ describe("anthropic transport stream", () => {
       api: "anthropic-messages",
       provider: "anthropic",
       model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createZeroUsage(),
       stopReason: "stop",
       timestamp: 1,
     };
@@ -2831,9 +2818,11 @@ describe("anthropic transport stream", () => {
             parameters: {
               type: "object",
               properties: {
-                query: { type: "string" },
+                query: { $ref: "#/$defs/Query" },
               },
+              $defs: { Query: { type: "string", minLength: 1 } },
               required: ["query"],
+              additionalProperties: false,
             },
           },
         ],
@@ -2847,8 +2836,12 @@ describe("anthropic transport stream", () => {
     expect(tools).toHaveLength(1);
     const tool = requireRecord(tools[0], "tool");
     expect(tool.name).toBe("good_plugin_tool");
-    expect(requireRecord(tool.input_schema, "input schema").properties).toEqual({
-      query: { type: "string" },
+    expect(tool.input_schema).toEqual({
+      type: "object",
+      properties: { query: { $ref: "#/$defs/Query" } },
+      $defs: { Query: { type: "string", minLength: 1 } },
+      required: ["query"],
+      additionalProperties: false,
     });
   });
 
@@ -3523,14 +3516,7 @@ describe("anthropic transport stream", () => {
             model: "claude-sonnet-4-6",
             stopReason: "toolUse",
             timestamp: 0,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             content: [{ type: "toolCall", id: "tool_1", name: "screenshot", arguments: {} }],
           },
           {

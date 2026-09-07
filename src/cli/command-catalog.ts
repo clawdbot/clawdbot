@@ -17,9 +17,6 @@ export type CliPluginRegistryScope =
   | "memory"
   | "sandbox-backends"
   | "sandbox-management";
-export type CliPluginRegistryPolicy = {
-  scope: CliPluginRegistryScope;
-};
 export type CliNetworkProxyPolicy = "default" | "bypass";
 type CliNetworkProxyPolicyResolver =
   | CliNetworkProxyPolicy
@@ -45,7 +42,9 @@ export type CliCommandPathPolicy = {
   configGuard: CliConfigGuardPolicy;
   stateStoreGuard: "run" | "skip";
   loadPlugins: CliCommandPluginLoadPolicy;
-  pluginRegistry: CliPluginRegistryPolicy;
+  pluginRegistry: {
+    scope: CliPluginRegistryScope;
+  };
   ownsProtocolStdout: boolean;
   hideBanner: boolean;
   ensureCliPath: boolean;
@@ -58,7 +57,6 @@ export type CliCommandCatalogEntry = {
   policy?: Partial<CliCommandPathPolicy>;
   route?: {
     id: CliRoutedCommandId;
-    preloadPlugins?: boolean;
   };
 };
 
@@ -341,6 +339,10 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { ...PASSIVE_STARTUP_POLICY },
     route: { id: "models-status" },
   },
+  // Default-policy children must remain distinct from the passive parent action.
+  ...["refresh", "set", "set-image", "aliases", "fallbacks", "image-fallbacks", "scan"].map(
+    (subcommand): CliCommandCatalogEntry => ({ commandPath: ["models", subcommand] }),
+  ),
   { commandPath: ["models", "auth"], policy: { stateStoreGuard: "run" } },
   {
     commandPath: ["models", "accounts"],

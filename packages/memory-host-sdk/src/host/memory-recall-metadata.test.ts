@@ -69,19 +69,22 @@ describe("memory recall metadata", () => {
       insertChunk.run("good", "MEMORY.md", 1, 1, "h", "t");
       insertProvenance.run("good", "owner");
       insertChunk.run("neutral", "MEMORY.md", 2, 2, "neutral", "neutral");
-      expect(readMemoryRecallMetadata(db, ["neutral"]).get("neutral")).toEqual({
+      expect(() => insertMetadata.run("good", 11, null, null)).toThrow();
+      insertMetadata.run("good", 9, "when flying", "github.com/openclaw/openclaw");
+      const metadata = readMemoryRecallMetadata(db, ["neutral", "good", "good", "unknown"]);
+      expect([...metadata.keys()].toSorted()).toEqual(["good", "neutral"]);
+      expect(metadata.get("neutral")).toEqual({
         id: "neutral",
         importance: null,
         triggers: null,
         project_key: null,
       });
-      expect(() => insertMetadata.run("good", 11, null, null)).toThrow();
-      insertMetadata.run("good", 9, "when flying", "github.com/openclaw/openclaw");
-      expect(readMemoryRecallMetadata(db, ["good"]).get("good")).toEqual({
+      expect(metadata.get("good")).toEqual({
         id: "good",
         importance: 9,
         triggers: "when flying",
         project_key: "github.com/openclaw/openclaw",
+        provenance: { originClass: "owner", sessionKind: "interactive", observedAt: 2 },
       });
       expect(readCuratedMemoryTriggerCandidates(db, 10)).toEqual([
         {

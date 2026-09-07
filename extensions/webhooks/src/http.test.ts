@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { createRuntimeTaskFlow } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { createTaskFlowWebhookRequestHandler, type TaskFlowWebhookTarget } from "./http.js";
 
@@ -114,10 +114,6 @@ function parseJsonBody(res: { body?: string | Buffer | null }) {
   return JSON.parse(String(res.body ?? ""));
 }
 
-afterEach(() => {
-  vi.clearAllMocks();
-});
-
 describe("createTaskFlowWebhookRequestHandler", () => {
   it("rejects requests with the wrong secret", async () => {
     const { handler, target } = createHandler();
@@ -152,37 +148,16 @@ describe("createTaskFlowWebhookRequestHandler", () => {
     };
     const handler = createHandlerWithTarget(target);
 
-    const first = await dispatchJsonRequest({
-      handler,
-      path: target.path,
-      secret: "shared-secret",
-      body: {
-        action: "list_flows",
-      },
-    });
-    const second = await dispatchJsonRequest({
-      handler,
-      path: target.path,
-      secret: "shared-secret",
-      body: {
-        action: "list_flows",
-      },
-    });
-    const third = await dispatchJsonRequest({
-      handler,
-      path: target.path,
-      secret: "rotated-secret",
-      body: {
-        action: "list_flows",
-      },
-    });
-
-    expect([first, second, third].map((response) => response.statusCode)).toEqual([401, 401, 401]);
-    expect([first, second, third].map((response) => response.body)).toEqual([
-      "unauthorized",
-      "unauthorized",
-      "unauthorized",
-    ]);
+    for (const secret of ["shared-secret", "shared-secret", "rotated-secret"]) {
+      const response = await dispatchJsonRequest({
+        handler,
+        path: target.path,
+        secret,
+        body: { action: "list_flows" },
+      });
+      expect(response.statusCode).toBe(401);
+      expect(response.body).toBe("unauthorized");
+    }
   });
 
   it("accepts a resolved secret that has env-template syntax", async () => {

@@ -55,6 +55,6 @@ export function createCliTimeoutError(
       : `CLI exceeded timeout (${cliTimeout.timeoutSeconds}s) and was terminated.`,
     "timeout",
     context,
-    { code, cliTimeout },
+    { code, cliTimeout, timeout: { timeoutPhase: "provider" } },
   );
 }

@@ -80,7 +80,7 @@ export type WorkerWorkspaceCommand = {
   seed?: NodeWorkerWorkspaceSeedInput;
 };
 
-export type WorkerWorkspaceSyncRequest = {
+export type WorkerLocalWorkspaceSyncRequest = {
   localPath: string;
   sessionId: string;
   generation: number;
@@ -89,13 +89,62 @@ export type WorkerWorkspaceSyncRequest = {
   projectKey?: string;
 };
 
-export type WorkerWorkspaceSyncResult = {
-  mode: "git" | "plain";
-  remoteWorkspaceDir: string;
-  manifestRef: string;
+type WorkerRepositoryCheckpointPayload = {
+  stagingRoot: string;
+  baseManifestRaw: string;
+  currentManifestRaw: string;
+  baseManifestRef: string;
+  currentManifestRef: string;
+  publicationStagingRoot?: string;
+  publicationDigest?: string;
 };
 
-export type WorkerWorkspaceReconcileRequest = {
+type WorkerRepositoryCheckpointPreparation = {
+  verify(): Promise<void>;
+  publish(): Promise<unknown>;
+  discard(): Promise<void>;
+};
+
+type WorkerRepositoryWorkspaceSource = {
+  kind: "repository";
+  url: string;
+  ref?: string;
+  branch: string;
+  baseCommit?: string;
+  gitToken?: string;
+  runSetupScript?: boolean;
+  checkpoint?: Pick<
+    WorkerRepositoryCheckpointPayload,
+    | "stagingRoot"
+    | "baseManifestRaw"
+    | "currentManifestRaw"
+    | "publicationStagingRoot"
+    | "publicationDigest"
+  >;
+};
+
+export type WorkerWorkspaceSyncRequest = {
+  sessionId: string;
+  generation: number;
+  gitAuthor?: { name?: string; email?: string };
+  source: { kind: "local"; path: string; projectKey?: string } | WorkerRepositoryWorkspaceSource;
+};
+
+export type WorkerWorkspaceSyncResult =
+  | {
+      mode: "git" | "plain";
+      remoteWorkspaceDir: string;
+      manifestRef: string;
+    }
+  | {
+      mode: "repository";
+      remoteWorkspaceDir: string;
+      manifestRef: string;
+      baseCommit: string;
+      baseManifestRef: string;
+    };
+
+export type WorkerLocalWorkspaceReconcileRequest = {
   localPath: string;
   remoteWorkspaceDir: string;
   baseManifestRef: string;
@@ -104,6 +153,25 @@ export type WorkerWorkspaceReconcileRequest = {
     ref: string;
     record(ref: string): void;
   };
+};
+
+export type WorkerWorkspaceReconcileRequest = {
+  remoteWorkspaceDir: string;
+  baseManifestRef: string;
+  source:
+    | {
+        kind: "local";
+        path: string;
+        journal: WorkerWorkspaceReconciliationJournalAdapter;
+        stagedResult?: WorkerLocalWorkspaceReconcileRequest["stagedResult"];
+      }
+    | {
+        kind: "repository";
+        referenceManifestRef: string;
+        prepareCheckpoint(
+          payload: WorkerRepositoryCheckpointPayload,
+        ): Promise<WorkerRepositoryCheckpointPreparation>;
+      };
 };
 
 export type WorkerWorkspaceReconcileResult = {

@@ -76,6 +76,9 @@ openclaw onboard --non-interactive \
 
 ## Built-in catalog
 
+Setup saves connection settings and aliases without copying generated catalog rows into your config.
+Explicit `models.mode: "replace"` keeps catalog seeding enabled; custom model rows stay intact.
+
 | Model ref                                              | Name           | Input        | Context | Max output | Thinking     |
 | ------------------------------------------------------ | -------------- | ------------ | ------- | ---------- | ------------ |
 | `fireworks/accounts/fireworks/routers/glm-5p2-fast`    | GLM 5.2 Fast   | text         | 256,000 | 256,000    | On (default) |

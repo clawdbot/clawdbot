@@ -8,14 +8,17 @@ import {
   readdirSync,
   realpathSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { availableParallelism } from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { minimatch } from "minimatch";
 import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createMacScriptTest } from "./mac-script-fixture.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scriptPath = "scripts/package-mac-app.sh";
@@ -24,10 +27,12 @@ const swiftScriptPath = "scripts/lib/mac-swift-build.sh";
 describe.skipIf(process.platform === "win32" || availableParallelism() < 2)(
   "parallel macOS Swift build ownership",
   () => {
-    it.each(["success", "failure", "wrong-source", "cancel", "cleanup-failure"])(
+    const test = createMacScriptTest();
+    test.for(["success", "failure", "wrong-source", "cancel", "cleanup-failure"])(
       "joins architecture workers and preserves assembly safety: %s",
-      async (mode) => {
-        const root = tempDirs.make("openclaw-swift-parallel-");
+      { timeout: 15_000 },
+      async (mode, { mac, onTestFinished }) => {
+        const root = mac.createTempDir("openclaw-swift-parallel-");
         const stage = path.join(root, "stage");
         const scripts = path.join(root, "scripts/lib");
         mkdirSync(scripts, { recursive: true });
@@ -78,6 +83,7 @@ fs.writeFileSync(path.join(root, 'pid-' + arch), String(child.pid));
 const exited = new Promise(resolve => child.on('exit', resolve));
 process.on('SIGTERM', async () => { child.kill(); await exited; event('stopped:' + arch); process.exit(143); });
 fs.writeFileSync(path.join(root, 'ready-' + arch), 'ready');
+console.log('ready:' + arch);
 const deadline = Date.now() + 5000;
 while (!['arm64', 'x86_64'].every(a => fs.existsSync(path.join(root, 'ready-' + a)))) {
   if (Date.now() > deadline) throw new Error('architecture barrier did not open');
@@ -127,20 +133,32 @@ touch "$ROOT_DIR/assembled"
         child.stderr.on("data", (chunk: Buffer) => {
           stderr += chunk.toString();
         });
-        child.stdout.resume();
-        const closed = new Promise<number | null>((resolve) => {
-          child.on("close", resolve);
+        const closed = mac.lifetime.track(
+          new Promise<number | null>((resolve, reject) => {
+            child.once("error", reject);
+            child.once("close", resolve);
+          }),
+        );
+        const output = createInterface({ input: child.stdout });
+        const ready = new Set<string>();
+        output.on("line", (line) => {
+          if (line === "ready:arm64" || line === "ready:x86_64") {
+            ready.add(line);
+            if (mode === "cancel" && ready.size === 2) {
+              child.kill("SIGTERM");
+            }
+          }
         });
-        if (mode === "cancel") {
-          await expect
-            .poll(
-              () =>
-                existsSync(path.join(root, "ready-arm64")) &&
-                existsSync(path.join(root, "ready-x86_64")),
-            )
-            .toBe(true);
-          child.kill("SIGTERM");
-        }
+        onTestFinished(async () => {
+          try {
+            if (child.exitCode === null && child.signalCode === null) {
+              child.kill("SIGTERM");
+            }
+            await closed;
+          } finally {
+            output.close();
+          }
+        });
         const code = await closed;
         expect(code, stderr).toBe(
           mode === "success" ? 0 : mode === "cancel" ? 143 : mode === "cleanup-failure" ? 2 : 1,
@@ -166,7 +184,6 @@ touch "$ROOT_DIR/assembled"
           ).toBe(mode === "cleanup-failure");
         }
       },
-      15_000,
     );
   },
 );
@@ -332,7 +349,8 @@ function makePlist(): string {
 }
 
 function runHelper(script: string, shell = "bash") {
-  return spawnSync(shell, ["-lc", script], {
+  // Login/logout hooks can replace the helper's exit status on headless hosts.
+  return spawnSync(shell, ["-c", script], {
     cwd: process.cwd(),
     encoding: "utf8",
   });
@@ -745,7 +763,7 @@ function getStopPackagedAppBlock(): string {
 function getSwiftCompatibilityBlock(): string {
   const script = readFileSync(scriptPath, "utf8");
   const start = script.indexOf('echo "📦 Copying Swift 6.2 compatibility libraries"');
-  const end = script.indexOf('echo "🖼  Copying app icon"');
+  const end = script.indexOf('echo "🖼  Compiling app icon"');
 
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
@@ -851,6 +869,8 @@ function runSwiftPMResourceBundleHarness(
 
 function runSwiftPMResourcePatchHarness(failRestore = false) {
   const root = tempDirs.make("openclaw-package-resource-patch-");
+  const workRoot = tempDirs.make("openclaw-resource-backups-");
+  const backupRoot = path.join(workRoot, "resource-backups");
   const buildPath = path.join(root, "build");
   const checkoutRoot = path.join(buildPath, "checkouts");
   const keyboardShortcuts = path.join(
@@ -908,20 +928,20 @@ function runSwiftPMResourcePatchHarness(failRestore = false) {
 
   const result = runHelper(`
     set -euo pipefail
-    SWIFT_WORK_ROOT=${JSON.stringify(tempDirs.make("openclaw-resource-backups-"))}
+    SWIFT_WORK_ROOT=${JSON.stringify(workRoot)}
     BUILD_PATH=${JSON.stringify(buildPath)}
     ${getSwiftPMResourcePatchBlock()}
     patch_swiftpm_resource_lookups ${JSON.stringify(buildPath)}
     grep -q keyboardShortcutsPackagedResources ${JSON.stringify(keyboardShortcuts)}
     test "$(grep -c swiftMathPackagedResources ${JSON.stringify(swiftMathFont)})" -eq 3
     grep -q swiftMathPackagedResources ${JSON.stringify(swiftMathLegacyFont)}
-    ${failRestore ? "mv() { return 13; }" : ""}
+    ${failRestore ? "mv() { printf 'restore failed\\n' >&2; return 13; }" : ""}
     cleanup_status=0
     restore_swiftpm_resource_sources || cleanup_status=$?
     exit "$cleanup_status"
   `);
 
-  return { fixtures, result };
+  return { backupRoot, fixtures, result };
 }
 
 function runStopPackagedAppHarness(killZeroStatus: 0 | 1) {
@@ -1446,46 +1466,62 @@ describe("package-mac-app plist stamping", () => {
     expect(dev.stdout).toContain("reached-build");
   });
 
-  it("falls back to corepack pnpm when the pnpm shim is absent", () => {
-    const helperBlock = getPackageManagerHelperBlock();
-    const tempRoot = tempDirs.make("openclaw-package-pnpm-root-");
-    const toolsDir = tempDirs.make("openclaw-package-pnpm-tools-");
-    const logPath = path.join(tempRoot, "corepack.log");
+  for (const { name, runner, expectedCommands } of [
+    {
+      name: "uses pnpm when Corepack is absent",
+      runner: "pnpm",
+      expectedCommands: ["install --frozen-lockfile --config.node-linker=hoisted", "build"],
+    },
+    {
+      name: "falls back to corepack pnpm when the pnpm shim is absent",
+      runner: "corepack",
+      expectedCommands: [
+        "pnpm --version",
+        "pnpm install --frozen-lockfile --config.node-linker=hoisted",
+        "pnpm build",
+      ],
+    },
+  ] as const) {
+    it(name, () => {
+      const helperBlock = getPackageManagerHelperBlock();
+      const tempRoot = tempDirs.make("openclaw-package-pnpm-root-");
+      const toolsDir = tempDirs.make("openclaw-package-pnpm-tools-");
+      const logPath = path.join(tempRoot, "corepack.log");
 
-    const corepackPath = path.join(toolsDir, "corepack");
-    writeFileSync(
-      corepackPath,
-      [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
-        'printf \'%s|%s\\n\' "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"',
-        'if [[ "${1:-}" == "pnpm" && "${2:-}" == "--version" ]]; then',
-        "  echo '11.2.2'",
-        "fi",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    chmodSync(corepackPath, 0o755);
+      symlinkSync("/bin/bash", path.join(toolsDir, "bash"));
+      const runnerPath = path.join(toolsDir, runner);
+      writeFileSync(
+        runnerPath,
+        [
+          "#!/usr/bin/env bash",
+          "set -euo pipefail",
+          'printf \'%s|%s\\n\' "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"',
+          'if [[ "${1:-}" == "pnpm" && "${2:-}" == "--version" ]]; then',
+          "  echo '11.2.2'",
+          "fi",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      chmodSync(runnerPath, 0o755);
 
-    const result = runHelper(`
+      const result = runHelper(`
       set -euo pipefail
       ROOT_DIR=${JSON.stringify(tempRoot)}
       OPENCLAW_TEST_LOG=${JSON.stringify(logPath)}
       export OPENCLAW_TEST_LOG
-      PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+      PATH=${JSON.stringify(toolsDir)}
       ${helperBlock}
       run_pnpm install --frozen-lockfile --config.node-linker=hoisted
       run_pnpm build
     `);
 
-    expect(result.status).toBe(0);
-    expect(readFileSync(logPath, "utf8").trim().split("\n")).toEqual([
-      `${tempRoot}|pnpm --version`,
-      `${tempRoot}|pnpm install --frozen-lockfile --config.node-linker=hoisted`,
-      `${tempRoot}|pnpm build`,
-    ]);
-  });
+      expect(result.status).toBe(0);
+      expect(readFileSync(logPath, "utf8").trim().split("\n")).toEqual(
+        expectedCommands.map((command) => `${tempRoot}|${command}`),
+      );
+    });
+  }
 
   it("prefers repo Corepack pnpm over a global pnpm shim", () => {
     const helperBlock = getPackageManagerHelperBlock();
@@ -1493,6 +1529,8 @@ describe("package-mac-app plist stamping", () => {
     const outerRoot = tempDirs.make("openclaw-package-pnpm-outer-");
     const toolsDir = tempDirs.make("openclaw-package-pnpm-tools-");
     const logPath = path.join(tempRoot, "pnpm.log");
+    symlinkSync("/bin/bash", path.join(toolsDir, "bash"));
+    symlinkSync("/usr/bin/grep", path.join(toolsDir, "grep"));
 
     writeFileSync(
       path.join(tempRoot, "package.json"),
@@ -1534,7 +1572,7 @@ describe("package-mac-app plist stamping", () => {
       ROOT_DIR=${JSON.stringify(tempRoot)}
       OPENCLAW_TEST_LOG=${JSON.stringify(logPath)}
       export OPENCLAW_TEST_LOG
-      PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+      PATH=${JSON.stringify(toolsDir)}
       cd ${JSON.stringify(outerRoot)}
       ${helperBlock}
       run_pnpm --version
@@ -1552,17 +1590,10 @@ describe("package-mac-app plist stamping", () => {
     const helperBlock = getPackageManagerHelperBlock();
     const tempRoot = tempDirs.make("openclaw-package-pnpm-root-");
     const toolsDir = tempDirs.make("openclaw-package-pnpm-tools-");
-    // Hosts with a system corepack in /usr/bin (plus a cached pnpm) would satisfy
-    // the detection this test needs to fail; an empty cache with network disabled
-    // keeps "corepack pnpm is unavailable" true everywhere.
-    const corepackHome = tempDirs.make("openclaw-package-corepack-home-");
-
     const result = runHelper(`
       set -euo pipefail
       ROOT_DIR=${JSON.stringify(tempRoot)}
-      PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
-      export COREPACK_HOME=${JSON.stringify(corepackHome)}
-      export COREPACK_ENABLE_NETWORK=0
+      PATH=${JSON.stringify(toolsDir)}
       ${helperBlock}
       run_pnpm build
     `);
@@ -1926,19 +1957,25 @@ try {
   });
 
   it("routes dependency resource lookups into signed app resources and restores sources", () => {
-    const { fixtures, result } = runSwiftPMResourcePatchHarness();
+    const { backupRoot, fixtures, result } = runSwiftPMResourcePatchHarness();
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     for (const [file, contents] of fixtures) {
       expect(readFileSync(file, "utf8")).toBe(contents);
-      expect(existsSync(`${file}.openclaw-original`)).toBe(false);
     }
+    expect(readdirSync(backupRoot)).toEqual([]);
   });
 
   it("fails cleanup instead of deleting backups when resource restoration fails", () => {
-    const { result } = runSwiftPMResourcePatchHarness(true);
-    expect(result.status).not.toBe(0);
+    const { backupRoot, fixtures, result } = runSwiftPMResourcePatchHarness(true);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe("restore failed\n");
+    const backups = readdirSync(backupRoot).map((file) =>
+      readFileSync(path.join(backupRoot, file), "utf8"),
+    );
+    expect(backups).toHaveLength(fixtures.size);
+    expect(backups).toEqual(expect.arrayContaining([...fixtures.values()]));
   });
 
   it("fails closed when any required SwiftPM resource bundle is missing", () => {
@@ -2270,9 +2307,9 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
     );
     expect(stageScript).toContain('manifest.dependencies["@trycua/cua-driver"]');
     expect(stageScript).toContain('manifest.cuaDriverArtifacts["darwin-universal-binary"]');
-    expect(cuaManifest.dependencies["@trycua/cua-driver"]).toBe("0.22.0");
+    expect(cuaManifest.dependencies["@trycua/cua-driver"]).toBe("0.22.2");
     expect(cuaManifest.cuaDriverArtifacts["darwin-universal-binary"]?.archiveSha256).toBe(
-      "202eb9dd2185d64fc0599079671f50efe2bf71b300a85644cf26d627bb7355e6",
+      "0bc95dab9543eec416b1c840754eea8bc8a53a7ffcae93dfef7f1825a7938b84",
     );
     expect(packageScript).toContain(
       '"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"',

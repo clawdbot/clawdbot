@@ -28,7 +28,10 @@ import {
   createAttachedChannelResultAdapter,
   createEmptyChannelResult,
 } from "openclaw/plugin-sdk/channel-send-result";
-import { buildTokenChannelStatusSummary } from "openclaw/plugin-sdk/channel-status";
+import {
+  buildTokenChannelStatusSummary,
+  PAIRING_APPROVED_MESSAGE,
+} from "openclaw/plugin-sdk/channel-status";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createStaticReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
 import {
@@ -296,10 +299,11 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
     pairing: {
       text: {
         idLabel: "zaloUserId",
-        message: "Your pairing request has been approved.",
+        message: PAIRING_APPROVED_MESSAGE,
         normalizeAllowEntry: (entry) => entry.trim().replace(/^(zalo|zl):/i, ""),
-        notify: async (params) =>
-          await (await loadZaloChannelRuntime()).notifyZaloPairingApproval(params),
+        notify: async (params) => {
+          await sendZaloDelivery({ ...params, to: params.id, text: params.message });
+        },
       },
     },
     threading: {

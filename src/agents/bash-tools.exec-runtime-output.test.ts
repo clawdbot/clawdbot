@@ -48,6 +48,7 @@ afterEach(() => {
 
 function successfulSupervisorRun() {
   return {
+    activity: { resultSettled: true, lastOutputAtMs: Date.now() },
     runId: "mock-run",
     startedAtMs: Date.now(),
     wait: async () => ({
@@ -66,6 +67,7 @@ function successfulSupervisorRun() {
 
 function runtimeManagedRun(input: SpawnInput): ManagedRun {
   return {
+    activity: { resultSettled: true, lastOutputAtMs: Date.now() },
     runId: input.runId ?? "test-run",
     pid: 1234,
     startedAtMs: Date.now(),
@@ -110,7 +112,9 @@ describe("exec notifyOnExit suppression", () => {
         if (params.stdout) {
           input.onStdout?.(params.stdout);
         }
+        const activity = { resultSettled: false, lastOutputAtMs: Date.now() };
         return {
+          activity,
           runId: "run-1",
           startedAtMs: Date.now(),
           pid: 123,
@@ -118,6 +122,7 @@ describe("exec notifyOnExit suppression", () => {
             await new Promise((resolve) => {
               setImmediate(resolve);
             });
+            activity.resultSettled = true;
             return {
               reason: params.reason,
               exitCode: null,

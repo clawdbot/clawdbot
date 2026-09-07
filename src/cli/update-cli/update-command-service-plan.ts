@@ -3,11 +3,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { createConfigIO } from "../../config/io.js";
+import { resolveGatewayPort } from "../../config/paths.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervision.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
+import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { resolveNodeRunner } from "./shared.js";
 
@@ -16,10 +20,47 @@ export type ManagedServiceRootRedirect = {
   previousRoot: string;
 };
 
+export type ManagedGatewayUpdateVerdict =
+  | { kind: "absent" | "foreign" }
+  | {
+      kind: "owned";
+      root: string;
+      fingerprint: string;
+      refreshDefinition: boolean;
+      requiresInstallRootRefresh?: boolean;
+    }
+  | { kind: "unresolved"; root: string; fingerprint: string }
+  | { kind: "unavailable"; message: string };
+
 export class GatewayServiceUpdateOwnershipError extends Error {
   constructor(message: string, cause: unknown) {
     super(message, { cause });
     this.name = "GatewayServiceUpdateOwnershipError";
+  }
+}
+
+export function assertGatewayServiceAdmissionUnchanged(
+  expectedService: { serviceUpdateVerdict?: ManagedGatewayUpdateVerdict } | undefined,
+  serviceUpdateVerdict: ManagedGatewayUpdateVerdict,
+): void {
+  const expectedVerdict = expectedService?.serviceUpdateVerdict;
+  if (expectedVerdict && expectedVerdict.kind !== serviceUpdateVerdict.kind) {
+    throw new GatewayServiceUpdateOwnershipError(
+      "Gateway service ownership changed after database admission; run `openclaw gateway status --deep` and retry.",
+      undefined,
+    );
+  }
+  if (
+    expectedVerdict?.kind === "owned" &&
+    serviceUpdateVerdict.kind === "owned" &&
+    expectedVerdict.fingerprint !== serviceUpdateVerdict.fingerprint
+  ) {
+    // Permission to refresh a writable definition after install does not allow
+    // its environment to change between database admission and native preparation.
+    throw new GatewayServiceUpdateOwnershipError(
+      "Gateway service definition changed after database admission; retry against its current configuration.",
+      undefined,
+    );
   }
 }
 
@@ -137,7 +178,7 @@ async function tryRealpathOrResolve(value: string): Promise<string> {
   return await fs.realpath(path.resolve(value)).catch(() => path.resolve(value));
 }
 
-function resolveManagedServiceNodeRunner(
+export function resolveManagedServiceNodeRunner(
   command: GatewayServiceCommandConfig | null,
 ): string | undefined {
   const args = command?.programArguments ?? [];
@@ -262,4 +303,31 @@ export async function gatewayServiceCommandUsesRoot(params: {
     // Without directory identity proof, the override cannot authorize lifecycle actions.
   }
   return false;
+}
+
+export async function resolveUpdatedGatewayRestartPort(params: {
+  config?: OpenClawConfig;
+  processEnv?: NodeJS.ProcessEnv;
+  serviceEnv?: NodeJS.ProcessEnv;
+  serviceCommand?: GatewayServiceCommandConfig | null;
+}): Promise<number> {
+  const env = params.serviceEnv ?? params.processEnv ?? process.env;
+  let config = params.config;
+  if (params.serviceCommand) {
+    // Preserved launchers keep their explicit port and their own config context;
+    // refresh callers omit the old command and use the intended new configuration.
+    const port = parseTcpPortFromArgs(params.serviceCommand.programArguments);
+    if (port !== null) {
+      return port;
+    }
+  }
+  if (params.serviceCommand || !config) {
+    config = await createConfigIO({
+      env,
+      observe: false,
+      pluginValidation: "skip",
+      suppressFutureVersionWarning: true,
+    }).readBestEffortConfig();
+  }
+  return resolveGatewayPort(config, env);
 }

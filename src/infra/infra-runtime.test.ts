@@ -8,6 +8,7 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import * as errorFormatting from "./errors.js";
 type RestartModule = typeof import("./restart.js");
 const managedSuccessorOwner = {
   kind: "managed-update-handoff",
@@ -837,40 +838,62 @@ describe("infra runtime", () => {
       }
     });
 
-    it("rolls back prepared restart state when emission is rejected", async () => {
-      const beforeEmit = vi.fn(async () => {});
-      const unformattableFailure = new Error();
-      Object.defineProperty(unformattableFailure, "message", {
-        get() {
-          throw new Error("message read failed");
-        },
-      });
-      const afterEmitRejected = vi.fn(async () => {
-        throw unformattableFailure;
-      });
-      const afterEmitFailed = vi.fn(async () => {});
-      vi.spyOn(process, "kill").mockImplementation(() => {
-        throw new Error("no signal");
-      });
+    it.each([
+      { failure: "message getter", expectedError: "Error" },
+      { failure: "formatter", expectedError: "Unknown error" },
+      { failure: "logger", expectedError: "Error" },
+    ])(
+      "rolls back prepared restart state when emission is rejected despite $failure failure",
+      async ({ failure, expectedError }) => {
+        const beforeEmit = vi.fn(async () => {});
+        const hookFailure = new Error();
+        Object.defineProperty(hookFailure, "message", {
+          get() {
+            throw new Error("message read failed");
+          },
+        });
+        const formatter = vi.spyOn(errorFormatting, "formatErrorMessage");
+        if (failure === "formatter") {
+          formatter.mockImplementationOnce(() => {
+            throw new Error("formatting failed");
+          });
+        }
+        if (failure === "logger") {
+          restartLogWarnMock.mockImplementationOnce(() => {
+            throw new Error("logging failed");
+          });
+        }
+        const afterEmitRejected = vi.fn(async () => {
+          throw hookFailure;
+        });
+        const afterEmitFailed = vi.fn(async () => {});
+        vi.spyOn(process, "kill").mockImplementation(() => {
+          throw new Error("no signal");
+        });
 
-      scheduleGatewaySigusr1Restart({
-        delayMs: 0,
-        emitHooks: { beforeEmit, afterEmitRejected, afterEmitFailed },
-      });
-      await vi.advanceTimersByTimeAsync(0);
+        scheduleGatewaySigusr1Restart({
+          delayMs: 0,
+          emitHooks: { beforeEmit, afterEmitRejected, afterEmitFailed },
+        });
+        await vi.advanceTimersByTimeAsync(0);
 
-      expect(beforeEmit).toHaveBeenCalledTimes(1);
-      expect(afterEmitRejected).toHaveBeenCalledTimes(1);
-      expect(afterEmitFailed).toHaveBeenCalledTimes(1);
-      expect(restartLogWarnMock).toHaveBeenCalledWith(
-        "restart hook callback failed; restart will continue",
-        {
-          hook: "afterEmitRejected",
-          error: "Unknown error",
-        },
-      );
-      expect(isGatewayWorkAdmissionClosed()).toBe(false);
-    });
+        expect(beforeEmit).toHaveBeenCalledTimes(1);
+        expect(afterEmitRejected).toHaveBeenCalledTimes(1);
+        expect(afterEmitFailed).toHaveBeenCalledTimes(1);
+        expect(formatter).toHaveBeenCalledExactlyOnceWith(hookFailure);
+        expect(restartLogWarnMock).toHaveBeenCalledExactlyOnceWith(
+          "restart hook callback failed; restart will continue",
+          {
+            hook: "afterEmitRejected",
+            error: expectedError,
+          },
+        );
+        expect(isGatewayWorkAdmissionClosed()).toBe(false);
+        const root = tryBeginGatewayRootWorkAdmission();
+        expect(root).not.toBeNull();
+        root?.release();
+      },
+    );
 
     it("drains parked emit hooks when a hooked deferral wins the emission race", async () => {
       // Gateway-tool parks sentinel/continuation hooks; config-reload deferral

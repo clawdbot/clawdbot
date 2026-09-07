@@ -17,71 +17,61 @@ const coreTools = new Set(["read", "write", "exec", "session_status"]);
 
 describe("analyzeAllowlistByToolType", () => {
   it("preserves allowlist when it only targets plugin tools", () => {
-    const policy = analyzeAllowlistByToolType({ allow: ["lobster"] }, pluginGroups, coreTools);
-    expect(policy.policy?.allow).toEqual(["lobster"]);
-    expect(policy.pluginOnlyAllowlist).toBe(true);
+    const input = { allow: ["lobster"] };
+    const policy = analyzeAllowlistByToolType(input, pluginGroups, coreTools);
+    expect(input).toEqual({ allow: ["lobster"] });
     expect(policy.unknownAllowlist).toStrictEqual([]);
   });
 
   it("preserves allowlist when it only targets plugin groups", () => {
-    const policy = analyzeAllowlistByToolType(
-      { allow: ["group:plugins"] },
-      pluginGroups,
-      coreTools,
-    );
-    expect(policy.policy?.allow).toEqual(["group:plugins"]);
-    expect(policy.pluginOnlyAllowlist).toBe(true);
+    const input = { allow: ["group:plugins"] };
+    const policy = analyzeAllowlistByToolType(input, pluginGroups, coreTools);
+    expect(input).toEqual({ allow: ["group:plugins"] });
     expect(policy.unknownAllowlist).toStrictEqual([]);
   });
 
   it('keeps allowlist when it uses "*"', () => {
-    const policy = analyzeAllowlistByToolType({ allow: ["*"] }, pluginGroups, coreTools);
-    expect(policy.policy?.allow).toEqual(["*"]);
+    const input = { allow: ["*"] };
+    const policy = analyzeAllowlistByToolType(input, pluginGroups, coreTools);
+    expect(input).toEqual({ allow: ["*"] });
     expect(policy.unknownAllowlist).toStrictEqual([]);
   });
 
   it("keeps allowlist when it mixes plugin and core entries", () => {
-    const policy = analyzeAllowlistByToolType(
-      { allow: ["lobster", "read"] },
-      pluginGroups,
-      coreTools,
-    );
-    expect(policy.policy?.allow).toEqual(["lobster", "read"]);
+    const input = { allow: ["lobster", "read"] };
+    const policy = analyzeAllowlistByToolType(input, pluginGroups, coreTools);
+    expect(input).toEqual({ allow: ["lobster", "read"] });
     expect(policy.unknownAllowlist).toStrictEqual([]);
   });
 
   it("preserves allowlist with unknown entries when no core tools match", () => {
     const emptyPlugins: PluginToolGroups = { all: [], byPlugin: new Map() };
-    const policy = analyzeAllowlistByToolType({ allow: ["lobster"] }, emptyPlugins, coreTools);
-    expect(policy.policy?.allow).toEqual(["lobster"]);
-    expect(policy.pluginOnlyAllowlist).toBe(false);
+    const input = { allow: ["lobster"] };
+    const policy = analyzeAllowlistByToolType(input, emptyPlugins, coreTools);
+    expect(input).toEqual({ allow: ["lobster"] });
     expect(policy.unknownAllowlist).toEqual(["lobster"]);
   });
 
   it("keeps allowlist with core tools and reports unknown entries", () => {
     const emptyPlugins: PluginToolGroups = { all: [], byPlugin: new Map() };
-    const policy = analyzeAllowlistByToolType(
-      { allow: ["read", "lobster"] },
-      emptyPlugins,
-      coreTools,
-    );
-    expect(policy.policy?.allow).toEqual(["read", "lobster"]);
+    const input = { allow: ["read", "lobster"] };
+    const policy = analyzeAllowlistByToolType(input, emptyPlugins, coreTools);
+    expect(input).toEqual({ allow: ["read", "lobster"] });
     expect(policy.unknownAllowlist).toEqual(["lobster"]);
   });
 
-  it("does not mark unavailable core entries as plugin-only", () => {
+  it("reports unavailable core entries as unknown", () => {
     const policy = analyzeAllowlistByToolType({ allow: ["apply_patch"] }, pluginGroups, coreTools);
-    expect(policy.pluginOnlyAllowlist).toBe(false);
     expect(policy.unknownAllowlist).toEqual(["apply_patch"]);
   });
 
   it("recognizes declared plugin tools before they are materialized", () => {
     const emptyPlugins: PluginToolGroups = { all: [], byPlugin: new Map() };
-    const policy = analyzeAllowlistByToolType({ allow: ["llm-task"] }, emptyPlugins, coreTools, {
+    const input = { allow: ["llm-task"] };
+    const policy = analyzeAllowlistByToolType(input, emptyPlugins, coreTools, {
       pluginToolNames: ["llm-task"],
     });
-    expect(policy.policy?.allow).toEqual(["llm-task"]);
-    expect(policy.pluginOnlyAllowlist).toBe(true);
+    expect(input).toEqual({ allow: ["llm-task"] });
     expect(policy.unknownAllowlist).toStrictEqual([]);
   });
 
@@ -93,7 +83,6 @@ describe("analyzeAllowlistByToolType", () => {
       coreTools,
       { mcpServerNames: ["paperless", "Home Assistant"] },
     );
-    expect(policy.pluginOnlyAllowlist).toBe(true);
     expect(policy.unknownAllowlist).toStrictEqual([]);
   });
 
@@ -105,7 +94,6 @@ describe("analyzeAllowlistByToolType", () => {
       coreTools,
       { mcpServerNames: ["paperless"] },
     );
-    expect(policy.pluginOnlyAllowlist).toBe(false);
     expect(policy.unknownAllowlist).toStrictEqual(["papreless__*"]);
   });
 

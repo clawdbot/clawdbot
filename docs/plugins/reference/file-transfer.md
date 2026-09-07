@@ -2,10 +2,13 @@
 summary: "Fetch, list, and write files on paired nodes via dedicated node commands. Bypasses bash stdout truncation by using base64 over node.invoke for binaries up to 16 MB."
 read_when:
   - You are installing, configuring, or auditing the file-transfer plugin
-title: "File Transfer plugin"
+title: "File Transfer plugin reference"
 ---
 
-# File Transfer plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 Fetch, list, and write files on paired nodes via dedicated node commands. Bypasses bash stdout truncation by using base64 over node.invoke for binaries up to 16 MB.
 
@@ -16,7 +19,8 @@ Fetch, list, and write files on paired nodes via dedicated node commands. Bypass
 
 ## Surface
 
-CLI commands: `openclaw file-transfer`; contracts: `tools`
+- CLI commands: `openclaw file-transfer`
+- Contracts: `tools`
 
 <!-- openclaw-plugin-reference:manual-start -->
 

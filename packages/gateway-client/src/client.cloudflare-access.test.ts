@@ -2,9 +2,9 @@ import { X509Certificate } from "node:crypto";
 import { createServer as createHttpsServer } from "node:https";
 import type { AddressInfo } from "node:net";
 import { afterEach, expect, test } from "vitest";
-import { WebSocketServer } from "ws";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../../test/helpers/tls-fixture.js";
 import { GatewayClient } from "./client.js";
+import { WebSocketServer } from "./websocket.test-support.js";
 
 const tlsFingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256;
 const websocketServers: WebSocketServer[] = [];

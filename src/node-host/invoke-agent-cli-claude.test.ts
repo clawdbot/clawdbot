@@ -299,6 +299,7 @@ process.stdout.write(JSON.stringify({
   descriptor: descriptor ?? null,
   rawPresent: Object.hasOwn(process.env, "CLAUDE_CODE_OAUTH_TOKEN") || Object.hasOwn(process.env, "ANTHROPIC_API_KEY"),
   scrubPresent: Object.hasOwn(process.env, "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"),
+  gitInstructionsDisabled: process.env.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS,
 }) + "\\n");`);
       const calls: Array<{ method: string; params: unknown }> = [];
       const handleSystemRun = vi.fn(
@@ -356,6 +357,7 @@ process.stdout.write(JSON.stringify({
       });
       expect(progress).toContain('"rawPresent":false');
       expect(progress).toContain('"scrubPresent":false');
+      expect(progress).toContain('"gitInstructionsDisabled":"1"');
       expect(calls).toContainEqual({
         method: "node.invoke.result",
         params: expect.objectContaining({
@@ -520,6 +522,7 @@ process.stdout.write(JSON.stringify({
   descriptor: process.env[${JSON.stringify(descriptorEnv)}],
   rawPresent: Object.hasOwn(process.env, ${JSON.stringify(rawEnv)}),
   scrubPresent: Object.hasOwn(process.env, "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"),
+  gitInstructionsDisabled: process.env.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS,
 }) + "\\n");`);
       const request = { argv: ["-p"], idleTimeoutMs: 1_000, timeoutMs: 5_000 };
       const calls: Array<{ method: string; params: unknown }> = [];
@@ -543,6 +546,7 @@ process.stdout.write(JSON.stringify({
       expect(progress).toContain('"descriptor":"3"');
       expect(progress).toContain('"rawPresent":false');
       expect(progress).toContain('"scrubPresent":false');
+      expect(progress).toContain('"gitInstructionsDisabled":"1"');
       expect(result).toMatchObject({ exitCode: 0, success: true });
     },
   );

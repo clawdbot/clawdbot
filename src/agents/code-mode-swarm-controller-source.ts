@@ -26,6 +26,8 @@ export const CODE_MODE_SWARM_CONTROLLER_SOURCE = String.raw`
     if (options.phase !== undefined && (typeof options.phase !== "string" || !options.phase.trim())) {
       throw new TypeError("agents.run phase must be a non-empty string");
     }
+    // Match the submitted contract even when callers reuse options while the child runs.
+    const structured = options.schema !== undefined;
     if (options.phase !== undefined) swarmNote("phase", options.phase);
     const spawned = await request("agentSpawn", [prompt, options], { queue: true });
     const completion = await request("agentWait", [spawned.runId], { queue: true });
@@ -37,6 +39,6 @@ export const CODE_MODE_SWARM_CONTROLLER_SOURCE = String.raw`
       ) || "collector returned no result";
       throw new SwarmAgentError(runId, status, detail);
     }
-    return options.schema !== undefined ? completion.structured : completion.result;
+    return structured ? completion.structured : completion.result;
   }
 `;

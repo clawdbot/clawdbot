@@ -24,12 +24,10 @@ const {
   runAuthProfileWriteTransaction,
   writePersistedAuthProfileStoreRaw,
 } = await import("./auth-profiles/sqlite.js");
-const {
-  captureAuthProfileStorePersistenceSnapshot,
-  getRuntimeAuthProfileStoreSnapshot,
-  saveAuthProfileStore,
-  saveAuthProfileStoreIfPersistenceSnapshotMatches,
-} = await import("./auth-profiles/store.js");
+const { captureAuthProfileStorePersistenceSnapshot, getRuntimeAuthProfileStoreSnapshot } =
+  await import("./auth-profiles/store.js");
+const { saveAuthProfileStore, saveAuthProfileStoreIfPersistenceSnapshotMatches } =
+  await import("./auth-profiles/store-runtime.js");
 const { clearRuntimeAuthProfileStoreSnapshots, replaceRuntimeAuthProfileStoreSnapshots } =
   await import("./auth-profiles/runtime-snapshots.js");
 const { closeOpenClawAgentDatabasesForTest } = await import("../state/openclaw-agent-db.js");

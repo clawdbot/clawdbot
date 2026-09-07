@@ -1,4 +1,5 @@
 // Plugin state store exposes persisted per-plugin state operations.
+import type { Result } from "@openclaw/normalization-core/result";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   clearPluginStateDatabaseForTests,
@@ -12,6 +13,7 @@ import {
   pluginStateDeleteIf,
   pluginStateEntries,
   pluginStateLookup,
+  pluginStateLookupMany,
   pluginStateRegister,
   pluginStateRegisterIfAbsent,
   pluginStateRegisterSequencedJournalEntry,
@@ -175,6 +177,7 @@ function createKeyedStoreForPluginId<T>(
     update: async (...args) => store.update(...args),
     deleteIf: async (...args) => store.deleteIf(...args),
     lookup: async (...args) => store.lookup(...args),
+    lookupMany: async (...args) => store.lookupMany(...args),
     consume: async (...args) => store.consume(...args),
     delete: async (...args) => store.delete(...args),
     entries: async () => store.entries(),
@@ -264,6 +267,20 @@ function createSyncKeyedStoreForPluginId<T>(
         key: normalizedKey,
         ...(env ? { env } : {}),
       }) as T | undefined;
+    },
+    lookupMany(keys) {
+      if (keys.length > 10_000) {
+        throw invalidInput("plugin state lookupMany accepts at most 10000 keys", "lookup");
+      }
+      const normalizedKeys = Array.from(keys, (key) => validateKey(key, "lookup"));
+      const values = pluginStateLookupMany({
+        pluginId,
+        namespace,
+        keys: normalizedKeys,
+        ...(env ? { env } : {}),
+      });
+      // SAFETY: This namespace uses the caller's JSON value type, as with lookup.
+      return values as Array<Result<T | undefined, PluginStateStoreError>>;
     },
     consume(key) {
       const normalizedKey = validateKey(key, "consume");

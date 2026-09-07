@@ -15,6 +15,7 @@ vi.mock("../../infra/openclaw-root.js", () => ({
 }));
 
 import { buildNativeHookRelayCommand } from "./native-hook-relay-command.js";
+import { shellQuoteArgs } from "./native-hook-relay-utils.js";
 
 function buildCommand(): string {
   return buildNativeHookRelayCommand({
@@ -39,14 +40,14 @@ describe("native hook relay executable resolution", () => {
     mocks.existingPaths.add(relayEntry);
     mocks.existingPaths.add(generalCli);
 
-    expect(buildCommand()).toContain(`${relayEntry} hooks relay`);
+    expect(buildCommand()).toContain(`${shellQuoteArgs([relayEntry])} hooks relay`);
   });
 
   it("falls back to the packaged general CLI when the isolated artifact is absent", () => {
     const generalCli = path.join(mocks.packageRoot, "openclaw.mjs");
     mocks.existingPaths.add(generalCli);
 
-    expect(buildCommand()).toContain(`${generalCli} hooks relay`);
+    expect(buildCommand()).toContain(`${shellQuoteArgs([generalCli])} hooks relay`);
   });
 
   it("preserves the explicit CLI path override", () => {
@@ -55,6 +56,6 @@ describe("native hook relay executable resolution", () => {
     mocks.existingPaths.add(override);
     mocks.existingPaths.add(path.join(mocks.packageRoot, "dist", "native-hook-relay", "entry.js"));
 
-    expect(buildCommand()).toContain(`${override} hooks relay`);
+    expect(buildCommand()).toContain(`${shellQuoteArgs([override])} hooks relay`);
   });
 });

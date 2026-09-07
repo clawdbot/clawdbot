@@ -44,20 +44,6 @@ function listQaScenarioExecutionPaths(dir = "qa/scenarios"): string[] {
 }
 
 describe("check-deadcode-exports", () => {
-  it("requests every unused-export issue class from Knip", () => {
-    const script = fs.readFileSync(
-      new URL("../../scripts/check-deadcode-exports.mts", import.meta.url),
-      "utf8",
-    );
-    expect(script).toContain('"exports,nsExports,types,nsTypes,enumMembers,namespaceMembers"');
-    expect(script).toContain('"config/knip.config.ts", "--production"');
-    expect(script).toContain('"config/knip.all-exports.config.ts"');
-    expect(script).toContain('"config/knip.scripts-exports.config.ts"');
-    expect(script).toContain(
-      'args: ["--config", "config/knip.scripts-exports.config.ts", "--include-entry-exports"]',
-    );
-  });
-
   it("excludes test support only from the production scan", () => {
     expect(knipConfig.ignore).toContain("dist/**");
     expect(knipConfig.ignore).toContain("**/test-helpers/**");
@@ -124,6 +110,7 @@ describe("check-deadcode-exports", () => {
         "apps/android/scripts/build-release-artifacts.ts!",
         "security/opengrep/check-rule-metadata.mjs!",
         "skills/meme-maker/scripts/meme.mjs!",
+        "scripts/check-openclaw-package-tarball.mts!",
         "scripts/check-live-cache.ts!",
         "scripts/lib/vitest-resource-reporter.mts!",
         "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",

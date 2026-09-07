@@ -10,7 +10,7 @@ import { hashCodexAppServerBindingFingerprint } from "./session-binding.js";
 import { resolveCodexGpt56MultiAgentVersion } from "./thread-binding-policy.js";
 
 export function codexDynamicToolsFingerprint(dynamicTools: readonly JsonValue[]): string {
-  return fingerprintDynamicTools(dynamicTools);
+  return hashCodexAppServerBindingFingerprint(legacyFingerprintDynamicTools(dynamicTools));
 }
 
 export function codexLegacyDynamicToolsFingerprint(dynamicTools: CodexDynamicToolSpec[]): string {
@@ -25,14 +25,10 @@ export function areCodexDynamicToolFingerprintsCompatible(params: {
   return areDynamicToolFingerprintsCompatible(params.previous, params.next, params.nextLegacy);
 }
 
-function fingerprintDynamicTools(dynamicTools: readonly JsonValue[]): string {
-  return hashCodexAppServerBindingFingerprint(legacyFingerprintDynamicTools(dynamicTools));
-}
-
 function legacyFingerprintDynamicTools(dynamicTools: readonly JsonValue[]): string {
-  return JSON.stringify(
-    dynamicTools.map(fingerprintDynamicToolSpec).toSorted(compareJsonFingerprint),
-  );
+  // Codex persists the complete model-visible schema at thread/start; resume
+  // cannot refresh changed tool or nested input descriptions.
+  return JSON.stringify(dynamicTools.map(stabilizeJsonValue).toSorted(compareJsonFingerprint));
 }
 
 export function legacyFingerprintUserMcpServersConfigPatch(
@@ -128,12 +124,6 @@ export function fingerprintEnvironmentSelection(
   environments: CodexTurnEnvironmentParams[] | undefined,
 ): string | undefined {
   return environments ? JSON.stringify(environments.map(stabilizeJsonValue)) : undefined;
-}
-
-function fingerprintDynamicToolSpec(tool: JsonValue): JsonValue {
-  // Codex persists the complete model-visible schema at thread/start; resume
-  // cannot refresh changed tool or nested input descriptions.
-  return stabilizeJsonValue(tool);
 }
 
 function stabilizeJsonValue(value: JsonValue): JsonValue {

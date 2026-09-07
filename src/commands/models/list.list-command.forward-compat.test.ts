@@ -317,8 +317,8 @@ function installModelsListCommandForwardCompatMocks() {
     },
   }));
 
-  vi.doMock("../../agents/auth-profiles/store.js", async (importOriginal) => ({
-    ...(await importOriginal<typeof import("../../agents/auth-profiles/store.js")>()),
+  vi.doMock("../../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../agents/auth-profiles/store-runtime.js")>()),
     loadAuthProfileStoreWithoutExternalProfiles: mocks.ensureAuthProfileStore,
   }));
 

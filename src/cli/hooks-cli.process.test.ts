@@ -252,56 +252,53 @@ async function runHooksCli(params: {
   });
 }
 
-async function runHooksRelay(params: {
-  entryPath?: string;
-  event: "post_tool_use" | "pre_tool_use";
-  stdin: string;
-}) {
-  const fixture = await createLingeringPreloadFixture();
-  const result = await runHooksCli({
-    args: [
-      "hooks",
-      "relay",
-      "--provider",
-      "codex",
-      "--relay-id",
-      "missing-relay",
-      "--event",
-      params.event,
-      "--timeout",
-      "50",
-    ],
-    completion: params.event === "post_tool_use" ? "exit" : "output-then-exit",
-    ...(params.entryPath ? { entryPath: params.entryPath } : {}),
-    label: `hooks relay ${params.event}`,
-    env: {
-      LINGER_MARKER: fixture.markerPath,
-      NODE_OPTIONS: `--import=${pathToFileURL(fixture.preloadPath).href}`,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_STATE_DIR: fixture.stateDir,
-    },
-    stdin: params.stdin,
-  });
-  await expect(fs.readFile(fixture.markerPath, "utf8")).resolves.toBe("loaded\n");
-  return result;
-}
-
 describe("hooks CLI process lifecycle", () => {
-  it("drains the dedicated relay entry output before forcing one-shot exit", async () => {
-    const result = await runHooksRelay({
-      entryPath: "src/cli/native-hook-relay-entry.ts",
-      event: "pre_tool_use",
-      stdin: "{}",
-    });
-
-    expect(result, result.stderr).toMatchObject({ code: 0, signal: null });
-    expect(JSON.parse(result.stdout)).toMatchObject({
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-      },
-    });
-  }, 90_000);
+  it.each([
+    {
+      name: "invalid JSON",
+      args: [
+        "hooks",
+        "relay",
+        "--provider",
+        "codex",
+        "--relay-id",
+        "ordinary-input",
+        "--event",
+        "post_tool_use",
+      ],
+      stdin: "{",
+      diagnostic: "failed to read native hook input",
+    },
+    {
+      name: "missing required option",
+      args: ["hooks", "relay"],
+      stdin: "",
+      diagnostic: "native hook relay failed: Missing required option --provider",
+    },
+  ])(
+    "drains a dedicated relay $name error before exiting",
+    async ({ args, stdin, diagnostic }) => {
+      const fixture = await createLingeringPreloadFixture();
+      const result = await runHooksCli({
+        entryPath: "src/cli/native-hook-relay-entry.ts",
+        args,
+        stdin,
+        completion: "exit",
+        label: "dedicated relay error",
+        env: {
+          LINGER_MARKER: fixture.markerPath,
+          NODE_OPTIONS: `--import=${pathToFileURL(fixture.preloadPath).href}`,
+          OPENCLAW_STATE_DIR: fixture.stateDir,
+        },
+      });
+      expect(result, result.stderr).toMatchObject({ code: 1, signal: null });
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(diagnostic);
+      expect(result.stderr.endsWith("\n")).toBe(true);
+      await expect(fs.readFile(fixture.markerPath, "utf8")).resolves.toBe("loaded\n");
+    },
+    90_000,
+  );
 
   it.runIf(process.platform !== "win32")(
     "keeps the relay on the timeout-owned shell PID",
@@ -372,52 +369,57 @@ describe("hooks CLI process lifecycle", () => {
     60_000,
   );
 
-  it("uses the explicit relay database and exits despite a lingering handle", async () => {
-    const relay = registerNativeHookRelay({
-      provider: "codex",
-      relayId: "process-explicit-state-db",
-      sessionId: "session-1",
-      runId: "run-1",
-      allowedEvents: ["post_tool_use"],
-    });
-    await expect
-      .poll(() => nativeHookRelayTesting.getNativeHookRelayBridgeRecordForTests(relay.relayId))
-      .toBeDefined();
+  it.each(["src/entry.ts", "src/cli/native-hook-relay-entry.ts"])(
+    "%s uses the explicit relay database and exits despite a lingering handle",
+    async (entryPath) => {
+      const relay = registerNativeHookRelay({
+        provider: "codex",
+        relayId: "process-explicit-state-db",
+        sessionId: "session-1",
+        runId: "run-1",
+        allowedEvents: ["post_tool_use"],
+      });
+      await expect
+        .poll(() => nativeHookRelayTesting.getNativeHookRelayBridgeRecordForTests(relay.relayId))
+        .toBeDefined();
 
-    const fixture = await createLingeringPreloadFixture();
-    const result = await runHooksCli({
-      args: [
-        "hooks",
-        "relay",
-        "--provider",
-        "codex",
-        "--relay-id",
-        relay.relayId,
-        "--state-db",
-        resolveOpenClawStateSqlitePath(),
-        "--generation",
-        relay.generation,
-        "--event",
-        "post_tool_use",
-        "--timeout",
-        "5000",
-      ],
-      completion: "exit",
-      label: "hooks relay explicit state database",
-      env: {
-        LINGER_MARKER: fixture.markerPath,
-        NODE_OPTIONS: `--import=${pathToFileURL(fixture.preloadPath).href}`,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_STATE_DIR: fixture.stateDir,
-      },
-      stdin: JSON.stringify({ hook_event_name: "PostToolUse" }),
-    });
+      const fixture = await createLingeringPreloadFixture();
+      const result = await runHooksCli({
+        entryPath,
+        args: [
+          "hooks",
+          "relay",
+          "--provider",
+          "codex",
+          "--relay-id",
+          relay.relayId,
+          "--state-db",
+          resolveOpenClawStateSqlitePath(),
+          "--generation",
+          relay.generation,
+          "--event",
+          "post_tool_use",
+          "--timeout",
+          "5000",
+        ],
+        completion: "exit",
+        label: "hooks relay explicit state database",
+        env: {
+          LINGER_MARKER: fixture.markerPath,
+          NODE_OPTIONS: `--import=${pathToFileURL(fixture.preloadPath).href}`,
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          OPENCLAW_STATE_DIR: fixture.stateDir,
+        },
+        stdin: JSON.stringify({ hook_event_name: "PostToolUse" }),
+      });
 
-    expect(result, result.stderr).toMatchObject({ code: 0, signal: null });
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toBe("");
-    await expect(fs.readFile(fixture.markerPath, "utf8")).resolves.toBe("loaded\n");
-  }, 90_000);
+      expect(result, result.stderr).toMatchObject({ code: 0, signal: null });
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toBe("");
+      await expect(fs.readFile(fixture.markerPath, "utf8")).resolves.toBe("loaded\n");
+    },
+    90_000,
+  );
 
   it("exits after hooks list output when plugin registration leaves a ref'd handle", async () => {
     const fixture = await createLingeringPluginFixture();

@@ -771,21 +771,19 @@ suite.define(() => {
           },
         },
       });
-      await gateway.setMethodResponse(
-        "config.get",
-        configResponse(
-          {
-            "session-docs": {
-              enabled: false,
-              transport: "streamable-http",
-              url: "https://session.example.test/mcp",
-            },
+      const afterSessionAdd = configResponse(
+        {
+          "session-docs": {
+            enabled: false,
+            transport: "streamable-http",
+            url: "https://session.example.test/mcp",
           },
-          false,
-          "capability-menu-config-1",
-        ),
+        },
+        false,
+        "capability-menu-config-1",
       );
-      await gateway.resolveDeferred("config.patch", { ok: true });
+      await gateway.setMethodResponse("config.get", afterSessionAdd);
+      await gateway.resolveDeferred("config.patch", { ok: true, ...afterSessionAdd });
       await expect
         .poll(() => latestToolOverrides(gateway))
         .toEqual({ mcpServers: { "session-docs": true }, skills: { docs: false } });
@@ -822,22 +820,20 @@ suite.define(() => {
           },
         },
       });
-      await gateway.setMethodResponse(
-        "config.get",
-        configResponse(
-          {
-            "global-docs": { args: ["--stdio"], command: "docs-mcp" },
-            "session-docs": {
-              enabled: false,
-              transport: "streamable-http",
-              url: "https://session.example.test/mcp",
-            },
+      const afterEverywhereAdd = configResponse(
+        {
+          "global-docs": { args: ["--stdio"], command: "docs-mcp" },
+          "session-docs": {
+            enabled: false,
+            transport: "streamable-http",
+            url: "https://session.example.test/mcp",
           },
-          false,
-          "capability-menu-config-2",
-        ),
+        },
+        false,
+        "capability-menu-config-2",
       );
-      await gateway.resolveDeferred("config.patch", { ok: true });
+      await gateway.setMethodResponse("config.get", afterEverywhereAdd);
+      await gateway.resolveDeferred("config.patch", { ok: true, ...afterEverywhereAdd });
       await expect.poll(() => everywhereDialog.count()).toBe(0);
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(sessionPatchCount);
 

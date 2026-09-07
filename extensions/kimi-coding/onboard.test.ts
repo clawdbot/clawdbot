@@ -9,8 +9,8 @@ describe("kimi coding onboard", () => {
     expect(KIMI_CODING_MODEL_REF).toBe(KIMI_MODEL_REF);
   });
 
-  it("adds the Kimi coding provider defaults", () => {
-    const cfg = applyKimiCodeConfig({});
+  it("adds the Kimi coding provider defaults in replace mode", () => {
+    const cfg = applyKimiCodeConfig({ models: { mode: "replace" } });
     const provider = cfg.models?.providers?.kimi;
 
     expect(provider).toEqual({
@@ -30,6 +30,14 @@ describe("kimi coding onboard", () => {
     });
     expect(provider?.models?.map((model) => model.id)).toEqual(["kimi-for-coding"]);
     expect(cfg.agents?.defaults?.models?.[KIMI_MODEL_REF]?.alias).toBe("Kimi");
+  });
+
+  it.each([undefined, "merge"] as const)("leaves ordinary %s catalogs runtime-owned", (mode) => {
+    const cfg = applyKimiCodeConfig({ models: { mode } });
+
+    expect(cfg.models?.providers?.kimi?.models).toEqual([]);
+    expect(cfg.agents?.defaults?.models?.[KIMI_MODEL_REF]).toEqual({ alias: "Kimi" });
+    expect(applyKimiCodeConfig(cfg)).toEqual(cfg);
   });
 
   it("sets the agent primary model when applying the full Kimi coding preset", () => {

@@ -1,6 +1,6 @@
 // Regresses rejection of legacy routing allowFrom config.
 import { describe, expect, it } from "vitest";
-import { validateConfigObject } from "./validation.js";
+import { validateConfigObject } from "./validation-core.js";
 
 describe("legacy config detection", () => {
   it.each([

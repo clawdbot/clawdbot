@@ -68,6 +68,7 @@ function props({
       ],
     },
     loading: false,
+    retrying: false,
     onRetry: vi.fn(),
     expandedAutomationDays: new Set<string>(),
     onAutomationDayToggle: vi.fn(),

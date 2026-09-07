@@ -1,6 +1,7 @@
 // Error output tests cover program-level error display and exit messaging.
-import { CommanderError, InvalidArgumentError } from "commander";
+import { CommanderError, InvalidArgumentError, type Command } from "commander";
 import { describe, expect, it } from "vitest";
+import { isConfigMachineOutput } from "../config-output-mode.js";
 import { createCronOutputCommand, isCronMachineOutput } from "../cron-cli/output-mode.js";
 import { isDevicesMachineOutput } from "../devices-output-mode.js";
 import { ExpectedCliError, formatCliJsonFailure } from "../failure-output.js";
@@ -77,7 +78,18 @@ async function parseLazyGroupError(params: {
 }
 
 describe("formatCliParseErrorOutput", () => {
-  it.each([
+  it.each<{
+    name: string;
+    args: string[];
+    root: string;
+    alias?: string;
+    children: string[];
+    argument?: string;
+    requiredOption?: string;
+    valueOption?: string;
+    message: string;
+    machineOutput: (argv: readonly string[], command?: Command) => boolean;
+  }>([
     {
       name: "automation lookup",
       args: ["cron", "get"],
@@ -89,12 +101,12 @@ describe("formatCliParseErrorOutput", () => {
     },
     {
       name: "profiled automation alias",
-      args: ["--profile", "work", "automations", "runs"],
+      args: ["--profile", "work", "automations", "get"],
       root: "cron",
       alias: "automations",
-      children: ["runs"],
-      requiredOption: "--id <id>",
-      message: 'Missing required option "--id <id>".',
+      children: ["get"],
+      argument: "<id>",
+      message: 'Missing required argument "id".',
       machineOutput: isCronMachineOutput,
     },
     {
@@ -115,6 +127,52 @@ describe("formatCliParseErrorOutput", () => {
       message: 'Missing required argument "ref".',
       machineOutput: isSkillsMachineOutput,
     },
+    {
+      name: "skill verification after a parent terminator",
+      args: ["skills", "--", "verify"],
+      root: "skills",
+      children: ["verify"],
+      argument: "<ref>",
+      message: 'Missing required argument "ref".',
+      machineOutput: isSkillsMachineOutput,
+    },
+    {
+      name: "config read after a parent terminator",
+      args: ["config", "--", "get"],
+      root: "config",
+      children: ["get"],
+      argument: "<path>",
+      message: 'Missing required argument "path".',
+      machineOutput: isConfigMachineOutput,
+    },
+    {
+      name: "skill verification after a root terminator",
+      args: ["--", "skills", "verify"],
+      root: "skills",
+      children: ["verify"],
+      argument: "<ref>",
+      message: 'Missing required argument "ref".',
+      machineOutput: isSkillsMachineOutput,
+    },
+    {
+      name: "config read after a root terminator",
+      args: ["--", "config", "get"],
+      root: "config",
+      children: ["get"],
+      argument: "<path>",
+      message: 'Missing required argument "path".',
+      machineOutput: isConfigMachineOutput,
+    },
+    ...["version", "tag"].map((option) => ({
+      name: `skill verification with a card-looking ${option} value`,
+      args: ["skills", "verify", `--${option}`, "--card"],
+      root: "skills",
+      children: ["verify"],
+      argument: "<ref>",
+      valueOption: `--${option} <value>`,
+      message: 'Missing required argument "ref".',
+      machineOutput: isSkillsMachineOutput,
+    })),
     {
       name: "node invocation",
       args: ["nodes", "invoke"],
@@ -173,7 +231,9 @@ describe("formatCliParseErrorOutput", () => {
       if (testCase.alias) {
         root.alias(testCase.alias);
       }
-      setCommandJsonMode(root, "output", ({ argv }) => testCase.machineOutput(argv));
+      setCommandJsonMode(root, "output", ({ argv, command }) =>
+        testCase.machineOutput(argv, command),
+      );
 
       let command = root;
       for (const child of testCase.children) {
@@ -187,6 +247,9 @@ describe("formatCliParseErrorOutput", () => {
       }
       if (testCase.requiredOption) {
         command.requiredOption(testCase.requiredOption);
+      }
+      if (testCase.valueOption) {
+        command.option(testCase.valueOption).option("--card");
       }
       command.action(() => {});
 

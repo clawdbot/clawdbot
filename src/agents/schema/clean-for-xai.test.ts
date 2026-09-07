@@ -1,5 +1,5 @@
 // xAI schema tests lock the live-supported JSON Schema bounds used by tools.
-import { normalizeToolParameterSchema } from "@openclaw/ai/internal/openai";
+import { normalizeToolParameterSchema } from "@openclaw/ai/internal/tool-schema";
 import { describe, expect, it } from "vitest";
 
 describe("xAI tool schema compatibility", () => {

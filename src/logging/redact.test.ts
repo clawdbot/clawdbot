@@ -223,6 +223,13 @@ describe("model-visible tool payload redaction", () => {
 });
 
 describe("redactSensitiveText", () => {
+  it("preserves long blank runs without stalling the default redaction scan", () => {
+    const input = `<details>a${"\n".repeat(60_000)}X</details>`;
+    const started = performance.now();
+    expect(redactSensitiveText(input, { mode: "tools" })).toBe(input);
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
   it("masks env assignments while keeping the key", () => {
     const input = "OPENAI_API_KEY=sk-1234567890abcdef";
     const output = redactSensitiveText(input, { mode: "tools" });

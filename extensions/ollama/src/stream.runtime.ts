@@ -32,6 +32,7 @@ import {
   MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
   notifyProviderHttpResponse,
   parseTerminalToolCallArguments,
+  sortPromptCacheToolsByName,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -40,8 +41,13 @@ import {
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { estimateStringChars } from "openclaw/plugin-sdk/text-utility-runtime";
-import { OLLAMA_CLOUD_BASE_URL, OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
+import {
+  isOllamaCloudOrigin,
+  OLLAMA_CLOUD_PROVIDER_ID,
+  OLLAMA_DEFAULT_BASE_URL,
+} from "./defaults.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
+import { resolveOllamaBaseUrlForRun } from "./provider-base-url.js";
 import { buildOllamaBaseUrlSsrFPolicy, isOllamaCloudModel } from "./provider-models.js";
 import {
   createOllamaVisibleContentSanitizer,
@@ -155,20 +161,7 @@ function isLikelyGarbledVisibleText(params: { text: string; modelId: string }): 
   );
 }
 
-export function resolveOllamaBaseUrlForRun(params: {
-  modelBaseUrl?: string;
-  providerBaseUrl?: string;
-}): string {
-  const providerBaseUrl = params.providerBaseUrl?.trim();
-  if (providerBaseUrl) {
-    return providerBaseUrl;
-  }
-  const modelBaseUrl = params.modelBaseUrl?.trim();
-  if (modelBaseUrl) {
-    return modelBaseUrl;
-  }
-  return OLLAMA_NATIVE_BASE_URL;
-}
+export { resolveOllamaBaseUrlForRun } from "./provider-base-url.js";
 
 const OLLAMA_OPTION_PARAM_KEYS = new Set([
   "num_keep",
@@ -309,7 +302,7 @@ function resolveOllamaResponseFormat(
   if (
     !responseFormat ||
     isOllamaCloudModel(params.modelId) ||
-    isOllamaCloudBaseUrl(params.baseUrl)
+    isOllamaCloudOrigin(params.baseUrl)
   ) {
     return undefined;
   }
@@ -326,14 +319,6 @@ function resolveOllamaResponseFormat(
   return responseFormat;
 }
 
-function isOllamaCloudBaseUrl(baseUrl: string): boolean {
-  try {
-    return new URL(baseUrl).origin === OLLAMA_CLOUD_BASE_URL;
-  } catch {
-    return false;
-  }
-}
-
 type StreamModelDescriptor = {
   api: string;
   provider: string;
@@ -341,10 +326,7 @@ type StreamModelDescriptor = {
   reasoning?: boolean;
 };
 
-type OllamaUsageFallback = {
-  input?: number;
-  output?: number;
-};
+type OllamaUsageFallback = Partial<Record<"input" | "output", number | (() => number)>>;
 
 const CHARS_PER_TOKEN_ESTIMATE = 4;
 
@@ -446,6 +428,7 @@ interface OllamaChatResponse extends Record<string, unknown> {
   total_duration?: number;
   load_duration?: number;
   prompt_eval_count?: number;
+  prompt_eval_cached_count?: number;
   prompt_eval_duration?: number;
   eval_count?: number;
   eval_duration?: number;
@@ -507,14 +490,23 @@ function estimateOllamaCompletionTokens(
   return estimateTokensFromChars(chars);
 }
 
-function resolveUsageCount(value: number | undefined, fallback: number | undefined): number {
+function resolveUsageCount(
+  value: number | undefined,
+  fallback: OllamaUsageFallback["input"],
+): number {
   if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
     return value;
   }
-  if (typeof fallback === "number" && Number.isFinite(fallback) && fallback > 0) {
-    return fallback;
+  // Provider counters, including zero, avoid scanning and serializing history for estimates.
+  const estimate = typeof fallback === "function" ? fallback() : fallback;
+  if (typeof estimate === "number" && Number.isFinite(estimate) && estimate > 0) {
+    return estimate;
   }
   return 0;
+}
+
+function resolveOptionalUsageCount(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 type InputContentPart =
@@ -808,7 +800,7 @@ function extractOllamaTools(tools: Tool[] | undefined): OllamaTool[] {
     return [];
   }
   const result: OllamaTool[] = [];
-  for (const tool of tools) {
+  for (const tool of sortPromptCacheToolsByName(tools)) {
     if (typeof tool.name !== "string" || !tool.name) {
       continue;
     }
@@ -862,13 +854,27 @@ export function buildAssistantMessage(
     }
   }
 
+  const promptTokens = resolveUsageCount(response.prompt_eval_count, usageFallback?.input);
+  const outputTokens = resolveUsageCount(response.eval_count, usageFallback?.output);
+  const reportedCacheRead = resolveOptionalUsageCount(response.prompt_eval_cached_count);
+  // Ollama includes cached tokens in prompt_eval_count; OpenClaw records input as uncached.
+  const cacheRead =
+    reportedCacheRead === undefined ? undefined : Math.min(reportedCacheRead, promptTokens);
+
   return buildStreamAssistantMessage({
     model: modelInfo,
     content,
     stopReason: resolveOllamaStopReason(response),
     usage: buildUsageWithNoCost({
-      input: resolveUsageCount(response.prompt_eval_count, usageFallback?.input),
-      output: resolveUsageCount(response.eval_count, usageFallback?.output),
+      input: promptTokens - (cacheRead ?? 0),
+      output: outputTokens,
+      ...(cacheRead === undefined
+        ? {}
+        : {
+            cacheRead,
+            cacheWrite: 0,
+            totalTokens: promptTokens + outputTokens,
+          }),
     }),
   });
 }
@@ -1013,6 +1019,13 @@ function createRawOllamaStreamFn(
                 modelId: model.id,
               });
         const requestParams = {
+          // OpenClaw owns history compaction. Ask local servers to reject overflow
+          // instead of silently discarding messages or shifting the context window.
+          ...(model.provider !== OLLAMA_CLOUD_PROVIDER_ID &&
+          !isOllamaCloudModel(model.id) &&
+          !isOllamaCloudOrigin(baseUrl)
+            ? { truncate: false, shift: false }
+            : {}),
           ...resolveOllamaTopLevelParams(model),
           ...(responseFormat !== undefined ? { format: responseFormat } : {}),
         };
@@ -1328,12 +1341,15 @@ function createRawOllamaStreamFn(
             finalResponse.message.tool_calls = accumulatedToolCalls;
           }
 
+          const completedResponse = finalResponse;
           const usageFallback = {
-            input: estimateOllamaPromptTokens({ messages: ollamaMessages, tools: ollamaTools }),
-            output: estimateOllamaCompletionTokens(
-              finalResponse,
-              estimateStringChars(suppressedThinking),
-            ),
+            input: () =>
+              estimateOllamaPromptTokens({ messages: ollamaMessages, tools: ollamaTools }),
+            output: () =>
+              estimateOllamaCompletionTokens(
+                completedResponse,
+                estimateStringChars(suppressedThinking),
+              ),
           };
           const assistantMessage = buildAssistantMessage(finalResponse, modelInfo, usageFallback, {
             ...toolCallNameOptions,

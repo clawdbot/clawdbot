@@ -1136,6 +1136,11 @@ timeouts, cancellations, and stream faults, retain bounded, redacted stderr and
 stdout captured through shutdown. Packaged plugin setup errors distinguish
 `update repair --help` from `update repair`.
 
+Gateway RPC calls wait for reconnection only while the request is unsent. Once
+sent, a lost connection is reported to the scenario without replaying the
+request: the Gateway may already have committed it. Scenario code must inspect
+the resulting state before deciding whether an interrupted action is safe to retry.
+
 Transport adapters drain their driver work in
 `cleanup()` and release Gateway-backed credentials in
 `cleanupAfterGatewayStop()`. The suite runs that second phase only when no
@@ -1413,6 +1418,10 @@ the suite output and whose artifact paths are resolved relative to that
 producer `qa-evidence.json`. When `qa suite` is reached through `qa run
 --qa-profile`, the same `qa-evidence.json` also includes the profile
 scorecard summary for the selected taxonomy categories.
+
+`qa confidence-report` keeps `productImpact` and `qaImpact` annotations in their
+own Markdown table cells, collapsing whitespace for display. The JSON summary
+preserves the annotation values, including internal line breaks.
 
 Treat coverage output as a discovery aid, not a gate replacement; the
 selected scenario still needs the right provider mode, live transport,

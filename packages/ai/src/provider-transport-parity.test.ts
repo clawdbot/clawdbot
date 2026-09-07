@@ -1,4 +1,5 @@
 import path from "node:path";
+import Anthropic from "@anthropic-ai/sdk";
 import { APIError as AnthropicAPIError } from "@anthropic-ai/sdk/core/error.js";
 import type { AssistantMessageEventStreamLike, Model } from "@openclaw/llm-core";
 import { describe, expect, it, vi } from "vitest";
@@ -417,6 +418,75 @@ const fixtures: ParityFixture[] = [
 describe("provider and transport observable parity fixtures", () => {
   registerParityHostLifecycle();
 
+  it.each([
+    { name: "seeded starts followed by deltas", seeded: true, deltas: true },
+    { name: "seed-only blocks", seeded: true, deltas: false },
+    { name: "empty starts followed by deltas", seeded: false, deltas: true },
+  ])("preserves Anthropic $name like the native SDK", async ({ seeded, deltas }) => {
+    const events = anthropicEvents
+      .filter((event) => deltas || event.type !== "content_block_delta")
+      .map((event) => {
+        if (event.type === "message_start") {
+          return Object.assign({}, event, {
+            message: Object.assign({}, event.message, {
+              type: "message",
+              role: "assistant",
+              content: [],
+              stop_reason: null,
+              stop_sequence: null,
+            }),
+          });
+        }
+        if (!seeded && event.type === "content_block_start" && event.content_block) {
+          return Object.assign({}, event, {
+            content_block:
+              event.content_block.type === "text"
+                ? { type: "text", text: "" }
+                : { type: "thinking", thinking: "", signature: "" },
+          });
+        }
+        return event;
+      });
+    const sdk = new Anthropic({
+      apiKey: "synthetic-key",
+      fetch: async () => createAnthropicResponse(events),
+    });
+    const sdkResult = await sdk.messages
+      .stream({
+        model: anthropicModel.id,
+        max_tokens: 4096,
+        messages: [{ role: "user", content: "Find the answer." }],
+      })
+      .finalMessage();
+    const thinking = `${seeded ? "seed" : ""}${deltas ? " + thought" : ""}`;
+    const text = `${seeded ? "Hello" : ""}${deltas ? " world" : ""}`;
+    const signature = deltas ? "final-signature" : "seed-signature";
+    expect(sdkResult.content).toEqual([
+      { type: "thinking", thinking, signature },
+      { type: "text", text },
+    ]);
+    for (const implementation of ["provider", "transport"] as const) {
+      const result = await runAnthropic(implementation, "success", events);
+      expect(result.terminal).toMatchObject({
+        stopReason: "stop",
+        content: [
+          { type: "thinking", thinking, thinkingSignature: signature },
+          { type: "text", text },
+        ],
+      });
+      expect(result.eventTrace).toContainEqual({
+        type: "thinking_end",
+        contentIndex: 0,
+        content: thinking,
+      });
+      expect(result.eventTrace).toContainEqual({
+        type: "text_end",
+        contentIndex: 1,
+        content: text,
+      });
+    }
+  });
+
   it.each(fixtures)("$name", async ({ provider, outcome, snapshot }) => {
     const run = provider === "anthropic" ? runAnthropic : runOpenAi;
     const providerResult = await run("provider", outcome);
@@ -525,6 +595,72 @@ describe("provider and transport observable parity fixtures", () => {
       }
     },
   );
+
+  it.each([
+    { name: "malformed seeded input", input: "{", providerError: true },
+    {
+      name: "encoded object input",
+      input: '{"query":"seed"}',
+      providerArguments: { query: "seed" },
+    },
+    {
+      name: "streamed arguments superseding a malformed seed",
+      input: "{",
+      delta: '{"query":"streamed"}',
+      providerArguments: { query: "streamed" },
+    },
+  ])("preserves Anthropic terminal tool validation for $name", async (fixture) => {
+    const events = [
+      {
+        type: "message_start",
+        message: {
+          id: "msg_seeded",
+          model: anthropicModel.id,
+          usage: { input_tokens: 1, output_tokens: 0 },
+        },
+      },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "call_seed", name: "lookup", input: fixture.input },
+      },
+      ...(fixture.delta
+        ? [
+            {
+              type: "content_block_delta",
+              index: 0,
+              delta: { type: "input_json_delta", partial_json: fixture.delta },
+            },
+          ]
+        : []),
+      { type: "content_block_stop", index: 0 },
+      { type: "message_delta", delta: { stop_reason: "tool_use" } },
+      { type: "message_stop" },
+    ];
+    for (const implementation of ["provider", "transport"] as const) {
+      const result = await runAnthropic(implementation, "success", events);
+      if (implementation === "provider" && fixture.providerError) {
+        expect(result.terminal.stopReason).toBe("error");
+        expect(result.errorFields.errorMessage).toContain("malformed JSON arguments");
+        expect(result.terminal.content).toEqual([]);
+        expect(result.eventTrace).not.toContainEqual(
+          expect.objectContaining({ type: "toolcall_end" }),
+        );
+      } else {
+        expect(result.terminal).toMatchObject({
+          stopReason: "toolUse",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_seed",
+              arguments:
+                implementation === "provider" || fixture.delta ? fixture.providerArguments : {},
+            },
+          ],
+        });
+      }
+    }
+  });
 
   it("marks content interrupted by native reasoning as commentary", async () => {
     for (const implementation of ["provider", "transport"] as const) {
