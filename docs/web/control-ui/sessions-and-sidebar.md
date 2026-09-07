@@ -67,6 +67,8 @@ The sidebar organizes everything around the agent. The identity row at the top i
 
 Switching agents refreshes the session list even while other conversations are active. A confirmed permission change remains visible if its follow-up list refresh fails.
 
+Expanded child rows stay visible while session-list refreshes fetch updated child data in the background. A loading placeholder appears only when the parent has no loaded child rows yet. Child-load errors remain visible until you choose **Retry** or collapse and reopen the parent.
+
 Session previews are hidden by default for compact, single-line rows. Enable **Show message preview** in the **Sessions** filter menu to restore routine status text and message previews. The browser remembers your choice. Errors and requests for attention remain visible with previews off.
 
 Enable **Hide empty groups** in the same menu to hide custom groups with no sessions in the current sidebar view. It is off by default, and the browser remembers your choice. Collapsed groups with sessions stay visible. Hidden groups keep their membership and order and remain available in **Move to group**; turn the setting off to use their headers as drag targets again.

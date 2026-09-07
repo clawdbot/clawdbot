@@ -99,7 +99,7 @@ function mergeChildSessionRows(
   return merged;
 }
 
-/** Retain only the routed ancestry while a canonical refresh invalidates other child snapshots. */
+/** Retain only the routed ancestry when a refreshed child list omits it (archived or filtered). */
 export function preserveActiveSessionLineageRows(
   sessionKey: string | null,
   rowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>,

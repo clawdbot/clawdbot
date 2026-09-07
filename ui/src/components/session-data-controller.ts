@@ -376,15 +376,10 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   private resetChildSessionState(preserveOperatorContext = false): void {
     this.childSessionGeneration += 1;
-    this.childSessionRowsByParent = preserveOperatorContext
-      ? preserveActiveSessionLineageRows(
-          this.activeSessionLineageRouteKey,
-          this.childSessionRowsByParent,
-        )
-      : {};
     this.loadedChildSessionKeys = new Set();
     this.loadingChildSessionKeys = new Set();
     if (!preserveOperatorContext) {
+      this.childSessionRowsByParent = {};
       this.childSessionErrorsByParent = new Map();
       this.activeSessionLineageRoot = null;
       this.activeSessionLineageSelectedRow = null;
@@ -413,8 +408,8 @@ export class SessionDataController implements ReactiveController, SessionCatalog
           ? preserveRosterPresentationMetadata(canonical, previous)
           : (previous ?? null);
       }
-      // Canonical root changes invalidate successful child snapshots, not operator-owned failures.
-      // Expanded parents refetch only when no failure blocks them.
+      // Keep child snapshots visible while expanded parents revalidate; the generation fences
+      // in-flight results. Operator-owned failures still block automatic refetches.
       this.resetChildSessionState(true);
       this.requestSessionDataUpdate();
     }
@@ -586,7 +581,14 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       if (!rows || !isCurrent()) {
         return;
       }
-      for (const existing of this.childSessionRowsByParent[parentKey] ?? []) {
+      // Server rows replace the snapshot, so removed children disappear; only the
+      // routed lineage survives omission because the selected pane still needs it.
+      const lineage =
+        preserveActiveSessionLineageRows(
+          this.activeSessionLineageRouteKey,
+          this.childSessionRowsByParent,
+        )[parentKey] ?? [];
+      for (const existing of lineage) {
         if (!rows.some((row) => row.key === existing.key)) {
           rows.push(existing);
         }
