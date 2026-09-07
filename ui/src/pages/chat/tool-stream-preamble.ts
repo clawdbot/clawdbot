@@ -1,5 +1,6 @@
 import { readAssistantStreamSegmentIdentity } from "@openclaw/gateway-client/browser";
 import { stripInlineDirectiveTagsForDelivery } from "../../../../src/utils/directive-tags.js";
+import { accumulatedStreamText, trimAccumulatedStreamPrefix } from "../../lib/chat/chat-types.ts";
 import { reconcileChatRunStartup } from "./chat-run-startup.ts";
 import type { AgentEventPayload, ToolStreamHost } from "./tool-stream-contract.ts";
 import { resolveAcceptedSession } from "./tool-stream-status.ts";
@@ -40,6 +41,51 @@ function normalizePreambleProgressText(value: unknown): string {
   return /^NO_REPLY$/iu.test(normalized) ? "" : stripped;
 }
 
+function collapseWhitespace(text: string): string {
+  return text.replace(/\s+/gu, " ").trim();
+}
+
+/**
+ * Transports that resolve commentary only at the tool boundary (openai-completions,
+ * anthropic) first stream the same text unphased through the chat delta lane, where
+ * it carries a run-scoped stream id instead of the item id the phase tagger later
+ * assigns. Once the keyed item owns that text, retire it from the cumulative chat
+ * stream as a persisted prefix so the item and the stream do not both render it.
+ */
+function retireStreamTextOwnedByCommentary(
+  host: ToolStreamHost,
+  payload: AgentEventPayload,
+  progressText: string,
+): void {
+  if (host.chatRunId !== payload.runId || typeof host.chatStream !== "string") {
+    return;
+  }
+  const segments = host.chatStreamSegments ?? [];
+  const tail = trimAccumulatedStreamPrefix(host.chatStream, accumulatedStreamText(segments));
+  if (
+    !tail.trim() ||
+    collapseWhitespace(normalizePreambleProgressText(tail)) !== collapseWhitespace(progressText)
+  ) {
+    return;
+  }
+  const last = segments.at(-1);
+  const extendsPersisted =
+    last?.persisted === true &&
+    last.runId === payload.runId &&
+    !last.boundaryRunId &&
+    !last.toolCallId;
+  host.chatStreamSegments = [
+    ...(extendsPersisted ? segments.slice(0, -1) : segments),
+    {
+      ...(extendsPersisted ? last : {}),
+      text: host.chatStream,
+      ts: host.chatStreamStartedAt ?? payload.ts,
+      runId: payload.runId,
+      persisted: true,
+    },
+  ];
+}
+
 export function handlePreambleProgress(host: ToolStreamHost, payload: AgentEventPayload): boolean {
   const progress = readPreambleProgressEvent(payload);
   if (!progress) {
@@ -72,6 +118,9 @@ export function handlePreambleProgress(host: ToolStreamHost, payload: AgentEvent
       (segment) => segment.itemId !== progress.itemId,
     );
     return true;
+  }
+  if (progress.itemId) {
+    retireStreamTextOwnedByCommentary(host, payload, progress.text);
   }
   const existingIndex = progress.itemId
     ? host.chatStreamSegments.findIndex((segment) => segment.itemId === progress.itemId)
