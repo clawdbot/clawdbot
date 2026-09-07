@@ -12,11 +12,7 @@ import { gatewayDirectStopEntrypoints } from "../cli-entrypoint.test-support.js"
 const tempDirs = createTempDirTracker();
 const children = new Map<ChildProcess, Promise<unknown[]>>();
 const runLoopUrl = resolveRuntimeWorkerUrl(gatewayDirectStopEntrypoints.runLoop).href;
-const restartUrl = resolveRuntimeWorkerUrl({
-  currentModuleUrl: import.meta.url,
-  sourceWorkerName: "../../infra/restart",
-  distWorkerPath: "infra/restart.js",
-}).href;
+const restartUrl = resolveRuntimeWorkerUrl(gatewayDirectStopEntrypoints.restartPolicy).href;
 
 const childScript = `
   import fs from "node:fs";
