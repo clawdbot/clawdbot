@@ -365,72 +365,110 @@ describe("worker environment service provision replay", () => {
     expect(destroy).not.toHaveBeenCalled();
   });
 
-  it.each([true, false])("recovers indeterminate cleanup (released: %s)", async (released) => {
-    const leaseId = "lease:worker-provision-cleanup";
-    const provision = vi.fn(async () => {
-      throw WorkerProviderError.cleanupIndeterminate(
-        leaseId,
-        new Error("worker enrollment failed"),
-        new Error("provider stop timed out after release was requested"),
+  it.each([
+    { released: true, verbose: false },
+    { released: false, verbose: false },
+    { released: true, verbose: true },
+    { released: false, verbose: true },
+  ])(
+    "recovers indeterminate cleanup (released: $released, verbose: $verbose)",
+    async ({ released, verbose }) => {
+      const leaseId = "lease:worker-provision-cleanup";
+      const provisionDiagnosis = "worker enrollment failed: tar: Unexpected EOF in archive";
+      const cleanupDiagnosis = "provider stop timed out after release was requested";
+      const secret = `synthetic-worker-auth-${"x".repeat(48)}`;
+      const progress = String.fromCodePoint(0x1f9ea).repeat(200);
+      const provisionDetail = verbose
+        ? `Crabbox worker bootstrap failed with exit code 1: ... ${progress} --provider aws --type worker\nAuthorization: Bearer ${secret}\n${provisionDiagnosis}`
+        : provisionDiagnosis;
+      const cleanupDetail = verbose
+        ? `Crabbox stop did not exit normally (timeout): ... ${progress} --provider aws --type worker\nAuthorization: Bearer ${secret}\n${cleanupDiagnosis}`
+        : cleanupDiagnosis;
+      const provision = vi.fn(async () => {
+        throw WorkerProviderError.cleanupIndeterminate(
+          leaseId,
+          new Error(provisionDetail),
+          new Error(cleanupDetail),
+        );
+      });
+      const inspect = vi.fn(async () => ({
+        status: released ? ("destroyed" as const) : ("active" as const),
+      }));
+      const destroy = vi.fn(async () => {});
+      const provider = support.createProvider({ provision, inspect, destroy });
+      const workerService = support.createService(provider);
+
+      const failure = await workerService
+        .create("development", "request-provision-cleanup")
+        .catch((error: unknown) => error);
+      expect(failure).toMatchObject({
+        code: "provider_failure",
+      } satisfies Partial<WorkerEnvironmentServiceError>);
+      if (!(failure instanceof Error)) {
+        throw new Error("expected worker creation to fail");
+      }
+      const pending = expectDefined(
+        support.testState.store.list()[0],
+        "persisted provision cleanup",
       );
-    });
-    const inspect = vi.fn(async () => ({
-      status: released ? ("destroyed" as const) : ("active" as const),
-    }));
-    const destroy = vi.fn(async () => {});
-    const provider = support.createProvider({ provision, inspect, destroy });
-    const workerService = support.createService(provider);
+      const diagnostic = expectDefined(pending.lastError, "persisted cleanup diagnostic");
+      for (const detail of [failure.message, diagnostic]) {
+        expect(detail).toContain(provisionDiagnosis);
+        expect(detail).toContain(cleanupDiagnosis);
+        expect(detail).not.toContain(secret);
+        expect(detail).not.toContain("x".repeat(40));
+        expect(detail).not.toMatch(/\s{2,}/u);
+        expect(Buffer.from(detail, "utf8").toString("utf8")).toBe(detail);
+        if (verbose) {
+          expect(detail).toContain("Crabbox worker bootstrap failed with exit code 1");
+          expect(detail).toContain("Crabbox stop did not exit normally (timeout)");
+        }
+      }
+      expect(diagnostic.length).toBeLessThanOrEqual(1_024);
+      expect(failure.message).toBe(
+        `Worker provider operation failed; teardown is pending: ${diagnostic}`,
+      );
+      expect(pending).toMatchObject({
+        state: "destroying",
+        leaseId,
+        destroyRequestedAtMs: expect.any(Number),
+        teardownTerminalState: "failed",
+        lastError: diagnostic,
+      });
 
-    await expect(
-      workerService.create("development", "request-provision-cleanup"),
-    ).rejects.toMatchObject({
-      code: "provider_failure",
-    } satisfies Partial<WorkerEnvironmentServiceError>);
-    const pending = expectDefined(support.testState.store.list()[0], "persisted provision cleanup");
-    expect(pending).toMatchObject({
-      state: "destroying",
-      leaseId,
-      destroyRequestedAtMs: expect.any(Number),
-      teardownTerminalState: "failed",
-      lastError: expect.stringMatching(
-        /worker enrollment failed.*provider stop timed out after release was requested/u,
-      ),
-    });
+      await workerService.stop();
+      support.testState.service = undefined;
+      closeOpenClawStateDatabaseForTest();
+      support.testState.stateDb = openOpenClawStateDatabase({
+        env: { OPENCLAW_STATE_DIR: support.testState.root },
+      });
+      support.testState.store = createWorkerEnvironmentStore({
+        database: support.testState.stateDb,
+        now: () => support.testState.nowMs,
+      });
+      const restarted = support.createService(provider);
+      restarted.start();
+      await support.waitForFast(() =>
+        expect(support.testState.store.get(pending.environmentId)).toMatchObject({
+          state: "failed",
+          leaseId: null,
+        }),
+      );
 
-    await workerService.stop();
-    support.testState.service = undefined;
-    closeOpenClawStateDatabaseForTest();
-    support.testState.stateDb = openOpenClawStateDatabase({
-      env: { OPENCLAW_STATE_DIR: support.testState.root },
-    });
-    support.testState.store = createWorkerEnvironmentStore({
-      database: support.testState.stateDb,
-      now: () => support.testState.nowMs,
-    });
-    const restarted = support.createService(provider);
-    restarted.start();
-    await support.waitForFast(() =>
+      expect(provision).toHaveBeenCalledTimes(1);
+      expect(inspect).toHaveBeenCalledWith({ leaseId, profile: { region: "test" } });
+      expect(destroy).toHaveBeenCalledTimes(released ? 0 : 1);
+      if (!released) {
+        expect(destroy).toHaveBeenCalledWith({ leaseId, profile: { region: "test" } });
+      }
       expect(support.testState.store.get(pending.environmentId)).toMatchObject({
         state: "failed",
         leaseId: null,
-      }),
-    );
-
-    expect(provision).toHaveBeenCalledTimes(1);
-    expect(inspect).toHaveBeenCalledWith({ leaseId, profile: { region: "test" } });
-    expect(destroy).toHaveBeenCalledTimes(released ? 0 : 1);
-    if (!released) {
-      expect(destroy).toHaveBeenCalledWith({ leaseId, profile: { region: "test" } });
-    }
-    expect(support.testState.store.get(pending.environmentId)).toMatchObject({
-      state: "failed",
-      leaseId: null,
-      teardownTerminalState: "failed",
-      lastError: expect.stringMatching(
-        /worker enrollment failed.*provider stop timed out after release was requested/u,
-      ),
-    });
-  });
+        teardownTerminalState: "failed",
+        lastError: diagnostic,
+      });
+    },
+  );
 
   it("does not resolve a provider provision timeout when the service override is set", async () => {
     const resolveProvisionTimeoutMs = vi.fn(() => {
