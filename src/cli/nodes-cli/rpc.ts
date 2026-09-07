@@ -205,7 +205,7 @@ export function buildNodeInvokeParams(params: {
 }
 
 function hasOptionalValue(value: unknown): boolean {
-  return value !== undefined && value !== null && value !== "";
+  return value !== undefined && value !== null;
 }
 
 /** Parse an optional positive integer node CLI flag. */

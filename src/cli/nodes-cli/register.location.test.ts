@@ -37,7 +37,7 @@ function createNodesCommand(): Command {
   return nodes.exitOverride().configureOutput({ writeErr: () => {}, writeOut: () => {} });
 }
 
-describe("nodes location get accuracy", () => {
+describe("nodes location get validation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -84,4 +84,27 @@ describe("nodes location get accuracy", () => {
       }),
     );
   });
+
+  it.each(["", " \t "])(
+    "rejects explicit blank --location-timeout %j before resolving or invoking a node",
+    async (locationTimeout) => {
+      const nodes = createNodesCommand();
+
+      await expect(
+        nodes.parseAsync([
+          "node",
+          "nodes",
+          "location",
+          "get",
+          "--node",
+          "node-1",
+          "--location-timeout",
+          locationTimeout,
+        ]),
+      ).rejects.toThrow("--location-timeout must be a positive integer");
+
+      expect(mocks.resolveCliNodeId).not.toHaveBeenCalled();
+      expect(mocks.callNodesGatewayCli).not.toHaveBeenCalled();
+    },
+  );
 });

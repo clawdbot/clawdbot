@@ -10,7 +10,14 @@ vi.mock("../gateway-rpc.js", () => ({
   callGatewayFromCliWithTransport: gatewayMocks.callGatewayFromCliWithTransport,
 }));
 
-import { buildNodeInvokeParams, resolveCliNode, resolveNodeDiagnosticsId } from "./rpc.js";
+import {
+  buildNodeInvokeParams,
+  parseOptionalNodeFiniteNumber,
+  parseOptionalNodeNonNegativeInteger,
+  parseOptionalNodePositiveInteger,
+  resolveCliNode,
+  resolveNodeDiagnosticsId,
+} from "./rpc.js";
 
 function requestError(params: {
   code?: string;
@@ -174,5 +181,23 @@ describe("node invoke envelope", () => {
     expect(result.idempotencyKey).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
     );
+  });
+});
+
+describe("node numeric option parsing", () => {
+  it("rejects explicit empty values while preserving omitted options", () => {
+    expect(() => parseOptionalNodePositiveInteger("", "--positive")).toThrow(
+      "--positive must be a positive integer",
+    );
+    expect(() => parseOptionalNodeNonNegativeInteger("", "--non-negative")).toThrow(
+      "--non-negative must be a non-negative integer",
+    );
+    expect(() => parseOptionalNodeFiniteNumber("", "--finite")).toThrow(
+      "--finite must be a finite number",
+    );
+
+    expect(parseOptionalNodePositiveInteger(undefined, "--positive")).toBeUndefined();
+    expect(parseOptionalNodeNonNegativeInteger(undefined, "--non-negative")).toBeUndefined();
+    expect(parseOptionalNodeFiniteNumber(undefined, "--finite")).toBeUndefined();
   });
 });
