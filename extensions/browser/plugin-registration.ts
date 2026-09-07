@@ -328,5 +328,20 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
       return await handleGatewayExtensionUpgrade(req, socket, head);
     },
   });
+  api.registerHttpRoute({
+    path: "/browser/screencast",
+    auth: "plugin",
+    match: "exact",
+    handler: (_req: IncomingMessage, res: ServerResponse) => {
+      res.writeHead(426, { "Content-Type": "text/plain" });
+      res.end("Upgrade Required: connect the browser screencast over WebSocket.");
+    },
+    handleUpgrade: async (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+      await loadBrowserRegistrationRuntimeModule();
+      const { handleBrowserScreencastUpgrade } =
+        await import("./src/browser/screencast/upgrade.js");
+      return await handleBrowserScreencastUpgrade(req, socket, head);
+    },
+  });
   api.registerService(createLazyBrowserPluginService());
 }

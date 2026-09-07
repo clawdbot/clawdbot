@@ -23,7 +23,7 @@ import { XAI_OAUTH_AUTO_MODEL_ID } from "./model-id.js";
 
 const PROVIDER_ID = "xai";
 const XAI_MODELS_ENDPOINT = `${XAI_BASE_URL}/models`;
-export const XAI_GROK_OAUTH_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
+const XAI_GROK_OAUTH_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
 const XAI_GROK_OAUTH_MODELS_ENDPOINT = `${XAI_GROK_OAUTH_BASE_URL}/models`;
 const XAI_GROK_OAUTH_SETTINGS_ENDPOINT = `${XAI_GROK_OAUTH_BASE_URL}/settings`;
 const XAI_MODELS_CACHE_TTL_MS = 60_000;
@@ -37,6 +37,17 @@ const XAI_UNKNOWN_MODEL_COST = {
   cacheRead: 0,
   cacheWrite: 0,
 } satisfies ModelDefinitionConfig["cost"];
+
+export function isXaiGrokProxyBaseUrl(baseUrl: string | undefined): boolean {
+  if (!baseUrl) {
+    return false;
+  }
+  try {
+    return new URL(baseUrl).href.replace(/\/+$/u, "") === XAI_GROK_OAUTH_BASE_URL;
+  } catch {
+    return false;
+  }
+}
 
 export function buildXaiProvider(
   api: ModelProviderConfig["api"] = "openai-responses",
@@ -233,6 +244,7 @@ function buildXaiOauthModelFromLiveRow(row: unknown): ModelDefinitionConfig | un
 
 export async function buildLiveXaiOAuthProvider(params: {
   discoveryApiKey: string;
+  authMode?: "oauth" | "token";
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
 }): Promise<ModelProviderConfig> {
@@ -244,7 +256,7 @@ export async function buildLiveXaiOAuthProvider(params: {
       providerConfig: {
         baseUrl: XAI_GROK_OAUTH_BASE_URL,
         api: "openai-responses",
-        auth: "oauth",
+        auth: params.authMode ?? "oauth",
       },
       models: [],
       discoveryApiKey: params.discoveryApiKey,

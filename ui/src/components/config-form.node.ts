@@ -168,10 +168,10 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
     return renderJsonTextarea(params);
   }
 
-  // Enum - use segmented for small, dropdown for large
+  // Nullable enums use the dropdown's distinct null and unset choices.
   if (schema.enum) {
     const options = schema.enum;
-    if (options.length <= 5) {
+    if (options.length <= 5 && !(schema.nullable && schema.enumIncludesNull)) {
       const resolvedValue = value !== undefined ? value : schema.default;
       return renderFieldRow({
         label,

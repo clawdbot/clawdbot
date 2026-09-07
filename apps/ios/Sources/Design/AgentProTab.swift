@@ -1,5 +1,4 @@
 import OpenClawKit
-import OpenClawProtocol
 import SwiftUI
 
 struct AgentProTab: View {
@@ -9,63 +8,12 @@ struct AgentProTab: View {
     let headerSidebarAction: OpenClawSidebarHeaderAction?
     let headerTitle: String
     let openSettings: (() -> Void)?
-    @State var overview: AgentOverviewSnapshot?
-    @State var overviewErrorText: String?
-    @State var overviewLoading: Bool = false
-    @State var overviewRefreshGate = AgentOverviewRefreshGate()
     @State var agentRosterFilter: AgentRosterFilter = .all
     @State var agentSearchText = ""
-    @State var skillFilter: String = ""
-    @State var skillStatusFilter: SkillStatusFilter = .all
-    @State var skillMutationBusyKeys: Set<String> = []
-    @State var skillMutationErrorText: String?
-    @State var skillMutationStatusText: String?
-    @State var skillConfigBusyKeys: Set<String> = []
-    @State var skillConfigMessages: [String: SkillEditorMessage] = [:]
-    @State var skillAPIKeyDrafts: [String: String] = [:]
-    @State var skillEditorSelection: SkillEditorSelection?
-    @State var clawHubQuery: String = ""
-    @State var clawHubResults: [ClawHubSearchResultLite] = []
-    @State var clawHubLoading: Bool = false
-    @State var clawHubErrorText: String?
-    @State var clawHubInstallSlug: String?
-    @State var cronActionBusyIDs: Set<String> = []
-    @State var pendingCronRuns = AgentAutomationPendingRunRegistry()
-    @State var cronActionStatusText: String?
-    @State var automationQuery = ""
-    @State var automationListFilter: AutomationListFilter = .all
-    @State var automationEditorSelection: AutomationEditorSelection?
 
     enum AgentRoute: Hashable {
         case agents
-        case skills
-        case instances
-        case cron
-        case usage
-        case dreaming
         case files
-    }
-
-    enum SkillStatusFilter: String, CaseIterable, Identifiable {
-        case all
-        case enabled
-        case off
-        case setup
-        case blocked
-
-        var id: Self {
-            self
-        }
-
-        var title: String {
-            switch self {
-            case .all: String(localized: "All")
-            case .enabled: String(localized: "Enabled")
-            case .off: String(localized: "Off")
-            case .setup: String(localized: "Setup")
-            case .blocked: String(localized: "Blocked")
-            }
-        }
     }
 
     enum AgentRosterFilter: String, CaseIterable, Identifiable {
@@ -94,28 +42,6 @@ struct AgentProTab: View {
         }
     }
 
-    enum AutomationListFilter: String, CaseIterable, Identifiable {
-        case all
-        case active
-        case paused
-
-        var id: Self {
-            self
-        }
-
-        var title: String {
-            switch self {
-            case .all: String(localized: "All")
-            case .active: String(localized: "Active")
-            case .paused: String(localized: "Paused")
-            }
-        }
-    }
-
-    enum AgentLayout {
-        static let cardRadius: CGFloat = OpenClawProMetric.cardRadius
-    }
-
     enum AgentRosterState: Equatable {
         case online
         case ready
@@ -125,29 +51,6 @@ struct AgentProTab: View {
             case .online: OpenClawBrand.ok
             case .ready: OpenClawBrand.info
             }
-        }
-    }
-
-    struct SkillEditorSelection: Identifiable {
-        let id: String
-    }
-
-    struct AutomationEditorSelection: Identifiable {
-        let initialJob: CronJob
-        let sourceGatewayID: String
-
-        var id: String {
-            self.initialJob.id
-        }
-    }
-
-    struct SkillEditorMessage {
-        let kind: Kind
-        let text: String
-
-        enum Kind {
-            case success
-            case error
         }
     }
 
@@ -165,31 +68,8 @@ struct AgentProTab: View {
 
     var body: some View {
         self.directDestination(for: self.directRoute)
-            .task(id: self.overviewTaskID) {
-                await self.refreshOverview(force: false)
-            }
-            .sheet(item: self.$skillEditorSelection) { selection in
-                if let skill = self.skillByKey(selection.id) {
-                    self.skillEditorSheet(skill)
-                } else {
-                    self.missingSkillEditorSheet
-                }
-            }
-            .sheet(item: self.$automationEditorSelection) { selection in
-                AgentAutomationDetailScreen(
-                    initialJob: selection.initialJob,
-                    sourceGatewayID: selection.sourceGatewayID,
-                    pendingRunRegistry: self.pendingCronRuns,
-                    onRunQueued: { runID, processInstanceID in
-                        self.reservePendingCronRun(
-                            jobID: selection.initialJob.id,
-                            runID: runID,
-                            processInstanceID: processInstanceID,
-                            sourceGatewayID: selection.sourceGatewayID)
-                    },
-                    onChanged: {
-                        Task { await self.refreshOverview(force: true) }
-                    })
+            .task(id: self.rosterTaskID) {
+                await self.refreshAgents()
             }
     }
 

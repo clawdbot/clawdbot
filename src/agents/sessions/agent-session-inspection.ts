@@ -1,7 +1,6 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { isCompactionReplayCheckpoint } from "@openclaw/ai/transports";
-import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import { calculateContextTokens, estimateContextTokens } from "../runtime/index.js";
 import { AgentSessionModels } from "./agent-session-models.js";
 import type { SessionStats } from "./agent-session-types.js";
@@ -165,7 +164,7 @@ export abstract class AgentSessionInspection extends AgentSessionModels {
 
     const header: SessionHeader = {
       type: "session",
-      version: CURRENT_SESSION_VERSION,
+      version: this.sessionManager.getHeader()?.version,
       id: this.sessionManager.getSessionId(),
       timestamp: new Date().toISOString(),
       cwd: this.sessionManager.getCwd(),

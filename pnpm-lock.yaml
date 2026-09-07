@@ -150,7 +150,7 @@ overrides:
 packageExtensionsChecksum: sha256-zZ8fyodhMTumshonC7kktCqTPsiHL3UAyS9vltFAlMo=
 
 patchedDependencies:
-  '@awesome.me/webawesome@3.12.0': 56965f5288ab449b79b5cf0920c37325444105bfc76f146d339c954804671fee
+  '@awesome.me/webawesome@3.12.0': a366a1422e3d8f0b9699205e969a73294877cbff761550bb360380e3ab9428f1
   '@novnc/novnc@1.7.0': bfde0e1bda172da3525f9f5014d85ad28073325b74f09609084598a65d2f412d
   matrix-js-sdk@42.2.0: 9e97147d99b86977d6665a676cdf853434ef61eee7cfb176bb66c9c48da599b4
   vitest@5.0.0: 76a69c6de8bc85bb68eebebddf7e1e798a4ebf46d36ad60e6447ebc62c49f702
@@ -1743,6 +1743,9 @@ importers:
 
   extensions/openshell:
     dependencies:
+      '@openclaw/fs-safe':
+        specifier: 0.8.3
+        version: 0.8.3
       p-limit:
         specifier: 7.3.1
         version: 7.3.1
@@ -2015,6 +2018,19 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+
+  extensions/team-reports:
+    dependencies:
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/teams-meetings:
     dependencies:
@@ -2578,7 +2594,7 @@ importers:
     dependencies:
       '@awesome.me/webawesome':
         specifier: 3.12.0
-        version: 3.12.0(patch_hash=56965f5288ab449b79b5cf0920c37325444105bfc76f146d339c954804671fee)(@floating-ui/utils@0.2.12)(@types/node@26.4.0)(@types/react@19.2.18)
+        version: 3.12.0(patch_hash=a366a1422e3d8f0b9699205e969a73294877cbff761550bb360380e3ab9428f1)(@floating-ui/utils@0.2.12)(@types/node@26.4.0)(@types/react@19.2.18)
       '@codemirror/commands':
         specifier: 6.11.0
         version: 6.11.0
@@ -9800,7 +9816,7 @@ snapshots:
 
   '@asamuzakjp/nwsapi@2.3.9': {}
 
-  '@awesome.me/webawesome@3.12.0(patch_hash=56965f5288ab449b79b5cf0920c37325444105bfc76f146d339c954804671fee)(@floating-ui/utils@0.2.12)(@types/node@26.4.0)(@types/react@19.2.18)':
+  '@awesome.me/webawesome@3.12.0(patch_hash=a366a1422e3d8f0b9699205e969a73294877cbff761550bb360380e3ab9428f1)(@floating-ui/utils@0.2.12)(@types/node@26.4.0)(@types/react@19.2.18)':
     dependencies:
       '@ctrl/tinycolor': 4.1.0
       '@floating-ui/dom': 1.8.0

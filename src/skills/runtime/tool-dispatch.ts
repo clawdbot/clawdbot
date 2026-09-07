@@ -226,7 +226,7 @@ export function resolveSkillDispatchTools(
       toolDenylist: explicitDenylist,
     }),
   });
-  const finalized = applyToolAvailabilityDescriptions(policyFiltered, { agentId: resolvedAgentId });
+  const finalized = applyToolAvailabilityDescriptions(policyFiltered);
   if (explicitPolicyList.some(hasRestrictiveAllowPolicy)) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, finalized);
   }

@@ -1,7 +1,10 @@
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createNativeDeviceSettingsSnapshot } from "../test-helpers/native-device-settings.ts";
+import {
+  createIosNativeDeviceSettingsSnapshot,
+  createNativeDeviceSettingsSnapshot,
+} from "../test-helpers/native-device-settings.ts";
 import {
   createNativeDeviceSettingsCapability,
   type NativeDeviceSettingsCapability,
@@ -52,10 +55,50 @@ describe("native device settings wire contract", () => {
     expect(capability?.snapshot).toEqual(snapshot);
   });
 
+  it("accepts the iOS snapshot with only its published fields", () => {
+    const snapshot = createIosNativeDeviceSettingsSnapshot();
+    installBridge(snapshot);
+    expect(capability?.snapshot).toEqual(snapshot);
+  });
+
+  it("accepts absent optional families and voice fields", () => {
+    const { device, permissions } = createNativeDeviceSettingsSnapshot();
+    const snapshot = {
+      contract: 1,
+      device,
+      permissions,
+      voice: { supported: false, wakeEnabled: false },
+    };
+    installBridge(snapshot);
+    expect(capability?.snapshot).toEqual(snapshot);
+  });
+
+  it.each([
+    { name: "empty", entries: [] },
+    { name: "single", entries: [{ id: "camera", status: "granted" }] },
+    {
+      name: "reordered",
+      entries: createNativeDeviceSettingsSnapshot().permissions.entries.toReversed(),
+    },
+  ])("accepts $name permission subsets in host-published order", ({ entries }) => {
+    const snapshot = createNativeDeviceSettingsSnapshot();
+    const next = { ...snapshot, permissions: { ...snapshot.permissions, entries } };
+    installBridge();
+    const listener = vi.fn();
+    capability?.subscribe(listener);
+    publish(next);
+    expect(capability?.snapshot).toEqual(next);
+    expect(listener).toHaveBeenCalledWith(next);
+  });
+
   it.each([
     ["contract", { contract: 2 }],
     ["device", { device: { platform: "macos" } }],
     ["app", { app: { ...createNativeDeviceSettingsSnapshot().app, showDockIcon: "yes" } }],
+    ["absent family encoded as null", { app: null }],
+    ["appearance", { app: { appearance: "sepia" } }],
+    ["notifications", { app: { notificationsEnabled: "true" } }],
+    ["iOS capability", { capabilities: { healthSummaryEnabled: "true" } }],
     ...[
       null,
       { selectedId: 1, available: [] },
@@ -84,17 +127,41 @@ describe("native device settings wire contract", () => {
     ],
     [
       "permissions",
-      { permissions: { ...createNativeDeviceSettingsSnapshot().permissions, entries: [] } },
+      { permissions: { ...createNativeDeviceSettingsSnapshot().permissions, entries: null } },
     ],
     [
-      "permission order",
+      "unknown permission id",
       {
         permissions: {
           ...createNativeDeviceSettingsSnapshot().permissions,
-          entries: createNativeDeviceSettingsSnapshot().permissions.entries.toReversed(),
+          entries: [{ id: "unknown", status: "granted" }],
         },
       },
     ],
+    [
+      "duplicate permission id",
+      {
+        permissions: {
+          ...createNativeDeviceSettingsSnapshot().permissions,
+          entries: [
+            { id: "camera", status: "granted" },
+            { id: "camera", status: "denied" },
+          ],
+        },
+      },
+    ],
+    [
+      "precise editability",
+      {
+        permissions: {
+          ...createIosNativeDeviceSettingsSnapshot().permissions,
+          location: { mode: "whileUsing", precise: true, preciseEditable: "false" },
+        },
+      },
+    ],
+    ["missing voice wakeEnabled", { voice: { supported: true } }],
+    ["missing voice supported", { voice: { wakeEnabled: false } }],
+    ["Talk toggle", { voice: { supported: true, wakeEnabled: false, talkEnabled: "true" } }],
     [
       "location",
       {
@@ -131,7 +198,7 @@ describe("native device settings wire contract", () => {
     const next = createNativeDeviceSettingsSnapshot();
     next.app.showDockIcon = false;
     publish(next);
-    expect(capability?.snapshot?.app.showDockIcon).toBe(false);
+    expect(capability?.snapshot?.app?.showDockIcon).toBe(false);
     expect(listener).toHaveBeenCalledWith(next);
     unsubscribe?.();
     publish(createNativeDeviceSettingsSnapshot());
@@ -145,7 +212,7 @@ describe("native device settings wire contract", () => {
     window.dispatchEvent(new Event("focus"));
     publish(next);
     expect(post).not.toHaveBeenCalled();
-    expect(capability?.snapshot?.app.showDockIcon).toBe(true);
+    expect(capability?.snapshot?.app?.showDockIcon).toBe(true);
   });
 
   it("settles a rejected edit with native state before notifying the current subscriber", async () => {
@@ -159,7 +226,7 @@ describe("native device settings wire contract", () => {
     capability!.set("browser.cookieSync.targetProfile", pending, settled);
     const observed: string[] = [];
     capability!.subscribe(() =>
-      observed.push(pending || capability!.snapshot!.browser.cookieSync.targetProfile),
+      observed.push(pending || capability!.snapshot!.browser!.cookieSync.targetProfile),
     );
     reply.resolve(createNativeDeviceSettingsSnapshot());
     await vi.waitFor(() => expect(observed).toEqual(["default"]));
@@ -187,7 +254,7 @@ describe("native device settings wire contract", () => {
     next.app.showDockIcon = false;
     delayed.resolve(next);
     await delayed.promise;
-    expect(capability!.snapshot!.app.showDockIcon).toBe(true);
+    expect(capability!.snapshot!.app?.showDockIcon).toBe(true);
     expect(settled).toHaveBeenCalledTimes(1);
     expect(listener).toHaveBeenCalledTimes(1);
     warning.mockRestore();
@@ -216,7 +283,7 @@ describe("native device settings wire contract", () => {
       { type: "open", panel: "quick-chat-shortcut" },
       { type: "check-for-updates" },
     ]);
-    expect(capability?.snapshot?.app.showDockIcon).toBe(true);
-    expect(capability?.snapshot?.app.iconStyle?.selectedId).toBe("paper");
+    expect(capability?.snapshot?.app?.showDockIcon).toBe(true);
+    expect(capability?.snapshot?.app?.iconStyle?.selectedId).toBe("paper");
   });
 });

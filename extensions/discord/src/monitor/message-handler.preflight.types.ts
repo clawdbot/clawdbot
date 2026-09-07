@@ -120,6 +120,7 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
 };
 
 export type DiscordMessagePreflightParams = DiscordMessagePreflightSharedFields & {
+  isPolicyCurrent?: () => boolean;
   dmEnabled: boolean;
   groupDmEnabled: boolean;
   groupDmChannels?: string[];

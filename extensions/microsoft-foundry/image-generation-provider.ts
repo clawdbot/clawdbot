@@ -327,43 +327,37 @@ export function buildMicrosoftFoundryImageGenerationProvider(): ImageGenerationP
         defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
       });
 
+      const requestOptions = {
+        url: buildMaiImageUrl(baseUrl, mode),
+        headers: new Headers(headers),
+        timeoutMs,
+        fetchFn: fetch,
+        allowPrivateNetwork,
+        ssrfPolicy: req.ssrfPolicy,
+        dispatcherPolicy,
+      };
+      if (mode === "edits") {
+        requestOptions.headers.delete("Content-Type");
+      } else {
+        requestOptions.headers.set("Content-Type", "application/json");
+      }
       const request =
         mode === "edits"
           ? postMultipartRequest({
-              url: buildMaiImageUrl(baseUrl, mode),
-              headers: (() => {
-                const multipartHeaders = new Headers(headers);
-                multipartHeaders.delete("Content-Type");
-                return multipartHeaders;
-              })(),
+              ...requestOptions,
               body: buildEditFormData({
                 req,
                 image: expectDefined(inputImages[0], "Microsoft Foundry edit source image"),
                 model,
               }),
-              timeoutMs,
-              fetchFn: fetch,
-              allowPrivateNetwork,
-              ssrfPolicy: req.ssrfPolicy,
-              dispatcherPolicy,
             })
           : postJsonRequest({
-              url: buildMaiImageUrl(baseUrl, mode),
-              headers: (() => {
-                const jsonHeaders = new Headers(headers);
-                jsonHeaders.set("Content-Type", "application/json");
-                return jsonHeaders;
-              })(),
+              ...requestOptions,
               body: {
                 model,
                 prompt: req.prompt,
                 ...resolveMaiImageSize(req.size),
               },
-              timeoutMs,
-              fetchFn: fetch,
-              allowPrivateNetwork,
-              ssrfPolicy: req.ssrfPolicy,
-              dispatcherPolicy,
             });
 
       const { response, release } = await request;

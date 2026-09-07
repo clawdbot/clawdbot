@@ -97,6 +97,16 @@ suite.define(() => {
                     },
                   },
                   {
+                    match: { path: "/screencast" },
+                    response: {
+                      __mockError: {
+                        code: "UNAVAILABLE",
+                        message: "Browser screencast requires Playwright in this gateway build.",
+                        details: { code: "SCREENCAST_UNSUPPORTED", reason: "playwright" },
+                      },
+                    },
+                  },
+                  {
                     match: { path: "/screenshot" },
                     response: { path: "/proof/default.png", targetId: "default-tab" },
                   },

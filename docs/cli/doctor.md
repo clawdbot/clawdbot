@@ -97,8 +97,19 @@ service through its owner. Once the native manager confirms it is offline,
 Doctor can repair its selected state without changing or starting that service.
 
 If migration or config repair cannot finish, Doctor leaves the stopped service
-stopped and reports an incomplete repair. Resolve the reported blocker, rerun
-`openclaw doctor --fix`, then start the service through its owner.
+stopped and reports an incomplete repair with exit code 1. When state requires
+manual recovery, the diagnosis names its path and the next action:
+
+- **Unsupported canonical workspace version:** use an OpenClaw build that supports
+  that version. Preserve the shared database unchanged.
+- **Unreadable or conflicting exec policy:** stop the Gateway and node hosts,
+  then reconcile the named legacy file or interrupted claim with a verified copy
+  of the intended policy. Preserve the existing SQLite policy.
+
+Doctor does not quarantine unsupported workspace state, discard future-version
+rows, or infer execution policy. Repeating the same repair invocation cannot
+resolve these conditions. After manual recovery, verify readiness before starting
+the service through its owner.
 
 ## Gateway service recovery
 
@@ -267,6 +278,13 @@ Bare `openclaw doctor --json` exits `0` once it emits a findings payload, includ
 `--all` controls which checks are selected before severity filtering. The default lint run excludes checks that are deep, historical, or more likely to surface repairable legacy residue; use `--all` for the complete inventory. `--only <id>` is the most precise selector and can run any registered check by id.
 
 `core/doctor/local-audio-acceleration` reports the auto-selected local STT command, separate capable/requested/observed backend evidence, and fallback order without loading a speech model. It emits an informational finding, so include `--severity-min info` to display it.
+
+`core/doctor/skill-workshop-relocation` distinguishes pending legacy collection
+backup roots from roots preserved for review. Eligible proposals or backup roots
+receive `openclaw doctor --fix` guidance, not a guarantee that every backup will
+be retired. Preserved roots require manual review of workspace ownership, backup
+manifests, and workspace migration blockers. If both kinds remain, Doctor reports
+both next steps. Do not delete preserved backups to clear the warning.
 
 ## Structured health checks
 

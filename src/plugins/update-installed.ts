@@ -100,6 +100,7 @@ export async function updateNpmInstalledPlugins(params: {
   updateChannel?: UpdateChannel;
   officialPluginUpdateChannel?: UpdateChannel;
   coreVersion?: string;
+  versionBoundPluginIds?: ReadonlySet<string>;
   dangerouslyForceUnsafeInstall?: boolean;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   specOverrides?: Record<string, string>;
@@ -201,6 +202,7 @@ export async function updateNpmInstalledPlugins(params: {
       syncOfficialPluginInstalls: params.syncOfficialPluginInstalls,
       updateChannel,
       coreVersion: params.coreVersion,
+      versionBoundToCore: params.versionBoundPluginIds?.has(pluginId),
       timeoutMs: params.timeoutMs,
     });
     if (normalizedPluginConfig) {
@@ -246,6 +248,7 @@ export async function updateNpmInstalledPlugins(params: {
             updateChannel,
             officialPackageName: trustedOfficialClawHubInstall ? recordClawHubPackage : undefined,
             coreVersion: params.coreVersion,
+            versionBoundToCore: params.versionBoundPluginIds?.has(pluginId),
           })
         : undefined;
     const effectiveSpec =

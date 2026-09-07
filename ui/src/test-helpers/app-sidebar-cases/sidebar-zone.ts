@@ -133,7 +133,7 @@ describe("AppSidebar interleaved zone", () => {
     expect(sidebar.querySelector('[data-session-key="agent:main:extra"]')).toBeNull();
   });
 
-  it("leads a pinned row like any other session row while activity trails it", async () => {
+  it("leads a pinned row with activity like any other session row", async () => {
     const keys = ["agent:main:main", "agent:main:page", "agent:main:plain"];
     const sessions = createSessionsHarness("main", keys);
     const result = sessions.sessions.state.result;
@@ -159,7 +159,7 @@ describe("AppSidebar interleaved zone", () => {
       plain?.querySelector(".sidebar-session-indicator")?.innerHTML,
     );
     expect(row?.querySelector(".nav-item__state")).toBeNull();
-    expect(row?.querySelector(".session-row-state .sidebar-recent-session__state")).not.toBeNull();
+    expect(row?.querySelector(".sidebar-session-indicator .session-glyph__ring")).not.toBeNull();
   });
 
   it("keeps pinned attention leading while unread trails the row", async () => {

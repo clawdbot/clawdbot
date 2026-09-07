@@ -30,7 +30,14 @@ const MAX_REPETITIONS = 10;
 const MAX_DIAGNOSTIC_CHARS = 8_000;
 
 export type CodeModeMatrixMode = "direct" | "auto" | "code";
-export type CodeModeMatrixTask = "read" | "dependent-read-write";
+const MATRIX_TASKS = [
+  "read",
+  "dependent-read-write",
+  "large-result-reduction",
+  "parallel-independent-reads",
+  "dependent-chain",
+] as const;
+export type CodeModeMatrixTask = (typeof MATRIX_TASKS)[number];
 
 export type CodeModeMatrixOptions = {
   allowFailures: boolean;
@@ -151,7 +158,8 @@ Runs repeated Code Mode acceptance cells through the normal embedded agent path.
 Options:
   --model <provider/model>  Model reference; repeat for multiple models
   --mode <mode>             direct | auto | code; repeat to select modes
-  --task <task>             read | dependent-read-write; repeat to select tasks
+  --task <task>             ${MATRIX_TASKS.join(" | ")}; repeat to select tasks
+                            (default: read, dependent-read-write)
   --repetitions <n>         Runs per model/mode/task cell (default: ${DEFAULT_REPETITIONS}, max: ${MAX_REPETITIONS})
   --timeout <seconds>       Per-run agent deadline (default: ${DEFAULT_TIMEOUT_SECONDS})
   --thinking <level>        Agent thinking level (default: off)
@@ -192,10 +200,11 @@ function parseMode(raw: string): CodeModeMatrixMode {
 }
 
 function parseTask(raw: string): CodeModeMatrixTask {
-  if (raw === "read" || raw === "dependent-read-write") {
-    return raw;
+  const task = MATRIX_TASKS.find((candidate) => candidate === raw);
+  if (task) {
+    return task;
   }
-  throw new Error(`--task must be one of read, dependent-read-write; got ${JSON.stringify(raw)}`);
+  throw new Error(`--task must be one of ${MATRIX_TASKS.join(", ")}; got ${JSON.stringify(raw)}`);
 }
 
 export function parseCodeModeMatrixOptions(
@@ -548,29 +557,92 @@ function verificationCode(cell: MatrixCell): string {
   return `CM-${createHash("sha256").update(cell.id).digest("hex").slice(0, 12).toUpperCase()}`;
 }
 
-async function prepareTaskFixture(workspace: string, cell: MatrixCell): Promise<MatrixTaskFixture> {
+function taskFixture(cell: MatrixCell): MatrixTaskFixture & { files: Record<string, string> } {
   const expected = verificationCode(cell);
-  await fs.mkdir(workspace, { recursive: true });
-  await fs.writeFile(
-    path.join(workspace, "facts.txt"),
-    `project=openclaw\nverification_code=${expected}\n`,
-    "utf8",
-  );
+  const facts = { "facts.txt": `project=openclaw\nverification_code=${expected}\n` };
   if (cell.task === "read") {
     return {
       expected,
+      files: facts,
       prompt:
         "Read facts.txt using tools. Reply with only the verification_code value, with no prose or formatting.",
     };
   }
-  const resultPath = path.join(workspace, "result.txt");
-  await fs.rm(resultPath, { force: true });
+  if (cell.task === "dependent-read-write") {
+    return {
+      expected,
+      files: facts,
+      prompt:
+        "Read facts.txt using tools. Write only its verification_code value to result.txt, then read result.txt and reply with only that value. Do not guess or skip verification.",
+      resultPath: "result.txt",
+    };
+  }
+  // Extended tasks use identical inputs across models/modes for each repetition.
+  const code = verificationCode({ ...cell, id: `${cell.task}-${cell.repetition}` });
+  const finish =
+    " Write only the answer to result.txt, read it back, and reply with only that answer, with no prose or formatting. Use file tools, not shell commands.";
+  if (cell.task === "large-result-reduction") {
+    const rows = Array.from({ length: 512 }, (_, index) => ({
+      id: index + 1,
+      region: index % 3 === 0 ? "west" : "east",
+      units: (index % 7) + 1,
+      unitPriceCents: 100 + (index % 23),
+      note: "irrelevant-detail-".repeat(4),
+    }));
+    const selected = rows.filter((row) => row.region === "east" && row.units >= 4);
+    return {
+      expected: `${code}:${selected.length}:${selected.reduce((total, row) => total + row.units * row.unitPriceCents, 0)}`,
+      files: {
+        "rules.json": JSON.stringify({ region: "east", minUnits: 4, verificationCode: code }),
+        "orders.jsonl": rows.map((row) => JSON.stringify(row)).join("\n") + "\n",
+      },
+      prompt:
+        "Read rules.json and all of orders.jsonl using tools, following read continuations when truncated. Select orders matching rules.region with units >= rules.minUnits. Compute their count and sum of units * unitPriceCents. The answer is verificationCode:count:sum, using rules.verificationCode and integer decimal numbers. Do not emit the raw orders." +
+        finish,
+      resultPath: "result.txt",
+    };
+  }
+  if (cell.task === "parallel-independent-reads") {
+    const names = ["north", "south", "west"];
+    const values = names.map((name, index) => `${code}-${index + 1}-${name}`);
+    return {
+      expected: values.join("|"),
+      files: Object.fromEntries(
+        names.map((name, index) => [`${name}.json`, JSON.stringify({ value: values[index] })]),
+      ),
+      prompt:
+        "Read north.json, south.json, and west.json using independent tool calls. Run the reads in parallel when the tool surface supports it; in Code Mode use Promise.all. Join their value fields in north, south, west order with | (not completion order)." +
+        finish,
+      resultPath: "result.txt",
+    };
+  }
+  const route = `route-${code.slice(3, 9)}.json`;
+  const payload = `payload-${code.slice(9)}.json`;
   return {
-    expected,
+    expected: code,
+    files: {
+      "start.json": JSON.stringify({ next: route }),
+      [route]: JSON.stringify({ next: payload }),
+      [payload]: JSON.stringify({ value: code }),
+    },
     prompt:
-      "Read facts.txt using tools. Write only its verification_code value to result.txt, then read result.txt and reply with only that value. Do not guess or skip verification.",
-    resultPath,
+      "Read start.json using tools. Its next field names the next file; read that file and follow its next field to the payload file. The answer is the payload's value. Await each read before choosing the next path; do not list the directory or guess paths." +
+      finish,
+    resultPath: "result.txt",
   };
+}
+
+async function prepareTaskFixture(workspace: string, cell: MatrixCell): Promise<MatrixTaskFixture> {
+  const { files, ...fixture } = taskFixture(cell);
+  await fs.mkdir(workspace, { recursive: true });
+  for (const [name, content] of Object.entries(files)) {
+    await fs.writeFile(path.join(workspace, name), content, "utf8");
+  }
+  if (fixture.resultPath) {
+    fixture.resultPath = path.join(workspace, fixture.resultPath);
+    await fs.rm(fixture.resultPath, { force: true });
+  }
+  return fixture;
 }
 
 async function readGitSha(repoRoot: string): Promise<string> {
@@ -1098,7 +1170,7 @@ function harnessFailureResult(
     diagnostics: message,
     elapsedMs,
     error: { kind: "harness_error", message },
-    expected: verificationCode(cell),
+    expected: taskFixture(cell).expected,
     failureCategory: "harness_error",
     final: "",
     gitSha: provenance.gitSha,
@@ -1124,6 +1196,17 @@ function harnessFailureResult(
   };
 }
 
+function summarizeMetric(values: (number | undefined)[]) {
+  const samples = values
+    .filter((value): value is number => value !== undefined)
+    .toSorted((a, b) => a - b);
+  return {
+    samples: samples.length,
+    total: samples.length > 0 ? samples.reduce((total, value) => total + value, 0) : null,
+    p50: samples[Math.floor(samples.length / 2)] ?? null,
+  };
+}
+
 function summarizeResults(results: CodeModeMatrixCellResult[]) {
   const groups = new Map<
     string,
@@ -1135,6 +1218,7 @@ function summarizeResults(results: CodeModeMatrixCellResult[]) {
       passed: number;
       total: number;
       wallMs: number[];
+      results: CodeModeMatrixCellResult[];
     }
   >();
   for (const result of results) {
@@ -1147,7 +1231,9 @@ function summarizeResults(results: CodeModeMatrixCellResult[]) {
       passed: 0,
       total: 0,
       wallMs: [],
+      results: [],
     };
+    group.results.push(result);
     group.total += 1;
     group.wallMs.push(result.elapsedMs);
     if (result.passed) {
@@ -1177,6 +1263,18 @@ function summarizeResults(results: CodeModeMatrixCellResult[]) {
       model,
       eventualPassed: group.passed > 0,
       p50WallMs: sortedWallMs[Math.floor(sortedWallMs.length / 2)] ?? 0,
+      metrics: {
+        assistantTurns: summarizeMetric(group.results.map((result) => result.assistantTurns)),
+        outerToolCalls: summarizeMetric(group.results.map((result) => result.toolSummary?.calls)),
+        bridgeSearchCalls: summarizeMetric(
+          group.results.map((result) => result.bridgeCalls?.search),
+        ),
+        bridgeDescribeCalls: summarizeMetric(
+          group.results.map((result) => result.bridgeCalls?.describe),
+        ),
+        bridgeToolCalls: summarizeMetric(group.results.map((result) => result.bridgeCalls?.call)),
+        costUsd: summarizeMetric(group.results.map((result) => result.costUsd)),
+      },
       passRate: group.total === 0 ? 0 : group.passed / group.total,
       passed: group.passed,
       task,

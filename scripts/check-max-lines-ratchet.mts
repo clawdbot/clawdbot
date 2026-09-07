@@ -16,6 +16,7 @@ import {
   reportRatchetSuccess,
   resolveRatchetBase,
 } from "./lib/shrink-ratchet.mts";
+import { collectTypeScriptCommentRanges } from "./lib/ts-guard-utils.mts";
 
 const BASELINE_PATH = "config/max-lines-baseline.txt";
 const GIT_MAX_BUFFER = 256 * 1024 * 1024;
@@ -58,25 +59,9 @@ export function collectLintDisableDirectives(source: string, filePath = "source.
     false,
     scriptKind,
   );
-  const comments = new Map<number, string>();
-  const addComments = (ranges: readonly ts.CommentRange[] | undefined) => {
-    for (const range of ranges ?? []) {
-      comments.set(range.pos, source.slice(range.pos, range.end));
-    }
-  };
-  const visit = (node: ts.Node) => {
-    addComments(ts.getLeadingCommentRanges(source, node.pos));
-    addComments(ts.getTrailingCommentRanges(source, node.end));
-    // getChildren includes delimiter tokens; forEachChild misses directives before closing tokens.
-    for (const child of node.getChildren(sourceFile)) {
-      visit(child);
-    }
-  };
-  visit(sourceFile);
-  addComments(ts.getLeadingCommentRanges(source, sourceFile.endOfFileToken.pos));
-
   const directives: string[][] = [];
-  for (const text of comments.values()) {
+  for (const range of collectTypeScriptCommentRanges(ts, sourceFile)) {
+    const text = source.slice(range.pos, range.end);
     const comment = text.slice(2, text.startsWith("/*") ? -2 : undefined);
     const match = directive.exec(comment.trim());
     if (!match) {

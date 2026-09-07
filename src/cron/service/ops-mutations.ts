@@ -509,7 +509,7 @@ async function updateLoadedJob(params: {
   await precondition?.(structuredClone(job), now);
   const nextJob = structuredClone(job);
   applyJobPatch(nextJob, patch, {
-    defaultAgentId: state.deps.defaultAgentId,
+    defaultAgentId: resolveCurrentDefaultAgentId(state),
     scheduleValidationNowMs: now,
     cronConfig: state.deps.cronConfig,
     scheduledToolPolicy: opts?.scheduledToolPolicy,

@@ -237,7 +237,7 @@ verification facts are included only when observed. Chat reports are limited to 
 The run records `downtimeMs` from the service stop request until a Gateway is
 verified running. Staging, candidate validation, and pre-activation repair are excluded. Verification
 records include service PID/port, version/build identity, settled health,
-plugin activation errors, channel readiness, `/readyz`, and the inference probe.
+plugin activation errors, channel readiness, and `/readyz`.
 
 After a live database migration, a fresh process from the candidate completes
 verification and writes the final outcome to the same run. It carries forward
@@ -263,7 +263,7 @@ openclaw update repair --accept-capabilities
 | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `--channel <stable\|extended-stable\|beta\|dev>` | Persist the core update channel before repair. For extended-stable, eligible official npm and trusted official ClawHub plugins that follow bare/default or `latest` intent target the exact installed core version. Extended-stable repair is rejected on Git checkouts without changing config. |
 | `--json`                                         | Print machine-readable finalization JSON.                                                                                                                                                                                                                                                        |
-| `--timeout <seconds>`                            | Timeout for repair steps. Default `1800`.                                                                                                                                                                                                                                                        |
+| `--timeout <seconds>`                            | Override each repair phase deadline in seconds. Defaults vary by phase (see below).                                                                                                                                                                                                              |
 | `--yes`                                          | Skip confirmation prompts.                                                                                                                                                                                                                                                                       |
 | `--accept-capabilities`                          | Accept each plugin's reviewed capability changes while repairing plugin state.                                                                                                                                                                                                                   |
 | `--no-restart`                                   | Accepted for parity; repair never restarts the Gateway.                                                                                                                                                                                                                                          |
@@ -301,6 +301,27 @@ healthy managed package.
 With `--json`, stdout contains one JSON document. Doctor panels and other
 diagnostics go to stderr, so stdout can be parsed directly. Failed doctor or
 plugin finalization steps still exit non-zero.
+
+Finalization (including the supervisor-facing `update finalize` command) records
+phase starts and finishes immediately on stderr and in the update run ledger.
+The defaults are 30 seconds for preflight admission, config validation, config backup, and completion
+cache work; 120 seconds for Doctor migrations; 600 seconds for plugin registry
+and installation work; and 180 seconds for post-plugin Doctor and validation.
+`--timeout` overrides each phase budget.
+
+A phase deadline produces exit code 1 and JSON with `status: "failed"`,
+`stuckPhase`, `elapsedMs`, `error`, and the existing `phaseTimings` array. Owned
+command trees are stopped before the finalizer exits so the supervisor can
+recover. Preserve the phase diagnostic when reporting a stalled update.
+Shared CLI disposers have individual five-second deadlines. If the finalizer
+remains alive ten seconds after its terminal JSON, stderr and the ledger
+record active resource types and unsettled disposer names, then the process
+exits with its recorded outcome. A retained handle cannot withhold the
+supervisor's result indefinitely.
+Human repair can still wait for a recovery choice or repair agent; its exit grace
+starts after recovery finishes. Completion-cache refresh remains best effort
+when its child can be stopped within the phase budget. A phase that exceeds its
+overall deadline still fails finalization.
 
 Plugin artifacts that require capability consent are not installed without an
 interactive review or explicit `--accept-capabilities`. `--yes` alone does not
@@ -477,27 +498,11 @@ budgets, permitted repairs, and attempt reports.
 Only `activating` stops the managed service. Its offline work includes the package
 or checkout swap, required `doctor --fix` migrations, and state compatibility
 inspection, followed by service start
-in `restarting`. In `verifying`, the updater requires the normal 12-probe settle,
-the expected version and Git build identity, no plugin activation errors,
-channel readiness, and HTTP 200 from `/readyz`. It then runs a real agent turn
-through that Gateway using configured inference and verifies the saved request and
-completed response through a fresh session-storage reader. This serving check has
-a 60-second budget and must match the health-checked Gateway boot and expected
-artifact version/build. Unavailable inference, timeout, failed turns, or missing
-persistence fail verification and enter the existing repair or rollback flow.
-Health or readiness alone cannot pass verification.
-
-The saved assistant reply may contain punctuation or a short sentence, but must
-include the run-specific verification token as a whole word. The check still
-requires the matching run, transcript lineage, provider/model metadata, and a
-successful stop reason. Reports, chat notices, and `openclaw update status` retain
-the failed check and its next action:
-
-| Reason                | Meaning and next action                                                                                                       |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `response-mismatch`   | The completed turn was saved, but the reply did not contain the token. Run `openclaw triage` to inspect the configured agent. |
-| `turn-incomplete`     | Saved transcript evidence did not prove a complete, valid turn. Run `openclaw triage` to inspect the turn and its lineage.    |
-| `persistence-missing` | No committed request/response pair was found. Run `openclaw triage` to inspect session persistence.                           |
+in `restarting`. Update verification does not use model inference. In `verifying`,
+the updater checks that the managed service is running and owns its port, requires
+the normal 12-probe health settle and a Gateway hello handshake matching the
+expected version and Git build identity, checks for plugin activation errors and
+channel readiness, and requires HTTP 200 from `/readyz`.
 
 A candidate can be running while verification fails. Recovery guidance uses the
 latest observed service state and names the running version when known; an

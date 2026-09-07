@@ -30,6 +30,7 @@ import {
 } from "../../pairing/pairing-store.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import { formatForLog } from "../ws-log.js";
+import { respondUnavailable, respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -341,7 +342,7 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
         undefined,
       );
     } catch (error) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(error)));
+      respondUnavailable(respond, error);
     }
   },
 
@@ -373,7 +374,7 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
       invalidPairingAccount(respond, parsed.channel, parsed.accountId);
       return;
     }
-    try {
+    await respondUnavailableOnThrow(respond, async () => {
       const dismissed = await dismissChannelPairingRequest({
         channel: account.plugin.id,
         accountId: account.accountId,
@@ -395,8 +396,6 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
         },
         undefined,
       );
-    } catch (error) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(error)));
-    }
+    });
   },
 };

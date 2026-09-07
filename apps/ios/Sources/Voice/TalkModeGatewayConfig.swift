@@ -46,30 +46,6 @@ struct TalkRuntimeIssue: Equatable {
         String(localized: "Listening (iOS Speech fallback)")
     }
 
-    var fallbackBannerTitle: String {
-        String(localized: "Using iOS Speech fallback")
-    }
-
-    var fallbackBannerOwnerLabel: String {
-        String(localized: "Fallback active")
-    }
-
-    var fallbackBannerMessage: String {
-        String(localized: "Realtime voice did not start. Talk is running with iOS speech recognition and TTS.")
-    }
-
-    var technicalDetails: String {
-        var lines = [
-            "code: \(code.rawValue)",
-            "message: \(self.displayMessage)",
-        ]
-        if let provider, !provider.isEmpty { lines.append("provider: \(provider)") }
-        if let model, !model.isEmpty { lines.append("model: \(model)") }
-        if let transport, !transport.isEmpty { lines.append("transport: \(transport)") }
-        if let phase, !phase.isEmpty { lines.append("phase: \(phase)") }
-        return lines.joined(separator: "\n")
-    }
-
     var diagnosticSummary: String {
         var parts = [displayMessage]
         if let provider, !provider.isEmpty { parts.append("provider: \(provider)") }
@@ -168,9 +144,12 @@ enum TalkVoiceModeDescriptorBuilder {
     }
 
     private static func voiceLabel(_ voice: String) -> String {
-        TalkModeRealtimeVoiceSelection.voices.contains(voice)
-            ? TalkModeRealtimeVoiceSelection.label(for: voice)
-            : voice
+        switch voice {
+        case "alloy", "ash", "ballad", "cedar", "coral", "echo", "marin", "sage", "shimmer", "verse":
+            voice.prefix(1).uppercased() + String(voice.dropFirst())
+        default:
+            voice
+        }
     }
 
     private static func transportLabel(_ transport: String) -> String {
@@ -190,34 +169,6 @@ enum TalkVoiceModeDescriptorBuilder {
         default:
             "Native"
         }
-    }
-}
-
-enum TalkModeProviderSelection: String, CaseIterable, Identifiable {
-    case gatewayDefault = "gateway"
-    case nativeElevenLabs = "elevenlabs"
-    case openAIRealtime = "openai-realtime"
-
-    static let storageKey = "talk.providerSelection"
-
-    var id: String {
-        rawValue
-    }
-
-    var label: String {
-        switch self {
-        case .gatewayDefault:
-            "Gateway Default"
-        case .nativeElevenLabs:
-            "ElevenLabs"
-        case .openAIRealtime:
-            "Realtime-2 (OpenAI)"
-        }
-    }
-
-    static func resolved(_ raw: String?) -> TalkModeProviderSelection {
-        let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return TalkModeProviderSelection(rawValue: trimmed) ?? .gatewayDefault
     }
 }
 
@@ -251,46 +202,27 @@ struct TalkModeResolvedRouting: Equatable {
 enum TalkModeRoutingResolver {
     static func resolve(
         parsed: TalkModeGatewayConfigState,
-        providerSelection: TalkModeProviderSelection,
-        defaultProvider: String,
-        defaultRealtimeModelId: String) -> TalkModeResolvedRouting
+        defaultProvider: String) -> TalkModeResolvedRouting
     {
-        var activeProvider = parsed.activeProvider
-        var realtimeProvider = parsed.realtimeProvider
-        var realtimeModelId = parsed.realtimeModelId
         let route: TalkModeRuntimeRoute
-
-        switch providerSelection {
-        case .gatewayDefault:
-            // Only an explicit realtime config selects the realtime transport. Other Gateway
-            // speech providers stay native and synthesize through talk.speak.
-            if parsed.executionMode == .realtimeWebRTC {
-                route = .realtimeWebRTC
-            } else if parsed.executionMode == .realtimeRelay {
-                route = .realtimeRelay
-            } else if Self.normalized(activeProvider) == Self.normalized(defaultProvider) {
-                // Preserve the shipped local ElevenLabs path, including its streaming playback.
-                route = .localElevenLabs
-            } else {
-                route = .gatewayTalkSpeak
-            }
-        case .nativeElevenLabs:
-            activeProvider = defaultProvider
-            route = .localElevenLabs
-        case .openAIRealtime:
-            activeProvider = "openai"
-            realtimeProvider = "openai"
-            realtimeModelId = defaultRealtimeModelId
-            // Provider selection can replace provider details, but an explicit Gateway-owned
-            // realtime route must remain on the Gateway (for example, Azure-backed OpenAI).
-            route = parsed.openAIRequiresGatewayRealtimeTransport ? .realtimeRelay : .realtimeWebRTC
+            // Only explicit Gateway realtime config selects a realtime transport. Other
+            // speech providers synthesize through talk.speak, except the shipped local ElevenLabs path.
+            = if parsed.executionMode == .realtimeWebRTC
+        {
+            .realtimeWebRTC
+        } else if parsed.executionMode == .realtimeRelay {
+            .realtimeRelay
+        } else if Self.normalized(parsed.activeProvider) == Self.normalized(defaultProvider) {
+            .localElevenLabs
+        } else {
+            .gatewayTalkSpeak
         }
 
         return TalkModeResolvedRouting(
-            activeProvider: activeProvider,
+            activeProvider: parsed.activeProvider,
             executionMode: Self.executionMode(for: route),
-            realtimeProvider: realtimeProvider,
-            realtimeModelId: realtimeModelId,
+            realtimeProvider: parsed.realtimeProvider,
+            realtimeModelId: parsed.realtimeModelId,
             route: route)
     }
 
@@ -310,39 +242,12 @@ enum TalkModeRoutingResolver {
     }
 }
 
-enum TalkModeRealtimeVoiceSelection {
-    static let storageKey = "talk.realtime.voiceSelection"
-    static let voices = [
-        "alloy",
-        "ash",
-        "ballad",
-        "cedar",
-        "coral",
-        "echo",
-        "marin",
-        "sage",
-        "shimmer",
-        "verse",
-    ]
-
-    static func resolvedOverride(_ raw: String?) -> String? {
-        let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !trimmed.isEmpty else { return nil }
-        return Self.voices.contains(trimmed) ? trimmed : nil
-    }
-
-    static func label(for voice: String) -> String {
-        voice.prefix(1).uppercased() + String(voice.dropFirst())
-    }
-}
-
 struct TalkModeGatewayConfigState {
     let activeProvider: String
     let normalizedPayload: Bool
     let missingResolvedPayload: Bool
     let executionMode: TalkModeExecutionMode
     let requiresGatewayRealtimeTransport: Bool
-    let openAIRequiresGatewayRealtimeTransport: Bool
     let defaultVoiceId: String?
     let voiceAliases: [String: String]
     let configuredModelId: String?
@@ -403,13 +308,6 @@ enum TalkModeGatewayConfigParser {
             || realtimeTransport == "gateway-relay"
             || realtimeTransport == "provider-websocket"
             || Self.usesAzureOpenAI(provider: realtimeProvider, config: realtimeProviderConfig)
-        let openAIProviderConfig = TalkConfigParsing.realtimeProviderConfig(
-            providers: realtimeProviders,
-            provider: "openai")
-        let openAIRequiresGatewayRealtimeTransport = requiresForcedAgentConsultRelay
-            || realtimeTransport == "gateway-relay"
-            || realtimeTransport == "provider-websocket"
-            || Self.usesAzureOpenAI(provider: "openai", config: openAIProviderConfig)
         let executionMode = Self.resolvedExecutionMode(
             realtime,
             requiresGatewayRealtimeTransport: requiresGatewayRealtimeTransport)
@@ -426,7 +324,6 @@ enum TalkModeGatewayConfigParser {
             missingResolvedPayload: talk != nil && selection == nil,
             executionMode: executionMode,
             requiresGatewayRealtimeTransport: requiresGatewayRealtimeTransport,
-            openAIRequiresGatewayRealtimeTransport: openAIRequiresGatewayRealtimeTransport,
             defaultVoiceId: defaultVoiceId,
             voiceAliases: voiceAliases,
             configuredModelId: model,

@@ -1,4 +1,5 @@
 import OpenClawChatUI
+import OpenClawKit
 import OpenClawProtocol
 import SwiftUI
 import Testing
@@ -7,6 +8,36 @@ import UIKit
 
 @MainActor
 struct RootTabsPresentationTests {
+    @Test func `notification guidance opens delivery setup before system permissions`() {
+        #expect(RootTabs
+            .notificationSettingsPath(servingEnabled: false, disclosureAccepted: false) == "/settings/device")
+        #expect(RootTabs
+            .notificationSettingsPath(servingEnabled: false, disclosureAccepted: true) == "/settings/device")
+        #expect(RootTabs
+            .notificationSettingsPath(servingEnabled: true, disclosureAccepted: false) == "/settings/device")
+        #expect(RootTabs
+            .notificationSettingsPath(servingEnabled: true, disclosureAccepted: true) == "/settings/device/permissions")
+    }
+
+    @Test func `every sidebar destination resolves to a native screen or a valid Dashboard route`() {
+        let expected: [RootTabs.SidebarDestination: RootTabs.SidebarScreen] = [
+            .chat: .chat, .overview: .overview, .agents: .agents, .sessions: .sessions,
+            .files: .files, .desktop: .desktop, .terminal: .terminal, .docs: .docs,
+            .settings: .settings, .gateway: .gateway,
+            .activity: .dashboard("/activity"), .workboard: .dashboard("/workboard"),
+            .skillWorkshop: .dashboard("/skills/workshop"), .instances: .dashboard("/settings/devices"),
+            .dreaming: .dashboard("/settings/memory/dreams"), .usage: .dashboard("/usage"),
+            .cron: .dashboard("/automations"),
+        ]
+        #expect(Set(expected.keys) == Set(RootTabs.SidebarDestination.allCases))
+        for destination in RootTabs.SidebarDestination.allCases {
+            #expect(expected[destination] == destination.screen)
+            if case let .dashboard(path) = destination.screen {
+                #expect(DashboardRouteMap.isValidSameAppPath(path))
+            }
+        }
+    }
+
     @Test func `session activity clamps current and future timestamps to just now`() {
         let now = Date(timeIntervalSince1970: 1_750_000_000)
 
@@ -199,34 +230,6 @@ struct RootTabsPresentationTests {
         }
     }
 
-    @Test func `usage list shows the latest fourteen days newest first`() {
-        let days = (1...20).map { day in
-            CostUsageDailyEntryLite(
-                date: String(format: "2026-07-%02d", day),
-                totalTokens: day,
-                totalCost: Double(day))
-        }
-
-        let displayed = AgentProTab.displayedUsageDays(days)
-
-        #expect(displayed.map(\.date) == (7...20).reversed().map {
-            String(format: "2026-07-%02d", $0)
-        })
-    }
-
-    @Test func `usage summary preserves numeric and string counts with missing totals`() throws {
-        let cases: [(json: String, expected: Int?)] = [
-            (#"{"totals":{"totalTokens":1200}}"#, 1200),
-            (#"{"totals":{"totalTokens":"1200"}}"#, 1200),
-            (#"{"totals":{}}"#, nil),
-            (#"{}"#, nil),
-        ]
-        for testCase in cases {
-            let summary = try JSONDecoder().decode(CostUsageSummaryLite.self, from: Data(testCase.json.utf8))
-            #expect(summary.totalTokens == testCase.expected)
-        }
-    }
-
     @Test func `iOS usage requests device calendar days`() throws {
         let cases: [(timeZoneID: String, timestamp: TimeInterval, expectedOffset: String)] = [
             ("America/Los_Angeles", 1_769_000_000, "UTC-8"),
@@ -415,136 +418,6 @@ struct RootTabsPresentationTests {
         #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "settings"]) == .settings)
     }
 
-    @Test func `skill workshop mutations require admin scope`() {
-        #expect(IPadSkillWorkshopScreen.shouldEnableProposalMutation(canWrite: true, hasOperatorAdminScope: true))
-        #expect(!IPadSkillWorkshopScreen.shouldEnableProposalMutation(canWrite: true, hasOperatorAdminScope: false))
-        #expect(!IPadSkillWorkshopScreen.shouldEnableProposalMutation(canWrite: false, hasOperatorAdminScope: true))
-    }
-
-    @Test func `skill workshop actions carry the reviewed revision hash`() throws {
-        let revisionHash = String(repeating: "a", count: 64)
-        let proposal = Self.skillWorkshopProposal(revisionHash: revisionHash)
-        let apply = try #require(IPadSkillProposalAction(kind: .apply, proposal: proposal))
-        let reject = try #require(IPadSkillProposalAction(kind: .reject, proposal: proposal))
-
-        for (action, method) in [
-            (apply, "skills.proposals.apply"),
-            (reject, "skills.proposals.reject"),
-        ] {
-            let encoded = try #require(
-                JSONSerialization.jsonObject(
-                    with: JSONEncoder().encode(action.params(agentID: "main"))) as? [String: Any])
-
-            #expect(action.method == method)
-            #expect(encoded["agentId"] as? String == "main")
-            #expect(encoded["proposalId"] as? String == proposal.id)
-            #expect(encoded["expectedRevisionHash"] as? String == revisionHash)
-        }
-    }
-
-    @Test func `skill workshop actions require an inspected revision hash`() {
-        #expect(IPadSkillProposalAction(
-            kind: .apply,
-            proposal: Self.skillWorkshopProposal(revisionHash: nil)) == nil)
-    }
-
-    @Test func `skill workshop held filter includes quarantined and stale`() {
-        #expect(IPadSkillWorkshopScreen.proposalStatusFilters.contains("held"))
-        #expect(IPadSkillWorkshopScreen.proposalStatusMatchesFilter(status: "quarantined", filter: "held"))
-        #expect(IPadSkillWorkshopScreen.proposalStatusMatchesFilter(status: "stale", filter: "held"))
-        #expect(!IPadSkillWorkshopScreen.proposalStatusMatchesFilter(status: "pending", filter: "held"))
-    }
-
-    @Test func `skill workshop board lanes match status filter`() {
-        #expect(
-            IPadSkillWorkshopScreen.proposalStatusBoardLanes(
-                filter: "pending",
-                proposalStatuses: ["pending", "applied"]) == ["pending"])
-        #expect(
-            IPadSkillWorkshopScreen.proposalStatusBoardLanes(
-                filter: "held",
-                proposalStatuses: ["quarantined", "stale"]) == ["quarantined", "stale"])
-        #expect(
-            IPadSkillWorkshopScreen.proposalStatusBoardLanes(
-                filter: "all",
-                proposalStatuses: ["pending", "needs-review"]) == [
-                "pending",
-                "quarantined",
-                "stale",
-                "applied",
-                "rejected",
-                "needs-review",
-            ])
-        #expect(IPadSkillWorkshopScreen.proposalLaneLabel("quarantined") == "Quarantined")
-        #expect(IPadSkillWorkshopScreen.proposalLaneLabel("pending") == "Pending")
-        #expect(IPadSkillWorkshopScreen.proposalLaneLabel("needs-review") == "Needs Review")
-        #expect(IPadSkillWorkshopScreen.proposalLaneLabel("manual_QA") == "Manual QA")
-    }
-
-    @Test func `skill workshop selection stays inside active filter`() {
-        let proposals = [
-            (id: "applied-1", status: "applied"),
-            (id: "pending-1", status: "pending"),
-            (id: "held-1", status: "quarantined"),
-        ]
-
-        #expect(
-            IPadSkillWorkshopScreen.nextSelectedProposalID(
-                current: "applied-1",
-                proposals: proposals,
-                filter: "pending") == "pending-1")
-        #expect(
-            IPadSkillWorkshopScreen.nextSelectedProposalID(
-                current: "held-1",
-                proposals: proposals,
-                filter: "held") == "held-1")
-        #expect(
-            IPadSkillWorkshopScreen.nextSelectedProposalID(
-                current: "pending-1",
-                visibleProposalIDs: ["held-1"]) == "held-1")
-        #expect(
-            IPadSkillWorkshopScreen.nextSelectedProposalID(
-                current: "pending-1",
-                visibleProposalIDs: []) == nil)
-    }
-
-    @Test func `workboard board scope labels stay compact`() {
-        #expect(IPadWorkboardScreen.normalizedScopeID("  planning ") == "planning")
-        #expect(IPadWorkboardScreen.boardScopeLabel(for: "") == "All boards")
-        #expect(IPadWorkboardScreen.boardScopeLabel(for: "planning") == "planning")
-        #expect(IPadWorkboardScreen.boardScopeOptions(
-            knownBoardIDs: ["default", " empty-board ", ""],
-            cardBoardIDs: ["planning", "default"]) == ["default", "empty-board", "planning"])
-        #expect(IPadWorkboardScreen
-            .workboardSubtitle(boardScopeLabel: "All boards", selectedStatus: "active") == "All boards / Active")
-        #expect(IPadWorkboardScreen
-            .workboardSubtitle(boardScopeLabel: "planning", selectedStatus: "running") == "planning / Running")
-    }
-
-    @Test func `workboard compact unavailable copy explains real capability state`() {
-        #expect(IPadWorkboardScreen
-            .compactWriteUnavailableMessage(canRead: false) ==
-            "Connect from Settings to create, move, and dispatch cards.")
-        #expect(IPadWorkboardScreen.compactWriteUnavailableMessage(canRead: true) == "Read-only gateway.")
-    }
-
-    @Test func `skill workshop agent scope normalizes gateway ids`() {
-        #expect(IPadSkillWorkshopScreen.normalizedScopeID("  aiden ") == "aiden")
-        #expect(IPadSkillWorkshopScreen.normalizedScopeID(nil) == "")
-    }
-
-    @Test func `channel lifecycle controls require admin scope`() {
-        #expect(SettingsChannelsDestination.shouldEnableChannelOperation(canRead: true, hasOperatorAdminScope: true))
-        #expect(!SettingsChannelsDestination.shouldEnableChannelOperation(canRead: true, hasOperatorAdminScope: false))
-        #expect(!SettingsChannelsDestination.shouldEnableChannelOperation(canRead: false, hasOperatorAdminScope: true))
-    }
-
-    @Test func `click clack stays in channels integration metadata`() {
-        #expect(SettingsChannelsDestination.fallbackLabel("clickclack") == "ClickClack")
-        #expect(SettingsChannelsDestination.fallbackDetail("clickclack") == "Self-hosted chat bot routing.")
-        #expect(SettingsChannelsDestination.fallbackSystemImage("clickclack") == "bubble.left.and.bubble.right")
-    }
-
     @Test func `chat header follows the agent badge presentation`() {
         #expect(ChatProTab.defaultHeaderTitle(showsAgentBadge: true, agentDisplayName: "OpenClaw") == "OpenClaw")
         #expect(ChatProTab.defaultHeaderTitle(showsAgentBadge: false, agentDisplayName: "OpenClaw") == "Chat")
@@ -586,24 +459,6 @@ struct RootTabsPresentationTests {
             nextTransportAgentID: "work"))
     }
 
-    @Test func `workboard dispatch summary reports started and failures`() throws {
-        let payload = Data(
-            """
-            {
-              "count": 2,
-              "started": [{}],
-              "startFailures": [{}],
-              "promoted": [],
-              "reclaimed": [],
-              "blocked": [],
-              "orchestrated": []
-            }
-            """.utf8)
-        let summary = try JSONDecoder().decode(IPadWorkboardDispatchSummary.self, from: payload)
-
-        #expect(summary.summaryText == "2 dispatched: 1 started, 1 failed.")
-    }
-
     @Test func `localized QR status matcher accepts positional placeholders`() {
         #expect(SettingsProTab.localizedFormat(
             "qr loaded. connecting to %1$@:%2$@...",
@@ -618,8 +473,8 @@ struct RootTabsPresentationTests {
             navigationPath: [.approvals],
             baseRoute: nil) == .approvals)
         #expect(RootTabs.visibleSettingsRoute(
-            navigationPath: [.approvals, .notifications],
-            baseRoute: .gateway) == .notifications)
+            navigationPath: [.approvals, .licenses],
+            baseRoute: .gateway) == .licenses)
         #expect(RootTabs.visibleSettingsRoute(
             navigationPath: [],
             baseRoute: .approvals) == .approvals)
@@ -1118,36 +973,6 @@ struct RootTabsPresentationTests {
                 layoutMode: .split))
     }
 
-    @Test func `workboard and skill workshop use compact task flow on phone sizes`() {
-        #expect(
-            IPadWorkboardScreen.usesCompactTaskFlow(
-                horizontalSizeClass: .compact,
-                verticalSizeClass: .regular))
-        #expect(
-            IPadSkillWorkshopScreen.usesCompactTaskFlow(
-                horizontalSizeClass: .compact,
-                verticalSizeClass: .regular))
-        #expect(
-            IPadWorkboardScreen.usesCompactTaskFlow(
-                horizontalSizeClass: .regular,
-                verticalSizeClass: .compact))
-        #expect(
-            IPadSkillWorkshopScreen.usesCompactTaskFlow(
-                horizontalSizeClass: .regular,
-                verticalSizeClass: .compact))
-    }
-
-    @Test func `workboard and skill workshop keep regular task flow on wide I pad sizes`() {
-        #expect(
-            !IPadWorkboardScreen.usesCompactTaskFlow(
-                horizontalSizeClass: .regular,
-                verticalSizeClass: .regular))
-        #expect(
-            !IPadSkillWorkshopScreen.usesCompactTaskFlow(
-                horizontalSizeClass: .regular,
-                verticalSizeClass: .regular))
-    }
-
     private static func sessionEntry(
         key: String,
         archived: Bool? = nil,
@@ -1200,23 +1025,5 @@ struct RootTabsPresentationTests {
             payload: AnyCodable(["kind": AnyCodable("agentTurn")]),
             state: [:],
             lastrunstatus: AnyCodable(status))
-    }
-
-    private static func skillWorkshopProposal(revisionHash: String?) -> IPadSkillProposal {
-        IPadSkillProposal(
-            inspect: IPadSkillProposalInspectResponse(
-                record: IPadSkillProposalRecord(
-                    id: "proposal-1",
-                    status: "pending",
-                    title: "Reviewed proposal",
-                    description: "A reviewed Skill Workshop proposal.",
-                    updatedAt: "2026-08-18T12:00:00Z",
-                    target: IPadSkillProposalTarget(
-                        skillName: "reviewed-skill",
-                        skillKey: "reviewed-skill")),
-                revisionHash: revisionHash,
-                content: "# Reviewed skill",
-                supportFiles: nil),
-            previous: nil)
     }
 }
