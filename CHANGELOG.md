@@ -10,11 +10,11 @@ Docs: https://docs.openclaw.ai
 - **Share selected conversations:** explicitly publish a revocable read-only view of a session’s existing and future conversation text, accessible to anyone with its public link. (#139489)
 - **A searchable meeting library:** browse saved notes, search full transcripts, download complete Markdown or JSONL archives, and manage capture sources from the Control UI. (#139875, #140084)
 - **Cloud sessions from a repository:** start from a repository URL and ref on the selected cloud node without first creating a checkout on the Gateway. (#138900)
-- **Safer update recovery:** validate supported candidates before stopping the Gateway, use bounded repair after failures, and require a persisted agent turn on the final Gateway boot before reporting success. Related #124396, #136997. (#138839, #139495, #140274) Thanks @fuller-stack-dev and @obviyus.
+- **Safer update recovery:** validate supported candidates before activation, require persisted serving proof, and offer one installation-owned repair after eligible update or startup failures while preserving the original failure result. Related #124396, #136997. (#138839, #139495, #140274, #135868) Thanks @fuller-stack-dev and @obviyus.
 - **Keep work through interruptions:** preserve active work and queued inputs across Gateway updates, watchdog retries, and temporary provider rate limits without splitting or duplicating replies. Related #139312, #139341. (#139663, #139661, #139397, #139465) Thanks @Jackten, @obviyus, and @ruel225.
 - **Your agent’s own Skill Workshop:** keep learned skills in one persistent agent-owned collection across workspaces, with review and approval controls and Doctor migration for proven legacy skills. Related #135291. (#135528, #139248) Thanks @khaisis and @obviyus.
 - **Foreground replies first:** fit automatic compaction to the actual pending request, preserve queued input, and let new conversation turns preempt optional background maintenance. (#139822)
-- **Choose your AI connection:** onboarding presents detected accounts and local models as choices and waits for your selection before testing, activating, installing, or saving a connection. (#139675)
+- **Choose your AI connection:** setup presents detected accounts and local models as choices and waits for your selection before testing, activating, installing, or saving a connection. (#139675, #140336)
 
 ### Changes
 
@@ -37,9 +37,11 @@ Docs: https://docs.openclaw.ai
 - **Watch voice setup:** include voice in normal Apple Watch setup. (#139712)
 - **Reference chips:** render GitHub issue and pull-request links as compact reference chips. (#139653)
 - **Diagnostics:** expose garbage-collection duration metrics and identify slow phases while opening agent databases. Related #139547. (#139592, #138125)
-- **Explicit provider choice:** native and guided CLI onboarding keep detection passive and wait for your choice before testing, installing, activating, or saving AI access; existing accounts and local models remain selectable, and skipped setup stays resumable. (#139675)
+- **Explicit provider choice:** native, desktop, Control UI, and guided CLI onboarding keep detection passive and wait for your choice before testing, installing, activating, or saving AI access; existing accounts and local endpoints remain selectable, with owner-bound consent and recoverable cancellation/reconnection. (#139675, #140336)
 - **Provider catalogs:** leave generated setup model rows to discovery while preserving authored model choices. (#140154) Thanks @obviyus.
 - **Android usage:** distinguish context pressure from cumulative latest-run usage, keep optional model-call details compact, and clear stale usage after compaction and history refresh. (#137494) Thanks @IWhatsskill.
+- **Installation-owned recovery:** eligible failed updates and recorded startup failures can start a repair using existing authentication and permissions, with only one active repair per installation; verified cleanup, cancellation, and admission limits remain enforced, and recovery does not turn the original failed update into success. (#135868)
+- **Cloud setup diagnostics:** report cloud bootstrap phase timings so provisioning delays are easier to locate. (#140442)
 
 ### Fixes
 
@@ -63,6 +65,19 @@ Docs: https://docs.openclaw.ai
 - **Chat presentation:** keep waiting time scoped to the current turn, prevent mobile image-avatar overlap, and clarify the current session’s empty task-run state. Related #127809, #139950, #140340. (#139972, #140341, #138597) Thanks @anyech, @NianJiuZst, @noelillinger, @obviyus, and @sunlit-deng.
 - **Large session stores:** avoid decoding unrelated saved prompts during subagent lists, session sharing, and precheck recovery, and reduce cold model-runtime request stalls. Related #139867. (#139540, #140368, #140231, #139911) Thanks @LiuwqGit and @VACInc.
 - **Compaction hooks:** pair hook lifecycles even when compaction makes no change. (#118094) Thanks @peterolkhov.
+- **Rollback and update results:** distinguish first-use database creation from migration, preserve the previous package’s schema compatibility before rollback, report serving/readback mismatches accurately, and treat same-version channel switches as successful. (#140419, #140493) Thanks @vincentkoc.
+- **Active-run documents:** retain extracted document text, attachment context, and rendered PDF pages when steering an active run, while preserving normal follow-up delivery when steering cannot be admitted. Related #138225. (#138275) Thanks @alexdhc, @obviyus, and @ruel225.
+- **Reply continuity:** retain final replies from nested tool runs, restore context when CLI recovery starts a fresh session, preserve successful tool results and diagnostics, and prevent delayed history from reviving completed runs. Related #140398. (#140399, #140294, #140362, #140379, #140523) Thanks @Takhoffman and @VACInc.
+- **Cancellation and resets:** stop unfinished subagents before resetting a conversation, cancel resumed yielded children, and allow queued resets after restart recovery tombstones a chat. Related #137214, #140354, #140355. (#140417, #140410, #137235) Thanks @Denny22044, @hannesrudolph, @LiuwqGit, and @obviyus.
+- **Streaming and tools:** enforce idle timeouts when a model stream goes silent between consumer reads, recover truncated OpenCode Go completions after tool use, and accept tool_search calls that combine a single query with a query batch. (#140335, #140367, #140310) Thanks @VACInc.
+- **Credential and model scope:** match prepared setup credentials to the normalized provider, keep MiniMax discovery on the selected credential, avoid duplicate xAI OAuth refreshes, isolate status metadata and case-distinct routes, and retain selected models in Codex prompt hooks. (#140461, #140438, #140434, #140506, #140099, #140488) Thanks @ly85206559 and @shakkernerd.
+- **Catalog and tool availability:** retain plugin catalogs after discovery timeouts, keep deferred audio/extraction providers discoverable, inherit active config for embedded agent runs, and cap configured output at the final context window. (#140441, #139231, #140435, #140436) Thanks @rodrigo-fonseca-oliveira and @shakkernerd.
+- **Channel and formatting behavior:** preserve silent-reply guidance, fall back from oversized Feishu tables to post mode, restore LINE and Mattermost account promotion, retain indentation in cited memory snippets, and preserve emoji in remote-desktop text input. Related #43690, #136854, #140470. (#138345, #136382, #136045, #140471, #140157) Thanks @Eppiedude, @ltspace, @name5566, @obviyus, @PenguinMiaou, and @wangmiao0668000666.
+- **Control UI recovery:** recover tabs after missed Gateway update notices, restore editor focus after preview, finish roster refreshes during session activity, and distinguish failed GitHub status checks from disconnected accounts. Related #140492. (#140484, #140495, #140459, #140333) Thanks @fuller-stack-dev and @Takhoffman.
+- **Native diagnostics and networking:** keep Android settings diagnostics readable and copyable, preserve complete quoted cache validators, use the installed WebSocket transport for node streams, and support Matrix and the bundled Proxyline runtime on opt-in Bun installations. Related #140528. (#140477, #140529, #140490, #139647, #140411)
+- **Workshop learning:** let background learning maintain complete Workshop skills. (#140315) Thanks @obviyus.
+- **Operational diagnostics:** clear stale diagnostics after Gateway changes, attribute slow session edits to internal waits, identify database admission mode in slow-open logs, and show executable-approval scope. Related #137108, #137452. (#140426, #140478, #140498, #138386) Thanks @abacha, @obviyus, @shakkernerd, and @ylcn91.
+- **Bounded text work:** avoid allocating discarded text when taking small code-point prefixes for cache keys, compaction instructions, widget titles, typing previews, reply identifiers, and Slack fallback chunks while preserving existing limits and output. (#136293) Thanks @edenfunf.
 - **Removed credentials:** preserve an explicit same-provider account selection when admitting chat messages, preparing agent commands, and changing models if its credential disappears, using the selected agent’s credential scope; report actionable authentication recovery instead of silently switching accounts or reporting an unknown model. Restore the credential or select another configured profile. Stale automatic selections and incompatible-provider selections still clear.
 - **Upgrade safety:** refuse a shared-database schema migration while an older updater still owns completion, so package rollback cannot leave the old updater writing a newer schema; that refused migration requires direct installation after the updater exits. Stop the Gateway through its deployment owner, create a verified backup, install the target with the package manager and prefix that own the installation, then run `openclaw doctor --fix` from the new install before restarting. See [database migration recovery](https://docs.openclaw.ai/reference/database-schemas#doctor-refuses-a-schema-migration-during-an-update).
 - **Temporary provider failures:** resume the existing transcript with bounded backoff after transient rate limits, preserving completed work and showing retry status. Related #139312. (#139397)
@@ -176,7 +191,7 @@ Docs: https://docs.openclaw.ai
 
 ### Complete contribution record
 
-This audited record covers the complete 0229a108fee749327b2cc60c4d228299dfe2f889..bb8f080ef29418b5aba69d1bfa2754b81d213206 history: 972 in-range PRs + 0 retained seed-only PRs = 972 unique PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
+This audited record covers the complete 0229a108fee749327b2cc60c4d228299dfe2f889..b3359337b131c482134d74512f1f2c8d1777ad04 history: 1,105 in-range PRs + 0 retained seed-only PRs = 1,105 unique PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
 
 Shipped baseline exclusions: v2026.9.1 (6 PRs: #131746, #131767, #135702, #135728, #135903, #136557); v2026.9.2 (225 PRs: #113611, #114580, #114625, #116157, #118358, #124633, #127177, #127182, #129561, #129897, #131436, #132552, #133318, #133323, #135808, #136146, #136364, #136661, #136755, #136781, #136900, #137030, #137131, #137342, #137368, #137506, #137527, #137637, #137681, #137738, #137830, #137885, #137923, #138111, #138207, #138223, #138246, #138248, #138249, #138280, #138332, #138360, #138394, #138398, #138440, #138449, #138481, #138492, #138500, #138524, #138556, #138568, #138574, #138624, #138625, #138627, #138635, #138641, #138648, #138655, #138656, #138669, #138674, #138675, #138678, #138680, #138687, #138690, #138693, #138694, #138695, #138699, #138701, #138707, #138708, #138709, #138711, #138713, #138715, #138716, #138717, #138718, #138719, #138720, #138725, #138728, #138730, #138731, #138733, #138734, #138737, #138738, #138739, #138740, #138742, #138743, #138744, #138745, #138746, #138747, #138748, #138752, #138754, #138758, #138759, #138764, #138765, #138766, #138767, #138769, #138772, #138776, #138780, #138781, #138782, #138784, #138785, #138792, #138793, #138794, #138796, #138801, #138804, #138805, #138806, #138810, #138813, #138814, #138816, #138818, #138820, #138822, #138824, #138827, #138828, #138830, #138832, #138837, #138838, #138840, #138841, #138845, #138849, #138851, #138854, #138855, #138856, #138857, #138858, #138859, #138860, #138862, #138863, #138865, #138866, #138868, #138872, #138875, #138876, #138877, #138878, #138880, #138884, #138885, #138888, #138889, #138890, #138891, #138894, #138895, #138896, #138898, #138902, #138904, #138907, #138908, #138909, #138910, #138911, #138912, #138914, #138916, #138920, #138921, #138925, #138926, #138927, #138930, #138931, #138932, #138933, #138935, #138937, #138940, #138941, #138942, #138946, #138949, #138957, #138960, #138961, #138962, #138967, #138968, #138969, #138970, #138971, #138973, #138974, #138977, #138978, #138979, #138980, #139018, #139020, #139046, #139056, #139111, #139116, #139126, #139132, #139135, #139136, #139150, #139153).
 
@@ -391,6 +406,7 @@ Shipped baseline exclusions: v2026.9.1 (6 PRs: #131746, #131767, #135702, #13572
 - **PR #139376**
 - **PR #139350**
 - **PR #139359**
+- **PR #135868**
 - **PR #139291** Thanks @ylcn91.
 - **PR #139358**
 - **PR #139378**
@@ -1058,6 +1074,7 @@ Shipped baseline exclusions: v2026.9.1 (6 PRs: #131746, #131767, #135702, #13572
 - **PR #140195** Thanks @obviyus.
 - **PR #140166** Related #132829. Thanks @dragonnite1221-lgtm and @IWhatsskill.
 - **PR #140202**
+- **PR #136293** Thanks @edenfunf.
 - **PR #139727**
 - **PR #140234**
 - **PR #140233**
@@ -1154,6 +1171,137 @@ Shipped baseline exclusions: v2026.9.1 (6 PRs: #131746, #131767, #135702, #13572
 - **PR #140361**
 - **PR #140182** Related #140179.
 - **PR #140369**
+- **PR #139943**
+- **PR #140364**
+- **PR #140370**
+- **PR #140336**
+- **PR #140315** Thanks @obviyus.
+- **PR #140157**
+- **PR #140254** Thanks @vincentkoc.
+- **PR #140374**
+- **PR #140382**
+- **PR #140371**
+- **PR #138275** Related #138225. Thanks @ruel225 and @obviyus and @alexdhc.
+- **PR #140267**
+- **PR #137330** Related #137198. Thanks @ruel225 and @obviyus and @felixboenkost-droid.
+- **PR #140385**
+- **PR #140362**
+- **PR #140389**
+- **PR #140367** Thanks @VACInc.
+- **PR #140324**
+- **PR #140372**
+- **PR #140394**
+- **PR #140395**
+- **PR #140400**
+- **PR #140391** Thanks @vincentkoc.
+- **PR #140390** Thanks @vincentkoc.
+- **PR #140386**
+- **PR #140402**
+- **PR #140379**
+- **PR #140403**
+- **PR #140407**
+- **PR #138386** Related #137452. Thanks @ylcn91 and @obviyus and @abacha.
+- **PR #140377**
+- **PR #140408**
+- **PR #140333** Thanks @fuller-stack-dev.
+- **PR #140409**
+- **PR #140335** Thanks @VACInc.
+- **PR #140415**
+- **PR #140384**
+- **PR #140420**
+- **PR #138345** Thanks @Eppiedude.
+- **PR #140427** Thanks @vincentkoc.
+- **PR #136045** Related #136854. Thanks @wangmiao0668000666 and @obviyus.
+- **PR #140330**
+- **PR #140410** Related #140354. Thanks @hannesrudolph.
+- **PR #140432**
+- **PR #140435**
+- **PR #140433**
+- **PR #140439**
+- **PR #140436**
+- **PR #140417** Related #140355. Thanks @hannesrudolph.
+- **PR #140430**
+- **PR #140294** Thanks @VACInc.
+- **PR #140419**
+- **PR #140310** Thanks @VACInc.
+- **PR #140437** Thanks @vincentkoc.
+- **PR #140442**
+- **PR #140445**
+- **PR #140399** Related #140398. Thanks @Takhoffman.
+- **PR #140448**
+- **PR #140450** Thanks @vincentkoc.
+- **PR #140440** Thanks @vincentkoc.
+- **PR #140446**
+- **PR #140444**
+- **PR #140411**
+- **PR #136382** Related #43690. Thanks @ltspace and @name5566 and @PenguinMiaou.
+- **PR #140414**
+- **PR #140453**
+- **PR #140119**
+- **PR #140451**
+- **PR #139231** Thanks @rodrigo-fonseca-oliveira.
+- **PR #140454**
+- **PR #140434** Thanks @shakkernerd.
+- **PR #140456**
+- **PR #140438** Thanks @shakkernerd.
+- **PR #140461**
+- **PR #140459**
+- **PR #140463**
+- **PR #140460**
+- **PR #140462**
+- **PR #140441** Thanks @shakkernerd.
+- **PR #140426** Related #137108. Thanks @shakkernerd.
+- **PR #140471** Related #140470.
+- **PR #140475**
+- **PR #140474**
+- **PR #140469**
+- **PR #140476**
+- **PR #137235** Related #137214. Thanks @LiuwqGit and @obviyus and @Denny22044.
+- **PR #139647**
+- **PR #140483**
+- **PR #140485**
+- **PR #140490**
+- **PR #140491**
+- **PR #140495** Related #140492.
+- **PR #140472** Thanks @vincentkoc.
+- **PR #140346** Thanks @vincentkoc.
+- **PR #140496**
+- **PR #140500**
+- **PR #140484** Thanks @Takhoffman.
+- **PR #140502**
+- **PR #140099** Thanks @ly85206559.
+- **PR #140486** Thanks @vincentkoc.
+- **PR #140489**
+- **PR #140498**
+- **PR #140478**
+- **PR #140511**
+- **PR #140509**
+- **PR #140510**
+- **PR #140512** Thanks @vincentkoc.
+- **PR #140506**
+- **PR #140481** Thanks @vincentkoc.
+- **PR #140488**
+- **PR #140514**
+- **PR #140513**
+- **PR #140480**
+- **PR #140518**
+- **PR #140519**
+- **PR #140515**
+- **PR #140516**
+- **PR #140520**
+- **PR #140477**
+- **PR #140517**
+- **PR #140521**
+- **PR #140522**
+- **PR #140525**
+- **PR #137976**
+- **PR #140493** Thanks @vincentkoc.
+- **PR #140523**
+- **PR #140527**
+- **PR #140524**
+- **PR #140529** Related #140528.
+- **PR #140530**
+- **PR #140533**
 
 ## 2026.9.2
 
