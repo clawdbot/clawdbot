@@ -679,7 +679,9 @@ describe("short-term promotion", () => {
     );
 
     const ranked = await rankAllCandidates(workspaceDir, { nowMs });
-    expect(ranked.map((candidate) => candidate.startLine).toSorted()).toEqual([3, 4, 5]);
+    expect(ranked.map((candidate) => candidate.startLine).toSorted((a, b) => a - b)).toEqual([
+      3, 4, 5,
+    ]);
     expect(await rankAllCandidates(workspaceDir, { nowMs, limit: 1 })).toEqual(ranked.slice(0, 1));
     expect(
       await rankAllCandidates(workspaceDir, { nowMs, limit: 1, includePromoted: true }),
