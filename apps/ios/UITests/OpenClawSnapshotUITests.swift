@@ -142,7 +142,9 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let tokens = try XCTUnwrap(self.app).buttons.containing(.staticText, identifier: "Tokens").firstMatch
         XCTAssertTrue(tokens.waitForExistence(timeout: 5))
         tokens.tap()
-        XCTAssertTrue(self.app?.staticTexts["Totals"].waitForExistence(timeout: 5) == true)
+        let app = try XCTUnwrap(self.app)
+        self.waitForValue("ready:usage", of: self.readinessMarker(in: app), timeout: 5)
+        XCTAssertTrue(app.descendants(matching: .any)["SettingsHub.Fallback"].waitForExistence(timeout: 5))
     }
 
     func testLiveGatewayApprovalNotificationsFromOverview() async throws {

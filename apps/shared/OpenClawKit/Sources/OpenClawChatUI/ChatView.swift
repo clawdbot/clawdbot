@@ -415,11 +415,13 @@ public struct OpenClawChatView: View {
                 return distanceFromBottom <= Layout.liveEdgeThreshold
             } action: { _, isAtLiveEdge in
                 self.isAtLiveEdge = isAtLiveEdge
+                #if !os(iOS)
                 guard self.hasPerformedInitialScroll else { return }
                 if isAtLiveEdge, !self.isUserScrolling, !self.isFollowingTurn, self.searchMessageID == nil {
                     self.followTarget = .latest
                     self.hasNewerContentBelow = false
                 }
+                #endif
             }
             #if os(iOS)
             .onScrollGeometryChange(for: CGSize.self) { $0.containerSize } action: { old, new in
@@ -430,7 +432,7 @@ public struct OpenClawChatView: View {
                 }
             }
             #endif
-            .onScrollPhaseChange { _, phase in
+            .onScrollPhaseChange { _, phase, context in
                 guard self.hasPerformedInitialScroll else { return }
                 if phase == .interacting {
                     self.restoresLiveEdgeAfterKeyboardShows = false
@@ -439,6 +441,12 @@ public struct OpenClawChatView: View {
                     self.isUserScrolling = true
                     self.followTarget = nil
                 } else if phase == .idle, self.isUserScrolling {
+                    #if os(iOS)
+                    // Passive keyboard layout cannot restore follow after a reader scrolls away.
+                    let geometry = context.geometry
+                    self.isAtLiveEdge = geometry.contentSize.height - geometry.visibleRect.maxY <= Layout
+                        .liveEdgeThreshold
+                    #endif
                     self.isUserScrolling = false
                     if self.isAtLiveEdge {
                         self.followTarget = .latest
