@@ -1,4 +1,3 @@
-// Memory Host SDK module implements multimodal behavior.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 // Multimodal memory settings and file classification helpers.

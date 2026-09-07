@@ -339,6 +339,10 @@ inside one lazily created package fixture per test run, keeping real UI checks o
 fixture-owned assets and each scenario’s state separate. Standalone and watch runs
 use live source inside the same fixture.
 
+Isolated Doctor config scripts also share the prepared config-flow, health-writer,
+and install-index modules. Each case still starts a fresh process with separate
+state; standalone and watch runs resolve the original TypeScript entrypoints.
+
 The prepared model-catalog worker also uses this compiled generation. Separate
 prepared model generations still own separate worker threads, and their choice
 of source or built plugin artifacts stays independent of worker compilation.

@@ -3,7 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import { getReplySystemEventContext } from "../auto-reply/reply/system-event-session-key.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
+import {
+  listSessionEntriesReadOnly,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
@@ -75,16 +80,23 @@ describe("runHeartbeatOnce identity", () => {
           lastProvider: "slack",
           lastTo: "channel:MAIN",
         });
-        await seedSessionStore(historianStorePath, "global", {
-          lastChannel: "slack",
-          lastProvider: "slack",
-          lastTo: "channel:HISTORIAN",
-        });
+        const historianScope = { agentId: "historian2", storePath: historianStorePath };
+        // Custom locators and the global key do not imply a database owner.
+        await replaceSessionEntry(
+          { ...historianScope, sessionKey: "global" },
+          {
+            sessionId: "historian-session",
+            updatedAt: Date.now(),
+            delivery: normalizeSessionDeliveryState({
+              context: { channel: "slack", to: "channel:HISTORIAN" },
+            }),
+          },
+        );
         const mainStoreBefore = readSessionStoreForTest(mainStorePath);
         replySpy.mockResolvedValue({ text: "needs attention" });
         const sendSlack = vi.fn().mockResolvedValue({ messageId: "m1", channelId: "HISTORIAN" });
 
-        await runHeartbeatOnce({
+        const result = await runHeartbeatOnce({
           cfg,
           agentId: "historian2",
           deps: {
@@ -94,6 +106,7 @@ describe("runHeartbeatOnce identity", () => {
           },
         });
 
+        expect(result.status).toBe("ran");
         expect(replySpy).toHaveBeenCalledTimes(1);
         expect(replySpy.mock.calls[0]?.[0]).toMatchObject({
           AgentId: "historian2",
@@ -105,7 +118,12 @@ describe("runHeartbeatOnce identity", () => {
           expect.any(Object),
         );
         expect(readSessionStoreForTest(mainStorePath)).toEqual(mainStoreBefore);
-        const historianStore = readSessionStoreForTest(historianStorePath);
+        const historianStore = Object.fromEntries(
+          listSessionEntriesReadOnly(historianScope).map(({ sessionKey, entry }) => [
+            sessionKey,
+            entry,
+          ]),
+        );
         expect(historianStore.global).toBeDefined();
         expect(historianStore["agent:historian2:global:heartbeat"] !== undefined).toBe(
           isolatedSession,

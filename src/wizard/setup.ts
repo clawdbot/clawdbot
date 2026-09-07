@@ -550,6 +550,7 @@ async function runSetupWizardOnce(
     config: gateway.nextConfig,
     workspace: workspaceDir,
     preserveCandidateRoster: usedImportFlow && hasAuthoredRoster,
+    // Pending setup choices must remain changes relative to the saved snapshot.
     baseConfig: setupConfigMergeBase,
     ...(firstAgent ? { firstAgent } : {}),
   });

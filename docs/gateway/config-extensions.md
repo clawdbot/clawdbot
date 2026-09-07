@@ -13,18 +13,18 @@ For the full key index and the other top-level config domains, see [Configuratio
 
 ## MCP
 
-OpenClaw-managed MCP server definitions live under `mcp.servers` and are
-consumed by embedded OpenClaw and other runtime adapters. The `openclaw mcp list`,
-`show`, `set`, and `unset` commands manage this block without connecting to the
-target server during config edits.
+OpenClaw-managed MCP server definitions live under `mcp.servers` for embedded
+OpenClaw and other runtime adapters. `openclaw mcp list`, `show`, `set`, and
+`unset` manage this block without connecting to the servers. The Fetch example
+requires [`uv`/`uvx`](https://docs.astral.sh/uv/getting-started/installation/).
 
 ```json5
 {
   mcp: {
     servers: {
       docs: {
-        command: "npx",
-        args: ["-y", "@modelcontextprotocol/server-fetch"],
+        command: "uvx",
+        args: ["mcp-server-fetch"],
       },
       remote: {
         url: "https://example.com/mcp",

@@ -1900,9 +1900,16 @@ if [ "$SCENARIO" = "legacy-operator-state" ]; then
     phase prepare-baseline-update-manager install_update_restart_systemctl_shim
     phase prepare-baseline-update-service run_update_restart_probe_gateway start 18789 "$COMMAND_TIMEOUT"
   fi
+  # Reload is disabled: retain the serving baseline while reproducing missing-plugin config.
+  phase seed-formerly-bundled-plugin node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+    seed-legacy-operator-external-plugin
 fi
 phase update-candidate update_candidate_for_install_mode
 if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  phase assert-formerly-bundled-plugin node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+    assert-npm-plugin-install duckduckgo @openclaw/duckduckgo-plugin "$candidate_version" 1
+  phase assert-formerly-bundled-plugin-config node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+    assert-legacy-operator-external-plugin "$candidate_version"
   phase assert-candidate-schemas assert_schema_outcome
 fi
 if [ "$candidate_install_mode" = "historical-package-replacement" ]; then
@@ -1969,6 +1976,8 @@ if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase legacy-operator-plugin assert_prepublish_plugin_install
   phase legacy-operator-update-noop assert_legacy_operator_update_noop
   phase legacy-operator-doctor-clean assert_legacy_operator_doctor_clean
+  phase formerly-bundled-doctor node scripts/e2e/lib/upgrade-survivor/formerly-bundled-plugin-doctor.mjs \
+    "$candidate_version"
 fi
 if [ "$SCENARIO" = "watchos-direct-node" ]; then
   phase watchos-candidate-reconnect watchos_reconnect_candidate

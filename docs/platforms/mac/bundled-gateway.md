@@ -150,8 +150,22 @@ moving back to local storage. See
 
 ## Debug app connectivity
 
-Use the macOS debug CLI from a source checkout to exercise the same Gateway
-WebSocket handshake and discovery logic the app uses:
+Inspect the running app with the bundled macOS CLI:
+
+```bash
+openclaw-mac status --json
+openclaw-mac primary show --json
+openclaw-mac gateway list --json
+```
+
+The app's CLI installer links `openclaw-mac` beside its profile-managed
+`openclaw` command. You can also run
+`/Applications/OpenClaw.app/Contents/MacOS/openclaw-mac` directly. See
+[remote control](/platforms/mac/remote#macos-app-setup) for `primary set`,
+saved-Gateway commands, profiles, and credential input.
+
+For standalone Gateway WebSocket handshake and discovery probes from a source
+checkout, the existing debug commands remain available:
 
 ```bash
 cd apps/macos

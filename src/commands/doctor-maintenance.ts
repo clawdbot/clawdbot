@@ -1,37 +1,15 @@
 /** Coordinates explicit Doctor repair with the managed Gateway lifecycle. */
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
-import {
-  renderRestartDiagnostics,
-  waitForGatewayHealthyRestart,
-} from "../cli/daemon-cli/restart-health.js";
-import {
-  maybeStopManagedServiceBeforeMutableUpdate,
-  maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
-  revalidateManagedGatewayServiceAfterUpdate,
-  type PreManagedServiceStop,
-} from "../cli/update-cli/update-command-service-maintenance.js";
-import { resolveUpdatedGatewayRestartPort } from "../cli/update-cli/update-command-service-plan.js";
-import { createConfigIO } from "../config/io.js";
+import type { PreManagedServiceStop } from "../cli/update-cli/update-command-service-maintenance.js";
 import { isDefaultInstallIdentity, resolveConfigPath, resolveStateDir } from "../config/paths.js";
-import {
-  resolveConfiguredAgentDatabaseCandidatePaths,
-  resolveConfiguredAgentDatabaseTargets,
-} from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readGatewayServiceState, resolveGatewayService } from "../daemon/service.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import {
   acquireGatewayLifecycleCoordinator,
   acquireStateDatabaseCoordinator,
 } from "../infra/state-database-coordinator.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
-import {
-  preflightOpenClawDatabaseSchemas,
-  OpenClawDatabaseSchemaPreflightError,
-} from "../state/openclaw-database-preflight.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 import { isDoctorUpdateRepairMode, resolveDoctorRepairMode } from "./doctor-repair-mode.js";
@@ -40,36 +18,6 @@ import {
   resolveUpdateParentGatewayActivation,
   shouldManageGatewayService,
 } from "./doctor-service-repair-policy.js";
-
-async function assertDoctorMaintenanceSchemasCompatible(env: NodeJS.ProcessEnv): Promise<void> {
-  // Core-only materialization avoids plugin runtime/state loading before the
-  // current Gateway has relinquished ownership. Keep config env changes local.
-  const snapshot = await createConfigIO({
-    env: { ...env },
-    observe: false,
-    pluginValidation: "core-only",
-  }).readConfigFileSnapshot();
-  const cfg = snapshot.sourceConfig ?? snapshot.config;
-  const schemas = await preflightOpenClawDatabaseSchemas({
-    env,
-    supportedVersions: {
-      state: OPENCLAW_STATE_SCHEMA_VERSION,
-      agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-    },
-    configuredAgentDatabaseTargets: (registeredAgentDatabases) =>
-      resolveConfiguredAgentDatabaseTargets(cfg, {
-        env,
-        registeredDatabases: registeredAgentDatabases,
-      }),
-    configuredAgentDatabaseCandidatePaths: resolveConfiguredAgentDatabaseCandidatePaths(cfg, {
-      env,
-    }),
-    verifyCurrentSchemaShape: true,
-  });
-  if (schemas.incompatible.length > 0) {
-    throw new OpenClawDatabaseSchemaPreflightError(schemas.incompatible, { operation: "doctor" });
-  }
-}
 
 function assertDoctorServiceSelection(env: NodeJS.ProcessEnv, serviceEnv: NodeJS.ProcessEnv): void {
   const selection = (candidate: NodeJS.ProcessEnv) => {
@@ -121,8 +69,10 @@ export async function beginDoctorMaintenance(params: {
     : undefined;
   // Repair discovery can execute plugins and open writable state. Establish
   // ownership for every explicit repair before running those inspections.
-  await assertDoctorMaintenanceSchemasCompatible(env);
   let stopped: PreManagedServiceStop | undefined;
+  let serviceMaintenance:
+    | typeof import("../cli/update-cli/update-command-service-maintenance.js")
+    | undefined;
   const coordinators: Array<{ release(): void }> = [];
   let repairStoresMayBeOpen = false;
   const release = async () => {
@@ -145,7 +95,7 @@ export async function beginDoctorMaintenance(params: {
       }
       const recovery = stopped?.windowsTaskAutoStartRecovery;
       try {
-        await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(stopped);
+        await serviceMaintenance?.maybeResumeWindowsTaskAutoStartAfterPackageUpdate(stopped);
       } finally {
         await recovery?.complete();
       }
@@ -158,6 +108,8 @@ export async function beginDoctorMaintenance(params: {
       !isServiceRepairExternallyManaged() &&
       (await shouldManageGatewayService(env))
     ) {
+      serviceMaintenance = await import("../cli/update-cli/update-command-service-maintenance.js");
+      const { maybeStopManagedServiceBeforeMutableUpdate } = serviceMaintenance;
       const inspection = await maybeStopManagedServiceBeforeMutableUpdate({
         updateInstallKind: "package",
         root: params.root,
@@ -204,13 +156,17 @@ export async function beginDoctorMaintenance(params: {
     const databasePath = path.resolve(resolveOpenClawStateSqlitePath(env));
     // Hold the reentrant lifecycle coordinators, not an in-tree Gateway lock:
     // individual migrations acquire their own in-tree locks under this scope.
-    coordinators.push(acquireGatewayLifecycleCoordinator({ databasePath, busyTimeoutMs: 250 }));
+    // Gateway ownership lasts until that process stops, not for a short transaction.
+    coordinators.push(acquireGatewayLifecycleCoordinator({ databasePath, busyTimeoutMs: 0 }));
     coordinators.push(acquireStateDatabaseCoordinator({ databasePath, busyTimeoutMs: 250 }));
+    const { assertNoOpenClawAgentDatabaseLeasesReadOnly } =
+      await import("../state/openclaw-agent-db-lease.js");
+    assertNoOpenClawAgentDatabaseLeasesReadOnly({ env });
     repairStoresMayBeOpen = true;
   } catch (error) {
     await release();
     throw new Error(
-      `Doctor could not enter maintenance. ${String(error)} Stop-requiring repair must run from a shell outside the Gateway and automatic triage; use ${formatCliCommand("openclaw doctor --fix", env)} there.`,
+      `Doctor could not enter maintenance. ${String(error)} Stop the Gateway service and other OpenClaw processes using this state, then run ${formatCliCommand("openclaw doctor --fix", env)} from an independent shell.`,
       { cause: error },
     );
   }
@@ -221,6 +177,17 @@ export async function beginDoctorMaintenance(params: {
       if (!stopped?.stopped || !stopped.serviceEnv || !params.root) {
         return;
       }
+      const [
+        { readGatewayServiceState, resolveGatewayService },
+        { resolveUpdatedGatewayRestartPort },
+        { renderRestartDiagnostics, waitForGatewayHealthyRestart },
+        { revalidateManagedGatewayServiceAfterUpdate },
+      ] = await Promise.all([
+        import("../daemon/service.js"),
+        import("../cli/update-cli/update-command-service-plan.js"),
+        import("../cli/daemon-cli/restart-health.js"),
+        import("../cli/update-cli/update-command-service-maintenance.js"),
+      ]);
       const service = resolveGatewayService();
       const state = await readGatewayServiceState(service, {
         env: stopped.serviceEnv,

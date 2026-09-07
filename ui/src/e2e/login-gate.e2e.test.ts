@@ -245,7 +245,7 @@ suite.define(() => {
         details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
       },
       expectedKind: "auth-required",
-      expectedTitle: "Token needed",
+      expectedTitle: "This Gateway expects its token",
     },
     {
       name: "missing identity header",

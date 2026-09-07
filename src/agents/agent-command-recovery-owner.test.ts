@@ -37,6 +37,7 @@ describe("agent command restart recovery ownership", () => {
   function createTarget() {
     const storePath = path.join(tempDirs.make("openclaw-agent-command-owner-"), "sessions.json");
     return {
+      sessionAgentId: "main",
       isNewSession: false,
       sessionId: "session-1",
       sessionKey,

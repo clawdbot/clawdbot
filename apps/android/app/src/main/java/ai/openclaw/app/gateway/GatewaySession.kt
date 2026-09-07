@@ -1430,7 +1430,7 @@ class GatewaySession(
           selectedAuth.attemptedDeviceTokenRetry &&
           shouldClearStoredDeviceTokenAfterRetry(error)
         ) {
-          deviceAuthStore.clearToken(target.endpoint.stableId, identity.deviceId, target.options.role)
+          deviceAuthStore.clearToken(target.endpoint.stableId, identity.deviceId, target.options.role, onlyIfToken = storedToken)
         }
         throw GatewayConnectFailure(error)
       }
@@ -1479,6 +1479,7 @@ class GatewaySession(
       role: String,
       token: String,
       scopes: List<String>,
+      replacesStoredToken: String? = null,
     ): Boolean {
       val persistedScopes =
         if (authSource == GatewayConnectAuthSource.BOOTSTRAP_TOKEN) {
@@ -1487,7 +1488,7 @@ class GatewaySession(
         } else {
           scopes
         }
-      return deviceAuthStore.saveToken(target.endpoint.stableId, deviceId, role, token, persistedScopes)
+      return deviceAuthStore.saveToken(target.endpoint.stableId, deviceId, role, token, persistedScopes, replacesStoredToken)
     }
 
     private fun parseConnectSuccess(
@@ -1535,8 +1536,16 @@ class GatewaySession(
             deviceToken.trim() == selectedAuth.storedToken &&
             authRole.trim().equals(target.options.role.trim(), ignoreCase = true)
         val persistedScopes = if (sameStoredTokenRecord) selectedAuth.storedScopes else authScopes
+        val replacesStoredToken =
+          if (selectedAuth.authSource == GatewayConnectAuthSource.DEVICE_TOKEN &&
+            authRole.trim().equals(target.options.role.trim(), ignoreCase = true)
+          ) {
+            selectedAuth.storedToken
+          } else {
+            null
+          }
         persistedRoles[authRole.trim()] =
-          persistIssuedDeviceToken(selectedAuth.authSource, deviceId, authRole, deviceToken, persistedScopes)
+          persistIssuedDeviceToken(selectedAuth.authSource, deviceId, authRole, deviceToken, persistedScopes, replacesStoredToken)
       }
       if (shouldPersistBootstrapHandoffTokens(selectedAuth.authSource)) {
         // Bootstrap connects can mint role-specific device tokens; store only locally trusted handoffs.
@@ -1564,7 +1573,8 @@ class GatewaySession(
         for (role in listOf("node", "operator")) {
           if (role in persistedRoles) continue
           val entry = deviceAuthStore.loadEntry(target.endpoint.stableId, deviceId, role) ?: continue
-          persistedRoles[role] = deviceAuthStore.saveToken(target.endpoint.stableId, deviceId, role, entry.token, entry.scopes)
+          persistedRoles[role] =
+            deviceAuthStore.saveToken(target.endpoint.stableId, deviceId, role, entry.token, entry.scopes, replacesStoredToken = entry.token)
         }
       }
       if (persistedRoles["node"] == true && persistedRoles["operator"] == true) {

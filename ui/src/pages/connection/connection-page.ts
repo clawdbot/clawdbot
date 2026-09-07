@@ -13,7 +13,6 @@ import {
   resolveGatewayCredentialsForUrlEdit,
   type UiSettings,
 } from "../../app/settings.ts";
-import { type CredentialMode, resolveCredentialMode } from "../../components/credential-mode.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
@@ -35,10 +34,7 @@ export class ConnectionPage extends OpenClawLightDomElement {
 
   @state() private settings: UiSettings = loadSettings();
   @state() private password = "";
-  // Operator's explicit Token/Password choice; null follows the draft and last error.
-  @state() private credentialMode: CredentialMode | null = null;
-  @state() private gatewayTokenVisible = false;
-  @state() private gatewayPasswordVisible = false;
+  @state() private gatewaySecretVisible = false;
   @state() private systemInfo: SystemInfoResult | null = null;
   @state() private systemInfoUnavailable = false;
 
@@ -71,8 +67,7 @@ export class ConnectionPage extends OpenClawLightDomElement {
   }
 
   private resetSensitiveUi() {
-    this.gatewayTokenVisible = false;
-    this.gatewayPasswordVisible = false;
+    this.gatewaySecretVisible = false;
   }
 
   private handleGatewaySnapshot({
@@ -167,7 +162,6 @@ export class ConnectionPage extends OpenClawLightDomElement {
     };
     this.password = password;
     this.sessionKeyDirty = false;
-    this.credentialMode = null;
     this.resetSensitiveUi();
   }
 
@@ -215,25 +209,16 @@ export class ConnectionPage extends OpenClawLightDomElement {
       hello: gateway.hello,
       settings: this.settings,
       liveGatewayUrl: live.gatewayUrl,
-      password: this.password,
+      secret: this.settings.token || this.password,
       lastError: gateway.lastError,
       systemInfo: this.systemInfo,
       systemInfoUnavailable: this.systemInfoUnavailable,
-      credentialMode: resolveCredentialMode(
-        {
-          token: this.settings.token,
-          password: this.password,
-          lastErrorCode: gateway.lastErrorCode,
-        },
-        this.credentialMode,
-      ),
       dirty,
-      showGatewayToken: this.gatewayTokenVisible,
-      showGatewayPassword: this.gatewayPasswordVisible,
+      showGatewaySecret: this.gatewaySecretVisible,
       onConnectionChange: (patch) => this.updateConnection(patch),
-      onPasswordChange: (next) => (this.password = next),
-      onCredentialModeChange: (mode) => {
-        this.credentialMode = mode;
+      onSecretChange: (token) => {
+        this.password = "";
+        this.updateConnection({ token });
       },
       onSessionKeyChange: (sessionKey) => {
         this.sessionKeyDirty = true;
@@ -243,11 +228,8 @@ export class ConnectionPage extends OpenClawLightDomElement {
           lastActiveSessionKey: sessionKey,
         };
       },
-      onToggleGatewayTokenVisibility: () => {
-        this.gatewayTokenVisible = !this.gatewayTokenVisible;
-      },
-      onToggleGatewayPasswordVisibility: () => {
-        this.gatewayPasswordVisible = !this.gatewayPasswordVisible;
+      onToggleGatewaySecretVisibility: () => {
+        this.gatewaySecretVisible = !this.gatewaySecretVisible;
       },
       onConnect: () => this.connect(),
     });

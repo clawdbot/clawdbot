@@ -1766,6 +1766,10 @@ if (command === "list-scenarios") {
   seedState();
 } else if (command === "seed-legacy-operator") {
   legacyOperator.seedLegacyOperatorState();
+} else if (command === "seed-legacy-operator-external-plugin") {
+  legacyOperator.seedLegacyOperatorExternalPlugin();
+} else if (command === "assert-legacy-operator-external-plugin") {
+  legacyOperator.assertLegacyOperatorExternalPlugin(process.argv[3]);
 } else if (command === "assert-baseline-plugin") {
   assertBaselinePlugin(process.argv.slice(3));
 } else if (command === "seed-legacy-operator-default-cron") {

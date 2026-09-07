@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { assertAgentReplyContainsMarker } from "../agent-turn-output.mjs";
 import { readTcpPortEnv } from "../env-limits.mjs";
+import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
 
 const MODEL = "survivor/gpt-5.6-luna";
 const JOBS = [
@@ -154,6 +155,96 @@ export function seedLegacyOperatorState() {
   fs.writeFileSync(
     path.join(workspace, "IDENTITY.md"),
     "# Upgrade Survivor\n\nSynthetic operator workspace.\n",
+  );
+}
+
+export function seedLegacyOperatorExternalPlugin() {
+  const inventory = cli(["plugins", "list", "--json"], "legacy-operator-baseline-plugins", {
+    json: true,
+  });
+  const bundled = inventory.plugins?.some(
+    (plugin) => plugin.id === "duckduckgo" && plugin.origin === "bundled",
+  );
+  const entry = {
+    enabled: true,
+    config: { webSearch: { region: "us-en", safeSearch: "moderate" } },
+  };
+  if (bundled) {
+    // This is the published bundled-era web-search configuration, authored by its CLI.
+    cli(["plugins", "enable", "duckduckgo"], "legacy-operator-enable-duckduckgo");
+    for (const [key, value] of Object.entries({
+      "plugins.entries.duckduckgo": entry,
+      "tools.web.search.provider": "duckduckgo",
+      "tools.web.search.enabled": true,
+    })) {
+      cli(["config", "set", key, JSON.stringify(value), "--strict-json"], `legacy-operator-${key}`);
+    }
+    cli(["config", "validate", "--json"], "legacy-operator-duckduckgo-baseline-validate", {
+      json: true,
+    });
+  } else {
+    // Recreate an earlier upgrade that retained config but lost the bundled payload.
+    // Seed only after the healthy baseline Gateway/CLI specimens have been captured.
+    assert(
+      !inventory.plugins?.some((plugin) => plugin.id === "duckduckgo"),
+      "baseline DuckDuckGo already installed",
+    );
+    const configPath = requiredEnv("OPENCLAW_CONFIG_PATH");
+    const config = readJson(configPath);
+    config.plugins ??= {};
+    config.plugins.entries ??= {};
+    config.plugins.entries.duckduckgo = entry;
+    if (Array.isArray(config.plugins.allow) && !config.plugins.allow.includes("duckduckgo")) {
+      config.plugins.allow.push("duckduckgo");
+    }
+    config.tools ??= {};
+    config.tools.web ??= {};
+    config.tools.web.search = { ...config.tools.web.search, provider: "duckduckgo", enabled: true };
+    writeJson(configPath, config);
+  }
+  const records = readPluginInstallIndex({
+    stateDir: requiredEnv("OPENCLAW_STATE_DIR"),
+  }).installRecords;
+  assert(!records?.duckduckgo, "formerly bundled plugin must have no baseline install record");
+  writeJson(artifact("legacy-operator-external-plugin.json"), {
+    pluginId: "duckduckgo",
+    packageName: "@openclaw/duckduckgo-plugin",
+    baselineState: bundled ? "bundled" : "missing",
+    installRecord: null,
+  });
+  console.log(
+    `Seeded configured DuckDuckGo without an install record (${bundled ? "bundled" : "already missing"}).`,
+  );
+}
+
+export function assertLegacyOperatorExternalPlugin(expectedVersion) {
+  const inventory = cli(["plugins", "list", "--json"], "legacy-operator-candidate-plugins", {
+    json: true,
+  });
+  const plugin = inventory.plugins?.find((entry) => entry.id === "duckduckgo");
+  assert(plugin, "plugins list omitted configured DuckDuckGo");
+  assert.notEqual(plugin.origin, "bundled", "DuckDuckGo must converge to an external package");
+  assert.equal(
+    plugin.version,
+    expectedVersion,
+    "plugins list reported the wrong DuckDuckGo version",
+  );
+  assert.notEqual(plugin.status, "error", "plugins list reported a DuckDuckGo load error");
+  assert.equal(plugin.enabled, true, "DuckDuckGo was disabled during the update");
+  const validation = cli(
+    ["config", "validate", "--json"],
+    "legacy-operator-external-plugin-validate",
+    { json: true },
+  );
+  assert.equal(
+    validation.valid,
+    true,
+    "config validation failed after external plugin convergence",
+  );
+  assert.deepEqual(
+    validation.warnings,
+    [],
+    "config validation reported unresolved plugin warnings",
   );
 }
 

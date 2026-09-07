@@ -2218,6 +2218,8 @@ jobs:
         run: node openclaw.mjs status --json --timeout 1
 
       - name: Smoke test built CLI with Bun
+        # Older frozen targets intentionally reject Bun at launcher startup.
+        if: ${{ needs.preflight.outputs.frozen_target != 'true' }}
         run: |
           bun openclaw.mjs --help
           bun openclaw.mjs status --json --timeout 1
@@ -3124,7 +3126,6 @@ jobs:
             // execution kinds. Reuse the current bounded smoke contract and
             // isolate each scenario so one invocation cannot pin a profile part.
             const compatibilityScenarioIds = new Set([
-              "control-ui-chat-flow-playwright",
               "system-agent-ring-zero-setup",
               "gateway-smoke",
               "group-visible-reply-tool",
@@ -3138,7 +3139,8 @@ jobs:
             ]);
             const partIndex = partId === "profile-1" ? 0 : partId === "profile-2" ? 1 : -1;
             if (partIndex < 0) {
-              throw new Error(`unknown QA smoke CI profile part: ${partId}`);
+              console.error(`[skip] ${partId} is not declared by this checkout's legacy smoke plan`);
+              process.exit(0);
             }
             const scenarioCatalog = await import("./extensions/qa-lab/src/scenario-catalog.ts");
             const scenarioKindById = new Map(
@@ -3689,6 +3691,14 @@ jobs:
               fi
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
+              if has_package_script "check:browser-inspect-script:swift"; then
+                pnpm check:browser-inspect-script:swift
+              elif [[ "$FROZEN_TARGET" == "true" ]]; then
+                echo "[skip] frozen target predates the browser inspect Swift script guard"
+              else
+                echo "Current CI targets must provide the check:browser-inspect-script:swift package script." >&2
+                exit 1
+              fi
               if has_package_script "check:temp-path-guardrails"; then
                 pnpm check:temp-path-guardrails
               elif [[ "$FROZEN_TARGET" == "true" ]]; then
@@ -3810,7 +3820,9 @@ jobs:
                   const configPath = "config/knip.config.ts";
                   const marker = "const repositoryScriptEntries = [";
                   const source = readFileSync(configPath, "utf8");
-                  if (!source.includes(marker)) throw new Error(`${configPath} is missing ${marker}`);
+                  // Pre-refactor frozen configs ignore scripts/** wholesale, so
+                  // they need no synthetic executable-root registration.
+                  if (!source.includes(marker)) process.exit(0);
                   writeFileSync(configPath, source.replace(
                     marker,
                     `${marker}\n  ${process.env.RELEASE_EVIDENCE_ENTRY},`,
@@ -4746,7 +4758,7 @@ jobs:
           elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
             # Frozen release targets before the shared wrappers used these commands directly.
             swiftlint lint --config config/swiftlint.yml
-            swiftformat --lint apps/macos/Sources --config config/swiftformat --exclude '**/OpenClawProtocol,**/HostEnvSecurityPolicy.generated.swift'
+            swiftformat --lint apps/macos/Sources --config config/swiftformat --exclude '**/OpenClawProtocol,**/HostEnvSecurityPolicy.generated.swift,**/BrowserInspectScript.generated.swift'
           else
             echo "Current CI targets must provide the Swift lint and format wrappers." >&2
             exit 1

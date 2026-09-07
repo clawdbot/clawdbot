@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
@@ -280,63 +281,68 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(coordinator.getRoutedCounts().block).toBe(0);
   });
 
-  it("does not wait for direct block dispatcher delivery before resolving block delivery", async () => {
-    const delivered: unknown[] = [];
-    let releaseDelivery: (() => void) | undefined;
-    let markDeliveryStarted: (() => void) | undefined;
-    const deliveryStarted = new Promise<void>((resolve) => {
-      markDeliveryStarted = resolve;
-    });
-    const deliveryGate = new Promise<void>((resolve) => {
-      releaseDelivery = resolve;
-    });
-    const dispatcher = createReplyDispatcher({
-      deliver: async (payload) => {
-        delivered.push(payload);
-        markDeliveryStarted?.();
-        await deliveryGate;
-      },
-    });
-    const coordinator = createAcpDispatchDeliveryCoordinator({
-      cfg: createAcpTestConfig(),
-      ctx: buildTestCtx({
-        Provider: "visiblechat",
-        Surface: "visiblechat",
-        SessionKey: "agent:codex-acp:session-1",
-      }),
-      dispatcher,
-      inboundAudio: false,
-      shouldRouteToOriginating: false,
-    });
-
-    let deliverySettled = false;
-    const deliveryPromise = coordinator.deliver("block", { text: "hello" }, { skipTts: true });
-    void deliveryPromise.then(() => {
-      deliverySettled = true;
-    });
-
-    await deliveryStarted;
-    await Promise.resolve();
-
-    expect(delivered).toEqual([{ text: "hello" }]);
-    expect(deliverySettled).toBe(true);
-
-    let transcriptSettled = false;
-    const transcriptPromise = coordinator
-      .resolveAccumulatedDeliveredTranscriptText()
-      .then((text) => {
-        transcriptSettled = true;
-        return text;
+  it.each([false, true])(
+    "keeps block admission independent of delivery settlement, no-send=%s",
+    async (noSend) => {
+      const delivered: unknown[] = [];
+      let releaseDelivery: (() => void) | undefined;
+      let markDeliveryStarted: (() => void) | undefined;
+      const deliveryStarted = new Promise<void>((resolve) => {
+        markDeliveryStarted = resolve;
       });
-    await Promise.resolve();
-    expect(transcriptSettled).toBe(false);
+      const deliveryGate = new Promise<void>((resolve) => {
+        releaseDelivery = resolve;
+      });
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload) => {
+          delivered.push(payload);
+          markDeliveryStarted?.();
+          await deliveryGate;
+          if (noSend) {
+            throw new PlatformMessageNotDispatchedError("offline", { cause: new Error("offline") });
+          }
+        },
+      });
+      const coordinator = createAcpDispatchDeliveryCoordinator({
+        cfg: createAcpTestConfig(),
+        ctx: buildTestCtx({
+          Provider: noSend ? "plainchat" : "visiblechat",
+          Surface: noSend ? "plainchat" : "visiblechat",
+          SessionKey: "agent:codex-acp:session-1",
+        }),
+        dispatcher,
+        inboundAudio: false,
+        shouldRouteToOriginating: false,
+      });
 
-    releaseDelivery?.();
-    await expect(deliveryPromise).resolves.toBe(true);
-    await expect(transcriptPromise).resolves.toBe("hello");
-    expect(deliverySettled).toBe(true);
-    await dispatcher.waitForIdle();
-  });
+      const deliveryPromise = coordinator.deliver("block", { text: "hello" }, { skipTts: true });
+
+      await deliveryStarted;
+      await Promise.resolve();
+
+      expect(delivered).toEqual([{ text: "hello" }]);
+      await expect(deliveryPromise).resolves.toBe(true);
+
+      let transcriptSettled = false;
+      const transcriptPromise = coordinator
+        .resolveAccumulatedDeliveredTranscriptText()
+        .then((text) => {
+          transcriptSettled = true;
+          return text;
+        });
+      await Promise.resolve();
+      expect(transcriptSettled).toBe(false);
+
+      const fallback = coordinator
+        .settleVisibleText()
+        .then(() => coordinator.getBlockTextForFallback());
+      await Promise.resolve();
+      releaseDelivery?.();
+      await expect(transcriptPromise).resolves.toBe(noSend ? "" : "hello");
+      await expect(fallback).resolves.toBe(noSend ? "hello" : "");
+      await dispatcher.waitForIdle();
+    },
+  );
 
   it("excludes direct output cancelled by a core before-delivery hook", async () => {
     const dispatcher = createReplyDispatcher({ deliver: vi.fn(async () => {}) });
@@ -1041,7 +1047,14 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     deliveryMocks.routeReply.mockImplementationOnce(async (paramsUnknown: unknown) => {
       const params = paramsUnknown as { abortSignal?: AbortSignal };
       return params.abortSignal?.aborted
-        ? { ok: false, delivered: false, error: "Reply routing aborted" }
+        ? {
+            ok: false,
+            delivered: false,
+            error: "Reply routing aborted",
+            cause: new PlatformMessageNotDispatchedError("Reply routing aborted", {
+              cause: undefined,
+            }),
+          }
         : { ok: true, delivered: true, messageId: "unexpected" };
     });
     const coordinator = createAcpDispatchDeliveryCoordinator({

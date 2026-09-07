@@ -51,6 +51,8 @@ export BASETEN_API_KEY=...
 
     </CodeGroup>
 
+    Onboarding saves the connection settings without copying the generated catalog into your config. Existing model rows stay unchanged. If you use `models.mode: "replace"`, onboarding also adds the bundled catalog because that mode disables implicit discovery.
+
   </Step>
   <Step title="Verify the live catalog">
     ```bash

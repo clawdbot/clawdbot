@@ -700,17 +700,93 @@ openclaw health
 
 </Steps>
 
-## Rollback
+<a id="rollback" />
+<a id="roll-back-a-package-install" />
+<a id="roll-back-a-source-checkout" />
+<a id="downgrading-across-the-session-sqlite-migration" />
+<a id="restore-state-only-when-necessary" />
+<a id="verify-the-rollback" />
 
-Rollback has two layers:
+## Downgrade
 
-1. Reinstall older OpenClaw code while keeping the current state.
-2. Restore pre-update state only when the older code cannot use a migrated
-   config or database.
+Verify the upgrade and your session history before retiring recovery originals
+with `openclaw update cleanup`. Downgrading the package does not reverse config
+or database migrations. Once state has migrated beyond the older release's
+supported format, the supported recovery is to restore a verified pre-update
+backup with its matching OpenClaw release.
 
-For manual recovery, start with a code-only rollback only after checking that
-the older release can read the current state. Restoring state discards changes
-made after the backup.
+Prefer `openclaw update` for upgrades and recovery. It validates the target,
+runs required Doctor migrations, and verifies the activated Gateway. A raw
+`npm i -g` replacement does not retain the previous package or run this recovery
+workflow; use `openclaw update` or [create a backup first](#before-updating-create-a-verified-backup).
+
+The updater retains the previous package during activation and keeps it when
+failed recovery cannot prove a working installation. Migration recovery originals
+remain until explicit [update cleanup](/cli/update#update-cleanup). These are
+separate recovery mechanisms: cleanup does not manage package or Git runtime
+backups, and retained migration originals are not a full pre-update backup.
+Preserve every recovery location named in the update report until you have
+verified the installation.
+
+For a target that can read the current state, preview and use the managed
+rollback path:
+
+```bash
+openclaw update --tag <known-good-version> --dry-run
+openclaw update --tag <known-good-version>
+```
+
+The updater checks compatibility and asks for downgrade confirmation. If the
+saved channel is `extended-stable`, add `--channel stable` for an exact one-off
+tag. Supported targets finalize the config writer stamp, restart the service,
+and verify the running version. Older targets may lack that finalization or
+migration-continuation contract; follow the printed recovery guidance if
+activation is refused. Do not bypass a newer-schema or newer-config refusal.
+
+When the update report identifies retained originals, use the corresponding
+[Doctor recovery command](/cli/doctor#session-sqlite-migration) before cleanup.
+Restoring legacy session artifacts does not reverse SQLite schemas or restore
+sessions created only in SQLite. If the older release cannot read the current
+state, restore the pre-update backup using [Restore a full archive](/install/backups#restore-a-full-archive).
+Keep the Gateway and other writers stopped throughout activation of the restored
+state, and preserve the current state separately first: restoration discards
+changes made since the backup. Reinstall the matching package through the
+installation's package manager; a backup archive does not contain the package.
+
+A complete recovery point must cover these together:
+
+- The matching OpenClaw package version or source revision and built runtime.
+- `openclaw.json`, including `meta.lastTouchedVersion`.
+- `state/openclaw.sqlite` and every `agents/<id>/agent/openclaw-agent.sqlite`,
+  including databases at configured paths outside the default layout.
+- The workspaces, credentials, and retained originals needed by that installation.
+
+Use `openclaw backup` for a verified, WAL-aware archive. Never copy only the
+main `.sqlite` file from a live WAL database: committed data can still be in
+`-wal`. Restore the verified consolidated database offline; do not mix it with
+`-wal` or `-shm` files from another database generation. See [Backup](/cli/backup)
+for archive coverage and omissions.
+
+Versions with the [startup preflight repair](https://github.com/openclaw/openclaw/pull/141451)
+leave configuration, databases, and migration inputs unchanged when preflight
+refuses startup. A successful start can migrate state forward. An older binary may then refuse
+both the database schema and the config's `meta.lastTouchedVersion`; changing
+either version marker does not undo the migration. Repair the installed version
+with `openclaw doctor --fix --non-interactive`, or use the backup recovery above.
+
+During recovery, prevent an enabled [auto-updater](#auto-updater) from immediately
+reapplying the newer release by setting `OPENCLAW_NO_AUTO_UPDATE=1` in the Gateway
+environment.
+
+After recovery, verify the running installation before cleanup:
+
+```bash
+openclaw --version
+openclaw health
+openclaw gateway status --deep --json
+openclaw doctor --lint --json
+openclaw update cleanup --dry-run
+```
 
 ### Automatic schema-neutral rollback
 
@@ -813,144 +889,6 @@ can be larger than the original JSONL; streaming import does not imply a fixed
 RAM requirement or migration time. Check free space on both the system temporary
 volume and the state volume. See [Session SQLite migration](/cli/doctor#session-sqlite-migration)
 for staging and memory details.
-
-### Roll back a package install
-
-List published versions, then preview and install the known-good version:
-
-```bash
-npm view openclaw versions --json
-openclaw update --tag <known-good-version> --dry-run
-openclaw update --tag <known-good-version>
-```
-
-`openclaw update --tag` is preferred over a direct package-manager install. It
-detects the downgrade, asks for confirmation, runs managed plugin convergence
-and compatibility checks against the installed target, refreshes service
-metadata, restarts the Gateway, and verifies the running version. If the stored
-channel is `extended-stable`, use
-`--channel stable --tag <known-good-version>` because exact one-off tags cannot
-be combined with the `extended-stable` selector.
-
-Downgrade finalization runs in the installed target when it supports the update
-handoff. After successful validation, current targets save the configuration with
-their own version, including when a one-off `--tag` leaves the channel unchanged.
-This allows later Gateway restarts without an older-binary override. Older targets
-that lack this finalization behavior can still refuse service activation because
-the configuration records a newer writer; follow the reported recovery guidance.
-
-Targets that predate the migration-continuation worker record runtime validation
-as unavailable and use the current updater's existing finalization path. A present
-worker that reports no schema contract still fails before activation. Database
-schema incompatibility still refuses the downgrade before activation. These older
-targets do not support automatic schema-neutral rollback.
-
-Package updates stage and verify the candidate before activation. If the
-filesystem swap or command-shim replacement fails, OpenClaw restores the old
-package automatically. A later Gateway verification failure follows the
-[automatic schema-neutral rollback rule](/install/updating#automatic-schema-neutral-rollback).
-
-If the CLI update path is unavailable, use the same package manager and install
-scope that own the current Gateway:
-
-The npm command below is for npm 12 or npm 11.16+. On npm 11.15 and earlier,
-omit `--allow-scripts=openclaw`.
-
-```bash
-openclaw gateway stop
-npm i -g openclaw@<known-good-version> --allow-scripts=openclaw
-openclaw gateway install --force
-openclaw gateway restart
-```
-
-For a pnpm-owned install, use
-`pnpm add -g --allow-build=openclaw openclaw@<known-good-version>` instead. For
-a Bun-owned install, use
-`bun add -g --trust openclaw@<known-good-version>`; `--trust` allows OpenClaw's
-lifecycle scripts. During incident recovery, prevent an enabled auto-updater
-from immediately applying a newer release by setting
-`OPENCLAW_NO_AUTO_UPDATE=1` in the Gateway environment.
-
-### Roll back a source checkout
-
-Use a clean checkout and select a known-good tag or commit. First verify that
-your Corepack bootstrap supports that ref's pnpm pin as described in
-[Source-checkout servers](#source-checkout-servers-reference-script):
-
-```bash
-git fetch --all --tags
-git checkout --detach <known-good-tag-or-commit>
-(
-  pnpm_shims="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pnpm.XXXXXX")" || exit
-  trap 'rm -rf "$pnpm_shims"' EXIT
-  corepack enable --install-directory "$pnpm_shims" pnpm || exit
-  export PATH="$pnpm_shims:$PATH"
-  export NPM_CONFIG_WORKSPACE_DIR="$PWD" npm_config_workspace_dir="$PWD"
-  export PNPM_CONFIG_LOCKFILE_DIR="$PWD" pnpm_config_lockfile_dir="$PWD"
-  "$pnpm_shims/pnpm" install --frozen-lockfile || exit
-  "$pnpm_shims/pnpm" build
-) && openclaw gateway restart
-```
-
-To return to latest: `git checkout main && git pull`.
-
-Candidate dependency, build, and validation failures leave the live checkout
-and serving Gateway unchanged. Before live migrations begin, activation
-failures can restore the previous branch, SHA, and retained built runtime.
-After live migrations begin, failures retain the candidate for diagnosis:
-switching code back cannot undo configuration or database migrations. Inspect
-the failed checks before selecting an older commit, and verify that it supports
-your state.
-
-### Downgrading across the session SQLite migration
-
-Before starting an older file-backed OpenClaw release, use the current CLI to
-restore archived legacy transcript artifacts:
-
-```bash
-openclaw gateway stop
-openclaw doctor --session-sqlite restore --session-sqlite-all-agents
-```
-
-This does not delete SQLite data. Sessions created after the SQLite migration
-exist only in SQLite and will not appear to the older runtime. See
-[Downgrading after session SQLite migration](/cli/doctor#downgrading-after-session-sqlite-migration).
-
-### Restore state only when necessary
-
-If the older code cannot read a newer config or database schema, stop the
-Gateway and restore the verified pre-update filesystem, volume, or VM snapshot.
-Preserve the current state separately before restoring because this removes
-changes made after the snapshot.
-
-Restore a broad archive to a fresh staging directory with the current CLI:
-
-```bash
-openclaw backup restore <archive.tar.gz> --target <fresh-directory>
-```
-
-The command verifies the archive and its SQLite databases before extraction.
-Activation remains an explicit offline step: stop the Gateway, move the
-restored asset tree into place or point `OPENCLAW_STATE_DIR` at the restored
-state asset, run `openclaw doctor`, then restart.
-
-Treat a state restore as time travel. Ratcheting channel credentials, especially
-WhatsApp, can desynchronize and require relinking. Approvals and
-delivery/dedupe state roll back too, and plugin `node_modules` trees are not
-archived. See [Restore a full archive](/install/backups#restore-a-full-archive)
-for the complete activation and recovery sequence. `openclaw backup sqlite
-restore` likewise writes a verified database to a fresh target; activating that
-target remains an explicit offline operator step.
-
-### Verify the rollback
-
-```bash
-openclaw --version
-openclaw health
-openclaw plugins list --json
-openclaw gateway status --deep --json
-openclaw doctor --lint --json
-```
 
 ## If you are stuck
 

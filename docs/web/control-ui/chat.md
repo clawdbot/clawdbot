@@ -152,6 +152,13 @@ Chat error banners, including cloud runner failures, show short messages in full
 
 ### Source previews and copying code
 
+Select **Open** on a text attachment to read it directly in the **Files** side
+panel. Same-origin text attachments, including pasted `.txt` files, Markdown,
+CSV, and JSON, display as selectable, read-only text with line breaks and
+indentation preserved. HTML and other markup remain literal text, never an
+embedded page. Previews require UTF-8 content no larger than 256 KiB; unsupported,
+external, oversized, or unavailable files keep their **Download** action.
+
 **View Raw Text** keeps Markdown notation literal, including nested code fences.
 Decoded text artifacts use the same literal preview. **Copy code** preserves the
 code's leading whitespace and final newline when present. Indented Markdown code

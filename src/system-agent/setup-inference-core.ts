@@ -1,3 +1,4 @@
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type {
   SetupInferenceActivationRejection,
   SetupInferenceFailureStatus,
@@ -340,7 +341,7 @@ export function invalidSetupConfigError(snapshot: {
 }
 
 export async function redactSetupInferenceError(
-  message: string,
+  message: unknown,
   ...apiKeys: Array<string | undefined>
 ): Promise<string> {
   const secrets = new Set(
@@ -348,7 +349,7 @@ export async function redactSetupInferenceError(
       .flatMap((apiKey) => [apiKey, apiKey?.trim()])
       .filter((value): value is string => Boolean(value)),
   );
-  let redacted = message;
+  let redacted = coerceErrorMessage(message);
   for (const secret of Array.from(secrets).toSorted((a, b) => b.length - a.length)) {
     redacted = redacted.split(secret).join("[redacted]");
   }

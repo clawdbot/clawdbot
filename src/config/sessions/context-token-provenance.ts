@@ -1,5 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import type { SessionEntry } from "./types.js";
+import type { SessionContextBudgetStatus, SessionEntry } from "./types.js";
 
 type SessionContextTokenOwner = Pick<
   SessionEntry,
@@ -119,4 +119,33 @@ export function resolveProjectedSessionContextTokens(params: {
   return params.entry?.modelSelectionLocked === true
     ? (trustedContextTokens ?? currentContextTokens)
     : currentContextTokens;
+}
+
+/** Only publish a last-run prompt budget for the current session selection and cap. */
+export function resolveProjectedSessionContextBudgetStatus(params: {
+  entry:
+    | Pick<SessionEntry, "sessionId" | "contextBudgetStatus" | "liveModelSwitchPending">
+    | undefined;
+  provider: string | null | undefined;
+  model: string | null | undefined;
+  contextTokens: number | undefined;
+}): SessionContextBudgetStatus | undefined {
+  const status = params.entry?.contextBudgetStatus;
+  const provider = normalizeLowercaseStringOrEmpty(params.provider);
+  const model = normalizeLowercaseStringOrEmpty(params.model);
+  if (
+    !status ||
+    !provider ||
+    !model ||
+    resolvePositiveContextTokens(params.contextTokens) === undefined ||
+    params.entry?.liveModelSwitchPending ||
+    normalizeLowercaseStringOrEmpty(status.provider) !== provider ||
+    normalizeLowercaseStringOrEmpty(status.model) !== model ||
+    !status.sessionId?.trim() ||
+    status.sessionId !== params.entry?.sessionId ||
+    status.contextTokenBudget !== params.contextTokens
+  ) {
+    return undefined;
+  }
+  return status;
 }

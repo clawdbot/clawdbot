@@ -1,4 +1,3 @@
-// Terminal Core module implements safe text behavior.
 import { stripAnsi } from "./ansi.js";
 
 /** Return whether text contains C0 or C1 terminal control characters. */
