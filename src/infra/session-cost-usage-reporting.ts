@@ -40,6 +40,7 @@ import type {
 } from "./session-cost-usage.types.js";
 
 const USAGE_COST_DIRECT_REFRESH_RETRY_MS = 25;
+const USAGE_COST_DIRECT_REFRESH_MAX_WAIT_MS = 5_000;
 
 /**
  * Scan all transcript files to discover sessions not in the session store.
@@ -159,6 +160,7 @@ export async function loadSessionCostSummary(params: {
   }
   const agentDir = resolveUsageCostAgentDir(params.config, params.agentId);
   const databasePath = resolveUsageCostCacheDatabasePath(params.agentId);
+  const refreshWaitStartedAt = Date.now();
   while (
     (await refreshCostUsageCacheForAgent({
       config: params.config,
@@ -168,6 +170,9 @@ export async function loadSessionCostSummary(params: {
       sessionFiles: [sessionFile],
     })) === "busy"
   ) {
+    if (Date.now() - refreshWaitStartedAt >= USAGE_COST_DIRECT_REFRESH_MAX_WAIT_MS) {
+      break;
+    }
     // Direct detail callers require the requested session, unlike background
     // summary refreshes. Wait for the agent-wide writer to release, then retry.
     await new Promise<void>((resolve) => {
