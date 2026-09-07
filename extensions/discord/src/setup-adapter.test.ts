@@ -1,23 +1,30 @@
-// Discord tests cover setup adapter token-shape validation (#140497 narrow slice).
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { describe, expect, it } from "vitest";
 import { discordSetupContract } from "./setup-adapter.js";
 
-const validate = (input: Record<string, unknown>) =>
+const validate = (input: unknown) =>
   discordSetupContract.validateInput?.({
     cfg: {},
     accountId: DEFAULT_ACCOUNT_ID,
     input,
-  } as never) ?? null;
+  });
 
 describe("discord setup adapter token shape", () => {
-  it("rejects a numeric application ID used as the bot token", () => {
-    const error = validate({ token: "1234567890123456789" });
-    expect(error).toMatch(/application ID/i);
-  });
+  it.each(["1234567890123456789", " 1234567890123456789 ", "12345678901234"])(
+    "rejects numeric ID %j used as the bot token",
+    (token) => {
+      const error = validate({ token });
+      expect(error).toContain("application ID");
+      expect(error).toContain("Discord Developer Portal (Bot page)");
+    },
+  );
 
   it("accepts a dot-separated bot token shape", () => {
     expect(validate({ token: "MTk4NjIyNDQ3NDUy.Xyz.Abc-def_123" })).toBeNull();
+  });
+
+  it("does not enforce a token format for nonnumeric strings", () => {
+    expect(validate({ token: "opaque-token" })).toBeNull();
   });
 
   it("leaves non-string credential references to the contract type check", () => {
