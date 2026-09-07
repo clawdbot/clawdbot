@@ -1759,69 +1759,6 @@ describe("models.authStatus", () => {
     expect(result.providers[0]?.profiles[0]?.usageRefreshPending).toBeUndefined();
   });
 
-  it("queries account usage for API-key credentials issued by a provider login", async () => {
-    const profile = createApiKeyProfile("openrouter");
-    setPreparedAuthStore({
-      version: 1,
-      profiles: {
-        [profile.profileId]: {
-          type: "api_key",
-          provider: "openrouter",
-          key: "sk-or-v1-test",
-          displayName: "OpenRouter user-1",
-          metadata: { authFlow: "oauth-pkce", userId: "user-1" },
-        },
-      },
-    });
-    const plugin = {
-      id: "openrouter",
-      origin: "bundled" as const,
-      contracts: { usageProviders: ["openrouter"] },
-    };
-    setPreparedMetadataSnapshot(createPluginMetadataSnapshotFixture({ plugins: [plugin] }));
-    mocks.listProviderUsagePluginDescriptors.mockReturnValueOnce([
-      { provider: "openrouter", displayName: "OpenRouter" },
-    ]);
-    mocks.buildAuthHealthSummary.mockReturnValue({
-      now: 0,
-      warnAfterMs: 0,
-      profiles: [profile],
-      providers: [{ provider: "openrouter", status: "static", profiles: [profile] }],
-    });
-    mocks.loadProviderUsageSummary.mockResolvedValue({
-      updatedAt: 0,
-      providers: [
-        {
-          provider: "openrouter",
-          displayName: "OpenRouter",
-          windows: [{ label: "Monthly key budget", usedPercent: 25 }],
-        },
-      ],
-    });
-
-    const first = await readAuthStatus();
-    expect(first.providers[0]?.profiles[0]?.usageRefreshPending).toBe(true);
-    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
-      providers: ["openrouter"],
-      authProfile: { provider: "openrouter", profileId: profile.profileId },
-      agentDir: "/tmp/agent",
-      workspaceDir: "/tmp/workspace",
-      authStore: preparedAuthStore,
-      config: expect.any(Object),
-      isAuthProfileCurrent: expect.any(Function),
-      timeoutMs: 5_000,
-    });
-
-    await waitForFast(async () => {
-      const refreshed = await readAuthStatus();
-      expect(refreshed.providers[0]?.usageScope).toBeUndefined();
-      expect(refreshed.providers[0]?.profiles[0]?.usage?.windows).toEqual([
-        { label: "Monthly key budget", usedPercent: 25 },
-      ]);
-    });
-    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(1);
-  });
-
   it("routes claude-cli OAuth profiles to Anthropic usage with plan and billing", async () => {
     const runtimeConfig = {};
     const plugins = [
@@ -1898,13 +1835,16 @@ describe("models.authStatus", () => {
 
     invalidateModelAuthStatusCache();
     mocks.loadProviderUsageSummary.mockClear();
-    const readOnlyOpts = createOptions({}, ["operator.read"]);
-    await handler(readOnlyOpts);
-    const readOnly = firstRespondCall(readOnlyOpts)?.[1] as ModelAuthStatusResult;
-    expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
-    expect(readOnly.providers[0]?.usage).toBeUndefined();
-    expect(readOnly.providers[0]?.profiles[0]?.usage).toBeUndefined();
-    expect(readOnly.providers[0]?.profiles[0]?.usageRefreshPending).toBeUndefined();
+    await waitForFast(async () => {
+      const readOnlyOpts = createOptions({}, ["operator.read"]);
+      await handler(readOnlyOpts);
+      const readOnly = firstRespondCall(readOnlyOpts)?.[1] as ModelAuthStatusResult;
+      expect(readOnly.providers[0]?.usage?.windows).toEqual([{ label: "5h", usedPercent: 22 }]);
+      expect(readOnly.providers[0]?.usage?.accountEmail).toBeUndefined();
+      expect(readOnly.providers[0]?.usageProfileId).toBeUndefined();
+      expect(readOnly.providers[0]?.profiles[0]?.usage).toBeUndefined();
+      expect(readOnly.providers[0]?.profiles[0]?.usageRefreshPending).toBeUndefined();
+    });
   });
 
   it.each([
@@ -2098,84 +2038,79 @@ describe("models.authStatus", () => {
     }
   });
 
-  it.each([
-    { pending: false, backupType: "token" },
-    { pending: true, backupType: "token" },
-    { pending: false, backupType: "api_key" },
-    { pending: true, backupType: "api_key" },
-  ] as const)("keeps login priority ($backupType, $pending)", async ({ pending, backupType }) => {
-    const loginId = "openrouter:login";
-    const tokenId = "openrouter:token";
-    const profiles = [
-      { ...createApiKeyProfile("openrouter"), profileId: loginId },
-      {
-        profileId: tokenId,
-        provider: "openrouter",
-        type: backupType,
-        status: "ok",
-        source: "store",
-        label: "Saved token",
-      },
-    ] satisfies AuthHealthSummary["profiles"];
-    setPreparedAuthStore({
-      version: 1,
-      profiles: {
-        [loginId]: {
-          type: "api_key",
+  it.each(["token", "api_key"] as const)(
+    "keeps login priority with a %s backup",
+    async (backupType) => {
+      const loginId = "openrouter:login";
+      const tokenId = "openrouter:token";
+      const profiles = [
+        { ...createApiKeyProfile("openrouter"), profileId: loginId },
+        {
+          profileId: tokenId,
           provider: "openrouter",
-          key: "synthetic-login-key",
-          metadata: { authFlow: "oauth-pkce" },
+          type: backupType,
+          status: "ok",
+          source: "store",
+          label: "Saved token",
         },
-        [tokenId]:
-          backupType === "token"
-            ? { type: "token", provider: "openrouter", token: "synthetic-saved-token" }
-            : { type: "api_key", provider: "openrouter", key: "synthetic-backup-key" },
-      },
-      order: { openrouter: [loginId, tokenId] },
-    });
-    setPreparedMetadataSnapshot(
-      createPluginMetadataSnapshotFixture({
-        plugins: [
-          { id: "openrouter", origin: "bundled", contracts: { usageProviders: ["openrouter"] } },
-        ],
-      }),
-    );
-    mocks.listProviderUsagePluginDescriptors.mockReturnValue([
-      { provider: "openrouter", displayName: "OpenRouter" },
-    ]);
-    mocks.buildAuthHealthSummary.mockReturnValue({
-      now: 0,
-      warnAfterMs: 0,
-      profiles,
-      providers: [{ provider: "openrouter", status: "ok", profiles, effectiveProfiles: profiles }],
-    });
-    const login = createDeferred();
-    if (!pending) {
-      login.resolve();
-    }
-    mocks.loadProviderUsageSummary.mockImplementation(async (options = {}) => {
-      if (options.authProfile?.profileId === loginId) {
-        await login.promise;
-      }
-      return {
-        updatedAt: 0,
-        providers: [
-          {
+      ] satisfies AuthHealthSummary["profiles"];
+      setPreparedAuthStore({
+        version: 1,
+        profiles: {
+          [loginId]: {
+            type: "api_key",
             provider: "openrouter",
-            displayName: "OpenRouter",
-            usageScope: "account",
-            windows: [
-              {
-                label: "Monthly key budget",
-                usedPercent: options.authProfile?.profileId === loginId ? 10 : 90,
-              },
-            ],
+            key: "synthetic-login-key",
+            metadata: { authFlow: "oauth-pkce" },
           },
+          [tokenId]:
+            backupType === "token"
+              ? { type: "token", provider: "openrouter", token: "synthetic-saved-token" }
+              : { type: "api_key", provider: "openrouter", key: "synthetic-backup-key" },
+        },
+        order: { openrouter: [loginId, tokenId] },
+      });
+      setPreparedMetadataSnapshot(
+        createPluginMetadataSnapshotFixture({
+          plugins: [
+            { id: "openrouter", origin: "bundled", contracts: { usageProviders: ["openrouter"] } },
+          ],
+        }),
+      );
+      mocks.listProviderUsagePluginDescriptors.mockReturnValue([
+        { provider: "openrouter", displayName: "OpenRouter" },
+      ]);
+      mocks.buildAuthHealthSummary.mockReturnValue({
+        now: 0,
+        warnAfterMs: 0,
+        profiles,
+        providers: [
+          { provider: "openrouter", status: "ok", profiles, effectiveProfiles: profiles },
         ],
-      };
-    });
-    try {
-      if (pending) {
+      });
+      const login = createDeferred();
+      mocks.loadProviderUsageSummary.mockImplementation(async (options = {}) => {
+        if (options.authProfile?.profileId === loginId) {
+          await login.promise;
+        }
+        return {
+          updatedAt: 0,
+          providers: [
+            {
+              provider: "openrouter",
+              displayName: "OpenRouter",
+              usageScope: "account",
+              windows: [
+                {
+                  label: "Monthly key budget",
+                  usedPercent: options.authProfile?.profileId === loginId ? 10 : 90,
+                },
+              ],
+            },
+          ],
+        };
+      });
+      try {
         await waitForFast(async () => {
           const result = (await readAuthStatus()).providers[0];
           expect(
@@ -2187,23 +2122,22 @@ describe("models.authStatus", () => {
           expect(result?.usageProfileId).toBeUndefined();
         });
         login.resolve();
+        await waitForFast(async () => {
+          const result = (await readAuthStatus()).providers[0];
+          expect(result?.profiles.map((profile) => profile.usage?.windows[0]?.usedPercent)).toEqual(
+            [10, backupType === "token" ? 90 : undefined],
+          );
+          expect(result?.usage?.windows[0]?.usedPercent).toBe(10);
+          expect(result?.usageProfileId).toBe(loginId);
+          expect(result?.independentUsage?.windows[0]?.usedPercent).toBe(
+            backupType === "api_key" ? 90 : undefined,
+          );
+        });
+      } finally {
+        login.resolve();
       }
-      await waitForFast(async () => {
-        const result = (await readAuthStatus()).providers[0];
-        expect(result?.profiles.map((profile) => profile.usage?.windows[0]?.usedPercent)).toEqual([
-          10,
-          backupType === "token" ? 90 : undefined,
-        ]);
-        expect(result?.usage?.windows[0]?.usedPercent).toBe(10);
-        expect(result?.usageProfileId).toBe(loginId);
-        expect(result?.independentUsage?.windows[0]?.usedPercent).toBe(
-          backupType === "api_key" ? 90 : undefined,
-        );
-      });
-    } finally {
-      login.resolve();
-    }
-  });
+    },
+  );
 
   it.each(["account", "provider", undefined] as const)(
     "keeps endpoint scope %s",

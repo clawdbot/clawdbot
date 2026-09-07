@@ -153,7 +153,6 @@ export async function loadProviderUsageSummary(
   const displayNames = new Map(
     descriptors.map((descriptor) => [descriptor.provider, descriptor.displayName]),
   );
-  const providerOrder = new Map(descriptors.map(({ provider }, index) => [provider, index]));
   const failureSnapshot = (provider: UsageProviderId, error: string): ProviderUsageSnapshot => ({
     provider,
     displayName: displayNames.get(provider) ?? providerUsageLabel(provider) ?? provider,
@@ -267,13 +266,9 @@ export async function loadProviderUsageSummary(
     );
   });
 
-  const snapshots = (await Promise.all(tasks))
-    .filter((snapshot): snapshot is ProviderUsageSnapshot => snapshot !== undefined)
-    .toSorted(
-      (left, right) =>
-        (providerOrder.get(left.provider) ?? Number.MAX_SAFE_INTEGER) -
-        (providerOrder.get(right.provider) ?? Number.MAX_SAFE_INTEGER),
-    );
+  const snapshots = (await Promise.all(tasks)).filter(
+    (snapshot): snapshot is ProviderUsageSnapshot => snapshot !== undefined,
+  );
   const providers = snapshots.filter((entry) => {
     if (entry.windows.length > 0) {
       return true;

@@ -550,88 +550,63 @@ describe("provider-usage.load", () => {
     }
   });
 
-  it("keeps timed-out profile work inside the three-request cap until I/O settles", async () => {
-    vi.useFakeTimers();
-    let releaseWork: (() => void) | undefined;
-    const workBlocked = new Promise<void>((resolve) => {
-      releaseWork = resolve;
-    });
-    resolveProviderUsageAuthWithPluginMock.mockResolvedValue({ token: "profile-token" });
-    resolveProviderUsageSnapshotWithPluginMock.mockImplementation(async ({ provider }) => {
-      await workBlocked;
-      return { provider, displayName: provider, windows: [] };
-    });
-    const pending = Array.from({ length: 4 }, (_, index) =>
-      loadProviderUsageSummary({
-        authProfile: { provider: "openai", profileId: `openai:${index}` },
-        authStore: { version: 1, profiles: {} },
-        config: {},
-        env: {},
-        timeoutMs: 50,
-        isAuthProfileCurrent: () => true,
-      }),
-    );
-    let queuedSettled = false;
-    void pending[3]?.then(() => {
-      queuedSettled = true;
-    });
-    try {
-      await vi.advanceTimersByTimeAsync(1);
-      expect(resolveProviderUsageSnapshotWithPluginMock).toHaveBeenCalledTimes(3);
-
-      await vi.advanceTimersByTimeAsync(49);
-      await Promise.all(pending.slice(0, 3));
-      expect(resolveProviderUsageSnapshotWithPluginMock).toHaveBeenCalledTimes(3);
-      expect(queuedSettled).toBe(false);
-
-      releaseWork?.();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(resolveProviderUsageSnapshotWithPluginMock).toHaveBeenCalledTimes(4);
-      await Promise.all(pending);
-    } finally {
-      releaseWork?.();
-      await Promise.allSettled(pending);
-      vi.useRealTimers();
-    }
-  });
-
-  it("bounds a queued profile refresh without letting it start later", async () => {
-    vi.useFakeTimers();
-    let releaseWork: (() => void) | undefined;
-    const workBlocked = new Promise<void>((resolve) => {
-      releaseWork = resolve;
-    });
-    resolveProviderUsageAuthWithPluginMock.mockResolvedValue({ token: "profile-token" });
-    resolveProviderUsageSnapshotWithPluginMock.mockImplementation(async ({ provider }) => {
-      await workBlocked;
-      return { provider, displayName: provider, windows: [] };
-    });
-    const pending = Array.from({ length: 4 }, (_, index) =>
-      loadProviderUsageSummary({
-        authProfile: { provider: "openai", profileId: `openai:${index}` },
-        authStore: { version: 1, profiles: {} },
-        config: {},
-        env: {},
-        timeoutMs: 50,
-        isAuthProfileCurrent: () => true,
-      }),
-    );
-    try {
-      await vi.advanceTimersByTimeAsync(100);
-      await expect(pending[3]).resolves.toMatchObject({
-        providers: [{ error: "Refresh queue timeout" }],
+  it.each([
+    { releaseAfter: 50, requestsStarted: 4 },
+    { releaseAfter: 100, requestsStarted: 3 },
+  ])(
+    "holds the I/O cap and expires queued work before release at $releaseAfter ms",
+    async ({ releaseAfter, requestsStarted }) => {
+      vi.useFakeTimers();
+      let releaseWork: (() => void) | undefined;
+      const workBlocked = new Promise<void>((resolve) => {
+        releaseWork = resolve;
       });
-      expect(resolveProviderUsageSnapshotWithPluginMock).toHaveBeenCalledTimes(3);
+      resolveProviderUsageAuthWithPluginMock.mockResolvedValue({ token: "profile-token" });
+      resolveProviderUsageSnapshotWithPluginMock.mockImplementation(async ({ provider }) => {
+        await workBlocked;
+        return { provider, displayName: provider, windows: [] };
+      });
+      const pending = Array.from({ length: 4 }, (_, index) =>
+        loadProviderUsageSummary({
+          authProfile: { provider: "openai", profileId: `openai:${index}` },
+          authStore: { version: 1, profiles: {} },
+          config: {},
+          env: {},
+          timeoutMs: 50,
+          isAuthProfileCurrent: () => true,
+        }),
+      );
+      let queuedSettled = false;
+      void pending[3]?.then(() => {
+        queuedSettled = true;
+      });
+      try {
+        await vi.advanceTimersByTimeAsync(1);
+        expect(resolveProviderUsageSnapshotWithPluginMock).toHaveBeenCalledTimes(3);
 
-      releaseWork?.();
-      await Promise.all(pending);
-      expect(resolveProviderUsageSnapshotWithPluginMock).toHaveBeenCalledTimes(3);
-    } finally {
-      releaseWork?.();
-      await Promise.allSettled(pending);
-      vi.useRealTimers();
-    }
-  });
+        await vi.advanceTimersByTimeAsync(49);
+        await Promise.all(pending.slice(0, 3));
+        expect(resolveProviderUsageSnapshotWithPluginMock).toHaveBeenCalledTimes(3);
+        expect(queuedSettled).toBe(false);
+
+        if (releaseAfter === 100) {
+          await vi.advanceTimersByTimeAsync(50);
+          await expect(pending[3]).resolves.toMatchObject({
+            providers: [{ error: "Refresh queue timeout" }],
+          });
+          expect(resolveProviderUsageSnapshotWithPluginMock).toHaveBeenCalledTimes(3);
+        }
+        releaseWork?.();
+        await vi.advanceTimersByTimeAsync(0);
+        await Promise.all(pending);
+        expect(resolveProviderUsageSnapshotWithPluginMock).toHaveBeenCalledTimes(requestsStarted);
+      } finally {
+        releaseWork?.();
+        await Promise.allSettled(pending);
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("keeps successful provider usage when a sibling auth hook rejects", async () => {
     resolveProviderUsageAuthWithPluginMock.mockImplementation(async ({ provider }) => {
