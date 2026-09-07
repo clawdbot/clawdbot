@@ -162,9 +162,7 @@ function shouldHandleControlUiBrowserActivation(event: MouseEvent): boolean {
   );
 }
 
-export async function startNativeLinkRouting(
-  options: NativeLinkRoutingOptions = {},
-): Promise<NativeLinkRouting> {
+export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): NativeLinkRouting {
   if (options.signal?.aborted || typeof window === "undefined" || typeof document === "undefined") {
     return { dispose() {} };
   }
@@ -177,15 +175,10 @@ export async function startNativeLinkRouting(
   ) {
     return { dispose() {} };
   }
-  if (postMessage) {
-    await import("../components/native-link-menu.runtime.ts");
-  }
-  // Startup may stop while the native-only menu module is loading.
-  if (options.signal?.aborted) {
-    return { dispose() {} };
-  }
-
   let menu: NativeLinkMenu | null = null;
+  let menuModule: Promise<unknown> | undefined;
+  let menuRequest = 0;
+  let disposed = false;
   let nativeUpdatePending = false;
   const handleNativeUpdatePosted = () => {
     nativeUpdatePending = true;
@@ -201,10 +194,11 @@ export async function startNativeLinkRouting(
     if (expected && menu !== expected) {
       return;
     }
+    menuRequest += 1;
     menu?.remove();
     menu = null;
   };
-  const showMenu = (
+  const showMenu = async (
     nativePostMessage: WebKitMessageHandler["postMessage"],
     anchor: HTMLAnchorElement,
     url: URL,
@@ -213,6 +207,18 @@ export async function startNativeLinkRouting(
     container: HTMLElement,
   ) => {
     closeMenu();
+    const request = menuRequest;
+    await (menuModule ??= import("../components/native-link-menu.runtime.ts"));
+    // A later click, shutdown, or removed trigger invalidates this pending menu.
+    if (
+      disposed ||
+      options.signal?.aborted ||
+      request !== menuRequest ||
+      !anchor.isConnected ||
+      !container.isConnected
+    ) {
+      return;
+    }
     const nextMenu = document.createElement("openclaw-native-link-menu") as NativeLinkMenu;
     nextMenu.x = x;
     nextMenu.y = y;
@@ -278,14 +284,19 @@ export async function startNativeLinkRouting(
     }
     event.preventDefault();
     event.stopPropagation();
-    showMenu(
+    void showMenu(
       postMessage,
       link.anchor,
       link.url,
       event.clientX,
       event.clientY,
       menuContainer(event),
-    );
+    ).catch((error: unknown) => {
+      menuModule = undefined;
+      if (!disposed) {
+        console.error("[openclaw] native link menu failed to load; right-click to retry", error);
+      }
+    });
   };
 
   // Run after target/document handlers so cancelled application actions remain authoritative.
@@ -298,14 +309,16 @@ export async function startNativeLinkRouting(
     document.addEventListener("contextmenu", handleContextMenu, true);
   }
 
-  return {
-    dispose() {
-      window.removeEventListener("click", handleClick);
-      window.removeEventListener("auxclick", handleClick);
-      window.removeEventListener(NATIVE_UPDATE_POSTED_EVENT, handleNativeUpdatePosted);
-      window.removeEventListener(NATIVE_UPDATE_DECLINED_EVENT, handleNativeUpdateDeclined);
-      document.removeEventListener("contextmenu", handleContextMenu, true);
-      closeMenu();
-    },
+  const dispose = () => {
+    disposed = true;
+    options.signal?.removeEventListener("abort", dispose);
+    window.removeEventListener("click", handleClick);
+    window.removeEventListener("auxclick", handleClick);
+    window.removeEventListener(NATIVE_UPDATE_POSTED_EVENT, handleNativeUpdatePosted);
+    window.removeEventListener(NATIVE_UPDATE_DECLINED_EVENT, handleNativeUpdateDeclined);
+    document.removeEventListener("contextmenu", handleContextMenu, true);
+    closeMenu();
   };
+  options.signal?.addEventListener("abort", dispose, { once: true });
+  return { dispose };
 }
