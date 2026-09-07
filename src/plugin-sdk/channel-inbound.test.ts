@@ -113,7 +113,7 @@ describe("channel-inbound public helpers", () => {
       { storePath, sessionKey: staleSessionKey },
       { sessionId: "published-inbound-stale", updatedAt: 1 },
     );
-    let staleEntryPresentAtDispatch = false;
+    let staleEntryAtDispatch: ReturnType<typeof loadSessionEntry>;
     const { runChannelInboundEvent } = await import("openclaw/plugin-sdk/channel-inbound");
 
     const result = await runChannelInboundEvent({
@@ -149,9 +149,7 @@ describe("channel-inbound public helpers", () => {
             },
           },
           runDispatch: async () => {
-            staleEntryPresentAtDispatch = Boolean(
-              loadSessionEntry({ storePath, sessionKey: staleSessionKey }),
-            );
+            staleEntryAtDispatch = loadSessionEntry({ storePath, sessionKey: staleSessionKey });
             return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
           },
           runDispatchLifecycle: {
@@ -163,9 +161,14 @@ describe("channel-inbound public helpers", () => {
     });
 
     expect(result.dispatched).toBe(true);
-    expect(staleEntryPresentAtDispatch).toBe(true);
+    expect(staleEntryAtDispatch).toMatchObject({ sessionId: "published-inbound-stale" });
+    expect(staleEntryAtDispatch?.archivedAt).toBeUndefined();
     await vi.waitFor(() => {
-      expect(loadSessionEntry({ storePath, sessionKey: staleSessionKey })).toBeUndefined();
+      expect(loadSessionEntry({ storePath, sessionKey: staleSessionKey })).toMatchObject({
+        sessionId: "published-inbound-stale",
+        updatedAt: 1,
+        archivedAt: expect.any(Number),
+      });
     });
   });
 

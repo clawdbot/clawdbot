@@ -56,6 +56,8 @@ const text = vi.fn();
 const spinner = vi.fn(() => ({ start: vi.fn(), stop: vi.fn(), clear: vi.fn() }));
 const isCancel = (value: unknown) => value === "cancel";
 const triageCommand = vi.fn<typeof import("../commands/triage.js").triageCommand>();
+const triageAfterFailure =
+  vi.fn<typeof import("../commands/triage-failure.js").triageAfterFailure>();
 const updateFailureActionMocks = vi.hoisted(() => ({
   runInteractiveUpdateFailureAction: vi.fn(),
 }));
@@ -609,6 +611,7 @@ vi.mock("../runtime.js", async (importOriginal) => ({
   defaultRuntime: runtimeCapture,
 }));
 vi.mock("../commands/triage.js", () => ({ triageCommand }));
+vi.mock("../commands/triage-failure.js", () => ({ triageAfterFailure }));
 vi.mock("./update-cli/update-command-report.js", () => updateFailureActionMocks);
 
 const { runGatewayUpdate } = await import("../infra/update-runner.js");
@@ -1870,6 +1873,7 @@ describe("update-cli", () => {
     }
     restartHealthTestControl.snapshot = undefined;
     vi.resetAllMocks();
+    triageAfterFailure.mockResolvedValue(undefined);
     managedUpdateHandoff.activate.mockResolvedValue(false);
     unattendedRepair.mockResolvedValue({
       status: "unavailable",
@@ -6065,6 +6069,75 @@ describe("update-cli", () => {
     },
   );
 
+  it("reports a same-version channel switch as successful without updating the package", async () => {
+    const root = await mockPackageInstallAtCaseDir();
+    const stateDir = tempDirs.make("openclaw-update-channel-switch-");
+    readPackageVersion.mockResolvedValue("2026.4.22");
+    primeNpmChannelTag("beta", "2026.4.22");
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue(
+      configSnapshot({ update: { channel: "stable" } }),
+    );
+    await writeJsonFixture(path.join(stateDir, "openclaw.json"), {
+      update: { channel: "stable" },
+    });
+    mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      await updateCommand({ channel: "beta", yes: true, restart: true, json: true });
+    });
+
+    expect(lastReplaceConfigCall()?.nextConfig?.update?.channel).toBe("beta");
+    expectNoSideEffects(
+      serviceStop,
+      serviceRestart,
+      runDaemonRestart,
+      candidateValidation,
+      syncPluginsForUpdateChannel,
+      updateNpmInstalledPlugins,
+    );
+    expect(packageInstallCommandCall()?.[0]).toBeUndefined();
+    expect(doctorCommandCall()).toBeUndefined();
+    expect(lastWriteJsonCall()).toMatchObject({ status: "ok" });
+    expect(lastWriteJsonCall()).not.toHaveProperty("reason");
+    const result = lastWriteJsonCall() as UpdateRunResult;
+    expect(
+      getUpdateRun(requireValue(result.runId, "channel switch run id"), {
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      }),
+    ).toMatchObject({ status: "succeeded", downtimeMs: 0 });
+  });
+
+  it("keeps an explicit same-version channel no-op skipped without rewriting config", async () => {
+    const root = await mockPackageInstallAtCaseDir();
+    const stateDir = tempDirs.make("openclaw-update-channel-noop-");
+    readPackageVersion.mockResolvedValue("2026.4.22");
+    primeNpmChannelTag("beta", "2026.4.22");
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue(
+      configSnapshot({ update: { channel: "beta" } }),
+    );
+    await writeJsonFixture(path.join(stateDir, "openclaw.json"), {
+      update: { channel: "beta" },
+    });
+    mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      await updateCommand({ channel: "beta", yes: true, restart: true, json: true });
+    });
+
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expectNoSideEffects(
+      serviceStop,
+      serviceRestart,
+      runDaemonRestart,
+      candidateValidation,
+      syncPluginsForUpdateChannel,
+      updateNpmInstalledPlugins,
+    );
+    expect(packageInstallCommandCall()?.[0]).toBeUndefined();
+    expect(doctorCommandCall()).toBeUndefined();
+    expect(lastWriteJsonCall()).toMatchObject({ status: "skipped", reason: "already-current" });
+  });
+
   it("runs the package update when latest target lookup is unresolved", async () => {
     setTty(false);
     await mockPackageInstallAtCaseDir();
@@ -8759,8 +8832,8 @@ describe("update-cli", () => {
         await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
         expect(defaultRuntime.exit).not.toHaveBeenCalled();
         if (failureKind === "post-core exception") {
-          expect(getTriageFailures()).toContainEqual(
-            expect.objectContaining({ error: failure.message }),
+          expect(triageAfterFailure.mock.calls.map(([, context]) => context)).toContainEqual(
+            expect.objectContaining({ kind: "update", error: failure.message }),
           );
         }
         expect(suspendScheduledTaskAutoStartForUpdate).toHaveBeenCalledOnce();

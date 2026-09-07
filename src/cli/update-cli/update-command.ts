@@ -514,13 +514,14 @@ async function updateCommandInternal(
 
   if (packageAlreadyCurrent) {
     const { finishAlreadyCurrentUpdate } = await import("./update-execution.runtime.js");
+    const channelChanged = requestedChannel !== null && requestedChannel !== storedChannel;
     await finishAlreadyCurrentUpdate({
       opts,
       result: {
-        status: "skipped",
+        status: channelChanged ? "ok" : "skipped",
         mode: packageInstallTarget?.manager ?? "unknown",
         root,
-        reason: "already-current",
+        ...(channelChanged ? {} : { reason: "already-current" }),
         before: { version: currentVersion },
         after: { version: currentVersion },
         steps: [],
@@ -681,6 +682,8 @@ async function updateCommandInternal(
   const finalizationConfigSnapshot = ownedManagedUpdateContext?.configSnapshot ?? configSnapshot;
   stop();
   const finalization = {
+    mutationStarted: execution.mutationStarted,
+    expectedVersion: targetVersion ?? undefined,
     result,
     failure: execution.failure,
     root,
@@ -726,7 +729,9 @@ async function updateCommandInternal(
       progress.pendingSteps,
     );
     if (continued.exitCode !== 0) {
-      throw new UpdateCommandFailure(continued.result, continued.exitCode);
+      throw new UpdateCommandFailure(continued.result, continued.exitCode, undefined, {
+        automaticTriage: continued.automaticTriage,
+      });
     }
     return;
   }
