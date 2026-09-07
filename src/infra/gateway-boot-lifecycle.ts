@@ -129,7 +129,7 @@ export function readGatewayBootLifecycleSegments(params?: {
     if (typeof params?.sinceMs === "number") {
       query = query.where("started_at_ms", ">=", params.sinceMs);
     }
-    const { rows } = executeSqliteQuerySync<GatewayBootLifecycleSegment>(db, query);
+    const { rows } = executeSqliteQuerySync(db, query);
     return rows.toSorted((left, right) => left.startedAtMs - right.startedAtMs);
   } catch (err) {
     gatewayLifecycleLog.warn(`boot lifecycle history unavailable; fail-open: ${String(err)}`);
