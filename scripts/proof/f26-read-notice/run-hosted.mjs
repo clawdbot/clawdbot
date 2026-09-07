@@ -503,9 +503,18 @@ try {
     "2",
     "--no-parallel",
     "--filter",
-    "ChatViewModelTests.(f26|progress upgrade hint survives bootstrap and clears only its own error)",
+    "ChatViewModelTests.(f26|`progress upgrade hint survives bootstrap and clears only its own error`)",
   ]).result;
   record("shared-unit-terminal", unit);
+  const nativeDerivedData = path.join(root, "apps/ios/build/F26DerivedData");
+  const builtApp = path.join(
+    nativeDerivedData,
+    "Build/Products/Debug-iphonesimulator/OpenClaw.app",
+  );
+  assert(
+    !existsSync(nativeDerivedData),
+    "This operation requires a new task-owned build directory",
+  );
   const build = await start("native-build", "xcodebuild", [
     "build-for-testing",
     "-project",
@@ -516,6 +525,8 @@ try {
     "Debug",
     "-destination",
     "generic/platform=iOS Simulator",
+    "-derivedDataPath",
+    nativeDerivedData,
     "-jobs",
     "2",
     "-parallel-testing-enabled",
@@ -526,7 +537,7 @@ try {
   await captureAppIdentity({
     root,
     output: publicOutput,
-    destination: "generic/platform=iOS Simulator",
+    app: builtApp,
     phase: "built",
     baseline,
     buildStepOutcome: `build-for-testing-exit-${build.code}`,
@@ -668,6 +679,8 @@ try {
       "Debug",
       "-destination",
       `platform=iOS Simulator,id=${simulator}`,
+      "-derivedDataPath",
+      nativeDerivedData,
       "-resultBundlePath",
       path.join(publicOutput, "F26Native.xcresult"),
       "-jobs",
@@ -700,7 +713,7 @@ try {
   const app = await captureAppIdentity({
     root,
     output: publicOutput,
-    destination: `platform=iOS Simulator,id=${simulator}`,
+    app: builtApp,
     phase: "tested",
     baseline,
     buildStepOutcome: `build-for-testing-exit-${build.code}`,

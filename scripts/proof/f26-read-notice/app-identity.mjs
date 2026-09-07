@@ -5,26 +5,33 @@ import { createReadStream, existsSync, readdirSync, readlinkSync, writeFileSync 
 import path from "node:path";
 
 // Captures an existing product only. This helper never builds, signs, installs or archives it.
-export async function captureAppIdentity({
-  root,
-  output,
-  destination,
-  phase,
-  baseline,
-  buildStepOutcome,
-}) {
+export async function captureAppIdentity({ root, output, app, phase, baseline, buildStepOutcome }) {
   const deadline = Date.now() + 60000;
   const signal = AbortSignal.timeout(60000);
   const command = (name, args) => {
     const remaining = deadline - Date.now();
     assert(remaining > 0, "One-minute existing-app identity capture deadline");
-    return execFileSync(name, args, {
-      cwd: root,
-      encoding: "utf8",
-      timeout: Math.min(10000, remaining),
-      maxBuffer: 16 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
+    try {
+      return execFileSync(name, args, {
+        cwd: root,
+        encoding: "utf8",
+        timeout: Math.min(10000, remaining),
+        maxBuffer: 16 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+    } catch (error) {
+      evidence.failedCommand = {
+        command: name,
+        args,
+        status: error.status,
+        signal: error.signal,
+        code: error.code,
+        stdout: error.stdout,
+        stderr: error.stderr,
+        error: String(error),
+      };
+      throw error;
+    }
   };
   const files = [];
   const evidence = {
@@ -38,31 +45,8 @@ export async function captureAppIdentity({
     files,
   };
   try {
-    const settingsOutput = command("xcodebuild", [
-      "-showBuildSettings",
-      "-json",
-      "-disableAutomaticPackageResolution",
-      "-onlyUsePackageVersionsFromResolvedFile",
-      "-project",
-      "apps/ios/OpenClaw.xcodeproj",
-      "-scheme",
-      "OpenClaw",
-      "-configuration",
-      "Debug",
-      "-destination",
-      destination,
-    ]);
-    writeFileSync(path.join(output, `${phase}-build-settings.json`), settingsOutput + "\n");
-    const targets = JSON.parse(settingsOutput).filter((target) => target.target === "OpenClaw");
-    assert.equal(targets.length, 1);
-    const settings = targets[0].buildSettings;
-    const app = path.join(settings.BUILT_PRODUCTS_DIR, settings.FULL_PRODUCT_NAME);
     assert(path.isAbsolute(app) && path.basename(app) === "OpenClaw.app" && existsSync(app));
-    Object.assign(evidence, {
-      app,
-      platform: settings.PLATFORM_NAME,
-      buildStepOutcome,
-    });
+    Object.assign(evidence, { app, buildStepOutcome });
     async function inventory(directory, prefix = "") {
       for (const item of readdirSync(directory, { withFileTypes: true }).sort((a, b) =>
         a.name.localeCompare(b.name),
@@ -84,6 +68,12 @@ export async function captureAppIdentity({
       }
     }
     await inventory(app);
+    evidence.platform = command("/usr/libexec/PlistBuddy", [
+      "-c",
+      "Print:DTPlatformName",
+      path.join(app, "Info.plist"),
+    ]);
+    assert.equal(evidence.platform, "iphonesimulator");
     evidence.bundleID = command("/usr/libexec/PlistBuddy", [
       "-c",
       "Print:CFBundleIdentifier",
@@ -112,15 +102,16 @@ export async function captureAppIdentity({
         signal: result.signal,
         stdout: result.stdout,
         stderr: result.stderr,
+        code: result.error?.code,
+        error: result.error?.message,
       });
+      assert.ifError(result.error);
       assert.equal(result.status, 0, "Existing app signature inspection failed");
     }
     evidence.complete = true;
     return app;
   } catch (error) {
     evidence.error = String(error);
-    if (error.stdout) evidence.commandStdout = String(error.stdout);
-    if (error.stderr) evidence.commandStderr = String(error.stderr);
     throw error;
   } finally {
     writeFileSync(

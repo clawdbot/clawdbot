@@ -6,8 +6,8 @@
   "files": [
     {
       "path": "app-identity.mjs",
-      "bytes": 4601,
-      "sha256": "17ecb280661e6fb82a85ea2b9850dbc6bef3d82f57d7dc7cec7e0ef1b6d534bb"
+      "bytes": 4299,
+      "sha256": "1a2fd9791c296f2c9619616708c96d53026b4e984938a0b1f40d068783b39027"
     },
     {
       "path": "artifact-recipient.pem",
@@ -66,8 +66,8 @@
     },
     {
       "path": "run-hosted.mjs",
-      "bytes": 25229,
-      "sha256": "efc1de0be63ccecf638ca20402a852fe164a720db193ce929bcfc4927d9df605"
+      "bytes": 25565,
+      "sha256": "d1153b36907862976d1108ee01cfdc7a324620f0bd94fff4425f7903ea0be7c3"
     },
     {
       "path": "ui-case.swift",
