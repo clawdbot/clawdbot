@@ -177,13 +177,35 @@ describe("LINE secret contract", () => {
         line: {
           enabled: true,
           channelAccessToken: STORE_TOKEN_REF,
+          // The account carries the same credential the root does. Reading the id as the default
+          // account would make it own the root value, which is the outcome this pins against.
+          accounts: { "!!!": { channelAccessToken: STORE_TOKEN_REF } },
+        },
+      },
+    });
+
+    expect(context.assignments.map((assignment) => assignment.path)).toEqual([
+      "channels.line.channelAccessToken",
+      "channels.line.accounts.!!!.channelAccessToken",
+    ]);
+    expect(context.warnings).toStrictEqual([]);
+  });
+
+  it("does not let an unreadable account id become a second consumer of the root credential", () => {
+    const context = collect({
+      channels: {
+        line: {
+          enabled: true,
+          channelAccessToken: STORE_TOKEN_REF,
+          // This account supplies a different credential, so reading its id as the default
+          // account would add it alongside the synthetic one and own the root value twice.
           accounts: { "!!!": { channelSecret: "named-secret" } },
         },
       },
     });
 
-    expect(context.assignments.map((assignment) => [assignment.path, assignment.ownerId])).toEqual([
-      ["channels.line.channelAccessToken", "line:default"],
+    expect(context.assignments.map((assignment) => assignment.path)).toEqual([
+      "channels.line.channelAccessToken",
     ]);
     expect(context.warnings).toStrictEqual([]);
   });
