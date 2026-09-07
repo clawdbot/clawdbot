@@ -113,6 +113,38 @@ function markPostCompactionFailureResult(
 export async function executePreparedReplyAgentRun(
   context: ExecutePreparedReplyAgentRunInput,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  const onAgentRunTerminalOutcome = context.opts?.onAgentRunTerminalOutcome;
+  if (!onAgentRunTerminalOutcome) {
+    return executePreparedReplyAgentRunInner(context);
+  }
+
+  let terminalOutcome: "completed" | "failed" | undefined;
+  const bufferedContext = {
+    ...context,
+    opts: {
+      ...context.opts,
+      onAgentRunTerminalOutcome: (outcome: "completed" | "failed") => {
+        terminalOutcome = outcome === "failed" ? outcome : (terminalOutcome ?? outcome);
+      },
+    },
+  };
+  try {
+    return await executePreparedReplyAgentRunInner(bufferedContext);
+  } catch (error) {
+    if (terminalOutcome !== undefined) {
+      terminalOutcome = "failed";
+    }
+    throw error;
+  } finally {
+    if (terminalOutcome) {
+      onAgentRunTerminalOutcome(terminalOutcome);
+    }
+  }
+}
+
+async function executePreparedReplyAgentRunInner(
+  context: ExecutePreparedReplyAgentRunInput,
+): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const {
     activeSessionStore,
     admitUserTurn: admitUserTurnWithRecovery,

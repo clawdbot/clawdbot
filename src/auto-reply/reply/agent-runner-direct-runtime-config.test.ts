@@ -51,6 +51,7 @@ const createReplyMediaPathNormalizerMock = vi.fn();
 const runSessionCompactionIfNeededMock = vi.fn();
 const runMemoryFlushIfNeededMock = vi.fn();
 const executeAgentTurnMock = vi.fn();
+const finalizeReplyAgentRunMock = vi.fn();
 const prepareGitCoauthorAttributionMock = vi.fn();
 const resetReplyRunSessionMock = vi.fn();
 const enqueueFollowupRunMock = vi.fn();
@@ -101,6 +102,10 @@ vi.mock("./agent-runner-execution.js", async () => {
     executeAgentTurn: (...args: unknown[]) => executeAgentTurnMock(...args),
   };
 });
+
+vi.mock("./agent-runner-result.js", () => ({
+  finalizeReplyAgentRun: (...args: unknown[]) => finalizeReplyAgentRunMock(...args),
+}));
 
 vi.mock("../../agents/git-coauthor-attribution.js", async () => {
   const actual = await vi.importActual<typeof import("../../agents/git-coauthor-attribution.js")>(
@@ -255,6 +260,7 @@ describe("runReplyAgent runtime config", () => {
     runSessionCompactionIfNeededMock.mockReset();
     runMemoryFlushIfNeededMock.mockReset();
     executeAgentTurnMock.mockReset();
+    finalizeReplyAgentRunMock.mockReset();
     prepareGitCoauthorAttributionMock.mockReset();
     resetReplyRunSessionMock.mockReset();
     enqueueFollowupRunMock.mockReset();
@@ -272,8 +278,73 @@ describe("runReplyAgent runtime config", () => {
       runId: "runtime-config-test",
       outcome: { kind: "rejected", payload: { text: "main reply" } },
     });
+    finalizeReplyAgentRunMock.mockResolvedValue(undefined);
     prepareGitCoauthorAttributionMock.mockReturnValue(undefined);
     resetReplyRunSessionMock.mockResolvedValue(false);
+  });
+
+  function createTerminalOutcomeFixture() {
+    const { replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    const onAgentRunTerminalOutcome = vi.fn();
+    replyParams.opts = { onAgentRunTerminalOutcome };
+    return {
+      onAgentRunTerminalOutcome,
+      run: () => runReplyAgent(replyParams),
+      completeAgentTurn: () => {
+        runSessionCompactionIfNeededMock.mockResolvedValue(undefined);
+        executeAgentTurnMock.mockImplementationOnce(
+          async (params: {
+            opts?: { onAgentRunTerminalOutcome?: (outcome: "completed" | "failed") => void };
+          }) => {
+            params.opts?.onAgentRunTerminalOutcome?.("completed");
+            return {
+              runId: "runtime-config-test",
+              outcome: {
+                kind: "settled" as const,
+                status: "ok" as const,
+                result: { payloads: [], meta: {} },
+                resolved: { provider: "openai", model: "gpt-5.4" },
+                fallback: { exhausted: false, attempts: [] },
+                autoCompactionCount: 0,
+                didLogHeartbeatStrip: false,
+              },
+            };
+          },
+        );
+      },
+    };
+  }
+
+  it("does not report a terminal outcome when pre-run preparation throws", async () => {
+    const fixture = createTerminalOutcomeFixture();
+
+    await expect(fixture.run()).rejects.toBe(sentinelError);
+
+    expect(fixture.onAgentRunTerminalOutcome).not.toHaveBeenCalled();
+    expect(executeAgentTurnMock).not.toHaveBeenCalled();
+  });
+
+  it("upgrades a buffered completion when finalization throws", async () => {
+    const fixture = createTerminalOutcomeFixture();
+    fixture.completeAgentTurn();
+    finalizeReplyAgentRunMock.mockRejectedValueOnce(sentinelError);
+
+    await expect(fixture.run()).rejects.toBe(sentinelError);
+
+    expect(fixture.onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("failed");
+  });
+
+  it("reports one completed outcome after successful finalization", async () => {
+    const fixture = createTerminalOutcomeFixture();
+    fixture.completeAgentTurn();
+    finalizeReplyAgentRunMock.mockResolvedValueOnce({ text: "done" });
+
+    await expect(fixture.run()).resolves.toEqual({ text: "done" });
+
+    expect(fixture.onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("completed");
   });
 
   it("resolves direct reply runs before early helpers read config", async () => {
