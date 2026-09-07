@@ -8,10 +8,23 @@ const SQLITE_DATABASE_FILE_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 export const SQLITE_SIDECAR_SUFFIXES = SQLITE_DATABASE_FILE_SUFFIXES.slice(1);
 // SQLite WAL format: https://sqlite.org/fileformat2.html#walformat defines a 32-byte header.
 const SQLITE_WAL_HEADER_BYTES = 32;
-/** AppleDouble metadata sidecars are not SQLite databases even when their name ends in `.sqlite`. */
-export function isAppleDoubleSqliteMetadataPath(pathname: string): boolean {
+const APPLE_DOUBLE_MAGIC = Buffer.from([0x00, 0x05, 0x16, 0x07]);
+
+/** AppleDouble files start with 00 05 16 07; the `._*.sqlite` name alone is not enough. */
+export function isAppleDoubleMetadataFile(pathname: string): boolean {
   const basename = path.basename(pathname);
-  return basename.startsWith("._") && basename.endsWith(".sqlite");
+  if (!basename.startsWith("._") || !basename.endsWith(".sqlite")) {
+    return false;
+  }
+  try {
+    const descriptor = fs.openSync(pathname, "r");
+    const header = Buffer.alloc(APPLE_DOUBLE_MAGIC.length);
+    const bytesRead = fs.readSync(descriptor, header, 0, header.length, 0);
+    fs.closeSync(descriptor);
+    return bytesRead === header.length && header.equals(APPLE_DOUBLE_MAGIC);
+  } catch {
+    return false;
+  }
 }
 
 const SQLITE_SIDECAR_HASH_BUFFER_BYTES = 1024 * 1024;
