@@ -1,4 +1,3 @@
-// Anthropic provider adapts Anthropic streams and tool calls for the runtime.
 import Anthropic from "@anthropic-ai/sdk";
 import { Stream } from "@anthropic-ai/sdk/core/streaming.js";
 import type {
@@ -29,6 +28,8 @@ import {
   resolveAnthropicContextManagementBetaHeader,
 } from "../transports/anthropic-payload-policy.js";
 import { consumeAnthropicStream } from "../transports/anthropic-stream-reducer.js";
+// Anthropic provider adapts Anthropic streams and tool calls for the runtime.
+import { createAssistantOutput } from "../transports/assistant-output.js";
 import { resolveOpencodeSessionHeaders } from "../transports/session-affinity.js";
 import {
   assignTransportErrorDetails,
@@ -38,8 +39,6 @@ import {
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
 import type {
   AnthropicMessagesCompat,
-  Api,
-  AssistantMessage,
   AssistantMessageEvent,
   CacheRetention,
   Context,
@@ -202,23 +201,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
   const requestOptions = normalizeAnthropicThinkingOptions(model, options);
 
   void (async () => {
-    const output: AssistantMessage = {
-      role: "assistant",
-      content: [],
-      api: model.api as Api,
-      provider: model.provider,
-      model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "stop",
-      timestamp: Date.now(),
-    };
+    const output = createAssistantOutput(model);
     // Classifier refusals can invalidate partial output, so no event is safe
     // to expose until the terminal stop reason is known.
     const refusalBuffer = usesClaudeStreamingRefusalContract(model)
@@ -806,5 +789,3 @@ function shouldUseFineGrainedToolStreamingBeta(
     Boolean(context.tools?.length) && !getAnthropicCompat(model).supportsEagerToolInputStreaming
   );
 }
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

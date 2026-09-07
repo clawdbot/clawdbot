@@ -309,6 +309,14 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const action = readToolStringParam(params, "action", {
         required: true,
       }) as ChannelMessageActionName;
+      const rawConfig = options?.config ?? loadConfigForTool();
+      const requestedAccountId = readToolStringParam(params, "accountId");
+      const effectiveCurrentChannel = resolveEffectiveCurrentChannelContext(options, {
+        config: rawConfig,
+        action,
+        params,
+        accountId: requestedAccountId ?? agentAccountId,
+      });
       const decisions = createMessageToolDecisionRecorder({
         actionId: toolCallId,
         action,
@@ -382,8 +390,6 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       }
 
       const gatewayOpts = readGatewayCallOptions(params);
-      const rawConfig = options?.config ?? loadConfigForTool();
-      const requestedAccountId = readToolStringParam(params, "accountId");
       decisions.runBoundary(() =>
         validateExplicitMessageAccountSelection({
           cfg: rawConfig,

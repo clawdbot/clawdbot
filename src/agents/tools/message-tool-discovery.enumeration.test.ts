@@ -1,5 +1,3 @@
-// Guards the cost boundary of canonical-destination recovery: the message tool may read this
-// session's own row, and must never enumerate the session store to do it.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const store = vi.hoisted(() => {
@@ -74,19 +72,23 @@ describe("canonical destination recovery stays bounded", () => {
     store.openSessionEntryReadView.mockClear();
     store.loadExactSessionEntryReadOnly.mockClear();
     getChannelPluginMock.mockReset();
-    getChannelPluginMock.mockReturnValue({ messaging: { targetIdComparison: "case-sensitive" } });
+    getChannelPluginMock.mockReturnValue({
+      config: { listAccountIds: () => ["default"] },
+      messaging: { targetIdComparison: "case-sensitive" },
+    });
   });
 
   it("recovers the canonical casing without enumerating the store", () => {
     seedRoutableRow();
 
-    const result = resolveEffectiveCurrentChannelContext({
-      currentChannelProvider: "webchat",
-      agentSessionKey: SESSION_KEY,
-      config: {} as never,
-    });
+    const result = resolveEffectiveCurrentChannelContext(
+      {
+        currentChannelProvider: "webchat",
+        agentSessionKey: SESSION_KEY,
+      },
+      { config: {}, action: "send", params: {} },
+    );
 
-    // Assert recovery first: a spy assertion alone would still pass if recovery silently broke.
     expect(result.currentChannelId).toBe(CANONICAL_SPACE);
     expect(result.currentMessagingTarget).toBe(CANONICAL_SPACE);
     expect(store.entriesCalls).toEqual([]);
@@ -94,13 +96,14 @@ describe("canonical destination recovery stays bounded", () => {
   });
 
   it("does not enumerate when this session has no stored delivery row", () => {
-    const result = resolveEffectiveCurrentChannelContext({
-      currentChannelProvider: "webchat",
-      agentSessionKey: SESSION_KEY,
-      config: {} as never,
-    });
+    const result = resolveEffectiveCurrentChannelContext(
+      {
+        currentChannelProvider: "webchat",
+        agentSessionKey: SESSION_KEY,
+      },
+      { config: {}, action: "send", params: {} },
+    );
 
-    // The miss is the path that used to widen into a freshest-row index over every row.
     expect(result.currentChannelId).toBe(FOLDED_SPACE);
     expect(store.entriesCalls).toEqual([]);
     expect(store.exactReads).toEqual([SESSION_KEY]);
@@ -109,26 +112,45 @@ describe("canonical destination recovery stays bounded", () => {
   it("does not enumerate when the stored row carries no external delivery", () => {
     store.rows[SESSION_KEY] = { sessionId: "s1", updatedAt: 1, delivery: { kind: "internal" } };
 
-    const result = resolveEffectiveCurrentChannelContext({
-      currentChannelProvider: "webchat",
-      agentSessionKey: SESSION_KEY,
-      config: {} as never,
-    });
+    const result = resolveEffectiveCurrentChannelContext(
+      {
+        currentChannelProvider: "webchat",
+        agentSessionKey: SESSION_KEY,
+      },
+      { config: {}, action: "send", params: {} },
+    );
 
     expect(result.currentChannelId).toBe(FOLDED_SPACE);
     expect(store.entriesCalls).toEqual([]);
     expect(store.exactReads).toEqual([SESSION_KEY]);
   });
 
+  it("does not recover delivery from a replacement session at the same key", () => {
+    seedRoutableRow();
+    const result = resolveEffectiveCurrentChannelContext(
+      {
+        currentChannelProvider: "webchat",
+        agentSessionKey: SESSION_KEY,
+        sessionId: "previous-session",
+      },
+      { config: {}, action: "send", params: {} },
+    );
+    expect(result.currentMessagingTarget).toBe(FOLDED_SPACE);
+    expect(store.exactReads).toEqual([SESSION_KEY]);
+    expect(store.entriesCalls).toEqual([]);
+  });
+
   it("reads no store at all for a channel with lowercase-canonical target ids", () => {
     getChannelPluginMock.mockReturnValue({ messaging: { targetIdComparison: "lowercase" } });
     seedRoutableRow();
 
-    resolveEffectiveCurrentChannelContext({
-      currentChannelProvider: "webchat",
-      agentSessionKey: SESSION_KEY,
-      config: {} as never,
-    });
+    resolveEffectiveCurrentChannelContext(
+      {
+        currentChannelProvider: "webchat",
+        agentSessionKey: SESSION_KEY,
+      },
+      { config: {}, action: "send", params: {} },
+    );
 
     expect(store.exactReads).toEqual([]);
     expect(store.entriesCalls).toEqual([]);

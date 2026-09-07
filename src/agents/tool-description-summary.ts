@@ -96,13 +96,15 @@ export function describeToolForVerbose(params: {
     return params.fallback;
   }
 
-  const lines = raw.split("\n").map((line) => line.trimEnd());
   const kept: string[] = [];
-  for (const line of lines) {
+  let keptLength = 0;
+  for (const line of raw.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed) {
       if (kept.length > 0 && kept.at(-1) !== "") {
         kept.push("");
+        // A paragraph gap contributes a separator even before the next line arrives.
+        keptLength += 1;
       }
       continue;
     }
@@ -114,16 +116,14 @@ export function describeToolForVerbose(params: {
     ) {
       break;
     }
+    keptLength += trimmed.length + (kept.length > 0 ? 1 : 0);
     kept.push(trimmed);
-    if (kept.join(" ").length >= (params.maxLen ?? 320)) {
+    if (keptLength >= (params.maxLen ?? 320)) {
       break;
     }
   }
 
-  const normalized = kept
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+  const normalized = kept.join("\n").trim();
   if (!normalized) {
     return params.fallback;
   }

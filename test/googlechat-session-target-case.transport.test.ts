@@ -1,9 +1,3 @@
-// Real-behaviour proof for the session-derived Google Chat destination repair.
-//
-// Drives the real message tool over a session whose key folded the space id, through real
-// outbound normalization and the real Google Chat plugin action, to a real guarded HTTP
-// transport pointed at a loopback server. The assertion is on the request the transport
-// actually issued, not on a URL built by the test.
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -83,7 +77,7 @@ afterAll(async () => {
 describe("session-derived Google Chat delivery", () => {
   it("delivers to the canonical mixed-case space recorded by the session", async () => {
     await withOpenClawTestState({ prefix: "googlechat-session-target-" }, async (state) => {
-      const config = {
+      const config: OpenClawConfig = {
         agents: { entries: { main: { default: true, workspace: state.workspaceDir } } },
         channels: {
           googlechat: {
@@ -95,19 +89,21 @@ describe("session-derived Google Chat delivery", () => {
             },
           },
         },
-      } as OpenClawConfig;
+      };
 
-      // The session recorded its canonical destination on the inbound turn.
-      await upsertSessionEntryCore({ agentId: "main", env: process.env, sessionKey: SESSION_KEY }, {
-        sessionId: "proof-session",
-        updatedAt: Date.now(),
-        delivery: {
-          kind: "external",
-          route: { channel: "googlechat", to: `googlechat:${CANONICAL_SPACE}` },
-          context: { channel: "googlechat", to: `googlechat:${CANONICAL_SPACE}` },
-          origin: { provider: "googlechat", to: `googlechat:${CANONICAL_SPACE}` },
+      await upsertSessionEntryCore(
+        { agentId: "main", env: process.env, sessionKey: SESSION_KEY },
+        {
+          sessionId: "proof-session",
+          updatedAt: Date.now(),
+          delivery: {
+            kind: "external",
+            route: { channel: "googlechat", to: `googlechat:${CANONICAL_SPACE}` },
+            context: { channel: "googlechat", to: `googlechat:${CANONICAL_SPACE}` },
+            origin: { provider: "googlechat", to: `googlechat:${CANONICAL_SPACE}` },
+          },
         },
-      } as never);
+      );
 
       setActivePluginRegistry(
         createTestRegistry([
@@ -123,6 +119,7 @@ describe("session-derived Google Chat delivery", () => {
         config,
         agentId: "main",
         agentSessionKey: SESSION_KEY,
+        sessionId: "proof-session",
         currentChannelProvider: "webchat",
         workspaceDir: state.workspaceDir,
         runMessageAction,
@@ -137,20 +134,19 @@ describe("session-derived Google Chat delivery", () => {
           targetStatesByPath: {},
           hadUnresolvedTargets: false,
         }),
-      } as never);
+      });
 
       // No explicit target: the tool must derive the destination from the session.
       const result = await tool.execute("proof-1", {
         action: "send",
         message: "session-derived reply",
-      } as never);
+      });
 
+      expect(result.details).toMatchObject({ ok: true, to: CANONICAL_SPACE });
       const sends = requests.filter((entry) => entry.method === "POST");
-      expect(sends.length).toBeGreaterThan(0);
-      console.log("CAPTURED REQUESTS:", JSON.stringify(requests, null, 2));
-      console.log("TOOL RESULT:", JSON.stringify(result, null, 2));
+      expect(sends).toHaveLength(1);
       expect(sends[0]?.path).toBe(`/v1/${CANONICAL_SPACE}/messages`);
-      expect(sends[0]?.path).not.toContain(FOLDED_SPACE);
+      expect(JSON.parse(sends[0]!.body)).toEqual({ text: "session-derived reply" });
     });
   }, 60_000);
 });

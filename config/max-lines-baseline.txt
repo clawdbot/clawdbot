@@ -265,7 +265,6 @@ packages/agent-core/src/agent-loop.ts
 packages/agent-core/src/harness/compaction/compaction.ts
 packages/ai/src/providers/agent-tools-parameter-schema.ts
 packages/ai/src/providers/anthropic.test.ts
-packages/ai/src/providers/anthropic.ts
 packages/ai/src/providers/mistral.ts
 packages/ai/src/providers/openai-chatgpt-responses.ts
 packages/ai/src/providers/openai-completions.test.ts
@@ -448,7 +447,6 @@ src/channels/plugins/bundled.shape-guard.test.ts
 src/channels/plugins/message-actions.security.test.ts
 src/channels/plugins/outbound/interactive.test.ts
 src/channels/plugins/read-only.test.ts
-src/channels/plugins/read-only.ts
 src/channels/plugins/setup-wizard-helpers.test.ts
 src/channels/plugins/setup-wizard-helpers.ts
 src/channels/plugins/types.adapters.ts

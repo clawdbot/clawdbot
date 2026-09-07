@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings, uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import type { ChatType } from "../../channels/chat-type.js";
+import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import {
   getChannelPlugin,
   getLoadedChannelPlugin,
@@ -19,6 +20,7 @@ import type { ChannelMessageActionName } from "../../channels/plugins/types.publ
 import { readExactSessionDeliveryContext } from "../../config/sessions/delivery-info.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { stripTargetProviderPrefix } from "../../infra/outbound/channel-target-prefix.js";
+import { actionHasTarget } from "../../infra/outbound/message-action-spec.js";
 import { resolveAllowedMessageActions } from "../../infra/outbound/outbound-policy.js";
 import { normalizeAccountId, parseSessionDeliveryRoute } from "../../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -50,7 +52,7 @@ type MessageActionDiscoveryInput = Omit<ChannelMessageActionDiscoveryInput, "cfg
 
 type MessageToolCurrentContextOptions = {
   agentSessionKey?: string;
-  config?: OpenClawConfig;
+  sessionId?: string;
   currentChannelId?: string;
   currentChannelProvider?: string;
   currentChatType?: ChatType;
@@ -81,42 +83,54 @@ function resolveSessionDeliveryChatType(peerKind: string): ChatType | undefined 
   return undefined;
 }
 
-/**
- * Session keys fold peer ids for channels outside the case-preservation
- * registry, so a delivery target rebuilt from the key reaches the wire
- * lowercased. Channels that compare target ids byte-exactly then reject it. The
- * same session's stored delivery metadata still holds the casing the channel
- * sent inbound, so recover it from there.
- *
- * Three gates keep this a case-only repair of one conversation: the channel
- * must declare case-sensitive target ids, the stored route must name the same
- * channel, and the stored id must match the folded one case-insensitively. The
- * last mirrors the stored-key guard in src/config/sessions/store-entry.ts, and
- * means the substitution can never select a different space or account.
- *
- * The lookup is bounded: readExactSessionDeliveryContext performs a single keyed read of this
- * session's own row and never builds the freshest-row index that walks every stored session.
- */
+type MessageToolDeliveryRequest = {
+  config: OpenClawConfig;
+  action: ChannelMessageActionName;
+  params: Record<string, unknown>;
+  accountId?: string;
+};
+
 function recoverSessionCanonicalPeerId(params: {
-  cfg?: OpenClawConfig;
   channel: string;
   peerId: string;
   sessionKey?: string;
+  sessionId?: string;
+  request?: MessageToolDeliveryRequest;
 }): string {
-  if (getChannelPlugin(params.channel)?.messaging?.targetIdComparison !== "case-sensitive") {
+  const { request } = params;
+  if (
+    !request ||
+    normalizeOptionalString(request.params.target) ||
+    (Array.isArray(request.params.targets) && request.params.targets.length > 0) ||
+    actionHasTarget(request.action, request.params, { channel: params.channel })
+  ) {
     return params.peerId;
   }
-  const deliveryContext = readExactSessionDeliveryContext({
-    cfg: params.cfg,
+  const plugin = getChannelPlugin(params.channel);
+  if (plugin?.messaging?.targetIdComparison !== "case-sensitive") {
+    return params.peerId;
+  }
+  const delivery = readExactSessionDeliveryContext({
+    cfg: request.config,
     sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
   });
-  const storedTo = normalizeOptionalString(deliveryContext?.to);
-  if (!storedTo || normalizeMessageChannel(deliveryContext?.channel) !== params.channel) {
+  const accountId =
+    request.accountId ??
+    resolveChannelDefaultAccountId({
+      plugin,
+      cfg: request.config,
+    });
+  if (
+    normalizeMessageChannel(delivery?.channel) !== params.channel ||
+    normalizeAccountId(delivery?.accountId) !== normalizeAccountId(accountId)
+  ) {
     return params.peerId;
   }
-  const canonical = normalizeOptionalString(
-    stripTargetProviderPrefix(storedTo, params.channel, deliveryContext?.channel ?? ""),
-  );
+  const storedTo = normalizeOptionalString(delivery?.to);
+  const canonical = storedTo
+    ? stripTargetProviderPrefix(storedTo, params.channel, delivery?.channel ?? "")
+    : undefined;
   return canonical && canonical.toLowerCase() === params.peerId.toLowerCase()
     ? canonical
     : params.peerId;
@@ -124,7 +138,8 @@ function recoverSessionCanonicalPeerId(params: {
 
 function inferDeliveryFromSessionKey(
   sessionKey: string | undefined,
-  cfg?: OpenClawConfig,
+  request?: MessageToolDeliveryRequest,
+  sessionId?: string,
 ): InferredSessionDelivery | null {
   const route = parseSessionDeliveryRoute(sessionKey);
   if (!route) {
@@ -135,7 +150,13 @@ function inferDeliveryFromSessionKey(
     return null;
   }
   const accountId = route.accountId ? resolveAgentAccountId(route.accountId) : undefined;
-  const peerId = recoverSessionCanonicalPeerId({ cfg, channel, peerId: route.peerId, sessionKey });
+  const peerId = recoverSessionCanonicalPeerId({
+    request,
+    channel,
+    peerId: route.peerId,
+    sessionKey,
+    sessionId,
+  });
   return {
     accountId,
     channel,
@@ -145,7 +166,10 @@ function inferDeliveryFromSessionKey(
   };
 }
 
-export function resolveEffectiveCurrentChannelContext(options?: MessageToolCurrentContextOptions): {
+export function resolveEffectiveCurrentChannelContext(
+  options?: MessageToolCurrentContextOptions,
+  request?: MessageToolDeliveryRequest,
+): {
   accountId?: string;
   currentChannelId?: string;
   currentChatType?: ChatType;
@@ -157,7 +181,7 @@ export function resolveEffectiveCurrentChannelContext(options?: MessageToolCurre
   const currentChannelId = options?.currentChannelId;
   const sessionDelivery =
     normalizeMessageChannel(currentChannelProvider) === INTERNAL_MESSAGE_CHANNEL
-      ? inferDeliveryFromSessionKey(options?.agentSessionKey, options?.config)
+      ? inferDeliveryFromSessionKey(options?.agentSessionKey, request, options?.sessionId)
       : null;
 
   if (!sessionDelivery?.to) {
