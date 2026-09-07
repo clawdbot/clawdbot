@@ -9,6 +9,8 @@ import { resolveSandboxHostPort } from "../agents/sandbox-host.js";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { resolveCanvasNodeCapability } from "../canvas/constants.js";
 import type { CliDeps } from "../cli/deps.types.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { isTailscaleRouteOwnershipConflictError } from "../infra/tailscale-route-ownership-error.js";
 import type { GatewayTlsRuntime } from "../infra/tls/gateway.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
@@ -85,6 +87,52 @@ type GatewayPluginUpgradeHandler = (
 ) => Promise<boolean>;
 
 const loadGatewayPluginsHttpModule = async () => await import("./server/plugins-http.js");
+
+// Private Tailscale ingress teardown during startup must never stall ordinary
+// ingress: bounded close with forced fallback (mirrors server-close closeHttpListener).
+// ponytail: no per-socket upgrade tracking here; closeAllConnections leaves
+// upgraded sockets and final runtime close owns them. Startup has no remote
+// route yet so a lingering upgrade can only be local.
+const PRIVATE_TAILSCALE_CLOSE_GRACE_MS = 1_000;
+const PRIVATE_TAILSCALE_CLOSE_FORCE_WAIT_MS = 2_000;
+
+async function closePrivateTailscaleIngress(
+  server: HttpServer,
+  warn: (msg: string) => void,
+): Promise<void> {
+  if (!server.listening) {
+    return;
+  }
+  server.closeIdleConnections?.();
+  const closePromise = new Promise<void>((resolve) => {
+    server.close((err) => {
+      // SAFETY: Node server.close callback err carries an optional code string; only compared, never dereferenced.
+      if (err && (err as { code?: unknown }).code !== "ERR_SERVER_NOT_RUNNING") {
+        warn(
+          `Tailscale private ingress close failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      resolve();
+    });
+  });
+  const timedClose = (ms: number): Promise<boolean> =>
+    Promise.race([
+      closePromise.then(() => true),
+      new Promise<boolean>((resolve) => {
+        setTimeout(() => resolve(false), ms);
+      }),
+    ]);
+  if (await timedClose(PRIVATE_TAILSCALE_CLOSE_GRACE_MS)) {
+    return;
+  }
+  server.closeAllConnections?.();
+  if (await timedClose(PRIVATE_TAILSCALE_CLOSE_FORCE_WAIT_MS)) {
+    return;
+  }
+  warn(
+    "Tailscale private ingress close timed out; continuing startup, runtime close owns leftovers",
+  );
+}
 
 function hasMatchingGatewayPluginRoute(
   registry: PluginRegistry,
@@ -515,7 +563,39 @@ export async function createGatewayHttpTransport(params: {
         }
         tailscaleIngressEndpoint = { host: "127.0.0.1", port: address.port };
         // Publish the private target before ordinary ingress can accept requests.
-        await params.prepareManagedTailscaleIngress?.(tailscaleIngressEndpoint);
+        // Tailscale exposure is optional: a degraded tailnet (e.g. Serve not enabled)
+        // must not take down the otherwise-ready loopback gateway (issue #133827).
+        try {
+          await params.prepareManagedTailscaleIngress?.(tailscaleIngressEndpoint);
+        } catch (err) {
+          if (isTailscaleRouteOwnershipConflictError(err)) {
+            // Port 443 ownership conflicts are fatal config errors (exit 78) to avoid
+            // a systemd restart loop with an unproven route. Close the private
+            // ingress before bubbling the 78 path.
+            await closePrivateTailscaleIngress(tailscaleHttpServer, params.log.warn);
+            const conflictIdx = httpServers.indexOf(tailscaleHttpServer);
+            if (conflictIdx >= 0) {
+              httpServers.splice(conflictIdx, 1);
+            }
+            tailscaleIngressEndpoint = undefined;
+            throw err;
+          }
+          // Degrade: keep loopback gateway alive, disable tailscale exposure.
+          const detail = formatErrorMessage(err);
+          params.log.warn(
+            `Tailscale ${managedTailscaleMode} exposure failed — continuing with loopback gateway only: ${detail}`,
+          );
+          params.log.warn(
+            `Tailscale ${managedTailscaleMode} exposure unavailable: ${detail}. ` +
+              `Fix tailnet Serve/Funnel or set gateway.tailscale.mode=off, then restart to restore remote exposure.`,
+          );
+          await closePrivateTailscaleIngress(tailscaleHttpServer, params.log.warn);
+          const idx = httpServers.indexOf(tailscaleHttpServer);
+          if (idx >= 0) {
+            httpServers.splice(idx, 1);
+          }
+          tailscaleIngressEndpoint = undefined;
+        }
       }
       const requiredAlias =
         params.bindHost !== "127.0.0.1" && bindHosts.includes("127.0.0.1")
