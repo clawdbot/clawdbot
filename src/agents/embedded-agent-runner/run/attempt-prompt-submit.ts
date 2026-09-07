@@ -126,10 +126,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
           input.toolResultAggregateMaxChars,
           input.toolResultPromptProjectionState,
         );
-        const providerMessages =
-          providerPromptHistoryTruncation.messages !== messages
-            ? providerPromptHistoryTruncation.messages
-            : messages;
+        const providerMessages = providerPromptHistoryTruncation.messages;
         if (providerPromptHistoryTruncation.aggregateTruncatedCount > 0) {
           recordAggregateTruncation(attempt);
         }

@@ -12,7 +12,6 @@ import type {
 } from "openclaw/plugin-sdk/llm";
 import { resolveClaudeModelIdentity } from "openclaw/plugin-sdk/provider-model-shared";
 
-/** Share explicit-cache capabilities between registration and payload construction. */
 export function resolveBedrockPromptCachePolicy(
   model: Pick<Model, "id" | "params"> & { name?: string },
 ): "nova" | "claude" | undefined {
