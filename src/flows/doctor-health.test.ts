@@ -721,7 +721,7 @@ describe("runDoctorHealthFlow", () => {
           expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
           expect(runtime.error).toHaveBeenCalledWith(
             expect.stringMatching(
-              /Doctor could not enter maintenance.*Agent main database is still open/,
+              /Doctor could not enter maintenance.*Agent main database is still open.*stop that process/,
             ),
           );
           expect(maintenanceOutcome()).toEqual({ outcome: "startup_failed" });
@@ -730,7 +730,6 @@ describe("runDoctorHealthFlow", () => {
             result: { status: "error", configHash: "unchanged" },
           });
           expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
-          expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("stop that process"));
           expect(fs.readFileSync(initial.path)).toEqual(before);
           expect(
             openOpenClawStateDatabase({ env: state.env })
