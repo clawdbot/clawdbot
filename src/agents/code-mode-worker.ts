@@ -3,10 +3,35 @@ import { createRequire } from "node:module";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { WorkerTaskError, WorkerTaskPool } from "../infra/worker-task-pool.js";
+import {
+  WorkerTaskError,
+  WorkerTaskPool,
+  type WorkerTaskRequestContext,
+  type WorkerTaskResponse,
+} from "../infra/worker-task-pool.js";
 import { createLazyPromise } from "../shared/lazy-promise.js";
 import { EMPTY_CODE_MODE_OUTPUT } from "./code-mode-json.js";
-import type { CodeModeFailureCode, CodeModeWorkerResult } from "./code-mode-runtime.js";
+import {
+  codeModeFailureCode,
+  type CodeModeFailureCode,
+  type CodeModeWorkerResult,
+} from "./code-mode-runtime.js";
+import {
+  CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
+  type CodeModeWorkerBoundary,
+  type CodeModeWorkerContinuation,
+} from "./code-mode-worker-types.js";
+
+export type CodeModeWorkerInlineHost = {
+  /** Append boundary output once. Continue with the remaining shared call budget;
+   * checkpoint only when genuinely parking the VM (including an internal wait). Host tools keep
+   * their cell-owner signal, not the shorter-lived worker-task signal. */
+  onBoundary: (
+    boundary: CodeModeWorkerBoundary,
+    context: WorkerTaskRequestContext,
+  ) => Promise<CodeModeWorkerContinuation & { onConsumed?: () => void }>;
+  onInputConsumed?: () => void;
+};
 
 const getQuickJsModules = createLazyPromise(async () => {
   const resolve = createRequire(import.meta.url).resolve;
@@ -76,6 +101,7 @@ export async function runCodeModeWorker(
   timeoutMs: number,
   workerUrl?: URL,
   signal?: AbortSignal,
+  inlineHost?: CodeModeWorkerInlineHost,
 ): Promise<CodeModeWorkerResult> {
   const pool = workerUrl
     ? new WorkerTaskPool<unknown, unknown>({ workerUrl, maxWorkers: 1 })
@@ -107,6 +133,26 @@ export async function runCodeModeWorker(
       {
         timeoutMs,
         signal,
+        onInputConsumed: inlineHost?.onInputConsumed,
+        onRequest: inlineHost
+          ? async (value, context): Promise<WorkerTaskResponse> => {
+              if (!isRecord(value) || value.status !== "boundary") {
+                throw new Error("invalid code mode worker boundary");
+              }
+              const { onConsumed, ...input } = await inlineHost.onBoundary(
+                // SAFETY: The private worker owns this boundary, never a guest routing identity.
+                value as CodeModeWorkerBoundary,
+                context,
+              );
+              return {
+                input,
+                onConsumed,
+                timeoutMs:
+                  (input.kind === "continue" ? input.timeoutMs : 0) +
+                  CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
+              };
+            }
+          : undefined,
         // A committed resume consumes this snapshot. Failure already closes
         // the run, so transferring ownership avoids copying its entire heap.
         transferList: (input) =>
@@ -129,7 +175,10 @@ export async function runCodeModeWorker(
     }
     return error instanceof WorkerTaskError && error.code === "timeout"
       ? failedCodeModeWorkerResult("code mode worker timeout exceeded", "timeout")
-      : failedCodeModeWorkerResult(error, "runtime_unavailable");
+      : failedCodeModeWorkerResult(
+          error,
+          error instanceof WorkerTaskError ? "runtime_unavailable" : codeModeFailureCode(error),
+        );
   } finally {
     if (workerUrl) {
       await pool.close();
