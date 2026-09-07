@@ -4,10 +4,12 @@ import {
   clearNodeSqliteKyselyCacheForDatabase,
   registerNodeSqliteKyselyQueryErrorHandler,
 } from "../infra/kysely-sync-cache-state.js";
+import { runWithSqliteCoordinator } from "../infra/sqlite-coordinator.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-transaction.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
+import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
 import {
   createOpenClawDatabaseVerificationError,
   readOpenClawDatabaseQuarantine,
@@ -245,6 +247,24 @@ function assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
   }
 }
 
+/** Explicit retirement can checkpoint WAL and must join the lifecycle writer gate. */
+function retireCachedOpenClawStateDatabase(
+  database: OpenClawStateDatabase,
+  options?: Parameters<OpenClawStateDatabase["walMaintenance"]["close"]>[0],
+): void {
+  const coordinator = acquireStateDatabaseCoordinator({ databasePath: database.path });
+  runWithSqliteCoordinator(coordinator, "state database retirement", () => {
+    // Acquire before checkpointing or removing cache ownership: a refused close
+    // must leave the same live owner available for a later coordinated retry.
+    database.walMaintenance.close(options);
+    if (database.db.isOpen) {
+      database.db.close();
+    }
+    cachedDatabases.delete(database.path);
+    notifyOpenClawStateDatabaseLifecycle({ kind: "closed", path: database.path });
+  });
+}
+
 /** Close one cached shared state database handle by exact pathname. */
 export function closeOpenClawStateDatabaseByPath(pathname: string): boolean {
   const resolvedPath = path.resolve(pathname);
@@ -252,12 +272,7 @@ export function closeOpenClawStateDatabaseByPath(pathname: string): boolean {
   if (!database) {
     return false;
   }
-  database.walMaintenance.close();
-  if (database.db.isOpen) {
-    database.db.close();
-  }
-  cachedDatabases.delete(resolvedPath);
-  notifyOpenClawStateDatabaseLifecycle({ kind: "closed", path: resolvedPath });
+  retireCachedOpenClawStateDatabase(database);
   return true;
 }
 
@@ -266,11 +281,7 @@ export function closeOpenClawStateDatabase(
   options?: Parameters<OpenClawStateDatabase["walMaintenance"]["close"]>[0],
 ): void {
   for (const database of cachedDatabases.values()) {
-    database.walMaintenance.close(options);
-    if (database.db.isOpen) {
-      database.db.close();
-    }
-    notifyOpenClawStateDatabaseLifecycle({ kind: "closed", path: database.path });
+    retireCachedOpenClawStateDatabase(database, options);
   }
   cachedDatabases.clear();
 }

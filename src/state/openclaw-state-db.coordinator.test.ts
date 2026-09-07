@@ -7,6 +7,8 @@ import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
 import {
+  closeOpenClawStateDatabase,
+  closeOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -71,6 +73,45 @@ function sqliteBytes(databasePath: string) {
 }
 
 describe("shared-state transaction lifecycle participation", () => {
+  it.each(["path", "all"] as const)(
+    "refuses %s retirement before checkpoint or close while another process owns lifecycle exclusion",
+    async (scope) => {
+      const root = tempDirs.make("openclaw-state-close-coordinator-");
+      const options = { path: path.join(root, "openclaw.sqlite") };
+      const database = openOpenClawStateDatabase(options);
+      runOpenClawStateWriteTransaction((owner) => {
+        owner.db
+          .prepare(
+            "INSERT INTO diagnostic_events(scope,event_key,payload_json,created_at) VALUES(?,?,?,?)",
+          )
+          .run("retirement", "retained", "{}", 1);
+      }, options);
+      const retire = () =>
+        scope === "path"
+          ? closeOpenClawStateDatabaseByPath(database.path)
+          : closeOpenClawStateDatabase();
+      const release = await holdStateCoordinator(database.path);
+      const before = sqliteBytes(database.path);
+      try {
+        expect(retire).toThrow(/state-lifecycle/);
+        expect(database.db.isOpen).toBe(true);
+        expect(sqliteBytes(database.path)).toEqual(before);
+      } finally {
+        await release();
+      }
+      // Refusal retains the actual cache owner; retry closes it only after exclusion ends.
+      expect(openOpenClawStateDatabase(options)).toBe(database);
+      retire();
+      expect(database.db.isOpen).toBe(false);
+      const reopened = openOpenClawStateDatabase(options);
+      expect(
+        reopened.db
+          .prepare("SELECT event_key FROM diagnostic_events WHERE scope = ?")
+          .all("retirement"),
+      ).toEqual([{ event_key: "retained" }]);
+    },
+  );
+
   it("refuses a savepoint in an uncoordinated enclosing transaction", () => {
     const root = tempDirs.make("openclaw-state-uncoordinated-parent-");
     const options = { path: path.join(root, "openclaw.sqlite") };
