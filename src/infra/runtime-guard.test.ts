@@ -1,5 +1,5 @@
 // Covers runtime detection and version support checks.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assertSupportedRuntime,
   isSupportedBunVersion,
@@ -7,6 +7,31 @@ import {
   nodeVersionSatisfiesEngine,
   parseSemver,
 } from "./runtime-guard.js";
+
+const state = vi.hoisted(() => ({
+  version: "24.16.0",
+  error: vi.fn(),
+  run: vi.fn(),
+}));
+
+vi.mock("node:process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:process")>();
+  return {
+    default: {
+      ...actual,
+      get versions() {
+        return { ...actual.versions, node: state.version, bun: undefined };
+      },
+      stderr: { write: state.error },
+      exit: (code: number) => {
+        throw new Error(`runtime exit ${code}`);
+      },
+    },
+  };
+});
+vi.mock("../worker/worker-deploy-runtime.js", () => ({}));
+vi.mock("../worker/worker-deploy-browser-runtime.js", () => ({ default: {} }));
+vi.mock("../worker/worker-process.js", () => ({ runWorkerProcess: state.run }));
 
 describe("runtime-guard", () => {
   it("parses semver with or without leading v", () => {
@@ -240,5 +265,35 @@ describe("runtime-guard", () => {
       ].join("\n"),
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+});
+
+describe("sealed worker runtime", () => {
+  const originalArgv = process.argv;
+  beforeEach(() => {
+    vi.resetModules();
+    state.error.mockClear();
+    state.run.mockClear();
+    process.argv = [process.execPath, "worker.mjs"];
+  });
+  afterEach(() => {
+    process.argv = originalArgv;
+  });
+
+  it.each(["22.23.2", "26.0.0"])(
+    "rejects an explicitly configured worker runtime %s before starting work",
+    async (version) => {
+      state.version = version;
+      await expect(import("../worker/worker-deploy-entry.js")).rejects.toThrow("runtime exit 1");
+      expect(state.run).not.toHaveBeenCalled();
+      expect(state.error).toHaveBeenCalledWith(expect.stringContaining("Upgrade Node"));
+    },
+  );
+
+  it.each(["24.16.0", "26.1.0"])("starts the worker on supported runtime %s", async (version) => {
+    state.version = version;
+    await import("../worker/worker-deploy-entry.js");
+    expect(state.run).toHaveBeenCalledOnce();
+    expect(state.error).not.toHaveBeenCalled();
   });
 });

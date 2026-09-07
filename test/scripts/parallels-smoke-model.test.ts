@@ -540,12 +540,12 @@ describe("Parallels smoke model selection", () => {
   });
 
   it.each([
-    ["ensure_node", "v24.14.0", "v24.15.0", true, 0],
-    ["ensure_node", "missing", "v24.15.0", true, 0],
-    ["ensure_node", "v24.15.0", "v24.15.0", false, 0],
-    ["ensure_node", "v24.14.0", "v24.14.0", true, 1],
-    ["verify_baseline", "v24.14.0", "v24.15.0", false, 1],
-    ["verify_baseline", "v24.15.0", "v24.15.0", false, 0],
+    ["ensure_node", "v24.15.0", "v24.16.0", true, 0],
+    ["ensure_node", "missing", "v24.16.0", true, 0],
+    ["ensure_node", "v24.16.0", "v24.16.0", false, 0],
+    ["ensure_node", "v24.15.0", "v24.15.0", true, 1],
+    ["verify_baseline", "v24.15.0", "v24.16.0", false, 1],
+    ["verify_baseline", "v24.16.0", "v24.16.0", false, 0],
   ])(
     "%s enforces the Windows Node contract from %s after installation of %s",
     (command, initialVersion, installedVersion, installs, exitCode) => {
@@ -593,7 +593,7 @@ printf 'verified-node=%s\\n' "$guest_version"`,
         expect(result.stdout).toContain("download=OpenJS.NodeJS.LTS");
       }
       if (exitCode === 0) {
-        expect(result.stdout).toContain("verified-node=v24.15.0");
+        expect(result.stdout).toContain("verified-node=v24.16.0");
       } else {
         expect(result.stderr).toContain("upgrade Node");
       }
