@@ -9,8 +9,10 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
+import { listAppServerRuntimeModelBackendBindings } from "../../agents/app-server-runtime-bindings.js";
 import { listCliRuntimeModelBackendBindings } from "../../agents/cli-backends.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
+import { resolveAgentHarnessOwnerPluginIds } from "../../agents/harness/runtime-plugin.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import {
   modelCatalogBrowseRequiresFullDiscovery,
@@ -52,7 +54,10 @@ import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../../utils/abso
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
-import { resolveRuntimeNormalization } from "./model-runtime-normalization.js";
+import {
+  readRuntimeNormalizationMetadataSnapshot,
+  resolveRuntimeNormalization,
+} from "./model-runtime-normalization.js";
 
 const PAGE_SIZE_DEFAULT = 20;
 const PAGE_SIZE_MAX = 100;
@@ -302,7 +307,11 @@ async function projectPreparedModelsProviderData(
   options: ModelsBrowseOptions,
   owner?: PreparedModelRuntimeSnapshot,
 ): Promise<PreparedModelsProviderData> {
-  const runtimeNormalization = resolveRuntimeNormalization(cfg);
+  // One browse resolves plugin metadata once: the same snapshot feeds model-ref
+  // normalization and the app-server runtime-owner checks below, so neither the
+  // manifest registry nor the plugin index is reloaded per runtime binding.
+  const pluginMetadataSnapshot = readRuntimeNormalizationMetadataSnapshot(cfg);
+  const runtimeNormalization = resolveRuntimeNormalization(cfg, pluginMetadataSnapshot);
   const resolvedDefault = resolveDefaultModelForAgent({
     cfg,
     agentId,
@@ -506,7 +515,22 @@ async function projectPreparedModelsProviderData(
 
   const runtimeChoicesByProvider = new Map<string, ModelsRuntimeChoice[]>();
   const runtimeBindings = [
-    { provider: "openai", runtime: "codex", cli: false },
+    ...listAppServerRuntimeModelBackendBindings()
+      .filter(
+        (binding) =>
+          resolveAgentHarnessOwnerPluginIds({
+            runtime: binding.runtime,
+            provider: binding.provider,
+            config: cfg,
+            workspaceDir,
+            ...(pluginMetadataSnapshot ? { metadataSnapshot: pluginMetadataSnapshot } : {}),
+          }).length > 0,
+      )
+      .map((binding) => ({
+        provider: binding.provider,
+        runtime: binding.runtime,
+        cli: false,
+      })),
     ...listCliRuntimeModelBackendBindings().map((binding) => ({
       provider: binding.provider,
       runtime: binding.runtime,

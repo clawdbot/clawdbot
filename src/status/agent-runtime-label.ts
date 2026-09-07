@@ -20,6 +20,7 @@ const AGENT_RUNTIME_LABELS: Readonly<Record<string, string>> = {
   openclaw: "OpenClaw Default",
   codex: "OpenAI Codex",
   "codex-cli": "OpenAI Codex",
+  copilot: "GitHub Copilot",
   "claude-cli": "Claude CLI",
   "google-gemini-cli": "Gemini CLI",
 };
