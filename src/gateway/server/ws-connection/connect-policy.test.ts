@@ -153,6 +153,21 @@ describe("ws connect policy", () => {
   test("auth.mode=none skips pairing for operator control-ui only", () => {
     // Control UI + operator + auth.mode=none: skip pairing (the fix for #42931)
     expectSkipPairing({ isControlUi: true, role: "operator", authMode: "none" }, "auth-none");
+    // Explicit none method (credential-free connect) still skips
+    expectSkipPairing(
+      { isControlUi: true, role: "operator", authMode: "none", authMethod: "none" },
+      "auth-none",
+    );
+    // Bootstrap / token handoff must still enroll + pair even when mode is none
+    expectSkipPairing(
+      {
+        isControlUi: true,
+        role: "operator",
+        authMode: "none",
+        authMethod: "bootstrap-token",
+      },
+      null,
+    );
     // Control UI + node role + auth.mode=none: still require pairing
     expectSkipPairing({ isControlUi: true, role: "node", authMode: "none" }, null);
     // Non-Control-UI + operator + auth.mode=none: still require pairing

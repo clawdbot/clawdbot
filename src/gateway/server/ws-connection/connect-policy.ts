@@ -27,7 +27,15 @@ export function shouldSkipControlUiPairing(params: {
   // called for ALL clients (not just Control UI) at the call site.
   // Scope to operator role so node-role sessions still need device identity
   // (#43478 was reverted for skipping ALL clients).
-  if (params.isControlUi && params.role === "operator" && params.authMode === "none") {
+  // If a concrete auth method already authenticated this connect (for example
+  // a dashboard bootstrap-token handoff while mode is still "none"), keep
+  // pairing so consumeSetupHandoff can match the paired public key.
+  if (
+    params.isControlUi &&
+    params.role === "operator" &&
+    params.authMode === "none" &&
+    (params.authMethod == null || params.authMethod === "none")
+  ) {
     return "auth-none";
   }
   return null;
