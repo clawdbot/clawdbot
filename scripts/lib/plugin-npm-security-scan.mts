@@ -110,10 +110,18 @@ const RELEASE_2026_9_1_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string,
   ["@openclaw/voice-call:dangerous-exec:src/tunnel.ts", 1],
 ]);
 
-const CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
+const RELEASE_2026_9_2_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
   ...RELEASE_2026_9_1_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
   ["@openclaw/llama-cpp-provider:dangerous-exec:src/hardware.ts", 1],
 ]);
+
+// The bounded async Codex version probe no longer produces this syntactic finding.
+// Keep shipped inventories intact; a new direct call must be reviewed again.
+const CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map(
+  [...RELEASE_2026_9_2_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS].filter(
+    ([key]) => key !== "@openclaw/codex:dangerous-exec:src/doctor.ts",
+  ),
+);
 
 type ReviewedReleaseLayout = {
   id: string;
@@ -212,7 +220,13 @@ const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurit
       requiredSourceFindingCounts: RELEASE_2026_9_1_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
     },
   ],
-  ["release/2026.9.2", CURRENT_SECURITY_INVENTORY_POLICY],
+  [
+    "release/2026.9.2",
+    {
+      ...CURRENT_SECURITY_INVENTORY_POLICY,
+      requiredSourceFindingCounts: RELEASE_2026_9_2_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+    },
+  ],
   ["release/2026.9.3", CURRENT_SECURITY_INVENTORY_POLICY],
   [
     "extended-stable/2026.6.33",
