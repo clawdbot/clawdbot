@@ -1,6 +1,10 @@
 // Outbound payload planning normalizes reply payloads into sendable text,
 // media, presentation, interactive, and mirror projections.
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import {
+  hasInternalRuntimeContext,
+  stripInternalRuntimeContext,
+} from "../../agents/internal-runtime-context.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import {
   formatBtwTextForExternalDelivery,
@@ -210,6 +214,18 @@ function mergeMediaUrls(...lists: Array<ReadonlyArray<string | undefined> | unde
   return merged;
 }
 
+// Fail-closed outbound guard (#136471): runtime-only turns inline channel
+// inbound context into the visible user turn, so a model echo can carry the
+// raw internal block into delivery. Strip it here — the one funnel every
+// channel projection routes through — and drop the text when markers survive
+// stripping (unbalanced delimiters) instead of delivering it raw.
+function stripInternalContextForDelivery(text: string): string {
+  // Match the queue-persistence stripper (protocol-scaffolding): preserve the
+  // surrounding single newline so mid-text blocks rejoin with "\n", not "\n\n".
+  const stripped = stripInternalRuntimeContext(text, { preserveSurroundingWhitespace: true });
+  return hasInternalRuntimeContext(stripped) ? "" : stripped;
+}
+
 function createOutboundPayloadPlanEntry(
   payload: ReplyPayload,
   context: Pick<OutboundPayloadPlanContext, "extractMarkdownImages"> = {},
@@ -217,9 +233,12 @@ function createOutboundPayloadPlanEntry(
   if (shouldSuppressReasoningPayload(payload)) {
     return null;
   }
-  const parsed = parseReplyDirectives(stripLeadingInboundMetadata(payload.text ?? ""), {
-    extractMarkdownImages: context.extractMarkdownImages,
-  });
+  const parsed = parseReplyDirectives(
+    stripInternalContextForDelivery(stripLeadingInboundMetadata(payload.text ?? "")),
+    {
+      extractMarkdownImages: context.extractMarkdownImages,
+    },
+  );
   const explicitMediaUrls = payload.mediaUrls ?? parsed.mediaUrls;
   const explicitMediaUrl = payload.mediaUrl ?? parsed.mediaUrls?.[0];
   const mergedMedia = mergeMediaUrls(
@@ -235,6 +254,9 @@ function createOutboundPayloadPlanEntry(
   const resolvedMediaUrl = mergedMedia.length > 1 ? undefined : explicitMediaUrl;
   const normalizedPayload: ReplyPayload = {
     ...payload,
+    ...(typeof payload.spokenText === "string"
+      ? { spokenText: stripInternalContextForDelivery(payload.spokenText) }
+      : {}),
     text:
       formatBtwTextForExternalDelivery({
         ...payload,

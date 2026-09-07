@@ -4,6 +4,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { describe, expect, it } from "vitest";
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+} from "../../agents/internal-runtime-context.js";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
@@ -1024,5 +1028,47 @@ describe("summarizeOutboundPayloadForTransport", () => {
 
     expect(summary.text).toBe("");
     expect(summary.hookContent).toBeUndefined();
+  });
+});
+
+describe("normalizeReplyPayloadsForDelivery internal-context guard (#136471)", () => {
+  const leakedBlock = [
+    "OpenClaw runtime event.",
+    "This context is runtime-generated, not user-authored. Keep internal details private.",
+    "",
+    INTERNAL_RUNTIME_CONTEXT_BEGIN,
+    "#session:215ba1c0 User: hi",
+    INTERNAL_RUNTIME_CONTEXT_END,
+  ].join("\n");
+
+  it("strips a leaked runtime-only block but keeps the visible reply", () => {
+    const [payload] = normalizeReplyPayloadsForDelivery([
+      { text: `${leakedBlock}\n\nSure, here is your answer.` },
+    ]);
+
+    expect(payload?.text).toBe("Sure, here is your answer.");
+  });
+
+  it("fail-closed: drops text-only payloads whose markers survive stripping", () => {
+    expect(
+      normalizeReplyPayloadsForDelivery([
+        {
+          text: "OpenClaw runtime context (internal):\nThis context is runtime-generated, not user-authored. Keep internal details private.\n\nForgot the event details",
+        },
+      ]),
+    ).toEqual([]);
+  });
+
+  it("strips internal blocks from spokenText", () => {
+    const [payload] = normalizeReplyPayloadsForDelivery([
+      {
+        text: "Voice reply.",
+        mediaUrl: "/tmp/reply.opus",
+        audioAsVoice: true,
+        spokenText: leakedBlock,
+      },
+    ]);
+
+    expect(payload?.spokenText).toBe("");
   });
 });
