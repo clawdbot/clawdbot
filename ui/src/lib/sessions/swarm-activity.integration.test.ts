@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -73,6 +73,11 @@ describe("session swarm activity", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway, emitEvent } = createGatewayHarness(client);
     const sessions = createTestSessionCapability(gateway);
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      sessions.dispose();
+      vi.useRealTimers();
+    });
     const note = (kind: "phase" | "log", text: string) => ({
       sessionKey: parentKey,
       reason: "swarm-note",
@@ -99,6 +104,7 @@ describe("session swarm activity", () => {
     const revisionBeforePhase = sessions.canonicalListRevision;
     emitChanged(note("phase", "Plan"));
     expect(sessions.canonicalListRevision).toBe(revisionBeforePhase);
+    await vi.advanceTimersToNextTimerAsync();
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     await waitForFast(() =>
       expect(sessions.canonicalListRevision).toBeGreaterThan(revisionBeforePhase),
@@ -115,6 +121,7 @@ describe("session swarm activity", () => {
       },
     ];
     emitChanged(child("agent:main:subagent:planner", 3));
+    await vi.advanceTimersToNextTimerAsync();
     await waitForFast(() =>
       expect(sessions.state.result?.sessions.some((row) => row.key.endsWith(":planner"))).toBe(
         true,
@@ -127,6 +134,7 @@ describe("session swarm activity", () => {
     expect(displayRows()?.find((row) => row.key.endsWith(":planner"))?.swarmPhase).toBe("Plan");
 
     emitChanged(note("log", "Planning is complete."));
+    await vi.advanceTimersToNextTimerAsync();
     await waitForFast(() =>
       expect(
         displayRows()
@@ -148,6 +156,7 @@ describe("session swarm activity", () => {
       },
     ];
     emitChanged(child("agent:main:subagent:builder", 4));
+    await vi.advanceTimersToNextTimerAsync();
     await waitForFast(() =>
       expect(sessions.state.result?.sessions.some((row) => row.key.endsWith(":builder"))).toBe(
         true,
@@ -172,6 +181,5 @@ describe("session swarm activity", () => {
     await waitForFast(() =>
       expect(displayRows()?.find((row) => row.key.endsWith(":older"))?.swarmPhase).toBeUndefined(),
     );
-    sessions.dispose();
   });
 });
