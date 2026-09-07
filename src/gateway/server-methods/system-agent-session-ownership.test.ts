@@ -10,6 +10,7 @@ import {
 } from "../../infra/agent-run-registry.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { SystemAgentWizardAnswerError } from "../../system-agent/chat-engine.js";
+import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -107,6 +108,7 @@ function makeClient(params: {
   authenticatedUserId?: string;
   profileId?: string;
   githubSyncPending?: boolean;
+  agentRuntimeIdentity?: AgentRuntimeIdentity;
 }): GatewayClient {
   return {
     connId: params.connId,
@@ -129,6 +131,9 @@ function makeClient(params: {
       ? {
           authenticatedGitHubIdentitySync: async () => ({ profileId: "pending", updatedAt: 1 }),
         }
+      : {}),
+    ...(params.agentRuntimeIdentity
+      ? { internal: { agentRuntimeIdentity: params.agentRuntimeIdentity } }
       : {}),
   } as GatewayClient;
 }
@@ -443,6 +448,54 @@ describe("openclaw.chat session ownership", () => {
     }
     await expect(resume()).rejects.toThrow("requires an active run authority");
     expect(handle).toHaveBeenCalledOnce();
+  });
+
+  it("uses signed runtime ownership instead of model-supplied wire delegation", async () => {
+    const sessions = new Map<string, SystemAgentChatSession>();
+    const context = {
+      ...makeContext(sessions),
+      validateAgentRuntimeApprovalAuthority: () => true,
+    } as GatewayRequestContext;
+    const operationalRunInstance = createOperationalRunInstanceRef("trusted-wire-ownership-run");
+    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+    const trustedAgentRuntime = {
+      kind: "agentRuntime",
+      agentId: "trusted",
+      sessionKey: "agent:trusted:session",
+      operationalRunInstance,
+      delegatedAuthority: { kind: "local", ...authority },
+      turnSourceChannel: "matrix",
+      turnSourceTo: "room:trusted",
+    } satisfies AgentRuntimeIdentity;
+
+    try {
+      const call = await callChat(
+        context,
+        {
+          sessionId: "trusted-wire",
+          message: "continue",
+          delegation: {
+            agentId: "spoofed",
+            sessionKey: "agent:spoofed:session",
+            turnSourceChannel: "telegram",
+            turnSourceTo: "chat:spoofed",
+          },
+        },
+        makeClient({ connId: "conn-wire", agentRuntimeIdentity: trustedAgentRuntime }),
+      );
+
+      expect(call.ok).toBe(true);
+      expect(sessions.get("trusted-wire")?.ownerKey).toBe(
+        JSON.stringify(["trusted", "agent:trusted:session"]),
+      );
+      expect(inferenceFallbackMocks.verifySystemAgentInferenceWithFallback).toHaveBeenCalledWith({
+        requestingAgentId: "trusted",
+        runtime: expect.anything(),
+      });
+      expect(createdEngineOptions[0]).toMatchObject({ requesterAgentId: "trusted" });
+    } finally {
+      releaseAgentRunDelegatedAuthority(authority);
+    }
   });
 
   it("rejects delegated reuse of a non-delegated session", async () => {

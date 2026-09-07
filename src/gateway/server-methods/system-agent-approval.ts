@@ -16,7 +16,10 @@ import {
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { describeSystemAgentPersistentOperation } from "../../system-agent/operations.js";
-import type { AgentRuntimeDelegatedAuthority } from "../agent-runtime-identity-token.js";
+import type {
+  AgentRuntimeDelegatedAuthority,
+  AgentRuntimeIdentity,
+} from "../agent-runtime-identity-token.js";
 import { ApprovalObserverClosedError } from "../exec-approval-lifecycle.js";
 import { sameWorkerSessionTurnClaim } from "../worker-environments/placement-record.js";
 import {
@@ -29,16 +32,17 @@ import { persistSystemAgentEngineHistory } from "./system-agent-chat-turn.js";
 import { runSystemAgentGatewayTask } from "./system-agent-execution.js";
 import type { GatewayRequestContext } from "./types.js";
 
-function sameApprovalAuthority(
+function sameApprovalSourceOwner(
   left: AgentRuntimeDelegatedAuthority,
   right: AgentRuntimeDelegatedAuthority,
 ): boolean {
+  if (left.kind !== right.kind) {
+    return false;
+  }
+  const leftOwner = getActiveAgentRunDelegatedAuthority(left.operationalRunInstance);
   if (
-    left.kind !== right.kind ||
-    left.claimId !== right.claimId ||
-    left.lifecycleGeneration !== right.lifecycleGeneration ||
-    left.operationalRunInstance.instanceId !== right.operationalRunInstance.instanceId ||
-    left.operationalRunInstance.runId !== right.operationalRunInstance.runId
+    !leftOwner ||
+    leftOwner !== getActiveAgentRunDelegatedAuthority(right.operationalRunInstance)
   ) {
     return false;
   }
@@ -73,6 +77,8 @@ async function reconcileSystemAgentApproval(
   if (!pending) {
     return undefined;
   }
+  // First fence the original exact application lease. A same-run observer may
+  // reuse the pending decision, but never replaces the authority stored on it.
   const closed = manager?.forceDenyIfRuntimeAuthorityClosed(pending.id);
   const snapshot = manager?.getSnapshot(pending.id);
   if (
@@ -80,7 +86,7 @@ async function reconcileSystemAgentApproval(
     snapshot &&
     (snapshot.resolvedAtMs === undefined || snapshot.decision === "allow-once") &&
     snapshot.agentRuntimeDelegatedAuthority &&
-    sameApprovalAuthority(snapshot.agentRuntimeDelegatedAuthority, authority) &&
+    sameApprovalSourceOwner(snapshot.agentRuntimeDelegatedAuthority, authority) &&
     session.engine.getPendingOperatorProposal()?.hash === pending.proposalHash
   ) {
     return pending;
@@ -118,19 +124,24 @@ export async function prepareDelegatedSystemAgentApproval(params: {
     turnSourceAccountId?: string;
     turnSourceThreadId?: string | number;
   };
+  trustedAgentRuntime?: AgentRuntimeIdentity;
 }): Promise<DelegatedProposalResolver> {
   const callerIdentity = getGatewayToolCallerIdentity();
+  const trustedAgentRuntime = callerIdentity ? undefined : params.trustedAgentRuntime;
   const approvalAuthority =
     callerIdentity?.approvalAuthority ??
     (callerIdentity?.operationalRunInstance
       ? getActiveAgentRunDelegatedAuthority(callerIdentity.operationalRunInstance)
-      : undefined);
+      : undefined) ??
+    trustedAgentRuntime?.delegatedAuthority;
   if (!approvalAuthority) {
     throw new Error("delegated OpenClaw approval requires an active run authority");
   }
-  const runtimeApprovalAuthority: AgentRuntimeDelegatedAuthority = callerIdentity?.workerTurnClaim
-    ? { kind: "worker", ...approvalAuthority, turnClaim: callerIdentity.workerTurnClaim }
-    : { kind: "local", ...approvalAuthority };
+  const runtimeApprovalAuthority: AgentRuntimeDelegatedAuthority =
+    trustedAgentRuntime?.delegatedAuthority ??
+    (callerIdentity?.workerTurnClaim
+      ? { kind: "worker", ...approvalAuthority, turnClaim: callerIdentity.workerTurnClaim }
+      : { kind: "local", ...approvalAuthority });
   const isAuthorityActive = () => {
     if (
       !validateAgentRunDelegatedAuthority(approvalAuthority) ||
@@ -141,17 +152,17 @@ export async function prepareDelegatedSystemAgentApproval(params: {
     ) {
       return false;
     }
-    return (
-      runtimeApprovalAuthority.kind === "local" ||
-      (callerIdentity !== undefined &&
-        params.context.validateAgentRuntimeApprovalAuthority?.({
-          kind: "agentRuntime",
-          agentId: callerIdentity.agentId,
-          sessionKey: callerIdentity.sessionKey,
-          operationalRunInstance: runtimeApprovalAuthority.operationalRunInstance,
-          delegatedAuthority: runtimeApprovalAuthority,
-        }) === true)
-    );
+    return trustedAgentRuntime !== undefined
+      ? params.context.validateAgentRuntimeApprovalAuthority?.(trustedAgentRuntime) === true
+      : runtimeApprovalAuthority.kind === "local" ||
+          (callerIdentity !== undefined &&
+            params.context.validateAgentRuntimeApprovalAuthority?.({
+              kind: "agentRuntime",
+              agentId: callerIdentity.agentId,
+              sessionKey: callerIdentity.sessionKey,
+              operationalRunInstance: runtimeApprovalAuthority.operationalRunInstance,
+              delegatedAuthority: runtimeApprovalAuthority,
+            }) === true);
   };
   const assertLiveApprovalAuthority = () => {
     if (!isAuthorityActive() || params.sessions.get(params.sessionId) !== params.session) {
@@ -166,13 +177,28 @@ export async function prepareDelegatedSystemAgentApproval(params: {
   assertLiveApprovalAuthority();
 
   return async (proposal) => {
+    let ownedApproval: GatewaySystemAgentSession["pendingApproval"];
+    // Retirement belongs to the proposal's owner. A same-source observer that lost its
+    // lease between preparation and resolution would otherwise cancel the live original.
+    const holdsLiveForeignApproval = (): boolean => {
+      const pending = params.session.pendingApproval;
+      return (
+        pending !== undefined &&
+        pending !== ownedApproval &&
+        pending.proposalHash === proposal.hash &&
+        manager?.forceDenyIfRuntimeAuthorityClosed(pending.id) === null
+      );
+    };
     const withProposalFailureCleanup = async <T>(resolve: () => Promise<T>): Promise<T> => {
       try {
         return await resolve();
       } catch (error) {
         // Entry, registration, and apply failures all retire this exact proposal.
         // Otherwise a later run can inherit it without the failed run's authority.
-        if (params.sessions.get(params.sessionId) === params.session) {
+        if (
+          params.sessions.get(params.sessionId) === params.session &&
+          !holdsLiveForeignApproval()
+        ) {
           await retireSystemAgentProposal(params.session, manager, proposal.hash);
         }
         throw error;
@@ -207,7 +233,7 @@ export async function prepareDelegatedSystemAgentApproval(params: {
       };
       // Only a fresh proposal belongs to this input. An existing operator request
       // stays bound to its original decision, even if this caller has Full Access.
-      if (callerIdentity?.fullPermission === true) {
+      if ((callerIdentity?.fullPermission ?? trustedAgentRuntime?.fullPermission) === true) {
         const reply = await applyDecision("allow-once");
         if (!reply) {
           throw new Error("OpenClaw change is no longer pending. Retry the request.");
@@ -231,7 +257,10 @@ export async function prepareDelegatedSystemAgentApproval(params: {
         turnSourceTo: params.delegation.turnSourceTo ?? null,
         turnSourceAccountId: params.delegation.turnSourceAccountId ?? null,
         turnSourceThreadId: params.delegation.turnSourceThreadId ?? null,
-        runId: callerIdentity?.operationalRunInstance?.runId ?? null,
+        runId:
+          callerIdentity?.operationalRunInstance?.runId ??
+          trustedAgentRuntime?.operationalRunInstance.runId ??
+          null,
       };
       const record = manager.create(
         request,
@@ -256,6 +285,7 @@ export async function prepareDelegatedSystemAgentApproval(params: {
         applied: false,
       };
       params.session.pendingApproval = pendingApproval;
+      ownedApproval = pendingApproval;
       record.agentRuntimeDelegatedAuthority = runtimeApprovalAuthority;
       // The request loses authority when replaced, even while its source run lives.
       record.approvalAuthority = () =>
