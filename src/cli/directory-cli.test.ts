@@ -111,6 +111,68 @@ describe("registerDirectoryCli", () => {
     });
   });
 
+  it.each([
+    ["empty", ""],
+    ["whitespace-only", " \t "],
+  ])(
+    "rejects explicit $0 directory account before plugin, secret, or default resolution",
+    async (_label, account) => {
+      const self = vi.fn().mockResolvedValue({ id: "self-1" });
+      mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+        cfg: { channels: { slack: {} } },
+        channelId: "slack",
+        plugin: { id: "slack", directory: { self } },
+        configChanged: false,
+      });
+
+      const program = new Command().name("openclaw");
+      registerDirectoryCli(program);
+
+      await expect(
+        program.parseAsync(
+          ["directory", "self", "--channel", "slack", "--account", account, "--json"],
+          { from: "user" },
+        ),
+      ).rejects.toThrow("--account must not be blank");
+
+      expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mocks.resolveInstallableChannelPlugin).not.toHaveBeenCalled();
+      expect(mocks.resolveMessageChannelSelection).not.toHaveBeenCalled();
+      expect(mocks.resolveChannelDefaultAccountId).not.toHaveBeenCalled();
+      expect(mocks.getScopedChannelsCommandSecretTargets).not.toHaveBeenCalled();
+      expect(mocks.resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
+      expect(self).not.toHaveBeenCalled();
+      expect(runtimeState.defaultRuntime.writeJson).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["peers", ["directory", "peers", "list", "--channel", "slack"]],
+    ["groups", ["directory", "groups", "list", "--channel", "slack"]],
+    [
+      "group members",
+      ["directory", "groups", "members", "--channel", "slack", "--group-id", "group-1"],
+    ],
+  ])(
+    "rejects blank account for the $0 sibling leaf before shared resolution",
+    async (_label, args) => {
+      const program = new Command().name("openclaw");
+      registerDirectoryCli(program);
+
+      await expect(
+        program.parseAsync([...args, "--account", "", "--json"], { from: "user" }),
+      ).rejects.toThrow("--account must not be blank");
+
+      expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mocks.resolveInstallableChannelPlugin).not.toHaveBeenCalled();
+      expect(mocks.resolveMessageChannelSelection).not.toHaveBeenCalled();
+      expect(mocks.resolveChannelDefaultAccountId).not.toHaveBeenCalled();
+      expect(mocks.getScopedChannelsCommandSecretTargets).not.toHaveBeenCalled();
+      expect(mocks.resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
+      expect(runtimeState.defaultRuntime.writeJson).not.toHaveBeenCalled();
+    },
+  );
+
   it("installs an explicit optional directory channel on demand", async () => {
     const tokenRef = {
       source: "env",

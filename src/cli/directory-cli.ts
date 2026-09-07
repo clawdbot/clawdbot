@@ -15,6 +15,7 @@ import { theme } from "../../packages/terminal-core/src/theme.js";
 import { nullChannelDirectorySelf } from "../channels/plugins/directory-adapters.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
+import { assertAccountSelector } from "../commands/channels/account-selector.js";
 import { requireValidConfigFileSnapshot } from "../commands/config-validation.js";
 import { getRuntimeConfig, replaceConfigFile } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
@@ -110,6 +111,7 @@ export function registerDirectoryCli(program: Command) {
       .option("--json", "Output JSON", false);
 
   const resolve = async (opts: { channel?: string; account?: string }) => {
+    assertAccountSelector(opts.account);
     const sourceSnapshot = await requireValidConfigFileSnapshot(defaultRuntime);
     if (!sourceSnapshot) {
       return null;
