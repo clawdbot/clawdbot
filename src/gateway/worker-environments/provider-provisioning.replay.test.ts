@@ -9,7 +9,7 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
-import { WorkerProviderError } from "../../plugins/types.js";
+import { WorkerProviderError, type WorkerProvider } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -29,6 +29,52 @@ type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
 
 describe("worker environment service provision replay", () => {
   support.setupWorkerEnvironmentServiceSuite();
+
+  it("retains an indeterminate node lease when runtime preflight fails after restart", async () => {
+    const provision = vi.fn<WorkerProvider["provision"]>(async () => {
+      throw new Error("node allocation response was lost");
+    });
+    const destroy = vi.fn(async () => {});
+    const provider = support.createProvider({
+      requiresNodeEnrollment: true,
+      provisionBeforeInstallation: true,
+      provision,
+      destroy,
+    });
+    const enrollment = async () => {
+      throw new Error("enrollment must not run");
+    };
+    const first = support.createService(provider, { prepareNodeEnrollment: enrollment });
+    await expect(first.create("development", "preflight-replay")).rejects.toMatchObject({
+      code: "provider_failure",
+    });
+    const original = support.testState.store.list()[0]!;
+    expect(original.state).toBe("provisioning");
+    await support.reopenWorkerEnvironmentStore();
+    const restarted = support.createService(provider, {
+      prepareNodeEnrollment: enrollment,
+      prepareNodeBootstrap: async () => {
+        throw new Error("runtime preparation unavailable");
+      },
+    });
+    restarted.start();
+    await support.waitForFast(() =>
+      expect(support.testState.store.get(original.environmentId)?.lastError).toContain(
+        "runtime preparation unavailable",
+      ),
+    );
+    expect(support.testState.store.get(original.environmentId)).toMatchObject({
+      state: "provisioning",
+      provisionOperationId: original.provisionOperationId,
+      leaseId: null,
+    });
+    expect(provision).toHaveBeenCalledOnce();
+    expect(destroy).not.toHaveBeenCalled();
+    await expect(restarted.destroy(original.environmentId)).resolves.toMatchObject({
+      state: "destroyed",
+    });
+    expect(destroy).toHaveBeenCalledOnce();
+  });
 
   it("adopts one committed provision across a service and store restart", async () => {
     const physicalLeases = new Set<string>();

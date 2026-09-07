@@ -8,14 +8,22 @@ import net from "node:net";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import * as tar from "tar";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createCrabboxNodeEnrollmentSetup,
   createCrabboxNodeRuntimeSetup,
   type CrabboxWorkerNodeEnrollment,
 } from "./crabbox-worker-node-enrollment.js";
 import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
+import { resolveCrabboxProvisionProfile } from "./crabbox-worker-profile.js";
 import { SCRUB_WORKER_STATE } from "./crabbox-worker-warm-image-scrub.js";
+import { openCrabboxWarmImageStore } from "./crabbox-worker-warm-image-store.js";
+import { createCrabboxWarmImageManager } from "./crabbox-worker-warm-image.js";
+import {
+  PROFILE,
+  commandResult,
+  checkpointResult,
+} from "./crabbox-worker-warm-image.test-support.js";
 
 const cleanups: Array<() => Promise<void> | void> = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanupDirectories) => {
@@ -306,6 +314,141 @@ async function readLaunch(stateDir: string) {
 }
 
 describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
+  it("reuses a completed runtime upgrade on the next fresh warm child", async () => {
+    const root = fs.realpathSync(tempDirs.make("warm-runtime-repeat-proof-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "gateway-state"));
+    const oldArtifact = await serveArtifact(await packageFixture("older-runtime"));
+    const currentArtifact = await serveArtifact(await packageFixture("current-runtime"));
+    expect(oldArtifact.nodeBootstrap.sha256).not.toBe(currentArtifact.nodeBootstrap.sha256);
+    const profile = resolveCrabboxProvisionProfile(PROFILE, undefined).profile;
+    const homes = new Map<string, string>();
+    const snapshots = new Map<string, string>();
+    let snapshotCount = 0;
+    const forkChoices: string[] = [];
+    const homeFor = (id: string) => {
+      const home = path.join(root, id);
+      fs.mkdirSync(home, { recursive: true });
+      homes.set(id, home);
+      return home;
+    };
+    const runtimeRoot = (home: string) => path.join(home, ".openclaw-worker", "node-runtimes");
+    const context = (id: string, digest = oldArtifact.nodeBootstrap.sha256) => ({
+      nodeRuntimeIdentity: { nodeBootstrapSha256: digest, executionMode: "worker-turn" as const },
+      binary: "crabbox",
+      id,
+      provider: "aws",
+      profile,
+      slug: id,
+      timeoutMs: () => 60_000,
+    });
+    const manager = createCrabboxWarmImageManager({
+      warn: (message) => {
+        throw new Error(message);
+      },
+      runArgs: ({ id }) => ["run", "--id", id, "--script-stdin"],
+      runCommand: async (argv, options) => {
+        if (argv[1] === "warmup") {
+          homeFor(argv[argv.indexOf("--lease-id") + 1]!);
+        }
+        if (argv[1] === "run") {
+          const id = argv[argv.indexOf("--id") + 1]!;
+          const home = homes.get(id)!;
+          execFileSync("/bin/sh", [], {
+            input: options?.input,
+            cwd: home,
+            env: { HOME: home, PATH: process.env.PATH },
+          });
+        }
+        if (argv[1] === "checkpoint" && argv[2] === "create") {
+          const id = argv[argv.indexOf("--id") + 1]!;
+          const checkpoint = `chk_fixture_${++snapshotCount}`;
+          const snapshot = path.join(root, checkpoint);
+          fs.cpSync(runtimeRoot(homes.get(id)!), snapshot, { recursive: true });
+          snapshots.set(checkpoint, snapshot);
+          return checkpointResult(checkpoint, id, "completed");
+        }
+        if (argv[1] === "checkpoint" && argv[2] === "delete") {
+          fs.rmSync(snapshots.get(argv[3]!)!, { recursive: true });
+          snapshots.delete(argv[3]!);
+        }
+        if (argv[1] === "checkpoint" && argv[2] === "inspect") {
+          return commandResult({
+            stdout: JSON.stringify({
+              localState: "metadata_available",
+              providerState: "completed",
+              nextAction: "fork_or_delete",
+            }),
+          });
+        }
+        if (argv[1] === "checkpoint" && argv[2] === "fork") {
+          const checkpoint = argv[3]!;
+          const id = argv[argv.indexOf("--lease-id") + 1]!;
+          const home = homeFor(id);
+          fs.cpSync(snapshots.get(checkpoint)!, runtimeRoot(home), { recursive: true });
+          forkChoices.push(checkpoint);
+          return commandResult({
+            stdout: JSON.stringify({
+              checkpointId: checkpoint,
+              leaseId: id,
+              provider: "aws",
+              slug: id,
+              workdir: "/workspace",
+            }),
+          });
+        }
+        return commandResult();
+      },
+    });
+    const initial = context("cbx_initial");
+    await manager.allocate(initial);
+    await expectSetupPhases(
+      enroll(homes.get(initial.id)!, oldArtifact.nodeBootstrap, undefined, true),
+    );
+    manager.markEnrolled(initial.id);
+    expect(await manager.capture(initial)).toBe(true);
+    await manager.release(initial);
+    fs.rmSync(homes.get(initial.id)!, { recursive: true });
+    const originalCheckpoint = openCrabboxWarmImageStore().entries()[0]!.value.image!.checkpointId;
+
+    const upgraded = context("cbx_upgraded", currentArtifact.nodeBootstrap.sha256);
+    expect(await manager.allocate(upgraded)).toEqual({
+      kind: "checkpoint",
+      checkpointId: originalCheckpoint,
+    });
+    const upgradePhases = await expectSetupPhases(
+      enroll(homes.get(upgraded.id)!, currentArtifact.nodeBootstrap, undefined, true),
+    );
+    expect(upgradePhases).toContain("openclaw-bootstrap-installation");
+    expect(
+      fs.existsSync(
+        path.join(runtimeRoot(homes.get(upgraded.id)!), currentArtifact.nodeBootstrap.sha256),
+      ),
+    ).toBe(true);
+    manager.markEnrolled(upgraded.id);
+    const refreshed = await manager.capture(upgraded);
+    await manager.release(upgraded);
+    fs.rmSync(homes.get(upgraded.id)!, { recursive: true });
+    const retainedCheckpoint = openCrabboxWarmImageStore().entries()[0]!.value.image!.checkpointId;
+
+    const next = context("cbx_next", currentArtifact.nodeBootstrap.sha256);
+    const nextChoice = await manager.allocate(next);
+    const currentWasCached = fs.existsSync(
+      path.join(runtimeRoot(homes.get(next.id)!), currentArtifact.nodeBootstrap.sha256),
+    );
+    const repeatPhases = await expectSetupPhases(
+      enroll(homes.get(next.id)!, currentArtifact.nodeBootstrap, undefined, true),
+    );
+    await manager.release(next);
+    expect(refreshed).toBe(true);
+    expect(retainedCheckpoint).not.toBe(originalCheckpoint);
+    expect(forkChoices).toEqual([originalCheckpoint, retainedCheckpoint]);
+    expect(nextChoice).toEqual({ kind: "checkpoint", checkpointId: retainedCheckpoint });
+    expect(currentWasCached).toBe(true);
+    expect(repeatPhases).not.toContain("openclaw-bootstrap-installation");
+    expect(openCrabboxWarmImageStore().entries()).toHaveLength(1);
+    expect(Object.keys(openCrabboxWarmImageStore().entries()[0]!.value.allocations)).toEqual([]);
+  }, 60_000);
+
   it("rejects malformed forwarded credentials without disclosing their value", async () => {
     const { home } = testHome();
     const { nodeBootstrap, authorizations } = await serveArtifact(
