@@ -669,6 +669,8 @@ function createOpenAICompletionsChatTemplateKwargsWrapper(params: {
   };
 }
 
+const FRAMEWORK_MANAGED_EXTRA_BODY_KEYS = new Set(["messages", "model", "stream"]);
+
 function createOpenAICompletionsExtraBodyWrapper(
   baseStreamFn: StreamFn | undefined,
   extraBody: Record<string, unknown>,
@@ -679,9 +681,13 @@ function createOpenAICompletionsExtraBodyWrapper(
       return underlying(model, context, options);
     }
     return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
-      const collisions = Object.keys(extraBody).filter((key) => Object.hasOwn(payloadObj, key));
-      if (collisions.length > 0) {
-        log.warn(`extra_body overwriting request payload keys: ${collisions.join(", ")}`);
+      const clobberedManagedKeys = Object.keys(extraBody).filter(
+        (key) => Object.hasOwn(payloadObj, key) && FRAMEWORK_MANAGED_EXTRA_BODY_KEYS.has(key),
+      );
+      if (clobberedManagedKeys.length > 0) {
+        log.warn(
+          `extra_body overrides framework-managed request keys: ${clobberedManagedKeys.join(", ")}`,
+        );
       }
       Object.assign(payloadObj, extraBody);
     });
