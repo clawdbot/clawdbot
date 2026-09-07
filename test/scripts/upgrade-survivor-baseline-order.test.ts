@@ -9,6 +9,83 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const runner = path.resolve("scripts/e2e/lib/upgrade-survivor/run.sh");
 
 it.each([
+  { scenario: "legacy-operator-state", mode: "auto-auth" },
+  { scenario: "legacy-operator-state", mode: "manual" },
+  { scenario: "base", mode: "auto-auth" },
+  { scenario: "mobile-pairing-reconnect", mode: "auto-auth" },
+])("binds the current registry before $scenario service start ($mode)", ({ scenario, mode }) => {
+  const source = readFileSync(runner, "utf8");
+  const routing = source.slice(
+    source.indexOf("companion_survivor_scenario()"),
+    source.indexOf("\npackage_root()"),
+  );
+  const orchestration = source.slice(
+    source.indexOf("phase seed-state seed_state"),
+    source.indexOf("phase update-candidate update_candidate_for_install_mode"),
+  );
+  const result = spawnSync(
+    "bash",
+    [
+      "-c",
+      `set -eu
+SCENARIO="$1"
+UPDATE_RESTART_MODE="$2"
+COMMAND_TIMEOUT=1
+plugin_registry_pid=synthetic
+NPM_CONFIG_REGISTRY=initial-registry
+manager_registry="$NPM_CONFIG_REGISTRY"
+${routing}
+openclaw_e2e_stop_process() { :; }
+configure_plugin_registry() {
+  NPM_CONFIG_REGISTRY="\${1:-candidate}-registry"
+  printf 'registry=%s\\n' "$NPM_CONFIG_REGISTRY"
+}
+prepare_schema_expectation() { printf 'schema-snapshot\\n'; }
+install_update_restart_systemctl_shim() {
+  manager_registry="$NPM_CONFIG_REGISTRY"
+  printf 'manager=%s\\n' "$manager_registry"
+}
+run_update_restart_probe_gateway() {
+  [ "$#" -eq 3 ] && [ "$1" = start ] && [ "$2" = 18789 ] && [ "$3" = "$COMMAND_TIMEOUT" ] || return 97
+  if [ "$manager_registry" != "$NPM_CONFIG_REGISTRY" ]; then
+    printf 'manager retained stale registry: %s, current: %s\\n' "$manager_registry" "$NPM_CONFIG_REGISTRY" >&2
+    return 91
+  fi
+  printf 'service=%s\\n' "$manager_registry"
+}
+phase() {
+  shift
+  case "$1" in
+    configure_plugin_registry|prepare_schema_expectation|install_update_restart_systemctl_shim|run_update_restart_probe_gateway) "$@" ;;
+    *) : ;;
+  esac
+}
+${orchestration}
+`,
+      "survivor-manager-registry-order",
+      scenario,
+      mode,
+    ],
+    { encoding: "utf8" },
+  );
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+  expect(result.stdout.trim().split("\n").filter(Boolean)).toEqual(
+    scenario === "legacy-operator-state"
+      ? [
+          "registry=baseline-registry",
+          "registry=candidate-registry",
+          "schema-snapshot",
+          ...(mode === "auto-auth"
+            ? ["manager=candidate-registry", "service=candidate-registry"]
+            : []),
+        ]
+      : scenario === "base"
+        ? ["registry=candidate-registry"]
+        : [],
+  );
+});
+
+it.each([
   { scenario: "base", mode: "manual" },
   { scenario: "base", mode: "auto-auth" },
   { scenario: "sqlite-volume", mode: "manual" },

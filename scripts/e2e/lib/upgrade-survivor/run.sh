@@ -1897,6 +1897,7 @@ run_plugin_fixture_phase configure-plugin-registry configure_plugin_registry
 if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase prepare-schema-expectation prepare_schema_expectation
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+    phase prepare-baseline-update-manager install_update_restart_systemctl_shim
     phase prepare-baseline-update-service run_update_restart_probe_gateway start 18789 "$COMMAND_TIMEOUT"
   fi
 fi
