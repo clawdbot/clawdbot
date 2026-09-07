@@ -745,6 +745,8 @@ describe("prepareChatSendUserTurn", () => {
       { role: "user", content: "more" },
       { role: "assistant", content: "ack" },
     ] as unknown as Parameters<typeof pruneProcessedHistoryImages>[0];
+    expect(pruneProcessedHistoryImages(history)).toBeNull();
+    history.push({ role: "user", content: "next turn", timestamp: 5 });
     const pruned = pruneProcessedHistoryImages(history);
     const first = pruned?.[0] as unknown as Record<string, unknown> | undefined;
     expect(first?.content).toBe(
@@ -849,6 +851,8 @@ describe("prepareChatSendUserTurn", () => {
         { role: "user", content: "more" },
         { role: "assistant", content: "ack" },
       ] as unknown as Parameters<typeof pruneProcessedHistoryImages>[0];
+      expect(pruneProcessedHistoryImages(history)).toBeNull();
+      history.push({ role: "user", content: "next turn", timestamp: 5 });
       const pruned = pruneProcessedHistoryImages(history);
       const first = pruned?.[0] as unknown as Record<string, unknown> | undefined;
       expect(first?.content).toBe(

@@ -206,6 +206,9 @@ the summed tokens as one large request. Provider-billed totals, including zero,
 take precedence over catalog estimates and remain visible even when token counts
 are unavailable. Unknown token counts are not inferred from a billed amount.
 
+Transcript reports preserve valid recorded per-call totals and allocations, including priority/flex adjustments, and use current catalog pricing only for missing costs or unknown-price zero placeholders.
+Anthropic fast-mode estimates multiply base and tier rates alike, preserving tier thresholds and mixed 5-minute/1-hour cache-write pricing.
+
 Omitting `cost`, or setting it to `{}`, inherits the catalog pricing schedule.
 Explicit flat or all-zero model prices do not inherit a catalog tier schedule.
 Omitted flat-rate fields can still inherit catalog defaults. An explicit

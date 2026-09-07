@@ -142,7 +142,8 @@ openclaw tui
 
 Expect the TUI to reach `wss://gateway.example` and show `connected`. A first
 connection may report `device pairing required`; approve it in the Control UI under
-Settings → Devices, or run `openclaw devices approve --latest` on the Gateway host.
+Settings → Devices, or run `openclaw devices approve --latest` on the Gateway host
+to preview the request, then rerun the approval command it prints.
 
 Reaching the Gateway's own pairing prompt is itself the proof that Access was
 satisfied — an unauthenticated request never gets that far.

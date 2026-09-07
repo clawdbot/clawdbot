@@ -3,9 +3,9 @@ import type { messagingApi } from "@line/bot-sdk";
 import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import {
-  adaptMessagePresentationForChannel,
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
+  renderPresentationForDelivery,
   resolveMessagePresentationButtonAction,
   resolveMessagePresentationOptionAction,
   type MessagePresentation,
@@ -154,10 +154,7 @@ function toLineAction(button: MessagePresentationButton): Action | undefined {
   return undefined;
 }
 
-export function renderLinePresentation(
-  payload: ReplyPayload,
-  presentation: MessagePresentation,
-): ReplyPayload | null {
+export function renderLinePresentation(payload: ReplyPayload, presentation: MessagePresentation) {
   const hasCard = presentation.blocks.some(
     (block) => block.type === "buttons" && block.buttons.length > 0,
   );
@@ -240,37 +237,25 @@ export function renderLinePresentation(
  * replies the plugin delivers itself reach delivery with the controls still
  * portable. Preparing them here keeps both LINE delivery paths on one rendering.
  */
-export function prepareLineReplyPayload(payload: ReplyPayload): ReplyPayload {
-  const presentation = normalizeMessagePresentation(payload.presentation);
-  if (!presentation) {
+export async function prepareLineReplyPayload(payload: ReplyPayload): Promise<ReplyPayload> {
+  if (!normalizeMessagePresentation(payload.presentation)) {
     return payload;
   }
-  const { presentation: _presentation, presentationTextMode, ...rest } = payload;
-  // "fallback" text already renders these controls as prose; native ones replace it.
-  const usesFallbackText = presentationTextMode === "fallback" && Boolean(rest.text?.trim());
-  const rendered = renderLinePresentation(
-    usesFallbackText ? { ...rest, text: undefined } : rest,
-    adaptMessagePresentationForChannel({
-      presentation,
-      capabilities: LINE_PRESENTATION_CAPABILITIES,
-    }),
+  const usesFallbackText =
+    payload.presentationTextMode === "fallback" && Boolean(payload.text?.trim());
+  return renderPresentationForDelivery(
+    {
+      presentationCapabilities: LINE_PRESENTATION_CAPABILITIES,
+      renderPresentation: (adapted) => {
+        const rendered = renderLinePresentation(adapted, adapted.presentation);
+        // Quick replies have no Flex body to replace the author's fallback prose.
+        return rendered && usesFallbackText && rendered.channelData.line.flexMessage === undefined
+          ? { ...rendered, text: payload.text }
+          : rendered;
+      },
+    },
+    { ...payload, presentationTextMode: usesFallbackText ? "fallback" : undefined },
   );
-  if (rendered) {
-    // Only a Flex body replaces the fallback prose. Without a card the renderer
-    // rebuilds the words it could not draw, and the author's own fallback text
-    // is the better rendering of the same facts, so it wins.
-    const renderedLine = isRecord(rendered.channelData?.line) ? rendered.channelData.line : {};
-    return usesFallbackText && renderedLine.flexMessage === undefined
-      ? { ...rendered, text: rest.text }
-      : rendered;
-  }
-  // LINE renders these controls natively or not at all; keep their labels visible.
-  return {
-    ...rest,
-    text: usesFallbackText
-      ? (rest.text ?? renderMessagePresentationFallbackText({ presentation }))
-      : renderMessagePresentationFallbackText({ text: rest.text, presentation }),
-  };
 }
 
 const toSlug = (value: string): string =>

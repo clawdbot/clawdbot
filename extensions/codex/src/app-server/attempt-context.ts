@@ -339,6 +339,7 @@ export function buildCodexSystemPromptReport(params: {
   workspaceDir: string;
   developerInstructions: string;
   workspaceBootstrapContext: CodexWorkspaceBootstrapContext;
+  omitWorkspaceReferences?: boolean;
   skillsPrompt: string;
   tools: CodexDynamicToolSpec[];
 }): CodexSystemPromptReport {
@@ -370,6 +371,7 @@ export function buildCodexSystemPromptReport(params: {
     injectedWorkspaceFiles: buildCodexBootstrapInjectionStats({
       bootstrapFiles: params.workspaceBootstrapContext.bootstrapFiles,
       injectedFiles: params.workspaceBootstrapContext.promptContextFiles ?? [],
+      omitReferenceFiles: params.omitWorkspaceReferences,
       developerInstructionFiles: [
         ...(params.workspaceBootstrapContext.threadDeveloperInstructionFiles ?? []),
         ...(params.workspaceBootstrapContext.turnScopedDeveloperInstructionFiles ?? []),
@@ -471,6 +473,7 @@ function stableJsonHash(value: JsonValue): string {
 function buildCodexBootstrapInjectionStats(params: {
   bootstrapFiles: CodexBootstrapFile[];
   injectedFiles: EmbeddedContextFile[];
+  omitReferenceFiles?: boolean;
   developerInstructionFiles?: EmbeddedContextFile[];
   memoryToolRoutedBootstrapFiles?: CodexBootstrapFile[];
   memoryToolRouted?: boolean;
@@ -514,8 +517,12 @@ function buildCodexBootstrapInjectionStats(params: {
         truncated: null,
       };
     }
-    const injectedChars = memoryToolRoutedFile ? 0 : (injected?.length ?? 0);
-    const truncated = memoryToolRoutedFile ? false : !file.missing && injectedChars < rawChars;
+    const omitted =
+      memoryToolRoutedFile ||
+      (params.omitReferenceFiles &&
+        readCodexIndexedContextFileContent(injectedIndex, pathValue, fileName) !== undefined);
+    const injectedChars = omitted ? 0 : (injected?.length ?? 0);
+    const truncated = omitted ? false : !file.missing && injectedChars < rawChars;
     return {
       name: displayName,
       path: pathValue,

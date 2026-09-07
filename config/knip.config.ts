@@ -3,6 +3,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { createManagedHandoffBuildConfig } from "../scripts/lib/managed-handoff-build-config.mts";
 import { runtimeProcessBuildEntries } from "../scripts/lib/runtime-process-build-entries.mts";
 import { controlUiSource } from "../src/plugins/package-manifest.js";
 
@@ -43,6 +44,8 @@ const repositoryScriptEntries = [
   "scripts/docker-e2e.mts!",
   // Docker and package-install harnesses invoke this verifier by path.
   "scripts/docker/verify-fs-safe-native.mjs!",
+  // Reusable Docker workflows invoke this selector from a trusted sparse checkout.
+  "scripts/resolve-fs-safe-native-contract.mjs!",
   "scripts/e2e/lib/browser-cdp-snapshot/assert-snapshot.mjs!",
   "scripts/e2e/lib/browser-cdp-snapshot/fixture-server.mjs!",
   "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs!",
@@ -109,6 +112,10 @@ const repositoryScriptEntries = [
   "scripts/lib/vitest-resource-reporter.mts!",
   // Invoked by scripts/lib/live-docker-stage.sh during container validation.
   "scripts/live-docker-normalize-config.ts!",
+  // Mantis controllers launch these observers and bridge by path inside isolated runtimes.
+  "scripts/mantis/observe-request-telegram-qa.mts!",
+  "scripts/mantis/observe-request-web-ui.mts!",
+  "scripts/mantis/telegram-proof-bridge.mjs!",
   "scripts/mcp-code-mode-gateway-e2e.ts!",
   "scripts/openclaw-release-clawhub-plan.ts!",
   "scripts/openclaw-release-clawhub-runtime-state.ts!",
@@ -177,9 +184,10 @@ const rootEntries = [
   ...repositoryScriptEntries,
   ...listScriptShimEntries(),
   // Runtime launchers resolve these by URL rather than a static import edge.
-  ...Object.values(runtimeProcessBuildEntries).map(
-    (source) => `${path.relative(".", source).replaceAll("\\", "/")}!`,
-  ),
+  ...Object.values({
+    ...runtimeProcessBuildEntries,
+    ...createManagedHandoffBuildConfig().entry,
+  }).map((source) => `${path.relative(".", source).replaceAll("\\", "/")}!`),
   // Knip loads these audit configurations directly by command-line path.
   "config/knip.config.ts!",
   "config/knip.all-exports.config.ts!",
@@ -241,6 +249,8 @@ const rootEntries = [
   "src/mcp/plugin-tools-serve.ts!",
   // Dedicated tsdown entry exercised against built plugin singletons.
   "src/plugins/build-smoke-entry.ts!",
+  // Required metadata readers load this tsdown entry by computed source/dist path.
+  "src/plugins/plugin-metadata-readers.runtime.ts!",
   // Released Gateways still import this stable entry after an on-disk update.
   "src/gateway/plugin-channel-reload-targets.ts!",
   // Package-script owners invoke these generated-artifact modules directly.

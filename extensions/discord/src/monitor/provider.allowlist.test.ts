@@ -29,6 +29,23 @@ describe("resolveDiscordAllowlistConfig", () => {
     );
   });
 
+  it("applies numeric guild and channel policy without directory resolution", async () => {
+    const guildEntries = {
+      "111": { users: ["333"], channels: { "222": { allow: true } } },
+      "444": { users: ["555"] },
+    };
+    const result = await resolveDiscordAllowlistConfig({
+      token: "synthetic-token",
+      guildEntries,
+      allowFrom: [],
+      discordConfig: {},
+      fetcher: vi.fn(),
+      runtime: createNonExitingRuntimeEnv(),
+    });
+    expect(result.guildEntries).toEqual(guildEntries);
+    expect(resolveChannelsModule.resolveDiscordChannelAllowlist).not.toHaveBeenCalled();
+  });
+
   it("canonicalizes resolved user names to ids in runtime config", async () => {
     const runtime = createNonExitingRuntimeEnv();
     const result = await resolveDiscordAllowlistConfig({
@@ -95,22 +112,6 @@ describe("resolveDiscordAllowlistConfig", () => {
   it("groups resolved discord channel aliases under one target line", async () => {
     vi.spyOn(resolveChannelsModule, "resolveDiscordChannelAllowlist").mockResolvedValueOnce([
       {
-        input: "1456350064065904867/1464953333713473657",
-        resolved: true,
-        guildId: "1456350064065904867",
-        guildName: "Friends of the Crustacean 🦞🤝",
-        channelId: "1464953333713473657",
-        channelName: "dev",
-      },
-      {
-        input: "1456350064065904867/1456744319972282449",
-        resolved: true,
-        guildId: "1456350064065904867",
-        guildName: "Friends of the Crustacean 🦞🤝",
-        channelId: "1456744319972282449",
-        channelName: "maintainers",
-      },
-      {
         input: "friends-of-the-crustacean/1464953333713473657",
         resolved: true,
         guildId: "1456350064065904867",
@@ -122,7 +123,7 @@ describe("resolveDiscordAllowlistConfig", () => {
 
     const runtime = createNonExitingRuntimeEnv();
 
-    await resolveDiscordAllowlistConfig({
+    const result = await resolveDiscordAllowlistConfig({
       token: "token",
       allowFrom: [],
       guildEntries: {
@@ -148,9 +149,10 @@ describe("resolveDiscordAllowlistConfig", () => {
       .join("\n");
     expect(logs.match(/1456350064065904867\/1464953333713473657/g)?.length).toBe(1);
     expect(logs).toContain("aliases:friends-of-the-crustacean/1464953333713473657");
-    expect(logs).toContain(
-      "1456350064065904867/1456744319972282449 (guild:Friends of the Crustacean 🦞🤝; channel:maintainers)",
-    );
+    expect(result.guildEntries?.["1456350064065904867"]?.channels).toEqual({
+      "1464953333713473657": {},
+      "1456744319972282449": {},
+    });
   });
 
   it("keeps user allowlist names unresolved unless name matching is enabled", async () => {

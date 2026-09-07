@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { NODE_WORKER_WORKSPACE_RETAIN_COMMAND } from "../../infra/node-commands.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES,
   NODE_WORKER_RETAIN_REQUEST_MAX_BYTES,
@@ -104,6 +105,7 @@ function createHarness(
     }>;
     node?: NodeWorkerSupervisorNodeProof;
     currentBundleStatus?: NodeWorkerBundleStatusObservation;
+    bundleRetention?: Parameters<typeof createNodeWorkspaceRetainCoordinator>[0]["bundleRetention"];
     additionalManifestRefs?: Parameters<
       typeof createNodeWorkspaceRetainCoordinator
     >[0]["additionalManifestRefs"];
@@ -151,6 +153,7 @@ function createHarness(
       list: () => (params.placements ?? [placement()]) as never,
       listPendingWorkspaceResults: () => params.pendingResults ?? [],
     } as Pick<WorkerSessionPlacementStore, "list" | "listPendingWorkspaceResults">,
+    bundleRetention: params.bundleRetention,
     additionalManifestRefs: params.additionalManifestRefs,
     warn,
   });
@@ -685,5 +688,133 @@ describe("node workspace retain coordinator", () => {
     } finally {
       await coordinator.stop();
     }
+  });
+
+  it("retains the current build without installing it or keeping unreferenced older builds", async () => {
+    const artifact = {
+      bundleHash: "c".repeat(64),
+      openclawVersion: "2026.8.10",
+      protocolFeatures: [],
+    };
+    const input = {
+      environments: [environment()],
+      placements: [placement()],
+      bundleRetention: {
+        currentBuild: async () => artifact,
+        isEnvironmentOwnedNode: () => false,
+      },
+      results: [
+        { applied: true, deleted: 0, hasMore: false, bundleGeneration: 1 },
+        { applied: true, deleted: 0, hasMore: false, bundleGeneration: 1 },
+        { applied: true, deleted: 1, hasMore: false, bundleGeneration: 1 },
+      ],
+    };
+    const { coordinator, invoke } = createHarness(input);
+    await coordinator.start();
+    await coordinator.schedule();
+    expect(invoke.mock.calls[1]?.[0].params).toMatchObject({
+      acknowledgedBundleGeneration: 1,
+      bundleHashes: ["b".repeat(64), artifact.bundleHash],
+      bundleStatusHash: artifact.bundleHash,
+    });
+    input.environments = [];
+    input.placements = [];
+    await coordinator.schedule();
+    expect(invoke.mock.calls[2]?.[0].params).toMatchObject({
+      acknowledgedBundleGeneration: 1,
+      bundleHashes: [artifact.bundleHash],
+      retain: [],
+    });
+    expect(invoke.mock.calls.map(([request]) => request.command)).toEqual([
+      NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
+      NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
+      NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
+    ]);
+    await coordinator.stop();
+  });
+
+  it("does not add the current-build retention pin to cloud-enrolled nodes", async () => {
+    const bundleRetention = {
+      currentBuild: vi.fn(),
+      isEnvironmentOwnedNode: () => true,
+    };
+    const { coordinator } = createHarness({
+      environments: [
+        environment({
+          nodeSetupId: "cloud-setup",
+          profileSnapshot: { executionMode: "remote-exec" },
+        }),
+      ],
+      bundleRetention,
+    });
+    await coordinator.start();
+    expect(bundleRetention.currentBuild).not.toHaveBeenCalled();
+    await coordinator.stop();
+  });
+
+  it("maintains a newly connected node while another node's retention is held", async () => {
+    const held = createDeferredCore();
+    const second = { ...node, nodeId: "node-2", connId: "connection-2" };
+    let nodes: NodeWorkerSupervisorNodeProof[] = [node];
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
+      if (request.node.nodeId === node.nodeId) {
+        await held.promise;
+      }
+      return {
+        ok: true,
+        payloadJSON: JSON.stringify({ applied: true, deleted: 0, hasMore: false }),
+      };
+    });
+    const transport: NodeWorkerSupervisorTransport = {
+      listCurrentNodes: async () => nodes,
+      hasCurrentRunner: () => true,
+      isCurrent: () => true,
+      invoke,
+    };
+    const coordinator = createNodeWorkspaceRetainCoordinator({
+      gatewayNamespace: "gateway-test",
+      environments: { list: () => [] },
+      placements: { list: () => [], listPendingWorkspaceResults: () => [] },
+      warn: vi.fn(),
+    });
+    coordinator.bindTransport(transport);
+    const first = coordinator.start();
+    try {
+      await vi.waitFor(() => expect(invoke).toHaveBeenCalledOnce());
+      nodes = [node, second];
+      await coordinator.schedule(second.nodeId);
+      expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ node: second }));
+    } finally {
+      held.resolve();
+      await first;
+      await coordinator.stop();
+    }
+  });
+
+  it("rechecks environment ownership after resolving the current build before retaining it", async () => {
+    const artifact = {
+      bundleHash: "c".repeat(64),
+      openclawVersion: "2026.8.10",
+      protocolFeatures: [],
+    };
+    const held = createDeferredCore<typeof artifact>();
+    let environmentOwned = false;
+    const bundleRetention = {
+      isEnvironmentOwnedNode: () => environmentOwned,
+      currentBuild: vi.fn(() => held.promise),
+    };
+    const { coordinator, invoke } = createHarness({
+      environments: [],
+      placements: [],
+      bundleRetention,
+    });
+    const startup = coordinator.start();
+    await vi.waitFor(() => expect(bundleRetention.currentBuild).toHaveBeenCalledOnce());
+    environmentOwned = true;
+    held.resolve(artifact);
+    await startup;
+    expect(invoke.mock.calls[0]?.[0].params).toMatchObject({ bundleHashes: [] });
+    expect(invoke.mock.calls[0]?.[0].params).not.toHaveProperty("bundleStatusHash");
+    await coordinator.stop();
   });
 });

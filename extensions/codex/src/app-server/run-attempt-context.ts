@@ -107,6 +107,12 @@ export async function prepareCodexAttemptContext(
     sessionKey: contextSessionKey,
     sessionId: params.sessionId,
     workspaceDir: params.workspaceDir,
+    // Native-owned models are confirmed after startup; hooks must not publish
+    // stale bindings or private transport overrides as the selected model.
+    ...(!usesSupervisionConnection &&
+    connection.mutable.startupBinding?.preserveNativeModel !== true
+      ? { modelProviderId: params.provider, modelId: params.modelId }
+      : {}),
     trigger: params.trigger,
     ...buildAgentHookContextChannelFields({
       sessionKey: contextSessionKey,
@@ -191,16 +197,20 @@ export async function prepareCodexAttemptContext(
     }),
     agentWorkspaceDeveloperInstructions,
   );
-  const openClawPromptContext = buildCodexOpenClawPromptContext({
-    params: runtimeParams,
-    workspacePromptContext: workspaceBootstrapContext.promptContext,
-    watchedSessionsContext: buildCodexWatchedSessionsContext({
-      attempt: runtimeParams,
-      dynamicTools: toolBridge.availableSpecs,
-      sessionKey: contextSessionKey,
-      sandboxed: sandbox?.enabled === true,
-    }),
+  const watchedSessionsContext = buildCodexWatchedSessionsContext({
+    attempt: runtimeParams,
+    dynamicTools: toolBridge.availableSpecs,
+    sessionKey: contextSessionKey,
+    sandboxed: sandbox?.enabled === true,
   });
+  const buildOpenClawPromptContext = (includeWorkspaceReferences: boolean) =>
+    buildCodexOpenClawPromptContext({
+      params: runtimeParams,
+      workspacePromptContext: includeWorkspaceReferences
+        ? workspaceBootstrapContext.promptContext
+        : undefined,
+      watchedSessionsContext,
+    });
   const promptState = {
     promptText: params.prompt,
     promptContextRange: undefined as CodexProjectedContextRange | undefined,
@@ -236,7 +246,7 @@ export async function prepareCodexAttemptContext(
     workspaceBootstrapContext,
     agentWorkspaceDeveloperInstructions,
     baseDeveloperInstructions,
-    openClawPromptContext,
+    buildOpenClawPromptContext,
     skillsInstructions,
     refreshableInstructions,
     promptState,

@@ -2,21 +2,24 @@
 summary: "OpenClaw LINE channel plugin for LINE Bot API chats."
 read_when:
   - You are installing, configuring, or auditing the line plugin
-title: "LINE plugin"
+title: "LINE plugin reference"
 ---
 
-# LINE plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 OpenClaw LINE channel plugin for LINE Bot API chats.
 
 ## Distribution
 
 - Package: `@openclaw/line`
-- Install route: npm; ClawHub
+- Install route: npm or ClawHub
 
 ## Surface
 
-channels: `line`
+- Channels: `line`
 
 ## Related docs
 

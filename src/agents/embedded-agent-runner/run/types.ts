@@ -366,6 +366,8 @@ export type EmbeddedRunAttemptResult = {
     codeModeSuspended?: boolean;
   }>;
   acceptedSessionSpawns?: AcceptedSessionSpawn[];
+  /** Core successfully settled this requester's explicit yield in the registry. */
+  requesterContinuationSettled?: true;
   /** This attempt accepted work whose future output has a runtime-owned delivery path. */
   runtimeContinuationStarted?: boolean;
   lastAssistant: AssistantMessage | undefined;

@@ -137,7 +137,8 @@ export function proposalFromManifest(
 ): SkillWorkshopProposal {
   const updatedAt = parseDateMs(entry.updatedAt);
   const createdAt = parseDateMs(entry.createdAt);
-  const previousIsCurrent = previous?.updatedAt === updatedAt;
+  const previousIsCurrent =
+    previous?.updatedAt === updatedAt && !entry.degradedState && !previous.degradedState;
   return {
     key: entry.id,
     kind: entry.kind,
@@ -147,9 +148,16 @@ export function proposalFromManifest(
     body: previousIsCurrent ? previous.body : "",
     bodyLoaded: previousIsCurrent ? previous.bodyLoaded : false,
     status: entry.status,
+    degradedState: entry.degradedState,
     ...(previousIsCurrent && previous.origin ? { origin: previous.origin } : {}),
     version: previousIsCurrent ? previous.version : 1,
-    revisionHash: previousIsCurrent ? previous.revisionHash : null,
+    // A missing draft can still be rejected against its recorded revision.
+    // Usable drafts require inspection before a decision can capture their hash.
+    revisionHash: entry.degradedState
+      ? (entry.revisionHash ?? null)
+      : previousIsCurrent
+        ? previous.revisionHash
+        : null,
     ...(previousIsCurrent && previous.evaluation ? { evaluation: previous.evaluation } : {}),
     createdAt,
     updatedAt,

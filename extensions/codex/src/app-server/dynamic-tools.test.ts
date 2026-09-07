@@ -65,6 +65,17 @@ const COMPUTER_FRAME_IMAGE =
 const REPLACEMENT_FRAME_IMAGE =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
 
+// Synthetic, non-usable credential fixtures for model-visible redaction coverage.
+const SYNTHETIC_BEARER_CREDENTIAL = "bearer-model-visible-credential-1234567890";
+const SYNTHETIC_ACCESS_TOKEN =
+  "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzeW50aGV0aWMifQ.c3ludGhldGljLXNpZ25hdHVyZQ";
+const SYNTHETIC_CREDENTIAL_REPORT = [
+  "Deployment finished in 42s.",
+  `Authorization: Bearer ${SYNTHETIC_BEARER_CREDENTIAL}`,
+  `https://example.test/callback?access_token=${SYNTHETIC_ACCESS_TOKEN}`,
+  "API_TOKEN = computeToken()",
+].join("\n");
+
 function frameImageIdentity(data: string, mimeType = "image/png") {
   return createHash("sha256")
     .update(JSON.stringify([mimeType, data]))
@@ -1877,6 +1888,146 @@ describe("createCodexDynamicToolBridge", () => {
     expect(text).toContain("OpenClaw truncated dynamic tool result");
     expect(text).toContain("original 20000 chars");
     expect(text).not.toContain("b".repeat(10_000));
+  });
+
+  it.each([
+    { label: "successful", middleware: false, details: {} },
+    { label: "successful with result middleware", middleware: true, details: {} },
+    { label: "failed", middleware: false, details: { ok: false } },
+    { label: "failed with result middleware", middleware: true, details: { ok: false } },
+  ])(
+    "redacts credentials from $label dynamic tool content items",
+    async ({ middleware, details }) => {
+      if (middleware) {
+        const registry = createEmptyPluginRegistry();
+        const passthrough = async (event: { result: AgentToolResult<unknown> }) => ({
+          result: event.result,
+        });
+        registry.agentToolResultMiddlewares.push({
+          pluginId: "passthrough-result",
+          pluginName: "Passthrough result",
+          rawHandler: passthrough,
+          handler: passthrough,
+          runtimes: ["codex"],
+          source: "test",
+        });
+        setActivePluginRegistry(registry);
+      }
+      const bridge = createBridgeWithToolResult(
+        "credential_lookup",
+        textToolResult(SYNTHETIC_CREDENTIAL_REPORT, details),
+      );
+
+      const result = await bridge.handleToolCall({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-credential",
+        namespace: null,
+        tool: "credential_lookup",
+        arguments: {},
+      });
+
+      const firstItem = result.contentItems[0];
+      if (firstItem?.type !== "inputText" || typeof firstItem.text !== "string") {
+        throw new Error("expected inputText tool result");
+      }
+      expect(firstItem.text).not.toContain(SYNTHETIC_BEARER_CREDENTIAL);
+      expect(firstItem.text).not.toContain(SYNTHETIC_ACCESS_TOKEN);
+      expect(firstItem.text).toContain("Deployment finished in 42s.");
+      expect(firstItem.text).toContain("API_TOKEN = computeToken()");
+    },
+  );
+
+  it("redacts credentials split across adjacent dynamic tool text items", async () => {
+    const bridge = createBridgeWithToolResult("credential_lookup", {
+      content: [
+        { type: "text", text: "Deployment finished.\nAuthorization: Bearer " },
+        { type: "text", text: SYNTHETIC_BEARER_CREDENTIAL },
+        { type: "text", text: "\nArtifacts remain available." },
+      ],
+      details: {},
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-split-credential",
+      namespace: null,
+      tool: "credential_lookup",
+      arguments: {},
+    });
+
+    const text = result.contentItems
+      .map((item) => (item.type === "inputText" && typeof item.text === "string" ? item.text : ""))
+      .join("");
+    expect(text).not.toContain(SYNTHETIC_BEARER_CREDENTIAL);
+    expect(text).toContain("Authorization: Bearer");
+    expect(text).toContain("Deployment finished.");
+    expect(text).toContain("Artifacts remain available.");
+  });
+
+  it("preserves Unicode characters when redaction repartitions adjacent text items", async () => {
+    const bridge = createBridgeWithToolResult("credential_lookup", {
+      content: [
+        { type: "text", text: "Authorization: Bearer abcdefg\n" },
+        { type: "text", text: "123😀tail" },
+      ],
+      details: {},
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-split-unicode",
+      namespace: null,
+      tool: "credential_lookup",
+      arguments: {},
+    });
+
+    const textItems = result.contentItems.flatMap((item) =>
+      item.type === "inputText" && typeof item.text === "string" ? [item.text] : [],
+    );
+    const unpairedSurrogate =
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+    expect(textItems).toHaveLength(2);
+    expect(textItems.every((text) => !unpairedSurrogate.test(text))).toBe(true);
+    expect(textItems.join("")).toBe("Authorization: Bearer ***\n123😀tail");
+  });
+
+  it("redacts a credential that crosses the dynamic tool result budget", async () => {
+    const maxChars = 16_000;
+    const totalChars = 20_000;
+    const noticeText = `...(OpenClaw truncated dynamic tool result: original ${totalChars} chars, weighted budget ${maxChars}; rerun with narrower args.)`;
+    const textBudget = maxChars - noticeText.length - 1;
+    // Newlines bound the credential token so the filler stays outside its mask.
+    const marker = `\nAuthorization: Bearer ${SYNTHETIC_BEARER_CREDENTIAL}\n`;
+    // Place the credential so an unsanitized slice would cut through it and strand a fragment.
+    const prefix = "a".repeat(textBudget - 45);
+    const suffix = "z".repeat(totalChars - prefix.length - marker.length);
+    const bridge = createBridgeWithToolResult("credential_lookup", {
+      content: [
+        { type: "text", text: `${prefix}${marker}${suffix}` },
+        { type: "image", mimeType: "image/png", data: COMPUTER_FRAME_IMAGE },
+      ],
+      details: {},
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-credential-budget",
+      namespace: null,
+      tool: "credential_lookup",
+      arguments: {},
+    });
+
+    const text = result.contentItems
+      .map((item) => (item.type === "inputText" && typeof item.text === "string" ? item.text : ""))
+      .join("");
+    expect(text).not.toContain(SYNTHETIC_BEARER_CREDENTIAL);
+    expect(text).not.toContain("bearer-model-visible");
+    expect(text).toContain("OpenClaw truncated dynamic tool result");
+    expect(result.contentItems).toContainEqual(expect.objectContaining({ type: "inputImage" }));
   });
 
   it("shares weighted budget across mixed text blocks while preserving images", async () => {
@@ -3718,6 +3869,60 @@ describe("createCodexDynamicToolBridge", () => {
     });
   });
 
+  it("preserves successful execution when its observer throws an unreadable error", async () => {
+    const observerError = Object.defineProperty(new Error(), "message", {
+      get() {
+        throw new Error("observer message getter escaped");
+      },
+    });
+    const onAgentToolResult = vi.fn(() => {
+      throw observerError;
+    });
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+    warn.mockClear();
+    const rawResult = textToolResult("committed effect", { receipt: "effect-1" });
+    const execute = vi.fn(async () => rawResult);
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "exec", execute })],
+      signal: new AbortController().signal,
+    });
+    const outcome = await bridge
+      .handleToolCall(
+        {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "observer-success",
+          namespace: null,
+          tool: "exec",
+          arguments: { command: "write synthetic effect" },
+        },
+        { onAgentToolResult },
+      )
+      .then(
+        (result) => ({ result }),
+        (error: unknown) => ({ error }),
+      );
+    expect(execute).toHaveBeenCalledOnce();
+    expect(outcome).toMatchObject({
+      result: {
+        success: true,
+        diagnosticTerminalType: "completed",
+        executionStarted: true,
+        sideEffectEvidence: true,
+        contentItems: [{ type: "inputText", text: "committed effect" }],
+      },
+    });
+    expect(onAgentToolResult).toHaveBeenCalledExactlyOnceWith({
+      toolName: "exec",
+      result: rawResult,
+      isError: false,
+    });
+    expect(rawResult).toEqual(textToolResult("committed effect", { receipt: "effect-1" }));
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "onAgentToolResult handler failed: tool=exec error=Error",
+    );
+  });
+
   it("reports thrown dynamic tool failures to the private result observer", async () => {
     const onAgentToolResult = vi.fn();
     const bridge = createCodexDynamicToolBridge({
@@ -4718,12 +4923,26 @@ describe("createCodexDynamicToolBridge", () => {
       { onAgentToolResult },
     );
 
-    expect(result).toMatchObject({
+    const protocolResponse = {
       success: false,
-      diagnosticTerminalReason: "failed",
-      contentItems: [{ type: "inputText", text: "OpenClaw dynamic tool call failed." }],
+      contentItems: [{ type: "inputText", text: "Error" }],
+    };
+    expect(result.diagnosticTerminalReason).toBe("failed");
+    expect(result).toMatchObject({
+      ...protocolResponse,
+      diagnosticTerminalType: "error",
+      executionStarted: true,
+      sideEffectEvidence: true,
     });
-    expect(onAgentToolResult).toHaveBeenCalledOnce();
+    expect(toCodexDynamicToolProtocolResponse(result)).toEqual(protocolResponse);
+    expect(onAgentToolResult).toHaveBeenCalledExactlyOnceWith({
+      toolName: "exec",
+      result: {
+        content: [{ type: "text", text: "Error" }],
+        details: { status: "failed", error: "Error" },
+      },
+      isError: true,
+    });
   });
 
   it("preserves report-only approval blocks for the outer lifecycle owner", async () => {

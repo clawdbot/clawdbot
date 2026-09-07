@@ -91,6 +91,17 @@ External-plugin compatibility work follows this order:
 
 ### Retained helper contracts
 
+Discord and llama.cpp retain their declared OpenClaw 2026.9.2 host support.
+They use the newer prepared-expiry, DM-policy refinement, and live-catalog outcome
+helpers when those exports are available, with plugin-local fallbacks for the
+2026.9.2 SDK. The fallbacks preserve Discord's timestamp validation, idle-first
+expiry ties, and root/account DM-policy validation through the older SDK
+validators, and llama.cpp's ready, authentication-rejected, and unavailable catalog outcomes
+with credential-profile attribution. They do not retry or suppress errors from
+an available newer helper. Remove these fallbacks only when the declared plugin
+API floor no longer includes 2026.9.2; test built plugin imports against that
+minimum host before changing unconditional SDK imports.
+
 Retained compatibility entrypoints keep their shipped caller names:
 `inbound-envelope` uses `resolveStorePath`, `provider-catalog-runtime` exports
 `resolvePluginProviders`, and `agent-runtime`'s
@@ -142,6 +153,18 @@ including empty results without range metadata. Only an explicit
 `status: "not_found"` reports absence. New producers must emit that status for
 missing files; registered-input normalization remains available through the
 next Plugin SDK major.
+
+### Config record migrations
+
+Use `mergeMissing(canonical, legacy)` from
+`openclaw/plugin-sdk/runtime-doctor-migrations` to fill undefined fields without
+replacing authored values. It fills existing nested records in place and keeps
+authored arrays, nulls, and scalars. Missing values are assigned by reference;
+callers own any cloning needed to isolate the migration from its input.
+
+The helper skips undefined source values and `__proto__`, `prototype`, and
+`constructor` keys at each level it merges. It does not recursively sanitize
+newly assigned subtrees.
 
 ### Plugin state migration declarations
 
@@ -317,6 +340,11 @@ media fields, payload builders, hook metadata aliases, and media template
 names. Its approved `removeAfter` date is **2026-10-01** (two release trains
 after the facts-first replacements shipped). Removal additionally requires a
 clean published-plugin artifact sweep at that time; migrate before the date.
+
+The unused `buildChannelTurnMediaPayload` alias has been removed from
+`openclaw/plugin-sdk/channel-inbound`. Its canonical
+`buildChannelInboundMediaPayload` export remains available for the compatibility
+window above. New ingress code should pass ordered media facts directly.
 
 For channel ingress, replace singular/plural `MediaPath`, `MediaUrl`,
 `MediaType`, `MediaPaths`, `MediaUrls`, `MediaTypes`,

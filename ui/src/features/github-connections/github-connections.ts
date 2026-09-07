@@ -1,6 +1,7 @@
 import { consume } from "@lit/context";
 import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
+import { pathForAgentPanel } from "../../app-route-paths.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -24,6 +25,7 @@ import {
   renderGitHubConnectionSetup,
   renderGitHubDetails,
   renderGitHubHealth,
+  renderGitHubUnloadedStatus,
 } from "./github-identity-view.ts";
 
 /** Profile credentials have their own read-scoped lifecycle, independent of users.self edits. */
@@ -173,6 +175,11 @@ export class GitHubConnections extends OpenClawLightDomElement {
   override render() {
     const personal = this.personal.personal;
     const system = this.system.status?.selected.identity ?? this.personal.system;
+    const agentId = this.context.agents.state.agentsList?.defaultId;
+    const agent = this.context.agents.state.agentsList?.agents?.find(
+      (entry) => entry.id === agentId,
+    );
+    const effective = this.system.status?.effective ?? null;
     const active = this.purpose === "personal" ? this.personal : this.system;
     const showSetup =
       this.setupOpen || this.personal.authorizationActive || this.system.authorizationActive;
@@ -187,9 +194,7 @@ export class GitHubConnections extends OpenClawLightDomElement {
         ? t("githubConnections.reconnectRequired")
         : connected
           ? t("githubConnections.connected")
-          : personal
-            ? t("githubConnections.disconnected")
-            : t("githubConnections.notLoaded");
+          : t("githubConnections.disconnected");
     return html`<div id=${PROFILE_SETTINGS_TARGET_IDS.githubConnections}>
       ${renderSettingsSection(
         {
@@ -202,7 +207,7 @@ export class GitHubConnections extends OpenClawLightDomElement {
                     ?disabled=${this.locked || (!this.profileId && !this.system.status)}
                     @click=${() => this.openSetup(this.profileId ? "personal" : "system")}
                   >
-                    ${t("agentTools.githubConnect")}
+                    ${t("githubConnections.manage")}
                   </button>
                   <button
                     class="btn btn--sm"
@@ -225,12 +230,16 @@ export class GitHubConnections extends OpenClawLightDomElement {
                     "githubConnections.personalDescription",
                   )}`
                 : t("githubConnections.unboundDescription"),
-              control: html`${renderSettingsStatus({
-                kind: reconnectRequired ? "warn" : connected ? "ok" : "muted",
-                label: personalLabel,
-              })}
+              control: html`${
+                this.profileId && !personal
+                  ? renderGitHubUnloadedStatus(this.personal)
+                  : renderSettingsStatus({
+                      kind: reconnectRequired ? "warn" : connected ? "ok" : "muted",
+                      label: personalLabel,
+                    })
+              }
               ${
-                this.profileId && this.canRead
+                this.profileId && this.canRead && personal
                   ? html`<button
                       class="btn btn--sm"
                       ?disabled=${this.locked}
@@ -252,7 +261,10 @@ export class GitHubConnections extends OpenClawLightDomElement {
               description: html`${system?.account ? `@${system.account.login} · ` : ""}${t(
                 "githubConnections.systemDescription",
               )}`,
-              control: html`${renderGitHubHealth(system)}${
+              control: html`${renderGitHubHealth(system, {
+                loading: this.system.loading || this.personal.loading,
+                error: this.system.error ?? this.personal.error,
+              })}${
                 this.canAdmin
                   ? html`<button
                       class="btn btn--sm"
@@ -265,6 +277,35 @@ export class GitHubConnections extends OpenClawLightDomElement {
               }`,
             })}
           </div>
+          ${
+            this.canAdmin && agentId
+              ? html`<div data-github-connection="agent">
+                  ${renderSettingsRow({
+                    title: t("githubConnections.agentFor", {
+                      agent: agent?.identity?.name ?? agent?.name ?? agentId,
+                    }),
+                    description: html`${effective?.account ? `@${effective.account.login} · ` : ""}${
+                        effective
+                          ? t(
+                              effective.source === "agent-override"
+                                ? "githubConnections.agentOverride"
+                                : "githubConnections.system",
+                            )
+                          : ""
+                      }<br />${t("githubConnections.agentDescription")}`,
+                    control: html`${renderGitHubHealth(effective, this.system)}<button
+                        class="btn btn--sm"
+                        @click=${() =>
+                          this.context.navigate("agents", {
+                            pathname: pathForAgentPanel(agentId, "tools", this.context.basePath),
+                          })}
+                      >
+                        ${t("githubConnections.viewAgent")}
+                      </button>`,
+                  })}
+                </div>`
+              : nothing
+          }
           ${renderGitHubConnectionError(
             this.personal.error ?? this.system.error,
             html`<button

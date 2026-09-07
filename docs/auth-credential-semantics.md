@@ -91,10 +91,21 @@ catalog discovery. Configured subscription modes remain attached to direct
 credentials, and successful OAuth preparation supplies the resolved current token
 to its catalog consumer rather than the captured store's older token.
 
+Environment-backed profiles keep usable values from the discovery environment,
+including cold command and worker paths. When that material is missing, only the
+selected profile's activated snapshot may supply it; otherwise discovery reports
+`unavailable` before catalog HTTP. Reference names are never sent as credentials
+or replaced with another profile's credential. On a Gateway, restore the secret
+and run `openclaw secrets reload` before retrying discovery.
+
 When every eligible OAuth candidate fails preparation, discovery reports
 `unavailable` with the attempted profile identities instead of treating the
 provider as unconfigured. Compatible prior inventory remains available. A usable
 fallback credential still supplies its own catalog result.
+
+When a catalog deadline expires, late provider results are discarded before
+finalization. An already-started hook or OAuth refresh may finish, including
+persisting a rotated credential, but cannot publish to the expired catalog run.
 
 API-key-oriented and full-auth catalog callbacks retain their existing source
 priorities. Plugins must keep credential bytes and their authentication mode from

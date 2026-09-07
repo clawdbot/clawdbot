@@ -283,6 +283,30 @@ describe("cron run scope suffix parsing", () => {
   });
 });
 
+describe("stored session grammar boundaries", () => {
+  it.each([
+    ["agent:ops:room::part", { agentId: "ops", rest: "room::part" }],
+    ["agent:ops::main", null],
+    ["agent::ops:main", null],
+    [":agent:ops:main", null],
+    ["agent:ops:cron:", { agentId: "ops", rest: "cron:" }],
+    [
+      "Agent:Ops:Matrix:Channel:!Room:Org:Thread:$Event",
+      { agentId: "ops", rest: "matrix:channel:!Room:Org:thread:$Event" },
+    ],
+    [
+      "Agent:Ops:Signal:Group:AbC:Thread:XyZ",
+      { agentId: "ops", rest: "signal:group:AbC:thread:xyz" },
+    ],
+    [
+      "agent:ops:catalog:fixture:Host:Thread",
+      { agentId: "ops", rest: "catalog:fixture:host:thread" },
+    ],
+  ] as const)("preserves stored identity for %s", (key, expected) => {
+    expect(parseAgentSessionKey(key)).toEqual(expected);
+  });
+});
+
 describe("session key canonicalization", () => {
   function expectSessionKeyCanonicalizationCase(params: { run: () => void }) {
     params.run();

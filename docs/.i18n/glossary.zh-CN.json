@@ -724,6 +724,86 @@
     "target": "配置参考"
   },
   {
+    "source": "Configuration — agents",
+    "target": "配置 — 智能体"
+  },
+  {
+    "source": "Configuration — agent workspace and bootstrap",
+    "target": "配置 — 智能体工作区和引导上下文"
+  },
+  {
+    "source": "Configuration — agent models",
+    "target": "配置 — 智能体模型"
+  },
+  {
+    "source": "Configuration — agent runtime and CLI backends",
+    "target": "配置 — 智能体运行时和 CLI 后端"
+  },
+  {
+    "source": "Configuration — agent heartbeat, compaction, and streaming",
+    "target": "配置 — 智能体心跳、压缩和流式输出"
+  },
+  {
+    "source": "Configuration — agent sandboxing",
+    "target": "配置 — 智能体沙箱"
+  },
+  {
+    "source": "Configuration — per-agent entries and multi-agent routing",
+    "target": "配置 — 单智能体条目和多智能体路由"
+  },
+  {
+    "source": "Configuration — agent sessions",
+    "target": "配置 — 智能体会话"
+  },
+  {
+    "source": "Configuration — messages and talk",
+    "target": "配置 — 消息和语音对话"
+  },
+  {
+    "source": "Configuration — audit, logging, diagnostics, and telemetry",
+    "target": "配置 — 审计、日志、诊断和遥测"
+  },
+  {
+    "source": "Configuration — automations and media template variables",
+    "target": "配置 — 自动化和媒体模板变量"
+  },
+  {
+    "source": "Configuration — browser, UI, and desktop",
+    "target": "配置 — 浏览器、UI 和桌面"
+  },
+  {
+    "source": "Configuration — channels",
+    "target": "配置 — 渠道"
+  },
+  {
+    "source": "Configuration — cloud worker environments",
+    "target": "配置 — Cloud Worker 环境"
+  },
+  {
+    "source": "Configuration — environment, secrets, and includes",
+    "target": "配置 — 环境变量、密钥和包含文件"
+  },
+  {
+    "source": "Configuration — gateway",
+    "target": "配置 — Gateway 网关"
+  },
+  {
+    "source": "Configuration — hooks",
+    "target": "配置 — Hooks"
+  },
+  {
+    "source": "Configuration — MCP, skills, and plugins",
+    "target": "配置 — MCP、Skills 和插件"
+  },
+  {
+    "source": "Configuration — runtime basics",
+    "target": "配置 — 运行时基础"
+  },
+  {
+    "source": "Configuration — tools",
+    "target": "配置 — 工具"
+  },
+  {
     "source": "wiki",
     "target": "wiki"
   },
@@ -970,6 +1050,34 @@
   {
     "source": "Plugin manifest",
     "target": "插件清单"
+  },
+  {
+    "source": "Manifest model fields",
+    "target": "清单模型字段"
+  },
+  {
+    "source": "Manifest provider fields",
+    "target": "清单提供商字段"
+  },
+  {
+    "source": "Manifest setup and auth fields",
+    "target": "清单设置与认证字段"
+  },
+  {
+    "source": "Manifest capability fields",
+    "target": "清单能力字段"
+  },
+  {
+    "source": "Manifest host surface fields",
+    "target": "清单宿主界面字段"
+  },
+  {
+    "source": "Manifest config and secret fields",
+    "target": "清单配置与密钥字段"
+  },
+  {
+    "source": "Manifest versus package.json",
+    "target": "清单与 package.json 对比"
   },
   {
     "source": "Building plugins",
@@ -2074,5 +2182,337 @@
   {
     "source": "Part 8 of 8",
     "target": "第 8 部分，共 8 部分"
+  },
+  {
+    "source": "Chat channels",
+    "target": "聊天渠道"
+  },
+  {
+    "source": "Installer internals",
+    "target": "安装程序内部机制"
+  },
+  {
+    "source": "Connect and pair",
+    "target": "连接与配对"
+  },
+  {
+    "source": "Sessions and sidebar",
+    "target": "会话与侧边栏"
+  },
+  {
+    "source": "Chat",
+    "target": "聊天"
+  },
+  {
+    "source": "Panels and docks",
+    "target": "面板与停靠区"
+  },
+  {
+    "source": "Settings",
+    "target": "设置"
+  },
+  {
+    "source": "Feature and RPC reference",
+    "target": "功能与 RPC 参考"
+  },
+  {
+    "source": "Offline and reconnect",
+    "target": "离线与重新连接"
+  },
+  {
+    "source": "Security model",
+    "target": "安全模型"
+  },
+  {
+    "source": "Build and develop",
+    "target": "构建与开发"
+  },
+  {
+    "source": "CI pipeline jobs",
+    "target": "CI 流水线作业"
+  },
+  {
+    "source": "Watch a CI run",
+    "target": "查看 CI 运行"
+  },
+  {
+    "source": "CI checkout ownership",
+    "target": "CI 检出归属"
+  },
+  {
+    "source": "CI scope and routing",
+    "target": "CI 范围与路由"
+  },
+  {
+    "source": "CI runner classes",
+    "target": "CI 运行器类型"
+  },
+  {
+    "source": "CI capacity and shard weights",
+    "target": "CI 容量与分片权重"
+  },
+  {
+    "source": "Release validation workflows",
+    "target": "发布验证工作流"
+  },
+  {
+    "source": "Scheduled and maintenance workflows",
+    "target": "定时与维护工作流"
+  },
+  {
+    "source": "Local checks and Testbox",
+    "target": "本地检查与 Testbox"
+  },
+  {
+    "source": "Release channels",
+    "target": "发布渠道"
+  },
+  {
+    "source": "Transport and framing",
+    "target": "传输与分帧"
+  },
+  {
+    "source": "Handshake and roles",
+    "target": "握手与角色"
+  },
+  {
+    "source": "Presence and events",
+    "target": "在线状态与事件"
+  },
+  {
+    "source": "RPC methods",
+    "target": "RPC 方法"
+  },
+  {
+    "source": "Ledger RPCs",
+    "target": "账本 RPC"
+  },
+  {
+    "source": "Operator methods",
+    "target": "操作员方法"
+  },
+  {
+    "source": "Versioning",
+    "target": "版本管理"
+  },
+  {
+    "source": "Auth and device identity",
+    "target": "身份验证与设备身份"
+  },
+  {
+    "source": "Gateway protocol transport",
+    "target": "Gateway 协议传输"
+  },
+  {
+    "source": "Gateway protocol handshake",
+    "target": "Gateway 协议握手"
+  },
+  {
+    "source": "Gateway protocol presence and events",
+    "target": "Gateway 协议在线状态与事件"
+  },
+  {
+    "source": "Gateway protocol RPC methods",
+    "target": "Gateway 协议 RPC 方法"
+  },
+  {
+    "source": "Gateway protocol ledger RPCs",
+    "target": "Gateway 协议账本 RPC"
+  },
+  {
+    "source": "Gateway protocol operator methods",
+    "target": "Gateway 协议操作员方法"
+  },
+  {
+    "source": "Gateway protocol versioning",
+    "target": "Gateway 协议版本管理"
+  },
+  {
+    "source": "Gateway protocol auth",
+    "target": "Gateway 协议身份验证"
+  },
+  {
+    "source": "Config and utilities",
+    "target": "配置与实用工具"
+  },
+  {
+    "source": "Agent and sessions",
+    "target": "Agent 与会话"
+  },
+  {
+    "source": "Model helpers",
+    "target": "模型辅助方法"
+  },
+  {
+    "source": "Background work",
+    "target": "后台工作"
+  },
+  {
+    "source": "Gateway and nodes",
+    "target": "Gateway 与节点"
+  },
+  {
+    "source": "Media helpers",
+    "target": "媒体辅助方法"
+  },
+  {
+    "source": "State and system",
+    "target": "状态与系统"
+  },
+  {
+    "source": "Channel helpers",
+    "target": "频道辅助方法"
+  },
+  {
+    "source": "Plugin runtime config and utilities",
+    "target": "插件运行时配置与实用工具"
+  },
+  {
+    "source": "Plugin runtime agent helpers",
+    "target": "插件运行时 Agent 辅助方法"
+  },
+  {
+    "source": "Plugin runtime model helpers",
+    "target": "插件运行时模型辅助方法"
+  },
+  {
+    "source": "Plugin runtime background work",
+    "target": "插件运行时后台工作"
+  },
+  {
+    "source": "Plugin runtime Gateway and nodes",
+    "target": "插件运行时 Gateway 与节点"
+  },
+  {
+    "source": "Plugin runtime media helpers",
+    "target": "插件运行时媒体辅助方法"
+  },
+  {
+    "source": "Plugin runtime state and system",
+    "target": "插件运行时状态与系统"
+  },
+  {
+    "source": "Plugin runtime channel helpers",
+    "target": "插件运行时频道辅助方法"
+  },
+  {
+    "source": "Slack setup",
+    "target": "Slack 设置"
+  },
+  {
+    "source": "Slack transports",
+    "target": "Slack 传输方式"
+  },
+  {
+    "source": "Slack Enterprise Grid",
+    "target": "Slack Enterprise Grid"
+  },
+  {
+    "source": "Slack manifest and scopes",
+    "target": "Slack 清单与权限范围"
+  },
+  {
+    "source": "Slack access control",
+    "target": "Slack 访问控制"
+  },
+  {
+    "source": "Slack threads and sessions",
+    "target": "Slack 话题与会话"
+  },
+  {
+    "source": "Slack message behavior",
+    "target": "Slack 消息行为"
+  },
+  {
+    "source": "Slack media and attachments",
+    "target": "Slack 媒体与附件"
+  },
+  {
+    "source": "Slack charts, tables, and approvals",
+    "target": "Slack 图表、表格与审批"
+  },
+  {
+    "source": "Slack events and operations",
+    "target": "Slack 事件与运维"
+  },
+  {
+    "source": "Slack troubleshooting",
+    "target": "Slack 故障排查"
+  },
+  {
+    "source": "Media understanding pipeline",
+    "target": "媒体理解流程"
+  },
+  {
+    "source": "PDF tool",
+    "target": "PDF 工具"
+  },
+  {
+    "source": "Run Codex on another machine",
+    "target": "在其他机器上运行 Codex"
+  },
+  {
+    "source": "Codex routing and deployment",
+    "target": "Codex 路由与部署"
+  },
+  {
+    "source": "Codex harness configuration",
+    "target": "Codex harness 配置"
+  },
+  {
+    "source": "Codex app-server policy",
+    "target": "Codex app-server 策略"
+  },
+  {
+    "source": "Codex plugin config fields",
+    "target": "Codex 插件配置字段"
+  },
+  {
+    "source": "Codex commands and diagnostics",
+    "target": "Codex 命令与诊断"
+  },
+  {
+    "source": "Codex runtime behavior",
+    "target": "Codex 运行时行为"
+  },
+  {
+    "source": "Native Codex state and features",
+    "target": "原生 Codex 状态与功能"
+  },
+  {
+    "source": "Codex harness troubleshooting",
+    "target": "Codex harness 故障排查"
+  },
+  {
+    "source": "How automations work",
+    "target": "自动化的工作原理"
+  },
+  {
+    "source": "Automation schedules",
+    "target": "自动化计划"
+  },
+  {
+    "source": "Automation payloads",
+    "target": "自动化载荷"
+  },
+  {
+    "source": "Automation delivery",
+    "target": "自动化投递"
+  },
+  {
+    "source": "Manage automations",
+    "target": "管理自动化"
+  },
+  {
+    "source": "Inbound webhooks",
+    "target": "入站 Webhook"
+  },
+  {
+    "source": "Gmail PubSub triggers",
+    "target": "Gmail PubSub 触发器"
+  },
+  {
+    "source": "Automation troubleshooting",
+    "target": "自动化故障排查"
   }
 ]

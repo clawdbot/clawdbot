@@ -48,7 +48,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     workspaceBootstrapContext,
     buildActiveContextEngineRuntimeContext,
     baseDeveloperInstructions,
-    openClawPromptContext,
+    buildOpenClawPromptContext,
     skillsInstructions,
     refreshableInstructions,
     promptState,
@@ -323,13 +323,16 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       },
     };
   };
-  const decorateCodexTurnPromptText = (promptBuildResult: {
-    prompt: string;
-    promptInputRange?: { start: number; end: number };
-  }) => {
+  const decorateCodexTurnPromptText = (
+    promptBuildResult: {
+      prompt: string;
+      promptInputRange?: { start: number; end: number };
+    },
+    includeWorkspaceReferences = true,
+  ) => {
     const turnPromptText = prependCodexOpenClawPromptContext(
       promptBuildResult.prompt,
-      openClawPromptContext,
+      buildOpenClawPromptContext(includeWorkspaceReferences),
       {
         preservePromptWithoutContext:
           params.bootstrapContextMode === "lightweight" &&
@@ -547,15 +550,19 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     });
   };
   await rotateStartupBindingForProjectedTurn();
-  const systemPromptReport = buildCodexSystemPromptReport({
-    attempt: params,
-    sessionKey: contextSessionKey,
-    workspaceDir: effectiveWorkspace,
-    developerInstructions: buildRenderedCodexDeveloperInstructions(),
-    workspaceBootstrapContext,
-    skillsPrompt: skillsInstructions ? (params.skillsSnapshot?.prompt ?? "") : "",
-    tools: toolBridge.availableSpecs,
-  });
+  const buildSystemPromptReport = (omitWorkspaceReferences = false) =>
+    buildCodexSystemPromptReport({
+      attempt: params,
+      sessionKey: contextSessionKey,
+      workspaceDir: effectiveWorkspace,
+      developerInstructions: buildRenderedCodexDeveloperInstructions(),
+      workspaceBootstrapContext,
+      omitWorkspaceReferences,
+      skillsPrompt: skillsInstructions ? (params.skillsSnapshot?.prompt ?? "") : "",
+      tools: toolBridge.availableSpecs,
+    });
+  const systemPromptReport = buildSystemPromptReport();
+  let workspaceReferencesIncluded = true;
   return {
     context,
     get contextImages() {
@@ -563,6 +570,13 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     },
     codexModelInputHistoryMessages,
     turnState,
+    refreshWorkspaceReferences: (include: boolean) => {
+      turnState.codexTurnPromptText = decorateCodexTurnPromptText(turnState.promptBuild, include);
+      if (include !== workspaceReferencesIncluded) {
+        Object.assign(systemPromptReport, buildSystemPromptReport(!include));
+        workspaceReferencesIncluded = include;
+      }
+    },
     buildRenderedCodexDeveloperInstructions,
     rebuildCodexTurnPromptTextFromCurrentProjection,
     applyNoContextEngineContinuityProjection,

@@ -52,7 +52,27 @@ build compiles the native Watch WebRTC library. Install the official
 and standard-library sources:
 
 ```bash
-rustup toolchain install nightly-2026-08-31 --profile minimal --component rust-src
+rustup toolchain install nightly-2026-09-05 --profile minimal --component rust-src
+```
+
+Both `rustup` and the rustup-managed `cargo` shim must be on the build's `PATH`.
+If you installed rustup through Homebrew, add its shim directory before running
+a command-line build such as `pnpm ios:build`:
+
+```bash
+export PATH="$(brew --prefix rustup)/bin:$PATH"
+```
+
+On Apple Silicon with the default Homebrew prefix, this directory is
+`/opt/homebrew/opt/rustup/bin`. Having `rustup` in `/opt/homebrew/bin` does not
+mean `cargo` is available. The Watch build phase adds `$HOME/.cargo/bin`,
+`/opt/homebrew/bin`, and `/usr/local/bin`, but not Homebrew's rustup shim directory.
+For GUI-launched Xcode builds, ensure that directory is also in the build
+phase's `PATH`; exporting it in a terminal alone does not configure Xcode.
+Verify the pinned Cargo is reachable from the build environment:
+
+```bash
+cargo +nightly-2026-09-05 --version
 ```
 
 `apps/shared/OpenClawWatchRTC/build.sh` uses that exact toolchain with

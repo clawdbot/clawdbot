@@ -49,6 +49,7 @@ import {
   resolveTestModelRefFromString,
 } from "./agent-command.live-model-switch.test-helpers.js";
 import type { FailoverReason } from "./failover/signal.js";
+import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./internal-events.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -2082,6 +2083,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
   });
 
   it("passes explicit timeout overrides into agent attempts", async () => {
+    // Freeze preflight elapsed time to keep the forwarding assertions exact.
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
 
@@ -5242,28 +5246,24 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
   it("sends internal completion wakes to ACP sessions as plain prompt text", async () => {
     setupAcpSession();
 
+    const internalEvents: AgentInternalEvent[] = [
+      {
+        type: "task_completion",
+        source: "subagent",
+        childSessionKey: "agent:main:subagent:child",
+        childSessionId: "child-session-id",
+        announceType: "subagent task",
+        taskLabel: "inspect ACP delivery",
+        status: "ok",
+        statusLabel: "completed successfully",
+        result: "child output",
+        replyInstruction: "Summarize the result for the user.",
+      },
+    ];
     await agentCommand({
-      message: [
-        INTERNAL_RUNTIME_CONTEXT_BEGIN,
-        "OpenClaw runtime context (internal):",
-        "hidden task completion event",
-        INTERNAL_RUNTIME_CONTEXT_END,
-      ].join("\n"),
+      message: formatAgentInternalEventsForPrompt(internalEvents),
       sessionKey: "agent:main:main",
-      internalEvents: [
-        {
-          type: "task_completion",
-          source: "subagent",
-          childSessionKey: "agent:main:subagent:child",
-          childSessionId: "child-session-id",
-          announceType: "subagent task",
-          taskLabel: "inspect ACP delivery",
-          status: "ok",
-          statusLabel: "completed successfully",
-          result: "child output",
-          replyInstruction: "Summarize the result for the user.",
-        },
-      ],
+      internalEvents,
     });
 
     expect(state.acpRunTurnMock).toHaveBeenCalledTimes(1);

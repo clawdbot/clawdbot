@@ -242,8 +242,8 @@ describe("package update recovery safety", () => {
                 ? "doctor"
                 : null,
           );
-          expect(result.activePackageRoot).toBe(outcome === "backup failed" ? null : packageRoot);
-          expect(result.afterVersion).toBe(outcome === "backup failed" ? null : "2.0.0");
+          expect(result.activePackageRoot).toBe(packageRoot);
+          expect(result.afterVersion).toBe(outcome === "backup failed" ? "1.0.0" : "2.0.0");
           if (!transaction) {
             throw new Error("activated package did not retain a transaction");
           }
@@ -276,6 +276,75 @@ describe("package update recovery safety", () => {
       });
     },
   );
+
+  it("replaces equal-version package bytes and rolls them back after verification fails", async () => {
+    await withTestDir({ prefix: "openclaw-package-equal-version-replacement-" }, async (base) => {
+      const prefix = path.join(base, "prefix");
+      const globalRoot = path.join(prefix, "lib", "node_modules");
+      const packageRoot = path.join(globalRoot, "openclaw");
+      const launcher = path.join(prefix, "bin", "openclaw");
+      await writePackageRoot(packageRoot, "1.0.0");
+      await fs.writeFile(path.join(packageRoot, "dist", "index.js"), "old runtime\n");
+      await fs.mkdir(path.dirname(launcher), { recursive: true });
+      await fs.writeFile(launcher, "old launcher\n");
+
+      const result = await runGlobalPackageUpdateSteps({
+        installTarget: createNpmTarget(globalRoot),
+        installSpec: "openclaw@1.0.0",
+        packageName: "openclaw",
+        packageRoot,
+        requirePackageReplacement: true,
+        runCommand: createRootRunner(globalRoot),
+        runStep: async ({ name, argv }) => {
+          const stagePrefix = argv[argv.indexOf("--prefix") + 1];
+          if (!stagePrefix) {
+            throw new Error("missing stage prefix");
+          }
+          const stageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
+          await writePackageRoot(stageRoot, "1.0.0");
+          await fs.writeFile(path.join(stageRoot, "dist", "index.js"), "new runtime\n");
+          await fs.mkdir(path.join(stagePrefix, "bin"), { recursive: true });
+          await fs.writeFile(path.join(stagePrefix, "bin", "openclaw"), "new launcher\n");
+          return { name, command: argv.join(" "), cwd: stagePrefix, durationMs: 0, exitCode: 0 };
+        },
+        validateCandidate: async (candidateRoot) => {
+          await expect(
+            fs.readFile(path.join(candidateRoot, "dist", "index.js"), "utf8"),
+          ).resolves.toBe("new runtime\n");
+          await expect(
+            fs.readFile(path.join(packageRoot, "dist", "index.js"), "utf8"),
+          ).resolves.toBe("old runtime\n");
+          return [];
+        },
+        beforeActivate: async () => {},
+        postVerifyStep: async (candidateRoot) => {
+          await expect(
+            fs.readFile(path.join(candidateRoot, "dist", "index.js"), "utf8"),
+          ).resolves.toBe("new runtime\n");
+          return {
+            name: "doctor",
+            command: "doctor --fix",
+            cwd: candidateRoot,
+            durationMs: 0,
+            exitCode: 1,
+          };
+        },
+        timeoutMs: 1000,
+      });
+
+      expect(result.reason).toBeUndefined();
+      expect(result.failedStep?.name).toBe("doctor");
+      expect(result.recovery).toEqual({
+        serviceRestartSafe: false,
+        reason: "runtime-verification-failed",
+        packageRollbackVerified: true,
+      });
+      await expect(fs.readFile(path.join(packageRoot, "dist", "index.js"), "utf8")).resolves.toBe(
+        "old runtime\n",
+      );
+      await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
+    });
+  });
 
   it("recovers the verified original when staging preparation fails before hooks run", async () => {
     await withTestDir({ prefix: "openclaw-package-stage-recovery-" }, async (base) => {
@@ -450,30 +519,19 @@ describe("package update recovery safety", () => {
           renameSpy.mockRestore();
           unlinkSpy.mockRestore();
         }
-        expect(cleanupRejected).toBe(true);
+        expect(cleanupRejected).toBe(failure === "activation");
         expect(await fs.readFile(stateCanary, "utf8")).toBe("migrated by staged lifecycle");
         // Main's old activation decision allowed anything except an explicit false.
         // Restored package bytes cannot undo the lifecycle's state mutation.
         expect(result.recovery?.serviceRestartSafe).toBe(false);
-        expect(result.failedStep?.stderrTail).toContain("source cleanup failed after commit");
-        expect(result.activePackageRoot).toBe(failure === "backup" ? null : packageRoot);
-        if (failure === "backup") {
-          await expect(
-            fs.readFile(path.join(packageRoot, "dist", "index.js")),
-          ).rejects.toMatchObject({ code: "ENOENT" });
-          const backups = (await fs.readdir(globalRoot)).filter((name) =>
-            name.startsWith(`.openclaw.package-backup-${process.pid}-`),
-          );
-          expect(backups).toHaveLength(1);
-          await expect(
-            fs.readFile(path.join(globalRoot, backups[0] ?? "", "dist", "index.js"), "utf8"),
-          ).resolves.toBe("export {};\n");
-        } else {
-          expect(result.afterVersion).toBe("1.0.0");
-          await expect(
-            fs.readFile(path.join(packageRoot, "dist", "index.js"), "utf8"),
-          ).resolves.toBe("export {};\n");
-        }
+        expect(result.failedStep?.stderrTail).toContain(
+          failure === "backup" ? "cross-device move" : "source cleanup failed after commit",
+        );
+        expect(result.activePackageRoot).toBe(packageRoot);
+        expect(result.afterVersion).toBe("1.0.0");
+        await expect(fs.readFile(path.join(packageRoot, "dist", "index.js"), "utf8")).resolves.toBe(
+          "export {};\n",
+        );
       });
     },
   );
@@ -658,7 +716,7 @@ describe("package update recovery safety", () => {
 
       expect(result.failedStep).toMatchObject({ name: "global install swap", exitCode: 1 });
       expect(result.failedStep?.stderrTail).toContain("launcher restoration denied");
-      expect(result.failedStep?.stderrTail).toContain(`launcher ${targetCmdShim} was not restored`);
+      expect(result.failedStep?.stderrTail).toContain(targetCmdShim);
       expect(result.recovery).toEqual({
         serviceRestartSafe: false,
         reason: "runtime-verification-failed",

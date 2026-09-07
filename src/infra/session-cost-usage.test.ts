@@ -1157,7 +1157,7 @@ describe("session cost usage", () => {
         version: number;
         rollup: { untimestamped: { totals: { totalTokens: number } } };
       };
-      currentRollup.version = 2;
+      currentRollup.version = 3;
       currentRollup.rollup.untimestamped.totals.totalTokens = 9_999;
       expect(
         writeSessionCostUsageRollup({
@@ -1206,7 +1206,7 @@ describe("session cost usage", () => {
         rollup: { untimestamped: { totals: { totalTokens: number } } };
       };
       expect(appendedRollup.rollup.untimestamped.totals.totalTokens).toBe(1_000);
-      expect(appendedRollup.version).toBe(3);
+      expect(appendedRollup.version).toBe(4);
 
       const allTime = await loadSessionCostSummariesFromCache({
         sessions: [session],

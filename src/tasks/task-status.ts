@@ -45,7 +45,8 @@ function isRecentTerminalTask(task: TaskRecord, now: number): boolean {
   return now - resolveTaskReferenceAt(task) <= TASK_STATUS_RECENT_WINDOW_MS;
 }
 
-function truncateTaskStatusText(value: string, maxChars: number): string {
+/** Applies a task display limit to text that its caller has already sanitized. */
+export function truncateTaskStatusText(value: string, maxChars: number): string {
   const trimmed = value.trim();
   if (trimmed.length <= maxChars) {
     return trimmed;

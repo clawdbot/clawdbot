@@ -273,7 +273,7 @@ describe("AppSidebar session catalog pagination", () => {
     const runningCatalogSection = sidebar.querySelector('[data-session-section="catalog:claude"]');
     expect(
       runningCatalogSection?.querySelector(
-        `[data-session-key="${backingSessionKey}"].session-row-host--running .session-run-spinner`,
+        `[data-session-key="${backingSessionKey}"].session-row-host--running .sidebar-session-indicator .session-glyph__ring`,
       ),
     ).not.toBeNull();
     expect(

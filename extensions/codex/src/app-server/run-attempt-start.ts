@@ -14,7 +14,6 @@ import {
 } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import { CodexThreadPolicyHandoffError } from "./thread-policy.js";
-import { recordCodexTrajectoryContext } from "./trajectory.js";
 
 export async function startCodexAttemptRuntime(resources: CodexAttemptResources) {
   const {
@@ -32,7 +31,6 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
   const {
     context,
     turnState,
-    buildRenderedCodexDeveloperInstructions,
     rebuildCodexTurnPromptTextFromCurrentProjection,
     applyNoContextEngineContinuityProjection,
   } = prompt;
@@ -233,16 +231,6 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       authProfileId: startupAuthProfileId,
       workspaceDir: effectiveWorkspace,
       toolCount: flattenCodexDynamicToolFunctions(toolBridge.specs).length,
-    });
-    recordCodexTrajectoryContext(trajectoryRecorder, {
-      attempt: params,
-      cwd: effectiveCwd,
-      developerInstructions: joinPresentSections(
-        buildRenderedCodexDeveloperInstructions(),
-        attemptTools.configuredMcp?.diagnosticNotice,
-      ),
-      prompt: turnState.codexTurnPromptText,
-      tools: toolBridge.availableSpecs,
     });
     connection.mutable.pluginAppServer = pluginAppServer;
   } catch (error) {

@@ -13,7 +13,7 @@ import { resolveUserPath } from "../utils.js";
 import { resolveArchiveKind } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
 import { applyNpmFreshnessBypassEnv, type NpmProjectInstallEnvOptions } from "./npm-install-env.js";
-import { resolveNpmJsonEntries } from "./npm-registry-spec.js";
+import { isExactSemverVersion, resolveNpmJsonEntries } from "./npm-registry-spec.js";
 import { withTempWorkspace } from "./private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
@@ -69,7 +69,7 @@ export function buildNpmResolutionFields(resolution?: NpmSpecResolution): NpmRes
 }
 
 /** Creates a script-free npm environment for metadata and pack commands. */
-export function createNpmMetadataEnv(
+function createNpmMetadataEnv(
   scope: Pick<NpmProjectInstallEnvOptions, "npmConfigCwd"> = {},
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
@@ -78,6 +78,36 @@ export function createNpmMetadataEnv(
   };
   applyNpmFreshnessBypassEnv(env, new Date(), scope);
   return env;
+}
+
+export async function loadNpmPackageVersions({
+  packageName,
+  timeoutMs,
+  ...commandOptions
+}: {
+  packageName: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  killProcessTree?: boolean;
+}): Promise<string[] | null> {
+  const versions = await runCommandWithTimeout(["npm", "view", packageName, "versions", "--json"], {
+    ...commandOptions,
+    timeoutMs: Math.max(timeoutMs ?? 0, 60_000),
+    env: createNpmMetadataEnv(),
+  });
+  if (versions.code !== 0) {
+    return null;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(versions.stdout.trim());
+  } catch {
+    return null;
+  }
+  return (Array.isArray(parsed) ? parsed : [parsed]).filter(
+    (value): value is string => typeof value === "string" && isExactSemverVersion(value),
+  );
 }
 
 function resolveNpmSpecVersionSelector(spec: string): string | undefined {

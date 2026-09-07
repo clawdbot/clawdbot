@@ -1,3 +1,4 @@
+export { getEventStreamCompletion } from "@openclaw/llm-core/event-stream";
 export * from "./default-runtime.js";
 export * from "../env-api-keys.js";
 export * from "../model-utils.js";
