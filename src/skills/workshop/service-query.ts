@@ -186,7 +186,7 @@ async function reconcilePendingSkillProposal(
         reconcile: false,
       });
       if (!current || current.status !== "pending") {
-        return;
+        return undefined;
       }
       // List availability depends on the draft, not supporting-file integrity.
       // Read under the lease so revision cleanup cannot remove this generation.
@@ -198,12 +198,12 @@ async function reconcilePendingSkillProposal(
         !isPathInside(workshopDir, current.target.skillFile) ||
         (await readSkillProposalRollback(current.id, options))
       ) {
-        return;
+        return undefined;
       }
       assertInsideSkillsRoot(workshopDir, current.target.skillFile, "skill file");
       const targetContent = await readWorkspaceSkillFile(current.target.skillFile);
       if (targetContent === null) {
-        return;
+        return undefined;
       }
       return transitionPendingSkillProposalToStale({
         record: current,
