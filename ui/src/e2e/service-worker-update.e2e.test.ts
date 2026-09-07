@@ -352,6 +352,10 @@ describe("Control UI service-worker production update E2E", () => {
         const draft =
           mode === "chat" ? "keep my draft through the missed update" : '{ "count": 2 }';
         await editor.fill(draft);
+        // Join startup update checks before changing the served worker bytes.
+        await page.evaluate(async () => {
+          await (await navigator.serviceWorker.ready).update();
+        });
         await buildProductionControlUiE2e(nextDir, buildB);
         await page.evaluate(() => sessionStorage.setItem("test-missed-activation", "1"));
         await rename(outDir, previousDir);
