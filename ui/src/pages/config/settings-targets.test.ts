@@ -37,6 +37,7 @@ describe("settings search target manifest", () => {
       ["meetings", "/meetings", "", ""],
       ["device", "/settings/device", "", ""],
       ["devicePermissions", "/settings/device/permissions", "", ""],
+      ["deviceTalk", "/settings/talk", "", ""],
       ["updates", "/settings/updates", "", "#config-section-update"],
       ["channels", "/settings/channels", "", ""],
       ["security", "/settings/security", "", ""],
@@ -105,7 +106,11 @@ describe("settings search target manifest", () => {
   it("indexes only translation keys present in the English source catalog", () => {
     const source = flattenTranslations(loadControlUiSourceCatalog());
     for (const target of targets) {
-      for (const key of [target.labelKey, ...target.searchKeys]) {
+      for (const key of [
+        target.labelKey,
+        ...target.searchKeys,
+        ...Object.keys(target.nativeSearchKeys ?? {}),
+      ]) {
         expect(source.has(key), `Missing settings search translation: ${key}`).toBe(true);
       }
     }

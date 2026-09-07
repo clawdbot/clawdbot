@@ -454,6 +454,7 @@ export function resolveNpmUpdateTarget(params: {
   syncOfficialPluginInstalls?: boolean;
   updateChannel?: UpdateChannel;
   coreVersion?: string;
+  versionBoundToCore?: boolean;
   timeoutMs?: number;
 }) {
   const official = params.trustedOfficialInstall;
@@ -472,6 +473,7 @@ export function resolveNpmUpdateTarget(params: {
           updateChannel: params.updateChannel,
           officialPackageName: resolveNpmSpecPackageName(official?.npmSpec),
           coreVersion: params.coreVersion,
+          versionBoundToCore: params.versionBoundToCore,
           timeoutMs: params.timeoutMs,
         }
       : undefined,
@@ -484,6 +486,7 @@ export function resolveClawHubUpdateSpecs(params: {
   updateChannel?: UpdateChannel;
   officialPackageName?: string;
   coreVersion?: string;
+  versionBoundToCore?: boolean;
 }): {
   installSpec?: string;
   recordSpec?: string;
@@ -507,6 +510,7 @@ export function resolveClawHubUpdateSpecs(params: {
     updateChannel: params.updateChannel,
     officialPackageName: params.officialPackageName,
     coreVersion: params.coreVersion,
+    versionBoundToCore: params.versionBoundToCore,
   });
 }
 

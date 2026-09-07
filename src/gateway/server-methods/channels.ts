@@ -46,6 +46,7 @@ import {
   collectGatewayChannelStatusIssues,
   resolveDeferredChannelReloadIssue,
 } from "./channels-status-issues.js";
+import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams, type Validator } from "./validation.js";
 
@@ -102,11 +103,9 @@ async function respondWithChannelOperationPayload<TPayload>(params: {
   respond: RespondFn;
   run: () => Promise<TPayload>;
 }): Promise<void> {
-  try {
+  await respondUnavailableOnThrow(params.respond, async () => {
     params.respond(true, await params.run(), undefined);
-  } catch (error) {
-    params.respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(error)));
-  }
+  });
 }
 
 const CHANNEL_STATUS_MAX_TIMEOUT_MS = 30_000;

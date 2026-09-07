@@ -56,6 +56,8 @@ import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.operatorScopesAllowAdmin
 import ai.openclaw.app.operatorScopesAllowWrite
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
+import ai.openclaw.app.ui.FoldAwareDropdownMenu
+import ai.openclaw.app.ui.FoldAwareMenuItem
 import ai.openclaw.app.ui.TabletopPaneBounds
 import ai.openclaw.app.ui.copyGatewayDiagnosticsReport
 import ai.openclaw.app.ui.design.ClawAgentAvatar
@@ -70,15 +72,18 @@ import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.ProviderBrandIcon
 import ai.openclaw.app.ui.design.agentAvatarSource
 import ai.openclaw.app.ui.design.sessionColor
+import ai.openclaw.app.ui.foldAwareSheet
 import ai.openclaw.app.ui.gatewayDiagnosticsEndpoint
 import ai.openclaw.app.ui.gatewayStatusForDisplay
 import ai.openclaw.app.ui.localizedUppercase
 import ai.openclaw.app.ui.relativeSessionTime
 import ai.openclaw.app.ui.rememberSystemAnimationsEnabled
+import ai.openclaw.app.ui.rememberWindowDisplayFeatureState
 import ai.openclaw.app.ui.sessionPresentationTitle
 import ai.openclaw.app.ui.sidebarCatalogHosts
 import android.os.SystemClock
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
@@ -150,8 +155,6 @@ import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -171,8 +174,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -197,6 +202,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -457,7 +463,19 @@ internal fun ChatScreen(
   val currentPickerOwner by rememberUpdatedState(composerOwner)
   val currentPickerMainSessionKey by rememberUpdatedState(mainSessionKey)
   val sendInFlight = composerOwner in sendStates
-  var showModelPicker by rememberSaveable { mutableStateOf(false) }
+  val pickerActivity = LocalActivity.current
+  val pickerView = LocalView.current
+  val modelPicker =
+    remember(viewModel, pickerActivity, pickerView, lifecycleOwner) {
+      ChatModelPickerSessionOwner(pickerActivity, pickerView, lifecycleOwner.lifecycle) { expected ->
+        viewModel.isCurrentChatComposerOwner(expected) &&
+          viewModel.gatewayConnectionDisplay.value.isConnected &&
+          operatorScopesAllowWrite(viewModel.operatorScopes.value)
+      }
+    }
+  rememberWindowDisplayFeatureState(modelPicker::publishFeatures)
+  SideEffect { modelPicker.refreshTarget() }
+  DisposableEffect(modelPicker) { onDispose { modelPicker.dispose() } }
   var showBackgroundTasks by rememberSaveable { mutableStateOf(false) }
   var showBranchSwitcher by rememberSaveable { mutableStateOf(false) }
   var detailsExpanded by rememberSaveable { mutableStateOf(false) }
@@ -711,12 +729,6 @@ internal fun ChatScreen(
     }
   }
 
-  LaunchedEffect(gatewayConnectionDisplay.isConnected) {
-    if (!gatewayConnectionDisplay.isConnected) {
-      showModelPicker = false
-    }
-  }
-
   val newChatEnabled =
     !sessionCreating && !modelSelectionLocked &&
       canStartNewChat(
@@ -935,7 +947,7 @@ internal fun ChatScreen(
           clearOverride = !fastModeProviderSupported,
         )
       },
-      onOpenModelPicker = { showModelPicker = true },
+      onOpenModelPicker = { modelPicker.open(composerOwner, sessionKey) },
       onPickImages = {
         if (!viewModel.isCurrentChatComposerOwner(composerOwner)) return@ChatComposer
         val authorizationId = composerState.beginMediaAcquisition(composerOwner) ?: return@ChatComposer
@@ -1052,42 +1064,83 @@ internal fun ChatScreen(
     )
   }
 
-  if (showModelPicker) {
-    ChatModelPickerSheet(
-      sections = modelSections,
-      favorites = modelFavorites.toSet(),
-      selectedModelLabel = selectedModelLabel,
-      modelSelectionLocked = modelSelectionLocked,
-      contextUsage = contextUsage,
-      messages = messages,
-      permissionMode = activeSession?.permissionMode,
-      permissionModePending = permissionModePending,
-      permissionPickerEnabled =
-        permissionSettingsAvailable &&
-          !activeSession?.sessionId.isNullOrBlank() &&
-          gatewayConnectionDisplay.isConnected &&
-          canWriteSessionSettings &&
-          !permissionModePending &&
-          !sessionSettingsPending,
-      permissionUnavailableReason =
-        when {
-          !permissionSettingsAvailable -> nativeString("Update the Gateway to change session permissions.")
-          activeSession?.sessionId.isNullOrBlank() -> nativeString("Refresh this chat before changing permissions.")
-          else -> null
+  modelPicker.visible?.let { opening ->
+    // The original callback target never becomes the newest opening after a coalesced close/open.
+    fun currentSession() =
+      viewModel.chatSessions.value.firstOrNull {
+        isActiveSessionChoice(it.key, opening.sessionKey, viewModel.mainSessionKey.value)
+      }
+
+    fun admitPermissions(): Boolean =
+      modelPicker.admit(opening) &&
+        viewModel.chatPermissionSettingsAvailable.value &&
+        currentSession()?.let { !it.sessionId.isNullOrBlank() && it.permissionModePending != true } == true &&
+        opening.sessionKey !in viewModel.chatPendingSessionSettingsKeys.value
+
+    key(opening) {
+      ChatModelPickerSheet(
+        opening = opening,
+        admit = { modelPicker.admit(opening) },
+        admitPermissions = ::admitPermissions,
+        sections = modelSections,
+        favorites = modelFavorites.toSet(),
+        selectedModelLabel = selectedModelLabel,
+        modelSelectionLocked = modelSelectionLocked,
+        contextUsage = contextUsage,
+        messages = messages,
+        permissionMode = activeSession?.permissionMode,
+        permissionModePending = permissionModePending,
+        permissionPickerEnabled =
+          permissionSettingsAvailable &&
+            !activeSession?.sessionId.isNullOrBlank() &&
+            gatewayConnectionDisplay.isConnected &&
+            canWriteSessionSettings &&
+            !permissionModePending &&
+            !sessionSettingsPending,
+        permissionUnavailableReason =
+          when {
+            !permissionSettingsAvailable -> nativeString("Update the Gateway to change session permissions.")
+            activeSession?.sessionId.isNullOrBlank() -> nativeString("Refresh this chat before changing permissions.")
+            else -> null
+          },
+        canSelectFullPermission = canAdminSessionSettings,
+        onPermissionModeChange = { mode ->
+          if (admitPermissions() && canSelectChatPermissionMode(mode, operatorScopesAllowAdmin(viewModel.operatorScopes.value))) {
+            viewModel.setChatSessionPermissionMode(opening.sessionKey, mode)
+            true
+          } else {
+            false
+          }
         },
-      canSelectFullPermission = canAdminSessionSettings,
-      onPermissionModeChange = { mode -> viewModel.setChatSessionPermissionMode(sessionKey, mode) },
-      onDismiss = { showModelPicker = false },
-      onSelect = { modelRef ->
-        viewModel.setChatSessionModel(sessionKey = sessionKey, modelRef = modelRef)
-        showModelPicker = false
-      },
-      onOpenProviders = {
-        showModelPicker = false
-        onOpenProvidersModels()
-      },
-      onToggleFavorite = viewModel::toggleModelFavorite,
-    )
+        onDismiss = { if (modelPicker.admit(opening)) modelPicker.retire(opening) },
+        onSelect = { modelRef ->
+          val model = viewModel.chatModelCatalog.value.firstOrNull { it.providerQualifiedRef() == modelRef }
+          if (modelPicker.admit(opening) && currentSession()?.modelSelectionLocked != true &&
+            (modelRef == null || model?.let(::chatModelPickerAction) == ChatModelPickerAction.Select)
+          ) {
+            modelPicker.retire(opening)
+            viewModel.setChatSessionModel(sessionKey = opening.sessionKey, modelRef = modelRef)
+          }
+        },
+        onOpenProviders = { ref ->
+          val model = viewModel.chatModelCatalog.value.firstOrNull { it.providerQualifiedRef() == ref }
+          if (modelPicker.admit(opening) && currentSession()?.modelSelectionLocked != true &&
+            model?.let(::chatModelPickerAction) == ChatModelPickerAction.OpenProviders
+          ) {
+            modelPicker.retire(opening)
+            onOpenProvidersModels()
+          }
+        },
+        onToggleFavorite = { ref ->
+          val model = viewModel.chatModelCatalog.value.firstOrNull { it.providerQualifiedRef() == ref }
+          if (modelPicker.admit(opening) && currentSession()?.modelSelectionLocked != true &&
+            model != null && model.available != false
+          ) {
+            viewModel.toggleModelFavorite(ref)
+          }
+        },
+      )
+    }
   }
 
   if (showBranchSwitcher) {
@@ -1282,53 +1335,30 @@ private fun ChatHeader(
           contentDescription = nativeString("Chat actions"),
           onClick = { actionsMenuExpanded = true },
         )
-        DropdownMenu(expanded = actionsMenuExpanded, onDismissRequest = { actionsMenuExpanded = false }) {
-          DropdownMenuItem(
-            text = { Text(nativeString("Refresh chat")) },
-            leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
-            onClick = {
-              actionsMenuExpanded = false
-              onRefresh()
+        FoldAwareDropdownMenu(
+          expanded = actionsMenuExpanded,
+          onDismissRequest = { actionsMenuExpanded = false },
+          items =
+            buildList {
+              add(FoldAwareMenuItem("refresh", nativeString("Refresh chat"), onRefresh, Icons.Default.Refresh))
+              if (branches.size > 1) {
+                add(
+                  FoldAwareMenuItem(
+                    "branches",
+                    nativeString("Switch branch"),
+                    onOpenBranchSwitcher,
+                    Icons.Default.ArrowDropDown,
+                    enabled = branchSwitchEnabled && !branchesLoading,
+                  ),
+                )
+              }
+              add(FoldAwareMenuItem("dashboard", nativeString("Dashboard"), onOpenDashboard, Icons.Default.Dashboard))
+              add(FoldAwareMenuItem("background", nativeString("Background tasks"), onOpenBackgroundTasks, Icons.Default.HourglassEmpty))
+              if (workspaceGit) {
+                add(FoldAwareMenuItem("worktree", newChatInWorktreeLabel, onNewChatInWorktree, enabled = newChatEnabled))
+              }
             },
-          )
-          if (branches.size > 1) {
-            DropdownMenuItem(
-              text = { Text(nativeString("Switch branch")) },
-              leadingIcon = { Icon(Icons.Default.ArrowDropDown, contentDescription = null) },
-              enabled = branchSwitchEnabled && !branchesLoading,
-              onClick = {
-                actionsMenuExpanded = false
-                onOpenBranchSwitcher()
-              },
-            )
-          }
-          DropdownMenuItem(
-            text = { Text(nativeString("Dashboard")) },
-            leadingIcon = { Icon(Icons.Default.Dashboard, contentDescription = null) },
-            onClick = {
-              actionsMenuExpanded = false
-              onOpenDashboard()
-            },
-          )
-          DropdownMenuItem(
-            text = { Text(nativeString("Background tasks")) },
-            leadingIcon = { Icon(Icons.Default.HourglassEmpty, contentDescription = null) },
-            onClick = {
-              actionsMenuExpanded = false
-              onOpenBackgroundTasks()
-            },
-          )
-          if (workspaceGit) {
-            DropdownMenuItem(
-              text = { Text(newChatInWorktreeLabel) },
-              enabled = newChatEnabled,
-              onClick = {
-                actionsMenuExpanded = false
-                onNewChatInWorktree()
-              },
-            )
-          }
-        }
+        )
       }
     }
   }
@@ -3141,6 +3171,9 @@ internal fun branchMetadataText(branch: SessionBranch): String {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ChatModelPickerSheet(
+  opening: ChatModelPickerSession,
+  admit: () -> Boolean,
+  admitPermissions: () -> Boolean,
   sections: ChatModelPickerSections,
   favorites: Set<String>,
   selectedModelLabel: String,
@@ -3152,18 +3185,19 @@ private fun ChatModelPickerSheet(
   permissionPickerEnabled: Boolean,
   permissionUnavailableReason: String?,
   canSelectFullPermission: Boolean,
-  onPermissionModeChange: (ChatPermissionMode?) -> Unit,
+  onPermissionModeChange: (ChatPermissionMode?) -> Boolean,
   onDismiss: () -> Unit,
   onSelect: (String?) -> Unit,
-  onOpenProviders: () -> Unit,
+  onOpenProviders: (String) -> Unit,
   onToggleFavorite: (String) -> Unit,
 ) {
   var showPermissionPicker by rememberSaveable { mutableStateOf(false) }
   var showUsageDetails by rememberSaveable { mutableStateOf(false) }
   LaunchedEffect(permissionPickerEnabled) {
-    if (!permissionPickerEnabled) showPermissionPicker = false
+    if (showPermissionPicker && !permissionPickerEnabled && admit()) showPermissionPicker = false
   }
   ModalBottomSheet(
+    modifier = Modifier.foldAwareSheet(opening.geometry),
     onDismissRequest = onDismiss,
     // IME dismissal can remove a partial-height anchor while the selector opens.
     sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
@@ -3178,7 +3212,9 @@ private fun ChatModelPickerSheet(
     // Material captures its Back callback's enabled state when the dialog is created.
     // Own both pages here so recreation cannot leave the model page without Back.
     BackHandler {
-      if (showPermissionPicker) showPermissionPicker = false else onDismiss()
+      if (admit()) {
+        if (showPermissionPicker) showPermissionPicker = false else onDismiss()
+      }
     }
     // Keep the outer sheet unconstrained: Material anchors use the full window height.
     // Cap only its scrollable content against the actual inset-adjusted available bounds.
@@ -3188,10 +3224,9 @@ private fun ChatModelPickerSheet(
           ChatPermissionPicker(
             selectedMode = permissionMode,
             canSelectFull = canSelectFullPermission,
-            onBack = { showPermissionPicker = false },
+            onBack = { if (admit()) showPermissionPicker = false },
             onSelect = { mode ->
-              showPermissionPicker = false
-              onPermissionModeChange(mode)
+              if (onPermissionModeChange(mode)) showPermissionPicker = false
             },
           )
         } else {
@@ -3231,7 +3266,7 @@ private fun ChatModelPickerSheet(
                 Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                   Text(text = nativeString("Latest run"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
                   TextButton(
-                    onClick = { showUsageDetails = !showUsageDetails },
+                    onClick = { if (admit()) showUsageDetails = !showUsageDetails },
                     modifier = Modifier.semantics { stateDescription = if (showUsageDetails) nativeString("Expanded") else nativeString("Collapsed") },
                   ) {
                     Text(nativeString("Details"))
@@ -3274,7 +3309,7 @@ private fun ChatModelPickerSheet(
                 verticalAlignment = Alignment.CenterVertically,
               ) {
                 Surface(
-                  onClick = { showPermissionPicker = true },
+                  onClick = { if (admitPermissions()) showPermissionPicker = true },
                   enabled = permissionPickerEnabled,
                   modifier = Modifier.weight(1f).heightIn(min = ClawTheme.spacing.touchTarget),
                   color = Color.Transparent,
@@ -3340,7 +3375,7 @@ private fun ChatModelPickerSheet(
                     model = model,
                     pinned = ref in favorites,
                     onSelect = { onSelect(ref) },
-                    onOpenProviders = onOpenProviders,
+                    onOpenProviders = { onOpenProviders(ref) },
                     onToggleFavorite = { onToggleFavorite(ref) },
                   )
                 }
@@ -3585,7 +3620,7 @@ private fun ChatInputPill(
   modifier: Modifier = Modifier,
 ) {
   val hardwareEnterHandler = remember { PhysicalChatSendKeyHandler() }
-  var attachmentMenuExpanded by rememberSaveable { mutableStateOf(false) }
+  var attachmentMenuExpanded by remember { mutableStateOf(false) }
   val draftStyle = chatDraftStyle()
 
   Surface(
@@ -3654,20 +3689,16 @@ private fun ChatInputPill(
               Icon(imageVector = Icons.Default.Add, contentDescription = nativeString("Add attachment"), modifier = Modifier.size(20.dp))
             }
           }
-          DropdownMenu(expanded = attachmentMenuExpanded, onDismissRequest = { attachmentMenuExpanded = false }) {
-            DropdownMenuItem(text = { Text(nativeString("Photos")) }, leadingIcon = { Icon(Icons.Default.Photo, contentDescription = null) }, onClick = {
-              attachmentMenuExpanded = false
-              onPickImages()
-            })
-            DropdownMenuItem(text = { Text(nativeString("Videos")) }, leadingIcon = { Icon(Icons.Default.Videocam, contentDescription = null) }, onClick = {
-              attachmentMenuExpanded = false
-              onPickVideo()
-            })
-            DropdownMenuItem(text = { Text(nativeString("Files")) }, leadingIcon = { Icon(Icons.Default.AttachFile, contentDescription = null) }, onClick = {
-              attachmentMenuExpanded = false
-              onPickAudioOrDocument()
-            })
-          }
+          FoldAwareDropdownMenu(
+            expanded = attachmentMenuExpanded,
+            onDismissRequest = { attachmentMenuExpanded = false },
+            items =
+              listOf(
+                FoldAwareMenuItem("photos", nativeString("Photos"), onPickImages, Icons.Default.Photo),
+                FoldAwareMenuItem("videos", nativeString("Videos"), onPickVideo, Icons.Default.Videocam),
+                FoldAwareMenuItem("files", nativeString("Files"), onPickAudioOrDocument, Icons.Default.AttachFile),
+              ),
+          )
         }
         Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
           ChatComposerModelPicker(

@@ -2,6 +2,7 @@
 summary: "iOS node app: connect to the Gateway, pairing, device capabilities, and troubleshooting"
 read_when:
   - Pairing or reconnecting the iOS node
+  - Starting live voice with Siri or Shortcuts
   - Using voice input and spoken replies on Apple Watch
   - Setting up standalone Apple Watch voice
   - Enabling or troubleshooting the direct Apple Watch node
@@ -537,6 +538,25 @@ Agents can still operate the iOS app through OpenClaw by invoking node commands,
 - OpenAI realtime Talk uses client-owned WebRTC when `talk.realtime.transport` is `webrtc`; an explicit `gateway-relay` configuration remains Gateway-owned. See [Talk mode](/nodes/talk).
 - Talk-capable iOS nodes advertise the `talk` capability and can declare `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, and `talk.ptt.once`; the Gateway allows those push-to-talk commands by default for trusted Talk-capable nodes.
 - iOS may suspend background audio; treat voice features as best-effort when the app is not active.
+
+### Start live voice with Siri or Shortcuts
+
+The **Start Live Voice** App Shortcut opens OpenClaw to the current
+chat and starts the same Talk path as the inline Talk control.
+
+1. Open OpenClaw and [pair and connect to your Gateway](/platforms/ios#quick-start-pair-+-connect)
+   first. Live voice uses your existing [Talk mode voice provider configuration](/nodes/talk);
+   the shortcut does not configure a provider or bypass pairing.
+2. In **Shortcuts > Apps > OpenClaw**, choose **Start Live Voice**. You can also
+   ask Siri: **"Start live voice with OpenClaw"**.
+3. Allow microphone access when iOS prompts. Unlock your iPhone if asked, and
+   keep OpenClaw in the foreground while Talk starts. The shortcut does not
+   bypass iOS unlock or foreground restrictions.
+
+For quick access, save a shortcut containing **Start Live Voice**, then assign
+it under **Settings > Action Button > Shortcut** on a supported iPhone, or use
+**Add to Home Screen** in Shortcuts. Background voice remains subject to the
+same iOS limits as Talk started inside the app.
 
 ## Common errors
 

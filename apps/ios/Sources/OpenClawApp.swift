@@ -49,7 +49,24 @@ final class BackgroundWakeRefreshAttempt: @unchecked Sendable {
 
 @MainActor
 enum OpenClawAppModelRegistry {
-    static var appModel: NodeAppModel?
+    static var appModel: NodeAppModel? {
+        didSet {
+            guard let appModel, self.pendingLiveVoiceStart else { return }
+            self.pendingLiveVoiceStart = false
+            appModel.requestLiveVoiceStart()
+        }
+    }
+
+    /// App Intents can arrive before SwiftUI installs the single application model.
+    private static var pendingLiveVoiceStart = false
+
+    static func requestLiveVoiceStart() {
+        guard let appModel else {
+            self.pendingLiveVoiceStart = true
+            return
+        }
+        appModel.requestLiveVoiceStart()
+    }
 }
 
 @MainActor

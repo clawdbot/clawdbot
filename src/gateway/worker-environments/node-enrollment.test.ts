@@ -161,6 +161,10 @@ describe("worker node enrollment", () => {
     "169.254.10.2",
     "0.0.0.0",
     "[::]",
+    "[::ffff:0.0.0.0]",
+    "[::ffff:0:0]",
+    "[64:ff9b::0.0.0.0]",
+    "[64:ff9b::]",
     "[fe80::1]",
     "[febf::1]",
   ])("rejects unreachable cloud Gateway host %s before preparing artifacts", async (host) => {
@@ -172,7 +176,7 @@ describe("worker node enrollment", () => {
 
     await expect(manager.prepare(createRequested())).rejects.toThrow(
       new Error(
-        `Cloud node bootstrap resolved a Gateway address that a cloud worker cannot reach (ws://${host}:19821, from plugins.entries.device-pair.config.publicUrl). Set gateway.publicOrigin (or plugins.entries.device-pair.config.publicUrl) to a URL reachable from the worker, such as a Tailscale Funnel or a reverse-proxied public origin with gateway.trustedProxies, then redispatch.`,
+        `Cloud node bootstrap resolved a Gateway address that a cloud worker cannot reach (ws://${new URL(`http://${host}`).hostname}:19821, from plugins.entries.device-pair.config.publicUrl). Set gateway.publicOrigin (or plugins.entries.device-pair.config.publicUrl) to a URL reachable from the worker, such as a Tailscale Funnel or a reverse-proxied public origin with gateway.trustedProxies, then redispatch.`,
       ),
     );
     expect(prepareArtifact).not.toHaveBeenCalled();

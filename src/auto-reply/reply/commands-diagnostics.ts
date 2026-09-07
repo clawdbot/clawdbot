@@ -523,7 +523,7 @@ function rewriteInteractive(interactive: LegacyInteractiveReply): LegacyInteract
           ...block,
           options: block.options.map((option) => ({
             ...option,
-            ...(option.action ? { action: rewriteSelectPresentationAction(option.action) } : {}),
+            ...(option.action ? { action: rewritePresentationAction(option.action) } : {}),
             ...(option.value ? { value: rewriteCodexDiagnosticsCommandPrefix(option.value) } : {}),
           })),
         };
@@ -533,6 +533,10 @@ function rewriteInteractive(interactive: LegacyInteractiveReply): LegacyInteract
   };
 }
 
+function rewritePresentationAction(
+  action: Extract<MessagePresentationAction, { type: "command" | "callback" | "model-picker" }>,
+): Extract<MessagePresentationAction, { type: "command" | "callback" | "model-picker" }>;
+function rewritePresentationAction(action: MessagePresentationAction): MessagePresentationAction;
 function rewritePresentationAction(action: MessagePresentationAction): MessagePresentationAction {
   if (action.type === "command") {
     return {
@@ -545,18 +549,6 @@ function rewritePresentationAction(action: MessagePresentationAction): MessagePr
       type: "callback",
       value: rewriteCodexDiagnosticsCommandPrefix(action.value),
     };
-  }
-  return action;
-}
-
-function rewriteSelectPresentationAction(
-  action: Extract<MessagePresentationAction, { type: "command" | "callback" | "model-picker" }>,
-): Extract<MessagePresentationAction, { type: "command" | "callback" | "model-picker" }> {
-  if (action.type === "command") {
-    return { type: "command", command: rewriteCodexDiagnosticsCommandPrefix(action.command) };
-  }
-  if (action.type === "callback") {
-    return { type: "callback", value: rewriteCodexDiagnosticsCommandPrefix(action.value) };
   }
   return action;
 }

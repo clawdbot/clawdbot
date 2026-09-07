@@ -48,6 +48,7 @@ function createSessionManager(
   overrides: Record<string, unknown> = {},
 ): ReturnType<typeof guardSessionManager> {
   return {
+    getHeader: () => ({ version: 3 }),
     getLeafEntry: () => undefined,
     getSessionTarget: () => undefined,
     ...overrides,

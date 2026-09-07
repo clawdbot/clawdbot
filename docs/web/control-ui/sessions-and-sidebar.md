@@ -127,10 +127,20 @@ Ordinary **New Chat** and explicit catalog continuation remain separate flows.
 Native starts require `operator.admin`, `gateway.cliAgents.enabled`,
 an enabled catalog plugin, and its installed CLI. Terminals are on by default;
 `gateway.terminal.enabled: false` blocks native starts.
-No matching OpenClaw model route is required. The host picker lists only local
-CLI sources and connected nodes with the exact fresh-start command currently
-invocable. Resume-only nodes are not eligible. After installing a CLI or approving
-a node capability change, reconnect the node and refresh the host picker.
+No matching OpenClaw model route is required. Each machine has one launch
+destination. The **Where** picker appears only when there is a choice or the
+previously selected machine is unavailable. It lists the Gateway's native CLI
+and connected nodes with the exact fresh-start command currently invocable;
+resume-only nodes are not eligible. Availability updates after Gateway reconnects
+and node connection or capability changes. After installing a CLI, reconnect to
+the Gateway; after approving a node capability change, reconnect that node.
+
+New Gateway-local Codex sessions use the primary native Codex profile configured
+for its catalog, normally the Gateway user's `CODEX_HOME` or `~/.codex`. Selecting
+a folder lets Codex load that project's trusted configuration; it does not select
+another account or Codex home. Additional Codex homes remain available for browsing
+and resuming existing sessions with their original profile. An OpenClaw agent's
+temporary app-server login is separate from a native CLI login.
 
 On the Gateway, the folder/worktree controls still provision the selected managed
 worktree before launching. On a node, enter an existing absolute directory on
@@ -139,10 +149,14 @@ OpenClaw worker placement, cloud/Auto selection, attachment submission, model
 controls, or Incognito. Add files and change native CLI settings in the terminal.
 A missing directory, disabled capability, or disconnected host produces an error;
 OpenClaw never starts a Chat or substitutes another host or home directory.
+If the CLI exits during startup, the terminal retains its output and exit status.
+If startup is rejected, the draft remains available to correct and retry.
 
 ### OpenClaw Chat workspace startup
 
 On a normal foreground OpenClaw Chat send, the submitted text and attachments appear immediately with a **Starting** indicator while the Gateway creates or adopts the session. This is a pending submission, not a Gateway acknowledgment. If creation is rejected, your prompt and attachments remain available to correct and retry. Once creation succeeds, the UI opens the session's chat.
+
+Attributed submissions show your avatar immediately, in the same position as the chat transcript. Opening the created session focuses the composer quietly; the attention cue is reserved for navigation that prefills a draft.
 
 The project picker refreshes after sign-in and reconnects. Gateway reconnects and Git verification retries preserve your edited base branch and worktree name. Choosing another folder or project clears those repository-specific details.
 
@@ -151,6 +165,8 @@ For local worktree sessions, sending the first message opens the admitted sessio
 For a remote target, the Control UI creates the repository or managed-worktree session with an empty initial message and no `execNode`, dispatches it by exact `deviceId`, `autoDevice: true`, or `profileId` (plus an optional cloud machine class), waits for active placement, and then sends the first message and attachments with the same idempotency key used by recovery. Explicit and automatic device dispatch require `operator.write`; cloud profile dispatch requires `operator.admin`. The composer footer chooses the new session's model and reasoning level.
 
 Model and **Effort** are separate adjacent composer controls in chat and New session, on desktop and mobile. The model picker never contains Effort or Fast-mode controls. Long model labels ellipsize to leave room for the other controls; the full name remains in the picker, accessible label, and tooltip. Mobile Effort uses a gauge whose needle reflects the current level, with a lightning badge when Fast mode is active. In chat, Fast mode stays in the Effort menu, or appears as the adjacent control when reasoning is unavailable. Models with neither available control omit it.
+
+Search the model picker by model name or provider. Your search stays applied as the model catalog refreshes. Press **Escape** to clear a nonempty search while keeping the picker open; press it again to close the picker and return focus to its trigger.
 
 When you switch sessions, the composer keeps the session's known model name visible while refreshing the model options available for that session. If the model is not yet known, the control shows a loading placeholder. Locked chats also show the selected model, or **Session model** when it is not known. The lock prevents model selection changes; it does not indicate that a native runtime owns the model.
 
