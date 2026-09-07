@@ -10,6 +10,7 @@ import type { ExecMode } from "../infra/exec-approvals.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { ConversationRecallContext } from "./conversation-recall.types.js";
+import type { CurrentTurnDeliveryToolRef } from "./current-turn-delivery.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "./exec-defaults.js";
 import type { ModelAwareToolContext } from "./openclaw-tools.model-context.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
@@ -129,6 +130,10 @@ export type OpenClawToolsOptions = {
   enableHeartbeatTool?: boolean;
   /** If true, skip plugin tool resolution and return only shipped core tools. */
   disablePluginTools?: boolean;
+  /** Host-authorized current-turn delivery is exposed only inside engaged Code Mode. */
+  includeCurrentTurnDeliveryTool?: boolean;
+  /** Internal slot carrying the exact host-created delivery tool through assembly. */
+  currentTurnDeliveryToolRef?: CurrentTurnDeliveryToolRef;
   /**
    * Wrap returned tools with the before_tool_call hook at construction time.
    * Defaults to true; callers that already enforce the hook at a later shared

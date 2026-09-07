@@ -88,4 +88,49 @@ describe("runMessageAction core send routing", () => {
     expect(mediaInput.text).toBe("caption-only text");
     expect(mediaInput.mediaUrl).toBe("https://example.com/cat.png");
   });
+
+  it("runs the synchronous direct-adapter fence immediately before adapter I/O", async () => {
+    const order: string[] = [];
+    const sendText = vi.fn(async () => {
+      order.push("adapter");
+      return {
+        channel: "testchat",
+        messageId: "m1",
+      };
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "testchat",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "testchat",
+            outbound: {
+              deliveryMode: "direct",
+              sendText,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await runMessageAction({
+      cfg: {},
+      action: "send",
+      params: {
+        channel: "testchat",
+        target: "channel:abc",
+        message: "hello",
+      },
+      assertDirectAdapterHandoff: () => {
+        order.push("fence");
+      },
+      forceCoreDelivery: true,
+      skipQueue: true,
+      dryRun: false,
+    });
+
+    expect(order).toEqual(["fence", "adapter"]);
+    expect(sendText).toHaveBeenCalledOnce();
+  });
 });

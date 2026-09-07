@@ -29,7 +29,7 @@ import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import { createPluginToolAllowlist } from "../plugins/tool-grant-allowlist.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
-import { createOpenClawCodingTools } from "./agent-tools.js";
+import { createEmbeddedAttemptCodingTools, createOpenClawCodingTools } from "./agent-tools.js";
 import { filterToolsByMessageProvider } from "./agent-tools.message-provider-policy.js";
 import {
   createOpenClawReadTool,
@@ -1337,23 +1337,26 @@ describe("createOpenClawCodingTools", () => {
     const preparedModelRuntime = { metadataSnapshot: {} } as never;
 
     try {
-      createOpenClawCodingTools({
-        config: testConfig,
-        includeCoreTools: false,
-        runtimeToolAllowlist: ["memory_search"],
-        modelProvider: "openrouter",
-        modelId: "openrouter/auto",
-        nativeChannelId: "oc_native_chat",
-        clientCaps: ["inline-widgets"],
-        preparedModelRuntime,
-        toolConstructionPlan: {
-          includeBaseCodingTools: false,
-          includeShellTools: false,
-          includeChannelTools: false,
-          includeOpenClawTools: false,
-          includePluginTools: true,
+      createEmbeddedAttemptCodingTools(
+        {
+          config: testConfig,
+          includeCoreTools: false,
+          runtimeToolAllowlist: ["memory_search"],
+          modelProvider: "openrouter",
+          modelId: "openrouter/auto",
+          nativeChannelId: "oc_native_chat",
+          clientCaps: ["inline-widgets"],
+          preparedModelRuntime,
+          toolConstructionPlan: {
+            includeBaseCodingTools: false,
+            includeShellTools: false,
+            includeChannelTools: false,
+            includeOpenClawTools: false,
+            includePluginTools: true,
+          },
         },
-      });
+        {},
+      );
 
       expect(createOpenClawToolsMock).not.toHaveBeenCalled();
       expect(resolvePluginToolsSpy).toHaveBeenCalledTimes(1);
@@ -1363,6 +1366,56 @@ describe("createOpenClawCodingTools", () => {
       expect(pluginToolOptions?.nativeChannelId).toBe("oc_native_chat");
       expect(pluginToolOptions?.clientCaps).toEqual(["inline-widgets"]);
       expect(pluginToolOptions?.preparedModelRuntime).toBe(preparedModelRuntime);
+      expect(pluginToolOptions?.includeCurrentTurnDeliveryTool).toBe(true);
+    } finally {
+      resolvePluginToolsSpy.mockRestore();
+    }
+  });
+
+  it("keeps only the exact current-turn delivery instance through restrictive policy", () => {
+    const currentTurnTool = {
+      name: "send_current_reply",
+      label: "Send current reply",
+      description: "Send the current reply.",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ content: [], details: { status: "sent" } }),
+    };
+    const pluginCollision = { ...currentTurnTool, label: "Plugin collision" };
+    const currentTurnDeliveryToolRef: NonNullable<
+      Parameters<typeof createEmbeddedAttemptCodingTools>[1]
+    > = {};
+    const resolvePluginToolsSpy = vi
+      .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
+      .mockImplementation((params) => {
+        if (params.currentTurnDeliveryToolRef) {
+          params.currentTurnDeliveryToolRef.value = currentTurnTool;
+        }
+        return [currentTurnTool, pluginCollision];
+      });
+
+    try {
+      const tools = createEmbeddedAttemptCodingTools(
+        {
+          config: { tools: { profile: "coding" } },
+          includeCoreTools: false,
+          runtimeToolAllowlist: ["read"],
+          toolConstructionPlan: {
+            includeBaseCodingTools: false,
+            includeShellTools: false,
+            includeChannelTools: false,
+            includeOpenClawTools: false,
+            includePluginTools: true,
+          },
+        },
+        currentTurnDeliveryToolRef,
+      );
+
+      expect(tools).toHaveLength(1);
+      expect(tools[0]).toMatchObject({
+        name: currentTurnTool.name,
+        label: currentTurnTool.label,
+      });
+      expect(currentTurnDeliveryToolRef.value).toBe(tools[0]);
     } finally {
       resolvePluginToolsSpy.mockRestore();
     }

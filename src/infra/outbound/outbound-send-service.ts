@@ -143,6 +143,7 @@ async function sendCoreMessage(params: {
       await params.ctx.input.onDeliveryResult?.(evidence);
     },
     onPlatformSendDispatch: params.ctx.input.onPlatformSendDispatch,
+    assertDirectAdapterHandoff: params.ctx.input.assertDirectAdapterHandoff,
     skipQueue: params.ctx.input.skipQueue,
     onDeliveredPayload: (payload) => deliveredPayloads.push(payload),
   });

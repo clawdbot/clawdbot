@@ -6,23 +6,18 @@
  */
 import { getRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  resolveMessageActionTurnCapability,
-  selectMessageActionRequesterIdentity,
-} from "../gateway/message-action-turn-capability.js";
-import { resolveAgentScopedOutboundMediaAccess } from "../media/read-capability.js";
-import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../plugins/runtime.js";
-import {
-  getPluginRuntimeGatewayRequestScope,
-  withPluginRuntimeRegistryScope,
-} from "../plugins/runtime/gateway-request-scope.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import type { OpenClawPluginToolDelivery } from "../plugins/tool-types.js";
 import { resolvePluginTools } from "../plugins/tools.js";
-import type { OpenClawPluginToolContext } from "../plugins/types.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveApiKeyForProfile, resolveAuthProfileOrder } from "./auth-profiles.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import {
+  createCurrentTurnDelivery,
+  createCurrentTurnDeliveryTool,
+  type CurrentTurnDeliveryToolRef,
+} from "./current-turn-delivery.js";
 import {
   createRuntimeProviderAuthLookup,
   hasRuntimeAvailableProviderAuth,
@@ -57,148 +52,15 @@ type ResolveOpenClawPluginToolsOptions = OpenClawPluginToolOptions & {
   authProfileStore?: AuthProfileStore;
 };
 
-const loadMessageActionRunner = createLazyRuntimeModule(
-  () => import("../infra/outbound/message-action-runner.js"),
-);
-
-function createPluginToolDelivery(params: {
-  options: ResolveOpenClawPluginToolsOptions | undefined;
-  context: OpenClawPluginToolContext;
-  bindingConfig: OpenClawConfig | undefined;
-  resolveConfig: () => OpenClawConfig | undefined;
-}): OpenClawPluginToolDelivery | undefined {
-  const deliveryContext = params.context.deliveryContext;
-  const agentId = params.context.agentId;
-  const sessionKey = params.context.sessionKey;
-  const sessionId = params.context.sessionId;
-  const senderIsOwner = params.context.senderIsOwner;
-  const conversationReadOrigin = params.context.conversationReadOrigin;
-  const runId = params.options?.runId;
-  const token = params.options?.messageActionTurnCapability;
-  const activeRegistry = getActivePluginRegistry();
-  const activeRegistryVersion = getActivePluginRegistryVersion();
-  if (
-    !deliveryContext?.channel ||
-    !deliveryContext.to ||
-    !agentId ||
-    !sessionKey ||
-    !runId ||
-    !token ||
-    !activeRegistry
-  ) {
-    return undefined;
-  }
-  // Capabilities bind the source policy session, even when plugins execute in
-  // a shared or durable session. Keep validation separate from execution identity.
-  const policySessionKey = params.options?.agentSessionKey ?? sessionKey;
-  const channelPlugin = activeRegistry.channels.find(
-    (entry) => entry.plugin.id === deliveryContext.channel,
-  )?.plugin;
-  // The turn capability and sender-scoped media reader are process-local.
-  // Gateway-owned delivery needs a server-verifiable authority contract first.
-  if (channelPlugin?.outbound?.deliveryMode === "gateway") {
-    return undefined;
-  }
-  const route = {
-    channel: deliveryContext.channel,
-    to: deliveryContext.to,
-    accountId: deliveryContext.accountId,
-    threadId: deliveryContext.threadId,
-  };
-
-  const resolveAuthorization = () => {
-    if (
-      getActivePluginRegistry() !== activeRegistry ||
-      getActivePluginRegistryVersion() !== activeRegistryVersion
-    ) {
-      throw new Error("plugin delivery capability is no longer active");
-    }
-    const authorization = resolveMessageActionTurnCapability({
-      token,
-      agentId,
-      runId,
-      sessionKey: policySessionKey,
-      sessionId,
-    });
-    if (!authorization) {
-      throw new Error("plugin delivery capability is no longer active");
-    }
-    return authorization;
-  };
-  const bindingAuthorization = resolveAuthorization();
-  const bindingConfig = params.bindingConfig;
-  if (!bindingConfig) {
-    return undefined;
-  }
-  const mediaAccess = resolveAgentScopedOutboundMediaAccess({
-    cfg: bindingConfig,
-    agentId,
-    workspaceDir: params.context.workspaceDir,
-    sessionKey,
-    accountId: bindingAuthorization.requesterAccountId ?? route.accountId,
-    requesterSenderId: bindingAuthorization.requesterSenderId,
-    requesterSenderName: bindingAuthorization.requesterSenderName,
-    requesterSenderUsername: bindingAuthorization.requesterSenderUsername,
-    requesterSenderE164: bindingAuthorization.requesterSenderE164,
-  });
-
-  return {
-    send: async ({ text, mediaUrl }) => {
-      resolveAuthorization();
-      const { runMessageAction } = await loadMessageActionRunner();
-      const authorization = resolveAuthorization();
-      const cfg = params.resolveConfig();
-      if (!cfg) {
-        throw new Error("plugin delivery requires an active runtime config");
-      }
-      await withPluginRuntimeRegistryScope(activeRegistry, () =>
-        runMessageAction({
-          cfg,
-          action: "send",
-          params: {
-            channel: route.channel,
-            target: route.to,
-            ...(route.accountId ? { accountId: route.accountId } : {}),
-            ...(route.threadId != null ? { threadId: route.threadId } : {}),
-            ...(text !== undefined ? { message: text } : {}),
-            ...(mediaUrl !== undefined ? { mediaUrl } : {}),
-          },
-          defaultAccountId: route.accountId,
-          ...selectMessageActionRequesterIdentity(authorization),
-          messageActionAuthorization: {
-            requesterAccountId: authorization.requesterAccountId,
-            requesterSenderId: authorization.requesterSenderId,
-            toolContext: authorization.toolContext,
-          },
-          senderIsOwner,
-          conversationReadOrigin,
-          toolContext: authorization.toolContext,
-          sessionKey,
-          sessionId,
-          runId,
-          agentId,
-          mediaAccess,
-          onPlatformSendDispatch: async () => {
-            resolveAuthorization();
-          },
-          forceCoreDelivery: true,
-          skipQueue: true,
-          dryRun: false,
-        }),
-      );
-      resolveAuthorization();
-    },
-  };
-}
-
 /** Resolves plugin tools and their delivery context for an agent run. */
 export function resolveOpenClawPluginToolsForOptions(params: {
   options?: ResolveOpenClawPluginToolsOptions;
   resolvedConfig?: OpenClawConfig;
   existingToolNames?: Set<string>;
+  currentTurnDeliveryToolRef?: CurrentTurnDeliveryToolRef;
 }): AnyAgentTool[] {
-  if (params.options?.disablePluginTools) {
-    return [];
+  if (params.currentTurnDeliveryToolRef) {
+    delete params.currentTurnDeliveryToolRef.value;
   }
 
   const inputConfig = params.resolvedConfig ?? params.options?.config;
@@ -216,12 +78,41 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     getRuntimeConfig: resolveCurrentRuntimeConfig,
   });
   const authProfileStore = params.options?.authProfileStore;
-  const delivery = createPluginToolDelivery({
-    options: params.options,
+  const currentTurnDelivery = createCurrentTurnDelivery({
     context: pluginToolInputs.context,
-    bindingConfig: availabilityConfig,
-    resolveConfig: resolveCurrentRuntimeConfig,
+    agentSessionKey: params.options?.agentSessionKey,
+    runId: params.options?.runId,
+    token: params.options?.messageActionTurnCapability,
+    revokedErrorMessage: "plugin delivery capability is no longer active",
   });
+  const currentTurnDeliveryTool =
+    params.options?.includeCurrentTurnDeliveryTool && currentTurnDelivery
+      ? createCurrentTurnDeliveryTool(currentTurnDelivery)
+      : undefined;
+  if (currentTurnDeliveryTool && params.currentTurnDeliveryToolRef) {
+    params.currentTurnDeliveryToolRef.value = currentTurnDeliveryTool;
+  }
+  if (params.options?.disablePluginTools) {
+    return currentTurnDeliveryTool ? [currentTurnDeliveryTool] : [];
+  }
+  const delivery: OpenClawPluginToolDelivery | undefined = currentTurnDelivery
+    ? {
+        send: async (input) => {
+          const result = await currentTurnDelivery.send(input);
+          if (
+            result.status !== "sent" &&
+            result.status !== "suppressed" &&
+            result.status !== "not_sent"
+          ) {
+            const error = new Error(result.error ?? "Plugin delivery failed.");
+            if (result.sentBeforeError) {
+              Object.assign(error, { sentBeforeError: true });
+            }
+            throw error;
+          }
+        },
+      }
+    : undefined;
   const availabilityRuntimeLookup = authProfileStore
     ? createRuntimeProviderAuthLookup({
         cfg: availabilityConfig,
@@ -292,6 +183,9 @@ export function resolveOpenClawPluginToolsForOptions(params: {
       }
     : undefined;
   const existingToolNames = new Set(params.existingToolNames ?? []);
+  if (currentTurnDeliveryTool) {
+    existingToolNames.add(currentTurnDeliveryTool.name);
+  }
   const preparedModelRuntime = params.options?.preparedModelRuntime;
   const requestRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
   const runtimeRegistry = requestRegistry ?? getActivePluginRegistry() ?? undefined;
@@ -338,6 +232,9 @@ export function resolveOpenClawPluginToolsForOptions(params: {
       agentSessionKey: pluginToolInputs.context.sessionKey,
     }),
   );
+  if (currentTurnDeliveryTool) {
+    pluginTools.push(currentTurnDeliveryTool);
+  }
 
   return pluginTools;
 }

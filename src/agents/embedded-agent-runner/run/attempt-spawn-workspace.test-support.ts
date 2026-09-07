@@ -721,8 +721,8 @@ vi.mock("../../cache-trace.js", () => ({
 }));
 
 vi.mock("../../agent-tools.js", () => ({
-  createOpenClawCodingTools: (options?: { workspaceDir?: string; spawnWorkspaceDir?: string }) =>
-    hoisted.createOpenClawCodingToolsMock(options),
+  createEmbeddedAttemptCodingTools: (...args: unknown[]) =>
+    hoisted.createOpenClawCodingToolsMock(...args),
   resolveToolLoopDetectionConfig: () => undefined,
 }));
 

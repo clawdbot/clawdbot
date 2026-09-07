@@ -47,7 +47,6 @@ import type {
   ToolSearchConfig,
   ToolSearchToolContext,
   UnknownToolErrorOptions,
-  UnknownToolRecoverySurface,
 } from "./tool-search-types.js";
 import { asToolParamsRecord, jsonResult, ToolInputError } from "./tools/common.js";
 
@@ -446,12 +445,10 @@ export class ToolSearchRuntime {
   callExactId = async (
     id: string,
     input?: unknown,
-    options?: {
-      parentToolCallId?: string;
-      signal?: AbortSignal;
-      onUpdate?: ToolSearchCallOptions["onUpdate"];
-      recoverySurface?: UnknownToolRecoverySurface;
-    },
+    options?: Pick<
+      ToolSearchCallOptions,
+      "parentToolCallId" | "terminalAggregation" | "signal" | "onUpdate" | "recoverySurface"
+    >,
   ) => {
     const catalog = resolveCatalog(this.ctx);
     return await this.callEntry(
@@ -507,11 +504,10 @@ export class ToolSearchRuntime {
     catalog: ToolSearchCatalogSession,
     entry: ToolSearchCatalogEntry,
     input?: unknown,
-    options?: {
-      parentToolCallId?: string;
-      signal?: AbortSignal;
-      onUpdate?: ToolSearchCallOptions["onUpdate"];
-    },
+    options?: Pick<
+      ToolSearchCallOptions,
+      "parentToolCallId" | "terminalAggregation" | "signal" | "onUpdate"
+    >,
   ) => {
     catalog.callCount += 1;
     const normalizedInput = input ?? {};
@@ -608,11 +604,12 @@ export class ToolSearchRuntime {
         : await runExecution();
       acceptedResult = await acceptResultBeforeProjection(result);
       if (options?.parentToolCallId) {
-        this.terminalTargetBatchByParent.set(
-          options.parentToolCallId,
-          this.terminalTargetBatchByParent.get(options.parentToolCallId) !== false &&
-            acceptedResult.terminate === true,
-        );
+        const previous = this.terminalTargetBatchByParent.get(options.parentToolCallId);
+        const terminal =
+          options.terminalAggregation === "any"
+            ? previous === true || acceptedResult.terminate === true
+            : previous !== false && acceptedResult.terminate === true;
+        this.terminalTargetBatchByParent.set(options.parentToolCallId, terminal);
       }
       return { tool: compactToolSearchCatalogEntry(entry), result: acceptedResult };
     } finally {

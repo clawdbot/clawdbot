@@ -386,6 +386,153 @@ describe("createOpenClawTools browser plugin integration", () => {
     }
   });
 
+  it("keeps plugin delivery fail-fast after a later adapter chunk fails", async () => {
+    const sentChunks: string[] = [];
+    const sendText = vi.fn(async ({ text }: { text: string }) => {
+      sentChunks.push(text);
+      if (text === "cd") {
+        throw new Error("second chunk failed");
+      }
+      return { channel: "telegram" as const, messageId: `sent-${text}` };
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "telegram",
+            outbound: {
+              deliveryMode: "direct",
+              textChunkLimit: 2,
+              chunker: (text, limit) => [
+                text.slice(0, limit),
+                text.slice(limit, limit * 2),
+                text.slice(limit * 2),
+              ],
+              sendText,
+              sendMedia: async () => ({ channel: "telegram", messageId: "media" }),
+            },
+            messaging: {
+              normalizeTarget: (raw) => raw,
+              targetResolver: { looksLikeId: () => true, hint: "<chat-id>" },
+            },
+          }),
+        },
+      ]),
+    );
+    const sessionKey = "agent:main:telegram:direct:123";
+    const token = mintMessageActionTurnCapability({
+      agentId: "main",
+      runId: "run-chunks",
+      sessionKey,
+      sessionId: "session-chunks",
+    });
+    let delivery: { send: (input: { text: string }) => Promise<void> } | undefined;
+    hoisted.resolvePluginTools.mockImplementation((params: unknown) => {
+      delivery = (
+        params as {
+          context?: { delivery?: { send: (input: { text: string }) => Promise<void> } };
+        }
+      ).context?.delivery;
+      return [];
+    });
+
+    try {
+      createOpenClawTools({
+        config: {} as OpenClawConfig,
+        agentSessionKey: sessionKey,
+        runSessionKey: sessionKey,
+        runId: "run-chunks",
+        sessionId: "session-chunks",
+        agentChannel: "telegram",
+        agentTo: "123",
+        requesterAgentIdOverride: "main",
+        messageActionTurnCapability: token,
+        disableMessageTool: true,
+      });
+      if (!delivery) {
+        throw new Error("expected plugin delivery capability");
+      }
+
+      await expect(delivery.send({ text: "abcdef" })).rejects.toThrow("second chunk failed");
+      expect(sentChunks).toEqual(["ab", "cd"]);
+    } finally {
+      revokeMessageActionTurnCapability(token);
+    }
+  });
+
+  it.each([
+    ["suppressed", undefined],
+    ["not_sent", "not_sent" as const],
+  ])("treats plugin delivery %s as completed without retry", async (_label, outcome) => {
+    const sendText = vi.fn(async () => ({
+      channel: "telegram" as const,
+      messageId: "",
+      ...(outcome ? { outcome } : {}),
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "telegram",
+            outbound: { deliveryMode: "direct", sendText },
+            messaging: {
+              targetResolver: {
+                looksLikeId: (raw) => /^-?\d+$/.test(raw),
+                hint: "<chatId>",
+              },
+            },
+          }),
+        },
+      ]),
+    );
+    const sessionKey = "agent:main:telegram:direct:123";
+    const token = mintMessageActionTurnCapability({
+      agentId: "main",
+      runId: "run-suppressed",
+      sessionKey,
+      sessionId: "session-suppressed",
+    });
+    let delivery: { send: (input: { text: string }) => Promise<void> } | undefined;
+    hoisted.resolvePluginTools.mockImplementation((params: unknown) => {
+      delivery = (
+        params as {
+          context?: { delivery?: { send: (input: { text: string }) => Promise<void> } };
+        }
+      ).context?.delivery;
+      return [];
+    });
+
+    try {
+      createOpenClawTools({
+        config: {} as OpenClawConfig,
+        agentSessionKey: sessionKey,
+        runSessionKey: sessionKey,
+        runId: "run-suppressed",
+        sessionId: "session-suppressed",
+        agentChannel: "telegram",
+        agentTo: "123",
+        requesterAgentIdOverride: "main",
+        messageActionTurnCapability: token,
+        disableMessageTool: true,
+      });
+      if (!delivery) {
+        throw new Error("expected plugin delivery capability");
+      }
+
+      await expect(delivery.send({ text: "handled" })).resolves.toBeUndefined();
+      expect(sendText).toHaveBeenCalledOnce();
+      expect(sendText).toHaveBeenCalledWith(
+        expect.objectContaining({ to: "123", text: "handled" }),
+      );
+    } finally {
+      revokeMessageActionTurnCapability(token);
+    }
+  });
+
   it("does not expose plugin delivery without a host turn capability", () => {
     hoisted.resolvePluginTools.mockReturnValue([]);
     setActivePluginRegistry(createEmptyPluginRegistry());
