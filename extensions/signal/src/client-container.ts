@@ -274,6 +274,8 @@ function containerReceiveCheck(
       resolve(result);
     };
     try {
+      // App timer + terminate() already aborts CONNECTING (ws 8.x). Do not add a
+      // parallel handshakeTimeout at the same deadline — it races settle errors.
       ws = new WebSocket(wsUrl, { maxPayload: WS_MAX_PAYLOAD });
     } catch (err) {
       settle({
@@ -441,6 +443,9 @@ export async function streamContainerEvents(params: {
 
   log(`[signal-ws] connecting to ${redactedWsUrl}`);
 
+  // Adapter forwards caller timeoutMs; ignoring it left stalled opens at a fixed 30s.
+  const handshakeTimeoutMs = resolveTimerTimeoutMs(params.timeoutMs, WS_HANDSHAKE_MS);
+
   return new Promise((resolve, reject) => {
     let ws: WebSocket;
     let settled = false;
@@ -476,7 +481,10 @@ export async function streamContainerEvents(params: {
     };
 
     try {
-      ws = new WebSocket(wsUrl, { maxPayload: WS_MAX_PAYLOAD, handshakeTimeout: WS_HANDSHAKE_MS });
+      ws = new WebSocket(wsUrl, {
+        maxPayload: WS_MAX_PAYLOAD,
+        handshakeTimeout: handshakeTimeoutMs,
+      });
     } catch (err) {
       logError(`[signal-ws] failed to create WebSocket: ${coerceErrorMessage(err)}`);
       reject(toErrorObject(err, "Non-Error rejection"));

@@ -1615,6 +1615,28 @@ describe("streamContainerEvents", () => {
     expectMockLogNotContains(log, "%2B14259798283");
   });
 
+  it("derives stream handshakeTimeout from caller timeoutMs, not a fixed 30s cap", async () => {
+    await streamContainerEvents({
+      baseUrl: "http://localhost:8080",
+      account: "+14259798283",
+      timeoutMs: 60_000,
+      onEvent: vi.fn(),
+    });
+
+    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024, handshakeTimeout: 60_000 }]);
+  });
+
+  it("honors a shorter caller stream handshake budget", async () => {
+    await streamContainerEvents({
+      baseUrl: "http://localhost:8080",
+      account: "+14259798283",
+      timeoutMs: 1_000,
+      onEvent: vi.fn(),
+    });
+
+    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024, handshakeTimeout: 1_000 }]);
+  });
+
   it("removes the abort listener when the stream closes", async () => {
     const abortController = new AbortController();
     const addEventListener = vi.spyOn(abortController.signal, "addEventListener");
