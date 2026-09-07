@@ -9,6 +9,96 @@ import {
 } from "./event-session-routing.js";
 
 describe("event session routing", () => {
+  it.each([
+    ["account DM", 0],
+    ["nested account DM", 1],
+    ["account", 2],
+    ["nested account", 3],
+    ["channel DM", 4],
+    ["channel", 5],
+  ] as const)(
+    "uses the first configured %s allowlist, including an empty list",
+    (_source, first) => {
+      for (const selected of [["123"], []]) {
+        const lists = Array.from({ length: 6 }, (_, index) =>
+          index < first ? undefined : index === first ? selected : [`other-${index}`],
+        );
+        const cfg: OpenClawConfig = {
+          agents: { entries: { main: {} } },
+          channels: {
+            example: {
+              dm: { allowFrom: lists[4] },
+              allowFrom: lists[5],
+              accounts: {
+                work: {
+                  dm: { allowFrom: lists[0] },
+                  allowFrom: lists[2],
+                  config: { dm: { allowFrom: lists[1] }, allowFrom: lists[3] },
+                },
+              },
+            },
+          },
+        };
+        const sessionKey = "agent:main:example:work:direct:123:thread:456";
+        const policy = resolveEventSessionRoutingPolicy({ cfg, sessionKey });
+        expect(policy.allowFrom).toEqual(selected);
+        expect(resolveEventSessionKeyForPolicy(sessionKey, policy)).toBe(
+          selected.length === 0 ? sessionKey : "agent:main:main",
+        );
+      }
+    },
+  );
+
+  it.each([
+    { channel: undefined, accountId: undefined, expected: "original" },
+    { channel: " Other ", accountId: " ALT ", expected: "override" },
+    { channel: "", accountId: " ", expected: "original" },
+    { channel: "other", accountId: "", expected: "other-work" },
+  ])("resolves channel/account overrides $channel/$accountId", ({ expected, ...overrides }) => {
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: {} } },
+      channels: {
+        example: { accounts: { work: { allowFrom: ["original"] } } },
+        other: {
+          accounts: {
+            work: { allowFrom: ["other-work"] },
+            alt: { allowFrom: ["override"] },
+          },
+        },
+      },
+    };
+    const params = {
+      cfg,
+      sessionKey: "agent:main:example:work:direct:123",
+      ...overrides,
+    };
+    expect(resolveEventSessionRoutingPolicy(params).allowFrom).toEqual([expected]);
+    expect(resolveEventSessionRoutingPolicy({ ...params, allowFrom: [] }).allowFrom).toEqual([]);
+  });
+
+  it.each([
+    ["agent:ops_1:example:direct:123", "agent:ops_1:main"],
+    ["  AGENT:OPS_1:EXAMPLE:DIRECT:123:THREAD:t  ", "agent:ops_1:main"],
+    ["agent:ops_1:example:direct:123:thread:", "agent:ops_1:main"],
+    ["agent:ops_1:example:direct:123:thread:first:thread:last", null],
+    ["agent::example:direct:123:thread:t", null],
+    ["agent:ops_1::example:direct:123:thread:t", null],
+    ["prefix:agent:ops_1:example:direct:123:thread:t", null],
+    ["agent:ops_1:agent:other:example:direct:123:thread:t", null],
+    ["agent:ops_1:example:direct::thread:t", null],
+    ["agent:ops_1:example:group:123:thread:t", null],
+  ] as const)("preserves direct event owner and thread parsing for %s", (sessionKey, expected) => {
+    expect(
+      resolveMainScopedEventSessionKey({
+        cfg: {
+          agents: { entries: { ops_1: {} } },
+          channels: { example: { allowFrom: ["123"] } },
+        },
+        sessionKey,
+      }),
+    ).toBe(expected);
+  });
+
   it("routes single-owner dmScope=main direct event keys to the agent main session", () => {
     const cfg: OpenClawConfig = {
       agents: { entries: { main: { default: true } } },

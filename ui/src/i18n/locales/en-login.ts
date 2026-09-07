@@ -4,13 +4,21 @@ import { en } from "./en.ts";
 // Recovery copy follows the lazy login and plugin views; the loader label stays eager.
 const enLogin = {
   login: {
-    passwordPlaceholder: "optional",
-    showToken: "Show token",
-    hideToken: "Hide token",
-    toggleTokenVisibility: "Toggle token visibility",
-    showPassword: "Show password",
-    hidePassword: "Hide password",
-    togglePasswordVisibility: "Toggle password visibility",
+    heading: "Connect to OpenClaw",
+    lede: "Enter the Gateway URL and secret, or open the one-time link that openclaw dashboard prints on the Gateway host.",
+    gatewayUrl: "Gateway URL",
+    secret: "Gateway secret",
+    secretPlaceholder: "Paste the token or type the password",
+    runOnHost: "Run on the Gateway host",
+    connection: {
+      target: "Connecting to {host}",
+      secretEntered: "secret entered",
+      noSecret: "no secret",
+      change: "Change",
+    },
+    showSecret: "Show Gateway secret",
+    hideSecret: "Hide Gateway secret",
+    toggleSecretVisibility: "Toggle Gateway secret visibility",
     failure: {
       rawError: "Raw error",
       profileUnavailable: {
@@ -29,25 +37,23 @@ const enLogin = {
           "For trusted local operator access, use the shared Gateway token or password.",
       },
       authRequired: {
-        title: "Auth required",
+        title: "This Gateway expects its token",
+        passwordTitle: "This Gateway expects its password",
         summary:
-          "The Gateway is reachable, but it needs a matching token or password before this browser can connect.",
-        stepPaste:
-          "Paste the token from openclaw gateway auth-token --show or enter the configured password.",
+          "The Gateway at {host} is reachable, but it needs a matching token or password before this browser can connect.",
+        stepPaste: "Paste the token from openclaw gateway auth-token --show into Gateway secret.",
+        stepPassword: "Type the configured Gateway password into Gateway secret.",
         stepGenerate:
           "If no token is configured, run openclaw doctor --generate-gateway-token on the gateway host.",
-        stepConnect: "Click Connect again after updating the credential.",
+        stepConnect: "Click Connect again after updating the Gateway secret.",
       },
       authFailed: {
-        title: "Auth did not match",
+        title: "Gateway secret rejected",
         summary:
-          "The supplied credential was rejected. The most common cause is a stale token or a token copied from another Gateway URL.",
+          "{host} rejected the supplied Gateway secret. Check that it belongs to this Gateway and try again.",
         stepDashboard:
           "Run openclaw dashboard --no-open for a fresh URL, or openclaw gateway auth-token --show to recover the token.",
-        stepReplace:
-          "Replace stale token/password values; do not reuse a token from another Gateway URL.",
-        stepMode:
-          "Use one matching auth mode at a time: gateway token for token mode, password for password mode.",
+        stepReplace: "Replace the Gateway secret with the token for this Gateway URL.",
       },
       trustedProxy: {
         title: "Proxy authentication required",
@@ -68,20 +74,22 @@ const enLogin = {
         stepCheckClients: "If this is a shared host, check other clients for repeated bad retries.",
       },
       pairing: {
-        title: "Device pairing required",
-        scopeTitle: "Scope upgrade pending",
-        roleTitle: "Role upgrade pending",
-        metadataTitle: "Device refresh pending",
+        title: "Approve this browser",
+        scopeTitle: "Approve the new access level",
+        roleTitle: "Approve the new role",
+        metadataTitle: "Re-approve this browser",
         summary:
-          "This browser needs one-time approval from the Gateway host before it can use the Control UI.",
+          "This browser passed Gateway auth at {host}, but the Gateway has not seen it before. A one-time approval on the Gateway host finishes pairing.",
         upgradeSummary:
-          "This browser is already known, but the requested access changed and needs a fresh approval.",
+          "This browser is already paired with {host}, but it asked for access it was not approved for. Approve the new request on the Gateway host.",
         stepDashboard:
-          "On the Gateway host, run openclaw dashboard to open a secure one-time pairing link.",
-        stepList: "Run openclaw devices list on the Gateway host.",
-        stepApproveId: "Approve this request: openclaw devices approve {requestId}.",
-        stepApprove: "Approve the pending browser/device request from that list.",
-        stepReconnect: "Reconnect after the approval completes.",
+          "Prefer a link? Run openclaw dashboard on the Gateway host and open the one-time URL it prints in this browser.",
+        stepLatest:
+          "That command prints the exact approve command for the newest pending request; run that one as well.",
+        stepReconnect: "Once approved, click Connect.",
+        waiting:
+          "Waiting for approval… this page connects on its own once the request is approved.",
+        checkNow: "Check now",
       },
       insecure: {
         title: "Secure browser context required",
@@ -112,9 +120,9 @@ const enLogin = {
           "Restart the Gateway after updating OpenClaw so it serves the current protocol.",
       },
       network: {
-        title: "Could not connect",
+        title: "Gateway unreachable",
         summary:
-          "The browser could not complete the Gateway connection. Check the target and transport before retrying credentials.",
+          "The browser could not reach {host}. Check the address and transport before retrying credentials.",
         stepGateway: "Confirm the Gateway is running with openclaw status or openclaw gateway run.",
         stepUrl:
           "Check the WebSocket URL and use wss:// when the Gateway is behind HTTPS/Tailscale Serve.",

@@ -90,6 +90,24 @@ function normalizeAssistantReplayInput(input: readonly unknown[], fromResponse =
   });
 }
 
+export function responsesContinuationRequestFingerprint(
+  request: ResponsesContinuationRequest,
+): string {
+  const serialized = JSON.stringify(requestWithoutInput(request));
+  return sha256Hex(stableStringify(JSON.parse(serialized)));
+}
+
+export function responsesContinuationPrefixFingerprint(
+  input: readonly unknown[],
+  output: readonly unknown[] = [],
+): string {
+  const serialized = JSON.stringify([
+    ...normalizeAssistantReplayInput(input),
+    ...normalizeAssistantReplayInput(output, true),
+  ]);
+  return sha256Hex(stableStringify(JSON.parse(serialized)));
+}
+
 export function resolveResponsesContinuationRequest(
   continuation: ResponsesContinuationState | undefined,
   request: ResponsesContinuationRequest,
@@ -195,6 +213,7 @@ export function claimOpenAIResponsesHttpContinuation(
   params: HttpContinuationIdentity & {
     sessionId: string;
     request: ResponsesContinuationRequest;
+    restoreRequest?: () => ResponsesContinuationRequest;
   },
 ) {
   const key = `${params.sessionId}\0${connectionIdentity(params)}`;
@@ -208,11 +227,13 @@ export function claimOpenAIResponsesHttpContinuation(
   const claimed = { kind: "claimed", sessionId: params.sessionId } as const;
   httpContinuationEntries.set(key, claimed);
   try {
+    const request =
+      previous?.kind === "ready" ? params.request : (params.restoreRequest?.() ?? params.request);
     const resolved = resolveResponsesContinuationRequest(
       previous?.kind === "ready" ? previous.state : undefined,
-      params.request,
+      request,
     );
-    const fullRequest = resolved.fullRequest ?? params.request;
+    const fullRequest = resolved.fullRequest ?? request;
     return {
       // Unstored HTTP responses cannot be referenced, but their prompt prefix can still be cached.
       request: params.request.store === false ? fullRequest : resolved.request,

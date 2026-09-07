@@ -21,6 +21,12 @@ export const OPENCLAW_RUNTIME_EVENT_HEADER = "OpenClaw runtime event.";
 /** Custom message type used for structured runtime-context messages. */
 export const OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE = "openclaw.runtime-context";
 
+/** Provenance assigned by the context producer, never inferred from its text. */
+export type RuntimeContextFragment = {
+  kind: "runtime-instruction" | "conversation-data" | "heartbeat-outcome";
+  text: string;
+};
+
 const LEGACY_INTERNAL_CONTEXT_HEADER =
   ["OpenClaw runtime context (internal):", OPENCLAW_RUNTIME_CONTEXT_NOTICE, ""].join("\n") + "\n";
 
@@ -69,18 +75,17 @@ function findDelimitedTokenLinePrefixStart(text: string, tokenIndex: number): nu
   return text[lineStart - 2] === "\r" ? lineStart - 2 : lineStart - 1;
 }
 
-function extractDelimitedBlocks(
+function stripDelimitedBlocks(
   text: string,
   options: { preserveSurroundingWhitespace?: boolean; separator?: string } = {},
-): { text: string; blocks: string[] } {
+): string {
   const begin = BEGIN_DELIMITER;
   const end = END_DELIMITER;
   let next = text;
-  const blocks: string[] = [];
   for (;;) {
     const start = findDelimitedTokenIndex(next, begin, 0);
     if (start === -1) {
-      return { text: next, blocks };
+      return next;
     }
 
     let cursor = start + begin.token.length;
@@ -109,13 +114,12 @@ function extractDelimitedBlocks(
       ? next.slice(0, blockStart)
       : next.slice(0, start).trimEnd();
     if (finish === -1 || depth !== 0) {
-      return { text: before, blocks };
+      return before;
     }
     let blockEnd = finish + end.token.length;
     while (next[blockEnd] === " " || next[blockEnd] === "\t") {
       blockEnd += 1;
     }
-    blocks.push(next.slice(start, blockEnd).trim());
     const after = options.preserveSurroundingWhitespace
       ? next.slice(blockEnd)
       : next.slice(blockEnd).trimStart();
@@ -214,34 +218,24 @@ const RUNTIME_CONTEXT_PROMPT_HEADERS: readonly string[] = [
   OPENCLAW_RUNTIME_EVENT_HEADER,
 ];
 
+const RUNTIME_CONTEXT_NOTICE_PATTERN = new RegExp(
+  OPENCLAW_RUNTIME_CONTEXT_NOTICE.split(/\s+/).map(escapeRegExp).join("\\s+"),
+);
+const RUNTIME_CONTEXT_PREFACE_PATTERN = new RegExp(
+  `^[ \\t]*(?:${RUNTIME_CONTEXT_PROMPT_HEADERS.flatMap((header) => {
+    const sentences = header.split(". ");
+    // Echoes may start at a header sentence, but the notice alone is ordinary text.
+    return sentences.map((_, index) =>
+      sentences.slice(index).join(". ").split(/\s+/).map(escapeRegExp).join("\\s+"),
+    );
+  }).join("|")})\\s+${RUNTIME_CONTEXT_NOTICE_PATTERN.source}[ \\t]*(?:\\r?\\n|$)`,
+  "gm",
+);
+
 function stripRuntimeContextPromptPreface(text: string): string {
-  const lines = text.split(/\r?\n/);
-  let changed = false;
-  const output: string[] = [];
-
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index] ?? "";
-    const nextLine = lines[index + 1] ?? "";
-    if (
-      RUNTIME_CONTEXT_PROMPT_HEADERS.includes(line.trim()) &&
-      nextLine.trim() === OPENCLAW_RUNTIME_CONTEXT_NOTICE
-    ) {
-      changed = true;
-      index += 1;
-      while (index + 1 < lines.length && (lines[index + 1] ?? "").trim() === "") {
-        index += 1;
-      }
-      continue;
-    }
-    output.push(line);
-  }
-
-  return changed
-    ? output
-        .join("\n")
-        .replace(/\n{3,}/g, "\n\n")
-        .trim()
-    : text;
+  // Each alternative has a fixed word count; unrelated lines never grow a candidate scan.
+  const stripped = text.replace(RUNTIME_CONTEXT_PREFACE_PATTERN, "");
+  return stripped === text ? text : stripped.replace(/\n{3,}/g, "\n\n").trim();
 }
 
 /** Remove protected and legacy runtime-context blocks from text. */
@@ -249,34 +243,22 @@ export function stripInternalRuntimeContext(
   text: string,
   options: { preserveSurroundingWhitespace?: boolean; separator?: string } = {},
 ): string {
-  // All removable formats contain a delimiter or the exact runtime notice.
+  // All removable formats contain a delimiter or the whitespace-tolerant runtime notice.
   // Skip delimiter scans and line parsing for ordinary display text.
   if (
     !text.includes(INTERNAL_RUNTIME_CONTEXT_BEGIN) &&
     !text.includes(INTERNAL_RUNTIME_CONTEXT_END) &&
-    !text.includes(OPENCLAW_RUNTIME_CONTEXT_NOTICE)
+    !RUNTIME_CONTEXT_NOTICE_PATTERN.test(text)
   ) {
     return text;
   }
-  const withoutDelimitedBlocks = extractDelimitedBlocks(text, options).text.replace(
+  const withoutDelimitedBlocks = stripDelimitedBlocks(text, options).replace(
     END_DELIMITER.pattern,
     "",
   );
   return stripRuntimeContextPromptPreface(
     stripLegacyInternalRuntimeContext(withoutDelimitedBlocks),
   );
-}
-
-/** Extract protected runtime-context blocks while returning remaining visible text. */
-export function extractInternalRuntimeContext(text: string): {
-  text: string;
-  runtimeContext?: string;
-} {
-  const extracted = extractDelimitedBlocks(text);
-  return {
-    text: extracted.text,
-    ...(extracted.blocks.length > 0 ? { runtimeContext: extracted.blocks.join("\n\n") } : {}),
-  };
 }
 
 /** Return true when text contains current or legacy runtime-context markers. */

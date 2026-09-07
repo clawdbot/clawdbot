@@ -1,11 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { BundledPluginSource } from "./bundled-sources.js";
-import {
-  persistPluginInstall,
-  type ConfigSnapshotForInstallPersist,
-} from "./install-persistence.js";
+import type { ConfigSnapshotForInstallPersist } from "./install-config-mutation.js";
+import { persistPluginInstall, prepareConfigForDisabledInstall } from "./install-persistence.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
 
 type BundledPluginConfigEnablement =
@@ -41,25 +38,6 @@ function resolveBundledPluginConfigEnablement(params: {
     : { mode: "invalid", error: result.errors[0]?.text ?? "invalid plugin config" };
 }
 
-function prepareConfigForDisabledBundledInstall(
-  config: OpenClawConfig,
-  pluginId: string,
-): OpenClawConfig {
-  const entry = config.plugins?.entries?.[pluginId];
-  const policy = isRecord(entry) ? { ...entry } : {};
-  delete policy.config;
-  return {
-    ...config,
-    plugins: {
-      ...config.plugins,
-      entries: {
-        ...config.plugins?.entries,
-        [pluginId]: { ...policy, enabled: false },
-      },
-    },
-  };
-}
-
 export async function installBundledPluginSource(params: {
   snapshot: ConfigSnapshotForInstallPersist;
   rawSpec: string;
@@ -83,7 +61,7 @@ export async function installBundledPluginSource(params: {
   const shouldEnable = configEnablement.mode === "ready";
   const configBase = shouldEnable
     ? params.snapshot.config
-    : prepareConfigForDisabledBundledInstall(params.snapshot.config, params.bundledSource.pluginId);
+    : prepareConfigForDisabledInstall(params.snapshot.config, params.bundledSource.pluginId);
   const configWarning = shouldEnable
     ? undefined
     : `Installed bundled plugin "${params.bundledSource.pluginId}" without enabling it because it requires configuration first. Configure it, then run \`openclaw plugins enable ${params.bundledSource.pluginId}\`.`;

@@ -169,6 +169,7 @@ export function projectAnthropicTools(
   toWireName: (name: string) => string,
 ): AnthropicToolProjection {
   const projectedTools: AnthropicProjectedTool[] = [];
+  const originalNameByWireName = new Map<string, string>();
   const unavailableOriginalNames = new Set<string>();
   for (const tool of tools) {
     let projectedTool: AnthropicProjectedTool;
@@ -229,14 +230,13 @@ export function projectAnthropicTools(
       }
       continue;
     }
-    const conflictingTool = projectedTools.find(
-      (entry) => entry.wireName === projectedTool.wireName,
-    );
-    if (conflictingTool && conflictingTool.originalName !== projectedTool.originalName) {
+    const conflictingName = originalNameByWireName.get(projectedTool.wireName);
+    if (conflictingName !== undefined && conflictingName !== projectedTool.originalName) {
       throw new Error(
-        `Anthropic tool names "${conflictingTool.originalName}" and "${projectedTool.originalName}" both map to "${projectedTool.wireName}"`,
+        `Anthropic tool names "${conflictingName}" and "${projectedTool.originalName}" both map to "${projectedTool.wireName}"`,
       );
     }
+    originalNameByWireName.set(projectedTool.wireName, projectedTool.originalName);
     projectedTools.push(projectedTool);
   }
   return {

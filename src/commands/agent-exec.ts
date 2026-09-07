@@ -53,6 +53,7 @@ type AgentExecCommandDeps = {
   /** Unlike the CLI collector's default [], an explicit [] disables configured fallbacks. */
   modelFallbacksOverride?: string[];
   isCurrent?: () => boolean;
+  assertSourceCurrent?: () => void;
   stdin?: AsyncIterable<unknown>;
   process?: EmbeddedStateSignalProcess;
   gatewayLockOptions?: GatewayLockOptions;
@@ -236,6 +237,7 @@ export async function agentExecCommand(
   let configIo: typeof import("../config/io.js") | undefined;
   let stopLocalAuditWriter: (() => Promise<void>) | undefined;
   let stateLock: EmbeddedStateLockHandle | null | undefined;
+  let abortSignal = signal;
   let signalBridge:
     | ReturnType<
         (typeof import("../infra/embedded-state-lock.js"))["createEmbeddedStateSignalBridge"]
@@ -369,9 +371,11 @@ export async function agentExecCommand(
       const { acquireEmbeddedStateLock, createEmbeddedStateSignalBridge } =
         await import("../infra/embedded-state-lock.js");
       signalBridge = createEmbeddedStateSignalBridge(deps.process ?? process);
+      // Retained-state signals and caller cancellation both own the turn's lifetime.
+      abortSignal = AbortSignal.any([abortSignal, signalBridge.signal]);
       stateLock = await acquireEmbeddedStateLock({
         options: deps.gatewayLockOptions,
-        signal: signalBridge.signal,
+        signal: abortSignal,
         formatActiveGatewayRefusal: formatActiveGatewayExecRefusal,
       });
     }
@@ -412,7 +416,8 @@ export async function agentExecCommand(
       exit: (code, exitOpts) => runtime.exit(code, exitOpts),
     };
     const invoke = async () => {
-      signal.throwIfAborted();
+      abortSignal.throwIfAborted();
+      deps.assertSourceCurrent?.();
       if (deps.isCurrent?.() === false) {
         throw new Error("Agent execution scope is no longer active");
       }
@@ -435,7 +440,8 @@ export async function agentExecCommand(
           cleanupBundleMcpOnRunEnd: true,
           cleanupCliLiveSessionOnRunEnd: true,
           oneShotCliRun: true,
-          abortSignal: signalBridge ? AbortSignal.any([signal, signalBridge.signal]) : signal,
+          abortSignal,
+          assertSourceCurrent: deps.assertSourceCurrent,
           onModelFallbackExhausted: () => {
             fallbackExhausted = true;
           },

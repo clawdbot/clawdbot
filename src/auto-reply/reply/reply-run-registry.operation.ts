@@ -36,9 +36,11 @@ import {
   markReplyRunDiagnosticProgress,
   notifyReplyRunEnded,
   operationsByUpstreamAbortSignal,
+  prepareReplyRunKeyUpdate,
   registerFollowupAdmissionBarrier,
   registerWaitSessionId,
   replyRunState,
+  resolveReplyOperationAgentId,
   retainStateUntilCompleteOperations,
   type ReplyRunAdmissionBarrier,
   runAfterReplyOperationClear,
@@ -54,6 +56,7 @@ type ReplyOperationAbortCode = Extract<ReplyOperationResult, { kind: "aborted" }
 export function createReplyOperation(params: {
   sessionKey: string;
   sessionId: string;
+  agentId?: string;
   turnKind?: ReplyTurnKind;
   resetTriggered: boolean;
   routeThreadId?: string | number;
@@ -87,6 +90,7 @@ export function createReplyOperation(params: {
   // adoption); every closure below must read this, never params.sessionKey.
   let currentSessionKey = sessionKey;
   let currentSessionId = sessionId;
+  let currentAgentId = resolveReplyOperationAgentId(sessionKey, params.agentId);
   let phase: ReplyOperationPhase = "queued";
   let phaseBeforeGlobalLaneWait: "queued" | "running" | undefined;
   let staleExpiryReason: replyRunSettle.ReplyOperationStaleReason | undefined;
@@ -147,14 +151,13 @@ export function createReplyOperation(params: {
     detachUpstreamAbort();
     const registeredBarrier = afterClearBarrier
       ? registerFollowupAdmissionBarrier(
-          currentSessionKey,
-          currentSessionId,
+          operation,
           afterClearBarrier,
           followupAdmissionBarrierTimeout,
         )
       : pendingClearBarrier;
     pendingClearBarrier = undefined;
-    updateFollowupAdmissionSessionId(currentSessionKey, currentSessionId);
+    updateFollowupAdmissionSessionId(operation);
     // Recovery-owner handoff must begin before the old slot wakes a successor;
     // otherwise that successor can snapshot durable state the handoff then mutates.
     startReplyOperationSuccessorBarriers(operation);
@@ -173,7 +176,7 @@ export function createReplyOperation(params: {
       return;
     }
     void registeredBarrier.settled.then(() =>
-      flushReplyOperationAfterClear(operation, registeredBarrier.sessionId),
+      flushReplyOperationAfterClear(operation, registeredBarrier.source.sessionId),
     );
   };
 
@@ -225,6 +228,9 @@ export function createReplyOperation(params: {
     get sessionId() {
       return currentSessionId;
     },
+    get agentId() {
+      return currentAgentId;
+    },
     turnKind: params.turnKind ?? "visible",
     lifecycleGeneration,
     get routeThreadId() {
@@ -267,6 +273,9 @@ export function createReplyOperation(params: {
     hasOwnedSessionId(candidateSessionId) {
       const normalizedSessionId = normalizeOptionalString(candidateSessionId);
       return normalizedSessionId ? ownedSessionIds.has(normalizedSessionId) : false;
+    },
+    captureOwnedSessionIds() {
+      return new Set(ownedSessionIds);
     },
     recordActivity() {
       finalizationLease.recordActivity();
@@ -396,7 +405,7 @@ export function createReplyOperation(params: {
       registerWaitSessionId(currentSessionKey, currentSessionId);
       currentSessionId = normalizedNextSessionId;
       ownedSessionIds.add(currentSessionId);
-      updateFollowupAdmissionSessionId(currentSessionKey, currentSessionId);
+      updateFollowupAdmissionSessionId(operation);
       updateSuccessorAdmissionSessionId(operation, currentSessionId);
       replyRunState.activeSessionIdsByKey.set(currentSessionKey, currentSessionId);
       replyRunState.activeKeysBySessionId.set(currentSessionId, currentSessionKey);
@@ -407,30 +416,20 @@ export function createReplyOperation(params: {
         reason: "reply_operation:session_updated",
       });
     },
-    updateSessionKey(nextSessionKey) {
-      const normalizedNextKey = normalizeOptionalString(nextSessionKey);
-      if (!normalizedNextKey) {
-        throw new Error("Reply operations require a canonical sessionKey");
-      }
-      if (normalizedNextKey === currentSessionKey) {
+    updateSessionKey(nextSessionKey, agentId) {
+      const update = prepareReplyRunKeyUpdate(operation, nextSessionKey, agentId, stateCleared);
+      if (!update) {
         return;
       }
-      // Only a queued reservation may move slots: once the run started (or the
-      // operation settled), abort/steer/wait paths already resolved this key.
-      if (result || stateCleared || phase !== "queued") {
-        throw new Error(`Cannot rekey reply operation ${currentSessionKey} in phase ${phase}`);
-      }
-      if (replyRunState.activeRunsByKey.has(normalizedNextKey)) {
-        throw new ReplyRunAlreadyActiveError(normalizedNextKey);
-      }
-      if (replyRunState.successorAdmissionBarriersByKey.has(normalizedNextKey)) {
-        throw new ReplyRunSuccessorAdmissionBlockedError(normalizedNextKey);
-      }
       recordActivity();
+      currentAgentId = update.agentId;
+      if (update.sessionKey === currentSessionKey) {
+        return;
+      }
       const previousKey = currentSessionKey;
       replyRunState.activeRunsByKey.delete(previousKey);
       replyRunState.activeSessionIdsByKey.delete(previousKey);
-      currentSessionKey = normalizedNextKey;
+      currentSessionKey = update.sessionKey;
       replyRunState.activeRunsByKey.set(currentSessionKey, operation);
       replyRunState.activeSessionIdsByKey.set(currentSessionKey, currentSessionId);
       replyRunState.activeKeysBySessionId.set(currentSessionId, currentSessionKey);
@@ -595,8 +594,7 @@ export function createReplyOperation(params: {
       // Prepare the recovery fence before cancellation, but retain exact lane
       // ownership until cancel returns or the backend re-enters completion.
       pendingClearBarrier = registerFollowupAdmissionBarrier(
-        currentSessionKey,
-        currentSessionId,
+        operation,
         options.afterClearBarrier,
         options.followupAdmissionBarrierTimeout,
       );

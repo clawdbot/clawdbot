@@ -24,6 +24,9 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("./install-persistence.js", () => ({
   persistPluginInstall: vi.fn(),
+}));
+
+vi.mock("./install-config-mutation.js", () => ({
   resolveInstallConfigMutationPreflights: () => ({
     hookMutation: { mode: "allowed" },
     pluginMutation: { mode: "allowed" },
@@ -55,7 +58,7 @@ vi.mock("./uninstall.js", async (importOriginal) => {
 });
 
 const { listManagedPlugins } = await import("./management-service.js");
-const { uninstallManagedPlugin } = await import("./management-mutations.js");
+const { uninstallManagedPlugin } = await import("./management-uninstall.js");
 const { planPluginUninstall } = await import("./uninstall.js");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 

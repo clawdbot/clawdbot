@@ -1,30 +1,5 @@
 import { escapeHtml } from "../shared/html-escape.js";
-
-const WIDGET_THEME_TOKENS = [
-  "surface",
-  "card",
-  "elevated",
-  "text",
-  "text-strong",
-  "muted",
-  "border",
-  "border-strong",
-  "accent",
-  "accent-fill",
-  "accent-fg",
-  "ok",
-  "warn",
-  "danger",
-  "info",
-  "radius",
-  "radius-full",
-  "scrollbar-size",
-  "scrollbar-thumb-inset",
-  "scrollbar-thumb",
-  "scrollbar-thumb-hover",
-  "font-body",
-  "font-mono",
-] as const;
+import { WIDGET_THEME_MESSAGE_TYPE, WIDGET_THEME_TOKENS } from "../shared/widget-theme.js";
 
 // Baked palettes mirror the host claw theme (ui/src/styles/base.css) so
 // fallback renders match Control UI renders, where the theme bridge pushes the
@@ -226,7 +201,7 @@ export function buildWidgetDocument(
     "const rm=root.style.removeProperty.bind(root.style);" +
     `const keys=${JSON.stringify(WIDGET_THEME_TOKENS)};` +
     'addEventListener("message",event=>{if(event.source!==window.parent)return;' +
-    'const data=event.data;if(!data||data.type!=="openclaw:widget-theme"||' +
+    `const data=event.data;if(!data||data.type!==${JSON.stringify(WIDGET_THEME_MESSAGE_TYPE)}||` +
     'typeof data.tokens!=="object"||data.tokens===null)return;' +
     "for(const key of keys){const raw=data.tokens[key];" +
     'const value=typeof raw==="string"?raw.trim():"";' +

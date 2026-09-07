@@ -1,4 +1,3 @@
-// Memory Host SDK module implements read file behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {

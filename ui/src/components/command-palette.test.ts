@@ -12,6 +12,7 @@ import type {
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "../app/context.ts";
+import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { CommandPalette } from "./command-palette.ts";
@@ -54,6 +55,7 @@ function createGateway(
     connection: { gatewayUrl: "ws://localhost", token: "", bootstrapToken: "", password: "" },
     connectionRevision: 0,
     eventLog: [],
+    eventLogRevision: 0,
     connect: () => undefined,
     setSessionKey: () => undefined,
     start: () => undefined,
@@ -171,6 +173,40 @@ describe("CommandPalette lifecycle", () => {
     }
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("hides native browser overlays while the palette is open and releases on close or disconnect", async () => {
+    vi.stubGlobal("webkit", {
+      messageHandlers: { openclawBrowser: { postMessage: vi.fn() } },
+    });
+    const { gateway } = createGateway(true);
+    const { palette } = await mountPalette(
+      createContext(
+        gateway,
+        vi.fn(async () => null),
+      ),
+    );
+    const changes = vi.fn();
+    const unsubscribe = subscribeNativeOverlayOcclusion(changes);
+    try {
+      palette.openPalette();
+      await palette.updateComplete;
+      await palette.querySelector("openclaw-modal-dialog")?.updateComplete;
+      expect(changes.mock.calls).toEqual([[false], [true]]);
+
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await palette.updateComplete;
+      expect(changes).toHaveBeenLastCalledWith(false);
+      palette.openPalette();
+      await palette.updateComplete;
+      await palette.querySelector("openclaw-modal-dialog")?.updateComplete;
+      expect(changes).toHaveBeenLastCalledWith(true);
+      palette.remove();
+      expect(changes).toHaveBeenLastCalledWith(false);
+    } finally {
+      unsubscribe();
+    }
   });
 
   it("closes and clears its query before a retained element reconnects", async () => {
@@ -873,22 +909,23 @@ describe("CommandPalette lifecycle", () => {
     expect(palette.textContent).toContain("Unrelated title");
   });
 
-  it("shows a search failure instead of a false empty result", async () => {
+  it.each(["zzz-unmatched", "plugins"])("shows a chat search failure for %s", async (query) => {
     const { gateway } = createGateway(true);
     const list = vi
       .fn<ApplicationContext<RouteId>["sessions"]["list"]>()
       .mockRejectedValueOnce(new Error("store needs doctor migration"))
       .mockResolvedValueOnce(createSessionResult("agent:main:zz", "Recovered chat"));
     const { palette } = await mountPalette(createContext(gateway, list));
-    // The query matches no navigation item, so a swallowed search failure
-    // would render the plain "No results" empty state.
-    await enterQuery(palette, "zzz-unmatched");
+    await enterQuery(palette, query);
     await vi.advanceTimersByTimeAsync(50);
     await palette.updateComplete;
 
     expect(list).toHaveBeenCalledOnce();
     expect(palette.textContent).toContain("Chat search failed");
     expect(palette.textContent).not.toContain("No results");
+    if (query === "plugins") {
+      expect(findPaletteOption(palette, "Plugins")).toBeDefined();
+    }
 
     // A new keystroke clears the failure state and retries cleanly.
     await enterQuery(palette, "zz");

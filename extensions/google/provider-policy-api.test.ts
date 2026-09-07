@@ -1,6 +1,11 @@
 // Google tests cover provider policy api plugin behavior.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { normalizeConfig, resolveThinkingProfile } from "./provider-policy-api.js";
+
+// Config and model policy must remain usable without initializing streaming transports.
+vi.mock("openclaw/plugin-sdk/provider-stream-shared", () => {
+  throw new Error("Google provider policy must not load the streaming SDK");
+});
 
 describe("google provider policy public artifact", () => {
   it("normalizes Google provider config without loading the full provider plugin", () => {

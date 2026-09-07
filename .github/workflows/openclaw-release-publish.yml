@@ -136,6 +136,7 @@ jobs:
       prepared_docker_artifact_name: ${{ steps.full_manifest.outputs.prepared_docker_artifact_name }}
       prepared_docker_manifest_sha256: ${{ steps.full_manifest.outputs.prepared_docker_manifest_sha256 }}
       coverage_policy: ${{ steps.full_manifest.outputs.coverage_policy }}
+      release_profile: ${{ steps.full_manifest.outputs.release_profile }}
       android_pin_version: ${{ steps.ref.outputs.android_pin_version }}
       android_pin_matches: ${{ steps.ref.outputs.android_pin_matches }}
       android_release_note: ${{ steps.ref.outputs.android_release_note }}
@@ -1346,6 +1347,66 @@ jobs:
         with:
           name: clawhub-bootstrap-approval-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/clawhub-bootstrap-approval/approval.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Prepare stable npm bootstrap approval
+        if: ${{ inputs.npm_dist_tag == 'latest' && inputs.release_evidence_mode == 'full-release-validation' && (needs.resolve_release_target.outputs.release_profile == 'stable' || needs.resolve_release_target.outputs.release_profile == 'full') }}
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
+          RELEASE_PROFILE: ${{ needs.resolve_release_target.outputs.release_profile }}
+          VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          VALIDATION_RUN_ATTEMPT: ${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}
+          PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
+          PLUGINS: ${{ inputs.plugins }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/npm-stable-bootstrap-approval"
+          node --import tsx --input-type=module <<'NODE'
+          import { writeFileSync } from "node:fs";
+          import { collectPublishablePluginPackages, resolveSelectedPublishablePluginPackages } from "./.release-harness/scripts/lib/plugin-npm-release.ts";
+          import { createStablePluginNpmBootstrapApproval } from "./.release-harness/scripts/plugin-npm-bootstrap-approval.mjs";
+
+          const plugins = collectPublishablePluginPackages();
+          const selection = (process.env.PLUGINS ?? "").split(",").map((name) => name.trim()).filter(Boolean);
+          const scope = process.env.PLUGIN_PUBLISH_SCOPE;
+          if ((scope !== "selected" && scope !== "all-publishable") ||
+              (scope === "selected" && selection.length === 0) ||
+              (scope === "all-publishable" && selection.length > 0)) {
+            throw new Error("Stable npm bootstrap requires an explicit complete plugin selection.");
+          }
+          const packages = resolveSelectedPublishablePluginPackages({ plugins, selection });
+          const approval = createStablePluginNpmBootstrapApproval({
+            repository: process.env.GITHUB_REPOSITORY,
+            parentRunId: process.env.GITHUB_RUN_ID,
+            parentRunAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+            workflowBranch: process.env.GITHUB_REF_NAME,
+            workflowFullRef: process.env.GITHUB_REF,
+            parentWorkflowSha: process.env.GITHUB_SHA,
+            releaseTag: process.env.RELEASE_TAG,
+            targetSha: process.env.TARGET_SHA,
+            publishTag: "latest",
+            releaseProfile: process.env.RELEASE_PROFILE,
+            validationRunId: process.env.VALIDATION_RUN_ID,
+            validationRunAttempt: Number(process.env.VALIDATION_RUN_ATTEMPT),
+            packages: packages.map((plugin) => plugin.packageName),
+          });
+          writeFileSync(`${process.env.RUNNER_TEMP}/npm-stable-bootstrap-approval/approval.json`, `${JSON.stringify(approval, null, 2)}\n`);
+          NODE
+
+      - name: Attest stable npm bootstrap approval
+        if: ${{ inputs.npm_dist_tag == 'latest' && inputs.release_evidence_mode == 'full-release-validation' && (needs.resolve_release_target.outputs.release_profile == 'stable' || needs.resolve_release_target.outputs.release_profile == 'full') }}
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/npm-stable-bootstrap-approval/approval.json
+
+      - name: Upload stable npm bootstrap approval
+        if: ${{ inputs.npm_dist_tag == 'latest' && inputs.release_evidence_mode == 'full-release-validation' && (needs.resolve_release_target.outputs.release_profile == 'stable' || needs.resolve_release_target.outputs.release_profile == 'full') }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: npm-stable-bootstrap-approval-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/npm-stable-bootstrap-approval/approval.json
           if-no-files-found: error
           retention-days: 30
 

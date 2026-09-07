@@ -96,7 +96,7 @@ suite.define(() => {
         const response = await page.goto(`${suite.server.baseUrl}settings/agents/main/overview`);
         expect(response?.status()).toBe(200);
 
-        const fallbackInput = page.locator(".agent-chip-input input");
+        const fallbackInput = page.locator("openclaw-multi-select.agent-fallbacks input");
         await fallbackInput.waitFor();
         await gateway.deferNext("config.set");
         await fallbackInput.fill("anthropic/claude-sonnet-4-6");

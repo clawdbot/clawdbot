@@ -27,12 +27,12 @@ import { assertGatewayServiceManagementAllowedForUpdate } from "./update-command
 import {
   createServiceActivationFixture,
   readyRecoveryHealth,
-  verifiedServingResult,
   registerRecoveryTests,
   writeRecoveryConfig,
 } from "./update-command-service-recovery.test-support.js";
 import {
   registerInstallRootTransitionTests,
+  registerPluginMaintenanceTests,
   registerRestartOutcomeTests,
 } from "./update-command-service-transition.test-support.js";
 import {
@@ -154,7 +154,8 @@ vi.mock("../../infra/gateway-processes.js", async (importOriginal) => ({
   signalVerifiedGatewayPidSync: mocks.signal,
 }));
 vi.mock("../../commands/doctor.js", () => ({ doctorCommand: mocks.doctor }));
-vi.mock("./update-command-config-snapshot.js", () => ({
+vi.mock("./update-command-config-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-config-snapshot.js")>()),
   createUpdateConfigSnapshot: mocks.configSnapshot,
 }));
 vi.mock("./restart-helper.js", () => ({ runRestartScript: mocks.script }));
@@ -170,10 +171,6 @@ vi.mock("../daemon-cli/restart-health.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon-cli/restart-health.js")>()),
   waitForGatewayHealthyRestart: mocks.health,
   waitForGatewayHttpReadiness: async () => ({ healthz: 200, readyz: 200 }),
-}));
-vi.mock("../../infra/update-serving-verification.js", () => ({
-  verifyUpdateServing: (...args: Parameters<typeof verifiedServingResult>) =>
-    verifiedServingResult(...args),
 }));
 vi.mock("./update-command-convergence.js", () => ({
   convergeUpdatePlugins: async (params: { result: unknown }) => ({
@@ -635,76 +632,7 @@ describe("preserved update activation with real version guards", () => {
     },
   );
 
-  it.each(["git", "npm"] as const)(
-    "delegates %s activation after candidate doctor stamps newer config",
-    async (mode) => {
-      const before = await maybeStopManagedServiceBeforeMutableUpdate({
-        updateInstallKind: mode === "git" ? "git" : "package",
-        root,
-        shouldRestart: true,
-        jsonMode: true,
-      });
-      expect(before.stopped).toBe(true);
-      mocks.events.push("core updated");
-      await writeConfig("9999.1.1");
-      mocks.events.push("candidate doctor stamped config");
-      const service = resolveGatewayService();
-      const state = await readGatewayServiceState(service, { requireEffective: true });
-      const verdict = await revalidateManagedGatewayServiceAfterUpdate({
-        state,
-        root,
-        preManagedServiceStop: before,
-      });
-
-      const activated = await maybeRestartService({
-        shouldRestart: true,
-        result: {
-          status: "ok",
-          mode,
-          root,
-          steps: [],
-          durationMs: 0,
-          before: { version: VERSION },
-          after: { version: "9999.1.1" },
-        },
-        opts: { run },
-        refreshServiceEnv: false,
-        serviceUpdateVerdict: verdict,
-        serviceEnv: state.env,
-        gatewayPort: 19305,
-        requireRunningServiceAfterRestart: true,
-        timeoutMs: 1000,
-      });
-
-      expect(activated, mocks.log.mock.calls.flat().join("\n")).toBe("ok");
-      expect(mocks.events).toEqual([
-        "native stop",
-        "core updated",
-        "candidate doctor stamped config",
-        "fresh CLI restart",
-      ]);
-      const child = mocks.child.mock.calls[0];
-      expect(child?.[0].slice(1)).toEqual([
-        path.join(root, "dist", "index.js"),
-        "gateway",
-        "restart",
-        "--preserve-definition",
-        "--json",
-      ]);
-      expect(mocks.health.mock.calls[0]?.[0]).toMatchObject({
-        port: 19305,
-        expectedVersion: "9999.1.1",
-        requireRunningService: true,
-      });
-      expect(mocks.start).not.toHaveBeenCalled();
-      expect(mocks.restart).not.toHaveBeenCalled();
-      expect(mocks.doctor).not.toHaveBeenCalled();
-      // The old adapter still refuses the same config: delegation must not weaken its guard.
-      await expect(service.restart({ env: state.env, stdout: process.stdout })).rejects.toThrow(
-        "older than the config",
-      );
-    },
-  );
+  registerPluginMaintenanceTests(() => ({ root, run, mocks, writeConfig }));
 
   it.each(["sealed", "writable"] as const)(
     "fresh restart keeps the preserved launcher even when authority is %s",
@@ -852,7 +780,6 @@ describe("preserved update activation with real version guards", () => {
     if (demandOnly) {
       mocks.health.mockImplementation(async ({ port }) => ({
         healthy: nativeRunning,
-        gatewayBootId: "service-boot",
         staleGatewayPids: [],
         runtime: { status: nativeRunning ? "running" : "stopped" },
         portUsage: { port, status: nativeRunning ? "busy" : "free", listeners: [], hints: [] },

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { SystemAgentSession } from "./agent-turn.js";
 import type { SystemAgentTurnDeps } from "./agent-turn.test-support.js";
 import {
+  createSystemAgentVerifiedInferenceTestFixture,
   fakeOverviewLoader,
   useTempStateDir,
   configSnapshot,
@@ -15,7 +16,6 @@ import {
   type SystemAgentChatEngineOptions,
 } from "./chat-engine.test-support.js";
 import { loadSystemAgentOverview } from "./overview.js";
-import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
 
 describe("SystemAgentChatEngine facade", () => {
   it("ends a partial timed-out agent turn without starting a second planner inference", async () => {

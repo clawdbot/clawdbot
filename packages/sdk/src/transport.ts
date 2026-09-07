@@ -1,5 +1,4 @@
-// OpenClaw SDK module implements transport behavior.
-import { GatewayClient } from "@openclaw/gateway-client";
+import { GatewayClient, type GatewayClientOptions } from "@openclaw/gateway-client";
 import { EventHub } from "./event-hub.js";
 import type {
   ConnectableOpenClawTransport,
@@ -10,51 +9,46 @@ import type {
 
 // Gateway transport adapter that converts the lower-level GatewayClient into the
 // SDK transport interface and replays raw events for late subscribers.
-type GatewayClientLike = {
-  request<T = unknown>(
-    method: string,
-    params?: unknown,
-    options?: GatewayRequestOptions,
-  ): Promise<T>;
-  stopAndWait(): Promise<void>;
-};
+type GatewayClientLike = Pick<GatewayClient, "request" | "stopAndWait">;
 
 const RAW_EVENT_REPLAY_LIMIT = 1000;
 
-/** Options passed through to the Gateway websocket client. */
-type GatewayClientTransportOptions = {
-  url?: string;
-  connectChallengeTimeoutMs?: number;
-  preauthHandshakeTimeoutMs?: number;
-  tickWatchMinIntervalMs?: number;
-  requestTimeoutMs?: number;
-  token?: string;
-  bootstrapToken?: string;
-  deviceToken?: string;
-  password?: string;
-  instanceId?: string;
+/** Explicit SDK projection with its broader identity and callback contracts preserved. */
+type GatewayClientTransportOptions = Pick<
+  GatewayClientOptions,
+  | "url"
+  | "connectChallengeTimeoutMs"
+  | "preauthHandshakeTimeoutMs"
+  | "tickWatchMinIntervalMs"
+  | "requestTimeoutMs"
+  | "token"
+  | "bootstrapToken"
+  | "deviceToken"
+  | "password"
+  | "instanceId"
+  | "clientDisplayName"
+  | "clientVersion"
+  | "platform"
+  | "deviceFamily"
+  | "role"
+  | "scopes"
+  | "caps"
+  | "commands"
+  | "permissions"
+  | "pathEnv"
+  | "minProtocol"
+  | "maxProtocol"
+  | "tlsFingerprint"
+  | "onConnectError"
+  | "onGap"
+> & {
   clientName?: string;
-  clientDisplayName?: string;
-  clientVersion?: string;
-  platform?: string;
-  deviceFamily?: string;
   mode?: string;
-  role?: string;
-  scopes?: string[];
-  caps?: string[];
-  commands?: string[];
-  permissions?: Record<string, boolean>;
-  pathEnv?: string;
   deviceIdentity?: unknown;
-  minProtocol?: number;
-  maxProtocol?: number;
-  tlsFingerprint?: string;
   onEvent?: (evt: GatewayEvent) => void;
   onHelloOk?: (hello: unknown) => void;
-  onConnectError?: (err: Error) => void;
   onReconnectPaused?: (info: unknown) => void;
   onClose?: (code: number, reason: string) => void;
-  onGap?: (info: { expected: number; received: number }) => void;
 };
 
 function toGatewayEvent(event: unknown): GatewayEvent {

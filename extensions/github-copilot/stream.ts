@@ -1,50 +1,16 @@
 // Github Copilot plugin module implements stream behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import type { Context } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAnthropicEphemeralCacheControlMarkers,
   createPayloadPatchStreamWrapper,
+  projectCopilotRequestFacts,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { sanitizeCopilotReplayResponsePayload } from "./connection-bound-ids.js";
 import { stripCopilotAssistantThinkingMessages } from "./replay-policy.js";
 import { buildCopilotRuntimeHeaders } from "./runtime-identity.js";
 
 type StreamOptions = Parameters<StreamFn>[2];
-
-function containsCopilotContentType(value: unknown, type: string): boolean {
-  if (Array.isArray(value)) {
-    return value.some((item) => containsCopilotContentType(item, type));
-  }
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const entry = value as { type?: unknown; content?: unknown };
-  return entry.type === type || containsCopilotContentType(entry.content, type);
-}
-
-function inferCopilotInitiator(messages: Context["messages"]): "agent" | "user" {
-  const last = messages[messages.length - 1];
-  if (!last) {
-    return "user";
-  }
-  if (last.role === "user" && containsCopilotContentType(last.content, "tool_result")) {
-    return "agent";
-  }
-  return last.role === "user" ? "user" : "agent";
-}
-
-function hasCopilotVisionInput(messages: Context["messages"]): boolean {
-  return messages.some((message) => {
-    if (message.role === "user" && Array.isArray(message.content)) {
-      return message.content.some((item) => containsCopilotContentType(item, "image"));
-    }
-    if (message.role === "toolResult" && Array.isArray(message.content)) {
-      return message.content.some((item) => containsCopilotContentType(item, "image"));
-    }
-    return false;
-  });
-}
 
 function patchOnPayloadResult(
   result: unknown,
@@ -227,14 +193,15 @@ export function wrapCopilotProviderStream(ctx: ProviderWrapStreamFnContext): Str
     ) {
       return stream(model, context, options);
     }
+    const facts = projectCopilotRequestFacts(context.messages, "nested");
     return stream(model, context, {
       ...options,
       headers: buildCopilotRuntimeHeaders({
         config: ctx.config,
         headers: {
           ...model.headers,
-          "x-initiator": inferCopilotInitiator(context.messages),
-          ...(hasCopilotVisionInput(context.messages) ? { "Copilot-Vision-Request": "true" } : {}),
+          "x-initiator": facts.initiator,
+          ...(facts.hasImages ? { "Copilot-Vision-Request": "true" } : {}),
           ...options?.headers,
         },
       }),

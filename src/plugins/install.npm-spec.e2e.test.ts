@@ -12,12 +12,22 @@ import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginNpmProjectDir } from "./install-paths.js";
 import { withPluginInstallRoots } from "./install-root-context.js";
-import { installPluginFromNpmSpec, PLUGIN_INSTALL_ERROR_CODE } from "./install.js";
+import {
+  requestDeferredPluginInstall,
+  resolvePluginInstallTransaction,
+} from "./install-transaction.js";
+import {
+  installPluginFromNpmPackArchive,
+  installPluginFromNpmSpec,
+  PLUGIN_INSTALL_ERROR_CODE,
+} from "./install.js";
 import {
   configWithInstalledPackageTreeBlockPolicy,
   createInstalledPackageTreePolicyExec,
+  installProjectDependencies,
 } from "./install.npm-spec.test-support.js";
 import { runPluginPayloadSmokeCheck } from "./payload-verification.js";
+import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import {
   packPlugins,
   registryPackages,
@@ -94,33 +104,94 @@ async function installNpmPlugin(params: {
   });
 }
 
-async function installProjectDependencies(
-  projectRoot: string,
-  dependencies: Record<string, string>,
-): Promise<void> {
-  await fs.mkdir(projectRoot, { recursive: true });
-  await fs.writeFile(
-    path.join(projectRoot, "package.json"),
-    `${JSON.stringify({ private: true, dependencies }, null, 2)}\n`,
-    "utf8",
-  );
-  await execFileAsync(
-    "npm",
-    [
-      "install",
-      "--omit=dev",
-      "--omit=peer",
-      "--legacy-peer-deps",
-      "--loglevel=error",
-      "--ignore-scripts",
-      "--no-audit",
-      "--no-fund",
-    ],
-    { cwd: projectRoot },
-  );
-}
-
 describe("installPluginFromNpmSpec e2e", () => {
+  it.each(["npm", "npm-pack"] as const)(
+    "preserves a real %s successor when an earlier lifecycle lease has closed",
+    { timeout: 120_000 },
+    async (source) => {
+      const { rootDir, npmRoot } = await makeInstallFixture("npm-rollback-owner-e2e");
+      const packageName = uniquePackageName("rollback-owner");
+      const versions = await packPlugins(rootDir, [
+        { packageName, version: "1.0.0" },
+        { packageName, version: "2.0.0" },
+      ]);
+      await useStaticRegistry([{ packageName, latest: "2.0.0", versions }]);
+      const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(rootDir, "state") };
+      const install = (version: string, deferCommit = false, cancelBeforePublish = false) =>
+        withPluginLifecycleLease({ env }, async (lease) => {
+          let callerActive = true;
+          const params = requestDeferredPluginInstall(
+            {
+              npmDir: npmRoot,
+              mode: "update" as const,
+              timeoutMs: 120_000,
+              beforePersistentApply: () => {
+                if (!callerActive) {
+                  throw new Error("caller authority closed");
+                }
+              },
+              onBeforePluginArtifactCommit: async () => {
+                lease.assertOwned();
+                callerActive = !cancelBeforePublish;
+              },
+            },
+            undefined,
+            () => lease.assertOwned(),
+          );
+          const result =
+            source === "npm"
+              ? await installPluginFromNpmSpec({ ...params, spec: `${packageName}@${version}` })
+              : await installPluginFromNpmPackArchive({
+                  ...params,
+                  archivePath: path.join(rootDir, `${packageName}-${version}.tgz`),
+                });
+          if (!result.ok) {
+            throw new Error(result.error);
+          }
+          const transaction = resolvePluginInstallTransaction(result);
+          if (!transaction) {
+            throw new Error("expected deferred npm install");
+          }
+          if (!deferCommit) {
+            await transaction.commit();
+          }
+          return { result, transaction };
+        });
+
+      await install("1.0.0");
+      const older = await install("2.0.0", true);
+      const successor = await install("2.0.0");
+      expect(successor.result.targetDir).toBe(older.result.targetDir);
+      const projectRoot = path.dirname(path.dirname(successor.result.targetDir));
+      const manifestPath = path.join(projectRoot, "package.json");
+      const protectedFiles = [
+        manifestPath,
+        path.join(projectRoot, "package-lock.json"),
+        path.join(successor.result.targetDir, "dist", "index.js"),
+      ];
+      if (source === "npm-pack") {
+        const manifest = await readJson<{ dependencies: Record<string, string> }>(manifestPath);
+        const dependencySpec = manifest.dependencies[packageName];
+        if (!dependencySpec?.startsWith("file:")) {
+          throw new Error("expected a managed npm-pack file dependency");
+        }
+        protectedFiles.push(path.resolve(projectRoot, dependencySpec.slice("file:".length)));
+      }
+      const before = await Promise.all(protectedFiles.map((file) => fs.readFile(file)));
+
+      const rollbackError = await older.transaction.rollback().then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect.soft(rollbackError).toHaveProperty("code", "OPENCLAW_STATE_LEASE_LOST");
+      const after = await Promise.all(protectedFiles.map((file) => fs.readFile(file)));
+      expect(after).toEqual(before);
+
+      await expect(install("2.0.0", false, true)).rejects.toThrow("caller authority closed");
+      expect(await Promise.all(protectedFiles.map((file) => fs.readFile(file)))).toEqual(before);
+    },
+  );
+
   it("relocates a bundled plugin through real npm only after artifact consent", async () => {
     const { rootDir, npmRoot } = await makeInstallFixture("relocation-e2e");
     const packageName = uniquePackageName("relocated-plugin");

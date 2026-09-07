@@ -95,10 +95,14 @@ describe("skill_workshop list", () => {
     });
     await expect(
       tool.execute("call-inspect", { action: "inspect", proposal_id: proposalId }),
-    ).rejects.toThrow(`Skill proposal draft is missing: ${proposalId}. Reject and re-propose it.`);
+    ).rejects.toThrow(
+      `Skill proposal draft is missing: ${proposalId}. Run openclaw doctor --fix for recovery.`,
+    );
     await expect(
       tool.execute("call-apply", { action: "apply", proposal_id: proposalId }),
-    ).rejects.toThrow(`Skill proposal draft is missing: ${proposalId}. Reject and re-propose it.`);
+    ).rejects.toThrow(
+      `Skill proposal draft is missing: ${proposalId}. Run openclaw doctor --fix for recovery.`,
+    );
     await expect(
       tool.execute("call-reject", { action: "reject", proposal_id: proposalId }),
     ).resolves.toMatchObject({ details: { id: proposalId, status: "rejected" } });

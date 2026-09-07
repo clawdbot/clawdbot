@@ -26,7 +26,10 @@ import {
   resolveGatewaySessionStoreTargetWithStore,
 } from "../session-utils.js";
 import { projectSessionsPatchEntry } from "../sessions-patch.js";
-import { prepareSessionWorkerPlacementMutationCheck } from "../worker-environments/session-placement-lifecycle.js";
+import {
+  prepareSessionWorkerPlacementMutationCheck,
+  SessionWorkerPlacementStopError,
+} from "../worker-environments/session-placement-lifecycle.js";
 import {
   prepareSessionLifecycleDrain,
   type SessionLifecycleDrain,
@@ -269,6 +272,11 @@ export async function prepareSessionPatchArchive(params: {
       ...(fresh.entry ? { entry: fresh.entry } : {}),
     });
   } catch (error) {
+    if (error instanceof SessionWorkerPlacementStopError) {
+      return err(
+        errorShape(ErrorCodes.UNAVAILABLE, error.message, { retryable: error.state !== "failed" }),
+      );
+    }
     if (
       error instanceof SessionMutationAuthorizationChangedError ||
       error instanceof ModelAccountConnectAuthorityError

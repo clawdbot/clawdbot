@@ -6,7 +6,7 @@ import {
   resolveLifecyclePrimaryEntry,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
+import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import {
   cloneSessionEntry,
@@ -17,9 +17,11 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { findSessionTranscriptHeader } from "./session-entry-codec.js";
 import type { SessionActor } from "./session-entry-provenance.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
+import { MIN_READABLE_SESSION_VERSION } from "./version.js";
 
 export type RestartTombstoneRecoveryResult =
   | {
@@ -67,15 +69,13 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
     ...params.successorTarget,
     storeKeys: [...params.successorTarget.storeKeys],
   });
-  let previousIdentity = new Map<string, SessionEntry>();
-  let currentIdentity = new Map<string, SessionEntry>();
   let result: RestartTombstoneRecoveryResult = {
     status: "conflict",
     reason: "source-changed",
   };
 
-  await runExclusiveSqliteSessionWrite(resolved, async () => {
-    runOpenClawAgentWriteTransaction((database) => {
+  const publish = await runExclusiveSqliteSessionWrite(resolved, async () => {
+    return runOpenClawAgentWriteTransaction((database) => {
       const source = resolveLifecyclePrimaryEntry(database, sourceTarget)?.entry as
         | InternalSessionEntry
         | undefined;
@@ -83,7 +83,7 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
       const tombstone = recovery?.tombstone;
       if (!source?.sessionId || !recovery || !tombstone) {
         result = { status: "conflict", reason: "not-tombstoned" };
-        return;
+        return undefined;
       }
 
       const recoveredSessionKey = tombstone.recoveredSessionKey;
@@ -91,7 +91,7 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
       if (recoveredSessionKey || recoveredSessionId) {
         if (!recoveredSessionKey || !recoveredSessionId) {
           result = { status: "conflict", reason: "successor-missing" };
-          return;
+          return undefined;
         }
         const linked = resolveLifecyclePrimaryEntry(
           database,
@@ -102,7 +102,7 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
         )?.entry;
         if (!linked || linked.sessionId !== recoveredSessionId) {
           result = { status: "conflict", reason: "successor-missing" };
-          return;
+          return undefined;
         }
         result = {
           status: "existing",
@@ -110,7 +110,7 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
           successorEntry: cloneSessionEntry(linked),
           successorKey: recoveredSessionKey,
         };
-        return;
+        return undefined;
       }
 
       if (
@@ -121,20 +121,18 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
         source.pluginOwnerId !== params.expected.pluginOwnerId
       ) {
         result = { status: "conflict", reason: "source-changed" };
-        return;
+        return undefined;
       }
       if (resolveLifecyclePrimaryEntry(database, successorTarget)?.entry) {
         result = { status: "conflict", reason: "target-exists" };
-        return;
+        return undefined;
       }
 
       const sourceEvents = loadTranscriptEventsFromDatabase(database, source.sessionId);
-      const header = sourceEvents.find(
-        (event): event is Record<string, unknown> => isRecord(event) && event.type === "session",
-      );
+      const header = findSessionTranscriptHeader(sourceEvents);
       if (!header) {
         result = { status: "conflict", reason: "transcript-missing" };
-        return;
+        return undefined;
       }
 
       const successorSessionId = params.successorEntry.sessionId;
@@ -155,6 +153,7 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
             ...createSessionTranscriptHeader({
               cwd: typeof header.cwd === "string" ? header.cwd : undefined,
               sessionId: successorSessionId,
+              version: header.version ?? MIN_READABLE_SESSION_VERSION,
             }),
             parentSession,
           },
@@ -190,21 +189,27 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
       params.commitGuard?.();
 
       const identityKeys = [sourceTarget.canonicalKey, successorTarget.canonicalKey];
-      previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
+      const previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
       writeSessionEntry(database, successorTarget.canonicalKey, params.successorEntry);
       writeSessionEntry(database, sourceTarget.canonicalKey, nextSource, {
         previousEntry: source,
       });
-      currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
+      const currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
       result = {
         status: "created",
         sourceEntry: cloneSessionEntry(nextSource),
         successorEntry: cloneSessionEntry(params.successorEntry),
         successorKey: successorTarget.canonicalKey,
       };
+      return prepareSessionIdentityPublication(
+        database,
+        resolved.agentId,
+        previousIdentity,
+        currentIdentity,
+      );
     }, toDatabaseOptions(resolved));
   });
 
-  emitCommittedSessionIdentityDiff(resolved.agentId, previousIdentity, currentIdentity);
+  publish?.();
   return result;
 }

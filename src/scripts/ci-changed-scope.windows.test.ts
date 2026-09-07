@@ -74,6 +74,17 @@ describe("detectChangedScope Windows routing", () => {
     {
       name: "routes paired-worker workspace transfer owners and native regression coverage to Windows",
       paths: [
+        "src/infra/git-exec.ts",
+        "src/infra/git-exec.test.ts",
+        "src/agents/worktrees/git.ts",
+        "src/agents/worktrees/git.test.ts",
+        "src/agents/worktrees/base-ref.ts",
+        "src/gateway/worker-environments/workspace-result-git.ts",
+        "src/gateway/worker-environments/workspace-result-git.test.ts",
+        "src/gateway/worker-environments/workspace-result-staging.ts",
+        "src/gateway/worker-environments/workspace-result-ref-mutation.test.ts",
+        "src/gateway/worker-environments/session-repository-checkpoints.ts",
+        "src/gateway/worker-environments/session-repository-checkpoints.test.ts",
         "src/node-host/node-worker-transfer-client.ts",
         "src/node-host/node-worker-transfer-client.test.ts",
         "src/gateway/worker-environments/node-worker-tunnel.ts",
@@ -254,6 +265,7 @@ describe("detectChangedScope Windows routing", () => {
       paths: [
         "src/plugin-sdk/node-host.ts",
         "src/plugin-sdk/node-host.test.ts",
+        "src/node-host/invoke-agent-cli-claude.test.ts",
         "src/process/supervisor/supervisor.anchored-shell.real.test.ts",
         "src/process/terminal-pty.test.ts",
         "src/tui/tui.ts",

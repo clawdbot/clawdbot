@@ -2,7 +2,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   buildCodeModeMatrixAgentEnv,
   classifyCodeModeMatrixCell,
@@ -13,7 +14,73 @@ import {
   runCodeModeModelMatrix,
   validateQaEvidenceSummaryJson,
   type CodeModeMatrixCellResult,
+  type CodeModeMatrixTask,
 } from "../../../scripts/code-mode-model-matrix.ts";
+
+const extendedTasks = [
+  "large-result-reduction",
+  "parallel-independent-reads",
+  "dependent-chain",
+] as const satisfies readonly CodeModeMatrixTask[];
+
+// A synthetic CLI, not a model or Code Mode runtime: exercise the real runner's
+// fixture preparation, process envelope, effect oracle, and artifact projection.
+// It consumes only task files/arguments; no provider imports or credentials.
+const fixtureCli = String.raw`
+import fs from "node:fs/promises";
+import path from "node:path";
+const option = (name) => process.argv[process.argv.indexOf(name) + 1];
+const workspace = option("--cwd");
+const prompt = process.argv[4];
+let calls = 0;
+const read = async (name) => {
+  calls++;
+  return await fs.readFile(path.join(workspace, name), "utf8");
+};
+const readJson = async (name) => JSON.parse(await read(name));
+let answer;
+if (prompt.includes("orders.jsonl")) {
+  const rules = await readJson("rules.json");
+  const orders = await read("orders.jsonl");
+  if (Buffer.byteLength(orders) <= 65536 || Buffer.byteLength(orders) > 131072) {
+    throw new Error("reduction fixture must require bounded large-result handling");
+  }
+  let count = 0;
+  let sum = 0;
+  for (const line of orders.trim().split("\n")) {
+    const order = JSON.parse(line);
+    if (order.region !== rules.region || order.units < rules.minUnits) continue;
+    count++;
+    sum += order.units * order.unitPriceCents;
+  }
+  answer = [rules.verificationCode, count, sum].join(":");
+} else if (prompt.includes("north.json")) {
+  const values = await Promise.all(["north.json", "south.json", "west.json"].map(readJson));
+  answer = values.map((entry) => entry.value).join("|");
+} else if (prompt.includes("start.json")) {
+  const start = await readJson("start.json");
+  const route = await readJson(start.next);
+  answer = (await readJson(route.next)).value;
+} else {
+  throw new Error("unsupported fixture prompt");
+}
+if (option("--thinking") !== "missing-effect") {
+  await fs.writeFile(path.join(workspace, "result.txt"), answer);
+  calls++;
+  if (await read("result.txt") !== answer) throw new Error("readback mismatch");
+}
+const engaged = option("--code-mode") === "code";
+const [provider, model] = option("--model").split("/");
+console.log(JSON.stringify({
+  ok: true, status: "ok", final: option("--thinking") === "wrong-answer" ? "wrong" : answer,
+  payloads: [], model, provider, sessionId: "fixture-only", codeModeEngaged: engaged,
+  assistantTurns: 2,
+  ...(engaged ? { bridgeCalls: { search: 0, describe: 0, call: calls } } : {}),
+  toolSummary: { calls: engaged ? 1 : calls, tools: engaged ? ["exec"] : ["read", "write"] }
+}));
+`;
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("Code Mode model matrix options", () => {
   it("defaults to the complete bounded matrix", () => {
@@ -26,6 +93,18 @@ describe("Code Mode model matrix options", () => {
       thinking: "off",
       repoRoot: "/repo",
     });
+  });
+
+  it("rejects invalid and duplicate extended task selectors", () => {
+    for (const tasks of [["unknown"], ["dependent-chain", "dependent-chain"]]) {
+      expect(() =>
+        parseCodeModeMatrixOptions([
+          "--model",
+          "fixture/model",
+          ...tasks.flatMap((task) => ["--task", task]),
+        ]),
+      ).toThrow(tasks.length === 1 ? "--task must be one of" : "Duplicate --task");
+    }
   });
 
   it("rejects ambiguous selectors and output paths", () => {
@@ -343,6 +422,146 @@ describe("Code Mode model matrix classification", () => {
   });
 });
 
+describe("Code Mode model matrix extended fixtures", () => {
+  it.each([
+    ["off", null],
+    ["wrong-answer", "answer_mismatch"],
+    ["missing-effect", "effect_mismatch"],
+  ] as const)(
+    "runs task fixtures through the process/evidence boundary: %s",
+    async (thinking, failureCategory) => {
+      const repoRoot = tempDirs.make("openclaw-matrix-fixtures-");
+      await fs.mkdir(path.join(repoRoot, "dist"));
+      await fs.mkdir(path.join(repoRoot, "node_modules"));
+      await fs.writeFile(path.join(repoRoot, "package.json"), JSON.stringify({ type: "module" }));
+      await fs.writeFile(path.join(repoRoot, "dist", "entry.js"), fixtureCli);
+      const options = parseCodeModeMatrixOptions(
+        [
+          "--model",
+          "fixture/model",
+          "--repetitions",
+          "1",
+          "--keep-state",
+          "--mode",
+          "code",
+          ...(failureCategory ? [] : ["--mode", "direct"]),
+          ...extendedTasks.flatMap((task) => ["--task", task]),
+          "--thinking",
+          thinking,
+          "--output-dir",
+          "artifacts",
+        ],
+        repoRoot,
+      );
+      const result = await runCodeModeModelMatrix(options, {
+        buildCliArtifacts: async () => {},
+        readBuildSha256: async () => "fixture-build",
+        readGitSha: async () => "fixture-source",
+      });
+      const readArtifact = async (name: string) =>
+        await fs.readFile(path.join(result.outputDir, name), "utf8");
+      const rows = (await readArtifact("results.jsonl"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as CodeModeMatrixCellResult);
+      expect(result.exitCode).toBe(failureCategory ? 1 : 0);
+      expect(rows).toHaveLength(failureCategory ? 3 : 6);
+      expect(JSON.parse(await readArtifact("manifest.json"))).toMatchObject({
+        tasks: extendedTasks,
+        cells: rows.map((row) => row.id),
+      });
+      for (const row of rows) {
+        expect(row).toMatchObject({
+          failureCategory,
+          passed: failureCategory === null,
+          assistantTurns: 2,
+          oracle: {
+            answer: thinking !== "wrong-answer",
+            effect: thinking !== "missing-effect",
+            engagement: true,
+            identity: true,
+            toolExecution: true,
+          },
+        });
+        expect(row.elapsedMs).toBeGreaterThanOrEqual(0);
+        const workspace = path.join(result.outputDir, "state", row.id, "workspace");
+        if (thinking === "missing-effect") {
+          await expect(fs.access(path.join(workspace, "result.txt"))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+        } else {
+          expect(await fs.readFile(path.join(workspace, "result.txt"), "utf8")).toBe(row.expected);
+        }
+        if (row.mode === "direct") {
+          const codeRow = rows.find(
+            (candidate) => candidate.task === row.task && candidate.mode === "code",
+          )!;
+          expect(row.expected).toBe(codeRow.expected);
+          expect(row.bridgeCalls).toBeUndefined();
+          const codeWorkspace = path.join(result.outputDir, "state", codeRow.id, "workspace");
+          for (const name of await fs.readdir(workspace)) {
+            expect(await fs.readFile(path.join(workspace, name), "utf8")).toBe(
+              await fs.readFile(path.join(codeWorkspace, name), "utf8"),
+            );
+          }
+        }
+      }
+      const evidence = validateQaEvidenceSummaryJson(
+        JSON.parse(await readArtifact("qa-evidence.json")),
+      );
+      expect(evidence.entries).toHaveLength(rows.length);
+      evidence.entries.forEach((entry, index) => {
+        expect(entry.result).toMatchObject({
+          status: failureCategory ? "fail" : "pass",
+          timing: { wallMs: Math.max(1, rows[index]!.elapsedMs) },
+        });
+        if (failureCategory) {
+          expect(entry.result.failure?.class).toBe(failureCategory);
+        }
+      });
+    },
+  );
+
+  it("plans extended tasks without building, executing, or fabricating passing evidence", async () => {
+    const repoRoot = tempDirs.make("openclaw-matrix-plan-");
+    const options = parseCodeModeMatrixOptions(
+      [
+        "--model",
+        "fixture/model",
+        "--mode",
+        "code",
+        "--repetitions",
+        "1",
+        "--dry-run",
+        ...extendedTasks.flatMap((task) => ["--task", task]),
+      ],
+      repoRoot,
+    );
+    const forbidden = async (): Promise<never> => {
+      throw new Error("dry run must not execute");
+    };
+    const result = await runCodeModeModelMatrix(options, {
+      readGitSha: async () => "fixture-source",
+      buildCliArtifacts: forbidden,
+      readBuildSha256: forbidden,
+      runCell: forbidden,
+    });
+    expect(result.summary).toEqual({ status: "dry-run", total: 3 });
+    const manifest = JSON.parse(
+      await fs.readFile(path.join(result.outputDir, "manifest.json"), "utf8"),
+    );
+    expect(manifest).toMatchObject({ tasks: extendedTasks, buildSha256: null });
+    expect(manifest.cells).toHaveLength(3);
+    const evidence = validateQaEvidenceSummaryJson(
+      JSON.parse(await fs.readFile(path.join(result.outputDir, "qa-evidence.json"), "utf8")),
+    );
+    expect(evidence.entries).toEqual([]);
+    await expect(fs.access(path.join(result.outputDir, "results.jsonl"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+});
+
 describe("Code Mode model matrix artifacts", () => {
   it("rejects output inside Git metadata", async () => {
     const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-git-test-"));
@@ -601,7 +820,20 @@ describe("Code Mode model matrix artifacts", () => {
         firstPassPassed: 0,
         eventualPassed: 1,
       });
-      expect(summary.groups).toMatchObject([{ firstPassPassed: false, eventualPassed: true }]);
+      expect(summary.groups).toMatchObject([
+        {
+          firstPassPassed: false,
+          eventualPassed: true,
+          metrics: {
+            assistantTurns: { samples: 0, total: null, p50: null },
+            costUsd: { samples: 0, total: null, p50: null },
+            outerToolCalls: { samples: 1, total: 1, p50: 1 },
+            bridgeToolCalls: { samples: 1, total: 1, p50: 1 },
+            bridgeSearchCalls: { samples: 1, total: 0, p50: 0 },
+            bridgeDescribeCalls: { samples: 1, total: 0, p50: 0 },
+          },
+        },
+      ]);
       const lines = (await fs.readFile(path.join(repoRoot, "artifacts", "results.jsonl"), "utf8"))
         .trim()
         .split("\n");

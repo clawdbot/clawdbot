@@ -1,14 +1,15 @@
+import { html, nothing } from "lit";
 // Control UI view renders config screen content.
 import "../../styles/lobster-pet.css";
-import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { normalizeChatMessageMaxWidth } from "../../app/settings.ts";
 import { countSensitiveConfigValues } from "../../components/config-form.shared.ts";
 import { renderConfigForm } from "../../components/config-form.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
-import "../../components/tooltip.ts";
 import { icons } from "../../components/icons.ts";
+import "../../components/tooltip.ts";
 import { highlightJsonHtml } from "../../components/markdown-code-blocks.ts";
+import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { isJson5Warm, warmJson5 } from "../../lib/json5-runtime.ts";
@@ -52,6 +53,7 @@ function renderAppearance(props: ConfigProps) {
       <input
         class="settings-input"
         data-settings-chat-message-width
+        aria-label=${t("configView.chatPrefs.messageWidth")}
         type="text"
         spellcheck="false"
         placeholder="48rem"
@@ -354,36 +356,33 @@ export function renderConfig(props: ConfigProps) {
         ? html`<div class="config-toolbar">
             ${
               showModeToggle
-                ? html`<div class="config-mode-toggle">
-                    <button
-                      class="config-mode-toggle__btn ${formMode === "form" ? "active" : ""}"
-                      aria-pressed=${formMode === "form" ? "true" : "false"}
-                      ?disabled=${props.schemaLoading || !props.schema || rawDraftPending}
-                      title=${
-                        rawDraftPending
+                ? renderSettingsSegmented({
+                    mode: "buttons",
+                    variant: "primary",
+                    value: formMode,
+                    onChange: props.onFormModeChange,
+                    onReselect: props.onFormModeChange,
+                    options: [
+                      {
+                        value: "form",
+                        label: t("configView.form"),
+                        disabled: props.schemaLoading || !props.schema || rawDraftPending,
+                        title: rawDraftPending
                           ? t("configView.rawDraftPendingFormTitle")
                           : formUnsafe
                             ? t("configView.formUnsafeTitle")
-                            : ""
-                      }
-                      @click=${() => props.onFormModeChange("form")}
-                    >
-                      ${t("configView.form")}
-                    </button>
-                    <button
-                      class="config-mode-toggle__btn ${formMode === "raw" ? "active" : ""}"
-                      aria-pressed=${formMode === "raw" ? "true" : "false"}
-                      ?disabled=${!rawAvailable}
-                      title=${
-                        rawAvailable
-                          ? t("configView.rawTitle")
-                          : t("configView.rawUnavailableTitle")
-                      }
-                      @click=${() => props.onFormModeChange("raw")}
-                    >
-                      ${t("configView.raw")}
-                    </button>
-                  </div>`
+                            : "",
+                      },
+                      {
+                        value: "raw",
+                        label: t("configView.raw"),
+                        disabled: !rawAvailable,
+                        title: t(
+                          rawAvailable ? "configView.rawTitle" : "configView.rawUnavailableTitle",
+                        ),
+                      },
+                    ],
+                  })
                 : nothing
             }
             ${sectionTabs}

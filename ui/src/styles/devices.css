@@ -137,8 +137,7 @@
   background: var(--bg-hover);
 }
 
-/* Details spans body and controls so the facts panel and token table get the
-   full row width; the 640px rule keeps it in the body column. */
+/* Details spans body and controls; narrow layouts use the full row width. */
 .device-entry__details {
   grid-column: 2 / -1;
   font-size: var(--control-ui-text-sm);
@@ -252,11 +251,36 @@
   }
 
   .device-entry__details {
-    grid-column: 2;
+    grid-column: 1 / -1;
   }
 
   .device-entry__facts {
     grid-template-columns: minmax(0, 1fr);
     gap: var(--space-2);
+  }
+
+  .device-token-table.settings-table--stacked {
+    min-width: 0;
+  }
+
+  .device-entry__token-actions {
+    flex-direction: column;
+  }
+
+  .device-token-table.settings-table--stacked td:last-child {
+    text-align: start;
+  }
+
+  .device-group__dups {
+    padding-left: 0;
+  }
+}
+
+@media (max-width: 640px), (pointer: coarse) {
+  .device-entry__details > summary,
+  .device-group__dups > summary,
+  .device-entry__menu-trigger {
+    min-height: 44px;
+    min-width: 44px;
   }
 }

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Verifies `openclaw update` succeeds when a managed external plugin is corrupt.
-# The lane installs an older published OpenClaw package, corrupts an npm-managed
-# plugin payload, then updates to the prepared package artifact.
+# The lane installs the prepared candidate, corrupts an npm-managed plugin,
+# then updates to a synthetic future package with the same storage schema.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -27,7 +27,6 @@ docker_e2e_run_with_harness \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_SKIP_CHANNELS=1 \
   -e OPENCLAW_SKIP_PROVIDERS=1 \
-  -e "OPENCLAW_UPDATE_CORRUPT_PLUGIN_BASELINE=${OPENCLAW_UPDATE_CORRUPT_PLUGIN_BASELINE:-${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}}" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "$IMAGE_NAME" \

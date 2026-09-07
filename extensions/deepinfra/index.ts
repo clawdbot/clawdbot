@@ -77,6 +77,7 @@ export default defineSingleProviderPluginEntry({
       // the upstream OpenRouter-only wrapper skips.
       return createDeepInfraAnthropicCacheWrapper(
         createOpenRouterWrapper(ctx.streamFn, thinkingLevel),
+        ctx.extraParams,
       );
     },
     isModernModelRef: () => true,

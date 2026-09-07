@@ -103,8 +103,10 @@ Open **Plugins → Workshop** and select the agent whose skills you want to insp
 
 - **Skills** opens by default and lists the skills currently installed in that
   agent's Workshop directory. Skills with instruction changes appear first.
-  Select one to compare its saved applied instructions with the current skill.
-  Unchanged skills show their current instructions.
+  Select one to read its complete current instructions. Changed skills show
+  additions and removals inline with all unchanged sections in one scrollable
+  comparison. Unchanged skills show their current instructions as Markdown.
+  Current instructions remain readable while saved versions are compared.
 - **Suggestions** contains pending proposals that you can evaluate, revise,
   apply, or reject.
 
@@ -114,9 +116,9 @@ or counted as installed skills.
 
 Comparisons use retained applied versions, not a complete edit timeline.
 Relative dates identify the saved baseline, not when later edits occurred.
-Supporting files and frontmatter are not compared. Missing versions and shortened
-diffs are labeled; no historical content is reconstructed.
-If the preview omits changed lines, the current instructions remain readable.
+Supporting files and frontmatter are not compared. Missing versions are labeled;
+the complete current instructions remain readable without a saved version.
+No historical content is reconstructed.
 
 Removing an installed skill does not remove its proposal history. Reading a
 historical draft does not restore or reinstall it. Handwritten and externally
@@ -157,7 +159,16 @@ operator's existing cron execution and approval policy; enabling review does not
 grant additional shell access. An approval-required policy can refuse unattended
 shell commands; a full-access policy permits them. File discovery does not need a shell.
 
-Reviews require the embedded runtime. If an enabled sandbox has
+Reviews support the embedded runtime and CLI runtimes that declare instruction
+isolation, disable their native tools, and use only the Gateway's restricted
+OpenClaw tool set, including Claude CLI. These CLI reviews retain the host-selected instruction snapshot;
+Workshop skill contents remain review material. OpenClaw carries the Workshop
+file root and prepared sandbox to the mediated tools. Changing the CLI working
+directory alone does not provide containment.
+
+Runtimes without those guarantees, including undeclared CLI backends, the Codex harness, and
+node-placed CLI execution, remain unsupported for rooted reviews and fail with
+an explanation. If an enabled sandbox has
 `workspaceAccess: "ro"` or `"none"`, the turn refuses to run rather than editing
 a disposable copy. A writable sandbox uses the agent's Workshop directory.
 Sandbox backends must support directory reads to provide shell-free discovery.
@@ -663,6 +674,7 @@ SQLite after verifying each proposal, then removes the migrated JSON files.
 It moves applied legacy Workshop creates into `workshop-skills`, retargets
 eligible pending creates, and marks outside updates stale before normal use.
 Pending updates follow their relocated skill in the same database commit.
+Ownership-only moves preserve the proposal's existing edit time.
 Interrupted moves resume without discarding those pending updates.
 If older workspace setup files remain, run `openclaw doctor --fix`.
 Startup defers the affected skill moves and backup conversion until Doctor
@@ -686,6 +698,15 @@ workspace-survival evidence only when saved pre-move facts prove that the same
 directory contained only those skills and every moved file is intact.
 Missing or replaced workspaces, ordinary project files, and newer workspace
 attestations keep their protection.
+
+If a proposal's draft is missing, Suggestions marks it unavailable. You can
+reject it, but cannot apply, evaluate, or revise content that is no longer there.
+Run `openclaw doctor --fix` to mark these proposals stale and remove them from
+actionable Suggestions. Doctor preserves their metadata and remaining files.
+If a proposal has unfinished apply recovery, Reject and Quarantine refuse to
+dismiss it. Doctor leaves it pending and asks you to restore the draft before
+retrying; it does not discard rollback evidence
+or change the installed skill.
 
 ## Limits
 

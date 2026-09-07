@@ -1746,7 +1746,7 @@ fs.renameSync = (source, destination) => {
     }
   });
 
-  it("allows the pre-marker uninstall contract only for frozen-target validation", () => {
+  it("requires the resolved legacy profile before allowing the pre-marker uninstall contract", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugins-assertions-"));
     const home = path.join(root, "home");
     const scratchRoot = path.join(root, "scratch");
@@ -1774,14 +1774,77 @@ fs.renameSync = (source, destination) => {
         encoding: "utf8",
         env: baseEnv,
       });
-      const frozen = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "plugin-tgz-removed"], {
+      const rawFrozenAuthorization = spawnSync(
+        process.execPath,
+        [ASSERTIONS_SCRIPT, "plugin-tgz-removed"],
+        {
+          encoding: "utf8",
+          env: { ...baseEnv, OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1" },
+        },
+      );
+      const legacy = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "plugin-tgz-removed"], {
         encoding: "utf8",
-        env: { ...baseEnv, OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1" },
+        env: { ...baseEnv, OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE: "legacy" },
       });
 
       expect(current.status).not.toBe(0);
       expect(current.stderr).toContain("exact disabled uninstall marker missing");
-      expect(frozen.status).toBe(0);
+      expect(rawFrozenAuthorization.status).not.toBe(0);
+      expect(rawFrozenAuthorization.stderr).toContain("exact disabled uninstall marker missing");
+      expect(legacy.status).toBe(0);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("keeps the legacy npm project cleanup assertion scoped to the resolved profile", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugins-assertions-"));
+    const home = path.join(root, "home");
+    const scratchRoot = path.join(root, "scratch");
+    const npmProjectRoot = path.join(home, ".openclaw", "npm", "projects", "demo-plugin-npm");
+    const installPath = path.join(npmProjectRoot, "node_modules", "@openclaw", "demo-plugin-npm");
+    const dependencyPackagePath = path.join(
+      npmProjectRoot,
+      "node_modules",
+      "is-number",
+      "package.json",
+    );
+
+    try {
+      mkdirSync(npmProjectRoot, { recursive: true });
+      writeJson(path.join(scratchRoot, "plugins-npm-uninstalled.json"), { plugins: [] });
+      writeFileSync(path.join(scratchRoot, "plugins-npm-install-path.txt"), installPath, "utf8");
+      writeFileSync(
+        path.join(scratchRoot, "plugins-npm-dependency-path.txt"),
+        dependencyPackagePath,
+        "utf8",
+      );
+      writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), { installRecords: {} });
+      writeJson(path.join(home, ".openclaw", "openclaw.json"), {
+        plugins: { entries: { "demo-plugin-npm": { enabled: false } } },
+      });
+
+      const baseEnv = {
+        ...process.env,
+        HOME: home,
+        OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
+        OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: "1000",
+        OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
+        OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
+      };
+      const current = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "plugin-npm-removed"], {
+        encoding: "utf8",
+        env: baseEnv,
+      });
+      writeJson(path.join(home, ".openclaw", "openclaw.json"), { plugins: { entries: {} } });
+      const legacy = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "plugin-npm-removed"], {
+        encoding: "utf8",
+        env: { ...baseEnv, OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE: "legacy" },
+      });
+
+      expect(current.status).not.toBe(0);
+      expect(current.stderr).toContain("npm managed project still exists after uninstall");
+      expect(legacy.status, legacy.stderr).toBe(0);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

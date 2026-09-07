@@ -650,8 +650,9 @@ struct DashboardWindowOwnershipTests {
         #expect(autosaveName.hasPrefix("OpenClawDashboardWindow-Test-"))
         #expect(controller._testDashboardDataStore === dataStore)
         #expect(!controller._testDashboardDataStore.isPersistent)
-        controller._testOpenLinkBrowser(server.url("/reader/first"))
-        #expect(controller._testLinkBrowserDataStore === dataStore)
+        try controller.nativeBrowser.open(tabId: "mac-first", url: server.url("/reader/first"))
+        #expect(try #require(controller.nativeBrowser.webView(for: "mac-first"))
+            .configuration.websiteDataStore === dataStore)
 
         await manager.handleEndpointState(.connecting(mode: .remote, detail: "Reconnecting"))
         let failure = try #require(manager._testController())
@@ -669,8 +670,9 @@ struct DashboardWindowOwnershipTests {
         #expect(recovered !== failure)
         #expect(recovered._testDashboardDataStore === dataStore)
         #expect(recovered.window?.frameAutosaveName == autosaveName)
-        recovered._testOpenLinkBrowser(server.url("/reader/recovered"))
-        #expect(recovered._testLinkBrowserDataStore === dataStore)
+        try recovered.nativeBrowser.open(tabId: "mac-recovered", url: server.url("/reader/recovered"))
+        #expect(try #require(recovered.nativeBrowser.webView(for: "mac-recovered"))
+            .configuration.websiteDataStore === dataStore)
     }
 
     @Test(arguments: [AppState.ConnectionMode.local, .remote])

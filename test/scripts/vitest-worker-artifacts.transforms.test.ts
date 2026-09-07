@@ -6,8 +6,10 @@ import { createWorkerArtifactTest, workerProbe } from "./vitest-worker-artifacts
 
 const root = process.cwd();
 const it = createWorkerArtifactTest();
+// Each sequence rebuilds all workers; avoid contention on Windows CI runners.
+const concurrent = process.platform !== "win32";
 
-describe.concurrent("fresh compiled subprocess invocation", () => {
+describe("fresh compiled subprocess invocation", { concurrent }, () => {
   it.for(
     (["single", "projects"] as const).flatMap((layout) =>
       (["fresh generations", "source mode", "source and config edits"] as const).map(
@@ -82,7 +84,8 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             expect(fileURLToPath(generation)).toBe(
               path.join(root, "src/infra/sqlite-readonly-location.worker.ts"),
             );
-            expect(observed.args.slice(0, 2)).toEqual(["--import", "tsx"]);
+            expect(observed.args[0]).toBe("--import");
+            expect(observed.args[1]).toMatch(/^file:\/\//);
             expect(fileURLToPath(observed.knn)).toBe(
               path.join(root, "extensions/memory-core/src/memory/manager-search-knn.child.ts"),
             );

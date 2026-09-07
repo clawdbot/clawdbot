@@ -1,9 +1,19 @@
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
+import { logVerbose } from "../../globals.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
   exceedsApprovalTextLimit,
   sanitizeExecApprovalWarningTextWithStatus,
 } from "../../infra/exec-approval-text-sanitize.js";
-import type { ExecAsk, ExecSecurity } from "../../infra/exec-approvals.js";
+import { evaluateShellAllowlistWithAuthorization } from "../../infra/exec-approvals-allowlist.js";
+import {
+  loadExecApprovals,
+  recordAllowlistMatchesUse,
+  resolveExecApprovalsFromFile,
+  type ExecAsk,
+  type ExecSecurity,
+} from "../../infra/exec-approvals.js";
+import { buildAuthorizedShellCommandFromPlan } from "../../infra/exec-authorization-render.js";
 import {
   DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
   PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
@@ -18,10 +28,8 @@ import {
 import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import { callGatewayTool } from "../tools/gateway.js";
 
-type CliNativeToolApprovalPlan = "allow" | "deny" | "prompt";
-type CliNativeToolApprovalDecision = "allow-once" | "allow-always" | "deny";
 type CliNativeToolApprovalOutcome =
-  | { kind: "allow"; grantAlways: boolean }
+  | { kind: "allow"; grantAlways: boolean; updatedInput?: Record<string, unknown> }
   | {
       kind: "deny";
       reason: "operand-binding" | "policy-oversized" | "user" | "unavailable";
@@ -33,17 +41,6 @@ const CLI_NATIVE_TOOL_DESCRIPTION_TAIL_CHARS = 80;
 const CLI_NATIVE_TOOL_DESCRIPTION_MAX_CHARS =
   CLI_NATIVE_TOOL_DESCRIPTION_HEAD_CHARS + CLI_NATIVE_TOOL_DESCRIPTION_TAIL_CHARS;
 const CLI_NATIVE_TOOL_APPROVAL_GATEWAY_GRACE_MS = 10_000;
-const CLI_NATIVE_TOOL_ALLOWED_DECISIONS = [
-  "allow-once",
-  "allow-always",
-  "deny",
-] as const satisfies readonly CliNativeToolApprovalDecision[];
-// A standing grant must never be minted from a partially displayed input, so
-// oversized inputs offer one-shot decisions only.
-const CLI_NATIVE_TOOL_TRUNCATED_DECISIONS = [
-  "allow-once",
-  "deny",
-] as const satisfies readonly CliNativeToolApprovalDecision[];
 // Bash is arbitrary shell execution, so a name-wide grant is unrestricted.
 // Bash fails closed when even the reviewer-only detail cannot show the complete input.
 const CLI_NATIVE_TOOL_ARBITRARY_EXECUTION_TOOL = "Bash";
@@ -51,7 +48,7 @@ const CLI_NATIVE_TOOL_ARBITRARY_EXECUTION_TOOL = "Bash";
 export function resolveCliNativeToolApprovalPlan(execPermission: {
   security: ExecSecurity;
   ask: ExecAsk;
-}): CliNativeToolApprovalPlan {
+}): "allow" | "deny" | "prompt" {
   if (execPermission.security === "deny") {
     return "deny";
   }
@@ -89,72 +86,6 @@ function formatCliNativeToolDescription(
   };
 }
 
-function formatCliNativeToolTitle(pluginId: string, toolName: string): string {
-  return truncateUtf16Safe(
-    `${pluginId} native tool: ${toolName}`,
-    PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
-  );
-}
-
-function resolveCliNativeToolAllowedDecisions(params: {
-  ask: ExecAsk;
-  toolName: string;
-  descriptionTruncated: boolean;
-}): readonly CliNativeToolApprovalDecision[] {
-  return params.ask === "always" ||
-    params.toolName === CLI_NATIVE_TOOL_ARBITRARY_EXECUTION_TOOL ||
-    params.descriptionTruncated
-    ? CLI_NATIVE_TOOL_TRUNCATED_DECISIONS
-    : CLI_NATIVE_TOOL_ALLOWED_DECISIONS;
-}
-
-function toAbortError(reason: unknown): Error {
-  return reason instanceof Error ? reason : new Error("CLI native tool approval aborted");
-}
-
-async function raceCliNativeToolApprovalAbort<T>(
-  promise: Promise<T>,
-  abortSignal: AbortSignal | undefined,
-): Promise<T> {
-  if (!abortSignal) {
-    return promise;
-  }
-  let onAbort: (() => void) | undefined;
-  const abortPromise = new Promise<never>((_, reject) => {
-    if (abortSignal.aborted) {
-      reject(toAbortError(abortSignal.reason));
-      return;
-    }
-    onAbort = () => reject(toAbortError(abortSignal.reason));
-    abortSignal.addEventListener("abort", onAbort, { once: true });
-  });
-  try {
-    return await Promise.race([promise, abortPromise]);
-  } finally {
-    if (onAbort) {
-      abortSignal.removeEventListener("abort", onAbort);
-    }
-  }
-}
-
-function waitForCliNativeToolApproval(params: {
-  id: string;
-  gatewayTimeoutMs: number;
-  abortSignal?: AbortSignal;
-}): Promise<{ id?: string; decision?: unknown }> {
-  return raceCliNativeToolApprovalAbort(
-    callGatewayTool(
-      "plugin.approval.waitDecision",
-      { timeoutMs: params.gatewayTimeoutMs },
-      { id: params.id },
-      // Abort must reach the RPC too, or the gateway keeps the approval prompt
-      // live for its full timeout after the admitted CLI run already ended.
-      { signal: params.abortSignal },
-    ),
-    params.abortSignal,
-  );
-}
-
 export async function requestCliNativeToolApproval(params: {
   toolName: string;
   toolInput: Record<string, unknown>;
@@ -163,6 +94,10 @@ export async function requestCliNativeToolApproval(params: {
   agentId?: string;
   toolCallId?: string;
   cwd?: string;
+  fallbackCwd?: string;
+  env?: NodeJS.ProcessEnv;
+  bindingEnv?: NodeJS.ProcessEnv;
+  assertActive?: () => void;
   abortSignal?: AbortSignal;
   ask: ExecAsk;
 }): Promise<CliNativeToolApprovalOutcome> {
@@ -172,11 +107,6 @@ export async function requestCliNativeToolApproval(params: {
       addTimerTimeoutGraceMs(timeoutMs, CLI_NATIVE_TOOL_APPROVAL_GATEWAY_GRACE_MS) ??
       timeoutMs + CLI_NATIVE_TOOL_APPROVAL_GATEWAY_GRACE_MS;
     const description = formatCliNativeToolDescription(params.toolInput);
-    const detail = truncatePluginApprovalDetail(description.compact);
-    const detailSanitization =
-      params.toolName === CLI_NATIVE_TOOL_ARBITRARY_EXECUTION_TOOL
-        ? sanitizeExecApprovalWarningTextWithStatus(description.compact)
-        : null;
     // Sanitization escapes control/bidi characters into longer visible
     // sequences, so a short raw command can still overflow the 512-char
     // description bound after sanitization and get truncated at render time.
@@ -191,8 +121,6 @@ export async function requestCliNativeToolApproval(params: {
     if (
       params.toolName === CLI_NATIVE_TOOL_ARBITRARY_EXECUTION_TOOL &&
       (description.truncated ||
-        detailSanitization?.truncated === true ||
-        detailSanitization?.oversized === true ||
         summarySanitization?.truncated === true ||
         summarySanitization?.oversized === true ||
         (summarySanitization &&
@@ -208,29 +136,118 @@ export async function requestCliNativeToolApproval(params: {
       typeof params.toolInput.command === "string"
         ? params.toolInput.command
         : undefined;
+    let autoAllow: (() => CliNativeToolApprovalOutcome) | undefined;
+    if (
+      params.ask === "on-miss" &&
+      params.pluginId === "claude-cli" &&
+      bashCommand &&
+      params.agentId
+    ) {
+      const file = loadExecApprovals();
+      const { allowlist } = resolveExecApprovalsFromFile({ file, agentId: params.agentId });
+      const analysis = await evaluateShellAllowlistWithAuthorization({
+        command: bashCommand,
+        allowlist,
+        safeBins: new Set(),
+        cwd: params.cwd,
+        env: params.env,
+      });
+      const plan = analysis.authorizationPlan;
+      const candidates = plan?.groups.flatMap((group) => group.candidates) ?? [];
+      const miss = candidates.findIndex(
+        (candidate, index) =>
+          candidate.transport.kind !== "direct" ||
+          candidate.trustMode !== "executable" ||
+          !candidate.sourceSegment.resolution?.execution.resolvedPath ||
+          candidate.sourceSegment.resolution.wrapperChain?.length ||
+          analysis.segmentSatisfiedBy[index] !== "allowlist",
+      );
+      const rendered =
+        plan?.ok && params.cwd && candidates.length > 0 && miss === -1
+          ? buildAuthorizedShellCommandFromPlan({
+              plan,
+              mode: "enforced",
+              segmentSatisfiedBy: analysis.segmentSatisfiedBy,
+            })
+          : {
+              ok: false as const,
+              reason:
+                plan && !plan.ok
+                  ? plan.reason
+                  : (candidates[miss]?.sourceStep.text ?? "no classified executable"),
+            };
+      if (rendered.ok) {
+        autoAllow = () => {
+          params.abortSignal?.throwIfAborted();
+          params.assertActive?.();
+          // Require current grants even when the caller policy is full with prompting.
+          recordAllowlistMatchesUse({
+            approvals: file,
+            agentId: params.agentId,
+            matches: analysis.allowlistMatches,
+            command: bashCommand,
+            resolvedPath:
+              candidates[0]?.sourceSegment.resolution?.execution.resolvedPath ?? undefined,
+            authorization: {
+              source: "current-policy",
+              security: "allowlist",
+              ask: params.ask,
+              allowlistSatisfied: true,
+            },
+          });
+          logVerbose("Claude CLI native Bash auto-allowed via exec allowlist");
+          return {
+            kind: "allow",
+            grantAlways: false,
+            updatedInput: { ...params.toolInput, command: rendered.command },
+          };
+        };
+      } else {
+        const reason = sanitizeExecApprovalWarningTextWithStatus(rendered.reason).text;
+        description.text += `\nExec allowlist miss: ${truncateUtf16Safe(reason, 100)}`;
+      }
+    }
     let mutableFileBinding: SystemRunMutableFileBinding | undefined;
     if (params.toolName === CLI_NATIVE_TOOL_ARBITRARY_EXECUTION_TOOL) {
       // Bind script bytes before the out-of-band approval wait. Text-identical
       // Bash input can otherwise execute a rewritten file after approval.
       const prepared = await prepareSystemRunMutableFileBinding({
         command: { kind: "shell", text: bashCommand ?? "" },
-        cwd: params.cwd,
+        cwd: params.cwd ?? params.fallbackCwd,
+        env: autoAllow ? params.env : (params.bindingEnv ?? params.env),
       });
       if (!prepared.ok) {
-        return { kind: "deny", reason: "operand-binding", message: prepared.message };
+        return {
+          kind: "deny",
+          reason: "operand-binding",
+          message: sanitizeExecApprovalWarningTextWithStatus(
+            `${prepared.message}\n${description.text}`,
+          ).text,
+        };
       }
       mutableFileBinding = prepared.binding.operands.length > 0 ? prepared.binding : undefined;
     }
-    const allowedDecisions = resolveCliNativeToolAllowedDecisions({
-      ask: params.ask,
-      toolName: params.toolName,
-      descriptionTruncated: description.truncated,
-    });
-    const requestResult: {
-      id?: string;
-      decision?: unknown;
-    } = await raceCliNativeToolApprovalAbort(
-      callGatewayTool(
+    if (autoAllow) {
+      return autoAllow();
+    }
+    if (
+      bashCommand &&
+      exceedsApprovalTextLimit(
+        sanitizeExecApprovalWarningTextWithStatus(description.text).text,
+        PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
+      )
+    ) {
+      return { kind: "deny", reason: "policy-oversized" };
+    }
+    // Standing grants require a complete description and never cover arbitrary Bash.
+    const allowedDecisions =
+      params.ask === "always" ||
+      params.toolName === CLI_NATIVE_TOOL_ARBITRARY_EXECUTION_TOOL ||
+      description.truncated
+        ? ["allow-once", "deny"]
+        : ["allow-once", "allow-always", "deny"];
+    const requestResult = await racePromiseWithAbortSignal(
+      callGatewayTool<{ id?: string; decision?: unknown }>(
         "plugin.approval.request",
         { timeoutMs: gatewayTimeoutMs },
         {
@@ -239,9 +256,12 @@ export async function requestCliNativeToolApproval(params: {
           toolCallId: params.toolCallId,
           agentId: params.agentId,
           sessionKey: params.sessionKey,
-          title: formatCliNativeToolTitle(params.pluginId, params.toolName),
+          title: truncateUtf16Safe(
+            `${params.pluginId} native tool: ${params.toolName}`,
+            PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
+          ),
           description: description.text,
-          detail,
+          detail: truncatePluginApprovalDetail(description.compact),
           severity: "warning",
           allowedDecisions,
           timeoutMs,
@@ -259,11 +279,16 @@ export async function requestCliNativeToolApproval(params: {
     if (Object.hasOwn(requestResult ?? {}, "decision")) {
       decision = requestResult.decision;
     } else {
-      const waitResult = await waitForCliNativeToolApproval({
-        id,
-        gatewayTimeoutMs,
-        abortSignal: params.abortSignal,
-      });
+      // Abort must cancel the RPC so the Gateway removes the pending prompt.
+      const waitResult = await racePromiseWithAbortSignal(
+        callGatewayTool<{ id?: string; decision?: unknown }>(
+          "plugin.approval.waitDecision",
+          { timeoutMs: gatewayTimeoutMs },
+          { id },
+          { signal: params.abortSignal },
+        ),
+        params.abortSignal,
+      );
       decision = waitResult?.id === id ? waitResult.decision : undefined;
     }
     if (params.abortSignal?.aborted) {
@@ -274,22 +299,19 @@ export async function requestCliNativeToolApproval(params: {
       // spawn, so reject bytes that changed during the approval wait.
       const binding = await revalidateSystemRunMutableFileBinding({
         binding: mutableFileBinding,
-        cwd: params.cwd,
+        cwd: params.cwd ?? params.fallbackCwd,
       });
       if (!binding.ok) {
         return { kind: "deny", reason: "operand-binding", message: binding.message };
       }
     }
-    if (decision === "allow-once") {
-      return { kind: "allow", grantAlways: false };
+    if (
+      decision === "allow-once" ||
+      (decision === "allow-always" && allowedDecisions.includes(decision))
+    ) {
+      return { kind: "allow", grantAlways: decision === "allow-always" };
     }
-    if (decision === "allow-always" && allowedDecisions.includes(decision)) {
-      return { kind: "allow", grantAlways: true };
-    }
-    if (decision === "deny") {
-      return { kind: "deny", reason: "user" };
-    }
-    return { kind: "deny", reason: "unavailable" };
+    return { kind: "deny", reason: decision === "deny" ? "user" : "unavailable" };
   } catch {
     return { kind: "deny", reason: "unavailable" };
   }

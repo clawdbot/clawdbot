@@ -13,7 +13,6 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { assembleHarnessContextEngine } from "../../harness/context-engine-lifecycle.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-repair.js";
-import { buildActiveSubagentSystemPromptAddition } from "../../subagents/registry/subagent-active-context.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
@@ -129,25 +128,6 @@ export async function prepareEmbeddedAttemptHistory(
             };
           },
           { skipMaintenance: true, takeCacheOwnership: true },
-        );
-      }
-    }
-
-    if (attempt.sessionKey && attempt.config && !isSettledTurnFinalization) {
-      // Capability guidance must include deferred OpenClaw tools without
-      // interpreting arbitrary client tool names as native capabilities.
-      const activeSubagentPromptAddition = buildActiveSubagentSystemPromptAddition({
-        cfg: attempt.config,
-        controllerSessionKey: attempt.sessionKey,
-        controllerAgentId: sessionAgentId,
-        hasSessionsYield: capabilityToolNames.has("sessions_yield"),
-      });
-      if (activeSubagentPromptAddition) {
-        setSystemPrompt(
-          prependSystemPromptAddition({
-            systemPrompt: systemPromptText,
-            systemPromptAddition: activeSubagentPromptAddition,
-          }),
         );
       }
     }

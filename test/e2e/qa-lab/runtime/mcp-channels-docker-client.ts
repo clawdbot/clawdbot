@@ -1,6 +1,7 @@
 // MCP channels Docker client drives the QA-owned channel bridge smoke.
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
+import { hasExpectedSeededMcpAttachment } from "../../../../scripts/e2e/lib/mcp-channels-attachment-contract.mjs";
 import {
   assert,
   assertGatewayScopes,
@@ -100,6 +101,7 @@ async function waitForGatewaySeededConversation(gateway: GatewayRpcClient) {
 async function main() {
   const gatewayUrl = process.env.GW_URL?.trim();
   const gatewayToken = process.env.GW_TOKEN?.trim();
+  const frozenTarget = process.env.OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT === "legacy";
   assert(gatewayUrl, "missing GW_URL");
   assert(gatewayToken, "missing GW_TOKEN");
 
@@ -234,19 +236,8 @@ async function main() {
       "expected one seeded attachment",
     );
     assert(
-      JSON.stringify(attachments.structuredContent?.attachments?.[0]) ===
-        JSON.stringify({
-          type: "openclaw_media",
-          media: {
-            url: "media://inbound/seeded-image.png",
-            contentType: "image/png",
-            kind: "image",
-            fileName: "seeded-image.png",
-            sizeBytes: 3,
-            transcribed: false,
-          },
-        }),
-      `expected canonical persisted media attachment: ${JSON.stringify(attachments.structuredContent)}`,
+      hasExpectedSeededMcpAttachment(attachments.structuredContent?.attachments?.[0], frozenTarget),
+      `expected persisted media attachment: ${JSON.stringify(attachments.structuredContent)}`,
     );
 
     let waitCursor = 0;
@@ -513,7 +504,7 @@ async function main() {
           nonOwnerReplyForwarded: true,
           nonOwnerPermissionBlocked: true,
           ownerPermissionAllowed: permission.behavior === "allow",
-          canonicalMediaAttachmentFound: true,
+          mediaAttachmentFound: true,
           rawNotifications: connectedMcp.rawMessages.filter(
             (entry) =>
               ClaudeChannelNotificationSchema.safeParse(entry).success ||

@@ -109,13 +109,13 @@ Core:
 
 - `/help`
 - `/status` (Gateway-forwarded; shows session/model summary)
-- `/gateway-status` (alias `/gwstatus`; shows Gateway connection status directly)
+- `/gateway-status` (alias `/gwstatus`; shows Gateway version, channel configuration summaries, and sessions directly)
 - `/agent <id>` (or `/agents`)
 - `/session <key>` (or `/sessions`)
 - `/model <provider/model|default>` (or `/models`; `default` clears the session override)
 
 Gateway-connected model updates honor the optional
-[`agents.defaults.modelSelectionScope`](/gateway/config-agents#agentsdefaultsmodelselectionscope)
+[`agents.defaults.modelSelectionScope`](/gateway/config-agents/models#agentsdefaultsmodelselectionscope)
 setting. When it is unset, they retain their existing configured-default behavior
 for admins. The embedded local TUI stays session-only regardless of this setting.
 

@@ -195,7 +195,7 @@ for await (const line of createInterface({ input: process.stdin })) {
       privateContext = response.hookSpecificOutput?.additionalContext;
       request("pre-" + turn, { subtype: "hook_callback",
         callback_id: hooks.PreToolUse[0].hookCallbackIds[0], tool_use_id: "tool-" + turn,
-        input: { hook_event_name: "PreToolUse", tool_name: scenario === "user-question" ? "AskUserQuestion" : scenario === "mcp-hook" ? "mcp__openclaw__message" : "Read",
+        input: { cwd: process.cwd(), hook_event_name: "PreToolUse", tool_name: scenario === "user-question" ? "AskUserQuestion" : scenario === "mcp-hook" ? "mcp__openclaw__message" : "Read",
           tool_input: scenario === "user-question" ? questionInput : { file_path: "fixture.txt" },
           tool_use_id: "tool-" + turn } });
     } else if (id === "pre-" + turn) {

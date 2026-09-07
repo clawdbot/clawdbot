@@ -192,6 +192,7 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
       const continued = await continueMigratedUpdateInFreshProcess(
         {
           result: input,
+          mutationStarted: gitMutationAuthorized,
           root: updateRoot,
           installKindChanged: false,
           configSnapshot,

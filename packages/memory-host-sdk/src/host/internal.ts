@@ -1,4 +1,3 @@
-// Memory Host SDK module implements internal behavior.
 import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -255,6 +254,7 @@ export async function listMemoryFiles(
   workspaceDir: string,
   extraPaths?: MemoryExtraPath[],
   multimodal?: MemoryMultimodalSettings,
+  onSkippedSymlinkRoot?: (root: string) => void,
 ): Promise<string[]> {
   const result: string[] = [];
   const memoryDir = path.join(workspaceDir, "memory");
@@ -299,6 +299,7 @@ export async function listMemoryFiles(
       try {
         const stat = await scanMemorySource(inputPath, () => fs.lstat(inputPath));
         if (stat.isSymbolicLink()) {
+          onSkippedSymlinkRoot?.(inputPath);
           continue;
         }
         if (stat.isDirectory()) {

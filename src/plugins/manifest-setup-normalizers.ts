@@ -28,6 +28,7 @@ import type {
   PluginManifestSetupProviderAuthEvidence,
   PluginConfigUiHint,
 } from "./manifest-types.js";
+import { normalizeSetupPresentationHttpsUrl } from "./setup-presentation-url.js";
 
 export function normalizeManifestActivation(value: unknown): PluginManifestActivation | undefined {
   if (!isRecord(value)) {
@@ -354,26 +355,6 @@ export function normalizeManifestControlUi(
   return ok({ entry, ...(styles.length > 0 ? { styles } : {}) });
 }
 
-function normalizeManifestHttpsUrl(value: unknown): string | undefined {
-  const normalized = normalizeOptionalString(value);
-  if (!normalized) {
-    return undefined;
-  }
-  try {
-    const url = new URL(normalized);
-    const canonical = url.toString();
-    return url.protocol === "https:" &&
-      url.hostname &&
-      !url.username &&
-      !url.password &&
-      canonical.length <= 2048
-      ? canonical
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 export function normalizeProviderAuthChoices(
   value: unknown,
 ): PluginManifestProviderAuthChoice[] | undefined {
@@ -393,8 +374,8 @@ export function normalizeProviderAuthChoices(
     }
     const choiceLabel = normalizeOptionalString(entry.choiceLabel) ?? "";
     const choiceHint = normalizeOptionalString(entry.choiceHint) ?? "";
-    const icon = normalizeManifestHttpsUrl(entry.icon);
-    const website = normalizeManifestHttpsUrl(entry.website);
+    const icon = normalizeSetupPresentationHttpsUrl(entry.icon);
+    const website = normalizeSetupPresentationHttpsUrl(entry.website);
     const assistantPriority =
       typeof entry.assistantPriority === "number" && Number.isFinite(entry.assistantPriority)
         ? entry.assistantPriority

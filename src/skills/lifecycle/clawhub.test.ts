@@ -9,6 +9,7 @@ import type {
   ClawHubSkillSecurityVerdictItem,
   ClawHubSkillVerificationResponse,
 } from "../../infra/clawhub-skills.js";
+import { hasErrnoCode } from "../../infra/errno.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 
 const fetchClawHubSkillDetailMock = vi.fn();
@@ -70,7 +71,8 @@ vi.mock("../../plugins/install-security-scan.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../infra/fs-safe.js", () => ({
+vi.mock("../../infra/fs-safe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/fs-safe.js")>()),
   pathExists: pathExistsMock,
 }));
 
@@ -1436,6 +1438,60 @@ describe("skills-clawhub", () => {
     expect(installed.skills.weather).toEqual(existing.skills.weather);
     expect(installed.skills.calendar).toEqual(added);
     expect(installed.skills.agentreceipt).toMatchObject({ version: "1.0.0" });
+  });
+
+  it.for([".clawhub", ".clawdhub"])(
+    "rejects symlinked %s tracking without changing the link or its target",
+    async (directory, context) => {
+      const workspaceDir = await tempDirs.make("openclaw-skills-linked-tracking-");
+      const target = path.join(workspaceDir, "original.json");
+      const content = JSON.stringify({ version: 1, skills: {} });
+      const lockPath = path.join(workspaceDir, directory, "lock.json");
+      await fs.writeFile(target, content);
+      await fs.mkdir(path.dirname(lockPath));
+      try {
+        await fs.symlink(target, lockPath);
+      } catch (error) {
+        if (process.platform === "win32" && hasErrnoCode(error, "EPERM")) {
+          // Windows file symlinks require a host-granted capability.
+          context.skip();
+          return;
+        }
+        throw error;
+      }
+
+      await expect(readTrackedClawHubSkillSlugs(workspaceDir)).rejects.toThrow(
+        "Malformed workspace ClawHub lockfile",
+      );
+      expect((await fs.lstat(lockPath)).isSymbolicLink()).toBe(true);
+      expect(await fs.readFile(target, "utf8")).toBe(content);
+    },
+  );
+
+  it("reads the replacement tracking when an existing lock changes before open", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skills-replaced-tracking-");
+    await writeTrackedSkill(workspaceDir, "weather");
+    const lockPath = path.join(workspaceDir, ".clawhub", "lock.json");
+    const replacement = path.join(workspaceDir, "replacement.json");
+    await fs.writeFile(
+      replacement,
+      JSON.stringify({ version: 1, skills: { calendar: { version: "2.0.0", installedAt: 123 } } }),
+    );
+    const open = fs.open.bind(fs);
+    let replaced = false;
+    const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      if (!replaced && args[0] === lockPath) {
+        replaced = true;
+        await fs.rename(replacement, lockPath);
+      }
+      return await open(...args);
+    });
+    try {
+      await expect(readTrackedClawHubSkillSlugs(workspaceDir)).resolves.toEqual(["calendar"]);
+      expect(replaced).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("persists install artifact and verification provenance in the ClawHub lockfile", async () => {

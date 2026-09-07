@@ -15,6 +15,7 @@ import {
 import { buildGuardedModelFetch } from "./host-policy.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { formatModelTransportDebugBaseUrl } from "./model-transport-url.js";
+import { isOpenAICodexResponsesModel } from "./openai-completions-compat.js";
 import { postOpenAIResponsesCompaction } from "./openai-responses-compact-client.js";
 import { claimResponsesCompactRequest } from "./openai-responses-compact-request.js";
 import {
@@ -47,6 +48,10 @@ import {
   sanitizeOpenAICodexResponsesParams,
 } from "./openai-responses-params-internal.js";
 import { createResponsesPromptEgressObserver } from "./openai-responses-prompt-observer-internal.js";
+import {
+  recordResponsesReasoningState,
+  restoreResponsesReasoningState,
+} from "./openai-responses-reasoning-state.js";
 import { supportsResponsesReasoningUpdate } from "./openai-responses-reasoning-update.js";
 import {
   createOpenAIResponsesAssistantOutput,
@@ -69,7 +74,6 @@ import {
   buildOpenAISdkClientOptions,
   buildOpenAISdkRequestOptions,
   enforceCodeModeResponsesToolSurface,
-  isOpenAICodexResponsesModel,
   resolveCodeModeResponsesVisibleToolNames,
 } from "./openai-transport-params.js";
 import {
@@ -348,6 +352,8 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
               sessionId,
             ),
             request: params as ResponsesContinuationRequest,
+            restoreRequest: () =>
+              restoreResponsesReasoningState(context, model, responsesOptions, params),
           });
           if (continuationClaim) {
             // SAFETY: The owner preserves the request; SDK inputs predate configuration_update.
@@ -403,11 +409,9 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
               suppressOpenAIResponsesCompaction(output, model, responsesOptions, checkpoint),
             canRetryStream: () => output.content.length === 0,
             wrapStream: ({ stream: rawResponseStream, response, attempt }) => {
-              if (continuationClaim) {
-                continuationBaseline = attempt.request.previous_response_id
-                  ? (params as ResponsesContinuationRequest)
-                  : (attempt.request as ResponsesContinuationRequest);
-              }
+              continuationBaseline = attempt.request.previous_response_id
+                ? (params as ResponsesContinuationRequest)
+                : (attempt.request as ResponsesContinuationRequest);
               return withProviderResponseHook({
                 stream: observeResponsesStream(rawResponseStream, model, requestStartedAt),
                 signal: firstEvent.signal,
@@ -428,6 +432,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         };
 
         let responseStream: AsyncIterable<unknown>;
+        let websocketBaseline: ResponsesContinuationRequest | undefined;
         let finishWebSocket: ((options?: { keep?: boolean }) => void) | undefined;
         let transport: "sse" | "websocket" = "sse";
         const logWebSocketFallback = (reason: string) =>
@@ -447,6 +452,8 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             const websocket = createOpenAIResponsesWebSocketStream({
               client,
               request: params,
+              restoreRequest: (request) =>
+                restoreResponsesReasoningState(context, model, responsesOptions, request),
               mode: websocketMode,
               sessionId: options?.sessionId,
               headers: websocketHeaders,
@@ -466,6 +473,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
                 ),
             });
             finishWebSocket = websocket.finish;
+            websocketBaseline = websocket.fullRequest;
             recordResponsesInputReplay(output, websocket.inputReplay);
             observePrompt?.(websocket.request, {
               egress: "responses-websocket",
@@ -567,6 +575,16 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           if (output.stopReason === "aborted" || output.stopReason === "error") {
             // Keep the provider's terminal fact; the catch-side projection would overwrite it.
             throw new Error(output.errorMessage ?? "An unknown error occurred");
+          }
+          const admitted = transport === "websocket" ? websocketBaseline : continuationBaseline;
+          if (terminal && admitted && supportsNativeOpenAIResponsesEndpoint(model)) {
+            recordResponsesReasoningState(
+              output,
+              model,
+              responsesOptions,
+              admitted,
+              terminal.output,
+            );
           }
           if (continuationClaim && continuationBaseline && terminal) {
             continuationClaim.commit(continuationBaseline, terminal);

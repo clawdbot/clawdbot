@@ -8,14 +8,22 @@ import net from "node:net";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import * as tar from "tar";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createCrabboxNodeEnrollmentSetup,
   createCrabboxNodeRuntimeSetup,
   type CrabboxWorkerNodeEnrollment,
 } from "./crabbox-worker-node-enrollment.js";
 import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
+import { resolveCrabboxProvisionProfile } from "./crabbox-worker-profile.js";
 import { SCRUB_WORKER_STATE } from "./crabbox-worker-warm-image-scrub.js";
+import { openCrabboxWarmImageStore } from "./crabbox-worker-warm-image-store.js";
+import { createCrabboxWarmImageManager } from "./crabbox-worker-warm-image.js";
+import {
+  PROFILE,
+  commandResult,
+  checkpointResult,
+} from "./crabbox-worker-warm-image.test-support.js";
 
 const cleanups: Array<() => Promise<void> | void> = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanupDirectories) => {
@@ -281,25 +289,19 @@ echo 123
   return { code, output: Buffer.concat(output).toString("utf8") };
 }
 
+async function expectSetupPhases(result: ReturnType<typeof enroll>) {
+  const completed = await result;
+  expect(completed.code).toBe(0);
+  const lines = completed.output.trim().split("\n");
+  // Crabbox consumes these stream markers; successful bootstrap emits no other data.
+  expect(lines.every((line) => /^CRABBOX_PHASE:[a-z.-]{1,80}$/.test(line))).toBe(true);
+  return lines.map((line) => line.slice("CRABBOX_PHASE:".length));
+}
+
 async function readLaunch(stateDir: string) {
   const target = path.join(stateDir, "launch.json");
-  // Child startup follows the test deadline, not waitFor's shorter polling deadline.
-  const watcher = fs.watch(stateDir, { persistent: false });
-  cleanups.push(() => watcher.close());
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const inspect = () => {
-        if (fs.existsSync(target)) {
-          resolve();
-        }
-      };
-      watcher.on("change", inspect);
-      watcher.once("error", reject);
-      inspect();
-    });
-  } finally {
-    watcher.close();
-  }
+  // File watchers can miss a fast atomic rename before their subscription is ready.
+  await expect.poll(() => fs.existsSync(target), { timeout: 30_000 }).toBe(true);
   return JSON.parse(fs.readFileSync(target, "utf8")) as {
     build: string;
     cli: string;
@@ -312,6 +314,141 @@ async function readLaunch(stateDir: string) {
 }
 
 describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
+  it("reuses a completed runtime upgrade on the next fresh warm child", async () => {
+    const root = fs.realpathSync(tempDirs.make("warm-runtime-repeat-proof-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "gateway-state"));
+    const oldArtifact = await serveArtifact(await packageFixture("older-runtime"));
+    const currentArtifact = await serveArtifact(await packageFixture("current-runtime"));
+    expect(oldArtifact.nodeBootstrap.sha256).not.toBe(currentArtifact.nodeBootstrap.sha256);
+    const profile = resolveCrabboxProvisionProfile(PROFILE, undefined).profile;
+    const homes = new Map<string, string>();
+    const snapshots = new Map<string, string>();
+    let snapshotCount = 0;
+    const forkChoices: string[] = [];
+    const homeFor = (id: string) => {
+      const home = path.join(root, id);
+      fs.mkdirSync(home, { recursive: true });
+      homes.set(id, home);
+      return home;
+    };
+    const runtimeRoot = (home: string) => path.join(home, ".openclaw-worker", "node-runtimes");
+    const context = (id: string, digest = oldArtifact.nodeBootstrap.sha256) => ({
+      nodeRuntimeIdentity: { nodeBootstrapSha256: digest, executionMode: "worker-turn" as const },
+      binary: "crabbox",
+      id,
+      provider: "aws",
+      profile,
+      slug: id,
+      timeoutMs: () => 60_000,
+    });
+    const manager = createCrabboxWarmImageManager({
+      warn: (message) => {
+        throw new Error(message);
+      },
+      runArgs: ({ id }) => ["run", "--id", id, "--script-stdin"],
+      runCommand: async (argv, options) => {
+        if (argv[1] === "warmup") {
+          homeFor(argv[argv.indexOf("--lease-id") + 1]!);
+        }
+        if (argv[1] === "run") {
+          const id = argv[argv.indexOf("--id") + 1]!;
+          const home = homes.get(id)!;
+          execFileSync("/bin/sh", [], {
+            input: options?.input,
+            cwd: home,
+            env: { HOME: home, PATH: process.env.PATH },
+          });
+        }
+        if (argv[1] === "checkpoint" && argv[2] === "create") {
+          const id = argv[argv.indexOf("--id") + 1]!;
+          const checkpoint = `chk_fixture_${++snapshotCount}`;
+          const snapshot = path.join(root, checkpoint);
+          fs.cpSync(runtimeRoot(homes.get(id)!), snapshot, { recursive: true });
+          snapshots.set(checkpoint, snapshot);
+          return checkpointResult(checkpoint, id, "completed");
+        }
+        if (argv[1] === "checkpoint" && argv[2] === "delete") {
+          fs.rmSync(snapshots.get(argv[3]!)!, { recursive: true });
+          snapshots.delete(argv[3]!);
+        }
+        if (argv[1] === "checkpoint" && argv[2] === "inspect") {
+          return commandResult({
+            stdout: JSON.stringify({
+              localState: "metadata_available",
+              providerState: "completed",
+              nextAction: "fork_or_delete",
+            }),
+          });
+        }
+        if (argv[1] === "checkpoint" && argv[2] === "fork") {
+          const checkpoint = argv[3]!;
+          const id = argv[argv.indexOf("--lease-id") + 1]!;
+          const home = homeFor(id);
+          fs.cpSync(snapshots.get(checkpoint)!, runtimeRoot(home), { recursive: true });
+          forkChoices.push(checkpoint);
+          return commandResult({
+            stdout: JSON.stringify({
+              checkpointId: checkpoint,
+              leaseId: id,
+              provider: "aws",
+              slug: id,
+              workdir: "/workspace",
+            }),
+          });
+        }
+        return commandResult();
+      },
+    });
+    const initial = context("cbx_initial");
+    await manager.allocate(initial);
+    await expectSetupPhases(
+      enroll(homes.get(initial.id)!, oldArtifact.nodeBootstrap, undefined, true),
+    );
+    manager.markEnrolled(initial.id);
+    expect(await manager.capture(initial)).toBe(true);
+    await manager.release(initial);
+    fs.rmSync(homes.get(initial.id)!, { recursive: true });
+    const originalCheckpoint = openCrabboxWarmImageStore().entries()[0]!.value.image!.checkpointId;
+
+    const upgraded = context("cbx_upgraded", currentArtifact.nodeBootstrap.sha256);
+    expect(await manager.allocate(upgraded)).toEqual({
+      kind: "checkpoint",
+      checkpointId: originalCheckpoint,
+    });
+    const upgradePhases = await expectSetupPhases(
+      enroll(homes.get(upgraded.id)!, currentArtifact.nodeBootstrap, undefined, true),
+    );
+    expect(upgradePhases).toContain("openclaw-bootstrap-installation");
+    expect(
+      fs.existsSync(
+        path.join(runtimeRoot(homes.get(upgraded.id)!), currentArtifact.nodeBootstrap.sha256),
+      ),
+    ).toBe(true);
+    manager.markEnrolled(upgraded.id);
+    const refreshed = await manager.capture(upgraded);
+    await manager.release(upgraded);
+    fs.rmSync(homes.get(upgraded.id)!, { recursive: true });
+    const retainedCheckpoint = openCrabboxWarmImageStore().entries()[0]!.value.image!.checkpointId;
+
+    const next = context("cbx_next", currentArtifact.nodeBootstrap.sha256);
+    const nextChoice = await manager.allocate(next);
+    const currentWasCached = fs.existsSync(
+      path.join(runtimeRoot(homes.get(next.id)!), currentArtifact.nodeBootstrap.sha256),
+    );
+    const repeatPhases = await expectSetupPhases(
+      enroll(homes.get(next.id)!, currentArtifact.nodeBootstrap, undefined, true),
+    );
+    await manager.release(next);
+    expect(refreshed).toBe(true);
+    expect(retainedCheckpoint).not.toBe(originalCheckpoint);
+    expect(forkChoices).toEqual([originalCheckpoint, retainedCheckpoint]);
+    expect(nextChoice).toEqual({ kind: "checkpoint", checkpointId: retainedCheckpoint });
+    expect(currentWasCached).toBe(true);
+    expect(repeatPhases).not.toContain("openclaw-bootstrap-installation");
+    expect(openCrabboxWarmImageStore().entries()).toHaveLength(1);
+    expect(Object.keys(openCrabboxWarmImageStore().entries()[0]!.value.allocations)).toEqual([]);
+  }, 60_000);
+
   it("rejects malformed forwarded credentials without disclosing their value", async () => {
     const { home } = testHome();
     const { nodeBootstrap, authorizations } = await serveArtifact(
@@ -333,10 +470,7 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
       ...worker.nodeBootstrap,
       packageRelativePath: `worker-artifacts/${worker.nodeBootstrap.sha256}.tgz`,
     };
-    await expect(enroll(home, nodeBootstrap, undefined, true, workerBundle)).resolves.toEqual({
-      code: 0,
-      output: "",
-    });
+    await expectSetupPhases(enroll(home, nodeBootstrap, undefined, true, workerBundle));
     const archivePath = path.join(
       home,
       ".openclaw-worker",
@@ -369,10 +503,21 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
       ...worker.nodeBootstrap,
       packageRelativePath: `worker-artifacts/${worker.nodeBootstrap.sha256}.tgz`,
     };
-    await expect(enroll(home, nodeBootstrap, undefined, true, workerBundle)).resolves.toEqual({
-      code: 0,
-      output: "",
-    });
+    expect(
+      await expectSetupPhases(enroll(home, nodeBootstrap, undefined, true, workerBundle)),
+    ).toEqual([
+      "openclaw-bootstrap-preparation",
+      "openclaw-bootstrap-download-connection",
+      "openclaw-bootstrap-download-http-response",
+      "openclaw-bootstrap-download-body",
+      "openclaw-bootstrap-download-connection",
+      "openclaw-bootstrap-download-http-response",
+      "openclaw-bootstrap-download-body",
+      "openclaw-bootstrap-installation",
+      "openclaw-bootstrap-runtime-verification",
+      "openclaw-bootstrap-worker-archive-publication",
+      "openclaw-bootstrap-complete",
+    ]);
     expect(fs.existsSync(path.join(home, ".openclaw"))).toBe(false);
     expect(fs.readdirSync(path.join(home, ".openclaw-worker", "node-runtimes"))).toEqual([
       nodeBootstrap.sha256,
@@ -408,12 +553,24 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     expect(fs.readFileSync(path.join(preparedPackage, workerBundle.packageRelativePath))).toEqual(
       workerBytes,
     );
-    await expect(enroll(home, nodeBootstrap, undefined, true, workerBundle)).resolves.toEqual({
-      code: 0,
-      output: "",
-    });
+    expect(
+      await expectSetupPhases(enroll(home, nodeBootstrap, undefined, true, workerBundle)),
+    ).toEqual([
+      "openclaw-bootstrap-preparation",
+      "openclaw-bootstrap-runtime-verification",
+      "openclaw-bootstrap-worker-archive-verification",
+      "openclaw-bootstrap-worker-archive-publication",
+      "openclaw-bootstrap-complete",
+    ]);
     expect(worker.authorizations).toEqual([`Bearer ${workerBundle.token}`]);
-    await expect(enroll(home, nodeBootstrap)).resolves.toEqual({ code: 0, output: "" });
+    expect(await expectSetupPhases(enroll(home, nodeBootstrap))).toEqual([
+      "openclaw-bootstrap-preparation",
+      "openclaw-bootstrap-runtime-verification",
+      "openclaw-bootstrap-activation",
+      "openclaw-bootstrap-plugin-activation",
+      "openclaw-bootstrap-node-launch",
+      "openclaw-bootstrap-complete",
+    ]);
     const launch = await readLaunch(stateDir);
     expect(launch).toMatchObject({
       build: "first",
@@ -437,7 +594,7 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     expect(authorizations).toEqual([`Bearer ${nodeBootstrap.token}`]);
     stop();
     fs.rmSync(path.join(stateDir, "launch.json"));
-    await expect(enroll(home, nodeBootstrap)).resolves.toEqual({ code: 0, output: "" });
+    await expectSetupPhases(enroll(home, nodeBootstrap));
     expect((await readLaunch(stateDir)).cli).toBe(launch.cli);
     expect(authorizations).toHaveLength(1);
   }, 30_000);
@@ -445,12 +602,12 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
   it("selects new source bytes even when the public version has not changed", async () => {
     const { home, stateDir, stop } = testHome();
     const first = await serveArtifact(await packageFixture("first"));
-    await expect(enroll(home, first.nodeBootstrap)).resolves.toEqual({ code: 0, output: "" });
+    await expectSetupPhases(enroll(home, first.nodeBootstrap));
     const oldLaunch = await readLaunch(stateDir);
     stop();
     fs.rmSync(path.join(stateDir, "launch.json"));
     const second = await serveArtifact(await packageFixture("second"));
-    await expect(enroll(home, second.nodeBootstrap)).resolves.toEqual({ code: 0, output: "" });
+    await expectSetupPhases(enroll(home, second.nodeBootstrap));
     const launch = await readLaunch(stateDir);
     expect(launch.build).toBe("second");
     expect(launch.cli).not.toBe(oldLaunch.cli);
@@ -461,10 +618,10 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     async () => {
       const { home, stateDir } = testHome();
       const { nodeBootstrap, authorizations } = await serveArtifact(await packageFixture("first"));
-      await expect(enroll(home, nodeBootstrap)).resolves.toEqual({ code: 0, output: "" });
+      await expectSetupPhases(enroll(home, nodeBootstrap));
       await readLaunch(stateDir);
       const pid = fs.readFileSync(path.join(stateDir, "node.pid"), "utf8");
-      await expect(enroll(home, nodeBootstrap)).resolves.toEqual({ code: 0, output: "" });
+      await expectSetupPhases(enroll(home, nodeBootstrap));
       expect(fs.readFileSync(path.join(stateDir, "node.pid"), "utf8")).toBe(pid);
       expect(authorizations).toHaveLength(1);
       const rejected = await enroll(home, { ...nodeBootstrap, sha256: "b".repeat(64) });
@@ -527,7 +684,7 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
       ),
     });
     expect(authorizations).toHaveLength(0);
-    await expect(enroll(home, nodeBootstrap)).resolves.toEqual({ code: 0, output: "" });
+    await expectSetupPhases(enroll(home, nodeBootstrap));
     expect((await readLaunch(stateDir)).build).toBe("tls");
     expect(authorizations).toEqual([`Bearer ${nodeBootstrap.token}`]);
   }, 30_000);
@@ -546,10 +703,7 @@ describe.runIf(hasBashMapfile)("Crabbox desktop node bootstrap", () => {
     async ({ enabled, runtimeDir }) => {
       const { home, stateDir } = testHome();
       const { nodeBootstrap } = await serveArtifact(await packageFixture("desktop"));
-      await expect(enroll(home, nodeBootstrap, { enabled, runtimeDir })).resolves.toEqual({
-        code: 0,
-        output: "",
-      });
+      await expectSetupPhases(enroll(home, nodeBootstrap, { enabled, runtimeDir }));
       const launch = await readLaunch(stateDir);
       expect(launch.enabledPlugins).toEqual(enabled ? ["demo", "cua-computer"] : ["demo"]);
       expect(launch.environment).toEqual(

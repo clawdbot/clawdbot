@@ -25,6 +25,7 @@ describe("Claude CLI context-window selection", () => {
         env: {
           CLAUDE_CODE_AUTO_COMPACT_WINDOW: "200000",
           CLAUDE_CODE_DISABLE_1M_CONTEXT: "1",
+          CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1",
         },
       });
       expect(resolveModelId?.({ modelId, contextWindow: "1m" })).toBe(`${modelId}[1m]`);
@@ -36,7 +37,12 @@ describe("Claude CLI context-window selection", () => {
           contextWindow: "1m",
           contextTokenBudget: 1_000_000,
         }),
-      ).toEqual({ env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "1000000" } });
+      ).toEqual({
+        env: {
+          CLAUDE_CODE_AUTO_COMPACT_WINDOW: "1000000",
+          CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1",
+        },
+      });
       expect(backend.config.clearEnv).toContain("CLAUDE_CODE_DISABLE_1M_CONTEXT");
       expect(resolveModelId?.({ modelId: "claude-opus-4-8" })).toBe("claude-opus-4-8");
     },

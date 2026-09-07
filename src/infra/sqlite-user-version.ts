@@ -1,6 +1,7 @@
 import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "../state/openclaw-state-db-contract.js";
 import { resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
+import { StartupMaintenanceRequiredError } from "./startup-maintenance-required.js";
 
 type SqliteUserVersionReader = {
   prepare: (sql: string) => { get: () => unknown };
@@ -8,8 +9,12 @@ type SqliteUserVersionReader = {
 
 const SQLITE_SCHEMA_VERSION_ERROR_NAME = "SqliteSchemaVersionError";
 
-export class SqliteSchemaVersionError extends Error {
+export class SqliteSchemaVersionError extends StartupMaintenanceRequiredError {
   override name = SQLITE_SCHEMA_VERSION_ERROR_NAME;
+
+  constructor(message: string) {
+    super("newer-schema", message);
+  }
 }
 
 export function isSqliteSchemaVersionError(error: unknown): error is Error {
@@ -45,7 +50,7 @@ export function createNewerSqliteSchemaVersionError(
     "This OpenClaw build cannot open your existing data.\n" +
       `${databaseLabel} ${pathname} uses newer schema version ${schemaVersion}; this build supports ${supportedVersion}.\n` +
       `Refused by ${describeRunningOpenClawBuild()}.\n` +
-      `Use a build that supports schema ${schemaVersion} or newer with this state directory. To start fresh with this build, point OPENCLAW_STATE_DIR at a separate directory.\n` +
+      `Use a build that supports schema ${schemaVersion} or newer with this state directory. To use an older build, restore your pre-update backup created with openclaw backup.\n` +
       `See ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
   );
 }

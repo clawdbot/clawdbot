@@ -101,6 +101,22 @@ After `merge-run` removes its worktree, switch command execution back to a
 persistent checkout. Clean only task-owned state and return the task checkout to
 current main, detached if another checkout owns the branch.
 
+If reconciliation confirms a merge but leaves completion pending, verify and
+finish ownership-scoped cleanup first. Then use the exact current receipt OID:
+
+```bash
+git rev-parse refs/openclaw/pr-merge-outcomes/<PR>
+scripts/pr merge-complete <PR> <OUTCOME_OID> --confirmed-operator-completion
+```
+
+This command revalidates the historical merge and requires native worktree,
+PR-owned local branches, and remote head branch absence. It never merges or deletes
+resources. It may post a first completion comment from `merged`; uncertain
+comment attempts only look up the existing marker and never POST again.
+Missing or ambiguous markers remain pending. Re-read the OID after any state
+transition. A first admin-route comment requires its original landing audit
+and remains outside this delayed completion path.
+
 Preserve the operator-facing narrative: what failed, the owning repair, important
 proof and limitations, human credit, and linked final state. Record material
 tradeoffs or remaining uncertainty, not a mandatory proof essay.

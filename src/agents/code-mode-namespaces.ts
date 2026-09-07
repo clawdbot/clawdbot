@@ -451,7 +451,7 @@ interface AgentRunOptions {
 }
 
 interface AgentsApi {
-  /** Child failures have name "SwarmAgentError", runId, status, and message; SwarmAgentError is not a global constructor. */
+  /** Reserve agents.run fan-out for batches; a single child uses sessions_spawn directly (announcing run). Child failures have name "SwarmAgentError", runId, status, and message; SwarmAgentError is not a global constructor. */
   run(prompt: string, options?: AgentRunOptions & { schema?: undefined }): Promise<string>;
   run<T>(prompt: string, options: AgentRunOptions & { schema: AgentJsonSchema }): Promise<T>;
 }
