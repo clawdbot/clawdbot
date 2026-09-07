@@ -524,7 +524,7 @@ describe("codex media understanding provider", () => {
   it("clamps oversized image understanding turn timeouts", async () => {
     // The bounded timer subtracts startup time from its clamped deadline.
     // Freeze the clock so the clamp assertion cannot lose a real millisecond.
-    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    const clockSpy = vi.spyOn(performance, "now").mockReturnValue(1_000);
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       const { client } = createFakeClient();
@@ -546,7 +546,7 @@ describe("codex media understanding provider", () => {
       expect(result?.text).toBe("A red square.");
       expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
     } finally {
-      dateNowSpy.mockRestore();
+      clockSpy.mockRestore();
       vi.restoreAllMocks();
       vi.clearAllTimers();
       vi.useRealTimers();
