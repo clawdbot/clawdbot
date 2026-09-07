@@ -1052,16 +1052,20 @@
   color: var(--warn);
 }
 
-/* Parent and child rows share one icon/text grid; order and whitespace carry
-   hierarchy without shrinking the available command width. */
+/* Keep expanded activity visibly bounded and in normal flow so the transcript
+   measures the panel as part of its row and places following work below it. */
 .chat-activity-group__body {
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   gap: 0;
   max-height: min(420px, 58vh);
-  margin: 0;
-  padding-left: 0;
-  border-left: 0;
+  margin: 4px 0 0;
+  padding: 4px 6px;
+  border: 1px solid color-mix(in srgb, var(--text) 22%, transparent);
+  border-radius: calc(14px * var(--openclaw-corner-radius-scale));
+  corner-shape: superellipse(1.5);
+  background: var(--card);
   overflow-y: auto;
 }
 

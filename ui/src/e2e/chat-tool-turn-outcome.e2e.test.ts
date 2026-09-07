@@ -239,6 +239,84 @@ suite.define(() => {
     },
   );
 
+  it("renders expanded activity in a bounded panel above following content", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const page = await context.newPage();
+    const workingText = "Working text must remain below expanded activity.";
+    const toolCalls = Array.from({ length: 24 }, (_, index) => ({
+      type: "toolCall",
+      id: `call-layout-${index}`,
+      name: "exec",
+      arguments: { command: `printf 'layout command ${index}'` },
+    }));
+    const toolResults = toolCalls.map((call, index) => ({
+      role: "toolResult",
+      toolCallId: call.id,
+      toolName: call.name,
+      content: [{ type: "text", text: `layout result ${index}` }],
+      timestamp: index + 2,
+    }));
+    await installMockGateway(page, {
+      historyMessages: [
+        { role: "assistant", content: toolCalls, timestamp: 1 },
+        ...toolResults,
+        { role: "assistant", content: [{ type: "text", text: workingText }], timestamp: 100 },
+      ],
+    });
+
+    await page.goto(`${suite.server.baseUrl}chat`);
+    const activitySummary = page.locator(".chat-group--activity .chat-activity-group__summary");
+    const followingText = page.getByText(workingText, { exact: true });
+    await activitySummary.waitFor();
+    await followingText.waitFor();
+    await waitForChatScrollIdle(page);
+    expect(await page.locator(".chat-activity-group__body:not([hidden])").count()).toBe(0);
+    const followingTopBefore = (await followingText.boundingBox())?.y;
+    expect(followingTopBefore).toBeTypeOf("number");
+
+    await activitySummary.click();
+    const activityBody = page.locator(".chat-activity-group__body:not([hidden])");
+    await activityBody.waitFor();
+    await waitForChatScrollIdle(page);
+
+    const layout = await page.evaluate((sentinel) => {
+      const body = document.querySelector<HTMLElement>(".chat-activity-group__body:not([hidden])");
+      const group = body?.closest<HTMLElement>(".chat-activity-group");
+      const following = [...document.querySelectorAll<HTMLElement>(".chat-text")].find((element) =>
+        element.textContent?.includes(sentinel),
+      );
+      if (!body || !group || !following) {
+        throw new Error("Expected expanded activity and following text");
+      }
+      const bodyStyle = getComputedStyle(body);
+      const groupRect = group.getBoundingClientRect();
+      const bodyRect = body.getBoundingClientRect();
+      const followingRect = following.getBoundingClientRect();
+      return {
+        borderRadiusPx: Number.parseFloat(bodyStyle.borderTopLeftRadius),
+        borderWidthPx: Number.parseFloat(bodyStyle.borderTopWidth),
+        bodyHeight: bodyRect.height,
+        followingTop: followingRect.top,
+        gapPx: followingRect.top - groupRect.bottom,
+        overlapPx: Math.max(
+          0,
+          Math.min(groupRect.bottom, followingRect.bottom) -
+            Math.max(groupRect.top, followingRect.top),
+        ),
+      };
+    }, workingText);
+
+    await captureToolActivityProof(page, "activity-disclosure-bounded-panel-light");
+    await page.evaluate(() => document.documentElement.setAttribute("data-theme-mode", "dark"));
+    await captureToolActivityProof(page, "activity-disclosure-bounded-panel-dark");
+    expect(layout.borderWidthPx).toBeGreaterThanOrEqual(1);
+    expect(layout.borderRadiusPx).toBeGreaterThan(0);
+    expect(layout.overlapPx).toBe(0);
+    expect(layout.gapPx).toBeGreaterThanOrEqual(0);
+    expect(layout.followingTop).toBeGreaterThan(followingTopBefore ?? layout.followingTop - 1);
+    await context.close();
+  });
+
   it("keeps an earlier autonomous failure visible after a later turn recovers", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const page = await context.newPage();
