@@ -53,7 +53,8 @@ const SHARED_CHANNEL_FIELD_HELP: Record<string, string> = {
   replyToModeByChatType: "Per-chat-type override of replyToMode.",
   requireMention: "Only respond in group chats when the agent is mentioned.",
   responsePrefix: "Text prepended to every outbound reply.",
-  sendReadReceipts: "Mark inbound messages as read on this channel.",
+  sendReadReceipts:
+    "Mark inbound messages as read on this channel. Note: On WhatsApp, disabling this may cause WhatsApp servers to stop delivering group messages to linked devices.",
   streaming: "How replies stream back to this channel while the agent is still working.",
   systemPrompt: "Extra system prompt applied to runs started from this channel.",
   textChunkLimit: "Maximum characters per outbound message before OpenClaw splits it.",

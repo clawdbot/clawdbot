@@ -403,6 +403,10 @@ A liveness probe sent to your own number can therefore become agent input with `
 
     Per-account override: `channels.whatsapp.accounts.<id>.sendReadReceipts`. Self-chat safeguards skip read receipts even when globally enabled (see [Self-chat behavior](/channels/whatsapp#personal-number-and-self-chat-behavior)).
 
+    <Warning>
+      **WhatsApp Group Delivery Notice**: Disabling read receipts (`sendReadReceipts: false`) suppresses all inbound read receipts on the WhatsApp connection. On linked devices, WhatsApp servers require read receipts for group conversations; disabling them can cause WhatsApp servers to silently stop delivering group messages to the linked device while 1:1 direct messages continue to work. If your instance participates in WhatsApp groups, keep `sendReadReceipts: true` (default).
+    </Warning>
+
   </Accordion>
 </AccordionGroup>
 

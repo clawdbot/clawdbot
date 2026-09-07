@@ -222,3 +222,48 @@ export function collectRawBundledChannelConfigIssues(
   }
   return issues;
 }
+
+/**
+ * Surface a warning when WhatsApp has sendReadReceipts disabled (false) while group messaging is enabled.
+ * Disabling read receipts suppresses all read receipts on the WhatsApp connection, which causes WhatsApp
+ * servers to silently throttle or stop group inbound message delivery to linked devices.
+ */
+export function collectWhatsAppReadReceiptsGroupWarnings(
+  config: OpenClawConfig,
+): ConfigValidationIssue[] {
+  if (!config.channels || !isRecord(config.channels)) {
+    return [];
+  }
+  const whatsapp = config.channels.whatsapp;
+  if (!isRecord(whatsapp) || !isConfigRecordEnabled(whatsapp)) {
+    return [];
+  }
+  const warnings: ConfigValidationIssue[] = [];
+  const rootGroupsEnabled = whatsapp.groupPolicy !== "disabled";
+
+  if (whatsapp.sendReadReceipts === false && rootGroupsEnabled) {
+    warnings.push({
+      path: "channels.whatsapp.sendReadReceipts",
+      message:
+        "channels.whatsapp.sendReadReceipts=false suppresses all read receipts. WhatsApp servers require read receipts for group messaging on linked devices, and disabling them may cause group inbound messages to silently stop arriving. Keep sendReadReceipts enabled (true) if participating in groups.",
+    });
+  }
+
+  if (isRecord(whatsapp.accounts)) {
+    for (const [accountId, account] of Object.entries(whatsapp.accounts)) {
+      if (!isRecord(account) || !isConfigRecordEnabled(account)) {
+        continue;
+      }
+      const accountGroupsEnabled =
+        account.groupPolicy !== undefined ? account.groupPolicy !== "disabled" : rootGroupsEnabled;
+      if (account.sendReadReceipts === false && accountGroupsEnabled) {
+        warnings.push({
+          path: `channels.whatsapp.accounts.${accountId}.sendReadReceipts`,
+          message: `channels.whatsapp.accounts.${accountId}.sendReadReceipts=false suppresses all read receipts. WhatsApp servers require read receipts for group messaging on linked devices, and disabling them may cause group inbound messages to silently stop arriving. Keep sendReadReceipts enabled (true) if participating in groups.`,
+        });
+      }
+    }
+  }
+
+  return warnings;
+}

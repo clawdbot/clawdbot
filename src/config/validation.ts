@@ -36,6 +36,7 @@ import { resolveSecretInputRef } from "./types.secrets.js";
 import {
   bundledChannelIds,
   collectChannelDmPolicyDependencyWarnings,
+  collectWhatsAppReadReceiptsGroupWarnings,
   formatRawChannelConfigIssueMessage,
   hasChannelDmPolicyDependencyWarningCandidates,
   normalizeBundledChannelId,
@@ -399,6 +400,7 @@ function validateConfigObjectWithPluginsBase(
         })
       : collectChannelDmPolicyDependencyWarnings(parsedConfig)),
   );
+  warnings.push(...collectWhatsAppReadReceiptsGroupWarnings(parsedConfig));
 
   let mutatedConfig = config;
   let channelsCloned = false;
