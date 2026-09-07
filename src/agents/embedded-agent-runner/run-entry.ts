@@ -4,6 +4,7 @@ import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
 import {
   formatAgentRunRouteChange,
+  isAgentRunModelRerouted,
   normalizeAgentRunTerminalReceipt,
 } from "../agent-run-terminal-receipt.js";
 import {
@@ -248,8 +249,7 @@ function mergeRunEntryExecutionTrace<T extends EmbeddedAgentRunResult>(params: {
           requested,
           rerouted:
             terminalReceipt.rerouted ||
-            terminalReceipt.effective.provider !== requested.provider ||
-            terminalReceipt.effective.model !== requested.model,
+            isAgentRunModelRerouted(requested, terminalReceipt.effective),
         },
       }
     : params.result.meta.agentMeta;
@@ -313,9 +313,10 @@ function buildTerminal(params: {
           },
           successfulToolNames: ["message"],
           sourceReplyDelivered: true as const,
-          rerouted:
-            agentMeta.provider !== params.requested.provider ||
-            agentMeta.model !== params.requested.model,
+          rerouted: isAgentRunModelRerouted(params.requested, {
+            provider: agentMeta.provider,
+            model: agentMeta.model,
+          }),
         }
       : undefined);
   const terminalReceipt =

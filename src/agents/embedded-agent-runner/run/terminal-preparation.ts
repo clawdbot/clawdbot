@@ -2,7 +2,10 @@ import { copyReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { estimateAggregateUsageCost } from "../../../utils/usage-format.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
-import type { AgentRunTerminalReceipt } from "../../agent-run-terminal-receipt.js";
+import {
+  isAgentRunModelRerouted,
+  type AgentRunTerminalReceipt,
+} from "../../agent-run-terminal-receipt.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
 import { getCoreTtsAttemptResultMediaUrls } from "../../tools/tts-tool-result-provenance.js";
@@ -181,10 +184,10 @@ export function prepareEmbeddedRunTerminal(input: {
       },
       successfulToolNames,
       sourceReplyDelivered: attempt.sourceReplyDelivered,
-      rerouted:
-        reportedModelRef.provider !== input.provider ||
-        reportedModelRef.model !== input.model ||
-        responseModel !== input.model,
+      rerouted: isAgentRunModelRerouted(
+        { provider: input.provider, model: input.model },
+        { ...reportedModelRef, responseModel },
+      ),
     } satisfies Omit<AgentRunTerminalReceipt, "terminalDisposition">,
   });
   // A yielded attempt ends before message_end. Its aborted tool-call assistant,
