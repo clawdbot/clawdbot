@@ -119,6 +119,8 @@ to `"token"` and `models.providers.xai.baseUrl` to
 catalog and keeps token authentication; an unavailable token does not switch
 discovery to the Console API. Tokens with the default or native xAI API endpoint
 continue to use the API catalog. Prefer OAuth login for automatic token refresh.
+Resolved environment-backed tokens also work in standalone model commands without
+a running Gateway.
 
 <Tip>
 Use `xai-oauth` when signing in from SSH, Docker, or a VPS. OpenClaw prints a
