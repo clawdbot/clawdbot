@@ -119,6 +119,33 @@ describe("xai onboard", () => {
     expect(cfg.agents?.defaults?.models?.["xai/auto"]?.alias).toBe("Grok");
   });
 
+  it("keeps the OAuth proxy baseUrl and OAuth catalog for OAuth setup", () => {
+    // Regression for #140482: a successful Grok OAuth login must keep the
+    // subscription proxy transport (cli-chat-proxy.grok.com), not overwrite it
+    // with the API-key endpoint and API-only catalog models.
+    const cfg = applyXaiOAuthConfig({});
+
+    expect(cfg.models?.providers?.xai?.baseUrl).toBe("https://cli-chat-proxy.grok.com/v1");
+    expect(cfg.models?.providers?.xai?.api).toBe("openai-responses");
+    expect(cfg.models?.providers?.xai?.models.map((m) => m.id)).toEqual([
+      "grok-4.6",
+      "grok-4.5",
+    ]);
+  });
+
+  it("preserves existing subscription catalog models on OAuth re-login", () => {
+    // Repeated login must not keep appending API-catalog models: existing
+    // OAuth rows stay first, and no API-only ids are merged in.
+    const base = applyXaiOAuthConfig({});
+    const rerun = applyXaiOAuthConfig(base);
+
+    expect(rerun.models?.providers?.xai?.baseUrl).toBe("https://cli-chat-proxy.grok.com/v1");
+    expect(rerun.models?.providers?.xai?.models.map((m) => m.id)).toEqual([
+      "grok-4.6",
+      "grok-4.5",
+    ]);
+  });
+
   it("preserves existing model fallbacks", () => {
     const cfg = applyXaiConfig(createConfigWithFallbacks());
     expect(resolveAgentModelFallbackValues(cfg.agents?.defaults?.model)).toEqual([

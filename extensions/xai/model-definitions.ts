@@ -288,6 +288,18 @@ export function buildXaiCatalogModels(): ModelDefinitionConfig[] {
   );
 }
 
+// Grok subscription (OAuth) serves the frontier models through the OAuth proxy
+// (cli-chat-proxy.grok.com). Only those are valid OAuth catalog rows: the API
+// catalog ids (grok-build-0.1, grok-4.3, grok-4.20-*) are not reachable over
+// the subscription transport and must never be written into an OAuth setup.
+const XAI_OAUTH_SELECTABLE_MODEL_IDS = new Set<string>(["grok-4.6", "grok-4.5"]);
+
+export function buildXaiOAuthCatalogModels(): ModelDefinitionConfig[] {
+  return XAI_MODEL_CATALOG.filter((entry) => XAI_OAUTH_SELECTABLE_MODEL_IDS.has(entry.id)).map(
+    (entry) => toModelDefinition(entry),
+  );
+}
+
 export function resolveXaiCatalogEntry(modelId: string) {
   const trimmed = modelId.trim();
   const lower = normalizeXaiCatalogModelId(modelId);
