@@ -433,6 +433,25 @@ const CODEX_CUSTOM_PATCH_NAMESPACE = {
   name: "openclaw_direct",
   tools: [CODEX_CUSTOM_PATCH_TOOL],
 } as const;
+const ANTHROPIC_GUEST_CODE_MODE_TOOLS = [
+  {
+    name: "exec",
+    input_schema: {
+      type: "object",
+      properties: { code: { type: "string" } },
+      required: ["code"],
+    },
+  },
+  {
+    name: "wait",
+    input_schema: {
+      type: "object",
+      properties: { runId: { type: "string" } },
+      required: ["runId"],
+    },
+  },
+] as const;
+
 const READ_TOOL = { type: "function", name: "read" } as const;
 const MESSAGE_TOOL = { type: "function", name: "message" } as const;
 const IMAGE_GENERATE_TOOL = { type: "function", name: "image_generate" } as const;
@@ -6315,24 +6334,7 @@ Update and merge these partial structured summaries.`,
   it("routes the initial model-switch read through Anthropic guest Code Mode", async () => {
     const server = await startMockServer();
     const body = (await expectAnthropicMessagesJson(server, {
-      tools: [
-        {
-          name: "exec",
-          input_schema: {
-            type: "object",
-            properties: { code: { type: "string" } },
-            required: ["code"],
-          },
-        },
-        {
-          name: "wait",
-          input_schema: {
-            type: "object",
-            properties: { runId: { type: "string" } },
-            required: ["runId"],
-          },
-        },
-      ],
+      tools: ANTHROPIC_GUEST_CODE_MODE_TOOLS,
       messages: [
         makeAnthropicUserText(
           "Read repo/qa/scenarios/index.yaml and summarize the QA scenario pack mission in one clause before any model switch.",
@@ -7151,24 +7153,7 @@ Update and merge these partial structured summaries.`,
   it("routes Anthropic image generation through Code Mode when only exec and wait are visible", async () => {
     const server = await startMockServer();
     const body = (await expectAnthropicMessagesJson(server, {
-      tools: [
-        {
-          name: "exec",
-          input_schema: {
-            type: "object",
-            properties: { code: { type: "string" } },
-            required: ["code"],
-          },
-        },
-        {
-          name: "wait",
-          input_schema: {
-            type: "object",
-            properties: { runId: { type: "string" } },
-            required: ["runId"],
-          },
-        },
-      ],
+      tools: ANTHROPIC_GUEST_CODE_MODE_TOOLS,
       messages: [
         makeAnthropicUserText(
           "Capability flip image check: generate a QA lighthouse image in this turn right now.",
@@ -7272,24 +7257,7 @@ Update and merge these partial structured summaries.`,
 
   it("does not interpret unmarked direct exec results as Code Mode control envelopes", async () => {
     const server = await startMockServer();
-    const tools = [
-      {
-        name: "exec",
-        input_schema: {
-          type: "object",
-          properties: { code: { type: "string" } },
-          required: ["code"],
-        },
-      },
-      {
-        name: "wait",
-        input_schema: {
-          type: "object",
-          properties: { runId: { type: "string" } },
-          required: ["runId"],
-        },
-      },
-    ];
+    const tools = ANTHROPIC_GUEST_CODE_MODE_TOOLS;
     const messages = [
       makeAnthropicUserText("Direct exec envelope isolation check."),
       {
@@ -7333,24 +7301,7 @@ Update and merge these partial structured summaries.`,
     const messages: Array<Record<string, unknown>> = [makeAnthropicUserText(prompt)];
     const request = async () => {
       const response = await expectAnthropicMessages(server, {
-        tools: [
-          {
-            name: "exec",
-            input_schema: {
-              type: "object",
-              properties: { code: { type: "string" } },
-              required: ["code"],
-            },
-          },
-          {
-            name: "wait",
-            input_schema: {
-              type: "object",
-              properties: { runId: { type: "string" } },
-              required: ["runId"],
-            },
-          },
-        ],
+        tools: ANTHROPIC_GUEST_CODE_MODE_TOOLS,
         messages,
       });
       return (await response.json()) as {
