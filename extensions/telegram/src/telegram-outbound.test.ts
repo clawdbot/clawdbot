@@ -100,6 +100,42 @@ describe("telegramPlugin outbound", () => {
       }),
     ).toBe(1200);
   });
+  it("strips GLM arg_key shadow XML before outbound delivery", () => {
+    clearTelegramRuntime();
+    const text =
+      "Visible\n<tool_call>exec<arg_key>command</arg_key><arg_value>echo redacted</arg_value></tool_call>\nDone.";
+
+    expect(telegramOutbound.sanitizeText?.({ text, payload: { text } })).toBe("Visible\n\nDone.");
+  });
+
+  it("preserves terminal literal GLM marker prose on rich outbound delivery", () => {
+    clearTelegramRuntime();
+    const cfg = { channels: { telegram: { richMessages: true } } } as never;
+    const text = "Use <tool_call>exec";
+    const spaced = "Use <tool_call>exec ";
+
+    expect(
+      telegramOutbound.sanitizeText?.({ text, payload: { text }, cfg, accountId: "default" }),
+    ).toBe(text);
+    expect(
+      telegramOutbound.sanitizeText?.({
+        text: spaced,
+        payload: { text: spaced },
+        cfg,
+        accountId: "default",
+      }),
+    ).toBe("Use <tool_call>exec");
+    const borrowedClose = "Use <tool_call>exec<arg_key> literally. Example: `</arg_key>`.";
+    expect(
+      telegramOutbound.sanitizeText?.({
+        text: borrowedClose,
+        payload: { text: borrowedClose },
+        cfg,
+        accountId: "default",
+      }),
+    ).toBe(borrowedClose);
+  });
+
   it("strips assistant-visible tool traces before outbound delivery", () => {
     clearTelegramRuntime();
     const text = 'Done.\n⚠️ 🛠️ `search "Pipeline" in ~/.openclaw/workspace-* (agent)` failed';

@@ -41,6 +41,7 @@ import {
   normalizeTextForComparison,
 } from "../../embedded-agent-helpers.js";
 import { SYNTHESIZED_TIMEOUT_ERROR_TEXT } from "../../embedded-agent-helpers/error-text.js";
+import { sanitizeUserFacingText } from "../../embedded-agent-helpers/sanitize-user-facing-text.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -49,13 +50,19 @@ import type { ToolResultFormat } from "../../embedded-agent-subscribe.shared-typ
 import {
   extractAssistantThinking,
   extractAssistantVisibleText,
-  sanitizeAssistantVisibleStreamText,
 } from "../../embedded-agent-utils.js";
 import { isTimeoutErrorMessage } from "../../failover/classify.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import { buildSourceReplyPayloadState } from "./source-reply-payloads.js";
 import { buildFailureWarning } from "./tool-error-warning.js";
+
+// Terminal GLM first, then user-facing cleanup. parseReplyDirectives runs next
+// and would otherwise adopt [[reply_to:]] from INTERNAL_CONTEXT that later
+// payload cleanup only strips as text.
+function sanitizeAssistantVisibleCompletedText(text: string): string {
+  return sanitizeUserFacingText(sanitizeAssistantVisibleText(text));
+}
 
 function isAssistantTextContentBlockType(value: unknown): boolean {
   return value === "text" || value === "input_text" || value === "output_text";
@@ -197,7 +204,7 @@ export function buildEmbeddedRunPayloads(params: {
     params.didSendDeterministicApprovalPrompt === true ||
     (params.sourceReplyDeliveryMode === "message_tool_only" && completedSourceReplyViaMessageTool);
   const nonEmptyAssistantTexts = params.assistantTexts
-    .map((text) => sanitizeAssistantVisibleStreamText(text))
+    .map((text) => sanitizeAssistantVisibleCompletedText(text))
     .filter((text) => text.trim().length > 0);
   const currentAssistant = params.currentAssistant ?? undefined;
   const assistantForPayload =

@@ -34,7 +34,7 @@ function sanitizeAssistantText(text: string, phase?: AssistantPhase, streaming =
   return sanitizeAssistantVisibleTextWithProfile(
     text,
     phase === "final_answer" ? "final-answer-delivery" : "delivery",
-    streaming && phase === "final_answer",
+    streaming,
   );
 }
 
@@ -42,15 +42,11 @@ function isAssistantTextContentBlockType(value: unknown): boolean {
   return value === "text" || value === "input_text" || value === "output_text";
 }
 
-export function sanitizeAssistantVisibleStreamText(text: string, phase?: AssistantPhase): string {
-  return sanitizeUserFacingText(sanitizeAssistantText(text, phase, true), { errorContext: false });
-}
-
 export function createAssistantVisibleStreamText(phase?: AssistantPhase) {
   return createTextProjection([
     ...assistantVisibleTextFilters(
       phase === "final_answer" ? "final-answer-delivery" : "delivery",
-      phase === "final_answer",
+      true,
     ),
     ...userFacingTextFilters(),
     trimTextFilter("both"),

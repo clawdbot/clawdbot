@@ -55,6 +55,8 @@ const TOOL_CALL_JSON_PAYLOAD_START_RE =
   /^(?:\s+[A-Za-z_:][-A-Za-z0-9_:.]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))*\s*(?:\r?\n\s*)?[[{]/;
 const TOOL_CALL_XML_PAYLOAD_START_RE =
   /^\s*(?:\r?\n\s*)?<(?:antml:)?(?:function_call|tool_call|function|invoke|parameters?|arguments?)\b/i;
+const GLM_TOOL_NAME_RE = /^[A-Za-z_][\w./:-]*/;
+const GLM_ARG_KEY = "arg_key";
 const NESTED_JSON_TOOL_CALL_PAYLOAD_START_RE = /^\s*(?:\r?\n\s*)?<(?:function_call|tool_call)\b/i;
 
 type ToolCallPayloadKind = "json" | "xml" | null;
@@ -151,7 +153,11 @@ function findTagCloseIndex(text: string, start: number): number {
   return -1;
 }
 
-function detectToolCallPayloadKind(text: string, start: number): ToolCallPayloadKind {
+function detectToolCallPayloadKind(
+  text: string,
+  start: number,
+  holdIncompleteGlmNamePrefixes = false,
+): ToolCallPayloadKind {
   const rest = text.slice(start);
   if (TOOL_CALL_JSON_PAYLOAD_START_RE.test(rest)) {
     return "json";
@@ -159,7 +165,114 @@ function detectToolCallPayloadKind(text: string, start: number): ToolCallPayload
   if (TOOL_CALL_XML_PAYLOAD_START_RE.test(rest)) {
     return "xml";
   }
+  if (
+    isClosedGlmArgPayload(rest) ||
+    isIncompleteGlmArgPayload(rest, holdIncompleteGlmNamePrefixes)
+  ) {
+    return "xml";
+  }
   return null;
+}
+
+function readGlmToolName(rest: string): string | null {
+  const match = GLM_TOOL_NAME_RE.exec(rest);
+  return match?.[0] ?? null;
+}
+
+function isClosedGlmArgPayload(rest: string): boolean {
+  const name = readGlmToolName(rest);
+  if (!name) {
+    return false;
+  }
+  // Bound to this payload: the first pair's own close, not a later prose/code tag.
+  return /^\s*<\s*arg_key\b[^>]*>[^\s<]*<\/\s*arg_key\b/i.test(rest.slice(name.length));
+}
+
+// Hold a <tool_call> tool-name / whitespace / partial <arg_key> prefix until
+// classified. Name-only and whitespace-only prefixes are stream-only: a later
+// replacement cannot unsay an emitted prefix, but a finished answer ending
+// `Use <tool_call>exec` is literal prose.
+function isIncompleteGlmArgPayload(rest: string, holdNameOnlyPrefixes = false): boolean {
+  const name = readGlmToolName(rest);
+  if (!name) {
+    return false;
+  }
+  const afterName = rest.slice(name.length);
+  if (afterName === "" || /^\s+$/.test(afterName)) {
+    return holdNameOnlyPrefixes;
+  }
+  const open = afterName.match(/^\s*</);
+  if (!open) {
+    return false;
+  }
+  return isIncompleteGlmArgKeyAfterOpen(afterName.slice(open[0].length));
+}
+
+function isPartialGlmArgKeyClose(text: string): boolean {
+  if (!text.startsWith("<") || text.includes(">")) {
+    return false;
+  }
+  if (text === "<") {
+    return true;
+  }
+  if (text[1] !== "/") {
+    return false;
+  }
+  let idx = 2;
+  while (idx < text.length && /\s/.test(text[idx] ?? "")) {
+    idx += 1;
+  }
+  const remaining = text.slice(idx);
+  if (remaining === "") {
+    return true;
+  }
+  const lower = remaining.toLowerCase();
+  if (GLM_ARG_KEY.startsWith(lower)) {
+    return true;
+  }
+  return lower.startsWith(GLM_ARG_KEY) && /^\s*$/.test(remaining.slice(GLM_ARG_KEY.length));
+}
+
+function isIncompleteGlmArgKeyAfterOpen(afterOpen: string): boolean {
+  let cursor = 0;
+  while (cursor < afterOpen.length && /\s/.test(afterOpen.charAt(cursor))) {
+    cursor += 1;
+  }
+  const body = afterOpen.slice(cursor);
+  if (body === "") {
+    return true;
+  }
+  let matched = 0;
+  while (
+    matched < body.length &&
+    matched < GLM_ARG_KEY.length &&
+    body[matched]?.toLowerCase() === GLM_ARG_KEY[matched]
+  ) {
+    matched += 1;
+  }
+  if (matched === 0) {
+    return false;
+  }
+  if (matched < GLM_ARG_KEY.length) {
+    return body.length === matched;
+  }
+  const afterTag = body.slice(GLM_ARG_KEY.length);
+  if (/^[A-Za-z0-9_]/.test(afterTag)) {
+    return false;
+  }
+  const close = afterTag.indexOf(">");
+  if (close === -1) {
+    return true;
+  }
+  const afterGt = afterTag.slice(close + 1);
+  if (/^[^\s<]*<\/\s*arg_key\b/i.test(afterGt)) {
+    return false;
+  }
+  if (/^[^\s<]*$/.test(afterGt)) {
+    return true;
+  }
+  const split = /^([^\s<]*)(<[\s\S]*)$/.exec(afterGt);
+  return split !== null && isPartialGlmArgKeyClose(split[2] ?? "");
 }
 
 function startsWithNestedJsonToolCallPayload(text: string, start: number): boolean {
@@ -368,6 +481,7 @@ export function stripToolCallXmlTags(
   options: {
     stripFunctionCallsXmlPayloads?: boolean;
     stripFunctionResponseAfterPluralToolCalls?: boolean;
+    holdIncompleteGlmNamePrefixes?: boolean;
   } = {},
 ): string {
   const text = input;
@@ -443,7 +557,11 @@ export function stripToolCallXmlTags(
           shouldStripPluralWrapperBeforeResponse) &&
           isPluralToolCallWrapper);
       const payloadKind = shouldDetectXmlPayload
-        ? detectToolCallPayloadKind(text, payloadStart)
+        ? detectToolCallPayloadKind(
+            text,
+            payloadStart,
+            options.holdIncompleteGlmNamePrefixes === true,
+          )
         : TOOL_CALL_JSON_PAYLOAD_START_RE.test(text.slice(payloadStart))
           ? "json"
           : null;
@@ -776,6 +894,7 @@ export function assistantVisibleTextFilters(
           stripFunctionCallsXmlPayloads: profile === "tool-progress",
           stripFunctionResponseAfterPluralToolCalls:
             profile === "delivery" || profile === "final-answer-delivery",
+          holdIncompleteGlmNamePrefixes: streaming,
         }),
     },
     ...(profile === "tool-progress" ? [] : [assistantTraceTextFilter]),
