@@ -230,6 +230,8 @@ export async function revalidateManagedGatewayServiceAfterUpdate(params: {
 export type UpdateCommandRecoveryState = {
   windowsTaskAutoStartRecovery?: WindowsTaskAutoStartRecovery;
   ledgerHandoffOwned?: boolean;
+  /** Local completion evidence only; never grants access to migrated canonical state. */
+  ledgerHandoffCompleted?: boolean;
   triageTarget: import("./update-command-triage.js").UpdateTriageTarget;
 };
 

@@ -67,6 +67,30 @@ export class UpdateCommandFailure extends Error {
   }
 }
 
+/** A conservative pending outcome, never a grant of recovery or mutation authority. */
+export class UpdateCommandPendingRecoveryFailure extends UpdateCommandFailure {
+  constructor(result: UpdateRunResult, detail?: string, options?: ErrorOptions) {
+    super(
+      {
+        ...result,
+        status: "error",
+        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      },
+      1,
+      detail,
+      options,
+    );
+    this.name = "UpdateCommandPendingRecoveryFailure";
+  }
+}
+
+/** Reporting-only marker: the durable finalizer already committed and printed the outcome. */
+export class UpdateCommandFinalizedRecoveryFailure extends UpdateCommandFailure {
+  constructor(result: UpdateRunResult) {
+    super(result, 1);
+  }
+}
+
 export function mergeWindowsTaskRecoveryFailure(
   failure: { error: unknown } | undefined,
   recoveryError: unknown,

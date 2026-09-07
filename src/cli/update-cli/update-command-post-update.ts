@@ -25,13 +25,9 @@ import { formatCliCommand } from "../command-format.js";
 import { printResult } from "./progress.js";
 import { tryWriteCompletionCache, type UpdateCommandOptions } from "./shared.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
+import { finishDurableUpdate } from "./update-command-durable-finalize.js";
 import { retireStandaloneGitWrapper } from "./update-command-git.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
-import {
-  assertUpdateCommandRecovery,
-  finalizeUpdateCommandRecovery,
-  UpdateCommandRecoveryPendingError,
-} from "./update-command-recovery.js";
 import { repairUpdateService } from "./update-command-repair-service.js";
 import {
   prepareUpdateRestart,
@@ -90,44 +86,9 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
   if (params.serviceLoadBoundary && process.platform !== "linux") {
     throw new Error("Deferred native service loading is not supported on this platform.");
   }
-  assertUpdateCommandRecovery(params.opts);
-  if (params.opts.recovery) {
-    // The durable executor owns mutations/replay. This consumer only settles its
-    // completed effects and proof; never replay the legacy convergence/cleanup path.
-    const record = params.opts.recovery.getRecord();
-    const runtime = record.verification?.runtime;
-    const status =
-      params.result.status === "ok" && runtime === "candidate"
-        ? "succeeded"
-        : params.result.status === "error" && runtime === "previous"
-          ? "rolled-back"
-          : null;
-    if (!status) {
-      throw new UpdateCommandRecoveryPendingError(
-        "Finish fenced recovery and serving verification before finalization.",
-      );
-    }
-    await finalizeUpdateCommandRecovery(params.opts, status);
-    assertUpdateCommandRecovery(params.opts);
-    const result = completeUpdateCommandRun(
-      {
-        ...params.result,
-        durationMs: Math.max(0, Date.now() - params.startedAt),
-      },
-      params.opts.run,
-    );
-    printResult(result, params.opts, {
-      nextAction: resolveUpdateResultNextAction({
-        result,
-        serviceRunning: true,
-        runningVersion: record.verification?.receipt.gateway.version,
-        env: params.opts.run?.env ?? process.env,
-      }),
-    });
-    if (result.status === "error") {
-      throw new UpdateCommandFailure(result);
-    }
-    return result;
+  const durableResult = await finishDurableUpdate(params);
+  if (durableResult) {
+    return durableResult;
   }
   let gateway: TriageFailureContext["gateway"] = "preserve";
   let triageAllowed = true;

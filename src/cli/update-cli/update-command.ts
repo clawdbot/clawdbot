@@ -51,14 +51,12 @@ import { readUpdateChannelConfig } from "./update-command-config.js";
 import { printUpdateDryRun } from "./update-command-dry-run.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import {
-  mergeWindowsTaskRecoveryFailure,
   reportPreMutationUpdateFailure,
   UpdateCommandFailure,
   withUpdateAdmissionReporting,
 } from "./update-command-result.js";
 import {
   admitUpdateCommandRun,
-  completeUpdateCommandRun,
   createUpdateRunProgress,
   failUpdateCommandRun,
   prepareUpdateCommand,
@@ -75,6 +73,7 @@ import {
 } from "./update-command-service-plan.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
+import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
 
 const CLI_NAME = resolveCliName();
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
@@ -118,38 +117,9 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
     const execute = () =>
       withUpdateFailureTriage({ ...opts, invocationCwd }, recoveryState.triageTarget, async () => {
         await withUpdateInProgressEnv(invocationCwd, async () => {
-          let failure: { error: unknown } | undefined;
-          try {
-            await updateCommandInternal(opts, recoveryState, invocationCwd, prepared, presentation);
-          } catch (error) {
-            failure = { error };
-          }
-          try {
-            await recoveryState.windowsTaskAutoStartRecovery?.restore();
-            await recoveryState.windowsTaskAutoStartRecovery?.complete();
-          } catch (restoreError) {
-            let error = restoreError;
-            try {
-              await recoveryState.windowsTaskAutoStartRecovery?.complete(false);
-            } catch (compensationError) {
-              error = new AggregateError(
-                [error, compensationError],
-                `Windows task autostart recovery failed: ${formatErrorMessage(error)}; ${formatErrorMessage(compensationError)}`,
-                { cause: error },
-              );
-            }
-            failure = mergeWindowsTaskRecoveryFailure(failure, error);
-          }
-          if (failure) {
-            if (!recoveryState.ledgerHandoffOwned) {
-              if (failure.error instanceof UpdateCommandFailure) {
-                completeUpdateCommandRun(failure.error.result, run);
-              } else {
-                failUpdateCommandRun(failure.error, run);
-              }
-            }
-            throw failure.error;
-          }
+          await withUpdateCommandRecoveryUnwind(opts, recoveryState, () =>
+            updateCommandInternal(opts, recoveryState, invocationCwd, prepared, presentation),
+          );
         });
       });
     await withUpdatePreviewSignals(opts, execute);
@@ -725,6 +695,7 @@ async function updateCommandInternal(
       { ...finalization, rollbackBlockedReason },
       progress.pendingSteps,
     );
+    recoveryState.ledgerHandoffCompleted = true;
     if (continued.exitCode !== 0) {
       throw new UpdateCommandFailure(continued.result, continued.exitCode, undefined, {
         automaticTriage: continued.automaticTriage,

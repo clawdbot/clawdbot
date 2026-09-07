@@ -197,7 +197,11 @@ describe("successful update finalization ordering", () => {
           packageTransaction: { backupRoot: home, rollback: vi.fn(), complete },
         },
       ),
-    ).rejects.toMatchObject({ name: "UpdateRecoveryRequiredError" });
+    ).rejects.toMatchObject({
+      name: "UpdateCommandPendingRecoveryFailure",
+      cause: { name: "UpdateRecoveryRequiredError" },
+      result: { status: "error", recovery: { serviceRestartSafe: false } },
+    });
     expect(complete).not.toHaveBeenCalled();
     expect(mocks.restartService).not.toHaveBeenCalled();
     expect(mocks.printResult).not.toHaveBeenCalled();
