@@ -8,8 +8,9 @@ import type { GatewayPageController } from "../../lit/gateway-page-controller.ts
 import { currentLocalDate, toUsageErrorMessage } from "./helpers.ts";
 import type { UsageJsonExport, UsageSessionEntry } from "./types.ts";
 
-function sessionIdentity({ agentId, key }: UsageSessionEntry): string {
-  return JSON.stringify([agentId, key]);
+// Logical keys can be reused after deletion; context belongs to a concrete session.
+function sessionIdentity({ agentId, key, sessionId }: UsageSessionEntry): string {
+  return JSON.stringify([agentId, key, sessionId]);
 }
 
 export function createUsageJsonExportTask(
